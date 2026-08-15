@@ -3126,6 +3126,38 @@ def test_participant_capture_pass_joins_candidates_before_judge_on_meeting_sourc
     assert outcome.report.participant_capture_added_titles == ("Sam Okafor",)
 
 
+def test_participant_capture_user_turn_carries_the_language_anchor() -> None:
+    """#713: the participant pass returned English descriptions AND English
+    BODIES from a 100% Spanish source, on 3 of 3 runs.
+
+    The bodies were TRANSLATIONS of the source's own turns, not summaries in
+    the wrong language -- what `query` cites back, and for a `Person` object,
+    personal data restated by a model rather than quoted.
+
+    Cause: this was the ONLY extraction call in the pipeline that omitted
+    `_LANGUAGE_ANCHOR`. Its docstring justified the omission on the grounds
+    that "the source text itself still carries the source's language", and
+    `evals/participant_language` measured that assumption false: harmful field
+    share 0.75 without the anchor, 0.00 with it, over 48 scored fields, with
+    MORE candidates retained and no latency cost.
+
+    The anchor is asserted on the USER turn specifically. `_build_messages`
+    places it there for the meeting-shaped branch (#522), and a system-turn
+    placement is a different, unmeasured configuration."""
+    messages = concept_mod._build_participant_capture_messages(
+        "Ana: buenos días.", "Reunión semanal"
+    )
+
+    user = messages[1]["content"]
+    assert concept_mod._LANGUAGE_ANCHOR in user
+    # The anchor is ADDITIVE: the title is this pass's own reference point for
+    # which meeting it is, and dropping it would silently change what #668
+    # measured.
+    assert "Reunión semanal" in user
+    assert "Ana: buenos días." in user
+    assert messages[0]["content"] == concept_mod._PARTICIPANT_CAPTURE_SYSTEM_PROMPT
+
+
 def test_participant_capture_pass_does_not_fire_on_non_meeting_source() -> None:
     """Scope rule (#668 design D6): the capture pass is gated on the exact
     same meeting-shape predicate as judge re-admission -- a non-meeting

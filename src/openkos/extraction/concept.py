@@ -2222,18 +2222,42 @@ def _build_participant_capture_messages(
     source_text: str, source_title: str
 ) -> list[Message]:
     """Assemble the participant-capture pass's 2-message prompt (#668
-    design D6). Always carries the source title -- this pass fires ONLY on
-    meeting-shaped sources (`_MEETING_SHAPED_TITLE_RE`), where the general
-    extraction prompt's own meeting-shaped branch (`_build_messages`)
-    already omits the title from the user turn in favor of
-    `_LANGUAGE_ANCHOR`; this narrower follow-up question needs the title as
-    its own reference point (what meeting this is), not a language
-    anchor -- the source text itself still carries the source's language."""
+    design D6). Carries BOTH the source title and `_LANGUAGE_ANCHOR`.
+
+    The title is this pass's own reference point -- which meeting this is --
+    and the general extraction prompt's meeting-shaped branch
+    (`_build_messages`) deliberately omits it in favor of the anchor. This
+    narrower follow-up question needs both, and they are not alternatives.
+
+    The anchor was ADDED by #713. This was the only extraction call in the
+    pipeline without it, on the reasoning that "the source text itself still
+    carries the source's language" -- and that assumption is measurably false
+    here. `evals/participant_language`, qwen3:8b, 3 runs per arm on two 100%
+    Spanish transcripts: the harmful field share (an `en` description or body
+    with no verbatim support in the prose) was **0.75** without the anchor and
+    **0.00** with it, over 48 scored fields. The bodies were not summaries in
+    the wrong language, they were TRANSLATIONS of the source's own turns --
+    which is what `query` cites back, and for a `Person` object is personal
+    data restated by a model rather than quoted.
+
+    The addition cost nothing measurable: candidates rose (5 per run against 4
+    on the fixture that leaked) and latency did not increase.
+
+    Why this is not the prompt-instruction direction that lost in #563 and
+    #613: it adds no new rule. It restores an instruction this module already
+    ships on every other extraction call, whose own measurement (#522) is that
+    removing the source-language text from a user turn produces English output
+    in 28 of 30 runs. `_build_messages`' asymmetry note still stands for the
+    TITLED general path, which is a different call on a different prompt."""
     return [
         {"role": "system", "content": _PARTICIPANT_CAPTURE_SYSTEM_PROMPT},
         {
             "role": "user",
-            "content": (f"SOURCE TITLE: {source_title}\n\nSOURCE TEXT:\n{source_text}"),
+            "content": (
+                f"{_LANGUAGE_ANCHOR}\n\n"
+                f"SOURCE TITLE: {source_title}\n\n"
+                f"SOURCE TEXT:\n{source_text}"
+            ),
         },
     ]
 
