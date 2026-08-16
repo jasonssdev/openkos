@@ -58,6 +58,10 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from contradiction_fixtures import DOCS, PAIRS  # noqa: E402
 from contradiction_prompts import TREATMENT_SYSTEM_PROMPT  # noqa: E402
 
+from openkos.config import (  # noqa: E402
+    DEFAULT_CONTEXT_WINDOW,
+    DEFAULT_MAX_GENERATION_TOKENS,
+)
 from openkos.llm.ollama import OllamaClient  # noqa: E402
 from openkos.resolution import contradiction as contradiction_mod  # noqa: E402
 
@@ -120,7 +124,20 @@ def main() -> None:
     if args.arm == "treatment":
         contradiction_mod._SYSTEM_PROMPT = TREATMENT_SYSTEM_PROMPT
 
-    client = OllamaClient(model=args.model)
+    # Built with production's OWN generation ceiling and context window, not
+    # the client's opted-out defaults (#700). Unpinned, this harness measured a
+    # model under conditions `ingest` never runs it in: `num_predict` absent, so
+    # a model that fails to terminate burns the full 600s transport deadline and
+    # the arm records a timeout rather than a verdict; and `num_ctx` absent, so
+    # the model reserves whatever window its own Modelfile ships -- the 32K/10 GB
+    # footprint #691 pinned away. Both matter most for exactly the comparison
+    # this harness now serves: a smaller model swapped in for the default is the
+    # case where "it rambled" and "it was faster" must not be confusable.
+    client = OllamaClient(
+        model=args.model,
+        max_generation_tokens=DEFAULT_MAX_GENERATION_TOKENS,
+        context_window=DEFAULT_CONTEXT_WINDOW,
+    )
     observed: list[dict[tuple[str, str], tuple[str, float]]] = []
     latencies: list[float] = []
 
@@ -209,6 +226,12 @@ def main() -> None:
                 "model": args.model,
                 "runs": args.runs,
                 "generated_at": stamp,
+                # The client settings are part of the arm's identity, not
+                # trivia (#700): they were unpinned before that issue, so a
+                # stored run that does not name them cannot be told apart from
+                # one measured under the old, unbounded conditions.
+                "max_generation_tokens": DEFAULT_MAX_GENERATION_TOKENS,
+                "context_window": DEFAULT_CONTEXT_WINDOW,
                 "outcomes": rows,
             },
             indent=2,

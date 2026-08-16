@@ -255,3 +255,48 @@ never bulk-apply asymmetric types; route them through per-item consent,
 zero LLM cost — filed as the follow-up from these numbers, where the
 flip check remains a candidate ANNOTATION (mark unverified, human
 decides) rather than an auto-degrade.
+
+## A smaller model on this stage (#700 lever 3) — NOT ADOPTED
+
+[#700](https://github.com/jasonssdev/openkos/issues/700) ranked "smaller models
+for mechanical tasks" third, and edge typing is where that claim is worth the
+most: it is the slowest classification stage in `curate`, and `docs/cli.md`
+budgets 200 untyped edges at 22.7 minutes.
+
+`qwen2.5:3b` (1.9 GB) against the default, **15 runs each** (345 judgements per
+arm), 2026-08-16, same machine and session, both with production's generation
+ceiling and context window pinned:
+
+| model | type accuracy | stability | degraded replies | run latency |
+| --- | --- | --- | --- | --- |
+| `qwen3:8b` *(default)* | 0.36 | **0.99** | 0 of 345 | **29.3s** |
+| `qwen2.5:3b` | 0.39 | **0.81** | 0 of 345 | **11.6s** |
+
+**2.5× faster and no less accurate — the cost is reproducibility.** The accuracy
+difference runs the small model's way and is not the point; at 0.36 against 0.39
+both models are simply bad at this task, and the good alternative (`gemma2:27b`,
+0.81 on the older fixture) is 15.6 GB and slower still. The stability difference
+is the real one: 0.81 modal share means the smaller model changes its answer
+across runs on roughly one edge in five, against one in a hundred for the
+default. Since [#624](https://github.com/jasonssdev/openkos/issues/624) every
+asymmetric suggestion passes through per-item consent, so an unstable suggester
+does not merely risk a wrong type — it makes the consent queue itself differ
+between two runs over an unchanged bundle.
+
+Not adopted, and deliberately **not** added to `RECOMMENDED_TASK_MODELS` either:
+that map means "measured best on this task's harness", which `qwen2.5:3b` is
+not. It is a speed-and-size trade, and the `models:` seam already accepts it
+for anyone who wants that trade on constrained hardware:
+`models: {edge_typing: qwen2.5:3b}`.
+
+**Do not compare arms here at small `--runs`.** At 3 runs per arm this same pair
+measured 0.36 against 0.35 — the ranking reversed — and the sibling harness
+`evals/contradictions/` recorded a 0.25 swing between two samples of one
+unchanged arm. Fifteen runs is the floor these numbers were taken at.
+
+**Two cautions for whoever reads the #516 table above.** The fixture has grown
+from 17 edges to 23 since that sweep, and this runner now pins the generation
+ceiling and context window it previously left to each model's own Modelfile.
+Both changed together, so `qwen3:8b` measuring 0.36 here rather than 0.44 cannot
+be attributed to either alone — and arms recorded before that client change are
+not comparable with arms recorded after it.
