@@ -93,12 +93,18 @@ from datetime import UTC, datetime
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(REPO_ROOT / "evals" / "extraction_cap"))
+# APPENDED, not inserted at zero: an insert would put the evals root
+# AHEAD of this harness's own directory, so a module added at the root
+# would shadow a same-named one beside this file (`fixtures.py` is the
+# obvious candidate).
+sys.path.append(str(REPO_ROOT / "evals"))
 
 # Cross-harness import, resolved at runtime through the `sys.path` insert
 # above; the sibling scripts beside `run_cap_eval` import it the same way.
 # No ignore: CI runs `mypy .` over the whole repository, which has
 # `run_cap_eval` in its checked set and resolves this. Checking this file
 # ALONE reports it unresolved -- follow CI, which is the contract.
+from harness_report import arm_identity_line  # noqa: E402
 from run_cap_eval import (  # noqa: E402
     UNJUDGED,
     GroundTruth,
@@ -383,9 +389,14 @@ def main() -> None:
         f"_Generated: {stamp}_ · model `{args.model}` · **{args.runs} runs per"
         f" arm** · fixture `{_FIXTURE}`.",
         "",
-        f"Generation ceiling `{DEFAULT_MAX_GENERATION_TOKENS}` · context window"
-        f" `{DEFAULT_CONTEXT_WINDOW}` · host `{args.host}` ·"
-        f" **`OLLAMA_NUM_PARALLEL={args.server_num_parallel}`**.",
+        arm_identity_line(
+            max_generation_tokens=DEFAULT_MAX_GENERATION_TOKENS,
+            context_window=DEFAULT_CONTEXT_WINDOW,
+            extra=(
+                f"host `{args.host}`",
+                f"**`OLLAMA_NUM_PARALLEL={args.server_num_parallel}`**",
+            ),
+        ),
         "",
         "Concurrency 1 is the shipped serial loop, not a one-worker pool.",
         "",
