@@ -324,12 +324,20 @@ cover this one too.
 cited ids all resolve to bundle concepts, which is a member of no
 single-Source closure, and whose `sensitivity` sits strictly below the
 high-water-mark of its cited concepts' levels. This category MUST be
-reported separately from `below-source-sensitivity` findings — it names
-descendants the `sensitivity-backfill` sweep cannot and will not raise, per
-that verb's per-Source scan scope — and its detail MUST name the
-descendant, its current level, and every cited concept id with that
-concept's level, and MUST mark the finding as not covered by
-`backfill-sensitivity`. A doc whose `provenance` cites two or more concepts
+reported separately from `below-source-sensitivity` findings — the two
+answer different questions about which single-Source closure a document
+belongs to, and therefore about whether `set-sensitivity <source>` alone
+would have reached it — and its detail MUST name the descendant, its current
+level, and every cited concept id with that concept's level.
+
+Since ADR-0016 the `sensitivity-backfill` sweep DOES repair these documents,
+so the detail MUST NOT mark the finding as uncovered by
+`backfill-sensitivity`. It MUST offer both remedies: the per-document
+`set-sensitivity` command and the bundle-wide sweep. The existing
+command-span rule is unchanged — exactly one runnable `openkos ...` command
+may appear inside a backtick span, and it MUST be the per-document one, so
+`next`'s reason line cannot echo a command in copy-paste shape that repairs
+more than the finding names. A doc whose `provenance` cites two or more concepts
 that all fall inside a single Source's closure MUST be reported as
 `below-source-sensitivity`, not as `multi-source-uncovered`.
 

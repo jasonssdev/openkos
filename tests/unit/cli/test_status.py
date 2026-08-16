@@ -486,13 +486,16 @@ def test_status_lists_below_source_sensitivity_under_needs_attention(
     assert "below-source-sensitivity" in section
 
 
-def test_status_marks_multi_source_uncovered_as_not_covered(
+def test_status_lists_multi_source_uncovered_with_both_remedies(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A doc that is a member of no single-Source closure is listed under
-    "needs attention", labeled `multi-source-uncovered` and explicitly
-    marked as not covered by `backfill-sensitivity`, and `status` still
-    exits 0 (design D3; #231)."""
+    "needs attention", labeled `multi-source-uncovered`, and `status` still
+    exits 0 (design D3; #231).
+
+    Since #697/ADR-0016 the sweep repairs this document, so the line names
+    the defect and both remedies instead of ruling `backfill-sensitivity`
+    out."""
     _init_workspace(tmp_path, monkeypatch)
     sources_dir = tmp_path / "bundle" / "sources"
     sources_dir.mkdir()
@@ -525,7 +528,9 @@ def test_status_marks_multi_source_uncovered_as_not_covered(
     section = result.stdout.split("Needs attention:", 1)[1]
     assert "concepts/mixed: " in section
     assert "multi-source-uncovered" in section
-    assert "not covered by" in section
+    assert "not covered by" not in section
+    assert "below the high-water mark of what it cites" in section
+    assert "backfill-sensitivity" in section
 
 
 # --- issue #257: dangling-provenance ---

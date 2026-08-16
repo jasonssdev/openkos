@@ -147,7 +147,17 @@ class TestResolveBackfillRaises:
             "concepts/mid",
         ]
 
-    def test_descendant_citing_two_unrelated_sources_is_never_raised(self) -> None:
+    def test_descendant_citing_two_unrelated_sources_is_now_raised(self) -> None:
+        """BEHAVIOR CHANGED by issue #697; this test previously asserted
+        `raises == []`.
+
+        ADR-0012 deferred the multi-Source case ("stays reported, not
+        resolved") and `lint` reported it as `multi-source-uncovered`. The
+        sweep now folds in `resolve_cited_high_water_raises`, so the concept
+        this closure rule cannot reach IS repaired -- see ADR-0016. The
+        per-Source closure half is unchanged and still exercised by every
+        other test in this class.
+        """
         files = {
             "sources/a.md": _source(sensitivity="confidential"),
             "sources/b.md": _source(sensitivity="confidential"),
@@ -158,7 +168,29 @@ class TestResolveBackfillRaises:
 
         raises = bundle_provenance.resolve_backfill_raises(files)
 
-        assert raises == []
+        assert [entry.concept_id for entry in raises] == ["concepts/both"]
+        assert raises[0].new_level == "confidential"
+
+    def test_the_closure_half_still_excludes_a_multi_source_descendant(self) -> None:
+        """The per-Source closure producer's own semantics are UNCHANGED by
+        #697 -- only the sweep that composes it gained a second producer. Kept
+        as a separate guard so a future edit cannot loosen
+        `provenance_closure`'s conservative subset rule and have the change
+        hide behind the fold above."""
+        files = {
+            "sources/a.md": _source(sensitivity="confidential"),
+            "sources/b.md": _source(sensitivity="confidential"),
+            "concepts/both.md": _concept(
+                sensitivity="public", provenance=["sources/a", "sources/b"]
+            ),
+        }
+
+        assert (
+            bundle_provenance.resolve_source_raises(
+                files, source_id="sources/a", level="confidential"
+            )
+            == []
+        )
 
     def test_merge_by_max_never_via_rank(self) -> None:
         """Two Sources both claim the same descendant via nested closures

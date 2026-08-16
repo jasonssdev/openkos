@@ -1018,8 +1018,16 @@ def check_below_source_sensitivity(docs: list[LintDoc]) -> list[LintFinding]:
       high-water-mark of its cited concepts' levels (folded via repeated
       `okf.combine_sensitivity`, never `okf._rank` -- ADR-0003 keeps that
       helper private). Its detail names the descendant, its current level,
-      and every cited concept id with that concept's level, and marks the
-      finding as not covered by `backfill-sensitivity`.
+      and every cited concept id with that concept's level.
+
+      SINCE ISSUE #697 the sweep DOES repair this document (ADR-0016:
+      `resolve_cited_high_water_raises` folds the same high-water mark this
+      check computes), so the detail no longer marks it as uncovered. The
+      finding kind survives the change because it still answers a different
+      question from `below-source-sensitivity` -- which single-Source closure
+      a document belongs to is what decides whether `set-sensitivity <source>`
+      alone would have reached it -- and because the two remedies differ in
+      blast radius: one document versus the whole bundle.
 
     A doc citing 2+ concepts that all fall inside ONE Source's closure is a
     member of that single closure and is therefore
@@ -1162,9 +1170,10 @@ def check_below_source_sensitivity(docs: list[LintDoc]) -> list[LintFinding]:
                 kind="multi-source-uncovered",
                 path=f"{doc.identity}.md",
                 detail=(
-                    f"sensitivity {doc.sensitivity!r} is not covered by the "
-                    f"backfill-sensitivity sweep (member of no single "
-                    f"Source's closure); {remedy_clause}; "
+                    f"sensitivity {doc.sensitivity!r} is below the high-water "
+                    f"mark of what it cites (member of no single Source's "
+                    f"closure); {remedy_clause}, or repair every such "
+                    f"document at once with the backfill-sensitivity sweep; "
                     f"cites: {cited_detail}"
                 ),
                 remediation=remediation,

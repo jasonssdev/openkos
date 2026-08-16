@@ -6971,6 +6971,19 @@ def backfill_sensitivity_cmd(
     the preview shown before confirmation, or declining the prompt, already
     serves as the dry run (spec Non-Goals).
 
+    SINCE ISSUE #697 the sweep has TWO producers, merged by max inside
+    `resolve_backfill_raises`. The per-Source closure walk above is one; the
+    other is `resolve_cited_high_water_raises`, which maintains ADR-0003's
+    high-water mark for a document whose provenance spans more than one
+    Source. ADR-0012 deferred that case ("stays reported, not resolved") and
+    ADR-0016 closes it: raising a cited Source used to leave every
+    multi-source insight below its own inputs, repairable only by hand, so
+    the `sensitivity` gate that withholds a document from an LLM send
+    (`sensitivity.blocks_llm_send`) kept passing content the operator had
+    just reclassified. `lint`'s `multi-source-uncovered` finding still
+    reports those documents -- it now points HERE as well as at
+    `set-sensitivity`, rather than ruling this verb out.
+
     Phase A: `require_workspace` -> `read_config` -> one `sorted(rglob)`
     bundle snapshot (reserved filenames skipped) -> `resolve_backfill_raises`
     computes every merged-by-max raise across every Source (design D4/D5).
@@ -7033,8 +7046,8 @@ def backfill_sensitivity_cmd(
     if not descendant_raises:
         typer.echo(
             "openkos backfill-sensitivity: nothing to backfill -- every "
-            "provenance descendant already meets or exceeds its Source's "
-            "sensitivity."
+            "document already meets or exceeds both its Source's sensitivity "
+            "and the high-water mark of everything it cites."
         )
         return
 
@@ -7050,8 +7063,8 @@ def backfill_sensitivity_cmd(
         )
         log_line = (
             f"**Backfill-sensitivity**: Raised {len(descendant_raises)} "
-            f"provenance descendant(s) to match their Source's sensitivity: "
-            f"{propagated}."
+            f"document(s) to their Source's sensitivity or to the high-water "
+            f"mark of what they cite: {propagated}."
         )
         new_log_text = bundle_log.insert_log_entry(
             log_text, now.astimezone().date(), log_line
@@ -7135,7 +7148,7 @@ def backfill_sensitivity_cmd(
     )
     typer.echo(
         f"openkos backfill-sensitivity: raised {len(descendant_raises)} "
-        f"provenance descendant(s) ({log_path.name} updated): {propagated}."
+        f"document(s) ({log_path.name} updated): {propagated}."
     )
 
     _autocommit(

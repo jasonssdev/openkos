@@ -503,3 +503,82 @@ def test_an_edit_landing_after_the_snapshot_observation_is_refused(
     assert changed_paths(before, snapshot_with_mtime(tmp_path)) == {
         Path("bundle/log.md")
     }
+
+
+# --- issue #697: the high-water mark is maintained, not only applied at birth ---
+
+
+def test_backfill_repairs_a_multi_source_insight_left_below_its_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #697's exact evidence, end to end on disk.
+
+    An insight is filed while every citation is `private`, so it is correctly
+    born `private`. One cited Source is raised to `confidential` afterwards.
+    Before ADR-0016 the sweep could not reach it -- the insight is a member of
+    no single Source's closure -- and the only repair was a manual
+    `set-sensitivity`. That matters beyond tidiness: `sensitivity` is the gate
+    `sensitivity.blocks_llm_send` reads, so the stale `private` level kept
+    sending reclassified content to the model.
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    sources_dir = tmp_path / "bundle" / "sources"
+    sources_dir.mkdir()
+    (sources_dir / "transcription1.md").write_text(
+        "---\ntype: Source\ntitle: T1\nresource: raw/t1.txt\n"
+        "sensitivity: confidential\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    (sources_dir / "transcription2.md").write_text(
+        "---\ntype: Source\ntitle: T2\nresource: raw/t2.txt\n"
+        "sensitivity: private\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    insights_dir = tmp_path / "bundle" / "insights"
+    insights_dir.mkdir()
+    insight = insights_dir / "relacion.md"
+    insight.write_text(
+        "---\ntype: Insight\ntitle: Relacion\nsensitivity: private\n"
+        "provenance:\n  - sources/transcription1\n  - sources/transcription2\n"
+        "---\nBody.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["backfill-sensitivity", "--auto"])
+
+    assert result.exit_code == 0
+    metadata, _ = okf.load_frontmatter(insight.read_text(encoding="utf-8"))
+    assert metadata["sensitivity"] == "confidential"
+    assert "insights/relacion" in result.output
+
+
+def test_backfill_leaves_a_multi_source_insight_already_at_the_mark(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The no-op path still reports nothing to do once the mark is met, so the
+    new producer cannot make the sweep permanently non-idempotent."""
+    _init_workspace(tmp_path, monkeypatch)
+    sources_dir = tmp_path / "bundle" / "sources"
+    sources_dir.mkdir()
+    (sources_dir / "a.md").write_text(
+        "---\ntype: Source\ntitle: A\nresource: raw/a.txt\n"
+        "sensitivity: confidential\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    (sources_dir / "b.md").write_text(
+        "---\ntype: Source\ntitle: B\nresource: raw/b.txt\n"
+        "sensitivity: private\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    insights_dir = tmp_path / "bundle" / "insights"
+    insights_dir.mkdir()
+    (insights_dir / "done.md").write_text(
+        "---\ntype: Insight\ntitle: Done\nsensitivity: confidential\n"
+        "provenance:\n  - sources/a\n  - sources/b\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["backfill-sensitivity", "--auto"])
+
+    assert result.exit_code == 0
+    assert "nothing to backfill" in result.output.lower()

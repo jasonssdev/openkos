@@ -313,9 +313,10 @@ distinct entries, reusing the same in-memory `docs` list from the
 `collect_docs()` call or any new bundle walk. Each surfaced
 `below-source-sensitivity` entry MUST name the descendant, its Source, and
 both sensitivity levels; each surfaced `multi-source-uncovered` entry MUST
-name the descendant and every cited concept id, and MUST be labeled as not
-covered by `backfill-sensitivity`. Findings MUST be informational: their
-presence MUST NOT cause a non-zero exit.
+name the descendant and every cited concept id. Since ADR-0016 it MUST NOT
+be labeled as not covered by `backfill-sensitivity`, because that sweep now
+repairs it. Findings MUST be informational: their presence MUST NOT cause a
+non-zero exit.
 
 #### Scenario: A below-Source descendant is surfaced under needs attention
 
@@ -328,12 +329,11 @@ presence MUST NOT cause a non-zero exit.
 #### Scenario: An uncovered multi-source descendant is surfaced distinctly
 
 - GIVEN a bundle containing a provenance descendant that is a member of no
-  single Source's closure, which the `sensitivity-backfill` sweep therefore
-  cannot raise
+  single Source's closure
 - WHEN `openkos status` runs
-- THEN it lists that descendant under "needs attention" as not covered by
-  `backfill-sensitivity`, distinct from any `below-source-sensitivity`
-  entry, and still exits 0
+- THEN it lists that descendant under "needs attention", naming it as below
+  the high-water mark of what it cites, distinct from any
+  `below-source-sensitivity` entry, and still exits 0
 
 #### Scenario: A clean bundle adds no new needs-attention entries
 

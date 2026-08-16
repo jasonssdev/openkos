@@ -152,7 +152,10 @@ def test_source_plus_foreign_derived_cite_is_multi_source_uncovered() -> None:
     assert finding.kind == "multi-source-uncovered"
     assert "sources/a" in finding.detail
     assert "concepts/from-c" in finding.detail
-    assert "not covered by" in finding.detail
+    # #697/ADR-0016 flipped this clause's polarity: the sweep now DOES repair
+    # this document, so the detail states the defect and offers both remedies
+    # instead of ruling the sweep out.
+    assert "below the high-water mark of what it cites" in finding.detail
     assert "backfill-sensitivity" in finding.detail
 
 
@@ -293,9 +296,11 @@ def test_multi_source_uncovered_names_set_sensitivity_as_the_resolving_verb() ->
 
     (finding,) = [f for f in findings if f.path == "concepts/mixed.md"]
     assert "`openkos set-sensitivity concepts/mixed confidential`" in finding.detail
-    # The negation stays: it is still true, and still the reason the sweep
-    # will not pick this up. It just no longer stands alone.
-    assert "not covered by" in finding.detail
+    # The negation is GONE (#697/ADR-0016): the sweep does pick this up now.
+    # What stays is the closure clause, which is still true and is still why
+    # this is a distinct finding kind.
+    assert "not covered by" not in finding.detail
+    assert "member of no single Source's closure" in finding.detail
 
 
 def test_multi_source_uncovered_carries_a_runnable_remediation() -> None:
@@ -432,7 +437,7 @@ def test_a_backtick_bearing_identity_never_forges_a_command_in_the_detail() -> N
     assert [s for s in re.findall(r"`([^`]+)`", finding.detail) if "openkos" in s] == []
     assert finding.remediation == ""
     # The finding still fires and still says what to do about it.
-    assert "not covered by" in finding.detail
+    assert "below the high-water mark of what it cites" in finding.detail
     assert "rename" in finding.detail
 
 
