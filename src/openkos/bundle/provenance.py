@@ -391,9 +391,10 @@ def _levels_by_id(files: Mapping[str, str]) -> dict[str, object]:
     `resolve_cited_high_water_raises` hands this value straight to
     `okf.DescendantRaise.current`, which a preview shows the operator as what
     the file HOLDS. Coercing would print `'42'` where the frontmatter holds
-    `42` -- a preview claiming a string the operator never wrote. That is the
-    property `test_a_present_but_dirty_sensitivity_fails_closed_and_propagates`
-    pins, and it is the only one a `str` coercion breaks.
+    `42` -- a preview claiming a string the operator never wrote. Of everything
+    stated here, that reporting property is the ONLY one a `str` coercion
+    breaks, and it is what
+    `test_a_present_but_dirty_sensitivity_fails_closed_and_propagates` pins.
 
     A file whose frontmatter fails to parse is SKIPPED, mirroring
     `_parse_provenance_by_id`.
@@ -445,12 +446,14 @@ def resolve_cited_high_water_raises(
 
     THE RE-SCAN IS NOT WHERE THE TIME GOES, so do not "fix" it first. The walk
     order is arbitrary, and on a linear chain inserted in reverse the loop
-    needs one pass per link -- genuinely quadratic. Measured (issue #736): a
-    real bundle shape, where every insight cites Sources DIRECTLY as `query
-    --save` files them, converges in TWO passes and spends 2.3% of the call in
-    this loop at 1k docs and at 10k alike; the other ~98% is the three
-    whole-bundle frontmatter parses above. Even the adversarial 400-deep
-    reverse chain -- a shape nothing in this product builds -- costs 36ms.
+    needs one pass per link -- genuinely quadratic. Measured once, on synthetic
+    bundles, 2026-08-16 (issue #736); the ratios are what to trust, not the
+    millisecond figures, which are one machine on one day. A real bundle shape,
+    where every insight cites Sources DIRECTLY as `query --save` files them,
+    converged in TWO passes and spent 2.3% of the call in this loop at 1k docs
+    and at 10k alike; the other ~98% was the three whole-bundle frontmatter
+    parses above. Even the adversarial 400-deep reverse chain -- a shape
+    nothing in this product builds -- cost 36ms.
     Reordering the walk topologically was therefore REJECTED: it optimizes 2%
     of a maintenance verb an operator runs explicitly. If this call ever does
     need to be faster, collapse the three parses into one.
