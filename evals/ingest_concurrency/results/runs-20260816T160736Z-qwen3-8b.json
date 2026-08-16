@@ -1,0 +1,1409 @@
+{
+  "fixture": "medium-10-reunion-plataforma",
+  "windows": [
+    3913,
+    3874,
+    3988,
+    940
+  ],
+  "model": "qwen3:8b",
+  "host": "http://127.0.0.1:11435",
+  "runs": 15,
+  "generated_at": "20260816T160736Z",
+  "server_num_parallel": 4,
+  "max_generation_tokens": 8192,
+  "context_window": 12288,
+  "arms": {
+    "1": {
+      "wall": [
+        149.01413341698935,
+        158.0314756250009,
+        137.0888683750236,
+        150.85780800000066,
+        165.02255758401589,
+        125.94993029200123,
+        155.16988212498836,
+        134.34008129200083,
+        156.28622512501897,
+        145.87661979100085,
+        163.9482165419904,
+        164.00579512497643,
+        185.33559420800884,
+        181.29181016702205,
+        181.81670979200862
+      ],
+      "recall": [
+        0.36363636363636365,
+        0.5454545454545454,
+        0.2727272727272727,
+        0.45454545454545453,
+        0.36363636363636365,
+        0.2727272727272727,
+        0.5454545454545454,
+        0.2727272727272727,
+        0.2727272727272727,
+        0.45454545454545453,
+        0.45454545454545453,
+        0.5454545454545454,
+        0.45454545454545453,
+        0.5454545454545454,
+        0.5454545454545454
+      ],
+      "precision": [
+        1.0,
+        0.75,
+        1.0,
+        1.0,
+        0.8,
+        1.0,
+        0.75,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        0.7142857142857143,
+        1.0,
+        0.75
+      ],
+      "per_call_latencies_completion_order": [
+        [
+          54.435646041005384,
+          54.284497124986956,
+          32.306848916981835,
+          7.987122916994849
+        ],
+        [
+          59.720431499998085,
+          57.5424013339798,
+          32.526503208995564,
+          8.242124374984996
+        ],
+        [
+          28.562947124999482,
+          68.72708945898921,
+          31.581673749984475,
+          8.217154542013304
+        ],
+        [
+          41.622482375008985,
+          68.9170458339795,
+          31.959256958012702,
+          8.359009750012774
+        ],
+        [
+          55.86713279201649,
+          68.9808859170007,
+          32.13968824999756,
+          8.034846624999773
+        ],
+        [
+          28.18979712500004,
+          57.42212008300703,
+          32.24685075000161,
+          8.091144125006394
+        ],
+        [
+          57.80036704201484,
+          57.74733966597705,
+          31.507841540995287,
+          8.114327791990945
+        ],
+        [
+          27.93151216697879,
+          67.07065441700979,
+          31.61453254200751,
+          7.723378833994502
+        ],
+        [
+          28.91655787502532,
+          87.275177833013,
+          31.779336040985072,
+          8.315149500005646
+        ],
+        [
+          54.43636966700433,
+          50.84660495899152,
+          32.36526683400734,
+          8.228374208003515
+        ],
+        [
+          54.88359391599079,
+          69.32818287500413,
+          32.11123233300168,
+          7.6252021249965765
+        ],
+        [
+          55.02960229097516,
+          68.92540562499198,
+          32.219844250008464,
+          7.830938665982103
+        ],
+        [
+          58.607737040991196,
+          87.0331141250208,
+          31.573728332994506,
+          8.12101045800955
+        ],
+        [
+          54.55905166701996,
+          86.78503612501663,
+          31.819268916995497,
+          8.12843662497471
+        ],
+        [
+          56.83555545899435,
+          84.9977041670063,
+          31.90208483301103,
+          8.081361166987335
+        ]
+      ],
+      "titles": [
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Decisi\u00f3n sobre el \u00edndice aproximado",
+          "Latencia de b\u00fasqueda",
+          "Problema de los archivos temporales",
+          "Problema de monitoreo",
+          "Actualizaci\u00f3n del modelo de embeddings",
+          "Discussion on Model Versioning and Vector Embeddings",
+          "Model Embedding Drift",
+          "Document Duplication in Corpus",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Decisi\u00f3n sobre el \u00edndice aproximado",
+          "Latencia de b\u00fasqueda vectorial",
+          "Incidente de ca\u00edda del servicio",
+          "Problema de rotaci\u00f3n de credenciales",
+          "Problema de respaldos",
+          "Cambio de modelo de embeddings",
+          "Discussion on Model Versioning and Vector Embeddings",
+          "Model Versioning and Vector Embeddings Derivation",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Backup and Security Procedures"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Discussion on Model Versioning and Vector Embeddings",
+          "Model Versioning and Vector Embeddings Derivation",
+          "Document Duplication in Corpus Processing",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Backup and Security Procedures"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Decisi\u00f3n sobre el \u00edndice aproximado",
+          "Latencia de b\u00fasqueda",
+          "Modelo de embeddings",
+          "Discussion on Model Versioning and Vector Embeddings",
+          "Model Versioning and Vector Embeddings Drift",
+          "Document Duplication in Corpus Processing",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Data Backup and Security Procedures"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Decisi\u00f3n sobre el \u00edndice aproximado",
+          "Latencia de b\u00fasqueda",
+          "Incidente de ca\u00edda de servicio",
+          "Problema de rotaci\u00f3n de credenciales",
+          "Discussion on Model Versioning and Vector Embeddings",
+          "Model Versioning and Vector Embeddings Drift",
+          "Document Duplication in Corpus Processing",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Data Backup and Security Procedures"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Discussion on Model Versioning and Vector Embeddings",
+          "Model Versioning and Embedding Drift",
+          "Document Duplication in Corpus",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Backup and Security Procedures"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Decisi\u00f3n sobre el \u00edndice aproximado",
+          "Latencia de b\u00fasqueda",
+          "Incidente de la semana pasada",
+          "Rotaci\u00f3n de credenciales",
+          "Respaldos",
+          "Modelo de embeddings",
+          "Discussion on Model Versioning and Vector Embeddings",
+          "Model Versioning and Embedding Drift",
+          "Document Duplication in the Corpus",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Backup and Security Procedures"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Discussion on Model Versioning and Vector Embeddings",
+          "Model Versioning and Vector Embeddings Derivation",
+          "Document Duplication in a Corpus",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Discussion on Model Versioning and Vector Embeddings",
+          "Model Versioning and Vector Embeddings Derivation",
+          "Document Duplication in the Corpus",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Backup and Security Procedures"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Cambio a \u00edndice aproximado",
+          "Latencia de b\u00fasqueda",
+          "Incidente de ca\u00edda del servicio",
+          "Cambios en el modelo de embeddings",
+          "Discussion on Model Versioning and Embedding Drift",
+          "Embedding Drift",
+          "Document Duplication in Corpus",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Data Backup and Security Procedures"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Decisi\u00f3n sobre el \u00edndice aproximado",
+          "Latencia de b\u00fasqueda vectorial",
+          "Incidente de ca\u00edda del servicio",
+          "Cambios en el modelo de embeddings",
+          "Discussion on Model Versioning and Vector Embeddings",
+          "Model Versioning and Vector Embeddings Drift",
+          "Document Duplication in the Corpus",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Decisi\u00f3n sobre el \u00edndice aproximado",
+          "Latencia de b\u00fasqueda",
+          "Incidente de ca\u00edda del servicio",
+          "Cambio de modelo de embeddings",
+          "Discussion on Model Versioning and Vector Embeddings",
+          "Model Versioning and Vector Embeddings",
+          "Document Duplication in Corpus Processing",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Decisi\u00f3n sobre el \u00edndice aproximado",
+          "Latencia de b\u00fasqueda",
+          "Incidente de la semana pasada",
+          "Rotaci\u00f3n de credenciales",
+          "Respaldos",
+          "Cambios en los modelos de embeddings",
+          "Discussion on Model Versioning and Vector Embeddings",
+          "Model Versioning and Vector Embeddings Derivation",
+          "Document Duplication in Corpus Processing",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Backup and Security Procedures"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Decisi\u00f3n sobre el \u00edndice aproximado",
+          "Latencia de b\u00fasqueda",
+          "Incidente de ca\u00edda del servicio",
+          "Cambio de modelo de embeddings",
+          "Discussion on Model Versioning and Vector Embeddings",
+          "Model Versioning and Vector Embeddings Derivation",
+          "Document Duplication in Corpus Processing",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Data Backup and Security Procedures"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Decisi\u00f3n sobre el \u00edndice aproximado",
+          "Latencia de b\u00fasqueda",
+          "Incidente de la semana pasada",
+          "Rotaci\u00f3n de credenciales",
+          "Respaldos",
+          "Modelo de embeddings",
+          "Discussion on Model Versioning and Vector Embeddings",
+          "Model Versioning and Vector Embeddings",
+          "Document Duplication in Corpus",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Data Backup and Security Procedures"
+        ]
+      ]
+    },
+    "2": {
+      "wall": [
+        153.16954500001157,
+        106.52128925002762,
+        117.33645254198927,
+        117.88741866700002,
+        123.47924262500601,
+        77.90838383301161,
+        121.84651825000765,
+        110.58213029100443,
+        155.9986792090058,
+        136.75208970802487,
+        124.92740670900093,
+        156.62947108299704,
+        125.02990449999925,
+        117.23965216698707,
+        115.82777049997821
+      ],
+      "recall": [
+        0.5454545454545454,
+        0.45454545454545453,
+        0.45454545454545453,
+        0.45454545454545453,
+        0.5454545454545454,
+        0.2727272727272727,
+        0.2727272727272727,
+        0.5454545454545454,
+        0.5454545454545454,
+        0.5454545454545454,
+        0.5454545454545454,
+        0.5454545454545454,
+        0.2727272727272727,
+        0.5454545454545454,
+        0.5454545454545454
+      ],
+      "precision": [
+        0.75,
+        1.0,
+        0.8333333333333334,
+        0.8333333333333334,
+        1.0,
+        1.0,
+        1.0,
+        0.75,
+        0.8571428571428571,
+        0.75,
+        0.75,
+        1.0,
+        1.0,
+        0.8571428571428571,
+        1.0
+      ],
+      "per_call_latencies_completion_order": [
+        [
+          93.72602354097762,
+          137.78956983299577,
+          12.877949874993647,
+          59.44295837500249
+        ],
+        [
+          43.16633837498375,
+          94.61086825001985,
+          62.166800082981354,
+          11.910140125022735
+        ],
+        [
+          79.79046379201463,
+          82.17832637499669,
+          12.509842583007412,
+          37.54564945798484
+        ],
+        [
+          80.29134799999883,
+          82.75898425001651,
+          12.480268999992404,
+          37.59586162501364
+        ],
+        [
+          81.40416566698696,
+          92.65154916601023,
+          12.534107707993826,
+          42.07489870899008
+        ],
+        [
+          42.716335834003985,
+          43.258579999994254,
+          11.911244624992833,
+          35.19175912498031
+        ],
+        [
+          41.76945333299227,
+          64.32131504200515,
+          121.53803470800631,
+          15.755542958999285
+        ],
+        [
+          42.766970625001704,
+          100.46362704201601,
+          61.96871391701279,
+          10.118197040981613
+        ],
+        [
+          89.72611233300995,
+          145.25535812499584,
+          62.9212725420075,
+          10.742977374990005
+        ],
+        [
+          90.48773658298887,
+          109.02018950000638,
+          12.567720999999437,
+          46.264185541978804
+        ],
+        [
+          80.29027929101721,
+          95.02607745799469,
+          12.563768499996513,
+          44.636783333990024
+        ],
+        [
+          89.18192612499115,
+          146.8670772500045,
+          63.613353041990194,
+          9.762049500015564
+        ],
+        [
+          43.29783062500064,
+          66.37458766700001,
+          123.45104466599878,
+          15.357315166998887
+        ],
+        [
+          42.8387448330177,
+          64.71253541699843,
+          112.07870783301769,
+          9.687870791007299
+        ],
+        [
+          79.29813224999816,
+          81.23902370798169,
+          12.243757749994984,
+          36.529262041993206
+        ]
+      ],
+      "titles": [
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Decisi\u00f3n sobre el \u00edndice aproximado",
+          "Latencia de b\u00fasqueda vectorial",
+          "Incidente de la semana pasada",
+          "Rotaci\u00f3n de credenciales",
+          "Respaldos",
+          "Cambio de modelo de embeddings",
+          "Discussion on Model Versioning and Vector Embeddings",
+          "Model Versioning and Vector Embeddings Issues",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Backup and Security Procedures"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Decisi\u00f3n sobre el \u00edndice aproximado",
+          "Latencia de b\u00fasqueda",
+          "Incidente de ca\u00edda del servicio",
+          "Cambios en el modelo de embeddings",
+          "Discussion on Model Versioning and Vector Embeddings",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Data Backup and Security Procedures"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Decisi\u00f3n sobre el \u00edndice aproximado",
+          "Latencia de b\u00fasqueda vectorial",
+          "Problema de acumulaci\u00f3n de archivos temporales",
+          "Problema de monitoreo y alertas",
+          "Cambio de modelo de embeddings",
+          "Discussion on Model Versioning and Embedding Drift",
+          "Embedding Drift",
+          "Document Duplication in Corpus",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Backup and Security Procedures"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Decisi\u00f3n sobre el \u00edndice aproximado",
+          "Latencia de b\u00fasqueda",
+          "Problema de acumulaci\u00f3n de archivos temporales",
+          "Problema de configuraci\u00f3n de alertas",
+          "Cambio de modelo de embeddings",
+          "Discussion on Model Versioning and Vector Embeddings",
+          "Vector Embeddings Drift",
+          "Document Duplication in Corpus",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Backup and Security Procedures"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Decisi\u00f3n sobre el \u00edndice aproximado",
+          "Latencia de b\u00fasqueda",
+          "Incidente de la semana pasada",
+          "Modelo de embeddings",
+          "Discussion on Model Versioning and Vector Embeddings",
+          "Model Versioning and Embedding Drift",
+          "Document Duplication in the Corpus",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Data Backup and Security Procedures"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Discusi\u00f3n sobre problemas de deriva en embeddings y duplicados en el corpus",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Discussion on Model Versioning and Vector Embeddings",
+          "Model Versioning and Vector Embeddings Derivation",
+          "Document Duplication in Corpus Processing",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Decisi\u00f3n sobre el \u00edndice aproximado",
+          "Latencia de b\u00fasqueda",
+          "Incidente de la semana pasada",
+          "Rotaci\u00f3n de credenciales",
+          "Respaldos",
+          "Modelo de embeddings",
+          "Discusi\u00f3n sobre problemas de modelado y duplicaci\u00f3n de documentos",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Backup and Security Procedures"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Decisi\u00f3n sobre el \u00edndice aproximado",
+          "Latencia de b\u00fasqueda vectorial",
+          "Incidente de ca\u00edda del servicio",
+          "Rotaci\u00f3n de credenciales",
+          "Respaldos de la plataforma",
+          "Cambio de modelo de embeddings",
+          "Discussion on Model Versioning and Vector Embeddings",
+          "Model Versioning and Vector Embeddings",
+          "Data Duplication in a Corpus",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Backup and Security Procedures"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Decisi\u00f3n sobre el \u00edndice aproximado",
+          "Latencia de b\u00fasqueda",
+          "Incidente de ca\u00edda del servicio",
+          "Problema de rotaci\u00f3n de credenciales",
+          "Problema de respaldos",
+          "Cambio de modelo de embeddings",
+          "Discussion on Model Versioning and Vector Embeddings",
+          "Model Versioning and Vector Embeddings Derivation",
+          "Document Duplication in Corpus Processing",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Backup and Security Procedures"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Decisi\u00f3n sobre el \u00edndice aproximado",
+          "Latencia de b\u00fasqueda vectorial",
+          "Incidente de ca\u00edda del servicio",
+          "Problema de rotaci\u00f3n de credenciales",
+          "Problema de respaldos",
+          "Cambio de modelo de embeddings",
+          "Discussion on Model Versioning and Vector Embedding Drift",
+          "Model Embedding Drift",
+          "Document Duplication in Corpus",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Backup and Security Procedures"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Decisi\u00f3n sobre el \u00edndice aproximado",
+          "Latencia de b\u00fasqueda",
+          "Incidente de la semana pasada",
+          "Problema de la rotaci\u00f3n de credenciales",
+          "Problema de los respaldos",
+          "Cambio de modelo de embeddings",
+          "Discussion on Model Versioning and Vector Embeddings",
+          "Model Versioning and Vector Embeddings Derivation",
+          "Document Duplication in Corpus Processing",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Discussion on Model Versioning and Vector Embeddings",
+          "Model Versioning and Vector Embeddings Derivation",
+          "Document Duplication in Corpus Processing",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Data Backup and Security Procedures"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Decisi\u00f3n sobre cambio de \u00edndice aproximado",
+          "Latencia de b\u00fasqueda",
+          "Incidente de ca\u00edda del servicio",
+          "Problema de respaldos",
+          "Cambio de modelo de embeddings",
+          "Discusi\u00f3n sobre problemas t\u00e9cnicos en el modelo de embeddings",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Backup and Security Procedures"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Decisi\u00f3n sobre el \u00edndice aproximado",
+          "Latencia de b\u00fasqueda",
+          "Incidente de ca\u00edda del servicio",
+          "Modelo de embeddings",
+          "Discussion on Model Versioning and Vector Embeddings",
+          "Model Embedding Drift",
+          "Document Duplication in Corpus",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Backup and Security Procedures"
+        ]
+      ]
+    },
+    "3": {
+      "wall": [
+        123.1195430830121,
+        137.94424437501584,
+        124.49463258398464,
+        123.43634866698994,
+        123.73680991699803,
+        109.7311788329971,
+        125.76316499998211,
+        83.28364999999758,
+        123.46798704200773,
+        123.12285154202254,
+        136.01203204199555,
+        128.9274185000104,
+        127.26763141699485,
+        139.38340204200358,
+        135.51453479198972
+      ],
+      "recall": [
+        0.5454545454545454,
+        0.36363636363636365,
+        0.45454545454545453,
+        0.5454545454545454,
+        0.5454545454545454,
+        0.2727272727272727,
+        0.5454545454545454,
+        0.2727272727272727,
+        0.2727272727272727,
+        0.2727272727272727,
+        0.5454545454545454,
+        0.6363636363636364,
+        0.45454545454545453,
+        0.2727272727272727,
+        0.45454545454545453
+      ],
+      "precision": [
+        0.75,
+        0.8,
+        1.0,
+        0.75,
+        0.75,
+        1.0,
+        0.75,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        0.875,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "per_call_latencies_completion_order": [
+        [
+          82.74399270897266,
+          18.87105945800431,
+          115.77630508298171,
+          123.11936512499233
+        ],
+        [
+          84.29376441700151,
+          18.49470375000965,
+          125.45057012498728,
+          137.9439242919907
+        ],
+        [
+          82.24224254200817,
+          18.51517379199504,
+          121.45303916599369,
+          124.49431104198447
+        ],
+        [
+          80.61731408300693,
+          18.970567749987822,
+          116.9984938330017,
+          123.43617666600039
+        ],
+        [
+          82.14488649999839,
+          18.463590583007317,
+          114.49937229201896,
+          123.73663808300626
+        ],
+        [
+          71.5968145840161,
+          79.32704679097515,
+          17.968208457983565,
+          109.73087212498649
+        ],
+        [
+          79.04972841701237,
+          18.14927770898794,
+          116.73139733399148,
+          125.76298554198002
+        ],
+        [
+          72.95378670899663,
+          73.53866329099401,
+          78.50181762501597,
+          10.329632542008767
+        ],
+        [
+          72.0538797499903,
+          82.31004074998782,
+          19.088480417005485,
+          123.46769004201633
+        ],
+        [
+          72.87579745898256,
+          80.79941879198304,
+          18.667007209005533,
+          123.12253312498797
+        ],
+        [
+          80.85659699997632,
+          18.698444042005576,
+          120.91548141601379,
+          136.01173025000026
+        ],
+        [
+          82.66493033300503,
+          106.94087737501832,
+          123.63215758401202,
+          46.262013208994176
+        ],
+        [
+          81.17070449999301,
+          18.622304374992382,
+          119.16374812499271,
+          127.26745062501868
+        ],
+        [
+          71.70595683300053,
+          80.73073520799517,
+          18.636144290998345,
+          139.38310787500814
+        ],
+        [
+          82.08100975002162,
+          18.277530874998774,
+          124.25539312500041,
+          135.51422249997267
+        ]
+      ],
+      "titles": [
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Decisi\u00f3n sobre el \u00edndice aproximado",
+          "Latencia de b\u00fasqueda vectorial",
+          "Incidente de ca\u00edda del servicio",
+          "Problema de rotaci\u00f3n de credenciales",
+          "Problema de respaldos",
+          "Cambio de modelo de embeddings",
+          "Discussion on Model Versioning and Embedding Drift",
+          "Embedding Drift",
+          "Document Duplication in Corpus",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Backup and Security Procedures"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Decisi\u00f3n sobre el uso de \u00edndices aproximados",
+          "Latencia de b\u00fasqueda vectorial",
+          "Problema de acumulaci\u00f3n de archivos temporales",
+          "Alertas de monitoreo y su configuraci\u00f3n",
+          "Cambios en el modelo de embeddings",
+          "Discussion on Model Versioning and Vector Embeddings",
+          "Model Versioning and Embedding Drift",
+          "Document Duplication in the Corpus",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Backup and Security Procedures"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Decisi\u00f3n sobre \u00edndice aproximado",
+          "Latencia de b\u00fasqueda",
+          "Incidente de ca\u00edda de servicio",
+          "Modelo de embeddings",
+          "Discussion on Model Versioning and Vector Embeddings",
+          "Model Versioning and Vector Embeddings Issues",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Backup and Security Procedures"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Decisi\u00f3n sobre el \u00edndice aproximado",
+          "Latencia de b\u00fasqueda",
+          "Incidente de ca\u00edda del servicio",
+          "Rotaci\u00f3n de credenciales",
+          "Respaldos",
+          "Modelo de embeddings",
+          "Discussion on Model Versioning and Vector Embedding Drift",
+          "Vector Embedding Drift",
+          "Document Duplication in Corpus",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Data Backup and Security Procedures"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Decisi\u00f3n sobre el \u00edndice aproximado",
+          "Latencia de b\u00fasqueda",
+          "Incidente de ca\u00edda del servicio",
+          "Rotaci\u00f3n de credenciales",
+          "Respaldos",
+          "Modelo de embeddings",
+          "Discussion on Model Vector Versioning and Embedding Drift",
+          "Embedding Drift",
+          "Data Duplication in Corpus",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Data Backup and Security Procedures"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Discussion on Model Versioning and Vector Embeddings",
+          "Model Versioning and Vector Embeddings",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Backup and Security Procedures"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Decisi\u00f3n sobre la latencia de b\u00fasqueda",
+          "Latencia de b\u00fasqueda",
+          "Incidente de la semana pasada",
+          "Rotaci\u00f3n de credenciales",
+          "Respaldos",
+          "Modelo de embeddings",
+          "Discussion on Model Versioning and Vector Embeddings",
+          "Model Embedding Drift",
+          "Document Duplication in Corpus",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Backup and Security Procedures"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Discusi\u00f3n sobre problemas de deriva del modelo de embeddings y duplicados en el corpus",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Backup and Security Procedures"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Discussion on Model Versioning and Vector Embeddings",
+          "Model Versioning and Vector Embeddings Derivation",
+          "Document Duplication in Corpus Processing",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Backup and Security Procedures"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Discussion on Model Versioning and Vector Embeddings",
+          "Model Versioning and Vector Embeddings Derivation",
+          "Document Duplication in Corpus Processing",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Backup and Security Procedures"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Decisi\u00f3n sobre el \u00edndice aproximado",
+          "Latencia de b\u00fasqueda",
+          "Incidente de ca\u00edda del servicio",
+          "Modelo de embeddings",
+          "Discussion on Model Versioning and Vector Embeddings",
+          "Model Versioning and Vector Embeddings Derivation",
+          "Document Duplication in Corpus Processing",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Backup and Security Procedures"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Decisi\u00f3n sobre el \u00edndice aproximado",
+          "Latencia de b\u00fasqueda",
+          "Incidente de ca\u00edda del servicio",
+          "Modelo de embeddings",
+          "Discusi\u00f3n sobre problemas t\u00e9cnicos en el modelo de embeddings",
+          "Deriva del modelo de embeddings",
+          "Duplicaci\u00f3n de documentos en el corpus",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Backup and Security Procedures",
+          "Encryption of Backups",
+          "Retention of Records",
+          "Documentation of Credential Rotation Procedure",
+          "Measurement of Vector Search Latency",
+          "Handling of Embedding Model Drift"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Decisi\u00f3n sobre el \u00edndice aproximado",
+          "Latencia de b\u00fasqueda",
+          "Incidente de ca\u00edda del servicio",
+          "Problema de escalabilidad de b\u00fasqueda",
+          "Problema de los vectores de embeddings",
+          "Discussion on Model Versioning and Vector Embeddings",
+          "Model Embeddings Drift",
+          "Document Duplication in Corpus",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Data Backup and Security Procedures"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Discussion on Model Versioning and Vector Embeddings",
+          "Model Versioning and Vector Embeddings Derivation",
+          "Document Duplication in Corpus Processing",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Data Backup and Security Procedures"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Decisi\u00f3n sobre el \u00edndice aproximado",
+          "Latencia de b\u00fasqueda",
+          "Incidente de la semana pasada",
+          "Respaldos y seguridad",
+          "Discussion on Model Versioning and Vector Embeddings",
+          "Model Versioning and Vector Embeddings Derivation",
+          "Document Duplication in the Corpus",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Backup and Security Procedures"
+        ]
+      ]
+    },
+    "4": {
+      "wall": [
+        108.40208025000175,
+        107.75790754199261,
+        124.61350612499518,
+        142.48390120800468,
+        139.44078750000335,
+        118.70866337500047,
+        147.2246650409943,
+        140.80650875001447,
+        137.86307195801055,
+        114.89448995800922,
+        128.941614499985,
+        125.56722841601004,
+        138.34425487500266,
+        83.49771162500838,
+        110.91236458398635
+      ],
+      "recall": [
+        0.2727272727272727,
+        0.2727272727272727,
+        0.45454545454545453,
+        0.2727272727272727,
+        0.5454545454545454,
+        0.45454545454545453,
+        0.45454545454545453,
+        0.5454545454545454,
+        0.36363636363636365,
+        0.45454545454545453,
+        0.5454545454545454,
+        0.45454545454545453,
+        0.5454545454545454,
+        0.2727272727272727,
+        0.5454545454545454
+      ],
+      "precision": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        0.75,
+        1.0,
+        1.0,
+        0.75,
+        1.0,
+        0.7142857142857143,
+        0.75,
+        1.0,
+        1.0,
+        1.0,
+        0.75
+      ],
+      "per_call_latencies_completion_order": [
+        [
+          29.355020042014075,
+          81.00214891601354,
+          87.31376129199634,
+          108.40171412497875
+        ],
+        [
+          29.659528999996837,
+          79.92965420900146,
+          87.32990770900506,
+          107.75756179200835
+        ],
+        [
+          29.746617790980963,
+          90.8203697919962,
+          123.7363153329934,
+          124.61330995798926
+        ],
+        [
+          27.334060416003922,
+          80.63771583299967,
+          87.47166345900041,
+          142.4835665000137
+        ],
+        [
+          27.52335950001725,
+          88.61630625001271,
+          128.72660016600275,
+          139.44045187500888
+        ],
+        [
+          29.220964958018158,
+          87.35397716599982,
+          117.02127279099659,
+          118.70834937499603
+        ],
+        [
+          28.604862750013126,
+          87.31986958399648,
+          103.83848066700739,
+          147.22434037501807
+        ],
+        [
+          29.255596833012532,
+          89.84734266702435,
+          130.23821079099434,
+          140.80615395799396
+        ],
+        [
+          29.157846957998117,
+          90.94988729199395,
+          121.58191745801014,
+          137.86272791601368
+        ],
+        [
+          29.1412474589888,
+          81.5701439580007,
+          88.94276191698737,
+          114.89426416700007
+        ],
+        [
+          29.245665041991742,
+          92.33816699997988,
+          124.41324583400274,
+          128.9414275829913
+        ],
+        [
+          28.356734375003725,
+          85.46368083401467,
+          122.59159758299938,
+          125.56688454101095
+        ],
+        [
+          28.599593791004736,
+          90.26389649999328,
+          123.14137683299487,
+          138.3439166660246
+        ],
+        [
+          28.688009916018927,
+          79.51107083298848,
+          79.81339208400459,
+          83.49726566701429
+        ],
+        [
+          28.783569457998965,
+          78.96742674999405,
+          85.5169292089995,
+          110.91217991602025
+        ]
+      ],
+      "titles": [
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Discussion on Model Versioning and Vector Embedding Drift",
+          "Model Embedding Drift",
+          "Document Duplication in Corpus",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Backup and Security Procedures"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Discussion on Model Versioning and Vector Embedding Drift",
+          "Vector Embedding Drift",
+          "Document Duplication in the Corpus",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Data Backup and Security Procedures"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Decisi\u00f3n sobre el uso de \u00edndices aproximados",
+          "Latencia de b\u00fasqueda vectorial",
+          "Incidente de ca\u00edda del servicio",
+          "Cambios en el modelo de embeddings",
+          "Discussion on Model Versioning and Vector Embeddings",
+          "Model Embedding Drift",
+          "Document Duplication in Corpus",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Data Backup and Security Procedures"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Discussion on Model Versioning and Vector Embeddings",
+          "Model Versioning and Vector Embeddings Derivation",
+          "Document Duplication in Corpus Processing",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Decisi\u00f3n sobre el cambio a un \u00edndice aproximado",
+          "Latencia de b\u00fasqueda",
+          "Incidente de ca\u00edda del servicio",
+          "Rotaci\u00f3n de credenciales",
+          "Respaldos",
+          "Modelo de embeddings",
+          "Discussion on Model Versioning and Vector Embeddings",
+          "Model Versioning and Vector Embeddings Derivation",
+          "Document Duplication in a Corpus",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Data Security Procedures"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Decisi\u00f3n sobre el \u00edndice aproximado",
+          "Latencia de b\u00fasqueda",
+          "Problemas de almacenamiento",
+          "Modelo de embeddings",
+          "Discussion on Model Versioning and Vector Embeddings",
+          "Model Embedding Drift",
+          "Document Duplication in Corpus",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Data Backup and Security Procedures"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Decisi\u00f3n sobre el \u00edndice aproximado",
+          "Latencia de b\u00fasqueda",
+          "Modelo de embeddings",
+          "Discussion on Model Versioning and Vector Embeddings",
+          "Model Versioning and Vector Embeddings Derivation",
+          "Document Duplication in Corpus Processing",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Data Backup and Security Procedures"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Decisi\u00f3n sobre el \u00edndice aproximado",
+          "Latencia de b\u00fasqueda",
+          "Incidente de la semana pasada",
+          "Rotaci\u00f3n de credenciales",
+          "Respaldos",
+          "Modelo de embeddings",
+          "Discussion on Model Versioning and Vector Embeddings",
+          "Model Versioning and Vector Embeddings Derivation",
+          "Document Duplication in Corpus Processing",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Data Backup and Security Procedures"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Decisi\u00f3n sobre el \u00edndice aproximado",
+          "Latencia de b\u00fasqueda",
+          "Problema de los archivos temporales",
+          "Cambios en el modelo de embeddings",
+          "Discussion on Model Versioning and Vector Embeddings",
+          "Model Versioning and Vector Embeddings Derivation",
+          "Document Duplication in Corpus Processing",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Data Backup and Security Procedures"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Decisi\u00f3n sobre el cambio al \u00edndice aproximado",
+          "Latencia de b\u00fasqueda",
+          "Incidente de ca\u00edda de servicio",
+          "Rotaci\u00f3n de credenciales",
+          "Respaldos",
+          "Modelo de embeddings",
+          "Discusi\u00f3n sobre problemas t\u00e9cnicos en el modelo de embeddings",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Data Backup and Security Procedures"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Decisi\u00f3n sobre el \u00edndice aproximado",
+          "Latencia de b\u00fasqueda",
+          "Incidente de la semana pasada",
+          "Rotaci\u00f3n de credenciales",
+          "Respaldos",
+          "Modelo de embeddings",
+          "Discussion on Model Versioning and Vector Embeddings",
+          "Model Embedding Drift",
+          "Document Duplication in Corpus",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Backup and Security Procedures"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Decisi\u00f3n sobre el \u00edndice aproximado",
+          "Latencia de b\u00fasqueda",
+          "Incidente de ca\u00edda del servicio",
+          "Cambios en el modelo de embeddings",
+          "Discussion on Model Versioning and Vector Embeddings",
+          "Model Versioning and Vector Embeddings Derivation",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Data Backup and Security Procedures"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Decisi\u00f3n sobre el \u00edndice aproximado",
+          "Latencia de b\u00fasqueda",
+          "Incidente de ca\u00edda del servicio",
+          "Modelo de embeddings",
+          "Discussion on Model Versioning and Vector Embeddings",
+          "Model Versioning and Vector Embeddings Derivation",
+          "Document Duplication in Corpus Processing",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Discusi\u00f3n sobre problemas t\u00e9cnicos en el modelo de embeddings",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Data Backup and Security Procedures"
+        ],
+        [
+          "Reuni\u00f3n de plataforma \u2014 revisi\u00f3n quincenal",
+          "Decisi\u00f3n sobre el cambio al \u00edndice aproximado",
+          "Latencia de b\u00fasqueda",
+          "Incidente de ca\u00edda del servicio",
+          "Rotaci\u00f3n de credenciales",
+          "Respaldos",
+          "Modelo de embeddings",
+          "Discussion on Model Versioning and Vector Embeddings",
+          "Cifrado de respaldos",
+          "Retenci\u00f3n de registros de acceso",
+          "Rotaci\u00f3n de credenciales",
+          "Meeting on Backup and Security Procedures"
+        ]
+      ]
+    }
+  },
+  "latency_key_note": "Renamed from `per_window_latencies`. The probe that produced this run appended each duration when its call FINISHED, so on the concurrent arms these are in completion order, not window order; only the serial arm's are positional. The values are untouched. Runs produced after that fix carry `per_window_latencies` and mean it. No conclusion in report.md reads this field."
+}
