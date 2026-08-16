@@ -75,11 +75,13 @@ Run from the repository root:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import importlib.util
+import io
 import json
 import sys
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -353,14 +355,21 @@ def score(runs: list[Run], *, variant: str, floor: int) -> Verdict:
 _VARIANTS = ("containment", "containment-meeting")
 
 
-def _render(pool_name: str, runs: list[Run], *, floor: int, adjudicated: bool) -> None:
+def _render(
+    pool_name: str,
+    runs: list[Run],
+    *,
+    floor: int,
+    adjudicated: bool,
+    variants: Sequence[str] = _VARIANTS,
+) -> None:
     if not runs:
         print(f"\n## {pool_name}\n\n  no stored runs in this checkout")
         return
     objects = sum(len(r.objects) for r in runs)
     print(f"\n## {pool_name}")
     print(f"\n  {len(runs)} runs, {objects} retained objects")
-    for variant in _VARIANTS:
+    for variant in variants:
         verdict = score(runs, variant=variant, floor=floor)
         print(
             f"\n  ### {variant} (floor {floor})\n"
@@ -513,6 +522,128 @@ def _self_test() -> int:
         set(),
     )
 
+    # The aggregation, on a synthetic pool. `score` and `_render` are what the
+    # published report IS -- a double count, a wrong denominator or a wrong
+    # baseline diff here would print a REJECTED verdict nobody could tell from
+    # a right one, and the comparison helpers above would still pass.
+    parsed = cap.parse_ground_truth(
+        "## Genuinely distinct subjects\n\n"
+        "- Concept | Claude Agent SDK\n"
+        "- Concept | Human-in-the-Loop Guardrails\n",
+        name="synthetic",
+    )
+    absent = Path("/nonexistent/synthetic.md")
+    truth = cap.GroundTruth(
+        name="synthetic",
+        gt_path=absent,
+        source_path=absent,
+        subjects=parsed.subjects,
+        facets=parsed.facets,
+        near_duplicates=parsed.near_duplicates,
+        out_of_scope=parsed.out_of_scope,
+        path_invariant=parsed.path_invariant,
+    )
+    prose_run = Run(
+        pool="synthetic",
+        fixture="synthetic",
+        arm="baseline",
+        source_title=_PROSE,
+        objects=(
+            ("Claude Agent SDK", "Concept"),
+            ("Human-in-the-Loop Guardrails", "Concept"),
+        ),
+        truth=truth,
+    )
+
+    baseline = score([prose_run], variant="equality", floor=2)
+    check("equality deletes nothing here", len(baseline.deletions), 0)
+    check("equality reaches nothing here", baseline.reach, 0)
+
+    # A run where equality ALSO deletes something, so the baseline subtraction
+    # is load-bearing. Without it the fragment and the exact twin are reported
+    # together, and the containment rule is charged for a deletion production
+    # already performs -- the difference between measuring a widening and
+    # measuring the rule that already shipped.
+    twin_run = Run(
+        pool="synthetic",
+        fixture="synthetic",
+        arm="baseline",
+        source_title=_PROSE,
+        objects=(
+            (_PROSE, "Concept"),
+            ("Claude Agent SDK", "Concept"),
+            ("Human-in-the-Loop Guardrails", "Concept"),
+        ),
+        truth=truth,
+    )
+    check(
+        "production today already deletes the exact twin here",
+        deleted_indices(list(twin_run.objects), _PROSE, match=equal),
+        {0},
+    )
+    twin_widened = score([twin_run], variant="containment", floor=2)
+    check(
+        "only the fragment is charged to the widening",
+        [title for _f, _a, title, _v in twin_widened.deletions],
+        ["Claude Agent SDK"],
+    )
+
+    widened = score([prose_run], variant="containment", floor=2)
+    check("counts every run", widened.runs, 1)
+    check("counts every object", widened.objects, 2)
+    check("a prose source is eligible for containment", widened.eligible, 2)
+    check("reach counts the fragment only", widened.reach, 1)
+    check("one deletion beyond the baseline", len(widened.deletions), 1)
+    check(
+        "the deletion is scored against the ground truth",
+        [
+            (fixture, title, verdict)
+            for fixture, _arm, title, verdict in widened.deletions
+        ],
+        [("synthetic", "Claude Agent SDK", cap.SUBJECT)],
+    )
+    check("a deleted subject is a false positive", widened.false_positives, 1)
+
+    narrowed = score([prose_run], variant="containment-meeting", floor=2)
+    check("a prose source is NOT eligible for the narrowing", narrowed.eligible, 0)
+    check("so the narrowing deletes nothing", len(narrowed.deletions), 0)
+
+    rendered = io.StringIO()
+    with contextlib.redirect_stdout(rendered):
+        _render("synthetic", [prose_run], floor=2, adjudicated=True)
+    text = rendered.getvalue()
+    check(
+        "the report states the verdict, the counts and BOTH denominators",
+        [
+            token in text
+            for token in (
+                "FALSE POSITIVES: 1",
+                "REJECTED",
+                "eligible:  2 of 2",
+                "reach:     1 of 2",
+                "Claude Agent SDK",
+            )
+        ],
+        [True] * 5,
+    )
+    unfalsifiable = io.StringIO()
+    with contextlib.redirect_stdout(unfalsifiable):
+        _render(
+            "synthetic",
+            [prose_run],
+            floor=2,
+            adjudicated=True,
+            variants=("containment-meeting",),
+        )
+    check(
+        "a zero over zero eligible objects reads as UNFALSIFIABLE, never as a pass",
+        [
+            token in unfalsifiable.getvalue()
+            for token in ("UNFALSIFIABLE", "BAR CLEARED")
+        ],
+        [True, False],
+    )
+
     if failures:
         print("SELF-TEST FAILED:")
         for failure in failures:
@@ -520,8 +651,9 @@ def _self_test() -> int:
         return 1
     print(
         "SELF-TEST PASSED: proper contiguous-token containment, the token floor, "
-        "the meeting-shaped narrowing, and the whole-rule model (Procedure "
-        "exemption, single-object floor, all-twins floor)."
+        "the meeting-shaped narrowing, the whole-rule model (Procedure exemption, "
+        "single-object floor, all-twins floor), and the aggregation and report "
+        "the verdict is published from."
     )
     return 0
 
@@ -539,16 +671,19 @@ def main(argv: list[str] | None = None) -> int:
     if args.self_test:
         return _self_test()
 
+    # BOTH pools are loaded before ANYTHING is printed. A stored sweep that
+    # fails to parse must abort with nothing published rather than leave a
+    # report holding a complete oracle section and no transcript one -- a
+    # truncated report is the shape a reader mistakes for a finished one, and
+    # this file exists because that shape is expensive here.
+    oracle = _oracle_runs()
+    transcript = _transcript_runs()
+
     print(f"# Title-containment twin rule (#722) — floor {args.floor}, no model calls")
-    _render(
-        "oracle corpus (adjudicated)",
-        _oracle_runs(),
-        floor=args.floor,
-        adjudicated=True,
-    )
+    _render("oracle corpus (adjudicated)", oracle, floor=args.floor, adjudicated=True)
     _render(
         "transcript probes (exposure only)",
-        _transcript_runs(),
+        transcript,
         floor=args.floor,
         adjudicated=False,
     )
