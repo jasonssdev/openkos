@@ -157,6 +157,36 @@ Each file then runs **independently, in order**, with `--include-confidential` f
 
 The batch's **exit ladder** mirrors the per-file one (see Conventions): exit `0` when every file succeeded (idempotent re-ingests count as success); exit `3` when **every** skip was a per-file drift refusal (exit 3) — nothing those files would have written was written, so the whole batch inherits the retry-safe guarantee and a script may re-run it exactly as it would a single-file exit 3; exit `1` when **any** skip was a hard refusal — a plain re-run would refuse again, so the batch never advertises retryability it cannot deliver.
 
+#### How long ingest actually takes
+
+Ingest is **inference-bound**: essentially all of its wall clock is the model generating structured JSON, and the client is idle throughout — 0.13s of client CPU against 47s of wall clock, measured in [#700](https://github.com/jasonssdev/openkos/issues/700). So the honest unit of cost is **model calls**, and the call count follows from the document, deterministically.
+
+One source costs, in calls:
+
+- **two** extraction passes if it is below its chunking threshold — the union path asks the identical prompt twice and merges (see `union_judge`) — or **one per window** if it is above, where windows target `_CHUNK_TARGET` (4,000 characters);
+- **plus one** participant-capture call if the source is meeting-shaped;
+- **plus one** judge call, skipped only when a single candidate survives the merge;
+- **plus one** re-ask, only when the source returned a *sole* object.
+
+The threshold is **not the same for every document**: a prose document chunks above 18,000 characters, a meeting-shaped one above 12,000 ([#714](https://github.com/jasonssdev/openkos/issues/714) lowered it, because a large window on a transcript hit the generation ceiling and failed the ingest outright). At roughly 3,000 characters per page:
+
+| Document | Pages | Prose document | Meeting transcript |
+| --- | --- | --- | --- |
+| Short note | 2 | 3 calls | 4 calls |
+| Minutes | 5 | 3 calls | 6 calls |
+| Long note | 10 | 9 calls | 10 calls |
+| Transcript | 15 | 13 calls | 14 calls |
+| Chapter or report | 30 | 24 calls | 25 calls |
+| Long document | 100 | 78 calls | 79 calls |
+
+The two columns diverge at 5 pages because that is between the thresholds: 15,000 characters is one document for prose and four windows for a transcript. Read a row near a threshold as the boundary it is — a document one character either side of 12,000 or 18,000 falls on a different row. Windows are cut on **line** boundaries, so a document of unusual line structure — one enormous unbroken paragraph, or a transcript of very short turns — can land a window either side of the target and shift the count by one.
+
+These counts are not written by hand. `test_documented_ingest_call_counts_match_the_pipeline` reads this table and replays each row through the real extraction pipeline against a counting stub, so neither threshold nor the per-window fan-out can move without failing there. What it does **not** cover is the two conditional calls: the re-ask fires only on a sole returned object and the judge is skipped only on a single surviving candidate, and both depend on what the model replies rather than on the document — so both are described above but neither is pinned.
+
+What a call costs is machine- and model-specific, and unlike the counts it is **not** something the repository can pin. Measured on one machine, one day (2026-08-14, Mac with 48 GB unified memory, `qwen3:8b`, thinking disabled): a single 4 KB Spanish source answered in **11.5s**, and one full transcript ingest took **4m 28s**. Thinking is already disabled in the client and is worth 4.1× on this model — the largest single saving is in place, not pending.
+
+Two consequences worth knowing before you start a long run. Progress is reported per phase on stderr, so a four-minute ingest names the chunk it is on rather than showing one frozen line. And Ollama unloads an idle model after five minutes (`OLLAMA_KEEP_ALIVE`), so a pause longer than that inside a batch pays a full model reload on the next file.
+
 **Not in this slice / planned:** a per-workspace configurable cap (both ceilings — the union backstop of 20 and the single-run `_MAX_OBJECTS_PER_SOURCE` of 6 — are fixed constants), cross-document synthesis (e.g. a `Decision` inferred from patterns spread across several sources), entity resolution/merge/reclassification on re-ingest, a typed relationship graph, and `--sensitivity <level>` (the generated Source's `sensitivity` always equals config's `default_sensitivity`, currently no per-invocation override). The flag is documented here for forward reference but is not implemented yet.
 
 ### `openkos query "<question>"`
@@ -740,7 +770,7 @@ Why the default was inverted (#650): the 15.6 GB pull made the out-of-the-box cu
 
 Valid task keys: `extraction`, `adjudication`, `edge_typing`, `volatility_typing`, `contradiction`. They are keyed by **task**, not by command — `edge_typing` covers both `curate`'s Structure stage and standalone `suggest-relations`, so the two cannot drift onto different models. An unknown key, a non-string non-null value, or a blank value is refused when the config is read, rather than silently falling back: a typo that quietly resolved to the global default would keep writing relation types from a model you did not choose.
 
-**Only `edge_typing` has evidence behind it, which is why only it carries a recommendation.** The sweep in [#516](https://github.com/jasonssdev/openkos/issues/516) measured eight models on the same 17-edge fixture through `evals/edge_typing/`:
+**Only `edge_typing` has evidence behind it, which is why only it carries a recommendation.** The sweep in [#516](https://github.com/jasonssdev/openkos/issues/516) measured eight models on one 17-edge fixture through `evals/edge_typing/`. **These figures no longer reproduce as written**, and two things changed under them: the fixture has grown from 17 edges to 23, and the harness now pins the generation ceiling and context window that the #516 sweep left to whatever each model's own Modelfile shipped. Re-measured on the current fixture with those pinned, `qwen3:8b` scores 0.36 rather than 0.44 — but only the two of them together were re-measured, so how much of the gap belongs to each is unmeasured, and neither should be quoted as the cause. Treat the table as the ranking it established, not as figures to reproduce:
 
 | model | relation-type accuracy | s/edge *(on ~145-char fixtures)* |
 |---|---|---|
@@ -773,7 +803,7 @@ An 8.4× larger input costs 1.70× the time — sublinear, but real. Budget from
 
 For comparison, the same 74 edges on `qwen3:8b` are roughly 1.6 minutes. That gap is why `curate`'s cost gate names the model whenever a stage resolves one other than `model:` — the same edge count means a materially different wait.
 
-**The other four keys are accepted, not recommended.** `extraction` was tuned on `qwen3:8b` through `evals/extraction_cap/`, and `adjudication`, `volatility_typing`, and `contradiction` have no harness at all — there is no fixture on which to justify a value, so setting one is a guess. If you want to move one, build the harness first and measure every candidate on the same fixture ([#508](https://github.com/jasonssdev/openkos/issues/508)'s rule).
+**The other four keys are accepted, not recommended.** `extraction` was tuned on `qwen3:8b` through `evals/extraction_cap/`. `contradiction` gained a harness in [#558](https://github.com/jasonssdev/openkos/issues/558) — `evals/contradictions/`, a 12-pair fixture scoring antonym false positives against true-positive retention, and it takes `--model` — so a candidate there can be measured rather than guessed; no model other than the default has been scored on it yet, which is why it still carries no recommendation. `adjudication` and `volatility_typing` have no harness at all: there is no fixture on which to justify a value, so setting one is a guess. If you want to move one, build the harness first and measure every candidate on the same fixture ([#508](https://github.com/jasonssdev/openkos/issues/508)'s rule).
 
 A named model that is not installed fails **only the stage or verb that named it**, with the usual `ollama pull <model>` remediation. It never falls back to `model:` — a visible failure is better than silently getting a model you did not ask for.
 

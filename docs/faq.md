@@ -61,6 +61,23 @@ No. That is the point of building on OKF. Your knowledge is a bundle of plain ma
 
 Yes — it runs, though it is **alpha**: the API may still change between releases. The MVP 1 (compile-query-lint) and MVP 2 (typed graph, hybrid retrieval, entity resolution and reversible merge, the forget/purge lifecycle) arcs are complete; `openkos --help` lists every verb. OpenKOS is on PyPI — `pip install openkos` — or install from a source checkout to track the latest `main`. Early feedback and contributors are welcome — see [CONTRIBUTING.md](../CONTRIBUTING.md).
 
+## How long does it take to ingest a document?
+
+Longer than a web app, and the reason is structural rather than fixable: everything runs on your own machine, and the model has to read the document and write structured objects out of it. Roughly, on a recent laptop with the default model:
+
+| Document | Pages | Time |
+| --- | --- | --- |
+| Short note | 2 | a minute or two |
+| Meeting transcript | 15 | a few minutes |
+| Chapter or report | 30 | several minutes |
+| Long document | 100 | tens of minutes |
+
+Cost tracks **model calls**, not file size directly, and a long document is split into windows of about 4,000 characters with one call per window — so the time grows roughly in proportion to length. `docs/cli.md` gives the exact call arithmetic if you want to predict a specific run.
+
+Two things that are *not* wrong when you see them: a transcript is split earlier than an ordinary document (it is more prone to a failure mode at large window sizes), and a pause of more than five minutes mid-batch makes the next file slower, because Ollama unloads the model when it goes idle.
+
+Progress is printed as it goes — the phase and the chunk being worked on — so a long run tells you it is moving. If it looks frozen, check that line before assuming it hung.
+
 ## What does "the human curates; the engine maintains" mean?
 
 You are in charge of sourcing, exploring, and asking good questions. The engine does the tedious bookkeeping that makes a knowledge base actually useful — summarizing, cross-referencing, filing, checking freshness — that humans reliably abandon. Consequential changes stay reviewable, not silently automatic.

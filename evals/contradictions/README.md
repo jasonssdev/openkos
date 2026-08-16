@@ -70,7 +70,68 @@ every measured arm.
   not thresholding, and why `--all`'s display gate must not be trusted as a
   precision knob.
 
+## What a smaller model costs here (#700 lever 3) — REJECTED
+
+[#700](https://github.com/jasonssdev/openkos/issues/700) ranked "smaller models
+for mechanical tasks" third: contradiction judging is classification, not
+composition, and the per-task `models:` seam already accepts a value for it.
+`qwen2.5:3b` (1.9 GB) against the default, both on the **live production
+prompt**, **15 runs each** (75 antonym judgements per arm), 2026-08-16, same
+machine and session:
+
+| model | antonym FP | TP retention | accuracy | stability | run latency |
+| --- | --- | --- | --- | --- | --- |
+| `qwen3:8b` *(default)* | **0.19** | 1.00 | 0.92 | 0.97 | **29.9s** |
+| `qwen2.5:3b` | **0.33** | 1.00 | 0.86 | 0.96 | **13.2s** |
+
+**2.3× faster, and it nearly doubles the false-positive rate** on the one metric
+this harness exists to protect — the number #558 spent a prompt change pulling
+down from 0.40. TP retention holds at 1.00 in both arms, so the smaller model
+never *loses* a real contradiction; it invents more of them.
+
+It was rejected on **payoff**, not on that alone. #700's own measurement is that
+`curate` is interaction-bound: 90s of model time inside a 310s session, of which
+this stage was 39s. Cutting it to a third saves ~22s of a session whose other
+220s is the operator answering prompts. A cheaper judge that surfaces more false findings is
+a bad trade at any speed — and since [#598](https://github.com/jasonssdev/openkos/issues/598)
+findings persist and are ranked in `status` and `next`, so a false positive now
+costs attention repeatedly instead of dying with the process.
+
+### Five runs is not enough on this metric, and that is the finding
+
+The table above says 15 runs because **5 could not tell the two models apart**.
+Measuring `qwen3:8b` against itself — identical model, identical prompt,
+identical client settings, minutes apart — produced:
+
+| sample | runs | antonym FP |
+| --- | --- | --- |
+| `runs-baseline-20260816T084135Z-qwen3-8b.json` | 5 | **0.44** |
+| `runs-baseline-20260816T084923Z-qwen3-8b.json` | 15 | **0.19** |
+
+A 0.25 spread between two samples of one arm is larger than the 0.14 gap the
+15-run table then reports between two different models. A first 5-run pair, run
+before these and not retained, had put the default at 0.28 and the small model
+at 0.36 — a tidy, publishable, **meaningless** result, and the conclusion drawn
+from it (that the smaller model costs "two verdict flips") did not survive the
+larger sample. It is described rather than filed on purpose: keeping a result
+this size invites someone to cite it.
+
+This README already warned that one flip moves the rate by 0.04 on a 5-pair
+antonym set. That understates it: with 5 runs the arm is 25 judgements, and both
+the model and the run order move several of them. **Do not compare arms here at
+n=5** — and do not read a single exploratory run at all: one such run of
+`qwen2.5:3b` scored 0.20, better than the default it in fact loses to by 14
+points.
+
 ## Never compare arms on different fixtures
 
 The 0.07 → 0.40 baseline move above came entirely from a fixture change.
 Re-run BOTH arms whenever `contradiction_fixtures.py` changes.
+
+**Nor on different client settings.** Until #700 this runner built
+`OllamaClient(model=...)` with no generation ceiling and no context window, so
+it measured every model under conditions `ingest` never runs it in. It now
+passes production's own `DEFAULT_MAX_GENERATION_TOKENS` and
+`DEFAULT_CONTEXT_WINDOW`. Arms recorded before that change are not comparable
+with arms recorded after it — which is why the table above re-measures the
+default rather than reading its number off the #558 sweep.

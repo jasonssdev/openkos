@@ -52,6 +52,10 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 from fixtures import DOCS, EDGES  # noqa: E402
 
+from openkos.config import (  # noqa: E402
+    DEFAULT_CONTEXT_WINDOW,
+    DEFAULT_MAX_GENERATION_TOKENS,
+)
 from openkos.graph.base import Edge  # noqa: E402
 from openkos.llm.ollama import OllamaClient  # noqa: E402
 from openkos.resolution.edge_typing import suggest_edge_types  # noqa: E402
@@ -105,7 +109,18 @@ def main() -> None:
     parser.add_argument("--model", default=DEFAULT_MODEL)
     args = parser.parse_args()
 
-    client = OllamaClient(model=args.model)
+    # Production's own generation ceiling and context window, not the client's
+    # opted-out defaults (#700) -- see the same note in
+    # `evals/contradictions/run_contradictions_eval.py`. It matters more here
+    # than anywhere: this harness's whole purpose is comparing models against
+    # each other, and an unpinned window lets each candidate reserve whatever
+    # its own Modelfile ships, so the arms would not be measured under one
+    # condition.
+    client = OllamaClient(
+        model=args.model,
+        max_generation_tokens=DEFAULT_MAX_GENERATION_TOKENS,
+        context_window=DEFAULT_CONTEXT_WINDOW,
+    )
     observed: list[list[tuple[str | None, float]]] = []
     latencies: list[float] = []
 
@@ -197,6 +212,10 @@ def main() -> None:
                 "model": args.model,
                 "runs": args.runs,
                 "generated_at": stamp,
+                # Part of the arm's identity, not trivia (#700) -- see the same
+                # note in `evals/contradictions/run_contradictions_eval.py`.
+                "max_generation_tokens": DEFAULT_MAX_GENERATION_TOKENS,
+                "context_window": DEFAULT_CONTEXT_WINDOW,
                 "outcomes": rows,
             },
             indent=2,
