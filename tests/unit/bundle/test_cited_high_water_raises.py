@@ -13,6 +13,10 @@ NOT call `okf._rank` (ADR-0003 keeps it private) -- fail-closed ranking is
 asserted through `okf.combine_sensitivity`'s observable behavior instead.
 """
 
+import datetime
+
+import pytest
+
 from openkos.bundle import provenance as bundle_provenance
 from openkos.model import okf
 
@@ -29,8 +33,11 @@ def _source(*, sensitivity: str | None, provenance: list[str] | None = None) -> 
 
 
 def _concept(
-    *, sensitivity: str | None, provenance: list[str], type: str = "Concept"
+    *, sensitivity: object, provenance: list[str], type: str = "Concept"
 ) -> str:
+    """`sensitivity` is typed `object`, not `str | None`, so a test can plant
+    the DIRTY frontmatter value (`42`, a list) that `_levels_by_id` keeps raw;
+    `None` still means "omit the key entirely"."""
     metadata: dict[str, object] = {
         "type": type,
         "title": "Doc",
@@ -216,6 +223,72 @@ class TestResolveCitedHighWaterRaises:
 
         assert [entry.concept_id for entry in raises] == ["insights/blank"]
         assert raises[0].new_level == "confidential"
+
+    @pytest.mark.parametrize(
+        "dirty",
+        [
+            42,
+            True,
+            3.14,
+            ["public"],
+            {"k": "public"},
+            datetime.date(2026, 8, 16),
+            datetime.datetime(2026, 8, 16, 12, 0, tzinfo=datetime.UTC),
+            "secret",
+            "PUBLIC",
+        ],
+        ids=["int", "bool", "float", "list", "dict", "date", "datetime", "str", "case"],
+    )
+    def test_a_present_but_dirty_sensitivity_fails_closed_and_propagates(
+        self, dirty: object
+    ) -> None:
+        """The companion to the MISSING-value case above: a cited concept whose
+        `sensitivity` is present but DIRTY. ADR-0003 floors any non-string at
+        `confidential`, so the dirty concept is raised to it AND carries that
+        level to everything citing it.
+
+        PARAMETRIZED over the six non-string classes `yaml.safe_load` yields
+        from a hand-edited `sensitivity:` line (`int`, `bool`, `float`, `list`,
+        `dict`, `date`/`datetime`) plus the two dirty STRING shapes that also
+        floor at `confidential` -- an unrecognized word and a canonical level in
+        the wrong case. `None` is the sibling test above, and a blank string is
+        `_rank`'s `private` floor, not this one. `_levels_by_id`'s rationale
+        makes a claim about all of these, and a single `int` would leave the
+        rest of it unbacked by any test.
+
+        THE `current` ASSERTIONS ARE THE LOAD-BEARING PAIR, and they are not
+        what #736 asked for. That issue asked only that the citing document be
+        raised to `confidential` -- which cannot fail under the `str` coercion
+        it exists to forbid, because `_rank` floors an unrecognized STRING at
+        `confidential` too, so `42` and `"42"` rank identically. What a
+        coercion really destroys is REPORTING: `okf.DescendantRaise.current` is
+        what a preview shows the operator as the value on disk, and coercing
+        would show `'42'` where the file holds `42`. The equality assertion is
+        what goes red under that mutation; the `type` assertion covers the
+        cases equality alone would let through, since `1 == True` and
+        `42 == 42.0` are both true in Python."""
+        files = {
+            "sources/a.md": _source(sensitivity="public"),
+            "concepts/dirty.md": _concept(sensitivity=dirty, provenance=["sources/a"]),
+            "insights/citing.md": _concept(
+                sensitivity="public", provenance=["concepts/dirty"]
+            ),
+        }
+
+        raises = bundle_provenance.resolve_cited_high_water_raises(files)
+
+        # The ordered list pins order AND count on `raises` itself; `by_id` is
+        # only a lookup, so the assertions below never index positionally into
+        # an order this test is not about.
+        assert [entry.concept_id for entry in raises] == [
+            "concepts/dirty",
+            "insights/citing",
+        ]
+        by_id = {entry.concept_id: entry for entry in raises}
+        assert [entry.new_level for entry in raises] == ["confidential"] * 2
+        assert _sensitivity_of(by_id["insights/citing"].content) == "confidential"
+        assert by_id["concepts/dirty"].current == dirty
+        assert type(by_id["concepts/dirty"].current) is type(dirty)
 
     def test_a_provenance_cycle_terminates(self) -> None:
         """Two concepts citing each other. The fold is monotone and bounded by
