@@ -54,9 +54,15 @@ from typing import cast
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+# APPENDED, not inserted at zero: an insert would put the evals root
+# AHEAD of this harness's own directory, so a module added at the root
+# would shadow a same-named one beside this file (`fixtures.py` is the
+# obvious candidate).
+sys.path.append(str(REPO_ROOT / "evals"))
 
 from contradiction_fixtures import DOCS, PAIRS  # noqa: E402
 from contradiction_prompts import TREATMENT_SYSTEM_PROMPT  # noqa: E402
+from harness_report import arm_identity_line  # noqa: E402
 
 from openkos.config import (  # noqa: E402
     DEFAULT_CONTEXT_WINDOW,
@@ -249,8 +255,10 @@ def main() -> None:
         # this file has recorded both since #738, but a reader who opens only
         # the report cannot otherwise tell this run apart from a pre-#738 one
         # measured under unbounded conditions.
-        f"Generation ceiling `{DEFAULT_MAX_GENERATION_TOKENS}` · context"
-        f" window `{DEFAULT_CONTEXT_WINDOW}`.",
+        arm_identity_line(
+            max_generation_tokens=DEFAULT_MAX_GENERATION_TOKENS,
+            context_window=DEFAULT_CONTEXT_WINDOW,
+        ),
         "",
         "Labels are CONSTRUCTED, not adjudicated — see `contradiction_fixtures.py`.",
         "",

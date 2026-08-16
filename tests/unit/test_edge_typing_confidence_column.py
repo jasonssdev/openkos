@@ -44,6 +44,14 @@ _EDGE_RUNNER = _REPO_ROOT / "evals" / "edge_typing" / "run_edge_typing_eval.py"
 _CONTRADICTIONS_RUNNER = (
     _REPO_ROOT / "evals" / "contradictions" / "run_contradictions_eval.py"
 )
+_CONCURRENCY_RUNNER = (
+    _REPO_ROOT / "evals" / "ingest_concurrency" / "run_ingest_concurrency_probe.py"
+)
+"""The third harness to carry the arm-identity line (#739).
+
+Its own table header differs, which is why the anti-vacuity marker below is
+parametrized rather than hard-coded: a shared `| metric | value |` would have
+silently skipped this runner's report builder."""
 
 _DEAD_COLUMN = "mean stated confidence"
 """The exact row label `evals/edge_typing/` printed until #740.
@@ -62,7 +70,15 @@ def test_the_stored_edge_typing_reports_carry_no_stated_confidence_row() -> None
     the nineteen already on disk are what someone reads tomorrow. The
     `runs-*.json` beside them are deliberately left untouched: the JSON is
     the evidence and still records the all-zero arrays, while the `.md` is
-    a render of a field that was never collected."""
+    a render of a field that was never collected.
+
+    IT ALSO BINDS EVERY REPORT WRITTEN FROM NOW ON, which is deliberate and
+    is the wider half of its contract (#742 item 3). The glob reads the live
+    results directory, so a run that revived the row would be caught the next
+    time the suite ran -- the count below is a floor, not a fixed set. That is
+    the only way a runner regression gets caught after someone pays for a
+    measurement, since the source guard beside this one cannot see what a run
+    actually wrote."""
     reports = sorted(_EDGE_RESULTS.glob("edge-typing-*.md"))
     # Guard the guard: an empty (or renamed) results directory would make
     # every assertion below pass without inspecting anything.
@@ -181,14 +197,19 @@ def test_the_contradictions_runner_still_reports_its_confidence_column() -> None
 
 
 @pytest.mark.parametrize(
-    "runner",
+    ("runner", "table_header"),
     [
-        pytest.param(_EDGE_RUNNER, id="edge_typing"),
-        pytest.param(_CONTRADICTIONS_RUNNER, id="contradictions"),
+        pytest.param(_EDGE_RUNNER, "| metric | value |", id="edge_typing"),
+        pytest.param(_CONTRADICTIONS_RUNNER, "| metric | value |", id="contradictions"),
+        pytest.param(
+            _CONCURRENCY_RUNNER,
+            "| concurrency | wall clock (s) |",
+            id="ingest_concurrency",
+        ),
     ],
 )
 def test_the_report_names_the_generation_ceiling_and_context_window(
-    runner: Path,
+    runner: Path, table_header: str
 ) -> None:
     """#738 made both settings part of an arm's identity and wrote them into
     each `runs-*.json`; the human-readable report beside it did not name
@@ -203,15 +224,18 @@ def test_the_report_names_the_generation_ceiling_and_context_window(
     module that only resolves because of it, which is not a side effect worth
     importing into the unit suite.
 
-    KNOWN LIMIT, stated rather than papered over: this proves the identifiers
-    are referenced where the report is built, NOT that the rendered line comes
-    out right. Nothing here executes the f-string, so a broken format would
-    still pass. Rendering it would mean either importing the runner (rejected
-    above) or extracting a report builder out of both harnesses, which is a
-    larger change to measurement tooling than a one-line report fix earns.
-    The runners have never had unit tests; this is the cheapest guard that
-    fails on the commit that drops the line, which is the regression the
-    issue actually describes.
+    This now guards the CALL SITE only. #740 shipped it asserting that the
+    two identifier names appeared in the emitted lines, which proved they were
+    referenced and nothing about what rendered -- a broken format string
+    passed, and so did a comment naming them. #742 called the extraction the
+    real fix and it landed: the line itself is built by
+    `evals/harness_report.py`, which `tests/unit/test_harness_report.py`
+    imports and RENDERS, asserting the values rather than the names.
+
+    So the pair divides the claim. That module proves the line comes out
+    right; this proves each report actually asks for it. Neither is
+    sufficient alone, and the second half can only be a source check while
+    the runners stay unimportable.
 
     The section is bounded on BOTH ends, and the first draft of this guard
     shows why. Splitting on the first `lines = [` picked up an unrelated list
@@ -232,21 +256,38 @@ def test_the_report_names_the_generation_ceiling_and_context_window(
         f"{runner.name} no longer joins its report out of `lines`; this guard "
         "needs updating with it"
     )
-    assert "| metric | value |" in block, (
+    assert table_header in block, (
         f"the slice taken from {runner.name} is not its report builder -- it "
-        "carries no metric table, so every assertion below would pass without "
-        "reading the report"
+        f"carries no {table_header!r} row, so every assertion below would pass "
+        "without reading the report"
     )
-    # Comments stripped first: both runners carry a comment above the line
+    # Comments stripped: both runners carry a comment above the call
     # explaining WHY the settings belong in the report, and a bare substring
     # search over the raw slice is satisfied by that comment alone -- so
-    # deleting the line while leaving its rationale behind would pass.
+    # deleting the call while leaving its rationale behind would pass.
     emitted = "\n".join(
         line for line in block.splitlines() if not line.lstrip().startswith("#")
     )
-    for setting in ("DEFAULT_MAX_GENERATION_TOKENS", "DEFAULT_CONTEXT_WINDOW"):
-        assert setting in emitted, (
-            f"{runner.name}'s markdown report does not name {setting} in any "
-            "emitted line, so a reader cannot tell the arm apart from a "
-            "pre-#738 run"
+    assert "arm_identity_line(" in emitted, (
+        f"{runner.name}'s report no longer calls `arm_identity_line`, so a "
+        "reader cannot tell the arm apart from a pre-#738 run. The name exists "
+        "only to be put in a report, so any occurrence here is the call site"
+    )
+    # The call ALONE does not say what it is handed. A site passing a literal,
+    # an unrelated constant, or the two keywords swapped would satisfy the
+    # check above and render a confidently wrong line -- the rendering test
+    # cannot see a call site, and this cannot see a value, so both are needed.
+    # PAIRED, not merely both present. `tests/unit/test_harness_report.py`
+    # proves each label binds to its own parameter INSIDE the renderer; only
+    # this can see which constant the CALL hands to which keyword, and a site
+    # that swapped them would satisfy both halves while rendering a
+    # confidently wrong ceiling.
+    for keyword, constant in (
+        ("max_generation_tokens", "DEFAULT_MAX_GENERATION_TOKENS"),
+        ("context_window", "DEFAULT_CONTEXT_WINDOW"),
+    ):
+        assert f"{keyword}={constant}" in emitted, (
+            f"{runner.name} does not pass {constant} as {keyword} to "
+            "`arm_identity_line`, so its report names something other than "
+            "the settings the arm was measured under"
         )
