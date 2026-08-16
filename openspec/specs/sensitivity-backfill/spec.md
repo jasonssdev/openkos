@@ -73,23 +73,60 @@ level MUST NOT be staged.
   other descendant, and `A` is unchanged since it is a closure root, not a
   descendant of any other root
 
-### Requirement: Descendants Outside Every Source's Closure Are Skipped, Never Written
+### Requirement: Descendants Outside Every Source's Closure Are Covered By The Cited High-Water Mark
 
-A derived concept that is a member of no single Source's provenance closure
-MUST NOT be written by the sweep, matching
-`find_provenance_descendants`'s existing per-root closure semantics. A
-concept citing two or more ids that all fall inside one Source's closure IS
-covered and MUST be raised. A concept in no single-Source closure MUST be
-surfaced only through the detection findings defined in the `lint` and
-`status` specs, never silently.
+The sweep MUST have TWO producers, merged by max: the per-Source provenance
+closure walk, and a fold of the high-water mark over each document's own
+direct `provenance` entries. A derived concept that is a member of no single
+Source's provenance closure — the case ADR-0012 deferred and ADR-0016 closes —
+MUST therefore be raised to the high-water mark of the concepts it cites,
+computed with `okf.combine_sensitivity` exactly as `query --save` computes it
+at birth. A concept citing two or more ids that all fall inside one Source's
+closure remains covered by the closure producer.
 
-#### Scenario: A descendant citing two unrelated Sources is never raised by the sweep
+The fold MUST be a fixpoint, not a single pass: raising a cited intermediate
+concept changes the mark for everything citing it, and a single pass would
+repair one level and leave the same gap one level up. It MUST be raise-only,
+so a document deliberately classified above everything it cites keeps its
+level. A `type: Source` MUST NEVER be staged by the fold: a Source's level is
+operator-set, never derived from what it cites.
+
+A document with any unresolvable `provenance` id MUST NOT be staged by the
+fold. That case belongs to the `dangling-provenance` finding defined in the
+`lint` spec. Folding an unresolvable citation to `confidential` — which
+`query --save` does at birth, for one document the operator is creating — MUST
+NOT be copied into this bundle-wide sweep, where it would raise every
+descendant of one dangling reference.
+
+#### Scenario: A descendant citing two unrelated Sources is raised to their high-water mark
 
 - GIVEN a derived concept whose `provenance` cites two distinct Source ids,
-  neither of which lies inside the other's provenance closure, each with a
-  `sensitivity` higher than the descendant's own
+  neither of which lies inside the other's provenance closure, one of them
+  with a `sensitivity` higher than the descendant's own
+- WHEN `openkos backfill-sensitivity` runs and is confirmed
+- THEN that descendant's `sensitivity` is raised to the higher of the two
+  cited levels
+
+#### Scenario: A multi-source raise propagates through a chain in one run
+
+- GIVEN a document citing an intermediate concept which itself cites two
+  unrelated Sources, one of them above both documents' level
+- WHEN `openkos backfill-sensitivity` runs and is confirmed
+- THEN BOTH the intermediate concept and the document citing it are raised in
+  the same run
+
+#### Scenario: A document above everything it cites is never lowered
+
+- GIVEN a document whose `sensitivity` is higher than every concept it cites
 - WHEN `openkos backfill-sensitivity` runs
-- THEN that descendant's frontmatter is unchanged by the run
+- THEN that document's frontmatter is unchanged by the run
+
+#### Scenario: A document with a dangling citation is left unstaged
+
+- GIVEN a document whose `provenance` names an id with no file behind it,
+  alongside a resolvable citation above the document's own level
+- WHEN `openkos backfill-sensitivity` runs
+- THEN that document's frontmatter is unchanged by the run
 
 #### Scenario: A descendant citing two ids inside the same Source's closure is raised
 

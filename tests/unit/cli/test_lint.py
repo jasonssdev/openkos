@@ -443,8 +443,9 @@ def test_lint_flags_multi_source_uncovered(
 ) -> None:
     """A doc citing one Source plus a concept derived from a DIFFERENT
     Source is a member of no single-Source closure and is reported as
-    `multi-source-uncovered`, marked as not covered by
-    `backfill-sensitivity` (design D3; #231)."""
+    `multi-source-uncovered` (design D3; #231). Since #697/ADR-0016 the
+    sweep repairs it, so the detail offers `backfill-sensitivity` as the
+    bundle-wide remedy instead of ruling it out."""
     _init_workspace(tmp_path, monkeypatch)
     sources_dir = tmp_path / "bundle" / "sources"
     sources_dir.mkdir()
@@ -477,7 +478,8 @@ def test_lint_flags_multi_source_uncovered(
     assert "Multi-source uncovered:" in result.stdout
     section = result.stdout.split("Multi-source uncovered:", 1)[1]
     assert "concepts/mixed: " in section
-    assert "not covered by" in section
+    assert "not covered by" not in section
+    assert "below the high-water mark of what it cites" in section
     # `concepts/from-c` is below-source-sensitivity (single-Source closure
     # member), not multi-source-uncovered -- it must not appear here.
     # Not a finding SUBJECT -- it may still be named inside another

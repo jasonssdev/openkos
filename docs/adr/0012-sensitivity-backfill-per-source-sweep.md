@@ -54,6 +54,14 @@ Phase B shape and its fail-closed partial-write handling (naming every
 path that already landed before a mid-sweep failure, matching the #233
 fix).
 
+> **Amended 2026-08-16 by [ADR-0016](0016-maintain-the-cited-high-water-mark.md)
+> (issue #697).** The deferral described in the next paragraph, and repeated
+> under Consequences, is CLOSED. The sweep gained a second producer that folds
+> the high-water mark over each document's own direct `provenance`, so a
+> descendant in no single Source's closure IS now written by it, and the
+> `multi-source-uncovered` finding no longer marks itself as uncovered. The
+> per-Source closure half described below is unchanged.
+
 A descendant that is a member of **no single Source's** closure — for
 example, one whose `provenance` cites two ids that resolve to two
 genuinely unrelated Sources — is never written by this sweep. Silently

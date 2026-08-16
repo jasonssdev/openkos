@@ -370,6 +370,139 @@ def _source_levels(files: Mapping[str, str]) -> dict[str, str]:
     return source_levels
 
 
+def _levels_by_id(files: Mapping[str, str]) -> dict[str, object]:
+    """Parse every file once into `id -> raw sensitivity value`, keeping the
+    value RAW (`object`, not `str`).
+
+    Raw is load-bearing: `okf.combine_sensitivity` ranks through the private
+    fail-closed `okf._rank` (ADR-0003), where a missing value floors at
+    `private` and a dirty non-string floors at `confidential`. Coercing to
+    `str` here -- as `_source_levels` must, to satisfy
+    `resolve_source_raises`'s `level: str` signature -- would turn a dirty
+    `int` into a string that no longer fails closed the same way. A file whose
+    frontmatter fails to parse is SKIPPED, mirroring `_parse_provenance_by_id`.
+    """
+    levels: dict[str, object] = {}
+    for path, text in files.items():
+        metadata: dict[str, object] | None
+        try:
+            metadata, _ = okf.load_frontmatter(text)
+        except Exception:  # broad: malformed frontmatter is skipped rather
+            # than surfaced, mirroring `_parse_provenance_by_id`
+            metadata = None
+        if metadata is None:
+            continue
+        levels[_normalize_id(path)] = metadata.get("sensitivity")
+    return levels
+
+
+def resolve_cited_high_water_raises(
+    files: Mapping[str, str],
+) -> list[okf.DescendantRaise]:
+    """Pure fixpoint maintaining ADR-0003's high-water mark for a concept
+    whose provenance spans MORE THAN ONE Source (issue #697).
+
+    ADR-0012 deferred exactly this case, and named the deferral: a concept in
+    no single Source's closure "stays reported, not resolved, until a human
+    acts". `resolve_source_raises` cannot reach it because
+    `provenance_closure`'s conservative NON-EMPTY SUBSET rule keeps out any
+    concept still citing a Source outside the root's closure -- correct for
+    propagating ONE Source's level down its exclusive descendants, and exactly
+    wrong for a high-water mark, where citing a confidential source and a
+    public one means confidential. The subset rule under-classifies here.
+
+    THE RULE MIRRORS BIRTH, not the closure walk. `cli/main.py`'s
+    `_stage_filed_answer` folds `okf.combine_sensitivity` over each CITED
+    concept's own level to compute a filing's sensitivity; this recomputes the
+    same fold over the same direct `provenance` entries, so an object's
+    maintained level is the one its own birth rule would produce today. Reading
+    Source ANCESTORS instead (`provenance_source_ancestors`, #628) would miss a
+    cited intermediate concept raised by hand without its Source.
+
+    WHY A FIXPOINT rather than one pass: raising `mid` changes the input for
+    everything citing `mid`. A single pass would repair one level and leave the
+    same gap one level up. Termination is the same argument
+    `provenance_closure` makes -- `combine_sensitivity` is monotone and
+    `okf.SENSITIVITY_ORDER` is finite, so levels only ever rise and the loop
+    halts, including on a provenance cycle (two concepts citing each other
+    converge on their shared maximum) and on self-referential provenance.
+
+    A concept is staged only when EVERY cited id resolves to a file in `files`.
+    A dangling citation leaves it unstaged, matching `lint`'s own
+    `multi-source-uncovered` rule and ADR-0012 design D8: that signal belongs
+    to `check_dangling_provenance`. The alternative -- folding an unresolvable
+    citation to `confidential`, as `_stage_filed_answer` does at birth -- is
+    deliberately NOT copied here. At birth it guards ONE document the operator
+    is creating; in a bundle-wide sweep it would raise every descendant of one
+    dangling ref, a blast radius no preview makes safe, and it would contradict
+    the `lint` finding that sent the operator to this verb.
+
+    A `type: Source` is NEVER staged: a Source's level is operator-set truth,
+    never derived from what it cites. In practice a Source cites its raw
+    `resource`, which never resolves to a bundle id and would leave it unstaged
+    anyway; the explicit type guard states the invariant rather than resting on
+    that coincidence.
+
+    Raise-only by construction (`combine_sensitivity` never lowers), so a
+    concept deliberately classified ABOVE everything it cites keeps its level.
+    The returned list is `sorted()` by `concept_id`, each entry's `content` a
+    full `okf.dump_frontmatter` re-render of the ORIGINAL metadata with only
+    `sensitivity` replaced.
+    """
+    provenance_by_id = _parse_provenance_by_id(files)
+    levels = _levels_by_id(files)
+    source_ids = set(_source_levels(files))
+
+    # Only concepts whose every citation resolves are eligible; the ineligible
+    # are excluded once, before the loop, so the fixpoint cannot admit one
+    # through a later iteration.
+    eligible = {
+        concept_id: parents
+        for concept_id, parents in provenance_by_id.items()
+        if parents
+        and concept_id not in source_ids
+        and all(parent in levels for parent in parents)
+    }
+
+    resolved = dict(levels)
+    changed = True
+    while changed:
+        changed = False
+        for concept_id, parents in eligible.items():
+            current = resolved[concept_id]
+            combined = current
+            for parent in parents:
+                combined = okf.combine_sensitivity(combined, resolved[parent])
+            if combined != current:
+                resolved[concept_id] = combined
+                changed = True
+
+    raises: list[okf.DescendantRaise] = []
+    for concept_id in sorted(eligible):
+        current = levels[concept_id]
+        # Re-combined rather than read straight out of `resolved`, for a typed
+        # `str`: the fold seeds from RAW frontmatter values (`object`), which
+        # is what keeps `okf._rank`'s fail-closed ranking intact. The fold only
+        # ever raises, so this is the canonical form of `resolved[concept_id]`.
+        # The comparison stays against the RAW `current`, matching
+        # `resolve_source_raises`: a document with no `sensitivity` key at all
+        # differs from any canonical level and is written explicitly.
+        new_level = okf.combine_sensitivity(current, resolved[concept_id])
+        if new_level == current:
+            continue
+        metadata, body = okf.load_frontmatter(files[f"{concept_id}.md"])
+        metadata["sensitivity"] = new_level
+        raises.append(
+            okf.DescendantRaise(
+                concept_id=concept_id,
+                current=current,
+                new_level=new_level,
+                content=okf.dump_frontmatter(metadata, body),
+            )
+        )
+    return raises
+
+
 def resolve_backfill_raises(files: Mapping[str, str]) -> list[okf.DescendantRaise]:
     """Pure, bundle-wide sweep core `backfill-sensitivity` needs (design
     D4/D5/D6) -- everything the verb requires that is NOT the Typer command:
@@ -418,15 +551,27 @@ def resolve_backfill_raises(files: Mapping[str, str]) -> list[okf.DescendantRais
 
     best: dict[str, okf.DescendantRaise] = {}
     best_rank: dict[str, int] = {}
+
+    def _offer(descendant_raise: okf.DescendantRaise) -> None:
+        concept_id = descendant_raise.concept_id
+        new_rank = okf.SENSITIVITY_ORDER.index(descendant_raise.new_level)
+        if concept_id not in best or new_rank > best_rank[concept_id]:
+            best[concept_id] = descendant_raise
+            best_rank[concept_id] = new_rank
+
     for source_id in sorted(source_levels):
         for descendant_raise in resolve_source_raises(
             files, source_id=source_id, level=source_levels[source_id]
         ):
-            concept_id = descendant_raise.concept_id
-            new_rank = okf.SENSITIVITY_ORDER.index(descendant_raise.new_level)
-            if concept_id not in best or new_rank > best_rank[concept_id]:
-                best[concept_id] = descendant_raise
-                best_rank[concept_id] = new_rank
+            _offer(descendant_raise)
+
+    # Second producer (issue #697), merged by the SAME max rule and offered
+    # LAST so a strictly higher cited high-water mark wins over a per-Source
+    # raise, while an equal one leaves the closure sweep's record in place --
+    # the existing "ties resolve to the first" contract, extended by one
+    # producer rather than reinterpreted.
+    for descendant_raise in resolve_cited_high_water_raises(files):
+        _offer(descendant_raise)
 
     return [best[concept_id] for concept_id in sorted(best)]
 
