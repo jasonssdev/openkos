@@ -29,8 +29,11 @@ def _source(*, sensitivity: str | None, provenance: list[str] | None = None) -> 
 
 
 def _concept(
-    *, sensitivity: str | None, provenance: list[str], type: str = "Concept"
+    *, sensitivity: object, provenance: list[str], type: str = "Concept"
 ) -> str:
+    """`sensitivity` is typed `object`, not `str | None`, so a test can plant
+    the DIRTY frontmatter value (`42`, a list) that `_levels_by_id` keeps raw;
+    `None` still means "omit the key entirely"."""
     metadata: dict[str, object] = {
         "type": type,
         "title": "Doc",
@@ -216,6 +219,45 @@ class TestResolveCitedHighWaterRaises:
 
         assert [entry.concept_id for entry in raises] == ["insights/blank"]
         assert raises[0].new_level == "confidential"
+
+    def test_a_present_but_dirty_sensitivity_fails_closed_and_propagates(self) -> None:
+        """The companion to the MISSING-value case above: a cited concept whose
+        `sensitivity` is present but DIRTY (`42`, from hand-edited frontmatter).
+        ADR-0003 floors any non-string at `confidential`, so the dirty concept
+        is raised to it AND carries that level to everything citing it.
+
+        THE LAST ASSERTION IS THE LOAD-BEARING ONE, and it is not the one #736
+        asked for. `_levels_by_id`'s docstring justifies keeping the value raw
+        by claiming a `str` coercion "would turn a dirty `int` into a string
+        that no longer fails closed the same way". Measured against every value
+        YAML frontmatter can produce (`int`, `bool`, `list`, `dict`, `float`,
+        `date`, blank and unrecognized strings), that claim is FALSE: `_rank`
+        floors an unrecognized STRING at `confidential` too, so `42` and `"42"`
+        rank identically and a `new_level` assertion alone cannot fail under
+        the coercion it exists to forbid.
+
+        What the coercion would really destroy is REPORTING: `DescendantRaise.
+        current` is the value a preview shows the operator as what is on disk,
+        and coercing would show `'42'` where the file holds `42`. Pinning the
+        raw type is therefore the assertion that actually goes red."""
+        files = {
+            "sources/a.md": _source(sensitivity="public"),
+            "concepts/dirty.md": _concept(sensitivity=42, provenance=["sources/a"]),
+            "insights/citing.md": _concept(
+                sensitivity="public", provenance=["concepts/dirty"]
+            ),
+        }
+
+        raises = bundle_provenance.resolve_cited_high_water_raises(files)
+
+        assert [entry.concept_id for entry in raises] == [
+            "concepts/dirty",
+            "insights/citing",
+        ]
+        assert [entry.new_level for entry in raises] == ["confidential"] * 2
+        assert _sensitivity_of(raises[1].content) == "confidential"
+        assert raises[0].current == 42
+        assert isinstance(raises[0].current, int)
 
     def test_a_provenance_cycle_terminates(self) -> None:
         """Two concepts citing each other. The fold is monotone and bounded by
