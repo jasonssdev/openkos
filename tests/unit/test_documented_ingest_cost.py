@@ -74,6 +74,22 @@ the chunked path runs `_drop_wrong_language_titles` against the source, and an
 English title over Spanish filler would be dropped before the judge saw it.
 """
 
+_SOLE_REPLY = (
+    "["
+    '{"type": "Concept", "title": "Trazabilidad Documental", '
+    '"description": "La practica de registrar el origen de cada dato.", '
+    '"body": "La plataforma conserva el origen de cada dato registrado."}'
+    "]"
+)
+"""ONE object, the first of `_REPLY`'s two, for the two conditional paths.
+
+`_REPLY` deliberately returns two so the documented table measures the
+unconditional fan-out. This is its counterpart: a sole returned object is
+exactly the condition the re-ask fires on (#642) and, once the union dedups
+the identical answers back to one candidate, exactly the condition that makes
+the judge a provable no-op (#644).
+"""
+
 _ROW = re.compile(
     r"^\|\s*(?P<label>[^|]+?)\s*\|\s*(?P<pages>\d+)\s*\|\s*"
     r"(?P<prose>\d+) calls\s*\|\s*(?P<meeting>\d+) calls\s*\|$"
@@ -81,19 +97,20 @@ _ROW = re.compile(
 
 
 class _CountingLLM:
-    """Structural `LLMBackend` that answers every call with `_REPLY`.
+    """Structural `LLMBackend` that answers every call with the same reply.
 
     The judge and participant passes get an extraction-shaped reply they cannot
     parse, so they degrade -- which is irrelevant here and deliberately so: each
     still costs exactly one call, and this test counts calls, not verdicts.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, reply: str = _REPLY) -> None:
         self.calls = 0
+        self._reply = reply
 
     def chat(self, messages: Sequence[Message]) -> str:
         self.calls += 1
-        return _REPLY
+        return self._reply
 
 
 def _source_of(chars: int) -> str:
@@ -111,10 +128,20 @@ def _source_of(chars: int) -> str:
     return "\n".join(lines)
 
 
+def _observe(
+    chars: int, *, title: str, reply: str = _REPLY
+) -> tuple[int, concept.ExtractionReport]:
+    """One real `extract_concept_union` pass; returns its call count and the
+    report that says which conditional branches ran."""
+    llm = _CountingLLM(reply)
+    outcome = concept.extract_concept_union(
+        _source_of(chars), source_title=title, llm=llm
+    )
+    return llm.calls, outcome.report
+
+
 def _observed_calls(chars: int, *, title: str) -> int:
-    llm = _CountingLLM()
-    concept.extract_concept_union(_source_of(chars), source_title=title, llm=llm)
-    return llm.calls
+    return _observe(chars, title=title)[0]
 
 
 def _documented_rows() -> list[tuple[str, int, int, int]]:
@@ -153,14 +180,109 @@ def test_documented_ingest_call_counts_match_the_pipeline(
     assert documented_meeting == _observed_calls(chars, title=_MEETING_TITLE)
 
 
-def test_the_two_titles_this_test_relies_on_still_differ_in_meeting_shape() -> None:
+@pytest.mark.parametrize("pages", _DOCUMENTED_PAGES)
+def test_the_two_titles_this_test_relies_on_still_differ_in_meeting_shape(
+    pages: int,
+) -> None:
     """The whole prose/meeting split is carried by these two titles. If either
     stopped classifying as the test assumes, both columns would silently
-    measure the same shape and agree with a table that had drifted."""
-    text = _source_of(2 * _PAGE_CHARS)
+    measure the same shape and agree with a table that had drifted.
+
+    Parametrized across every documented size rather than asserted at one
+    (#740). Two pages is the ONLY row that stays unchunked in the meeting
+    column, so checking it alone left the gate untested on exactly the rows
+    where chunking makes it matter. `_is_meeting_shaped` reads the whole
+    source, not a window -- `extract_concept_union` computes it once before
+    it branches -- so a longer source is the only thing needed to cover them.
+    """
+    text = _source_of(pages * _PAGE_CHARS)
 
     assert not concept._is_meeting_shaped(_PROSE_TITLE, text)
     assert concept._is_meeting_shaped(_MEETING_TITLE, text)
+
+
+@pytest.mark.parametrize(
+    "title", [_PROSE_TITLE, _MEETING_TITLE], ids=["prose", "meeting"]
+)
+@pytest.mark.parametrize("pages", _DOCUMENTED_PAGES)
+def test_a_sole_returned_object_fires_the_reask(pages: int, title: str) -> None:
+    """`docs/cli.md` documents the re-ask as firing "only when the source
+    returned a *sole* object", and until #740 nothing pinned it: the stub
+    answers with two objects on every row, so the guard measured the table
+    with this branch permanently off.
+
+    The baseline arm is asserted alongside the triggering one. Without it the
+    test would pass just as well against a re-ask that fired unconditionally,
+    which is the failure mode the word "only" is there to forbid.
+
+    Across every documented size AND both title columns. The trigger is
+    evaluated per BRANCH, and the branches are different code: below the
+    threshold the union merges two whole-source passes, above it
+    `_dedup_merged` collapses one pass per window, and the meeting column
+    crosses that threshold at a different size while adding a participant
+    call. A guard at 2 pages of prose alone would have left the chunked half
+    and the entire meeting column measured with this branch permanently off --
+    which is the very gap this test exists to close."""
+    _, sole = _observe(pages * _PAGE_CHARS, title=title, reply=_SOLE_REPLY)
+    _, pair = _observe(pages * _PAGE_CHARS, title=title)
+
+    assert sole.reask_runs == 1
+    assert pair.reask_runs == 0
+
+
+@pytest.mark.parametrize(
+    "title", [_PROSE_TITLE, _MEETING_TITLE], ids=["prose", "meeting"]
+)
+@pytest.mark.parametrize("pages", _DOCUMENTED_PAGES)
+def test_a_single_surviving_candidate_skips_the_judge(pages: int, title: str) -> None:
+    """The table's other unpinned conditional: the judge is "skipped only when
+    a single candidate survives the merge" (#644).
+
+    Both arms again, for the same reason -- an always-skipped judge would
+    satisfy the first assertion on its own, and that is precisely the bug that
+    would silently halve the documented cost of every row. Across every size
+    and both columns for the same reason as the re-ask above: what survives
+    the merge is branch-specific."""
+    _, sole = _observe(pages * _PAGE_CHARS, title=title, reply=_SOLE_REPLY)
+    _, pair = _observe(pages * _PAGE_CHARS, title=title)
+
+    assert sole.judge_status == "skipped"
+    assert pair.judge_status != "skipped"
+
+
+@pytest.mark.parametrize(
+    "title", [_PROSE_TITLE, _MEETING_TITLE], ids=["prose", "meeting"]
+)
+@pytest.mark.parametrize("pages", _DOCUMENTED_PAGES)
+def test_the_two_conditional_branches_cancel_in_the_documented_total(
+    pages: int, title: str
+) -> None:
+    """Why the two tests above assert the REPORT and not the call count.
+
+    On a sole returned object the re-ask adds a call and the skipped judge
+    removes one, so the arm costs exactly what the two-object arm costs. A
+    guard written against `llm.calls` would therefore go green whether the
+    branches ran or not -- the same shape of vacuous pass as a metric that
+    cannot vary. Pinned rather than left as prose, so that if the arithmetic
+    ever stops cancelling, the reason these tests look indirect is re-read.
+
+    Measured at every documented size and in both columns, not assumed from
+    the smallest: the cancellation holds for prose at 2 and 5 pages (3 calls
+    either way), at 10 (9) and at 30 (24), and for the meeting column at the
+    same sizes (4, 6, 10, 25 -- one higher, and crossing into chunking
+    earlier). Holding across two different branch shapes and two thresholds is
+    what makes it a structural property rather than a coincidence of one row.
+
+    Each component is asserted separately. A single tuple comparison is
+    satisfied when only ONE of the two differs, so a regression that left the
+    judge running on the sole-object arm while the re-ask still fired would
+    keep the tuples unequal and slip through."""
+    sole_calls, sole = _observe(pages * _PAGE_CHARS, title=title, reply=_SOLE_REPLY)
+    pair_calls, pair = _observe(pages * _PAGE_CHARS, title=title)
+
+    assert sole_calls == pair_calls
+    assert sole.reask_runs != pair.reask_runs
+    assert sole.judge_status != pair.judge_status
 
 
 def test_the_two_thresholds_the_table_names_are_the_shipped_ones() -> None:

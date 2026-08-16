@@ -10,10 +10,8 @@ Labels are CONSTRUCTED, not adjudicated — see `fixtures.py`. Read accuracy as 
 | mean stability (modal share) | 0.80 |
 | degraded replies | 0 of 51 |
 | mean run latency | 18.2s |
-| mean stated confidence, CORRECT answers | 0.00 |
-| mean stated confidence, WRONG answers | 0.00 |
 
-A threshold policy is only meaningful if the second number is clearly below the first. Equal values mean stated confidence carries no signal about correctness, and gating on it would automate the errors instead of catching them.
+_Two stated-confidence rows and the paragraph interpreting them were removed from this stored report by #740: `EdgeSuggestion` carries no `confidence` field, so both could only ever print a structural `0.00`. The per-edge `confidences` arrays in the `runs-*.json` beside this file are unchanged._
 
 ## Type distribution
 
