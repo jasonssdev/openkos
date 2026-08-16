@@ -58,6 +58,17 @@ the eval never picked 8 in advance, it fell out of `max(8, ceil(1.5*3))` —
 the floor, not the multiplier, is what actually binds here, because no
 measured run came close to it.
 
+**This number was never shipped, and slice 3 is closed UNSHIPPED
+(2026-08-16).** The lane it would size exists to stop participants evicting
+subjects from `_UNION_BACKSTOP = 20`; a sweep of every stored run in every
+participant-bearing harness found the backstop has never bound. Largest
+retained set on record: 9 objects (`stage_attrition`, 45 runs), 7 with
+`--participants` on (`participant_anchor`, 9 runs), against at most 5
+participant candidates ever produced. The floor binding here was the first
+sign of it — `max(8, ...)` won because the measurement was nowhere near the
+capacity. Full reasoning and D4's reopen trigger:
+`openspec/changes/archive/2026-08-16-named-person-capture/STATUS.md`.
+
 ## Reject condition 2 in detail: the `ami-ts3005a` reliability cost
 
 Two of three treatment runs on the real AMI transcript failed outright

@@ -98,38 +98,8 @@ affiliation, or relation beyond a bare name before re-admission is
 incompatible with "always identified.")
 (Migration: `Person`/`Organization` re-admission on a meeting-shaped source
 is now unconditional on anchor content — see the MODIFIED requirements
-above. Volume is bounded instead by the new participant budget lane below,
-not by rejecting name-only candidates.)
-
-## ADDED Requirements
-
-### Requirement: Participant Budget Lane Separate From the Subject Backstop
-
-`Person`/`Organization` candidates re-admitted via judge re-admission MUST
-be bounded by a participant-lane capacity that is separate from
-`_UNION_BACKSTOP`. `_UNION_BACKSTOP` MUST remain the ceiling for
-subject-typed candidates (`Concept`, `Entity`, `Place`, `Event`,
-`Procedure`, `Decision`, `Project`) only. A `Person`/`Organization`
-candidate MUST NOT consume subject-lane capacity, and a subject-typed
-candidate MUST NOT consume participant-lane capacity. This requirement does
-not fix the participant lane's numeric capacity or its truncation
-ordering; both are set by measurement in a later slice of this change.
-
-#### Scenario: Participant lane does not compete with the subject backstop
-
-- GIVEN a merged candidate set where the subject backstop is already at
-  capacity, and one or more `Person`/`Organization` candidates await
-  re-admission
-- WHEN both lanes are applied
-- THEN the `Person`/`Organization` candidates are bounded independently of
-  the subject backstop, and their presence does not reduce the number of
-  subject-typed candidates retained
-
-#### Scenario: Participant lane bounds Person/Organization volume
-
-- GIVEN more `Person`/`Organization` candidates eligible for re-admission
-  than the participant lane's capacity
-- WHEN the participant lane's truncation runs
-- THEN no more than the lane's capacity of `Person`/`Organization`
-  candidates are retained, and the truncated candidates are recorded on the
-  `ExtractionReport` distinctly from subject-lane truncation
+above. Volume stays bounded by `_UNION_BACKSTOP` applied to the whole
+retained set, exactly as before this change. A separate participant budget
+lane was specified for slice 3 and closed unshipped: measurement found the
+backstop has never bound, so the lane would bound nothing. See
+`STATUS.md`.)

@@ -739,7 +739,8 @@ An import that merely breaks can be fixed at the read site; a measurement that
 can no longer be reproduced cannot.
 
 It was a minimal context anchor beyond a bare name -- a meeting role,
-affiliation, or relation cue (the Stub Rejection requirement, design D4) --
+affiliation, or relation cue (the Stub Rejection requirement, itself removed
+from `openspec/specs/extraction-union-judge` when this change archived) --
 and #706 measured what it actually did. It searched the CANDIDATE'S OWN
 description, which the model wrote out of `_PARTICIPANT_CAPTURE_SYSTEM_PROMPT`'s
 vocabulary, so it was checking the prompt against itself: all 9 candidates on a
@@ -2220,13 +2221,15 @@ re-admission set could not fix a pass that never generated a candidate to
 re-admit; this prompt exists to give the general pass a scoped second
 chance at generating one.
 
-Deliberately asks for the anchor (role/affiliation/relation) explicitly,
-mirroring the Stub Rejection requirement (design D4, `_has_participant_anchor`)
-this pass's candidates are gated on exactly like every other Person/
-Organization candidate reaching judge re-admission -- a name-only answer
-here would only be discarded downstream, so the prompt asks for the anchor
-up front instead of relying on the deterministic gate alone to catch a
-stub after paying for the call."""
+Deliberately asks for the anchor (role/affiliation/relation) explicitly.
+It once mirrored a Stub Rejection requirement that discarded name-only
+candidates at judge re-admission; owner ruling #712 RETIRED that gate, so a
+name-only answer here is no longer dropped anywhere downstream -- every
+named person is identified. The request survives on its own merit: an
+anchor is what makes a `Person` object useful to read and to relate, and
+asking for it costs nothing on a call already being paid for. It is a
+quality request now, never a precondition, and NOTHING may be inferred
+from its absence."""
 
 
 def _build_participant_capture_messages(

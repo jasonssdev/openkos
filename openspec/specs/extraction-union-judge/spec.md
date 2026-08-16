@@ -190,11 +190,12 @@ predicate.
 
 #### Scenario: Judge-dropped Person on a meeting-shaped source is re-admitted
 
-- GIVEN a `Person` candidate on a meeting-shaped source that carries a valid
-  participant anchor, which the judge's selection dropped
+- GIVEN a `Person` candidate on a meeting-shaped source, which the judge's
+  selection dropped
 - WHEN judge re-admission runs after selection
 - THEN the candidate is added back to the final set, deterministically, not
-  via any judge prompt clause
+  via any judge prompt clause, and no context-anchor check gates this
+  addition
 
 #### Scenario: A Person title-twin of the source is still dropped
 
@@ -218,41 +219,19 @@ predicate.
 - THEN the outcome is identical to current behavior; only the judge
   re-admission site gained new eligible types
 
-### Requirement: Stub Rejection at Judge Re-Admission
-
-At the judge re-admission step, a `Person` or `Organization` candidate MUST
-NOT be re-admitted unless it carries a minimal context anchor beyond its
-name: a meeting role, an affiliation, or a relation (for example
-`spoke_in`, `member_of`). A name-only candidate is a stub and MUST be
-discarded, not re-admitted. This anchor check applies ONLY to the additive
-re-admission step, never to the deletion sites.
-
-#### Scenario: Name-only candidate is not re-admitted
-
-- GIVEN a `Person` candidate that the judge dropped, whose only attribute
-  is a name, with no role, affiliation, or relation
-- WHEN judge re-admission runs
-- THEN the candidate remains dropped and does not appear in the final set
-
-#### Scenario: Candidate with a meeting-role anchor is re-admitted
-
-- GIVEN a `Person` candidate that the judge dropped, carrying a meeting
-  role (for example "chair") alongside its name
-- WHEN judge re-admission runs
-- THEN the candidate is added back to the final set
-
 ### Requirement: Judge Re-Admission Scoped to Meeting-Shaped Sources
 
 Judge re-admission of `Person`/`Organization` candidates MUST only apply to
 transcript/meeting-shaped sources, using the same shape test as
-`_MEETING_SHAPED_TITLE_RE`. A non-meeting-shaped source (for example a
-technical article that merely mentions a person's name) MUST NOT produce a
-judge-re-admitted `Person`/`Organization` candidate.
+`_is_meeting_shaped` — the source's TITLE or its CONTENT shape. A
+non-meeting-shaped source (for example a technical article that merely
+mentions a person's name, with no speaker-turn structure) MUST NOT produce
+a judge-re-admitted `Person`/`Organization` candidate.
 
 #### Scenario: Meeting transcript re-admits a judge-dropped participant
 
 - GIVEN a meeting-shaped source and a `Person` candidate that the judge
-  dropped and that satisfies the participant-anchor requirement
+  dropped
 - WHEN judge re-admission runs
 - THEN the candidate is added back to the final set
 
