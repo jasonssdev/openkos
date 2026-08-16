@@ -144,19 +144,9 @@ def main() -> None:
     distribution: Counter[str] = Counter()
     rows: list[dict[str, object]] = []
 
-    right_confidences: list[float] = []
-    wrong_confidences: list[float] = []
-
     for position, labelled in enumerate(EDGES):
         pairs = per_edge[position]
         answers = [a for a, _ in pairs]
-        for answer, confidence in pairs:
-            bucket = (
-                right_confidences
-                if answer == labelled.expected_type
-                else wrong_confidences
-            )
-            bucket.append(confidence)
         counts = Counter(a for a in answers if a is not None)
         distribution.update(counts)
         modal, modal_count = counts.most_common(1)[0] if counts else ("<none>", 0)
@@ -229,6 +219,13 @@ def main() -> None:
         f"_Generated: {stamp}_ · model `{args.model}` · **{args.runs} runs**"
         f" over {len(EDGES)} labelled edges.",
         "",
+        # Part of the arm's identity, not trivia (#700/#740): the JSON beside
+        # this file has recorded both since #738, but a reader who opens only
+        # the report cannot otherwise tell this run apart from a pre-#738 one
+        # measured under whatever window each candidate model happened to ship.
+        f"Generation ceiling `{DEFAULT_MAX_GENERATION_TOKENS}` · context"
+        f" window `{DEFAULT_CONTEXT_WINDOW}`.",
+        "",
         "Labels are CONSTRUCTED, not adjudicated — see `fixtures.py`. Read"
         " accuracy as rubric-consistency, and trust **stability** when a"
         " label is arguable: it needs no labels at all.",
@@ -239,10 +236,6 @@ def main() -> None:
         f"| mean stability (modal share) | {mean_stability:.2f} |",
         f"| degraded replies | {total - emissions} of {total} |",
         f"| mean run latency | {statistics.fmean(latencies):.1f}s |",
-        f"| mean stated confidence, CORRECT answers | "
-        f"{statistics.fmean(right_confidences) if right_confidences else 0.0:.2f} |",
-        f"| mean stated confidence, WRONG answers | "
-        f"{statistics.fmean(wrong_confidences) if wrong_confidences else 0.0:.2f} |",
         *(
             [
                 f"| **direction-trap hits (reversed probes)** | "
@@ -253,10 +246,16 @@ def main() -> None:
             else []
         ),
         "",
-        "A threshold policy is only meaningful if the second number is"
-        " clearly below the first. Equal values mean stated confidence"
-        " carries no signal about correctness, and gating on it would"
-        " automate the errors instead of catching them.",
+        "**No stated-confidence metric is reported here, by construction"
+        " (#740).** `EdgeSuggestion` carries no `confidence` field and the"
+        " #508 investigation concluded it should not gain one, so every arm"
+        " run so far reads the `getattr` default. Until #740 this report"
+        " printed `0.00` for CORRECT and `0.00` for WRONG answers, which"
+        " reads like a calibration finding and is instead a column that"
+        " could not vary. The per-edge `confidences` arrays stay in"
+        " `runs-*.json` as the seam for an arm that re-adds the field; the"
+        " sibling `evals/contradictions/` column, which does measure a real"
+        " reply field, is unaffected.",
         "",
         "## Type distribution",
         "",

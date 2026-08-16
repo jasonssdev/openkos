@@ -245,6 +245,13 @@ def main() -> None:
         f"_Generated: {stamp}_ · model `{args.model}` · **{args.runs} runs**"
         f" over {len(PAIRS)} labelled pairs.",
         "",
+        # Part of the arm's identity, not trivia (#700/#740): the JSON beside
+        # this file has recorded both since #738, but a reader who opens only
+        # the report cannot otherwise tell this run apart from a pre-#738 one
+        # measured under unbounded conditions.
+        f"Generation ceiling `{DEFAULT_MAX_GENERATION_TOKENS}` · context"
+        f" window `{DEFAULT_CONTEXT_WINDOW}`.",
+        "",
         "Labels are CONSTRUCTED, not adjudicated — see `contradiction_fixtures.py`.",
         "",
         "| metric | value |",
