@@ -14,7 +14,79 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
-_Nothing yet._
+### Added
+
+- **Opt-in concurrent extraction fan-out**: a new `concurrent_extraction` key
+  in `openkos.yaml` lets a **chunked** ingest send its windows two at a time
+  instead of one after another. Default `false`, and deliberately so — the
+  entire benefit is conditional on `ollama serve` having been started with
+  `OLLAMA_NUM_PARALLEL` at 2 or more, a setting that lives on a separate
+  process OpenKOS can name but cannot set. With the server configured the
+  measured effect is 1.26x on the fan-out, which is 91% of an ingest, so
+  ~20% off a whole run (160.7s → ~128s) with no quality change on either
+  axis; against a **default** server the requests simply queue and the
+  speedup is 1.01x. It is an on/off switch, not a worker count: the count is
+  fixed at 2, where the measurement saturates (arms at 3 and 4 were
+  statistically indistinguishable while resident memory kept climbing), so
+  `concurrent_extraction: 2` is refused at config read rather than read as
+  "two workers". Window ordering is unchanged — windows are collected in
+  window order, never completion order (#744, #739; evidence in
+  `evals/ingest_concurrency/`).
+
+- **The queuing risk is named where it bites**: when a chunked source times
+  out on a run that had `concurrent_extraction` on, the skip line is followed
+  by one naming the interaction and both exits — raise `OLLAMA_NUM_PARALLEL`
+  on the server, or set `concurrent_extraction: false`. Each queued request's
+  own `chat_timeout` keeps running while it waits its turn, so enabling the
+  flag against an unconfigured server can start failing ingests that used to
+  succeed: the results are unaffected, the deadline is not. All three
+  conditions are required, so it stays quiet on a serial run, on a source too
+  small to fan out, and on failures that are not deadlines (#746, #748).
+
+### Fixed
+
+- **`query --save` no longer titles a filed Insight with the question when
+  both earlier rungs refuse**: a third rung cuts the answer's first sentence
+  at its opening clause when rung 1 refused **for length alone** and the
+  sentence carries a comma or a known Spanish clause connector whose left
+  part fits the same 15–90 character bound. It sits *below* the
+  question's-own-subject rung deliberately and by measurement, not by
+  assumption — placed above it, `¿qué es la trazabilidad?` was cut to
+  `La trazabilidad`, article and all, where rung 2 gives the cleaner
+  `Trazabilidad`. The rung exists because rung 1's ceiling does not survive
+  real Spanish openings: a measured production answer's first sentence ran
+  158 characters (#696; evidence in `evals/query_title/`).
+
+### Changed
+
+- **`llm.chat`'s thread safety is now pinned by a test** rather than assumed,
+  since the concurrent fan-out above is the first code in the engine to call
+  it from more than one thread (#748).
+
+### Removed
+
+- **`scipy` is no longer a runtime dependency**, cutting a clean install from
+  **120 MB to 28 MB** (it pulled `numpy` with it). Nothing in the codebase
+  imported it: it was required only by `networkx.pagerank`, and the seeded
+  personalized-PageRank retrieval channel was retired in #434. Every user
+  installing OpenKOS had been downloading ~92 MB of numerical libraries for a
+  code path that no longer exists. Verified by building the wheel and
+  installing it into an empty environment: every module imports and
+  `openkos doctor` passes with `scipy` absent.
+
+- **`pydantic` and `ruamel-yaml` dropped from the dev dependency group.**
+  Neither is imported anywhere — the only mentions are comments explaining
+  why they are *not* used, and `pydantic` in particular contradicted the
+  documented decision to validate with stdlib dataclasses and hand-rolled
+  validators.
+
+### Fixed (packaging)
+
+- **`rich` is now declared** in `[project] dependencies`. `cli/main.py`
+  imports `rich.console.Console` directly, and the install only worked
+  because Typer happens to depend on `rich` — an undeclared transitive
+  import that would break at import time, on an install that resolved
+  cleanly, the day Typer drops or vendors it.
 
 ## [0.2.5] - 2026-08-14
 

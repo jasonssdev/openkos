@@ -82,6 +82,20 @@ As shipped, the whole derived layer is four SQLite files under `.openkos/`, all 
 
 The runtime and interoperability layer (FastAPI local API, MCP server, OKF import/export) arrives with MVP 3.
 
+**The actual runtime dependency set**, as declared in `pyproject.toml` — six packages, deliberately small, and enumerated here because a dependency nobody lists is a dependency nobody notices:
+
+| Package | Why it is there |
+| --- | --- |
+| `typer` | the CLI |
+| `rich` | `cli/main.py` builds a `Console` directly; declared rather than inherited from Typer |
+| `python-frontmatter` + `pyyaml` | reading and round-tripping OKF frontmatter |
+| `sqlite-vec` | the on-disk dense index (`vectors.db`) |
+| `networkx` | the `GraphStore` → `DiGraph` conversion in `graph/analysis.py` |
+
+SQLite, FTS5, and everything git-related add nothing: SQLite ships with Python, and git is driven through `subprocess` rather than a client library.
+
+`scipy` was a seventh entry until the pre-release audit removed it. It had **no importer at all** — it was required only by `networkx.pagerank`, and the PageRank retrieval channel was retired in [#434](https://github.com/jasonssdev/openkos/issues/434), leaving every user to download it plus `numpy` for a code path that no longer existed. Dropping it took a clean install from **120 MB to 28 MB**. The lesson generalises: a derived-layer dependency outlives the feature that justified it unless something checks, so re-run that check whenever a retrieval or graph channel is removed.
+
 ---
 
 ## Core framework
