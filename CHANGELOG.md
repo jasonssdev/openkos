@@ -14,6 +14,10 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [0.2.6] - 2026-08-17
+
 ### Added
 
 - **Opt-in concurrent extraction fan-out**: a new `concurrent_extraction` key
@@ -87,6 +91,35 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   because Typer happens to depend on `rich` — an undeclared transitive
   import that would break at import time, on an install that resolved
   cleanly, the day Typer drops or vendors it.
+
+### Documentation
+
+- **The packaged `AGENTS.md` template now describes the whole workspace.**
+  The tree it teaches every new workspace omitted `bundle/insights/` (where
+  `query --save` files a synthesis) and `bundle/.state/` (the merge-ledger
+  and curation-verdict sidecars) entirely, so an agent reading the manual
+  did not know either existed. It also described sensitivity as a flat
+  `private` default, which predates the per-type birth offset: the bullet
+  now says the map is *levels above the floor* and that the shipped
+  `Person: 1` puts a person page at `confidential` on a `private`
+  workspace.
+
+- **`docs/cli.md` no longer documents a `--no-color` flag.** No such flag
+  has ever existed, and the engine emits no ANSI at all — meaning is
+  carried by `+`, `~`, `-` and `→`, so a piped run is byte-identical to a
+  terminal one. The symbol list also claimed a check mark that is never
+  printed. Separately, `curate` was described as walking "five kinds" of
+  pending judgment whose list did not match its own five stages;
+  sensitivity is reported inside Metadata and is not a stage.
+
+- **`docs/roadmap.md` and `docs/architecture.md` no longer claim PageRank
+  graph traversal feeds `query`.** That channel was retired by measurement
+  in #434. `graph.db` is still built by `reindex` and is read by
+  `contradictions`.
+
+- **`docs/tech_stack.md` records why each runtime dependency exists.** A
+  manifest says what is required and never why, which is what let `scipy`
+  outlive its only caller unnoticed.
 
 ## [0.2.5] - 2026-08-14
 
