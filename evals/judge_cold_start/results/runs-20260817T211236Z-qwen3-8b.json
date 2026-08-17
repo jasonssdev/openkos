@@ -1,0 +1,277 @@
+{
+  "stamp": "20260817T211236Z",
+  "model": "qwen3:8b",
+  "rows": [
+    {
+      "arm": "warm",
+      "run": 1,
+      "model": "qwen3:8b",
+      "resident_before": [
+        "bge-m3:latest"
+      ],
+      "unload_confirmed": null,
+      "latency_s": 37.57440141600091,
+      "outcome": "ok",
+      "error_class": null,
+      "error_message": null,
+      "reply_chars": 410,
+      "reply_head": "{\"keep\": [\"Decision on Remote Control Functions\", \"Decision on Using L_C_D_ Screen\", \"Designing a Remote Control with an LCD Screen\", \"Remote Control Battery Management\", \"Button-less Remote Development\", \"Discussion on Remote Control Design\", \"Remote Control Design Considerations\", \"Remote Control Design for Television\", \"Corporate Branding in Product Design\", \"Market Targeting and Customer Segmentation\"]}",
+      "unparseable_detail": null,
+      "selected": 10,
+      "salvaged": 0
+    },
+    {
+      "arm": "warm",
+      "run": 2,
+      "model": "qwen3:8b",
+      "resident_before": [
+        "qwen3:8b",
+        "bge-m3:latest"
+      ],
+      "unload_confirmed": null,
+      "latency_s": 37.0968538330053,
+      "outcome": "ok",
+      "error_class": null,
+      "error_message": null,
+      "reply_chars": 489,
+      "reply_head": "{\"keep\": [\"Decision on Remote Control Functions\", \"Decision on Using L_C_D_ Screen\", \"Designing a Remote Control with an LCD Screen\", \"Remote Control Battery Management\", \"Button-less Remote Development\", \"Discussion on Remote Control Design\", \"Market Targeting and Customer Segmentation\", \"Corporate Branding in Product Design\", \"User Preferences for Remote Control Design\", \"Remote Control Design Considerations\", \"Remote Control Design for Television\", \"User Interface for Television\"]}",
+      "unparseable_detail": null,
+      "selected": 12,
+      "salvaged": 0
+    },
+    {
+      "arm": "warm",
+      "run": 3,
+      "model": "qwen3:8b",
+      "resident_before": [
+        "qwen3:8b"
+      ],
+      "unload_confirmed": null,
+      "latency_s": 35.50407575001009,
+      "outcome": "ok",
+      "error_class": null,
+      "error_message": null,
+      "reply_chars": 211,
+      "reply_head": "{\"keep\": [\"Decision on Remote Control Functions\", \"Decision on Using L_C_D_ Screen\", \"Remote Control Design Considerations\", \"Corporate Branding in Product Design\", \"Market Targeting and Customer Segmentation\"]}",
+      "unparseable_detail": null,
+      "selected": 5,
+      "salvaged": 0
+    },
+    {
+      "arm": "warm",
+      "run": 4,
+      "model": "qwen3:8b",
+      "resident_before": [
+        "qwen3:8b"
+      ],
+      "unload_confirmed": null,
+      "latency_s": 36.395390082965605,
+      "outcome": "ok",
+      "error_class": null,
+      "error_message": null,
+      "reply_chars": 410,
+      "reply_head": "{\"keep\": [\"Decision on Remote Control Functions\", \"Decision on Using L_C_D_ Screen\", \"Designing a Remote Control with an LCD Screen\", \"Remote Control Battery Management\", \"Button-less Remote Development\", \"Discussion on Remote Control Design\", \"Remote Control Design Considerations\", \"Remote Control Design for Television\", \"Corporate Branding in Product Design\", \"Market Targeting and Customer Segmentation\"]}",
+      "unparseable_detail": null,
+      "selected": 10,
+      "salvaged": 0
+    },
+    {
+      "arm": "warm",
+      "run": 5,
+      "model": "qwen3:8b",
+      "resident_before": [
+        "qwen3:8b"
+      ],
+      "unload_confirmed": null,
+      "latency_s": 36.67994445795193,
+      "outcome": "ok",
+      "error_class": null,
+      "error_message": null,
+      "reply_chars": 410,
+      "reply_head": "{\"keep\": [\"Decision on Remote Control Functions\", \"Decision on Using L_C_D_ Screen\", \"Designing a Remote Control with an LCD Screen\", \"Remote Control Battery Management\", \"Button-less Remote Development\", \"Discussion on Remote Control Design\", \"Remote Control Design Considerations\", \"Remote Control Design for Television\", \"Corporate Branding in Product Design\", \"Market Targeting and Customer Segmentation\"]}",
+      "unparseable_detail": null,
+      "selected": 10,
+      "salvaged": 0
+    },
+    {
+      "arm": "warm",
+      "run": 6,
+      "model": "qwen3:8b",
+      "resident_before": [
+        "qwen3:8b"
+      ],
+      "unload_confirmed": null,
+      "latency_s": 35.94338212499861,
+      "outcome": "ok",
+      "error_class": null,
+      "error_message": null,
+      "reply_chars": 195,
+      "reply_head": "{\"keep\": [\"Decision on Remote Control Functions\", \"Decision on Using L_C_D_ Screen\", \"Remote Control Battery Management\", \"Button-less Remote Development\", \"Discussion on Remote Control Design\"]}",
+      "unparseable_detail": null,
+      "selected": 5,
+      "salvaged": 0
+    },
+    {
+      "arm": "warm",
+      "run": 7,
+      "model": "qwen3:8b",
+      "resident_before": [
+        "qwen3:8b"
+      ],
+      "unload_confirmed": null,
+      "latency_s": 36.054712208977435,
+      "outcome": "ok",
+      "error_class": null,
+      "error_message": null,
+      "reply_chars": 211,
+      "reply_head": "{\"keep\": [\"Decision on Remote Control Functions\", \"Decision on Using L_C_D_ Screen\", \"Remote Control Design Considerations\", \"Corporate Branding in Product Design\", \"Market Targeting and Customer Segmentation\"]}",
+      "unparseable_detail": null,
+      "selected": 5,
+      "salvaged": 0
+    },
+    {
+      "arm": "warm",
+      "run": 8,
+      "model": "qwen3:8b",
+      "resident_before": [
+        "qwen3:8b"
+      ],
+      "unload_confirmed": null,
+      "latency_s": 36.39092883403646,
+      "outcome": "ok",
+      "error_class": null,
+      "error_message": null,
+      "reply_chars": 410,
+      "reply_head": "{\"keep\": [\"Decision on Remote Control Functions\", \"Decision on Using L_C_D_ Screen\", \"Designing a Remote Control with an LCD Screen\", \"Remote Control Battery Management\", \"Button-less Remote Development\", \"Discussion on Remote Control Design\", \"Remote Control Design Considerations\", \"Remote Control Design for Television\", \"Corporate Branding in Product Design\", \"Market Targeting and Customer Segmentation\"]}",
+      "unparseable_detail": null,
+      "selected": 10,
+      "salvaged": 0
+    },
+    {
+      "arm": "warm",
+      "run": 9,
+      "model": "qwen3:8b",
+      "resident_before": [
+        "qwen3:8b"
+      ],
+      "unload_confirmed": null,
+      "latency_s": 37.326569791999646,
+      "outcome": "ok",
+      "error_class": null,
+      "error_message": null,
+      "reply_chars": 410,
+      "reply_head": "{\"keep\": [\"Decision on Remote Control Functions\", \"Decision on Using L_C_D_ Screen\", \"Designing a Remote Control with an LCD Screen\", \"Remote Control Battery Management\", \"Button-less Remote Development\", \"Discussion on Remote Control Design\", \"Remote Control Design Considerations\", \"Remote Control Design for Television\", \"Corporate Branding in Product Design\", \"Market Targeting and Customer Segmentation\"]}",
+      "unparseable_detail": null,
+      "selected": 10,
+      "salvaged": 0
+    },
+    {
+      "arm": "warm",
+      "run": 10,
+      "model": "qwen3:8b",
+      "resident_before": [
+        "qwen3:8b"
+      ],
+      "unload_confirmed": null,
+      "latency_s": 38.032290417002514,
+      "outcome": "ok",
+      "error_class": null,
+      "error_message": null,
+      "reply_chars": 288,
+      "reply_head": "{\"keep\": [\"Decision on Remote Control Functions\", \"Decision on Using L_C_D_ Screen\", \"Remote Control Design Considerations\", \"Remote Control Design for Television\", \"Corporate Branding in Product Design\", \"Market Targeting and Customer Segmentation\", \"Remote Control Battery Management\"]}",
+      "unparseable_detail": null,
+      "selected": 7,
+      "salvaged": 0
+    },
+    {
+      "arm": "warm",
+      "run": 11,
+      "model": "qwen3:8b",
+      "resident_before": [
+        "qwen3:8b"
+      ],
+      "unload_confirmed": null,
+      "latency_s": 37.763620541023556,
+      "outcome": "ok",
+      "error_class": null,
+      "error_message": null,
+      "reply_chars": 211,
+      "reply_head": "{\"keep\": [\"Decision on Remote Control Functions\", \"Decision on Using L_C_D_ Screen\", \"Remote Control Design Considerations\", \"Corporate Branding in Product Design\", \"Market Targeting and Customer Segmentation\"]}",
+      "unparseable_detail": null,
+      "selected": 5,
+      "salvaged": 0
+    },
+    {
+      "arm": "warm",
+      "run": 12,
+      "model": "qwen3:8b",
+      "resident_before": [
+        "qwen3:8b"
+      ],
+      "unload_confirmed": null,
+      "latency_s": 36.896294666978065,
+      "outcome": "ok",
+      "error_class": null,
+      "error_message": null,
+      "reply_chars": 251,
+      "reply_head": "{\"keep\": [\"Decision on Remote Control Functions\", \"Decision on Using L_C_D_ Screen\", \"Remote Control Design Considerations\", \"Remote Control Design for Television\", \"Corporate Branding in Product Design\", \"Market Targeting and Customer Segmentation\"]}",
+      "unparseable_detail": null,
+      "selected": 6,
+      "salvaged": 0
+    },
+    {
+      "arm": "warm",
+      "run": 13,
+      "model": "qwen3:8b",
+      "resident_before": [
+        "qwen3:8b"
+      ],
+      "unload_confirmed": null,
+      "latency_s": 36.23714416701114,
+      "outcome": "ok",
+      "error_class": null,
+      "error_message": null,
+      "reply_chars": 410,
+      "reply_head": "{\"keep\": [\"Decision on Remote Control Functions\", \"Decision on Using L_C_D_ Screen\", \"Designing a Remote Control with an LCD Screen\", \"Remote Control Battery Management\", \"Button-less Remote Development\", \"Discussion on Remote Control Design\", \"Remote Control Design Considerations\", \"Remote Control Design for Television\", \"Corporate Branding in Product Design\", \"Market Targeting and Customer Segmentation\"]}",
+      "unparseable_detail": null,
+      "selected": 10,
+      "salvaged": 0
+    },
+    {
+      "arm": "warm",
+      "run": 14,
+      "model": "qwen3:8b",
+      "resident_before": [
+        "qwen3:8b"
+      ],
+      "unload_confirmed": null,
+      "latency_s": 36.53272516699508,
+      "outcome": "ok",
+      "error_class": null,
+      "error_message": null,
+      "reply_chars": 489,
+      "reply_head": "{\"keep\": [\"Decision on Remote Control Functions\", \"Decision on Using L_C_D_ Screen\", \"Designing a Remote Control with an LCD Screen\", \"Remote Control Battery Management\", \"Button-less Remote Development\", \"Discussion on Remote Control Design\", \"Market Targeting and Customer Segmentation\", \"Corporate Branding in Product Design\", \"User Preferences for Remote Control Design\", \"Remote Control Design Considerations\", \"Remote Control Design for Television\", \"User Interface for Television\"]}",
+      "unparseable_detail": null,
+      "selected": 12,
+      "salvaged": 0
+    },
+    {
+      "arm": "warm",
+      "run": 15,
+      "model": "qwen3:8b",
+      "resident_before": [
+        "qwen3:8b"
+      ],
+      "unload_confirmed": null,
+      "latency_s": 35.21976237499621,
+      "outcome": "ok",
+      "error_class": null,
+      "error_message": null,
+      "reply_chars": 211,
+      "reply_head": "{\"keep\": [\"Decision on Remote Control Functions\", \"Decision on Using L_C_D_ Screen\", \"Remote Control Design Considerations\", \"Corporate Branding in Product Design\", \"Market Targeting and Customer Segmentation\"]}",
+      "unparseable_detail": null,
+      "selected": 5,
+      "salvaged": 0
+    }
+  ]
+}

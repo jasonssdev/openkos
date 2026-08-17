@@ -15,6 +15,10 @@ miss that case due to the length difference.
 from difflib import SequenceMatcher
 from typing import Final
 
+from openkos.extraction.concept import LANGUAGE_FUNCTION_WORDS
+
+from .normalize import normalize_key
+
 SIMILARITY_THRESHOLD: Final[float] = 0.75
 """Minimum per-token `SequenceMatcher.ratio()` for two tokens to be
 considered equivalent. Locked by `SequenceMatcher(None, "stoic",
@@ -61,6 +65,54 @@ def _match_tokens(key: str) -> tuple[str, ...]:
     return dropped
 
 
+MATCH_FUNCTION_WORDS: Final = frozenset(
+    normalize_key(word) for word in LANGUAGE_FUNCTION_WORDS
+)
+"""The shipped function-word lexicon (#648), re-keyed through `normalize_key`
+-- the SAME function that produced the keys this module compares (#755).
+
+Reused, never copied: a private list here would diverge from the #618
+voter's the first time a word is added to one side. Normalizing it is not
+cosmetic. `normalize_key` strips accents, while `más`, `según` and `también`
+appear in the lexicon ONLY in their accented form, so a raw membership test
+would silently never fire for them and the filter would be three words
+smaller than it reads. (`qué` escapes that only because `que` is listed
+separately -- which is exactly how such a gap stays invisible.)"""
+
+
+def _content_tokens(tokens: tuple[str, ...]) -> tuple[str, ...]:
+    """`tokens` without function words, guarded by the SAME floor
+    `_match_tokens` applies to short-token dropping (#755).
+
+    Function words must not be able to DECIDE a containment, in either
+    direction, and both directions were measured:
+
+    - As a required token they BLOCK. #755's pair is the report, though not
+      by the mechanism it states: both sets held four tokens, so the tie made
+      the left one required and the genuine content word `decisiones` did the
+      blocking. Dropping `del` fixes it by making the right set SMALLER, so
+      containment is asked in the direction that can succeed. Size picks the
+      direction, so function words must not count toward size either.
+    - As a match TARGET they MANUFACTURE. `SequenceMatcher(None, "model",
+      "del").ratio()` is exactly 0.750, so `del` sitting in the larger set
+      matched `model` and reported two unrelated titles as duplicates.
+      Removing them from scoring, not just from the required set, is what
+      kills that.
+
+    The floor is #555's, for #555's reason: dropping outright can reduce a
+    multi-word title to ONE token, and a manufactured single-token set
+    subset-matches everything sharing that token at a displayed 1.000 --
+    'the app' would contain into 'app store'. So the words are RETAINED
+    whenever removing them would leave a multi-word key with fewer than two
+    tokens. Retention, not rejection: the function word must then find an
+    equivalent, exactly as `_match_tokens` requires of a retained short one.
+    """
+    content = tuple(token for token in tokens if token not in MATCH_FUNCTION_WORDS)
+    if len(tokens) >= 2 and len(content) < 2:
+        return tokens
+    return content
+
+
 def near_match_score(key_a: str, key_b: str) -> float | None:
     """The near-match score for `key_a`/`key_b`, or `None` if they do not
     qualify as a LOW-confidence near-match.
@@ -91,8 +143,8 @@ def near_match_score(key_a: str, key_b: str) -> float | None:
     queue (never auto-merged); precision here is deliberately deferred to
     LLM adjudication in a later slice.
     """
-    tokens_a = _match_tokens(key_a)
-    tokens_b = _match_tokens(key_b)
+    tokens_a = _content_tokens(_match_tokens(key_a))
+    tokens_b = _content_tokens(_match_tokens(key_b))
     if not tokens_a or not tokens_b:
         return None
     smaller, larger = (

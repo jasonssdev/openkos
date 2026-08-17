@@ -30,7 +30,7 @@ from pathlib import Path
 
 import pytest
 
-from openkos.extraction import concept
+from openkos.extraction import concept, judge
 from openkos.llm.base import Message
 
 CLI_DOC = Path(__file__).resolve().parents[2] / "docs" / "cli.md"
@@ -96,20 +96,49 @@ _ROW = re.compile(
 )
 
 
-class _CountingLLM:
-    """Structural `LLMBackend` that answers every call with the same reply.
+_JUDGE_REPLY = '{"keep": ["Trazabilidad Documental", "Adopcion del Registro Diario"]}'
+"""A VALID judge selection, keeping both candidates.
 
-    The judge and participant passes get an extraction-shaped reply they cannot
-    parse, so they degrade -- which is irrelevant here and deliberately so: each
-    still costs exactly one call, and this test counts calls, not verdicts.
+Until #754 the judge got the extraction-shaped reply like every other call and
+degraded, and the test recorded that as harmless: "each still costs exactly one
+call". #754 made it matter -- a failing judge now costs TWO calls, because
+`judge.select` retries once before declaring itself unavailable. Left as it
+was, this table would have documented the JUDGE-FAILURE cost of every ingest
+as if it were the ordinary one.
+
+Keeping both candidates also keeps the fan-out identical to what the table
+already documented: no candidate is dropped, so nothing downstream of the
+judge changes shape.
+"""
+
+
+class _CountingLLM:
+    """Structural `LLMBackend` that answers extraction-shaped calls with a
+    fixed reply and the JUDGE with a valid selection.
+
+    The judge is told apart by comparing the system turn against
+    `judge._JUDGE_SYSTEM_PROMPT` itself, not by sniffing for a phrase: the
+    live constant cannot drift from what production sends, while a substring
+    guess would silently stop matching the day the prompt is reworded and
+    quietly restore the judge-failure cost this class exists to avoid.
+
+    The participant pass still receives the extraction-shaped reply and still
+    degrades. That one IS harmless and stays: it is an extraction-shaped
+    prompt, its reply is legitimately shaped for it, and it costs one call
+    either way.
     """
 
-    def __init__(self, reply: str = _REPLY) -> None:
+    def __init__(self, reply: str = _REPLY, *, judge_reply: str = _JUDGE_REPLY) -> None:
         self.calls = 0
+        self.judge_calls = 0
         self._reply = reply
+        self._judge_reply = judge_reply
 
     def chat(self, messages: Sequence[Message]) -> str:
         self.calls += 1
+        if messages and messages[0].get("content") == judge._JUDGE_SYSTEM_PROMPT:
+            self.judge_calls += 1
+            return self._judge_reply
         return self._reply
 
 
@@ -305,3 +334,45 @@ def test_the_faq_states_the_same_window_size_as_the_code() -> None:
     faq = (CLI_DOC.parent / "faq.md").read_text(encoding="utf-8")
 
     assert f"about {concept._CHUNK_TARGET:,} characters" in faq
+
+
+def test_a_failing_judge_costs_exactly_one_extra_call_for_the_retry() -> None:
+    """#754's retry is a real cost, and it is bounded at one.
+
+    The documented table measures the ORDINARY path, where the judge answers.
+    This pins the other one: when the judge cannot be used, `select` asks a
+    second time and then gives up. Asserted as a DIFFERENCE against the same
+    source, so it cannot drift with the fan-out -- and asserted on the judge's
+    own call count too, since a total that happened to rise by one for some
+    other reason would satisfy a bare arithmetic check.
+    """
+    chars = 5 * _PAGE_CHARS
+
+    healthy = _CountingLLM()
+    concept.extract_concept_union(
+        _source_of(chars), source_title=_PROSE_TITLE, llm=healthy
+    )
+
+    # An extraction-shaped array is not a judge object, so both attempts fail.
+    failing = _CountingLLM(judge_reply=_REPLY)
+    outcome = concept.extract_concept_union(
+        _source_of(chars), source_title=_PROSE_TITLE, llm=failing
+    )
+
+    assert healthy.judge_calls == 1
+    assert failing.judge_calls == judge.JUDGE_ATTEMPTS == 2
+    assert failing.calls - healthy.calls == 1
+    assert outcome.report.judge_status == "failed"
+
+
+def test_the_ordinary_path_pays_nothing_for_the_retry() -> None:
+    """The complement, and the one that matters most: a judge that answers on
+    the first attempt must cost exactly what it cost before #754. A retry that
+    also fired on success would double a call on every source in a batch."""
+    llm = _CountingLLM()
+    outcome = concept.extract_concept_union(
+        _source_of(5 * _PAGE_CHARS), source_title=_PROSE_TITLE, llm=llm
+    )
+
+    assert outcome.report.judge_status == "ok"
+    assert llm.judge_calls == 1

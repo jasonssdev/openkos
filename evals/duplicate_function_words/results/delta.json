@@ -1,0 +1,272 @@
+{
+  "titles": 549,
+  "pairs": 150426,
+  "delta": [
+    {
+      "title_a": "Building a Multi-Agent Research Application Using Claude Agent SDK",
+      "title_b": "Building a Multi-Agent Research Application with Claude Agent SDK",
+      "baseline": null,
+      "treatment": 1.0,
+      "key": "building a multi agent research application using claude agent sdk || building a multi agent research application with claude agent sdk"
+    },
+    {
+      "title_a": "Building a Multi-Agent Research Application Using Claude Agent SDK",
+      "title_b": "Building a Research Agent with Claude Agent SDK",
+      "baseline": null,
+      "treatment": 1.0,
+      "key": "building a multi agent research application using claude agent sdk || building a research agent with claude agent sdk"
+    },
+    {
+      "title_a": "Building a Multi-Agent Research Application Using Claude Agent SDK",
+      "title_b": "Building a Research Agent with the Claude Agent SDK",
+      "baseline": null,
+      "treatment": 1.0,
+      "key": "building a multi agent research application using claude agent sdk || building a research agent with the claude agent sdk"
+    },
+    {
+      "title_a": "Building a Multi-Agent Research Application Using Claude Agent SDK",
+      "title_b": "Using the Claude Agent SDK for Research Applications",
+      "baseline": null,
+      "treatment": 0.9565217391304348,
+      "key": "building a multi agent research application using claude agent sdk || using the claude agent sdk for research applications"
+    },
+    {
+      "title_a": "Building a Multi-Agent Research Application with Claude Agent SDK",
+      "title_b": "Building a Research Agent with the Claude Agent SDK",
+      "baseline": null,
+      "treatment": 1.0,
+      "key": "building a multi agent research application with claude agent sdk || building a research agent with the claude agent sdk"
+    },
+    {
+      "title_a": "Capacitación del equipo nuevo con un procedimiento de onboarding",
+      "title_b": "Procedimiento de Onboarding para el Equipo Nuevo",
+      "baseline": null,
+      "treatment": 1.0,
+      "key": "capacitacion del equipo nuevo con un procedimiento de onboarding || procedimiento de onboarding para el equipo nuevo"
+    },
+    {
+      "title_a": "Decision on Bundle and Storage Centralized",
+      "title_b": "Decisión sobre el bundle y el storage centralizado",
+      "baseline": null,
+      "treatment": 0.8695652173913043,
+      "key": "decision on bundle and storage centralized || decision sobre el bundle y el storage centralizado"
+    },
+    {
+      "title_a": "Decision on Bundle and Storage Centralized",
+      "title_b": "Decisión sobre el Storage Centralizado",
+      "baseline": null,
+      "treatment": 0.8695652173913043,
+      "key": "decision on bundle and storage centralized || decision sobre el storage centralizado"
+    },
+    {
+      "title_a": "Decision on Bundle and Storage Centralized",
+      "title_b": "Decisión sobre el Storage Centralizado y el Bundle",
+      "baseline": null,
+      "treatment": 0.8695652173913043,
+      "key": "decision on bundle and storage centralized || decision sobre el storage centralizado y el bundle"
+    },
+    {
+      "title_a": "Decision on Centralized Knowledge Storage",
+      "title_b": "Decisión sobre el Storage Centralizado",
+      "baseline": null,
+      "treatment": 0.8695652173913043,
+      "key": "decision on centralized knowledge storage || decision sobre el storage centralizado"
+    },
+    {
+      "title_a": "Decision on Knowledge Source Bundle and Centralized Storage",
+      "title_b": "Decisión sobre el bundle y el storage centralizado",
+      "baseline": null,
+      "treatment": 0.8695652173913043,
+      "key": "decision on knowledge source bundle and centralized storage || decision sobre el bundle y el storage centralizado"
+    },
+    {
+      "title_a": "Decision on Knowledge Source Bundle and Centralized Storage",
+      "title_b": "Decisión sobre el centralized knowledge storage",
+      "baseline": null,
+      "treatment": 1.0,
+      "key": "decision on knowledge source bundle and centralized storage || decision sobre el centralized knowledge storage"
+    },
+    {
+      "title_a": "Decision on Knowledge Source Bundle and Centralized Storage",
+      "title_b": "Decisión sobre el Storage Centralizado",
+      "baseline": null,
+      "treatment": 0.8695652173913043,
+      "key": "decision on knowledge source bundle and centralized storage || decision sobre el storage centralizado"
+    },
+    {
+      "title_a": "Decision on Knowledge Source Bundle and Centralized Storage",
+      "title_b": "Decisión sobre el Storage Centralizado y el Bundle",
+      "baseline": null,
+      "treatment": 0.8695652173913043,
+      "key": "decision on knowledge source bundle and centralized storage || decision sobre el storage centralizado y el bundle"
+    },
+    {
+      "title_a": "Decisión sobre retención de registros de acceso",
+      "title_b": "Retención de los registros de acceso",
+      "baseline": null,
+      "treatment": 1.0,
+      "key": "decision sobre retencion de registros de acceso || retencion de los registros de acceso"
+    },
+    {
+      "title_a": "El bundle sigue siendo la fuente canónica",
+      "title_b": "Fuente canónica del bundle",
+      "baseline": null,
+      "treatment": 1.0,
+      "key": "el bundle sigue siendo la fuente canonica || fuente canonica del bundle"
+    },
+    {
+      "title_a": "Fuente canónica del bundle y uso de snapshots derivados",
+      "title_b": "Uso del bundle como fuente canónica",
+      "baseline": null,
+      "treatment": 1.0,
+      "key": "fuente canonica del bundle y uso de snapshots derivados || uso del bundle como fuente canonica"
+    },
+    {
+      "title_a": "Fuente canónica del bundle y uso del storage centralizado",
+      "title_b": "Uso del bundle como fuente canónica",
+      "baseline": null,
+      "treatment": 1.0,
+      "key": "fuente canonica del bundle y uso del storage centralizado || uso del bundle como fuente canonica"
+    },
+    {
+      "title_a": "Fuente canónica del bundle",
+      "title_b": "Usar el bundle como fuente canónica",
+      "baseline": null,
+      "treatment": 1.0,
+      "key": "fuente canonica del bundle || usar el bundle como fuente canonica"
+    },
+    {
+      "title_a": "Integración del knowledge source project",
+      "title_b": "Knowledge Object Model",
+      "baseline": 0.75,
+      "treatment": null,
+      "key": "integracion del knowledge source project || knowledge object model"
+    },
+    {
+      "title_a": "Knowledge Object Model and Evaluation Pipeline",
+      "title_b": "Reunión de revisión del knowledge object model y pipeline de evaluation",
+      "baseline": null,
+      "treatment": 1.0,
+      "key": "knowledge object model and evaluation pipeline || reunion de revision del knowledge object model y pipeline de evaluation"
+    },
+    {
+      "title_a": "MCP (Model Context Protocol)",
+      "title_b": "Protocolo de Contexto del Modelo",
+      "baseline": null,
+      "treatment": 0.9090909090909091,
+      "key": "mcp model context protocol || protocolo de contexto del modelo"
+    },
+    {
+      "title_a": "Model Context Protocol Integration",
+      "title_b": "Protocolo de Contexto del Modelo",
+      "baseline": null,
+      "treatment": 0.9090909090909091,
+      "key": "model context protocol integration || protocolo de contexto del modelo"
+    },
+    {
+      "title_a": "Model Context Protocol (MCP)",
+      "title_b": "Protocolo de Contexto del Modelo",
+      "baseline": null,
+      "treatment": 0.9090909090909091,
+      "key": "model context protocol mcp || protocolo de contexto del modelo"
+    },
+    {
+      "title_a": "Pre-built Skills and Skill Creator with MCP",
+      "title_b": "Pre-built Skills, Skill Creator, and MCP Workflows",
+      "baseline": null,
+      "treatment": 1.0,
+      "key": "pre built skills and skill creator with mcp || pre built skills skill creator and mcp workflows"
+    },
+    {
+      "title_a": "Pre-built Skills and Skill Creator with MCP",
+      "title_b": "Pre-built Skills, Skill Creator, and MCP Workflows Documentation",
+      "baseline": null,
+      "treatment": 1.0,
+      "key": "pre built skills and skill creator with mcp || pre built skills skill creator and mcp workflows documentation"
+    },
+    {
+      "title_a": "Pre-built Skills, Skill Creator and Workflows with MCP",
+      "title_b": "Pre-built Skills, Skill Creator, and MCP Workflows Documentation",
+      "baseline": null,
+      "treatment": 1.0,
+      "key": "pre built skills skill creator and mcp workflows documentation || pre built skills skill creator and workflows with mcp"
+    },
+    {
+      "title_a": "Pre-built Skills, Skill Creator, and MCP Workflows Documentation",
+      "title_b": "Workflow Creation with Skills and MCP",
+      "baseline": null,
+      "treatment": 0.8,
+      "key": "pre built skills skill creator and mcp workflows documentation || workflow creation with skills and mcp"
+    },
+    {
+      "title_a": "Pre-built Skills, Skill Creator, and MCP Workflows",
+      "title_b": "Workflow Creation with Skills and MCP",
+      "baseline": null,
+      "treatment": 0.8,
+      "key": "pre built skills skill creator and mcp workflows || workflow creation with skills and mcp"
+    },
+    {
+      "title_a": "Problema de acumulación de archivos temporales",
+      "title_b": "Problema de los archivos temporales",
+      "baseline": null,
+      "treatment": 1.0,
+      "key": "problema de acumulacion de archivos temporales || problema de los archivos temporales"
+    },
+    {
+      "title_a": "Production Security with Human-in-the-Loop Guardrails",
+      "title_b": "Production Security: Implementing Human-in-the-Loop Guardrails",
+      "baseline": null,
+      "treatment": 1.0,
+      "key": "production security implementing human in the loop guardrails || production security with human in the loop guardrails"
+    },
+    {
+      "title_a": "Re-ranking del retrieval con el judge ensemble",
+      "title_b": "Retrieval Re-ranking with Judge Ensemble",
+      "baseline": null,
+      "treatment": 1.0,
+      "key": "re ranking del retrieval con el judge ensemble || retrieval re ranking with judge ensemble"
+    },
+    {
+      "title_a": "Re-ranking del Retrieval",
+      "title_b": "Retrieval Re-ranking Project",
+      "baseline": null,
+      "treatment": 1.0,
+      "key": "re ranking del retrieval || retrieval re ranking project"
+    },
+    {
+      "title_a": "Re-ranking del Retrieval",
+      "title_b": "Retrieval Re-ranking with Judge Ensemble",
+      "baseline": null,
+      "treatment": 1.0,
+      "key": "re ranking del retrieval || retrieval re ranking with judge ensemble"
+    },
+    {
+      "title_a": "Technical Implementation of Agent Application",
+      "title_b": "Technical Implementation of the Agent",
+      "baseline": null,
+      "treatment": 1.0,
+      "key": "technical implementation of agent application || technical implementation of the agent"
+    },
+    {
+      "title_a": "Technical Implementation of the Agent",
+      "title_b": "Technical Implementation using `agent.py`",
+      "baseline": null,
+      "treatment": 1.0,
+      "key": "technical implementation of the agent || technical implementation using agent py"
+    },
+    {
+      "title_a": "Workflow Automation using Pre-built Skills and Skill Creator",
+      "title_b": "Workflow Automation with Skills",
+      "baseline": null,
+      "treatment": 1.0,
+      "key": "workflow automation using pre built skills and skill creator || workflow automation with skills"
+    },
+    {
+      "title_a": "Workflow Automation using Skills",
+      "title_b": "Workflow Automation with Skills",
+      "baseline": null,
+      "treatment": 1.0,
+      "key": "workflow automation using skills || workflow automation with skills"
+    }
+  ]
+}

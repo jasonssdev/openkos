@@ -31,8 +31,8 @@ a Python package and learning a new command surface.
 are already working inside an AI coding tool all day. Meeting them there removes
 the install step entirely, and the agent can drive the verbs on their behalf.
 
-*Cost and risk.* A thin wrapper is cheap; keeping it in step with 26 verbs is
-not. It also creates a second supported surface with its own bug reports before
+*Cost and risk.* A thin wrapper is cheap; keeping it in step with the whole verb
+surface is not. It also creates a second supported surface with its own bug reports before
 the CLI is stable. Probably belongs after the MCP server, not before it — the
 plugin should wrap the agent-facing API rather than shelling out to the CLI.
 
@@ -206,7 +206,75 @@ remains reachable.
 
 ---
 
-## Agent-facing surface
+## Scale
+
+None of this is a problem at the sizes OpenKOS has been exercised on. The
+entries here exist so that the walls are known before a bundle hits them, and
+so nobody has to rediscover the arithmetic under pressure.
+
+The figures below are projections from a measured baseline — a two-transcript
+workspace producing roughly sixteen derived objects per source — extrapolated to
+one transcript a day. They are estimates, not measurements, and the first thing
+any of this work should do is replace them with a real curve from a synthetic
+bundle.
+
+### Blocking for the duplicate scan
+
+Duplicate detection compares titles pairwise, so its cost grows with the square
+of the object count.
+
+| Objects | Pairs | Rough time |
+| --- | --- | --- |
+| 1,600 | 1.3 M | seconds |
+| 8,000 | 32 M | minutes |
+| 16,000 | 128 M | tens of minutes |
+| 58,000 | 1.7 B | hours |
+
+*Why it might matter.* At one transcript a day this becomes uncomfortable
+somewhere around eighteen months of use — well inside the life of a real
+knowledge base, and long before any other subsystem complains. Curation is half
+the product; a scan nobody waits for is a capability lost.
+
+*Cost and risk.* The remedy is standard record-linkage practice rather than
+research: group candidates by a cheap blocking key (a leading content token, a
+length band, an n-gram hash) and compare only within blocks. The risk is that
+blocking trades recall for speed — a pair split across two blocks is never
+compared — so the key has to be chosen against the extraction oracle on known
+duplicate and non-duplicate pairs, not by reasoning.
+
+### The cost of a full re-embed
+
+`reindex` is incremental by content hash, but `purge` drops the vector store and
+with it the embedding-model tag, which forces a rebuild of every surviving
+document. At the measured rate of roughly a sixth of a second per embedding
+call, fifty-eight thousand documents is close to three hours.
+
+*Why it might matter.* It turns an occasional operation into one a user has to
+plan around, and it arrives immediately after an irreversible action — the worst
+moment to be surprised. The same applies to any embedding-model change, which is
+what makes that setting sticky.
+
+*Cost and risk.* Preserving the model tag across a purge removes most of it and
+is small. Making the rebuild resumable is larger and only worth it if the
+measured curve says so.
+
+### Write cost of the append-only log
+
+OKF §7 orders `log.md` newest-first, so every new entry is a prepend and
+therefore a full-file rewrite. Each ingest writes one entry per derived object,
+and each rewrite is a whole-file diff in git.
+
+*Why it might matter.* At a decade of daily use the log is tens of megabytes and
+every operation rewrites all of it. On an SSD that is seconds rather than
+minutes, so this degrades rather than breaks — but it compounds with repository
+size in a way that is hard to undo later.
+
+*Cost and risk.* This is a property of the specification rather than of this
+implementation, which makes it interesting for a different reason: it is a
+concrete, measured observation worth taking upstream to the format's authors.
+Working around it locally — writing oldest-first and rendering reversed, say —
+would trade conformance for performance, which is not a trade this project
+should make quietly.
 
 These are for the runtime work and should be revisited when it starts.
 

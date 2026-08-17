@@ -13,6 +13,7 @@ from difflib import SequenceMatcher
 import pytest
 
 from openkos.resolution import similarity
+from openkos.resolution.normalize import normalize_key
 from openkos.resolution.similarity import is_near_match, near_match_score, tokenize
 
 
@@ -378,3 +379,91 @@ def test_genuine_single_token_subset_containment_is_unchanged() -> None:
     assert near_match_score("stoicism", "stoic philosophy") == pytest.approx(
         0.769, abs=0.01
     )
+
+
+# --- #755: function words must not decide a containment ---------------------
+
+
+def test_function_words_do_not_block_a_genuine_near_duplicate() -> None:
+    """#755's reported pair. Two concepts on one subject, from one source,
+    went unreported and `curate` then filed a `part_of` between them.
+
+    NOTE the mechanism, because the issue states a different one. It claims
+    the unmatched `del` makes the rule return `None`. It does not: both token
+    sets have four members, the tie makes the LEFT set the required one, and
+    what actually blocks is `decisiones` -- a genuine content word absent
+    from the right title. Excluding `del` fixes the pair by changing WHICH
+    set is smaller, so containment is asked in the direction that can
+    succeed. Function words must not count toward SIZE, and size is what
+    picks the direction."""
+    score = near_match_score(
+        "arquitectura de sistemas de extraccion de decisiones",
+        "arquitectura del sistema de extraccion",
+    )
+    assert score is not None
+    assert score >= similarity.SIMILARITY_THRESHOLD
+
+
+def test_a_function_word_is_never_a_match_target_for_a_content_word() -> None:
+    """The mirror defect, found while measuring: a function word left in the
+    LARGER set is a lexical target a content word can match against, which
+    MANUFACTURES a near-match between unrelated titles.
+
+    `SequenceMatcher(None, "model", "del").ratio()` is exactly 0.750 -- on
+    the threshold -- so `model` matched `del` and these two unrelated titles
+    were reported as duplicates. Excluding function words from scoring, not
+    only from the required set, is what removes it."""
+    assert SequenceMatcher(None, "model", "del").ratio() == 0.75
+    assert (
+        near_match_score(
+            "integracion del knowledge source project", "knowledge object model"
+        )
+        is None
+    )
+
+
+def test_excluding_function_words_never_manufactures_a_single_token_title() -> None:
+    """#555's floor, applied to this filter -- the trap the issue names.
+
+    'the app' carries two tokens, one of them a function word. Dropping it
+    outright leaves `("app",)`, which subset-matches anything containing a
+    similar token at a displayed 1.000: precisely the LOW-tier false positive
+    #555 removed, reintroduced through a different door. So the exclusion
+    RETAINS the function words whenever dropping would leave a multi-word
+    title with fewer than two tokens."""
+    assert near_match_score("the app", "app store") is None
+
+
+def test_accented_function_words_are_matched_after_normalization() -> None:
+    """The lexicon is normalized through `normalize_key`, the same function
+    that produced the keys being compared.
+
+    Three entries -- `más`, `según`, `también` -- exist ONLY in accented form
+    in `LANGUAGE_FUNCTION_WORDS`, while `normalize_key` strips accents. A
+    raw-set membership test would silently never fire for them, and the
+    lexicon would be quietly three words smaller than it reads."""
+    assert "mas" in similarity.MATCH_FUNCTION_WORDS
+    assert "segun" in similarity.MATCH_FUNCTION_WORDS
+    assert "tambien" in similarity.MATCH_FUNCTION_WORDS
+    assert "del" in similarity.MATCH_FUNCTION_WORDS
+    assert "with" in similarity.MATCH_FUNCTION_WORDS
+
+
+def test_the_lexicon_is_the_shipped_one_not_a_second_copy() -> None:
+    """One source of truth (owner ruling on #755): this module must reuse
+    `extraction.concept.LANGUAGE_FUNCTION_WORDS` rather than grow a private
+    list that diverges the first time someone adds a word to one side."""
+    from openkos.extraction.concept import LANGUAGE_FUNCTION_WORDS
+
+    assert {normalize_key(w) for w in LANGUAGE_FUNCTION_WORDS} == (
+        similarity.MATCH_FUNCTION_WORDS
+    )
+
+
+def test_content_bearing_titles_are_unaffected_by_the_exclusion() -> None:
+    """A pair with no function words on either side scores exactly as before
+    -- the filter must be inert where it has nothing to remove."""
+    assert near_match_score("stoicism", "stoic philosophy") == pytest.approx(
+        0.769, abs=0.01
+    )
+    assert near_match_score("ai agent", "ai agents") == pytest.approx(0.909, abs=0.01)

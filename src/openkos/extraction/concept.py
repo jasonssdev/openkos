@@ -3260,13 +3260,33 @@ def extract_concept_union(
                 if c.type in _PARTICIPANT_TYPES and c not in kept
             )
 
-    retained = kept[:_UNION_BACKSTOP]
+    # #754: the backstop is a POSITIONAL cut, and position is only meaningful
+    # on a set something has ranked. When the judge is unavailable -- both
+    # attempts failed, `judge_status == "failed"` -- nothing ranked anything,
+    # so cutting the tail discards by arrival order. The reported run threw
+    # away three candidates that were not the weakest, merely the last
+    # emitted. Owner ruling: keep the unreviewed set whole rather than
+    # compound an arbitrary cut onto it.
+    #
+    # This does NOT make the result unbounded: `_MAX_JUDGE_CANDIDATES` (24)
+    # already truncated the merged union above, before the judge, and that
+    # ceiling is what bounds this branch.
+    #
+    # Scoped to `"failed"` alone, deliberately. `"empty"` means the judge RAN
+    # and named no candidate -- a legible verdict, unlike an unusable reply --
+    # and widening the skip to cover it is a separate decision.
+    cap_applies = judge_status != "failed"
+    retained = kept[:_UNION_BACKSTOP] if cap_applies else kept
     return ExtractionOutcome(
         objects=retained,
         report=ExtractionReport(
             produced=len(kept),
             retained=len(retained),
-            discarded_titles=tuple(result.title for result in kept[_UNION_BACKSTOP:]),
+            discarded_titles=(
+                tuple(result.title for result in kept[_UNION_BACKSTOP:])
+                if cap_applies
+                else ()
+            ),
             chunks=chunk_count,
             runs=run_count,
             judge_status=judge_status,
