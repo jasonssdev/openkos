@@ -42,7 +42,7 @@ Complete every step in this section before any walkthrough phase; a fresh
 machine needs all of it, and nothing here is assumed to be present already.
 OpenKOS is local-first — there are no API keys and no cloud endpoints;
 everything runs against a local [Ollama](https://ollama.com) server. (The
-prerequisites here match the README's Getting started section.)
+prerequisites here match the README's Quickstart section.)
 
 > **Looking for the automated test suite instead?** This document is the
 > *manual* walkthrough. Contributors run the automated tests from a source

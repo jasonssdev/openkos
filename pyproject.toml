@@ -40,7 +40,12 @@ dependencies = [
     "networkx>=3.4",
     "python-frontmatter>=1.3.0",
     "pyyaml>=6.0.3",
-    "scipy>=1.14",
+    # `cli/main.py` imports `rich.console.Console` directly. Typer happens to
+    # depend on rich too, but an undeclared transitive import is a dependency
+    # we do not control: the day Typer drops or vendors it, openkos breaks at
+    # import time on an install that resolved cleanly. Declare what we import.
+    # The floor matches Typer's own so the resolver has no extra constraint.
+    "rich>=13.8.0",
     "sqlite-vec>=0.1.6",
     "typer>=0.27.0",
 ]
@@ -59,14 +64,15 @@ requires = ["uv_build>=0.11.29,<0.12.0"]
 build-backend = "uv_build"
 
 [dependency-groups]
+# `git-filter-repo` is a real test requirement, not just `purge`'s runtime
+# system tool: `test_filter_repo_available_true_when_installed` asserts the
+# PATH probe finds it, so it fails on a machine without the binary.
 dev = [
     "git-filter-repo>=2.47.0",
     "mypy>=2.3.0",
     "pre-commit>=4.6.0",
-    "pydantic>=2.13.4",
     "pytest>=9.1.1",
     "pytest-cov>=7.1.0",
-    "ruamel-yaml>=0.19.1",
     "ruff>=0.15.21",
     "types-networkx>=3.6.1.20260624",
     "types-pyyaml>=6.0.12.20260518",

@@ -50,7 +50,7 @@ That command is also how you track unreleased `main` at any time.
 openkos doctor
 ```
 
-Every check should pass except *Workspace initialized* — you haven't created one yet. Anything that fails prints the command that fixes it. `doctor` is also the first thing to run whenever something misbehaves later.
+Outside a workspace, expect one `[FAIL]` — *Workspace initialized*, since you haven't created one yet — and six `[SKIP]` lines for the checks that need a workspace to inspect. Everything else should `[PASS]`. Anything that fails prints the command that fixes it. `doctor` is also the first thing to run whenever something misbehaves later.
 
 **5 · Create a knowledge base and run the loop:**
 
