@@ -437,10 +437,12 @@ prompt is shown.
 
 WHEN `--save` is passed and `answer()` returns a matched result, `query`
 MUST, after rendering the answer, build a new document via the ingest
-builder with: body = the rendered answer text; title = a DECLARATIVE title
-derived from the answer's first sentence (falling back to the question when
-that sentence is too short, too long, or itself a question), or `--title`
-when given; description = the question, or `--description` when given; type
+builder with: body = the rendered answer text; title = the first rung of the
+TITLE LADDER that resolves -- the answer's first sentence as a DECLARATIVE
+title, else a definitional question's own SUBJECT (issue #646), else that
+first sentence's opening CLAUSE when it was refused for LENGTH alone (issue
+#696), else the question verbatim -- or `--title` when given; description =
+the question, or `--description` when given; type
 = `"Insight"` (the filed-synthesis type, issue #570), or `--type` when
 given (any buildable type); provenance = the cited concepts' ids
 (`result.citations`).
@@ -462,10 +464,28 @@ interrogative sentence.
   sentence, the description is the question, the type is `"Insight"` under
   `bundle/insights/`, and provenance lists the cited concept ids
 
+#### Scenario: A definitional question titles the filing by its subject
+
+- GIVEN the answer's first sentence is unusable AND the question is a
+  recognized definitional scaffold (`¿qué es el Model Context Protocol?`)
+- WHEN the document is built
+- THEN the title is the question's subject (`Model Context Protocol`),
+  never the clause rung below it
+
+#### Scenario: An over-long first sentence titles the filing by its clause
+
+- GIVEN the answer's first sentence is refused for LENGTH ALONE and the
+  question is not a recognized definitional scaffold (`¿por qué es
+  importante la trazabilidad en un sistema de conocimiento?`)
+- WHEN the document is built
+- THEN the title is that sentence cut at its first clause boundary, so the
+  permanent Concept ID is declarative rather than interrogative
+
 #### Scenario: An unusable first sentence falls back to the question title
 
 - GIVEN the answer's first sentence is shorter than the declarative
-  minimum, longer than the maximum, or itself a question
+  minimum, or itself a question, or is over-long with no clause boundary to
+  cut at, AND the question names no recognizable subject
 - WHEN the document is built
 - THEN the title falls back to the question (the pre-#570 default)
 

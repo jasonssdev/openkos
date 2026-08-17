@@ -1,0 +1,834 @@
+{
+  "model": "qwen3:8b",
+  "runs": 5,
+  "generated_at": "20260817T121634Z",
+  "max_generation_tokens": 8192,
+  "context_window": 12288,
+  "rows": [
+    {
+      "run": 0,
+      "shape": "definitional",
+      "question": "¿qué es la trazabilidad?",
+      "answer": "La trazabilidad es la propiedad que permite rastrear cada afirmación generada por el sistema hasta la fuente original de la que proviene. Sin trazabilidad, una respuesta correcta y una inventada son indistinguibles para quien la lee, porque ninguna de las dos puede verificarse. En un repositorio de conocimiento, la trazabilidad se materializa como una cadena de procedencia: cada objeto derivado declara los objetos que lo produjeron.",
+      "cited": [
+        "concepts/trazabilidad",
+        "sources/reunion-almacenamiento",
+        "concepts/fuentes-inmutables",
+        "concepts/sistemas-rag",
+        "concepts/verdad-contextual"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 0,
+      "shape": "definitional",
+      "question": "¿qué es un sistema RAG?",
+      "answer": "Un sistema RAG combina recuperación y generación: primero busca fragmentos relevantes en un índice y después genera una respuesta condicionada a esos fragmentos. La calidad depende tanto del recuperador como del generador, y los errores de recuperación se propagan silenciosamente hasta la respuesta final.",
+      "cited": [
+        "concepts/sistemas-rag",
+        "concepts/verdad-contextual",
+        "concepts/trazabilidad",
+        "sources/reunion-almacenamiento",
+        "concepts/producto-minimo-viable-mvp"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 0,
+      "shape": "definitional",
+      "question": "¿qué son las fuentes inmutables?",
+      "answer": "Las fuentes inmutables son la base del repositorio de conocimiento y nunca se reescriben. Cada fuente entra una vez al repositorio y el conocimiento derivado siempre puede regenerarse desde ellas. La inmutabilidad asegura que la procedencia siga significando algo con el paso del tiempo.",
+      "cited": [
+        "concepts/fuentes-inmutables",
+        "sources/reunion-almacenamiento",
+        "concepts/trazabilidad",
+        "concepts/verdad-contextual",
+        "concepts/producto-minimo-viable-mvp"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 0,
+      "shape": "definitional",
+      "question": "¿qué es un MVP?",
+      "answer": "Un MVP es la versión más pequeña de un producto que ya entrega valor y sirve para aprender del usuario real antes de invertir más. Su propósito es validar la idea con el menor esfuerzo posible.",
+      "cited": [
+        "concepts/producto-minimo-viable-mvp",
+        "concepts/fuentes-inmutables",
+        "concepts/trazabilidad",
+        "concepts/verdad-contextual",
+        "sources/reunion-almacenamiento"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 0,
+      "shape": "causal",
+      "question": "¿por qué es importante la trazabilidad en un sistema de conocimiento?",
+      "answer": "La trazabilidad es importante en un sistema de conocimiento porque permite rastrear cada afirmación hasta su fuente original, lo que hace posible distinguir entre una respuesta correcta y una inventada. Sin trazabilidad, ninguna de las dos puede ser verificada, lo que compromete la integridad y la confiabilidad del conocimiento. Además, la trazabilidad se materializa como una cadena de procedencia, donde cada objeto derivado declara los objetos que lo produjeron, asegurando que el conocimiento pueda ser regenerado y validado a partir de sus fuentes inmutables.",
+      "cited": [
+        "concepts/trazabilidad",
+        "concepts/fuentes-inmutables",
+        "sources/reunion-almacenamiento",
+        "concepts/sistemas-rag",
+        "concepts/verdad-contextual"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 0,
+      "shape": "causal",
+      "question": "¿por qué son importantes las fuentes inmutables?",
+      "answer": "Las fuentes inmutables son importantes porque nunca se reescriben, lo que garantiza que el conocimiento derivado pueda regenerarse siempre desde ellas. Esta propiedad asegura que la procedencia de la información siga significando algo con el paso del tiempo. Además, la inmutabilidad permite la trazabilidad, que es esencial para verificar la procedencia de cada afirmación y distinguir entre una respuesta correcta y una inventada. La trazabilidad se materializa como una cadena de procedencia, donde cada objeto derivado declara los objetos que lo produjeron, lo cual refuerza la confiabilidad del conocimiento almacenado.",
+      "cited": [
+        "concepts/fuentes-inmutables",
+        "sources/reunion-almacenamiento",
+        "concepts/trazabilidad",
+        "concepts/verdad-contextual",
+        "concepts/producto-minimo-viable-mvp"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 0,
+      "shape": "relational",
+      "question": "¿qué relación hay entre la trazabilidad y la verdad contextual en sistemas RAG?",
+      "answer": "La trazabilidad y la verdad contextual están relacionadas en sistemas RAG porque la trazabilidad permite rastrear cada afirmación generada hasta su fuente original, lo cual es esencial para evaluar su verdad contextual. La verdad contextual requiere que una afirmación sea juzgada dentro del contexto que la produjo, y la trazabilidad asegura que ese contexto esté disponible para su evaluación. Sin trazabilidad, una afirmación no puede ser verificada, lo que impide su evaluación según el contexto en el que fue generada.",
+      "cited": [
+        "concepts/verdad-contextual",
+        "concepts/sistemas-rag",
+        "concepts/trazabilidad",
+        "sources/reunion-almacenamiento",
+        "concepts/fuentes-inmutables"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 0,
+      "shape": "relational",
+      "question": "¿qué relación hay entre un MVP y las fuentes inmutables?",
+      "answer": "El MVP y las fuentes inmutables comparten una relación indirecta a través de su enfoque en la validación y la confiabilidad del conocimiento. El MVP busca validar una idea con el menor esfuerzo posible, entregando un valor práctico para aprender del usuario real. Por otro lado, las fuentes inmutables garantizan que el conocimiento derivado pueda siempre regenerarse desde su origen, asegurando la trazabilidad y la veracidad. Aunque no están directamente vinculados, ambos conceptos apuntan a la importancia de establecer una base sólida y verificable para el desarrollo de un producto o conocimiento.",
+      "cited": [
+        "concepts/fuentes-inmutables",
+        "concepts/producto-minimo-viable-mvp",
+        "sources/reunion-almacenamiento",
+        "concepts/trazabilidad",
+        "concepts/verdad-contextual"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 0,
+      "shape": "open",
+      "question": "¿qué decidimos sobre el almacenamiento?",
+      "answer": "Decidimos que el ledger de merges vive fuera del frontmatter, en un árbol de sidecars, para que un rebuild del índice no lo pise. Quedó acordado que las fuentes inmutables son la base y que la trazabilidad se verifica en cada escritura. El responsable de la migración es Bruno y el riesgo principal es la reindexación.",
+      "cited": [
+        "sources/reunion-almacenamiento",
+        "concepts/sistemas-rag",
+        "concepts/fuentes-inmutables",
+        "concepts/trazabilidad",
+        "concepts/verdad-contextual"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 0,
+      "shape": "open",
+      "question": "¿quién quedó como responsable de la migración?",
+      "answer": "Bruno quedó como responsable de la migración.",
+      "cited": [
+        "sources/reunion-almacenamiento",
+        "concepts/trazabilidad",
+        "concepts/fuentes-inmutables",
+        "concepts/verdad-contextual",
+        "concepts/sistemas-rag"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 0,
+      "shape": "open",
+      "question": "resumí la reunión de almacenamiento",
+      "answer": "La reunión de almacenamiento acordó que el ledger de merges se almacene fuera del frontmatter, en un árbol de sidecars, para evitar que un rebuild del índice lo afecte. Se decidió que las fuentes inmutables son la base del repositorio y que la trazabilidad se verifica en cada escritura. Bruno es el responsable de la migración y el riesgo principal es la reindexación.",
+      "cited": [
+        "sources/reunion-almacenamiento",
+        "concepts/sistemas-rag",
+        "concepts/trazabilidad",
+        "concepts/fuentes-inmutables",
+        "concepts/verdad-contextual"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 1,
+      "shape": "definitional",
+      "question": "¿qué es la trazabilidad?",
+      "answer": "La trazabilidad es la propiedad que permite rastrear cada afirmación generada por el sistema hasta la fuente original de la que proviene. Sin trazabilidad, una respuesta correcta y una inventada son indistinguibles para quien la lee, porque ninguna de las dos puede verificarse. En un repositorio de conocimiento, la trazabilidad se materializa como una cadena de procedencia: cada objeto derivado declara los objetos que lo produjeron.",
+      "cited": [
+        "concepts/trazabilidad",
+        "sources/reunion-almacenamiento",
+        "concepts/fuentes-inmutables",
+        "concepts/sistemas-rag",
+        "concepts/verdad-contextual"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 1,
+      "shape": "definitional",
+      "question": "¿qué es un sistema RAG?",
+      "answer": "Un sistema RAG combina recuperación y generación: primero busca fragmentos relevantes en un índice y después genera una respuesta condicionada a esos fragmentos. La calidad depende tanto del recuperador como del generador, y los errores de recuperación se propagan silenciosamente hasta la respuesta final.",
+      "cited": [
+        "concepts/sistemas-rag",
+        "concepts/verdad-contextual",
+        "concepts/trazabilidad",
+        "sources/reunion-almacenamiento",
+        "concepts/producto-minimo-viable-mvp"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 1,
+      "shape": "definitional",
+      "question": "¿qué son las fuentes inmutables?",
+      "answer": "Las fuentes inmutables son la base del repositorio de conocimiento y nunca se reescriben. Cada fuente entra una vez al repositorio y el conocimiento derivado siempre puede regenerarse desde ellas. La inmutabilidad asegura que la procedencia siga significando algo con el paso del tiempo.",
+      "cited": [
+        "concepts/fuentes-inmutables",
+        "sources/reunion-almacenamiento",
+        "concepts/trazabilidad",
+        "concepts/verdad-contextual",
+        "concepts/producto-minimo-viable-mvp"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 1,
+      "shape": "definitional",
+      "question": "¿qué es un MVP?",
+      "answer": "Un MVP es la versión más pequeña del producto que ya entrega valor y sirve para aprender del usuario real antes de invertir más. Este enfoque permite validar la idea con el menor esfuerzo posible.",
+      "cited": [
+        "concepts/producto-minimo-viable-mvp",
+        "concepts/fuentes-inmutables",
+        "concepts/trazabilidad",
+        "concepts/verdad-contextual",
+        "sources/reunion-almacenamiento"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 1,
+      "shape": "causal",
+      "question": "¿por qué es importante la trazabilidad en un sistema de conocimiento?",
+      "answer": "La trazabilidad es importante en un sistema de conocimiento porque permite rastrear cada afirmación hasta su fuente original, lo que hace que una respuesta correcta y una inventada sean distinguibles. Sin trazabilidad, ninguna de las dos puede verificarse, lo que compromete la integridad y confiabilidad del conocimiento. Además, la trazabilidad se materializa como una cadena de procedencia, donde cada objeto derivado declara los objetos que lo produjeron, asegurando que el conocimiento pueda regenerarse siempre que sea necesario.",
+      "cited": [
+        "concepts/trazabilidad",
+        "concepts/fuentes-inmutables",
+        "sources/reunion-almacenamiento",
+        "concepts/sistemas-rag",
+        "concepts/verdad-contextual"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 1,
+      "shape": "causal",
+      "question": "¿por qué son importantes las fuentes inmutables?",
+      "answer": "Las fuentes inmutables son importantes porque nunca se reescriben, lo que garantiza que el conocimiento derivado siempre pueda regenerarse desde ellas. Esta propiedad permite mantener la procedencia del conocimiento con el paso del tiempo, asegurando que cada afirmación pueda rastrearse hasta su fuente original. Además, la inmutabilidad contribuye a la trazabilidad, que es esencial para distinguir entre una respuesta correcta y una inventada, ya que permite verificar cada afirmación hasta su origen. Asimismo, las fuentes inmutables forman la base del repositorio, lo que facilita la verificación y el mantenimiento de la integridad del conocimiento.",
+      "cited": [
+        "concepts/fuentes-inmutables",
+        "sources/reunion-almacenamiento",
+        "concepts/trazabilidad",
+        "concepts/verdad-contextual",
+        "concepts/producto-minimo-viable-mvp"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 1,
+      "shape": "relational",
+      "question": "¿qué relación hay entre la trazabilidad y la verdad contextual en sistemas RAG?",
+      "answer": "La trazabilidad y la verdad contextual están relacionadas en sistemas RAG porque la trazabilidad permite rastrear cada afirmación generada hasta su fuente original, lo cual es esencial para evaluar su verdad contextual. La verdad contextual requiere que una afirmación sea juzgada dentro del contexto que la produjo, y la trazabilidad proporciona esa conexión al asegurar que se puede verificar la procedencia de la información. Sin trazabilidad, no se puede distinguir entre una afirmación correcta y una inventada, lo que dificulta la evaluación de su verdad en el contexto adecuado.",
+      "cited": [
+        "concepts/verdad-contextual",
+        "concepts/sistemas-rag",
+        "concepts/trazabilidad",
+        "sources/reunion-almacenamiento",
+        "concepts/fuentes-inmutables"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 1,
+      "shape": "relational",
+      "question": "¿qué relación hay entre un MVP y las fuentes inmutables?",
+      "answer": "La relación entre un MVP y las fuentes inmutables radica en la necesidad de garantizar la veracidad y la trazabilidad del conocimiento. Un MVP se basa en la validación de una idea con el menor esfuerzo posible, lo cual requiere que las fuentes utilizadas sean confiables y puedan ser rastreadas. Las fuentes inmutables, al no ser reescritas y mantener su procedencia intacta, permiten que el conocimiento derivado de ellas siempre pueda regenerarse y verificarse, lo cual es esencial para mantener la integridad y la confianza en el producto mínimo viable.",
+      "cited": [
+        "concepts/fuentes-inmutables",
+        "concepts/producto-minimo-viable-mvp",
+        "sources/reunion-almacenamiento",
+        "concepts/trazabilidad",
+        "concepts/verdad-contextual"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 1,
+      "shape": "open",
+      "question": "¿qué decidimos sobre el almacenamiento?",
+      "answer": "Decidimos que el ledger de merges vive fuera del frontmatter, en un árbol de sidecars, para que un rebuild del índice no lo pise. Quedó acordado que las fuentes inmutables son la base y que la trazabilidad se verifica en cada escritura. El responsable de la migración es Bruno y el riesgo principal es la reindexación.",
+      "cited": [
+        "sources/reunion-almacenamiento",
+        "concepts/sistemas-rag",
+        "concepts/fuentes-inmutables",
+        "concepts/trazabilidad",
+        "concepts/verdad-contextual"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 1,
+      "shape": "open",
+      "question": "¿quién quedó como responsable de la migración?",
+      "answer": "Bruno quedó como responsable de la migración.",
+      "cited": [
+        "sources/reunion-almacenamiento",
+        "concepts/trazabilidad",
+        "concepts/fuentes-inmutables",
+        "concepts/verdad-contextual",
+        "concepts/sistemas-rag"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 1,
+      "shape": "open",
+      "question": "resumí la reunión de almacenamiento",
+      "answer": "La reunión de almacenamiento acordó que el ledger de merges se almacene fuera del frontmatter, en un árbol de sidecars, para evitar que un rebuild del índice lo afecte. Se estableció que las fuentes inmutables son la base del repositorio y que la trazabilidad se verifica en cada escritura. Bruno es responsable de la migración, y el riesgo principal es la reindexación.",
+      "cited": [
+        "sources/reunion-almacenamiento",
+        "concepts/sistemas-rag",
+        "concepts/trazabilidad",
+        "concepts/fuentes-inmutables",
+        "concepts/verdad-contextual"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 2,
+      "shape": "definitional",
+      "question": "¿qué es la trazabilidad?",
+      "answer": "La trazabilidad es la propiedad que permite rastrear cada afirmación generada por el sistema hasta la fuente original de la que proviene. Sin trazabilidad, una respuesta correcta y una inventada son indistinguibles para quien la lee, porque ninguna de las dos puede verificarse. En un repositorio de conocimiento, la trazabilidad se materializa como una cadena de procedencia: cada objeto derivado declara los objetos que lo produjeron.",
+      "cited": [
+        "concepts/trazabilidad",
+        "sources/reunion-almacenamiento",
+        "concepts/fuentes-inmutables",
+        "concepts/sistemas-rag",
+        "concepts/verdad-contextual"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 2,
+      "shape": "definitional",
+      "question": "¿qué es un sistema RAG?",
+      "answer": "Un sistema RAG combina recuperación y generación: primero busca fragmentos relevantes en un índice y después genera una respuesta condicionada a esos fragmentos. La calidad depende tanto del recuperador como del generador, y los errores de recuperación se propagan silenciosamente hasta la respuesta final.",
+      "cited": [
+        "concepts/sistemas-rag",
+        "concepts/verdad-contextual",
+        "concepts/trazabilidad",
+        "sources/reunion-almacenamiento",
+        "concepts/producto-minimo-viable-mvp"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 2,
+      "shape": "definitional",
+      "question": "¿qué son las fuentes inmutables?",
+      "answer": "Las fuentes inmutables son la base de un repositorio de conocimiento y nunca se reescriben. Cada fuente entra una vez al repositorio y el conocimiento derivado siempre puede regenerarse desde ellas. Esta propiedad de inmutabilidad garantiza que la procedencia del conocimiento siga siendo significativa con el paso del tiempo.",
+      "cited": [
+        "concepts/fuentes-inmutables",
+        "sources/reunion-almacenamiento",
+        "concepts/trazabilidad",
+        "concepts/verdad-contextual",
+        "concepts/producto-minimo-viable-mvp"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 2,
+      "shape": "definitional",
+      "question": "¿qué es un MVP?",
+      "answer": "Un MVP, o producto mínimo viable, es la versión más pequeña de un producto que ya entrega valor y permite validar la idea con el menor esfuerzo posible. Sirve para aprender del usuario real antes de invertir más recursos en el desarrollo del producto.",
+      "cited": [
+        "concepts/producto-minimo-viable-mvp",
+        "concepts/fuentes-inmutables",
+        "concepts/trazabilidad",
+        "concepts/verdad-contextual",
+        "sources/reunion-almacenamiento"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 2,
+      "shape": "causal",
+      "question": "¿por qué es importante la trazabilidad en un sistema de conocimiento?",
+      "answer": "La trazabilidad es importante en un sistema de conocimiento porque permite rastrear cada afirmación hasta su fuente original, lo cual hace que una respuesta correcta sea distinguible de una inventada. Sin trazabilidad, ninguna de las dos puede ser verificada, lo que compromete la confiabilidad del conocimiento. Además, la trazabilidad se materializa como una cadena de procedencia, donde cada objeto derivado declara los objetos que lo produjeron, lo que refuerza la transparencia y la capacidad de validación del sistema.",
+      "cited": [
+        "concepts/trazabilidad",
+        "concepts/fuentes-inmutables",
+        "sources/reunion-almacenamiento",
+        "concepts/sistemas-rag",
+        "concepts/verdad-contextual"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 2,
+      "shape": "causal",
+      "question": "¿por qué son importantes las fuentes inmutables?",
+      "answer": "Las fuentes inmutables son importantes porque nunca se reescriben, lo que garantiza que el conocimiento derivado siempre pueda regenerarse desde ellas. Esta propiedad permite mantener la procedencia del conocimiento con el paso del tiempo, asegurando que cada afirmación pueda ser rastreada hasta su fuente original. Además, la inmutabilidad facilita la trazabilidad, que es esencial para distinguir entre una respuesta correcta y una inventada, ya que permite verificar la procedencia de cada afirmación. También contribuye a la estabilidad del sistema, al asegurar que las fuentes no cambien, lo que reduce el riesgo de inconsistencias durante procesos como la reindexación.",
+      "cited": [
+        "concepts/fuentes-inmutables",
+        "sources/reunion-almacenamiento",
+        "concepts/trazabilidad",
+        "concepts/verdad-contextual",
+        "concepts/producto-minimo-viable-mvp"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 2,
+      "shape": "relational",
+      "question": "¿qué relación hay entre la trazabilidad y la verdad contextual en sistemas RAG?",
+      "answer": "La trazabilidad y la verdad contextual están relacionadas en sistemas RAG porque la trazabilidad permite rastrear una afirmación generada hasta su contexto original, lo cual es esencial para evaluar su verdad según el contexto que la produjo. Sin trazabilidad, una afirmación no puede ser verificada ni juzgada, ya que no se puede conocer el contexto desde el cual fue generada. La verdad contextual requiere que una afirmación sea evaluada dentro del contexto que la produjo, y la trazabilidad garantiza que ese contexto esté disponible para su evaluación.",
+      "cited": [
+        "concepts/verdad-contextual",
+        "concepts/sistemas-rag",
+        "concepts/trazabilidad",
+        "sources/reunion-almacenamiento",
+        "concepts/fuentes-inmutables"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 2,
+      "shape": "relational",
+      "question": "¿qué relación hay entre un MVP y las fuentes inmutables?",
+      "answer": "El MVP y las fuentes inmutables no tienen una relación directa según los conceptos compilados. El MVP se enfoca en validar una idea con el menor esfuerzo posible, mientras que las fuentes inmutables se refieren a la inmutabilidad y trazabilidad de los datos en un repositorio. Ambos conceptos pertenecen a contextos distintos y no se mencionan explícitamente en relación entre sí en la información proporcionada.",
+      "cited": [
+        "concepts/fuentes-inmutables",
+        "concepts/producto-minimo-viable-mvp",
+        "sources/reunion-almacenamiento",
+        "concepts/trazabilidad",
+        "concepts/verdad-contextual"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 2,
+      "shape": "open",
+      "question": "¿qué decidimos sobre el almacenamiento?",
+      "answer": "Decidimos que el ledger de merges vive fuera del frontmatter, en un árbol de sidecars, para que un rebuild del índice no lo pise. Quedó acordado que las fuentes inmutables son la base y que la trazabilidad se verifica en cada escritura. El responsable de la migración es Bruno y el riesgo principal es la reindexación.",
+      "cited": [
+        "sources/reunion-almacenamiento",
+        "concepts/sistemas-rag",
+        "concepts/fuentes-inmutables",
+        "concepts/trazabilidad",
+        "concepts/verdad-contextual"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 2,
+      "shape": "open",
+      "question": "¿quién quedó como responsable de la migración?",
+      "answer": "Bruno quedó como responsable de la migración.",
+      "cited": [
+        "sources/reunion-almacenamiento",
+        "concepts/trazabilidad",
+        "concepts/fuentes-inmutables",
+        "concepts/verdad-contextual",
+        "concepts/sistemas-rag"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 2,
+      "shape": "open",
+      "question": "resumí la reunión de almacenamiento",
+      "answer": "La reunión de almacenamiento abordó la organización del ledger de merges fuera del frontmatter, en un árbol de sidecars, para evitar que un rebuild del índice lo afectara. Se acordó que las fuentes inmutables son la base del repositorio y que la trazabilidad se verifica en cada escritura. Bruno es el responsable de la migración, y el riesgo principal es la reindexación.",
+      "cited": [
+        "sources/reunion-almacenamiento",
+        "concepts/sistemas-rag",
+        "concepts/trazabilidad",
+        "concepts/fuentes-inmutables",
+        "concepts/verdad-contextual"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 3,
+      "shape": "definitional",
+      "question": "¿qué es la trazabilidad?",
+      "answer": "La trazabilidad es la propiedad que permite rastrear cada afirmación generada por el sistema hasta la fuente original de la que proviene. Sin trazabilidad, una respuesta correcta y una inventada son indistinguibles para quien la lee, porque ninguna de las dos puede verificarse. En un repositorio de conocimiento, la trazabilidad se materializa como una cadena de procedencia: cada objeto derivado declara los objetos que lo produjeron.",
+      "cited": [
+        "concepts/trazabilidad",
+        "sources/reunion-almacenamiento",
+        "concepts/fuentes-inmutables",
+        "concepts/sistemas-rag",
+        "concepts/verdad-contextual"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 3,
+      "shape": "definitional",
+      "question": "¿qué es un sistema RAG?",
+      "answer": "Un sistema RAG combina recuperación y generación: primero busca fragmentos relevantes en un índice y después genera una respuesta condicionada a esos fragmentos. La calidad depende tanto del recuperador como del generador, y los errores de recuperación se propagan silenciosamente hasta la respuesta final.",
+      "cited": [
+        "concepts/sistemas-rag",
+        "concepts/verdad-contextual",
+        "concepts/trazabilidad",
+        "sources/reunion-almacenamiento",
+        "concepts/producto-minimo-viable-mvp"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 3,
+      "shape": "definitional",
+      "question": "¿qué son las fuentes inmutables?",
+      "answer": "Las fuentes inmutables son la base del repositorio de conocimiento y nunca se reescriben. Cada fuente entra una vez al repositorio y el conocimiento derivado siempre puede regenerarse desde ellas. La inmutabilidad asegura que la procedencia siga significando algo con el paso del tiempo.",
+      "cited": [
+        "concepts/fuentes-inmutables",
+        "sources/reunion-almacenamiento",
+        "concepts/trazabilidad",
+        "concepts/verdad-contextual",
+        "concepts/producto-minimo-viable-mvp"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 3,
+      "shape": "definitional",
+      "question": "¿qué es un MVP?",
+      "answer": "Un MVP es la versión más pequeña del producto que ya entrega valor y sirve para aprender del usuario real antes de invertir más.",
+      "cited": [
+        "concepts/producto-minimo-viable-mvp",
+        "concepts/fuentes-inmutables",
+        "concepts/trazabilidad",
+        "concepts/verdad-contextual",
+        "sources/reunion-almacenamiento"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 3,
+      "shape": "causal",
+      "question": "¿por qué es importante la trazabilidad en un sistema de conocimiento?",
+      "answer": "La trazabilidad es importante en un sistema de conocimiento porque permite rastrear cada afirmación hasta su fuente original, lo que garantiza que una respuesta correcta sea distinguible de una inventada. Sin trazabilidad, no se puede verificar la procedencia de las afirmaciones, lo que hace que ambas sean indistinguibles para quien las lea. Además, la trazabilidad se materializa como una cadena de procedencia, donde cada objeto derivado declara los objetos que lo produjeron, asegurando la integridad y la verificabilidad del conocimiento.",
+      "cited": [
+        "concepts/trazabilidad",
+        "concepts/fuentes-inmutables",
+        "sources/reunion-almacenamiento",
+        "concepts/sistemas-rag",
+        "concepts/verdad-contextual"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 3,
+      "shape": "causal",
+      "question": "¿por qué son importantes las fuentes inmutables?",
+      "answer": "Las fuentes inmutables son importantes porque nunca se reescriben, lo que garantiza que el conocimiento derivado siempre pueda regenerarse desde ellas. Esta propiedad asegura que la procedencia siga significando algo con el paso del tiempo. Además, la inmutabilidad permite la trazabilidad, que es esencial para verificar la procedencia de cada afirmación y distinguir entre una respuesta correcta y una inventada. La trazabilidad se materializa como una cadena de procedencia, donde cada objeto derivado declara los objetos que lo produjeron. Asimismo, las fuentes inmutables son la base del repositorio, lo que permite mantener la integridad del conocimiento y garantizar que cada escritura pueda ser verificada.",
+      "cited": [
+        "concepts/fuentes-inmutables",
+        "sources/reunion-almacenamiento",
+        "concepts/trazabilidad",
+        "concepts/verdad-contextual",
+        "concepts/producto-minimo-viable-mvp"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 3,
+      "shape": "relational",
+      "question": "¿qué relación hay entre la trazabilidad y la verdad contextual en sistemas RAG?",
+      "answer": "La trazabilidad y la verdad contextual están relacionadas en sistemas RAG porque la trazabilidad permite rastrear cada afirmación generada hasta su fuente original, lo cual es esencial para evaluar su verdad contextual. La verdad contextual sostiene que una afirmación solo puede ser juzgada en el contexto en el que fue producida, y la trazabilidad asegura que ese contexto esté disponible para su verificación. Sin trazabilidad, la afirmación pierde su capacidad de ser evaluada, lo que afecta su verdad contextual.",
+      "cited": [
+        "concepts/verdad-contextual",
+        "concepts/sistemas-rag",
+        "concepts/trazabilidad",
+        "sources/reunion-almacenamiento",
+        "concepts/fuentes-inmutables"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 3,
+      "shape": "relational",
+      "question": "¿qué relación hay entre un MVP y las fuentes inmutables?",
+      "answer": "La relación entre un MVP y las fuentes inmutables radica en la necesidad de tener una base confiable y verificable para validar ideas. Las fuentes inmutables proporcionan una base estable y trazable, lo cual es esencial para construir un MVP. El MVP, al ser la versión más pequeña del producto que entrega valor, depende de esta base para garantizar que la información utilizada sea precisa y verificable, permitiendo así aprender de los usuarios reales sin correr el riesgo de basarse en datos inestables o no verificables.",
+      "cited": [
+        "concepts/fuentes-inmutables",
+        "concepts/producto-minimo-viable-mvp",
+        "sources/reunion-almacenamiento",
+        "concepts/trazabilidad",
+        "concepts/verdad-contextual"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 3,
+      "shape": "open",
+      "question": "¿qué decidimos sobre el almacenamiento?",
+      "answer": "Decidimos que el ledger de merges vive fuera del frontmatter, en un árbol de sidecars, para que un rebuild del índice no lo pise. Quedó acordado que las fuentes inmutables son la base y que la trazabilidad se verifica en cada escritura. El responsable de la migración es Bruno y el riesgo principal es la reindexación.",
+      "cited": [
+        "sources/reunion-almacenamiento",
+        "concepts/sistemas-rag",
+        "concepts/fuentes-inmutables",
+        "concepts/trazabilidad",
+        "concepts/verdad-contextual"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 3,
+      "shape": "open",
+      "question": "¿quién quedó como responsable de la migración?",
+      "answer": "Bruno quedó como responsable de la migración.",
+      "cited": [
+        "sources/reunion-almacenamiento",
+        "concepts/trazabilidad",
+        "concepts/fuentes-inmutables",
+        "concepts/verdad-contextual",
+        "concepts/sistemas-rag"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 3,
+      "shape": "open",
+      "question": "resumí la reunión de almacenamiento",
+      "answer": "La reunión de almacenamiento estableció que el ledger de merges se almacenará fuera del frontmatter, en un árbol de sidecars, para evitar que un rebuild del índice lo afecte. Se acordó que las fuentes inmutables son la base del repositorio y que la trazabilidad se verifica en cada escritura. Bruno es el responsable de la migración, y el riesgo principal es la reindexación.",
+      "cited": [
+        "sources/reunion-almacenamiento",
+        "concepts/sistemas-rag",
+        "concepts/trazabilidad",
+        "concepts/fuentes-inmutables",
+        "concepts/verdad-contextual"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 4,
+      "shape": "definitional",
+      "question": "¿qué es la trazabilidad?",
+      "answer": "La trazabilidad es la propiedad que permite rastrear cada afirmación generada por el sistema hasta la fuente original de la que proviene. Sin trazabilidad, una respuesta correcta y una inventada son indistinguibles para quien la lee, porque ninguna de las dos puede verificarse. En un repositorio de conocimiento, la trazabilidad se materializa como una cadena de procedencia: cada objeto derivado declara los objetos que lo produjeron.",
+      "cited": [
+        "concepts/trazabilidad",
+        "sources/reunion-almacenamiento",
+        "concepts/fuentes-inmutables",
+        "concepts/sistemas-rag",
+        "concepts/verdad-contextual"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 4,
+      "shape": "definitional",
+      "question": "¿qué es un sistema RAG?",
+      "answer": "Un sistema RAG combina recuperación y generación: primero busca fragmentos relevantes en un índice y después genera una respuesta condicionada a esos fragmentos. La calidad depende tanto del recuperador como del generador, y los errores de recuperación se propagan silenciosamente hasta la respuesta final.",
+      "cited": [
+        "concepts/sistemas-rag",
+        "concepts/verdad-contextual",
+        "concepts/trazabilidad",
+        "sources/reunion-almacenamiento",
+        "concepts/producto-minimo-viable-mvp"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 4,
+      "shape": "definitional",
+      "question": "¿qué son las fuentes inmutables?",
+      "answer": "Las fuentes inmutables son la base del repositorio de conocimiento y nunca se reescriben. Cada fuente entra una vez al repositorio y el conocimiento derivado siempre puede regenerarse desde ellas. La inmutabilidad asegura que la procedencia siga significando algo con el paso del tiempo.",
+      "cited": [
+        "concepts/fuentes-inmutables",
+        "sources/reunion-almacenamiento",
+        "concepts/trazabilidad",
+        "concepts/verdad-contextual",
+        "concepts/producto-minimo-viable-mvp"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 4,
+      "shape": "definitional",
+      "question": "¿qué es un MVP?",
+      "answer": "Un MVP es la versión más pequeña del producto que ya entrega valor y sirve para aprender del usuario real antes de invertir más. Este enfoque permite validar la idea con el menor esfuerzo posible.",
+      "cited": [
+        "concepts/producto-minimo-viable-mvp",
+        "concepts/fuentes-inmutables",
+        "concepts/trazabilidad",
+        "concepts/verdad-contextual",
+        "sources/reunion-almacenamiento"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 4,
+      "shape": "causal",
+      "question": "¿por qué es importante la trazabilidad en un sistema de conocimiento?",
+      "answer": "La trazabilidad es importante en un sistema de conocimiento porque permite rastrear cada afirmación hasta su fuente original, lo que garantiza que una respuesta correcta sea distinguible de una inventada. Sin trazabilidad, ninguna afirmación puede verificarse, lo que compromete la integridad y confiabilidad del conocimiento. Además, la trazabilidad se materializa como una cadena de procedencia, donde cada objeto derivado declara los objetos que lo produjeron, lo que refuerza la transparencia y la capacidad de revisión del sistema.",
+      "cited": [
+        "concepts/trazabilidad",
+        "concepts/fuentes-inmutables",
+        "sources/reunion-almacenamiento",
+        "concepts/sistemas-rag",
+        "concepts/verdad-contextual"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 4,
+      "shape": "causal",
+      "question": "¿por qué son importantes las fuentes inmutables?",
+      "answer": "Las fuentes inmutables son importantes porque nunca se reescriben, lo que garantiza que el conocimiento derivado siempre pueda regenerarse desde ellas. Esta propiedad asegura que la procedencia del conocimiento siga significando algo con el paso del tiempo. Además, la inmutabilidad permite la trazabilidad, que es esencial para verificar la procedencia de cada afirmación y distinguir entre una respuesta correcta y una inventada. Asimismo, las fuentes inmutables son la base del repositorio y permiten mantener la integridad del conocimiento, incluso frente a riesgos como la reindexación.",
+      "cited": [
+        "concepts/fuentes-inmutables",
+        "sources/reunion-almacenamiento",
+        "concepts/trazabilidad",
+        "concepts/verdad-contextual",
+        "concepts/producto-minimo-viable-mvp"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 4,
+      "shape": "relational",
+      "question": "¿qué relación hay entre la trazabilidad y la verdad contextual en sistemas RAG?",
+      "answer": "La trazabilidad y la verdad contextual están relacionadas en sistemas RAG porque la trazabilidad permite rastrear cada afirmación generada hasta su fuente original, lo cual es esencial para evaluar su verdad contextual. La verdad contextual requiere que una afirmación sea juzgada dentro del contexto que la produjo, y la trazabilidad asegura que ese contexto esté disponible para su evaluación. Sin trazabilidad, una afirmación no puede ser verificada, lo que impide su evaluación según el contexto que la originó.",
+      "cited": [
+        "concepts/verdad-contextual",
+        "concepts/sistemas-rag",
+        "concepts/trazabilidad",
+        "sources/reunion-almacenamiento",
+        "concepts/fuentes-inmutables"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 4,
+      "shape": "relational",
+      "question": "¿qué relación hay entre un MVP y las fuentes inmutables?",
+      "answer": "La relación entre un MVP y las fuentes inmutables radica en la forma en que ambos conceptos abordan la validación y la confiabilidad del conocimiento. El MVP busca validar una idea con el menor esfuerzo posible, entregando un valor tangible al usuario real. Para garantizar que este valor sea confiable y verificable, es fundamental que las fuentes inmutables sean la base del conocimiento. Las fuentes inmutables, al no ser reescritas y mantener una trazabilidad clara, permiten que el conocimiento derivado pueda ser regenerado y verificado, lo cual es esencial para mantener la integridad y la confiabilidad del MVP. Así, las fuentes inmutables proporcionan la base sólida sobre la cual se construye y valida el MVP.",
+      "cited": [
+        "concepts/fuentes-inmutables",
+        "concepts/producto-minimo-viable-mvp",
+        "sources/reunion-almacenamiento",
+        "concepts/trazabilidad",
+        "concepts/verdad-contextual"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 4,
+      "shape": "open",
+      "question": "¿qué decidimos sobre el almacenamiento?",
+      "answer": "Decidimos que el ledger de merges vive fuera del frontmatter, en un árbol de sidecars, para que un rebuild del índice no lo pise. También quedó acordado que las fuentes inmutables son la base y que la trazabilidad se verifica en cada escritura. El responsable de la migración es Bruno y el riesgo principal es la reindexación.",
+      "cited": [
+        "sources/reunion-almacenamiento",
+        "concepts/sistemas-rag",
+        "concepts/fuentes-inmutables",
+        "concepts/trazabilidad",
+        "concepts/verdad-contextual"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 4,
+      "shape": "open",
+      "question": "¿quién quedó como responsable de la migración?",
+      "answer": "Bruno quedó como responsable de la migración.",
+      "cited": [
+        "sources/reunion-almacenamiento",
+        "concepts/trazabilidad",
+        "concepts/fuentes-inmutables",
+        "concepts/verdad-contextual",
+        "concepts/sistemas-rag"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    },
+    {
+      "run": 4,
+      "shape": "open",
+      "question": "resumí la reunión de almacenamiento",
+      "answer": "La reunión de almacenamiento acordó que el ledger de merges se almacene fuera del frontmatter, en un árbol de sidecars, para evitar que un rebuild del índice lo afecte. Se estableció que las fuentes inmutables son la base del repositorio y que la trazabilidad se verifica en cada escritura. Bruno es el responsable de la migración, y el riesgo principal es la reindexación.",
+      "cited": [
+        "sources/reunion-almacenamiento",
+        "concepts/sistemas-rag",
+        "concepts/trazabilidad",
+        "concepts/fuentes-inmutables",
+        "concepts/verdad-contextual"
+      ],
+      "llm_invoked": true,
+      "no_match_cause": "none"
+    }
+  ]
+}

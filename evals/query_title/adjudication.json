@@ -1,0 +1,40 @@
+{
+  "_what": [
+    "Hand-written labels for titles an ARM produced on an `open` question",
+    "where the shipped ladder fell through to the question verbatim. These",
+    "are the only filings a candidate could get wrong that the baseline got",
+    "right, so they are the whole false-positive surface.",
+    "",
+    "`good` = the title names the subject of the filing and is a defensible",
+    "permanent Concept ID. `bad` = it names nothing, or names the wrong",
+    "thing, and the question-verbatim safety net was the better outcome.",
+    "",
+    "Keyed `shape::title` -- never on the run index or the answer text, so a",
+    "regenerated corpus reuses every label whose produced title is unchanged."
+  ],
+  "_judgment_calls": [
+    "`open::Decidimos que el ledger de merges vive fuera del frontmatter` is",
+    "the contested one, and it is recorded as contested rather than quietly",
+    "resolved.",
+    "",
+    "AGAINST it: #646 ruled that an open question has no extractable subject",
+    "and must fall through. `Decidimos` is first-person and situational, so",
+    "a later session asking `¿donde vive el ledger?` about the same decision",
+    "files a differently-named object -- the very duplicate-detection defect",
+    "#696 is about.",
+    "",
+    "FOR it, and why it is labelled `good`: #646's rule is about extracting",
+    "a subject from the QUESTION. The clause rung reads the ANSWER, which",
+    "does carry a subject here, so the ruling does not transfer. The title",
+    "is declarative, specific, and names the decision; the alternative it",
+    "replaces is `qué-decidimos-sobre-el-almacenamiento`, which names only",
+    "that somebody asked something about storage. And the shipped",
+    "declarative rung already files situational first-person titles on open",
+    "questions today (`Bruno quedó como responsable de la migración`), so",
+    "rejecting this one would hold the candidate to a bar the shipped",
+    "product does not meet."
+  ],
+  "labels": {
+    "open::Decidimos que el ledger de merges vive fuera del frontmatter": "good"
+  }
+}

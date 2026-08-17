@@ -207,10 +207,27 @@ What `query` *does* do is **say so**. Before contacting the model it compares ea
 | `--include-deprecated` | Include deprecated and superseded concepts in retrieval. Excluded by default from both channels (lexical, dense) — the `retrieval:` stderr summary already reports the POST-filter counts. |
 | `--include-confidential` | Include confidential concepts in retrieval. Excluded by default from both channels (lexical, dense) when the LLM backend is **not** verifiably on this machine. Against a local backend the exemption already applies and this flag is unnecessary — see [Sensitivity and the local backend](#sensitivity-and-the-local-backend). |
 | `--save` | File the cited answer back into the bundle as a new `Insight` — the filed-synthesis type (the two-output rule). Opt-in; off by default, keeping `query` read-only. Refuses when the answer cited no concepts (nothing to record provenance from). |
-| `--title <text>` | With `--save`, the title of the filed document. Defaults to a **declarative** title derived from the answer's first sentence; when that sentence is unusable (too short, too long, or itself a question) it falls back to the question's own subject, and only an unrecognizable question falls back to the question verbatim. Its slug is the new document's id; a collision with an existing file refuses. |
+| `--title <text>` | With `--save`, the title of the filed document. Overrides the title ladder below. Its slug is the new document's id; a collision with an existing file refuses. |
 | `--description <text>` | With `--save`, the description of the filed document. Defaults to the question. |
 | `--type <type>` | With `--save`, the type of the filed document. Defaults to `Insight`; the classifiable types remain accepted. |
 | `--auto` | With `--save`, skip the confirmation prompt and write immediately (unattended). Config `review: false` skips the prompt the same way. Has no effect without `--save`. |
+
+Without `--title`, the filed document's name comes from the first rung of this
+ladder that resolves. The slug of whatever wins becomes the permanent Concept
+ID, which is why none of these rungs may guess:
+
+| # | Rung | Resolves when | Refuses when |
+| --- | --- | --- | --- |
+| 1 | The answer's first sentence, as a **declarative** title | It is between 15 and 90 characters and is not itself a question or a markdown line | It is a fragment, a paragraph, a question, or a list/heading opener |
+| 2 | The **question's own subject** ([#646](https://github.com/jasonssdev/openkos/issues/646)) | The question is a recognized definitional scaffold — `¿qué es X?`, `what is X?`, `¿cómo funciona X?` | The question's shape is anything else; an open question has no subject to extract and must not be guessed at |
+| 3 | That first sentence's **opening clause** ([#696](https://github.com/jasonssdev/openkos/issues/696)) | Rung 1 refused **for length alone**, and the sentence carries a comma or a known Spanish clause connector whose left part fits the same 15–90 bound | Rung 1 refused for any other reason, or there is no clause boundary to cut at |
+| 4 | The **question, verbatim** | Always — the safety net | Never |
+
+Rung 3 exists because rung 1's ceiling does not survive real Spanish openings:
+a measured production answer's first sentence ran 158 characters. It sits
+*below* rung 2 deliberately — measured, not assumed. Placed above it,
+`¿qué es la trazabilidad?` was cut to `La trazabilidad`, article and all,
+where rung 2 gives the cleaner `Trazabilidad`. See `evals/query_title/`.
 
 Output is answer-first and banner-free: the answer text, then (only when at least one citation exists) a blank line, `Citations:`, and one `  → <concept_id> (<title>)` line per citation, in fused-rank order — with a trailing `[confidential]` marker on any citation whose freshly re-read frontmatter explicitly carries `sensitivity: confidential` (#569). When any citation is so marked, one stderr `openkos: NOTICE` line — the read-path mirror of the commit-path NOTICE — says the answer cites confidential content and that sharing it forward moves that content off this machine; transparency only, never enforcement (admission was already decided by the fail-closed gate). On every completed run — successful answer or no-match — a one-line `retrieval: <n> FTS + <n> dense → <n> fused → LLM invoked|skipped → <n> cited` summary prints to **stderr**, so a silent short-circuit (e.g. zero hits from both retrievers, so the LLM never ran) is always visible even though stdout stays pipe-clean. (It carried a third `<n> graph-added` term until #434, alongside a separate graph-degrade note; both went with the channel.) When either derived index is absent or unavailable/corrupt this run, an additional stderr hint recommends running `openkos reindex` to enable full retrieval — a missing or corrupt `graph.db` no longer triggers it, since `query` does not read that store. When the persisted FTS index (built at the last `reindex` run) skipped any unreadable/unparseable files, an `index:` skip-notice block follows the summary on stderr, worded as a whole-bundle build diagnostic — never implying the skipped files were candidates for the current question. When `OLLAMA_HOST` points the embedding host off this machine, the same one-line stderr advisory `ingest` prints (redacted host; document text and embedding vectors will leave this machine) precedes the answer — advisory only, never a refusal.
 

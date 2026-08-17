@@ -13363,6 +13363,127 @@ def _question_subject(question: str) -> str | None:
     return subject[0].upper() + subject[1:]
 
 
+_CLAUSE_CONNECTORS: Final = (
+    " porque ",
+    " ya que ",
+    " puesto que ",
+    " debido a ",
+    " radica en ",
+    " consiste en ",
+    " se refiere a ",
+    " se basa en ",
+    " permite ",
+    " sirve para ",
+    " es que ",
+    " es la ",
+    " es el ",
+    " es una ",
+    " es un ",
+    " son las ",
+    " son los ",
+)
+"""Spanish clause boundaries `_clause_answer_title` may cut at, alongside a
+plain comma. Closed and deliberately small: a shape nobody listed simply
+does not cut, and an uncut sentence falls through to the question verbatim
+-- the same safety net as today, never a wrong title.
+
+EVERY entry is space-delimited on both sides, and that is what makes each
+one match a clause boundary rather than a substring inside a word: without
+the trailing space ` es un ` would fire inside `es una`, and without the
+leading one ` permite ` would fire inside `impermite`-shaped tokens. The
+spaces are the word boundaries, spelled literally.
+
+`_clause_answer_title` searches these through `_CLAUSE_CONNECTOR_RE` and
+keeps `match.start() > 0`. A match AT index 0 is unreachable anyway -- the
+candidate has been through `" ".join(...split())`, so it never begins with
+a space -- and were one to occur it would cut an empty residue, which fails
+the minimum-length bound and falls through safely. An entry added without
+its spaces would therefore go silently inert rather than loudly wrong, so
+`test_clause_connectors_are_space_delimited` pins the invariant instead of
+leaving it to a reader to reconstruct."""
+
+_CLAUSE_CONNECTOR_RE: Final = re.compile(
+    "|".join(re.escape(connector) for connector in _CLAUSE_CONNECTORS),
+    re.IGNORECASE,
+)
+"""`_CLAUSE_CONNECTORS` as one leftmost-wins, case-insensitive alternation.
+
+Exists so the cut index is measured against the SAME string it slices.
+Matching case-insensitively here rather than searching a `candidate.lower()`
+copy is a correctness requirement, not a style choice: `str.lower()` is not
+length-preserving (`"İ"` becomes two codepoints), so indices taken from a
+lower-cased copy drift right against the original."""
+
+
+def _clause_answer_title(answer_text: str) -> str | None:
+    """Derive a title from the first CLAUSE of an over-long declarative
+    opening, or `None` (issue #696).
+
+    #696 reports that filed insights are still named after the question, and
+    proposes reordering the ladder so the subject rung runs first. Measured
+    (`evals/query_title/`), that proposal is a no-op on its own two evidence
+    questions: `_question_subject` returns `None` for both, so promoting it
+    promotes a refusal. What actually happens is that BOTH existing rungs
+    refuse -- `_declarative_answer_title` because a real Spanish opening runs
+    past `_DECLARATIVE_TITLE_MAX_CHARS` (the evidence sentence measures 158),
+    and `_question_subject` because `¿por qué es importante X?` is not one of
+    the eleven definitional scaffolds #646 narrowed itself to.
+
+    So this rung attacks the ceiling, which is the binding constraint
+    `_question_subject`'s own docstring already named in prose. It cuts the
+    first sentence at its earliest comma or clause connector and applies rung
+    1's own bounds to the residue.
+
+    TWO GUARDS, both load-bearing:
+
+    It refuses anything rung 1 could have promoted. The over-ceiling check is
+    what makes this additive: every answer resolving at rung 1 today reaches
+    here only to be refused, so the filings whose titles are already right
+    keep them byte for byte. Without it, a 50-character sentence would be cut
+    at its copula and the ~30 e2e filings pinned on
+    `stoicism-teaches-the-dichotomy-of-control` would silently change name.
+
+    It re-checks the question/markdown shapes rung 1 rejects. Length is not
+    why rung 1 refuses those, so a length-only gate would admit a long
+    question as a title -- exactly the interrogative Concept ID #696 exists
+    to remove.
+
+    Ordering is MEASURED, not assumed: this rung sits BELOW `_question_subject`
+    (see `_stage_filed_answer`). Placed above it, `¿qué es la trazabilidad?`
+    over a long opening cut to `La trazabilidad`, article and all, where the
+    subject rung gives the cleaner `Trazabilidad`. A clause cut is a degraded
+    declarative -- it is what you reach for when the sentence overran AND the
+    question named no subject."""
+    first_line = answer_text.strip().split("\n", 1)[0]
+    sentence = first_line.split(". ", 1)[0].removesuffix(".")
+    candidate = " ".join(sentence.split())
+    if len(candidate) <= _DECLARATIVE_TITLE_MAX_CHARS:
+        return None
+    if candidate.endswith("?") or candidate.startswith(("¿", "#", "-", "*", ">")):
+        return None
+    cuts = [candidate.index(",")] if "," in candidate else []
+    # Searched case-insensitively against `candidate` ITSELF, never against a
+    # lower-cased copy. `str.lower()` is not length-preserving -- `"İ"` lowers
+    # to two codepoints -- so an index taken from `candidate.lower()` and used
+    # to slice `candidate` drifts right by one per such character, cutting
+    # mid-word once more than one appears. Two review lenses found this
+    # independently. A regex alternation also returns the LEFTMOST match, so
+    # it replaces the previous per-connector `min` scan outright.
+    match = _CLAUSE_CONNECTOR_RE.search(candidate)
+    if match is not None and match.start() > 0:
+        cuts.append(match.start())
+    if not cuts:
+        return None
+    residue = candidate[: min(cuts)].strip().rstrip(",;:")
+    if not (
+        _DECLARATIVE_TITLE_MIN_CHARS <= len(residue) <= _DECLARATIVE_TITLE_MAX_CHARS
+    ):
+        return None
+    if not any(char.isalpha() for char in residue):
+        return None
+    return residue
+
+
 def _stage_filed_answer(
     *,
     question: str,
@@ -13437,6 +13558,7 @@ def _stage_filed_answer(
         (
             _declarative_answer_title(answer_text)
             or _question_subject(question)
+            or _clause_answer_title(answer_text)
             or question
         )
         if title is None
