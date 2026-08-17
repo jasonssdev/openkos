@@ -220,6 +220,32 @@ def minimum_context_window(max_generation_tokens: int) -> int:
     return PROMPT_CONTEXT_ALLOWANCE + max_generation_tokens
 
 
+DEFAULT_CONCURRENT_EXTRACTION = False
+"""Packaged default for `concurrent_extraction` (issue #744): whether the
+chunked extraction fan-out sends its windows concurrently.
+
+`False`, and unlike `DEFAULT_UNION_JUDGE` this default is NOT a hedge about
+quality -- #739 measured no quality movement on either axis at any
+concurrency level. It is off because the entire gain is conditional on
+`OLLAMA_NUM_PARALLEL` being at least two on the `ollama serve` process,
+which openkos can document and cannot set. Against a default server the
+requests queue perfectly and nothing is gained, so defaulting this ON would
+advertise a speedup most installations cannot deliver.
+
+Turning it on where the server is NOT configured returns the same results in
+the same order -- but not for free. Each request's `chat_timeout` keeps
+running while that request queues behind its sibling, so per-call wall time
+inflates and a workspace whose timeout sits near its single-call latency can
+begin timing out on sources that used to succeed. Results are never wrong,
+only late; this is the reason the key is opt-in rather than a default that
+"cannot hurt".
+
+The measured speedup, memory and quality numbers live in
+`evals/ingest_concurrency/report.md` and are summarised for operators under
+`concurrent_extraction` in `docs/cli.md`. They are deliberately not restated
+here so that one correction reaches every reader."""
+
+
 DEFAULT_UNION_JUDGE = True
 """Packaged default for `union_judge` (design D9, #456): the union-of-runs +
 selector-judge extraction pipeline (`extraction.concept.extract_concept_union`)
@@ -779,6 +805,22 @@ class Config:
     value explicitly to `_stage_derived_objects`'s `union_judge` kwarg
     rather than defaulting it there, so the product-ON default lives in
     exactly ONE place."""
+    concurrent_extraction: bool
+    """Whether the chunked extraction fan-out sends its windows concurrently
+    (issue #744), defaulting to `DEFAULT_CONCURRENT_EXTRACTION` when the key
+    is absent or explicitly null.
+
+    A BOOLEAN, not a worker count, and deliberately so: #739 measured the
+    speedup saturating at two in-flight windows -- 3 and 4 are statistically
+    indistinguishable from 2 (t~0.05) while resident memory keeps climbing --
+    so the count is a private constant in `extraction.concept`
+    (`_FAN_OUT_CONCURRENCY`) that no config value can raise past its
+    evidence. This key answers only "may the fan-out use it at all".
+
+    Affects the CHUNKED path only: a source under `_chunk_threshold_for` runs
+    a single whole-document call (or two, under `union_judge`) and has no
+    windows to overlap. Both extraction entry points honour it, so the answer
+    never depends on `union_judge`."""
     type_sensitivity_defaults: dict[str, int]
     """Per-OKF-type sensitivity offset above `default_sensitivity` (issue
     #669, ADR-0015): `DEFAULT_TYPE_SENSITIVITY_DEFAULTS` (`{"Person": 1}`,
@@ -839,6 +881,7 @@ def read_config(root: Path) -> Config:
     type_tiers = raw.get("type_tiers")
     models = raw.get("models")
     union_judge = raw.get("union_judge")
+    concurrent_extraction = raw.get("concurrent_extraction")
     type_sensitivity_defaults = raw.get("type_sensitivity_defaults")
     if model is not None and not isinstance(model, str):
         raise ValueError(
@@ -997,6 +1040,25 @@ def read_config(root: Path) -> Config:
             f"{layout.config_path.name}: 'union_judge' must be a boolean, got "
             f"{type(union_judge).__name__}"
         )
+    if concurrent_extraction is not None and not isinstance(
+        concurrent_extraction, bool
+    ):
+        # Same narrow `isinstance(x, bool)` guard as `union_judge` above, and
+        # here the int case is not merely a YAML technicality: this key reads
+        # like a worker count, so `concurrent_extraction: 2` is exactly what
+        # an operator writes when they expect to choose the concurrency. It
+        # is refused rather than truthy-coerced, because coercion would give
+        # them the behaviour they asked for by accident and teach them a
+        # setting that does not exist.
+        # The message says "not a worker count" WITHOUT naming the count: the
+        # number lives in `extraction.concept._FAN_OUT_CONCURRENCY` and
+        # `config` does not import `extraction`. Restating it here would be a
+        # second copy free to drift from the constant it describes.
+        raise ValueError(
+            f"{layout.config_path.name}: 'concurrent_extraction' must be a "
+            f"boolean, got {type(concurrent_extraction).__name__} -- it is an "
+            f"on/off switch, not a worker count"
+        )
     if type_sensitivity_defaults is not None:
         # Validated entry by entry, eagerly, mirroring `models:`'s own
         # precedent (issue #515) rather than `volatility_windows`/
@@ -1088,6 +1150,11 @@ def read_config(root: Path) -> Config:
         type_tiers=(type_tiers if type_tiers is not None else {}),
         models=(models if models is not None else {}),
         union_judge=(union_judge if union_judge is not None else DEFAULT_UNION_JUDGE),
+        concurrent_extraction=(
+            concurrent_extraction
+            if concurrent_extraction is not None
+            else DEFAULT_CONCURRENT_EXTRACTION
+        ),
         type_sensitivity_defaults=(
             type_sensitivity_defaults
             if type_sensitivity_defaults is not None

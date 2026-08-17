@@ -15,7 +15,9 @@ membership is the positive per-item signal (no more `extract` field), and
 import ast
 import dataclasses
 import hashlib
-from collections.abc import Sequence
+import threading
+import time
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import pytest
@@ -5776,3 +5778,352 @@ def test_single_run_extraction_also_reports_absent_participant_names() -> None:
     )
 
     assert outcome.report.participant_names_absent_from_source == ("Nadie Real",)
+
+
+# --------------------------------------------------------------------------- #
+# Concurrent fan-out (#744)                                                     #
+# --------------------------------------------------------------------------- #
+
+
+class _WindowKeyedLLM:
+    """A structural `LLMBackend` that answers by WINDOW CONTENT, not call order.
+
+    `_SequencedLLM` cannot serve a concurrent fan-out: it indexes
+    `replies[len(self.calls) - 1]`, so which reply a window receives depends on
+    which thread reached `chat` first. Every assertion built on it would be
+    describing the scheduler rather than the code under test. Keying on the
+    window text makes a window's reply identical under any interleaving, which
+    is the only condition under which an ORDER assertion means anything.
+
+    `on_call` runs inside the call, before the reply, and is how a test
+    manufactures a completion order that differs from the input order.
+    """
+
+    def __init__(
+        self,
+        windows: Sequence[str],
+        replies: dict[int, str | Exception],
+        *,
+        on_call: "Callable[[int], None] | None" = None,
+    ) -> None:
+        self._windows = list(windows)
+        self._replies = replies
+        self._on_call = on_call
+        self._lock = threading.Lock()
+        self.call_order: list[int] = []
+        self.call_threads: list[int] = []
+
+    def _index_for(self, user: str) -> int:
+        for index, window in enumerate(self._windows):
+            if window in user:
+                return index
+        raise AssertionError("no window matched the prompt")
+
+    def chat(self, messages: Sequence[Message]) -> str:
+        index = self._index_for(messages[1]["content"])
+        with self._lock:
+            self.call_order.append(index)
+            self.call_threads.append(threading.get_ident())
+        if self._on_call is not None:
+            self._on_call(index)
+        reply = self._replies.get(index, "[]")
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+
+def _finish_second_window_first() -> "Callable[[int], None]":
+    """An `on_call` hook that makes window 0 finish AFTER window 1, with no
+    wall-clock assumption.
+
+    A fixed `time.sleep` in window 0 would only PROBABLY produce that order:
+    under scheduling delay on a loaded runner, window 0 could still finish
+    first, and the test would then pass VACUOUSLY -- input order and
+    completion order would agree, which is precisely the condition an
+    `as_completed` implementation also satisfies. A handshake removes the
+    guess: window 0 blocks until window 1 has been served, so the inversion
+    the test depends on is a fact rather than a race it usually wins.
+
+    The pool has at least two slots, so window 1 is always reachable while
+    window 0 waits. The timeout only stops a hang from becoming an infinite
+    one; it is never reached on a correct implementation.
+    """
+    second_served = threading.Event()
+
+    def _hook(index: int) -> None:
+        if index == 1:
+            second_served.set()
+        elif index == 0:
+            second_served.wait(timeout=10)
+
+    return _hook
+
+
+def _titled_item(title: str) -> str:
+    return (
+        f'{{"type": "Concept", "title": "{title}", '
+        f'"description": "From one window.", "body": ""}}'
+    )
+
+
+def test_concurrent_fan_out_actually_runs_two_windows_at_once() -> None:
+    """Two windows must be in flight SIMULTANEOUSLY, proven by a barrier.
+
+    Without this the whole feature can be inert and every other test here
+    still passes: `map` over a pool of one, or a `concurrent` flag never
+    threaded through, produces identical results, identical order and
+    identical call counts -- only the wall clock would differ, and no unit
+    test reads that. The barrier is the only assertion that can see the
+    regime it guards. Serial execution cannot release it: the first window
+    would wait alone until the timeout and raise `BrokenBarrierError`.
+    """
+    text = _long_text()
+    windows = concept_mod._chunk_lines(text)
+    assert len(windows) >= 2
+    barrier = threading.Barrier(2, timeout=10)
+
+    def _wait(index: int) -> None:
+        # ONLY the first two windows meet at the barrier. Attaching it to every
+        # window would make the test depend on the window COUNT being even: the
+        # barrier resets after each pair, so an odd tail window would wait alone
+        # for the full timeout and fail with BrokenBarrierError for a reason
+        # that has nothing to do with concurrency. The pool has two slots, so
+        # windows 0 and 1 are always the two that start together.
+        if index < 2:
+            barrier.wait()
+
+    llm = _WindowKeyedLLM(windows, {}, on_call=_wait)
+
+    concept_mod.extract_concept(
+        text, source_title="Field Notes", llm=llm, concurrent=True
+    )
+
+    assert len(llm.call_order) == len(windows)
+    assert len(set(llm.call_threads)) > 1
+
+
+def test_concurrent_fan_out_keeps_window_order_when_completion_order_differs() -> None:
+    """Results concatenate in WINDOW order even when the first window is the
+    last to finish -- the `map`-not-`as_completed` rule, made falsifiable.
+
+    `_dedup_merged` keeps the FIRST occurrence of a `(type, normalized title)`
+    key, so completion-ordered results would silently change which duplicate
+    wins: a quality regression wearing a throughput change's clothes. Window 0
+    is deliberately slowed so that an `as_completed` implementation would put
+    its object LAST and fail here.
+    """
+    text = _long_text()
+    windows = concept_mod._chunk_lines(text)
+
+    llm = _WindowKeyedLLM(
+        windows,
+        {
+            0: _array(_titled_item("First Window")),
+            1: _array(_titled_item("Second Window")),
+        },
+        on_call=_finish_second_window_first(),
+    )
+
+    outcome = concept_mod.extract_concept(
+        text, source_title="Field Notes", llm=llm, concurrent=True
+    )
+
+    assert llm.call_order[0] == 0  # submitted first...
+    assert [r.title for r in outcome.objects] == ["First Window", "Second Window"]
+
+
+def test_concurrent_fan_out_dedup_keeps_the_earlier_WINDOW_not_the_earlier_reply() -> (
+    None
+):
+    """The same subject in two windows resolves to the earlier WINDOW's copy,
+    even when the later window answers first. This is the concrete data-loss
+    `as_completed` would cause, asserted on the surviving description."""
+    text = _long_text()
+    windows = concept_mod._chunk_lines(text)
+    early = (
+        '{"type": "Concept", "title": "Stoicism", '
+        '"description": "The earlier window.", "body": ""}'
+    )
+    late = (
+        '{"type": "Concept", "title": "stoicism", '
+        '"description": "The later window.", "body": ""}'
+    )
+
+    llm = _WindowKeyedLLM(
+        windows,
+        {0: _array(early), 1: _array(late)},
+        on_call=_finish_second_window_first(),
+    )
+
+    outcome = concept_mod.extract_concept(
+        text, source_title="Field Notes", llm=llm, concurrent=True
+    )
+
+    assert [r.title for r in outcome.objects] == ["Stoicism"]
+    assert outcome.objects[0].description == "The earlier window."
+
+
+def test_concurrent_fan_out_reports_progress_only_from_the_calling_thread() -> None:
+    """The `on_progress` hook (#701) must never be invoked from a worker.
+
+    A display writing to stderr from two threads interleaves its own output,
+    and the hook's contract was written for a single-threaded caller. Consuming
+    `map`'s iterator on the calling thread is what keeps this true without a
+    lock -- so this test is the reason the implementation may stay lock-free.
+    """
+    text = _long_text()
+    windows = concept_mod._chunk_lines(text)
+    llm = _WindowKeyedLLM(windows, {})
+    seen: list[int] = []
+
+    concept_mod.extract_concept(
+        text,
+        source_title="Field Notes",
+        llm=llm,
+        concurrent=True,
+        on_progress=lambda _phase: seen.append(threading.get_ident()),
+    )
+
+    assert seen
+    assert set(seen) == {threading.get_ident()}
+
+
+def test_concurrent_fan_out_propagates_a_window_failure_and_discards_the_rest() -> None:
+    """A backend failure on any window propagates unswallowed and takes every
+    partial result with it -- `concept.py`'s existing all-or-nothing contract,
+    unchanged by concurrency. `map` re-raises in INPUT order, so the exception
+    a caller sees does not depend on which thread failed first."""
+    text = _long_text()
+    windows = concept_mod._chunk_lines(text)
+    llm = _WindowKeyedLLM(
+        windows,
+        {0: _array(_titled_item("Survivor")), 1: OllamaUnavailable("backend down")},
+    )
+
+    with pytest.raises(OllamaUnavailable):
+        concept_mod.extract_concept(
+            text, source_title="Field Notes", llm=llm, concurrent=True
+        )
+
+
+def test_serial_fan_out_is_the_default_and_stays_single_threaded() -> None:
+    """`concurrent` defaults to False, and the serial path is untouched: one
+    call per window, in window order, all on the calling thread. The default
+    must remain byte-identical because a stock Ollama serializes anyway --
+    threading it would buy nothing and change the #701 progress vocabulary for
+    every user who never opted in."""
+    text = _long_text()
+    windows = concept_mod._chunk_lines(text)
+    llm = _WindowKeyedLLM(windows, {})
+
+    concept_mod.extract_concept(text, source_title="Field Notes", llm=llm)
+
+    assert llm.call_order == list(range(len(windows)))
+    assert set(llm.call_threads) == {threading.get_ident()}
+
+
+def test_union_path_fans_out_concurrently_too() -> None:
+    """Both production entry points take the flag, per `_chunk_threshold_for`'s
+    one-definition rule: `cli/main.py` picks between them on `union_judge`, so
+    a lever wired into one only would leave whether #744 is active depending on
+    an unrelated setting."""
+    text = _long_text()
+    windows = concept_mod._chunk_lines(text)
+    assert len(windows) >= 2
+    barrier = threading.Barrier(2, timeout=10)
+
+    def _wait(index: int) -> None:
+        # ONLY the first two windows meet at the barrier. Attaching it to every
+        # window would make the test depend on the window COUNT being even: the
+        # barrier resets after each pair, so an odd tail window would wait alone
+        # for the full timeout and fail with BrokenBarrierError for a reason
+        # that has nothing to do with concurrency. The pool has two slots, so
+        # windows 0 and 1 are always the two that start together.
+        if index < 2:
+            barrier.wait()
+
+    llm = _WindowKeyedLLM(windows, {}, on_call=_wait)
+
+    concept_mod.extract_concept_union(
+        text, source_title="Field Notes", llm=llm, concurrent=True
+    )
+
+    assert len(set(llm.call_threads)) > 1
+
+
+def test_fan_out_concurrency_is_two_and_not_a_tunable() -> None:
+    """#739 measured the speedup saturating at 2 (arms 2, 3 and 4 are
+    statistically indistinguishable, t~0.05) while memory keeps climbing
+    (9.1 / 11.1 / 12.9 GB). The value is a private constant precisely so no
+    config key can raise it past the point the measurement supports."""
+    assert concept_mod._FAN_OUT_CONCURRENCY == 2
+
+
+def test_concurrent_fan_out_drains_in_flight_windows_before_it_raises() -> None:
+    """A failure must not return while a sibling window is still running.
+
+    Executor threads are not daemons, so leaving one in flight does not skip
+    the wait -- it moves it to interpreter exit, where the CLI has already
+    printed "keeping the Source only" and the command appears to hang for up
+    to one `chat_timeout`. Window 0 fails instantly while window 1 is still
+    inside its call; the flag can only be set if the fan-out drained it
+    before propagating.
+    """
+    text = _long_text()
+    windows = concept_mod._chunk_lines(text)
+    drained = threading.Event()
+
+    def _slow_second(index: int) -> None:
+        if index == 1:
+            time.sleep(0.3)
+            drained.set()
+
+    llm = _WindowKeyedLLM(
+        windows,
+        {0: OllamaUnavailable("backend down")},
+        on_call=_slow_second,
+    )
+
+    with pytest.raises(OllamaUnavailable):
+        concept_mod.extract_concept(
+            text, source_title="Field Notes", llm=llm, concurrent=True
+        )
+
+    assert drained.is_set()
+
+
+def test_concurrent_fan_out_reports_before_the_first_window_returns() -> None:
+    """Progress must appear BEFORE the first window completes.
+
+    Completion-only reporting leaves the display frozen for the whole first
+    call -- 5 to 20 seconds on the latencies this change measures -- which is
+    the exact "line that reads as a hang" condition #701 exists to prevent.
+    The serial path never had this gap because it reports before each call.
+    The hook is asserted to have fired while every window is still blocked,
+    so a fan-out that only reported completions cannot pass.
+    """
+    text = _long_text()
+    windows = concept_mod._chunk_lines(text)
+    released = threading.Event()
+    reported_before_any_return: list[str] = []
+
+    def _block(_index: int) -> None:
+        released.wait(timeout=10)
+
+    def _on_progress(phase: str) -> None:
+        reported_before_any_return.append(phase)
+        released.set()  # only reachable if a report preceded every return
+
+    llm = _WindowKeyedLLM(windows, {}, on_call=_block)
+
+    concept_mod.extract_concept(
+        text,
+        source_title="Field Notes",
+        llm=llm,
+        concurrent=True,
+        on_progress=_on_progress,
+    )
+
+    assert reported_before_any_return
+    assert str(len(windows)) in reported_before_any_return[0]
+    assert str(concept_mod._FAN_OUT_CONCURRENCY) in reported_before_any_return[0]

@@ -3388,11 +3388,18 @@ def _stage_derived_objects(
             # frozen line that reads as a hang. `phase_callback` returns
             # `None` off a TTY, so a piped run passes no hook and the
             # extractor's per-phase cost is one `is not None` comparison.
+            # #744: read off `cfg` rather than taken as its own kwarg, unlike
+            # `union_judge` above. That kwarg exists so the product-ON default
+            # lives in exactly one place; this key's default is False on BOTH
+            # sides, so there is no second default to keep honest. Passed to
+            # whichever extractor was selected -- a lever wired into one only
+            # would leave whether #744 is active depending on `union_judge`.
             outcome = extractor(
                 raw_content,
                 source_title=source_title,
                 llm=llm,
                 on_progress=observability.phase_callback("ingest", status.update),
+                concurrent=cfg.concurrent_extraction,
             )
     except OllamaError as exc:
         typer.echo(

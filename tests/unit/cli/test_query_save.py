@@ -99,6 +99,7 @@ def _default_cfg(**overrides: object) -> config.Config:
         "type_tiers": {},
         "models": {},
         "union_judge": config.DEFAULT_UNION_JUDGE,
+        "concurrent_extraction": config.DEFAULT_CONCURRENT_EXTRACTION,
         "type_sensitivity_defaults": dict(config.DEFAULT_TYPE_SENSITIVITY_DEFAULTS),
     }
     fields.update(overrides)

@@ -13,6 +13,7 @@ recovery from a partial write is via git, not an in-process undo.
 import json
 import os
 import stat
+import threading
 import unicodedata
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -1088,6 +1089,7 @@ def _default_cfg(**overrides: object) -> config.Config:
         "type_tiers": {},
         "models": {},
         "union_judge": config.DEFAULT_UNION_JUDGE,
+        "concurrent_extraction": config.DEFAULT_CONCURRENT_EXTRACTION,
         "type_sensitivity_defaults": dict(config.DEFAULT_TYPE_SENSITIVITY_DEFAULTS),
     }
     fields.update(overrides)
@@ -7046,3 +7048,120 @@ def test_participant_ungrounded_notice_is_silent_when_every_name_is_grounded() -
     report = concept_mod.ExtractionReport(produced=4, retained=4, judge_status="ok")
 
     assert main._participant_ungrounded_notice(report) is None
+
+
+# --- concurrent_extraction reaches BOTH extractors (#744) --------------------
+
+
+def _capturing_extractor(seen: dict[str, object]) -> object:
+    """A stand-in extractor that records the `concurrent` it was handed."""
+
+    def _extractor(
+        source_text: str,
+        *,
+        source_title: str,
+        llm: object,
+        on_progress: object = None,
+        concurrent: bool = False,
+    ) -> concept_mod.ExtractionOutcome:
+        seen["concurrent"] = concurrent
+        return concept_mod.ExtractionOutcome(
+            objects=[],
+            report=concept_mod.ExtractionReport(
+                produced=0, retained=0, chunks=1, runs=1
+            ),
+        )
+
+    return _extractor
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+@pytest.mark.parametrize("union_judge", [True, False])
+def test_stage_derived_objects_forwards_concurrent_extraction_from_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    enabled: bool,
+    union_judge: bool,
+) -> None:
+    """`cfg.concurrent_extraction` reaches whichever extractor `union_judge`
+    selected.
+
+    Parametrized over BOTH extractors deliberately: `cli/main.py` picks
+    between them on an unrelated setting, so a lever wired into one only
+    would make whether #744 is active depend on `union_judge` -- the exact
+    arm-inert defect `_chunk_threshold_for`'s one-definition rule exists to
+    prevent, and one no end-to-end assertion about a single path can see.
+    """
+    seen: dict[str, object] = {}
+    target = "extract_concept_union" if union_judge else "extract_concept"
+    monkeypatch.setattr(main, target, _capturing_extractor(seen))
+
+    main._stage_derived_objects(
+        **_stage_kwargs(  # type: ignore[arg-type]
+            tmp_path,
+            cfg=_default_cfg(concurrent_extraction=enabled),
+            union_judge=union_judge,
+        )
+    )
+
+    assert seen["concurrent"] is enabled
+
+
+def test_stage_derived_objects_degrades_when_a_concurrent_window_fails(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The CLI's `OllamaError` degrade path must still hold through the REAL
+    concurrent fan-out, not just through a stubbed extractor.
+
+    The wiring test above replaces the extractor entirely, so it proves the
+    flag arrives and nothing about what happens when a window fails once the
+    flag is honoured. Here a genuinely chunked source runs the real
+    `_fan_out_windows` with one window raising: the command must keep the
+    Source and report the skip, never surface a partial extraction and never
+    raise. Which window fails is keyed on CONTENT, because under concurrency
+    call order is not the test's to decide.
+
+    What this does NOT prove is that the windows overlapped: a serial run of
+    the same source fails identically, which is the point -- the contract is
+    supposed to be schedule-independent. The barrier test in
+    `tests/unit/extraction/test_concept.py` is the one that can see whether
+    concurrency happened at all.
+    """
+
+    class _FailingWindowLLM:
+        locality = LOCAL_BACKEND_LOCALITY
+
+        def __init__(self, doomed: str) -> None:
+            self._doomed = doomed
+            self.calls = 0
+            self._lock = threading.Lock()
+
+        def chat(self, messages: Sequence[Message]) -> str:
+            with self._lock:
+                self.calls += 1
+            if self._doomed in messages[1]["content"]:
+                raise OllamaUnavailable("backend down")
+            return "[]"
+
+        def embed(self, texts: Sequence[str]) -> list[list[float]]:
+            return [[0.0] * EMBED_DIM for _ in texts]
+
+    text = "\n".join(f"A: line {i:04d} " + "x" * 30 for i in range(700))
+    windows = concept_mod._chunk_lines(text)
+    assert len(windows) > concept_mod._FAN_OUT_CONCURRENCY
+    llm = _FailingWindowLLM(windows[1])
+
+    plans, skip_reason, notice = main._stage_derived_objects(
+        **_stage_kwargs(  # type: ignore[arg-type]
+            tmp_path,
+            raw_content=text,
+            llm=llm,
+            cfg=_default_cfg(concurrent_extraction=True),
+            union_judge=False,
+        )
+    )
+
+    assert plans == []
+    assert skip_reason == "failed"
+    assert notice is None
+    assert "keeping the Source only" in capsys.readouterr().err

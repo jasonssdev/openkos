@@ -38,6 +38,20 @@ context_window: 12288     # tokens the model holds at once (prompt + reply); unp
 # union_judge: true       # union-of-runs + selector-judge extraction (default
                           # on); set false to restore the single-run, single-cap
                           # extraction path byte-for-byte
+# concurrent_extraction: true  # send chunk windows 2-at-a-time instead of one
+                          # by one (default OFF). Chunked sources only; below
+                          # the chunk threshold there are no windows to
+                          # overlap. Measured ~20% off a whole ingest -- BUT
+                          # only if the Ollama server was started with
+                          # OLLAMA_NUM_PARALLEL=2 or more, which openkos
+                          # cannot set for you. Against a default server the
+                          # requests just queue: same results, no speedup, and
+                          # each call's chat_timeout runs while it waits, so a
+                          # tight timeout can start firing. Leave it off unless
+                          # the server is configured.
+                          # An on/off switch, not a worker count: the count is
+                          # fixed at 2, where the measured speedup saturates.
+                          # See evals/ingest_concurrency/report.md.
 
 # Layout is fixed: `raw/` (immutable sources) and `bundle/` (the OKF
 # bundle root) live next to this file. The engine does not read layout

@@ -19,7 +19,8 @@ import contextlib
 import itertools
 import re
 import unicodedata
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from typing import Any, Final
 
@@ -1976,6 +1977,121 @@ def _extract_once(
     return results
 
 
+_FAN_OUT_CONCURRENCY: Final = 2
+"""How many chunk windows a concurrent fan-out keeps in flight (#744).
+
+A CONSTANT, deliberately not a config key. #739 measured the speedup
+SATURATING here: more slots buy no additional throughput while resident
+memory keeps climbing, so two is the only level the measurement supports.
+Exposing it as a number would invite raising it past its own evidence.
+
+The gain is entirely conditional on `OLLAMA_NUM_PARALLEL` being at least
+two on the `ollama serve` process, which openkos does NOT own. Against a
+stock server the requests queue perfectly and every level measures no gain
+at all. No detection is attempted here because the only reliable signal is
+behavioural and would cost a probe on every run.
+
+An opted-in run against an unconfigured server produces the SAME results in
+the same order, but it is not free: each request's `chat_timeout` runs while
+that request waits its turn on the server, so per-call wall time inflates
+roughly in proportion to the slots asked for. A workspace whose timeout sits
+near its single-call latency can start timing out on sources that used to
+succeed. That is a deadline effect, never a correctness one -- but it is why
+the setting is opt-in rather than "harmless to leave on".
+
+The measured numbers live in `evals/ingest_concurrency/report.md` and are
+summarised for operators in `docs/cli.md`; they are deliberately NOT
+restated here, so there is one place to correct if the hardware or the
+model ever changes them."""
+
+
+def _fan_out_windows(
+    windows: Sequence[str],
+    source_title: str,
+    llm: LLMBackend,
+    *,
+    concurrent: bool,
+    on_progress: ProgressHook | None,
+) -> list[ExtractionResult]:
+    """Every window's validated results, concatenated in WINDOW order.
+
+    Shared by both production entry points (`extract_concept` and
+    `extract_concept_union`) for the same reason `_chunk_threshold_for` is
+    shared: `cli/main.py` picks between them on the `union_judge` flag, so a
+    fan-out wired into one only would leave whether #744 is active depending
+    on an unrelated setting.
+
+    `concurrent=False` is the serial path VERBATIM, progress label included.
+    It is the default and stays byte-identical on purpose: a stock Ollama
+    serializes, so threading an un-opted-in run would buy nothing while
+    changing #701's progress vocabulary for every user.
+
+    `concurrent=True` uses `ThreadPoolExecutor.map`, and the choice of `map`
+    over `as_completed` is load-bearing three times over:
+
+    - **Order.** `map` yields in INPUT order, so `_dedup_merged` downstream
+      still keeps the earlier WINDOW's copy of a repeated subject. Completion
+      order would silently change which duplicate wins -- data loss dressed
+      as a throughput change. #739's own probe shipped that bug and three of
+      four review lenses caught it.
+    - **Failure.** `map` re-raises in input order as the iterator is
+      consumed, preserving this module's all-or-nothing contract exactly:
+      a backend failure on any window propagates unswallowed and the partial
+      results are discarded with it. Which thread failed first cannot change
+      which exception the caller sees.
+    - **The progress hook.** The iterator is consumed on the CALLING thread,
+      so `_report` is never invoked from a worker and needs no lock. #701's
+      hook writes to stderr and was written for a single-threaded caller.
+
+    Shutdown cancels futures that have not started, so a failure part-way
+    through does not go on paying for windows whose results are already
+    guaranteed to be thrown away, and WAITS for the at most
+    `_FAN_OUT_CONCURRENCY - 1` still in flight. Waiting is deliberate:
+    executor threads are not daemons, so `wait=False` would not avoid the
+    wait, only move it to interpreter exit -- the CLI would print its
+    "keeping the Source only" line, finish, and then appear to hang for up
+    to one `chat_timeout`. Draining here bounds that by the same timeout the
+    serial path already accepts for a single call, and keeps the order of
+    what the user sees honest.
+
+    `llm.chat` must be safe to call from several threads: `OllamaClient.chat`
+    builds its request locally and mutates no instance state, which is what
+    makes that true today.
+    """
+    chunk_count = len(windows)
+    collected: list[ExtractionResult] = []
+    if not concurrent:
+        for index, window in enumerate(windows, start=1):
+            _report(on_progress, f"extracting chunk {index}/{chunk_count}")
+            collected.extend(_extract_once(window, source_title, llm))
+        return collected
+
+    def _extract_window(window: str) -> list[ExtractionResult]:
+        return _extract_once(window, source_title, llm)
+
+    # One report BEFORE the pool starts, then one per COMPLETION. Both halves
+    # are needed. Completion reporting is the only honest per-chunk statement
+    # available here -- with two windows in flight there is no single chunk the
+    # run "is on", and a pre-call label would name a window whose neighbour is
+    # already finished. But completion reporting ALONE would leave the display
+    # silent until the first window returns, which on measured latencies is
+    # 5-20 seconds of exactly the frozen line #701 exists to prevent. The
+    # opening line covers that span and is the only place the fan-out's shape
+    # is stated at all.
+    _report(
+        on_progress,
+        f"extracting {chunk_count} chunks, {_FAN_OUT_CONCURRENCY} at a time",
+    )
+    pool = ThreadPoolExecutor(max_workers=_FAN_OUT_CONCURRENCY)
+    try:
+        for done, results in enumerate(pool.map(_extract_window, windows), start=1):
+            _report(on_progress, f"extracted chunk {done}/{chunk_count}")
+            collected.extend(results)
+    finally:
+        pool.shutdown(wait=True, cancel_futures=True)
+    return collected
+
+
 def _dedup_merged(results: list[ExtractionResult]) -> list[ExtractionResult]:
     """Drop chunk-merge duplicates by `(type, _normalize_title(title))`,
     keeping the FIRST occurrence (chunk order -- earlier context named the
@@ -2554,6 +2670,7 @@ def extract_concept(
     source_title: str,
     llm: LLMBackend,
     on_progress: ProgressHook | None = None,
+    concurrent: bool = False,
 ) -> ExtractionOutcome:
     """Prompt `llm` to classify zero or more distinct derived objects from
     `source_text`.
@@ -2606,6 +2723,15 @@ def extract_concept(
     Any `OllamaError`-family exception raised by `llm.chat` propagates
     unswallowed to the caller (see module docstring). The caller loops
     `openkos.model.okf.build_concept` once per returned object.
+
+    `concurrent` (issue #744) opts the CHUNKED fan-out into sending its
+    windows `_FAN_OUT_CONCURRENCY` at a time instead of one after another.
+    It changes the schedule and nothing else: results still concatenate in
+    window order, a window failure still propagates and still discards the
+    partial results, and a source below the chunking threshold is untouched
+    because it has no windows to overlap. `False`, the default, is the serial
+    path verbatim. See `_fan_out_windows` for why the gain depends on a
+    setting on the Ollama server that this process does not own.
     """
     # #714, same boundary as `extract_concept_union`: computed here rather than
     # threaded in, because this entry point has no other need for the verdict
@@ -2640,10 +2766,13 @@ def extract_concept(
         # with it (the caller's degrade seam is all-or-nothing).
         windows = _chunk_lines(source_text)
         chunk_count = len(windows)
-        merged: list[ExtractionResult] = []
-        for index, window in enumerate(windows, start=1):
-            _report(on_progress, f"extracting chunk {index}/{chunk_count}")
-            merged.extend(_extract_once(window, source_title, llm))
+        merged = _fan_out_windows(
+            windows,
+            source_title,
+            llm,
+            concurrent=concurrent,
+            on_progress=on_progress,
+        )
         # Grounding checks against the FULL source, not the window that
         # produced the object -- an expansion stated once in chunk 1 grounds
         # the acronym a later chunk re-derives.
@@ -2811,6 +2940,7 @@ def extract_concept_union(
     source_title: str,
     llm: LLMBackend,
     on_progress: ProgressHook | None = None,
+    concurrent: bool = False,
 ) -> ExtractionOutcome:
     """Union-of-runs + selector-judge orchestrator (design D1, #456): a
     SIBLING to `extract_concept` in this same module, replacing the blind
@@ -2885,6 +3015,14 @@ def extract_concept_union(
     exactly like `extract_concept` -- the judge's own fail-closed contract
     is `judge.select`'s alone and is never extended to cover extraction
     failures.
+
+    `concurrent` (issue #744) carries the identical meaning it has on
+    `extract_concept`, and is honoured on the identical seam
+    (`_fan_out_windows`): the chunked branch sends its windows
+    `_FAN_OUT_CONCURRENCY` at a time, window order and the all-or-nothing
+    failure contract both unchanged. Both entry points take it because
+    `cli/main.py` picks between them on `union_judge`, so a lever wired into
+    one only would leave whether it is active depending on that setting.
     """
     # Computed ONCE for the whole union path (#673): the same single
     # `_is_meeting_shaped` verdict feeds framing-object enforcement here,
@@ -2921,10 +3059,13 @@ def extract_concept_union(
     else:
         windows = _chunk_lines(source_text)
         chunk_count = len(windows)
-        chunked: list[ExtractionResult] = []
-        for index, window in enumerate(windows, start=1):
-            _report(on_progress, f"extracting chunk {index}/{chunk_count}")
-            chunked.extend(_extract_once(window, source_title, llm))
+        chunked = _fan_out_windows(
+            windows,
+            source_title,
+            llm,
+            concurrent=concurrent,
+            on_progress=on_progress,
+        )
         deduped = _dedup_merged(
             _strip_ungrounded_expansions(chunked, source_text=source_text)
         )

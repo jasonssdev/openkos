@@ -168,6 +168,8 @@ One source costs, in calls:
 - **plus one** judge call, skipped only when a single candidate survives the merge;
 - **plus one** re-ask, only when the source returned a *sole* object.
 
+Those calls run one after another by default. On a **chunked** source they can overlap two at a time — worth about 20% of a run, and only if your Ollama server was started with `OLLAMA_NUM_PARALLEL` raised. See `concurrent_extraction` under config below; it is off by default for exactly that reason.
+
 The threshold is **not the same for every document**: a prose document chunks above 18,000 characters, a meeting-shaped one above 12,000 ([#714](https://github.com/jasonssdev/openkos/issues/714) lowered it, because a large window on a transcript hit the generation ceiling and failed the ingest outright). At roughly 3,000 characters per page:
 
 | Document | Pages | Prose document | Meeting transcript |
@@ -672,6 +674,8 @@ context_window: 12288     # tokens the model holds at once (prompt + reply); unp
 #   edge_typing: gemma2:27b   # the measured optional upgrade — see below
 # union_judge: true       # union-of-runs + selector-judge extraction (default on);
                           # false restores the single-run, single-cap path
+# concurrent_extraction: true  # send chunk windows 2-at-a-time (default off);
+                          # needs OLLAMA_NUM_PARALLEL>=2 on the server
 # type_sensitivity_defaults:  # per-type birth floor: offset above default_sensitivity
 #   Person: 1               # shipped default; {} opts out entirely (see ADR-0015)
 
@@ -749,6 +753,34 @@ Every step of that pipeline reports itself on stderr rather than deciding quietl
 With `false`, `ingest` runs the single-run `extract_concept` path byte-for-byte as it was before, one model call and the hard cap of 6 (`_MAX_OBJECTS_PER_SOURCE`) described under `ingest` above. That is the whole rollback: one line in `openkos.yaml`, no migration, nothing already on disk affected.
 
 A value that is absent or explicitly null falls back to the default. A non-boolean value is refused when the config is read, rather than coerced — the check is a strict boolean test, not a truthiness test, so `union_judge: 0` is a refusal rather than a `false` that agreed with you by accident of Python's numeric tower.
+
+### `concurrent_extraction`
+
+Whether a **chunked** ingest sends its windows two at a time instead of one after another. Default `false`.
+
+It applies to the chunked path only. A source below its chunking threshold makes one whole-document call (or two, under `union_judge`) and has no windows to overlap. Both extraction pipelines honour the setting, so the answer never depends on `union_judge`.
+
+**The entire benefit is conditional on a setting OpenKOS does not own.** Ollama serializes concurrent requests unless `ollama serve` was started with `OLLAMA_NUM_PARALLEL` at 2 or more. That variable lives on a separate, long-running, usually desktop-app-managed process; OpenKOS can name it and cannot set it. Measured against a **default** server ([#739](https://github.com/jasonssdev/openkos/issues/739)), 2, 3 and 4 concurrent requests all returned **1.01x**, with per-call latencies of 5.1, 10.2, 15.2 and 20.2 seconds at 1, 2, 3 and 4 requests in flight — a perfect queue.
+
+With the server configured, on the same machine and the same prompts, 15 runs per arm:
+
+| | |
+| --- | --- |
+| speedup on the extraction fan-out | **1.26x** |
+| the fan-out's share of a whole ingest | **91%** |
+| net effect on a run | **~20%** — 160.7s → ~128s |
+| quality change | **none detected** on either axis |
+| memory | 7.2 GB → **9.1 GB** resident |
+
+**Turning it on against an unconfigured server gains nothing, and it is not entirely free.** The requests queue, which is the 1.01x above — same results, same order, same memory. But each request's own `chat_timeout` keeps running while it waits its turn on the server, so per-call wall time inflates: the measured per-call latencies on a default server are 5.1 seconds alone against 10.2 with two in flight. An installation whose `chat_timeout` sits close to its single-call latency can therefore start failing with timeouts purely from enabling this flag, on ingests that used to succeed. The **results** are unaffected; the **deadline** is not. So enable it when your server is configured, and leave it off otherwise rather than "just in case".
+
+That inflation is also why there is no `doctor` check and no automatic detection: `/api/ps` does not report `OLLAMA_NUM_PARALLEL`, so the only reliable signal would be firing two probe requests on every run to time the queue — paying the cost on every ingest to discover whether the cost applies.
+
+**It is an on/off switch, not a worker count.** The count is fixed at **2** inside the engine, because that is where the measurement saturates: arms at 3 and 4 were statistically indistinguishable from 2 (t ≈ 0.05) while resident memory kept climbing — 7.2 / 9.1 / 11.1 / 12.9 GB at `OLLAMA_NUM_PARALLEL` 1 / 2 / 3 / 4. Two slots also fit the ~11 GB budget a 16 GB machine actually has (see `context_window` above), which three do not. So `concurrent_extraction: 2` is **refused** when the config is read rather than read as "two workers" — it would give you the behaviour you meant by accident and teach you a setting that does not exist. Absent or explicitly null falls back to the default; any non-boolean is refused, on the same strict boolean check `union_judge` uses.
+
+Ordering is unaffected. Windows are collected in **window order**, never completion order, so a subject appearing in two windows still resolves to the earlier window's copy exactly as it does serially. A backend failure on any window still propagates and still discards the whole source's partial results — concurrency changes the schedule, not the contract.
+
+Full evidence, including the three probes and their `--self-test` modes, lives in `evals/ingest_concurrency/`. Re-running the speedup table costs about 2 hours 10 minutes of GPU time; nothing there needs re-measuring unless the hardware or the model changes.
 
 ### `models` — a different model per task
 
