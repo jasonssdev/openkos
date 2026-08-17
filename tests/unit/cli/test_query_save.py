@@ -1677,6 +1677,270 @@ def test_question_subject_refuses_non_definitional_questions() -> None:
     assert main._question_subject("what is   ?") is None
 
 
+def test_clause_connectors_are_space_delimited() -> None:
+    """The cut filter keeps `str.find` results `> 0`, which is only a correct
+    spelling of "found" because a leading space makes index 0 unreachable.
+
+    Raised by the readability lens on this change: the guard reads as if it
+    were excluding position 0, when what it excludes is `-1`. Rather than
+    rewrite the filter, pin the invariant it rests on -- an entry added
+    without its spaces would go silently inert, never loudly wrong, and that
+    is the failure mode a test earns its keep against."""
+    for connector in main._CLAUSE_CONNECTORS:
+        assert connector.startswith(" "), connector
+        assert connector.endswith(" "), connector
+
+
+def test_clause_answer_title_promotes_the_first_clause_of_an_overlong_opening() -> None:
+    """#696: a real Spanish opening runs past the declarative ceiling, so
+    rung 1 refuses and -- when the question names no subject either -- the
+    filing used to be named after the question. The clause rung cuts the
+    same sentence at its first clause boundary and promotes that."""
+    assert (
+        main._clause_answer_title(
+            "La relación entre la trazabilidad y la verdad contextual en "
+            "sistemas RAG radica en que cada afirmación generada debe poder "
+            "rastrearse hasta su fuente original."
+        )
+        == "La relación entre la trazabilidad y la verdad contextual en sistemas RAG"
+    )
+
+
+def test_clause_answer_title_defers_to_the_declarative_rung_within_the_ceiling() -> (
+    None
+):
+    """A sentence rung 1 can already promote is NOT this rung's business.
+
+    This is what keeps the change additive: every answer that resolves at
+    rung 1 today must reach this helper and be refused, or the filings whose
+    titles are already correct would start being cut short."""
+    within = "Symmetric cryptography relies on modular arithmetic. More detail."
+    assert main._declarative_answer_title(within) is not None
+    assert main._clause_answer_title(within) is None
+
+
+def test_clause_answer_title_cuts_at_the_earliest_competing_boundary() -> None:
+    """`min(cuts)` picks the EARLIEST of a comma and up to seventeen
+    connectors, and nothing else pinned that choice.
+
+    Raised by the reliability lens on this change: every other test supplies
+    a sentence with one cut point, so the tie-break was untested. Both cases
+    below carry two real boundaries at once, and in each the LATER one would
+    also pass the length bounds — so a `max`, or a first-match-wins over the
+    connector tuple's own order, produces a different, still-plausible title
+    and every other test stays green."""
+    # A comma at 44 and ` porque ` at 62: the comma wins.
+    assert (
+        main._clause_answer_title(
+            "La trazabilidad de cada afirmación generada, que es la base del "
+            "sistema, importa porque sin ella nada se verifica jamás."
+        )
+        == "La trazabilidad de cada afirmación generada"
+    )
+    # Two connectors, no comma: ` es la ` precedes ` porque `, and ` es la `
+    # sits later in `_CLAUSE_CONNECTORS` than ` porque `, so a tuple-order
+    # scan would cut at the wrong one.
+    assert (
+        main._clause_answer_title(
+            "La verdad contextual del sistema es la propiedad central porque "
+            "sostiene cada afirmación que el modelo genera al responder."
+        )
+        == "La verdad contextual del sistema"
+    )
+
+
+def test_clause_answer_title_refuses_questions_and_markdown() -> None:
+    """The over-ceiling test alone would admit a long question or a markdown
+    opening, both of which rung 1 refuses for a reason that has nothing to do
+    with length."""
+    assert (
+        main._clause_answer_title(
+            "¿Por qué la trazabilidad importa tanto en un repositorio de "
+            "conocimiento local, y qué pasa si falta?"
+        )
+        is None
+    )
+    assert (
+        main._clause_answer_title(
+            "- La trazabilidad es la propiedad que permite rastrear cada "
+            "afirmación hasta su fuente original de origen."
+        )
+        is None
+    )
+
+
+def test_clause_answer_title_refuses_a_residue_outside_the_bounds() -> None:
+    """The cut inherits rung 1's own bounds: a two-word left part names as
+    little as a fragment does, and a clause that is still a paragraph is
+    still a paragraph."""
+    assert (
+        main._clause_answer_title(
+            "El MVP, entendido como la versión más pequeña del producto que "
+            "ya entrega valor real al usuario, sirve para aprender."
+        )
+        is None
+    )
+
+
+def test_clause_answer_title_cut_index_survives_a_length_changing_lowercase() -> None:
+    """The cut index must be measured against the string it slices.
+
+    `str.lower()` is not length-preserving: `"İ"` lowers to TWO codepoints,
+    so an index taken from `candidate.lower()` drifts one position right per
+    such character. Two review lenses found this independently on this
+    change. With three of them ahead of the connector the drift is three
+    characters, which cuts inside the preceding word rather than at the
+    clause boundary."""
+    cut = main._clause_answer_title(
+        "İİİstanbul y su repositorio local de conocimiento compartido "
+        "es la base sobre la que se apoya toda la trazabilidad declarada."
+    )
+    assert cut == "İİİstanbul y su repositorio local de conocimiento compartido"
+
+
+def test_clause_answer_title_refuses_a_residue_over_the_ceiling() -> None:
+    """The UPPER arm of the residue bound, which the too-short case cannot
+    reach (reliability lens, this change).
+
+    The cut here lands past `_DECLARATIVE_TITLE_MAX_CHARS`, so the residue is
+    still prose. Dropping the upper bound would file a paragraph as the
+    permanent Concept ID -- exactly what the ceiling exists to prevent, and
+    the too-short test would stay green throughout."""
+    cut = main._clause_answer_title(
+        "La trazabilidad de cada afirmación generada por el sistema hasta su "
+        "fuente original inmutable y verificable es la propiedad central."
+    )
+    assert cut is None
+
+
+def test_clause_answer_title_refuses_a_residue_with_no_letters() -> None:
+    """The `isalpha` guard, driven for real (reliability lens, this change).
+
+    A residue of digits and punctuation names nothing, and would slug to
+    something unusable. Reachable because the earliest cut can land after a
+    purely numeric opening."""
+    cut = main._clause_answer_title(
+        "2024 2025 2026 2027 2028 2029 2030 2031 2032, la trazabilidad "
+        "quedó definida como la propiedad central del repositorio local."
+    )
+    assert cut is None
+
+
+def test_clause_answer_title_refuses_a_sentence_with_no_clause_boundary() -> None:
+    """No comma and no connector means no defensible cut, so the ladder
+    falls through to the question verbatim exactly as it does today."""
+    assert (
+        main._clause_answer_title(
+            "Rastrear afirmaciones generadas hasta fuentes originales "
+            "inmutables mediante cadenas largas de procedencia declarada"
+        )
+        is None
+    )
+
+
+def test_stage_filed_answer_still_falls_through_to_the_question_verbatim(
+    tmp_path: Path,
+) -> None:
+    """All THREE rungs refuse and the pre-#570 safety net still catches.
+
+    Raised by the reliability lens on this change: the clause rung was
+    spliced in directly above the terminal `or question`, and no test drove
+    a filing all the way through it to that fallback. Without this, the
+    safety net could be deleted and the suite would stay green for every
+    question shape that happens to resolve earlier.
+
+    The answer here overruns the declarative ceiling (so rung 1 refuses) and
+    carries neither a comma nor any `_CLAUSE_CONNECTORS` entry (so the clause
+    rung refuses), and the question is not a definitional scaffold (so the
+    subject rung refuses)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_concept(bundle_dir, "concepts", "trazabilidad")
+    citations = [Citation(concept_id="concepts/trazabilidad", title="Trazabilidad")]
+    question = "¿qué decidimos sobre el almacenamiento?"
+    answer_text = (
+        "Rastrear afirmaciones generadas hasta fuentes originales inmutables "
+        "mediante cadenas largas de procedencia declarada por cada objeto"
+    )
+    assert main._declarative_answer_title(answer_text) is None
+    assert main._question_subject(question) is None
+    assert main._clause_answer_title(answer_text) is None
+
+    plan = _stage_filed_answer(
+        question=question,
+        answer_text=answer_text,
+        citations=citations,
+        bundle_dir=bundle_dir,
+        default_sensitivity="private",
+        timestamp="2026-07-23T00:00:00Z",
+        cfg=_default_cfg(),
+    )
+
+    assert plan.title == question
+    assert plan.slug == "qué-decidimos-sobre-el-almacenamiento"
+
+
+def test_stage_filed_answer_prefers_the_subject_over_the_clause(
+    tmp_path: Path,
+) -> None:
+    """MEASURED ORDERING (evals/query_title/): the clause rung sits BELOW the
+    subject rung, not above it.
+
+    Placed above, `¿qué es la trazabilidad?` over a long Spanish opening cut
+    to `La trazabilidad` -- article and all -- where the shipped subject rung
+    gives the cleaner `Trazabilidad`. A clause cut is a degraded declarative;
+    a recognized definitional subject beats it every time."""
+    bundle_dir = tmp_path / "bundle"
+    _write_concept(bundle_dir, "concepts", "trazabilidad")
+    citations = [Citation(concept_id="concepts/trazabilidad", title="Trazabilidad")]
+
+    plan = _stage_filed_answer(
+        question="¿qué es la trazabilidad?",
+        answer_text=(
+            "La trazabilidad es la propiedad que permite rastrear cada "
+            "afirmación generada por el sistema hasta la fuente original."
+        ),
+        citations=citations,
+        bundle_dir=bundle_dir,
+        default_sensitivity="private",
+        timestamp="2026-07-23T00:00:00Z",
+        cfg=_default_cfg(),
+    )
+
+    assert plan.title == "Trazabilidad"
+    assert plan.slug == "trazabilidad"
+
+
+def test_stage_filed_answer_uses_the_clause_when_the_question_names_no_subject(
+    tmp_path: Path,
+) -> None:
+    """#696's own evidence question, end to end: `¿por qué es importante...?`
+    is not a definitional scaffold, so the subject rung refuses too, and the
+    filing used to take the question verbatim as its permanent Concept ID."""
+    bundle_dir = tmp_path / "bundle"
+    _write_concept(bundle_dir, "concepts", "trazabilidad")
+    citations = [Citation(concept_id="concepts/trazabilidad", title="Trazabilidad")]
+
+    plan = _stage_filed_answer(
+        question="¿por qué es importante la trazabilidad en un sistema de conocimiento?",
+        answer_text=(
+            "La trazabilidad es importante en un sistema de conocimiento "
+            "porque sin ella una respuesta correcta y una inventada son "
+            "indistinguibles para quien la lee."
+        ),
+        citations=citations,
+        bundle_dir=bundle_dir,
+        default_sensitivity="private",
+        timestamp="2026-07-23T00:00:00Z",
+        cfg=_default_cfg(),
+    )
+
+    assert plan.title == "La trazabilidad es importante en un sistema de conocimiento"
+    assert plan.slug == "la-trazabilidad-es-importante-en-un-sistema-de-conocimiento"
+    assert plan.description == (
+        "¿por qué es importante la trazabilidad en un sistema de conocimiento?"
+    )
+
+
 def test_stage_filed_answer_uses_the_subject_when_the_sentence_is_unusable(
     tmp_path: Path,
 ) -> None:
