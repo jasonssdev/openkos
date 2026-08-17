@@ -82,7 +82,7 @@ As shipped, the whole derived layer is four SQLite files under `.openkos/`, all 
 
 The runtime and interoperability layer (FastAPI local API, MCP server, OKF import/export) arrives with MVP 3.
 
-**The actual runtime dependency set**, as declared in `pyproject.toml` — six packages, deliberately small, and enumerated here because a dependency nobody lists is a dependency nobody notices:
+**What each runtime dependency is for.** `pyproject.toml` is the authority for the list itself; this table exists because a manifest says *what* is required and never *why*, and a dependency whose reason nobody records is one nobody can retire:
 
 | Package | Why it is there |
 | --- | --- |
