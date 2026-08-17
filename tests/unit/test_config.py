@@ -2102,6 +2102,7 @@ def test_resolve_task_model_survives_a_hand_built_non_mapping_models() -> None:
         type_tiers={},
         models=None,  # type: ignore[arg-type]
         union_judge=True,
+        concurrent_extraction=False,
         type_sensitivity_defaults={},
     )
 
@@ -2473,3 +2474,81 @@ class TestTypeBirthSensitivity:
         cfg = self._cfg(tmp_path, "default_sensitivity: public\n")
 
         assert config.type_birth_sensitivity(cfg, "Organization", "public") == "public"
+
+
+# --- concurrent_extraction: opt-in chunk fan-out concurrency (#744) -----------
+
+
+def test_default_concurrent_extraction_is_false() -> None:
+    """The packaged default is OFF, and that is the whole point of #744.
+
+    The gain is conditional on `OLLAMA_NUM_PARALLEL >= 2` on the `ollama
+    serve` process, which openkos does not own and most users have never
+    set. Defaulting ON would advertise a ~20% speedup that a stock server
+    (measured at 1.01x -- a perfect queue) cannot deliver."""
+    assert config.DEFAULT_CONCURRENT_EXTRACTION is False
+
+
+def test_read_config_falls_back_to_false_when_concurrent_extraction_absent(
+    tmp_path: Path,
+) -> None:
+    """An absent key leaves every existing workspace serial, byte-for-byte."""
+    (tmp_path / "openkos.yaml").write_text("model: gemma3\n", encoding="utf-8")
+
+    result = config.read_config(tmp_path)
+
+    assert result.concurrent_extraction is False
+
+
+def test_read_config_preserves_explicit_concurrent_extraction_true(
+    tmp_path: Path,
+) -> None:
+    """`concurrent_extraction: true` is the opt-in, and it reads back exactly
+    as written -- this is the only way a user can reach the fan-out."""
+    (tmp_path / "openkos.yaml").write_text(
+        "concurrent_extraction: true\n", encoding="utf-8"
+    )
+
+    result = config.read_config(tmp_path)
+
+    assert result.concurrent_extraction is True
+
+
+@pytest.mark.parametrize(
+    "yaml_body", ["concurrent_extraction: null\n", "concurrent_extraction:\n"]
+)
+def test_read_config_explicit_null_concurrent_extraction_falls_back(
+    tmp_path: Path, yaml_body: str
+) -> None:
+    """A present-but-null value falls back to the packaged default, matching
+    every other field's `is not None` fallback."""
+    (tmp_path / "openkos.yaml").write_text(yaml_body, encoding="utf-8")
+
+    result = config.read_config(tmp_path)
+
+    assert result.concurrent_extraction is config.DEFAULT_CONCURRENT_EXTRACTION
+
+
+@pytest.mark.parametrize(
+    "yaml_body",
+    [
+        "concurrent_extraction: maybe\n",
+        "concurrent_extraction: 1\n",
+        "concurrent_extraction: 2\n",
+        "concurrent_extraction: [true]\n",
+    ],
+)
+def test_read_config_rejects_non_boolean_concurrent_extraction(
+    tmp_path: Path, yaml_body: str
+) -> None:
+    """Validated, never coerced, mirroring `union_judge`'s own guard.
+
+    `concurrent_extraction: 2` is the case worth naming: it is what an
+    operator writes when they read this as a worker COUNT. It is not one --
+    the count is a private constant pinned at 2 because #739 measured the
+    speedup saturating there -- so the value must be refused loudly rather
+    than silently truthy-coerced into the same behaviour by accident."""
+    (tmp_path / "openkos.yaml").write_text(yaml_body, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="concurrent_extraction"):
+        config.read_config(tmp_path)
