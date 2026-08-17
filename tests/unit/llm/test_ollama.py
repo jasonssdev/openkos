@@ -12,11 +12,12 @@ import ast
 import http.client
 import io
 import json
+import threading
 import urllib.error
 import urllib.request
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -31,6 +32,7 @@ from openkos.llm.ollama import (
     OllamaModelNotFound,
     OllamaUnavailable,
     is_embedding_model,
+    is_timeout_failure,
     model_tag_matches,
 )
 
@@ -2021,3 +2023,368 @@ def test_chat_does_not_raise_when_done_reason_is_not_a_string() -> None:
     result = client.chat([{"role": "user", "content": "hi"}])
 
     assert result == "a complete reply"
+
+
+# --- chat() must stay safe to call from several threads (#748) ---------------
+
+
+def _self_mutation_offenders(source: str, *, method: str = "chat") -> list[int]:
+    """Line numbers inside `method` that write to state reachable from `self`.
+
+    `extraction.concept._fan_out_windows` (#744) calls `chat` from two worker
+    threads against ONE shared client. That is safe today for a single
+    structural reason: `chat` builds everything it needs as locals and writes
+    nothing back onto the instance. Nothing enforced it -- the claim lived in
+    a docstring, and two review lenses flagged that independently (#748).
+
+    A comment is too weak because the invariant is one line from being false
+    and breaking it is INVISIBLE to the rest of the suite. Adding
+
+        self._last_reply = content
+
+    introduces a data race no existing test can see: the default path is
+    serial, and the concurrency tests use a fake backend rather than this
+    client. The suite stays green and the corruption appears only on a real
+    opted-in run, intermittently.
+
+    **This asks the AST what a node IS, never what form it was written in.**
+    An earlier version enumerated `Assign`, `AugAssign`, `AnnAssign`, tuple
+    and starred targets -- and four review rounds found four more ways
+    through it: nested attributes, subscripts, `for` targets, `with ... as`.
+    That list has no end. Python already marks every write: a target node
+    carries `ctx=Store` (or `Del`), a read carries `ctx=Load`. Flagging any
+    `self`-rooted `Attribute` or `Subscript` in a store context therefore
+    covers every assignment form the language has, including ones added
+    later, with no form-by-form tail to maintain.
+
+    Two things a store context cannot express are handled separately: a bare
+    call that mutates (`self._cache.append(x)`), and `setattr`.
+    """
+    tree = ast.parse(source)
+    owner = next(
+        (
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ClassDef)
+            and any(
+                isinstance(item, ast.FunctionDef) and item.name == method
+                for item in node.body
+            )
+        ),
+        None,
+    )
+    assert owner is not None, f"no class defines a method named {method!r}"
+    # Scoped to THIS class's own body: keying every FunctionDef in the file by
+    # bare name would let an unrelated class's same-named method stand in for
+    # the one actually called.
+    methods = {
+        item.name: item for item in owner.body if isinstance(item, ast.FunctionDef)
+    }
+
+    def _is_self(node: ast.expr) -> bool:
+        return isinstance(node, ast.Name) and node.id == "self"
+
+    def _rooted_at_self(node: ast.expr) -> bool:
+        """Whether an attribute/subscript chain bottoms out at `self`."""
+        while isinstance(node, ast.Attribute | ast.Subscript):
+            node = node.value
+        return _is_self(node)
+
+    def _mutating_call(node: ast.stmt) -> bool:
+        """A bare call that can only be there for its effect on `self`.
+
+        A pure call's value gets used -- `chat` itself does
+        `response = self._urlopen(...)` and `raise self._unavailable(exc)`,
+        neither of which is a bare statement. Discarding the result of a call
+        on instance state is what mutation looks like.
+        """
+        if not isinstance(node, ast.Expr) or not isinstance(node.value, ast.Call):
+            return False
+        func = node.value.func
+        if isinstance(func, ast.Name) and func.id == "setattr":
+            return bool(node.value.args) and _is_self(node.value.args[0])
+        return isinstance(func, ast.Attribute) and _rooted_at_self(func.value)
+
+    def _self_methods_called(fn: ast.FunctionDef) -> set[str]:
+        """Names of same-class methods `fn` invokes as `self.<name>(...)`.
+
+        The guard has to follow these or it is trivially escapable: `chat`
+        really does call `self._unavailable(exc)`, so a mutation moved one
+        frame down would satisfy a subtree-only check while breaking the
+        exact property the check exists to protect.
+
+        Names that are not methods of this class are skipped, which is
+        correct rather than lax: `self._urlopen` is an INJECTED callable, not
+        code this repository controls, and following it would mean auditing
+        whatever a caller passed.
+        """
+        return {
+            node.func.attr
+            for node in ast.walk(fn)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and _is_self(node.func.value)
+            and node.func.attr in methods
+        }
+
+    offenders: list[int] = []
+    pending, seen = [method], {method}
+    while pending:
+        fn = methods[pending.pop()]
+        for node in ast.walk(fn):
+            if (isinstance(node, ast.stmt) and _mutating_call(node)) or (
+                isinstance(node, ast.Attribute | ast.Subscript)
+                and isinstance(node.ctx, ast.Store | ast.Del)
+                and _rooted_at_self(node.value)
+            ):
+                offenders.append(node.lineno)
+        for name in _self_methods_called(fn) - seen:
+            seen.add(name)
+            pending.append(name)
+    return sorted(offenders)
+
+
+def test_chat_writes_nothing_back_onto_the_client() -> None:
+    """`OllamaClient.chat` must remain free of writes to `self`.
+
+    This is the property that makes #744's concurrent fan-out correct. If it
+    ever fails, the fix is NOT to relax this test -- it is to keep the state
+    out of `chat`, or to stop calling it concurrently."""
+    source = (_REPO_ROOT / "src" / "openkos" / "llm" / "ollama.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert _self_mutation_offenders(source) == []
+
+
+def test_the_self_mutation_guard_catches_every_write_form() -> None:
+    """The guard's own detection, form by form.
+
+    Without this the guard could be silently inert -- a walker that matched
+    nothing would report a clean `chat` just as convincingly as a correct one
+    does. Every case below is a real way to mutate shared state, and the last
+    group is the one an enumerate-the-forms guard kept missing across four
+    review rounds until the check was rebuilt on `ctx`.
+    """
+
+    def _chat_body(line: str) -> str:
+        return f"class C:\n    def chat(self, messages):\n        {line}\n"
+
+    # Plain, augmented, annotated.
+    assert _self_mutation_offenders(_chat_body("self._last = 1")) == [3]
+    assert _self_mutation_offenders(_chat_body("self._calls += 1")) == [3]
+    assert _self_mutation_offenders(_chat_body("self._n: int = 1")) == [3]
+    # Unpacking targets.
+    assert _self_mutation_offenders(_chat_body("self._a, x = 1, 2")) == [3]
+    assert _self_mutation_offenders(_chat_body("[self._a, x] = [1, 2]")) == [3]
+    assert _self_mutation_offenders(_chat_body("*self._a, x = [1, 2]")) == [3]
+    # Nested attributes and SUBSCRIPTS -- neither is a one-level attribute.
+    assert _self_mutation_offenders(_chat_body("self._session.timeout = 5")) == [3]
+    assert _self_mutation_offenders(_chat_body("self._a.b.c = 5")) == [3]
+    assert _self_mutation_offenders(_chat_body('self._cache["k"] = 1')) == [3]
+    assert _self_mutation_offenders(_chat_body('self._a.b["k"] += 1')) == [3]
+    # Binding forms that are not assignments at all.
+    assert _self_mutation_offenders(_chat_body("for self._i in range(3): pass")) == [3]
+    assert _self_mutation_offenders(_chat_body("with open('f') as self._f: pass")) == [
+        3
+    ]
+    assert _self_mutation_offenders(_chat_body("del self._cache")) == [3]
+    # Mutation through a CALL leaves no store context behind.
+    assert _self_mutation_offenders(_chat_body("self._cache.append(1)")) == [3]
+    assert _self_mutation_offenders(_chat_body("self._reset()")) == [3]
+    assert _self_mutation_offenders(_chat_body('setattr(self, "_x", 1)')) == [3]
+    # READS of self, locals, and writes to anything else are all fine.
+    assert _self_mutation_offenders(_chat_body("url = self._host")) == []
+    assert _self_mutation_offenders(_chat_body('x = self._cache["k"]')) == []
+    assert _self_mutation_offenders(_chat_body("other._last = 1")) == []
+    assert _self_mutation_offenders(_chat_body("other.session.timeout = 5")) == []
+    assert _self_mutation_offenders(_chat_body('setattr(other, "_x", 1)')) == []
+    # A call whose VALUE is used is not a bare mutation -- chat() really does
+    # `response = self._urlopen(...)` and `raise self._unavailable(exc)`.
+    assert _self_mutation_offenders(_chat_body("r = self._urlopen(1)")) == []
+    assert _self_mutation_offenders(_chat_body("raise self._unavailable(1)")) == []
+
+
+def test_the_self_mutation_guard_scopes_to_the_right_methods() -> None:
+    """What the guard follows, and what it deliberately does not."""
+    # An UNRELATED method is out of scope; one `chat` CALLS is not.
+    unrelated = (
+        "class C:\n"
+        "    def chat(self, messages):\n"
+        "        return 1\n"
+        "    def embed(self, texts):\n"
+        "        self._last = 1\n"
+    )
+    assert _self_mutation_offenders(unrelated) == []
+    assert _self_mutation_offenders(unrelated, method="embed") == [5]
+    # Transitive: moving the write one frame down must not hide it.
+    delegated = (
+        "class C:\n"
+        "    def chat(self, messages):\n"
+        "        return self._build(messages)\n"
+        "    def _build(self, messages):\n"
+        "        self._last = 1\n"
+        "        return 1\n"
+    )
+    assert _self_mutation_offenders(delegated) == [5]
+    # An injected callable is NOT followed: it is not ours to audit.
+    injected = (
+        "class C:\n"
+        "    def chat(self, messages):\n"
+        "        return self._urlopen(messages)\n"
+    )
+    assert _self_mutation_offenders(injected) == []
+    # A same-named method on an UNRELATED class must not stand in for ours.
+    shadowed = (
+        "class Other:\n"
+        "    def _build(self, m):\n"
+        "        self._last = 1\n"
+        "class C:\n"
+        "    def chat(self, messages):\n"
+        "        return self._build(messages)\n"
+        "    def _build(self, m):\n"
+        "        return 1\n"
+    )
+    assert _self_mutation_offenders(shadowed) == []
+
+
+def test_chat_serves_concurrent_callers_their_own_replies() -> None:
+    """Several threads sharing ONE client each get their own reply back.
+
+    The structural guard above proves `chat` writes nothing to `self`; this
+    proves the behaviour that property exists for, against the real client
+    rather than a fake backend. The barrier forces every caller to be INSIDE
+    `chat` simultaneously, so a shared buffer or a reused request object would
+    have to survive genuine overlap rather than an accidental serial order.
+
+    Replies are keyed on each request's own body, which is the only way an
+    answer can be attributed to its asker: if `chat` ever routed a reply
+    through instance state, the callers would collide here and at least one
+    would receive another's text.
+    """
+    callers = 4
+    barrier = threading.Barrier(callers, timeout=10)
+
+    def _urlopen(
+        request: urllib.request.Request, timeout: float | None = None
+    ) -> _FakeResponse:
+        sent = json.loads(cast("bytes", request.data))
+        asked = sent["messages"][0]["content"]
+        barrier.wait()  # every caller is inside chat() at this instant
+        return _FakeResponse(_ok_body(f"reply to {asked}"))
+
+    client = OllamaClient("qwen3", urlopen=_urlopen)
+    replies: dict[int, str] = {}
+    lock = threading.Lock()
+
+    def _ask(index: int) -> None:
+        text = client.chat([Message(role="user", content=f"question {index}")])
+        with lock:
+            replies[index] = text
+
+    threads = [threading.Thread(target=_ask, args=(i,)) for i in range(callers)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=15)
+
+    assert not [t for t in threads if t.is_alive()]
+    assert replies == {i: f"reply to question {i}" for i in range(callers)}
+
+
+# --- is_timeout_failure: was this failure the deadline, or something else? ---
+
+
+def _chained(exc: Exception, cause: BaseException) -> Exception:
+    """`exc` as if it had been raised `from cause`.
+
+    Assigning `__cause__` is what `raise ... from ...` does, and doing it
+    directly keeps the assertion out of an `except` block -- which is both
+    what ruff's PT017 asks for and clearer: these tests are about the
+    predicate reading a cause, not about raising anything.
+    """
+    exc.__cause__ = cause
+    return exc
+
+
+def test_is_timeout_failure_recognises_a_direct_timeout() -> None:
+    """A read-phase timeout surfaces as `TimeoutError` and is wrapped
+    `from exc`, so the cause is what identifies it."""
+    exc = _chained(OllamaUnavailable("not reachable"), TimeoutError("timed out"))
+
+    assert is_timeout_failure(exc)
+
+
+def test_is_timeout_failure_recognises_a_timeout_wrapped_in_urlerror() -> None:
+    """The connect phase raises `URLError` whose `reason` is the timeout --
+    the shape `urlopen(..., timeout=T)` actually produces."""
+    cause = urllib.error.URLError(TimeoutError("timed out"))
+    exc = _chained(OllamaUnavailable("not reachable"), cause)
+
+    assert is_timeout_failure(exc)
+
+
+def test_is_timeout_failure_rejects_an_ordinary_connection_failure() -> None:
+    """A refused connection is NOT a deadline. Treating it as one would
+    attach #746's queuing advice to a server that is simply not running,
+    sending the operator after a setting that has nothing to do with it."""
+    cause = urllib.error.URLError(ConnectionRefusedError("refused"))
+    exc = _chained(OllamaUnavailable("not reachable"), cause)
+
+    assert not is_timeout_failure(exc)
+
+
+def test_is_timeout_failure_rejects_unrelated_ollama_errors() -> None:
+    """A missing model and a truncated reply are both real failures with
+    causes of their own; neither is the deadline."""
+    assert not is_timeout_failure(OllamaModelNotFound("no such model"))
+    assert not is_timeout_failure(OllamaGenerationCapped("truncated"))
+    assert not is_timeout_failure(OllamaError("malformed response"))
+
+
+def test_is_timeout_failure_survives_a_missing_cause() -> None:
+    """An exception raised with no `from` has `__cause__` of None, and the
+    predicate must answer rather than raise -- it runs on a degrade path that
+    is already handling one failure."""
+    assert not is_timeout_failure(OllamaUnavailable("not reachable"))
+
+
+def test_is_timeout_failure_recognises_what_chat_itself_raises() -> None:
+    """The predicate must agree with the REAL raise site, not with a
+    hand-built exception that merely resembles it.
+
+    Every other test here chains the cause itself, which assumes the shape
+    `chat` produces. That assumption is the whole coupling: if
+    `_unavailable` ever stopped wrapping `from exc`, or wrapped a different
+    cause, `is_timeout_failure` would answer False on genuine timeouts and
+    the #746 advisory would go quiet exactly when it is needed. Here the
+    exception comes out of `chat` itself.
+    """
+
+    def _timing_out(
+        request: urllib.request.Request, timeout: float | None = None
+    ) -> _FakeResponse:
+        raise TimeoutError("timed out")
+
+    client = OllamaClient("qwen3", urlopen=_timing_out)
+
+    with pytest.raises(OllamaUnavailable) as caught:
+        client.chat([Message(role="user", content="hi")])
+
+    assert is_timeout_failure(caught.value)
+
+
+def test_is_timeout_failure_says_no_to_what_a_refused_connection_raises() -> None:
+    """The same coupling in the negative direction, also through `chat`."""
+
+    def _refusing(
+        request: urllib.request.Request, timeout: float | None = None
+    ) -> _FakeResponse:
+        raise urllib.error.URLError(ConnectionRefusedError("refused"))
+
+    client = OllamaClient("qwen3", urlopen=_refusing)
+
+    with pytest.raises(OllamaUnavailable) as caught:
+        client.chat([Message(role="user", content="hi")])
+
+    assert not is_timeout_failure(caught.value)

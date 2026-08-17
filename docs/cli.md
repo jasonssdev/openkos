@@ -780,6 +780,8 @@ That inflation is also why there is no `doctor` check and no automatic detection
 
 Ordering is unaffected. Windows are collected in **window order**, never completion order, so a subject appearing in two windows still resolves to the earlier window's copy exactly as it does serially. A backend failure on any window still propagates and still discards the whole source's partial results — concurrency changes the schedule, not the contract.
 
+**If that deadline is what bites you, `ingest` says so.** When a chunked source times out on a run that had this setting on, the usual skip line is followed by one naming the interaction and both exits — raise `OLLAMA_NUM_PARALLEL` on the server, or set `concurrent_extraction: false`. All three conditions are required, so it stays quiet on a serial run, on a source too small to fan out, and on failures that are not deadlines: a refused connection prints nothing about concurrency, because sending you after this setting while your server is not running would be worse than saying nothing.
+
 Full evidence, including the three probes and their `--self-test` modes, lives in `evals/ingest_concurrency/`. Re-running the speedup table costs about 2 hours 10 minutes of GPU time; nothing there needs re-measuring unless the hardware or the model changes.
 
 ### `models` — a different model per task

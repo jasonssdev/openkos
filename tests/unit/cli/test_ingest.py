@@ -15,6 +15,7 @@ import os
 import stat
 import threading
 import unicodedata
+import urllib.error
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -7148,7 +7149,7 @@ def test_stage_derived_objects_degrades_when_a_concurrent_window_fails(
 
     text = "\n".join(f"A: line {i:04d} " + "x" * 30 for i in range(700))
     windows = concept_mod._chunk_lines(text)
-    assert len(windows) > concept_mod._FAN_OUT_CONCURRENCY
+    assert len(windows) > concept_mod.FAN_OUT_CONCURRENCY
     llm = _FailingWindowLLM(windows[1])
 
     plans, skip_reason, notice = main._stage_derived_objects(
@@ -7165,3 +7166,125 @@ def test_stage_derived_objects_degrades_when_a_concurrent_window_fails(
     assert skip_reason == "failed"
     assert notice is None
     assert "keeping the Source only" in capsys.readouterr().err
+
+
+# --- a timeout on the concurrent path names the queuing risk (#746) ----------
+
+
+class _TimingOutLLM:
+    locality = LOCAL_BACKEND_LOCALITY
+
+    def __init__(self, exc: Exception) -> None:
+        self._exc = exc
+
+    def chat(self, messages: Sequence[Message]) -> str:
+        raise self._exc
+
+    def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        return [[0.0] * EMBED_DIM for _ in texts]
+
+
+def _timeout_exc() -> OllamaUnavailable:
+    try:
+        raise OllamaUnavailable("Ollama not reachable at localhost") from TimeoutError(
+            "timed out"
+        )
+    except OllamaUnavailable as exc:
+        return exc
+
+
+def _chunked_text() -> str:
+    return "\n".join(f"A: line {i:04d} " + "x" * 30 for i in range(700))
+
+
+def test_timeout_on_the_concurrent_path_names_queuing_and_both_exits(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A timeout during a concurrent chunked run must say WHY it might be one.
+
+    The engine knows both halves -- that the run was concurrent, and that the
+    failure was the deadline -- and before #746 it said neither, leaving an
+    operator to connect a timeout to a setting they had changed. The advisory
+    names the interaction and BOTH exits, following the same
+    name-the-resolving-verb convention `doctor` already uses.
+    """
+    plans, skip_reason, _notice = main._stage_derived_objects(
+        **_stage_kwargs(  # type: ignore[arg-type]
+            tmp_path,
+            raw_content=_chunked_text(),
+            llm=_TimingOutLLM(_timeout_exc()),
+            cfg=_default_cfg(concurrent_extraction=True),
+            union_judge=False,
+        )
+    )
+
+    err = capsys.readouterr().err
+    assert plans == []
+    assert skip_reason == "failed"
+    assert "keeping the Source only" in err
+    assert "concurrent_extraction" in err
+    assert "OLLAMA_NUM_PARALLEL" in err
+
+
+def test_no_queuing_advisory_when_the_failure_is_not_a_timeout(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A refused connection is not a deadline. Blaming queuing here would send
+    the operator after a concurrency setting while their server is simply not
+    running -- worse than saying nothing."""
+    refused = None
+    try:
+        raise OllamaUnavailable("not reachable") from urllib.error.URLError(
+            ConnectionRefusedError("refused")
+        )
+    except OllamaUnavailable as exc:
+        refused = exc
+
+    main._stage_derived_objects(
+        **_stage_kwargs(  # type: ignore[arg-type]
+            tmp_path,
+            raw_content=_chunked_text(),
+            llm=_TimingOutLLM(refused),
+            cfg=_default_cfg(concurrent_extraction=True),
+            union_judge=False,
+        )
+    )
+
+    assert "concurrent_extraction" not in capsys.readouterr().err
+
+
+def test_no_queuing_advisory_when_concurrency_was_never_enabled(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A serial run's timeout has nothing to do with #744, so the advisory
+    must not fire on the DEFAULT path -- where most timeouts will happen."""
+    main._stage_derived_objects(
+        **_stage_kwargs(  # type: ignore[arg-type]
+            tmp_path,
+            raw_content=_chunked_text(),
+            llm=_TimingOutLLM(_timeout_exc()),
+            cfg=_default_cfg(concurrent_extraction=False),
+            union_judge=False,
+        )
+    )
+
+    assert "concurrent_extraction" not in capsys.readouterr().err
+
+
+def test_no_queuing_advisory_when_the_source_never_fanned_out(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A source below the chunking threshold has no windows to overlap, so
+    concurrency was not involved even with the flag on. This is the arm a
+    naive `if cfg.concurrent_extraction` check would get wrong."""
+    main._stage_derived_objects(
+        **_stage_kwargs(  # type: ignore[arg-type]
+            tmp_path,
+            raw_content="Short notes about self-control.",
+            llm=_TimingOutLLM(_timeout_exc()),
+            cfg=_default_cfg(concurrent_extraction=True),
+            union_judge=False,
+        )
+    )
+
+    assert "concurrent_extraction" not in capsys.readouterr().err

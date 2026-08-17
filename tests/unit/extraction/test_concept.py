@@ -6056,7 +6056,7 @@ def test_fan_out_concurrency_is_two_and_not_a_tunable() -> None:
     statistically indistinguishable, t~0.05) while memory keeps climbing
     (9.1 / 11.1 / 12.9 GB). The value is a private constant precisely so no
     config key can raise it past the point the measurement supports."""
-    assert concept_mod._FAN_OUT_CONCURRENCY == 2
+    assert concept_mod.FAN_OUT_CONCURRENCY == 2
 
 
 def test_concurrent_fan_out_drains_in_flight_windows_before_it_raises() -> None:
@@ -6126,4 +6126,58 @@ def test_concurrent_fan_out_reports_before_the_first_window_returns() -> None:
 
     assert reported_before_any_return
     assert str(len(windows)) in reported_before_any_return[0]
-    assert str(concept_mod._FAN_OUT_CONCURRENCY) in reported_before_any_return[0]
+    assert str(concept_mod.FAN_OUT_CONCURRENCY) in reported_before_any_return[0]
+
+
+# --- fans_out: the public "will this source overlap windows" seam (#746) -----
+
+
+def test_fans_out_is_false_below_the_threshold() -> None:
+    """A source that fits one whole-document call has no windows to overlap,
+    so #744's lever cannot be involved in anything that happens to it."""
+    assert not concept_mod.fans_out("Short notes about control.", source_title="Notes")
+
+
+def test_fans_out_is_true_above_the_threshold() -> None:
+    """A chunked source is exactly the case the fan-out governs."""
+    text = _long_text()
+
+    assert concept_mod.fans_out(text, source_title="Field Notes")
+
+
+def test_fans_out_follows_the_meeting_shaped_boundary_not_a_fixed_number() -> None:
+    """The boundary BRANCHES on shape since #714 -- 12 000 chars for a
+    meeting-shaped source against 18 000 otherwise -- so a caller must ask
+    this function rather than compare against a constant of its own.
+
+    The text below sits between the two thresholds, which is the only region
+    where a fixed-number caller and the real pipeline disagree.
+
+    Its content is PLAIN PROSE, with no speaker labels: `_is_meeting_shaped`
+    is a title gate OR a content gate since #673, so text that could itself
+    read as a transcript would leave the two arms differing in two ways at
+    once, and the non-meeting arm passing for the wrong reason. Here only the
+    title varies, which is exactly the gate this test means to exercise."""
+    line = "The team reviewed the quarterly numbers " + "x" * 40
+    text = "\n".join(f"{line} {i:04d}" for i in range(200))
+    assert 12_000 < len(text) < 18_000
+    assert not concept_mod._transcript_shaped_text(text)
+
+    assert concept_mod.fans_out(text, source_title="Weekly Sync Meeting")
+    assert not concept_mod.fans_out(text, source_title="Field Notes")
+
+
+def test_fans_out_is_false_exactly_at_the_threshold() -> None:
+    """The boundary is `>`, not `>=`: a source of EXACTLY the threshold length
+    still takes the whole-document path.
+
+    Pinned because an off-by-one here silently moves a source onto a
+    different pipeline -- one chat call becomes several, with different
+    prompts and a different selection path -- while every other test, which
+    sits comfortably on one side or the other, keeps passing."""
+    threshold = concept_mod._chunk_threshold_for(meeting_shaped=False)
+    text = "x" * threshold
+    assert not concept_mod._is_meeting_shaped("Field Notes", text)
+
+    assert not concept_mod.fans_out(text, source_title="Field Notes")
+    assert concept_mod.fans_out(text + "x", source_title="Field Notes")

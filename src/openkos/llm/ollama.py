@@ -348,6 +348,37 @@ def classify_backend_host(raw: str | None) -> BackendHostLocality:
     return BackendHostLocality(is_local=is_local, display_host=hostport)
 
 
+def is_timeout_failure(exc: BaseException) -> bool:
+    """Whether `exc` is a request that ran out of TIME, rather than one that
+    failed for any other reason (issue #746).
+
+    The distinction matters because #744's `concurrent_extraction` inflates
+    per-call wall time when the server is not configured to run requests in
+    parallel: each request's own timeout keeps running while it waits its
+    turn. A caller can only offer that explanation for a failure that is
+    actually a deadline. Attaching it to a refused connection would send an
+    operator after a concurrency setting when their server is simply not
+    running, which is worse than saying nothing.
+
+    Only `OllamaUnavailable` can be a timeout -- it is the one member of the
+    family raised for transport failures, always `from` the underlying
+    exception. Both shapes `urlopen(..., timeout=...)` produces are accepted:
+    a bare `TimeoutError` (the read phase, and `socket.timeout` since Python
+    3.10) and a `URLError` wrapping one (the connect phase).
+
+    Never raises, including on an exception with no cause at all: it runs on
+    a degrade path that is already handling a failure, and a predicate that
+    could fail there would replace a handled error with an unhandled one."""
+    if not isinstance(exc, OllamaUnavailable):
+        return False
+    cause = exc.__cause__
+    if isinstance(cause, TimeoutError):
+        return True
+    return isinstance(cause, urllib.error.URLError) and isinstance(
+        cause.reason, TimeoutError
+    )
+
+
 class OllamaClient:
     """A chat-completion client for a locally running Ollama server (D1-D6)."""
 
