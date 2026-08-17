@@ -244,3 +244,81 @@ def test_judge_module_never_imports_concept() -> None:
 
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__])
+
+
+# --- #754: one retry before the judge is declared unavailable ---------------
+
+
+class _SequencedLLM:
+    """A structural `LLMBackend` that answers differently per attempt: each
+    entry is either a reply string or an exception to raise."""
+
+    def __init__(self, *outcomes: str | Exception) -> None:
+        self.outcomes = list(outcomes)
+        self.calls: list[list[Message]] = []
+
+    def chat(self, messages: Sequence[Message]) -> str:
+        self.calls.append(list(messages))
+        outcome = self.outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+
+def test_select_retries_once_after_a_raising_chat_call() -> None:
+    """#754: the judge failed on the first extraction call of a batch and no
+    quality selection happened at all. A second attempt costs one round trip
+    and recovers a transient failure."""
+    llm = _SequencedLLM(
+        OllamaUnavailable("connection refused"), '{"keep": ["Stoicism"]}'
+    )
+    assert judge_mod.select("source", _CANDIDATES, llm) == ("Stoicism",)
+    assert len(llm.calls) == 2
+
+
+def test_select_retries_once_after_an_unparseable_reply() -> None:
+    """The retry covers every cause `select` collapses to `None`, not only a
+    raised exception. A reply carrying no JSON object is as transient as a
+    dropped connection on a sampling model, and telling the two apart at this
+    seam would need a distinction `select`'s contract does not make."""
+    llm = _SequencedLLM("Sure! I kept the first one.", '{"keep": ["Stoicism"]}')
+    assert judge_mod.select("source", _CANDIDATES, llm) == ("Stoicism",)
+    assert len(llm.calls) == 2
+
+
+def test_select_retries_once_after_a_wrong_shaped_reply() -> None:
+    """A valid JSON object whose `keep` fails `_validate_selection` is the
+    third cause, and it retries too."""
+    llm = _SequencedLLM('{"keep": []}', '{"keep": ["Epictetus"]}')
+    assert judge_mod.select("source", _CANDIDATES, llm) == ("Epictetus",)
+    assert len(llm.calls) == 2
+
+
+def test_select_returns_none_after_the_retry_also_fails() -> None:
+    """The bound is ONE retry, not a loop: two failures is unavailable."""
+    llm = _SequencedLLM("nope", "still nope")
+    assert judge_mod.select("source", _CANDIDATES, llm) is None
+    assert len(llm.calls) == 2
+
+
+def test_select_spends_no_retry_when_the_first_attempt_succeeds() -> None:
+    """The healthy path must cost exactly what it cost before. A retry that
+    also fired on success would double every judge call in the product."""
+    llm = _SequencedLLM('{"keep": ["Stoicism"]}')
+    assert judge_mod.select("source", _CANDIDATES, llm) == ("Stoicism",)
+    assert len(llm.calls) == 1
+
+
+def test_the_retry_sends_the_identical_prompt() -> None:
+    """The second attempt re-asks the SAME question. Varying the prompt would
+    make the retry a different experiment whose success says nothing about
+    the first attempt's failure."""
+    llm = _SequencedLLM("nope", '{"keep": ["Stoicism"]}')
+    judge_mod.select("source", _CANDIDATES, llm)
+    assert llm.calls[0] == llm.calls[1]
+
+
+def test_judge_attempts_is_two() -> None:
+    """The bound is a named constant, so the notice and the tests cannot
+    drift from what the code spends."""
+    assert judge_mod.JUDGE_ATTEMPTS == 2

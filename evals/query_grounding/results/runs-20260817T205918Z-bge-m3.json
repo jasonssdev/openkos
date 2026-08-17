@@ -1,0 +1,546 @@
+{
+  "stamp": "20260817T205918Z",
+  "model": "bge-m3",
+  "rows": [
+    {
+      "run": 1,
+      "label": "grounded",
+      "question": "¿qué decisiones se tomaron en las reuniones?",
+      "best": 1.0106168985366821,
+      "second": 1.0335774421691895,
+      "mean_top3": 1.0261567831039429,
+      "nearest_id": "decisions/borrado-real"
+    },
+    {
+      "run": 1,
+      "label": "grounded",
+      "question": "¿quiénes participaron en las reuniones?",
+      "best": 1.0754461288452148,
+      "second": 1.0760314464569092,
+      "mean_top3": 1.0823169151941936,
+      "nearest_id": "sources/reunion-01-trazabilidad"
+    },
+    {
+      "run": 1,
+      "label": "grounded",
+      "question": "¿qué aportó Gustavo Martínez al proyecto?",
+      "best": 1.0672612190246582,
+      "second": 1.126592993736267,
+      "mean_top3": 1.1354421377182007,
+      "nearest_id": "sources/reunion-02-ingesta"
+    },
+    {
+      "run": 1,
+      "label": "grounded",
+      "question": "¿qué se decidió sobre el historial de decisiones?",
+      "best": 0.8758534789085388,
+      "second": 0.9429676532745361,
+      "mean_top3": 0.9332715074221293,
+      "nearest_id": "decisions/historial-secuencial"
+    },
+    {
+      "run": 1,
+      "label": "grounded",
+      "question": "¿por qué se exigen citas textuales?",
+      "best": 0.8332391977310181,
+      "second": 0.8515979647636414,
+      "mean_top3": 0.8687181274096171,
+      "nearest_id": "decisions/citas-obligatorias"
+    },
+    {
+      "run": 1,
+      "label": "grounded",
+      "question": "¿qué pasa si ingiero el mismo archivo dos veces?",
+      "best": 0.8177279233932495,
+      "second": 1.0107167959213257,
+      "mean_top3": 0.9487953980763754,
+      "nearest_id": "concepts/ingesta-idempotente"
+    },
+    {
+      "run": 1,
+      "label": "grounded",
+      "question": "¿quién quedó como responsable de la migración?",
+      "best": 1.176207184791565,
+      "second": 1.2461336851119995,
+      "mean_top3": 1.225085735321045,
+      "nearest_id": "sources/reunion-02-ingesta"
+    },
+    {
+      "run": 1,
+      "label": "grounded",
+      "question": "¿qué alcance tiene el borrado de un concepto?",
+      "best": 0.9122612476348877,
+      "second": 0.9935406446456909,
+      "mean_top3": 0.9853880405426025,
+      "nearest_id": "concepts/borrado-barre-snapshots"
+    },
+    {
+      "run": 1,
+      "label": "grounded",
+      "question": "¿el bundle o el índice es la fuente de verdad?",
+      "best": 0.7888789772987366,
+      "second": 1.0223913192749023,
+      "mean_top3": 0.9572129448254904,
+      "nearest_id": "concepts/bundle-como-fuente-canonica"
+    },
+    {
+      "run": 1,
+      "label": "grounded",
+      "question": "¿cómo se aprueban los cambios durante la curación?",
+      "best": 0.8115740418434143,
+      "second": 0.8753185868263245,
+      "mean_top3": 0.8720093369483948,
+      "nearest_id": "concepts/curacion-con-consentimiento"
+    },
+    {
+      "run": 1,
+      "label": "adjacent",
+      "question": "¿qué relación hay entre la trazabilidad y la verdad contextual en sistemas RAG?",
+      "best": 1.0123275518417358,
+      "second": 1.0993497371673584,
+      "mean_top3": 1.0754489103953044,
+      "nearest_id": "sources/reunion-01-trazabilidad"
+    },
+    {
+      "run": 1,
+      "label": "adjacent",
+      "question": "¿cuáles son las mejores prácticas de chunking en sistemas RAG?",
+      "best": 1.134737491607666,
+      "second": 1.1574397087097168,
+      "mean_top3": 1.1513468027114868,
+      "nearest_id": "sources/reunion-01-trazabilidad"
+    },
+    {
+      "run": 1,
+      "label": "adjacent",
+      "question": "¿cómo se evalúa la calidad de un sistema de recuperación aumentada?",
+      "best": 1.1002137660980225,
+      "second": 1.1113417148590088,
+      "mean_top3": 1.108792781829834,
+      "nearest_id": "concepts/curacion-con-consentimiento"
+    },
+    {
+      "run": 1,
+      "label": "adjacent",
+      "question": "¿qué es la destilación de modelos de lenguaje?",
+      "best": 1.1209931373596191,
+      "second": 1.142553448677063,
+      "mean_top3": 1.1374197800954182,
+      "nearest_id": "sources/reunion-01-trazabilidad"
+    },
+    {
+      "run": 1,
+      "label": "adjacent",
+      "question": "¿cómo funciona la cuantización de pesos en un LLM?",
+      "best": 1.148081660270691,
+      "second": 1.1494349241256714,
+      "mean_top3": 1.1501919428507488,
+      "nearest_id": "sources/reunion-02-ingesta"
+    },
+    {
+      "run": 1,
+      "label": "adjacent",
+      "question": "¿qué ventajas tiene un índice HNSW frente a una búsqueda exhaustiva?",
+      "best": 1.135435700416565,
+      "second": 1.1421722173690796,
+      "mean_top3": 1.1506881316502888,
+      "nearest_id": "sources/reunion-01-trazabilidad"
+    },
+    {
+      "run": 1,
+      "label": "adjacent",
+      "question": "¿cómo se diseña una arquitectura hexagonal en un servicio web?",
+      "best": 1.1311384439468384,
+      "second": 1.1369426250457764,
+      "mean_top3": 1.1388041575749714,
+      "nearest_id": "concepts/curacion-con-consentimiento"
+    },
+    {
+      "run": 1,
+      "label": "adjacent",
+      "question": "¿qué diferencia hay entre fine-tuning y aprendizaje en contexto?",
+      "best": 1.1131335496902466,
+      "second": 1.1138073205947876,
+      "mean_top3": 1.1185498634974163,
+      "nearest_id": "concepts/ingesta-idempotente"
+    },
+    {
+      "run": 1,
+      "label": "adjacent",
+      "question": "¿cuál es el estado del arte en reranking neuronal?",
+      "best": 1.1490315198898315,
+      "second": 1.1681482791900635,
+      "mean_top3": 1.1665463050206502,
+      "nearest_id": "sources/reunion-02-ingesta"
+    },
+    {
+      "run": 1,
+      "label": "adjacent",
+      "question": "¿cómo se mide la deriva de un modelo en producción?",
+      "best": 1.0982346534729004,
+      "second": 1.1271898746490479,
+      "mean_top3": 1.1269224087397258,
+      "nearest_id": "sources/reunion-01-trazabilidad"
+    },
+    {
+      "run": 2,
+      "label": "grounded",
+      "question": "¿qué decisiones se tomaron en las reuniones?",
+      "best": 1.0106168985366821,
+      "second": 1.0335774421691895,
+      "mean_top3": 1.0261567831039429,
+      "nearest_id": "decisions/borrado-real"
+    },
+    {
+      "run": 2,
+      "label": "grounded",
+      "question": "¿quiénes participaron en las reuniones?",
+      "best": 1.0754461288452148,
+      "second": 1.0760314464569092,
+      "mean_top3": 1.0823169151941936,
+      "nearest_id": "sources/reunion-01-trazabilidad"
+    },
+    {
+      "run": 2,
+      "label": "grounded",
+      "question": "¿qué aportó Gustavo Martínez al proyecto?",
+      "best": 1.0672612190246582,
+      "second": 1.126592993736267,
+      "mean_top3": 1.1354421377182007,
+      "nearest_id": "sources/reunion-02-ingesta"
+    },
+    {
+      "run": 2,
+      "label": "grounded",
+      "question": "¿qué se decidió sobre el historial de decisiones?",
+      "best": 0.8758534789085388,
+      "second": 0.9429676532745361,
+      "mean_top3": 0.9332715074221293,
+      "nearest_id": "decisions/historial-secuencial"
+    },
+    {
+      "run": 2,
+      "label": "grounded",
+      "question": "¿por qué se exigen citas textuales?",
+      "best": 0.8332391977310181,
+      "second": 0.8515979647636414,
+      "mean_top3": 0.8687181274096171,
+      "nearest_id": "decisions/citas-obligatorias"
+    },
+    {
+      "run": 2,
+      "label": "grounded",
+      "question": "¿qué pasa si ingiero el mismo archivo dos veces?",
+      "best": 0.8177279233932495,
+      "second": 1.0107167959213257,
+      "mean_top3": 0.9487953980763754,
+      "nearest_id": "concepts/ingesta-idempotente"
+    },
+    {
+      "run": 2,
+      "label": "grounded",
+      "question": "¿quién quedó como responsable de la migración?",
+      "best": 1.176207184791565,
+      "second": 1.2461336851119995,
+      "mean_top3": 1.225085735321045,
+      "nearest_id": "sources/reunion-02-ingesta"
+    },
+    {
+      "run": 2,
+      "label": "grounded",
+      "question": "¿qué alcance tiene el borrado de un concepto?",
+      "best": 0.9122612476348877,
+      "second": 0.9935406446456909,
+      "mean_top3": 0.9853880405426025,
+      "nearest_id": "concepts/borrado-barre-snapshots"
+    },
+    {
+      "run": 2,
+      "label": "grounded",
+      "question": "¿el bundle o el índice es la fuente de verdad?",
+      "best": 0.7888789772987366,
+      "second": 1.0223913192749023,
+      "mean_top3": 0.9572129448254904,
+      "nearest_id": "concepts/bundle-como-fuente-canonica"
+    },
+    {
+      "run": 2,
+      "label": "grounded",
+      "question": "¿cómo se aprueban los cambios durante la curación?",
+      "best": 0.8115740418434143,
+      "second": 0.8753185868263245,
+      "mean_top3": 0.8720093369483948,
+      "nearest_id": "concepts/curacion-con-consentimiento"
+    },
+    {
+      "run": 2,
+      "label": "adjacent",
+      "question": "¿qué relación hay entre la trazabilidad y la verdad contextual en sistemas RAG?",
+      "best": 1.0123275518417358,
+      "second": 1.0993497371673584,
+      "mean_top3": 1.0754489103953044,
+      "nearest_id": "sources/reunion-01-trazabilidad"
+    },
+    {
+      "run": 2,
+      "label": "adjacent",
+      "question": "¿cuáles son las mejores prácticas de chunking en sistemas RAG?",
+      "best": 1.134737491607666,
+      "second": 1.1574397087097168,
+      "mean_top3": 1.1513468027114868,
+      "nearest_id": "sources/reunion-01-trazabilidad"
+    },
+    {
+      "run": 2,
+      "label": "adjacent",
+      "question": "¿cómo se evalúa la calidad de un sistema de recuperación aumentada?",
+      "best": 1.1002137660980225,
+      "second": 1.1113417148590088,
+      "mean_top3": 1.108792781829834,
+      "nearest_id": "concepts/curacion-con-consentimiento"
+    },
+    {
+      "run": 2,
+      "label": "adjacent",
+      "question": "¿qué es la destilación de modelos de lenguaje?",
+      "best": 1.1209931373596191,
+      "second": 1.142553448677063,
+      "mean_top3": 1.1374197800954182,
+      "nearest_id": "sources/reunion-01-trazabilidad"
+    },
+    {
+      "run": 2,
+      "label": "adjacent",
+      "question": "¿cómo funciona la cuantización de pesos en un LLM?",
+      "best": 1.148081660270691,
+      "second": 1.1494349241256714,
+      "mean_top3": 1.1501919428507488,
+      "nearest_id": "sources/reunion-02-ingesta"
+    },
+    {
+      "run": 2,
+      "label": "adjacent",
+      "question": "¿qué ventajas tiene un índice HNSW frente a una búsqueda exhaustiva?",
+      "best": 1.135435700416565,
+      "second": 1.1421722173690796,
+      "mean_top3": 1.1506881316502888,
+      "nearest_id": "sources/reunion-01-trazabilidad"
+    },
+    {
+      "run": 2,
+      "label": "adjacent",
+      "question": "¿cómo se diseña una arquitectura hexagonal en un servicio web?",
+      "best": 1.1311384439468384,
+      "second": 1.1369426250457764,
+      "mean_top3": 1.1388041575749714,
+      "nearest_id": "concepts/curacion-con-consentimiento"
+    },
+    {
+      "run": 2,
+      "label": "adjacent",
+      "question": "¿qué diferencia hay entre fine-tuning y aprendizaje en contexto?",
+      "best": 1.1131335496902466,
+      "second": 1.1138073205947876,
+      "mean_top3": 1.1185498634974163,
+      "nearest_id": "concepts/ingesta-idempotente"
+    },
+    {
+      "run": 2,
+      "label": "adjacent",
+      "question": "¿cuál es el estado del arte en reranking neuronal?",
+      "best": 1.1490315198898315,
+      "second": 1.1681482791900635,
+      "mean_top3": 1.1665463050206502,
+      "nearest_id": "sources/reunion-02-ingesta"
+    },
+    {
+      "run": 2,
+      "label": "adjacent",
+      "question": "¿cómo se mide la deriva de un modelo en producción?",
+      "best": 1.0982346534729004,
+      "second": 1.1271898746490479,
+      "mean_top3": 1.1269224087397258,
+      "nearest_id": "sources/reunion-01-trazabilidad"
+    },
+    {
+      "run": 3,
+      "label": "grounded",
+      "question": "¿qué decisiones se tomaron en las reuniones?",
+      "best": 1.0106168985366821,
+      "second": 1.0335774421691895,
+      "mean_top3": 1.0261567831039429,
+      "nearest_id": "decisions/borrado-real"
+    },
+    {
+      "run": 3,
+      "label": "grounded",
+      "question": "¿quiénes participaron en las reuniones?",
+      "best": 1.0754461288452148,
+      "second": 1.0760314464569092,
+      "mean_top3": 1.0823169151941936,
+      "nearest_id": "sources/reunion-01-trazabilidad"
+    },
+    {
+      "run": 3,
+      "label": "grounded",
+      "question": "¿qué aportó Gustavo Martínez al proyecto?",
+      "best": 1.0672612190246582,
+      "second": 1.126592993736267,
+      "mean_top3": 1.1354421377182007,
+      "nearest_id": "sources/reunion-02-ingesta"
+    },
+    {
+      "run": 3,
+      "label": "grounded",
+      "question": "¿qué se decidió sobre el historial de decisiones?",
+      "best": 0.8758534789085388,
+      "second": 0.9429676532745361,
+      "mean_top3": 0.9332715074221293,
+      "nearest_id": "decisions/historial-secuencial"
+    },
+    {
+      "run": 3,
+      "label": "grounded",
+      "question": "¿por qué se exigen citas textuales?",
+      "best": 0.8332391977310181,
+      "second": 0.8515979647636414,
+      "mean_top3": 0.8687181274096171,
+      "nearest_id": "decisions/citas-obligatorias"
+    },
+    {
+      "run": 3,
+      "label": "grounded",
+      "question": "¿qué pasa si ingiero el mismo archivo dos veces?",
+      "best": 0.8177279233932495,
+      "second": 1.0107167959213257,
+      "mean_top3": 0.9487953980763754,
+      "nearest_id": "concepts/ingesta-idempotente"
+    },
+    {
+      "run": 3,
+      "label": "grounded",
+      "question": "¿quién quedó como responsable de la migración?",
+      "best": 1.176207184791565,
+      "second": 1.2461336851119995,
+      "mean_top3": 1.225085735321045,
+      "nearest_id": "sources/reunion-02-ingesta"
+    },
+    {
+      "run": 3,
+      "label": "grounded",
+      "question": "¿qué alcance tiene el borrado de un concepto?",
+      "best": 0.9122612476348877,
+      "second": 0.9935406446456909,
+      "mean_top3": 0.9853880405426025,
+      "nearest_id": "concepts/borrado-barre-snapshots"
+    },
+    {
+      "run": 3,
+      "label": "grounded",
+      "question": "¿el bundle o el índice es la fuente de verdad?",
+      "best": 0.7888789772987366,
+      "second": 1.0223913192749023,
+      "mean_top3": 0.9572129448254904,
+      "nearest_id": "concepts/bundle-como-fuente-canonica"
+    },
+    {
+      "run": 3,
+      "label": "grounded",
+      "question": "¿cómo se aprueban los cambios durante la curación?",
+      "best": 0.8115740418434143,
+      "second": 0.8753185868263245,
+      "mean_top3": 0.8720093369483948,
+      "nearest_id": "concepts/curacion-con-consentimiento"
+    },
+    {
+      "run": 3,
+      "label": "adjacent",
+      "question": "¿qué relación hay entre la trazabilidad y la verdad contextual en sistemas RAG?",
+      "best": 1.0123275518417358,
+      "second": 1.0993497371673584,
+      "mean_top3": 1.0754489103953044,
+      "nearest_id": "sources/reunion-01-trazabilidad"
+    },
+    {
+      "run": 3,
+      "label": "adjacent",
+      "question": "¿cuáles son las mejores prácticas de chunking en sistemas RAG?",
+      "best": 1.134737491607666,
+      "second": 1.1574397087097168,
+      "mean_top3": 1.1513468027114868,
+      "nearest_id": "sources/reunion-01-trazabilidad"
+    },
+    {
+      "run": 3,
+      "label": "adjacent",
+      "question": "¿cómo se evalúa la calidad de un sistema de recuperación aumentada?",
+      "best": 1.1002137660980225,
+      "second": 1.1113417148590088,
+      "mean_top3": 1.108792781829834,
+      "nearest_id": "concepts/curacion-con-consentimiento"
+    },
+    {
+      "run": 3,
+      "label": "adjacent",
+      "question": "¿qué es la destilación de modelos de lenguaje?",
+      "best": 1.1209931373596191,
+      "second": 1.142553448677063,
+      "mean_top3": 1.1374197800954182,
+      "nearest_id": "sources/reunion-01-trazabilidad"
+    },
+    {
+      "run": 3,
+      "label": "adjacent",
+      "question": "¿cómo funciona la cuantización de pesos en un LLM?",
+      "best": 1.148081660270691,
+      "second": 1.1494349241256714,
+      "mean_top3": 1.1501919428507488,
+      "nearest_id": "sources/reunion-02-ingesta"
+    },
+    {
+      "run": 3,
+      "label": "adjacent",
+      "question": "¿qué ventajas tiene un índice HNSW frente a una búsqueda exhaustiva?",
+      "best": 1.135435700416565,
+      "second": 1.1421722173690796,
+      "mean_top3": 1.1506881316502888,
+      "nearest_id": "sources/reunion-01-trazabilidad"
+    },
+    {
+      "run": 3,
+      "label": "adjacent",
+      "question": "¿cómo se diseña una arquitectura hexagonal en un servicio web?",
+      "best": 1.1311384439468384,
+      "second": 1.1369426250457764,
+      "mean_top3": 1.1388041575749714,
+      "nearest_id": "concepts/curacion-con-consentimiento"
+    },
+    {
+      "run": 3,
+      "label": "adjacent",
+      "question": "¿qué diferencia hay entre fine-tuning y aprendizaje en contexto?",
+      "best": 1.1131335496902466,
+      "second": 1.1138073205947876,
+      "mean_top3": 1.1185498634974163,
+      "nearest_id": "concepts/ingesta-idempotente"
+    },
+    {
+      "run": 3,
+      "label": "adjacent",
+      "question": "¿cuál es el estado del arte en reranking neuronal?",
+      "best": 1.1490315198898315,
+      "second": 1.1681482791900635,
+      "mean_top3": 1.1665463050206502,
+      "nearest_id": "sources/reunion-02-ingesta"
+    },
+    {
+      "run": 3,
+      "label": "adjacent",
+      "question": "¿cómo se mide la deriva de un modelo en producción?",
+      "best": 1.0982346534729004,
+      "second": 1.1271898746490479,
+      "mean_top3": 1.1269224087397258,
+      "nearest_id": "sources/reunion-01-trazabilidad"
+    }
+  ]
+}

@@ -38,6 +38,7 @@ from openkos.bundle import relations as bundle_relations
 from openkos.cli import curate as curate_module
 from openkos.cli import next_action as next_action_module
 from openkos.cli import observability
+from openkos.extraction import judge as judge_mod
 from openkos.extraction.concept import (
     FAN_OUT_CONCURRENCY,
     ExtractionReport,
@@ -2892,25 +2893,41 @@ def _judge_failure_notice(report: ExtractionReport) -> str | None:
     and from `_judge_selection_notice` (a successful judge selection) --
     spec: "a `_judge_failure_notice` distinct from `_judge_selection_notice`/
     `_extraction_cap_notice`". Fires on BOTH degrade statuses that keep the
-    full (backstop-capped) merged union instead of filtering it:
-    `"failed"` (the judge call raised, returned an empty reply, or an
-    unparseable/wrong-shape reply) and `"empty"` (#456 gate finding: a
-    valid-shaped reply whose admitted set was empty). Each status renders
-    distinct wording so the two degrade causes stay tellable apart in the
-    terminal -- and the `"empty"` wording must be honest that the judge
-    REPLIED (#644: a full-line echo landing here as "unavailable"-adjacent
-    wording sent the reporter chasing a cold-load timeout that measurement
-    falsified; the reply arrived fine, it just named no candidate)."""
+    merged union instead of filtering it: `"failed"` (every attempt raised,
+    returned an empty reply, or returned an unparseable/wrong-shape reply)
+    and `"empty"` (#456 gate finding: a valid-shaped reply whose admitted set
+    was empty). Each status renders distinct wording so the two degrade
+    causes stay tellable apart in the terminal -- and the `"empty"` wording
+    must be honest that the judge REPLIED (#644: a full-line echo landing
+    here as "unavailable"-adjacent wording sent the reporter chasing a
+    cold-load timeout that measurement falsified; the reply arrived fine, it
+    just named no candidate).
+
+    The two statuses no longer describe the same OUTCOME, which is why the
+    shared sentence they used to share is gone (#754): `"empty"` is still
+    backstop-capped, while `"failed"` is not capped at all. A single
+    parametrized sentence would have had to stay silent about the difference
+    or state it wrongly for one of the two."""
     if report.judge_status == "failed":
-        reason = "judge selection unavailable"
-    elif report.judge_status == "empty":
-        reason = "judge reply matched no candidate"
-    else:
-        return None
-    return (
-        f"{reason}; kept the full merged extraction "
-        f"union ({report.retained} object(s)) unfiltered"
-    )
+        # #754: the earlier wording -- "kept the full merged extraction union
+        # (N object(s)) unfiltered" -- was accurate and still misled. It
+        # named an OUTCOME and left the two consequences unsaid: that no
+        # quality gate ran at all, and that a positional cap then cut the
+        # unranked set by arrival order. The second is no longer true (the
+        # cap is skipped now), and the first is what the operator has to know
+        # to judge whether the stored objects were ever filtered.
+        return (
+            "judge selection unavailable after "
+            f"{judge_mod.JUDGE_ATTEMPTS} attempts; no quality selection ran, "
+            f"so all {report.retained} merged candidate(s) were kept and the "
+            "positional cap was NOT applied to them"
+        )
+    if report.judge_status == "empty":
+        return (
+            "judge reply matched no candidate; kept the full merged "
+            f"extraction union ({report.retained} object(s)) unfiltered"
+        )
+    return None
 
 
 def _pre_judge_ceiling_notice(report: ExtractionReport) -> str | None:

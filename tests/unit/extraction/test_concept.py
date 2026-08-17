@@ -6181,3 +6181,80 @@ def test_fans_out_is_false_exactly_at_the_threshold() -> None:
 
     assert not concept_mod.fans_out(text, source_title="Field Notes")
     assert concept_mod.fans_out(text + "x", source_title="Field Notes")
+
+
+# --- #754: an unavailable judge must not hand the cap an unreviewed set ----
+
+
+def _many_items(n: int) -> str:
+    return _array(
+        *(
+            f'{{"type": "Concept", "title": "Subject {i}", '
+            f'"description": "Distinct subject {i}.", "body": ""}}'
+            for i in range(1, n + 1)
+        )
+    )
+
+
+def test_union_skips_the_positional_cap_when_the_judge_is_unavailable() -> None:
+    """#754's compounding pair. When both judge attempts fail, NOTHING has
+    ranked the candidates -- so applying `_UNION_BACKSTOP` afterwards cuts by
+    ARRIVAL ORDER, and the three objects it dropped in the reported run were
+    not the weakest, merely the last emitted.
+
+    Owner ruling: keep the unreviewed set whole rather than compound an
+    arbitrary cut onto it. The set is still bounded -- `_MAX_JUDGE_CANDIDATES`
+    (24) capped it before the judge ever saw it -- so this cannot grow
+    without limit."""
+    llm = _SequencedLLM([_many_items(23), _array(), "not json", "not json"])
+
+    outcome = concept_mod.extract_concept_union("Notes.", source_title="Notes", llm=llm)
+
+    assert outcome.report.judge_status == "failed"
+    assert len(outcome.objects) == 23
+    assert outcome.report.produced == 23
+    assert outcome.report.retained == 23
+    assert outcome.report.discarded_titles == ()
+
+
+def test_the_skipped_cap_is_still_bounded_by_the_pre_judge_ceiling() -> None:
+    """Skipping the backstop does not remove every bound: the 24-candidate
+    pre-judge ceiling already truncated the merged union, and it is what
+    keeps an unavailable judge from storing an unbounded set."""
+    llm = _SequencedLLM([_many_items(40), _array(), "not json", "not json"])
+
+    outcome = concept_mod.extract_concept_union("Notes.", source_title="Notes", llm=llm)
+
+    assert outcome.report.judge_status == "failed"
+    assert len(outcome.objects) == concept_mod._MAX_JUDGE_CANDIDATES
+    assert outcome.report.pre_judge_dropped == 40 - concept_mod._MAX_JUDGE_CANDIDATES
+
+
+def test_the_cap_still_applies_when_the_judge_selected_normally() -> None:
+    """The skip is scoped to `failed`. A successful selection IS a ranking,
+    so cutting its tail at the backstop is a cut through ranked material and
+    stays exactly as it was."""
+    judge_reply = _keep_reply(*(f"Subject {i}" for i in range(1, 24)))
+    llm = _SequencedLLM([_many_items(23), _array(), judge_reply])
+
+    outcome = concept_mod.extract_concept_union("Notes.", source_title="Notes", llm=llm)
+
+    assert outcome.report.judge_status == "ok"
+    assert len(outcome.objects) == concept_mod._UNION_BACKSTOP
+    assert outcome.report.discarded_titles != ()
+
+
+def test_the_cap_still_applies_when_the_judge_replied_but_matched_nothing() -> None:
+    """Deliberate boundary. `empty` means the judge RAN and its reply named
+    no candidate -- a legible verdict the operator can act on, unlike
+    `failed`, where nothing is known about the set at all.
+
+    The arbitrariness argument does partly apply here too (the kept set is
+    equally unranked), and that is recorded rather than acted on: widening
+    the skip is a second decision, not a detail of this one."""
+    llm = _SequencedLLM([_many_items(23), _array(), _keep_reply("Nothing Matching")])
+
+    outcome = concept_mod.extract_concept_union("Notes.", source_title="Notes", llm=llm)
+
+    assert outcome.report.judge_status == "empty"
+    assert len(outcome.objects) == concept_mod._UNION_BACKSTOP

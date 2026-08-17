@@ -156,27 +156,43 @@ def _salvage_full_line_echoes(
     return tuple(resolved)
 
 
-def select(
+JUDGE_ATTEMPTS = 2
+"""How many times `select` asks before declaring the judge unavailable
+(issue #754).
+
+TWO, not a loop. The failure #754 reports costs more than the selection it
+loses: with no judge, the caller keeps the whole merged union, and the caller
+then has nothing ranked to apply a positional cap to. One extra round trip is
+cheap against that.
+
+WHAT THIS DOES *NOT* CLAIM. #754 attributed the failure to a cold model start,
+and `evals/judge_cold_start/` -- added alongside this constant -- did not
+reproduce it: 45 calls at two candidate counts, cold and warm, 15 confirmed
+model evictions, zero failures. #644 filed the same symptom, hypothesised the
+same cause, and was falsified the same way. So the retry is NOT justified as
+"the model was not resident and the first attempt loads it". The cause is
+unidentified, and this is a cause-agnostic remedy: re-asking is worth one call
+against ANY non-deterministic failure, and a sampling model that answers in
+prose one call and clean JSON the next is the shape #644 actually measured.
+
+Bounded at two on purpose, and the bound has a cost worth naming: `select`
+inherits the workspace `chat_timeout`, so against a backend that HANGS rather
+than refuses, two attempts wait up to twice that deadline before the judge is
+declared unavailable -- once per source in a batch. That is accepted rather
+than mitigated. Backing off would add delay to the common case to shrink a
+worst case that is already pathological (the two extraction calls ahead of
+this one would have had to succeed against the same hanging backend first),
+and `OllamaClient.embed`'s backoff exists for a different reason: an embedding
+batch competes with itself, while this is one call."""
+
+
+def _select_once(
     source_text: str,
     candidates: "list[JudgeCandidate] | tuple[JudgeCandidate, ...]",
     llm: LLMBackend,
 ) -> tuple[str, ...] | None:
-    """Ask `llm` which of `candidates` are genuine, distinct subjects.
-
-    Returns the titles it keeps, echoed verbatim from the closed candidate
-    list, in reply order -- a kept string that instead echoes a whole
-    candidate line is first resolved back to its bare candidate title
-    (`_salvage_full_line_echoes`, #644). `None` means unusable -- `llm.chat`
-    raised any exception, the reply was not valid JSON, or the parsed shape
-    failed `_validate_selection` -- and the caller must fail closed to the
-    whole candidate set (design D7). Never raises.
-
-    Deliberate bound (#457): the reply is TITLE-ONLY, so it cannot
-    disambiguate two candidates of different types sharing one normalized
-    title -- the caller admits every same-titled candidate when the title
-    is selected, damage bounded by its backstop cap. The reply-protocol
-    change that could tell them apart is tracked in #457.
-    """
+    """One judge attempt: chat, parse, validate, salvage. `None` on any of
+    the three failure causes, exactly as `select`'s contract describes."""
     try:
         reply = llm.chat(_build_judge_messages(source_text, candidates))
     except Exception:  # broad: design D7 -- the judge's failure must
@@ -194,3 +210,38 @@ def select(
     if validated is None:
         return None
     return _salvage_full_line_echoes(validated, candidates)
+
+
+def select(
+    source_text: str,
+    candidates: "list[JudgeCandidate] | tuple[JudgeCandidate, ...]",
+    llm: LLMBackend,
+) -> tuple[str, ...] | None:
+    """Ask `llm` which of `candidates` are genuine, distinct subjects.
+
+    Returns the titles it keeps, echoed verbatim from the closed candidate
+    list, in reply order -- a kept string that instead echoes a whole
+    candidate line is first resolved back to its bare candidate title
+    (`_salvage_full_line_echoes`, #644). `None` means unusable -- `llm.chat`
+    raised any exception, the reply was not valid JSON, or the parsed shape
+    failed `_validate_selection` -- and the caller must fail closed to the
+    whole candidate set (design D7). Never raises.
+
+    Asks up to `JUDGE_ATTEMPTS` times (#754), re-sending the IDENTICAL prompt.
+    The retry covers all three failure causes rather than only a raised
+    exception: `select` deliberately does not distinguish them at this seam,
+    and a sampling model producing prose one call and clean JSON the next is
+    as transient as a dropped connection. A first attempt that succeeds costs
+    exactly what it always did -- the retry is reached only after a failure.
+
+    Deliberate bound (#457): the reply is TITLE-ONLY, so it cannot
+    disambiguate two candidates of different types sharing one normalized
+    title -- the caller admits every same-titled candidate when the title
+    is selected, damage bounded by its backstop cap. The reply-protocol
+    change that could tell them apart is tracked in #457.
+    """
+    for _attempt in range(JUDGE_ATTEMPTS):
+        selected = _select_once(source_text, candidates, llm)
+        if selected is not None:
+            return selected
+    return None

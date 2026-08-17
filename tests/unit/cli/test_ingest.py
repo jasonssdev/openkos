@@ -7288,3 +7288,35 @@ def test_no_queuing_advisory_when_the_source_never_fanned_out(
     )
 
     assert "concurrent_extraction" not in capsys.readouterr().err
+
+
+def test_ingest_judge_unavailable_notice_names_both_compounding_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#754: the old wording -- "kept the full merged extraction union (20
+    object(s)) unfiltered" -- is accurate and still misleads. It does not say
+    that NO QUALITY GATE RAN, and it does not say that a positional cap then
+    cut the unranked set by arrival order.
+
+    The second half is now false (the cap is skipped, #754), so the notice
+    must state both: no selection happened, and nothing was discarded for
+    it. `_extraction_cap_notice` must stay silent, since there is no longer
+    anything for it to report."""
+    _init_workspace(tmp_path, monkeypatch)
+    run1 = _concept_reply(title="Stoic Dichotomy Of Control")
+    run2 = _concept_reply(title="Negative Visualization")
+    # TWO failures: the retry (#754) must be exhausted before the degrade.
+    _patch_sequenced_llm(
+        monkeypatch,
+        [run1, run2, OllamaUnavailable("boom"), OllamaUnavailable("boom")],
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert "judge selection unavailable" in result.stderr
+    assert "no quality selection ran" in result.stderr
+    assert "cap reached" not in result.stderr
+    assert "judge dropped" not in result.stderr
