@@ -19,10 +19,27 @@ class Message(TypedDict):
 
 
 class LLMBackend(Protocol):
-    """A chat-completion backend: send `messages`, get assistant text back."""
+    """A chat-completion backend: send `messages`, get assistant text back.
+
+    **`chat` must be safe to call from several threads on one instance.**
+    Since #744 `extraction.concept._fan_out_windows` calls it concurrently
+    against a single shared backend when a workspace opts into
+    `concurrent_extraction`, so an implementation that carries per-call state
+    on the instance would corrupt replies across callers rather than merely
+    run slower.
+
+    The bar is structural and easy to meet: build every per-call value as a
+    local and write nothing back onto the instance. `ollama.OllamaClient`
+    satisfies it, and `tests/unit/llm/test_ollama.py` pins that with an AST
+    guard rather than a comment (#748) -- because breaking the property is a
+    one-line edit whose damage is invisible to a serial test suite.
+    """
 
     def chat(self, messages: Sequence[Message]) -> str:
-        """Send `messages` to the backend and return the assistant's reply text."""
+        """Send `messages` to the backend and return the assistant's reply text.
+
+        Must tolerate concurrent calls on one instance -- see the class
+        docstring."""
         ...  # pragma: no cover -- Protocol stub body, never executed
 
 

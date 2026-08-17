@@ -1866,6 +1866,32 @@ def _chunk_threshold_for(*, meeting_shaped: bool) -> int:
     return _MEETING_CHUNK_THRESHOLD if meeting_shaped else _CHUNK_THRESHOLD
 
 
+def fans_out(source_text: str, *, source_title: str) -> bool:
+    """Whether this source takes the CHUNKED path, and so has windows that
+    `concurrent_extraction` could overlap (issue #746).
+
+    Public because a caller outside this module needs the answer and must not
+    re-derive it: the boundary BRANCHES on shape since #714 -- 12 000 chars
+    for a meeting-shaped source, 18 000 otherwise -- and `_is_meeting_shaped`
+    is itself a title gate OR a content-shape gate since #673. A consumer
+    comparing against a constant of its own would be right for prose and
+    wrong for transcripts, which is the same drift `_chunk_threshold_for`
+    exists to prevent one level down.
+
+    Answers a question about the SOURCE, not about configuration: it is true
+    for a chunked source whether or not the workspace opted into concurrency.
+    The caller ANDs it with its own `concurrent_extraction`.
+
+    **Never raises**, and that is a requirement rather than an observation:
+    `cli/main.py` calls this from inside the `except OllamaError` handler
+    that prints the degrade message, where an exception would replace a
+    handled failure with an unhandled one. It is total by construction --
+    `len`, an integer comparison, and `_is_meeting_shaped`, which is a regex
+    match plus line counting over a `str` with no parsing and no I O."""
+    meeting_shaped = _is_meeting_shaped(source_title, source_text)
+    return len(source_text) > _chunk_threshold_for(meeting_shaped=meeting_shaped)
+
+
 ProgressHook = Callable[[str], None]
 """A phase reporter: called with one human-readable label per phase the
 extraction is about to enter (issue #701).
@@ -1977,7 +2003,7 @@ def _extract_once(
     return results
 
 
-_FAN_OUT_CONCURRENCY: Final = 2
+FAN_OUT_CONCURRENCY: Final = 2
 """How many chunk windows a concurrent fan-out keeps in flight (#744).
 
 A CONSTANT, deliberately not a config key. #739 measured the speedup
@@ -2046,7 +2072,7 @@ def _fan_out_windows(
     Shutdown cancels futures that have not started, so a failure part-way
     through does not go on paying for windows whose results are already
     guaranteed to be thrown away, and WAITS for the at most
-    `_FAN_OUT_CONCURRENCY - 1` still in flight. Waiting is deliberate:
+    `FAN_OUT_CONCURRENCY - 1` still in flight. Waiting is deliberate:
     executor threads are not daemons, so `wait=False` would not avoid the
     wait, only move it to interpreter exit -- the CLI would print its
     "keeping the Source only" line, finish, and then appear to hang for up
@@ -2080,9 +2106,9 @@ def _fan_out_windows(
     # is stated at all.
     _report(
         on_progress,
-        f"extracting {chunk_count} chunks, {_FAN_OUT_CONCURRENCY} at a time",
+        f"extracting {chunk_count} chunks, {FAN_OUT_CONCURRENCY} at a time",
     )
-    pool = ThreadPoolExecutor(max_workers=_FAN_OUT_CONCURRENCY)
+    pool = ThreadPoolExecutor(max_workers=FAN_OUT_CONCURRENCY)
     try:
         for done, results in enumerate(pool.map(_extract_window, windows), start=1):
             _report(on_progress, f"extracted chunk {done}/{chunk_count}")
@@ -2725,7 +2751,7 @@ def extract_concept(
     `openkos.model.okf.build_concept` once per returned object.
 
     `concurrent` (issue #744) opts the CHUNKED fan-out into sending its
-    windows `_FAN_OUT_CONCURRENCY` at a time instead of one after another.
+    windows `FAN_OUT_CONCURRENCY` at a time instead of one after another.
     It changes the schedule and nothing else: results still concatenate in
     window order, a window failure still propagates and still discards the
     partial results, and a source below the chunking threshold is untouched
@@ -2733,13 +2759,12 @@ def extract_concept(
     path verbatim. See `_fan_out_windows` for why the gain depends on a
     setting on the Ollama server that this process does not own.
     """
-    # #714, same boundary as `extract_concept_union`: computed here rather than
-    # threaded in, because this entry point has no other need for the verdict
-    # and `_is_meeting_shaped` is pure. `_build_messages` recomputes it per
-    # call already, so this adds no new class of work.
-    if len(source_text) <= _chunk_threshold_for(
-        meeting_shaped=_is_meeting_shaped(source_title, source_text)
-    ):
+    # #746: asked of `fans_out` rather than re-derived, so the predicate a
+    # CALLER uses to reason about this pipeline and the branch the pipeline
+    # actually takes cannot disagree. Both entry points route through it, the
+    # same one-definition rule `_chunk_threshold_for` already carries one
+    # level down.
+    if not fans_out(source_text, source_title=source_title):
         _report(on_progress, "extracting the source")
         results = _extract_once(source_text, source_title, llm)
         if not results:
@@ -3019,7 +3044,7 @@ def extract_concept_union(
     `concurrent` (issue #744) carries the identical meaning it has on
     `extract_concept`, and is honoured on the identical seam
     (`_fan_out_windows`): the chunked branch sends its windows
-    `_FAN_OUT_CONCURRENCY` at a time, window order and the all-or-nothing
+    `FAN_OUT_CONCURRENCY` at a time, window order and the all-or-nothing
     failure contract both unchanged. Both entry points take it because
     `cli/main.py` picks between them on `union_judge`, so a lever wired into
     one only would leave whether it is active depending on that setting.
@@ -3028,9 +3053,17 @@ def extract_concept_union(
     # `_is_meeting_shaped` verdict feeds framing-object enforcement here,
     # the participant-capture gate, and the judge re-admission conjunct
     # below -- design D3's one-definition rule, now title OR content shape.
+    #
+    # `fans_out` on the next line recomputes the same verdict for its own
+    # threshold. That is deliberate: threading this value in would make the
+    # predicate's answer depend on what a caller passed rather than on the
+    # source, and the branch and the public predicate could then disagree --
+    # the exact drift routing through `fans_out` exists to remove. The call
+    # is pure and `_build_messages` already recomputes it per chat call, so
+    # this adds no new class of work.
     meeting_shaped = _is_meeting_shaped(source_title, source_text)
 
-    if len(source_text) <= _chunk_threshold_for(meeting_shaped=meeting_shaped):
+    if not fans_out(source_text, source_title=source_title):
         # `pass i/2`, not `chunk 1/1`: below the threshold this branch runs
         # the IDENTICAL prompt twice and merges, which is a different shape
         # from a one-window fan-out and should not be described as one.

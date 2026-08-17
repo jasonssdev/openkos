@@ -39,9 +39,11 @@ from openkos.cli import curate as curate_module
 from openkos.cli import next_action as next_action_module
 from openkos.cli import observability
 from openkos.extraction.concept import (
+    FAN_OUT_CONCURRENCY,
     ExtractionReport,
     extract_concept,
     extract_concept_union,
+    fans_out,
 )
 from openkos.graph import proximity, sqlite_graph
 from openkos.graph.base import GraphStore
@@ -57,6 +59,7 @@ from openkos.llm.ollama import (
     OllamaModelNotFound,
     OllamaUnavailable,
     is_embedding_model,
+    is_timeout_failure,
     model_tag_matches,
 )
 from openkos.model import okf, types
@@ -3407,6 +3410,33 @@ def _stage_derived_objects(
             "keeping the Source only.",
             err=True,
         )
+        # #746: the engine knows both halves of this and used to say neither.
+        # `concurrent_extraction` inflates PER-CALL wall time when the server
+        # is not running requests in parallel -- each request's own timeout
+        # keeps running while it queues -- so a deadline failure on that path
+        # may be an artifact of the setting rather than a backend problem.
+        #
+        # All three conditions are required, and the third is the one a naive
+        # check gets wrong: with the flag on but a source below the chunking
+        # threshold there are no windows to overlap, so concurrency was never
+        # involved. Naming a timeout that is really a refused connection would
+        # send the operator after a setting while their server is not running.
+        if (
+            cfg.concurrent_extraction
+            and is_timeout_failure(exc)
+            and fans_out(raw_content, source_title=source_title)
+        ):
+            typer.echo(
+                "openkos ingest: this run had concurrent_extraction on, and "
+                "the request ran out of time rather than failing outright. "
+                "Concurrent windows queue on a server started without "
+                "OLLAMA_NUM_PARALLEL, and each one's chat_timeout keeps "
+                "running while it waits -- so this may be the setting, not "
+                "the backend. Either raise OLLAMA_NUM_PARALLEL to "
+                f"{FAN_OUT_CONCURRENCY} on the Ollama server, or set "
+                "concurrent_extraction: false in openkos.yaml.",
+                err=True,
+            )
         return [], "failed", None
 
     extractions = outcome.objects
