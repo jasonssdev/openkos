@@ -1820,3 +1820,29 @@ def test_purge_deletes_findings_db_without_rebuild(tmp_git_repo: TmpGitRepo) -> 
     assert not (tmp_git_repo.root / ".openkos" / "findings.db").exists()
     assert (tmp_git_repo.root / ".openkos" / "fts.db").exists()
     assert (tmp_git_repo.root / ".openkos" / "graph.db").exists()
+
+
+def test_purge_drops_the_filed_question_cache(tmp_git_repo: TmpGitRepo) -> None:
+    """`purge` deletes `.openkos/insight_questions.db` with the other stores.
+
+    That store holds embeddings of the SOURCE QUESTION every filed insight
+    was saved from — private text, at rest, that did not exist before the
+    near-duplicate cache. A `purge` that forgets a Source but leaves the
+    vector of a question about it behind would be a hole in exactly the
+    guarantee `purge` sells.
+
+    Deleted and NOT rebuilt in-line, like `vectors.db` and `findings.db`: a
+    missing row is a cache miss the next save re-embeds, so restoring it
+    costs embedding time and never correctness.
+    """
+    cache_path = tmp_git_repo.root / ".openkos" / "insight_questions.db"
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_bytes(b"stale question vectors")
+
+    phrase = f"purge {tmp_git_repo.source_id}"
+    result = runner.invoke(
+        app, ["purge", tmp_git_repo.source_id, "--confirm-phrase", phrase]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert not cache_path.exists()
