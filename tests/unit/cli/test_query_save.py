@@ -2339,14 +2339,16 @@ def test_the_save_preview_discloses_a_possible_duplicate(
     )
     monkeypatch.setattr(
         "openkos.cli.main.insight_identity.near_duplicate_insights",
-        lambda *a, **k: [
-            insight_identity.NearDuplicate(
-                concept_id="insights/why-stoicism-matters",
-                title="Why Stoicism Matters",
-                question="why does stoicism matter?",
-                similarity=0.9612,
-            )
-        ],
+        lambda *a, **k: insight_identity.DuplicateScan(
+            [
+                insight_identity.NearDuplicate(
+                    concept_id="insights/why-stoicism-matters",
+                    title="Why Stoicism Matters",
+                    question="why does stoicism matter?",
+                    similarity=0.9612,
+                )
+            ]
+        ),
     )
 
     result = runner.invoke(app, ["query", "what is stoicism?", "--save", "--auto"])
@@ -2379,14 +2381,16 @@ def test_the_disclosure_is_advisory_and_the_save_still_writes(
     )
     monkeypatch.setattr(
         "openkos.cli.main.insight_identity.near_duplicate_insights",
-        lambda *a, **k: [
-            insight_identity.NearDuplicate(
-                concept_id="insights/other",
-                title="Other",
-                question="q?",
-                similarity=0.99,
-            )
-        ],
+        lambda *a, **k: insight_identity.DuplicateScan(
+            [
+                insight_identity.NearDuplicate(
+                    concept_id="insights/other",
+                    title="Other",
+                    question="q?",
+                    similarity=0.99,
+                )
+            ]
+        ),
     )
 
     result = runner.invoke(app, ["query", "what is stoicism?", "--save", "--auto"])
@@ -2410,7 +2414,7 @@ def test_no_duplicate_means_no_disclosure_line(
     )
     monkeypatch.setattr(
         "openkos.cli.main.insight_identity.near_duplicate_insights",
-        lambda *a, **k: [],
+        lambda *a, **k: insight_identity.DuplicateScan([]),
     )
 
     result = runner.invoke(app, ["query", "what is stoicism?", "--save", "--auto"])
@@ -2439,10 +2443,10 @@ def test_the_disclosure_is_asked_about_the_question_being_filed(
     )
     seen: dict[str, object] = {}
 
-    def _spy(question: str, **kwargs: object) -> list[object]:
+    def _spy(question: str, **kwargs: object) -> object:
         seen["question"] = question
         seen.update(kwargs)
-        return []
+        return insight_identity.DuplicateScan([])
 
     monkeypatch.setattr(
         "openkos.cli.main.insight_identity.near_duplicate_insights", _spy
@@ -2505,3 +2509,96 @@ def test_a_zero_hit_short_circuit_still_reports_skipped(
     assert result.exit_code == 0
     assert "LLM skipped" in result.stderr
     assert "LLM refused" not in result.stderr
+
+
+def test_a_degraded_sufficiency_check_notifies_the_operator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Failing open is announced, not silent (#764)."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake = AnswerResult(
+        answer="An answer.",
+        citations=[Citation(concept_id="concepts/stoicism", title="Stoicism")],
+        fts_hit_count=1,
+        llm_invoked=True,
+        no_match_cause="none",
+        skip_notices=[],
+        sufficiency_degraded=True,
+    )
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *a, **k: fake)
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code == 0
+    assert "sufficiency check could not run" in result.stderr
+
+
+def test_a_working_query_prints_no_sufficiency_notice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No noise on the ordinary path — the notice has to stay rare to be read."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main.answer",
+        lambda *a, **k: _fake_matched_answer(
+            citations=[Citation(concept_id="concepts/stoicism", title="Stoicism")]
+        ),
+    )
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code == 0
+    assert "sufficiency check could not run" not in result.stderr
+
+
+def test_an_unavailable_duplicate_scan_notifies_the_operator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ "Could not check" and "nothing to disclose" must not look the same (#764).
+
+    Both were an empty list before, so a down embedding backend silently
+    retired the disclosure and the human confirming the save had one fewer
+    piece of information than they believed.
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
+    monkeypatch.setattr(
+        "openkos.cli.main.answer",
+        lambda *a, **k: _fake_matched_answer(
+            citations=[Citation(concept_id="concepts/stoicism", title="Stoicism")]
+        ),
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.insight_identity.near_duplicate_insights",
+        lambda *a, **k: insight_identity.DuplicateScan([], unavailable=True),
+    )
+
+    result = runner.invoke(app, ["query", "what is stoicism?", "--save", "--auto"])
+
+    assert result.exit_code == 0
+    assert "could not check this question against" in result.stderr
+    # Advisory to the end: the filing still happens.
+    assert len(sorted((tmp_path / "bundle" / "insights").glob("*.md"))) == 1
+
+
+def test_a_successful_empty_scan_prints_no_notice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A scan that ran and found nothing is silent — the common case."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
+    monkeypatch.setattr(
+        "openkos.cli.main.answer",
+        lambda *a, **k: _fake_matched_answer(
+            citations=[Citation(concept_id="concepts/stoicism", title="Stoicism")]
+        ),
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.insight_identity.near_duplicate_insights",
+        lambda *a, **k: insight_identity.DuplicateScan([]),
+    )
+
+    result = runner.invoke(app, ["query", "what is stoicism?", "--save", "--auto"])
+
+    assert result.exit_code == 0
+    assert "could not check this question against" not in result.stderr

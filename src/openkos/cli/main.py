@@ -14042,6 +14042,18 @@ def query(
             "run `openkos reindex` to enable full retrieval.",
             err=True,
         )
+    if result.sufficiency_degraded:
+        # #764: the check failed OPEN, which is deliberate -- a backend error
+        # is not evidence that the bundle cannot answer. But an operator whose
+        # backend has been flaky has no other way to learn that the guard they
+        # configured has not run, so the degradation is announced exactly like
+        # the retrieval one above rather than left silent.
+        typer.echo(
+            "openkos query: notice -- the sufficiency check could not run this "
+            "call, so this answer was not checked against the retrieved "
+            "context before it was written.",
+            err=True,
+        )
     if result.skip_notices:
         typer.echo(
             f"index: {len(result.skip_notices)} "
@@ -14235,13 +14247,25 @@ def query(
     #
     # The slug is the permanent Concept ID, so a duplicate filed here is
     # permanent too; this is the last moment it costs nothing to notice.
-    for duplicate in insight_identity.near_duplicate_insights(
+    duplicate_scan = insight_identity.near_duplicate_insights(
         question, bundle_dir=layout.bundle_dir, embedder=embedder
-    ):
+    )
+    for duplicate in duplicate_scan.candidates:
         typer.echo(
             f"  ? possible duplicate of bundle/{duplicate.concept_id}.md "
             f"({duplicate.title}) -- filed from "
             f"{duplicate.question!r} ({duplicate.similarity:.2f} similar)"
+        )
+    if duplicate_scan.unavailable:
+        # #764: "scanned and found nothing" and "could not scan" used to look
+        # identical from here -- both an empty list -- so a down embedding
+        # backend silently retired the disclosure and nobody could tell. Said
+        # on stderr, above the confirmation gate, because the human is about
+        # to decide with one fewer piece of information than they think.
+        typer.echo(
+            "openkos query: notice -- could not check this question against "
+            "already-filed insights, so no duplicate was looked for.",
+            err=True,
         )
 
     if not auto and cfg.review:

@@ -72,6 +72,19 @@ acceptable at all: nothing is merged, renamed or refused on it."""
 
 
 @dataclass(frozen=True)
+class DuplicateScan:
+    """The outcome of one near-duplicate lookup.
+
+    `unavailable` distinguishes "scanned, found nothing" from "could not
+    scan" (#764). Collapsing them into an empty list makes a down embedding
+    backend indistinguishable from a genuinely unique question, and the
+    caller cannot say anything honest about which happened."""
+
+    candidates: list[NearDuplicate]
+    unavailable: bool = False
+
+
+@dataclass(frozen=True)
 class NearDuplicate:
     """One already-filed insight whose source question resembles a new one."""
 
@@ -159,31 +172,42 @@ def near_duplicate_insights(
     bundle_dir: Path,
     embedder: Embedder,
     threshold: float = DUPLICATE_QUESTION_SIMILARITY,
-) -> list[NearDuplicate]:
+) -> DuplicateScan:
     """Filed insights whose source question resembles `question`.
 
-    Returns them most-similar first. Returns `[]` -- never raises -- when
-    there is nothing to compare, when the embedding backend fails, or when a
-    vector comes back the wrong shape. This is advisory: an embedding
-    hiccup must degrade to "no candidates disclosed", never to a refused
-    save, because the caller is a write path that worked fine before this
-    existed.
+    Returns a `DuplicateScan`, most-similar first, and NEVER raises. This is
+    advisory: an embedding hiccup must degrade to "no candidates disclosed",
+    never to a refused save, because the caller is a write path that worked
+    fine before this existed.
+
+    `unavailable` is `True` only when the scan COULD NOT RUN -- the backend
+    failed, or returned a malformed batch. Having nothing to compare against
+    (no filed insights, no question) is not a degradation: the scan ran and
+    correctly found nothing, so a caller notice built on this flag stays
+    rare enough to be read (#764).
 
     ONE batched `embed` call covers the new question and every stored one,
     so the cost is a single round trip per save rather than one per filed
     insight.
     """
     if not question.strip():
-        return []
+        return DuplicateScan([])
     filed = _filed_questions(bundle_dir)
     if not filed:
-        return []
+        return DuplicateScan([])
     try:
         vectors = embedder.embed([question, *(q for _, _, q in filed)])
     except Exception:  # advisory: any backend failure degrades to no candidates
-        return []
+        return DuplicateScan([], unavailable=True)
     if len(vectors) != len(filed) + 1:
-        return []
+        return DuplicateScan([], unavailable=True)
+    # RAGGED widths, not just the wrong count. `_cosine` returns 0.0 for a
+    # mismatched pair, so a ragged batch would otherwise scan "successfully"
+    # and report no duplicates -- a silent wrong answer, which is worse than
+    # the loud absence of one. Checked here rather than inside `_cosine`
+    # because only this layer knows the batch was supposed to be uniform.
+    if any(len(vector) != len(vectors[0]) for vector in vectors):
+        return DuplicateScan([], unavailable=True)
     new_vector, stored = vectors[0], vectors[1:]
     matches = [
         NearDuplicate(
@@ -197,4 +221,6 @@ def near_duplicate_insights(
         )
         if (similarity := _cosine(new_vector, vector)) >= threshold
     ]
-    return sorted(matches, key=lambda match: match.similarity, reverse=True)
+    return DuplicateScan(
+        sorted(matches, key=lambda match: match.similarity, reverse=True)
+    )

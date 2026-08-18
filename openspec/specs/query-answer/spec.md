@@ -300,6 +300,24 @@ question. The check MUST NOT run when no context was assembled.
 - WHEN `answer(..., sufficiency_check=True)` is called
 - THEN synthesis still runs
 
+`AnswerResult.sufficiency_degraded` MUST report that the check was REQUESTED
+and could not run (#764). It MUST be `False` when the check was not
+requested, and `False` when it ran and allowed the answer through: the flag
+means "could not run", so a notice built on it fires only when the configured
+guard is actually missing.
+
+#### Scenario: A degraded check is reported
+
+- GIVEN the check raises a non-fatal backend error
+- WHEN `answer(..., sufficiency_check=True)` is called
+- THEN the answer is produced and `sufficiency_degraded` is `True`
+
+#### Scenario: A check that ran is not reported as degraded
+
+- GIVEN the check returns a verdict
+- WHEN `answer(..., sufficiency_check=True)` is called
+- THEN `sufficiency_degraded` is `False`
+
 #### Scenario: A transient check failure still answers
 
 - GIVEN the check raises a non-fatal backend error
