@@ -13906,6 +13906,25 @@ def query(
     llm = _chat_client(cfg)
     embedder = OllamaClient(model=cfg.embedding_model)
     _warn_if_nonlocal_embed_host("query", embedder.locality)
+    if save and not embedder.locality.is_local:
+        # #764 finding 3. The standing advisory above was written when
+        # `query` embedded ONE string -- the question just typed. Since #762
+        # a save also ships every comparable filed insight's SOURCE QUESTION
+        # to the same host, which is other content, written on other days,
+        # about other subjects: a different disclosure, not a louder one.
+        #
+        # Said here, at command start, because this is the last point BEFORE
+        # the send. The scan runs at preview time, so a notice printed there
+        # would describe a transmission that already happened. It names the
+        # bound too -- "up to N" is the honest ceiling, and the same number
+        # the truncation notice discloses.
+        typer.echo(
+            "openkos query: note -- --save also sends your already-filed "
+            f"source questions (up to {insight_identity.DUPLICATE_SCAN_LIMIT}) "
+            f"to '{embedder.locality.display_host}' to check this one for "
+            "duplicates.",
+            err=True,
+        )
     # The CHAT client decides the exemption, not the embedder: the
     # confidential concept bodies travel in the `llm.chat` payload (#240).
     local_exemption = _resolve_local_exemption(llm, cfg)
@@ -14255,6 +14274,22 @@ def query(
             f"  ? possible duplicate of bundle/{duplicate.concept_id}.md "
             f"({duplicate.title}) -- filed from "
             f"{duplicate.question!r} ({duplicate.similarity:.2f} similar)"
+        )
+    if duplicate_scan.truncated:
+        # #764: "a truncated comparison that reads like a complete one is the
+        # failure mode to avoid". Printed on stdout with the rest of the
+        # preview, not on stderr beside the failure notice -- the scan RAN,
+        # and this qualifies the `?` lines above (or their absence) rather
+        # than reporting something going wrong.
+        #
+        # Fires only when the bound actually dropped a comparable insight, so
+        # it stays absent for every bundle under `DUPLICATE_SCAN_LIMIT`. A
+        # line on every save is a line nobody reads, and this one has to be
+        # readable on the save where it matters.
+        typer.echo(
+            f"  ? compared against the {duplicate_scan.compared} most recently "
+            f"filed of {duplicate_scan.filed_total} insights -- older filings "
+            "were not checked."
         )
     if duplicate_scan.unavailable:
         # #764: "scanned and found nothing" and "could not scan" used to look

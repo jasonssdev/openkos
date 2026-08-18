@@ -70,6 +70,25 @@ fitting noise.
 It is a DISCLOSURE threshold, which is what makes a mid-gap guess
 acceptable at all: nothing is merged, renamed or refused on it."""
 
+DUPLICATE_SCAN_LIMIT: Final[int] = 100
+"""How many already-filed insights one scan compares against, at most (#764).
+
+Chosen from the curve `evals/insight_scan_bound/` measured, not from taste.
+The scan is linear at ~11.8 ms per filed insight with no knee -- 100 filed
+insights cost 1.277s, 400 cost 4.774s and 1600 cost 18.904s -- and it runs at
+PREVIEW time, as dead wait between the answer appearing and the confirmation
+gate, on a write path that made no embedding call at all before #762.
+
+100 is where that wait stays near a second. The scan buys ONE advisory line,
+so paying appreciably more for it is disproportionate to what it delivers,
+and no bundle under 100 filed insights is truncated at all.
+
+What this number is NOT is a recall claim. Nothing here measured whether the
+bounded scan still finds what the unbounded one would: that needs a corpus
+with many independent paraphrase relations, and the stored population has
+two (`evals/query_identity/`). The bound is therefore DISCLOSED to the human
+rather than trusted -- see `DuplicateScan.truncated`."""
+
 
 @dataclass(frozen=True)
 class DuplicateScan:
@@ -82,6 +101,35 @@ class DuplicateScan:
 
     candidates: list[NearDuplicate]
     unavailable: bool = False
+    compared: int = 0
+    """Filed insights this scan actually embedded and compared.
+
+    ZERO whenever `unavailable` is set. The embed either returned a usable
+    batch or it did not, and on the failure paths nothing was compared no
+    matter how many insights the bound had selected -- carrying the intended
+    count there would make this field describe an intention rather than an
+    outcome, which is the opposite of what its name promises."""
+    filed_total: int = 0
+    """Filed insights that WERE comparable -- readable, non-confidential and
+    carrying a source question. Deliberately the same population `compared`
+    counts from, so `filed_total - compared` is exactly what the bound
+    dropped and never also counts neighbours skipped for other reasons."""
+
+    @property
+    def truncated(self) -> bool:
+        """True when the bound dropped comparable insights from a scan that RAN.
+
+        The caller discloses on this rather than on `filed_total`: a scan
+        that compared everything must say nothing, or the notice appears on
+        every save and stops being read (#764).
+
+        `unavailable` makes this False even when filings were dropped. A
+        failed scan compared NOTHING, so "compared against the 100 most
+        recently filed of 347" beside "could not check this question" would
+        be two contradictory sentences in one preview, the first of them
+        false. There is exactly one honest thing to say when the backend
+        fails, and the unavailable notice already says it."""
+        return not self.unavailable and self.filed_total > self.compared
 
 
 @dataclass(frozen=True)
@@ -114,8 +162,24 @@ def _cosine(a: Sequence[float], b: Sequence[float]) -> float:
     return dot / (norm_a * norm_b)
 
 
-def _filed_questions(bundle_dir: Path) -> list[tuple[str, str, str]]:
-    """`(concept_id, title, source_question)` for every readable insight.
+@dataclass(frozen=True)
+class _FiledInsight:
+    """One already-filed insight, as the scan needs to see it."""
+
+    concept_id: str
+    title: str
+    question: str
+    timestamp: str
+    """The `timestamp` frontmatter key `okf.build_concept` writes, or `""`.
+
+    Compared as a STRING, never parsed: the value is ISO-8601 written by one
+    code path, so lexical order is chronological order, and a parse would add
+    a failure mode to a sort that has no need of one. An absent or malformed
+    value is `""`, which sorts oldest -- see `near_duplicate_insights`."""
+
+
+def _filed_questions(bundle_dir: Path) -> list[_FiledInsight]:
+    """Every readable insight, as `_FiledInsight` records.
 
     Unreadable and unparseable files are SKIPPED rather than raised on,
     matching `retrieval.answer`'s guarded re-read: this feature is an
@@ -127,7 +191,7 @@ def _filed_questions(bundle_dir: Path) -> list[tuple[str, str, str]]:
     empty string, which would otherwise cluster every such file together.
     """
     insights_dir = bundle_dir / "insights"
-    found: list[tuple[str, str, str]] = []
+    found: list[_FiledInsight] = []
     try:
         paths = sorted(insights_dir.glob("*.md"))
     except OSError:
@@ -162,7 +226,14 @@ def _filed_questions(bundle_dir: Path) -> list[tuple[str, str, str]]:
         if not question:
             continue
         title = str(metadata.get("title") or "") or path.stem
-        found.append((f"insights/{path.stem}", title, question))
+        found.append(
+            _FiledInsight(
+                concept_id=f"insights/{path.stem}",
+                title=title,
+                question=question,
+                timestamp=str(metadata.get("timestamp") or "").strip(),
+            )
+        )
     return found
 
 
@@ -172,6 +243,7 @@ def near_duplicate_insights(
     bundle_dir: Path,
     embedder: Embedder,
     threshold: float = DUPLICATE_QUESTION_SIMILARITY,
+    limit: int = DUPLICATE_SCAN_LIMIT,
 ) -> DuplicateScan:
     """Filed insights whose source question resembles `question`.
 
@@ -186,41 +258,82 @@ def near_duplicate_insights(
     correctly found nothing, so a caller notice built on this flag stays
     rare enough to be read (#764).
 
-    ONE batched `embed` call covers the new question and every stored one,
-    so the cost is a single round trip per save rather than one per filed
-    insight.
+    ONE batched `embed` call covers the new question and the stored ones, so
+    the cost is a single round trip per save rather than one per filed
+    insight -- and `limit` bounds how many stored questions ride in it
+    (#764). Every filed insight is still READ: `evals/insight_scan_bound/`
+    measured the disk half at 1/300th of the scan (0.063s to parse 1600 files
+    against 18.841s to embed them), so bounding the read would buy nothing
+    while costing the counts the disclosure is made of.
+
+    Selection is NEWEST FIRST by the `timestamp` frontmatter key. Ties are
+    broken by slug, which this function does not sort for: `_filed_questions`
+    already returns path-sorted records and Python's sort is stable, so that
+    ordering survives. Glob order -- what the unbounded scan happened to use --
+    is alphabetical by slug and means nothing, so truncating on it would drop
+    insights for a reason no user could predict. `mtime` is not used: a `git
+    clone` stamps every file with the checkout time and would flatten the
+    order entirely.
+
+    The result reports `compared` and `filed_total` so the caller can
+    DISCLOSE a bounded comparison. Nothing here decides that a truncated scan
+    is good enough -- no measurement supports that claim (see
+    `DUPLICATE_SCAN_LIMIT`) -- so the honest move is to hand both numbers to
+    the human already confirming the save.
     """
     if not question.strip():
         return DuplicateScan([])
-    filed = _filed_questions(bundle_dir)
-    if not filed:
+    all_filed = _filed_questions(bundle_dir)
+    if not all_filed:
         return DuplicateScan([])
+    # Newest first, and same-timestamp filings keep the slug order
+    # `_filed_questions` already returns them in -- Python's sort is stable,
+    # so that ordering IS the tiebreak and a second sort by `concept_id` here
+    # would be a guard no test could observe. A tuple key cannot express this
+    # anyway: the two orders point opposite ways, and `reverse=True` flips
+    # both.
+    filed = sorted(all_filed, key=lambda insight: insight.timestamp, reverse=True)[
+        : max(limit, 0)
+    ]
+    compared, filed_total = len(filed), len(all_filed)
+
+    def could_not_scan() -> DuplicateScan:
+        """The one shape every failure path returns.
+
+        `compared=0` is the whole point of routing all three through here:
+        the count must say what was compared, and on these paths that is
+        nothing. One helper rather than three literals so a future change to
+        the failure shape cannot land on two of them."""
+        return DuplicateScan([], unavailable=True, compared=0, filed_total=filed_total)
+
+    if not filed:  # limit <= 0 -- nothing was compared, everything was dropped
+        return DuplicateScan([], compared=compared, filed_total=filed_total)
     try:
-        vectors = embedder.embed([question, *(q for _, _, q in filed)])
+        vectors = embedder.embed([question, *(f.question for f in filed)])
     except Exception:  # advisory: any backend failure degrades to no candidates
-        return DuplicateScan([], unavailable=True)
+        return could_not_scan()
     if len(vectors) != len(filed) + 1:
-        return DuplicateScan([], unavailable=True)
+        return could_not_scan()
     # RAGGED widths, not just the wrong count. `_cosine` returns 0.0 for a
     # mismatched pair, so a ragged batch would otherwise scan "successfully"
     # and report no duplicates -- a silent wrong answer, which is worse than
     # the loud absence of one. Checked here rather than inside `_cosine`
     # because only this layer knows the batch was supposed to be uniform.
     if any(len(vector) != len(vectors[0]) for vector in vectors):
-        return DuplicateScan([], unavailable=True)
+        return could_not_scan()
     new_vector, stored = vectors[0], vectors[1:]
     matches = [
         NearDuplicate(
-            concept_id=concept_id,
-            title=title,
-            question=stored_question,
+            concept_id=insight.concept_id,
+            title=insight.title,
+            question=insight.question,
             similarity=similarity,
         )
-        for (concept_id, title, stored_question), vector in zip(
-            filed, stored, strict=True
-        )
+        for insight, vector in zip(filed, stored, strict=True)
         if (similarity := _cosine(new_vector, vector)) >= threshold
     ]
     return DuplicateScan(
-        sorted(matches, key=lambda match: match.similarity, reverse=True)
+        sorted(matches, key=lambda match: match.similarity, reverse=True),
+        compared=compared,
+        filed_total=filed_total,
     )
