@@ -562,42 +562,42 @@ configured guard is distinguishable from one the guard allowed.
 - WHEN `openkos query "<question>" --save --auto` runs
 - THEN no possible-duplicate line appears
 
-The lookup MUST compare against a BOUNDED number of already-filed insights,
-selected newest-first by filing time (#764). The scan is linear in the number
-of filings — measured at ~11.8 ms each, with no knee — and it runs as dead
-wait between the answer appearing and the confirmation gate, so an unbounded
-comparison makes every save slower for as long as the bundle keeps growing.
+The lookup MUST compare against EVERY comparable already-filed insight, and
+MUST report that it could not run rather than comparing only some of them
+(#764). A partial comparison that renders like a complete one is the failure
+to avoid, and once the scan promises all of them there is no count left to
+disclose a shortfall with.
 
-WHEN the bound dropped a comparable filing, `query` MUST disclose how many it
-compared against and how many exist. A truncated comparison MUST NOT render
-identically to a complete one. WHEN nothing was dropped, `query` MUST NOT
-print that disclosure: a line on every save is a line nobody reads.
+To make that affordable, `query` MUST cache each filed insight's source-question
+embedding and re-embed only questions it has not seen, or whose text changed.
+Cached vectors MUST be keyed by embedding model, MUST be dropped when their
+insight leaves the bundle, and MUST be treated as a rebuildable cache: losing
+the store costs re-embedding, never correctness.
 
-WHEN the lookup could not run, `query` MUST NOT print the bound disclosure
-either, whatever the bound had selected. A failed scan compared nothing, so a
-bound notice beside the unavailable notice would be two contradictory
-sentences in one preview, the first of them false.
+WHEN the cache is unavailable, `query` MUST report the lookup as one that could
+not run. It MUST NOT fall back to embedding every filed question: that is the
+cost this design removes, and it would stall the confirmation gate with nothing
+on screen explaining the wait.
 
-#### Scenario: A failed scan over the bound discloses only the failure
+#### Scenario: Every filed insight is compared, including the oldest
 
-- GIVEN more comparable filed insights than the scan compares against
-- AND the embedding backend fails during `--save`
+- GIVEN a bundle with more filed insights than any previous bound allowed
 - WHEN `openkos query "<question>" --save --auto` runs
-- THEN stderr says the question could not be checked, no bound disclosure
-  appears, and the new insight is still written
+- THEN the oldest filing is eligible for disclosure on the same terms as the
+  newest, and no line claims a partial comparison
 
-#### Scenario: A truncated comparison discloses its bound
+#### Scenario: A warm cache re-embeds nothing
 
-- GIVEN more comparable filed insights than the scan compares against
+- GIVEN a save that already embedded every filed insight's question
+- WHEN a second `openkos query "<question>" --save --auto` runs
+- THEN no already-cached question is embedded again
+
+#### Scenario: No cache is a lookup that could not run
+
+- GIVEN the question-vector cache cannot be opened
 - WHEN `openkos query "<question>" --save --auto` runs
-- THEN the preview says how many of the total were compared, and the new
-  insight is still written
-
-#### Scenario: A complete comparison discloses no bound
-
-- GIVEN fewer comparable filed insights than the scan compares against
-- WHEN `openkos query "<question>" --save --auto` runs
-- THEN no bound disclosure appears
+- THEN stderr says the question could not be checked, and the new insight is
+  still written
 
 WHEN the embedding host is NOT this machine, `--save` MUST announce — before
 the send — that already-filed source questions are transmitted too, naming

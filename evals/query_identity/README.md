@@ -128,6 +128,8 @@ usage rate, and no fixture produces it. What they now support is the narrower
 and more useful claim: whether a threshold on this signal can separate the
 classes at all. It cannot.
 
-Nothing here measures recall under `DUPLICATE_SCAN_LIMIT` (#764) either. That
-is a question about where duplicates sit in FILING ORDER, not about the
-signal, and it needs usage traces rather than more questions.
+Recall under a scan BOUND is no longer a question: the #764 bound was retired
+once caching the question embeddings made comparing the whole bundle cheap, so
+every filed insight is compared and nothing depends on filing order. What
+remains unmeasured is the signal's own recall, which is what the table above
+reports — 11 of 35 paraphrase pairs at the shipped threshold.

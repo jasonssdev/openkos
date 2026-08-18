@@ -461,6 +461,22 @@ class WorkspaceLayout:
         never free)."""
         return self.openkos_dir / "findings.db"
 
+    @property
+    def insight_questions_db_path(self) -> Path:
+        """`.openkos/insight_questions.db`: cached embeddings of the SOURCE
+        QUESTION every filed insight was saved from.
+
+        Mirrors `findings_db_path`'s pure-derivation contract: written ONLY
+        by `query --save`'s near-duplicate scan, lazily -- this property
+        never creates anything on disk by itself, and `purge` deletes it
+        without rebuilding it in-line.
+
+        Rebuilding is FREE in correctness terms and merely slow: a missing
+        row is a cache miss the next save re-embeds. That is why the scan can
+        treat this store as advisory and degrade to "could not check" rather
+        than refusing to save."""
+        return self.openkos_dir / "insight_questions.db"
+
 
 class RefusalCondition(NamedTuple):
     """One reason `init` might refuse to write, with its workspace classification."""

@@ -112,7 +112,7 @@ from openkos.resolution.volatility_typing import (
 )
 from openkos.retrieval.answer import NO_MATCH, Citation, NoMatchCause, answer
 from openkos.sensitivity import blocks_llm_send
-from openkos.state import derived, findings, fts
+from openkos.state import derived, findings, fts, question_vectors
 from openkos.state import reindex as reindex_module
 from openkos.state.derived import stale_derived_stores
 from openkos.state.fts import FtsUnavailable
@@ -5785,6 +5785,7 @@ def _purge_rebuild_indexes(layout: config.WorkspaceLayout) -> None:
         layout.vectors_db_path,
         layout.graph_db_path,
         layout.findings_db_path,
+        layout.insight_questions_db_path,
     ):
         try:
             db_path.unlink(missing_ok=True)
@@ -13919,10 +13920,11 @@ def query(
         # bound too -- "up to N" is the honest ceiling, and the same number
         # the truncation notice discloses.
         typer.echo(
-            "openkos query: note -- --save also sends your already-filed "
-            f"source questions (up to {insight_identity.DUPLICATE_SCAN_LIMIT}) "
-            f"to '{embedder.locality.display_host}' to check this one for "
-            "duplicates.",
+            "openkos query: note -- --save also sends already-filed source "
+            f"questions to '{embedder.locality.display_host}' to check this "
+            "one for duplicates: at most one per filed insight, and only the "
+            "first time each is seen. They are cached after that, so a warm "
+            "workspace sends only the question you just asked.",
             err=True,
         )
     # The CHAT client decides the exemption, not the embedder: the
@@ -14259,7 +14261,13 @@ def query(
     # #762: disclose insights already filed from a question resembling this
     # one, BEFORE the confirmation gate, so the human deciding has the
     # duplicate in front of them. Advisory only -- nothing is merged,
-    # renamed or refused, because the separating margin measured in
+    # renamed or refused.
+    #
+    # Every comparable filed insight is compared; there is no bound to
+    # disclose, because #764's cap was retired once caching made the
+    # comparison cheap.
+    #
+    # The separating margin measured in
     # `evals/query_identity/` is NEGATIVE over eleven families -- the classes
     # overlap and no threshold splits them. What survives is that the shipped
     # threshold discloses zero of 526 different-subject pairs while reaching
@@ -14269,30 +14277,43 @@ def query(
     #
     # The slug is the permanent Concept ID, so a duplicate filed here is
     # permanent too; this is the last moment it costs nothing to notice.
-    duplicate_scan = insight_identity.near_duplicate_insights(
-        question, bundle_dir=layout.bundle_dir, embedder=embedder
-    )
+    # The question-vector cache is what lets this compare the WHOLE bundle
+    # instead of the 100 most recently filed: a stored question's embedding
+    # never changes, and reusing it is 355x cheaper than recomputing it
+    # (`evals/insight_scan_bound/`). Opened here because the CLI owns the
+    # connection's lifetime; the scan takes a structural Protocol and never
+    # touches sqlite.
+    #
+    # A store that cannot open degrades to `cache=None`, which the scan
+    # reports as "could not check" -- the same already-disclosed state a down
+    # embedding backend produces. Deliberately NOT a fallback to embedding
+    # every filed question: that is the linear cost this design removes, and
+    # it would stall the confirmation gate with nothing on screen saying why.
+    question_cache_conn = None
+    try:
+        question_cache_conn = question_vectors.open_question_vectors(
+            layout.insight_questions_db_path
+        )
+        question_cache = question_vectors.QuestionVectorStore(
+            question_cache_conn, cfg.embedding_model
+        )
+    except Exception:  # advisory: a cache that will not open never blocks a save
+        question_cache = None
+    try:
+        duplicate_scan = insight_identity.near_duplicate_insights(
+            question,
+            bundle_dir=layout.bundle_dir,
+            embedder=embedder,
+            cache=question_cache,
+        )
+    finally:
+        if question_cache_conn is not None:
+            question_cache_conn.close()
     for duplicate in duplicate_scan.candidates:
         typer.echo(
             f"  ? possible duplicate of bundle/{duplicate.concept_id}.md "
             f"({duplicate.title}) -- filed from "
             f"{duplicate.question!r} ({duplicate.similarity:.2f} similar)"
-        )
-    if duplicate_scan.truncated:
-        # #764: "a truncated comparison that reads like a complete one is the
-        # failure mode to avoid". Printed on stdout with the rest of the
-        # preview, not on stderr beside the failure notice -- the scan RAN,
-        # and this qualifies the `?` lines above (or their absence) rather
-        # than reporting something going wrong.
-        #
-        # Fires only when the bound actually dropped a comparable insight, so
-        # it stays absent for every bundle under `DUPLICATE_SCAN_LIMIT`. A
-        # line on every save is a line nobody reads, and this one has to be
-        # readable on the save where it matters.
-        typer.echo(
-            f"  ? compared against the {duplicate_scan.compared} most recently "
-            f"filed of {duplicate_scan.filed_total} insights -- older filings "
-            "were not checked."
         )
     if duplicate_scan.unavailable:
         # #764: "scanned and found nothing" and "could not scan" used to look

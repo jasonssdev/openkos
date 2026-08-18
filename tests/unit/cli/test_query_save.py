@@ -9,7 +9,7 @@ through `CliRunner`, patching `openkos.cli.main.answer` exactly like
 process, zero real FTS5/vector/graph index.
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import pytest
@@ -2636,45 +2636,6 @@ def _save_with_scan(
     return runner.invoke(app, ["query", "what is stoicism?", "--save", "--auto"])
 
 
-def test_a_truncated_duplicate_scan_discloses_its_bound(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A partial comparison must not read like a complete one (#764).
-
-    `evals/insight_scan_bound/` measured the scan at ~11.8 ms per filed
-    insight with no knee, so a bound is unavoidable -- and nothing measured
-    that the bounded scan still finds what the unbounded one would (that
-    needs a corpus with more than the two paraphrase relations the stored
-    population has). The bound is therefore handed to the human, who is
-    about to make the filing permanent, rather than trusted silently.
-    """
-    result = _save_with_scan(
-        tmp_path,
-        monkeypatch,
-        insight_identity.DuplicateScan([], compared=100, filed_total=347),
-    )
-
-    assert result.exit_code == 0
-    assert "100 most recently filed of 347" in result.stdout
-
-
-def test_an_untruncated_duplicate_scan_discloses_no_bound(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Comparing everything says nothing about a bound -- the common case.
-
-    A notice on every save is a notice nobody reads, which would cost
-    exactly the disclosure the truncated case depends on."""
-    result = _save_with_scan(
-        tmp_path,
-        monkeypatch,
-        insight_identity.DuplicateScan([], compared=12, filed_total=12),
-    )
-
-    assert result.exit_code == 0
-    assert "most recently filed of" not in result.stdout
-
-
 def test_save_against_a_remote_embed_host_names_the_filed_questions(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2691,7 +2652,9 @@ def test_save_against_a_remote_embed_host_names_the_filed_questions(
 
     assert result.exit_code == 0
     assert "already-filed source questions" in result.stderr
-    assert "up to 100" in result.stderr
+    # Says the payload SHRINKS with use, because it does: a question is
+    # embedded once and cached, so a warm workspace sends only the new one.
+    assert "cached" in result.stderr
     # The userinfo redaction the standing advisory guarantees is not weakened.
     assert "s3cret" not in result.stderr
 
@@ -2730,21 +2693,20 @@ def test_a_query_without_save_names_no_filed_questions(
     assert "already-filed source questions" not in result.stderr
 
 
-def test_the_shipped_bound_truncates_a_real_bundle_end_to_end(
+def test_every_filed_insight_is_compared_end_to_end(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The real scan, the real constant, the real preview -- no stub.
+    """The real scan, the real cache, no bound -- including the OLDEST filing.
 
-    Every other test here replaces `near_duplicate_insights` with a canned
-    `DuplicateScan`, so each one proves how the CLI RENDERS counts it was
-    handed and none proves the counts are real. This one files more insights
-    than `DUPLICATE_SCAN_LIMIT` and reads the disclosure off the preview, so
-    the module and the command are pinned together.
+    This is the test #764's cap made impossible. Under it, whether a
+    duplicate was found depended on where it sat in filing order, and the
+    250th-oldest insight in a 250-insight bundle could not be reached at all.
+    Recall was therefore a usage rate no fixture could produce, and the
+    honest move was to disclose the bound rather than trust it.
 
-    Deliberately exercises the SHIPPED constant rather than a patched one:
-    `limit` defaults are bound at definition time, so a test that
-    monkeypatched `insight_identity.DUPLICATE_SCAN_LIMIT` would change a name
-    nothing reads and pass while proving nothing.
+    Caching the question embeddings retired the bound, so the property is
+    now testable directly: everything is compared, and the disclosure names
+    the oldest filing alongside the newest.
     """
     _init_workspace(tmp_path, monkeypatch)
     _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
@@ -2756,55 +2718,86 @@ def test_the_shipped_bound_truncates_a_real_bundle_end_to_end(
     )
     insights = tmp_path / "bundle" / "insights"
     insights.mkdir(parents=True, exist_ok=True)
-    over = insight_identity.DUPLICATE_SCAN_LIMIT + 5
-    for index in range(over):
+    for index in range(250):
         (insights / f"filed-{index:04d}.md").write_text(
             f"---\ntype: Insight\ntitle: Filed {index}\n"
             f"description: what is stoicism, take {index}?\n"
-            # Valid distinct stamps, minute by minute. An out-of-range value
-            # like `00:00:60Z` does not merely lose the ordering key -- YAML
-            # rejects it and `_filed_questions` skips the WHOLE file, so the
-            # bundle would silently be smaller than this test believes.
-            f"sensitivity: private\n"
-            f"timestamp: 2026-01-01T{index // 60:02d}:{index % 60:02d}:00Z\n"
-            "---\nThe answer.",
+            "sensitivity: private\n---\nThe answer.",
             encoding="utf-8",
         )
 
     result = runner.invoke(app, ["query", "what is stoicism?", "--save", "--auto"])
 
     assert result.exit_code == 0
-    assert (
-        f"compared against the {insight_identity.DUPLICATE_SCAN_LIMIT} most "
-        f"recently filed of {over} insights" in result.stdout
-    )
     # The offline embedder returns one identical vector per text, so every
-    # COMPARED insight is disclosed -- which makes the candidate count a
-    # direct read of how many actually rode in the batch.
-    assert (
-        result.stdout.count("? possible duplicate of")
-        == insight_identity.DUPLICATE_SCAN_LIMIT
-    )
+    # COMPARED insight is disclosed -- which makes the count a direct read of
+    # how many actually rode in the comparison.
+    assert result.stdout.count("? possible duplicate of") == 250
+    assert "bundle/insights/filed-0000.md" in result.stdout
+    # And nothing claims a partial comparison, because none happened.
+    assert "most recently filed of" not in result.stdout
 
 
-def test_a_failed_scan_over_the_bound_discloses_only_the_failure(
+def test_the_second_save_embeds_only_the_new_question(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """One honest sentence, not two contradictory ones.
+    """The cache warms: a filed question is embedded ONCE, ever.
 
-    A bundle over the bound whose embedding backend fails used to satisfy
-    both `truncated` and `unavailable`, so the preview claimed a partial
-    comparison had happened AND that no comparison could be made. The first
-    of those was false: the embed raised and nothing was compared.
+    Without the write-back every save would re-embed the whole bundle and
+    the design would be the unbounded cost it replaced -- silently, since
+    the results would look identical.
     """
-    result = _save_with_scan(
-        tmp_path,
-        monkeypatch,
-        insight_identity.DuplicateScan(
-            [], unavailable=True, compared=0, filed_total=347
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
+    # Distinct answers per call: the title -- and therefore the slug, which
+    # is the permanent Concept ID -- is derived from the answer, so two
+    # identical answers collide on the second `write_exclusive` and the save
+    # refuses for a reason that has nothing to do with the cache.
+    answers = iter(
+        (
+            "Stoicism teaches the dichotomy of control.",
+            "Stoicism separates what is up to us from what is not.",
+        )
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.answer",
+        lambda *a, **k: _fake_matched_answer(
+            answer=next(answers),
+            citations=[Citation(concept_id="concepts/stoicism", title="Stoicism")],
         ),
     )
+    insights = tmp_path / "bundle" / "insights"
+    insights.mkdir(parents=True, exist_ok=True)
+    for index in range(3):
+        (insights / f"filed-{index}.md").write_text(
+            f"---\ntype: Insight\ntitle: Filed {index}\n"
+            f"description: stored question {index}?\n"
+            "sensitivity: private\n---\nThe answer.",
+            encoding="utf-8",
+        )
 
-    assert result.exit_code == 0
-    assert "could not check this question against" in result.stderr
-    assert "most recently filed of" not in result.stdout
+    batches: list[list[str]] = []
+    # Delegate to whatever `main.OllamaClient` currently IS -- the autouse
+    # fixture swaps in an offline subclass, and capturing the real class's
+    # method instead would send the spy to the network. That failure is
+    # silent here: the scan catches it, reports `unavailable`, and writes
+    # NOTHING to the cache, so the second save re-embeds and the test reads
+    # as a cache bug rather than a broken double.
+    live_client = main.OllamaClient  # type: ignore[attr-defined]
+    real_embed = live_client.embed
+
+    def _spy(self: object, texts: Sequence[str]) -> list[list[float]]:
+        batches.append(list(texts))
+        return real_embed(self, texts)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(live_client, "embed", _spy)
+
+    first = runner.invoke(app, ["query", "primera?", "--save", "--auto"])
+    warm_start = len(batches)
+    second = runner.invoke(app, ["query", "segunda?", "--save", "--auto"])
+
+    assert (first.exit_code, second.exit_code) == (0, 0)
+    cold = [b for b in batches[:warm_start] if "stored question 0?" in b]
+    warm = [b for b in batches[warm_start:] if "stored question 0?" in b]
+    assert cold, "the first save must embed the questions it has never seen"
+    assert not warm, "the second save must not re-embed an already-cached question"
