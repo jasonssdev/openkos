@@ -14279,7 +14279,7 @@ def query(
     # permanent too; this is the last moment it costs nothing to notice.
     # The question-vector cache is what lets this compare the WHOLE bundle
     # instead of the 100 most recently filed: a stored question's embedding
-    # never changes, and reusing it is 355x cheaper than recomputing it
+    # never changes, and reusing it is ~220x cheaper than recomputing it
     # (`evals/insight_scan_bound/`). Opened here because the CLI owns the
     # connection's lifetime; the scan takes a structural Protocol and never
     # touches sqlite.

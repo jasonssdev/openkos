@@ -16,7 +16,7 @@ had to be disclosed rather than trusted.
 
 A stored question does not change, and neither does its embedding. Caching
 them replaces the linear EMBED cost with a linear COSINE cost, and those are
-measured 355x apart: 11.8 ms to embed one question against 0.053 ms to
+measured ~220x apart: 11.8 ms to embed one question against 0.053 ms to
 compare one. That is what lets the scan compare EVERYTHING again, which is
 the only honest answer to "what does the bound cost" -- there is no bound.
 
