@@ -14,7 +14,60 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
-_Nothing yet._
+### Changed
+
+- **No type is born above the workspace sensitivity floor by default**
+  ([#756](https://github.com/jasonssdev/openkos/issues/756)). OpenKOS shipped
+  `type_sensitivity_defaults: {Person: 1}`, so every `Person` was born one
+  level above the floor — `confidential` on a stock `private` workspace. On
+  the primary use case, a local bundle against a local backend, that bought
+  no protection (`confidential_local_exemption` lets confidential objects
+  participate normally) while emitting a `NOTICE` on every answer that
+  touched a person, and it diluted the marker it is made of: when 100% of a
+  type is `confidential`, `confidential` stops meaning "especially sensitive"
+  and starts meaning "this is a Person". The packaged default is now empty.
+
+  The **mechanism is unchanged** and still recommended for workspaces holding
+  material about third parties — put this in `openkos.yaml`:
+
+  ```yaml
+  type_sensitivity_defaults:
+    Person: 1
+  ```
+
+  **Migration:** objects already born `confidential` under 0.2.6 keep that
+  value, because sensitivity is written at birth and this changes only what
+  new objects inherit. Lower one explicitly with
+  `openkos set-sensitivity <id> private --allow-downgrade`. See the amendment
+  to [ADR-0015](docs/adr/0015-per-type-default-sensitivity.md).
+
+- **The merge ledger records what a merge changed, not a copy of the bundle**
+  ([#758](https://github.com/jasonssdev/openkos/issues/758)). Every ledger
+  entry used to embed complete verbatim copies of `index.md` and `log.md`, so
+  a sidecar grew with the size of the workspace rather than with the size of
+  the merge — measured at **79.6%** of a real sidecar's bytes on a
+  33-document bundle after a single merge, and compounding, because each
+  successive merge photographed a larger catalog than the last. Entries are
+  now `openkos.merge_ledger/v5` and store only the catalog bullets the merge
+  removed; `log.md` needs no stored field at all, because a merge's one log
+  line is derivable from the ids and timestamp the entry already carries.
+  Measured against a bundle of 10, 50 and 200 documents, the same merge's
+  sidecar went from 1838 / 5998 / 21798 characters to a **constant 963**. See
+  [ADR-0017](docs/adr/0017-merge-ledger-stores-the-catalog-delta.md).
+
+- **`unmerge` no longer discards catalog work done since the merge.** Because
+  reversal wrote those whole-file snapshots back, anything added to
+  `index.md`/`log.md` between a merge and its unmerge was destroyed —
+  `unmerge` warned and continued. It now reverses only its own edit: the
+  bullet it removed goes back, the log line it added comes out, and
+  everything else is left alone. It fails closed if the catalog drifted past
+  recognition, rather than guessing a position. The discard warning is gone
+  for new entries because there is nothing left to discard.
+
+- Ledgers written before this change are read exactly as they were written,
+  wholesale restore and drift warning included. Nothing is migrated: an entry
+  already on disk records no delta, and converting it would mean turning a
+  read of the reversibility record into a write of it.
 
 ## [0.2.6] - 2026-08-17
 

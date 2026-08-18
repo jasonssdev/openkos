@@ -27,6 +27,23 @@ from tests.unit.vcs.conftest import isolate_git_identity
 runner = CliRunner()
 
 
+def _opt_in_person_offset(tmp_path: Path) -> None:
+    """Opt this workspace in to `type_sensitivity_defaults: {Person: 1}`.
+
+    The packaged default is EMPTY since #756 -- sensitivity is the
+    operator's call and no type is born above the floor unless they say so.
+    The offset MECHANISM is unchanged and still has to be proven, so the
+    tests that exercise it now configure it the way a real operator would
+    instead of leaning on a shipped value that no longer exists.
+    """
+    config_path = tmp_path / "openkos.yaml"
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8")
+        + "\ntype_sensitivity_defaults:\n  Person: 1\n",
+        encoding="utf-8",
+    )
+
+
 class _FakeLLM:
     """A structural `LLMBackend`, mirroring `test_ingest.py::_FakeLLM` --
     zero network, zero real Ollama process. Used only to produce a real
@@ -366,6 +383,7 @@ def test_type_defaulted_confidential_person_can_still_be_downgraded(
     refusal at write time (spec `type-sensitivity-defaults` Requirement:
     "`set-sensitivity` Downgrade Remains Unaffected")."""
     _init_workspace(tmp_path, monkeypatch)
+    _opt_in_person_offset(tmp_path)
     _patch_llm(monkeypatch, _person_reply())
     source = tmp_path / "notes.txt"
     source.write_text("Epictetus was a Stoic philosopher.", encoding="utf-8")

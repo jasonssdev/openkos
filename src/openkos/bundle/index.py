@@ -299,6 +299,135 @@ def remove_index_entry(index_text: str, concept_id: str) -> tuple[str, int]:
     return frontmatter_block + "".join(kept_lines), removed
 
 
+def removed_entry_restores(
+    index_text: str, concept_id: str
+) -> list[okf.CatalogLineRestore]:
+    """What `remove_index_entry(index_text, concept_id)` would DELETE,
+    recorded as reversible deltas (issue #758).
+
+    The merge ledger used to snapshot the whole of `index.md` to be able to
+    put one bullet back. This returns just the bullets, each paired with the
+    body line that immediately preceded it -- everything `restore_entries`
+    needs and nothing else.
+
+    Candidate matching is byte-identical to `remove_index_entry`'s (the
+    same frontmatter split, the same `_BULLET_MARKERS` test, the same FIRST
+    markdown link resolved through `_link_identity`), because a delta that
+    disagreed with the removal it records would restore the wrong line. The
+    two walk the same shape deliberately rather than sharing a generator:
+    `remove_index_entry` is on the hot path of every deletion verb and its
+    count semantics are load-bearing, so it stays a single flat pass.
+
+    `preceded_by` is `""` when the removed line is the body's first, and
+    `preceded_by_occurrence` records WHICH occurrence of that anchor line
+    it was, counted over the body as it stands here -- the disambiguator a
+    catalog holding duplicate bullets needs. For two ADJACENT removed
+    bullets the second's anchor is the first's line, which
+    `restore_entries` satisfies by restoring in list order."""
+    _, body = _split_frontmatter_verbatim(index_text)
+    lines = body.splitlines(keepends=True)
+    restores: list[okf.CatalogLineRestore] = []
+    for position, line in enumerate(lines):
+        stripped = line.lstrip()
+        if not stripped.startswith(_BULLET_MARKERS):
+            continue
+        match = _LINK_RE.search(stripped)
+        if match is None or _link_identity(match.group(1)) != concept_id:
+            continue
+        # Walk PAST blank lines to the nearest line that carries identity
+        # (review correction, reliability lens): a section's first bullet is
+        # always preceded by the blank line under its header, and blank
+        # lines are interchangeable, so anchoring on one -- and counting its
+        # occurrences over the whole body -- moved the target as soon as any
+        # unrelated section was catalogued above.
+        cursor = position - 1
+        while cursor >= 0 and not lines[cursor].strip():
+            cursor -= 1
+        anchor = lines[cursor] if cursor >= 0 else ""
+        restores.append(
+            okf.CatalogLineRestore(
+                line=line,
+                preceded_by=anchor,
+                preceded_by_occurrence=(
+                    sum(1 for prior in lines[:cursor] if prior == anchor)
+                    if anchor
+                    else 0
+                ),
+                blank_gap=position - cursor - 1,
+            )
+        )
+    return restores
+
+
+def restore_entries(
+    index_text: str, restores: list[okf.CatalogLineRestore]
+) -> tuple[str, int]:
+    """Put every line in `restores` back where it was, returning the new
+    text and how many were actually inserted (issue #758).
+
+    The SURGICAL counterpart to `remove_index_entry`: it touches only the
+    recorded lines, so catalog work that landed after the merge -- a bullet
+    from a later `ingest`, a `forget` that pruned a different concept --
+    survives an `unmerge` that previously overwrote it with a whole-file
+    snapshot.
+
+    Anchoring is by CONTENT, never by character offset: `index.md` is
+    appended to by every ingest, so a position recorded at merge time is
+    stale by the time the reversal runs. Each restore is inserted
+    `blank_gap` lines after occurrence number `preceded_by_occurrence` of
+    its `preceded_by` line -- an anchor that is never a blank line, since
+    blank lines carry no identity and multiply with every new section. A
+    catalog may hold
+    byte-identical duplicate bullets, so the occurrence index -- not
+    uniqueness -- is what resolves them; an anchor with FEWER occurrences
+    than the recorded index raises `ValueError` with NOTHING written,
+    because a catalog that drifted past recognition must refuse rather than
+    guess a position and silently file a bullet under the wrong section.
+
+    Idempotent by COUNT, not by presence. Each iteration re-counts the
+    body's current copies of its line and inserts only while that count is
+    below the total `restores` asks for, so the loop converges on the right
+    total from ANY starting count -- zero, partial, or complete -- and a
+    re-run after a partially-written unmerge adds only what is missing.
+    Counting matters because `remove_index_entry` removes ALL duplicates of
+    a bullet and this function has to put all of them back; a presence test
+    would restore the first and silently swallow every one after it, which
+    no "is it there?" assertion can see."""
+    frontmatter_block, body = _split_frontmatter_verbatim(index_text)
+    lines = body.splitlines(keepends=True)
+    wanted: dict[str, int] = {}
+    for restore in restores:
+        wanted[restore.line] = wanted.get(restore.line, 0) + 1
+    inserted = 0
+    for restore in restores:
+        if lines.count(restore.line) >= wanted[restore.line]:
+            continue
+        if restore.preceded_by == "":
+            lines.insert(restore.blank_gap, restore.line)
+            inserted += 1
+            continue
+        # Occurrences are counted over NON-BLANK lines, matching how
+        # `removed_entry_restores` recorded the index; `blank_gap` then
+        # replaces the blank lines that sat between anchor and bullet.
+        positions = [
+            i
+            for i, line in enumerate(lines)
+            if line == restore.preceded_by and line.strip()
+        ]
+        if len(positions) <= restore.preceded_by_occurrence:
+            raise ValueError(
+                f"index.md: cannot restore {restore.line.strip()!r} -- its anchor "
+                f"line {restore.preceded_by.strip()!r} occurs {len(positions)} "
+                f"times, needed at least {restore.preceded_by_occurrence + 1}"
+            )
+        anchor_at = positions[restore.preceded_by_occurrence]
+        lines.insert(anchor_at + 1 + restore.blank_gap, restore.line)
+        inserted += 1
+    if inserted == 0:
+        return index_text, 0
+    return frontmatter_block + "".join(lines), inserted
+
+
 _LABELLED_LINK_RE = re.compile(r"\[([^\]]*)\]\(([^)]+)\)")
 _LABEL_UNSAFE_CHARS_RE = re.compile(r"[\[\]()`]")
 

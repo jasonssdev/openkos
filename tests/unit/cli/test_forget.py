@@ -403,6 +403,67 @@ def test_sweep_ledger_sidecars_scrubs_referring_bullets_from_snapshots(
     }, "the entry itself is kept -- only the reference goes"
 
 
+def test_sweep_ledger_sidecars_scrubs_the_v5_catalog_delta(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #758: a V5 entry stores no `index_before`, so its catalog data
+    lives in `index_restores` -- and the sweep must reach it there.
+
+    Two ways a purge-set member enters that delta, and BOTH are covered
+    here because they fail independently. `line` is the absorbed concept's
+    own bullet, reached when the absorbed concept is itself forgotten. And
+    `preceded_by` is a VERBATIM COPY of whichever bullet happened to sit
+    above it -- a neighbouring concept's title, description and link,
+    carried in the ledger purely as a positional anchor. Forgetting that
+    NEIGHBOUR leaves its data sitting in a sidecar belonging to a merge it
+    was never part of, which is the #689 leak class one store over.
+
+    Scrubbing drops the whole restore rather than blanking a field: an
+    anchor cannot be emptied and still anchor. That costs the ability to
+    put that one bullet back, which is the trade the forget-command spec
+    already names -- privacy over reversibility.
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    _write_plain_concept(tmp_path, "concepts/survivor", title="Survivor")
+    _write_plain_concept(tmp_path, "concepts/neighbour", title="Vecino Confidencial")
+    _write_plain_concept(tmp_path, "concepts/absorbed", title="Absorbed")
+
+    # Put the neighbour's bullet directly above the absorbed one, so it
+    # becomes the recorded anchor.
+    index_path = tmp_path / "bundle" / "index.md"
+    index_path.write_text(
+        index_path.read_text(encoding="utf-8")
+        + "\n# Concepts\n\n"
+        + "* [Vecino Confidencial](/concepts/neighbour.md) - Dato sensible\n"
+        + "* [Absorbed](/concepts/absorbed.md) - Absorbed description\n",
+        encoding="utf-8",
+    )
+
+    merge_result = runner.invoke(
+        app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+    assert merge_result.exit_code == 0, merge_result.output
+
+    bundle_dir = tmp_path / "bundle"
+    sidecar = bundle_ledger.ledger_path_for("concepts/survivor", bundle_dir)
+    metadata, _ = okf.load_frontmatter(sidecar.read_text(encoding="utf-8"))
+    entry = okf.decode_merged_from(metadata)[-1]
+    assert entry.schema == okf.MERGE_LEDGER_SCHEMA_V5
+    assert any(
+        "concepts/neighbour" in restore.preceded_by for restore in entry.index_restores
+    ), "fixture precondition: the neighbour's bullet must be the recorded anchor"
+    assert "Vecino Confidencial" in sidecar.read_text(encoding="utf-8")
+
+    touched = main._sweep_ledger_sidecars_for_ids(bundle_dir, ["concepts/neighbour"])
+
+    assert sidecar in touched
+    after = sidecar.read_text(encoding="utf-8")
+    assert "Vecino Confidencial" not in after, (
+        "the forgotten neighbour survived inside the ledger's positional anchor"
+    )
+    assert "concepts/neighbour" not in after
+
+
 def test_sweep_ledger_sidecars_refuses_traversal_survivor_id(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
