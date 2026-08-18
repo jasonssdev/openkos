@@ -83,6 +83,7 @@ sys.path.append(str(_EVALS / "query_title"))
 
 from run_query_title_probe import _PROBES, resolve_title  # noqa: E402
 
+from openkos.llm.base import Embedder  # noqa: E402
 from openkos.llm.ollama import OllamaClient  # noqa: E402
 
 # Production's own cosine, imported rather than re-implemented -- the same
@@ -377,16 +378,272 @@ def _self_test() -> int:
         verdict([separation(clean, "answer")]).startswith("POSITIVE"),
     )
 
-    total = 11
+    # `--questions` is a whole second scoring path (`measure_questions`,
+    # `_uncontested`, `render_questions`) that the checks above never reach.
+    # A probe mode with no self-test is one whose numbers nothing checks,
+    # which matters more here than in shipped code: these numbers become
+    # docstrings and issue bodies.
+    class _StubEmbedder:
+        """One vector per text, derived from its length.
+
+        Deliberately not a language model: this exercises the pairing,
+        classification and filtering, never what bge-m3 thinks two Spanish
+        questions mean."""
+
+        def embed(self, texts: Sequence[str]) -> list[list[float]]:
+            return [[float(len(text) % 7), 1.0] for text in texts]
+
+    qpairs = measure_questions(_StubEmbedder())
+    familied = {probe.question for probe in _PROBES if probe.subject}
+    check(
+        "questions mode scores only the question signal",
+        all(pair.signal == "question" for pair in qpairs),
+    )
+    check(
+        "questions mode populates both classes",
+        any(p.pair_class == PARAPHRASE for p in qpairs)
+        and any(p.pair_class == DIFFERENT for p in qpairs),
+    )
+    check(
+        "unique questions produce no same-question pair",
+        not any(p.pair_class == SAME_QUESTION for p in qpairs),
+    )
+    check(
+        "a paraphrase pair shares its family",
+        all(
+            subject_of(p.question_a) == subject_of(p.question_b)
+            for p in qpairs
+            if p.pair_class == PARAPHRASE
+        ),
+    )
+    check(
+        "contested questions and families leave the strict population",
+        not any(
+            _uncontested(p)
+            for p in qpairs
+            if p.question_a in CONTESTED_QUESTIONS
+            or p.question_b in CONTESTED_QUESTIONS
+            or subject_of(p.question_a) in CONTESTED_FAMILIES
+            or subject_of(p.question_b) in CONTESTED_FAMILIES
+        ),
+    )
+    # A typo in either contested tuple would filter NOTHING and quietly
+    # inflate the strict margin -- the friendlier half of the sensitivity
+    # analysis -- so the names are pinned against the probe table itself.
+    check(
+        "every contested question is a real familied probe",
+        set(CONTESTED_QUESTIONS) <= familied,
+    )
+    check(
+        "every contested family is a real family",
+        set(CONTESTED_FAMILIES) <= {p.subject for p in _PROBES if p.subject},
+    )
+    check(
+        "an unreachable threshold still renders the negative verdict",
+        "DOES NOT SEPARATE" in render_questions(qpairs, 2.0),
+    )
+
+    total = 19
     for name in failures:
         print(f"FAIL: {name}")
     print(f"self-test: {total - len(failures)}/{total} passed")
     return 1 if failures else 0
 
 
+def measure_questions(embedder: Embedder) -> list[Pair]:
+    """Score the QUESTION signal over `_PROBES` alone -- no stored answers.
+
+    The question signal is the one that SHIPPED
+    (`resolution.insight_identity`), and it needs nothing but the questions.
+    `measure` above reads stored `query_title` runs because it also scores the
+    answer body and the derived title, and those need generated answers; this
+    mode drops the two rejected controls in exchange for being able to score
+    every probe in the table the moment it is written, at the cost of ~34
+    embeddings and zero chat calls.
+
+    One pair per QUESTION PAIR, not per stored filing pair. The 14,365 pairs
+    the first run reported were inflated by repetition -- each question recurs
+    once per run and generation, so one relation contributed hundreds of
+    identical comparisons and the count read as evidence it was not. Unique
+    questions give an honest n.
+
+    `same-question` therefore has no members here, by construction: there are
+    no repeats to compare. It was only ever the sanity check, never the class
+    that decided anything.
+    """
+    questions = sorted({probe.question for probe in _PROBES})
+    vectors = dict(zip(questions, embedder.embed(questions), strict=True))
+    pairs: list[Pair] = []
+    for a, b in itertools.combinations(questions, 2):
+        subject_a, subject_b = subject_of(a), subject_of(b)
+        # An unfamilied probe is a DIFFERENT-subject partner to everything,
+        # never a paraphrase of anything -- absence of a family label is not
+        # evidence of sameness. Two unfamilied probes would be an unknown
+        # relation rather than a negative, so they are dropped instead of
+        # being scored as one; there is only one such probe today, so no pair
+        # is actually dropped, and the guard is here for when there are two.
+        if not subject_a and not subject_b:
+            continue
+        klass = PARAPHRASE if subject_a and subject_a == subject_b else DIFFERENT
+        pairs.append(Pair(klass, "question", _cosine(vectors[a], vectors[b]), a, b))
+    return pairs
+
+
+CONTESTED_FAMILIES: Final = ("que-es-mvp",)
+"""Families whose membership this probe's author flagged as CONTESTED when
+writing them, BEFORE seeing any score.
+
+`_PROBES` records three contested calls; this names the one whose members are
+separable from the rest by family alone. The other two live inside
+`por-que-importa-trazabilidad` and `por-que-importan-inmutables` as the
+`¿qué se gana...?` phrasings, and are excluded by question text below.
+
+The point of the flag is that the ground truth here was authored by the same
+party that measures against it. Reporting the result BOTH ways is what keeps
+that from being circular: if a verdict only holds under the author's own
+contested calls, it is the calls being measured, not the signal."""
+
+CONTESTED_QUESTIONS: Final = (
+    "¿qué se gana con la trazabilidad?",
+    "¿qué se gana teniendo fuentes inmutables?",
+    "¿cuál fue la decisión sobre almacenamiento?",
+)
+"""Contested calls 1 and 3 from `_PROBES`, excluded by question text.
+
+The `¿qué se gana...?` phrasings are call 1. `¿cuál fue la decisión sobre
+almacenamiento?` is call 3, whose family (`decision-almacenamiento`) also
+holds an UNCONTESTED member -- `¿qué se resolvió sobre el almacenamiento?` --
+so the family cannot be dropped wholesale the way `que-es-mvp` can. Excluding
+by question keeps the uncontested pair in the strict population instead of
+discarding it with the contested one."""
+
+
+def _uncontested(pair: Pair) -> bool:
+    """True when neither side of `pair` rests on a contested family call."""
+    if subject_of(pair.question_a) in CONTESTED_FAMILIES:
+        return False
+    if subject_of(pair.question_b) in CONTESTED_FAMILIES:
+        return False
+    return not (
+        pair.question_a in CONTESTED_QUESTIONS or pair.question_b in CONTESTED_QUESTIONS
+    )
+
+
+def render_questions(pairs: Sequence[Pair], threshold: float) -> str:
+    """The report: does the SHIPPED threshold still sit in the gap?"""
+    sep = separation(pairs, "question")
+    para = [p for p in pairs if p.pair_class == PARAPHRASE]
+    families: dict[str, list[Pair]] = {}
+    for pair in pairs:
+        if pair.pair_class == PARAPHRASE:
+            families.setdefault(subject_of(pair.question_a), []).append(pair)
+    lines = [
+        "# Does the shipped duplicate threshold survive more relations?",
+        "",
+        f"`{EMBED_MODEL}`, question signal only, {len(pairs)} unique-question "
+        f"pairs over {len(families)} paraphrase families. Zero chat calls.",
+        "",
+        f"- paraphrase pairs: {sep.paraphrase_n} "
+        f"(worst {sep.paraphrase_worst:.4f}, median {sep.paraphrase_median:.4f})",
+        f"- different pairs: {sep.different_n} "
+        f"(best {sep.different_best:.4f}, median {sep.different_median:.4f})",
+        f"- **margin: {sep.margin:+.4f}** -- "
+        + ("separates" if sep.separates else "**DOES NOT SEPARATE**"),
+        "",
+        f"Shipped threshold `DUPLICATE_QUESTION_SIMILARITY = {threshold}`:",
+        f"- paraphrases it would DISCLOSE: "
+        f"{sum(1 for p in para if p.score >= threshold)} of {len(para)}",
+        f"- strangers it would disclose (false positives): "
+        f"{sum(1 for p in pairs if p.pair_class == DIFFERENT and p.score >= threshold)}"
+        f" of {sep.different_n}",
+        "",
+        "## Worst pair per family",
+        "",
+        "| family | members scored | worst | reaches threshold |",
+        "| --- | ---: | ---: | :---: |",
+    ]
+    for name, group in sorted(families.items()):
+        worst = min(group, key=lambda p: p.score)
+        lines.append(
+            f"| {name} | {len(group)} | {worst.score:.4f} | "
+            + ("yes" if worst.score >= threshold else "**no**")
+            + " |"
+        )
+    strict = [p for p in pairs if _uncontested(p)]
+    strict_para = [p for p in strict if p.pair_class == PARAPHRASE]
+    strict_diff = [p for p in strict if p.pair_class == DIFFERENT]
+    if not strict_para or not strict_diff:
+        # `separation` reduces each class with min/max, so an empty one raises
+        # from inside the report rather than reporting an empty population.
+        # A future edit to CONTESTED_* could empty either side, and a probe
+        # that dies while rendering hides the very thing it measured.
+        lines += [
+            "",
+            "## Sensitivity: dropping the author's own contested calls",
+            "",
+            f"NOT SCORED -- the strict population holds {len(strict_para)} "
+            f"paraphrase and {len(strict_diff)} different pairs, and a "
+            "separation needs at least one of each. Widen the contested set "
+            "or add relations.",
+            "",
+            "## Hardest negatives (same topic, different question)",
+            "",
+        ]
+        return _with_negatives(lines, pairs)
+    strict_sep = separation(strict, "question")
+    lines += [
+        "",
+        "## Sensitivity: dropping the author's own contested calls",
+        "",
+        "The families here were authored by the same party measuring against "
+        "them, so the verdict is reported both ways. Contested calls were "
+        "flagged in `_PROBES` BEFORE any score was seen.",
+        "",
+        f"- paraphrase pairs: {strict_sep.paraphrase_n} "
+        f"(worst {strict_sep.paraphrase_worst:.4f})",
+        f"- different pairs: {strict_sep.different_n} "
+        f"(best {strict_sep.different_best:.4f})",
+        f"- **margin: {strict_sep.margin:+.4f}** -- "
+        + ("separates" if strict_sep.separates else "**still DOES NOT SEPARATE**"),
+        f"- at threshold {threshold}: discloses "
+        f"{sum(1 for p in strict_para if p.score >= threshold)} of "
+        f"{len(strict_para)} paraphrases, "
+        f"{sum(1 for p in strict if p.pair_class == DIFFERENT and p.score >= threshold)}"
+        f" of {strict_sep.different_n} strangers",
+        "",
+        "## Hardest negatives (same topic, different question)",
+        "",
+    ]
+    return _with_negatives(lines, pairs)
+
+
+def _with_negatives(lines: list[str], pairs: Sequence[Pair]) -> str:
+    """Append the five highest-scoring different-subject pairs and render.
+
+    Shared by both exits of `render_questions` so the hardest negatives are
+    reported even when the sensitivity population is too thin to score --
+    they are the number the threshold is actually chosen against."""
+    worst_neg = sorted(
+        (p for p in pairs if p.pair_class == DIFFERENT),
+        key=lambda p: p.score,
+        reverse=True,
+    )[:5]
+    for pair in worst_neg:
+        lines.append(
+            f"- {pair.score:.4f} -- {pair.question_a!r} vs {pair.question_b!r}"
+        )
+    return "\n".join(lines) + "\n"
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--self-test", action="store_true")
+    parser.add_argument(
+        "--questions",
+        action="store_true",
+        help="score the shipped question signal over _PROBES alone (no stored "
+        "answers needed, embeddings only)",
+    )
     parser.add_argument("--rescore", type=pathlib.Path, default=None)
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
     parser.add_argument("--stamp", default="manual")
@@ -401,6 +658,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     embedder = OllamaClient(model=EMBED_MODEL, timeout=args.timeout)
+    if args.questions:
+        from openkos.resolution.insight_identity import (
+            DUPLICATE_QUESTION_SIMILARITY,
+        )
+
+        pairs = measure_questions(embedder)
+        RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+        report = render_questions(pairs, DUPLICATE_QUESTION_SIMILARITY)
+        out = RESULTS_DIR / f"question-threshold-{args.stamp}-{EMBED_MODEL}.md"
+        out.write_text(report, encoding="utf-8")
+        print(report)
+        print(f"wrote {out}")
+        return 0
     pairs = measure(embedder)
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     (RESULTS_DIR / f"pairs-{args.stamp}-{EMBED_MODEL}.json").write_text(

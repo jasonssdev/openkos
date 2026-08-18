@@ -14260,9 +14260,12 @@ def query(
     # one, BEFORE the confirmation gate, so the human deciding has the
     # duplicate in front of them. Advisory only -- nothing is merged,
     # renamed or refused, because the separating margin measured in
-    # `evals/query_identity/` is +0.0745 over two subject families, which is
-    # real evidence for "worth showing a person" and nowhere near enough for
-    # "act on it automatically".
+    # `evals/query_identity/` is NEGATIVE over eleven families -- the classes
+    # overlap and no threshold splits them. What survives is that the shipped
+    # threshold discloses zero of 526 different-subject pairs while reaching
+    # 11 of 35 paraphrases: low recall, no strangers. That is evidence for
+    # "worth showing a person" and nowhere near enough for "act on it
+    # automatically".
     #
     # The slug is the permanent Concept ID, so a duplicate filed here is
     # permanent too; this is the last moment it costs nothing to notice.

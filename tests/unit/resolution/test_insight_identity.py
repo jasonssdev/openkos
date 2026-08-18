@@ -3,8 +3,11 @@
 #762's harm is an IDENTITY defect, not a titling one: two people asking one
 question in different words file two objects that look unrelated, and the
 slug is the permanent Concept ID. `evals/query_identity/` measured which
-signal can tell them apart -- the SOURCE QUESTION separates (+0.0745) while
-the title (-0.1579) and the answer body (-0.0620) both overlap.
+signal can tell them apart. Re-measured over eleven paraphrase families,
+NONE of them does: the source question inverts from +0.0745 to -0.0809, and
+the title (-0.1579) and answer body (-0.0620) never separated. The mechanism
+ships on asymmetry instead -- it discloses no strangers and catches some
+duplicates -- never on separation.
 
 Every test here uses a structural fake embedder returning fixed vectors, so
 the assertions are about this module's decisions and never about how a real
@@ -266,16 +269,31 @@ def test_an_empty_bundle_embeds_nothing(tmp_path: Path) -> None:
     assert embedder.calls == []
 
 
-def test_the_threshold_sits_between_the_measured_classes() -> None:
-    """The shipped constant is inside the measured gap, not at either edge.
+def test_the_threshold_discloses_no_measured_stranger() -> None:
+    """The shipped constant sits ABOVE every different-subject pair measured.
 
-    `evals/query_identity/` scored the worst same-subject pair at 0.9719 and
-    the best different-subject pair at 0.8974. A threshold outside that band
-    is one of the two failures the measurement exists to prevent: above it
-    discloses nothing, below it discloses strangers. Pinned so a later tweak
-    has to argue with the evidence rather than with taste.
+    This test used to pin `0.8974 < threshold < 0.9719`, a "gap" between the
+    classes. THERE IS NO GAP. Re-measured over eleven paraphrase families
+    instead of two, the best different-subject pair rose to 0.9152 and the
+    worst same-subject pair fell to 0.8343: the classes overlap and no value
+    splits them. The old band still contains 0.93, so the assertion kept
+    passing while the reason for it had been refuted -- which is the failure
+    mode this replacement exists to prevent.
+
+    What is actually true, and what a later tweak now has to argue with:
+
+    - ABOVE 0.9152, the best different-subject pair. Below it the mechanism
+      starts merging strangers, and the first one is much closer than the
+      retired 0.8974 implied.
+    - BELOW 0.9569, the worst pair of the best-behaved family. Above it the
+      mechanism discloses nothing at all and the feature is dead weight.
+
+    Both bounds come from `evals/query_identity/ --questions`. Recall between
+    them is LOW by construction -- 11 of 35 paraphrase pairs -- and that is
+    the accepted trade, not an oversight.
     """
-    assert 0.8974 < DUPLICATE_QUESTION_SIMILARITY < 0.9719
+    assert DUPLICATE_QUESTION_SIMILARITY > 0.9152
+    assert DUPLICATE_QUESTION_SIMILARITY < 0.9569
 
 
 def test_the_module_does_not_reach_for_the_title_signal() -> None:

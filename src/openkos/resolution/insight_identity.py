@@ -9,16 +9,24 @@ Identity is a different question from titling, and this module asks it.
 
 ## Which signal, and why not the two obvious ones
 
-Measured in `evals/query_identity/` over 14,365 pairs drawn from the stored
-`evals/query_title/` population, scoring the worst same-subject pair against
-the best different-subject pair (the separation bar `evals/query_grounding/`
-used to reject the relevance floor):
+Measured in `evals/query_identity/`, scoring the worst same-subject pair
+against the best different-subject pair (the separation bar
+`evals/query_grounding/` used to reject the relevance floor):
 
-| signal | margin | separates |
-| --- | ---: | --- |
-| title similarity (`resolution.similarity`) | -0.1579 | no |
-| answer-body embedding | -0.0620 | no |
-| SOURCE-QUESTION embedding | +0.0745 | yes |
+| signal | margin, 2 families | margin, 11 families | separates |
+| --- | ---: | ---: | --- |
+| title similarity (`resolution.similarity`) | -0.1579 | not re-run | no |
+| answer-body embedding | -0.0620 | not re-run | no |
+| SOURCE-QUESTION embedding | +0.0745 | **-0.0809** | **no** |
+
+**NO SIGNAL SEPARATES, including this one.** The `+0.0745` that originally
+chose the source question held over TWO paraphrase relations; re-measured over
+eleven it inverts to -0.0809 (-0.4772 before dropping the probe author's own
+contested family calls). That number was a property of a thin corpus, not of
+the signal, and this module ships anyway -- for a different reason, stated
+under "Why it still ships" below. Do not restore the old table: a docstring
+that justifies a mechanism with a refuted margin is the same defect as a spec
+overstating its code.
 
 The title signal is the one identity already runs on elsewhere in this
 codebase, and it OVERLAPS: its best different-subject pair scores a perfect
@@ -28,19 +36,29 @@ overlaps too, which is #760's conclusion holding in a new regime: two
 answers about one topic are textually similar whether or not they answer the
 same question.
 
-The source question is the signal that separates, and in hindsight that is
+The source question is still the best of the three, and in hindsight it is
 what a paraphrase IS: near-identical questions, whatever the answers do. It
-is reachable at write time because `query --save` already stores the
-question as the filed insight's `description`.
+is reachable at write time because `query --save` already stores the question
+as the filed insight's `description`.
+
+## Why it still ships, given nothing separates
+
+Not on separation -- that claim is refuted. On ASYMMETRY. Over eleven
+families the threshold below discloses **zero of 526** different-subject
+pairs while catching 11 of 35 paraphrases: it misses most duplicates and
+merges no strangers. For an advisory whose false positive costs one preview
+line and whose false negative costs exactly what happens today, that is the
+right direction to be wrong in.
+
+What the codebase must NOT do is read this as "duplicate detection works".
+It is a low-recall disclosure that a human confirms, and the honest summary
+is "it will sometimes notice", never "it will notice".
 
 ## Advisory, never enforcing
 
-The margin is +0.0745 -- real but THIN, and resting on two subject families.
-That is not enough evidence to auto-merge anything, and adopting a tight
-threshold on it would repeat the mistake #760 refused. So this reports
-candidates into the preview a human already confirms, and the human decides.
-A false positive costs one advisory line; a false negative costs exactly
-what happens today.
+Nothing is merged, renamed or refused on this signal, and adopting a tight
+threshold on it would repeat the mistake #760 refused. It reports candidates
+into the preview a human already confirms, and the human decides.
 """
 
 from __future__ import annotations
@@ -60,14 +78,26 @@ DUPLICATE_QUESTION_SIMILARITY: Final[float] = 0.93
 """Cosine similarity above which two source questions are DISCLOSED as
 possible duplicates.
 
-Sits between the measured classes: the worst same-subject pair scored
-0.9719 and the best different-subject pair 0.8974
-(`evals/query_identity/`). Deliberately mid-gap rather than tight against
-either edge, because the gap is 0.07 wide and rests on two subject
-families -- a threshold tuned to the last digit of that evidence would be
-fitting noise.
+Chosen when the classes were believed to be separable, and KEPT after they
+were shown not to be -- for a reason the original one does not survive.
 
-It is a DISCLOSURE threshold, which is what makes a mid-gap guess
+The original: it sat mid-gap between a worst same-subject pair of 0.9719 and
+a best different-subject pair of 0.8974, measured over two families.
+
+Eleven families put the best different-subject pair at 0.9152, and the worst
+same-subject pair at **0.4380** -- or 0.8343 once the probe author's own
+contested family calls are dropped. Either way it falls BELOW 0.9152, so the
+classes OVERLAP and no value splits them. Both numbers are stated because
+quoting only the filtered one would present the friendlier half of a
+sensitivity analysis as the result.
+
+What holds at 0.93 is one-sided and is why it stays: it sits above every
+different-subject pair measured (best 0.9152), so it discloses no strangers,
+while still reaching 11 of 35 paraphrase pairs. Moving it DOWN buys recall by
+spending that property, and the first stranger it would admit is at 0.9152 --
+much closer than the old 0.8974 suggested.
+
+It is a DISCLOSURE threshold, which is what makes a low-recall guess
 acceptable at all: nothing is merged, renamed or refused on it."""
 
 DUPLICATE_SCAN_LIMIT: Final[int] = 100
