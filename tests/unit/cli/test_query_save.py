@@ -2141,3 +2141,81 @@ def test_query_below_the_synthesis_share_threshold_stays_quiet(
     assert result.exit_code == 0
     assert "filed syntheses" not in result.stderr
     assert "every citation is itself a filed synthesis" not in result.stderr
+
+
+# --- the answer that reports drawing on nothing (#753) ----------------------
+
+
+def _fake_unsupported_answer(
+    *, answer: str = "A general essay about RAG systems."
+) -> AnswerResult:
+    """An answer the model reported drawing on NO context block.
+
+    Distinct from a no-match: retrieval succeeded and `llm.chat` ran, so
+    there is real prose to show -- it just stands on nothing in the bundle.
+    That is #753's specimen, and before the citation fix it arrived carrying
+    five citations."""
+    return AnswerResult(
+        answer=answer,
+        citations=[],
+        fts_hit_count=5,
+        llm_invoked=True,
+        no_match_cause="none",
+        skip_notices=[],
+        fused_count=5,
+        attribution="reported",
+    )
+
+
+def test_query_warns_when_the_answer_reports_drawing_on_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An answer standing on no cited concept says so, on stderr.
+
+    Without this the reply prints bare: prose, no `Citations:` block, and no
+    reason for its absence -- which reads like a rendering bug rather than
+    the finding it is. #753's whole rationale is that a visible failure is
+    correctable while borrowed authority is not, so the honest case must
+    ANNOUNCE itself rather than merely omit a section.
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main.answer", lambda *args, **kwargs: _fake_unsupported_answer()
+    )
+
+    result = runner.invoke(app, ["query", "what is retrieval augmented generation?"])
+
+    assert result.exit_code == 0
+    assert "A general essay about RAG systems." in result.stdout
+    assert "Citations:" not in result.stdout
+    assert "drew on none of the" in result.stderr
+
+
+def test_the_no_support_warning_is_silent_when_the_model_never_reported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A model that never attributed gets today's behavior, warning included.
+
+    `attribution="absent"` means the citation list was NOT decided by the
+    answer, so an empty one there says nothing about support -- it means
+    retrieval returned nothing readable. Warning on it would claim a finding
+    the run never made, and would fire on every backend that ignores the
+    instruction.
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    fake_result = AnswerResult(
+        answer="An answer.",
+        citations=[],
+        fts_hit_count=5,
+        llm_invoked=True,
+        no_match_cause="none",
+        skip_notices=[],
+        fused_count=5,
+        attribution="absent",
+    )
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code == 0
+    assert "drew on none of the" not in result.stderr

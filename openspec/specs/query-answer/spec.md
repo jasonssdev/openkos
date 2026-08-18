@@ -237,18 +237,69 @@ fourth injected handle; issue #434 removed the stage that read it.)
 Every `Citation(concept_id, title, confidential)` in `citations` MUST
 correspond to a concept whose body was actually placed in the LLM context
 for that call. Concepts skipped under guarded re-read, or never retrieved,
-MUST NOT appear in `citations`. The `confidential` flag (issue #569) MUST
-be `True` exactly when the concept's freshly re-read frontmatter EXPLICITLY
-carries the top sensitivity rank — transparency for the CLI's disclosure,
-mirroring the commit path's explicit-value-only posture, never the
-fail-closed gate's — and MUST default to `False`.
+MUST NOT appear in `citations`. This is a necessary condition, not a
+sufficient one: `citations` is a SUBSET of the context-included concepts,
+narrowed by the attribution requirement below (issue #753). The
+`confidential` flag (issue #569) MUST be `True` exactly when the concept's
+freshly re-read frontmatter EXPLICITLY carries the top sensitivity rank —
+transparency for the CLI's disclosure, mirroring the commit path's
+explicit-value-only posture, never the fail-closed gate's — and MUST
+default to `False`.
 
-#### Scenario: Citation set matches context set exactly
+#### Scenario: Citations never exceed the context set
 
 - GIVEN a mix of readable and unreadable hits returned by `search`
 - WHEN `answer(question, bundle_dir=bundle_dir, llm=llm)` is called
-- THEN `citations` contains exactly one `Citation` per concept placed in
-  context, with `title` read from that concept's OKF frontmatter
+- THEN every `Citation` corresponds to a concept placed in context, with
+  `title` read from that concept's OKF frontmatter, and no concept skipped
+  under guarded re-read appears
+
+### Requirement: Citations Are Decided By What The Answer Reports Using
+
+`answer` MUST determine `citations` from the reply, not from retrieval
+alone (issue #753). The context blocks presented to the model MUST be
+numbered from 1, and the model MUST be instructed to close its reply with a
+single line naming the block numbers its answer draws on. `answer` MUST
+strip that line from the returned prose — `query --save` files the prose as
+a permanent bundle concept, so a surviving marker would be written into the
+bundle rather than merely shown.
+
+`AnswerResult.attribution` MUST report how the list was decided:
+
+- `"reported"` — a usable line was present; `citations` is exactly the
+  blocks it named, in fused-rank order, and MAY be empty when the reply
+  reports drawing on none of them.
+- `"absent"` — no line was present; `citations` is every context-included
+  concept, which is the pre-#753 behavior.
+- `"unparsed"` — a line was present but named no in-range block; the same
+  fallback applies.
+
+Out-of-range block numbers MUST be dropped rather than clamped, and
+filtering MUST preserve fused-rank order rather than the order the model
+listed. The fallback for `"absent"`/`"unparsed"` MUST NOT be an empty
+citation list: emptying them would turn a non-compliant backend into a
+silent loss of provenance rather than a visible one.
+
+#### Scenario: A reported subset narrows the citation list
+
+- GIVEN three concepts placed in context
+- WHEN the reply names only the first and third blocks
+- THEN `citations` holds exactly those two, in fused-rank order, and
+  `attribution` is `"reported"`
+
+#### Scenario: An answer reporting no support cites nothing
+
+- GIVEN concepts placed in context
+- WHEN the reply reports drawing on none of them
+- THEN `citations` is empty and `attribution` is `"reported"`, so
+  `query --save` refuses the filing for want of provenance
+
+#### Scenario: A reply with no marker keeps every citation
+
+- GIVEN concepts placed in context
+- WHEN the reply carries no attribution line at all
+- THEN `citations` holds one `Citation` per context-included concept and
+  `attribution` is `"absent"`
 
 #### Scenario: Only an explicit confidential value sets the flag
 
