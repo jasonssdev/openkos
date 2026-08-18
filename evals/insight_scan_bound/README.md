@@ -72,7 +72,8 @@ COULD MEASURE.
 **Then the bound was retired**, because the cost had a better fix. A stored
 question does not change and neither does its embedding, so caching them
 replaces the linear EMBED term with the linear COSINE term — and this probe's
-own numbers put those 355x apart. The warm column above is the result: every
+own numbers put those ~220x apart — 11.8 ms to embed one filed question
+against 0.053 ms to compare one. The warm column above is the result: every
 filed insight compared, for less than the cap used to cost.
 
 The cold column is therefore the measurement of a design that no longer ships.

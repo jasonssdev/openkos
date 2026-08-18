@@ -14,7 +14,76 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+## [0.2.7] - 2026-08-18
+
+### Added
+
+- **`query` can refuse before it answers.** A new `sufficiency_check` key in
+  `openkos.yaml` (default on) asks one cheap call over the assembled context
+  to quote the sentence that answers the question, or reply that none does —
+  and refuses instead of synthesising when none does. Sufficiency is a
+  judgement about entailment, so nothing in retrieval can make it: no floor
+  separates the classes on any available signal, which is why the ruling that
+  ordered a relevance threshold could not be implemented as written. Measured
+  over 400 checks: every adjacent question refused, every grounded one
+  answered, at a median 1.12s for the extra call. Asking for EVIDENCE rather
+  than a verdict is what made it work — an arm that asked for a yes/no
+  false-refused a question that works today. Off by default inside `answer`
+  itself, so library and eval callers are unchanged
+  ([#760](https://github.com/jasonssdev/openkos/issues/760)).
+
+- **`query --save` discloses an insight already filed from a resembling
+  question**, before the confirmation gate, as `? possible duplicate of …`.
+  The slug is the permanent Concept ID, so two people asking one thing in
+  different words file two objects that look unrelated, and the preview is
+  the last moment noticing costs nothing. Advisory: nothing is merged,
+  renamed or refused
+  ([#762](https://github.com/jasonssdev/openkos/issues/762)).
+
+- **A guard that could not run says so.** When the sufficiency check or the
+  duplicate lookup fails — a down embedding backend, a malformed reply — one
+  stderr notice names it. Both used to render exactly like a guard that ran
+  and found nothing, so an operator whose backend had been down for a week
+  would simply never see a disclosure again
+  ([#764](https://github.com/jasonssdev/openkos/issues/764)).
+
 ### Changed
+
+- **Citations name what the answer reports drawing on, not what retrieval
+  returned.** The citation list was the retrieval set under another name:
+  assembled before the model ran and never compared to the reply, then
+  written by `query --save` as permanent provenance, so the defect outlived
+  the screen. Context blocks are now numbered and the model closes with a
+  line naming the ones it used. Measured over 170 stored answers, every one
+  had cited exactly `limit` concepts across only four distinct sets, and not
+  one had every citation supported by its own text; after the change, 22 of
+  30 adjacent answers correctly cite nothing. A backend that never reports
+  falls back to citing everything — the previous behaviour unchanged, because
+  emptying the list for a non-compliant model would trade a precision fix for
+  a silent loss of provenance
+  ([#753](https://github.com/jasonssdev/openkos/issues/753)).
+
+- **The duplicate lookup compares every filed insight, and embeds each
+  question only once.** A stored question does not change and neither does
+  its embedding, so they are cached in `.openkos/insight_questions.db` and
+  reused. Comparing a cached question is measured ~220x cheaper than embedding
+  one (0.053 ms against 11.8 ms), which is what makes a whole-bundle
+  comparison affordable: 0.285s at 1,600 filed insights, against 18.8s to
+  re-embed them. The cache is keyed by embedding model, `purge` deletes it,
+  and losing it costs re-embedding rather than correctness. When it cannot be
+  opened the lookup reports that it could not run, rather than silently
+  falling back to embedding the whole bundle and stalling the prompt
+  ([#764](https://github.com/jasonssdev/openkos/issues/764)).
+
+- **The duplicate disclosure now tells you to expect misses.** Re-measured
+  over eleven paraphrase families instead of two, no signal separates the
+  classes — the source question inverts from a positive margin to a negative
+  one, and title and answer-body similarity never separated at all. What the
+  shipped threshold has is asymmetry rather than separation: it disclosed
+  none of 526 different-subject pairs while catching 11 of 35 paraphrases. So
+  it will sometimes notice a duplicate and it will not merge strangers, and
+  the documentation says so instead of implying working duplicate detection
+  ([#762](https://github.com/jasonssdev/openkos/issues/762)).
 
 - **No type is born above the workspace sensitivity floor by default**
   ([#756](https://github.com/jasonssdev/openkos/issues/756)). OpenKOS shipped
@@ -68,6 +137,29 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   wholesale restore and drift warning included. Nothing is migrated: an entry
   already on disk records no delta, and converting it would mean turning a
   read of the reversibility record into a write of it.
+
+### Fixed
+
+- **A failed extraction judge no longer leaves a positional cap as the only
+  filter.** When the judge that ranks extraction candidates failed, nothing
+  ranked the set and an arrival-order cap cut it anyway — position means
+  something only on a set something has ranked. The judge is now asked twice,
+  and when it is still unusable the positional backstop is not applied: the
+  result stays bounded by the pre-judge ceiling and the notice says plainly
+  that no quality selection ran. The reported cause did not reproduce — 45
+  replayed calls, 15 confirmed model evictions, zero failures — so the fix
+  ships cause-agnostic rather than as a cold-start fix, and nothing claims
+  that warming the model prevents it
+  ([#754](https://github.com/jasonssdev/openkos/issues/754)).
+
+- **Spanish function words no longer decide whether two titles are the same
+  object.** They could block a genuine near-match and manufacture a false one
+  in the same lexicon: a three-letter article scored 0.750 against an
+  unrelated token and paired two unrelated titles. Function words are now
+  excluded from the required token set and from scoring alike, keeping the
+  existing two-token floor. Measured over 549 stored titles: 36 duplicates
+  recovered, one false positive removed, none introduced, no regressions
+  ([#755](https://github.com/jasonssdev/openkos/issues/755)).
 
 ## [0.2.6] - 2026-08-17
 
@@ -1166,7 +1258,9 @@ and Memory) work.
 - Default embedding model is `bge-m3` (ADR-0006), superseding the earlier
   `qwen3-embedding:0.6b` default.
 
-[Unreleased]: https://github.com/jasonssdev/openkos/compare/v0.2.5...HEAD
+[Unreleased]: https://github.com/jasonssdev/openkos/compare/v0.2.7...HEAD
+[0.2.7]: https://github.com/jasonssdev/openkos/compare/v0.2.6...v0.2.7
+[0.2.6]: https://github.com/jasonssdev/openkos/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/jasonssdev/openkos/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/jasonssdev/openkos/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/jasonssdev/openkos/compare/v0.2.1...v0.2.3
