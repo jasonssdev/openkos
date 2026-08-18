@@ -53,6 +53,23 @@ from tests.unit.vcs.conftest import isolate_git_identity
 runner = CliRunner()
 
 
+def _opt_in_person_offset(tmp_path: Path) -> None:
+    """Opt this workspace in to `type_sensitivity_defaults: {Person: 1}`.
+
+    The packaged default is EMPTY since #756 -- sensitivity is the
+    operator's call and no type is born above the floor unless they say so.
+    The offset MECHANISM is unchanged and still has to be proven, so the
+    tests that exercise it now configure it the way a real operator would
+    instead of leaning on a shipped value that no longer exists.
+    """
+    config_path = tmp_path / "openkos.yaml"
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8")
+        + "\ntype_sensitivity_defaults:\n  Person: 1\n",
+        encoding="utf-8",
+    )
+
+
 def test_format_type_tally_empty_dict_yields_empty_string() -> None:
     """`_format_type_tally({})` returns `""` -- signals "no line to print"
     (spec: Reusable Type-Tally Formatting Helper, empty dict scenario)."""
@@ -1072,10 +1089,15 @@ def test_include_confidential_bypasses_the_confidential_floor_gate(
 def _default_cfg(**overrides: object) -> config.Config:
     """Build a minimal `config.Config` for direct `_stage_derived_objects`
     calls (issue #669) -- mirrors `test_lint.py::_cfg`'s hand-built-Config
-    pattern. Defaults to the shipped `{"Person": 1}` type-sensitivity-offset
-    mapping so callers exercising the type default need only override
-    `stamp_sensitivity`/`default_sensitivity`; pass
-    `type_sensitivity_defaults={}` to opt out entirely."""
+    pattern. Defaults to `{"Person": 1}` -- a workspace that has OPTED IN to
+    the per-type offset -- so callers exercising the mechanism need only
+    override `stamp_sensitivity`/`default_sensitivity`; pass
+    `type_sensitivity_defaults={}` to opt out entirely.
+
+    That is no longer the PACKAGED default, which is empty since #756. It is
+    written here as a literal on purpose: these tests exist to prove the
+    mechanism still raises, and reading the shipped constant would have made
+    every one of them go quietly vacuous the moment that constant emptied."""
     fields: dict[str, object] = {
         "model": "qwen3:8b",
         "review": True,
@@ -1091,7 +1113,7 @@ def _default_cfg(**overrides: object) -> config.Config:
         "models": {},
         "union_judge": config.DEFAULT_UNION_JUDGE,
         "concurrent_extraction": config.DEFAULT_CONCURRENT_EXTRACTION,
-        "type_sensitivity_defaults": dict(config.DEFAULT_TYPE_SENSITIVITY_DEFAULTS),
+        "type_sensitivity_defaults": {"Person": 1},
     }
     fields.update(overrides)
     return config.Config(**fields)  # type: ignore[arg-type]
@@ -1266,6 +1288,7 @@ def test_ingest_source_sensitivity_is_never_type_defaulted(
     Type-Defaulted"). The Person derived from it IS raised, proving the two
     are computed independently rather than one leaking into the other."""
     _init_workspace(tmp_path, monkeypatch)
+    _opt_in_person_offset(tmp_path)
     _patch_llm(monkeypatch, _person_reply())
     source = tmp_path / "notes.txt"
     source.write_text("Epictetus was a Stoic philosopher.", encoding="utf-8")
@@ -1312,6 +1335,37 @@ def test_ingest_no_backfill_of_existing_person_after_unrelated_ingest(
 # --- type-sensitivity-defaults: ingest run-summary advisory (issue #669) ----
 
 
+def test_stock_workspace_births_person_at_the_floor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A workspace nobody configured births a `Person` at the workspace
+    floor, like every other type, and says nothing about it (#756).
+
+    The packaged `type_sensitivity_defaults` used to be `{"Person": 1}`. On
+    the primary use case -- a local bundle against a local backend -- that
+    bought no protection (`confidential_local_exemption` lets confidential
+    objects participate normally) and cost signal: when 100% of a type is
+    `confidential`, the marker stops meaning "especially sensitive" and
+    starts meaning "this is a Person". The offset mechanism is unchanged and
+    still proven by the tests around this one; only the shipped policy is
+    now "none".
+    """
+    _init_workspace(tmp_path, monkeypatch)  # deliberately NOT opted in
+    _patch_llm(monkeypatch, _person_reply())
+    source = tmp_path / "notes.txt"
+    source.write_text("Epictetus was a Stoic philosopher.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0, result.stderr
+    person = next((tmp_path / "bundle" / "people").rglob("*.md"))
+    metadata, _ = okf.load_frontmatter(person.read_text(encoding="utf-8"))
+    assert metadata["sensitivity"] == "private", (
+        "a stock workspace must not raise Person above its own floor"
+    )
+    assert "born above the workspace sensitivity floor" not in result.stderr
+
+
 def test_ingest_prints_type_floor_advisory_with_confidential_consequence(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1320,6 +1374,7 @@ def test_ingest_prints_type_floor_advisory_with_confidential_consequence(
     retrieval-exclusion consequence line (spec: "Write-Time Advisory Names
     Type-Defaulted Objects And The Retrieval Consequence")."""
     _init_workspace(tmp_path, monkeypatch)
+    _opt_in_person_offset(tmp_path)
     _patch_llm(monkeypatch, _person_reply())
     source = tmp_path / "notes.txt"
     source.write_text("Epictetus was a Stoic philosopher.", encoding="utf-8")
@@ -1346,6 +1401,7 @@ def test_ingest_prints_type_floor_advisory_without_consequence_at_private(
     does NOT, since the raised level is not `confidential` (spec: the
     consequence line "fires only when the raised level is confidential")."""
     _init_workspace(tmp_path, monkeypatch)
+    _opt_in_person_offset(tmp_path)
     _set_config_field(
         tmp_path, "default_sensitivity: private", "default_sensitivity: public"
     )
@@ -1388,6 +1444,7 @@ def test_ingest_batch_aggregates_type_floor_advisory_across_files(
     seam (spec: works identically single-file and batch; mirrors #566's own
     batch-aggregate precedent)."""
     _init_workspace(tmp_path, monkeypatch)
+    _opt_in_person_offset(tmp_path)
     _patch_llm(monkeypatch, _person_reply())
     docs = tmp_path / "docs"
     docs.mkdir()

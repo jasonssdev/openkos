@@ -1,8 +1,8 @@
 ---
 type: Decision
 title: "ADR-0015: Per-type default sensitivity as a floor-relative offset"
-description: Why a Person is born one level above the workspace sensitivity floor.
-status: Accepted
+description: The floor-relative per-type offset mechanism -- kept; its packaged Person default -- reversed by #756.
+status: Amended
 date: 2026-08-14
 tags:
   - openkos
@@ -14,7 +14,12 @@ sensitivity: public
 
 # ADR-0015: Per-type default sensitivity as a floor-relative offset
 
-- **Status:** Accepted
+- **Status:** Amended (2026-08-17) — the MECHANISM stands; the packaged
+  `{"Person": 1}` default it shipped was reversed. See
+  [Amendment: the packaged default is "none"](#amendment-2026-08-17-the-packaged-default-is-none)
+  at the end of this document, which is the current decision. The Context and
+  Decision below are preserved as they were written, because the reasoning that
+  led to the default is what makes the reversal legible.
 - **Date:** 2026-08-14
 
 ## Context
@@ -111,3 +116,45 @@ where it is merely a correction.
 - **Rejecting an over-range offset at runtime instead of at config load**:
   rejected — the same silent-security-failure argument; a config error should
   surface when the config is read.
+
+
+## Amendment (2026-08-17): the packaged default is "none"
+
+**Status:** Accepted · **Issue:**
+[#756](https://github.com/jasonssdev/openkos/issues/756)
+
+`DEFAULT_TYPE_SENSITIVITY_DEFAULTS` ships as `{}`. `Person: 1` moves to the
+documentation as the recommended configuration for anyone working with material
+about third parties.
+
+Nothing above about the *mechanism* is withdrawn. The offset is still
+floor-relative, still applied at both birth seams identically, still validated
+eagerly, still incapable of lowering anything. What changed is who decides.
+
+**It protected nothing in the stock configuration.** With
+`confidential_local_exemption: true` and a verified-local Ollama, confidential
+objects participate normally; the exclusion only bites against a non-local
+backend. So on a default install the setting produced a `NOTICE` on every answer
+that touched a person, and no protection.
+
+**It diluted the signal it is made of.** When 100% of a type is `confidential`,
+the marker stops meaning "this one is especially sensitive" and starts meaning
+"this is a Person". A marker that always fires carries no information — the same
+failure that got the `type_alternative` notice aggregated into one line.
+
+**Type is a proxy for risk, not a measure of it.** A Person extracted from the
+published minutes of a city council is not sensitive. The correlation is real,
+which is why the mechanism is worth having, but it is not strong enough to
+justify deciding on the operator's behalf.
+
+**Migration.** Objects already born `confidential` under 0.2.6 keep that value —
+sensitivity is written at birth, and this changes only what NEW objects inherit.
+They can be lowered explicitly with
+`openkos set-sensitivity <id> private --allow-downgrade`, so no workspace is
+stuck.
+
+**A note for whoever reads this later.** The `type_sensitivity_defaults`
+mechanism now ships with no default entry. That is the policy, not an oversight:
+the mechanism exists so an operator can express a policy, and the packaged
+policy is "none". Please do not restore `{"Person": 1}` on the assumption that
+an empty default was an accident.

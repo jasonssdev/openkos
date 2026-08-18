@@ -12,7 +12,25 @@ and the LIFO-tail-enforced reversal `unmerge` needs.
 
 from dataclasses import dataclass
 
+from openkos.bundle import index as bundle_index
+from openkos.bundle import log as bundle_log
 from openkos.model import okf
+
+
+def merge_log_entry(*, survivor_id: str, absorbed_id: str) -> str:
+    """The exact `log.md` bullet text a merge of `absorbed_id` into
+    `survivor_id` writes (issue #758).
+
+    Defined once because it is now read from three directions: `merge`
+    writes it, `unmerge` removes it, and the drift check reconstructs it to
+    decide whether the log still looks like the merge left it. While the
+    string was inlined at each site, a reworded merge line would have made
+    the reversal silently unable to find the bullet it was meant to remove
+    -- and the delta ledger (V5) has no snapshot to fall back on."""
+    return (
+        f"**Merge**: Merged [{absorbed_id}](/{absorbed_id}.md) "
+        f"into [{survivor_id}](/{survivor_id}.md)."
+    )
 
 
 @dataclass(frozen=True)
@@ -107,7 +125,6 @@ def plan_merge(
     survivor_text: str,
     absorbed_text: str,
     index_text: str,
-    log_text: str,
     merged_at: str,
     existing_entries: list[okf.MergeLedgerEntry] | None = None,
     link_rewrites: list[okf.LinkRewrite] | None = None,
@@ -118,11 +135,15 @@ def plan_merge(
     the new `merged_from` ledger entry, without writing anything.
 
     `survivor_text`/`absorbed_text` are each the FULL verbatim
-    frontmatter+body of an existing bundle document; `index_text`/
-    `log_text` are the current bundle's `index.md`/`log.md` verbatim
-    contents, captured ONLY to be embedded in the ledger entry's
-    `index_before`/`log_before` -- this layer never computes an updated
-    catalog/log (that composition is a later unit's concern). `link_rewrites`
+    frontmatter+body of an existing bundle document; `index_text` is the
+    current bundle's `index.md` verbatim contents, read ONLY to derive the
+    entry's `index_restores` -- the bullets this merge will remove, which
+    is all `unmerge` needs to put the catalog back (#758). There is no
+    `log_text` parameter: a merge's effect on `log.md` is one bullet fully
+    derivable from the two ids and `merged_at` (`merge_log_entry`), so
+    storing the log was never necessary. This layer still never computes an
+    updated catalog/log (that composition is a later unit's concern), and
+    the entry it writes is `MERGE_LEDGER_SCHEMA_V5`. `link_rewrites`
     defaults to `[]`; the actual bundle-wide link scan is a later unit.
     `relation_rewrites` (design D1, v2) similarly defaults to `[]`; the
     actual third-party inbound scan (`bundle/relations.py`) and CLI wiring
@@ -130,10 +151,12 @@ def plan_merge(
     rewrite-provenance-on-merge) likewise defaults to `[]`; the actual
     third-party inbound scan (`bundle/provenance.py`) and CLI wiring are
     PR2's concern -- this layer only carries whatever the caller injects
-    into the new ledger entry, and ALWAYS writes `MERGE_LEDGER_SCHEMA_V4`
-    (#667: v4 adds `carried_content_ids`, computed HERE from
-    `existing_entries` vs `survivor_text`; the reader still accepts v1-v3
-    entries already on disk from before this merge).
+    into the new ledger entry, and ALWAYS writes `MERGE_LEDGER_SCHEMA_V5`
+    (#667: v4 added `carried_content_ids`, computed HERE from
+    `existing_entries` vs `survivor_text`; #758: v5 swaps the two catalog
+    snapshots for `index_restores`. The reader still accepts v1-v4 entries
+    already on disk from before this merge, and `plan_unmerge` still
+    reverses them the way they were written).
 
     `existing_entries` (durable-derived-state slice 1a) is the survivor's
     CURRENT sidecar content, read by the caller via `bundle.ledger.
@@ -182,13 +205,19 @@ def plan_merge(
 
     sensitivity_before = survivor_metadata.get("sensitivity")
     entry = okf.MergeLedgerEntry(
-        schema=okf.MERGE_LEDGER_SCHEMA_V4,
+        schema=okf.MERGE_LEDGER_SCHEMA_V5,
         merged_at=merged_at,
         absorbed_id=absorbed_id,
         absorbed_snapshot=absorbed_text,
         survivor_before=survivor_text,
-        index_before=index_text,
-        log_before=log_text,
+        # #758: V5 records the catalog DELTA, not two whole-file snapshots.
+        # `index_restores` is derived from the SAME removal the merge is
+        # about to perform, so the ledger cannot describe an edit that did
+        # not happen; `log.md` needs no field at all (see
+        # `MERGE_LEDGER_SCHEMA_V5`).
+        index_before="",
+        log_before="",
+        index_restores=bundle_index.removed_entry_restores(index_text, absorbed_id),
         link_rewrites=list(link_rewrites) if link_rewrites is not None else [],
         sensitivity_before=""
         if sensitivity_before is None
@@ -213,11 +242,59 @@ def plan_merge(
     )
 
 
+def _restored_catalog_and_log(
+    entry: okf.MergeLedgerEntry,
+    *,
+    survivor_id: str,
+    absorbed_id: str,
+    current_index_text: str | None,
+    current_log_text: str | None,
+) -> tuple[str, str]:
+    """The `index.md`/`log.md` text `unmerge` must write, for either ledger
+    shape (issue #758).
+
+    A V5 entry is reversed SURGICALLY against the CURRENT files: the
+    recorded bullets go back into today's catalog and this merge's own log
+    line comes out of today's log, so catalog/log work that landed between
+    the merge and the unmerge survives. Both current texts are therefore
+    REQUIRED for a V5 entry -- a caller that omits them is asking for a
+    reversal with no base to apply it to, which fails loudly here rather
+    than silently restoring nothing.
+
+    A V1-V4 entry still carries the two whole-file snapshots and is still
+    restored wholesale from them, unchanged (the dual-shape ruling on
+    #758): its recorded pre-merge bytes are the only reversal information
+    it has, so narrowing its behavior retroactively would be inventing a
+    delta nobody recorded.
+
+    Both paths fail closed rather than approximate: `restore_entries`
+    refuses an ambiguous anchor and `remove_inserted_entry` refuses a
+    bullet it cannot find exactly once."""
+    if entry.schema != okf.MERGE_LEDGER_SCHEMA_V5:
+        return entry.index_before, entry.log_before
+    if current_index_text is None or current_log_text is None:
+        raise ValueError(
+            f"reversing a {okf.MERGE_LEDGER_SCHEMA_V5} entry needs the current "
+            "index.md and log.md text -- it records the merge's delta, not a "
+            "pre-merge snapshot"
+        )
+    restored_index, _ = bundle_index.restore_entries(
+        current_index_text, entry.index_restores
+    )
+    restored_log, _ = bundle_log.remove_inserted_entry(
+        current_log_text,
+        merge_log_entry(survivor_id=survivor_id, absorbed_id=absorbed_id),
+    )
+    return restored_index, restored_log
+
+
 def plan_unmerge(
     *,
     survivor_id: str,
     absorbed_id: str,
     entries: list[okf.MergeLedgerEntry],
+    current_index_text: str | None = None,
+    current_log_text: str | None = None,
 ) -> UnmergePlan:
     """Pure planning: reverse ONLY the LIFO-tail entry of `entries`, without
     writing anything (spec: Unmerge Achieves Round-Trip Parity).
@@ -245,6 +322,12 @@ def plan_unmerge(
     Unmerge of a non-merged pair). `remaining_entries` is `entries` with
     the tail popped -- the sidecar's new content once a later unit writes
     it.
+
+    `current_index_text`/`current_log_text` are the CURRENT on-disk
+    `index.md`/`log.md`. They are REQUIRED for a V5 (delta) tail entry and
+    ignored for a V1-V4 (snapshot) one -- see `_restored_catalog_and_log`
+    -- and default to `None` so a caller reversing an old snapshot entry
+    needs no knowledge of the newer shape.
     """
     _reject_same_or_blank(survivor_id, absorbed_id)
 
@@ -287,11 +370,19 @@ def plan_unmerge(
             "unmerge refused"
         )
 
+    restored_index, restored_log = _restored_catalog_and_log(
+        tail,
+        survivor_id=survivor_id,
+        absorbed_id=absorbed_id,
+        current_index_text=current_index_text,
+        current_log_text=current_log_text,
+    )
+
     return UnmergePlan(
         restored_survivor=tail.survivor_before,
         restored_absorbed=tail.absorbed_snapshot,
-        restored_index=tail.index_before,
-        restored_log=tail.log_before,
+        restored_index=restored_index,
+        restored_log=restored_log,
         link_rewrites=list(tail.link_rewrites),
         relation_rewrites=list(tail.relation_rewrites),
         provenance_rewrites=list(tail.provenance_rewrites),

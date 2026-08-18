@@ -15,11 +15,14 @@ context_window: 12288     # tokens the model holds at once (prompt + reply); unp
 # type_tiers:             # per-concept-type volatility tier overrides (overrides
 #   Person: volatile      # the built-in registry default; see docs/adr/0007)
 # type_sensitivity_defaults:  # per-type birth offset above `default_sensitivity`,
-#   Person: 1             # in levels, clamped at confidential. Ships as
-                          # `Person: 1`, so a Person is born one level above the
-                          # floor; set to 0 to opt a type out. The high-water-mark
-                          # over cited sources still wins whenever it is higher.
-                          # See docs/adr/0015.
+#   Person: 1             # in levels, clamped at confidential. Ships EMPTY --
+                          # every type is born at the floor unless you say
+                          # otherwise. Uncommenting the two lines above is the
+                          # recommended setting if this workspace holds material
+                          # about other people: a Person is then born one level
+                          # above the floor. The high-water-mark over cited
+                          # sources still wins whenever it is higher.
+                          # See docs/adr/0015 and docs/adr/0017.
 # models:                 # per-task model overrides. Every task follows
 #   edge_typing: gemma2:27b  # `model:` by default, so nothing here needs a
                           # second `ollama pull`. gemma2:27b is the one

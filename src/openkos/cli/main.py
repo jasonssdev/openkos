@@ -756,6 +756,24 @@ def _scrub_entry_snapshots(
     absorbed_snapshot = _scrub(entry.absorbed_snapshot)
     index_before = _scrub(entry.index_before)
     log_before = _scrub(entry.log_before)
+    # #758: a V5 entry keeps no catalog snapshots -- its catalog data is the
+    # recorded delta, and it is swept by the SAME structural matcher. A
+    # restore is dropped whole rather than blanked, on either of its two
+    # fields: `line` IS the member's own catalog bullet (title, description,
+    # link), and `preceded_by` is a verbatim copy of a NEIGHBOURING
+    # concept's bullet, which carries that concept's data just as fully when
+    # it is the one being forgotten. Dropping it costs the ability to put
+    # that bullet back, which is the trade the spec already names -- privacy
+    # over reversibility (#602's rule) -- and the surgical reversal then
+    # restores the rest of the catalog without the forgotten line rather
+    # than refusing outright.
+    index_restores = [
+        restore
+        for restore in entry.index_restores
+        if _scrub_referring_bullets(restore.line, purge_ids) == restore.line
+        and _scrub_referring_bullets(restore.preceded_by, purge_ids)
+        == restore.preceded_by
+    ]
     relation_rewrites = [
         dataclasses.replace(rewrite, snapshot=_scrub(rewrite.snapshot))
         for rewrite in entry.relation_rewrites
@@ -772,6 +790,7 @@ def _scrub_entry_snapshots(
         absorbed_snapshot=absorbed_snapshot,
         index_before=index_before,
         log_before=log_before,
+        index_restores=index_restores,
         relation_rewrites=relation_rewrites,
         provenance_rewrites=provenance_rewrites,
     )
@@ -8025,7 +8044,7 @@ def _reverse_link_rewrite_idempotently(
 
 def _expected_post_merge_index_and_log(
     entry: okf.MergeLedgerEntry, *, survivor_id: str, absorbed_id: str
-) -> tuple[str, str]:
+) -> tuple[str, str] | None:
     """Reconstruct what `index.md`/`log.md` looked like immediately AFTER
     the merge `entry` records, by replaying the SAME deterministic
     transforms `merge` itself applied to `entry.index_before`/
@@ -8037,14 +8056,21 @@ def _expected_post_merge_index_and_log(
     (another `ingest`/`forget`/unrelated `merge`) touched them since" --
     `unmerge` unconditionally overwrites both with the PRE-merge snapshot
     regardless, but the caller uses this to decide whether to surface a
-    warning about that discard (principle #3: reviewable, not silent)."""
+    warning about that discard (principle #3: reviewable, not silent).
+
+    Returns `None` for a V5 entry (#758), which has no snapshots to
+    reconstruct from and needs none: its reversal is surgical, so
+    intervening catalog/log work is PRESERVED rather than discarded and
+    there is no discard left to warn about. Callers must treat `None` as
+    "nothing to compare, nothing to warn" -- not as "no drift"."""
+    if entry.schema == okf.MERGE_LEDGER_SCHEMA_V5:
+        return None
     expected_index, _ = bundle_index.remove_index_entry(entry.index_before, absorbed_id)
     merge_date = datetime.fromisoformat(entry.merged_at).astimezone().date()
     expected_log = bundle_log.insert_log_entry(
         entry.log_before,
         merge_date,
-        f"**Merge**: Merged [{absorbed_id}](/{absorbed_id}.md) "
-        f"into [{survivor_id}](/{survivor_id}.md).",
+        bundle_merge.merge_log_entry(survivor_id=survivor_id, absorbed_id=absorbed_id),
     )
     return expected_index, expected_log
 
@@ -8274,7 +8300,6 @@ def prepare_merge(
         survivor_text=survivor_text,
         absorbed_text=absorbed_text,
         index_text=index_text,
-        log_text=log_text,
         merged_at=now.isoformat(),
         existing_entries=existing_entries,
         link_rewrites=link_rewrites,
@@ -8323,8 +8348,9 @@ def prepare_merge(
     new_log_text = bundle_log.insert_log_entry(
         log_text,
         now.astimezone().date(),
-        f"**Merge**: Merged [{absorbed_canonical}](/{absorbed_canonical}.md) "
-        f"into [{survivor_canonical}](/{survivor_canonical}.md).",
+        bundle_merge.merge_log_entry(
+            survivor_id=survivor_canonical, absorbed_id=absorbed_canonical
+        ),
     )
 
     rewritten_files = sorted({rewrite.file for rewrite in link_rewrites})
@@ -9307,8 +9333,19 @@ def _unwind_step_preview_lines(
             f"  ~ bundle/{rel} (restore pre-merge provenance snapshot)"
             for rel in provenance_files
         ),
-        "  ~ index.md (restore pre-merge contents)",
-        "  ~ log.md (restore pre-merge contents, append unmerge entry)",
+        # #758: same two shapes as the single-step preview -- a V5 entry
+        # reverses only this merge's own catalog/log edit.
+        *(
+            [
+                "  ~ index.md (restore this merge's catalog entry)",
+                "  ~ log.md (remove this merge's entry, append unmerge)",
+            ]
+            if entry.schema == okf.MERGE_LEDGER_SCHEMA_V5
+            else [
+                "  ~ index.md (restore pre-merge contents)",
+                "  ~ log.md (restore pre-merge contents, append unmerge entry)",
+            ]
+        ),
         f"  ~ bundle/{survivor_canonical}.md (restore pre-merge contents)",
         f"  + bundle/{entry.absorbed_id}.md (restore)",
     ]
@@ -9474,10 +9511,19 @@ def _execute_single_unmerge(
         existing_entries = bundle_ledger.read_entries(
             survivor_canonical, layout.bundle_dir
         )
+        # Read BEFORE planning (#758): a V5 entry records the merge's
+        # catalog delta, so the reversal is computed against these current
+        # texts rather than replayed from a snapshot. Still ONE observation
+        # each, feeding both the plan and the drift guard's baseline -- the
+        # invariant #318 closed is unchanged, only its position moved.
+        index_bytes, current_index_text = _snapshot_read(index_path)
+        log_bytes, current_log_text = _snapshot_read(log_path)
         plan = bundle_merge.plan_unmerge(
             survivor_id=survivor_canonical,
             absorbed_id=absorbed_canonical,
             entries=existing_entries,
+            current_index_text=current_index_text,
+            current_log_text=current_log_text,
         )
 
         absorbed_path = layout.bundle_dir / f"{absorbed_canonical}.md"
@@ -9487,16 +9533,17 @@ def _execute_single_unmerge(
                 "already exists at that path"
             )
 
-        index_bytes, current_index_text = _snapshot_read(index_path)
-        log_bytes, current_log_text = _snapshot_read(log_path)
-        expected_index_text, expected_log_text = _expected_post_merge_index_and_log(
+        expected_catalog_and_log = _expected_post_merge_index_and_log(
             plan.entry,
             survivor_id=survivor_canonical,
             absorbed_id=absorbed_canonical,
         )
-        catalog_log_drifted = (
-            current_index_text != expected_index_text
-            or current_log_text != expected_log_text
+        # `None` is a V5 (delta) entry: nothing is discarded, so nothing is
+        # warned about (#758). Only the snapshot shapes can silently drop
+        # intervening catalog/log work, and only they warn.
+        catalog_log_drifted = expected_catalog_and_log is not None and (
+            current_index_text != expected_catalog_and_log[0]
+            or current_log_text != expected_catalog_and_log[1]
         )
 
         # Precedence, generalized to three rewrite kinds (provenance >
@@ -9598,10 +9645,18 @@ def _execute_single_unmerge(
         typer.echo(f"  ~ bundle/{rel} (restore pre-merge relations snapshot)")
     for rel in provenance_rewrite_files:
         typer.echo(f"  ~ bundle/{rel} (restore pre-merge provenance snapshot)")
-    typer.echo(f"  ~ {index_path.name} (restore pre-merge contents)")
-    typer.echo(
-        f"  ~ {log_path.name} (restore pre-merge contents, append unmerge entry)"
-    )
+    # #758: a V5 entry reverses the merge's own catalog/log edit and leaves
+    # everything else standing, so the preview must not keep promising a
+    # wholesale restore -- the two shapes really do different things to
+    # these two files, and the operator is consenting to one of them.
+    if plan.entry.schema == okf.MERGE_LEDGER_SCHEMA_V5:
+        typer.echo(f"  ~ {index_path.name} (restore this merge's catalog entry)")
+        typer.echo(f"  ~ {log_path.name} (remove this merge's entry, append unmerge)")
+    else:
+        typer.echo(f"  ~ {index_path.name} (restore pre-merge contents)")
+        typer.echo(
+            f"  ~ {log_path.name} (restore pre-merge contents, append unmerge entry)"
+        )
     typer.echo(f"  ~ bundle/{survivor_canonical}.md (restore pre-merge contents)")
     typer.echo(f"  + bundle/{absorbed_canonical}.md (restore)")
     if catalog_log_drifted:

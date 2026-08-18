@@ -11,10 +11,29 @@ import pytest
 from openkos.bundle import merge as bundle_merge
 from openkos.model import okf
 
+_ABSORBED_BULLET = "* [Absorbed](/concepts/absorbed.md) - Absorbed description.\n"
+"""The catalog bullet a merge of `concepts/absorbed` actually removes.
+
+The fixture used to be a bare `* entry` matching no concept id, which made
+every delta assertion (#758) vacuous: `removed_entry_restores` returned
+`[]`, so a round trip could not tell a correct reversal from one that did
+nothing at all."""
+
 _INDEX_TEXT = okf.dump_frontmatter(
-    {"okf_version": okf.OKF_VERSION}, "# Concepts\n\n* entry\n"
+    {"okf_version": okf.OKF_VERSION},
+    "# Concepts\n\n"
+    "* [Survivor](/concepts/survivor.md) - Survivor description.\n"
+    f"{_ABSORBED_BULLET}",
 )
 _LOG_TEXT = "# Directory Update Log\n\n## 2026-07-19\n\n* Entry.\n"
+
+_POST_MERGE_INDEX_TEXT = _INDEX_TEXT.replace(_ABSORBED_BULLET, "")
+"""`_INDEX_TEXT` as the merge leaves it -- the absorbed bullet gone.
+
+A V5 reversal is computed against the CURRENT catalog rather than replayed
+from a snapshot (#758), so this is what `plan_unmerge` must be handed for a
+round trip to mean anything: restoring into it has to reproduce
+`_INDEX_TEXT` byte for byte."""
 
 
 def _survivor_text(**overrides: object) -> str:
@@ -56,7 +75,6 @@ def test_plan_merge_body_appends_absorbed_content() -> None:
         survivor_text=_survivor_text(),
         absorbed_text=_absorbed_text(),
         index_text=_INDEX_TEXT,
-        log_text=_LOG_TEXT,
         merged_at="2026-07-20T00:00:00Z",
     )
 
@@ -74,7 +92,6 @@ def test_plan_merge_provenance_unioned_deduped_order_preserving() -> None:
         survivor_text=_survivor_text(provenance=["sources/call-a", "sources/shared"]),
         absorbed_text=_absorbed_text(provenance=["sources/shared", "sources/call-b"]),
         index_text=_INDEX_TEXT,
-        log_text=_LOG_TEXT,
         merged_at="2026-07-20T00:00:00Z",
     )
 
@@ -103,7 +120,6 @@ def test_plan_merge_frontmatter_conflicts_scalar_list_freshness() -> None:
             freshness="verified",
         ),
         index_text=_INDEX_TEXT,
-        log_text=_LOG_TEXT,
         merged_at="2026-07-20T00:00:00Z",
     )
 
@@ -122,7 +138,6 @@ def test_plan_merge_sensitivity_recomputed() -> None:
         survivor_text=_survivor_text(sensitivity="private"),
         absorbed_text=_absorbed_text(sensitivity="confidential"),
         index_text=_INDEX_TEXT,
-        log_text=_LOG_TEXT,
         merged_at="2026-07-20T00:00:00Z",
     )
 
@@ -149,7 +164,6 @@ def test_plan_merge_ledger_entry_captures_full_pre_merge_snapshot_set() -> None:
         survivor_text=survivor_text,
         absorbed_text=absorbed_text,
         index_text=_INDEX_TEXT,
-        log_text=_LOG_TEXT,
         merged_at="2026-07-20T00:00:00Z",
         link_rewrites=[link_rewrite],
     )
@@ -158,8 +172,10 @@ def test_plan_merge_ledger_entry_captures_full_pre_merge_snapshot_set() -> None:
     assert entry.absorbed_id == "concepts/absorbed"
     assert entry.absorbed_snapshot == absorbed_text
     assert entry.survivor_before == survivor_text
-    assert entry.index_before == _INDEX_TEXT
-    assert entry.log_before == _LOG_TEXT
+    # #758: V5 stores the catalog DELTA, not two whole-file snapshots.
+    assert entry.index_before == ""
+    assert entry.log_before == ""
+    assert [restore.line for restore in entry.index_restores] == [_ABSORBED_BULLET]
     assert entry.link_rewrites == [link_rewrite]
     assert entry.sensitivity_after == "confidential"
     assert entry.merged_at == "2026-07-20T00:00:00Z"
@@ -174,7 +190,6 @@ def test_plan_merge_link_rewrites_default_to_empty_list() -> None:
         survivor_text=_survivor_text(),
         absorbed_text=_absorbed_text(),
         index_text=_INDEX_TEXT,
-        log_text=_LOG_TEXT,
         merged_at="2026-07-20T00:00:00Z",
     )
 
@@ -191,7 +206,6 @@ def test_plan_merge_survivor_carries_no_merged_from_key() -> None:
         survivor_text=_survivor_text(),
         absorbed_text=_absorbed_text(),
         index_text=_INDEX_TEXT,
-        log_text=_LOG_TEXT,
         merged_at="2026-07-20T00:00:00Z",
     )
 
@@ -215,7 +229,6 @@ def test_plan_merge_sequential_survivor_before_retains_prior_entry() -> None:
         survivor_text=_survivor_text(),
         absorbed_text=_absorbed_text(),
         index_text=_INDEX_TEXT,
-        log_text=_LOG_TEXT,
         merged_at="2026-07-18T00:00:00Z",
     )
     survivor_after_first_merge = first_plan.merged_survivor
@@ -226,7 +239,6 @@ def test_plan_merge_sequential_survivor_before_retains_prior_entry() -> None:
         survivor_text=survivor_after_first_merge,
         absorbed_text=_absorbed_text(title="Third"),
         index_text=_INDEX_TEXT,
-        log_text=_LOG_TEXT,
         merged_at="2026-07-20T00:00:00Z",
         existing_entries=first_plan.ledger_entries,
     )
@@ -249,7 +261,6 @@ def test_plan_merge_rejects_duplicate_absorbed_id() -> None:
         survivor_text=_survivor_text(),
         absorbed_text=_absorbed_text(),
         index_text=_INDEX_TEXT,
-        log_text=_LOG_TEXT,
         merged_at="2026-07-18T00:00:00Z",
     )
 
@@ -260,7 +271,6 @@ def test_plan_merge_rejects_duplicate_absorbed_id() -> None:
             survivor_text=first_plan.merged_survivor,
             absorbed_text=_absorbed_text(title="Absorbed Again"),
             index_text=_INDEX_TEXT,
-            log_text=_LOG_TEXT,
             merged_at="2026-07-20T00:00:00Z",
             existing_entries=first_plan.ledger_entries,
         )
@@ -275,7 +285,6 @@ def test_plan_merge_rejects_self_merge() -> None:
             survivor_text=_survivor_text(),
             absorbed_text=_absorbed_text(),
             index_text=_INDEX_TEXT,
-            log_text=_LOG_TEXT,
             merged_at="2026-07-20T00:00:00Z",
         )
 
@@ -288,7 +297,6 @@ def test_plan_merge_rejects_blank_survivor_id() -> None:
             survivor_text=_survivor_text(),
             absorbed_text=_absorbed_text(),
             index_text=_INDEX_TEXT,
-            log_text=_LOG_TEXT,
             merged_at="2026-07-20T00:00:00Z",
         )
 
@@ -301,7 +309,6 @@ def test_plan_merge_rejects_blank_absorbed_id() -> None:
             survivor_text=_survivor_text(),
             absorbed_text=_absorbed_text(),
             index_text=_INDEX_TEXT,
-            log_text=_LOG_TEXT,
             merged_at="2026-07-20T00:00:00Z",
         )
 
@@ -316,7 +323,6 @@ def test_plan_unmerge_restores_survivor_and_absorbed_from_snapshots() -> None:
         survivor_text=survivor_text,
         absorbed_text=absorbed_text,
         index_text=_INDEX_TEXT,
-        log_text=_LOG_TEXT,
         merged_at="2026-07-20T00:00:00Z",
     )
 
@@ -324,6 +330,8 @@ def test_plan_unmerge_restores_survivor_and_absorbed_from_snapshots() -> None:
         survivor_id="concepts/survivor",
         absorbed_id="concepts/absorbed",
         entries=plan.ledger_entries,
+        current_index_text=_POST_MERGE_INDEX_TEXT,
+        current_log_text=_LOG_TEXT,
     )
 
     assert unmerge_plan.restored_survivor == survivor_text
@@ -344,7 +352,6 @@ def test_plan_unmerge_lifo_tail_targeting() -> None:
         survivor_text=_survivor_text(),
         absorbed_text=_absorbed_text(),
         index_text=_INDEX_TEXT,
-        log_text=_LOG_TEXT,
         merged_at="2026-07-18T00:00:00Z",
     )
     second_plan = bundle_merge.plan_merge(
@@ -353,7 +360,6 @@ def test_plan_unmerge_lifo_tail_targeting() -> None:
         survivor_text=first_plan.merged_survivor,
         absorbed_text=_absorbed_text(title="Third"),
         index_text=_INDEX_TEXT,
-        log_text=_LOG_TEXT,
         merged_at="2026-07-20T00:00:00Z",
         existing_entries=first_plan.ledger_entries,
     )
@@ -363,6 +369,8 @@ def test_plan_unmerge_lifo_tail_targeting() -> None:
             survivor_id="concepts/survivor",
             absorbed_id="concepts/absorbed-b",
             entries=second_plan.ledger_entries,
+            current_index_text=_POST_MERGE_INDEX_TEXT,
+            current_log_text=_LOG_TEXT,
         )
 
 
@@ -376,7 +384,6 @@ def test_plan_unmerge_sequential_lifo_tail_then_prior_entry() -> None:
         survivor_text=_survivor_text(),
         absorbed_text=_absorbed_text(),
         index_text=_INDEX_TEXT,
-        log_text=_LOG_TEXT,
         merged_at="2026-07-18T00:00:00Z",
     )
     second_plan = bundle_merge.plan_merge(
@@ -385,7 +392,6 @@ def test_plan_unmerge_sequential_lifo_tail_then_prior_entry() -> None:
         survivor_text=first_plan.merged_survivor,
         absorbed_text=_absorbed_text(title="Third"),
         index_text=_INDEX_TEXT,
-        log_text=_LOG_TEXT,
         merged_at="2026-07-20T00:00:00Z",
         existing_entries=first_plan.ledger_entries,
     )
@@ -394,6 +400,8 @@ def test_plan_unmerge_sequential_lifo_tail_then_prior_entry() -> None:
         survivor_id="concepts/survivor",
         absorbed_id="concepts/absorbed-c",
         entries=second_plan.ledger_entries,
+        current_index_text=_POST_MERGE_INDEX_TEXT,
+        current_log_text=_LOG_TEXT,
     )
     assert tail_unmerge.restored_survivor == first_plan.merged_survivor
     assert tail_unmerge.remaining_entries == first_plan.ledger_entries
@@ -402,6 +410,8 @@ def test_plan_unmerge_sequential_lifo_tail_then_prior_entry() -> None:
         survivor_id="concepts/survivor",
         absorbed_id="concepts/absorbed-b",
         entries=tail_unmerge.remaining_entries,
+        current_index_text=_POST_MERGE_INDEX_TEXT,
+        current_log_text=_LOG_TEXT,
     )
     assert prior_unmerge.restored_survivor == _survivor_text()
     assert prior_unmerge.restored_absorbed == _absorbed_text()
@@ -415,6 +425,8 @@ def test_plan_unmerge_rejects_non_merged_pair() -> None:
             survivor_id="concepts/survivor",
             absorbed_id="concepts/never-merged",
             entries=[],
+            current_index_text=_POST_MERGE_INDEX_TEXT,
+            current_log_text=_LOG_TEXT,
         )
 
 
@@ -424,6 +436,8 @@ def test_plan_unmerge_rejects_self_merge_ids() -> None:
             survivor_id="concepts/same",
             absorbed_id="concepts/same",
             entries=[],
+            current_index_text=_POST_MERGE_INDEX_TEXT,
+            current_log_text=_LOG_TEXT,
         )
 
 
@@ -452,7 +466,6 @@ def test_plan_merge_moves_absorbed_outbound_relations_onto_survivor() -> None:
         survivor_text=_survivor_text(),
         absorbed_text=absorbed_text,
         index_text=_INDEX_TEXT,
-        log_text=_LOG_TEXT,
         merged_at="2026-07-20T00:00:00Z",
     )
 
@@ -468,6 +481,8 @@ def test_plan_unmerge_rejects_blank_ids() -> None:
             survivor_id="  ",
             absorbed_id="concepts/absorbed",
             entries=[],
+            current_index_text=_POST_MERGE_INDEX_TEXT,
+            current_log_text=_LOG_TEXT,
         )
 
 
@@ -483,11 +498,10 @@ def test_plan_merge_always_writes_v4_schema() -> None:
         survivor_text=_survivor_text(),
         absorbed_text=_absorbed_text(),
         index_text=_INDEX_TEXT,
-        log_text=_LOG_TEXT,
         merged_at="2026-07-20T00:00:00Z",
     )
 
-    assert plan.ledger_entry.schema == okf.MERGE_LEDGER_SCHEMA_V4
+    assert plan.ledger_entry.schema == okf.MERGE_LEDGER_SCHEMA_V5
 
 
 def test_plan_merge_provenance_rewrites_default_to_empty_list() -> None:
@@ -500,7 +514,6 @@ def test_plan_merge_provenance_rewrites_default_to_empty_list() -> None:
         survivor_text=_survivor_text(),
         absorbed_text=_absorbed_text(),
         index_text=_INDEX_TEXT,
-        log_text=_LOG_TEXT,
         merged_at="2026-07-20T00:00:00Z",
     )
 
@@ -521,13 +534,12 @@ def test_plan_merge_threads_provenance_rewrites_into_ledger_entry() -> None:
         survivor_text=_survivor_text(),
         absorbed_text=_absorbed_text(),
         index_text=_INDEX_TEXT,
-        log_text=_LOG_TEXT,
         merged_at="2026-07-20T00:00:00Z",
         provenance_rewrites=[provenance_rewrite],
     )
 
     assert plan.ledger_entry.provenance_rewrites == [provenance_rewrite]
-    assert plan.ledger_entry.schema == okf.MERGE_LEDGER_SCHEMA_V4
+    assert plan.ledger_entry.schema == okf.MERGE_LEDGER_SCHEMA_V5
     assert plan.ledger_entries == [plan.ledger_entry]
 
 
@@ -544,7 +556,6 @@ def test_plan_unmerge_provenance_rewrites_round_trip() -> None:
         survivor_text=_survivor_text(),
         absorbed_text=_absorbed_text(),
         index_text=_INDEX_TEXT,
-        log_text=_LOG_TEXT,
         merged_at="2026-07-20T00:00:00Z",
         provenance_rewrites=[provenance_rewrite],
     )
@@ -553,6 +564,8 @@ def test_plan_unmerge_provenance_rewrites_round_trip() -> None:
         survivor_id="concepts/survivor",
         absorbed_id="concepts/absorbed",
         entries=plan.ledger_entries,
+        current_index_text=_POST_MERGE_INDEX_TEXT,
+        current_log_text=_LOG_TEXT,
     )
 
     assert unmerge_plan.provenance_rewrites == [provenance_rewrite]
@@ -575,7 +588,6 @@ def _chained_entries(*absorbed_ids: str) -> list[okf.MergeLedgerEntry]:
             survivor_text=survivor_text,
             absorbed_text=_absorbed_text(title=f"Absorbed {n}"),
             index_text=_INDEX_TEXT,
-            log_text=_LOG_TEXT,
             merged_at=f"2026-07-{18 + n:02d}T00:00:00Z",
             existing_entries=entries,
         )
@@ -598,6 +610,8 @@ def test_plan_unmerge_non_tail_error_lists_the_full_unwind_sequence() -> None:
             survivor_id="concepts/survivor",
             absorbed_id="concepts/absorbed-a",
             entries=entries,
+            current_index_text=_POST_MERGE_INDEX_TEXT,
+            current_log_text=_LOG_TEXT,
         )
 
     message = str(excinfo.value)
@@ -619,6 +633,8 @@ def test_plan_unmerge_unknown_absorbed_id_refuses_without_an_unwind_hint() -> No
             survivor_id="concepts/survivor",
             absorbed_id="concepts/never-merged",
             entries=entries,
+            current_index_text=_POST_MERGE_INDEX_TEXT,
+            current_log_text=_LOG_TEXT,
         )
 
     message = str(excinfo.value)
@@ -726,12 +742,11 @@ def test_plan_merge_writes_v4_and_annotates_reconciled_prior_content() -> None:
         survivor_text=reconciled_survivor,
         absorbed_text=_absorbed_text(),
         index_text=_INDEX_TEXT,
-        log_text=_LOG_TEXT,
         merged_at="2026-07-20T00:00:00Z",
         existing_entries=[_prior_entry("concepts/first")],
     )
 
-    assert plan.ledger_entry.schema == okf.MERGE_LEDGER_SCHEMA_V4
+    assert plan.ledger_entry.schema == okf.MERGE_LEDGER_SCHEMA_V5
     assert plan.ledger_entry.carried_content_ids == ["concepts/first"]
 
 
@@ -751,7 +766,6 @@ def test_plan_merge_does_not_annotate_a_still_delimited_prior_section() -> None:
         survivor_text=stacked_survivor,
         absorbed_text=_absorbed_text(),
         index_text=_INDEX_TEXT,
-        log_text=_LOG_TEXT,
         merged_at="2026-07-20T00:00:00Z",
         existing_entries=[_prior_entry("concepts/first")],
     )
@@ -785,7 +799,6 @@ def test_plan_merge_does_not_annotate_an_empty_bodied_prior() -> None:
         survivor_text=reconciled_survivor,
         absorbed_text=_absorbed_text(),
         index_text=_INDEX_TEXT,
-        log_text=_LOG_TEXT,
         merged_at="2026-07-20T00:00:00Z",
         existing_entries=[empty_prior],
     )
@@ -815,7 +828,6 @@ def test_plan_merge_still_annotates_a_malformed_prior_snapshot() -> None:
         survivor_text=reconciled_survivor,
         absorbed_text=_absorbed_text(),
         index_text=_INDEX_TEXT,
-        log_text=_LOG_TEXT,
         merged_at="2026-07-20T00:00:00Z",
         existing_entries=[malformed_prior],
     )
@@ -839,4 +851,6 @@ def test_plan_unmerge_refuses_a_redacted_survivor_snapshot() -> None:
             survivor_id="concepts/survivor",
             absorbed_id="concepts/first",
             entries=[redacted_tail],
+            current_index_text=_POST_MERGE_INDEX_TEXT,
+            current_log_text=_LOG_TEXT,
         )

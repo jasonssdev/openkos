@@ -63,6 +63,50 @@ The diverging family is instructive:
 | `scaffold` | `fuentes-inmutables` | `por-qué-importan-las-fuentes-inmutables` |
 | `clause` | `las-fuentes-inmutables-son-importantes` | `las-fuentes-inmutables-importan` |
 
+## #757 asks for the `scaffold` arm, and the same numbers refuse it
+
+[#757](https://github.com/jasonssdev/openkos/issues/757) reopens the request
+one day later: *"Applying the subject-derived title in the ordinary case —
+rather than only as a fallback when the first clause is unusable — is the
+change."* That is this harness's `scaffold` arm, re-scored here at zero cost
+over the stored population.
+
+**Three of the issue's claims do not survive contact with the code or the
+measurement.**
+
+1. **Its description of the current ladder is wrong.** The shipped order is
+   `_declarative_answer_title` → `_question_subject` → `_clause_answer_title`
+   → the question verbatim. The subject rung is already ABOVE the clause
+   rung, not below it — and that ordering was MEASURED, not assumed: with the
+   clause rung on top, `¿qué es la trazabilidad?` over a long opening cuts to
+   `La trazabilidad`, article and all, where the subject rung gives the
+   cleaner `Trazabilidad`.
+
+2. **"Keep the original question as a field" already ships.** `query --save`
+   assigns the question as the filing's default `description`
+   (`resolved_description = question if description is None else description`),
+   pinned by `test_stage_filed_answer_title_description_default_to_question`.
+   Nothing is lost today.
+
+3. **The widening it asks for measures WORSE than what ships.** Alone,
+   `scaffold` leaves 35 of 170 filings titled by the question against the
+   shipped `clause` arm's 16. Stacked on top of it, `clause+scaffold` reaches
+   13 — three filings out of 170, bought with a prefix list somebody has to
+   keep extending, whose blind spot is measured rather than hypothesized
+   (`por qué importan ` is one word from its `por qué son importantes `
+   entry and returns `None`).
+
+**And #757's own second cost is unfixed by the thing it asks for.** The issue
+argues the slug is the identity, so two phrasings of one question file as
+unrelated objects that duplicate detection cannot group. Convergence is
+**8 of 16 for every arm, including `scaffold`** — identical to the baseline.
+The remedy does not touch the harm.
+
+What remains real is the residual 9%: filings still named after the question
+under the shipped ladder. Any future attempt on them should be measured
+against this population before it is written, and should be aimed at
+convergence, which nothing here has moved.
+
 ## Why `scaffold` was not adopted
 
 Its blind spot is **measured, not hypothesized**. `por qué importan ` is one

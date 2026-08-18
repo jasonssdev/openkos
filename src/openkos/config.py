@@ -95,11 +95,29 @@ DEFAULT_REVIEW = True
 DEFAULT_SENSITIVITY = "private"
 """Packaged default for `default_sensitivity`, matching `openkos.yaml.template`."""
 
-DEFAULT_TYPE_SENSITIVITY_DEFAULTS: Final[dict[str, int]] = {"Person": 1}
-"""Packaged default for `type_sensitivity_defaults` (issue #669, ADR-0015):
-`Person` concepts are born one level above the workspace `default_sensitivity`
-floor. `read_config` always returns a COPY of this dict, never the shared
-module object -- a caller mutating the returned mapping must not corrupt the
+DEFAULT_TYPE_SENSITIVITY_DEFAULTS: Final[dict[str, int]] = {}
+"""Packaged default for `type_sensitivity_defaults` (issue #669, ADR-0015;
+EMPTIED by #756): no type is born above the workspace `default_sensitivity`
+floor unless the operator says so.
+
+**The empty mapping is the policy, not an oversight.** This shipped as
+`{"Person": 1}`, and the mechanism is worth having -- but deciding on the
+operator's behalf was wrong on the primary use case, a local bundle against
+a local backend. There it protects nothing: with
+`confidential_local_exemption` on and a verified-local Ollama, confidential
+objects participate normally, so the setting produced notices and no
+exclusion. And it diluted the signal it is made of -- when 100% of a type
+is `confidential`, the marker stops meaning "this one is especially
+sensitive" and starts meaning "this is a Person", the same failure that got
+the `type_alternative` notice aggregated. Type correlates with risk; it
+does not measure it (a Person extracted from published council minutes is
+not sensitive). So the offset is documented as a RECOMMENDED opt-in for
+anyone working with material about third parties, and the packaged policy
+is "none". Please do not restore `{"Person": 1}` on the assumption that an
+empty default was an accident.
+
+`read_config` always returns a COPY of this dict, never the shared module
+object -- a caller mutating the returned mapping must not corrupt the
 packaged default for the next `read_config` call."""
 
 DEFAULT_CONFIDENTIAL_LOCAL_EXEMPTION = True
@@ -823,10 +841,12 @@ class Config:
     never depends on `union_judge`."""
     type_sensitivity_defaults: dict[str, int]
     """Per-OKF-type sensitivity offset above `default_sensitivity` (issue
-    #669, ADR-0015): `DEFAULT_TYPE_SENSITIVITY_DEFAULTS` (`{"Person": 1}`,
-    a copy) when the key is absent from `openkos.yaml` or explicitly null;
-    an explicit `{}` is the total opt-out, applying no per-type offset to
-    any type. Unlike `volatility_windows`/`type_tiers`'s lazy passthrough,
+    #669, ADR-0015): `DEFAULT_TYPE_SENSITIVITY_DEFAULTS` (a copy, and EMPTY
+    since #756) when the key is absent from `openkos.yaml` or explicitly
+    null, so a stock workspace applies no per-type offset at all and every
+    object is born at the floor. An explicit `{}` means the same thing said
+    out loud. `Person: 1` is the recommended opt-in for workspaces holding
+    material about third parties. Unlike `volatility_windows`/`type_tiers`'s lazy passthrough,
     entries ARE validated eagerly at `read_config` time (see below),
     mirroring `models:`'s precedent: a silently-wrong SECURITY default
     produces a run that looks completely ordinary.

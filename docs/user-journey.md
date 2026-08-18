@@ -73,7 +73,7 @@ openkos ingest ./call-with-maria-2026-07-14.txt
 
 - **By path.** `ingest <path>` copies the source into `raw/` for the user — they never have to organize folders by hand. Sources keep their own names and extensions, markdown included, and the compiled knowledge lands in `bundle/`.
 - **One file or a batch.** `ingest` takes a `<path>` — a single file, a directory, or a quoted glob (`openkos ingest ./inbox/` or `openkos ingest './inbox/*.txt'`), driving every matched file through the same per-file pipeline with one up-front cost gate for users who want throughput.
-- **Sensitivity at capture.** Sensitivity is not a per-command flag — it comes from `default_sensitivity` in `openkos.yaml`, which sets the floor for everything ingested. It is no longer flat across types, though: `type_sensitivity_defaults` raises a type's birth level above that floor, and ships with `Person: 1`, so a person page compiled from a `private` source is born `confidential` while the concepts beside it stay `private`. **Later MVPs** may add a per-source `--sensitivity` flag for one-off overrides.
+- **Sensitivity at capture.** Sensitivity is not a per-command flag — it comes from `default_sensitivity` in `openkos.yaml`, which sets the floor for everything ingested. It need not be flat across types: `type_sensitivity_defaults` raises a type's birth level above that floor. It ships empty — sensitivity is your call — and `Person: 1` is the recommended setting if the workspace holds material about other people, under which a person page compiled from a `private` source is born `confidential` while the concepts beside it stay `private`. **Later MVPs** may add a per-source `--sensitivity` flag for one-off overrides.
 
 ### Step 2 — Compile
 

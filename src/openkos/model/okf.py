@@ -266,6 +266,29 @@ structural excision cannot reach it). `plan_merge` computes the set at
 snapshot time; `forget`'s sweep redacts the whole snapshot for a match
 (privacy over reversibility, #602's own rule)."""
 
+MERGE_LEDGER_SCHEMA_V5: Final = "openkos.merge_ledger/v5"
+"""The `schema` value every `merged_from` entry carries from #758 onward:
+the catalog snapshots `index_before`/`log_before` are REPLACED by
+`index_restores`, the DELTA the merge actually applied to `index.md`.
+
+V1-V4 stored a full verbatim copy of `index.md` AND `log.md` in every
+entry, so a sidecar scaled with the size of the BUNDLE rather than with
+the size of the merge -- measured at 79.6% of a real sidecar's bytes on a
+33-document workspace after a single merge, and growing super-linearly
+because each successive merge photographs a larger catalog than the last.
+
+`log.md` needs no stored field at all: a merge's only effect on it is one
+`**Merge**: Merged [<absorbed>](...) into [<survivor>](...).` bullet,
+fully derivable from `absorbed_id`, the survivor id, and `merged_at` (the
+same reconstruction `cli._expected_post_merge_index_and_log` already
+performed to detect drift). `index.md` needs only the bullet the merge
+REMOVED plus the line that preceded it, because a catalog bullet carries a
+title and description that no id can regenerate.
+
+The reader still accepts V1-V4 entries, which keep their snapshots and
+their original wholesale-restore behavior (issue #758's dual-shape
+ruling); only entries written from #758 onward are V5."""
+
 REDACTED_SNAPSHOT_SENTINEL: Final = (
     "[redacted by openkos forget: this snapshot carried reconciled "
     "content of a forgotten concept]"
@@ -623,6 +646,56 @@ class LinkRewrite:
 
 
 @dataclass(frozen=True)
+class CatalogLineRestore:
+    """One `index.md` bullet a merge REMOVED, plus the anchor needed to put
+    it back exactly where it was (issue #758, `MERGE_LEDGER_SCHEMA_V5`).
+
+    The V1-V4 ledger stored the whole pre-merge `index.md` and restored it
+    wholesale, which both scaled with the bundle and destroyed any catalog
+    work that landed between the merge and the unmerge. This records the
+    DELTA instead: the exact line, and where it sat.
+
+    `line` is the removed line INCLUDING its trailing newline, so
+    reinsertion is a pure splice with no separator guessing.
+
+    `preceded_by` is the nearest NON-BLANK line above it in the catalog BODY
+    (frontmatter excluded), or `""` when none exists. It is a CONTENT anchor
+    rather than a character offset -- unlike `LinkRewrite`, whose file is
+    restored wholesale around it, a catalog is appended to by every
+    `ingest`, so any offset recorded at merge time is stale by the time
+    `unmerge` runs.
+
+    Blank lines are skipped rather than used (review correction, reliability
+    lens). A section's FIRST bullet is always preceded by the blank line
+    `insert_index_entry` writes under the header, and blank lines are
+    interchangeable and multiply with every new section -- so anchoring on
+    one, and counting its occurrences over the whole body, pointed at a
+    different blank line as soon as any unrelated section was catalogued
+    above it. The bullet then went back in the wrong place, breaking
+    byte-parity through an ordinary `ingest`. A section header or a sibling
+    bullet carries identity; a blank line carries none.
+
+    `blank_gap` is how many blank lines sat between that anchor and the
+    removed line, so the exact position is restored rather than merely the
+    right neighbourhood.
+
+    `preceded_by_occurrence` is the 0-based index of WHICH occurrence of the
+    anchor line this was, counted over NON-BLANK lines only, and exists for
+    exactly the reason `LinkRewrite.offset` does. A catalog may legitimately
+    hold two byte-identical bullets -- `remove_index_entry`'s own contract
+    calls that "a duplicate catalog entry" and handles it rather than
+    refusing -- and a content-only anchor cannot tell them apart, so it
+    would either refuse a reversible merge or reinsert under the wrong one.
+    Reinsertion fails closed when that occurrence no longer exists: a
+    catalog that drifted past recognition must refuse, never guess."""
+
+    line: str
+    preceded_by: str
+    preceded_by_occurrence: int = 0
+    blank_gap: int = 0
+
+
+@dataclass(frozen=True)
 class RelationRewrite:
     """One third-party file's whole-file pre-merge snapshot, recorded when
     that file's `relations:` targeted the absorbed id (design D1/D3; spec:
@@ -735,6 +808,18 @@ class MergeLedgerEntry:
     `plan_merge` always populates it explicitly and always writes
     `MERGE_LEDGER_SCHEMA_V4`."""
 
+    index_restores: list[CatalogLineRestore] = field(default_factory=list)
+    """V5 addition (#758): the `index.md` bullets this merge REMOVED, each
+    with the anchor that puts it back. REPLACES `index_before`/`log_before`
+    -- a V5 entry carries both of those as `""` and `unmerge` reverses the
+    catalog SURGICALLY from this list, instead of overwriting `index.md`
+    with a whole-bundle snapshot. `log.md` has no counterpart field at all,
+    because a merge's only effect on it is one derivable `**Merge**`
+    bullet (see `MERGE_LEDGER_SCHEMA_V5`). Defaults to `[]` for the same
+    backward-compatibility reason as the other versioned fields; a V1-V4
+    entry never carries it, and `plan_merge` always populates it
+    explicitly."""
+
 
 def encode_merge_ledger_entry(entry: MergeLedgerEntry) -> dict[str, object]:
     """Turn one `MergeLedgerEntry` into a plain-dict shape safe for
@@ -771,14 +856,21 @@ def encode_merge_ledger_entry(entry: MergeLedgerEntry) -> dict[str, object]:
         and entry.carried_content_ids
     ):
         raise ValueError(f"a {entry.schema} entry must not carry carried_content_ids")
-    return {
+    if entry.schema != MERGE_LEDGER_SCHEMA_V5 and entry.index_restores:
+        raise ValueError(f"a {entry.schema} entry must not carry index_restores")
+    if entry.schema == MERGE_LEDGER_SCHEMA_V5 and (
+        entry.index_before or entry.log_before
+    ):
+        raise ValueError(
+            "a MERGE_LEDGER_SCHEMA_V5 entry must not carry index_before/log_before "
+            "-- the catalog delta replaced them (#758)"
+        )
+    encoded: dict[str, object] = {
         "schema": entry.schema,
         "merged_at": entry.merged_at,
         "absorbed_id": entry.absorbed_id,
         "absorbed_snapshot": entry.absorbed_snapshot,
         "survivor_before": entry.survivor_before,
-        "index_before": entry.index_before,
-        "log_before": entry.log_before,
         "link_rewrites": [
             {
                 "file": lr.file,
@@ -799,6 +891,24 @@ def encode_merge_ledger_entry(entry: MergeLedgerEntry) -> dict[str, object]:
         ],
         "carried_content_ids": list(entry.carried_content_ids),
     }
+    if entry.schema == MERGE_LEDGER_SCHEMA_V5:
+        # The catalog DELTA replaces the two whole-file snapshots; the keys
+        # are omitted outright rather than written empty, so a V5 sidecar
+        # never carries a field whose name promises a snapshot it does not
+        # hold (#758).
+        encoded["index_restores"] = [
+            {
+                "line": restore.line,
+                "preceded_by": restore.preceded_by,
+                "preceded_by_occurrence": restore.preceded_by_occurrence,
+                "blank_gap": restore.blank_gap,
+            }
+            for restore in entry.index_restores
+        ]
+    else:
+        encoded["index_before"] = entry.index_before
+        encoded["log_before"] = entry.log_before
+    return encoded
 
 
 def encode_merged_from(entries: list[MergeLedgerEntry]) -> list[dict[str, object]]:
@@ -856,6 +966,33 @@ def _decode_provenance_rewrite(raw: object) -> ProvenanceRewrite:
         raise ValueError(f"provenance_rewrites entry missing field {exc}") from exc
 
 
+def _decode_catalog_line_restore(raw: object) -> CatalogLineRestore:
+    """Parse one `index_restores` list item back into a
+    `CatalogLineRestore`, failing closed (`ValueError`) on anything
+    malformed -- mirrors `_decode_link_rewrite`. `preceded_by` is REQUIRED
+    even though `""` is a legitimate value (the removed line was the body's
+    first): a missing key and a deliberately empty anchor mean different
+    things, and defaulting the former to the latter would silently
+    reinsert at the top of a catalog it never belonged to. So is
+    `preceded_by_occurrence`, for the same reason `_decode_link_rewrite`
+    requires `offset`: a positional disambiguator silently defaulted to `0`
+    would reinsert under the FIRST duplicate anchor rather than the
+    recorded one."""
+    if not isinstance(raw, dict):
+        raise ValueError(
+            f"index_restores entry must be a mapping, got {type(raw).__name__}"
+        )
+    try:
+        return CatalogLineRestore(
+            line=str(raw["line"]),
+            preceded_by=str(raw["preceded_by"]),
+            preceded_by_occurrence=int(raw["preceded_by_occurrence"]),
+            blank_gap=int(raw["blank_gap"]),
+        )
+    except KeyError as exc:
+        raise ValueError(f"index_restores entry missing field {exc}") from exc
+
+
 def decode_merge_ledger_entry(raw: object) -> MergeLedgerEntry:
     """Parse one `merged_from` list item back into a `MergeLedgerEntry`,
     failing closed (`ValueError`) on any malformed or missing field -- a
@@ -870,8 +1007,11 @@ def decode_merge_ledger_entry(raw: object) -> MergeLedgerEntry:
     `provenance_rewrites` defaults to `[]` (V2 entries predate that field);
     V3 -> BOTH `relation_rewrites` and `provenance_rewrites` keys are
     REQUIRED, and a missing key (or a malformed item within either) fails
-    closed exactly like any other required field; any other schema string is
-    unsupported and rejected outright."""
+    closed exactly like any other required field; V5 (#758) additionally
+    REQUIRES `index_restores` and, uniquely, has NO `index_before`/
+    `log_before` keys at all -- the catalog delta replaced them, so both
+    decode to `""`; any other schema string is unsupported and rejected
+    outright."""
     if not isinstance(raw, dict):
         raise ValueError(
             f"merged_from entry must be a mapping, got {type(raw).__name__}"
@@ -881,6 +1021,7 @@ def decode_merge_ledger_entry(raw: object) -> MergeLedgerEntry:
         relation_rewrites: list[RelationRewrite]
         provenance_rewrites: list[ProvenanceRewrite]
         carried_content_ids: list[str] = []
+        index_restores: list[CatalogLineRestore] = []
         if schema == MERGE_LEDGER_SCHEMA_V1:
             relation_rewrites = []
             provenance_rewrites = []
@@ -910,23 +1051,50 @@ def decode_merge_ledger_entry(raw: object) -> MergeLedgerEntry:
                     f"{type(raw_carried).__name__}"
                 )
             carried_content_ids = [str(item) for item in raw_carried]
+        elif schema == MERGE_LEDGER_SCHEMA_V5:
+            relation_rewrites = [
+                _decode_relation_rewrite(item) for item in raw["relation_rewrites"]
+            ]
+            provenance_rewrites = [
+                _decode_provenance_rewrite(item) for item in raw["provenance_rewrites"]
+            ]
+            raw_carried = raw["carried_content_ids"]
+            if not isinstance(raw_carried, list):
+                raise ValueError(
+                    "carried_content_ids must be a list, got "
+                    f"{type(raw_carried).__name__}"
+                )
+            carried_content_ids = [str(item) for item in raw_carried]
+            raw_restores = raw["index_restores"]
+            if not isinstance(raw_restores, list):
+                raise ValueError(
+                    f"index_restores must be a list, got {type(raw_restores).__name__}"
+                )
+            index_restores = [
+                _decode_catalog_line_restore(item) for item in raw_restores
+            ]
         else:
             raise ValueError(f"unsupported merged_from schema version: {schema!r}")
         link_rewrites = [_decode_link_rewrite(item) for item in raw["link_rewrites"]]
+        # V5 replaced the two whole-file catalog snapshots with the delta
+        # above, so their keys are ABSENT rather than empty (#758); every
+        # earlier schema still requires both.
+        catalog_snapshots_stored = schema != MERGE_LEDGER_SCHEMA_V5
         return MergeLedgerEntry(
             schema=schema,
             merged_at=str(raw["merged_at"]),
             absorbed_id=str(raw["absorbed_id"]),
             absorbed_snapshot=str(raw["absorbed_snapshot"]),
             survivor_before=str(raw["survivor_before"]),
-            index_before=str(raw["index_before"]),
-            log_before=str(raw["log_before"]),
+            index_before=str(raw["index_before"]) if catalog_snapshots_stored else "",
+            log_before=str(raw["log_before"]) if catalog_snapshots_stored else "",
             link_rewrites=link_rewrites,
             sensitivity_before=str(raw["sensitivity_before"]),
             sensitivity_after=str(raw["sensitivity_after"]),
             relation_rewrites=relation_rewrites,
             provenance_rewrites=provenance_rewrites,
             carried_content_ids=carried_content_ids,
+            index_restores=index_restores,
         )
     except KeyError as exc:
         raise ValueError(f"merged_from entry missing field {exc}") from exc

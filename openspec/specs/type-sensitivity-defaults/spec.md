@@ -19,16 +19,28 @@ any concept already on disk.
 The system MUST accept a workspace config field mapping an OKF type name to
 a non-negative integer offset above the workspace's `default_sensitivity`
 floor. WHEN the field is absent from config, the system MUST behave as
-though it were set to `{"Person": 1}`. WHEN the field is present and empty
-(`{}`), the system MUST apply no per-type offset to any type, i.e. every
-type is born exactly at `default_sensitivity` (subject only to Source
-high-water-mark inheritance).
+though it were set to `{}` — the PACKAGED policy is "none" (#756). WHEN the
+field is present and empty (`{}`), the system MUST likewise apply no
+per-type offset to any type, i.e. every type is born exactly at
+`default_sensitivity` (subject only to Source high-water-mark inheritance).
 
-#### Scenario: Absent field applies the shipped Person default
+The system MUST NOT ship a per-type offset for any type. `Person: 1` is
+documented as a RECOMMENDED opt-in for workspaces holding material about
+third parties, and nothing more. (Previously the packaged default was
+`{"Person": 1}`. On the primary use case — a local bundle against a local
+backend — it protected nothing, because `confidential_local_exemption` lets
+confidential objects participate normally, and it diluted the signal it is
+made of: when 100% of a type is `confidential`, the marker stops meaning
+"especially sensitive" and starts meaning "this is a Person". Type
+correlates with risk; it does not measure it. The offset MECHANISM is
+unchanged and every requirement below still governs it.)
+
+#### Scenario: Absent field applies no offset
 
 - GIVEN a workspace config with no per-type sensitivity offset field at all
 - WHEN the config is read
-- THEN the effective mapping is `{"Person": 1}`
+- THEN the effective mapping is `{}`, and a `Person` is born at the
+  workspace floor like every other type
 
 #### Scenario: Explicit empty mapping opts out of every type default
 

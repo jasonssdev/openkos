@@ -75,6 +75,78 @@ def insert_log_entry(log_text: str, today: date, entry: str) -> str:
     return preamble + "".join(f"\n{chunk}" for chunk in section_chunks)
 
 
+def remove_inserted_entry(log_text: str, entry: str) -> tuple[str, int]:
+    """Reverse ONE `insert_log_entry(log_text, _, entry)` call, returning the
+    new text and how many bullets were dropped (issue #758).
+
+    The merge ledger used to snapshot the whole of `log.md` so `unmerge`
+    could write it back. It never needed to: a merge's only effect on the
+    log is a single bullet whose text is fully derivable from the ids and
+    timestamp the ledger entry already carries, so reversing it needs no
+    stored copy of the file at all.
+
+    Surgical and fail-closed, located by exact text (`"* " + entry +
+    "\\n"`). Every other line, including log entries written AFTER the one
+    being reversed, is left untouched.
+
+    ZERO occurrences returns the text unchanged with a count of `0` rather
+    than raising, following the idempotence rule
+    `cli._reverse_link_rewrites_idempotent` already applies to link
+    reversal: `unmerge` writes several files in sequence, so a run that
+    dies midway must be safe to re-run, and an already-reversed entry is
+    the expected state on that second pass.
+
+    SEVERAL identical bullets can legitimately coexist -- the same pair
+    merged, unmerged and merged again, or two merges of one pair recorded
+    on one day -- and the TOPMOST is removed. That is not a guess: the log
+    is newest-first by construction (`insert_log_entry` always prepends,
+    and sections descend by date), while `unmerge` only ever reverses the
+    LIFO tail, the most recent merge recorded for that survivor. Newest
+    line, newest merge -- the two orderings agree, so the topmost
+    occurrence is always the one this reversal wrote.
+
+    A dated `## YYYY-MM-DD` section left EMPTY is removed with it:
+    `insert_log_entry` creates the section when today's is absent, so a
+    section holding nothing else is one this insertion introduced, and
+    leaving it behind would break byte-parity on an otherwise-untouched log.
+    A section still holding ANY content is kept exactly as it stands --
+    whether that is another `* ` bullet, an entry written with a `-` marker,
+    or an operator's prose note. Emptiness is the test, never "no `* `
+    bullet remains".
+    """
+    bullet = f"* {entry}\n"
+    if bullet not in log_text:
+        return log_text, 0
+
+    chunks = _SECTION_SPLIT_RE.split(log_text)
+    preamble, section_chunks = chunks[0], chunks[1:]
+    kept_chunks: list[str] = []
+    removed = 0
+    for chunk in section_chunks:
+        match = _SECTION_HEADER_RE.match(chunk)
+        if match is None:
+            raise ValueError(f"log.md: malformed section chunk {chunk!r}")
+        if removed or bullet not in chunk:
+            kept_chunks.append(chunk)
+            continue
+        # Topmost section holding it, and `replace(..., 1)` takes the
+        # topmost line within it: newest-first on both axes.
+        body = chunk[match.end() :].replace(bullet, "", 1)
+        removed += 1
+        if not body.strip():
+            # The insertion created this section; nothing else ever landed
+            # in it, so it goes away with the bullet. The test is EMPTINESS,
+            # not "no `* ` bullet remains" (review correction, resilience
+            # lens): an operator's prose note under that date, or an entry
+            # written with the `-` marker `index.py`'s own `_BULLET_MARKERS`
+            # accepts, is content, and dropping the section would destroy it
+            # -- the exact discard this reversal exists to stop doing.
+            continue
+        kept_chunks.append(match.group(0) + body)
+
+    return preamble + "".join(f"\n{chunk}" for chunk in kept_chunks), removed
+
+
 @dataclass(frozen=True)
 class LogEntry:
     """One flattened `log.md` bullet, tagged with its section date (D4)."""

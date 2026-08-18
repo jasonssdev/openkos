@@ -1603,9 +1603,9 @@ def test_decode_merge_ledger_entry_rejects_unsupported_schema_version() -> None:
     """A `schema` value other than the supported `MERGE_LEDGER_SCHEMA_V*`
     versions must be rejected rather than silently reinterpreted as any of
     them -- ADR-0002's "migrate rather than silently reinterpret" promise.
-    (`v4` became a genuinely supported schema in #667, so this uses a
-    still-unsupported `v5` literal instead.)"""
-    entry = _valid_encoded_entry(schema="openkos.merge_ledger/v5")
+    (`v4` became a genuinely supported schema in #667 and `v5` in #758, so
+    this uses a still-unsupported `v6` literal instead.)"""
+    entry = _valid_encoded_entry(schema="openkos.merge_ledger/v6")
 
     with pytest.raises(ValueError, match="unsupported merged_from schema version"):
         okf.decode_merged_from({"merged_from": [entry]})

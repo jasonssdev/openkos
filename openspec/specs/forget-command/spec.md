@@ -282,12 +282,28 @@ external-reference refusal.
 
 `forget`'s Phase B deletion/redaction sweep MUST cover
 `bundle/.state/ledger/`: any ledger sidecar entry whose snapshot fields
-(`absorbed_snapshot`, `survivor_before`, `index_before`, `log_before`, or
-any `relation_rewrites`/`provenance_rewrites` snapshot) contain a
-purge-set member's body MUST be redacted or removed as part of the same
-Phase B write that deletes the purge-set member's own file, so that a
-concept's content does not survive `forget` merely because it was
+(`absorbed_snapshot`, `survivor_before`, the pre-v5 `index_before`/
+`log_before`, or any `relation_rewrites`/`provenance_rewrites` snapshot)
+contain a purge-set member's body MUST be redacted or removed as part of
+the same Phase B write that deletes the purge-set member's own file, so
+that a concept's content does not survive `forget` merely because it was
 previously absorbed into (or is the survivor of) a merge.
+
+A v5 entry stores no catalog snapshots, so its catalog data lives in
+`index_restores` and the sweep MUST reach it there, through the SAME
+structural matcher. A restore MUST be dropped WHOLE — never blanked —
+when a purge-set member resolves from either of its two fields: `line`,
+which is that member's own catalog bullet, or `preceded_by`, which is a
+verbatim copy of a NEIGHBOURING concept's bullet held purely as a
+positional anchor and carrying that concept's title, description and link
+just as fully. An anchor cannot be emptied and still anchor, and privacy
+wins over reversibility, so the cost is that one bullet can no longer be
+put back; the surgical reversal then restores the rest of the catalog
+without it rather than refusing.
+
+This shape shrinks the sweep's own surface: a v5 entry holds one catalog
+bullet and its neighbour, where a v1–v4 entry held the entire catalog and
+log of the bundle as it stood at merge time.
 
 Dropping the member's own `absorbed_id` entry alone is NOT sufficient
 (issue #602): `build_merged_document` APPENDS, so entry *k*'s
@@ -328,6 +344,15 @@ structural — resolved link identity, never a substring match on body text
 — so a bullet that merely MENTIONS a purged title in its description
 survives, and a YAML sequence item in a snapshot's frontmatter, carrying
 neither link nor anchor, can never match.
+
+#### Scenario: Forgetting a concept named only as a v5 anchor
+- GIVEN a v5 ledger entry whose `index_restores` anchor (`preceded_by`) is
+  a copy of a NEIGHBOURING concept's catalog bullet, and that neighbour is
+  the purge-set member — it was never absorbed by this survivor
+- WHEN `openkos forget <neighbour-id>` completes
+- THEN that restore is dropped from the entry entirely, the neighbour's
+  title, description and link are gone from the sidecar, and the entry
+  itself is kept because its `absorbed_id` is a different concept
 
 #### Scenario: Forgetting a survivor sweeps its own ledger entries
 - GIVEN the purge-set member is a merge survivor with its own ledger

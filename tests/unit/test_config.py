@@ -2237,13 +2237,13 @@ def test_read_config_type_sensitivity_defaults_absent_uses_shipped_default(
     tmp_path: Path,
 ) -> None:
     """A `type_sensitivity_defaults` field absent from `openkos.yaml` falls
-    back to the packaged `{"Person": 1}` default (spec: Per-Type Offset
+    back to the packaged default, which is EMPTY (#756 -- spec: Per-Type Offset
     Config Shape, absent-field scenario)."""
     (tmp_path / "openkos.yaml").write_text("model: qwen3:8b\n", encoding="utf-8")
 
     result = config.read_config(tmp_path)
 
-    assert result.type_sensitivity_defaults == {"Person": 1}
+    assert result.type_sensitivity_defaults == {}
 
 
 def test_read_config_type_sensitivity_defaults_explicit_null_uses_shipped_default(
@@ -2257,7 +2257,7 @@ def test_read_config_type_sensitivity_defaults_explicit_null_uses_shipped_defaul
 
     result = config.read_config(tmp_path)
 
-    assert result.type_sensitivity_defaults == {"Person": 1}
+    assert result.type_sensitivity_defaults == {}
 
 
 def test_read_config_type_sensitivity_defaults_returns_a_copy_not_the_module_constant(
@@ -2271,7 +2271,7 @@ def test_read_config_type_sensitivity_defaults_returns_a_copy_not_the_module_con
     result = config.read_config(tmp_path)
     result.type_sensitivity_defaults["Organization"] = 2
 
-    assert config.DEFAULT_TYPE_SENSITIVITY_DEFAULTS == {"Person": 1}
+    assert config.DEFAULT_TYPE_SENSITIVITY_DEFAULTS == {}
 
 
 def test_read_config_type_sensitivity_defaults_explicit_empty_map_is_total_opt_out(
@@ -2438,12 +2438,18 @@ class TestTypeBirthSensitivity:
         return config.read_config(tmp_path)
 
     def test_public_floor_raises_person_to_private(self, tmp_path: Path) -> None:
-        cfg = self._cfg(tmp_path, "default_sensitivity: public\n")
+        cfg = self._cfg(
+            tmp_path,
+            "default_sensitivity: public\ntype_sensitivity_defaults:\n  Person: 1\n",
+        )
 
         assert config.type_birth_sensitivity(cfg, "Person", "public") == "private"
 
     def test_private_floor_raises_person_to_confidential(self, tmp_path: Path) -> None:
-        cfg = self._cfg(tmp_path, "default_sensitivity: private\n")
+        cfg = self._cfg(
+            tmp_path,
+            "default_sensitivity: private\ntype_sensitivity_defaults:\n  Person: 1\n",
+        )
 
         assert config.type_birth_sensitivity(cfg, "Person", "private") == "confidential"
 

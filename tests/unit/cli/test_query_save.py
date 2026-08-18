@@ -33,6 +33,23 @@ from tests.unit.vcs.conftest import isolate_git_identity
 runner = CliRunner()
 
 
+def _opt_in_person_offset(tmp_path: Path) -> None:
+    """Opt this workspace in to `type_sensitivity_defaults: {Person: 1}`.
+
+    The packaged default is EMPTY since #756 -- sensitivity is the
+    operator's call and no type is born above the floor unless they say so.
+    The offset MECHANISM is unchanged and still has to be proven, so the
+    tests that exercise it now configure it the way a real operator would
+    instead of leaning on a shipped value that no longer exists.
+    """
+    config_path = tmp_path / "openkos.yaml"
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8")
+        + "\ntype_sensitivity_defaults:\n  Person: 1\n",
+        encoding="utf-8",
+    )
+
+
 def _simulate_tty(monkeypatch: pytest.MonkeyPatch) -> None:
     """Make `sys.stdin.isatty()` report `True` inside a `CliRunner.invoke`
     call (mirrors `test_ingest.py::_simulate_tty`)."""
@@ -100,7 +117,7 @@ def _default_cfg(**overrides: object) -> config.Config:
         "models": {},
         "union_judge": config.DEFAULT_UNION_JUDGE,
         "concurrent_extraction": config.DEFAULT_CONCURRENT_EXTRACTION,
-        "type_sensitivity_defaults": dict(config.DEFAULT_TYPE_SENSITIVITY_DEFAULTS),
+        "type_sensitivity_defaults": {"Person": 1},
     }
     fields.update(overrides)
     return config.Config(**fields)  # type: ignore[arg-type]
@@ -1513,6 +1530,7 @@ def test_query_save_preview_names_the_type_default_when_raised(
     and stays silent on the confidential-consequence line at a non-
     confidential raised level."""
     _init_workspace(tmp_path, monkeypatch)
+    _opt_in_person_offset(tmp_path)
     _set_config_field(
         tmp_path, "default_sensitivity: private", "default_sensitivity: public"
     )
@@ -1545,6 +1563,7 @@ def test_query_save_preview_confidential_consequence_via_type_default(
     `confidential` -- the consequence belongs to the level, not the cause
     (design D4)."""
     _init_workspace(tmp_path, monkeypatch)
+    _opt_in_person_offset(tmp_path)
     _write_concept(
         tmp_path / "bundle",
         "concepts",
@@ -1581,6 +1600,7 @@ def test_query_save_success_message_names_the_type_default_raise(
     printed unconditionally in this codebase, but the success message must
     never depend on it either way)."""
     _init_workspace(tmp_path, monkeypatch)
+    _opt_in_person_offset(tmp_path)
     _write_concept(
         tmp_path / "bundle",
         "concepts",

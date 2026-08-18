@@ -10,6 +10,7 @@ command's own mechanics and threat matrix (LIFO-tail check, restore
 collision, link drift, confirm gate, path safety).
 """
 
+import dataclasses
 from pathlib import Path
 
 import pytest
@@ -1043,14 +1044,24 @@ def test_unmerge_v1_ledger_entry_without_relation_rewrites_key_still_unmerges(
     ) == absorbed_snapshot
 
 
-def test_unmerge_warns_on_interleaved_index_log_drift(
+def test_unmerge_keeps_interleaved_index_log_work_without_warning(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """If `index.md`/`log.md` changed since the merge (an `ingest`/`forget`/
-    unrelated `merge` ran in between), `unmerge`'s preview surfaces a clear
-    warning BEFORE the confirm gate instead of silently discarding those
-    changes when it restores the pre-merge snapshot (principle #3:
-    reviewable, not silent)."""
+    """`index.md`/`log.md` changes made since the merge SURVIVE the unmerge,
+    and nothing warns, because nothing is discarded (issue #758).
+
+    This test previously asserted the opposite: the ledger stored whole-file
+    snapshots, `unmerge` wrote them back over both files, and the best it
+    could do was warn that it was about to destroy the interleaved work. The
+    V5 delta ledger reverses only the bullet the merge removed and the log
+    line it added, so the warning has nothing left to report -- see
+    `test_unmerge_surgical_catalog.py` for the contract, and
+    `_expected_post_merge_index_and_log`, which now returns `None` for a V5
+    entry rather than a comparison nobody can act on.
+
+    A V1-V4 entry still restores wholesale and still warns; that path is
+    pinned by `test_unmerge_snapshot_entry_still_warns_on_interleaved_drift`.
+    """
     _init_workspace(tmp_path, monkeypatch)
     _write_concept(tmp_path, "concepts/survivor", title="Survivor")
     _write_concept(tmp_path, "concepts/absorbed", title="Absorbed")
@@ -1076,8 +1087,76 @@ def test_unmerge_warns_on_interleaved_index_log_drift(
     )
 
     assert result.exit_code == 0, result.stderr
+    assert "changed since the merge" not in result.stdout
+    assert "discard" not in result.stdout
+
+    # The interleaved work is still there...
+    assert "* Unrelated bullet." in index_path.read_text(encoding="utf-8")
+    assert "* Unrelated log entry." in log_path.read_text(encoding="utf-8")
+    # ... and the merge itself is still reversed.
+    assert "/concepts/absorbed.md" in index_path.read_text(encoding="utf-8")
+    assert "**Merge**: Merged" not in log_path.read_text(encoding="utf-8")
+
+
+def test_unmerge_snapshot_entry_still_warns_on_interleaved_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pre-#758 V4 ledger entry keeps its whole-file snapshots, its
+    wholesale restore, AND its drift warning (the dual-shape ruling).
+
+    The delta ledger only governs entries written from #758 onward. An
+    entry already on disk records no delta, so narrowing its behavior
+    retroactively would mean inventing reversal information nobody stored;
+    it must keep behaving exactly as it did when it was written -- warning
+    included, since it really is about to discard the interleaved work.
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/survivor", title="Survivor")
+    _write_concept(tmp_path, "concepts/absorbed", title="Absorbed")
+
+    index_path = tmp_path / "bundle" / "index.md"
+    log_path = tmp_path / "bundle" / "log.md"
+    pre_merge_index = index_path.read_text(encoding="utf-8")
+    pre_merge_log = log_path.read_text(encoding="utf-8")
+
+    merge_result = runner.invoke(
+        app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+    assert merge_result.exit_code == 0, merge_result.stderr
+
+    # Rewrite the sidecar in the OLD V4 shape, carrying the snapshots a
+    # pre-#758 merge would have recorded.
+    bundle_dir = tmp_path / "bundle"
+    entries = bundle_ledger.read_entries("concepts/survivor", bundle_dir)
+    assert entries[-1].schema == okf.MERGE_LEDGER_SCHEMA_V5
+    downgraded = dataclasses.replace(
+        entries[-1],
+        schema=okf.MERGE_LEDGER_SCHEMA_V4,
+        index_before=pre_merge_index,
+        log_before=pre_merge_log,
+        index_restores=[],
+    )
+    bundle_ledger.write_entries(
+        "concepts/survivor",
+        bundle_dir,
+        survivor_id="concepts/survivor",
+        entries=[*entries[:-1], downgraded],
+    )
+
+    index_path.write_text(
+        index_path.read_text(encoding="utf-8") + "\n* Unrelated bullet.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app, ["unmerge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+
+    assert result.exit_code == 0, result.stderr
     assert "changed since the merge" in result.stdout
     assert "discard" in result.stdout
+    # The old shape really does discard it -- that is what it warned about.
+    assert index_path.read_text(encoding="utf-8") == pre_merge_index
 
 
 # -- #313: re-validate every write target after the confirm gate ------------

@@ -93,20 +93,40 @@ Every merge MUST append an entry to a per-survivor sidecar file under
 `bundle/.state/ledger/`, written and read only via `okf.dump_frontmatter`/
 `load_frontmatter`. The survivor's own concept frontmatter MUST NOT gain a
 `merged_from` key or any other ledger content. Each entry holds, per
-absorbed object: `absorbed_snapshot`, `survivor_before`,
-`index_before`/`log_before`, `link_rewrites`, `relation_rewrites` (v2),
-`provenance_rewrites` (v3), and `sensitivity_before`/`sensitivity_after`.
-`unmerge` MUST restore EVERY touched file — survivor, absorbed, and every
-file in `relation_rewrites` and `provenance_rewrites` — byte-exact. The
-ledger schema is `MERGE_LEDGER_SCHEMA_V3`. An entry with no
+absorbed object: `absorbed_snapshot`, `survivor_before`, `link_rewrites`,
+`relation_rewrites` (v2), `provenance_rewrites` (v3),
+`carried_content_ids` (v4), `index_restores` (v5), and
+`sensitivity_before`/`sensitivity_after`. `unmerge` MUST restore EVERY
+touched file — survivor, absorbed, and every file in `relation_rewrites`
+and `provenance_rewrites` — byte-exact. The ledger schema is
+`MERGE_LEDGER_SCHEMA_V5`.
+
+An entry MUST NOT store a whole-file copy of `index.md` or `log.md`. A
+sidecar's size MUST track the size of the MERGE, not the size of the
+bundle: `index_restores` records only the catalog bullets that merge
+removed, each with the preceding line and that line's occurrence index as
+its positional anchor, and `log.md` gets no stored field at all because a
+merge's only effect on it is one bullet derivable from the two ids and
+`merged_at`. (Measured before the change: one merge's sidecar cost 1838
+characters in a 10-document bundle and 21798 in a 200-document one, because
+each entry photographed the whole catalog and log; on a real 33-document
+workspace those two fields were 79.6% of the sidecar's bytes after a single
+merge, and each successive merge photographed a larger catalog than the
+one before it.)
+
+Backward compatibility is by SHAPE, not by migration. An entry with no
 `provenance_rewrites` key (v1 or v2) MUST still decode and unmerge exactly
-as before, and one with no `relation_rewrites` key (v1) MUST likewise still
-decode; the reader MUST accept v1, v2, and v3 entries regardless of storage
-location.
+as before; one with no `relation_rewrites` key (v1) MUST likewise still
+decode; and a v1–v4 entry, which carries `index_before`/`log_before` and no
+`index_restores`, MUST keep its whole-file catalog restore and its drift
+warning unchanged. The reader MUST accept v1, v2, v3, v4, and v5 entries
+regardless of storage location, and MUST NOT rewrite an older entry into
+the newer shape — an entry already on disk records no delta, so converting
+it would mean inventing reversal information nobody stored.
 (Previously: entries were embedded directly in the survivor's own
 `merged_from` frontmatter key, growing that file geometrically across
-merges; the schema and round-trip contract are unchanged, only the
-storage location moved to a sidecar under `bundle/.state/ledger/`.)
+merges; then relocated to a sidecar under `bundle/.state/ledger/`, which
+fixed the document corruption but not what the entry stored.)
 
 #### Scenario: No `merged_from` key remains in survivor frontmatter
 - GIVEN a merge that appends a new ledger entry
@@ -114,13 +134,36 @@ storage location moved to a sidecar under `bundle/.state/ledger/`.)
 - THEN it contains no `merged_from` key, and the new entry instead exists
   under `bundle/.state/ledger/`
 
-#### Scenario: Ledger sidecar embeds the full snapshot set plus relation rewrites
+#### Scenario: Ledger sidecar embeds the snapshot set plus relation rewrites
 - GIVEN a merge that rewrote one inbound link and retargeted one
   third-party relation
 - WHEN the survivor's ledger sidecar is inspected
 - THEN its entry has `absorbed_snapshot`, `survivor_before`,
-  `index_before`, `log_before`, `link_rewrites`, `relation_rewrites`
-  (with that file's snapshot), and `sensitivity_before`/`sensitivity_after`
+  `index_restores`, `link_rewrites`, `relation_rewrites` (with that file's
+  snapshot), and `sensitivity_before`/`sensitivity_after`, and NO
+  `index_before` or `log_before` key
+
+#### Scenario: A sidecar does not grow with the bundle
+- GIVEN the same pair of concepts merged in a small bundle and in a much
+  larger one
+- WHEN each survivor's ledger sidecar is measured
+- THEN the two sidecars are the same size, and neither contains any
+  concept the merge did not touch
+
+#### Scenario: Catalog work done after the merge survives the unmerge
+- GIVEN a merge, followed by an `ingest` that adds a bullet to `index.md`
+  and a line to `log.md`
+- WHEN `unmerge <survivor> <absorbed>` is confirmed
+- THEN the absorbed concept's bullet is back, this merge's `**Merge**` log
+  line is gone, the bullet and line added in between are still there, and
+  no discard warning is printed
+
+#### Scenario: A pre-v5 snapshot entry keeps its old behavior
+- GIVEN a ledger entry written before this change, carrying
+  `index_before`/`log_before`
+- WHEN `unmerge` reverses it after `index.md` changed since the merge
+- THEN `index.md` is restored wholesale from the snapshot and the drift
+  warning is printed, exactly as before
 
 #### Scenario: Unmerge restores every touched file, including drops/dedupes
 - GIVEN a merge that dropped a self-loop and deduped a collision on a
@@ -275,7 +318,25 @@ the survivor's ledger sidecar; a non-tail `absorbed-id` refuses cleanly
 with no write. It MUST restore the survivor from `survivor_before`, the
 absorbed object from `absorbed_snapshot`, REVERSE every recorded link,
 relation, and provenance rewrite, remove the entry from the sidecar, and
-restore `index.md`/`log.md` then append an audit line. For a file touched
+reverse this merge's own `index.md`/`log.md` edit then append an audit
+line.
+
+That catalog reversal MUST be SURGICAL for a v5 entry: put back exactly the
+bullets in `index_restores`, remove exactly this merge's `**Merge**` log
+line, and leave every other byte of both files alone, so catalog and log
+work that landed between the merge and the unmerge SURVIVES. It MUST fail
+closed rather than approximate — a recorded anchor that no longer occurs as
+often as recorded, or a log bullet occurring more than once where the
+reversal cannot tell which is its own, refuses with nothing written — and
+it MUST be idempotent, so a run that died midway is safe to re-run. Where
+several identical `**Merge**` bullets coexist the TOPMOST is reversed:
+`log.md` is newest-first by construction and `unmerge` only ever reverses
+the LIFO tail, so the two orderings agree. Byte-parity on an
+otherwise-untouched bundle is unchanged and still required.
+
+Because a v5 reversal discards nothing, it MUST NOT print the
+catalog/log discard warning; a v1–v4 entry still restores wholesale and
+still warns. For a file touched
 by more than one rewrite kind, precedence is `provenance > relations >
 links`: a `provenance_rewrites` snapshot restores exclusively (skipping
 relation/link reversal); failing that, a `relation_rewrites` snapshot skips
