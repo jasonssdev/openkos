@@ -639,7 +639,12 @@ def test_multiple_surviving_hits_cite_in_rank_order_and_join_context(
     )
     assert stoicism_block in user_content
     assert epictetus_block in user_content
-    assert f"{stoicism_block}\n\n{epictetus_block}" in user_content
+    # The blocks carry their 1-based attribution number (#753). The number is
+    # part of the join, so the adjacency below is asserted WITH it rather than
+    # around it -- a version checking only the bare blocks would pass with the
+    # numbering silently dropped, and the numbering is the vocabulary the
+    # model attributes with.
+    assert f"[1] {stoicism_block}\n\n[2] {epictetus_block}" in user_content
     assert user_content.index(stoicism_block) < user_content.index(epictetus_block)
 
 
@@ -2356,3 +2361,285 @@ def test_assemble_context_labels_an_insight_as_filed_synthesis(
         "insights/earlier-answer",
         "concepts/stoicism",
     ]
+
+
+# --- citation attribution (#753, citation half) -----------------------------
+#
+# Before this feature `citations` was the retrieval set renamed: it was built
+# by `_assemble_context` BEFORE `llm.chat` ran and was never compared to the
+# reply, so every answer cited exactly `limit` concepts whatever it actually
+# said. Measured over the 170 stored answers in `evals/query_title/results/`:
+# 170/170 cited exactly 5, in only 4 distinct sets, and not one answer had all
+# five citations supported by its own text. `query --save` then wrote all five
+# as permanent provenance (`cli/main.py`), so the defect outlived the screen.
+#
+# The mechanism is model self-attribution in the SAME chat call: the context
+# blocks are numbered and the model closes with a `USED:` line naming the ones
+# it drew on. Numbers, never concept ids -- #193's leak was the model copying
+# the `[concept_id: ...]` label it was shown, and re-introducing ids as the
+# attribution vocabulary would re-open exactly that.
+
+
+def _answer_over_three(tmp_path: Path, reply: str) -> answer_mod.AnswerResult:
+    """Drive a successful THREE-hit `answer()` whose LLM returns `reply`.
+
+    Three docs, not one, because every assertion here is about WHICH subset
+    survives -- a one-hit fixture cannot tell "kept the reported block" from
+    "kept everything", which is the distinction under test.
+    """
+    bundle_dir = tmp_path / "bundle"
+    for slug, title in (("alpha", "Alpha"), ("beta", "Beta"), ("gamma", "Gamma")):
+        _write_doc(
+            bundle_dir / "concepts" / f"{slug}.md",
+            title=title,
+            body=f"dichotomyzz {slug} body",
+        )
+    with fts.build_index(bundle_dir) as idx:
+        return answer_mod.answer(
+            "dichotomyzz",
+            bundle_dir=bundle_dir,
+            llm=_FakeLLM(reply=reply),
+            fts_index=idx,
+        )
+
+
+def test_context_blocks_are_numbered_for_attribution(tmp_path: Path) -> None:
+    """The user message numbers each context block `[1]`, `[2]`, ...
+
+    The system prompt has always called them "the numbered CONTEXT concepts",
+    but nothing ever numbered them -- the blocks were headed by
+    `[concept_id: ...]` alone. Attribution needs a vocabulary the model can
+    use WITHOUT naming an id, so the number is that vocabulary and this pins
+    that it actually reaches the prompt.
+    """
+    bundle_dir = tmp_path / "bundle"
+    for slug in ("alpha", "beta"):
+        _write_doc(
+            bundle_dir / "concepts" / f"{slug}.md",
+            title=slug.capitalize(),
+            body=f"dichotomyzz {slug}",
+        )
+    llm = _FakeLLM(reply="An answer.")
+    with fts.build_index(bundle_dir) as idx:
+        answer_mod.answer("dichotomyzz", bundle_dir=bundle_dir, llm=llm, fts_index=idx)
+
+    user_content = llm.calls[0][1]["content"]
+    assert "[1]" in user_content
+    assert "[2]" in user_content
+
+
+def test_reported_blocks_filter_the_citations(tmp_path: Path) -> None:
+    """`USED: 1, 3` cites the first and third block, and nothing else.
+
+    This is the whole feature: the citation list becomes a function of what
+    the answer says it drew on, instead of a function of retrieval rank.
+    """
+    result = _answer_over_three(tmp_path, "An answer.\n\nUSED: 1, 3")
+
+    assert len(result.citations) == 2
+    assert result.attribution == "reported"
+
+
+def test_the_attribution_line_never_reaches_the_prose(tmp_path: Path) -> None:
+    """The marker is machinery, so it is stripped like #193's ids.
+
+    `query --save` files `AnswerResult.answer` as a real bundle concept, so a
+    surviving marker is not a cosmetic blemish shown once -- it is written
+    into the bundle permanently.
+    """
+    result = _answer_over_three(tmp_path, "An answer.\n\nUSED: 1, 3")
+
+    assert "USED" not in result.answer
+    assert result.answer == "An answer."
+
+
+def test_an_answer_reporting_no_support_cites_nothing(tmp_path: Path) -> None:
+    """`USED: none` is a REPORT, not a parse failure, and it empties the list.
+
+    This is #753's own specimen: the model answered from its own knowledge and
+    the caller stapled five citations to it. An honest "I drew on none of
+    these" must produce zero citations -- which also makes `query --save`
+    refuse the filing outright, since it requires non-empty provenance.
+    """
+    result = _answer_over_three(tmp_path, "A general essay.\n\nUSED: none")
+
+    assert result.citations == []
+    assert result.attribution == "reported"
+
+
+def test_an_absent_marker_keeps_every_citation(tmp_path: Path) -> None:
+    """A model that never reports falls back to today's behavior exactly.
+
+    Deliberately NOT fail-closed. Emptying the citations of every
+    non-compliant model would turn a citation-precision fix into a silent
+    outage for anyone on a weaker one, and the compliance rate is the thing
+    the eval harness is there to measure before that trade is even offered.
+    """
+    result = _answer_over_three(tmp_path, "An answer with no marker at all.")
+
+    assert len(result.citations) == 3
+    assert result.attribution == "absent"
+
+
+def test_a_malformed_marker_keeps_every_citation(tmp_path: Path) -> None:
+    """Garbage after `USED:` is indistinguishable from not reporting."""
+    result = _answer_over_three(tmp_path, "An answer.\n\nUSED: banana")
+
+    assert len(result.citations) == 3
+    assert result.attribution == "unparsed"
+
+
+def test_out_of_range_indices_are_dropped_not_trusted(tmp_path: Path) -> None:
+    """A number naming no block cites nothing, rather than indexing wildly.
+
+    Three blocks were sent, so `9` is a hallucinated slot. It must not wrap,
+    clamp, or raise -- and with no valid index left the reply carries no
+    usable report, so the conservative fallback applies.
+    """
+    result = _answer_over_three(tmp_path, "An answer.\n\nUSED: 9")
+
+    assert len(result.citations) == 3
+    assert result.attribution == "unparsed"
+
+
+def test_a_partially_valid_report_keeps_only_its_valid_half(tmp_path: Path) -> None:
+    """`USED: 2, 9` cites block 2 -- the real index survives the fake one."""
+    result = _answer_over_three(tmp_path, "An answer.\n\nUSED: 2, 9")
+
+    assert len(result.citations) == 1
+    assert result.attribution == "reported"
+
+
+def test_citations_keep_fused_rank_order_after_filtering(tmp_path: Path) -> None:
+    """Filtering is a subset, never a reordering.
+
+    The order is the documented contract of `AnswerResult.citations` ("in
+    fused-rank order") and the CLI renders the list in it, so a filter that
+    returned the model's own listing order would quietly re-rank the output
+    by whatever sequence the model happened to type.
+    """
+    result = _answer_over_three(tmp_path, "An answer.\n\nUSED: 3, 1")
+    filtered = [c.concept_id for c in result.citations]
+
+    unfiltered = _answer_over_three(tmp_path, "An answer.")
+    expected = [c.concept_id for c in unfiltered.citations]
+
+    assert filtered == [expected[0], expected[2]]
+
+
+def test_attribution_defaults_to_absent_on_a_no_match(tmp_path: Path) -> None:
+    """A short-circuited answer never called the LLM, so nothing reported."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    with fts.build_index(bundle_dir) as idx:
+        result = answer_mod.answer(
+            "", bundle_dir=bundle_dir, llm=_FakeLLM(), fts_index=idx
+        )
+
+    assert result.attribution == "absent"
+
+
+def test_the_last_marker_wins_when_a_reply_carries_several(tmp_path: Path) -> None:
+    """A reply restating the format before emitting the real line attributes
+    from the LAST one.
+
+    The instruction asks for a CLOSING line, so the final marker is the one
+    that was meant; an earlier one is the model quoting the format back. The
+    rule was documented from the first version of `_split_attribution` but
+    nothing exercised it, so a regression to `search()` (first match) would
+    have passed the whole suite.
+    """
+    # BOTH lines must start with the keyword, or the regex matches only one
+    # and the test cannot tell first from last. An earlier revision opened
+    # with "I will end with a line like USED: 1", which is not at a line
+    # start, so a mutation to `matches[0]` survived it -- the exact vacuous
+    # test the finding was about, reproduced while fixing the finding.
+    result = _answer_over_three(
+        tmp_path,
+        "USED: 1\n\nThe actual answer.\n\nUSED: 2, 3",
+    )
+
+    assert len(result.citations) == 2
+    unfiltered = _answer_over_three(tmp_path, "An answer.")
+    expected = [c.concept_id for c in unfiltered.citations]
+    assert [c.concept_id for c in result.citations] == [expected[1], expected[2]]
+
+
+def test_prose_after_the_marker_is_stitched_onto_the_prose_before_it(
+    tmp_path: Path,
+) -> None:
+    """Characterization: a marker mid-reply splices, it does not truncate.
+
+    `_split_attribution` removes the matched line and joins what surrounded
+    it, so a model that writes past its own closing line has the remainder
+    welded onto the preceding paragraph rather than dropped.
+
+    Pinned rather than fixed. Truncating at the marker instead would DISCARD
+    model output on a reply that merely mis-ordered its line, which is the
+    worse failure -- and the alternative, refusing to attribute unless the
+    marker is last, throws away a correct report over formatting. The trade
+    is visible here so whoever reconsiders it fails loudly.
+    """
+    result = _answer_over_three(tmp_path, "First part.\n\nUSED: 1\n\nSecond part.")
+
+    assert "USED" not in result.answer
+    assert "First part." in result.answer
+    assert "Second part." in result.answer
+    assert len(result.citations) == 1
+
+
+def test_context_block_count_reports_what_the_model_was_shown(
+    tmp_path: Path,
+) -> None:
+    """`context_block_count` is the blocks SENT, not the concepts fused.
+
+    `fused_count` is computed before `_assemble_context`'s per-concept skip
+    guard, so on a bundle where a fused hit is unreadable the two differ --
+    and any caller reporting "the model drew on none of N concepts" from
+    `fused_count` would overstate N.
+    """
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "alpha.md", title="Alpha", body="dichotomyzz alpha"
+    )
+    _write_doc(
+        bundle_dir / "concepts" / "beta.md", title="Beta", body="dichotomyzz beta"
+    )
+    with fts.build_index(bundle_dir) as idx:
+        # Delete one indexed doc so its fused hit survives the fuse but is
+        # skipped at the guarded re-read -- the exact divergence under test.
+        (bundle_dir / "concepts" / "beta.md").unlink()
+        result = answer_mod.answer(
+            "dichotomyzz",
+            bundle_dir=bundle_dir,
+            llm=_FakeLLM(reply="An answer."),
+            fts_index=idx,
+        )
+
+    assert result.fused_count == 2
+    assert result.context_block_count == 1
+
+
+def test_context_block_count_is_zero_on_a_short_circuit(tmp_path: Path) -> None:
+    """A short-circuited answer assembled no context, so it counts none.
+
+    The field's docstring claims `0` for every early return; nothing proved
+    it, and a default asserted only in prose is a contract the next edit can
+    break silently. Both short-circuits are exercised — the empty question,
+    which returns before retrieval runs at all, and the zero-hit search,
+    which returns after it.
+    """
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    with fts.build_index(bundle_dir) as idx:
+        empty_question = answer_mod.answer(
+            "", bundle_dir=bundle_dir, llm=_FakeLLM(), fts_index=idx
+        )
+        no_hits = answer_mod.answer(
+            "dichotomyzz", bundle_dir=bundle_dir, llm=_FakeLLM(), fts_index=idx
+        )
+
+    assert empty_question.no_match_cause == "empty_query"
+    assert empty_question.context_block_count == 0
+    assert no_hits.no_match_cause == "zero_hits"
+    assert no_hits.context_block_count == 0

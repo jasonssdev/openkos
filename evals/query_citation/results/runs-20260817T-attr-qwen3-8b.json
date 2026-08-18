@@ -1,0 +1,550 @@
+{
+  "model": "qwen3:8b",
+  "runs": 3,
+  "generated_at": "20260817T-attr",
+  "limit": 5,
+  "corpus_docs": 14,
+  "rows": [
+    {
+      "run": 0,
+      "label": "grounded",
+      "question": "¿qué decisiones se tomaron en las reuniones?",
+      "attribution": "reported",
+      "cited": 5,
+      "blocks": 5,
+      "answer_chars": 696
+    },
+    {
+      "run": 0,
+      "label": "grounded",
+      "question": "¿quiénes participaron en las reuniones?",
+      "attribution": "reported",
+      "cited": 3,
+      "blocks": 5,
+      "answer_chars": 171
+    },
+    {
+      "run": 0,
+      "label": "grounded",
+      "question": "¿qué aportó Gustavo Martínez al proyecto?",
+      "attribution": "reported",
+      "cited": 3,
+      "blocks": 5,
+      "answer_chars": 527
+    },
+    {
+      "run": 0,
+      "label": "grounded",
+      "question": "¿qué se decidió sobre el historial de decisiones?",
+      "attribution": "reported",
+      "cited": 2,
+      "blocks": 5,
+      "answer_chars": 261
+    },
+    {
+      "run": 0,
+      "label": "grounded",
+      "question": "¿por qué se exigen citas textuales?",
+      "attribution": "reported",
+      "cited": 2,
+      "blocks": 5,
+      "answer_chars": 307
+    },
+    {
+      "run": 0,
+      "label": "grounded",
+      "question": "¿qué pasa si ingiero el mismo archivo dos veces?",
+      "attribution": "reported",
+      "cited": 2,
+      "blocks": 5,
+      "answer_chars": 338
+    },
+    {
+      "run": 0,
+      "label": "grounded",
+      "question": "¿quién quedó como responsable de la migración?",
+      "attribution": "reported",
+      "cited": 1,
+      "blocks": 5,
+      "answer_chars": 90
+    },
+    {
+      "run": 0,
+      "label": "grounded",
+      "question": "¿qué alcance tiene el borrado de un concepto?",
+      "attribution": "reported",
+      "cited": 2,
+      "blocks": 5,
+      "answer_chars": 379
+    },
+    {
+      "run": 0,
+      "label": "grounded",
+      "question": "¿el bundle o el índice es la fuente de verdad?",
+      "attribution": "reported",
+      "cited": 2,
+      "blocks": 5,
+      "answer_chars": 332
+    },
+    {
+      "run": 0,
+      "label": "grounded",
+      "question": "¿cómo se aprueban los cambios durante la curación?",
+      "attribution": "reported",
+      "cited": 2,
+      "blocks": 5,
+      "answer_chars": 285
+    },
+    {
+      "run": 0,
+      "label": "adjacent",
+      "question": "¿qué relación hay entre la trazabilidad y la verdad contextual en sistemas RAG?",
+      "attribution": "reported",
+      "cited": 2,
+      "blocks": 5,
+      "answer_chars": 736
+    },
+    {
+      "run": 0,
+      "label": "adjacent",
+      "question": "¿cuáles son las mejores prácticas de chunking en sistemas RAG?",
+      "attribution": "reported",
+      "cited": 0,
+      "blocks": 5,
+      "answer_chars": 306
+    },
+    {
+      "run": 0,
+      "label": "adjacent",
+      "question": "¿cómo se evalúa la calidad de un sistema de recuperación aumentada?",
+      "attribution": "reported",
+      "cited": 3,
+      "blocks": 5,
+      "answer_chars": 597
+    },
+    {
+      "run": 0,
+      "label": "adjacent",
+      "question": "¿qué es la destilación de modelos de lenguaje?",
+      "attribution": "reported",
+      "cited": 0,
+      "blocks": 5,
+      "answer_chars": 160
+    },
+    {
+      "run": 0,
+      "label": "adjacent",
+      "question": "¿cómo funciona la cuantización de pesos en un LLM?",
+      "attribution": "reported",
+      "cited": 0,
+      "blocks": 5,
+      "answer_chars": 156
+    },
+    {
+      "run": 0,
+      "label": "adjacent",
+      "question": "¿qué ventajas tiene un índice HNSW frente a una búsqueda exhaustiva?",
+      "attribution": "reported",
+      "cited": 0,
+      "blocks": 5,
+      "answer_chars": 167
+    },
+    {
+      "run": 0,
+      "label": "adjacent",
+      "question": "¿cómo se diseña una arquitectura hexagonal en un servicio web?",
+      "attribution": "reported",
+      "cited": 0,
+      "blocks": 5,
+      "answer_chars": 305
+    },
+    {
+      "run": 0,
+      "label": "adjacent",
+      "question": "¿qué diferencia hay entre fine-tuning y aprendizaje en contexto?",
+      "attribution": "reported",
+      "cited": 0,
+      "blocks": 5,
+      "answer_chars": 155
+    },
+    {
+      "run": 0,
+      "label": "adjacent",
+      "question": "¿cuál es el estado del arte en reranking neuronal?",
+      "attribution": "reported",
+      "cited": 0,
+      "blocks": 5,
+      "answer_chars": 38
+    },
+    {
+      "run": 0,
+      "label": "adjacent",
+      "question": "¿cómo se mide la deriva de un modelo en producción?",
+      "attribution": "reported",
+      "cited": 0,
+      "blocks": 5,
+      "answer_chars": 319
+    },
+    {
+      "run": 1,
+      "label": "grounded",
+      "question": "¿qué decisiones se tomaron en las reuniones?",
+      "attribution": "reported",
+      "cited": 5,
+      "blocks": 5,
+      "answer_chars": 585
+    },
+    {
+      "run": 1,
+      "label": "grounded",
+      "question": "¿quiénes participaron en las reuniones?",
+      "attribution": "reported",
+      "cited": 3,
+      "blocks": 5,
+      "answer_chars": 75
+    },
+    {
+      "run": 1,
+      "label": "grounded",
+      "question": "¿qué aportó Gustavo Martínez al proyecto?",
+      "attribution": "reported",
+      "cited": 3,
+      "blocks": 5,
+      "answer_chars": 397
+    },
+    {
+      "run": 1,
+      "label": "grounded",
+      "question": "¿qué se decidió sobre el historial de decisiones?",
+      "attribution": "reported",
+      "cited": 2,
+      "blocks": 5,
+      "answer_chars": 221
+    },
+    {
+      "run": 1,
+      "label": "grounded",
+      "question": "¿por qué se exigen citas textuales?",
+      "attribution": "reported",
+      "cited": 2,
+      "blocks": 5,
+      "answer_chars": 245
+    },
+    {
+      "run": 1,
+      "label": "grounded",
+      "question": "¿qué pasa si ingiero el mismo archivo dos veces?",
+      "attribution": "reported",
+      "cited": 2,
+      "blocks": 5,
+      "answer_chars": 376
+    },
+    {
+      "run": 1,
+      "label": "grounded",
+      "question": "¿quién quedó como responsable de la migración?",
+      "attribution": "reported",
+      "cited": 1,
+      "blocks": 5,
+      "answer_chars": 90
+    },
+    {
+      "run": 1,
+      "label": "grounded",
+      "question": "¿qué alcance tiene el borrado de un concepto?",
+      "attribution": "reported",
+      "cited": 2,
+      "blocks": 5,
+      "answer_chars": 365
+    },
+    {
+      "run": 1,
+      "label": "grounded",
+      "question": "¿el bundle o el índice es la fuente de verdad?",
+      "attribution": "reported",
+      "cited": 2,
+      "blocks": 5,
+      "answer_chars": 396
+    },
+    {
+      "run": 1,
+      "label": "grounded",
+      "question": "¿cómo se aprueban los cambios durante la curación?",
+      "attribution": "reported",
+      "cited": 2,
+      "blocks": 5,
+      "answer_chars": 362
+    },
+    {
+      "run": 1,
+      "label": "adjacent",
+      "question": "¿qué relación hay entre la trazabilidad y la verdad contextual en sistemas RAG?",
+      "attribution": "reported",
+      "cited": 2,
+      "blocks": 5,
+      "answer_chars": 763
+    },
+    {
+      "run": 1,
+      "label": "adjacent",
+      "question": "¿cuáles son las mejores prácticas de chunking en sistemas RAG?",
+      "attribution": "reported",
+      "cited": 2,
+      "blocks": 5,
+      "answer_chars": 523
+    },
+    {
+      "run": 1,
+      "label": "adjacent",
+      "question": "¿cómo se evalúa la calidad de un sistema de recuperación aumentada?",
+      "attribution": "reported",
+      "cited": 3,
+      "blocks": 5,
+      "answer_chars": 484
+    },
+    {
+      "run": 1,
+      "label": "adjacent",
+      "question": "¿qué es la destilación de modelos de lenguaje?",
+      "attribution": "reported",
+      "cited": 0,
+      "blocks": 5,
+      "answer_chars": 205
+    },
+    {
+      "run": 1,
+      "label": "adjacent",
+      "question": "¿cómo funciona la cuantización de pesos en un LLM?",
+      "attribution": "reported",
+      "cited": 0,
+      "blocks": 5,
+      "answer_chars": 173
+    },
+    {
+      "run": 1,
+      "label": "adjacent",
+      "question": "¿qué ventajas tiene un índice HNSW frente a una búsqueda exhaustiva?",
+      "attribution": "reported",
+      "cited": 0,
+      "blocks": 5,
+      "answer_chars": 183
+    },
+    {
+      "run": 1,
+      "label": "adjacent",
+      "question": "¿cómo se diseña una arquitectura hexagonal en un servicio web?",
+      "attribution": "reported",
+      "cited": 0,
+      "blocks": 5,
+      "answer_chars": 299
+    },
+    {
+      "run": 1,
+      "label": "adjacent",
+      "question": "¿qué diferencia hay entre fine-tuning y aprendizaje en contexto?",
+      "attribution": "reported",
+      "cited": 0,
+      "blocks": 5,
+      "answer_chars": 162
+    },
+    {
+      "run": 1,
+      "label": "adjacent",
+      "question": "¿cuál es el estado del arte en reranking neuronal?",
+      "attribution": "reported",
+      "cited": 0,
+      "blocks": 5,
+      "answer_chars": 350
+    },
+    {
+      "run": 1,
+      "label": "adjacent",
+      "question": "¿cómo se mide la deriva de un modelo en producción?",
+      "attribution": "reported",
+      "cited": 0,
+      "blocks": 5,
+      "answer_chars": 158
+    },
+    {
+      "run": 2,
+      "label": "grounded",
+      "question": "¿qué decisiones se tomaron en las reuniones?",
+      "attribution": "reported",
+      "cited": 5,
+      "blocks": 5,
+      "answer_chars": 551
+    },
+    {
+      "run": 2,
+      "label": "grounded",
+      "question": "¿quiénes participaron en las reuniones?",
+      "attribution": "reported",
+      "cited": 3,
+      "blocks": 5,
+      "answer_chars": 75
+    },
+    {
+      "run": 2,
+      "label": "grounded",
+      "question": "¿qué aportó Gustavo Martínez al proyecto?",
+      "attribution": "reported",
+      "cited": 4,
+      "blocks": 5,
+      "answer_chars": 580
+    },
+    {
+      "run": 2,
+      "label": "grounded",
+      "question": "¿qué se decidió sobre el historial de decisiones?",
+      "attribution": "reported",
+      "cited": 2,
+      "blocks": 5,
+      "answer_chars": 232
+    },
+    {
+      "run": 2,
+      "label": "grounded",
+      "question": "¿por qué se exigen citas textuales?",
+      "attribution": "reported",
+      "cited": 2,
+      "blocks": 5,
+      "answer_chars": 275
+    },
+    {
+      "run": 2,
+      "label": "grounded",
+      "question": "¿qué pasa si ingiero el mismo archivo dos veces?",
+      "attribution": "reported",
+      "cited": 2,
+      "blocks": 5,
+      "answer_chars": 325
+    },
+    {
+      "run": 2,
+      "label": "grounded",
+      "question": "¿quién quedó como responsable de la migración?",
+      "attribution": "reported",
+      "cited": 1,
+      "blocks": 5,
+      "answer_chars": 90
+    },
+    {
+      "run": 2,
+      "label": "grounded",
+      "question": "¿qué alcance tiene el borrado de un concepto?",
+      "attribution": "reported",
+      "cited": 2,
+      "blocks": 5,
+      "answer_chars": 464
+    },
+    {
+      "run": 2,
+      "label": "grounded",
+      "question": "¿el bundle o el índice es la fuente de verdad?",
+      "attribution": "reported",
+      "cited": 2,
+      "blocks": 5,
+      "answer_chars": 381
+    },
+    {
+      "run": 2,
+      "label": "grounded",
+      "question": "¿cómo se aprueban los cambios durante la curación?",
+      "attribution": "reported",
+      "cited": 2,
+      "blocks": 5,
+      "answer_chars": 304
+    },
+    {
+      "run": 2,
+      "label": "adjacent",
+      "question": "¿qué relación hay entre la trazabilidad y la verdad contextual en sistemas RAG?",
+      "attribution": "reported",
+      "cited": 2,
+      "blocks": 5,
+      "answer_chars": 897
+    },
+    {
+      "run": 2,
+      "label": "adjacent",
+      "question": "¿cuáles son las mejores prácticas de chunking en sistemas RAG?",
+      "attribution": "reported",
+      "cited": 5,
+      "blocks": 5,
+      "answer_chars": 397
+    },
+    {
+      "run": 2,
+      "label": "adjacent",
+      "question": "¿cómo se evalúa la calidad de un sistema de recuperación aumentada?",
+      "attribution": "reported",
+      "cited": 2,
+      "blocks": 5,
+      "answer_chars": 540
+    },
+    {
+      "run": 2,
+      "label": "adjacent",
+      "question": "¿qué es la destilación de modelos de lenguaje?",
+      "attribution": "reported",
+      "cited": 0,
+      "blocks": 5,
+      "answer_chars": 79
+    },
+    {
+      "run": 2,
+      "label": "adjacent",
+      "question": "¿cómo funciona la cuantización de pesos en un LLM?",
+      "attribution": "reported",
+      "cited": 0,
+      "blocks": 5,
+      "answer_chars": 176
+    },
+    {
+      "run": 2,
+      "label": "adjacent",
+      "question": "¿qué ventajas tiene un índice HNSW frente a una búsqueda exhaustiva?",
+      "attribution": "reported",
+      "cited": 0,
+      "blocks": 5,
+      "answer_chars": 149
+    },
+    {
+      "run": 2,
+      "label": "adjacent",
+      "question": "¿cómo se diseña una arquitectura hexagonal en un servicio web?",
+      "attribution": "reported",
+      "cited": 0,
+      "blocks": 5,
+      "answer_chars": 622
+    },
+    {
+      "run": 2,
+      "label": "adjacent",
+      "question": "¿qué diferencia hay entre fine-tuning y aprendizaje en contexto?",
+      "attribution": "reported",
+      "cited": 0,
+      "blocks": 5,
+      "answer_chars": 186
+    },
+    {
+      "run": 2,
+      "label": "adjacent",
+      "question": "¿cuál es el estado del arte en reranking neuronal?",
+      "attribution": "reported",
+      "cited": 0,
+      "blocks": 5,
+      "answer_chars": 327
+    },
+    {
+      "run": 2,
+      "label": "adjacent",
+      "question": "¿cómo se mide la deriva de un modelo en producción?",
+      "attribution": "reported",
+      "cited": 0,
+      "blocks": 5,
+      "answer_chars": 167
+    }
+  ],
+  "failures": []
+}

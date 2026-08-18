@@ -71,7 +71,7 @@ import re
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Final, Literal
 
 from openkos import lifecycle, sensitivity
 from openkos.extraction.concept import LANGUAGE_FUNCTION_WORDS
@@ -92,22 +92,66 @@ NO_MATCH = "No matching concepts were found in the compiled bundle for this ques
 """Stable no-match text (D3): zero or all-skipped hits short-circuit to this,
 without calling `llm.chat`."""
 
+Attribution = Literal["reported", "absent", "unparsed"]
+"""How `AnswerResult.citations` was decided for this call (#753).
+
+- `"reported"` -- the reply carried a usable attribution line and the
+  citations are exactly the blocks it named (possibly none).
+- `"absent"`   -- no attribution line at all, so every retrieved concept is
+  cited: the pre-#753 behavior, byte for byte.
+- `"unparsed"` -- a line was there but named nothing usable (no integers, or
+  only out-of-range ones), so the same conservative fallback applies.
+
+`"absent"` and `"unparsed"` are kept apart rather than folded into one
+"fell back" value because they answer different questions about a model: the
+first says it ignored the instruction, the second says it tried and produced
+something unusable. Collapsing them would make the eval harness unable to
+tell a compliance problem from a format problem -- which is exactly the
+number that decides whether the fallback can ever be tightened."""
+
 NoMatchCause = Literal["none", "empty_query", "zero_hits", "all_unreadable"]
 """Why an `AnswerResult` short-circuited to `NO_MATCH` -- `"none"` on a
 successful answer, otherwise which guard tripped (D-shortcircuit): an
 empty/whitespace-only question, zero hits from BOTH retrievers, or hits
 that were all unreadable/unparseable at re-read time."""
 
+_ATTRIBUTION_KEYWORD: Final = "USED"
+"""Opening token of the attribution line the model closes its answer with.
+
+Deliberately an English all-caps keyword rather than anything localized: it
+is machinery addressed to the model, and the same corpus is answered in
+whatever language the question arrives in -- a marker that varied with the
+answer's language would need a parser per language and would collide with
+ordinary prose in each of them."""
+
+_ATTRIBUTION_NONE: Final = "none"
+"""The payload meaning "this answer draws on no context block at all".
+
+A REPORT, not a parse failure, and the distinction is the point: it is
+#753's own specimen (an answer written from the model's own knowledge) and
+it must empty the citation list rather than fall back to citing everything.
+`query --save` then refuses the filing outright, because `build_concept`
+requires non-empty provenance -- the ungrounded answer stops at the screen
+instead of becoming a permanent bundle concept with five invented
+provenance edges."""
+
+
 _SYSTEM_PROMPT = (
     "You are OpenKOS, a local-first knowledge assistant. Answer the question "
     "using ONLY the numbered CONTEXT concepts below -- do not use outside "
     "knowledge. Write prose only: a concept id is an internal identifier, so "
     "never quote one in your answer and never repeat the bracketed labels "
-    "that head the context blocks -- the caller renders its own citation "
-    "list from the same concepts. If the "
+    "that head the context blocks -- refer to a concept by its number if you "
+    "must refer to one at all. If the "
     "context does not contain enough information to answer, say so plainly "
     'rather than guessing; an honest "the compiled bundle does not cover '
-    'this" is the correct answer when the context is insufficient.'
+    'this" is the correct answer when the context is insufficient. '
+    "Finish with one final line of its own, exactly of the form "
+    f"'{_ATTRIBUTION_KEYWORD}: 1, 3' -- the numbers of the CONTEXT blocks "
+    "your answer actually draws on. List a block only if your answer genuinely "
+    "uses what it says, never merely because it was provided, and write "
+    f"'{_ATTRIBUTION_KEYWORD}: {_ATTRIBUTION_NONE}' if your answer draws on "
+    "none of them. The caller cites exactly the blocks this line names."
 )
 """Stable system half of the 2-message prompt (D5): local-first grounding
 rules (answer only from CONTEXT, keep internal ids out of the prose, admit
@@ -167,6 +211,67 @@ _SCAFFOLD_INLINE_RE = re.compile(rf"[ \t]*(?:{_CONCEPT_ID_SCAFFOLD})", re.VERBOS
 Only HORIZONTAL space is absorbed. Using `\\s*` would swallow the newline
 before a scaffold that opens a line and silently reflow the answer's
 markdown -- joining a list item or a heading onto the previous paragraph."""
+
+
+_ATTRIBUTION_LINE_RE = re.compile(
+    rf"(?im)^[ \t]*{re.escape(_ATTRIBUTION_KEYWORD)}[ \t]*:[ \t]*(?P<payload>[^\n]*)$"
+)
+"""The attribution line, anchored to a line of its own.
+
+Case-insensitive and tolerant of surrounding space because the marker is
+produced by a model rather than by code, but NOT tolerant of the keyword
+appearing mid-sentence: requiring the line start is what keeps an answer
+that legitimately contains the word from being truncated at it."""
+
+_ATTRIBUTION_INDEX_RE = re.compile(r"\d+")
+
+
+def _split_attribution(
+    reply: str, block_count: int
+) -> tuple[str, frozenset[int] | None, Attribution]:
+    """Split `reply` into its prose, the block numbers it reports, and how.
+
+    Returns the prose with the marker line removed, either the reported
+    1-based block indices (possibly an EMPTY set, meaning the answer reports
+    drawing on nothing) or `None` when nothing usable was reported, and the
+    `Attribution` value naming which of those three cases happened. The
+    status is returned rather than left for the caller to infer, because
+    `None` alone cannot tell "no line" from "a line naming nothing" -- and
+    the whole reason those are separate values is that a caller reading only
+    the set would collapse them.
+
+    The LAST marker line wins. A model that restates the format mid-answer
+    before emitting the real one at the end would otherwise have its example
+    read as the report -- and the instruction asks for a closing line, so the
+    final one is the one that was meant.
+
+    Out-of-range numbers are DROPPED rather than clamped: `9` against three
+    blocks names no concept that was ever sent, and clamping it to the third
+    would manufacture a citation the model never claimed. A report whose
+    numbers are all out of range therefore survives as `None`, not as an
+    empty set -- an empty set is a positive claim ("none of them"), which is
+    not what a hallucinated index says.
+
+    The marker is stripped whether or not it parsed. It is machinery either
+    way, and `query --save` files this prose as a real bundle concept, so
+    leaving an unparsed one behind writes it into the bundle permanently.
+    """
+    matches = list(_ATTRIBUTION_LINE_RE.finditer(reply))
+    if not matches:
+        return reply, None, "absent"
+    last = matches[-1]
+    prose = (reply[: last.start()] + reply[last.end() :]).strip()
+    payload = last.group("payload").strip()
+    if payload.casefold() == _ATTRIBUTION_NONE.casefold():
+        return prose, frozenset(), "reported"
+    reported = {
+        index
+        for raw in _ATTRIBUTION_INDEX_RE.findall(payload)
+        if 1 <= (index := int(raw)) <= block_count
+    }
+    if not reported:
+        return prose, None, "unparsed"
+    return prose, frozenset(reported), "reported"
 
 
 def _strip_concept_id_scaffolding(text: str) -> str:
@@ -245,6 +350,24 @@ class AnswerResult:
     """Number of distinct `concept_id`s in the fused, limit-truncated list
     (additive). Already reflects the lifecycle status filter, since both
     `hits` and `vec_hits` are filtered before this fuse."""
+    context_block_count: int = 0
+    """How many context blocks were actually SENT to the model.
+
+    NOT `fused_count`, which is counted before `_assemble_context`'s
+    per-concept skip guard runs: a fused hit that is unreadable, unparseable
+    or sensitivity-blocked at re-read never reaches the prompt, so the two
+    diverge exactly when a concept vanishes between the fuse and the send.
+    Anything reporting "the answer drew on none of N concepts" must use THIS
+    number -- `fused_count` would name concepts the model was never shown.
+
+    Defaults to `0`, which is the honest value for every short-circuit
+    return above: those assemble no context at all."""
+    attribution: Attribution = "absent"
+    """How this call's `citations` list was decided (#753).
+
+    Defaults to `"absent"`, which is both the pre-#753 behavior and the
+    honest value for every short-circuit return above: those never reach
+    `llm.chat`, so no model ever reported anything for them."""
     dense_degraded: bool = False
     """`True` when dense retrieval could not proceed this call (absent
     `vector_store`, `VecUnavailable`, a read-path `sqlite3.Error`, or the
@@ -373,9 +496,16 @@ def _assemble_context(
 def _build_messages(context_blocks: list[str], question: str) -> list[Message]:
     """Assemble the 2-message prompt (D5): system grounding + delimited
     context blocks + question."""
-    user_content = (
-        "CONTEXT:\n\n" + "\n\n".join(context_blocks) + f"\n\nQUESTION:\n{question}"
-    )
+    # The system prompt has always called these "the numbered CONTEXT
+    # concepts"; until #753 nothing numbered them. The number is the
+    # vocabulary the model attributes with, and it exists precisely so that
+    # attribution never needs a concept id -- #193's leak was the model
+    # copying back the `[concept_id: ...]` label it was shown, so making ids
+    # the attribution vocabulary would re-open it by design.
+    numbered = [
+        f"[{position}] {block}" for position, block in enumerate(context_blocks, 1)
+    ]
+    user_content = "CONTEXT:\n\n" + "\n\n".join(numbered) + f"\n\nQUESTION:\n{question}"
     return [
         {"role": "system", "content": _SYSTEM_PROMPT},
         {"role": "user", "content": user_content},
@@ -635,12 +765,36 @@ def answer(
         )
 
     reply = llm.chat(_build_messages(context_blocks, question))
+
+    # #753: the citation list is decided HERE, after the model has spoken,
+    # from the blocks it reports drawing on. Until this it was
+    # `_assemble_context`'s output verbatim -- computed before `llm.chat` ran
+    # and never compared to the reply, which made "citations" the retrieval
+    # set under another name. Measured over the 170 stored answers in
+    # `evals/query_title/results/`: 170 of 170 cited exactly `limit`, in only
+    # four distinct sets, and not one answer had every citation supported by
+    # its own text.
+    #
+    # `citations` and `context_blocks` are index-aligned by construction --
+    # `_assemble_context` appends to both in the same iteration, after every
+    # skip guard -- so a block number indexes its citation directly.
+    prose, reported, attribution = _split_attribution(reply, len(context_blocks))
+    if reported is not None:
+        # A SUBSET, never a reordering: `citations` is documented as being in
+        # fused-rank order and the CLI renders the list in it, so honouring
+        # the model's own listing order here would quietly re-rank the output
+        # by whatever sequence it happened to type.
+        citations = [
+            citation
+            for position, citation in enumerate(citations, 1)
+            if position in reported
+        ]
     return AnswerResult(
         # Stripped HERE, not at the print site, because `AnswerResult.answer`
         # feeds both -- `query` echoes it and `query --save` files it as a
         # new concept. Cleaning only the echo would leave the leak permanent
         # in the bundle while looking fixed on screen (#193).
-        answer=_strip_concept_id_scaffolding(reply),
+        answer=_strip_concept_id_scaffolding(prose),
         citations=citations,
         fts_hit_count=len(hits),
         llm_invoked=True,
@@ -649,4 +803,6 @@ def answer(
         dense_hit_count=len(vec_hits),
         fused_count=len(fused_ids),
         dense_degraded=dense_degraded,
+        context_block_count=len(context_blocks),
+        attribution=attribution,
     )

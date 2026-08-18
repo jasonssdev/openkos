@@ -14043,6 +14043,25 @@ def query(
             typer.echo(
                 f"  → {citation.concept_id} ({citation.title}){synthesis}{marker}"
             )
+    elif result.attribution == "reported":
+        # #753: the answer itself reported drawing on none of the concepts
+        # retrieved for it. Announced rather than merely rendered as a missing
+        # section, because a bare reply with no `Citations:` block reads like a
+        # rendering bug instead of the finding it is -- and this exact reply,
+        # before the citation fix, arrived carrying `limit` citations that its
+        # own text did not support.
+        #
+        # Gated on `reported`, never on an empty list alone: under `absent` the
+        # citation list was not decided by the answer at all, so its emptiness
+        # says nothing about support and this would fire on every backend that
+        # ignores the instruction.
+        typer.echo(
+            "openkos query: warning -- this answer drew on none of the "
+            f"{result.context_block_count} concepts placed in its context, so "
+            "it stands on nothing in the bundle. Treat it as the model's own "
+            "knowledge.",
+            err=True,
+        )
 
     # Issue #570: compounding on sources is the product's thesis;
     # compounding on model output with no source underneath is how a

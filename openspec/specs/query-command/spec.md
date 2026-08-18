@@ -519,6 +519,36 @@ that nothing beneath the answer reaches a `Source`.
 - THEN a stderr warning states that every citation is itself a filed
   synthesis
 
+### Requirement: An Answer Standing On Nothing Says So
+
+WHEN `AnswerResult.attribution` is `"reported"` and `citations` is empty —
+the answer itself reported drawing on none of the concepts retrieved for it
+(issue #753) — `query` MUST print one stderr warning saying the answer
+stands on nothing in the bundle. It MUST NOT print that warning when
+`attribution` is `"absent"` or `"unparsed"`: there the citation list was not
+decided by the answer, so its emptiness is a retrieval fact rather than a
+finding about support, and warning on it would fire on every backend that
+ignores the attribution instruction.
+
+The warning is stderr-only and MUST NOT change the exit code. The answer
+text still prints: a reply the model wrote from its own knowledge is not an
+error, it is a reply whose authority must not be borrowed from the bundle.
+
+#### Scenario: An unsupported answer announces itself
+
+- GIVEN an answer with `attribution` `"reported"` and no citations
+- WHEN `openkos query "<question>"` completes
+- THEN stdout carries the answer text with no `Citations:` block, stderr
+  carries the warning naming `context_block_count` — never `fused_count`,
+  which counts concepts the model may never have been shown — and the exit
+  code is `0`
+
+#### Scenario: A non-reporting backend prints no such warning
+
+- GIVEN an answer with `attribution` `"absent"` and no citations
+- WHEN `openkos query "<question>"` completes
+- THEN no such warning appears on stderr
+
 ### Requirement: Sensitivity Is The High-Water-Mark Of Cited Concepts
 
 WHEN filing via `--save`, `query` MUST re-read each cited concept's
