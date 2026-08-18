@@ -562,6 +562,57 @@ configured guard is distinguishable from one the guard allowed.
 - WHEN `openkos query "<question>" --save --auto` runs
 - THEN no possible-duplicate line appears
 
+The lookup MUST compare against a BOUNDED number of already-filed insights,
+selected newest-first by filing time (#764). The scan is linear in the number
+of filings — measured at ~11.8 ms each, with no knee — and it runs as dead
+wait between the answer appearing and the confirmation gate, so an unbounded
+comparison makes every save slower for as long as the bundle keeps growing.
+
+WHEN the bound dropped a comparable filing, `query` MUST disclose how many it
+compared against and how many exist. A truncated comparison MUST NOT render
+identically to a complete one. WHEN nothing was dropped, `query` MUST NOT
+print that disclosure: a line on every save is a line nobody reads.
+
+WHEN the lookup could not run, `query` MUST NOT print the bound disclosure
+either, whatever the bound had selected. A failed scan compared nothing, so a
+bound notice beside the unavailable notice would be two contradictory
+sentences in one preview, the first of them false.
+
+#### Scenario: A failed scan over the bound discloses only the failure
+
+- GIVEN more comparable filed insights than the scan compares against
+- AND the embedding backend fails during `--save`
+- WHEN `openkos query "<question>" --save --auto` runs
+- THEN stderr says the question could not be checked, no bound disclosure
+  appears, and the new insight is still written
+
+#### Scenario: A truncated comparison discloses its bound
+
+- GIVEN more comparable filed insights than the scan compares against
+- WHEN `openkos query "<question>" --save --auto` runs
+- THEN the preview says how many of the total were compared, and the new
+  insight is still written
+
+#### Scenario: A complete comparison discloses no bound
+
+- GIVEN fewer comparable filed insights than the scan compares against
+- WHEN `openkos query "<question>" --save --auto` runs
+- THEN no bound disclosure appears
+
+WHEN the embedding host is NOT this machine, `--save` MUST announce — before
+the send — that already-filed source questions are transmitted too, naming
+the ceiling (#764). The standing `OLLAMA_HOST` advisory covers the question
+just typed; a save additionally ships other filings' questions, which is a
+different disclosure rather than a louder one. A `query` without `--save`
+MUST NOT print it: no filed question is sent there.
+
+#### Scenario: A remote embedding host is told what a save sends
+
+- GIVEN `OLLAMA_HOST` names a host that is not this machine
+- WHEN `openkos query "<question>" --save --auto` runs
+- THEN stderr announces that already-filed source questions are sent, with
+  the ceiling, and the credentialed host value stays redacted
+
 ### Requirement: An Answer Standing On Nothing Says So
 
 WHEN `AnswerResult.attribution` is `"reported"` and `citations` is empty —

@@ -418,3 +418,228 @@ def test_a_ragged_batch_is_reported_as_unavailable(tmp_path: Path) -> None:
 
     assert scan.candidates == []
     assert scan.unavailable is True
+
+
+# --- #764: the batch is bounded, and the bound is reported ------------------
+#
+# `evals/insight_scan_bound/` measured the scan at ~11.8 ms per filed insight,
+# linear with no knee: 100 filed insights cost 1.277s and 1600 cost 18.904s,
+# on a write path that cost nothing before #762. The disk half is 1/300th of
+# that (0.063s to read and parse 1600 files), so the bound belongs on the
+# EMBED BATCH -- bounding the read alone would save nothing measurable.
+
+
+def _timestamped(bundle_dir: Path, slug: str, *, question: str, timestamp: str) -> None:
+    """One filed insight carrying the `timestamp` key `build_concept` writes."""
+    path = bundle_dir / "insights" / f"{slug}.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"---\ntype: Insight\ntitle: {slug}\ndescription: {question}\n"
+        f"sensitivity: private\ntimestamp: {timestamp}\n---\nThe answer.",
+        encoding="utf-8",
+    )
+
+
+class _CountingEmbedder:
+    """Returns one identical vector per text, recording each batch."""
+
+    def __init__(self) -> None:
+        self.batches: list[list[str]] = []
+
+    def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        self.batches.append(list(texts))
+        return [[1.0, 0.0] for _ in texts]
+
+
+def test_the_embed_batch_is_bounded_by_the_scan_limit(tmp_path: Path) -> None:
+    """More filed insights than the limit still costs ONE bounded batch.
+
+    This is #764's first finding: cost grew linearly and without limit on a
+    write path, so what must be pinned is the SIZE of the call, not merely
+    that a call happens."""
+    bundle = tmp_path / "bundle"
+    for index in range(insight_identity.DUPLICATE_SCAN_LIMIT + 25):
+        _timestamped(
+            bundle,
+            f"filed-{index:04d}",
+            question=f"question {index}?",
+            timestamp=f"2026-08-{(index % 28) + 1:02d}T00:00:00Z",
+        )
+    embedder = _CountingEmbedder()
+
+    near_duplicate_insights("a new question?", bundle_dir=bundle, embedder=embedder)
+
+    assert len(embedder.batches) == 1
+    # The new question plus the bound, never the whole bundle.
+    assert len(embedder.batches[0]) == insight_identity.DUPLICATE_SCAN_LIMIT + 1
+
+
+def test_the_bounded_batch_keeps_the_most_recently_filed(tmp_path: Path) -> None:
+    """The bound selects by FILING TIME, newest first.
+
+    Alphabetical slug order -- what `glob` hands back, and what the unbounded
+    scan happened to use -- carries no meaning, so truncating on it would drop
+    insights for a reason no user could predict or read. The `timestamp`
+    frontmatter key `build_concept` writes is used rather than `mtime`,
+    because a `git clone` stamps every working-tree file with the checkout
+    time and would flatten the order to nothing."""
+    bundle = tmp_path / "bundle"
+    _timestamped(
+        bundle, "aaa-oldest", question="oldest?", timestamp="2026-01-01T00:00:00Z"
+    )
+    _timestamped(
+        bundle, "mmm-middle", question="middle?", timestamp="2026-06-01T00:00:00Z"
+    )
+    _timestamped(
+        bundle, "zzz-newest", question="newest?", timestamp="2026-12-01T00:00:00Z"
+    )
+    embedder = _CountingEmbedder()
+
+    near_duplicate_insights("new?", bundle_dir=bundle, embedder=embedder, limit=2)
+
+    # Newest first, and the alphabetically-first file is the one dropped --
+    # so this fails if selection silently falls back to glob order.
+    assert embedder.batches[0] == ["new?", "newest?", "middle?"]
+
+
+def test_a_truncated_scan_reports_what_it_compared(tmp_path: Path) -> None:
+    """A truncated comparison must be able to say so.
+
+    #764: "a truncated comparison that reads like a complete one is the
+    failure mode to avoid". The caller cannot disclose a bound it cannot
+    see, so both numbers travel on the result."""
+    bundle = tmp_path / "bundle"
+    for index in range(5):
+        _timestamped(
+            bundle,
+            f"filed-{index}",
+            question=f"question {index}?",
+            timestamp=f"2026-08-0{index + 1}T00:00:00Z",
+        )
+
+    scan = near_duplicate_insights(
+        "new?", bundle_dir=bundle, embedder=_CountingEmbedder(), limit=2
+    )
+
+    assert scan.compared == 2
+    assert scan.filed_total == 5
+    assert scan.truncated is True
+
+
+def test_an_untruncated_scan_reports_no_bound(tmp_path: Path) -> None:
+    """Under the limit, `truncated` is False and the counts agree.
+
+    The common case. A disclosure built on this flag must stay silent here,
+    or it becomes noise on every save and stops being read."""
+    bundle = tmp_path / "bundle"
+    _timestamped(bundle, "one", question="one?", timestamp="2026-08-01T00:00:00Z")
+    _timestamped(bundle, "two", question="two?", timestamp="2026-08-02T00:00:00Z")
+
+    scan = near_duplicate_insights(
+        "new?", bundle_dir=bundle, embedder=_CountingEmbedder(), limit=10
+    )
+
+    assert (scan.compared, scan.filed_total) == (2, 2)
+    assert scan.truncated is False
+
+
+def test_an_insight_without_a_timestamp_is_compared_last(tmp_path: Path) -> None:
+    """A missing or unparseable `timestamp` sorts OLDEST, never newest.
+
+    Sorting it newest would let one malformed neighbour evict every genuinely
+    recent insight from the batch -- the bound would still hold and the scan
+    would compare against the wrong hundred. Filed insights written by
+    `query --save` always carry the key; a hand-edited or foreign file may
+    not, and it must degrade to "least likely to be reached", not to "first
+    in line"."""
+    bundle = tmp_path / "bundle"
+    _timestamped(
+        bundle, "stamped", question="stamped?", timestamp="2026-01-01T00:00:00Z"
+    )
+    (bundle / "insights" / "unstamped.md").write_text(
+        "---\ntype: Insight\ntitle: unstamped\ndescription: unstamped?\n"
+        "sensitivity: private\n---\nThe answer.",
+        encoding="utf-8",
+    )
+    embedder = _CountingEmbedder()
+
+    near_duplicate_insights("new?", bundle_dir=bundle, embedder=embedder, limit=1)
+
+    assert embedder.batches[0] == ["new?", "stamped?"]
+
+
+def test_equal_timestamps_break_deterministically(tmp_path: Path) -> None:
+    """Same-second filings truncate the same way on every run.
+
+    `query --save` stamps to whole seconds, so two saves inside one second
+    are reachable. Without a tiebreak the survivor would depend on sort
+    stability over `glob` order, and the same bundle could disclose a
+    different bound on two consecutive saves."""
+    bundle = tmp_path / "bundle"
+    stamp = "2026-08-18T00:00:00Z"
+    _timestamped(bundle, "bbb", question="bbb?", timestamp=stamp)
+    _timestamped(bundle, "aaa", question="aaa?", timestamp=stamp)
+    embedder = _CountingEmbedder()
+
+    near_duplicate_insights("new?", bundle_dir=bundle, embedder=embedder, limit=1)
+
+    assert embedder.batches[0] == ["new?", "aaa?"]
+
+
+def test_a_failed_scan_reports_nothing_compared(tmp_path: Path) -> None:
+    """A scan that could not run compared NOTHING, whatever the bound picked.
+
+    `compared` promises what was embedded and compared. On the failure paths
+    the embed never returned, so carrying the intended slice length there
+    would make the field describe an intention rather than an outcome -- and
+    the caller would then disclose a comparison that did not happen.
+    """
+    bundle = tmp_path / "bundle"
+    for index in range(5):
+        _timestamped(
+            bundle,
+            f"filed-{index}",
+            question=f"question {index}?",
+            timestamp=f"2026-08-0{index + 1}T00:00:00Z",
+        )
+
+    scan = near_duplicate_insights(
+        "new?", bundle_dir=bundle, embedder=_RaisingEmbedder(), limit=2
+    )
+
+    assert scan.unavailable is True
+    assert scan.compared == 0
+    # ...and therefore NOT truncated: "compared against 2 of 5" beside "could
+    # not check this question" would be two contradictory sentences in one
+    # preview, the first of them false.
+    assert scan.truncated is False
+    assert scan.filed_total == 5
+
+
+def test_an_unparseable_neighbour_is_outside_filed_total(tmp_path: Path) -> None:
+    """`filed_total` counts the COMPARABLE population, not files on disk.
+
+    The disclosure reads "compared against N of M", so M has to mean the same
+    thing N is drawn from. A corrupt neighbour is skipped by the reader and
+    could never have been compared, so counting it would inflate the gap the
+    bound is blamed for and overstate what the human is missing.
+    """
+    bundle = tmp_path / "bundle"
+    _timestamped(bundle, "good", question="good?", timestamp="2026-08-01T00:00:00Z")
+    (bundle / "insights" / "corrupt.md").write_text(
+        "---\ntype: Insight\ntitle: [unclosed\ndescription: corrupt?\n---\nbody",
+        encoding="utf-8",
+    )
+    (bundle / "insights" / "confidential.md").write_text(
+        "---\ntype: Insight\ntitle: Secret\ndescription: secret?\n"
+        "sensitivity: confidential\n---\nbody",
+        encoding="utf-8",
+    )
+
+    scan = near_duplicate_insights(
+        "new?", bundle_dir=bundle, embedder=_CountingEmbedder(), limit=10
+    )
+
+    assert scan.filed_total == 1
+    assert scan.compared == 1
+    assert scan.truncated is False

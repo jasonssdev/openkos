@@ -13,7 +13,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner, _NamedTextIOWrapper
+from typer.testing import CliRunner, Result, _NamedTextIOWrapper
 
 from openkos import config, fsio
 from openkos.cli import main
@@ -2602,3 +2602,206 @@ def test_a_successful_empty_scan_prints_no_notice(
 
     assert result.exit_code == 0
     assert "could not check this question against" not in result.stderr
+
+
+# --- #764: a bounded comparison says so -------------------------------------
+
+
+def _stub_scan(
+    monkeypatch: pytest.MonkeyPatch, scan: insight_identity.DuplicateScan
+) -> None:
+    monkeypatch.setattr(
+        "openkos.cli.main.insight_identity.near_duplicate_insights",
+        lambda *a, **k: scan,
+    )
+
+
+def _save_with_scan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    scan: insight_identity.DuplicateScan,
+) -> Result:
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
+    monkeypatch.setattr(
+        "openkos.cli.main.answer",
+        lambda *a, **k: _fake_matched_answer(
+            citations=[Citation(concept_id="concepts/stoicism", title="Stoicism")]
+        ),
+    )
+    _stub_scan(monkeypatch, scan)
+    return runner.invoke(app, ["query", "what is stoicism?", "--save", "--auto"])
+
+
+def test_a_truncated_duplicate_scan_discloses_its_bound(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A partial comparison must not read like a complete one (#764).
+
+    `evals/insight_scan_bound/` measured the scan at ~11.8 ms per filed
+    insight with no knee, so a bound is unavoidable -- and nothing measured
+    that the bounded scan still finds what the unbounded one would (that
+    needs a corpus with more than the two paraphrase relations the stored
+    population has). The bound is therefore handed to the human, who is
+    about to make the filing permanent, rather than trusted silently.
+    """
+    result = _save_with_scan(
+        tmp_path,
+        monkeypatch,
+        insight_identity.DuplicateScan([], compared=100, filed_total=347),
+    )
+
+    assert result.exit_code == 0
+    assert "100 most recently filed of 347" in result.stdout
+
+
+def test_an_untruncated_duplicate_scan_discloses_no_bound(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Comparing everything says nothing about a bound -- the common case.
+
+    A notice on every save is a notice nobody reads, which would cost
+    exactly the disclosure the truncated case depends on."""
+    result = _save_with_scan(
+        tmp_path,
+        monkeypatch,
+        insight_identity.DuplicateScan([], compared=12, filed_total=12),
+    )
+
+    assert result.exit_code == 0
+    assert "most recently filed of" not in result.stdout
+
+
+def test_save_against_a_remote_embed_host_names_the_filed_questions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--save` sends OTHER people's questions too, and says so first (#764).
+
+    The standing `OLLAMA_HOST` advisory was written when `query` embedded one
+    string: the question just typed. Since #762 a save also ships every
+    comparable filed insight's source question off the machine, which is a
+    different disclosure -- and it is made BEFORE the send, at command start,
+    not after it.
+    """
+    monkeypatch.setenv("OLLAMA_HOST", "http://user:s3cret@remote.example:11434")
+    result = _save_with_scan(tmp_path, monkeypatch, insight_identity.DuplicateScan([]))
+
+    assert result.exit_code == 0
+    assert "already-filed source questions" in result.stderr
+    assert "up to 100" in result.stderr
+    # The userinfo redaction the standing advisory guarantees is not weakened.
+    assert "s3cret" not in result.stderr
+
+
+def test_a_local_embed_host_stays_silent_about_filed_questions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nothing leaves the machine, so there is nothing to disclose."""
+    monkeypatch.delenv("OLLAMA_HOST", raising=False)
+    result = _save_with_scan(tmp_path, monkeypatch, insight_identity.DuplicateScan([]))
+
+    assert result.exit_code == 0
+    assert "already-filed source questions" not in result.stderr
+
+
+def test_a_query_without_save_names_no_filed_questions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No `--save`, no duplicate scan, so no filed question is ever sent.
+
+    Without this the new advisory would fire on a read-only `query` against a
+    remote host and describe a transmission that does not happen."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
+    monkeypatch.setattr(
+        "openkos.cli.main.answer",
+        lambda *a, **k: _fake_matched_answer(
+            citations=[Citation(concept_id="concepts/stoicism", title="Stoicism")]
+        ),
+    )
+    monkeypatch.setenv("OLLAMA_HOST", "http://remote.example:11434")
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code == 0
+    assert "already-filed source questions" not in result.stderr
+
+
+def test_the_shipped_bound_truncates_a_real_bundle_end_to_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The real scan, the real constant, the real preview -- no stub.
+
+    Every other test here replaces `near_duplicate_insights` with a canned
+    `DuplicateScan`, so each one proves how the CLI RENDERS counts it was
+    handed and none proves the counts are real. This one files more insights
+    than `DUPLICATE_SCAN_LIMIT` and reads the disclosure off the preview, so
+    the module and the command are pinned together.
+
+    Deliberately exercises the SHIPPED constant rather than a patched one:
+    `limit` defaults are bound at definition time, so a test that
+    monkeypatched `insight_identity.DUPLICATE_SCAN_LIMIT` would change a name
+    nothing reads and pass while proving nothing.
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
+    monkeypatch.setattr(
+        "openkos.cli.main.answer",
+        lambda *a, **k: _fake_matched_answer(
+            citations=[Citation(concept_id="concepts/stoicism", title="Stoicism")]
+        ),
+    )
+    insights = tmp_path / "bundle" / "insights"
+    insights.mkdir(parents=True, exist_ok=True)
+    over = insight_identity.DUPLICATE_SCAN_LIMIT + 5
+    for index in range(over):
+        (insights / f"filed-{index:04d}.md").write_text(
+            f"---\ntype: Insight\ntitle: Filed {index}\n"
+            f"description: what is stoicism, take {index}?\n"
+            # Valid distinct stamps, minute by minute. An out-of-range value
+            # like `00:00:60Z` does not merely lose the ordering key -- YAML
+            # rejects it and `_filed_questions` skips the WHOLE file, so the
+            # bundle would silently be smaller than this test believes.
+            f"sensitivity: private\n"
+            f"timestamp: 2026-01-01T{index // 60:02d}:{index % 60:02d}:00Z\n"
+            "---\nThe answer.",
+            encoding="utf-8",
+        )
+
+    result = runner.invoke(app, ["query", "what is stoicism?", "--save", "--auto"])
+
+    assert result.exit_code == 0
+    assert (
+        f"compared against the {insight_identity.DUPLICATE_SCAN_LIMIT} most "
+        f"recently filed of {over} insights" in result.stdout
+    )
+    # The offline embedder returns one identical vector per text, so every
+    # COMPARED insight is disclosed -- which makes the candidate count a
+    # direct read of how many actually rode in the batch.
+    assert (
+        result.stdout.count("? possible duplicate of")
+        == insight_identity.DUPLICATE_SCAN_LIMIT
+    )
+
+
+def test_a_failed_scan_over_the_bound_discloses_only_the_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One honest sentence, not two contradictory ones.
+
+    A bundle over the bound whose embedding backend fails used to satisfy
+    both `truncated` and `unavailable`, so the preview claimed a partial
+    comparison had happened AND that no comparison could be made. The first
+    of those was false: the embed raised and nothing was compared.
+    """
+    result = _save_with_scan(
+        tmp_path,
+        monkeypatch,
+        insight_identity.DuplicateScan(
+            [], unavailable=True, compared=0, filed_total=347
+        ),
+    )
+
+    assert result.exit_code == 0
+    assert "could not check this question against" in result.stderr
+    assert "most recently filed of" not in result.stdout
