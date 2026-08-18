@@ -274,6 +274,13 @@ bundle rather than merely shown.
 - `"unparsed"` — a line was present but named no in-range block; the same
   fallback applies.
 
+`AnswerResult.context_block_count` MUST report how many context blocks were
+actually sent to the model — the count AFTER the guarded re-read skip guard,
+never the fused count, which is taken before it. Any message telling a user
+how many concepts an answer could have drawn on MUST use this number: a
+concept skipped between the fuse and the send was never shown to the model,
+so naming it would overstate what the answer declined.
+
 Out-of-range block numbers MUST be dropped rather than clamped, and
 filtering MUST preserve fused-rank order rather than the order the model
 listed. The fallback for `"absent"`/`"unparsed"` MUST NOT be an empty
@@ -293,6 +300,13 @@ silent loss of provenance rather than a visible one.
 - WHEN the reply reports drawing on none of them
 - THEN `citations` is empty and `attribution` is `"reported"`, so
   `query --save` refuses the filing for want of provenance
+
+#### Scenario: The block count excludes a concept skipped at re-read
+
+- GIVEN two concepts surviving the fuse, one of which is unreadable when
+  `_assemble_context` re-reads it
+- WHEN `answer(...)` is called
+- THEN `fused_count` is `2` and `context_block_count` is `1`
 
 #### Scenario: A reply with no marker keeps every citation
 

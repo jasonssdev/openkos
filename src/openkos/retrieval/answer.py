@@ -214,7 +214,7 @@ markdown -- joining a list item or a heading onto the previous paragraph."""
 
 
 _ATTRIBUTION_LINE_RE = re.compile(
-    rf"(?im)^[ \t]*{_ATTRIBUTION_KEYWORD}[ \t]*:[ \t]*(?P<payload>[^\n]*)$"
+    rf"(?im)^[ \t]*{re.escape(_ATTRIBUTION_KEYWORD)}[ \t]*:[ \t]*(?P<payload>[^\n]*)$"
 )
 """The attribution line, anchored to a line of its own.
 
@@ -350,6 +350,18 @@ class AnswerResult:
     """Number of distinct `concept_id`s in the fused, limit-truncated list
     (additive). Already reflects the lifecycle status filter, since both
     `hits` and `vec_hits` are filtered before this fuse."""
+    context_block_count: int = 0
+    """How many context blocks were actually SENT to the model.
+
+    NOT `fused_count`, which is counted before `_assemble_context`'s
+    per-concept skip guard runs: a fused hit that is unreadable, unparseable
+    or sensitivity-blocked at re-read never reaches the prompt, so the two
+    diverge exactly when a concept vanishes between the fuse and the send.
+    Anything reporting "the answer drew on none of N concepts" must use THIS
+    number -- `fused_count` would name concepts the model was never shown.
+
+    Defaults to `0`, which is the honest value for every short-circuit
+    return above: those assemble no context at all."""
     attribution: Attribution = "absent"
     """How this call's `citations` list was decided (#753).
 
@@ -791,5 +803,6 @@ def answer(
         dense_hit_count=len(vec_hits),
         fused_count=len(fused_ids),
         dense_degraded=dense_degraded,
+        context_block_count=len(context_blocks),
         attribution=attribution,
     )

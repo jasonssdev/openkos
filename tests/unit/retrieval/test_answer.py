@@ -2537,3 +2537,109 @@ def test_attribution_defaults_to_absent_on_a_no_match(tmp_path: Path) -> None:
         )
 
     assert result.attribution == "absent"
+
+
+def test_the_last_marker_wins_when_a_reply_carries_several(tmp_path: Path) -> None:
+    """A reply restating the format before emitting the real line attributes
+    from the LAST one.
+
+    The instruction asks for a CLOSING line, so the final marker is the one
+    that was meant; an earlier one is the model quoting the format back. The
+    rule was documented from the first version of `_split_attribution` but
+    nothing exercised it, so a regression to `search()` (first match) would
+    have passed the whole suite.
+    """
+    # BOTH lines must start with the keyword, or the regex matches only one
+    # and the test cannot tell first from last. An earlier revision opened
+    # with "I will end with a line like USED: 1", which is not at a line
+    # start, so a mutation to `matches[0]` survived it -- the exact vacuous
+    # test the finding was about, reproduced while fixing the finding.
+    result = _answer_over_three(
+        tmp_path,
+        "USED: 1\n\nThe actual answer.\n\nUSED: 2, 3",
+    )
+
+    assert len(result.citations) == 2
+    unfiltered = _answer_over_three(tmp_path, "An answer.")
+    expected = [c.concept_id for c in unfiltered.citations]
+    assert [c.concept_id for c in result.citations] == [expected[1], expected[2]]
+
+
+def test_prose_after_the_marker_is_stitched_onto_the_prose_before_it(
+    tmp_path: Path,
+) -> None:
+    """Characterization: a marker mid-reply splices, it does not truncate.
+
+    `_split_attribution` removes the matched line and joins what surrounded
+    it, so a model that writes past its own closing line has the remainder
+    welded onto the preceding paragraph rather than dropped.
+
+    Pinned rather than fixed. Truncating at the marker instead would DISCARD
+    model output on a reply that merely mis-ordered its line, which is the
+    worse failure -- and the alternative, refusing to attribute unless the
+    marker is last, throws away a correct report over formatting. The trade
+    is visible here so whoever reconsiders it fails loudly.
+    """
+    result = _answer_over_three(tmp_path, "First part.\n\nUSED: 1\n\nSecond part.")
+
+    assert "USED" not in result.answer
+    assert "First part." in result.answer
+    assert "Second part." in result.answer
+    assert len(result.citations) == 1
+
+
+def test_context_block_count_reports_what_the_model_was_shown(
+    tmp_path: Path,
+) -> None:
+    """`context_block_count` is the blocks SENT, not the concepts fused.
+
+    `fused_count` is computed before `_assemble_context`'s per-concept skip
+    guard, so on a bundle where a fused hit is unreadable the two differ --
+    and any caller reporting "the model drew on none of N concepts" from
+    `fused_count` would overstate N.
+    """
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "alpha.md", title="Alpha", body="dichotomyzz alpha"
+    )
+    _write_doc(
+        bundle_dir / "concepts" / "beta.md", title="Beta", body="dichotomyzz beta"
+    )
+    with fts.build_index(bundle_dir) as idx:
+        # Delete one indexed doc so its fused hit survives the fuse but is
+        # skipped at the guarded re-read -- the exact divergence under test.
+        (bundle_dir / "concepts" / "beta.md").unlink()
+        result = answer_mod.answer(
+            "dichotomyzz",
+            bundle_dir=bundle_dir,
+            llm=_FakeLLM(reply="An answer."),
+            fts_index=idx,
+        )
+
+    assert result.fused_count == 2
+    assert result.context_block_count == 1
+
+
+def test_context_block_count_is_zero_on_a_short_circuit(tmp_path: Path) -> None:
+    """A short-circuited answer assembled no context, so it counts none.
+
+    The field's docstring claims `0` for every early return; nothing proved
+    it, and a default asserted only in prose is a contract the next edit can
+    break silently. Both short-circuits are exercised — the empty question,
+    which returns before retrieval runs at all, and the zero-hit search,
+    which returns after it.
+    """
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    with fts.build_index(bundle_dir) as idx:
+        empty_question = answer_mod.answer(
+            "", bundle_dir=bundle_dir, llm=_FakeLLM(), fts_index=idx
+        )
+        no_hits = answer_mod.answer(
+            "dichotomyzz", bundle_dir=bundle_dir, llm=_FakeLLM(), fts_index=idx
+        )
+
+    assert empty_question.no_match_cause == "empty_query"
+    assert empty_question.context_block_count == 0
+    assert no_hits.no_match_cause == "zero_hits"
+    assert no_hits.context_block_count == 0

@@ -14057,8 +14057,9 @@ def query(
         # ignores the instruction.
         typer.echo(
             "openkos query: warning -- this answer drew on none of the "
-            f"{result.fused_count} concepts retrieved for it, so it stands on "
-            "nothing in the bundle. Treat it as the model's own knowledge.",
+            f"{result.context_block_count} concepts placed in its context, so "
+            "it stands on nothing in the bundle. Treat it as the model's own "
+            "knowledge.",
             err=True,
         )
 

@@ -2162,7 +2162,11 @@ def _fake_unsupported_answer(
         llm_invoked=True,
         no_match_cause="none",
         skip_notices=[],
+        # DELIBERATELY divergent: five concepts survived the fuse, but only
+        # three reached the prompt (two were skipped at the guarded re-read).
+        # The warning must name the three the model was actually shown.
         fused_count=5,
+        context_block_count=3,
         attribution="reported",
     )
 
@@ -2188,7 +2192,10 @@ def test_query_warns_when_the_answer_reports_drawing_on_nothing(
     assert result.exit_code == 0
     assert "A general essay about RAG systems." in result.stdout
     assert "Citations:" not in result.stdout
-    assert "drew on none of the" in result.stderr
+    assert "drew on none of the 3 concepts placed in its context" in result.stderr
+    # The count must come from the blocks SENT, never from the fuse total --
+    # `fused_count` is 5 here and naming it would overstate what the model had.
+    assert "none of the 5" not in result.stderr
 
 
 def test_the_no_support_warning_is_silent_when_the_model_never_reported(

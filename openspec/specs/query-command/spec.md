@@ -539,7 +539,9 @@ error, it is a reply whose authority must not be borrowed from the bundle.
 - GIVEN an answer with `attribution` `"reported"` and no citations
 - WHEN `openkos query "<question>"` completes
 - THEN stdout carries the answer text with no `Citations:` block, stderr
-  carries the warning, and the exit code is `0`
+  carries the warning naming `context_block_count` — never `fused_count`,
+  which counts concepts the model may never have been shown — and the exit
+  code is `0`
 
 #### Scenario: A non-reporting backend prints no such warning
 

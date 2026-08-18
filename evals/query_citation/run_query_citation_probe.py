@@ -252,6 +252,16 @@ def generate(
                             f"{question[:48]!r}",
                             flush=True,
                         )
+                        # Checkpoint per ANSWER, not per run.
+                        # Writing once per completed run left a whole
+                        # run of ~20 paid generations exposed to any failure
+                        # outside the narrow `except` above -- a
+                        # `KeyboardInterrupt`, an error while building `Row`,
+                        # a full disk at print time -- which is exactly the
+                        # loss this function's docstring calls its most
+                        # expensive. `run` (completed runs), never `run + 1`,
+                        # until the run actually finishes.
+                        _write_runs(rows, failures, model, run, stamp)
                     _write_runs(rows, failures, model, run + 1, stamp)
         finally:
             if fts_index is not None:
