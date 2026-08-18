@@ -384,6 +384,15 @@ class AnswerResult:
     Defaults to `"absent"`, which is both the pre-#753 behavior and the
     honest value for every short-circuit return above: those never reach
     `llm.chat`, so no model ever reported anything for them."""
+    sufficiency_degraded: bool = False
+    """`True` when the pre-synthesis sufficiency check was REQUESTED and could
+    not run (#764), so synthesis proceeded unguarded.
+
+    Never `True` when the check was not requested at all, and never for a
+    check that ran and allowed the answer through: the flag means "could not
+    run", so an operator notice built on it fires only when the guard they
+    configured is actually missing. Mirrors `dense_degraded` below, which
+    models the same shape for the retrieval half."""
     dense_degraded: bool = False
     """`True` when dense retrieval could not proceed this call (absent
     `vector_store`, `VecUnavailable`, a read-path `sqlite3.Error`, or the
@@ -534,7 +543,7 @@ negative arm cannot distinguish "this mechanism does not work" from "this
 wording does not work"."""
 
 
-def _context_holds_the_answer(llm: LLMBackend, user_content: str) -> bool:
+def _context_holds_the_answer(llm: LLMBackend, user_content: str) -> tuple[bool, bool]:
     """Whether the assembled context contains an answer to the question.
 
     `user_content` is the SAME string synthesis will be sent, so the check
@@ -553,6 +562,11 @@ def _context_holds_the_answer(llm: LLMBackend, user_content: str) -> bool:
     surrounding punctuation and case -- never when it merely contains it. A
     context sentence containing the word would otherwise read as a refusal
     and silently refuse an answerable question.
+
+    Returns `(context_holds_the_answer, degraded)`. `degraded` is `True` only
+    on the fail-open path: failing open is the right call, but failing open
+    SILENTLY leaves an operator whose backend has been flaky no way to learn
+    that the guard they configured has not run once (#764).
     """
     try:
         reply = llm.chat(
@@ -568,8 +582,8 @@ def _context_holds_the_answer(llm: LLMBackend, user_content: str) -> bool:
     ):
         raise
     except OllamaError:
-        return True
-    return reply.strip().strip("\"'`*. \t\n").upper() != _SUFFICIENCY_NONE
+        return True, True
+    return reply.strip().strip("\"'`*. \t\n").upper() != _SUFFICIENCY_NONE, False
 
 
 def _user_content(context_blocks: list[str], question: str) -> str:
@@ -865,7 +879,12 @@ def answer(
     # Defaults OFF here and ON in the workspace config: every existing caller,
     # the eval harnesses included, keeps byte-identical behavior and pays no
     # added latency unless it opts in.
-    if sufficiency_check and not _context_holds_the_answer(llm, user_content):
+    sufficiency_degraded = False
+    if sufficiency_check:
+        holds, sufficiency_degraded = _context_holds_the_answer(llm, user_content)
+    else:
+        holds = True
+    if not holds:
         return AnswerResult(
             answer=NO_MATCH,
             citations=[],
@@ -876,6 +895,7 @@ def answer(
             dense_hit_count=len(vec_hits),
             fused_count=len(fused_ids),
             dense_degraded=dense_degraded,
+            sufficiency_degraded=sufficiency_degraded,
             context_block_count=len(context_blocks),
         )
 
@@ -918,6 +938,7 @@ def answer(
         dense_hit_count=len(vec_hits),
         fused_count=len(fused_ids),
         dense_degraded=dense_degraded,
+        sufficiency_degraded=sufficiency_degraded,
         context_block_count=len(context_blocks),
         attribution=attribution,
     )

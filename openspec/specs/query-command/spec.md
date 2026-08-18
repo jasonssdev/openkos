@@ -540,6 +540,22 @@ backend MUST disclose nothing rather than fail the save.
 - THEN a possible-duplicate line names that insight and its source question,
   and the new insight is still written
 
+WHEN the lookup could not run — the embedding backend failed, or returned a
+malformed batch — `query` MUST say so on stderr rather than rendering the
+same silence as a scan that ran and found nothing (#764). Having nothing to
+compare against is NOT such a case: that scan ran correctly.
+
+`query` MUST likewise announce on stderr when the pre-synthesis sufficiency
+check was requested and could not run, so an answer produced without the
+configured guard is distinguishable from one the guard allowed.
+
+#### Scenario: An unavailable lookup is announced and the save still writes
+
+- GIVEN the embedding backend fails during `--save`
+- WHEN `openkos query "<question>" --save --auto` runs
+- THEN stderr says the question could not be checked against filed insights,
+  and the new insight is still written
+
 #### Scenario: No candidate, no line
 
 - GIVEN no filed insight resembles the question

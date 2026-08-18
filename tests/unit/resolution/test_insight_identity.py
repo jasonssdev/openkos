@@ -17,8 +17,24 @@ from pathlib import Path
 from openkos.resolution import insight_identity
 from openkos.resolution.insight_identity import (
     DUPLICATE_QUESTION_SIMILARITY,
+    NearDuplicate,
     near_duplicate_insights,
 )
+
+
+def _candidates(
+    question: str, *, bundle_dir: Path, embedder: object
+) -> list[NearDuplicate]:
+    """The candidate list alone, for the assertions that are about it.
+
+    `near_duplicate_insights` returns a `DuplicateScan` so that "could not
+    scan" is distinguishable from "scanned, found nothing" (#764); most tests
+    here are only about the candidates."""
+    return near_duplicate_insights(
+        question,
+        bundle_dir=bundle_dir,
+        embedder=embedder,  # type: ignore[arg-type]
+    ).candidates
 
 
 class _FakeEmbedder:
@@ -80,7 +96,7 @@ def test_a_paraphrase_is_disclosed(tmp_path: Path) -> None:
         {"¿por qué son importantes?": [1.0, 0.0], "¿por qué importan?": [1.0, 0.0]}
     )
 
-    found = near_duplicate_insights(
+    found = _candidates(
         "¿por qué son importantes?", bundle_dir=bundle, embedder=embedder
     )
 
@@ -103,9 +119,7 @@ def test_a_different_subject_is_not_disclosed(tmp_path: Path) -> None:
     )
 
     assert (
-        near_duplicate_insights(
-            "¿por qué son importantes?", bundle_dir=bundle, embedder=embedder
-        )
+        _candidates("¿por qué son importantes?", bundle_dir=bundle, embedder=embedder)
         == []
     )
 
@@ -124,9 +138,7 @@ def test_candidates_come_back_most_similar_first(tmp_path: Path) -> None:
         }
     )
 
-    found = near_duplicate_insights(
-        "new question", bundle_dir=bundle, embedder=embedder
-    )
+    found = _candidates("new question", bundle_dir=bundle, embedder=embedder)
 
     assert [match.concept_id for match in found] == [
         "insights/nearer",
@@ -149,7 +161,7 @@ def test_one_batched_embed_call_covers_every_stored_question(tmp_path: Path) -> 
         {"new question": [1.0, 0.0], **{f"question {i}": [0.0, 1.0] for i in range(4)}}
     )
 
-    near_duplicate_insights("new question", bundle_dir=bundle, embedder=embedder)
+    _candidates("new question", bundle_dir=bundle, embedder=embedder)
 
     assert len(embedder.calls) == 1
     assert len(embedder.calls[0]) == 5
@@ -167,7 +179,7 @@ def test_an_embedding_failure_discloses_nothing_and_never_raises(
     _write_insight(bundle, "filed", description="a question?")
     embedder = _RaisingEmbedder()
 
-    assert near_duplicate_insights("new?", bundle_dir=bundle, embedder=embedder) == []
+    assert _candidates("new?", bundle_dir=bundle, embedder=embedder) == []
     assert embedder.calls == 1
 
 
@@ -180,10 +192,11 @@ def test_a_malformed_vector_count_discloses_nothing(tmp_path: Path) -> None:
     bundle = tmp_path / "bundle"
     _write_insight(bundle, "filed", description="a question?")
 
-    assert (
-        near_duplicate_insights("new?", bundle_dir=bundle, embedder=_ShortEmbedder())
-        == []
-    )
+    scan = near_duplicate_insights("new?", bundle_dir=bundle, embedder=_ShortEmbedder())
+
+    assert scan.candidates == []
+    # A malformed batch is a FAILED scan, not an empty one (#764).
+    assert scan.unavailable is True
 
 
 def test_an_unreadable_insight_is_skipped_not_fatal(tmp_path: Path) -> None:
@@ -195,9 +208,7 @@ def test_an_unreadable_insight_is_skipped_not_fatal(tmp_path: Path) -> None:
     )
     embedder = _FakeEmbedder({"new question": [1.0, 0.0], "good question": [1.0, 0.0]})
 
-    found = near_duplicate_insights(
-        "new question", bundle_dir=bundle, embedder=embedder
-    )
+    found = _candidates("new question", bundle_dir=bundle, embedder=embedder)
 
     assert [match.concept_id for match in found] == ["insights/good"]
 
@@ -212,10 +223,7 @@ def test_an_insight_with_no_description_is_skipped(tmp_path: Path) -> None:
     _write_insight(bundle, "questionless", description="")
     embedder = _FakeEmbedder({"new question": [1.0, 0.0]})
 
-    assert (
-        near_duplicate_insights("new question", bundle_dir=bundle, embedder=embedder)
-        == []
-    )
+    assert _candidates("new question", bundle_dir=bundle, embedder=embedder) == []
     assert embedder.calls == []
 
 
@@ -233,10 +241,7 @@ def test_a_non_insight_under_insights_is_skipped(tmp_path: Path) -> None:
     _write_insight(bundle, "impostor", description="a question?", doc_type="Concept")
     embedder = _FakeEmbedder({"new question": [1.0, 0.0], "a question?": [1.0, 0.0]})
 
-    assert (
-        near_duplicate_insights("new question", bundle_dir=bundle, embedder=embedder)
-        == []
-    )
+    assert _candidates("new question", bundle_dir=bundle, embedder=embedder) == []
     # And it was never even embedded: the type gate runs before the batch.
     assert embedder.calls == []
 
@@ -247,7 +252,7 @@ def test_an_empty_question_embeds_nothing(tmp_path: Path) -> None:
     _write_insight(bundle, "filed", description="a question?")
     embedder = _FakeEmbedder({})
 
-    assert near_duplicate_insights("   ", bundle_dir=bundle, embedder=embedder) == []
+    assert _candidates("   ", bundle_dir=bundle, embedder=embedder) == []
     assert embedder.calls == []
 
 
@@ -257,7 +262,7 @@ def test_an_empty_bundle_embeds_nothing(tmp_path: Path) -> None:
     bundle.mkdir()
     embedder = _FakeEmbedder({})
 
-    assert near_duplicate_insights("q?", bundle_dir=bundle, embedder=embedder) == []
+    assert _candidates("q?", bundle_dir=bundle, embedder=embedder) == []
     assert embedder.calls == []
 
 
@@ -314,10 +319,7 @@ def test_a_ragged_vector_batch_discloses_nothing_and_never_raises(
     _write_insight(bundle, "filed", description="a question?")
 
     assert (
-        near_duplicate_insights(
-            "new question", bundle_dir=bundle, embedder=_RaggedEmbedder()
-        )
-        == []
+        _candidates("new question", bundle_dir=bundle, embedder=_RaggedEmbedder()) == []
     )
 
 
@@ -341,10 +343,7 @@ def test_a_confidential_insight_is_never_a_candidate(tmp_path: Path) -> None:
         {"a secret question?": [1.0, 0.0], "new question": [1.0, 0.0]}
     )
 
-    assert (
-        near_duplicate_insights("new question", bundle_dir=bundle, embedder=embedder)
-        == []
-    )
+    assert _candidates("new question", bundle_dir=bundle, embedder=embedder) == []
     assert embedder.calls == []
 
 
@@ -364,7 +363,58 @@ def test_an_unlabelled_insight_is_treated_as_confidential(tmp_path: Path) -> Non
     )
     embedder = _FakeEmbedder({"a question?": [1.0, 0.0], "new question": [1.0, 0.0]})
 
-    assert (
-        near_duplicate_insights("new question", bundle_dir=bundle, embedder=embedder)
-        == []
+    assert _candidates("new question", bundle_dir=bundle, embedder=embedder) == []
+
+
+def test_a_backend_failure_is_reported_as_unavailable(tmp_path: Path) -> None:
+    """A down backend is not the same as a unique question (#764).
+
+    Both used to return `[]`, so `--save` could not say anything honest about
+    which happened, and an operator whose embedding backend had been down for
+    a week would just never see a disclosure again.
+    """
+    bundle = tmp_path / "bundle"
+    _write_insight(bundle, "filed", description="a question?")
+
+    scan = near_duplicate_insights(
+        "new?", bundle_dir=bundle, embedder=_RaisingEmbedder()
     )
+
+    assert scan.candidates == []
+    assert scan.unavailable is True
+
+
+def test_nothing_to_compare_is_not_a_degradation(tmp_path: Path) -> None:
+    """An empty bundle SCANNED fine and found nothing.
+
+    Reporting it as unavailable would fire the operator notice on the very
+    first `--save` of every new workspace, which is the fastest way to teach
+    someone to ignore it.
+    """
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+
+    scan = near_duplicate_insights("q?", bundle_dir=bundle, embedder=_FakeEmbedder({}))
+
+    assert scan.candidates == []
+    assert scan.unavailable is False
+
+
+def test_a_ragged_batch_is_reported_as_unavailable(tmp_path: Path) -> None:
+    """Right COUNT, wrong WIDTHS is a failed scan, not an empty one.
+
+    `_cosine` returns `0.0` for a mismatched pair, so without an explicit
+    width check the batch scans "successfully" and reports no duplicates —
+    a silent wrong answer, which is worse than a loud absence of one. An
+    earlier revision of this test asserted `unavailable is False` and
+    contradicted its own name; the behaviour was what needed changing.
+    """
+    bundle = tmp_path / "bundle"
+    _write_insight(bundle, "filed", description="a question?")
+
+    scan = near_duplicate_insights(
+        "new question", bundle_dir=bundle, embedder=_RaggedEmbedder()
+    )
+
+    assert scan.candidates == []
+    assert scan.unavailable is True

@@ -2958,3 +2958,61 @@ def test_an_empty_check_reply_lets_the_answer_through(tmp_path: Path) -> None:
     assert len(llm.calls) == 2
     assert result.no_match_cause == "none"
     assert result.answer == "The answer."
+
+
+def test_a_degraded_sufficiency_check_is_reported(tmp_path: Path) -> None:
+    """Failing open is fine; failing open SILENTLY is not (#764).
+
+    A transient backend error lets the answer through, which is the right
+    call — an error is not evidence of insufficiency. But an operator whose
+    backend has been flaky for a week would otherwise have no way to know the
+    guard they configured has not run once. `dense_degraded` already models
+    exactly this shape for the retrieval half, so the sufficiency half
+    reports the same way rather than inventing a second vocabulary.
+    """
+    bundle_dir = _bundle_with_two(tmp_path)
+    llm = _RaisingOnceLLM(OllamaError("transient"), "The answer.")
+    with fts.build_index(bundle_dir) as idx:
+        result = answer_mod.answer(
+            "dichotomyzz",
+            bundle_dir=bundle_dir,
+            llm=llm,
+            fts_index=idx,
+            sufficiency_check=True,
+        )
+
+    assert result.no_match_cause == "none"
+    assert result.sufficiency_degraded is True
+
+
+def test_a_working_check_is_not_reported_as_degraded(tmp_path: Path) -> None:
+    """The flag means "could not run", never "ran and allowed"."""
+    bundle_dir = _bundle_with_two(tmp_path)
+    llm = _ScriptedLLM("dichotomyzz alpha body", "The answer.")
+    with fts.build_index(bundle_dir) as idx:
+        result = answer_mod.answer(
+            "dichotomyzz",
+            bundle_dir=bundle_dir,
+            llm=llm,
+            fts_index=idx,
+            sufficiency_check=True,
+        )
+
+    assert result.sufficiency_degraded is False
+
+
+def test_a_disabled_check_is_not_reported_as_degraded(tmp_path: Path) -> None:
+    """A check nobody asked for did not degrade — it was never requested.
+
+    Reporting `True` here would fire the operator notice on every query of
+    every workspace that turned the key off, which is the fastest way to
+    train someone to ignore it.
+    """
+    bundle_dir = _bundle_with_two(tmp_path)
+    llm = _ScriptedLLM("The answer.")
+    with fts.build_index(bundle_dir) as idx:
+        result = answer_mod.answer(
+            "dichotomyzz", bundle_dir=bundle_dir, llm=llm, fts_index=idx
+        )
+
+    assert result.sufficiency_degraded is False
