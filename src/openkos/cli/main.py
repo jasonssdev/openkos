@@ -69,7 +69,11 @@ from openkos.model.types import BUILDABLE_TYPES as _BUILDABLE_TYPES
 from openkos.model.types import INSIGHT_TYPE as _INSIGHT_TYPE
 from openkos.model.types import TYPE_TO_LINK_DIR as _TYPE_TO_LINK_DIR
 from openkos.model.types import TYPE_TO_SECTION as _TYPE_TO_SECTION
-from openkos.resolution import find_candidates_report, find_exact_title_groups
+from openkos.resolution import (
+    find_candidates_report,
+    find_exact_title_groups,
+    insight_identity,
+)
 from openkos.resolution.adjudication import (
     AdjudicatedCandidate,
     AdjudicationBatch,
@@ -13229,6 +13233,20 @@ def _no_match_message(cause: NoMatchCause, fts_hit_count: int) -> str:
             "No question was provided. Pass a question to answer, e.g. "
             'openkos query "what is stoicism?".'
         )
+    if cause == "insufficient_context":
+        # Deliberately NOT the `zero_hits` wording. Retrieval succeeded here:
+        # concepts were found and read, and then judged unable to answer. A
+        # user told to "try different wording" would rephrase a question the
+        # bundle simply does not cover, which is the wrong instruction and
+        # the reason #760 keeps this cause separate.
+        return (
+            f"Found {fts_hit_count} matching concept{_plural(fts_hit_count)}, "
+            "but none of them answers this question — the compiled bundle "
+            "does not cover it. Answering anyway would be the model's own "
+            "knowledge wearing the bundle's citations. Ingest a source that "
+            "covers it, or set `sufficiency_check: false` in openkos.yaml to "
+            "answer regardless."
+        )
     raise ValueError(f"unexpected no_match_cause: {cause!r}")
 
 
@@ -13937,6 +13955,10 @@ def query(
                 include_deprecated=include_deprecated,
                 include_confidential=include_confidential,
                 local_exemption=local_exemption,
+                # The ONE place that injects `cfg.sufficiency_check`
+                # explicitly (#760), so the product-ON default lives in the
+                # config and `answer` itself stays OFF for library callers.
+                sufficiency_check=cfg.sufficiency_check,
             )
         except OllamaUnavailable as exc:
             typer.echo(
@@ -13989,7 +14011,16 @@ def query(
             raise typer.Exit(code=1) from exc
 
     cited_count = len(result.citations)
-    llm_status = "invoked" if result.llm_invoked else "skipped"
+    # #760: a sufficiency refusal DID reach the model -- one cheap call was
+    # made and its latency paid -- so reporting it as `skipped`, the same word
+    # a zero-hit short-circuit gets, would hide a call the operator is paying
+    # for and make the two look like the same event. `refused` names what
+    # actually happened: the model was asked, and said the context cannot
+    # answer.
+    if result.no_match_cause == "insufficient_context":
+        llm_status = "refused"
+    else:
+        llm_status = "invoked" if result.llm_invoked else "skipped"
     # Two retrieval terms, because there are two retrieval channels. The
     # summary used to carry a third, `<n> graph-added` from
     # `graph_contributed_count` -- how many reserved tail slots the seeded
@@ -14193,6 +14224,25 @@ def query(
         )
     typer.echo(f"  ~ {save_index_path.name} (new entry)")
     typer.echo(f"  ~ {save_log_path.name} (new dated entry)")
+
+    # #762: disclose insights already filed from a question resembling this
+    # one, BEFORE the confirmation gate, so the human deciding has the
+    # duplicate in front of them. Advisory only -- nothing is merged,
+    # renamed or refused, because the separating margin measured in
+    # `evals/query_identity/` is +0.0745 over two subject families, which is
+    # real evidence for "worth showing a person" and nowhere near enough for
+    # "act on it automatically".
+    #
+    # The slug is the permanent Concept ID, so a duplicate filed here is
+    # permanent too; this is the last moment it costs nothing to notice.
+    for duplicate in insight_identity.near_duplicate_insights(
+        question, bundle_dir=layout.bundle_dir, embedder=embedder
+    ):
+        typer.echo(
+            f"  ? possible duplicate of bundle/{duplicate.concept_id}.md "
+            f"({duplicate.title}) -- filed from "
+            f"{duplicate.question!r} ({duplicate.similarity:.2f} similar)"
+        )
 
     if not auto and cfg.review:
         if sys.stdin.isatty():

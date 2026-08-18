@@ -1112,6 +1112,7 @@ def _default_cfg(**overrides: object) -> config.Config:
         "type_tiers": {},
         "models": {},
         "union_judge": config.DEFAULT_UNION_JUDGE,
+        "sufficiency_check": config.DEFAULT_SUFFICIENCY_CHECK,
         "concurrent_extraction": config.DEFAULT_CONCURRENT_EXTRACTION,
         "type_sensitivity_defaults": {"Person": 1},
     }

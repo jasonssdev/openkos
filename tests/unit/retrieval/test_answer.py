@@ -2643,3 +2643,318 @@ def test_context_block_count_is_zero_on_a_short_circuit(tmp_path: Path) -> None:
     assert empty_question.context_block_count == 0
     assert no_hits.no_match_cause == "zero_hits"
     assert no_hits.context_block_count == 0
+
+
+# --- pre-synthesis sufficiency check (#760) ---------------------------------
+#
+# #753 ruled "below a relevance floor, refuse". #760 measured that no floor
+# exists on any retrieval signal -- `fusion.fuse` is RRF and encodes position
+# only, and `VecHit.distance` reports topical relatedness, which is the
+# defect's own premise. It proposed instead a cheap model call over the
+# assembled context, BEFORE synthesis.
+#
+# Measured in `evals/query_sufficiency/` (qwen3:8b, 10 runs, 400 checks): the
+# evidence-first formulation -- quote the sentence that answers, or NONE --
+# refused 0 of 10 grounded questions across 100 grounded checks while
+# refusing all 10 adjacent ones, including the three the shipped `USED:`
+# attribution does not catch and the one #753 itself reports. A yes/no
+# formulation false-refused a grounded question and was rejected.
+
+
+class _ScriptedLLM:
+    """An `LLMBackend` returning queued replies in order, recording each call.
+
+    `answer()` may now make TWO chat calls -- the sufficiency check and then
+    synthesis -- so a fixture returning one fixed string can no longer
+    distinguish them. Replies are consumed in order; running out is an error
+    rather than a repeat, because a test that silently reused the last reply
+    would pass while asserting the wrong call.
+    """
+
+    def __init__(self, *replies: str) -> None:
+        self._replies = list(replies)
+        self.calls: list[list[Message]] = []
+
+    def chat(self, messages: Sequence[Message]) -> str:
+        self.calls.append(list(messages))
+        if not self._replies:
+            raise AssertionError(
+                f"_ScriptedLLM ran out of replies on call {len(self.calls)}"
+            )
+        return self._replies.pop(0)
+
+
+class _RaisingOnceLLM:
+    """Raises on the FIRST chat call, then returns `reply`.
+
+    Models a sufficiency check whose backend hiccups while synthesis would
+    still succeed.
+    """
+
+    def __init__(self, exc: Exception, reply: str) -> None:
+        self._exc = exc
+        self._reply = reply
+        self.calls: list[list[Message]] = []
+
+    def chat(self, messages: Sequence[Message]) -> str:
+        self.calls.append(list(messages))
+        if len(self.calls) == 1:
+            raise self._exc
+        return self._reply
+
+
+def _bundle_with_two(tmp_path: Path) -> Path:
+    bundle_dir = tmp_path / "bundle"
+    for slug in ("alpha", "beta"):
+        _write_doc(
+            bundle_dir / "concepts" / f"{slug}.md",
+            title=slug.capitalize(),
+            body=f"dichotomyzz {slug} body",
+        )
+    return bundle_dir
+
+
+def test_an_insufficient_context_refuses_before_synthesis(tmp_path: Path) -> None:
+    """`NONE` from the check means synthesis is never called at all.
+
+    Not merely "the answer is discarded": the whole point of placing this
+    BEFORE synthesis rather than reading the shipped `USED:` line after it is
+    that the expensive call is never paid, and that the user is never shown
+    an ungrounded essay to ignore.
+    """
+    bundle_dir = _bundle_with_two(tmp_path)
+    llm = _ScriptedLLM("NONE")
+    with fts.build_index(bundle_dir) as idx:
+        result = answer_mod.answer(
+            "dichotomyzz",
+            bundle_dir=bundle_dir,
+            llm=llm,
+            fts_index=idx,
+            sufficiency_check=True,
+        )
+
+    assert len(llm.calls) == 1
+    assert result.no_match_cause == "insufficient_context"
+    assert result.citations == []
+    assert result.llm_invoked is False
+
+
+def test_a_sufficient_context_proceeds_to_synthesis(tmp_path: Path) -> None:
+    """A quotation from the check lets the answer through, unchanged."""
+    bundle_dir = _bundle_with_two(tmp_path)
+    llm = _ScriptedLLM("dichotomyzz alpha body", "The answer.\n\nUSED: 1")
+    with fts.build_index(bundle_dir) as idx:
+        result = answer_mod.answer(
+            "dichotomyzz",
+            bundle_dir=bundle_dir,
+            llm=llm,
+            fts_index=idx,
+            sufficiency_check=True,
+        )
+
+    assert len(llm.calls) == 2
+    assert result.no_match_cause == "none"
+    assert result.answer == "The answer."
+    assert len(result.citations) == 1
+
+
+def test_the_check_is_off_by_default_and_costs_nothing(tmp_path: Path) -> None:
+    """A caller that never passes the flag makes exactly ONE chat call.
+
+    The library default is `False` so every existing caller -- the eval
+    harnesses included -- keeps byte-identical behavior and pays no added
+    latency. The workspace default is where it is turned ON.
+    """
+    bundle_dir = _bundle_with_two(tmp_path)
+    llm = _ScriptedLLM("The answer.")
+    with fts.build_index(bundle_dir) as idx:
+        result = answer_mod.answer(
+            "dichotomyzz", bundle_dir=bundle_dir, llm=llm, fts_index=idx
+        )
+
+    assert len(llm.calls) == 1
+    assert result.no_match_cause == "none"
+
+
+def test_a_failing_check_falls_through_to_synthesis(tmp_path: Path) -> None:
+    """A backend error in the CHECK must not become a refusal.
+
+    An error is not evidence of insufficiency, and refusing on one would deny
+    answers for infrastructure reasons. Fails OPEN deliberately: the shipped
+    `USED:` attribution still strips the citations off an ungrounded answer,
+    so the backstop that made this check optional is exactly what covers its
+    failure.
+    """
+    bundle_dir = _bundle_with_two(tmp_path)
+    llm = _RaisingOnceLLM(OllamaError("transient"), "The answer.")
+    with fts.build_index(bundle_dir) as idx:
+        result = answer_mod.answer(
+            "dichotomyzz",
+            bundle_dir=bundle_dir,
+            llm=llm,
+            fts_index=idx,
+            sufficiency_check=True,
+        )
+
+    assert len(llm.calls) == 2
+    assert result.no_match_cause == "none"
+    assert result.answer == "The answer."
+
+
+def test_a_fatal_backend_error_in_the_check_still_propagates(tmp_path: Path) -> None:
+    """Failing open covers TRANSIENT errors, never a dead backend.
+
+    `OllamaUnavailable` and its siblings are the fatal family issue #209
+    keeps propagating rather than degrading, and swallowing one here would
+    turn "Ollama is not running" into a silently answered question against a
+    backend that answered nothing.
+    """
+    bundle_dir = _bundle_with_two(tmp_path)
+    llm = _RaisingOnceLLM(OllamaUnavailable("down"), "The answer.")
+    with fts.build_index(bundle_dir) as idx, pytest.raises(OllamaUnavailable):
+        answer_mod.answer(
+            "dichotomyzz",
+            bundle_dir=bundle_dir,
+            llm=llm,
+            fts_index=idx,
+            sufficiency_check=True,
+        )
+
+
+def test_the_check_reads_the_same_numbered_context_as_synthesis(
+    tmp_path: Path,
+) -> None:
+    """The check judges exactly what synthesis would be given.
+
+    A check reading a different context than the one that produces the
+    answer is judging a different question, and would drift the moment
+    either assembly changed.
+    """
+    bundle_dir = _bundle_with_two(tmp_path)
+    llm = _ScriptedLLM("dichotomyzz alpha body", "The answer.")
+    with fts.build_index(bundle_dir) as idx:
+        answer_mod.answer(
+            "dichotomyzz",
+            bundle_dir=bundle_dir,
+            llm=llm,
+            fts_index=idx,
+            sufficiency_check=True,
+        )
+
+    check_user = llm.calls[0][1]["content"]
+    synthesis_user = llm.calls[1][1]["content"]
+    assert check_user == synthesis_user
+    assert "[1]" in check_user
+
+
+def test_the_check_never_runs_when_no_context_was_assembled(tmp_path: Path) -> None:
+    """A zero-hit question short-circuits before any chat call, as before.
+
+    There is nothing for the check to judge, and paying for a call to be told
+    so would add latency to the one path that is already free.
+    """
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    llm = _ScriptedLLM()
+    with fts.build_index(bundle_dir) as idx:
+        result = answer_mod.answer(
+            "dichotomyzz",
+            bundle_dir=bundle_dir,
+            llm=llm,
+            fts_index=idx,
+            sufficiency_check=True,
+        )
+
+    assert llm.calls == []
+    assert result.no_match_cause == "zero_hits"
+
+
+def test_a_quotation_containing_the_sentinel_is_not_a_refusal(
+    tmp_path: Path,
+) -> None:
+    """The refusal token must BE the reply, never merely appear in it.
+
+    The check asks the model to QUOTE the sentence that answers, so any word
+    of the corpus can come back inside a legitimate quotation -- `none`
+    included. Matching the sentinel by substring would read this answer-
+    bearing quotation as a refusal and silently refuse an answerable
+    question, which is the false refusal the whole mechanism was chosen to
+    avoid. Prose in `_context_holds_the_answer` claimed this; nothing tested
+    it, and a substring mutation survived the suite.
+    """
+    bundle_dir = _bundle_with_two(tmp_path)
+    llm = _ScriptedLLM(
+        "None of the participants objected to the dichotomyzz.", "The answer."
+    )
+    with fts.build_index(bundle_dir) as idx:
+        result = answer_mod.answer(
+            "dichotomyzz",
+            bundle_dir=bundle_dir,
+            llm=llm,
+            fts_index=idx,
+            sufficiency_check=True,
+        )
+
+    assert len(llm.calls) == 2
+    assert result.no_match_cause == "none"
+    assert result.answer == "The answer."
+
+
+def test_a_decorated_sentinel_is_still_a_refusal(tmp_path: Path) -> None:
+    """`"NONE."`, `**none**`, ` none ` — all refusals.
+
+    The other side of the same rule. A model asked for one bare word returns
+    it wrapped in whatever formatting it was in the mood for, and treating a
+    quoted or bolded sentinel as a quotation would let every such reply
+    through as sufficient.
+    """
+    bundle_dir = _bundle_with_two(tmp_path)
+    for decorated in ('"NONE."', "**none**", "  none  \n", "`None`"):
+        llm = _ScriptedLLM(decorated)
+        with fts.build_index(bundle_dir) as idx:
+            result = answer_mod.answer(
+                "dichotomyzz",
+                bundle_dir=bundle_dir,
+                llm=llm,
+                fts_index=idx,
+                sufficiency_check=True,
+            )
+        assert result.no_match_cause == "insufficient_context", decorated
+        assert len(llm.calls) == 1, decorated
+
+
+def test_an_empty_check_reply_lets_the_answer_through(tmp_path: Path) -> None:
+    """Characterization: a reply that strips to nothing is NOT a refusal.
+
+    The verdict is "did the model name the refusal sentinel", so an empty
+    reply — no quotation and no explicit `NONE` — passes. Pinned rather than
+    changed, for two reasons.
+
+    First, this is the exact rule the winning arm was measured under
+    (`evals/query_sufficiency/`, 400 checks): treating empty as a refusal
+    ships a refusal path that measurement never saw, and this repo's whole
+    posture on #753 is that treatments are adopted on evidence.
+
+    Second, it matches the module's failure direction. `_context_holds_the_answer`
+    already fails OPEN on a transient backend error, because an absence of
+    evidence is not evidence of insufficiency — and the `USED:` attribution
+    still strips the citations off whatever synthesis produces, so the
+    backstop that makes this check optional at all is what covers the case.
+
+    Raised by the reliability lens as untested. It is now tested, and the
+    trade is visible to whoever reconsiders it.
+    """
+    bundle_dir = _bundle_with_two(tmp_path)
+    llm = _ScriptedLLM("   \n  ", "The answer.")
+    with fts.build_index(bundle_dir) as idx:
+        result = answer_mod.answer(
+            "dichotomyzz",
+            bundle_dir=bundle_dir,
+            llm=llm,
+            fts_index=idx,
+            sufficiency_check=True,
+        )
+
+    assert len(llm.calls) == 2
+    assert result.no_match_cause == "none"
+    assert result.answer == "The answer."

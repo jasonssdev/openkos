@@ -254,6 +254,58 @@ default to `False`.
   `title` read from that concept's OKF frontmatter, and no concept skipped
   under guarded re-read appears
 
+### Requirement: A Sufficiency Check May Refuse Before Synthesis
+
+WHEN `sufficiency_check` is enabled, `answer` MUST ask one model call, over
+the SAME assembled context and question string synthesis would receive,
+whether the context contains an answer — and MUST return
+`no_match_cause == "insufficient_context"` with empty `citations` and
+`llm_invoked` `False`, WITHOUT calling synthesis, when it does not (#760).
+
+The check MUST be evidence-first: it asks for the sentence that answers and
+treats a refusal sentinel as the negative, rather than asking for a verdict.
+A verdict formulation was measured alongside it and false-refused a question
+the bundle answers.
+
+The refusal sentinel MUST be matched as the WHOLE reply, modulo surrounding
+whitespace, punctuation and case — never as a substring. The check asks the
+model to quote corpus text, so the sentinel can legitimately appear inside an
+answer-bearing quotation.
+
+`sufficiency_check` MUST default to `False` in `answer` itself, so every
+library and eval caller keeps byte-identical behavior, and the product-ON
+default MUST live in the workspace config alone.
+
+A transient backend error in the check MUST fall through to synthesis: an
+error is not evidence of insufficiency. The FATAL `OllamaError` subclasses
+MUST still propagate, so an unreachable backend never becomes an answered
+question. The check MUST NOT run when no context was assembled.
+
+#### Scenario: An unanswerable context refuses without synthesising
+
+- GIVEN context was assembled and the check reports no answering sentence
+- WHEN `answer(..., sufficiency_check=True)` is called
+- THEN exactly one chat call is made, `no_match_cause` is
+  `"insufficient_context"`, `citations` is empty, and `llm_invoked` is `False`
+
+#### Scenario: A quotation lets the answer through
+
+- GIVEN the check quotes a context sentence
+- WHEN `answer(..., sufficiency_check=True)` is called
+- THEN synthesis runs and the answer is produced normally
+
+#### Scenario: A quotation containing the sentinel is not a refusal
+
+- GIVEN the check returns a quotation that contains the sentinel word
+- WHEN `answer(..., sufficiency_check=True)` is called
+- THEN synthesis still runs
+
+#### Scenario: A transient check failure still answers
+
+- GIVEN the check raises a non-fatal backend error
+- WHEN `answer(..., sufficiency_check=True)` is called
+- THEN synthesis runs and the answer is produced
+
 ### Requirement: Citations Are Decided By What The Answer Reports Using
 
 `answer` MUST determine `citations` from the reply, not from retrieval

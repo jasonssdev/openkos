@@ -277,6 +277,27 @@ path byte-for-byte -- so shipping the improved path as the default carries no
 un-recoverable risk, unlike `confidential_local_exemption` (a security
 posture) or `default_sensitivity` (data classification)."""
 
+DEFAULT_SUFFICIENCY_CHECK = True
+"""Packaged default for `sufficiency_check` (#760): `query` asks one cheap
+model call whether the assembled context can answer the question at all, and
+refuses instead of synthesising when it cannot.
+
+`True` because what it prevents is a CORRECTNESS defect (#753: the model
+answers a conceptual question from its own knowledge and the reply wears the
+bundle's authority), and because the cost side was measured rather than
+assumed. `evals/query_sufficiency/`, qwen3:8b, 10 runs: zero false refusals
+across 100 grounded checks, while refusing all ten adjacent questions --
+including the three the shipped `USED:` attribution does not catch and the
+one #753 itself reports.
+
+The price is one extra chat call per answered query, a measured median of
+1.12s against a default Ollama, which serialises. That is why this is a key
+and not a constant: a workspace whose bundle is broad enough that adjacent
+questions are rare pays latency for a refusal it will seldom need, and
+turning it off restores the pre-#760 path byte-for-byte. The `USED:`
+attribution still strips citations off an ungrounded answer either way, so
+`False` is degraded, never unguarded."""
+
 DEFAULT_VOLATILITY_WINDOWS: dict[str, str] = {"slow": "90d", "volatile": "7d"}
 """Packaged per-tier default windows (freshness-lint-v1, design: "Per-tier
 windows (CONCRETE, FINAL)"): `slow` = 90d, `volatile` = 7d -- continuity
@@ -823,6 +844,14 @@ class Config:
     value explicitly to `_stage_derived_objects`'s `union_judge` kwarg
     rather than defaulting it there, so the product-ON default lives in
     exactly ONE place."""
+    sufficiency_check: bool
+    """Whether `query` runs the pre-synthesis sufficiency check (#760),
+    defaulting to `DEFAULT_SUFFICIENCY_CHECK` when the key is absent or
+    explicitly null. `False` restores the pre-#760 path byte-for-byte and
+    removes the extra chat call. The CLI passes this value explicitly to
+    `answer`'s `sufficiency_check` kwarg rather than defaulting it there, so
+    the product-ON default lives in exactly ONE place -- `answer` itself
+    defaults `False`, which keeps every library and eval caller unchanged."""
     concurrent_extraction: bool
     """Whether the chunked extraction fan-out sends its windows concurrently
     (issue #744), defaulting to `DEFAULT_CONCURRENT_EXTRACTION` when the key
@@ -901,6 +930,7 @@ def read_config(root: Path) -> Config:
     type_tiers = raw.get("type_tiers")
     models = raw.get("models")
     union_judge = raw.get("union_judge")
+    sufficiency_check = raw.get("sufficiency_check")
     concurrent_extraction = raw.get("concurrent_extraction")
     type_sensitivity_defaults = raw.get("type_sensitivity_defaults")
     if model is not None and not isinstance(model, str):
@@ -1060,6 +1090,14 @@ def read_config(root: Path) -> Config:
             f"{layout.config_path.name}: 'union_judge' must be a boolean, got "
             f"{type(union_judge).__name__}"
         )
+    if sufficiency_check is not None and not isinstance(sufficiency_check, bool):
+        # Same narrow `isinstance(x, bool)` guard as `union_judge` above: YAML
+        # resolves `1` to `int`, and a key that gates a model call must not
+        # accept a count that looks like one.
+        raise ValueError(
+            f"{layout.config_path.name}: 'sufficiency_check' must be a boolean, "
+            f"got {type(sufficiency_check).__name__}"
+        )
     if concurrent_extraction is not None and not isinstance(
         concurrent_extraction, bool
     ):
@@ -1170,6 +1208,11 @@ def read_config(root: Path) -> Config:
         type_tiers=(type_tiers if type_tiers is not None else {}),
         models=(models if models is not None else {}),
         union_judge=(union_judge if union_judge is not None else DEFAULT_UNION_JUDGE),
+        sufficiency_check=(
+            sufficiency_check
+            if sufficiency_check is not None
+            else DEFAULT_SUFFICIENCY_CHECK
+        ),
         concurrent_extraction=(
             concurrent_extraction
             if concurrent_extraction is not None

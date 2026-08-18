@@ -1203,6 +1203,7 @@ def _cfg(
         type_tiers=({} if type_tiers is None else type_tiers),  # type: ignore[arg-type]
         models={},
         union_judge=config.DEFAULT_UNION_JUDGE,
+        sufficiency_check=config.DEFAULT_SUFFICIENCY_CHECK,
         concurrent_extraction=config.DEFAULT_CONCURRENT_EXTRACTION,
         type_sensitivity_defaults=dict(config.DEFAULT_TYPE_SENSITIVITY_DEFAULTS),
     )

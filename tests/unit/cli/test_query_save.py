@@ -19,6 +19,7 @@ from openkos import config, fsio
 from openkos.cli import main
 from openkos.cli.main import _stage_filed_answer, app
 from openkos.graph import sqlite_graph
+from openkos.resolution import insight_identity
 from openkos.retrieval.answer import NO_MATCH, AnswerResult, Citation
 from openkos.state import fts, vectorstore
 from openkos.vcs import git as vcs_git
@@ -116,6 +117,7 @@ def _default_cfg(**overrides: object) -> config.Config:
         "type_tiers": {},
         "models": {},
         "union_judge": config.DEFAULT_UNION_JUDGE,
+        "sufficiency_check": config.DEFAULT_SUFFICIENCY_CHECK,
         "concurrent_extraction": config.DEFAULT_CONCURRENT_EXTRACTION,
         "type_sensitivity_defaults": {"Person": 1},
     }
@@ -2226,3 +2228,280 @@ def test_the_no_support_warning_is_silent_when_the_model_never_reported(
 
     assert result.exit_code == 0
     assert "drew on none of the" not in result.stderr
+
+
+# --- the pre-synthesis sufficiency check reaches the CLI (#760) --------------
+
+
+def test_query_renders_the_insufficient_context_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A refusal explains that the bundle does not COVER the question.
+
+    Deliberately different wording from `zero_hits`. Retrieval succeeded
+    here — concepts were found and read, then judged unable to answer — so
+    telling the user to "try different wording" would send them rephrasing a
+    question the bundle simply does not cover. The message also names the
+    opt-out, because a user who disagrees with the refusal needs a way past
+    it that is not "give up".
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    fake = AnswerResult(
+        answer=NO_MATCH,
+        citations=[],
+        fts_hit_count=4,
+        llm_invoked=False,
+        no_match_cause="insufficient_context",
+        skip_notices=[],
+        fused_count=4,
+        context_block_count=4,
+    )
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *a, **k: fake)
+
+    result = runner.invoke(app, ["query", "¿qué es la cuantización de pesos?"])
+
+    assert result.exit_code == 0
+    assert "does not cover it" in result.stdout
+    assert "sufficiency_check: false" in result.stdout
+    # NOT the zero-hit instruction: concepts WERE found.
+    assert "Try different wording" not in result.stdout
+
+
+def test_query_passes_the_configured_sufficiency_check_to_answer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`cfg.sufficiency_check` reaches `answer()`, rather than being defaulted
+    at the call site.
+
+    The library default is `False` and the workspace default is `True`, so a
+    call site that forgot to thread the value would silently ship the check
+    OFF while `openkos.yaml` documented it ON — a divergence no config test
+    can see, because both halves would still be individually correct.
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    seen: dict[str, object] = {}
+
+    def _spy(*args: object, **kwargs: object) -> AnswerResult:
+        seen.update(kwargs)
+        return _fake_matched_answer()
+
+    monkeypatch.setattr("openkos.cli.main.answer", _spy)
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code == 0
+    assert seen["sufficiency_check"] is config.DEFAULT_SUFFICIENCY_CHECK
+
+
+def test_query_honours_sufficiency_check_false_from_the_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An operator who turns the key off gets it off, end to end."""
+    _init_workspace(tmp_path, monkeypatch)
+    config_path = tmp_path / "openkos.yaml"
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8") + "\nsufficiency_check: false\n",
+        encoding="utf-8",
+    )
+    seen: dict[str, object] = {}
+
+    def _spy(*args: object, **kwargs: object) -> AnswerResult:
+        seen.update(kwargs)
+        return _fake_matched_answer()
+
+    monkeypatch.setattr("openkos.cli.main.answer", _spy)
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code == 0
+    assert seen["sufficiency_check"] is False
+
+
+# --- near-duplicate disclosure in the --save preview (#762) ------------------
+
+
+def test_the_save_preview_discloses_a_possible_duplicate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A resembling filed insight is shown BEFORE the confirmation gate.
+
+    The slug is the permanent Concept ID, so a duplicate filed here is
+    permanent; the preview is the last moment noticing it is free. Advisory
+    by design — the line describes, and the human already confirming decides.
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
+    monkeypatch.setattr(
+        "openkos.cli.main.answer",
+        lambda *a, **k: _fake_matched_answer(
+            citations=[Citation(concept_id="concepts/stoicism", title="Stoicism")]
+        ),
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.insight_identity.near_duplicate_insights",
+        lambda *a, **k: [
+            insight_identity.NearDuplicate(
+                concept_id="insights/why-stoicism-matters",
+                title="Why Stoicism Matters",
+                question="why does stoicism matter?",
+                similarity=0.9612,
+            )
+        ],
+    )
+
+    result = runner.invoke(app, ["query", "what is stoicism?", "--save", "--auto"])
+
+    assert result.exit_code == 0
+    assert "possible duplicate of bundle/insights/why-stoicism-matters.md" in (
+        result.stdout
+    )
+    assert "why does stoicism matter?" in result.stdout
+    assert "0.96 similar" in result.stdout
+
+
+def test_the_disclosure_is_advisory_and_the_save_still_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A disclosed duplicate does NOT refuse or alter the filing.
+
+    The measured margin is +0.0745 over two subject families — enough to
+    show a person, nowhere near enough to act on. A version that refused
+    would turn a thin signal into a hard gate, which is exactly the mistake
+    #760 refused when it declined to ship a distance threshold.
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
+    monkeypatch.setattr(
+        "openkos.cli.main.answer",
+        lambda *a, **k: _fake_matched_answer(
+            citations=[Citation(concept_id="concepts/stoicism", title="Stoicism")]
+        ),
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.insight_identity.near_duplicate_insights",
+        lambda *a, **k: [
+            insight_identity.NearDuplicate(
+                concept_id="insights/other",
+                title="Other",
+                question="q?",
+                similarity=0.99,
+            )
+        ],
+    )
+
+    result = runner.invoke(app, ["query", "what is stoicism?", "--save", "--auto"])
+
+    assert result.exit_code == 0
+    filed = sorted((tmp_path / "bundle" / "insights").glob("*.md"))
+    assert len(filed) == 1
+
+
+def test_no_duplicate_means_no_disclosure_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ordinary save is unchanged — no noise on the common path."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
+    monkeypatch.setattr(
+        "openkos.cli.main.answer",
+        lambda *a, **k: _fake_matched_answer(
+            citations=[Citation(concept_id="concepts/stoicism", title="Stoicism")]
+        ),
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.insight_identity.near_duplicate_insights",
+        lambda *a, **k: [],
+    )
+
+    result = runner.invoke(app, ["query", "what is stoicism?", "--save", "--auto"])
+
+    assert result.exit_code == 0
+    assert "possible duplicate" not in result.stdout
+
+
+def test_the_disclosure_is_asked_about_the_question_being_filed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The lookup runs on the QUESTION, not the answer or the derived title.
+
+    `evals/query_identity/` measured all three: the answer body (-0.0620)
+    and the title (-0.1579) both OVERLAP, and only the source question
+    separates. Passing the wrong one would still produce plausible-looking
+    output while reproducing the defect the measurement rejected.
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
+    monkeypatch.setattr(
+        "openkos.cli.main.answer",
+        lambda *a, **k: _fake_matched_answer(
+            citations=[Citation(concept_id="concepts/stoicism", title="Stoicism")]
+        ),
+    )
+    seen: dict[str, object] = {}
+
+    def _spy(question: str, **kwargs: object) -> list[object]:
+        seen["question"] = question
+        seen.update(kwargs)
+        return []
+
+    monkeypatch.setattr(
+        "openkos.cli.main.insight_identity.near_duplicate_insights", _spy
+    )
+
+    result = runner.invoke(app, ["query", "what is stoicism?", "--save", "--auto"])
+
+    assert result.exit_code == 0
+    assert seen["question"] == "what is stoicism?"
+    assert seen["bundle_dir"] == tmp_path / "bundle"
+
+
+def test_a_sufficiency_refusal_reports_the_llm_as_refused_not_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The retrieval summary must not call a paid call `skipped`.
+
+    `skipped` is what a zero-hit short-circuit gets, and that one truly never
+    reaches the backend. A sufficiency refusal DID: one chat call was made
+    and its latency paid, so reusing the same word hides a cost the operator
+    is being charged and makes two different events read identically.
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    fake = AnswerResult(
+        answer=NO_MATCH,
+        citations=[],
+        fts_hit_count=4,
+        llm_invoked=False,
+        no_match_cause="insufficient_context",
+        skip_notices=[],
+        fused_count=4,
+        context_block_count=4,
+    )
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *a, **k: fake)
+
+    result = runner.invoke(app, ["query", "¿qué es la cuantización?"])
+
+    assert result.exit_code == 0
+    assert "LLM refused" in result.stderr
+    assert "LLM skipped" not in result.stderr
+
+
+def test_a_zero_hit_short_circuit_still_reports_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other side of the same distinction, so `refused` cannot swallow it."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake = AnswerResult(
+        answer=NO_MATCH,
+        citations=[],
+        fts_hit_count=0,
+        llm_invoked=False,
+        no_match_cause="zero_hits",
+        skip_notices=[],
+    )
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *a, **k: fake)
+
+    result = runner.invoke(app, ["query", "nothing matches this"])
+
+    assert result.exit_code == 0
+    assert "LLM skipped" in result.stderr
+    assert "LLM refused" not in result.stderr
