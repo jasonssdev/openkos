@@ -2366,10 +2366,13 @@ def test_the_disclosure_is_advisory_and_the_save_still_writes(
 ) -> None:
     """A disclosed duplicate does NOT refuse or alter the filing.
 
-    The measured margin is +0.0745 over two subject families — enough to
-    show a person, nowhere near enough to act on. A version that refused
-    would turn a thin signal into a hard gate, which is exactly the mistake
-    #760 refused when it declined to ship a distance threshold.
+    The measured margin is NEGATIVE over eleven subject families — the
+    classes overlap and no threshold splits them. What the signal has is
+    asymmetry: no stranger disclosed, some duplicates caught. That is enough
+    to show a person and nowhere near enough to act on. A version that
+    refused would turn a low-recall advisory into a hard gate, which is
+    exactly the mistake #760 refused when it declined to ship a distance
+    threshold.
     """
     _init_workspace(tmp_path, monkeypatch)
     _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")

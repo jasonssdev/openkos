@@ -193,13 +193,18 @@ class Probe:
 _PROBES: Final[tuple[Probe, ...]] = (
     # definitional — rung 2 already resolves these; an arm must not move them.
     Probe("definitional", "¿qué es la trazabilidad?", subject="que-es-trazabilidad"),
-    Probe("definitional", "¿qué es un sistema RAG?"),
-    Probe("definitional", "¿qué son las fuentes inmutables?"),
-    Probe("definitional", "¿qué es un MVP?"),
+    Probe("definitional", "¿qué es un sistema RAG?", subject="que-es-rag"),
+    Probe(
+        "definitional",
+        "¿qué son las fuentes inmutables?",
+        subject="que-son-inmutables",
+    ),
+    Probe("definitional", "¿qué es un MVP?", subject="que-es-mvp"),
     # causal / relational — #696's evidence shapes, the residuals.
     Probe(
         "causal",
         "¿por qué es importante la trazabilidad en un sistema de conocimiento?",
+        subject="por-que-importa-trazabilidad",
     ),
     Probe(
         "causal",
@@ -209,8 +214,13 @@ _PROBES: Final[tuple[Probe, ...]] = (
     Probe(
         "relational",
         "¿qué relación hay entre la trazabilidad y la verdad contextual en sistemas RAG?",
+        subject="relacion-trazabilidad-verdad",
     ),
-    Probe("relational", "¿qué relación hay entre un MVP y las fuentes inmutables?"),
+    Probe(
+        "relational",
+        "¿qué relación hay entre un MVP y las fuentes inmutables?",
+        subject="relacion-mvp-inmutables",
+    ),
     # Convergence families — PARAPHRASES of one question, not merely questions
     # about one topic. An earlier revision grouped `¿qué es la trazabilidad?`
     # with `¿por qué es importante la trazabilidad?` and scored every arm at
@@ -229,9 +239,158 @@ _PROBES: Final[tuple[Probe, ...]] = (
         subject="por-que-importan-inmutables",
     ),
     # open — MUST stay question-verbatim. This is the false-positive exposure.
-    Probe("open", "¿qué decidimos sobre el almacenamiento?"),
-    Probe("open", "¿quién quedó como responsable de la migración?"),
+    Probe(
+        "open",
+        "¿qué decidimos sobre el almacenamiento?",
+        subject="decision-almacenamiento",
+    ),
+    Probe(
+        "open",
+        "¿quién quedó como responsable de la migración?",
+        subject="responsable-migracion",
+    ),
+    # No family: the only probe with no paraphrase partner, kept that way on
+    # purpose so the corpus still carries an unfamilied question.
     Probe("open", "resumí la reunión de almacenamiento"),
+    # ----------------------------------------------------------------- #
+    # Added 2026-08-18: paraphrase DEPTH.                                #
+    # ----------------------------------------------------------------- #
+    #
+    # Every harness that reads this table has reported the same limit:
+    # `query_identity` separated the question signal by +0.0745 over TWO
+    # paraphrase relations and said so in its own README, and
+    # `insight_scan_bound` could not measure recall under the #764 cap at all
+    # for want of more. Two relations cannot carry a threshold that ships.
+    #
+    # The rule for what belongs in a family is unchanged and is the one an
+    # earlier revision got wrong: a family is ONE QUESTION ASKED TWO WAYS,
+    # not two questions about one topic. `¿qué es la trazabilidad?` and
+    # `¿por qué es importante la trazabilidad?` stay in DIFFERENT families --
+    # they ask different things and should file as different objects. Those
+    # cross-family, same-topic pairs are the HARD negatives, and
+    # `query_identity` recorded that dropping them made every signal look
+    # like it separated, `title` apparently perfectly. Depth here is
+    # deliberately built to produce more of them, not fewer.
+    #
+    # These carry no stored answers yet, so they do not change any published
+    # convergence number: `convergence` counts a family only when at least
+    # two of its members appear IN THAT RUN, and no stored run contains
+    # these. A future generation run picks them up and costs proportionally
+    # more; that is the price of the depth.
+    #
+    # THREE CONTESTED CALLS, recorded rather than quietly resolved, in the
+    # spirit of `adjudication.json`'s own contested entry:
+    #
+    #  1. `¿qué se gana con la trazabilidad?` is filed under
+    #     `por-que-importa-trazabilidad`. FOR: "why does it matter" and "what
+    #     do you get from it" ask for the same answer. AGAINST: the second
+    #     invites a list of concrete benefits where the first invites a
+    #     rationale, and a system could reasonably file those apart.
+    #  2. `¿qué significa producto mínimo viable?` is filed with `¿qué es un
+    #     MVP?`. FOR: the acronym and its expansion name one thing, and #397
+    #     already treats acronym identity as solved downstream. AGAINST: this
+    #     makes the family test acronym resolution as much as paraphrase.
+    #  3. `¿cuál fue la decisión sobre almacenamiento?` is filed with `¿qué
+    #     decidimos sobre el almacenamiento?`. FOR: same fact requested.
+    #     AGAINST: the first-person `decidimos` is situational, which is the
+    #     exact property `adjudication.json` argued about for the `open`
+    #     shape.
+    #
+    # If any of the three is wrong, the honest fix is to split the family and
+    # `--rescore`, NOT to retune a threshold against it.
+    Probe(
+        "definitional",
+        "¿a qué se le llama trazabilidad?",
+        subject="que-es-trazabilidad",
+    ),
+    Probe(
+        "definitional",
+        "¿cómo se define la trazabilidad?",
+        subject="que-es-trazabilidad",
+    ),
+    Probe("definitional", "¿qué significa RAG?", subject="que-es-rag"),
+    Probe("definitional", "¿a qué se le llama sistema RAG?", subject="que-es-rag"),
+    Probe(
+        "definitional",
+        "¿qué significa que una fuente sea inmutable?",
+        subject="que-son-inmutables",
+    ),
+    Probe(
+        "definitional",
+        "¿a qué se le llama fuente inmutable?",
+        subject="que-son-inmutables",
+    ),
+    Probe(
+        "definitional",
+        "¿qué significa producto mínimo viable?",
+        subject="que-es-mvp",
+    ),
+    Probe("definitional", "¿a qué se le llama MVP?", subject="que-es-mvp"),
+    Probe(
+        "definitional",
+        "¿qué es la verdad contextual?",
+        subject="que-es-verdad-contextual",
+    ),
+    Probe(
+        "definitional",
+        "¿qué significa verdad contextual?",
+        subject="que-es-verdad-contextual",
+    ),
+    Probe(
+        "causal",
+        "¿para qué sirve la trazabilidad en un repositorio de conocimiento?",
+        subject="por-que-importa-trazabilidad",
+    ),
+    Probe(
+        "causal",
+        "¿qué se gana con la trazabilidad?",
+        subject="por-que-importa-trazabilidad",
+    ),
+    Probe(
+        "causal",
+        "¿qué se gana teniendo fuentes inmutables?",
+        subject="por-que-importan-inmutables",
+    ),
+    Probe(
+        "causal",
+        "¿para qué sirve que las fuentes sean inmutables?",
+        subject="por-que-importan-inmutables",
+    ),
+    Probe(
+        "relational",
+        "¿cómo se relacionan la trazabilidad y la verdad contextual?",
+        subject="relacion-trazabilidad-verdad",
+    ),
+    Probe(
+        "relational",
+        "¿qué vínculo hay entre trazabilidad y verdad contextual?",
+        subject="relacion-trazabilidad-verdad",
+    ),
+    Probe(
+        "relational",
+        "¿cómo se relacionan un MVP y las fuentes inmutables?",
+        subject="relacion-mvp-inmutables",
+    ),
+    Probe(
+        "open",
+        "¿qué se resolvió sobre el almacenamiento?",
+        subject="decision-almacenamiento",
+    ),
+    Probe(
+        "open",
+        "¿cuál fue la decisión sobre almacenamiento?",
+        subject="decision-almacenamiento",
+    ),
+    Probe(
+        "open",
+        "¿a quién le asignaron la migración?",
+        subject="responsable-migracion",
+    ),
+    Probe(
+        "open",
+        "¿quién se hizo cargo de la migración?",
+        subject="responsable-migracion",
+    ),
 )
 
 
