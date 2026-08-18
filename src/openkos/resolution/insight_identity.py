@@ -64,10 +64,10 @@ into the preview a human already confirms, and the human decides.
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final
+from typing import Final, Protocol
 
 from openkos import sensitivity
 from openkos.llm.base import Embedder
@@ -100,25 +100,6 @@ much closer than the old 0.8974 suggested.
 It is a DISCLOSURE threshold, which is what makes a low-recall guess
 acceptable at all: nothing is merged, renamed or refused on it."""
 
-DUPLICATE_SCAN_LIMIT: Final[int] = 100
-"""How many already-filed insights one scan compares against, at most (#764).
-
-Chosen from the curve `evals/insight_scan_bound/` measured, not from taste.
-The scan is linear at ~11.8 ms per filed insight with no knee -- 100 filed
-insights cost 1.277s, 400 cost 4.774s and 1600 cost 18.904s -- and it runs at
-PREVIEW time, as dead wait between the answer appearing and the confirmation
-gate, on a write path that made no embedding call at all before #762.
-
-100 is where that wait stays near a second. The scan buys ONE advisory line,
-so paying appreciably more for it is disproportionate to what it delivers,
-and no bundle under 100 filed insights is truncated at all.
-
-What this number is NOT is a recall claim. Nothing here measured whether the
-bounded scan still finds what the unbounded one would: that needs a corpus
-with many independent paraphrase relations, and the stored population has
-two (`evals/query_identity/`). The bound is therefore DISCLOSED to the human
-rather than trusted -- see `DuplicateScan.truncated`."""
-
 
 @dataclass(frozen=True)
 class DuplicateScan:
@@ -127,39 +108,16 @@ class DuplicateScan:
     `unavailable` distinguishes "scanned, found nothing" from "could not
     scan" (#764). Collapsing them into an empty list makes a down embedding
     backend indistinguishable from a genuinely unique question, and the
-    caller cannot say anything honest about which happened."""
+    caller cannot say anything honest about which happened.
+
+    There is no longer a `compared`/`filed_total` pair, and deliberately so:
+    a scan either compares EVERY comparable filed insight or reports that it
+    could not run. Those fields existed to disclose a truncation whose cost
+    nothing could measure; the truncation is gone, so the disclosure would
+    now always say "all of them" and mean nothing."""
 
     candidates: list[NearDuplicate]
     unavailable: bool = False
-    compared: int = 0
-    """Filed insights this scan actually embedded and compared.
-
-    ZERO whenever `unavailable` is set. The embed either returned a usable
-    batch or it did not, and on the failure paths nothing was compared no
-    matter how many insights the bound had selected -- carrying the intended
-    count there would make this field describe an intention rather than an
-    outcome, which is the opposite of what its name promises."""
-    filed_total: int = 0
-    """Filed insights that WERE comparable -- readable, non-confidential and
-    carrying a source question. Deliberately the same population `compared`
-    counts from, so `filed_total - compared` is exactly what the bound
-    dropped and never also counts neighbours skipped for other reasons."""
-
-    @property
-    def truncated(self) -> bool:
-        """True when the bound dropped comparable insights from a scan that RAN.
-
-        The caller discloses on this rather than on `filed_total`: a scan
-        that compared everything must say nothing, or the notice appears on
-        every save and stops being read (#764).
-
-        `unavailable` makes this False even when filings were dropped. A
-        failed scan compared NOTHING, so "compared against the 100 most
-        recently filed of 347" beside "could not check this question" would
-        be two contradictory sentences in one preview, the first of them
-        false. There is exactly one honest thing to say when the backend
-        fails, and the unavailable notice already says it."""
-        return not self.unavailable and self.filed_total > self.compared
 
 
 @dataclass(frozen=True)
@@ -199,13 +157,6 @@ class _FiledInsight:
     concept_id: str
     title: str
     question: str
-    timestamp: str
-    """The `timestamp` frontmatter key `okf.build_concept` writes, or `""`.
-
-    Compared as a STRING, never parsed: the value is ISO-8601 written by one
-    code path, so lexical order is chronological order, and a parse would add
-    a failure mode to a sort that has no need of one. An absent or malformed
-    value is `""`, which sorts oldest -- see `near_duplicate_insights`."""
 
 
 def _filed_questions(bundle_dir: Path) -> list[_FiledInsight]:
@@ -261,10 +212,44 @@ def _filed_questions(bundle_dir: Path) -> list[_FiledInsight]:
                 concept_id=f"insights/{path.stem}",
                 title=title,
                 question=question,
-                timestamp=str(metadata.get("timestamp") or "").strip(),
             )
         )
     return found
+
+
+class QuestionVectorCache(Protocol):
+    """The persisted question-embedding cache this scan reads and writes.
+
+    Structural, so a test can supply a dict-backed stand-in and this module
+    never owns a database connection. `state.question_vectors` provides the
+    on-disk implementation and the CLI binds its lifetime."""
+
+    def digest(self, question: str) -> str:
+        """The cache's own digest of `question`.
+
+        Owned by the CACHE rather than computed here on purpose: this module
+        may not import `openkos.state` (the layering guard in
+        `tests/unit/resolution/test_layering.py` pins it), and a second copy
+        of the hash living on this side is how the two ends of one cache key
+        drift apart. Asking the store what it would call this question keeps
+        exactly one definition."""
+        ...  # pragma: no cover -- Protocol stub body, never executed
+
+    def hashes(self) -> dict[str, str]:
+        """`concept_id -> digest` for every cached vector."""
+        ...  # pragma: no cover -- Protocol stub body, never executed
+
+    def iter_vectors(self) -> Iterator[tuple[str, str, list[float]]]:
+        """Stream `(concept_id, question_hash, vector)`, never a list."""
+        ...  # pragma: no cover -- Protocol stub body, never executed
+
+    def store(self, items: Sequence[tuple[str, str, Sequence[float]]]) -> None:
+        """Upsert freshly embedded `(concept_id, question_hash, vector)`."""
+        ...  # pragma: no cover -- Protocol stub body, never executed
+
+    def prune_missing(self, keep: set[str]) -> None:
+        """Drop cached rows whose insight is no longer in the bundle."""
+        ...  # pragma: no cover -- Protocol stub body, never executed
 
 
 def near_duplicate_insights(
@@ -272,8 +257,8 @@ def near_duplicate_insights(
     *,
     bundle_dir: Path,
     embedder: Embedder,
+    cache: QuestionVectorCache | None,
     threshold: float = DUPLICATE_QUESTION_SIMILARITY,
-    limit: int = DUPLICATE_SCAN_LIMIT,
 ) -> DuplicateScan:
     """Filed insights whose source question resembles `question`.
 
@@ -282,88 +267,112 @@ def near_duplicate_insights(
     never to a refused save, because the caller is a write path that worked
     fine before this existed.
 
-    `unavailable` is `True` only when the scan COULD NOT RUN -- the backend
-    failed, or returned a malformed batch. Having nothing to compare against
-    (no filed insights, no question) is not a degradation: the scan ran and
-    correctly found nothing, so a caller notice built on this flag stays
-    rare enough to be read (#764).
+    **Every comparable filed insight is compared -- there is no bound.** The
+    scan embeds only questions the cache has not seen, so its cost is one
+    embed call for the new question plus the cheap term
+    (measured at 0.053 ms per filed insight against 11.8 ms to embed one --
+    `evals/insight_scan_bound/`). #764's bound existed because every
+    save re-embedded the whole bundle; caching removed the reason, and with
+    it a recall loss that depended on FILING ORDER and that no fixture could
+    measure.
 
-    ONE batched `embed` call covers the new question and the stored ones, so
-    the cost is a single round trip per save rather than one per filed
-    insight -- and `limit` bounds how many stored questions ride in it
-    (#764). Every filed insight is still READ: `evals/insight_scan_bound/`
-    measured the disk half at 1/300th of the scan (0.063s to parse 1600 files
-    against 18.841s to embed them), so bounding the read would buy nothing
-    while costing the counts the disclosure is made of.
+    `cache` is REQUIRED and `None` reports `unavailable`. The alternative
+    was to fall back to embedding every filed question, which is exactly the
+    linear cost this design removes: a 2,000-insight bundle would stall the
+    confirmation gate for around 24 seconds with nothing on screen saying
+    why. `unavailable` is already disclosed to the operator, so a scan that
+    cannot run says so instead of running slowly.
 
-    Selection is NEWEST FIRST by the `timestamp` frontmatter key. Ties are
-    broken by slug, which this function does not sort for: `_filed_questions`
-    already returns path-sorted records and Python's sort is stable, so that
-    ordering survives. Glob order -- what the unbounded scan happened to use --
-    is alphabetical by slug and means nothing, so truncating on it would drop
-    insights for a reason no user could predict. `mtime` is not used: a `git
-    clone` stamps every file with the checkout time and would flatten the
-    order entirely.
-
-    The result reports `compared` and `filed_total` so the caller can
-    DISCLOSE a bounded comparison. Nothing here decides that a truncated scan
-    is good enough -- no measurement supports that claim (see
-    `DUPLICATE_SCAN_LIMIT`) -- so the honest move is to hand both numbers to
-    the human already confirming the save.
+    `unavailable` is `True` when the scan COULD NOT RUN -- no cache, the
+    backend failed, it returned a malformed batch, or the cache did not
+    yield a vector for every insight on disk. Having nothing to compare
+    against (no filed insights, no question) is not a degradation: the scan
+    ran and correctly found nothing.
     """
     if not question.strip():
         return DuplicateScan([])
-    all_filed = _filed_questions(bundle_dir)
-    if not all_filed:
-        return DuplicateScan([])
-    # Newest first, and same-timestamp filings keep the slug order
-    # `_filed_questions` already returns them in -- Python's sort is stable,
-    # so that ordering IS the tiebreak and a second sort by `concept_id` here
-    # would be a guard no test could observe. A tuple key cannot express this
-    # anyway: the two orders point opposite ways, and `reverse=True` flips
-    # both.
-    filed = sorted(all_filed, key=lambda insight: insight.timestamp, reverse=True)[
-        : max(limit, 0)
-    ]
-    compared, filed_total = len(filed), len(all_filed)
-
-    def could_not_scan() -> DuplicateScan:
-        """The one shape every failure path returns.
-
-        `compared=0` is the whole point of routing all three through here:
-        the count must say what was compared, and on these paths that is
-        nothing. One helper rather than three literals so a future change to
-        the failure shape cannot land on two of them."""
-        return DuplicateScan([], unavailable=True, compared=0, filed_total=filed_total)
-
-    if not filed:  # limit <= 0 -- nothing was compared, everything was dropped
-        return DuplicateScan([], compared=compared, filed_total=filed_total)
+    if cache is None:
+        return DuplicateScan([], unavailable=True)
+    filed = _filed_questions(bundle_dir)
+    wanted = {insight.concept_id: insight for insight in filed}
     try:
-        vectors = embedder.embed([question, *(f.question for f in filed)])
+        # Pruned FIRST so a deleted insight cannot be compared on this pass.
+        # Its vector would otherwise disclose a duplicate whose document the
+        # operator cannot open.
+        cache.prune_missing(set(wanted))
+    except Exception:  # advisory: a cache failure never blocks a save
+        return DuplicateScan([], unavailable=True)
+    if not filed:
+        return DuplicateScan([])
+    try:
+        digests = {
+            insight.concept_id: cache.digest(insight.question) for insight in filed
+        }
+    except Exception:
+        return DuplicateScan([], unavailable=True)
+    try:
+        cached = cache.hashes()
+    except Exception:
+        return DuplicateScan([], unavailable=True)
+    # A STALE hash is a miss, not a hit: the cached vector describes the old
+    # question, so serving it would compare against text no longer on disk
+    # and quote a question the operator cannot find in the file.
+    misses = [
+        insight
+        for insight in filed
+        if cached.get(insight.concept_id) != digests[insight.concept_id]
+    ]
+    try:
+        vectors = embedder.embed([question, *(miss.question for miss in misses)])
     except Exception:  # advisory: any backend failure degrades to no candidates
-        return could_not_scan()
-    if len(vectors) != len(filed) + 1:
-        return could_not_scan()
+        return DuplicateScan([], unavailable=True)
+    if len(vectors) != len(misses) + 1:
+        return DuplicateScan([], unavailable=True)
     # RAGGED widths, not just the wrong count. `_cosine` returns 0.0 for a
     # mismatched pair, so a ragged batch would otherwise scan "successfully"
     # and report no duplicates -- a silent wrong answer, which is worse than
     # the loud absence of one. Checked here rather than inside `_cosine`
     # because only this layer knows the batch was supposed to be uniform.
     if any(len(vector) != len(vectors[0]) for vector in vectors):
-        return could_not_scan()
-    new_vector, stored = vectors[0], vectors[1:]
-    matches = [
-        NearDuplicate(
-            concept_id=insight.concept_id,
-            title=insight.title,
-            question=insight.question,
-            similarity=similarity,
+        return DuplicateScan([], unavailable=True)
+    new_vector = vectors[0]
+    try:
+        # Stored BEFORE the comparison pass, so this save's misses ride in
+        # from the cache with everything else and one code path does all the
+        # comparing. Without the write-back the next save would miss again
+        # and the cache would never warm.
+        cache.store(
+            [
+                (miss.concept_id, digests[miss.concept_id], vector)
+                for miss, vector in zip(misses, vectors[1:], strict=True)
+            ]
         )
-        for insight, vector in zip(filed, stored, strict=True)
-        if (similarity := _cosine(new_vector, vector)) >= threshold
-    ]
+        matches: list[NearDuplicate] = []
+        compared: set[str] = set()
+        for concept_id, digest, vector in cache.iter_vectors():
+            insight = wanted.get(concept_id)
+            if insight is None or digest != digests[concept_id]:
+                continue
+            compared.add(concept_id)
+            similarity = _cosine(new_vector, vector)
+            if similarity >= threshold:
+                matches.append(
+                    NearDuplicate(
+                        concept_id=insight.concept_id,
+                        title=insight.title,
+                        question=insight.question,
+                        similarity=similarity,
+                    )
+                )
+    except Exception:
+        return DuplicateScan([], unavailable=True)
+    if compared != set(wanted):
+        # The cache did not yield a usable vector for every insight on disk,
+        # so this scan covered less than the bundle. Reporting candidates
+        # anyway would be the exact failure #764 named -- a partial
+        # comparison that reads like a complete one -- and there is no
+        # count to disclose now that the design promises "all of them".
+        return DuplicateScan([], unavailable=True)
     return DuplicateScan(
-        sorted(matches, key=lambda match: match.similarity, reverse=True),
-        compared=compared,
-        filed_total=filed_total,
+        sorted(matches, key=lambda match: match.similarity, reverse=True)
     )

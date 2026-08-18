@@ -14,7 +14,7 @@ the assertions are about this module's decisions and never about how a real
 model happens to embed Spanish.
 """
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 
 from openkos.resolution import insight_identity
@@ -23,6 +23,35 @@ from openkos.resolution.insight_identity import (
     NearDuplicate,
     near_duplicate_insights,
 )
+from openkos.state import question_vectors
+
+
+class _RecordingCache:
+    """An in-memory stand-in for the persisted question-vector cache."""
+
+    def __init__(self, rows: dict[str, tuple[str, list[float]]] | None = None) -> None:
+        self.rows = dict(rows or {})
+        self.stored: list[tuple[str, str, list[float]]] = []
+        self.pruned: set[str] | None = None
+
+    def digest(self, question: str) -> str:
+        return question_vectors.question_hash(question)
+
+    def hashes(self) -> dict[str, str]:
+        return {cid: digest for cid, (digest, _) in self.rows.items()}
+
+    def iter_vectors(self) -> Iterator[tuple[str, str, list[float]]]:
+        for cid, (digest, vector) in sorted(self.rows.items()):
+            yield cid, digest, vector
+
+    def store(self, items: Sequence[tuple[str, str, Sequence[float]]]) -> None:
+        for cid, digest, vector in items:
+            self.stored.append((cid, digest, list(vector)))
+            self.rows[cid] = (digest, list(vector))
+
+    def prune_missing(self, keep: set[str]) -> None:
+        self.pruned = set(keep)
+        self.rows = {cid: v for cid, v in self.rows.items() if cid in keep}
 
 
 def _candidates(
@@ -37,6 +66,11 @@ def _candidates(
         question,
         bundle_dir=bundle_dir,
         embedder=embedder,  # type: ignore[arg-type]
+        # An EMPTY cache makes every filed question a miss, so the embed call
+        # carries the same texts it did before the cache existed. That keeps
+        # these tests about this module's decisions rather than about which
+        # questions happened to be warm.
+        cache=_RecordingCache(),
     ).candidates
 
 
@@ -195,7 +229,9 @@ def test_a_malformed_vector_count_discloses_nothing(tmp_path: Path) -> None:
     bundle = tmp_path / "bundle"
     _write_insight(bundle, "filed", description="a question?")
 
-    scan = near_duplicate_insights("new?", bundle_dir=bundle, embedder=_ShortEmbedder())
+    scan = near_duplicate_insights(
+        "new?", bundle_dir=bundle, embedder=_ShortEmbedder(), cache=_RecordingCache()
+    )
 
     assert scan.candidates == []
     # A malformed batch is a FAILED scan, not an empty one (#764).
@@ -395,7 +431,10 @@ def test_a_backend_failure_is_reported_as_unavailable(tmp_path: Path) -> None:
     _write_insight(bundle, "filed", description="a question?")
 
     scan = near_duplicate_insights(
-        "new?", bundle_dir=bundle, embedder=_RaisingEmbedder()
+        "new?",
+        bundle_dir=bundle,
+        embedder=_RaisingEmbedder(),
+        cache=_RecordingCache(),
     )
 
     assert scan.candidates == []
@@ -412,7 +451,9 @@ def test_nothing_to_compare_is_not_a_degradation(tmp_path: Path) -> None:
     bundle = tmp_path / "bundle"
     bundle.mkdir()
 
-    scan = near_duplicate_insights("q?", bundle_dir=bundle, embedder=_FakeEmbedder({}))
+    scan = near_duplicate_insights(
+        "q?", bundle_dir=bundle, embedder=_FakeEmbedder({}), cache=_RecordingCache()
+    )
 
     assert scan.candidates == []
     assert scan.unavailable is False
@@ -431,7 +472,10 @@ def test_a_ragged_batch_is_reported_as_unavailable(tmp_path: Path) -> None:
     _write_insight(bundle, "filed", description="a question?")
 
     scan = near_duplicate_insights(
-        "new question", bundle_dir=bundle, embedder=_RaggedEmbedder()
+        "new question",
+        bundle_dir=bundle,
+        embedder=_RaggedEmbedder(),
+        cache=_RecordingCache(),
     )
 
     assert scan.candidates == []
@@ -469,178 +513,15 @@ class _CountingEmbedder:
         return [[1.0, 0.0] for _ in texts]
 
 
-def test_the_embed_batch_is_bounded_by_the_scan_limit(tmp_path: Path) -> None:
-    """More filed insights than the limit still costs ONE bounded batch.
+def test_an_unparseable_neighbour_is_simply_not_compared(tmp_path: Path) -> None:
+    """A corrupt or confidential neighbour leaves the comparable population.
 
-    This is #764's first finding: cost grew linearly and without limit on a
-    write path, so what must be pinned is the SIZE of the call, not merely
-    that a call happens."""
-    bundle = tmp_path / "bundle"
-    for index in range(insight_identity.DUPLICATE_SCAN_LIMIT + 25):
-        _timestamped(
-            bundle,
-            f"filed-{index:04d}",
-            question=f"question {index}?",
-            timestamp=f"2026-08-{(index % 28) + 1:02d}T00:00:00Z",
-        )
-    embedder = _CountingEmbedder()
-
-    near_duplicate_insights("a new question?", bundle_dir=bundle, embedder=embedder)
-
-    assert len(embedder.batches) == 1
-    # The new question plus the bound, never the whole bundle.
-    assert len(embedder.batches[0]) == insight_identity.DUPLICATE_SCAN_LIMIT + 1
-
-
-def test_the_bounded_batch_keeps_the_most_recently_filed(tmp_path: Path) -> None:
-    """The bound selects by FILING TIME, newest first.
-
-    Alphabetical slug order -- what `glob` hands back, and what the unbounded
-    scan happened to use -- carries no meaning, so truncating on it would drop
-    insights for a reason no user could predict or read. The `timestamp`
-    frontmatter key `build_concept` writes is used rather than `mtime`,
-    because a `git clone` stamps every working-tree file with the checkout
-    time and would flatten the order to nothing."""
-    bundle = tmp_path / "bundle"
-    _timestamped(
-        bundle, "aaa-oldest", question="oldest?", timestamp="2026-01-01T00:00:00Z"
-    )
-    _timestamped(
-        bundle, "mmm-middle", question="middle?", timestamp="2026-06-01T00:00:00Z"
-    )
-    _timestamped(
-        bundle, "zzz-newest", question="newest?", timestamp="2026-12-01T00:00:00Z"
-    )
-    embedder = _CountingEmbedder()
-
-    near_duplicate_insights("new?", bundle_dir=bundle, embedder=embedder, limit=2)
-
-    # Newest first, and the alphabetically-first file is the one dropped --
-    # so this fails if selection silently falls back to glob order.
-    assert embedder.batches[0] == ["new?", "newest?", "middle?"]
-
-
-def test_a_truncated_scan_reports_what_it_compared(tmp_path: Path) -> None:
-    """A truncated comparison must be able to say so.
-
-    #764: "a truncated comparison that reads like a complete one is the
-    failure mode to avoid". The caller cannot disclose a bound it cannot
-    see, so both numbers travel on the result."""
-    bundle = tmp_path / "bundle"
-    for index in range(5):
-        _timestamped(
-            bundle,
-            f"filed-{index}",
-            question=f"question {index}?",
-            timestamp=f"2026-08-0{index + 1}T00:00:00Z",
-        )
-
-    scan = near_duplicate_insights(
-        "new?", bundle_dir=bundle, embedder=_CountingEmbedder(), limit=2
-    )
-
-    assert scan.compared == 2
-    assert scan.filed_total == 5
-    assert scan.truncated is True
-
-
-def test_an_untruncated_scan_reports_no_bound(tmp_path: Path) -> None:
-    """Under the limit, `truncated` is False and the counts agree.
-
-    The common case. A disclosure built on this flag must stay silent here,
-    or it becomes noise on every save and stops being read."""
-    bundle = tmp_path / "bundle"
-    _timestamped(bundle, "one", question="one?", timestamp="2026-08-01T00:00:00Z")
-    _timestamped(bundle, "two", question="two?", timestamp="2026-08-02T00:00:00Z")
-
-    scan = near_duplicate_insights(
-        "new?", bundle_dir=bundle, embedder=_CountingEmbedder(), limit=10
-    )
-
-    assert (scan.compared, scan.filed_total) == (2, 2)
-    assert scan.truncated is False
-
-
-def test_an_insight_without_a_timestamp_is_compared_last(tmp_path: Path) -> None:
-    """A missing or unparseable `timestamp` sorts OLDEST, never newest.
-
-    Sorting it newest would let one malformed neighbour evict every genuinely
-    recent insight from the batch -- the bound would still hold and the scan
-    would compare against the wrong hundred. Filed insights written by
-    `query --save` always carry the key; a hand-edited or foreign file may
-    not, and it must degrade to "least likely to be reached", not to "first
-    in line"."""
-    bundle = tmp_path / "bundle"
-    _timestamped(
-        bundle, "stamped", question="stamped?", timestamp="2026-01-01T00:00:00Z"
-    )
-    (bundle / "insights" / "unstamped.md").write_text(
-        "---\ntype: Insight\ntitle: unstamped\ndescription: unstamped?\n"
-        "sensitivity: private\n---\nThe answer.",
-        encoding="utf-8",
-    )
-    embedder = _CountingEmbedder()
-
-    near_duplicate_insights("new?", bundle_dir=bundle, embedder=embedder, limit=1)
-
-    assert embedder.batches[0] == ["new?", "stamped?"]
-
-
-def test_equal_timestamps_break_deterministically(tmp_path: Path) -> None:
-    """Same-second filings truncate the same way on every run.
-
-    `query --save` stamps to whole seconds, so two saves inside one second
-    are reachable. Without a tiebreak the survivor would depend on sort
-    stability over `glob` order, and the same bundle could disclose a
-    different bound on two consecutive saves."""
-    bundle = tmp_path / "bundle"
-    stamp = "2026-08-18T00:00:00Z"
-    _timestamped(bundle, "bbb", question="bbb?", timestamp=stamp)
-    _timestamped(bundle, "aaa", question="aaa?", timestamp=stamp)
-    embedder = _CountingEmbedder()
-
-    near_duplicate_insights("new?", bundle_dir=bundle, embedder=embedder, limit=1)
-
-    assert embedder.batches[0] == ["new?", "aaa?"]
-
-
-def test_a_failed_scan_reports_nothing_compared(tmp_path: Path) -> None:
-    """A scan that could not run compared NOTHING, whatever the bound picked.
-
-    `compared` promises what was embedded and compared. On the failure paths
-    the embed never returned, so carrying the intended slice length there
-    would make the field describe an intention rather than an outcome -- and
-    the caller would then disclose a comparison that did not happen.
-    """
-    bundle = tmp_path / "bundle"
-    for index in range(5):
-        _timestamped(
-            bundle,
-            f"filed-{index}",
-            question=f"question {index}?",
-            timestamp=f"2026-08-0{index + 1}T00:00:00Z",
-        )
-
-    scan = near_duplicate_insights(
-        "new?", bundle_dir=bundle, embedder=_RaisingEmbedder(), limit=2
-    )
-
-    assert scan.unavailable is True
-    assert scan.compared == 0
-    # ...and therefore NOT truncated: "compared against 2 of 5" beside "could
-    # not check this question" would be two contradictory sentences in one
-    # preview, the first of them false.
-    assert scan.truncated is False
-    assert scan.filed_total == 5
-
-
-def test_an_unparseable_neighbour_is_outside_filed_total(tmp_path: Path) -> None:
-    """`filed_total` counts the COMPARABLE population, not files on disk.
-
-    The disclosure reads "compared against N of M", so M has to mean the same
-    thing N is drawn from. A corrupt neighbour is skipped by the reader and
-    could never have been compared, so counting it would inflate the gap the
-    bound is blamed for and overstate what the human is missing.
+    The scan now promises to compare EVERY comparable filed insight, and
+    reports `unavailable` when it cannot. That promise is only honest if
+    "comparable" means the same thing to the reader and to the coverage
+    check -- a file the reader skips must not then be counted as one the
+    scan failed to cover, or every bundle with one corrupt neighbour would
+    report a scan that could not run.
     """
     bundle = tmp_path / "bundle"
     _timestamped(bundle, "good", question="good?", timestamp="2026-08-01T00:00:00Z")
@@ -655,9 +536,219 @@ def test_an_unparseable_neighbour_is_outside_filed_total(tmp_path: Path) -> None
     )
 
     scan = near_duplicate_insights(
-        "new?", bundle_dir=bundle, embedder=_CountingEmbedder(), limit=10
+        "new?",
+        bundle_dir=bundle,
+        embedder=_CountingEmbedder(),
+        cache=_RecordingCache(),
     )
 
-    assert scan.filed_total == 1
-    assert scan.compared == 1
-    assert scan.truncated is False
+    assert scan.unavailable is False
+    assert [c.concept_id for c in scan.candidates] == ["insights/good"]
+
+
+# --- the cache removes the bound entirely ----------------------------------
+
+
+def test_a_cached_question_is_never_re_embedded(tmp_path: Path) -> None:
+    """The whole point: comparing costs no embed call at all.
+
+    `evals/insight_scan_bound/` measured embedding a filed question at
+    ~11.8 ms against 0.053 ms to compare one. Caching turns a linear EMBED
+    into a linear COSINE, which is what lets the scan compare EVERYTHING and
+    is why the #764 bound no longer exists.
+    """
+    bundle = tmp_path / "bundle"
+    _write_insight(bundle, "filed", description="¿por qué importan?")
+    cache = _RecordingCache(
+        {
+            "insights/filed": (
+                question_vectors.question_hash("¿por qué importan?"),
+                [1.0, 0.0],
+            )
+        }
+    )
+    embedder = _FakeEmbedder({"¿por qué son importantes?": [1.0, 0.0]})
+
+    scan = near_duplicate_insights(
+        "¿por qué son importantes?",
+        bundle_dir=bundle,
+        embedder=embedder,
+        cache=cache,
+    )
+
+    # ONE embed call, carrying ONE text: the new question. The stored
+    # question rode in from the cache.
+    assert embedder.calls == [["¿por qué son importantes?"]]
+    assert [c.concept_id for c in scan.candidates] == ["insights/filed"]
+
+
+def test_an_uncached_question_is_embedded_once_and_stored(tmp_path: Path) -> None:
+    """A cache miss embeds, discloses, and writes the vector back.
+
+    Without the write-back the next save would miss again and the cache
+    would never warm -- the scan would keep paying the cost it exists to
+    remove, silently.
+    """
+    bundle = tmp_path / "bundle"
+    _write_insight(bundle, "filed", description="¿por qué importan?")
+    cache = _RecordingCache()
+    embedder = _FakeEmbedder(
+        {"¿por qué son importantes?": [1.0, 0.0], "¿por qué importan?": [1.0, 0.0]}
+    )
+
+    scan = near_duplicate_insights(
+        "¿por qué son importantes?",
+        bundle_dir=bundle,
+        embedder=embedder,
+        cache=cache,
+    )
+
+    assert len(embedder.calls) == 1
+    assert embedder.calls[0][0] == "¿por qué son importantes?"
+    assert "¿por qué importan?" in embedder.calls[0]
+    assert [row[0] for row in cache.stored] == ["insights/filed"]
+    assert [c.concept_id for c in scan.candidates] == ["insights/filed"]
+
+
+def test_an_edited_question_is_re_embedded(tmp_path: Path) -> None:
+    """A stale hash is a miss, not a hit.
+
+    The cached vector describes the OLD question. Serving it would compare
+    the new save against text that is no longer on disk, and the disclosure
+    would quote a question the operator cannot find in the file.
+    """
+    bundle = tmp_path / "bundle"
+    _write_insight(bundle, "filed", description="¿por qué importan?")
+    cache = _RecordingCache(
+        {"insights/filed": (question_vectors.question_hash("¿algo viejo?"), [0.0, 1.0])}
+    )
+    embedder = _FakeEmbedder({"¿nueva?": [1.0, 0.0], "¿por qué importan?": [1.0, 0.0]})
+
+    scan = near_duplicate_insights(
+        "¿nueva?", bundle_dir=bundle, embedder=embedder, cache=cache
+    )
+
+    assert "¿por qué importan?" in embedder.calls[0]
+    assert [c.concept_id for c in scan.candidates] == ["insights/filed"]
+
+
+def test_every_filed_insight_is_compared_however_many_there_are(
+    tmp_path: Path,
+) -> None:
+    """No bound. This is the test the #764 cap made impossible to write.
+
+    Under the cap, recall depended on where a duplicate sat in FILING ORDER
+    — a usage rate no fixture produces, so the loss could only be disclosed,
+    never measured. Comparing everything answers it by construction.
+    """
+    bundle = tmp_path / "bundle"
+    total = 250
+    rows = {}
+    for index in range(total):
+        _write_insight(bundle, f"filed-{index:04d}", description=f"pregunta {index}?")
+        rows[f"insights/filed-{index:04d}"] = (
+            question_vectors.question_hash(f"pregunta {index}?"),
+            [1.0, 0.0],
+        )
+    cache = _RecordingCache(rows)
+    embedder = _FakeEmbedder({"¿nueva?": [1.0, 0.0]})
+
+    scan = near_duplicate_insights(
+        "¿nueva?", bundle_dir=bundle, embedder=embedder, cache=cache
+    )
+
+    # The OLDEST filing is disclosed, which the recency bound could not do.
+    assert len(scan.candidates) == total
+    assert "insights/filed-0000" in {c.concept_id for c in scan.candidates}
+
+
+def test_vectors_for_deleted_insights_are_pruned(tmp_path: Path) -> None:
+    """The cache follows the bundle, never outlives it.
+
+    A vector whose document was deleted would be compared forever and could
+    disclose a duplicate the operator cannot open.
+    """
+    bundle = tmp_path / "bundle"
+    _write_insight(bundle, "alive", description="¿viva?")
+    cache = _RecordingCache(
+        {
+            "insights/alive": (question_vectors.question_hash("¿viva?"), [1.0, 0.0]),
+            "insights/deleted": (
+                question_vectors.question_hash("¿muerta?"),
+                [1.0, 0.0],
+            ),
+        }
+    )
+
+    near_duplicate_insights(
+        "¿nueva?",
+        bundle_dir=bundle,
+        embedder=_FakeEmbedder({"¿nueva?": [0.0, 1.0]}),
+        cache=cache,
+    )
+
+    assert cache.pruned == {"insights/alive"}
+    assert "insights/deleted" not in cache.rows
+
+
+def test_no_cache_is_a_scan_that_could_not_run(tmp_path: Path) -> None:
+    """Without the cache the scan reports unavailable rather than paying the
+    old unbounded cost.
+
+    The alternative was to fall back to embedding every filed question,
+    which is the linear cost this design removes — a 2,000-insight bundle
+    would stall the confirmation gate for ~24s with no way to tell why.
+    `unavailable` is an already-disclosed state, so the operator is told the
+    check did not run instead of waiting for one that should not.
+    """
+    bundle = tmp_path / "bundle"
+    _write_insight(bundle, "filed", description="¿por qué importan?")
+    embedder = _FakeEmbedder({})
+
+    scan = near_duplicate_insights(
+        "¿nueva?", bundle_dir=bundle, embedder=embedder, cache=None
+    )
+
+    assert scan.unavailable is True
+    assert scan.candidates == []
+    assert embedder.calls == []
+
+
+def test_a_cache_that_covers_less_than_the_bundle_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    """Partial coverage reports "could not check", never partial candidates.
+
+    This is the invariant the whole redesign rests on. Once the scan promises
+    to compare EVERY comparable filed insight, there is no count left to
+    disclose a shortfall with -- so a pass that silently covered less would
+    be exactly the failure #764 named, a partial comparison that reads like a
+    complete one, with the disclosure removed.
+
+    The cache is the one component that can under-deliver: a row lost to a
+    concurrent write, or a `store` that reported success and wrote nothing.
+    """
+    bundle = tmp_path / "bundle"
+    _write_insight(bundle, "seen", description="¿vista?")
+    _write_insight(bundle, "missing", description="¿ausente?")
+
+    class _ForgetfulCache(_RecordingCache):
+        """Accepts writes and then does not yield one of the rows."""
+
+        def iter_vectors(self) -> Iterator[tuple[str, str, list[float]]]:
+            for concept_id, digest, vector in super().iter_vectors():
+                if concept_id != "insights/missing":
+                    yield concept_id, digest, vector
+
+    cache = _ForgetfulCache()
+    embedder = _FakeEmbedder(
+        {"¿nueva?": [1.0, 0.0], "¿vista?": [1.0, 0.0], "¿ausente?": [1.0, 0.0]}
+    )
+
+    scan = near_duplicate_insights(
+        "¿nueva?", bundle_dir=bundle, embedder=embedder, cache=cache
+    )
+
+    assert scan.unavailable is True
+    # NOT "here is the one I managed to compare".
+    assert scan.candidates == []

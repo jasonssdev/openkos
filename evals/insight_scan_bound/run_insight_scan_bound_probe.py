@@ -55,7 +55,7 @@ import statistics
 import sys
 import tempfile
 import time
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import asdict, dataclass
 from typing import Any, Final
 
@@ -68,7 +68,6 @@ from openkos.llm.ollama import OllamaClient  # noqa: E402
 # Production's own reader and scan, imported rather than re-implemented: a
 # second copy of either would measure a shape that does not ship.
 from openkos.resolution.insight_identity import (  # noqa: E402
-    DUPLICATE_SCAN_LIMIT,
     _filed_questions,
     _FiledInsight,
     near_duplicate_insights,
@@ -113,6 +112,12 @@ class Point:
     candidates: int
     """Duplicates disclosed. Recorded to prove the scan actually ran, never
     as a quality signal -- the synthetic bundle repeats questions."""
+    warm_seconds: float = 0.0
+    """Median wall clock of the SAME scan against a warm question cache.
+
+    The number the shipped design is judged on: every filed question already
+    embedded, so the save pays one embed for the new question plus the
+    comparison term."""
 
 
 def stored_questions() -> list[str]:
@@ -154,6 +159,60 @@ def write_bundle(
         )
 
 
+class _PersistentCache:
+    """An in-memory cache that KEEPS what it is given.
+
+    The warm arm's instrument. Deliberately not the on-disk store: this probe
+    measures the scan, and adding SQLite would fold storage latency into a
+    number about comparison cost."""
+
+    def __init__(self) -> None:
+        self._rows: dict[str, tuple[str, list[float]]] = {}
+
+    def digest(self, question: str) -> str:
+        return question
+
+    def hashes(self) -> dict[str, str]:
+        return {cid: digest for cid, (digest, _) in self._rows.items()}
+
+    def iter_vectors(self) -> Iterator[tuple[str, str, list[float]]]:
+        for cid, (digest, vector) in self._rows.items():
+            yield cid, digest, vector
+
+    def store(self, items: Sequence[tuple[str, str, Sequence[float]]]) -> None:
+        for cid, digest, vector in items:
+            self._rows[cid] = (digest, list(vector))
+
+    def prune_missing(self, keep: set[str]) -> None:
+        self._rows = {cid: v for cid, v in self._rows.items() if cid in keep}
+
+
+class _ColdCache:
+    """A cache that never has anything and forgets every write.
+
+    Forces the scan down its cold path on every ladder point, which is the
+    cost this probe exists to measure. A warm cache would report the
+    comparison term instead and flat-line the curve."""
+
+    def __init__(self) -> None:
+        self._last: list[tuple[str, str, list[float]]] = []
+
+    def digest(self, question: str) -> str:
+        return question
+
+    def hashes(self) -> dict[str, str]:
+        return {}
+
+    def iter_vectors(self) -> Iterator[tuple[str, str, list[float]]]:
+        yield from self._last
+
+    def store(self, items: Sequence[tuple[str, str, Sequence[float]]]) -> None:
+        self._last = [(cid, digest, list(vec)) for cid, digest, vec in items]
+
+    def prune_missing(self, keep: set[str]) -> None:
+        self._last = []
+
+
 def measure(embedder: Embedder, *, ladder: Sequence[int] = LADDER) -> list[Point]:
     """Time the shipped scan against a synthetic bundle at each ladder point."""
     questions = stored_questions()
@@ -180,13 +239,12 @@ def measure(embedder: Embedder, *, ladder: Sequence[int] = LADDER) -> list[Point
                     probe_question,
                     bundle_dir=bundle,
                     embedder=embedder,
-                    # UNBOUNDED on purpose. This probe measures the cost the
-                    # shipped `DUPLICATE_SCAN_LIMIT` exists to cap, so it must
-                    # keep measuring it after the cap lands -- otherwise the
-                    # evidence for the cap disappears the moment the cap does
-                    # its job, and re-running this would report a flat line
-                    # that argues for nothing.
-                    limit=max(filed, 1),
+                    # COLD CACHE on purpose. This probe measures the
+                    # embed-everything cost, which is what the shipped cache
+                    # exists to avoid -- so it must keep paying it, or
+                    # re-running this would report the warm path and stop
+                    # being evidence for the design it justified.
+                    cache=_ColdCache(),
                 )
                 scans.append(time.perf_counter() - start)
                 candidates = len(scan.candidates)
@@ -195,6 +253,24 @@ def measure(embedder: Embedder, *, ladder: Sequence[int] = LADDER) -> list[Point
                         f"scan unavailable at filed={filed}: the embedding "
                         "backend failed, so no timing here is meaningful"
                     )
+            # Warm arm: run once against a persisted cache to fill it, then
+            # time the steady state. This is what a real second save costs.
+            warm_cache = _PersistentCache()
+            near_duplicate_insights(
+                probe_question, bundle_dir=bundle, embedder=embedder, cache=warm_cache
+            )
+            warms: list[float] = []
+            for _ in range(REPEATS):
+                start = time.perf_counter()
+                warm_scan = near_duplicate_insights(
+                    probe_question,
+                    bundle_dir=bundle,
+                    embedder=embedder,
+                    cache=warm_cache,
+                )
+                warms.append(time.perf_counter() - start)
+                if warm_scan.unavailable:  # pragma: no cover -- backend failure
+                    raise SystemExit(f"warm scan unavailable at filed={filed}")
             read = statistics.median(reads)
             scan_seconds = statistics.median(scans)
             payload = len(
@@ -211,12 +287,13 @@ def measure(embedder: Embedder, *, ladder: Sequence[int] = LADDER) -> list[Point
                     embed_seconds=max(scan_seconds - read, 0.0),
                     payload_bytes=payload,
                     candidates=candidates,
+                    warm_seconds=statistics.median(warms),
                 )
             )
             print(
-                f"  filed={filed:>5}  scan={scan_seconds:7.3f}s  "
-                f"read={read:6.3f}s  payload={payload:>8}B  "
-                f"candidates={candidates}",
+                f"  filed={filed:>5}  cold={scan_seconds:7.3f}s  "
+                f"warm={statistics.median(warms):7.3f}s  read={read:6.3f}s  "
+                f"payload={payload:>8}B  candidates={candidates}",
                 flush=True,
             )
     return points
@@ -224,7 +301,6 @@ def measure(embedder: Embedder, *, ladder: Sequence[int] = LADDER) -> list[Point
 
 def render(points: Sequence[Point]) -> str:
     """The report: the curve, the baseline multiple, and where it turns."""
-    baseline = next((p.scan_seconds for p in points if p.filed == 1), None)
     lines = [
         "# What one `query --save` duplicate scan costs (#764)",
         "",
@@ -232,26 +308,29 @@ def render(points: Sequence[Point]) -> str:
         "synthetic bundle over "
         f"{len(stored_questions())} real stored questions.",
         "",
-        "| filed insights | scan | disk read | embed | payload | x baseline |",
+        "| filed insights | cold scan | WARM scan | disk read | payload | cold/warm |",
         "| ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for point in points:
-        multiple = (
-            f"{point.scan_seconds / baseline:.1f}x"
-            if baseline not in (None, 0.0) and point.filed
+        ratio = (
+            f"{point.scan_seconds / point.warm_seconds:.0f}x"
+            if point.warm_seconds
             else "--"
         )
         lines.append(
             f"| {point.filed} | {point.scan_seconds:.3f}s | "
-            f"{point.read_seconds:.3f}s | {point.embed_seconds:.3f}s | "
-            f"{point.payload_bytes / 1024:.1f} KiB | {multiple} |"
+            f"**{point.warm_seconds:.3f}s** | {point.read_seconds:.3f}s | "
+            f"{point.payload_bytes / 1024:.1f} KiB | {ratio} |"
         )
     lines += ["", "## Where the curve crosses a human threshold", ""]
     for budget in (0.5, 1.0, 2.0, 5.0):
-        crossed = next((p.filed for p in points if p.scan_seconds > budget), None)
+        cold = next((p.filed for p in points if p.scan_seconds > budget), None)
+        warm = next((p.filed for p in points if p.warm_seconds > budget), None)
         lines.append(
-            f"- **{budget:g}s** per save: first exceeded at "
-            + (f"{crossed} filed insights." if crossed else "no measured size.")
+            f"- **{budget:g}s** per save: cold "
+            + (f"{cold}" if cold else "never")
+            + " filed insights, warm "
+            + (f"{warm}." if warm else "never at any measured size.")
         )
     return "\n".join(lines) + "\n"
 
@@ -281,10 +360,15 @@ def _self_test() -> int:
         ),
         ([p.filed for p in points] == [0, 3], "every ladder point is measured"),
         (
-            fake.batches == [4] * REPEATS,
-            "filed=0 short-circuits before any embed call, and filed=3 sends "
-            "the new question plus each stored one -- the unbounded batch "
-            "#764 is about",
+            fake.batches.count(4) >= REPEATS,
+            "the COLD arm sends the new question plus each stored one -- the "
+            "whole-bundle embed the cache exists to avoid",
+        ),
+        (
+            fake.batches.count(1) >= REPEATS,
+            "the WARM arm sends ONE text, the new question. If this stops "
+            "holding, the cache is not being read and the warm column is "
+            "measuring the cold path under another name",
         ),
         (
             points[1].payload_bytes > points[0].payload_bytes,
@@ -292,10 +376,15 @@ def _self_test() -> int:
         ),
         (points[1].candidates == 3, "identical vectors are all duplicates"),
         (
-            max(LADDER) > DUPLICATE_SCAN_LIMIT,
-            "the ladder must exceed the shipped cap -- this probe measures the "
-            "UNBOUNDED curve, and a run that quietly stopped at the cap would "
-            "flat-line while looking like a measurement",
+            points[1].warm_seconds >= 0.0,
+            "the warm arm runs at every ladder point, or the shipped path is "
+            "unmeasured and only the retired one is reported",
+        ),
+        (
+            max(LADDER) >= 1600,
+            "the ladder must reach far past any plausible bundle -- a ladder "
+            "that stops where the cost is still comfortable cannot show where "
+            "it stops being comfortable",
         ),
         ("filed insights" in report, "the report must render its table"),
     ]
