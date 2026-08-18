@@ -41,6 +41,14 @@ context_window: 12288     # tokens the model holds at once (prompt + reply); unp
 # union_judge: true       # union-of-runs + selector-judge extraction (default
                           # on); set false to restore the single-run, single-cap
                           # extraction path byte-for-byte
+# sufficiency_check: true # before answering, ask one cheap model call whether
+                          # the retrieved context can answer the question at
+                          # all, and refuse instead of answering from the
+                          # model's own knowledge (default ON). Measured zero
+                          # false refusals over 100 grounded checks. Costs one
+                          # extra chat call per answered query (median ~1.1s
+                          # against a default Ollama, which serialises); set
+                          # false to remove it and restore the pre-#760 path
 # concurrent_extraction: true  # send chunk windows 2-at-a-time instead of one
                           # by one (default OFF). Chunked sources only; below
                           # the chunk threshold there are no windows to

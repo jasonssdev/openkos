@@ -109,11 +109,20 @@ something unusable. Collapsing them would make the eval harness unable to
 tell a compliance problem from a format problem -- which is exactly the
 number that decides whether the fallback can ever be tightened."""
 
-NoMatchCause = Literal["none", "empty_query", "zero_hits", "all_unreadable"]
+NoMatchCause = Literal[
+    "none", "empty_query", "zero_hits", "all_unreadable", "insufficient_context"
+]
 """Why an `AnswerResult` short-circuited to `NO_MATCH` -- `"none"` on a
 successful answer, otherwise which guard tripped (D-shortcircuit): an
-empty/whitespace-only question, zero hits from BOTH retrievers, or hits
-that were all unreadable/unparseable at re-read time."""
+empty/whitespace-only question, zero hits from BOTH retrievers, hits that
+were all unreadable/unparseable at re-read time, or (issue #760) context
+that was assembled and then judged not to contain the answer.
+
+`insufficient_context` is the only one reached with a NON-empty context:
+the others all mean nothing usable was retrieved, while this one means
+documents were found, read, and judged unable to answer. Conflating them
+would tell a user to "try different wording" when the bundle simply does
+not cover the topic."""
 
 _ATTRIBUTION_KEYWORD: Final = "USED"
 """Opening token of the attribution line the model closes its answer with.
@@ -333,7 +342,14 @@ class AnswerResult:
     concept ids removed (unless `include_deprecated=True`), so it stays `>
     0` even when every surviving hit is later skipped as unreadable."""
     llm_invoked: bool
-    """Whether `llm.chat` was called for this answer."""
+    """Whether the SYNTHESIS `llm.chat` call was made for this answer.
+
+    Narrowed from "whether `llm.chat` was called" when the sufficiency check
+    (#760) added a SECOND chat seam: a refused answer HAS made a chat call
+    and still produced no synthesis. This field feeds `query`'s
+    `LLM invoked|skipped` summary term, which is about the expensive call;
+    `no_match_cause == "insufficient_context"` is what says the cheap one ran
+    and refused."""
     no_match_cause: NoMatchCause
     """`"none"` on a successful answer; otherwise which no-match guard
     tripped. Never derived from `citations` alone -- distinguishes a
@@ -493,9 +509,77 @@ def _assemble_context(
     return context_blocks, citations
 
 
-def _build_messages(context_blocks: list[str], question: str) -> list[Message]:
-    """Assemble the 2-message prompt (D5): system grounding + delimited
-    context blocks + question."""
+_SUFFICIENCY_NONE: Final = "NONE"
+"""The reply meaning "no sentence here answers the question" (#760)."""
+
+_SUFFICIENCY_PROMPT = (
+    "You judge whether a body of CONTEXT can answer a QUESTION. Quote, "
+    "verbatim, the sentence or sentences from the CONTEXT that answer the "
+    "QUESTION. Quote only text that appears in the CONTEXT word for word. If "
+    f"no sentence in the CONTEXT answers the QUESTION, reply with exactly the "
+    f"single word {_SUFFICIENCY_NONE}. Sharing a topic with the question is "
+    "not enough -- a sentence must actually answer it. Do not answer from "
+    "your own knowledge."
+)
+"""System half of the pre-synthesis sufficiency check (#760).
+
+EVIDENCE-FIRST, not a verdict, and that is the whole finding. A yes/no
+formulation ("reply SUFFICIENT or INSUFFICIENT") was measured side by side in
+`evals/query_sufficiency/` and false-refused a grounded question -- the exact
+cost that rejected #753's ruled distance floor. Making the model produce the
+quotation first, and deriving the verdict from whether it found one, refused
+0 of 10 grounded questions across 100 checks while still refusing all 10
+adjacent ones. Two formulations were measured precisely because a single
+negative arm cannot distinguish "this mechanism does not work" from "this
+wording does not work"."""
+
+
+def _context_holds_the_answer(llm: LLMBackend, user_content: str) -> bool:
+    """Whether the assembled context contains an answer to the question.
+
+    `user_content` is the SAME string synthesis will be sent, so the check
+    judges exactly what would be answered from rather than a reconstruction
+    that could drift.
+
+    FAILS OPEN on a transient backend error: an error is not evidence of
+    insufficiency, and refusing on one would deny answers for infrastructure
+    reasons. The shipped `USED:` attribution (#753) still strips the
+    citations off an ungrounded answer, so the backstop that makes this check
+    optional at all is exactly what covers its failure. The three FATAL
+    `OllamaError` subclasses propagate untouched (issue #209): "the server is
+    down" must not become "the bundle answered your question".
+
+    A reply is a refusal only when it IS the sentinel, modulo whitespace,
+    surrounding punctuation and case -- never when it merely contains it. A
+    context sentence containing the word would otherwise read as a refusal
+    and silently refuse an answerable question.
+    """
+    try:
+        reply = llm.chat(
+            [
+                {"role": "system", "content": _SUFFICIENCY_PROMPT},
+                {"role": "user", "content": user_content},
+            ]
+        )
+    except (
+        OllamaUnavailable,
+        OllamaModelNotFound,
+        OllamaEmbeddingDimensionMismatch,
+    ):
+        raise
+    except OllamaError:
+        return True
+    return reply.strip().strip("\"'`*. \t\n").upper() != _SUFFICIENCY_NONE
+
+
+def _user_content(context_blocks: list[str], question: str) -> str:
+    """The user half of the prompt: numbered context blocks + the question.
+
+    Split out of `_build_messages` so the sufficiency check (#760) and
+    synthesis are sent the IDENTICAL string. A check judging a
+    reconstruction of the context rather than the context itself would be
+    answering a different question, and the two would drift the moment
+    either assembly changed."""
     # The system prompt has always called these "the numbered CONTEXT
     # concepts"; until #753 nothing numbered them. The number is the
     # vocabulary the model attributes with, and it exists precisely so that
@@ -505,7 +589,11 @@ def _build_messages(context_blocks: list[str], question: str) -> list[Message]:
     numbered = [
         f"[{position}] {block}" for position, block in enumerate(context_blocks, 1)
     ]
-    user_content = "CONTEXT:\n\n" + "\n\n".join(numbered) + f"\n\nQUESTION:\n{question}"
+    return "CONTEXT:\n\n" + "\n\n".join(numbered) + f"\n\nQUESTION:\n{question}"
+
+
+def _build_messages(user_content: str) -> list[Message]:
+    """The 2-message synthesis prompt (D5): system grounding + `user_content`."""
     return [
         {"role": "system", "content": _SYSTEM_PROMPT},
         {"role": "user", "content": user_content},
@@ -643,6 +731,7 @@ def answer(
     include_deprecated: bool = False,
     include_confidential: bool = False,
     local_exemption: bool = False,
+    sufficiency_check: bool = False,
 ) -> AnswerResult:
     """Answer `question` from `bundle_dir` using `llm`, citing the concepts used.
 
@@ -764,7 +853,33 @@ def answer(
             dense_degraded=dense_degraded,
         )
 
-    reply = llm.chat(_build_messages(context_blocks, question))
+    user_content = _user_content(context_blocks, question)
+
+    # #760: judge whether this context can answer at all, BEFORE paying for
+    # synthesis. #753 ruled "refuse below a relevance floor" and #760 measured
+    # that no such floor exists on any retrieval signal -- `fusion.fuse` is
+    # RRF and encodes position only, and embedding proximity reports topical
+    # relatedness, which is the defect's own premise. The judgement is about
+    # entailment, so nothing in retrieval can make it.
+    #
+    # Defaults OFF here and ON in the workspace config: every existing caller,
+    # the eval harnesses included, keeps byte-identical behavior and pays no
+    # added latency unless it opts in.
+    if sufficiency_check and not _context_holds_the_answer(llm, user_content):
+        return AnswerResult(
+            answer=NO_MATCH,
+            citations=[],
+            fts_hit_count=len(hits),
+            llm_invoked=False,
+            no_match_cause="insufficient_context",
+            skip_notices=skip_notices,
+            dense_hit_count=len(vec_hits),
+            fused_count=len(fused_ids),
+            dense_degraded=dense_degraded,
+            context_block_count=len(context_blocks),
+        )
+
+    reply = llm.chat(_build_messages(user_content))
 
     # #753: the citation list is decided HERE, after the model has spoken,
     # from the blocks it reports drawing on. Until this it was

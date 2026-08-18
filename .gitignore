@@ -265,3 +265,9 @@ $RECYCLE.BIN/
 # External evaluation datasets
 /data/ami/raw/
 /evals/decision_extraction/results/
+
+# `evals/query_identity/` writes one row per SCORED PAIR, which is quadratic in
+# the stored population: 14,365 pairs is already 8 MB on one line. The report
+# beside it carries every conclusion, and `--rescore` reads a locally
+# regenerated file, so the raw pairs stay out of the repository.
+evals/query_identity/results/pairs-*.json

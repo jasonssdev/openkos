@@ -519,6 +519,33 @@ that nothing beneath the answer reaches a `Source`.
 - THEN a stderr warning states that every citation is itself a filed
   synthesis
 
+### Requirement: `--save` Discloses A Possible Duplicate Before Confirming
+
+BEFORE the `--save` confirmation gate, `query` MUST disclose already-filed
+insights whose SOURCE QUESTION resembles the question being filed (#762),
+one line per candidate, most-similar first.
+
+The lookup MUST run on the question, never on the answer body or the derived
+title: both were measured and OVERLAP, with title similarity scoring a
+perfect match on a pair of unrelated subjects.
+
+The disclosure MUST be advisory. `query` MUST NOT merge, rename, refuse or
+otherwise alter the filing because of it, and an unreachable embedding
+backend MUST disclose nothing rather than fail the save.
+
+#### Scenario: A resembling filing is disclosed and the save still writes
+
+- GIVEN an insight already filed from a resembling question
+- WHEN `openkos query "<question>" --save --auto` runs
+- THEN a possible-duplicate line names that insight and its source question,
+  and the new insight is still written
+
+#### Scenario: No candidate, no line
+
+- GIVEN no filed insight resembles the question
+- WHEN `openkos query "<question>" --save --auto` runs
+- THEN no possible-duplicate line appears
+
 ### Requirement: An Answer Standing On Nothing Says So
 
 WHEN `AnswerResult.attribution` is `"reported"` and `citations` is empty —

@@ -2102,6 +2102,7 @@ def test_resolve_task_model_survives_a_hand_built_non_mapping_models() -> None:
         type_tiers={},
         models=None,  # type: ignore[arg-type]
         union_judge=True,
+        sufficiency_check=True,
         concurrent_extraction=False,
         type_sensitivity_defaults={},
     )
@@ -2558,3 +2559,86 @@ def test_read_config_rejects_non_boolean_concurrent_extraction(
 
     with pytest.raises(ValueError, match="concurrent_extraction"):
         config.read_config(tmp_path)
+
+
+# --- sufficiency_check: opt-out flag for the pre-synthesis check (#760) -------
+
+
+def test_default_sufficiency_check_is_true() -> None:
+    """The packaged default runs the check.
+
+    ON because what it prevents is a correctness defect (#753) and because
+    the cost side was measured, not assumed: `evals/query_sufficiency/`
+    recorded zero false refusals across 100 grounded checks. The rollback is
+    one key, so the product default can safely be the guarded path."""
+    assert config.DEFAULT_SUFFICIENCY_CHECK is True
+
+
+def test_read_config_falls_back_when_sufficiency_check_absent(tmp_path: Path) -> None:
+    """A workspace created before #760 keeps working, opted in."""
+    (tmp_path / "openkos.yaml").write_text("model: gemma3\n", encoding="utf-8")
+
+    assert config.read_config(tmp_path).sufficiency_check is True
+
+
+def test_read_config_preserves_explicit_sufficiency_check_false(
+    tmp_path: Path,
+) -> None:
+    """`sufficiency_check: false` is a real value, not an absence.
+
+    This is the opt-out an operator reaches for when the extra chat call's
+    latency costs more than the refusals it buys, so it has to survive
+    exactly as written rather than being coerced back to the default."""
+    (tmp_path / "openkos.yaml").write_text(
+        "sufficiency_check: false\n", encoding="utf-8"
+    )
+
+    assert config.read_config(tmp_path).sufficiency_check is False
+
+
+@pytest.mark.parametrize(
+    "yaml_body", ["sufficiency_check: null\n", "sufficiency_check:\n"]
+)
+def test_read_config_explicit_null_sufficiency_check_falls_back(
+    tmp_path: Path, yaml_body: str
+) -> None:
+    """A present-but-null key falls back, matching every other field."""
+    (tmp_path / "openkos.yaml").write_text(yaml_body, encoding="utf-8")
+
+    assert (
+        config.read_config(tmp_path).sufficiency_check
+        is config.DEFAULT_SUFFICIENCY_CHECK
+    )
+
+
+@pytest.mark.parametrize(
+    "yaml_body",
+    ["sufficiency_check: maybe\n", "sufficiency_check: 1\n", "sufficiency_check: 0\n"],
+)
+def test_read_config_refuses_a_non_boolean_sufficiency_check(
+    tmp_path: Path, yaml_body: str
+) -> None:
+    """Validated, never coerced -- `isinstance(x, bool)`, not truthiness.
+
+    `1` and `0` are the cases that make the narrow guard matter: YAML
+    resolves them to `int`, and accepting int-as-bool would make
+    `sufficiency_check: 0` and `: false` agree only by coincidence of
+    Python's numeric tower."""
+    (tmp_path / "openkos.yaml").write_text(yaml_body, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="'sufficiency_check' must be a boolean"):
+        config.read_config(tmp_path)
+
+
+def test_the_template_documents_the_sufficiency_check_key() -> None:
+    """The shipped template must mention the key and its default.
+
+    `openkos.yaml.template` is the only place most operators ever read a
+    default from, and no test reads comment prose -- so a template that goes
+    on teaching a stale default does it silently, for a whole release. Pinned
+    as documentation, deliberately."""
+    template = (
+        Path(config.__file__).parent / "templates" / "openkos.yaml.template"
+    ).read_text(encoding="utf-8")
+
+    assert "sufficiency_check" in template
