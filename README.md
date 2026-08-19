@@ -61,7 +61,7 @@ openkos ingest ./meeting-notes.txt    # compile a source — a file, a folder, o
 openkos query "what did we decide?"   # an answer with citations, from your own knowledge
 ```
 
-From here, `openkos next` always tells you the one thing worth doing, and `openkos --help` lists every command, grouped. The full reference is [`docs/cli.md`](https://github.com/jasonssdev/openkos/blob/main/docs/cli.md); the end-to-end experience is [`docs/user-journey.md`](https://github.com/jasonssdev/openkos/blob/main/docs/user-journey.md).
+From here, `openkos next` recommends the one thing worth doing whenever one of its ranked tiers fires — and says so honestly when none does (`openkos status` then points at the standing disclosures, such as near-duplicate backlogs its duplicate tier deliberately leaves to `openkos duplicates`) — and `openkos --help` lists every command, grouped. The full reference is [`docs/cli.md`](https://github.com/jasonssdev/openkos/blob/main/docs/cli.md); the end-to-end experience is [`docs/user-journey.md`](https://github.com/jasonssdev/openkos/blob/main/docs/user-journey.md).
 
 **What `init` set up for you.** `raw/` holds your immutable sources; `bundle/` is the pure-OKF knowledge base — plain markdown you can open in Obsidian, VS Code, or GitHub, and take anywhere; `openkos.yaml` is the engine config. The folder is also a git repository **you never have to operate**: every command commits its own changes, and `git log` / `git diff` / `git revert` are always there for inspection and undo.
 

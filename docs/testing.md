@@ -275,6 +275,15 @@ ls -la
 > **Enter**; typing `yes` would set the model to the literal string `yes`.
 > Embedding models such as `bge-m3` are filtered out of the list by design.
 
+> **Then a second picker follows.** After the chat model, `init` prints a
+> sticky-model note and asks `Installed embedding models:` with its own
+> numbered list (`bge-m3` first and `(recommended)`) — answer with a
+> **number** here too, or press Enter for `1)`. The note is worth reading:
+> the embedding model is **sticky** — changing it in this workspace later
+> forces a full corpus re-embed on the next `openkos reindex` — which makes
+> this the one `init` answer with a real switching cost. The chat model has
+> no such stickiness.
+
 Expect exactly five workspace artifacts, plus the git setup `init` performs
 after them:
 
@@ -617,9 +626,16 @@ BEFORE=$(git rev-parse HEAD)         # capture the pre-merge state
 openkos merge <survivor_id> <absorbed_id>
 openkos status                       # absorbed concept is gone
 openkos unmerge <survivor_id> <absorbed_id>
-git diff "$BEFORE" HEAD              # expect EMPTY — byte-parity restored
+git diff "$BEFORE" HEAD -- ':!bundle/log.md'   # expect EMPTY — concept files byte-parity restored
+git diff "$BEFORE" HEAD -- bundle/log.md       # expect ONE appended unmerge line — the audit trail
 git log --oneline "$BEFORE"..HEAD    # expect two commits: the merge and the unmerge
 ```
+
+Byte-parity is a claim about the **concept documents**, not the whole tree:
+`unmerge` deliberately appends its own entry to `bundle/log.md` (its plan
+discloses this before you confirm — `~ log.md (remove this merge's entry,
+append unmerge)`), so a bare whole-tree diff against `$BEFORE` shows exactly
+that one log line. The concept files themselves must be absent from the diff.
 
 Constraints: `unmerge` reverses merges **in reverse order** — reversing an
 earlier merge means unwinding the ones that followed it, and the refusal names
