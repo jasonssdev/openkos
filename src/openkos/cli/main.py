@@ -14792,6 +14792,30 @@ def query(
             "context before it was written.",
             err=True,
         )
+    # #777: the attribution fallback is announced, not silent. Under `absent`
+    # or `unparsed` every retrieved concept is cited -- the pre-#753 behavior,
+    # byte for byte -- so the `N cited` term above is indistinguishable from a
+    # compliant answer that genuinely drew on all N. Same #764 principle as
+    # the sufficiency notice: a guard that could not run says so. The two
+    # states keep separate wording because they answer different questions
+    # about a model (ignored the instruction vs. tried and failed the format).
+    # Gated on `llm_invoked`: `attribution` defaults to `"absent"` on every
+    # short-circuit result, where no citation list was ever decided.
+    if result.llm_invoked and result.attribution == "absent":
+        typer.echo(
+            "openkos query: notice -- the answer reported no attribution "
+            "line, so every retrieved concept is cited (the citation list is "
+            "the retrieval set, not the model's own accounting).",
+            err=True,
+        )
+    elif result.llm_invoked and result.attribution == "unparsed":
+        typer.echo(
+            "openkos query: notice -- the answer's attribution line named "
+            "nothing usable, so every retrieved concept is cited (the "
+            "citation list is the retrieval set, not the model's own "
+            "accounting).",
+            err=True,
+        )
     if result.skip_notices:
         typer.echo(
             f"index: {len(result.skip_notices)} "

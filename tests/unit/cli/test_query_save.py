@@ -20,7 +20,7 @@ from openkos.cli import main
 from openkos.cli.main import _stage_filed_answer, app
 from openkos.graph import sqlite_graph
 from openkos.resolution import insight_identity
-from openkos.retrieval.answer import NO_MATCH, AnswerResult, Citation
+from openkos.retrieval.answer import NO_MATCH, AnswerResult, Attribution, Citation
 from openkos.state import fts, vectorstore
 from openkos.vcs import git as vcs_git
 from tests.unit.cli.conftest import (
@@ -129,6 +129,7 @@ def _fake_matched_answer(
     *,
     answer: str = "Stoicism teaches the dichotomy of control.",
     citations: list[Citation] | None = None,
+    attribution: Attribution = "absent",
 ) -> AnswerResult:
     return AnswerResult(
         answer=answer,
@@ -137,6 +138,7 @@ def _fake_matched_answer(
         llm_invoked=True,
         no_match_cause="none",
         skip_notices=[],
+        attribution=attribution,
     )
 
 
@@ -597,7 +599,7 @@ def test_query_purity_without_save_is_byte_identical(
     (spec: "Read-Only Purity Without `--save`")."""
     _init_workspace(tmp_path, monkeypatch)
     citation = Citation(concept_id="concepts/stoicism", title="Stoicism")
-    fake_result = _fake_matched_answer(citations=[citation])
+    fake_result = _fake_matched_answer(citations=[citation], attribution="reported")
     monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
     index_before = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
     log_before = (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
@@ -2552,6 +2554,114 @@ def test_a_working_query_prints_no_sufficiency_notice(
 
     assert result.exit_code == 0
     assert "sufficiency check could not run" not in result.stderr
+
+
+def test_an_absent_attribution_line_notifies_the_operator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The silent fallback is announced, not invisible (#777).
+
+    Under `absent` every retrieved concept is cited — the pre-#753 behavior,
+    byte for byte — so `N cited` alone is indistinguishable from a compliant
+    answer that genuinely used all N. The same #764 principle the sufficiency
+    and duplicate guards already follow: a guard that could not run says so.
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    fake = AnswerResult(
+        answer="An answer.",
+        citations=[Citation(concept_id="concepts/stoicism", title="Stoicism")],
+        fts_hit_count=1,
+        llm_invoked=True,
+        no_match_cause="none",
+        skip_notices=[],
+        attribution="absent",
+    )
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *a, **k: fake)
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code == 0
+    assert "reported no attribution line" in result.stderr
+    assert "every retrieved concept is cited" in result.stderr
+    # The notice must not perturb the answer path: stdout still carries the
+    # answer and its citation block.
+    assert "An answer." in result.stdout
+    assert "concepts/stoicism" in result.stdout
+
+
+def test_an_unparsed_attribution_line_notifies_the_operator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`unparsed` gets its own wording: the model tried and produced something
+    unusable — a format problem, not a compliance problem. The two are kept
+    apart in `Attribution` for exactly this reason, so the notice must not
+    collapse them back into one message."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake = AnswerResult(
+        answer="An answer.",
+        citations=[Citation(concept_id="concepts/stoicism", title="Stoicism")],
+        fts_hit_count=1,
+        llm_invoked=True,
+        no_match_cause="none",
+        skip_notices=[],
+        attribution="unparsed",
+    )
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *a, **k: fake)
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code == 0
+    assert "named nothing usable" in result.stderr
+    assert "every retrieved concept is cited" in result.stderr
+    # Same stdout invariant as the absent case above.
+    assert "An answer." in result.stdout
+    assert "concepts/stoicism" in result.stdout
+
+
+def test_a_reported_attribution_prints_no_fallback_notice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No noise when the model complied — the notice has to stay rare to be
+    read, same as the sufficiency one above."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake = AnswerResult(
+        answer="An answer.",
+        citations=[Citation(concept_id="concepts/stoicism", title="Stoicism")],
+        fts_hit_count=1,
+        llm_invoked=True,
+        no_match_cause="none",
+        skip_notices=[],
+        attribution="reported",
+    )
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *a, **k: fake)
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code == 0
+    assert "every retrieved concept is cited" not in result.stderr
+
+
+def test_a_short_circuit_prints_no_attribution_notice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`attribution` defaults to `"absent"` on every short-circuit
+    `AnswerResult`, but no LLM ran and no citation list was decided — the
+    notice would announce a fallback that never happened."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake = AnswerResult(
+        answer=NO_MATCH,
+        citations=[],
+        fts_hit_count=0,
+        llm_invoked=False,
+        no_match_cause="zero_hits",
+        skip_notices=[],
+    )
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *a, **k: fake)
+
+    result = runner.invoke(app, ["query", "nothing matches this"])
+
+    assert result.exit_code == 0
+    assert "every retrieved concept is cited" not in result.stderr
 
 
 def test_an_unavailable_duplicate_scan_notifies_the_operator(
