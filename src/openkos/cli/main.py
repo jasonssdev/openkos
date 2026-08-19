@@ -65,7 +65,7 @@ from openkos.llm.ollama import (
     model_tag_matches,
 )
 from openkos.model import okf, types
-from openkos.model.relations import validate_relation_type
+from openkos.model.relations import ASYMMETRIC_RELATION_TYPES, validate_relation_type
 from openkos.model.types import BUILDABLE_TYPES as _BUILDABLE_TYPES
 from openkos.model.types import INSIGHT_TYPE as _INSIGHT_TYPE
 from openkos.model.types import TYPE_TO_LINK_DIR as _TYPE_TO_LINK_DIR
@@ -12269,6 +12269,21 @@ def _zero_edge_state_message(
     return none_survived.format(count=count)
 
 
+def _direction_caveat(suggested_type: str) -> str:
+    """#624's asymmetric-direction caveat, spelled ONCE (#778): `" (direction
+    model-suggested, unverified)"` when `suggested_type` is asymmetric, else
+    `""`. Shared by `suggest-relations`' listing, its `--apply` preview and
+    prompt, and `curate`'s Structure stage -- `docs/testing.md` documents
+    the wording as the contract wherever a suggested direction is
+    presented, and #778 was exactly one surface spelling it while the
+    other stayed silent."""
+    return (
+        " (direction model-suggested, unverified)"
+        if suggested_type in ASYMMETRIC_RELATION_TYPES
+        else ""
+    )
+
+
 def _run_suggest_relations_apply(
     root: Path,
     layout: config.WorkspaceLayout,
@@ -12304,11 +12319,20 @@ def _run_suggest_relations_apply(
             skipped += 1
             continue
 
-        typer.echo(f"[{result.suggested_type}] {edge.source_id} -> {edge.target_id}")
+        # #778: the SAME caveat curate's Structure stage spells (#624) --
+        # an asymmetric direction carries no evidence, and the surface
+        # that most invites bulk application must not be the one surface
+        # missing the documented warning. Rendered on the preview line
+        # AND inside the consent prompt, mirroring curate exactly.
+        direction_caveat = _direction_caveat(result.suggested_type)
+        typer.echo(
+            f"[{result.suggested_type}] {edge.source_id} -> "
+            f"{edge.target_id}{direction_caveat}"
+        )
         typer.echo(f"  rationale: {result.rationale}")
         if not curate_module._confirm(
             f"Relate {edge.source_id} -> {edge.target_id} "
-            f"[{result.suggested_type}]? [y/N]"
+            f"[{result.suggested_type}]{direction_caveat}? [y/N]"
         ):
             skipped += 1
             declined.append(
@@ -12674,8 +12698,12 @@ def suggest_relations_cmd(
                 typer.echo(f"[?] {edge.source_id} -> {edge.target_id}")
                 typer.echo("  note: no valid type suggested")
             else:
+                # #778: the read-only listing carries the same caveat as
+                # the --apply prompt and curate -- docs/testing.md promises
+                # it wherever a relation direction is presented.
                 typer.echo(
-                    f"[{result.suggested_type}] {edge.source_id} -> {edge.target_id}"
+                    f"[{result.suggested_type}] {edge.source_id} -> "
+                    f"{edge.target_id}{_direction_caveat(result.suggested_type)}"
                 )
                 typer.echo(f"  rationale: {result.rationale}")
             typer.echo()

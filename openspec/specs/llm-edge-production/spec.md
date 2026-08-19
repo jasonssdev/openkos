@@ -37,6 +37,16 @@ frontmatter; it now also excludes edges typed by provenance-mirror
 projection synthesis, with no code path distinction required since both
 sources populate the same `relation_type` field read by this requirement.)
 
+An ASYMMETRIC suggested type (`relations.ASYMMETRIC_RELATION_TYPES`) MUST
+carry the `(direction model-suggested, unverified)` suffix on the listing
+line AND on `--apply`'s preview line and `[y/N]` prompt (issue #778): the
+wording is the documented contract (`docs/testing.md`, Known issues) and
+#624 already established it on `curate`'s Structure stage -- one surface
+spelling the caveat while the surface that most invites bulk application
+stayed silent was the defect. The spelling MUST come from one shared
+helper so the surfaces cannot drift. A symmetric type MUST NOT carry the
+suffix.
+
 #### Scenario: Verb lists every untyped edge with a valid suggestion
 
 - GIVEN a bundle containing three untyped body-link edges
@@ -44,6 +54,19 @@ sources populate the same `relation_type` field read by this requirement.)
 - THEN it prints all three edges, each with a suggested `type` (a member of
   the relation vocabulary accepted by `validate_relation_type`) and a
   rationale
+
+#### Scenario: An asymmetric suggestion is marked direction-unverified
+
+- GIVEN an untyped edge whose suggestion is `produced_by`
+- WHEN the suggestion verb runs (listing), and again with `--apply`
+- THEN the listing line, the `--apply` preview line, and the `[y/N]` prompt
+  all carry `(direction model-suggested, unverified)`
+
+#### Scenario: A symmetric suggestion is unmarked
+
+- GIVEN an untyped edge whose suggestion is `related_to`
+- WHEN the suggestion verb runs
+- THEN no direction caveat is printed for it
 
 #### Scenario: Verb performs zero writes
 

@@ -1697,3 +1697,110 @@ def test_suggest_relations_edge_offset_beyond_the_set_reports_it(
 
     assert result.exit_code == 0
     assert "no candidate edges at --edge-offset 60" in result.stdout
+
+
+# --- issue #778: the direction disclaimer reaches both surfaces -------------
+
+
+def test_listing_marks_an_asymmetric_type_direction_unverified(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#778: the read-only listing carries the SAME
+    `(direction model-suggested, unverified)` suffix `curate` shows on an
+    asymmetric type -- the documented contract (`docs/testing.md`, Known
+    issues), previously honoured by only one of the two surfaces."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_candidate_edges(
+        monkeypatch, [Edge(source_id="concepts/a", target_id="projects/b")]
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.suggest_edge_types",
+        lambda edges, **kwargs: EdgeSuggestionBatch(
+            results=[
+                _suggestion(
+                    source="concepts/a",
+                    target="projects/b",
+                    suggested_type="produced_by",
+                    rationale="the concept is an output of the project",
+                )
+            ]
+        ),
+    )
+
+    result = runner.invoke(app, ["suggest-relations", "--auto"])
+
+    assert result.exit_code == 0
+    assert (
+        "[produced_by] concepts/a -> projects/b "
+        "(direction model-suggested, unverified)" in result.stdout
+    )
+
+
+def test_listing_leaves_a_symmetric_type_unmarked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`related_to` is symmetric by definition -- no direction to doubt, no
+    disclaimer to print."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_candidate_edges(
+        monkeypatch, [Edge(source_id="concepts/a", target_id="concepts/b")]
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.suggest_edge_types",
+        lambda edges, **kwargs: EdgeSuggestionBatch(
+            results=[
+                _suggestion(
+                    source="concepts/a",
+                    target="concepts/b",
+                    suggested_type="related_to",
+                    rationale="the two are discussed together",
+                )
+            ]
+        ),
+    )
+
+    result = runner.invoke(app, ["suggest-relations", "--auto"])
+
+    assert result.exit_code == 0
+    assert "direction model-suggested" not in result.stdout
+
+
+def test_apply_prompt_carries_the_direction_disclaimer(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#778 on the consent surface -- the one that most invites bulk
+    application: the `--apply` prompt spells the exact caveat `curate`'s
+    Structure stage spells, on both the preview line and the [y/N] text."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="A")
+    _write_doc(tmp_path / "bundle" / "projects" / "b.md", title="B", doc_type="Project")
+    _patch_candidate_edges(
+        monkeypatch, [Edge(source_id="concepts/a", target_id="projects/b")]
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.suggest_edge_types",
+        lambda edges, **kwargs: EdgeSuggestionBatch(
+            results=[
+                _suggestion(
+                    source="concepts/a",
+                    target="projects/b",
+                    suggested_type="produced_by",
+                    rationale="the concept is an output of the project",
+                )
+            ]
+        ),
+    )
+
+    result = runner.invoke(app, ["suggest-relations", "--auto", "--apply"], input="n\n")
+
+    assert result.exit_code == 0
+    assert (
+        "[produced_by] concepts/a -> projects/b "
+        "(direction model-suggested, unverified)" in result.stdout
+    )
+    assert (
+        "Relate concepts/a -> projects/b [produced_by] "
+        "(direction model-suggested, unverified)? [y/N]" in result.stdout
+    )
