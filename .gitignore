@@ -271,3 +271,9 @@ $RECYCLE.BIN/
 # beside it carries every conclusion, and `--rescore` reads a locally
 # regenerated file, so the raw pairs stay out of the repository.
 evals/query_identity/results/pairs-*.json
+
+# `evals/query_entailment/` field mode runs the probe against a REAL
+# workspace, so its rows quote private bundle content verbatim (answers and
+# context blocks). Constructed-corpus runs (`runs-*`/`arms-*`/`report-*`)
+# stay committed like every other harness; field runs never leave the machine.
+/evals/query_entailment/results/field-*

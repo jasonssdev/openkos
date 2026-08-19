@@ -129,7 +129,11 @@ def _fake_matched_answer(
     *,
     answer: str = "Stoicism teaches the dichotomy of control.",
     citations: list[Citation] | None = None,
-    attribution: Attribution = "absent",
+    # `reported` (compliant), not the dataclass's own `absent` default: these
+    # tests model an ordinary matched answer, and `absent` would trip the
+    # #774 unverified-grounding gate plus the #777 notice in every one of
+    # them. The gate and notice tests pass their fallback state explicitly.
+    attribution: Attribution = "reported",
 ) -> AnswerResult:
     return AnswerResult(
         answer=answer,
@@ -807,6 +811,163 @@ def test_query_save_auto_bypasses_prompt(
 
     assert result.exit_code == 0
     assert "Proceed" not in result.output
+    assert (
+        tmp_path
+        / "bundle"
+        / "insights"
+        / "stoicism-teaches-the-dichotomy-of-control.md"
+    ).is_file()
+
+
+def test_save_unattributed_gate_confirms_on_tty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#774: filing an answer whose citation list is the retrieval fallback
+    (attribution `absent`) asks its own stronger question, naming the risk.
+    Measured on the field bundle: 30 of 30 fabricated answers were `absent`,
+    so this gate is the last moment before fabricated provenance becomes
+    permanent."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
+    citation = Citation(concept_id="concepts/stoicism", title="Stoicism")
+    fake_result = _fake_matched_answer(citations=[citation], attribution="absent")
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["query", "what is stoicism?", "--save"], input="y\n")
+
+    assert result.exit_code == 0
+    assert "unverified grounding" in result.output
+    assert "retrieval set" in result.output
+    assert (
+        tmp_path
+        / "bundle"
+        / "insights"
+        / "stoicism-teaches-the-dichotomy-of-control.md"
+    ).is_file()
+
+
+def test_save_unattributed_gate_decline_writes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Declining the #774 gate aborts with nothing written."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
+    citation = Citation(concept_id="concepts/stoicism", title="Stoicism")
+    fake_result = _fake_matched_answer(citations=[citation], attribution="absent")
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    _simulate_tty(monkeypatch)
+    index_before = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
+
+    result = runner.invoke(app, ["query", "what is stoicism?", "--save"], input="n\n")
+
+    assert result.exit_code != 0
+    # The GUARD's question, not the ordinary review gate's -- without this,
+    # the test passes vacuously through "Proceed with these changes?".
+    assert "unverified citations" in result.output
+    assert not (
+        tmp_path
+        / "bundle"
+        / "insights"
+        / "stoicism-teaches-the-dichotomy-of-control.md"
+    ).exists()
+    assert (tmp_path / "bundle" / "index.md").read_text(
+        encoding="utf-8"
+    ) == index_before
+
+
+def test_save_unattributed_refuses_non_tty_even_with_auto(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--auto` bypasses the ORDINARY review gate, never the #774 one: an
+    unattended pipeline filing fabricated provenance is the exact harm the
+    issue documents, so non-TTY refuses unless `--allow-unattributed` says
+    the caller accepts retrieval-set citations as provenance."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
+    citation = Citation(concept_id="concepts/stoicism", title="Stoicism")
+    fake_result = _fake_matched_answer(citations=[citation], attribution="absent")
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    index_before = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
+
+    result = runner.invoke(app, ["query", "what is stoicism?", "--save", "--auto"])
+
+    assert result.exit_code == 1
+    assert "--allow-unattributed" in result.stderr
+    assert not (
+        tmp_path
+        / "bundle"
+        / "insights"
+        / "stoicism-teaches-the-dichotomy-of-control.md"
+    ).exists()
+    assert (tmp_path / "bundle" / "index.md").read_text(
+        encoding="utf-8"
+    ) == index_before
+
+
+def test_save_allow_unattributed_files_without_the_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The explicit opt-in: a backend that never emits the attribution line
+    (every answer `absent` -- the deliberate pre-#753 fallback population)
+    keeps an unattended save path, by saying so."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
+    citation = Citation(concept_id="concepts/stoicism", title="Stoicism")
+    fake_result = _fake_matched_answer(citations=[citation], attribution="absent")
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+
+    result = runner.invoke(
+        app,
+        ["query", "what is stoicism?", "--save", "--auto", "--allow-unattributed"],
+    )
+
+    assert result.exit_code == 0
+    assert (
+        tmp_path
+        / "bundle"
+        / "insights"
+        / "stoicism-teaches-the-dichotomy-of-control.md"
+    ).is_file()
+
+
+def test_save_unparsed_attribution_fires_the_gate_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`unparsed` is the same fallback with a different cause -- the
+    citation list is equally the retrieval set, so the gate treats it the
+    same way."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
+    citation = Citation(concept_id="concepts/stoicism", title="Stoicism")
+    fake_result = _fake_matched_answer(citations=[citation], attribution="unparsed")
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    index_before = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
+
+    result = runner.invoke(app, ["query", "what is stoicism?", "--save", "--auto"])
+
+    assert result.exit_code == 1
+    assert (tmp_path / "bundle" / "index.md").read_text(
+        encoding="utf-8"
+    ) == index_before
+
+
+def test_save_reported_attribution_never_sees_the_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A compliant answer saves exactly as before -- the gate exists for the
+    fallback states only, and 63 of 63 grounded or compliant answers
+    measured were `reported`."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
+    citation = Citation(concept_id="concepts/stoicism", title="Stoicism")
+    fake_result = _fake_matched_answer(citations=[citation], attribution="reported")
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+
+    result = runner.invoke(app, ["query", "what is stoicism?", "--save", "--auto"])
+
+    assert result.exit_code == 0
+    assert "unverified grounding" not in result.output
     assert (
         tmp_path
         / "bundle"
