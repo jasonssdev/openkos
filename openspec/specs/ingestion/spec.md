@@ -2011,6 +2011,42 @@ nothing new costs a hash check, not a rebuild.
 - WHEN `openkos ingest <dir> --auto` runs
 - THEN the FTS index is built exactly once, after the last file
 
+### Requirement: Batch Cost Gate Announces A Fan-Out-Aware Estimate
+
+The batch cost gate MUST announce an ESTIMATE of the model calls the run
+will spend, summed from per-file estimates computed by
+`extraction.concept.estimate_extraction_calls` — the same thresholds and
+window arithmetic the pipeline branches on — never a one-call-per-file
+identity (issue #775: the gate announced 3 and the run made ~16, an
+order-of-magnitude consent failure). The line MUST be labelled as an
+estimate (`~N LLM call(s) (estimate; ...)`), MUST name how many sources
+will be split into roughly how many windows when any source fans out, and
+MUST count a file at zero when the pipeline will make no model call for
+it: an undecodable or blank source, the confidential floor gate without
+`--include-confidential`, and a file #773's convergence skip will not
+extract (disclosed as `N unchanged -- extraction will be skipped`). The
+skip prediction MUST reuse the same retryable-debt predicate `ingest`'s
+own skip decision reads, and MUST fail open — a file whose state cannot be
+read is billed at the full estimate, never silently dropped from the count.
+The estimate targets the ordinary path; reply-dependent calls (judge retry,
+re-ask, single-candidate judge skip) are out of its scope, exactly as they
+are out of the documented cost table's.
+
+#### Scenario: A chunking source is billed per window
+
+- GIVEN a batch holding one small prose file and one prose file above its
+  chunking threshold
+- WHEN the batch cost gate renders
+- THEN it names the splitting source's approximate window count and the
+  total is the sum of both files' ordinary-path estimates, marked `~` and
+  `estimate`
+
+#### Scenario: A convergent re-ingest is billed at zero
+
+- GIVEN a batch whose only file is unchanged and already extracted
+- WHEN the batch cost gate renders
+- THEN it announces `~0 LLM call(s)` and discloses the skipped file
+
 #### Scenario: A failed FTS build never costs the ingest
 
 - GIVEN an environment where the FTS build raises (e.g. fts5 unavailable)

@@ -1892,6 +1892,53 @@ def fans_out(source_text: str, *, source_title: str) -> bool:
     return len(source_text) > _chunk_threshold_for(meeting_shaped=meeting_shaped)
 
 
+@dataclass(frozen=True)
+class ExtractionCallEstimate:
+    """What one source is expected to cost in model calls (#775), computed
+    from the SAME internals the pipeline branches on (`_is_meeting_shaped`,
+    `_chunk_threshold_for`, `_chunk_lines`) so the number the cost gate
+    announces cannot drift from the fan-out it consents to.
+
+    An ESTIMATE of the ordinary path, deliberately: the judge skip on a
+    single surviving candidate, the #754 judge retry, the bounded re-ask,
+    and per-candidate degradations all depend on what the model replies,
+    not on the document -- the same line `docs/cli.md`'s cost table draws.
+    `test_estimate_matches_the_observed_ordinary_path` pins `calls` against
+    the real `extract_concept_union` fan-out for every documented row."""
+
+    calls: int
+    """Expected model calls on the ordinary path: extraction passes (two
+    below the chunking threshold on the union path, one per window above
+    it), plus the participant-capture call on a meeting-shaped source and
+    the judge call -- union path only."""
+    windows: int
+    """`_chunk_lines` window count when the source fans out, else 0 -- the
+    same number the per-chunk progress counter shows, so the gate can say
+    which sources will split and into roughly how many windows."""
+
+
+def estimate_extraction_calls(
+    source_text: str, *, source_title: str, union_judge: bool = True
+) -> ExtractionCallEstimate:
+    """Estimate the ordinary-path model-call cost of extracting one source
+    (#775): the answer `ingest`'s batch cost gate announces BEFORE any model
+    contact, exported for the same reason `fans_out` is -- a caller outside
+    this module needs it and must not re-derive the thresholds.
+
+    Pure and total like `fans_out`: length checks, a regex-backed shape
+    gate, and line packing; no I/O, no model."""
+    meeting_shaped = _is_meeting_shaped(source_title, source_text)
+    chunked = len(source_text) > _chunk_threshold_for(meeting_shaped=meeting_shaped)
+    windows = len(_chunk_lines(source_text)) if chunked else 0
+    if not union_judge:
+        # Single-run path: one extraction pass, or one per window -- no
+        # judge, no participant pass.
+        return ExtractionCallEstimate(calls=windows if chunked else 1, windows=windows)
+    passes = windows if chunked else 2
+    participant = 1 if meeting_shaped else 0
+    return ExtractionCallEstimate(calls=passes + participant + 1, windows=windows)
+
+
 ProgressHook = Callable[[str], None]
 """A phase reporter: called with one human-readable label per phase the
 extraction is about to enter (issue #701).

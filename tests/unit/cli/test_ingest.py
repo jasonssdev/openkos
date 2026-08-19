@@ -5875,11 +5875,14 @@ def test_batch_basename_collision_refuses_whole_run_naming_both_paths(
 def test_batch_cost_gate_prints_counts_and_confirms_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Before any LLM contact, the batch prints `{n} file(s) -> {n} LLM
-    call(s)` (the #134 pattern) to stderr and asks ONE up-front
-    confirmation; a `y` answer covers every file -- the per-file prompt is
-    suppressed the way `--auto` suppresses it today, so a single `y` on
-    stdin completes a two-file batch (issue #267, settled decision 4)."""
+    """Before any LLM contact, the batch prints `{n} file(s) -> ~{k} LLM
+    call(s)` to stderr and asks ONE up-front confirmation; a `y` answer
+    covers every file -- the per-file prompt is suppressed the way `--auto`
+    suppresses it today, so a single `y` on stdin completes a two-file
+    batch (issue #267, settled decision 4). Since #775 the count is a
+    fan-out-aware ESTIMATE, labelled as one: two small union-path prose
+    files cost ~3 calls each (two extraction passes plus the judge), never
+    "one extraction per file"."""
     _init_workspace(tmp_path, monkeypatch)
     _write_notes(tmp_path, {"a.txt": "Alpha notes.", "b.txt": "Beta notes."})
     _simulate_tty(monkeypatch)
@@ -5887,13 +5890,116 @@ def test_batch_cost_gate_prints_counts_and_confirms_once(
     result = runner.invoke(app, ["ingest", "notes"], input="y\n")
 
     assert result.exit_code == 0
-    assert "2 file(s) -> 2 LLM call(s)" in result.stderr
+    assert "2 file(s) -> ~6 LLM call(s)" in result.stderr
+    assert "estimate" in result.stderr
     assert (tmp_path / "raw" / "a.txt").is_file()
     assert (tmp_path / "raw" / "b.txt").is_file()
     # ONE gate: the batch prompt appears exactly once and the single-file
     # "Proceed with these changes?" prompt never does.
     assert "Proceed with these changes?" not in result.output
     assert result.output.count("Proceed") == 1
+
+
+def test_batch_cost_gate_counts_windows_for_a_chunking_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#775's reported defect: a source above its chunking threshold takes
+    one extraction call PER WINDOW, and the old gate still announced one
+    call per file (announced 3, made ~16). The gate must announce a
+    fan-out-aware estimate and say which source will split."""
+    _init_workspace(tmp_path, monkeypatch)
+    line = "La plataforma registra la decision y su justificacion en el acta.\n"
+    big = line * (30_000 // len(line) + 1)
+    _write_notes(tmp_path, {"small.txt": "Alpha notes.", "big.txt": big})
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["ingest", "notes"], input="n\n")
+
+    windows = len(concept_mod._chunk_lines(big))
+    assert windows > 1
+    expected = 3 + (windows + 1)  # small: 2 passes + judge; big: windows + judge
+    assert f"1 will be split into ~{windows} window(s)" in result.stderr
+    assert f"~{expected} LLM call(s)" in result.stderr
+
+
+def test_batch_cost_gate_counts_zero_for_a_convergent_reingest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#773 x #775: a file the convergence skip will not extract must not be
+    billed by the gate either -- the operator consenting to a re-run of an
+    unchanged corpus is consenting to ~0 calls, and the gate says so."""
+    _init_workspace(tmp_path, monkeypatch)
+    corpus = tmp_path / "notes"
+    corpus.mkdir()
+    (corpus / "a.md").write_text("Some raw notes about self-control.", encoding="utf-8")
+    run1 = _concept_reply(title="Stoic Dichotomy Of Control")
+    run2 = _concept_reply(title="Negative Visualization")
+    _patch_sequenced_llm(
+        monkeypatch,
+        [
+            run1,
+            run2,
+            '{"keep": ["Stoic Dichotomy Of Control", "Negative Visualization"]}',
+        ],
+    )
+    assert runner.invoke(app, ["ingest", "notes", "--auto"]).exit_code == 0
+
+    fake = _patch_sequenced_llm(monkeypatch, [])
+    _simulate_tty(monkeypatch)
+    result = runner.invoke(app, ["ingest", "notes"], input="y\n")
+
+    assert result.exit_code == 0
+    assert fake.calls == []
+    assert "1 unchanged -- extraction will be skipped" in result.stderr
+    assert "~0 LLM call(s)" in result.stderr
+
+
+def test_batch_cost_gate_bills_zero_for_blank_and_undecodable_sources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#775: files the pipeline will never send to the model are billed at
+    zero -- a blank source (no extractable text) and an undecodable one
+    (Source-only degrade). One healthy small file keeps the total honest:
+    only ITS ~3 calls are announced."""
+    _init_workspace(tmp_path, monkeypatch)
+    notes = tmp_path / "notes"
+    notes.mkdir()
+    (notes / "real.txt").write_text("Alpha notes.", encoding="utf-8")
+    (notes / "blank.txt").write_text("   \n", encoding="utf-8")
+    (notes / "binary.txt").write_bytes(b"\xff\xfe\x00garbage\x00")
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["ingest", "notes"], input="n\n")
+
+    assert "3 file(s)" in result.stderr
+    assert "~3 LLM call(s)" in result.stderr
+
+
+def test_estimate_bills_an_unreadable_file_at_the_unchunked_cost(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#775's fail-open mandate, tested at the helper because batch
+    expansion already drops a file unreadable at expansion time -- the
+    OSError branch guards the RACE where a file turns unreadable between
+    expansion and the gate. Such a file is billed at the unchunked ordinary
+    cost (~3 on the union path), never silently dropped to zero."""
+    if os.name != "posix" or os.geteuid() == 0:
+        pytest.skip("permission-based unreadability needs a non-root POSIX user")
+    _init_workspace(tmp_path, monkeypatch)
+    locked = tmp_path / "locked.txt"
+    locked.write_text("Beta notes.", encoding="utf-8")
+    locked.chmod(0)
+    layout = config.WorkspaceLayout(tmp_path)
+    cfg = config.read_config(tmp_path)
+    try:
+        estimate = main._estimate_batch_calls(
+            [locked], layout, cfg, include_confidential=False, re_extract=False
+        )
+    finally:
+        locked.chmod(0o644)
+
+    assert estimate.calls == 3
+    assert estimate.skipped_files == 0
 
 
 def test_batch_cost_gate_decline_writes_nothing(
