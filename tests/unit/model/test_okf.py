@@ -664,8 +664,20 @@ def test_extraction_notice_vocabulary_constants() -> None:
     folding the two would make "extraction produced nothing" and
     "extraction produced one thing" share a field that cannot hold both."""
     assert okf.EXTRACTION_NOTICE_KEY == "extraction_notice"
-    assert okf.EXTRACTION_NOTICE_VALUES == ("sole-object-restates-source",)
+    assert okf.EXTRACTION_NOTICE_VALUES == (
+        "sole-object-restates-source",
+        "judge-selection-unavailable",
+        "judge-selection-empty",
+    )
     assert okf.EXTRACTION_NOTICE_SOLE_OBJECT_RESTATES == "sole-object-restates-source"
+    # #772: the two judge-degrade tokens quarantine an unjudged extraction.
+    # Two tokens, not one, for the same reason #754 split the terminal
+    # notices: "the judge never answered" and "the judge answered and named
+    # no candidate" are different causes with different retry expectations,
+    # and a reader deciding whether to retry must not have to guess which
+    # one happened.
+    assert okf.EXTRACTION_NOTICE_JUDGE_UNAVAILABLE == "judge-selection-unavailable"
+    assert okf.EXTRACTION_NOTICE_JUDGE_EMPTY == "judge-selection-empty"
 
 
 def test_build_source_concept_omits_extraction_notice_by_default() -> None:

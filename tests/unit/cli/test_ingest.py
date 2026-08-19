@@ -1589,6 +1589,89 @@ def test_ingest_judge_empty_admission_keeps_the_merged_union_and_reports_distinc
     assert concept_path.is_file()
 
 
+def test_ingest_judge_failure_quarantines_the_source_with_extraction_notice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#772: a judge that could not run keeps the union (fail-open is
+    unchanged) but the Source is MARKED -- `extraction_notice:
+    judge-selection-unavailable` lands in its frontmatter so a later
+    `lint`/`status` pass knows these objects skipped quality selection --
+    and the terminal notice discloses the marking, mirroring #585's
+    sole-object notice."""
+    _init_workspace(tmp_path, monkeypatch)
+    run1 = _concept_reply(title="Stoic Dichotomy Of Control")
+    run2 = _concept_reply(title="Negative Visualization")
+    _patch_sequenced_llm(monkeypatch, [run1, run2, OllamaUnavailable("boom")])
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    source_text = (tmp_path / "bundle" / "sources" / "notes.md").read_text(
+        encoding="utf-8"
+    )
+    metadata, _ = okf.load_frontmatter(source_text)
+    assert metadata["extraction_notice"] == "judge-selection-unavailable"
+    assert "extraction_status" not in metadata
+    assert "marking the Source (extraction_notice: " in result.stderr
+
+
+def test_ingest_judge_empty_admission_quarantines_with_the_empty_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#772, the other degrade status: a well-formed judge reply admitting
+    nothing also stores the unfiltered union, so the Source carries the
+    distinct `judge-selection-empty` token -- the two causes stay tellable
+    apart on disk exactly as #754 keeps them apart in the terminal."""
+    _init_workspace(tmp_path, monkeypatch)
+    run1 = _concept_reply(title="Stoic Dichotomy Of Control")
+    run2 = _concept_reply(title="Negative Visualization")
+    _patch_sequenced_llm(monkeypatch, [run1, run2, '{"keep": ["A Fabricated Title"]}'])
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    source_text = (tmp_path / "bundle" / "sources" / "notes.md").read_text(
+        encoding="utf-8"
+    )
+    metadata, _ = okf.load_frontmatter(source_text)
+    assert metadata["extraction_notice"] == "judge-selection-empty"
+
+
+def test_ingest_healthy_judge_selection_stamps_no_extraction_notice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#772's self-clearing half: a run whose judge SELECTED rebuilds the
+    Source without any `extraction_notice`, so a quarantine marker from an
+    earlier degraded run never outlives the condition it described (#187's
+    anti-merge rule, inherited by every notice token)."""
+    _init_workspace(tmp_path, monkeypatch)
+    run1 = _concept_reply(title="Stoic Dichotomy Of Control")
+    run2 = _concept_reply(title="Negative Visualization")
+    _patch_sequenced_llm(
+        monkeypatch,
+        [
+            run1,
+            run2,
+            '{"keep": ["Stoic Dichotomy Of Control", "Negative Visualization"]}',
+        ],
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    source_text = (tmp_path / "bundle" / "sources" / "notes.md").read_text(
+        encoding="utf-8"
+    )
+    metadata, _ = okf.load_frontmatter(source_text)
+    assert "extraction_notice" not in metadata
+
+
 def test_ingest_single_candidate_union_skips_the_judge_and_reports_no_degrade(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

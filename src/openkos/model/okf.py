@@ -205,14 +205,29 @@ This key fires on the opposite precondition -- an object WAS written -- so
 one field cannot honestly hold both, and a reader matching `failed` must
 never have to skip past a value that means "extraction worked"."""
 
-ExtractionNotice = Literal["sole-object-restates-source"]
+ExtractionNotice = Literal[
+    "sole-object-restates-source",
+    "judge-selection-unavailable",
+    "judge-selection-empty",
+]
 """The closed vocabulary for `EXTRACTION_NOTICE_KEY`.
 
-One token today (#585): the source's SOLE derived object restates the
+The first token is #585's: the source's SOLE derived object restates the
 source's own topic, so the bundle stores an object that adds nothing the
 Source did not already say. The object is kept -- see #585 for why a
 degrade to `[]` was rejected -- and this key is the disclosure that keeps
-the output honest about it."""
+the output honest about it.
+
+The two judge tokens are #772's quarantine markers: the union+judge run
+kept its FULL merged union because no quality selection was applied --
+either the judge call itself was unusable after every attempt
+(`judge-selection-unavailable`, `judge_status == "failed"`) or the judge
+replied and its admitted set matched no candidate
+(`judge-selection-empty`, `judge_status == "empty"`). Two tokens rather
+than one for the same reason #754 split the terminal notices: the causes
+carry different retry expectations, and a persistent marker that erased
+the distinction would force the reader back to a terminal transcript that
+no longer exists. `lint.check_unjudged` reads BOTH as retryable debt."""
 
 EXTRACTION_NOTICE_VALUES: Final[tuple[ExtractionNotice, ...]] = get_args(
     ExtractionNotice
@@ -223,8 +238,20 @@ runtime validation gate."""
 EXTRACTION_NOTICE_SOLE_OBJECT_RESTATES: Final[ExtractionNotice] = (
     "sole-object-restates-source"
 )
-"""#585's one notice token, named so both the writer (`cli/main.py`) and
+"""#585's notice token, named so both the writer (`cli/main.py`) and
 any future reader spell it from the same constant."""
+
+EXTRACTION_NOTICE_JUDGE_UNAVAILABLE: Final[ExtractionNotice] = (
+    "judge-selection-unavailable"
+)
+"""#772's quarantine token for `judge_status == "failed"`: every judge
+attempt raised, returned an empty reply, or returned an unparseable/
+wrong-shape reply, so the stored objects were never quality-selected."""
+
+EXTRACTION_NOTICE_JUDGE_EMPTY: Final[ExtractionNotice] = "judge-selection-empty"
+"""#772's quarantine token for `judge_status == "empty"`: the judge
+REPLIED with a valid shape whose admitted set matched no candidate, so the
+full (backstop-capped) union was stored unfiltered."""
 
 EXTRACTION_STATUS_FAILED: Final[ExtractionStatus] = "failed"
 """The one `EXTRACTION_STATUS_VALUES` member that represents retryable

@@ -304,6 +304,23 @@ findings.
 - THEN it reuses that same in-memory `docs` list and `status` still performs
   no more bundle walks than before this change
 
+### Requirement: Needs-Attention Surfaces Unjudged Extractions
+
+`openkos status` MUST fold `lint`'s `unjudged` findings (issue #772: a
+Source whose `extraction_notice` carries a judge-degrade token) into its
+"needs attention" section, naming the same retry command `lint` computes.
+The check MUST consume the SAME in-memory `docs` list from the single
+`collect_docs()` call `status` already makes — no second call, no new
+walk — and `status` remains read-only, exiting 0 regardless of findings.
+
+#### Scenario: Unjudged extraction surfaced under needs attention
+
+- GIVEN a bundle containing a Source with `extraction_notice:
+  judge-selection-unavailable`
+- WHEN `openkos status` runs
+- THEN the retry command for that Source is listed under "needs attention",
+  and the command still exits 0
+
 ### Requirement: Needs-Attention Surfaces Below-Source Sensitivity And Uncovered Multi-Source Descendants
 
 `openkos status` MUST fold `lint`'s `below-source-sensitivity` and
