@@ -7296,6 +7296,48 @@ def test_ingest_wrong_language_drop_notice_names_the_dropped_titles(
     ).exists()
 
 
+def test_ingest_recombination_drop_notice_is_distinct_from_the_language_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#780: a #630 recombination drop (gate-neutral English noun phrase,
+    not quoted, bigrams non-adjacent) must NOT be announced as a
+    wrong-language leak. The two failure modes call for opposite responses
+    -- language anchor vs. extraction quality -- so the notice names the
+    branch that fired."""
+    _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(tmp_path, "# union_judge: true", "union_judge: false")
+    lines = [
+        "Ana: Revisamos el avance del proyecto y las decisiones pendientes "
+        "sobre la capa de almacenamiento con el equipo de datos.",
+        "Bruno: La migración terminó y los índices se regeneran con el "
+        "modelo nuevo; la búsqueda mejoró bastante en las pruebas.",
+    ]
+    blocks: list[str] = []
+    while sum(len(b) + 1 for b in blocks) <= 19_000:
+        blocks.append(f"{lines[len(blocks) % 2]} (bloque {len(blocks)})")
+    text = "\n".join(blocks)
+    assert len(text) > concept_mod._CHUNK_THRESHOLD
+    windows = concept_mod._chunk_lines(text)
+    replies: list[str | Exception] = ["[]"] * len(windows)
+    replies[0] = "[" + _concept_reply(title="Procedimiento de ingesta") + "]"
+    replies[1] = "[" + _concept_reply(title="Knowledge Recovery Project") + "]"
+    _patch_sequenced_llm(monkeypatch, replies)
+    source = tmp_path / "notas.txt"
+    source.write_text(text, encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notas.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert (
+        "dropped 1 title(s) recombined from the source's words, not quoted "
+        "from it: Knowledge Recovery Project" in result.stderr
+    )
+    assert "wrong-language" not in result.stderr
+    assert not (
+        tmp_path / "bundle" / "concepts" / "knowledge-recovery-project.md"
+    ).exists()
+
+
 def test_participant_unreadmitted_notice_names_the_real_second_decision() -> None:
     """Issue #690: the engine has known since #668 which participant
     candidates re-admission declined to restore --

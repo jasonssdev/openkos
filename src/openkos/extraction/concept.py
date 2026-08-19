@@ -1670,11 +1670,17 @@ def _quoted_verbatim(title: str, source_text: str) -> bool:
 
 def _drop_wrong_language_titles(
     results: list[ExtractionResult], *, source_text: str
-) -> tuple[list[ExtractionResult], tuple[str, ...]]:
+) -> tuple[list[ExtractionResult], tuple[str, ...], tuple[str, ...]]:
     """Deterministic wrong-language-title gate (#618), CHUNKED paths only:
     drop each candidate whose title votes PURELY for a language other than
     the document's dominant one and is NOT quoted verbatim from the prose.
-    Returns `(kept, dropped_titles)`; the caller reports the drops.
+    Returns `(kept, dropped_wrong_language, dropped_recombined)`; the
+    caller reports the drops. The two dropped tuples are kept apart (#780)
+    because they answer opposite operator questions -- a wrong-language
+    vote says the model is leaking the other language (check the language
+    anchor), while a #630 recombination says the model is inventing
+    non-verbatim titles (check extraction quality) -- and one merged list
+    forced the notice to mislabel one class as the other.
 
     Why deterministic: the third prompt-tier failure in a row. A
     named-language anchor was measured on the exact leaking register and
@@ -1720,9 +1726,10 @@ def _drop_wrong_language_titles(
     the re-scored 15-run bar holds at 32/32 caught, 0 false positives."""
     dominant = _dominant_language(source_text)
     if dominant is None:
-        return results, ()
+        return results, (), ()
     kept: list[ExtractionResult] = []
-    dropped: list[str] = []
+    dropped_wrong_language: list[str] = []
+    dropped_recombined: list[str] = []
     for result in results:
         language = _title_language(result.title)
         if (
@@ -1730,7 +1737,7 @@ def _drop_wrong_language_titles(
             and language != dominant
             and not _quoted_verbatim(result.title, source_text)
         ):
-            dropped.append(result.title)
+            dropped_wrong_language.append(result.title)
             continue
         if (
             dominant == "es"
@@ -1742,12 +1749,12 @@ def _drop_wrong_language_titles(
             )
             and not _bigram_adjacent(result.title, source_text)
         ):
-            dropped.append(result.title)
+            dropped_recombined.append(result.title)
             continue
         kept.append(result)
     if not kept:
-        return results, ()
-    return kept, tuple(dropped)
+        return results, (), ()
+    return kept, tuple(dropped_wrong_language), tuple(dropped_recombined)
 
 
 _MAX_OBJECTS_PER_SOURCE = 6
@@ -2657,7 +2664,19 @@ class ExtractionReport:
     proper name. Named rather than counted for the same reason
     `discarded_titles` is: the reader has to be able to tell a dropped
     leak from a dropped subject. Defaulted so every existing construction
-    site keeps working unchanged."""
+    site keeps working unchanged. Since #780 this carries ONLY the
+    language-vote class; the gate's #630 recombination arm reports through
+    `recombined_dropped_titles` below."""
+    recombined_dropped_titles: tuple[str, ...] = ()
+    """Titles the same gate's #630 recombination arm dropped (#780):
+    gate-NEUTRAL titles on a Spanish-dominant document with no Spanish
+    orthographic marker, not quoted verbatim, and bigrams non-adjacent in
+    the prose -- a recombination, not a quote. Kept apart from
+    `wrong_language_dropped_titles` because the two classes call for
+    opposite responses: a language leak points at the anchor and the
+    model, a recombination points at extraction quality. The pre-#780
+    merged list made the notice report a Spanish-titled recombination as a
+    "wrong-language" drop, sending the operator to the wrong subsystem."""
     participant_judge_selected_titles: tuple[str, ...] = ()
     """`Person`/`Organization` titles (#668 design D5) the judge ITSELF
     selected -- present in the judge's own echoed selection, not restored
@@ -2827,6 +2846,7 @@ def extract_concept(
         results = _strip_ungrounded_expansions(results, source_text=source_text)
         chunk_count = 1
         wrong_language_dropped: tuple[str, ...] = ()
+        recombined_dropped: tuple[str, ...] = ()
     else:
         # #454: above the threshold the single call collapses to one object
         # (the one-object-per-call attractor), so fan out one call per
@@ -2855,8 +2875,8 @@ def extract_concept(
         # anchor-rebinding failure (0.69 of window titles on the measured
         # fixture); the short-document single-call path measured zero leak
         # and stays ungated. Voted against the FULL source, like grounding.
-        results, wrong_language_dropped = _drop_wrong_language_titles(
-            results, source_text=source_text
+        results, wrong_language_dropped, recombined_dropped = (
+            _drop_wrong_language_titles(results, source_text=source_text)
         )
     results = _drop_framing_objects(
         results, meeting_shaped=_is_meeting_shaped(source_title, source_text)
@@ -2888,6 +2908,7 @@ def extract_concept(
                 retained, source_title=source_title
             ),
             wrong_language_dropped_titles=wrong_language_dropped,
+            recombined_dropped_titles=recombined_dropped,
             # The LEGACY single-run path reports the advisory too (#712 D5).
             # `cli/main.py` picks `extract_concept_union if union_judge else
             # extract_concept`, so leaving it out here would store
@@ -3136,6 +3157,7 @@ def extract_concept_union(
         chunk_count = 1
         run_count = 2
         wrong_language_dropped: tuple[str, ...] = ()
+        recombined_dropped: tuple[str, ...] = ()
     else:
         windows = _chunk_lines(source_text)
         chunk_count = len(windows)
@@ -3154,8 +3176,8 @@ def extract_concept_union(
         # per-window candidates BEFORE the judge sees the list -- a leaked
         # title the judge selected would become a permanent wrong-language
         # slug, and the judge is exactly the selector that leak survives.
-        deduped, wrong_language_dropped = _drop_wrong_language_titles(
-            deduped, source_text=source_text
+        deduped, wrong_language_dropped, recombined_dropped = (
+            _drop_wrong_language_titles(deduped, source_text=source_text)
         )
         merged = _drop_source_title_twins(
             _drop_framing_objects(deduped, meeting_shaped=meeting_shaped),
@@ -3216,6 +3238,7 @@ def extract_concept_union(
                 reask_runs=reask_runs,
                 reask_added_titles=reask_added_titles,
                 wrong_language_dropped_titles=wrong_language_dropped,
+                recombined_dropped_titles=recombined_dropped,
                 participant_capture_runs=participant_capture_runs,
                 participant_capture_added_titles=participant_capture_added_titles,
             ),
@@ -3345,6 +3368,7 @@ def extract_concept_union(
                 retained, source_title=source_title
             ),
             wrong_language_dropped_titles=wrong_language_dropped,
+            recombined_dropped_titles=recombined_dropped,
             participant_judge_selected_titles=participant_judge_selected_titles,
             participant_readmitted_titles=participant_readmitted_titles,
             participant_unreadmitted_discarded_titles=participant_unreadmitted_discarded_titles,

@@ -3201,6 +3201,29 @@ def _wrong_language_notice(report: ExtractionReport) -> str | None:
     )
 
 
+def _recombined_title_notice(report: ExtractionReport) -> str | None:
+    """Render the #630 recombination drop (#780), or `None` when that arm
+    cut nothing. Separate from `_wrong_language_notice` because the two
+    branches of the same gate diagnose opposite failures: a wrong-language
+    vote says the model is leaking the other language (check the language
+    anchor, consider a different model), a recombination says the model is
+    inventing non-verbatim titles (look at extraction quality). The
+    pre-#780 merged notice reported Spanish-titled recombinations as
+    "wrong-language" drops on a Spanish source, pointing a whole
+    investigation at the wrong subsystem."""
+    if not report.recombined_dropped_titles:
+        return None
+    shown = report.recombined_dropped_titles[:_CAP_NOTICE_TITLE_LIMIT]
+    remainder = len(report.recombined_dropped_titles) - len(shown)
+    listed = ", ".join(shown)
+    if remainder > 0:
+        listed = f"{listed} (+{remainder} more)"
+    return (
+        f"dropped {len(report.recombined_dropped_titles)} title(s) recombined "
+        f"from the source's words, not quoted from it: {listed}"
+    )
+
+
 def _reask_notice(report: ExtractionReport) -> str | None:
     """Render the bounded sole-twin re-ask notice (#584), or `None` when no
     re-ask was spent -- which is the common case.
@@ -3691,6 +3714,13 @@ def _stage_derived_objects(
     wrong_language_notice = _wrong_language_notice(outcome.report)
     if wrong_language_notice is not None:
         typer.echo(f"openkos ingest: {wrong_language_notice}", err=True)
+
+    # #780: the same gate's other arm, rendered right after it -- the two
+    # run at the same pipeline point but diagnose opposite failures, so
+    # they never share one message.
+    recombined_notice = _recombined_title_notice(outcome.report)
+    if recombined_notice is not None:
+        typer.echo(f"openkos ingest: {recombined_notice}", err=True)
 
     # #584: the re-ask fires before the judge ever runs (it feeds the merged
     # candidate list), so its notice renders ahead of every other one below.

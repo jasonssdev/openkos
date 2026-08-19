@@ -597,9 +597,12 @@ def main() -> None:
         # Deliberately a DIFFERENT classifier than this probe's: the gate
         # votes generic function words; the probe's marker lists are this
         # fixture's ground truth. The probe measures the gate, not itself.
-        gated, gate_dropped = concept_mod._drop_wrong_language_titles(
-            objects, source_text=text
+        # #780 split the gate's report into language-vote and recombination
+        # tuples; this probe scores the gate as a whole, so it re-joins them.
+        gated, gate_dropped_language, gate_dropped_recombined = (
+            concept_mod._drop_wrong_language_titles(objects, source_text=text)
         )
+        gate_dropped = gate_dropped_language + gate_dropped_recombined
         harmful_after_gate = [
             r.title
             for r in gated
