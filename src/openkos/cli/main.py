@@ -1709,6 +1709,7 @@ def _adjudication_payload(
     same_only: bool,
     total: int,
     partial: bool,
+    cross_source_flags: Sequence[bool],
 ) -> AdjudicationPayload:
     """Build the pure, I/O-free `adjudicate --json` payload from `results`,
     preserving `results` order and omitting `confidence` and any
@@ -1724,7 +1725,13 @@ def _adjudication_payload(
     `batch.failure is not None` -- both are the caller's to supply, because
     neither is recoverable from `results` alone: a batch that failed on its
     very first group and one that completed a single-group run produce the
-    same `results` list (issue #468 item 5)."""
+    same `results` list (issue #468 item 5).
+
+    `cross_source_flags` (#776) is aligned 1:1 with `results` and supplied
+    by the caller for the same purity reason as `total`: whether a SAME
+    pair's provenance sets are disjoint is a bundle read this I/O-free
+    builder must not perform. The unattended pipelines `--json` serves are
+    exactly where the human-only note would otherwise be invisible."""
     return {
         "partial": partial,
         "adjudicated": len(results),
@@ -1736,8 +1743,9 @@ def _adjudication_payload(
                 "tier": result.candidate.tier.name,
                 "verdict": result.verdict.value.upper(),
                 "rationale": result.rationale,
+                "cross_source": cross_source,
             }
-            for result in results
+            for result, cross_source in zip(results, cross_source_flags, strict=True)
             if not same_only or result.verdict is Verdict.SAME
         ],
     }
@@ -1778,6 +1786,7 @@ def _render_adjudicate_report(
         "of the smaller title (1.000 = every token matched, NOT "
         "identical titles)."
     )
+    bundle_dir = config.WorkspaceLayout(root).bundle_dir
     for result in displayed:
         group = result.candidate
         tier_label = group.tier.name
@@ -1790,6 +1799,18 @@ def _render_adjudicate_report(
         # parsed and kept on `AdjudicatedCandidate` for future thresholding.
         typer.echo(f"  verdict: {result.verdict.value.upper()}")
         typer.echo(f"  rationale: {result.rationale}")
+        # #776: a SAME verdict over disjoint provenance is the risky class
+        # -- named here, in the read-only listing, so the operator's eye
+        # lands on it BEFORE any apply mode is invoked. 2-member groups
+        # only: the merge unit is the pair, and an N>2 group's GLOBAL
+        # intersection can be empty while every adjacent pair shares a
+        # source, which would make "share no source" a false statement.
+        if (
+            result.verdict is Verdict.SAME
+            and len(group.member_ids) == 2
+            and _cross_source_same_pair(bundle_dir, group.member_ids)
+        ):
+            typer.echo(_CROSS_SOURCE_REPORT_NOTE)
         typer.echo()
     typer.echo("Next: openkos merge <survivor> <absorbed>")
 
@@ -1923,12 +1944,92 @@ def _echo_suggest_volatility_batch_failure(
         typer.echo(f"{context} -- {failure}.", err=True)
 
 
+def _member_body_length(bundle_dir: Path, member_id: str) -> int:
+    """Stripped body length of one member's document, or `-1` when it
+    cannot be read or parsed (#776) -- the one measurement
+    `_ordered_merge_pair` ranks on. `-1` rather than `0` so an unreadable
+    member can never beat a readable-but-empty one."""
+    try:
+        path, _canonical = _resolve_concept_path(bundle_dir, member_id)
+        _metadata, body = okf.load_frontmatter(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return -1
+    return len(body.strip())
+
+
+def _ordered_merge_pair(
+    bundle_dir: Path, member_ids: tuple[str, ...]
+) -> tuple[str, str, str]:
+    """`(survivor, absorbed, criterion)` for one 2-member SAME group
+    (#776): the member with the RICHER BODY survives, so a permanent
+    Concept ID is no longer decided by `f` sorting before `o` -- the E2E
+    run watched a bilingual pleonasm beat the clean id purely on string
+    order. Ties (including two unreadable members, which `-1 == -1` here
+    and `_prepare_one_merge` then reports as unresolved) keep today's
+    ascending-id order, and `criterion` names WHICH rule decided so every
+    preview can state it -- an unexplained arbitrary choice is what the
+    issue reports, not the choice itself.
+
+    Mirrors the union path's twin-drop precedent exactly: "the candidate
+    with the richer body is kept"."""
+    first, second = member_ids
+    first_length = _member_body_length(bundle_dir, first)
+    second_length = _member_body_length(bundle_dir, second)
+    if second_length > first_length:
+        return second, first, "richer body"
+    if first_length > second_length:
+        return first, second, "richer body"
+    return first, second, "id order -- equal body length"
+
+
+def _cross_source_same_pair(bundle_dir: Path, member_ids: tuple[str, ...]) -> bool:
+    """Whether a SAME verdict over `member_ids` is the RISKY class #776
+    reports: every member carries a non-empty `provenance:` and the sets
+    are DISJOINT -- extracted from different sources with no overlap, the
+    exact shape that fused two meetings held a week apart.
+
+    Deliberately `False` on missing evidence: a member with NO provenance
+    (hand-written) or an unreadable/unparseable one gives no signal, and
+    flagging on absence would mark every hand-authored concept forever.
+    The destructive paths stay guarded regardless -- an unreadable member
+    makes `_prepare_one_merge` return `None`."""
+    provenance_sets: list[set[str]] = []
+    for member_id in member_ids:
+        try:
+            path, _canonical = _resolve_concept_path(bundle_dir, member_id)
+            metadata, _body = okf.load_frontmatter(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return False
+        raw = metadata.get("provenance")
+        if not isinstance(raw, list) or not raw:
+            return False
+        provenance_sets.append({str(entry).removesuffix(".md") for entry in raw})
+    return not set.intersection(*provenance_sets)
+
+
+_CROSS_SOURCE_REPORT_NOTE = (
+    "  note: cross-source -- members share no source; review before merging"
+)
+"""The listing's #776 marker, on SAME verdicts only: the risky class must
+catch the operator's eye BEFORE any apply mode is invoked."""
+
+_CROSS_SOURCE_WALK_NOTE = (
+    "  note: cross-source SAME -- members share no source; "
+    "the two may be distinct real-world items"
+)
+"""The per-item walks' #776 warning, rendered BEFORE the [y/N] prompt --
+ONE constant shared by `adjudicate --apply` and `curate`'s Identity stage
+so the two surfaces cannot drift apart."""
+
+
 def _prepare_one_merge(
     root: Path,
     layout: config.WorkspaceLayout,
     index_path: Path,
     log_path: Path,
     group: CandidateGroup,
+    *,
+    ordered_pair: tuple[str, str] | None = None,
 ) -> "PreparedMerge | None":
     """Resolve both member ids of one SAME 2-member `group` and build the
     pure `PreparedMerge` preview, extracted verbatim from
@@ -1941,8 +2042,26 @@ def _prepare_one_merge(
     genuinely missing/invalid concept id; the two causes are
     indistinguishable from here, so the caller must not assert either one
     as the sole reason. Otherwise raises `OSError`/`ValueError` straight
-    from `prepare_merge`, unchanged."""
-    survivor_id, absorbed_id = group.member_ids
+    from `prepare_merge`, unchanged.
+
+    Since #776 the pair is ordered by `_ordered_merge_pair` -- richer body
+    survives, ties keep ascending-id order -- so every walk that drives
+    this helper (both adjudicate apply modes and curate's Identity stage)
+    picks the same survivor by the same stated criterion.
+
+    `ordered_pair`, when given, PINS the direction instead of re-deriving
+    it from live file contents (#776 review, 3-lens CRITICAL): the
+    `--apply-same` typed count consents to Pass 1's PREVIEWED survivor,
+    and an earlier merge in the same batch can enrich a shared member
+    enough to flip a live recomputation -- the operator would then get a
+    direction they never saw. Every walk therefore computes the pair once,
+    displays it, and threads that exact pair here."""
+    if ordered_pair is None:
+        survivor_id, absorbed_id, _criterion = _ordered_merge_pair(
+            layout.bundle_dir, group.member_ids
+        )
+    else:
+        survivor_id, absorbed_id = ordered_pair
     try:
         survivor_path, survivor_canonical = _resolve_concept_path(
             layout.bundle_dir, survivor_id
@@ -2069,26 +2188,34 @@ def _format_merge_preview_line(
     )
 
 
-def _echo_n_gt2_skip(group: "CandidateGroup") -> None:
+def _echo_n_gt2_skip(bundle_dir: Path, group: "CandidateGroup") -> None:
     """The SAME-verdict N>2 skip report shared by `_run_adjudicate_apply`
     and `_run_adjudicate_apply_same` (issue #191) -- ONE helper so the two
     walks can never drift apart again.
 
     Keeps the pre-#191 skip line byte-identical, then prints the exact
     pairwise merge commands the operator would otherwise have to
-    reconstruct by hand: the survivor is `group.member_ids[0]` (member ids
-    are sorted ascending, so this matches the existing 2-member convention
-    `survivor_id, absorbed_id = group.member_ids`), and each remaining
-    member is absorbed into it with one `openkos merge <survivor>
-    <absorbed>` line, in member order. Sequential pairwise merges into one
-    survivor are safe to run in order because each individual merge is
-    reversible via `unmerge` -- a mistake at step k never strands steps
-    1..k-1 (issue #191). Print-only: counters and summary lines stay with
-    the callers, byte-identical to the pre-#191 output."""
+    reconstruct by hand: since #776 the suggested survivor is the member
+    with the RICHEST body (ties keep ascending-id order, so a group whose
+    members cannot be measured falls back to `member_ids[0]`, the pre-#776
+    convention), matching the 2-member walks' own `_ordered_merge_pair`
+    rule; each remaining member is absorbed into it with one
+    `openkos merge <survivor> <absorbed>` line, in member order.
+    Sequential pairwise merges into one survivor are safe to run in order
+    because each individual merge is reversible via `unmerge` -- a mistake
+    at step k never strands steps 1..k-1 (issue #191). Print-only:
+    counters and summary lines stay with the callers, byte-identical to
+    the pre-#191 output."""
     typer.echo(f"[{group.okf_type}] {group.member_ids}: skipped (N>2, merge manually)")
-    survivor_id = group.member_ids[0]
+    # max() keeps the FIRST of equally-long members, so an all-tie group
+    # (including all-unresolvable) preserves the ascending-id convention.
+    survivor_id = max(
+        group.member_ids, key=lambda mid: _member_body_length(bundle_dir, mid)
+    )
     typer.echo("  run in order (each reversible via unmerge):")
-    for absorbed_id in group.member_ids[1:]:
+    for absorbed_id in group.member_ids:
+        if absorbed_id == survivor_id:
+            continue
         typer.echo(f"    openkos merge {survivor_id} {absorbed_id}")
 
 
@@ -2176,14 +2303,23 @@ def _run_adjudicate_apply(
             continue
         if len(group.member_ids) != 2:
             if len(group.member_ids) > 2:
-                _echo_n_gt2_skip(group)
+                _echo_n_gt2_skip(layout.bundle_dir, group)
                 skipped_n_gt2 += 1
             continue
 
-        survivor_id, absorbed_id = group.member_ids
+        survivor_id, absorbed_id, survivor_criterion = _ordered_merge_pair(
+            layout.bundle_dir, group.member_ids
+        )
 
         try:
-            prepared = _prepare_one_merge(root, layout, index_path, log_path, group)
+            prepared = _prepare_one_merge(
+                root,
+                layout,
+                index_path,
+                log_path,
+                group,
+                ordered_pair=(survivor_id, absorbed_id),
+            )
         except (OSError, ValueError) as exc:
             typer.echo(
                 "openkos adjudicate --apply: failed while merging "
@@ -2200,6 +2336,14 @@ def _run_adjudicate_apply(
             continue
 
         typer.echo(_format_merge_preview_line(prepared, no_reconcile=no_reconcile))
+        # #776: the choice is deterministic and STATED -- an unexplained
+        # arbitrary survivor is what the issue reports.
+        typer.echo(f"  survivor: {prepared.survivor_canonical} ({survivor_criterion})")
+        if _cross_source_same_pair(layout.bundle_dir, group.member_ids):
+            # #776: the interactive walk keeps the pair -- the operator
+            # consents per item -- but the risky class is named BEFORE the
+            # prompt, not discovered in the wreckage afterwards.
+            typer.echo(_CROSS_SOURCE_WALK_NOTE)
         # Issue #483: `curate._confirm` is the one validating per-item
         # write-consent prompt (#398 contract) -- private-helper reuse
         # across the boundary is deliberate, as with `_type_label` (#479).
@@ -2286,6 +2430,7 @@ def _run_adjudicate_apply_same(
     *,
     confirm_count: str | None,
     no_reconcile: bool = False,
+    include_cross_source: bool = False,
 ) -> None:
     """The guarded batch `adjudicate --apply-same` merge (issue #137
     closing slice): Pass 1 builds ONE aggregate preview over every eligible
@@ -2337,22 +2482,57 @@ def _run_adjudicate_apply_same(
     affordance the failure path already has."""
     eligible_groups: list[CandidateGroup] = []
     skipped_n_gt2 = 0
+    skipped_cross_source = 0
     for result in results:
         if result.verdict is not Verdict.SAME:
             continue
         group = result.candidate
         if len(group.member_ids) == 2:
+            # #776: a SAME verdict over members with DISJOINT provenance is
+            # the risky class -- the typed-count gate consents to a batch,
+            # not to fusing two real-world items, so the pair is routed to
+            # per-item review unless `--include-cross-source` opts in. The
+            # exclusion is disclosed with the exact manual command, in the
+            # survivor order `_ordered_merge_pair` would pick.
+            if not include_cross_source and _cross_source_same_pair(
+                layout.bundle_dir, group.member_ids
+            ):
+                survivor_id, absorbed_id, _criterion = _ordered_merge_pair(
+                    layout.bundle_dir, group.member_ids
+                )
+                typer.echo(
+                    f"{group.member_ids[0]} / {group.member_ids[1]}: skipped "
+                    "(cross-source SAME -- members share no source; review "
+                    "and merge manually with `openkos merge "
+                    f"{survivor_id} {absorbed_id}`, or re-run with "
+                    "--include-cross-source)"
+                )
+                skipped_cross_source += 1
+                continue
             eligible_groups.append(group)
         elif len(group.member_ids) > 2:
-            _echo_n_gt2_skip(group)
+            _echo_n_gt2_skip(layout.bundle_dir, group)
             skipped_n_gt2 += 1
 
-    previewed_groups: list[CandidateGroup] = []
+    # Each previewed entry pins the (survivor, absorbed) order Pass 1
+    # DISPLAYED (#776 review CRITICAL): the typed count consents to that
+    # exact direction, and Pass 2 must never re-derive it from live bodies
+    # an earlier merge in this same batch may have enriched.
+    previewed_groups: list[tuple[CandidateGroup, str, str]] = []
     refused_stacked = 0
     for group in eligible_groups:
-        survivor_id, absorbed_id = group.member_ids
+        survivor_id, absorbed_id, survivor_criterion = _ordered_merge_pair(
+            layout.bundle_dir, group.member_ids
+        )
         try:
-            prepared = _prepare_one_merge(root, layout, index_path, log_path, group)
+            prepared = _prepare_one_merge(
+                root,
+                layout,
+                index_path,
+                log_path,
+                group,
+                ordered_pair=(survivor_id, absorbed_id),
+            )
         except (OSError, ValueError) as exc:
             typer.echo(
                 "openkos adjudicate --apply-same: failed while previewing "
@@ -2379,19 +2559,24 @@ def _run_adjudicate_apply_same(
             )
             refused_stacked += 1
             continue
-        previewed_groups.append(group)
+        previewed_groups.append((group, survivor_id, absorbed_id))
         typer.echo(_format_merge_preview_line(prepared, no_reconcile=no_reconcile))
+        # #776: the batch survivor rule is deterministic and STATED.
+        typer.echo(f"  survivor: {prepared.survivor_canonical} ({survivor_criterion})")
     total = len(previewed_groups)
     typer.echo(f"Total: {total}")
 
     if total == 0:
-        skipped_total = skipped_n_gt2 + refused_stacked
+        skipped_total = skipped_n_gt2 + refused_stacked + skipped_cross_source
         prefix = "nothing to apply -- " if skipped_total == 0 else ""
         stacked_note = f", stacked-body: {refused_stacked}" if refused_stacked else ""
+        cross_note = (
+            f", cross-source: {skipped_cross_source}" if skipped_cross_source else ""
+        )
         typer.echo(
             f"openkos adjudicate --apply-same: {prefix}applied 0, skipped "
             f"{skipped_total} (N>2: {skipped_n_gt2}, already-merged: 0"
-            f"{stacked_note})"
+            f"{stacked_note}{cross_note})"
         )
         return
 
@@ -2417,10 +2602,16 @@ def _run_adjudicate_apply_same(
 
     applied = 0
     skipped_already_merged = 0
-    for group in previewed_groups:
-        survivor_id, absorbed_id = group.member_ids
+    for group, survivor_id, absorbed_id in previewed_groups:
         try:
-            prepared = _prepare_one_merge(root, layout, index_path, log_path, group)
+            prepared = _prepare_one_merge(
+                root,
+                layout,
+                index_path,
+                log_path,
+                group,
+                ordered_pair=(survivor_id, absorbed_id),
+            )
         except (OSError, ValueError) as exc:
             typer.echo(
                 "openkos adjudicate --apply-same: failed while merging "
@@ -2515,12 +2706,17 @@ def _run_adjudicate_apply_same(
             raise typer.Exit(code=1) from exc
         applied += 1
 
-    skipped_total = skipped_n_gt2 + skipped_already_merged + refused_stacked
+    skipped_total = (
+        skipped_n_gt2 + skipped_already_merged + refused_stacked + skipped_cross_source
+    )
     stacked_note = f", stacked-body: {refused_stacked}" if refused_stacked else ""
+    cross_note = (
+        f", cross-source: {skipped_cross_source}" if skipped_cross_source else ""
+    )
     typer.echo(
         f"openkos adjudicate --apply-same: applied {applied} of {total} "
         f"previewed, skipped {skipped_total} (N>2: {skipped_n_gt2}, "
-        f"already-merged: {skipped_already_merged}{stacked_note})"
+        f"already-merged: {skipped_already_merged}{stacked_note}{cross_note})"
     )
 
     # #640: once per batch, after Pass 2 -- never per `_commit_one_merge`.
@@ -11729,6 +11925,15 @@ def adjudicate(
             "and `curate` take."
         ),
     ),
+    include_cross_source: bool = typer.Option(
+        False,
+        "--include-cross-source",
+        help=(
+            "Let --apply-same batch-merge SAME pairs whose members share "
+            "no provenance source (#776) -- excluded by default because "
+            "that is the class that fuses distinct real-world items."
+        ),
+    ),
 ) -> None:
     """LLM-adjudicate cross-source candidate duplicates: read-only by default.
 
@@ -11831,6 +12036,15 @@ def adjudicate(
             err=True,
         )
         raise typer.Exit(code=2)
+    if include_cross_source and not apply_same:
+        # #776: the flag consents to batch-merging the risky class; without
+        # --apply-same it would consent to nothing, and a silently ignored
+        # consent flag is worse than a refusal.
+        typer.echo(
+            "openkos adjudicate: --include-cross-source requires --apply-same.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
 
     root = Path.cwd()
     reason = config.require_workspace(root)
@@ -11904,6 +12118,15 @@ def adjudicate(
 
     results = batch.results
     if json_output:
+        # #776: the machine surface carries the same cross-source signal
+        # the human listing renders as a note -- computed HERE, so the
+        # payload builder stays I/O-free.
+        cross_source_flags = tuple(
+            result.verdict is Verdict.SAME
+            and len(result.candidate.member_ids) == 2
+            and _cross_source_same_pair(layout.bundle_dir, result.candidate.member_ids)
+            for result in results
+        )
         typer.echo(
             json.dumps(
                 _adjudication_payload(
@@ -11911,6 +12134,7 @@ def adjudicate(
                     same_only=same_only,
                     total=len(candidates),
                     partial=batch.failure is not None,
+                    cross_source_flags=cross_source_flags,
                 ),
                 indent=2,
             )
@@ -11928,6 +12152,7 @@ def adjudicate(
             results,
             confirm_count=confirm_count,
             no_reconcile=no_reconcile,
+            include_cross_source=include_cross_source,
         )
     else:
         _render_adjudicate_report(root, results, same_only=same_only)

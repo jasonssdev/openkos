@@ -28,6 +28,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner, _NamedTextIOWrapper
 
+from openkos import config as okf_config
 from openkos.bundle import ledger as bundle_ledger
 from openkos.cli import main
 from openkos.cli.main import app
@@ -80,10 +81,23 @@ def _init_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert result.exit_code == 0
 
 
-def _write_doc(path: Path, *, doc_type: str = "Concept", title: str = "Stub") -> None:
+def _write_doc(
+    path: Path,
+    *,
+    doc_type: str = "Concept",
+    title: str = "Stub",
+    provenance: tuple[str, ...] = (),
+    body: str = "",
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    provenance_block = (
+        "provenance:\n" + "".join(f"  - {entry}\n" for entry in provenance)
+        if provenance
+        else ""
+    )
     path.write_text(
-        f"---\ntype: {doc_type}\ntitle: {title}\n---\n# {title}\n",
+        f"---\ntype: {doc_type}\ntitle: {title}\n{provenance_block}---\n"
+        f"# {title}\n{body}",
         encoding="utf-8",
     )
 
@@ -991,6 +1005,7 @@ def test_adjudicate_json_partial_batch_emits_completed_verdicts_then_exits_one(
                 "tier": "HIGH",
                 "verdict": "SAME",
                 "rationale": "kept work",
+                "cross_source": False,
             }
         ],
     }
@@ -1835,7 +1850,8 @@ def test_adjudicate_apply_plans_and_applies_the_merged_body_reconciliation(
 
     assert result.exit_code == 0, result.output
     assert "reconcile merged body" in result.stdout
-    assert reconciled == ["concepts/b"]
+    # #776: `b`'s body is the richer one, so it survives and `a` is absorbed.
+    assert reconciled == ["concepts/a"]
 
 
 def _seed_reconcilable_pair(
@@ -1897,7 +1913,8 @@ def test_adjudicate_apply_no_reconcile_opts_out(
     assert result.exit_code == 0, result.output
     assert "reconcile merged body" not in result.stdout
     assert reconciled == []
-    assert not (tmp_path / "bundle" / "concepts" / "b.md").exists(), (
+    # #776: `b` has the richer body, so it survives and `a` is removed.
+    assert not (tmp_path / "bundle" / "concepts" / "a.md").exists(), (
         "the merge itself still happens -- only the improvement pass is skipped"
     )
 
@@ -1918,7 +1935,8 @@ def test_adjudicate_apply_same_plans_and_applies_the_reconciliation(
 
     assert result.exit_code == 0, result.output
     assert "reconcile merged body" in result.stdout
-    assert reconciled == ["concepts/b"]
+    # #776: `b`'s body is the richer one, so it survives and `a` is absorbed.
+    assert reconciled == ["concepts/a"]
 
 
 def test_adjudicate_apply_same_no_reconcile_opts_out(
@@ -2837,16 +2855,17 @@ def _write_bodied_doc(path: Path, *, title: str, body: str) -> None:
     )
 
 
-def test_adjudicate_apply_same_refuses_a_stacked_share_dominated_merge(
+def test_adjudicate_apply_same_richer_body_survivor_defuses_domination(
     tmp_path: Path,
     tmp_path_factory: pytest.TempPathFactory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`--apply-same` is the one accept path with NO per-item consent, so a
-    merge whose result would be dominated by unreconciled absorbed content
-    is refused outright there (issue #559): excluded from the preview and
-    the typed count, reported with an explicit line that names the
-    interactive route, and both files stay on disk."""
+    """#776 supersedes #559's refusal scenario BY CONSTRUCTION: the
+    richer-body survivor rule absorbs the small document into the big one,
+    so the absorbed share can never reach the 80% domination guardrail on
+    a 2-member pair -- the pair that used to be refused now merges, with
+    the big document as the permanent id. The guardrail itself stays as
+    defense in depth."""
     _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
     _write_bodied_doc(
         tmp_path / "bundle" / "concepts" / "adk.md", title="ADK", body="Stub."
@@ -2873,23 +2892,24 @@ def test_adjudicate_apply_same_refuses_a_stacked_share_dominated_merge(
     )
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
 
-    result = runner.invoke(app, ["adjudicate", "--apply-same"])
+    result = runner.invoke(app, ["adjudicate", "--apply-same", "--confirm-count", "1"])
 
     assert result.exit_code == 0
-    assert "refused (stacked-body" in result.stdout
-    assert "adjudicate --apply" in result.stdout
-    assert "Total: 0" in result.stdout
-    assert (tmp_path / "bundle" / "concepts" / "adk-callbacks.md").exists()
-    assert "stacked-body: 1" in result.stdout
+    assert "refused (stacked-body" not in result.stdout
+    assert "survivor: concepts/adk-callbacks (richer body)" in result.stdout
+    assert not (tmp_path / "bundle" / "concepts" / "adk.md").exists()
+    assert (tmp_path / "bundle" / "concepts" / "adk-callbacks.md").is_file()
 
 
-def test_adjudicate_apply_same_applies_clean_merges_while_refusing_dominated_ones(
+def test_adjudicate_apply_same_formerly_dominated_pair_rides_the_batch(
     tmp_path: Path,
     tmp_path_factory: pytest.TempPathFactory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The guardrail refuses per merge, not per batch: a clean pair in the
-    same run is previewed, counted, and applied normally."""
+    """#776: with the richer-body survivor rule, the pair #559's guardrail
+    used to refuse (tiny doc + huge doc) merges small-into-big alongside
+    an ordinary clean pair -- both previewed, both counted, both applied,
+    no refusal line."""
     _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
     _write_bodied_doc(
         tmp_path / "bundle" / "concepts" / "adk.md", title="ADK", body="Stub."
@@ -2932,25 +2952,28 @@ def test_adjudicate_apply_same_applies_clean_merges_while_refusing_dominated_one
     )
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
 
-    result = runner.invoke(app, ["adjudicate", "--apply-same", "--confirm-count", "1"])
+    result = runner.invoke(app, ["adjudicate", "--apply-same", "--confirm-count", "2"])
 
     assert result.exit_code == 0
-    assert "refused (stacked-body" in result.stdout
-    assert "Total: 1" in result.stdout
-    assert "applied 1" in result.stdout
-    # The dominated pair's files are untouched; the clean duplicate merged.
+    assert "refused (stacked-body" not in result.stdout
+    assert "Total: 2" in result.stdout
+    assert "applied 2" in result.stdout
+    # Small-into-big: the huge doc survives; the clean pair keeps its
+    # richer member (`http-client`'s body is the longer of the two).
     assert (tmp_path / "bundle" / "concepts" / "adk-callbacks.md").exists()
+    assert not (tmp_path / "bundle" / "concepts" / "adk.md").exists()
     assert not (tmp_path / "bundle" / "concepts" / "http-client-2.md").exists()
 
 
-def test_adjudicate_apply_interactive_still_prompts_on_a_dominated_merge(
+def test_adjudicate_apply_interactive_merges_small_into_the_richer_body(
     tmp_path: Path,
     tmp_path_factory: pytest.TempPathFactory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The interactive walk keeps per-item consent as the gate (issue #559
-    chose warn-not-refuse where a human decides): the preview carries the
-    warning, the prompt still runs, and an accepted `y` still merges."""
+    """#776 on the interactive walk: the tiny/huge pair that #559 used to
+    warn ABOUT-domination on now previews small-into-big -- no domination
+    warning fires, the survivor criterion is stated, the prompt still
+    runs, and an accepted `y` merges with the big document surviving."""
     _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
     _write_bodied_doc(
         tmp_path / "bundle" / "concepts" / "adk.md", title="ADK", body="Stub."
@@ -2980,10 +3003,10 @@ def test_adjudicate_apply_interactive_still_prompts_on_a_dominated_merge(
     result = runner.invoke(app, ["adjudicate", "--apply"], input="y\n")
 
     assert result.exit_code == 0
-    assert "warning:" in result.stdout
-    assert "ABOUT" in result.stdout
+    assert "survivor: concepts/adk-callbacks (richer body)" in result.stdout
     assert "applied 1" in result.stdout
-    assert not (tmp_path / "bundle" / "concepts" / "adk-callbacks.md").exists()
+    assert not (tmp_path / "bundle" / "concepts" / "adk.md").exists()
+    assert (tmp_path / "bundle" / "concepts" / "adk-callbacks.md").is_file()
 
 
 def test_adjudicate_apply_same_aggregate_preview_precedes_gate_and_writes(
@@ -3738,6 +3761,7 @@ def test_adjudicate_json_flag_emits_clean_json_and_suppresses_human_output(
                 "tier": "HIGH",
                 "verdict": "SAME",
                 "rationale": "same rationale",
+                "cross_source": False,
             },
             {
                 "member_ids": ["c", "d"],
@@ -3745,6 +3769,7 @@ def test_adjudicate_json_flag_emits_clean_json_and_suppresses_human_output(
                 "tier": "LOW",
                 "verdict": "DIFFERENT",
                 "rationale": "diff rationale",
+                "cross_source": False,
             },
         ],
     }
@@ -3940,7 +3965,9 @@ def test_adjudication_payload_empty_results_returns_empty_results_list() -> None
     any group to map, and that the empty state is still self-describing
     rather than a bare `[]` (spec: Empty State Emits Valid Empty `results`
     Under `--json`)."""
-    assert main._adjudication_payload([], same_only=False, total=0, partial=False) == {
+    assert main._adjudication_payload(
+        [], same_only=False, total=0, partial=False, cross_source_flags=()
+    ) == {
         "partial": False,
         "adjudicated": 0,
         "total": 0,
@@ -3968,7 +3995,11 @@ def test_adjudication_payload_complete_run_marks_partial_false_with_equal_counts
     ]
 
     payload = main._adjudication_payload(
-        results, same_only=False, total=2, partial=False
+        results,
+        same_only=False,
+        total=2,
+        partial=False,
+        cross_source_flags=(False,) * len(results),
     )
 
     assert payload["partial"] is False
@@ -3987,7 +4018,11 @@ def test_adjudication_payload_partial_run_marks_partial_true_with_short_count() 
     results = [_adjudicated(group, verdict=Verdict.SAME, rationale="kept work")]
 
     payload = main._adjudication_payload(
-        results, same_only=False, total=2, partial=True
+        results,
+        same_only=False,
+        total=2,
+        partial=True,
+        cross_source_flags=(False,) * len(results),
     )
 
     assert payload["partial"] is True
@@ -4000,6 +4035,7 @@ def test_adjudication_payload_partial_run_marks_partial_true_with_short_count() 
             "tier": "HIGH",
             "verdict": "SAME",
             "rationale": "kept work",
+            "cross_source": False,
         }
     ]
 
@@ -4024,7 +4060,11 @@ def test_adjudication_payload_same_only_does_not_shrink_adjudicated_count() -> N
     ]
 
     payload = main._adjudication_payload(
-        results, same_only=True, total=2, partial=False
+        results,
+        same_only=True,
+        total=2,
+        partial=False,
+        cross_source_flags=(False,) * len(results),
     )
 
     assert payload["adjudicated"] == 2
@@ -4051,7 +4091,11 @@ def test_adjudication_payload_single_same_result_exact_field_set() -> None:
     )
 
     payload = main._adjudication_payload(
-        [result], same_only=False, total=1, partial=False
+        [result],
+        same_only=False,
+        total=1,
+        partial=False,
+        cross_source_flags=(False,) * len([result]),
     )
 
     assert payload["results"] == [
@@ -4061,6 +4105,7 @@ def test_adjudication_payload_single_same_result_exact_field_set() -> None:
             "tier": "HIGH",
             "verdict": "SAME",
             "rationale": "Same individual; identical canonical name and role.",
+            "cross_source": False,
         }
     ]
     assert "confidence" not in payload["results"][0]
@@ -4093,7 +4138,11 @@ def test_adjudication_payload_mixed_verdicts_preserves_order_and_renders_low_tie
     ]
 
     payload = main._adjudication_payload(
-        results, same_only=False, total=3, partial=False
+        results,
+        same_only=False,
+        total=3,
+        partial=False,
+        cross_source_flags=(False,) * len(results),
     )
 
     assert payload["results"] == [
@@ -4103,6 +4152,7 @@ def test_adjudication_payload_mixed_verdicts_preserves_order_and_renders_low_tie
             "tier": "HIGH",
             "verdict": "SAME",
             "rationale": "same rationale",
+            "cross_source": False,
         },
         {
             "member_ids": ["c", "d"],
@@ -4110,6 +4160,7 @@ def test_adjudication_payload_mixed_verdicts_preserves_order_and_renders_low_tie
             "tier": "LOW",
             "verdict": "DIFFERENT",
             "rationale": "diff rationale",
+            "cross_source": False,
         },
         {
             "member_ids": ["e", "f"],
@@ -4117,6 +4168,7 @@ def test_adjudication_payload_mixed_verdicts_preserves_order_and_renders_low_tie
             "tier": "LOW",
             "verdict": "UNCERTAIN",
             "rationale": "unc rationale",
+            "cross_source": False,
         },
     ]
 
@@ -4139,7 +4191,11 @@ def test_adjudication_payload_cross_type_group_has_no_member_types_key() -> None
     )
 
     payload = main._adjudication_payload(
-        [result], same_only=False, total=1, partial=False
+        [result],
+        same_only=False,
+        total=1,
+        partial=False,
+        cross_source_flags=(False,) * len([result]),
     )
 
     assert payload["results"] == [
@@ -4149,6 +4205,7 @@ def test_adjudication_payload_cross_type_group_has_no_member_types_key() -> None
             "tier": "HIGH",
             "verdict": "DIFFERENT",
             "rationale": "different entities",
+            "cross_source": False,
         }
     ]
     assert set(payload["results"][0].keys()) == {
@@ -4157,6 +4214,7 @@ def test_adjudication_payload_cross_type_group_has_no_member_types_key() -> None
         "tier",
         "verdict",
         "rationale",
+        "cross_source",
     }
 
 
@@ -4178,7 +4236,11 @@ def test_adjudication_payload_same_only_filters_to_same_verdicts() -> None:
     ]
 
     payload = main._adjudication_payload(
-        results, same_only=True, total=2, partial=False
+        results,
+        same_only=True,
+        total=2,
+        partial=False,
+        cross_source_flags=(False,) * len(results),
     )
 
     assert len(payload["results"]) == 1
@@ -4377,3 +4439,439 @@ def test_adjudicate_below_cap_bundle_emits_no_truncation_notice(
 
     assert result.exit_code == 0
     assert "cap reached" not in result.stderr
+
+
+# --- issue #776: cross-source SAME gating and richer-body survivor ----------
+
+
+def _stub_candidates_and_verdict(
+    monkeypatch: pytest.MonkeyPatch, group: CandidateGroup, *, verdict: Verdict
+) -> None:
+    """Stub discovery and adjudication to one group with one verdict."""
+
+    def _fake_find_candidates(
+        bundle_dir: object, **kwargs: object
+    ) -> CandidateGroupReport:
+        return CandidateGroupReport(groups=(group,), produced=1, retained=1)
+
+    def _fake_adjudicate(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> AdjudicationBatch:
+        return AdjudicationBatch(
+            results=[_adjudicated(group, verdict=verdict, rationale="stub")]
+        )
+
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _fake_find_candidates
+    )
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
+
+
+def test_apply_same_survivor_is_the_richer_body_not_alphabetical(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#776's second half: the batch survivor is chosen by the RICHER BODY,
+    not string order -- `f` sorting before `o` must no longer decide a
+    permanent Concept ID -- and the preview states the criterion."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(
+        tmp_path / "bundle" / "concepts" / "a.md",
+        title="Concept A",
+        provenance=("sources/s1",),
+    )
+    _write_doc(
+        tmp_path / "bundle" / "concepts" / "b.md",
+        title="Concept B",
+        provenance=("sources/s1",),
+        body="A much richer body carrying the real content of this concept.\n",
+    )
+    group = _two_member_group(("concepts/a", "concepts/b"))
+    _stub_candidates_and_verdict(monkeypatch, group, verdict=Verdict.SAME)
+
+    result = runner.invoke(app, ["adjudicate", "--apply-same", "--confirm-count", "1"])
+
+    assert result.exit_code == 0
+    assert "merge concepts/a into concepts/b" in result.stdout
+    assert "survivor: concepts/b (richer body)" in result.stdout
+    assert not (tmp_path / "bundle" / "concepts" / "a.md").exists()
+    assert (tmp_path / "bundle" / "concepts" / "b.md").is_file()
+
+
+def test_apply_same_survivor_tie_keeps_id_order_and_says_so(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Equal body lengths keep today's ascending-id survivor -- and the
+    preview names the tiebreak instead of leaving it looking like a
+    quality judgment."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(
+        tmp_path / "bundle" / "concepts" / "a.md",
+        title="Concept X",
+        provenance=("sources/s1",),
+    )
+    _write_doc(
+        tmp_path / "bundle" / "concepts" / "b.md",
+        title="Concept Y",
+        provenance=("sources/s1",),
+    )
+    group = _two_member_group(("concepts/a", "concepts/b"))
+    _stub_candidates_and_verdict(monkeypatch, group, verdict=Verdict.SAME)
+
+    result = runner.invoke(app, ["adjudicate", "--apply-same", "--confirm-count", "1"])
+
+    assert result.exit_code == 0
+    assert "merge concepts/b into concepts/a" in result.stdout
+    assert "survivor: concepts/a (id order -- equal body length)" in result.stdout
+
+
+def test_apply_same_skips_a_cross_source_same_pair_by_default(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#776's serious half: a SAME verdict over two members whose provenance
+    sets are DISJOINT is the risky class -- the E2E run fused two meetings
+    held a week apart this way. `--apply-same` excludes it from the batch by
+    default, routes it to manual review, and writes nothing for it."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(
+        tmp_path / "bundle" / "events" / "m1.md",
+        doc_type="Event",
+        title="Weekly Sync",
+        provenance=("sources/transcription1",),
+    )
+    _write_doc(
+        tmp_path / "bundle" / "events" / "m2.md",
+        doc_type="Event",
+        title="Weekly Sync II",
+        provenance=("sources/transcription2",),
+    )
+    group = CandidateGroup(
+        okf_type="Event",
+        member_ids=("events/m1", "events/m2"),
+        tier=Tier.LOW,
+        trigger="stub",
+    )
+    _stub_candidates_and_verdict(monkeypatch, group, verdict=Verdict.SAME)
+
+    result = runner.invoke(app, ["adjudicate", "--apply-same", "--confirm-count", "0"])
+
+    assert result.exit_code == 0
+    assert "cross-source SAME" in result.stdout
+    assert "share no source" in result.stdout
+    assert "openkos merge" in result.stdout
+    assert "cross-source: 1" in result.stdout
+    assert (tmp_path / "bundle" / "events" / "m1.md").is_file()
+    assert (tmp_path / "bundle" / "events" / "m2.md").is_file()
+
+
+def test_apply_same_include_cross_source_restores_the_merge(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`--include-cross-source` is the explicit opt-in: the same pair is
+    previewed, gated by the typed count, and merged."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(
+        tmp_path / "bundle" / "events" / "m1.md",
+        doc_type="Event",
+        title="Weekly Sync",
+        provenance=("sources/transcription1",),
+    )
+    _write_doc(
+        tmp_path / "bundle" / "events" / "m2.md",
+        doc_type="Event",
+        title="Weekly Sync II",
+        provenance=("sources/transcription2",),
+    )
+    group = CandidateGroup(
+        okf_type="Event",
+        member_ids=("events/m1", "events/m2"),
+        tier=Tier.LOW,
+        trigger="stub",
+    )
+    _stub_candidates_and_verdict(monkeypatch, group, verdict=Verdict.SAME)
+
+    result = runner.invoke(
+        app,
+        [
+            "adjudicate",
+            "--apply-same",
+            "--include-cross-source",
+            "--confirm-count",
+            "1",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Total: 1" in result.stdout
+    # `m2`'s body is one word longer, so the richer-body rule keeps it and
+    # absorbs `m1` -- the #776 survivor criterion, not id order.
+    assert not (tmp_path / "bundle" / "events" / "m1.md").exists()
+    assert (tmp_path / "bundle" / "events" / "m2.md").is_file()
+
+
+def test_apply_same_shared_source_pair_is_not_flagged(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two members sharing a provenance source -- #773's manufactured
+    near-duplicates -- are the SAFE class and stay in the batch untouched;
+    members carrying NO provenance at all (hand-written) give no signal
+    and are never flagged either."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(
+        tmp_path / "bundle" / "concepts" / "a.md",
+        title="Concept A",
+        provenance=("sources/s1",),
+    )
+    _write_doc(
+        tmp_path / "bundle" / "concepts" / "b.md",
+        title="Concept B",
+        provenance=("sources/s1", "sources/s2"),
+    )
+    group = _two_member_group(("concepts/a", "concepts/b"))
+    _stub_candidates_and_verdict(monkeypatch, group, verdict=Verdict.SAME)
+
+    result = runner.invoke(app, ["adjudicate", "--apply-same", "--confirm-count", "1"])
+
+    assert result.exit_code == 0
+    assert "cross-source" not in result.stdout
+    assert "Total: 1" in result.stdout
+
+
+def test_include_cross_source_requires_apply_same(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--include-cross-source` without `--apply-same` is refused up front
+    (exit 2) rather than silently consenting to nothing."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["adjudicate", "--include-cross-source"])
+
+    assert result.exit_code == 2
+    assert "--include-cross-source" in result.stderr
+
+
+def test_adjudicate_report_notes_a_cross_source_same_verdict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The read-only listing carries the cross-source note on a SAME
+    verdict whose members share no source, so the operator's eye lands on
+    the risky class before any apply mode is ever invoked."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(
+        tmp_path / "bundle" / "events" / "m1.md",
+        doc_type="Event",
+        title="Weekly Sync",
+        provenance=("sources/transcription1",),
+    )
+    _write_doc(
+        tmp_path / "bundle" / "events" / "m2.md",
+        doc_type="Event",
+        title="Weekly Sync II",
+        provenance=("sources/transcription2",),
+    )
+    group = CandidateGroup(
+        okf_type="Event",
+        member_ids=("events/m1", "events/m2"),
+        tier=Tier.LOW,
+        trigger="stub",
+    )
+    _stub_candidates_and_verdict(monkeypatch, group, verdict=Verdict.SAME)
+
+    result = runner.invoke(app, ["adjudicate"])
+
+    assert result.exit_code == 0
+    assert "note: cross-source" in result.stdout
+    assert "share no source" in result.stdout
+
+
+def test_adjudicate_report_no_note_for_different_or_shared_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The note fires ONLY on the risky class: a DIFFERENT verdict over
+    disjoint provenance needs no warning, and a SAME verdict over a shared
+    source is the safe class."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(
+        tmp_path / "bundle" / "events" / "m1.md",
+        doc_type="Event",
+        title="Weekly Sync",
+        provenance=("sources/transcription1",),
+    )
+    _write_doc(
+        tmp_path / "bundle" / "events" / "m2.md",
+        doc_type="Event",
+        title="Weekly Sync II",
+        provenance=("sources/transcription2",),
+    )
+    group = CandidateGroup(
+        okf_type="Event",
+        member_ids=("events/m1", "events/m2"),
+        tier=Tier.LOW,
+        trigger="stub",
+    )
+    _stub_candidates_and_verdict(monkeypatch, group, verdict=Verdict.DIFFERENT)
+
+    result = runner.invoke(app, ["adjudicate"])
+
+    assert result.exit_code == 0
+    assert "note: cross-source" not in result.stdout
+
+
+def test_apply_interactive_warns_on_a_cross_source_pair(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The interactive `--apply` walk keeps the pair (the operator consents
+    per item) but the warning renders BEFORE the [y/N] prompt."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(
+        tmp_path / "bundle" / "events" / "m1.md",
+        doc_type="Event",
+        title="Weekly Sync",
+        provenance=("sources/transcription1",),
+    )
+    _write_doc(
+        tmp_path / "bundle" / "events" / "m2.md",
+        doc_type="Event",
+        title="Weekly Sync II",
+        provenance=("sources/transcription2",),
+    )
+    group = CandidateGroup(
+        okf_type="Event",
+        member_ids=("events/m1", "events/m2"),
+        tier=Tier.LOW,
+        trigger="stub",
+    )
+    _stub_candidates_and_verdict(monkeypatch, group, verdict=Verdict.SAME)
+
+    result = runner.invoke(app, ["adjudicate", "--apply"], input="n\n")
+
+    assert result.exit_code == 0
+    assert "note: cross-source SAME" in result.stdout
+    out = result.stdout
+    assert out.index("note: cross-source SAME") < out.index("[y/N]")
+
+
+def test_n_gt2_skip_suggests_the_richest_member_as_survivor(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#776 reaches the N>2 manual-merge suggestion too: the suggested
+    survivor is the member with the richest body, wherever it sits in the
+    id order, and the absorbed lines skip it."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="B")
+    _write_doc(
+        tmp_path / "bundle" / "concepts" / "c.md",
+        title="C",
+        body="The richest body of the three, by a wide margin. " * 4,
+    )
+    group = CandidateGroup(
+        okf_type="Concept",
+        member_ids=("concepts/a", "concepts/b", "concepts/c"),
+        tier=Tier.HIGH,
+        trigger="stub",
+    )
+    _stub_candidates_and_verdict(monkeypatch, group, verdict=Verdict.SAME)
+
+    result = runner.invoke(app, ["adjudicate", "--apply-same", "--confirm-count", "0"])
+
+    assert result.exit_code == 0
+    assert "openkos merge concepts/c concepts/a" in result.stdout
+    assert "openkos merge concepts/c concepts/b" in result.stdout
+    assert "merge concepts/a concepts/" not in result.stdout
+
+
+def test_ordered_merge_pair_never_keeps_an_unreadable_member(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The spec's unreadable rule, at the helper: a member whose
+    frontmatter cannot be parsed measures below every readable one
+    (`-1` sentinel), so the readable member survives."""
+    _init_workspace(tmp_path, monkeypatch)
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "good.md", title="Good")
+
+    survivor, absorbed, criterion = main._ordered_merge_pair(
+        bundle_dir, ("concepts/absent", "concepts/good")
+    )
+
+    assert survivor == "concepts/good"
+    assert absorbed == "concepts/absent"
+    assert criterion == "richer body"
+
+
+def test_prepare_one_merge_honors_a_pinned_ordered_pair(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#776 review CRITICAL: the batch's Pass 2 must apply the direction
+    Pass 1 DISPLAYED, never a live recomputation -- `ordered_pair` pins it
+    even when current body lengths would order the other way."""
+    _init_workspace(tmp_path, monkeypatch)
+    layout = okf_config.WorkspaceLayout(tmp_path)
+    _write_doc(
+        layout.bundle_dir / "concepts" / "a.md",
+        title="A",
+        body="The richer body right now, which a live recompute would keep. " * 3,
+    )
+    _write_doc(layout.bundle_dir / "concepts" / "b.md", title="B")
+    group = _two_member_group(("concepts/a", "concepts/b"))
+
+    prepared = main._prepare_one_merge(
+        tmp_path,
+        layout,
+        layout.bundle_dir / "index.md",
+        layout.bundle_dir / "log.md",
+        group,
+        ordered_pair=("concepts/b", "concepts/a"),
+    )
+
+    assert prepared is not None
+    assert prepared.survivor_canonical == "concepts/b"
+    assert prepared.absorbed_canonical == "concepts/a"
+
+
+def test_adjudicate_json_carries_the_cross_source_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#776 on the machine surface: `--json` results carry `cross_source`,
+    true exactly for a SAME 2-member pair with disjoint provenance --
+    the unattended pipelines `--json` serves cannot read a stdout note."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(
+        tmp_path / "bundle" / "events" / "m1.md",
+        doc_type="Event",
+        title="Weekly Sync",
+        provenance=("sources/transcription1",),
+    )
+    _write_doc(
+        tmp_path / "bundle" / "events" / "m2.md",
+        doc_type="Event",
+        title="Weekly Sync II",
+        provenance=("sources/transcription2",),
+    )
+    group = CandidateGroup(
+        okf_type="Event",
+        member_ids=("events/m1", "events/m2"),
+        tier=Tier.LOW,
+        trigger="stub",
+    )
+    _stub_candidates_and_verdict(monkeypatch, group, verdict=Verdict.SAME)
+
+    result = runner.invoke(app, ["adjudicate", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["results"][0]["cross_source"] is True

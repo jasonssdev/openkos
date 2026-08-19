@@ -1077,7 +1077,8 @@ def test_identity_plans_and_applies_the_merged_body_reconciliation(
     assert "reconcile merged body" in result.stdout, (
         "the reconciliation must be disclosed in the plan, before consent"
     )
-    assert reconciled == ["concepts/b"], (
+    # #776: `b`'s body is the richer one, so it survives and `a` is absorbed.
+    assert reconciled == ["concepts/a"], (
         "the accepted Identity merge must actually run the reconciliation"
     )
 
@@ -4884,3 +4885,68 @@ def test_gate_never_offers_accept_for_a_read_only_stage(
     curate.gate(stage, probe, ctx)
 
     assert "--accept" not in capsys.readouterr().err
+
+
+def test_identity_walk_states_the_survivor_criterion_and_cross_source_note(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#776 on the recommended path: curate's Identity walk renders the
+    same survivor-criterion line and cross-source warning `adjudicate
+    --apply` renders, before its [y/N] prompt."""
+    _stub_later_stages_empty(monkeypatch)
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_bodied_doc(
+        tmp_path / "bundle" / "events" / "m1.md",
+        title="Weekly Sync",
+        body="Short.",
+    )
+    (tmp_path / "bundle" / "events" / "m1.md").write_text(
+        "---\ntype: Event\ntitle: Weekly Sync\nprovenance:\n"
+        "  - sources/transcription1\n---\n# Weekly Sync\nShort.\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "bundle" / "events" / "m2.md").write_text(
+        "---\ntype: Event\ntitle: Weekly Sync II\nprovenance:\n"
+        "  - sources/transcription2\n---\n# Weekly Sync II\n"
+        "A much longer record of the second meeting, held a week later.\n",
+        encoding="utf-8",
+    )
+    _reindexed_workspace(tmp_path, monkeypatch)
+    group = CandidateGroup(
+        okf_type="Event",
+        member_ids=("events/m1", "events/m2"),
+        tier=Tier.LOW,
+        trigger="stub",
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(groups=(group,), produced=1, retained=1),
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate.adjudicate_candidates",
+        lambda *a, **k: AdjudicationBatch(
+            results=[
+                AdjudicatedCandidate(
+                    candidate=group,
+                    verdict=Verdict.SAME,
+                    confidence=0.9,
+                    rationale="same",
+                )
+            ]
+        ),
+    )
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["curate"], input="y\nn\n")
+
+    assert result.exit_code == 0, result.output
+    assert "survivor: events/m2 (richer body)" in result.stdout
+    assert "note: cross-source SAME -- members share no source" in result.stdout
+    out = result.stdout
+    # Compare against the per-item MERGE prompt -- curate's earlier stage
+    # gate also prints a [y/N].
+    assert out.index("note: cross-source SAME") < out.index(
+        "Merge events/m1 into events/m2? [y/N]"
+    )
