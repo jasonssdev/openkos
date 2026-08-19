@@ -1042,9 +1042,9 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         # SOURCE/TARGET swapped on nearly every edge -- so its consent line
         # says so, and it is never bulk-acceptable.
         asymmetric = suggestion.suggested_type in ASYMMETRIC_RELATION_TYPES
-        direction_caveat = (
-            " (direction model-suggested, unverified)" if asymmetric else ""
-        )
+        # #778: ONE spelling for the caveat, shared with suggest-relations'
+        # listing and --apply prompt via the same helper.
+        direction_caveat = cli_main._direction_caveat(suggestion.suggested_type)
         if not _confirm_item(
             ctx,
             "Structure",
