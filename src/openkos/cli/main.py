@@ -2943,12 +2943,15 @@ def _judge_failure_notice(report: ExtractionReport) -> str | None:
             "judge selection unavailable after "
             f"{judge_mod.JUDGE_ATTEMPTS} attempts; no quality selection ran, "
             f"so all {report.retained} merged candidate(s) were kept and the "
-            "positional cap was NOT applied to them"
+            "positional cap was NOT applied to them; marking the Source "
+            f"(extraction_notice: {okf.EXTRACTION_NOTICE_JUDGE_UNAVAILABLE})"
         )
     if report.judge_status == "empty":
         return (
             "judge reply matched no candidate; kept the full merged "
-            f"extraction union ({report.retained} object(s)) unfiltered"
+            f"extraction union ({report.retained} object(s)) unfiltered; "
+            "marking the Source (extraction_notice: "
+            f"{okf.EXTRACTION_NOTICE_JUDGE_EMPTY})"
         )
     return None
 
@@ -3540,11 +3543,22 @@ def _stage_derived_objects(
     # here -- the predicate lives in `extraction/concept.py` beside the
     # re-ask trigger it shares, and a second spelling in this layer is
     # exactly the drift that helper exists to prevent.
-    extraction_notice: okf.ExtractionNotice | None = (
-        okf.EXTRACTION_NOTICE_SOLE_OBJECT_RESTATES
-        if outcome.report.sole_object_restates_source
-        else None
-    )
+    # #772: a judge degrade quarantines the Source. The three notice
+    # conditions are mutually exclusive by construction -- both degrade
+    # statuses imply a multi-candidate union (a single-candidate union
+    # skips the judge entirely, #644), while sole-object requires exactly
+    # one retained object -- but the precedence is still written out so a
+    # future overlap picks the judge marker, the one `lint.check_unjudged`
+    # reads as retryable debt, over #585's disclosure.
+    extraction_notice: okf.ExtractionNotice | None
+    if outcome.report.judge_status == "failed":
+        extraction_notice = okf.EXTRACTION_NOTICE_JUDGE_UNAVAILABLE
+    elif outcome.report.judge_status == "empty":
+        extraction_notice = okf.EXTRACTION_NOTICE_JUDGE_EMPTY
+    elif outcome.report.sole_object_restates_source:
+        extraction_notice = okf.EXTRACTION_NOTICE_SOLE_OBJECT_RESTATES
+    else:
+        extraction_notice = None
     sole_object_notice = _sole_object_notice(outcome.report)
     if sole_object_notice is not None:
         typer.echo(f"openkos ingest: {sole_object_notice}", err=True)
@@ -10679,6 +10693,10 @@ def status() -> None:
     # no second `collect_docs()` call, no new walk (status spec: "No new
     # bundle walk is introduced").
     unextracted = lint_check.check_unextracted(docs)
+    # issue #772: reuses this SAME in-memory `docs` list -- the unjudged-
+    # extraction check is the quarantine's read half, and it must cost no
+    # new walk for the same reason every sibling check does not.
+    unjudged = lint_check.check_unjudged(docs)
     # issue #231 (PR2): reuses this SAME in-memory `docs` list too -- no
     # third `collect_docs()` call (design D3's no-fifth-walk guard).
     sensitivity_findings = lint_check.check_below_source_sensitivity(docs)
@@ -10695,6 +10713,9 @@ def status() -> None:
     )
     needs_attention.extend(
         f"{finding.concept_id}: {finding.detail}" for finding in unextracted
+    )
+    needs_attention.extend(
+        f"{finding.concept_id}: {finding.detail}" for finding in unjudged
     )
     needs_attention.extend(
         f"{finding.concept_id}: [{finding.kind}] {finding.detail}"
@@ -11197,6 +11218,8 @@ def lint() -> None:
     orphans = lint_check.check_orphans(docs, index_text=index_text)
     dangling = lint_check.check_dangling_targets(docs)
     unextracted = lint_check.check_unextracted(docs)
+    # #772: reuses this SAME `docs` list -- the quarantine's read half.
+    unjudged = lint_check.check_unjudged(docs)
     # #231 (PR2): reuses this SAME `docs` list -- no new bundle walk
     # (design D3's no-fifth-walk guard).
     sensitivity_findings = lint_check.check_below_source_sensitivity(docs)
@@ -11229,6 +11252,7 @@ def lint() -> None:
         orphans=orphans,
         dangling=dangling,
         unextracted=unextracted,
+        unjudged=unjudged,
         below_source=below_source,
         multi_source_uncovered=multi_source_uncovered,
         dangling_provenance=dangling_provenance,
@@ -11275,6 +11299,13 @@ def lint() -> None:
         typer.echo("  No unextracted sources.")
     else:
         for finding in report.unextracted:
+            typer.echo(f"  {finding.concept_id}: {finding.detail}")
+    typer.echo()
+    typer.echo("Unjudged extractions:")
+    if not report.unjudged:
+        typer.echo("  No unjudged extractions.")
+    else:
+        for finding in report.unjudged:
             typer.echo(f"  {finding.concept_id}: {finding.detail}")
     typer.echo()
     typer.echo("Below-source sensitivity:")

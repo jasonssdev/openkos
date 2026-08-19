@@ -403,6 +403,68 @@ def test_lint_ignores_blocked_by_sensitivity(
     assert "openkos ingest" not in result.stdout
 
 
+# --- issue #772: Unjudged extractions section -------------------------------
+
+
+def test_lint_renders_empty_unjudged_section(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fresh, empty bundle renders the `Unjudged extractions:` section with
+    its own empty-state line."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["lint"])
+
+    assert result.exit_code == 0
+    assert "Unjudged extractions:" in result.stdout
+    assert "  No unjudged extractions." in result.stdout
+
+
+def test_lint_flags_an_unjudged_extraction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Source with `extraction_notice: judge-selection-unavailable` is
+    reported under `Unjudged extractions:` naming the retry command, and
+    the command still exits 0 (#772: the quarantine marker becomes visible
+    work, never an exit-code change)."""
+    _init_workspace(tmp_path, monkeypatch)
+    sources_dir = tmp_path / "bundle" / "sources"
+    sources_dir.mkdir()
+    (sources_dir / "notes.md").write_text(
+        "---\ntype: Source\ntitle: Notes\nresource: raw/notes.txt\n"
+        "extraction_notice: judge-selection-unavailable\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["lint"])
+
+    assert result.exit_code == 0
+    assert "sources/notes:" in result.stdout
+    assert "without judge selection" in result.stdout
+    assert "openkos ingest raw/notes.txt" in result.stdout
+
+
+def test_lint_ignores_the_sole_object_notice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Source with #585's `sole-object-restates-source` notice produces NO
+    `unjudged` finding -- that token is an honest disclosure, never
+    retryable debt."""
+    _init_workspace(tmp_path, monkeypatch)
+    sources_dir = tmp_path / "bundle" / "sources"
+    sources_dir.mkdir()
+    (sources_dir / "notes.md").write_text(
+        "---\ntype: Source\ntitle: Notes\nresource: raw/notes.txt\n"
+        "extraction_notice: sole-object-restates-source\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["lint"])
+
+    assert result.exit_code == 0
+    assert "  No unjudged extractions." in result.stdout
+
+
 # --- issue #231 (PR2): below-source-sensitivity / multi-source-uncovered ---
 
 

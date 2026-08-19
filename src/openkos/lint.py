@@ -18,6 +18,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path, PurePosixPath
+from typing import Final
 
 from openkos import config, fsio
 from openkos.bundle import provenance as bundle_provenance
@@ -94,6 +95,16 @@ class LintDoc:
     `check_unextracted`, which matches ONLY the literal `"failed"` value --
     any other token, including an unrecognized one, is ignored fail-silent
     (design's write-side-typed/read-side-fail-silent policy)."""
+
+    extraction_notice: str = ""
+    """The doc's frontmatter `extraction_notice` field, or `""` if absent
+    (issue #772). Only a Source can carry this key
+    (`okf.build_source_concept`); every other doc type defaults to `""`,
+    same as `extraction_status`. Feeds `check_unjudged`, which matches ONLY
+    the two judge-degrade tokens -- #585's `sole-object-restates-source`
+    and any unrecognized token are ignored fail-silent (the same
+    write-side-typed/read-side-fail-silent policy `extraction_status`
+    documents)."""
 
     resource: str = ""
     """The doc's frontmatter `resource` field, or `""` if absent (issue
@@ -183,6 +194,11 @@ class LintReport:
     orphans: list[LintFinding]
     dangling: list[LintFinding] = field(default_factory=list)
     unextracted: list[LintFinding] = field(default_factory=list)
+    unjudged: list[LintFinding] = field(default_factory=list)
+    """`"unjudged"` findings (#772): a Source whose `extraction_notice`
+    carries a judge-degrade token, meaning its derived objects were stored
+    without quality selection -- retryable debt, rendered under its own
+    `Unjudged extractions:` section (see `check_unjudged`)."""
     below_source: list[LintFinding] = field(default_factory=list)
     """`"below-source-sensitivity"` findings (#231, PR2): a descendant
     inside exactly one `type: Source` closure whose `sensitivity` differs
@@ -304,6 +320,7 @@ def collect_docs(bundle_dir: Path) -> tuple[list[LintDoc], list[str]]:
                 relations=relations,
                 engine_owned_relations=engine_owned_relations,
                 extraction_status=str(metadata.get("extraction_status", "")),
+                extraction_notice=str(metadata.get("extraction_notice", "")),
                 resource=str(metadata.get("resource", "")),
                 sensitivity=str(metadata.get("sensitivity", "")),
                 provenance=provenance,
@@ -961,27 +978,89 @@ def check_unextracted(docs: list[LintDoc]) -> list[LintFinding]:
     for doc in docs:
         if doc.extraction_status != okf.EXTRACTION_STATUS_FAILED:
             continue
-        if doc.resource and _UNSPELLABLE_IN_SPAN.search(doc.resource):
-            # Third outcome (#285): a present `resource` that cannot be
-            # spelled inside the span. Emit NO command at all -- not even a
-            # bare `openkos ingest` span, which would collide with the
-            # empty-`resource` fallback below and make two different repairs
-            # indistinguishable -- and never echo the value back, which
-            # would reintroduce #274's defect one line lower. The finding's
-            # `path`/`concept_id` still locates the document.
-            retry_hint = (
-                "this source's raw filename cannot be spelled inside a "
-                "command; rename the raw file and re-ingest it"
-            )
-        elif doc.resource:
-            retry_hint = f"retry with `openkos ingest {doc.resource}`"
-        else:
-            retry_hint = "re-run `openkos ingest` on this source's raw file"
         findings.append(
             LintFinding(
                 kind="unextracted",
                 path=f"{doc.identity}.md",
-                detail=f"concept extraction failed during ingest — {retry_hint}",
+                detail=(
+                    "concept extraction failed during ingest — "
+                    f"{_ingest_retry_hint(doc)}"
+                ),
+            )
+        )
+    return findings
+
+
+def _ingest_retry_hint(doc: LintDoc) -> str:
+    """The three-outcome re-ingest hint `check_unextracted` documents,
+    shared verbatim with `check_unjudged` (#772) so the two retryable-debt
+    kinds cannot drift apart on how they spell the remedy.
+
+    Outcome 3 -- a present but UNSPELLABLE `resource` (#285) -- emits NO
+    command at all, not even a bare `openkos ingest` span (which would
+    collide with the empty-`resource` fallback and make two different
+    repairs indistinguishable), and never echoes the refused value back
+    (#274's defect one line lower). The finding's `path`/`concept_id`
+    still locates the document."""
+    if doc.resource and _UNSPELLABLE_IN_SPAN.search(doc.resource):
+        return (
+            "this source's raw filename cannot be spelled inside a "
+            "command; rename the raw file and re-ingest it"
+        )
+    if doc.resource:
+        return f"retry with `openkos ingest {doc.resource}`"
+    return "re-run `openkos ingest` on this source's raw file"
+
+
+_UNJUDGED_NOTICE_CAUSES: Final = {
+    "judge-selection-unavailable": "judge unavailable",
+    "judge-selection-empty": "judge reply matched no candidate",
+}
+"""Spelled as literals rather than `okf.EXTRACTION_NOTICE_*` so a typo in
+either module fails a test instead of silently agreeing with itself --
+the same reasoning `check_unextracted` gives for matching one literal.
+The values are the human-readable cause each token records; keeping them
+distinct on this surface preserves the same failed/empty split #754
+established in `ingest`'s terminal notices."""
+
+
+def check_unjudged(docs: list[LintDoc]) -> list[LintFinding]:
+    """Flag each Source whose derived objects were stored WITHOUT judge
+    selection (issue #772).
+
+    Matches ONLY the two judge-degrade `extraction_notice` tokens
+    (`_UNJUDGED_NOTICE_CAUSES`); #585's `sole-object-restates-source` --
+    an honest disclosure, never debt -- and any unrecognized,
+    out-of-vocabulary token are ignored fail-silent, exactly the
+    write-side-typed/read-side-fail-silent policy `check_unextracted`
+    follows for `extraction_status`.
+
+    This is the read half of #772's fail-open-but-quarantine design: the
+    write half (`ingest` stamping the token) is only a quarantine if some
+    later surface is guaranteed to look. `lint` and `status` both render
+    these findings, so an unjudged extraction can no longer be admitted
+    silently and forgotten.
+
+    Same structural no-fifth-walk guard as every sibling: the signature
+    takes ONLY `docs`, so this function is incapable of opening a walk.
+
+    The detail reuses `_ingest_retry_hint` -- including #285's declining
+    third outcome -- because the remedy is the same re-ingest
+    `check_unextracted` names: a re-run whose judge answers replaces the
+    unfiltered set with a selected one."""
+    findings: list[LintFinding] = []
+    for doc in docs:
+        cause = _UNJUDGED_NOTICE_CAUSES.get(doc.extraction_notice)
+        if cause is None:
+            continue
+        findings.append(
+            LintFinding(
+                kind="unjudged",
+                path=f"{doc.identity}.md",
+                detail=(
+                    "derived objects were stored without judge selection "
+                    f"during ingest ({cause}) — {_ingest_retry_hint(doc)}"
+                ),
             )
         )
     return findings

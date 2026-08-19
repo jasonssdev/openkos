@@ -393,6 +393,29 @@ def test_status_lists_unextracted_under_needs_attention(
     assert "openkos ingest raw/notes.txt" in result.stdout
 
 
+def test_status_lists_unjudged_under_needs_attention(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Source with `extraction_notice: judge-selection-unavailable` is
+    listed under "needs attention", naming the same retry command `lint`
+    computes, and `status` still exits 0 (#772: the quarantine marker is
+    only a quarantine if the operator is told to look)."""
+    _init_workspace(tmp_path, monkeypatch)
+    sources_dir = tmp_path / "bundle" / "sources"
+    sources_dir.mkdir()
+    (sources_dir / "notes.md").write_text(
+        "---\ntype: Source\ntitle: Notes\nresource: raw/notes.txt\n"
+        "extraction_notice: judge-selection-unavailable\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    assert "without judge selection" in result.stdout
+    assert "openkos ingest raw/notes.txt" in result.stdout
+
+
 def test_status_blocked_by_sensitivity_never_in_retry_prompt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

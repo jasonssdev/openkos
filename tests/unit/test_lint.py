@@ -29,6 +29,7 @@ def _write_doc(
     volatility: str | None = None,
     sensitivity_value: str | None = None,
     extraction_status: str | None = None,
+    extraction_notice: str | None = None,
     resource: str | None = None,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -39,6 +40,8 @@ def _write_doc(
         frontmatter += f"sensitivity: {sensitivity_value}\n"
     if extraction_status is not None:
         frontmatter += f"extraction_status: {extraction_status}\n"
+    if extraction_notice is not None:
+        frontmatter += f"extraction_notice: {extraction_notice}\n"
     if resource is not None:
         frontmatter += f"resource: {resource}\n"
     frontmatter += "---\n"
@@ -296,6 +299,29 @@ def test_collect_docs_defaults_both_fields_when_absent(tmp_path: Path) -> None:
     assert docs[0].resource == ""
 
 
+def test_collect_docs_reads_extraction_notice(tmp_path: Path) -> None:
+    """`collect_docs` populates `LintDoc.extraction_notice` from the SAME
+    `metadata` dict (#772) -- absent decodes to `""`, present carries the
+    token verbatim."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "sources" / "notes.md",
+        doc_type="Source",
+        extraction_notice="judge-selection-unavailable",
+        resource="raw/notes.txt",
+    )
+    _write_doc(bundle_dir / "concepts" / "stoicism.md")
+
+    docs, skipped = lint.collect_docs(bundle_dir)
+
+    by_identity = {doc.identity: doc for doc in docs}
+    assert (
+        by_identity["sources/notes"].extraction_notice == "judge-selection-unavailable"
+    )
+    assert by_identity["concepts/stoicism"].extraction_notice == ""
+    assert skipped == []
+
+
 def test_collect_docs_skips_doc_with_corrupt_relations_key(tmp_path: Path) -> None:
     """A `relations:` value that is not a list (`okf.decode_relations`
     raises `ValueError`) is skipped, not raised, with a skip notice --
@@ -390,6 +416,7 @@ def _doc(
     volatility: str = "",
     relations: tuple[str, ...] = (),
     extraction_status: str = "",
+    extraction_notice: str = "",
     resource: str = "",
 ) -> lint.LintDoc:
     rel_dir = str(PurePosixPath(identity).parent)
@@ -405,6 +432,7 @@ def _doc(
         volatility=volatility,
         relations=relations,
         extraction_status=extraction_status,
+        extraction_notice=extraction_notice,
         resource=resource,
     )
 
@@ -1067,6 +1095,114 @@ def test_check_unextracted_falls_back_when_resource_is_missing() -> None:
 
     assert "openkos ingest" in findings[0].detail
     assert "raw/" not in findings[0].detail
+
+
+# --- issue #772: check_unjudged(docs) (quarantine surfacing) --------------
+
+
+@pytest.mark.parametrize(
+    ("notice", "cause"),
+    [
+        ("judge-selection-unavailable", "judge unavailable"),
+        ("judge-selection-empty", "judge reply matched no candidate"),
+    ],
+)
+def test_check_unjudged_flags_judge_degrade_notices(notice: str, cause: str) -> None:
+    """A `LintDoc` carrying either judge-degrade `extraction_notice` token
+    produces exactly one `unjudged` finding naming the cause (#772: the
+    quarantine marker is only a quarantine if a later surface reads it)."""
+    docs = [
+        _doc(
+            "sources/notes",
+            "Body.",
+            extraction_notice=notice,
+            resource="raw/notes.txt",
+        )
+    ]
+
+    findings = lint.check_unjudged(docs)
+
+    assert len(findings) == 1
+    assert findings[0].kind == "unjudged"
+    assert findings[0].path == "sources/notes.md"
+    assert cause in findings[0].detail
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["", "sole-object-restates-source", "some-unrecognized-value"],
+)
+def test_check_unjudged_ignores_other_notice_values(value: str) -> None:
+    """Every `extraction_notice` value other than the two judge-degrade
+    tokens -- including #585's sole-object token and an out-of-vocabulary
+    one -- produces NO `unjudged` finding (write-side-typed/read-side-
+    fail-silent, same as `check_unextracted`)."""
+    docs = [_doc("sources/notes", "Body.", extraction_notice=value)]
+
+    findings = lint.check_unjudged(docs)
+
+    assert findings == []
+
+
+def test_check_unjudged_names_exact_retry_command() -> None:
+    """The finding's detail names the literal re-ingest command built from
+    the Source's own `resource` value -- the SAME three-outcome hint
+    `check_unextracted` renders, so the two retryable-debt kinds cannot
+    drift apart on how they spell the remedy."""
+    docs = [
+        _doc(
+            "sources/notes",
+            "Body.",
+            extraction_notice="judge-selection-unavailable",
+            resource="raw/foo.md",
+        )
+    ]
+
+    findings = lint.check_unjudged(docs)
+
+    assert findings[0].detail == (
+        "derived objects were stored without judge selection during ingest "
+        "(judge unavailable) — retry with `openkos ingest raw/foo.md`"
+    )
+
+
+def test_check_unjudged_falls_back_when_resource_is_missing() -> None:
+    """An empty `resource` falls back to the generic re-ingest hint rather
+    than naming a broken command."""
+    docs = [
+        _doc(
+            "sources/notes",
+            "Body.",
+            extraction_notice="judge-selection-empty",
+            resource="",
+        )
+    ]
+
+    findings = lint.check_unjudged(docs)
+
+    assert "openkos ingest" in findings[0].detail
+    assert "raw/" not in findings[0].detail
+
+
+def test_check_unjudged_declines_an_unspellable_resource() -> None:
+    """A `resource` that cannot sit inside a backtick span (#285's defect
+    class) yields NO command at all and never echoes the value back --
+    the same declining outcome `check_unextracted` pins."""
+    docs = [
+        _doc(
+            "sources/notes",
+            "Body.",
+            extraction_notice="judge-selection-unavailable",
+            resource="raw/evil`touch pwned`.md",
+        )
+    ]
+
+    findings = lint.check_unjudged(docs)
+
+    assert len(findings) == 1
+    assert "`" not in findings[0].detail
+    assert "evil" not in findings[0].detail
+    assert "rename the raw file" in findings[0].detail
 
 
 def _ingest_spans_with_an_argument(detail: str) -> list[str]:

@@ -262,6 +262,46 @@ Contract already covers all existing kinds and MUST cover this one too.
 - WHEN `openkos lint` runs
 - THEN it reports the finding(s) and still exits 0
 
+### Requirement: Unjudged-Extraction Scan
+
+`openkos lint` MUST flag any Source document whose frontmatter
+`extraction_notice` carries a judge-degrade token
+(`judge-selection-unavailable` or `judge-selection-empty`) as an `unjudged`
+finding (issue #772) — the read half of ingest's fail-open-but-quarantine
+design: objects stored without quality selection are retryable debt, and a
+marker nothing reads is not a quarantine. `sole-object-restates-source`
+and any unrecognized, out-of-vocabulary token MUST NEVER produce this
+finding — that token is an honest disclosure, not debt. The finding's
+detail MUST name which degrade occurred (the failed/empty split #754
+established) and MUST spell the same three-outcome retry hint the
+`unextracted` kind renders, built from the Source's own `resource` value —
+including #285's declining outcome for an unspellable `resource`. This
+scan MUST reuse `LintDoc`'s existing single-pass `collect_docs` walk — no
+new bundle walk — and MUST NOT change `lint`'s exit code. Findings render
+under their own `Unjudged extractions:` section.
+
+#### Scenario: A judge-degrade token produces an unjudged finding
+
+- GIVEN a Source document with `extraction_notice:
+  judge-selection-unavailable`
+- WHEN `openkos lint` runs
+- THEN it reports an `unjudged` finding for that Source naming the retry
+  command built from its `resource`, and still exits 0
+
+#### Scenario: The empty-admission token names its distinct cause
+
+- GIVEN a Source document with `extraction_notice: judge-selection-empty`
+- WHEN `openkos lint` runs
+- THEN the `unjudged` finding's detail names the judge reply matching no
+  candidate, not unavailability
+
+#### Scenario: The sole-object disclosure produces no finding
+
+- GIVEN a Source document with `extraction_notice:
+  sole-object-restates-source`
+- WHEN `openkos lint` runs
+- THEN no `unjudged` finding is reported for that Source
+
 ### Requirement: Below-Source Sensitivity Scan
 
 `openkos lint` MUST flag any provenance descendant for which

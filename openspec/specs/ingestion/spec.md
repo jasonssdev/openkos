@@ -1796,9 +1796,11 @@ repair verb and no migration step.
 WHEN a single `ingest` run's extraction retains EXACTLY ONE derived object and
 that object restates the topic the Source's own title names, the system MUST
 write an `extraction_notice` frontmatter key on the Source concept with the
-value `sole-object-restates-source`. In every other case `extraction_notice`
-MUST be ABSENT — no `ok`/`none` sentinel, mirroring `extraction_status`.
-Readers MUST ignore any value outside this vocabulary without raising.
+value `sole-object-restates-source`. When no `extraction_notice` vocabulary
+token applies (this one, or #772's judge-degrade quarantine tokens — see
+"Judge-Degrade Quarantine Marker"), the key MUST be ABSENT — no `ok`/`none`
+sentinel, mirroring `extraction_status`. Readers MUST ignore any value
+outside this vocabulary without raising.
 
 The object itself MUST be kept, unchanged. The system MUST NOT degrade to
 zero derived objects on this condition: a genuinely single-subject source
@@ -1849,8 +1851,9 @@ content each run and never merged onto on-disk frontmatter.
 
 #### Scenario: Two or more objects write no key
 
-- GIVEN extraction retains two or more derived objects, including the case
-  where one of them restates the Source's title
+- GIVEN extraction retains two or more derived objects under a judge that
+  SELECTED (`judge_status == "ok"`, or a path where the judge was rightly
+  skipped), including the case where one of them restates the Source's title
 - WHEN the Source concept's frontmatter is inspected
 - THEN it contains no `extraction_notice` key
 
@@ -1876,6 +1879,64 @@ content each run and never merged onto on-disk frontmatter.
 - THEN stderr carries a non-blocking line naming both halves of the outcome:
   that the only derived object restates the source, and that it is kept and
   the Source marked
+
+### Requirement: Judge-Degrade Quarantine Marker
+
+WHEN a union+judge `ingest` run stores its merged candidate union WITHOUT a
+quality selection — either because every judge attempt was unusable
+(`judge_status == "failed"`) or because a well-formed judge reply admitted
+no candidate (`judge_status == "empty"`) — the system MUST write an
+`extraction_notice` frontmatter key on the Source concept recording which
+degrade occurred: `judge-selection-unavailable` for `"failed"`,
+`judge-selection-empty` for `"empty"` (issue #772). Fail-open is retained —
+the objects are still written — but the admission MUST NOT be silent debt:
+the marker is what lets `lint`'s unjudged-extraction scan and `status`'s
+needs-attention fold-in guarantee a later surface revisits these objects.
+
+The two tokens MUST stay distinct, preserving on disk the same failed/empty
+split #754 established in the terminal notices: the causes carry different
+retry expectations. The terminal degrade notice MUST disclose the marking,
+mirroring the sole-object notice's `marking the Source (extraction_notice:
+<token>)` shape.
+
+When a judge-degrade token applies it MUST take precedence over
+`sole-object-restates-source` — the quarantine reading is retryable debt,
+the sole-object reading is a disclosure — although the two conditions are
+mutually exclusive on any real run (a degrade implies a multi-candidate
+union; the sole-object notice requires exactly one retained object).
+
+Like every `extraction_notice` value, the token MUST be stamped onto freshly
+built Source content each run and never merged onto on-disk frontmatter, so
+a re-ingest whose judge selects rebuilds the Source without the marker.
+
+#### Scenario: A failed judge quarantines the Source
+
+- GIVEN a union+judge run whose judge call is unusable on every attempt
+- WHEN `openkos ingest <path>` completes
+- THEN the merged union's objects are written, AND the Source's
+  `extraction_notice` is `judge-selection-unavailable`, AND stderr's degrade
+  notice names the marking
+
+#### Scenario: An empty admission quarantines with the distinct token
+
+- GIVEN a union+judge run whose judge reply is well-formed but admits no
+  candidate
+- WHEN `openkos ingest <path>` completes
+- THEN the Source's `extraction_notice` is `judge-selection-empty`
+
+#### Scenario: A healthy selection writes no quarantine marker
+
+- GIVEN a union+judge run whose judge admitted at least one candidate
+- WHEN the Source concept's frontmatter is inspected
+- THEN it contains no `extraction_notice` key (unless the sole-object
+  condition independently applies)
+
+#### Scenario: The quarantine self-clears on a later judged run
+
+- GIVEN a Source whose frontmatter currently has `extraction_notice:
+  judge-selection-unavailable`
+- WHEN `openkos ingest raw/<name>` is re-run and the judge now selects
+- THEN the rewritten Source's frontmatter has NO `extraction_notice` key
 
 ### Requirement: Ingest Builds The FTS Index Once At The End Of Each Run
 
