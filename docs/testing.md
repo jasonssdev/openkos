@@ -348,9 +348,14 @@ writing anything.
   when it binds (`N of M extracted object(s) kept (cap reached)`). Judge the
   count against the document, not against a target — and treat a long,
   content-rich source that yields a single object as a finding worth recording.
-- **`raw/` is immutable.** A byte-identical re-ingest is idempotent and **re-runs
-  extraction** (useful to recover from a transient LLM failure). A *different*
-  file under the same basename is refused.
+- **`raw/` is immutable.** A byte-identical re-ingest of an already-extracted
+  source is idempotent and **skips extraction** — no model call, nothing
+  written, one stderr line saying so ([#773](https://github.com/jasonssdev/openkos/issues/773)).
+  Extraction re-runs without any flag only when the previous run left
+  retryable debt (`extraction_status: failed`, or a judge-degrade
+  `extraction_notice` — the transient-LLM-failure recovery); `--re-extract`
+  forces a redo on a healthy source. A *different* file under the same
+  basename is refused.
 - **Same-slug collisions resolve by origin.** Two sources whose extracted
   objects produce the same slug now **both survive**: the later one is
   disambiguated to the first free numeric suffix and announces
@@ -427,7 +432,7 @@ git log --oneline        # one auto-commit per successful ingest
 openkos ingest /path/to/an/empty/dir/    # expect refusal — nothing matched
 openkos ingest /nonexistent.md           # expect refusal
 openkos ingest /path/to/some.pdf         # expect exit 0, copied, no extraction
-openkos ingest /path/to/first.md         # identical re-ingest: idempotent, re-runs extraction
+openkos ingest /path/to/first.md         # identical re-ingest: idempotent, skips extraction (#773)
 ```
 
 A directory with readable text files is **not** a refusal — it is the batch

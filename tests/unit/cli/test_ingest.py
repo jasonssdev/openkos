@@ -596,7 +596,7 @@ def test_reingest_without_forget_regenerates_without_duplicate_index_entry(
     assert first.exit_code == 0
     raw_snapshot = (tmp_path / "raw" / "notes.txt").read_bytes()
 
-    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto", "--re-extract"])
 
     assert result.exit_code == 0
     assert (tmp_path / "raw" / "notes.txt").read_bytes() == raw_snapshot
@@ -619,7 +619,7 @@ def test_reingest_preview_shows_regenerate_not_new_raw(
     assert first.exit_code == 0
     _simulate_tty(monkeypatch)
 
-    result = runner.invoke(app, ["ingest", "notes.txt"], input="y\n")
+    result = runner.invoke(app, ["ingest", "notes.txt", "--re-extract"], input="y\n")
 
     assert result.exit_code == 0
     assert "~ raw/notes.txt" in result.stdout
@@ -1672,6 +1672,222 @@ def test_ingest_healthy_judge_selection_stamps_no_extraction_notice(
     assert "extraction_notice" not in metadata
 
 
+# --- issue #773: byte-identical re-ingest converges instead of accumulating
+
+
+def _first_healthy_ingest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> "_SequencedLLM":
+    """One healthy union+judge ingest of `notes.txt`: two distinct
+    candidates, judge selects both. Returns the exhausted fake."""
+    run1 = _concept_reply(title="Stoic Dichotomy Of Control")
+    run2 = _concept_reply(title="Negative Visualization")
+    fake = _patch_sequenced_llm(
+        monkeypatch,
+        [
+            run1,
+            run2,
+            '{"keep": ["Stoic Dichotomy Of Control", "Negative Visualization"]}',
+        ],
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert result.exit_code == 0
+    return fake
+
+
+def test_reingest_of_extracted_source_skips_extraction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#773: a byte-identical re-ingest of a source whose extraction already
+    succeeded spends ZERO model calls and writes NOTHING -- the bundle
+    converges on the set it already has instead of unioning every set the
+    model ever produced. The fake carries no replies, so any model contact
+    fails this test loudly."""
+    _init_workspace(tmp_path, monkeypatch)
+    _first_healthy_ingest(tmp_path, monkeypatch)
+    bundle_dir = tmp_path / "bundle"
+    before = {
+        p.relative_to(bundle_dir): p.read_bytes() for p in bundle_dir.rglob("*.md")
+    }
+
+    fake = _patch_sequenced_llm(monkeypatch, [])
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert fake.calls == []
+    assert "skipping extraction" in result.stderr
+    assert "--re-extract" in result.stderr
+    after = {
+        p.relative_to(bundle_dir): p.read_bytes() for p in bundle_dir.rglob("*.md")
+    }
+    assert after == before
+
+
+def test_reingest_with_re_extract_flag_runs_extraction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--re-extract` restores the deliberate redo: extraction runs again on
+    an unchanged, already-extracted source, reconciling create-only exactly
+    as before #773."""
+    _init_workspace(tmp_path, monkeypatch)
+    _first_healthy_ingest(tmp_path, monkeypatch)
+
+    run1 = _concept_reply(title="Stoic Dichotomy Of Control")
+    run2 = _concept_reply(title="Negative Visualization")
+    fake = _patch_sequenced_llm(
+        monkeypatch,
+        [
+            run1,
+            run2,
+            '{"keep": ["Stoic Dichotomy Of Control", "Negative Visualization"]}',
+        ],
+    )
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto", "--re-extract"])
+
+    assert result.exit_code == 0
+    assert len(fake.calls) == 3
+    assert "skipping extraction" not in result.stderr
+
+
+def test_reingest_of_failed_extraction_retries_without_the_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`extraction_status: failed` is retryable debt (#187), so a plain
+    re-ingest -- the exact command `lint`'s retry hint names -- re-runs
+    extraction without needing `--re-extract`, and a now-healthy run clears
+    the status and writes the objects."""
+    _init_workspace(tmp_path, monkeypatch)
+    # Run 1: the BASE extraction call itself fails -> Source-only degrade.
+    _patch_sequenced_llm(monkeypatch, [OllamaUnavailable("boom")])
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert result.exit_code == 0
+    source_path = tmp_path / "bundle" / "sources" / "notes.md"
+    metadata, _ = okf.load_frontmatter(source_path.read_text(encoding="utf-8"))
+    assert metadata["extraction_status"] == "failed"
+
+    run1 = _concept_reply(title="Stoic Dichotomy Of Control")
+    run2 = _concept_reply(title="Negative Visualization")
+    fake = _patch_sequenced_llm(
+        monkeypatch,
+        [
+            run1,
+            run2,
+            '{"keep": ["Stoic Dichotomy Of Control", "Negative Visualization"]}',
+        ],
+    )
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert len(fake.calls) == 3
+    metadata, _ = okf.load_frontmatter(source_path.read_text(encoding="utf-8"))
+    assert "extraction_status" not in metadata
+    concept_path = tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
+    assert concept_path.is_file()
+
+
+def test_reingest_of_quarantined_source_retries_and_self_clears(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#772 x #773: a judge-degrade quarantine token is retryable debt too,
+    so a plain re-ingest re-runs extraction, and a run whose judge now
+    SELECTS rebuilds the Source without the marker -- the ingestion spec's
+    'quarantine self-clears on a later judged run' scenario, exercised from
+    the marked-Source starting state."""
+    _init_workspace(tmp_path, monkeypatch)
+    run1 = _concept_reply(title="Stoic Dichotomy Of Control")
+    run2 = _concept_reply(title="Negative Visualization")
+    _patch_sequenced_llm(monkeypatch, [run1, run2, OllamaUnavailable("boom")])
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert result.exit_code == 0
+    source_path = tmp_path / "bundle" / "sources" / "notes.md"
+    metadata, _ = okf.load_frontmatter(source_path.read_text(encoding="utf-8"))
+    assert metadata["extraction_notice"] == "judge-selection-unavailable"
+
+    fake = _patch_sequenced_llm(
+        monkeypatch,
+        [
+            run1,
+            run2,
+            '{"keep": ["Stoic Dichotomy Of Control", "Negative Visualization"]}',
+        ],
+    )
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert len(fake.calls) == 3
+    metadata, _ = okf.load_frontmatter(source_path.read_text(encoding="utf-8"))
+    assert "extraction_notice" not in metadata
+
+
+def test_reingest_of_unparseable_prior_source_falls_through_to_extraction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#773's fail-open guard: an unparseable prior Source proves nothing
+    about the previous extraction, so the skip does NOT fire and the full
+    pre-#773 pipeline runs -- which also rebuilds the corrupted document."""
+    _init_workspace(tmp_path, monkeypatch)
+    _first_healthy_ingest(tmp_path, monkeypatch)
+    source_path = tmp_path / "bundle" / "sources" / "notes.md"
+    source_path.write_text("no frontmatter here at all\n", encoding="utf-8")
+
+    run1 = _concept_reply(title="Stoic Dichotomy Of Control")
+    run2 = _concept_reply(title="Negative Visualization")
+    fake = _patch_sequenced_llm(
+        monkeypatch,
+        [
+            run1,
+            run2,
+            '{"keep": ["Stoic Dichotomy Of Control", "Negative Visualization"]}',
+        ],
+    )
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert len(fake.calls) == 3
+    assert "skipping extraction" not in result.stderr
+
+
+def test_batch_reingest_of_extracted_source_skips_extraction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#773's reported reproduction ran through the DIRECTORY batch path, so
+    the skip must hold there too: re-ingesting a directory holding one
+    unchanged, already-extracted source spends zero model calls and reports
+    the file as re-ingested with extraction skipped."""
+    _init_workspace(tmp_path, monkeypatch)
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    run1 = _concept_reply(title="Stoic Dichotomy Of Control")
+    run2 = _concept_reply(title="Negative Visualization")
+    _patch_sequenced_llm(
+        monkeypatch,
+        [
+            run1,
+            run2,
+            '{"keep": ["Stoic Dichotomy Of Control", "Negative Visualization"]}',
+        ],
+    )
+    (corpus / "notes.md").write_text(
+        "Some raw notes about self-control.", encoding="utf-8"
+    )
+    result = runner.invoke(app, ["ingest", "corpus", "--auto"])
+    assert result.exit_code == 0
+
+    fake = _patch_sequenced_llm(monkeypatch, [])
+    result = runner.invoke(app, ["ingest", "corpus", "--auto"])
+
+    assert result.exit_code == 0
+    assert fake.calls == []
+    assert "1 re-ingested" in result.stdout
+    assert "extraction skipped" in result.stdout
+
+
 def test_ingest_single_candidate_union_skips_the_judge_and_reports_no_degrade(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2594,7 +2810,7 @@ def test_reingest_with_nondeterministic_llm_title_inserts_a_new_distinct_object(
     first_content = first_concept_path.read_text(encoding="utf-8")
 
     fake = _patch_llm(monkeypatch, _concept_reply(title="A Completely Different Title"))
-    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto", "--re-extract"])
 
     assert result.exit_code == 0
     # 2 extraction runs (#456); one merged candidate skips the judge (#644).
@@ -2630,7 +2846,7 @@ def test_reingest_of_identical_source_can_still_stage_a_new_derived_object(
 
     _patch_llm(monkeypatch, _concept_reply())
     _simulate_tty(monkeypatch)
-    result = runner.invoke(app, ["ingest", "notes.txt"], input="y\n")
+    result = runner.invoke(app, ["ingest", "notes.txt", "--re-extract"], input="y\n")
 
     assert result.exit_code == 0
     assert "re-ingest" in result.stdout
@@ -2816,7 +3032,7 @@ def test_reingest_stamps_new_derived_objects_with_the_preserved_level(
     _set_source_sensitivity(tmp_path, "notes", "confidential")
     _patch_llm(monkeypatch, _concept_reply())
 
-    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto", "--re-extract"])
 
     assert result.exit_code == 0
     concept_path = tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
@@ -2986,7 +3202,7 @@ def test_unrecognized_extraction_status_value_ignored(
     concept_path.write_text(okf.dump_frontmatter(metadata, body), encoding="utf-8")
     _patch_llm(monkeypatch, _concept_reply())
 
-    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto", "--re-extract"])
 
     assert result.exit_code == 0
     concept_text = concept_path.read_text(encoding="utf-8")
@@ -3012,7 +3228,7 @@ def test_sensitivity_and_extraction_status_independent(
     _set_source_sensitivity(tmp_path, "notes", "confidential")
     _patch_llm(monkeypatch, raises=OllamaUnavailable("boom"))
 
-    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto", "--re-extract"])
 
     assert result.exit_code == 0
     concept_path = tmp_path / "bundle" / "sources" / "notes.md"
@@ -3048,7 +3264,7 @@ def test_reingest_raises_when_workspace_default_exceeds_on_disk(
         tmp_path, "default_sensitivity: public", "default_sensitivity: private"
     )
 
-    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto", "--re-extract"])
 
     assert result.exit_code == 0
     metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
@@ -3058,7 +3274,7 @@ def test_reingest_raises_when_workspace_default_exceeds_on_disk(
         tmp_path, "default_sensitivity: private", "default_sensitivity: public"
     )
 
-    final = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    final = runner.invoke(app, ["ingest", "notes.txt", "--auto", "--re-extract"])
 
     assert final.exit_code == 0
     metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
@@ -3089,7 +3305,7 @@ def test_reingest_still_refreshes_timestamp_and_description(
 
     monkeypatch.setattr("openkos.cli.main.datetime", _FixedClock)
 
-    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto", "--re-extract"])
 
     assert result.exit_code == 0
     metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
@@ -3122,7 +3338,7 @@ def test_reingest_with_equal_values_writes_byte_identical_output(
 
     monkeypatch.setattr("openkos.cli.main.datetime", _FixedClock)
 
-    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto", "--re-extract"])
 
     assert result.exit_code == 0
     after = concept_path.read_text(encoding="utf-8")
@@ -3262,7 +3478,7 @@ def test_reingest_with_unknown_on_disk_sensitivity_fails_closed_to_confidential(
     assert first.exit_code == 0
     _set_source_sensitivity(tmp_path, "notes", "secret")
 
-    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto", "--re-extract"])
 
     assert result.exit_code == 0
     concept_path = tmp_path / "bundle" / "sources" / "notes.md"
@@ -3289,7 +3505,7 @@ def test_reingest_with_non_string_on_disk_sensitivity_fails_closed_to_confidenti
     assert first.exit_code == 0
     _set_source_sensitivity(tmp_path, "notes", 42)
 
-    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto", "--re-extract"])
 
     assert result.exit_code == 0
     concept_path = tmp_path / "bundle" / "sources" / "notes.md"
@@ -3339,7 +3555,7 @@ def test_reingest_with_missing_on_disk_sensitivity_resolves_to_private(
     assert first.exit_code == 0
     _delete_source_sensitivity(tmp_path, "notes")
 
-    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto", "--re-extract"])
 
     assert result.exit_code == 0
     concept_path = tmp_path / "bundle" / "sources" / "notes.md"
@@ -3372,7 +3588,7 @@ def test_reingest_with_blank_on_disk_sensitivity_resolves_to_private(
     assert first.exit_code == 0
     _set_source_sensitivity(tmp_path, "notes", "   ")
 
-    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto", "--re-extract"])
 
     assert result.exit_code == 0
     concept_path = tmp_path / "bundle" / "sources" / "notes.md"
@@ -3403,7 +3619,7 @@ def test_reingest_resolved_sensitivity_does_not_leak_into_workspace_floor(
     _set_source_sensitivity(tmp_path, "notes", "confidential")
     fake = _patch_llm(monkeypatch, _concept_reply())
 
-    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto", "--re-extract"])
 
     assert result.exit_code == 0
     assert fake.calls != []
@@ -3430,7 +3646,7 @@ def test_reingest_preview_reports_preserved_level(
     _set_source_sensitivity(tmp_path, "notes", "confidential")
     _simulate_tty(monkeypatch)
 
-    result = runner.invoke(app, ["ingest", "notes.txt"], input="y\n")
+    result = runner.invoke(app, ["ingest", "notes.txt", "--re-extract"], input="y\n")
 
     assert result.exit_code == 0
     assert (
@@ -3458,7 +3674,7 @@ def test_reingest_preview_reports_raised_level(
     )
     _simulate_tty(monkeypatch)
 
-    result = runner.invoke(app, ["ingest", "notes.txt"], input="y\n")
+    result = runner.invoke(app, ["ingest", "notes.txt", "--re-extract"], input="y\n")
 
     assert result.exit_code == 0
     assert (
@@ -3480,7 +3696,7 @@ def test_reingest_preview_reports_unchanged_level(
     assert first.exit_code == 0
     _simulate_tty(monkeypatch)
 
-    result = runner.invoke(app, ["ingest", "notes.txt"], input="y\n")
+    result = runner.invoke(app, ["ingest", "notes.txt", "--re-extract"], input="y\n")
 
     assert result.exit_code == 0
     assert (
@@ -3750,7 +3966,7 @@ def test_reingest_reconciles_per_slug_skips_existing_inserts_new(
     concept_path.write_text(hand_edited, encoding="utf-8")
 
     _patch_llm(monkeypatch, _multi_object_reply(_concept_reply(), _person_reply()))
-    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto", "--re-extract"])
 
     assert result.exit_code == 0
     assert concept_path.read_text(encoding="utf-8") == hand_edited
@@ -3995,7 +4211,7 @@ def test_exists_skip_reports_stderr(
     first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
     assert first.exit_code == 0
 
-    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto", "--re-extract"])
 
     assert result.exit_code == 0
     assert "stoic-dichotomy-of-control" in result.stderr
@@ -4891,7 +5107,7 @@ def test_reingest_of_identical_bytes_writes_a_byte_identical_source_document(
 
     monkeypatch.setattr("openkos.cli.main.datetime", _FixedClock)
 
-    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto", "--re-extract"])
 
     assert result.exit_code == 0
     after = concept_path.read_text(encoding="utf-8")
@@ -4967,7 +5183,7 @@ def test_reingest_preview_names_a_title_change(
     assert first.exit_code == 0
     _set_source_title(tmp_path, "notes", "Legacy Slug Title")
 
-    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto", "--re-extract"])
 
     assert result.exit_code == 0, result.stdout
     assert "title changed from 'Legacy Slug Title' to 'Chapter One'" in result.stdout
@@ -5032,7 +5248,7 @@ def test_a_write_target_edited_during_the_prompt_is_refused(
         monkeypatch, lambda: target_path.write_text(concurrent, encoding="utf-8")
     )
 
-    result = runner.invoke(app, ["ingest", "notes.txt"], input="y\n")
+    result = runner.invoke(app, ["ingest", "notes.txt", "--re-extract"], input="y\n")
 
     assert result.exit_code == 3
     assert isinstance(result.exception, SystemExit)
@@ -5055,7 +5271,7 @@ def test_a_write_target_deleted_during_the_prompt_is_refused(
     before = snapshot_with_mtime(tmp_path)
     confirm_after(monkeypatch, deleted_path.unlink)
 
-    result = runner.invoke(app, ["ingest", "notes.txt"], input="y\n")
+    result = runner.invoke(app, ["ingest", "notes.txt", "--re-extract"], input="y\n")
 
     assert result.exit_code == 3
     assert isinstance(result.exception, SystemExit)
@@ -5086,7 +5302,7 @@ def test_a_crlf_rewrite_during_the_prompt_is_refused(
     before = snapshot_with_mtime(tmp_path)
     confirm_after(monkeypatch, lambda: target_path.write_bytes(concurrent))
 
-    result = runner.invoke(app, ["ingest", "notes.txt"], input="y\n")
+    result = runner.invoke(app, ["ingest", "notes.txt", "--re-extract"], input="y\n")
 
     assert result.exit_code == 3
     assert "refusing to write --" in result.stderr
@@ -5186,7 +5402,7 @@ def test_an_edit_landing_after_the_snapshot_observation_is_refused(
     before = snapshot_with_mtime(tmp_path)
     monkeypatch.setattr(main, "_snapshot_read", racing_snapshot_read)
 
-    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto", "--re-extract"])
 
     assert fired, "the racing wrapper never saw the index.md snapshot"
     assert result.exit_code == 3
@@ -5240,6 +5456,8 @@ def test_a_concept_edited_during_the_llm_call_is_refused(
     """
     _init_workspace(tmp_path, monkeypatch)
     (tmp_path / "notes.txt").write_text("Some raw notes.", encoding="utf-8")
+    # First ingest of a just-created source: fresh, so no --re-extract --
+    # the flag belongs only on the RE-ingest below (#773).
     assert runner.invoke(app, ["ingest", "notes.txt", "--auto"]).exit_code == 0
     concept_path = tmp_path / "bundle" / "sources" / "notes.md"
 
@@ -5266,7 +5484,7 @@ def test_a_concept_edited_during_the_llm_call_is_refused(
     )
     before = snapshot_with_mtime(tmp_path)
 
-    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto", "--re-extract"])
 
     assert result.exit_code == 3
     assert "refusing to write --" in result.stderr
@@ -6567,7 +6785,7 @@ def test_reingest_clears_a_previous_extraction_notice(
     keep_two = '{"keep": ["Replica Lag", "Read-Your-Writes Consistency"]}'
     _patch_sequenced_llm(monkeypatch, [both, both, keep_two])
 
-    result = runner.invoke(app, ["ingest", "replica-lag.txt", "--auto"])
+    result = runner.invoke(app, ["ingest", "replica-lag.txt", "--auto", "--re-extract"])
 
     assert result.exit_code == 0
     assert "extraction_notice" not in concept_path.read_text(encoding="utf-8")

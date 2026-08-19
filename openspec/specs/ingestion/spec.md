@@ -977,16 +977,61 @@ runs beforehand.
 - THEN no confirmation prompt appears and the Source concept together with
   every staged derived object is written
 
-### Requirement: Idempotent Re-Ingest Reconciles Derived Objects Per Slug
+### Requirement: Byte-Identical Re-Ingest Converges Instead Of Accumulating
 
-WHEN a source is re-ingested, `ingest` MUST reconcile derived objects per
-slug rather than all-or-nothing: for each validated candidate, the system
-MUST check whether an object with that slug already exists, MUST insert it
-only when no such slug exists yet (create-only), and MUST leave any existing
-derived object file byte-untouched — no overwrite, no re-typing, no merge.
+WHEN a byte-identical re-ingest resolves to a Source concept that already
+exists, records an `origin_key`, and whose previous extraction ran to its
+intended conclusion — no `extraction_status: failed`, no judge-degrade
+`extraction_notice` token — `ingest` MUST skip extraction entirely (issue
+#773): no model call, no write of any kind (not even a regenerated Source,
+so prior markers like #585's sole-object disclosure survive untouched), exit
+0, and one stderr line disclosing the skip and naming `--re-extract` as the
+deliberate redo. Extraction is non-deterministic, so re-running it on an
+unchanged source unions every set the model has ever produced — the
+create-only dedup below can only catch verbatim-reproduced slugs — and a
+re-ingest MUST converge on one set of objects per source, never accumulate.
+
+Extraction MUST still re-run, without any flag, when the previous run left
+RETRYABLE DEBT: `extraction_status: failed` (#187) or a judge-degrade
+`extraction_notice` token (#772) — the exact states whose `lint` findings
+name a plain re-ingest as the remedy. A pre-#552 legacy Source recording no
+`origin_key` MUST take the full path once (which backfills the key), so the
+no-verb self-migration is not suppressed. `--re-extract` MUST force the full
+path on any re-ingest. A post-`forget` regenerate (raw bytes match, concept
+absent) is a fresh pipeline run, never a skip.
+
+#### Scenario: An unchanged, extracted source spends nothing and writes nothing
+
+- GIVEN a source already ingested whose extraction succeeded
+- WHEN `openkos ingest <path>` runs again with byte-identical content
+- THEN no model call is made, no bundle file changes, the exit code is 0,
+  and stderr names `--re-extract`
+
+#### Scenario: Retryable debt re-extracts without the flag
+
+- GIVEN a Source carrying `extraction_status: failed` or a judge-degrade
+  `extraction_notice`
+- WHEN `openkos ingest <path>` runs again with byte-identical content
+- THEN extraction re-runs and reconciles per slug as below
+
+#### Scenario: --re-extract is the deliberate redo
+
+- GIVEN a source already ingested whose extraction succeeded
+- WHEN `openkos ingest <path> --re-extract` runs
+- THEN extraction re-runs and reconciles per slug as below
+
+### Requirement: Re-Extraction Reconciles Derived Objects Per Slug
+
+WHEN a re-ingest DOES run extraction (retryable debt, `--re-extract`, a
+legacy origin-key backfill, or a post-`forget` regenerate), `ingest` MUST
+reconcile derived objects per slug rather than all-or-nothing: for each
+validated candidate, the system MUST check whether an object with that slug
+already exists, MUST insert it only when no such slug exists yet
+(create-only), and MUST leave any existing derived object file
+byte-untouched — no overwrite, no re-typing, no merge.
 The slug-existence check for a candidate MUST complete BEFORE any write for
 that candidate, so a failed write never leaves a partially-reconciled state.
-Re-ingest re-runs extraction, so a genuinely new object CAN be inserted even
+A genuinely new object CAN be inserted even
 when older objects for the same source already exist. Re-ingesting the SAME
 source MUST NOT spawn a new disambiguated slug on each run: a slug collision
 against a concept already carrying this source's `provenance` — INCLUDING a
@@ -1029,10 +1074,10 @@ colliding slug, and made no mention of disambiguated `-N` slugs.)
 #### Scenario: Byte-identical raw re-ingest short-circuits
 
 - GIVEN a source already ingested and re-ingested with byte-identical raw
-  content
+  content and a successful previous extraction
 - WHEN `openkos ingest <path>` runs again
-- THEN it short-circuits as today (D2), with no new derived-object files of
-  any kind
+- THEN it short-circuits (issue #773's convergence requirement above), with
+  no new derived-object files of any kind
 
 ### Requirement: Derived Object Cataloging and Logging
 
