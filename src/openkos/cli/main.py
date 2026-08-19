@@ -3956,6 +3956,13 @@ class _SingleIngestOutcome:
     derived_count: int = 0
     """How many derived objects this run staged (the aggregate line's
     denominator, #566)."""
+
+    extraction_skipped: bool = False
+    """`True` exactly when #773's convergence short-circuit fired: a
+    byte-identical re-ingest of a source whose previous extraction
+    succeeded spent no model call and wrote nothing. Always `False` on a
+    fresh ingest, on `--re-extract`, and on the retryable-debt paths
+    (`extraction_status: failed`, judge-degrade `extraction_notice`)."""
     alternative_pairs: tuple[tuple[str, str], ...] = ()
     """One `(type, type_alternative)` pair per staged object whose
     classification the model reported as torn (#401) -- the callers
@@ -4139,6 +4146,7 @@ def _ingest_batch(
     auto: bool,
     include_confidential: bool,
     skipped_non_text: int = 0,
+    re_extract: bool = False,
 ) -> None:
     """Drive every file in `matches` (already expanded and sorted by
     `_expand_batch_sources`) through the EXISTING single-file pipeline
@@ -4273,6 +4281,7 @@ def _ingest_batch(
                 auto=True,
                 include_confidential=include_confidential,
                 warn_nonlocal_embed_host=False,
+                re_extract=re_extract,
             )
         except typer.Exit as exc:
             # The per-file pipeline already printed its own refusal reason
@@ -4301,6 +4310,11 @@ def _ingest_batch(
         if outcome.extraction_degraded:
             degraded_count += 1
             suffix = " (extraction degraded -- Source only; see stderr)"
+        elif outcome.extraction_skipped:
+            # #773: an unchanged, already-extracted source spent no model
+            # call -- said on its outcome line, so a batch reader can tell
+            # a converged no-op from a re-extraction at a glance.
+            suffix = " (unchanged -- extraction skipped)"
         outcome_lines.append(f"  {marker} {path} -- {label}{suffix}")
 
     # End-of-run derived refresh (issue #553, widened to graph+vectors by
@@ -4363,6 +4377,14 @@ def ingest(
             "extraction (excluded by default)."
         ),
     ),
+    re_extract: bool = typer.Option(
+        False,
+        "--re-extract",
+        help=(
+            "Run extraction again on an unchanged, already-extracted source "
+            "(a byte-identical re-ingest skips it by default, #773)."
+        ),
+    ),
 ) -> None:
     """Ingest one source file, a whole directory, or a glob's matches into
     the workspace in a single invocation (issue #267).
@@ -4411,7 +4433,10 @@ def ingest(
         raise typer.Exit(code=1) from exc
     if expansion is None:
         outcome = _ingest_single(
-            src, auto=auto, include_confidential=include_confidential
+            src,
+            auto=auto,
+            include_confidential=include_confidential,
+            re_extract=re_extract,
         )
         # ONE aggregate torn-classification line per run (#566), printed by
         # the command -- never by `_ingest_single`, which the batch path
@@ -4435,6 +4460,28 @@ def ingest(
         auto=auto,
         include_confidential=include_confidential,
         skipped_non_text=skipped_non_text,
+        re_extract=re_extract,
+    )
+
+
+def _extraction_retry_due(metadata: Mapping[str, object]) -> bool:
+    """Whether a byte-identical re-ingest should still re-run extraction
+    (#773): only when the previous run left RETRYABLE DEBT on the Source --
+    `extraction_status: failed` (#187, the one status `lint` flags) or a
+    judge-degrade `extraction_notice` token (#772's quarantine, whose
+    `lint` retry hint names exactly this re-ingest as the remedy).
+
+    Every other state -- markers absent, a deliberate-policy
+    `extraction_status` (`no-extractable-text`/`blocked-by-sensitivity`/
+    `no-concepts-found`), or #585's sole-object disclosure -- means the
+    previous extraction ran to its intended conclusion, so an unchanged
+    source has nothing to retry and the re-ingest skips extraction unless
+    `--re-extract` asks for a deliberate redo."""
+    if metadata.get(okf.EXTRACTION_STATUS_KEY) == okf.EXTRACTION_STATUS_FAILED:
+        return True
+    return metadata.get(okf.EXTRACTION_NOTICE_KEY) in (
+        okf.EXTRACTION_NOTICE_JUDGE_UNAVAILABLE,
+        okf.EXTRACTION_NOTICE_JUDGE_EMPTY,
     )
 
 
@@ -4444,6 +4491,7 @@ def _ingest_single(
     auto: bool,
     include_confidential: bool,
     warn_nonlocal_embed_host: bool = True,
+    re_extract: bool = False,
 ) -> _SingleIngestOutcome:
     """Copy `src` into `raw/`, generate one OKF Source concept, and attempt
     LLM extraction of zero or more distinct derived objects, up to
@@ -4756,6 +4804,52 @@ def _ingest_single(
             resolved_sensitivity = cfg.default_sensitivity
             on_disk_title = None
             concept_snapshot = None
+            concept_text = None
+
+        # #773: the convergence short-circuit, decided BEFORE any model
+        # contact and before any write. A byte-identical re-ingest of a
+        # source whose previous extraction ran to its intended conclusion
+        # has nothing to redo: re-running it here is what unioned every
+        # set the model ever produced for one unchanged document (17
+        # objects from an 81-line source), because create-only dedup can
+        # only catch verbatim-reproduced slugs. Writing NOTHING -- not
+        # even a regenerated Source -- is what makes the promised
+        # idempotence true, and it keeps the prior markers (#585's
+        # sole-object disclosure, a deliberate-policy extraction_status)
+        # alive on disk without violating the never-read-back rule: the
+        # document that recorded them is simply left untouched.
+        # `--re-extract` is the deliberate redo; retryable debt
+        # (`_extraction_retry_due`) falls through to extraction, which is
+        # exactly the retry `lint`'s unextracted/unjudged hints name.
+        if had_prior_source and concept_text is not None and not re_extract:
+            try:
+                prior_metadata, _ = okf.load_frontmatter(concept_text)
+            except ValueError:
+                # An unparseable prior Source proves nothing about the
+                # previous extraction -- fall through to the full run,
+                # which is the pre-#773 behavior for every re-ingest.
+                prior_metadata = None
+            # A pre-#552 legacy Source records no `origin_key`; the full
+            # regenerate path is what backfills it (the no-verb
+            # self-migration), so such a Source takes that path ONCE and
+            # every later re-ingest of it skips like any other.
+            if (
+                prior_metadata is not None
+                and prior_metadata.get(okf.ORIGIN_KEY_KEY) is not None
+                and not _extraction_retry_due(prior_metadata)
+            ):
+                typer.echo(
+                    "openkos ingest: source unchanged and already "
+                    "extracted; skipping extraction -- existing derived "
+                    "objects preserved; pass --re-extract to run "
+                    "extraction again.",
+                    err=True,
+                )
+                return _SingleIngestOutcome(
+                    regenerated=True,
+                    extraction_degraded=False,
+                    extraction_skipped=True,
+                )
 
         def _build_source_document(
             extraction_status: okf.ExtractionStatus | None,
