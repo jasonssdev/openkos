@@ -801,14 +801,24 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
             continue
         if len(group.member_ids) != 2:
             if len(group.member_ids) > 2:
-                cli_main._echo_n_gt2_skip(group)
+                cli_main._echo_n_gt2_skip(layout.bundle_dir, group)
                 skipped += 1
             continue
 
-        survivor_id, absorbed_id = group.member_ids
+        # #776: the pair is ordered ONCE (richer body survives), displayed,
+        # and pinned through the prepare -- never re-derived from live
+        # bodies between the preview and the write.
+        survivor_id, absorbed_id, survivor_criterion = cli_main._ordered_merge_pair(
+            layout.bundle_dir, group.member_ids
+        )
         try:
             prepared = cli_main._prepare_one_merge(
-                ctx.root, layout, index_path, log_path, group
+                ctx.root,
+                layout,
+                index_path,
+                log_path,
+                group,
+                ordered_pair=(survivor_id, absorbed_id),
             )
         except (OSError, ValueError) as exc:
             typer.echo(
@@ -824,6 +834,14 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         typer.echo(
             cli_main._format_merge_preview_line(prepared, no_reconcile=ctx.no_reconcile)
         )
+        # #776: the survivor rule is deterministic and STATED, and the
+        # risky cross-source class is named BEFORE the prompt -- the same
+        # two disclosures `adjudicate --apply` renders, via the same
+        # helpers and the same shared note constant, so the recommended
+        # path is never the less-informed one.
+        typer.echo(f"  survivor: {prepared.survivor_canonical} ({survivor_criterion})")
+        if cli_main._cross_source_same_pair(layout.bundle_dir, group.member_ids):
+            typer.echo(cli_main._CROSS_SOURCE_WALK_NOTE)
         if not _confirm(
             f"Merge {prepared.absorbed_canonical} into "
             f"{prepared.survivor_canonical}? [y/N]"

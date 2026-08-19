@@ -394,7 +394,11 @@ single valid JSON OBJECT with EXACTLY these four keys: `partial` (boolean),
 `results` holds one object per entry in the `results` set, with EXACTLY these
 fields per object: `member_ids` (list of strings, already sorted), `okf_type`
 (string), `tier` (`"HIGH"` or `"LOW"`), `verdict` (`"SAME"`, `"DIFFERENT"`, or
-`"UNCERTAIN"`), `rationale` (string). The object MUST NOT contain a
+`"UNCERTAIN"`), `rationale` (string), and `cross_source` (boolean, issue
+#776: `true` exactly when the verdict is SAME, the group has two members,
+and their provenance sets are disjoint -- the same predicate the human
+listing's note fires on, because the unattended pipelines `--json` serves
+cannot read a stdout note). The object MUST NOT contain a
 `confidence` field or any survivor/absorbed field.
 
 `total` MUST be the number of candidate groups QUEUED for adjudication and
@@ -599,13 +603,35 @@ group, where `N` is its member count.
 
 ### Requirement: Survivor/Absorbed Preview And Prompt
 
-For each eligible group, survivor MUST be `member_ids[0]` (alphabetical-first)
-and absorbed MUST be `member_ids[1]`. Before prompting, a preview of what
-`prepare_merge` would fuse (survivor, absorbed, rewrites, removed) MUST be
-printed. The prompt text MUST be exactly
+For each eligible group, the survivor MUST be the member with the RICHER
+BODY (longer stripped body text), falling back to `member_ids[0]`
+(ascending id) only on an exact tie (issue #776: string order alone made a
+bilingual pleonasm the permanent Concept ID purely because `f` sorts
+before `o`; the richer-body rule mirrors the extraction union's own
+twin-drop precedent). An unreadable member measures below every readable
+one and never survives on this rule. The criterion that DECIDED MUST be
+stated in the preview (`survivor: <id> (richer body)` or `survivor: <id>
+(id order -- equal body length)`) -- an arbitrary-looking choice with no
+stated criterion is the defect, not the determinism. Before prompting, a
+preview of what `prepare_merge` would fuse (survivor, absorbed, rewrites,
+removed) MUST be printed. The prompt text MUST be exactly
 `Merge <absorbed> into <survivor>? [y/N]` (issue #483: the same #398
 contract `curate`'s per-item walks advertise -- the formerly advertised
 `skip` token never had behavior distinct from a decline).
+
+The same ordering rule and criterion disclosure apply to EVERY walk that
+drives `_prepare_one_merge`: `--apply`, `--apply-same`, and `curate`'s
+Identity stage. Each walk MUST compute the ordering ONCE, display it, and
+PIN that exact `(survivor, absorbed)` pair through the prepare-and-write
+that follows -- `--apply-same`'s Pass 2 in particular MUST apply the
+direction Pass 1 previewed and the typed count consented to, never a live
+recomputation: an earlier merge in the same batch can enrich a shared
+member enough to flip a recomputed ordering, and the operator would then
+get a direction they never saw. A structural consequence, deliberate: with the smaller
+body always absorbed into the larger, a 2-member batch merge can no
+longer reach #559's 80% stacked-share domination guardrail -- the hazard
+that guardrail refused is now prevented by construction (the guardrail
+itself remains as defense in depth).
 
 #### Scenario: Preview precedes the exact prompt text
 
@@ -613,7 +639,65 @@ contract `curate`'s per-item walks advertise -- the formerly advertised
 - WHEN `adjudicate --apply` runs
 - THEN a `prepare_merge` preview is printed before the prompt
 - AND the prompt line is exactly `Merge <absorbed> into <survivor>? [y/N]`
-  with `<survivor>` = `member_ids[0]` and `<absorbed>` = `member_ids[1]`
+  with `<survivor>` = the richer-body member and `<absorbed>` the other
+
+#### Scenario: The richer body survives regardless of id order
+
+- GIVEN a SAME 2-member group whose alphabetically-later member carries
+  the longer body
+- WHEN any apply walk previews it
+- THEN that member is the survivor and the preview states `richer body`
+
+#### Scenario: A tie keeps ascending-id order and says so
+
+- GIVEN a SAME 2-member group whose members' stripped bodies have equal
+  length
+- WHEN any apply walk previews it
+- THEN `member_ids[0]` is the survivor and the preview states the id-order
+  tiebreak
+
+### Requirement: Cross-Source SAME Verdicts Are Flagged And Batch-Gated
+
+A SAME verdict over a 2-member group whose members BOTH carry non-empty
+`provenance:` frontmatter with DISJOINT sets is the risky class (issue
+#776: exactly this shape fused two meetings held a week apart into one
+false Event). The read-only listing MUST mark such verdicts with a
+`note: cross-source -- members share no source` line; the interactive
+`--apply` walk MUST print the warning BEFORE its `[y/N]` prompt while
+keeping per-item consent as the gate; and `--apply-same` MUST exclude the
+pair from the batch by default -- out of the preview, the typed count,
+and Pass 2 -- disclosing each exclusion with the exact manual
+`openkos merge` command and counting it in the summary
+(`cross-source: N`). A new `--include-cross-source` flag restores the
+batch merge as an explicit opt-in, and MUST be refused (exit 2) without
+`--apply-same`, because a silently ignored consent flag is worse than a
+refusal.
+
+Absent evidence MUST NOT flag: a member with no `provenance:` key, an
+empty list, or an unreadable/unparseable document gives no signal, and
+flagging on absence would mark every hand-written concept forever.
+
+#### Scenario: The batch excludes a disjoint-provenance SAME pair
+
+- GIVEN a SAME 2-member group whose members' provenance sets share no entry
+- WHEN `adjudicate --apply-same` runs without `--include-cross-source`
+- THEN the pair is skipped with a line naming the manual merge command,
+  the typed count excludes it, no file changes, and the summary carries
+  `cross-source: 1`
+
+#### Scenario: --include-cross-source restores the batch merge
+
+- GIVEN the same group
+- WHEN `adjudicate --apply-same --include-cross-source` runs with the
+  matching typed count
+- THEN the pair is previewed, counted, and merged
+
+#### Scenario: A shared source or absent provenance is never flagged
+
+- GIVEN a SAME pair whose provenance sets intersect, and another whose
+  members carry no provenance at all
+- WHEN any adjudicate surface renders them
+- THEN neither carries the cross-source note nor is excluded from the batch
 
 ### Requirement: Prompt Response Semantics
 
