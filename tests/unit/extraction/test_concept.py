@@ -4705,10 +4705,13 @@ def test_gate_drops_a_pure_wrong_language_non_verbatim_title() -> None:
         ),
     ]
 
-    kept, dropped = concept_mod._drop_wrong_language_titles(results, source_text=source)
+    kept, dropped, dropped_recombined = concept_mod._drop_wrong_language_titles(
+        results, source_text=source
+    )
 
     assert [r.title for r in kept] == ["Procedimiento de ingesta"]
     assert dropped == ("Recovery of Knowledge Project",)
+    assert dropped_recombined == ()
 
 
 def test_gate_keeps_a_verbatim_quoted_wrong_language_title() -> None:
@@ -4732,10 +4735,13 @@ def test_gate_keeps_a_verbatim_quoted_wrong_language_title() -> None:
         ),
     ]
 
-    kept, dropped = concept_mod._drop_wrong_language_titles(results, source_text=source)
+    kept, dropped, dropped_recombined = concept_mod._drop_wrong_language_titles(
+        results, source_text=source
+    )
 
     assert [r.title for r in kept] == ["Model Context Protocol"]
     assert dropped == ("Decision on the Storage",)
+    assert dropped_recombined == ()
 
 
 def test_gate_keeps_neutral_and_mixed_titles() -> None:
@@ -4755,10 +4761,13 @@ def test_gate_keeps_neutral_and_mixed_titles() -> None:
         ),
     ]
 
-    kept, dropped = concept_mod._drop_wrong_language_titles(results, source_text=source)
+    kept, dropped, dropped_recombined = concept_mod._drop_wrong_language_titles(
+        results, source_text=source
+    )
 
     assert [r.title for r in kept] == ["MCP", "Guía de setup and usage"]
     assert dropped == ()
+    assert dropped_recombined == ()
 
 
 def test_gate_drops_a_neutral_english_recombination(monkeypatch: object) -> None:
@@ -4785,10 +4794,13 @@ def test_gate_drops_a_neutral_english_recombination(monkeypatch: object) -> None
         ),
     ]
 
-    kept, dropped = concept_mod._drop_wrong_language_titles(results, source_text=source)
+    kept, dropped, dropped_recombined = concept_mod._drop_wrong_language_titles(
+        results, source_text=source
+    )
 
     assert [r.title for r in kept] == ["Procedimiento de ingesta"]
-    assert dropped == ("Knowledge Recovery Project",)
+    assert dropped == ()
+    assert dropped_recombined == ("Knowledge Recovery Project",)
 
 
 def test_gate_keeps_a_neutral_title_quoted_verbatim() -> None:
@@ -4808,10 +4820,13 @@ def test_gate_keeps_a_neutral_title_quoted_verbatim() -> None:
         ),
     ]
 
-    kept, dropped = concept_mod._drop_wrong_language_titles(results, source_text=source)
+    kept, dropped, dropped_recombined = concept_mod._drop_wrong_language_titles(
+        results, source_text=source
+    )
 
     assert [r.title for r in kept] == ["Evaluation Harness (EH)"]
     assert dropped == ()
+    assert dropped_recombined == ()
 
 
 def test_gate_exempts_spanish_orthography_before_the_adjacency_test() -> None:
@@ -4842,7 +4857,9 @@ def test_gate_exempts_spanish_orthography_before_the_adjacency_test() -> None:
         ),
     ]
 
-    kept, dropped = concept_mod._drop_wrong_language_titles(results, source_text=source)
+    kept, dropped, dropped_recombined = concept_mod._drop_wrong_language_titles(
+        results, source_text=source
+    )
 
     assert [r.title for r in kept] == [
         "Snapshot Derivado",
@@ -4850,6 +4867,7 @@ def test_gate_exempts_spanish_orthography_before_the_adjacency_test() -> None:
         "Procedimiento de ingesta",
     ]
     assert dropped == ()
+    assert dropped_recombined == ()
 
 
 def test_gate_keeps_inflected_and_digit_interrupted_spanish_neutral_titles() -> None:
@@ -4890,14 +4908,80 @@ def test_gate_keeps_inflected_and_digit_interrupted_spanish_neutral_titles() -> 
         ),
     ]
 
-    kept, dropped = concept_mod._drop_wrong_language_titles(results, source_text=source)
+    kept, dropped, dropped_recombined = concept_mod._drop_wrong_language_titles(
+        results, source_text=source
+    )
 
     assert [r.title for r in kept] == [
         "Repositorio Local",
         "Fuente Inmutable",
         "Procedimiento de ingesta",
     ]
-    assert dropped == ("Knowledge Recovery Project",)
+    assert dropped == ()
+    assert dropped_recombined == ("Knowledge Recovery Project",)
+
+
+def test_gate_separates_language_drops_from_recombination_drops() -> None:
+    """#780: the two branches of the gate answer opposite operator
+    questions -- a wrong-language vote says the model is leaking English
+    into a Spanish corpus (check the language anchor), a #630 recombination
+    says the model is inventing non-verbatim titles (check extraction
+    quality). One merged list forced the notice to mislabel one class as
+    the other, pointing a whole investigation at the wrong subsystem."""
+    source = (
+        _spanish_lines(500) + "\nAna: El knowledge del equipo alimenta la recovery del "
+        "sistema y el project sigue en curso."
+    )
+    results = [
+        # Pure-English function words: the #618 language-vote class.
+        concept_mod.ExtractionResult(
+            type="Concept",
+            title="Decision on the Storage",
+            description="d",
+            body="",
+        ),
+        # Gate-neutral English noun phrase, bigrams non-adjacent: #630.
+        concept_mod.ExtractionResult(
+            type="Concept",
+            title="Knowledge Recovery Project",
+            description="d",
+            body="",
+        ),
+        concept_mod.ExtractionResult(
+            type="Concept",
+            title="Procedimiento de ingesta",
+            description="d",
+            body="",
+        ),
+    ]
+
+    kept, dropped_language, dropped_recombined = (
+        concept_mod._drop_wrong_language_titles(results, source_text=source)
+    )
+
+    assert [r.title for r in kept] == ["Procedimiento de ingesta"]
+    assert dropped_language == ("Decision on the Storage",)
+    assert dropped_recombined == ("Knowledge Recovery Project",)
+
+
+def test_chunked_extraction_reports_recombination_drops_in_their_own_field() -> None:
+    """End to end on the chunked path (#780): a #630 recombination drop
+    lands in `recombined_dropped_titles`, never in
+    `wrong_language_dropped_titles` -- the report keeps the two classes
+    apart so the notice can name the branch that fired."""
+    text = _spanish_lines(19_000)
+    assert len(text) > concept_mod._CHUNK_THRESHOLD
+    windows = concept_mod._chunk_lines(text)
+    replies: list[str | Exception] = ["[]"] * len(windows)
+    replies[0] = _array(_es_item("Procedimiento de ingesta"))
+    replies[1] = _array(_es_item("Knowledge Recovery Project"))
+    llm = _SequencedLLM(replies)
+
+    outcome = concept_mod.extract_concept(text, source_title="Notas", llm=llm)
+
+    assert [r.title for r in outcome.objects] == ["Procedimiento de ingesta"]
+    assert outcome.report.recombined_dropped_titles == ("Knowledge Recovery Project",)
+    assert outcome.report.wrong_language_dropped_titles == ()
 
 
 def test_adjacency_normalization_folds_inflection_and_digits() -> None:
@@ -4958,10 +5042,13 @@ def test_gate_fails_open_when_the_source_has_no_dominant_language() -> None:
         ),
     ]
 
-    kept, dropped = concept_mod._drop_wrong_language_titles(results, source_text=source)
+    kept, dropped, dropped_recombined = concept_mod._drop_wrong_language_titles(
+        results, source_text=source
+    )
 
     assert [r.title for r in kept] == ["Recovery of Knowledge Project"]
     assert dropped == ()
+    assert dropped_recombined == ()
 
 
 def test_gate_keeps_everything_when_it_would_drop_everything() -> None:
@@ -4985,10 +5072,13 @@ def test_gate_keeps_everything_when_it_would_drop_everything() -> None:
         ),
     ]
 
-    kept, dropped = concept_mod._drop_wrong_language_titles(results, source_text=source)
+    kept, dropped, dropped_recombined = concept_mod._drop_wrong_language_titles(
+        results, source_text=source
+    )
 
     assert kept == results
     assert dropped == ()
+    assert dropped_recombined == ()
 
 
 def test_chunked_extraction_drops_wrong_language_titles_and_reports() -> None:
@@ -5063,13 +5153,16 @@ def test_gate_verbatim_check_ignores_parenthesized_acronym_suffixes() -> None:
         ),
     ]
 
-    kept, dropped = concept_mod._drop_wrong_language_titles(results, source_text=source)
+    kept, dropped, dropped_recombined = concept_mod._drop_wrong_language_titles(
+        results, source_text=source
+    )
 
     assert [r.title for r in kept] == [
         "Model Context Protocol (MCP)",
         "Procedimiento de ingesta",
     ]
     assert dropped == ()
+    assert dropped_recombined == ()
 
 
 # --- Content-shape transcript detection (#673) ------------------------------
