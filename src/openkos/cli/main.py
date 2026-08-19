@@ -113,6 +113,7 @@ from openkos.resolution.volatility_typing import (
 )
 from openkos.retrieval.answer import NO_MATCH, Citation, NoMatchCause, answer
 from openkos.sensitivity import blocks_llm_send
+from openkos.state import adjudications as adjudications_store
 from openkos.state import derived, findings, fts, question_vectors
 from openkos.state import reindex as reindex_module
 from openkos.state.derived import stale_derived_stores
@@ -923,14 +924,18 @@ def _sweep_findings_for_ids(
         conn = derived.open_derived_connection(layout.findings_db_path)
         try:
             findings.delete_findings_referencing(conn, set(purge_ids))
+            # #779: the adjudications tables are the same file's second
+            # tenant and their rationales can quote member bodies verbatim
+            # -- same sweep, same erasure discipline, same connection.
+            adjudications_store.delete_adjudications_referencing(conn, set(purge_ids))
         finally:
             conn.close()
     except (OSError, sqlite3.Error) as exc:
         typer.echo(
-            "openkos forget: warning -- failed to sweep persisted findings "
-            f"({exc}); '.openkos/findings.db' may still quote the forgotten "
-            "concept(s). Delete the file to clear the residue (findings are "
-            "recomputable at LLM cost).",
+            "openkos forget: warning -- failed to sweep persisted findings/"
+            f"adjudications ({exc}); '.openkos/findings.db' may still quote "
+            "the forgotten concept(s). Delete the file to clear the residue "
+            "(both stores are recomputable at LLM cost).",
             err=True,
         )
 
@@ -11934,6 +11939,15 @@ def adjudicate(
             "that is the class that fuses distinct real-world items."
         ),
     ),
+    fresh: bool = typer.Option(
+        False,
+        "--fresh",
+        help=(
+            "Bypass the persisted-adjudications serve and re-judge every "
+            "candidate group with the model (#779), re-persisting the "
+            "fresh verdicts -- the same lever `contradictions --fresh` is."
+        ),
+    ),
 ) -> None:
     """LLM-adjudicate cross-source candidate duplicates: read-only by default.
 
@@ -12045,6 +12059,22 @@ def adjudicate(
             err=True,
         )
         raise typer.Exit(code=2)
+    if confirm_count is not None and not (
+        confirm_count.strip().isascii() and confirm_count.strip().isdigit()
+    ):
+        # #779: the typed-count rail is a COUNT, so a value that cannot
+        # possibly match any count is refused before candidate discovery
+        # and before any model call -- it used to be validated last, after
+        # a full adjudication pass had been spent and discarded. A numeric
+        # mismatch is still checked against the previewed total, which
+        # only exists after adjudication (and, since #779, that repeat
+        # pass is served from the store on an unchanged bundle).
+        typer.echo(
+            "openkos adjudicate: --confirm-count must be a whole number; "
+            "nothing was adjudicated.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
 
     root = Path.cwd()
     reason = config.require_workspace(root)
@@ -12073,14 +12103,43 @@ def adjudicate(
         typer.echo(notice, err=True)
     llm = _chat_client(cfg, task="adjudication")
     local_exemption = _resolve_local_exemption(llm, cfg)
+    # #779: serve digest-fresh persisted verdicts before any model contact,
+    # exactly as `contradictions` has since #653 -- the two advisors no
+    # longer disagree about whether a repeat run on an unchanged bundle
+    # costs model calls. `--fresh` bypasses the serve; every fresh verdict
+    # is (re-)persisted below. The store keys on the EFFECTIVE confidential
+    # inclusion -- `--include-confidential` OR the verified local-backend
+    # exemption (the same disjunction `sensitivity.should_block` applies)
+    # -- which is why this partition runs only AFTER the exemption is
+    # resolved: a verdict judged with confidential members included must
+    # never serve a run that would exclude them, whichever lever included
+    # them.
+    effective_confidential = include_confidential or local_exemption
+    served_by_key: dict[str, AdjudicatedCandidate] = {}
+    to_judge = candidates
+    if candidates and not fresh:
+        served_by_key, to_judge = _partition_adjudication_serves(
+            layout, candidates, include_confidential=effective_confidential
+        )
+    if candidates:
+        typer.echo(
+            f"openkos adjudicate: {len(served_by_key)} of {len(candidates)} "
+            "candidate group(s) served from persisted adjudications; "
+            f"{len(to_judge)} judged fresh.",
+            err=True,
+        )
     observability.warn_if_walk_incomplete(
         layout.bundle_dir,
         include_confidential=include_confidential,
         local_exemption=local_exemption,
     )
     try:
+        # Still called with an empty `to_judge` (a fully-served run): zero
+        # groups means zero `llm.chat` calls by construction, and the
+        # pre-#779 seam contract (e.g. the on_progress threading pin)
+        # stays byte-identical.
         batch = adjudicate_candidates(
-            candidates,
+            to_judge,
             bundle_dir=layout.bundle_dir,
             llm=llm,
             include_confidential=include_confidential,
@@ -12116,7 +12175,34 @@ def adjudicate(
         typer.echo(f"openkos adjudicate: failed -- {exc}.", err=True)
         raise typer.Exit(code=1) from exc
 
-    results = batch.results
+    # #779: fresh verdicts persist even on a partial batch (the paid-for
+    # work is kept, mirroring #441's own posture), then the run's results
+    # are rebuilt in candidate order -- served verdict, else fresh one;
+    # groups past a mid-batch failure appear in neither and stay absent.
+    _persist_adjudications(
+        layout, batch.results, include_confidential=effective_confidential
+    )
+    if served_by_key:
+        fresh_by_key = {
+            adjudications_store.group_key_for(result.candidate.member_ids): result
+            for result in batch.results
+        }
+        results = [
+            resolved
+            for group in candidates
+            if (
+                resolved := served_by_key.get(
+                    adjudications_store.group_key_for(group.member_ids)
+                )
+                or fresh_by_key.get(adjudications_store.group_key_for(group.member_ids))
+            )
+            is not None
+        ]
+    else:
+        # Nothing served -> the batch IS the run, byte-identical to the
+        # pre-#779 contract (and tolerant of a test double returning
+        # results the discovery report never listed).
+        results = list(batch.results)
     if json_output:
         # #776: the machine surface carries the same cross-source signal
         # the human listing renders as a note -- computed HERE, so the
@@ -12961,6 +13047,130 @@ def _is_contradiction_declined(
         if record.decision_key == key:
             return record.state == "declined"
     return False
+
+
+def _partition_adjudication_serves(
+    layout: config.WorkspaceLayout,
+    candidates: "list[CandidateGroup]",
+    *,
+    include_confidential: bool,
+) -> "tuple[dict[str, AdjudicatedCandidate], list[CandidateGroup]]":
+    """Split `candidates` into verdicts servable from `.openkos/findings.db`
+    and the groups that still need a model call (#779) -- the adjudication
+    twin of `_partition_persisted_serves`, same posture throughout.
+
+    A group is SERVED iff its latest persisted row matches this run's
+    `include_confidential` bit (a verdict computed over a different member
+    subset must never serve), carries at least one digest row, every
+    stored `(member, digest)` equals the member's CURRENT content hash,
+    and the stored verdict is in the enum. Everything else re-judges,
+    conservatively -- including a present-but-corrupt store, which
+    degrades to one stderr advisory and a full fresh judge rather than
+    crashing before any model spend (the #685 item-4 posture)."""
+    if not layout.findings_db_path.exists():
+        return {}, candidates
+    try:
+        conn = derived.open_derived_connection(layout.findings_db_path)
+        try:
+            persisted = adjudications_store.open_adjudications(conn)
+        finally:
+            conn.close()
+    except (OSError, sqlite3.Error) as exc:
+        typer.echo(
+            "openkos adjudicate: warning -- failed to read persisted "
+            f"adjudications ({exc}); judging every group fresh.",
+            err=True,
+        )
+        return {}, candidates
+    latest: dict[str, adjudications_store.Adjudication] = {}
+    for row in persisted:
+        latest[adjudications_store.group_key_for(row.member_ids)] = row
+
+    current_digest = _current_finding_digest(layout.bundle_dir)
+    served: dict[str, AdjudicatedCandidate] = {}
+    to_judge: list[CandidateGroup] = []
+    for group in candidates:
+        key = adjudications_store.group_key_for(group.member_ids)
+        stored = latest.get(key)
+        if stored is None or stored.include_confidential != include_confidential:
+            to_judge.append(group)
+            continue
+        # The stored ref SET must equal the group's current member set
+        # (#779 review, two lenses): a row carrying digests for fewer or
+        # different members than the group now holds was computed over a
+        # DIFFERENT prompt, however fresh each stored digest is.
+        if {digest.input_ref for digest in stored.input_digests} != set(
+            group.member_ids
+        ) or any(
+            current_digest(digest.input_ref) != digest.digest
+            for digest in stored.input_digests
+        ):
+            to_judge.append(group)
+            continue
+        try:
+            verdict = Verdict(stored.verdict)
+        except ValueError:
+            to_judge.append(group)
+            continue
+        served[key] = AdjudicatedCandidate(
+            candidate=group,
+            verdict=verdict,
+            confidence=stored.confidence,
+            rationale=stored.rationale,
+        )
+    return served, to_judge
+
+
+def _persist_adjudications(
+    layout: config.WorkspaceLayout,
+    results: "Sequence[AdjudicatedCandidate]",
+    *,
+    include_confidential: bool,
+) -> None:
+    """Persist freshly judged adjudication verdicts (#779), fail-open: a
+    failed persist costs one stderr advisory, never the run -- the same
+    #684 posture curate's findings persist takes. A result any of whose
+    members has no current digest (unreadable -- including the
+    no-readable-member UNCERTAIN short-circuit) is skipped: a row whose
+    staleness can never be checked would serve forever."""
+    if not results:
+        return
+    current_digest = _current_finding_digest(layout.bundle_dir)
+    batch: list[adjudications_store.Adjudication] = []
+    for result in results:
+        digests: list[adjudications_store.InputDigest] = []
+        for member_id in result.candidate.member_ids:
+            digest = current_digest(member_id)
+            if digest is None:
+                break
+            digests.append(
+                adjudications_store.InputDigest(input_ref=member_id, digest=digest)
+            )
+        else:
+            batch.append(
+                adjudications_store.Adjudication(
+                    member_ids=tuple(result.candidate.member_ids),
+                    verdict=result.verdict.value,
+                    confidence=result.confidence,
+                    rationale=result.rationale,
+                    include_confidential=include_confidential,
+                    input_digests=tuple(digests),
+                )
+            )
+    if not batch:
+        return
+    try:
+        conn = derived.open_derived_connection(layout.findings_db_path)
+        try:
+            adjudications_store.record_adjudications(conn, batch)
+        finally:
+            conn.close()
+    except (OSError, sqlite3.Error) as exc:
+        typer.echo(
+            "openkos adjudicate: warning -- failed to persist adjudication "
+            f"verdicts ({exc}); the next run will re-judge them.",
+            err=True,
+        )
 
 
 def _current_finding_digest(bundle_dir: Path) -> Callable[[str], str | None]:

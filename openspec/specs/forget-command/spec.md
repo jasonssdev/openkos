@@ -195,7 +195,11 @@ every persisted finding whose `pair_ids` (either element) or
 `merged_absorbed_id` names a purge-set member. `finding_claims` persists
 verbatim claim text quoted from concept bodies, so a finding referencing a
 forgotten concept is the same class of leak the ledger and decisions
-sweeps already close. The deletion MUST be an erasure (no
+sweeps already close. The SAME sweep MUST also delete every persisted
+ADJUDICATION (issue #779: the `adjudications` tables are the same file's
+second tenant) whose member set names a purge-set member -- an
+adjudication's `rationale` can quote the member's body verbatim -- under
+the same erasure discipline. The deletion MUST be an erasure (no
 freelist-recoverable pages, no residual WAL images), not a row-level
 tombstone. A missing store is a no-op and is never created by the sweep; a
 corrupt or unreadable store degrades to a stderr warning naming the

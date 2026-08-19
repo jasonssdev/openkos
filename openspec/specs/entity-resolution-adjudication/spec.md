@@ -385,6 +385,67 @@ tally, legend, and hint lines.
 - WHEN `adjudicate` runs after this change
 - THEN that substring is still present, unchanged
 
+### Requirement: Persisted Verdicts Are Served Before Re-Judging
+
+`openkos adjudicate` MUST persist every freshly judged verdict to the
+`adjudications` tables of `.openkos/findings.db` (issue #779 --
+`state.adjudications`, the findings store's second tenant, so `purge`'s
+wholesale deletion and `forget`'s sweep cover it with no new privacy
+surface), alongside one content-hash digest per member computed at
+persist time. A later run MUST serve a candidate group from the store,
+with NO model call for it, exactly when: the latest persisted row for the
+group's member set matches the run's EFFECTIVE confidential inclusion
+(`--include-confidential` OR the verified local-backend exemption -- the
+same disjunction `sensitivity.should_block` applies, so the partition
+runs only after the exemption is resolved; a verdict computed over a
+different member subset must never serve), carries a digest row for
+EVERY current group member and no others, every stored digest equals the
+member's CURRENT content hash, and the stored verdict is in the
+vocabulary.
+Everything else re-judges, conservatively -- including a
+present-but-corrupt store, which degrades to one stderr advisory and a
+full fresh judge, and a persist failure, which costs one advisory, never
+the run. A result any of whose members has no current digest MUST NOT be
+persisted (a row whose staleness can never be checked would serve
+forever -- this also keeps the no-readable-member UNCERTAIN
+short-circuit out of the store).
+
+The run MUST report the split on stderr
+(`N of M candidate group(s) served from persisted adjudications; K judged
+fresh.`), mirroring `contradictions`' line, and a `--fresh` flag MUST
+bypass the serve and re-persist, mirroring `contradictions --fresh`.
+Served and fresh verdicts MUST render identically through every output
+mode, in candidate order. Writes stay confined to derived state under
+`.openkos/` -- the bundle remains untouched on a read-only run, exactly
+as before.
+
+#### Scenario: A repeat run on an unchanged bundle costs zero model calls
+
+- GIVEN a bundle adjudicated once, unchanged since
+- WHEN `openkos adjudicate` runs again
+- THEN every group is served from the store, the model receives zero
+  groups, and the split line reports `N of N ... 0 judged fresh`
+
+#### Scenario: Member drift re-judges
+
+- GIVEN a persisted verdict and a member edited since
+- WHEN `openkos adjudicate` runs
+- THEN that group is judged fresh and the new verdict re-persisted
+
+#### Scenario: An effective-inclusion mismatch never serves
+
+- GIVEN a verdict persisted from a run whose EFFECTIVE inclusion was
+  exclusive (no flag, local exemption disabled)
+- WHEN `openkos adjudicate --include-confidential` runs on the unchanged
+  bundle
+- THEN the group is judged fresh
+
+#### Scenario: The store stays bounded by the live group set
+
+- GIVEN a group re-judged (drift or `--fresh`)
+- WHEN the fresh verdict is persisted
+- THEN the group's superseded rows are replaced, not accumulated
+
 ### Requirement: Machine-Readable `--json` Output Mode
 
 `openkos adjudicate` MUST accept a `--json` flag. When set, stdout MUST be a
@@ -912,10 +973,16 @@ count. No write MUST occur before the confirmation gate is resolved.
 
 The confirmation gate MUST be resolved in this order:
 
+0. A `--confirm-count` value that is not a whole number (empty or
+   non-numeric) MUST be refused (exit 2) BEFORE candidate discovery and
+   before any model call (issue #779): it cannot possibly match any
+   count, and validating it last made the cheapest possible check the
+   most expensive step in the workflow.
 1. If `--confirm-count <value>` is supplied on the command line, proceed
-   ONLY when `value.strip()` exactly equals the eligible-merge count; any
-   other value (empty, non-numeric, wrong number) MUST abort with ZERO
-   writes.
+   ONLY when `value.strip()` exactly equals the eligible-merge count; a
+   wrong number MUST abort with ZERO BUNDLE writes (persisted verdicts
+   are derived state under `.openkos/`, written by the adjudication
+   itself before this gate -- issue #779).
 2. Else, if stdin is a TTY, print the full aggregate preview, then prompt
    the operator to type the exact eligible-merge count; the same
    exact-match-or-abort-zero-writes rule applies.

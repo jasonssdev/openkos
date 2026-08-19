@@ -221,14 +221,17 @@ def test_adjudicate_never_writes_to_the_workspace(
     _init_workspace(tmp_path, monkeypatch)
     _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Ada Lovelace")
     _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="ada lovelace")
-    before = _snapshot(tmp_path)
+    # #779: adjudicate persists verdicts under .openkos/ (derived
+    # state, the contradictions precedent) -- the no-write guarantee
+    # that matters is the BUNDLE.
+    before = _snapshot(tmp_path / "bundle")
 
     result = runner.invoke(app, ["adjudicate"], catch_exceptions=True)
 
     # Regardless of exit code (a real Ollama may or may not be reachable in
     # this environment), the workspace bytes/mtimes must be identical --
     # `adjudicate` never writes, whether it succeeds or degrades.
-    assert _snapshot(tmp_path) == before
+    assert _snapshot(tmp_path / "bundle") == before
     if result.exit_code == 0:
         assert "openkos adjudicate: workspace at" in result.stdout
 
@@ -765,7 +768,10 @@ def test_adjudicate_ollama_unavailable_maps_to_exit_one(
     printed as a friendly stderr message with `ollama serve` remediation,
     exits 1, and writes nothing (spec: Degrade-On-No-Model)."""
     _init_workspace(tmp_path, monkeypatch)
-    before = _snapshot(tmp_path)
+    # #779: adjudicate persists verdicts under .openkos/ (derived
+    # state, the contradictions precedent) -- the no-write guarantee
+    # that matters is the BUNDLE.
+    before = _snapshot(tmp_path / "bundle")
 
     def _raise_unavailable(
         candidates: list[CandidateGroup], **kwargs: object
@@ -785,7 +791,7 @@ def test_adjudicate_ollama_unavailable_maps_to_exit_one(
         "Or run `openkos doctor` to diagnose the environment."
     )
     assert "Traceback" not in result.stderr
-    assert _snapshot(tmp_path) == before
+    assert _snapshot(tmp_path / "bundle") == before
 
 
 def test_adjudicate_model_not_found_maps_to_exit_one(
@@ -799,7 +805,10 @@ def test_adjudicate_model_not_found_maps_to_exit_one(
     (tmp_path / "openkos.yaml").write_text(
         f"model: {configured_model}\n", encoding="utf-8"
     )
-    before = _snapshot(tmp_path)
+    # #779: adjudicate persists verdicts under .openkos/ (derived
+    # state, the contradictions precedent) -- the no-write guarantee
+    # that matters is the BUNDLE.
+    before = _snapshot(tmp_path / "bundle")
 
     def _raise_model_not_found(
         candidates: list[CandidateGroup], **kwargs: object
@@ -819,7 +828,7 @@ def test_adjudicate_model_not_found_maps_to_exit_one(
     assert f"ollama pull {configured_model}" in result.stderr
     assert "openkos doctor" not in result.stderr
     assert "Traceback" not in result.stderr
-    assert _snapshot(tmp_path) == before
+    assert _snapshot(tmp_path / "bundle") == before
 
 
 def test_adjudicate_generic_ollama_error_maps_to_exit_one(
@@ -830,7 +839,10 @@ def test_adjudicate_generic_ollama_error_maps_to_exit_one(
     generic friendly message with no cause-specific remediation, exits 1,
     and writes nothing."""
     _init_workspace(tmp_path, monkeypatch)
-    before = _snapshot(tmp_path)
+    # #779: adjudicate persists verdicts under .openkos/ (derived
+    # state, the contradictions precedent) -- the no-write guarantee
+    # that matters is the BUNDLE.
+    before = _snapshot(tmp_path / "bundle")
 
     def _raise_generic(
         candidates: list[CandidateGroup], **kwargs: object
@@ -847,7 +859,7 @@ def test_adjudicate_generic_ollama_error_maps_to_exit_one(
     assert "ollama serve" not in result.stderr
     assert "ollama pull" not in result.stderr
     assert "Traceback" not in result.stderr
-    assert _snapshot(tmp_path) == before
+    assert _snapshot(tmp_path / "bundle") == before
 
 
 def test_adjudicate_specific_ollama_subclasses_do_not_fall_through_to_generic(
@@ -942,6 +954,8 @@ def test_adjudicate_partial_batch_reports_completed_verdicts_then_exits_one(
     assert "adjudicated 1: 1 SAME" in result.stdout
     assert "kept work" in result.stdout
     assert result.stderr == (
+        "openkos adjudicate: 0 of 2 candidate group(s) served from "
+        "persisted adjudications; 2 judged fresh.\n"
         "openkos adjudicate: failed after adjudicating 1 of 2 candidate "
         "group(s) -- boom.\n"
     )
@@ -1010,6 +1024,8 @@ def test_adjudicate_json_partial_batch_emits_completed_verdicts_then_exits_one(
         ],
     }
     assert result.stderr == (
+        "openkos adjudicate: 0 of 2 candidate group(s) served from "
+        "persisted adjudications; 2 judged fresh.\n"
         "openkos adjudicate: failed after adjudicating 1 of 2 candidate "
         "group(s) -- boom.\n"
     )
@@ -2495,7 +2511,13 @@ def test_adjudicate_apply_toctou_drift_exits_three_nothing_written(
     assert isinstance(result.exception, SystemExit)
     assert "openkos adjudicate --apply: refusing to write --" in result.stderr
     after = _snapshot(tmp_path)
-    changed = changed_paths(before, after)
+    # #779: adjudicate persists verdicts under .openkos/ (derived state);
+    # the drift guarantee is about the BUNDLE's bytes.
+    changed = {
+        rel
+        for rel in changed_paths(before, after)
+        if not str(rel).startswith(".openkos")
+    }
     assert changed == {Path("bundle/concepts/a.md")}
     assert survivor_path.read_text(encoding="utf-8") == concurrent
 
@@ -2620,13 +2642,16 @@ def test_adjudicate_apply_no_eligible_groups_prints_nothing_to_apply(
         "openkos.cli.main.find_candidates_report", _fake_find_candidates
     )
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
-    before = _snapshot(tmp_path)
+    # #779: adjudicate persists verdicts under .openkos/ (derived
+    # state, the contradictions precedent) -- the no-write guarantee
+    # that matters is the BUNDLE.
+    before = _snapshot(tmp_path / "bundle")
 
     result = runner.invoke(app, ["adjudicate", "--apply"])
 
     assert result.exit_code == 0
     assert "nothing to apply" in result.stdout.lower()
-    assert _snapshot(tmp_path) == before
+    assert _snapshot(tmp_path / "bundle") == before
 
 
 def test_adjudicate_apply_same_only_is_a_no_op_composition(
@@ -3047,7 +3072,10 @@ def test_adjudicate_apply_same_aggregate_preview_precedes_gate_and_writes(
         "openkos.cli.main.find_candidates_report", _fake_find_candidates
     )
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
-    before = _snapshot(tmp_path)
+    # #779: adjudicate persists verdicts under .openkos/ (derived
+    # state, the contradictions precedent) -- the no-write guarantee
+    # that matters is the BUNDLE.
+    before = _snapshot(tmp_path / "bundle")
 
     result = runner.invoke(app, ["adjudicate", "--apply-same", "--confirm-count", "0"])
 
@@ -3060,7 +3088,7 @@ def test_adjudicate_apply_same_aggregate_preview_precedes_gate_and_writes(
     total_idx = result.stdout.index("Total: 2")
     assert result.stdout.index("concepts/b") < total_idx
     assert result.stdout.index("concepts/d") < total_idx
-    assert _snapshot(tmp_path) == before
+    assert _snapshot(tmp_path / "bundle") == before
 
 
 def test_adjudicate_apply_same_confirm_count_exact_applies_all(
@@ -3121,7 +3149,11 @@ def test_adjudicate_apply_same_confirm_count_exact_applies_all(
     assert "applied 2 of 2 previewed" in result.stdout
 
 
-@pytest.mark.parametrize("wrong_count", ["0", "2", "", "yes"])
+# #779: non-numeric values ("", "yes") are refused BEFORE any spend by the
+# early rail (test_confirm_count_non_numeric_refuses_before_any_spend);
+# only numeric wrong counts reach the post-preview mismatch abort pinned
+# here.
+@pytest.mark.parametrize("wrong_count", ["0", "2"])
 def test_adjudicate_apply_same_confirm_count_mismatch_aborts_with_zero_writes(
     tmp_path: Path,
     tmp_path_factory: pytest.TempPathFactory,
@@ -3135,14 +3167,17 @@ def test_adjudicate_apply_same_confirm_count_mismatch_aborts_with_zero_writes(
     _, fake_find, fake_adjudicate = _seed_one_same_group(tmp_path)
     monkeypatch.setattr("openkos.cli.main.find_candidates_report", fake_find)
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", fake_adjudicate)
-    before = _snapshot(tmp_path)
+    # #779: adjudicate persists verdicts under .openkos/ (derived
+    # state, the contradictions precedent) -- the no-write guarantee
+    # that matters is the BUNDLE.
+    before = _snapshot(tmp_path / "bundle")
 
     result = runner.invoke(
         app, ["adjudicate", "--apply-same", "--confirm-count", wrong_count]
     )
 
     assert result.exit_code == 1
-    assert _snapshot(tmp_path) == before
+    assert _snapshot(tmp_path / "bundle") == before
 
 
 def test_adjudicate_apply_same_tty_prompt_exact_count_applies(
@@ -3182,12 +3217,15 @@ def test_adjudicate_apply_same_tty_prompt_wrong_input_aborts_with_zero_writes(
     _, fake_find, fake_adjudicate = _seed_one_same_group(tmp_path)
     monkeypatch.setattr("openkos.cli.main.find_candidates_report", fake_find)
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", fake_adjudicate)
-    before = _snapshot(tmp_path)
+    # #779: adjudicate persists verdicts under .openkos/ (derived
+    # state, the contradictions precedent) -- the no-write guarantee
+    # that matters is the BUNDLE.
+    before = _snapshot(tmp_path / "bundle")
 
     result = runner.invoke(app, ["adjudicate", "--apply-same"], input=wrong_input)
 
     assert result.exit_code == 1
-    assert _snapshot(tmp_path) == before
+    assert _snapshot(tmp_path / "bundle") == before
 
 
 def test_adjudicate_apply_same_non_tty_without_confirm_count_refuses(
@@ -3202,13 +3240,16 @@ def test_adjudicate_apply_same_non_tty_without_confirm_count_refuses(
     _, fake_find, fake_adjudicate = _seed_one_same_group(tmp_path)
     monkeypatch.setattr("openkos.cli.main.find_candidates_report", fake_find)
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", fake_adjudicate)
-    before = _snapshot(tmp_path)
+    # #779: adjudicate persists verdicts under .openkos/ (derived
+    # state, the contradictions precedent) -- the no-write guarantee
+    # that matters is the BUNDLE.
+    before = _snapshot(tmp_path / "bundle")
 
     result = runner.invoke(app, ["adjudicate", "--apply-same"])
 
     assert result.exit_code == 1
     assert "TTY" in result.stderr
-    assert _snapshot(tmp_path) == before
+    assert _snapshot(tmp_path / "bundle") == before
 
 
 def test_adjudicate_apply_same_mid_batch_merge_core_failure_keeps_prior_commit(
@@ -3332,7 +3373,13 @@ def test_adjudicate_apply_same_toctou_drift_exits_three_with_partial_summary(
     assert "remaining pairs were not attempted" in result.stderr
     assert "reversible via `unmerge`" in result.stderr
     after = _snapshot(tmp_path)
-    changed = changed_paths(before, after)
+    # #779: adjudicate persists verdicts under .openkos/ (derived state);
+    # the drift guarantee is about the BUNDLE's bytes.
+    changed = {
+        rel
+        for rel in changed_paths(before, after)
+        if not str(rel).startswith(".openkos")
+    }
     assert changed == {Path("bundle/concepts/a.md")}
     assert survivor_path.read_text(encoding="utf-8") == concurrent
 
@@ -3472,14 +3519,17 @@ def test_adjudicate_apply_same_zero_eligible_non_tty_exits_zero_nothing_to_apply
         "openkos.cli.main.find_candidates_report", _fake_find_candidates
     )
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
-    before = _snapshot(tmp_path)
+    # #779: adjudicate persists verdicts under .openkos/ (derived
+    # state, the contradictions precedent) -- the no-write guarantee
+    # that matters is the BUNDLE.
+    before = _snapshot(tmp_path / "bundle")
 
     result = runner.invoke(app, ["adjudicate", "--apply-same"])
 
     assert result.exit_code == 0
     assert "nothing to apply" in result.stdout.lower()
     assert "not a TTY" not in result.stderr
-    assert _snapshot(tmp_path) == before
+    assert _snapshot(tmp_path / "bundle") == before
 
 
 def test_adjudicate_apply_same_zero_eligible_tty_exits_zero_without_prompt(
@@ -4875,3 +4925,301 @@ def test_adjudicate_json_carries_the_cross_source_flag(
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["results"][0]["cross_source"] is True
+
+
+# --- issue #779: persisted verdicts and the early --confirm-count rail ------
+
+
+def _stub_one_same_group_with_call_log(
+    monkeypatch: pytest.MonkeyPatch, calls: list[int]
+) -> CandidateGroup:
+    """ONE SAME group over real docs; `_fake_adjudicate` appends the group
+    count it received to `calls`, so a test can prove exactly how many
+    groups reached the model layer."""
+    group = _two_member_group(("concepts/a", "concepts/b"))
+
+    def _fake_find_candidates(
+        bundle_dir: object, **kwargs: object
+    ) -> CandidateGroupReport:
+        return CandidateGroupReport(groups=(group,), produced=1, retained=1)
+
+    def _fake_adjudicate(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> AdjudicationBatch:
+        calls.append(len(candidates))
+        return AdjudicationBatch(
+            results=[
+                _adjudicated(candidate, verdict=Verdict.SAME, rationale="stable")
+                for candidate in candidates
+            ]
+        )
+
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _fake_find_candidates
+    )
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
+    return group
+
+
+def test_confirm_count_non_numeric_refuses_before_any_spend(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#779's cheap half: a `--confirm-count` that cannot possibly match
+    any count (non-numeric) is refused BEFORE candidate discovery or any
+    model call -- the rail used to be validated last, after every call had
+    been spent."""
+    _init_workspace(tmp_path, monkeypatch)
+    calls: list[int] = []
+    _stub_one_same_group_with_call_log(monkeypatch, calls)
+
+    result = runner.invoke(
+        app, ["adjudicate", "--apply-same", "--confirm-count", "five"]
+    )
+
+    assert result.exit_code == 2
+    assert "--confirm-count" in result.stderr
+    assert "whole number" in result.stderr
+    assert calls == []
+
+
+def test_repeat_run_serves_persisted_verdicts_with_zero_model_calls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#779's main half: an unchanged bundle's second run serves every
+    verdict from the store -- zero model calls, the same split line
+    `contradictions` prints, and the rendered verdict identical."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    calls: list[int] = []
+    _stub_one_same_group_with_call_log(monkeypatch, calls)
+
+    first = runner.invoke(app, ["adjudicate"])
+    assert first.exit_code == 0
+    assert calls == [1]
+    assert "0 of 1 candidate group(s) served from persisted adjudications" in (
+        first.stderr
+    )
+
+    second = runner.invoke(app, ["adjudicate"])
+
+    assert second.exit_code == 0
+    # The seam is still crossed (pre-#779 contract pins its kwargs), but
+    # with ZERO groups -- zero llm.chat calls by construction.
+    assert calls == [1, 0], "the second run must hand the model zero groups"
+    assert "1 of 1 candidate group(s) served from persisted adjudications" in (
+        second.stderr
+    )
+    assert "0 judged fresh" in second.stderr
+    assert "verdict: SAME" in second.stdout
+    assert "rationale: stable" in second.stdout
+
+
+def test_changed_member_rejudges_fresh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Any member content drift invalidates the served verdict -- the same
+    per-row digest contract `contradictions` uses."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    calls: list[int] = []
+    _stub_one_same_group_with_call_log(monkeypatch, calls)
+    assert runner.invoke(app, ["adjudicate"]).exit_code == 0
+
+    _write_doc(
+        tmp_path / "bundle" / "concepts" / "a.md",
+        title="Concept A",
+        body="Edited since the verdict was computed.\n",
+    )
+    second = runner.invoke(app, ["adjudicate"])
+
+    assert second.exit_code == 0
+    assert calls == [1, 1]
+    assert "0 of 1 candidate group(s) served" in second.stderr
+
+
+def test_fresh_flag_bypasses_the_serve(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--fresh` re-judges everything and re-persists, mirroring
+    `contradictions --fresh`."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    calls: list[int] = []
+    _stub_one_same_group_with_call_log(monkeypatch, calls)
+    assert runner.invoke(app, ["adjudicate"]).exit_code == 0
+
+    second = runner.invoke(app, ["adjudicate", "--fresh"])
+
+    assert second.exit_code == 0
+    assert calls == [1, 1]
+
+
+def test_include_confidential_mismatch_rejudges(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A verdict computed with confidential members excluded was computed
+    over a DIFFERENT prompt -- it must never serve a run that includes
+    them, digests notwithstanding. The store keys on the EFFECTIVE
+    inclusion (flag OR verified local exemption), so the exemption is
+    disabled here to make run 1 genuinely exclusive."""
+    _init_workspace(tmp_path, monkeypatch)
+    disable_local_exemption(tmp_path)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    calls: list[int] = []
+    _stub_one_same_group_with_call_log(monkeypatch, calls)
+    assert runner.invoke(app, ["adjudicate"]).exit_code == 0
+
+    second = runner.invoke(app, ["adjudicate", "--include-confidential"])
+
+    assert second.exit_code == 0
+    assert calls == [1, 1]
+
+
+def test_forget_sweep_erases_adjudications_referencing_the_member(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The forget privacy sweep reaches the adjudications tables too: a
+    persisted rationale can quote the forgotten member's body verbatim."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    calls: list[int] = []
+    _stub_one_same_group_with_call_log(monkeypatch, calls)
+    assert runner.invoke(app, ["adjudicate"]).exit_code == 0
+    layout = okf_config.WorkspaceLayout(tmp_path)
+    assert layout.findings_db_path.exists()
+
+    main._sweep_findings_for_ids(layout, {"concepts/a"})
+
+    from openkos.state import adjudications as adjudications_store
+    from openkos.state import derived
+
+    conn = derived.open_derived_connection(layout.findings_db_path)
+    try:
+        assert adjudications_store.open_adjudications(conn) == ()
+    finally:
+        conn.close()
+
+
+def test_mixed_serve_interleaves_in_candidate_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two groups, one drifted: the served verdict and the fresh one render
+    interleaved in CANDIDATE order, indistinguishable in shape."""
+    _init_workspace(tmp_path, monkeypatch)
+    for name in ("a", "b", "c", "d"):
+        _write_doc(tmp_path / "bundle" / "concepts" / f"{name}.md", title=name.upper())
+    group_ab = _two_member_group(("concepts/a", "concepts/b"), trigger="stub-ab")
+    group_cd = _two_member_group(("concepts/c", "concepts/d"), trigger="stub-cd")
+    calls: list[int] = []
+
+    def _fake_find_candidates(
+        bundle_dir: object, **kwargs: object
+    ) -> CandidateGroupReport:
+        return CandidateGroupReport(groups=(group_ab, group_cd), produced=2, retained=2)
+
+    def _fake_adjudicate(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> AdjudicationBatch:
+        calls.append(len(candidates))
+        return AdjudicationBatch(
+            results=[
+                _adjudicated(candidate, verdict=Verdict.DIFFERENT, rationale="fresh")
+                for candidate in candidates
+            ]
+        )
+
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _fake_find_candidates
+    )
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
+    assert runner.invoke(app, ["adjudicate"]).exit_code == 0
+    assert calls == [2]
+
+    _write_doc(
+        tmp_path / "bundle" / "concepts" / "c.md",
+        title="C",
+        body="Edited since the verdict.\n",
+    )
+    second = runner.invoke(app, ["adjudicate"])
+
+    assert second.exit_code == 0
+    assert calls == [2, 1]
+    assert "1 of 2 candidate group(s) served" in second.stderr
+    out = second.stdout
+    # Candidate order preserved: the served ab group renders before the
+    # freshly judged cd group.
+    assert out.index("stub-ab") < out.index("stub-cd")
+    assert out.count("verdict: DIFFERENT") == 2
+
+
+def test_corrupt_store_degrades_to_a_full_fresh_judge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The spec's fail-open path: a present-but-corrupt findings.db costs
+    one stderr advisory and a full fresh judge, never the run."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    layout = okf_config.WorkspaceLayout(tmp_path)
+    layout.findings_db_path.parent.mkdir(parents=True, exist_ok=True)
+    layout.findings_db_path.write_bytes(b"not a sqlite database at all")
+    calls: list[int] = []
+    _stub_one_same_group_with_call_log(monkeypatch, calls)
+
+    result = runner.invoke(app, ["adjudicate"])
+
+    assert result.exit_code == 0
+    assert calls == [1]
+    assert "failed to read persisted adjudications" in result.stderr
+    assert "judging every group fresh" in result.stderr
+
+
+def test_a_row_missing_a_member_digest_never_serves(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The serve gate requires the stored ref SET to equal the group's
+    member set (#779 review): a row carrying digests for fewer members was
+    computed over a different prompt, however fresh each stored digest is."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    layout = okf_config.WorkspaceLayout(tmp_path)
+    from openkos.state import adjudications as adjudications_store
+    from openkos.state import derived
+    from openkos.state.vectorstore import content_hash
+
+    digest_a = content_hash((tmp_path / "bundle" / "concepts" / "a.md").read_bytes())
+    conn = derived.open_derived_connection(layout.findings_db_path)
+    try:
+        adjudications_store.record_adjudications(
+            conn,
+            [
+                adjudications_store.Adjudication(
+                    member_ids=("concepts/a", "concepts/b"),
+                    verdict="same",
+                    confidence=0.9,
+                    rationale="stale partial row",
+                    include_confidential=False,
+                    input_digests=(
+                        adjudications_store.InputDigest(
+                            input_ref="concepts/a", digest=digest_a
+                        ),
+                    ),
+                )
+            ],
+        )
+    finally:
+        conn.close()
+    calls: list[int] = []
+    _stub_one_same_group_with_call_log(monkeypatch, calls)
+
+    result = runner.invoke(app, ["adjudicate"])
+
+    assert result.exit_code == 0
+    assert calls == [1], "a partial-digest row must re-judge, never serve"
+    assert "0 of 1 candidate group(s) served" in result.stderr
