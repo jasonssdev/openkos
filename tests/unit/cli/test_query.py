@@ -207,6 +207,7 @@ def test_query_matching_answer_renders_citations_in_fused_rank_order(
         dense_hit_count=2,
         fused_count=2,
         dense_degraded=False,
+        attribution="reported",
     )
     monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
 
@@ -334,6 +335,7 @@ def test_query_skip_notices_surfaced_on_stderr_alongside_successful_answer(
         dense_hit_count=0,
         fused_count=1,
         dense_degraded=False,
+        attribution="reported",
     )
     monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
 
@@ -370,6 +372,7 @@ def test_query_no_skip_notices_omits_skip_block(
         dense_hit_count=0,
         fused_count=1,
         dense_degraded=False,
+        attribution="reported",
     )
     monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
 
@@ -928,6 +931,7 @@ def test_query_retrieval_summary_has_no_graph_term(
         dense_hit_count=2,
         fused_count=2,
         dense_degraded=False,
+        attribution="reported",
     )
     monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
 
