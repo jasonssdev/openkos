@@ -14,6 +14,109 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+## [0.2.8] - 2026-08-19
+
+Every change in this release comes from one source: a full manual walkthrough
+of `docs/testing.md` on 0.2.7 filed ten issues
+([#772](https://github.com/jasonssdev/openkos/issues/772)–[#781](https://github.com/jasonssdev/openkos/issues/781)),
+four of them links in a single causal chain — a failed judge admitted junk,
+re-ingest multiplied it, title-matching merged it across sources, and the junk
+concept became the retrieval magnet behind a fabricated answer carrying five
+bundle citations. All ten are closed here; the chain's links were fixed in
+causal order (#772 → #773 → #776 → #774), and the sections below group by
+kind, not by that order.
+
+### Added
+
+- **`query --save` gates on unverified grounding.** When the answer never
+  accounted for its own citations (attribution `absent` or `unparsed`), the
+  citations about to become permanent `provenance` are the retrieval set —
+  and, measured on the bundle that produced the field failure, that state IS
+  the fabrication signal: 30 of 30 fabricated answers were `absent` while 44
+  of 45 grounded answers were `reported` (constructed corpus: 63 of 63).
+  Filing one now asks its own stronger question on a TTY and refuses off-TTY
+  even under `--auto` or `review: false`; the new `--allow-unattributed`
+  flag is the explicit opt-in that keeps never-attributing backends usable
+  unattended. Two chat-judge entailment mechanisms were measured and
+  rejected first — both flagged most grounded answers
+  (`evals/query_entailment/`)
+  ([#774](https://github.com/jasonssdev/openkos/issues/774)).
+
+- **`adjudicate` persists its verdicts and serves them on repeat runs.**
+  Verdicts land in `.openkos/findings.db` beside the contradiction findings
+  (so `purge` and `forget`'s privacy sweep cover them with no new surface),
+  keyed on each member's content hash and the run's effective confidential
+  inclusion. An unchanged bundle re-judges nothing and reports the same
+  served/fresh split `contradictions` prints; `--fresh` re-judges
+  deliberately. A `--confirm-count` that cannot possibly match any count is
+  refused before candidate discovery — the cheapest check is no longer the
+  most expensive step in the workflow
+  ([#779](https://github.com/jasonssdev/openkos/issues/779)).
+
+### Fixed
+
+- **A judge that could not run no longer admits every candidate silently.**
+  Fail-open is unchanged — an unavailable or empty judge selection still
+  keeps the merged union — but the Source is now stamped with a persistent
+  `extraction_notice` token, the terminal notice discloses the marking, and
+  `lint` (new `unjudged` finding kind) plus `status` surface it with the
+  exact re-ingest retry command until a later judged run self-clears it
+  ([#772](https://github.com/jasonssdev/openkos/issues/772)).
+
+- **A byte-identical re-ingest converges instead of accumulating.**
+  Extraction is non-deterministic, so re-running it on an unchanged source
+  unioned every set the model ever produced — 17 objects from one 81-line
+  file. An already-extracted, unchanged source now skips extraction
+  entirely (no model call, nothing written, one stderr line naming
+  `--re-extract` as the deliberate redo), while retryable debt — the exact
+  state `lint`'s retry hint names — still re-extracts without the flag
+  ([#773](https://github.com/jasonssdev/openkos/issues/773)).
+
+- **The batch ingest cost gate announces a fan-out-aware estimate.** It
+  hardcoded one LLM call per file while the unit of cost is the window plus
+  the judge and the participant pass — announcing 3 calls for a run that
+  made ~16. The gate now sums per-file estimates from the same thresholds
+  the pipeline branches on, names which sources will chunk, bills a
+  convergent re-ingest at ~0, and labels the line an estimate
+  ([#775](https://github.com/jasonssdev/openkos/issues/775)).
+
+- **`adjudicate --apply-same` no longer merges across sources by default,
+  and the survivor is no longer alphabetical.** A SAME verdict over members
+  with disjoint provenance fused two meetings held a week apart; such pairs
+  are now excluded by default (disclosed with the manual merge command;
+  `--include-cross-source` opts in) and the member with the richer body
+  survives, with the direction pinned through the write
+  ([#776](https://github.com/jasonssdev/openkos/issues/776)).
+
+- **`query` announces the citation-attribution fallback.** Under `absent`
+  or `unparsed` every retrieved concept is cited — the pre-#753 behavior —
+  so `5 cited` was indistinguishable from a compliant answer that used all
+  five. Both states now get a stderr notice with separate wording, in the
+  shape the other guards already follow
+  ([#777](https://github.com/jasonssdev/openkos/issues/777)).
+
+- **`suggest-relations` carries the direction disclaimer on both surfaces.**
+  The `(direction model-suggested, unverified)` suffix only `curate`'s
+  Structure stage rendered now also appears on the read-only listing and on
+  `--apply`'s preview and prompt, from one shared helper so the surfaces
+  cannot drift ([#778](https://github.com/jasonssdev/openkos/issues/778)).
+
+- **The ingest drop notice names the branch that fired.** A #630
+  recombination drop (a gate-neutral title assembled from prose fragments)
+  was announced as a "wrong-language title" — on a Spanish source, with a
+  Spanish first title shown, pointing the investigation at the wrong
+  subsystem. The two classes now travel apart and the recombination arm has
+  its own honest wording
+  ([#780](https://github.com/jasonssdev/openkos/issues/780)).
+
+- **Three places where the docs described a system the code does not have.**
+  `docs/testing.md` now documents `init`'s second (embedding-model) picker
+  and its sticky-model note, its merge/unmerge round-trip check excludes the
+  deliberate `log.md` audit line from the byte-parity expectation, and the
+  README no longer claims `next` *always* recommends an action — the
+  duplicate tier's recall bound is by design
+  ([#781](https://github.com/jasonssdev/openkos/issues/781)).
+
 ## [0.2.7] - 2026-08-18
 
 ### Added
@@ -1258,7 +1361,8 @@ and Memory) work.
 - Default embedding model is `bge-m3` (ADR-0006), superseding the earlier
   `qwen3-embedding:0.6b` default.
 
-[Unreleased]: https://github.com/jasonssdev/openkos/compare/v0.2.7...HEAD
+[Unreleased]: https://github.com/jasonssdev/openkos/compare/v0.2.8...HEAD
+[0.2.8]: https://github.com/jasonssdev/openkos/compare/v0.2.7...v0.2.8
 [0.2.7]: https://github.com/jasonssdev/openkos/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/jasonssdev/openkos/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/jasonssdev/openkos/compare/v0.2.4...v0.2.5
