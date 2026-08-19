@@ -376,3 +376,50 @@ def test_the_ordinary_path_pays_nothing_for_the_retry() -> None:
 
     assert outcome.report.judge_status == "ok"
     assert llm.judge_calls == 1
+
+
+# --- issue #775: the cost-gate estimator is pinned against the same pipeline
+
+
+@pytest.mark.parametrize("pages", _DOCUMENTED_PAGES)
+@pytest.mark.parametrize("title", [_PROSE_TITLE, _MEETING_TITLE])
+def test_estimate_matches_the_observed_ordinary_path(pages: int, title: str) -> None:
+    """`estimate_extraction_calls` -- the number `ingest`'s batch cost gate
+    announces (#775) -- must equal what the real union pipeline spends on the
+    ordinary path (multi-candidate reply, judge answers first try), for every
+    documented row. Observed, not re-derived: a changed fan-out shape must
+    fail this, exactly as it fails the table test above."""
+    text = _source_of(pages * _PAGE_CHARS)
+    estimate = concept.estimate_extraction_calls(text, source_title=title)
+
+    assert estimate.calls == _observed_calls(pages * _PAGE_CHARS, title=title)
+
+
+def test_estimate_reports_windows_only_when_the_source_fans_out() -> None:
+    """`windows` is 0 below the threshold (the gate has no split to name) and
+    equals the real `_chunk_lines` window count above it -- the same number
+    the per-chunk progress counter shows."""
+    small = concept.estimate_extraction_calls(
+        _source_of(2 * _PAGE_CHARS), source_title=_PROSE_TITLE
+    )
+    big_text = _source_of(10 * _PAGE_CHARS)
+    big = concept.estimate_extraction_calls(big_text, source_title=_PROSE_TITLE)
+
+    assert small.windows == 0
+    assert big.windows == len(concept._chunk_lines(big_text))
+    assert big.calls == big.windows + 1
+
+
+def test_estimate_single_run_path_counts_extraction_passes_only() -> None:
+    """`union_judge=False` restores the single-run path: one call below the
+    threshold, one per window above, no judge and no participant pass."""
+    small = concept.estimate_extraction_calls(
+        _source_of(2 * _PAGE_CHARS), source_title=_PROSE_TITLE, union_judge=False
+    )
+    big_text = _source_of(10 * _PAGE_CHARS)
+    big = concept.estimate_extraction_calls(
+        big_text, source_title=_PROSE_TITLE, union_judge=False
+    )
+
+    assert small.calls == 1
+    assert big.calls == len(concept._chunk_lines(big_text))

@@ -42,6 +42,7 @@ from openkos.extraction import judge as judge_mod
 from openkos.extraction.concept import (
     FAN_OUT_CONCURRENCY,
     ExtractionReport,
+    estimate_extraction_calls,
     extract_concept,
     extract_concept_union,
     fans_out,
@@ -4139,6 +4140,111 @@ def _refuse_basename_collisions(matches: Sequence[Path]) -> None:
     raise typer.Exit(code=1)
 
 
+@dataclass(frozen=True)
+class _BatchCallEstimate:
+    """What the batch cost gate announces (#775): a fan-out-aware estimate
+    of the model calls this run will spend, plus the two per-file facts the
+    operator needs to judge it -- which sources will split into windows,
+    and which will be skipped outright by #773's convergence short-circuit."""
+
+    calls: int
+    chunked_files: int
+    chunked_windows: int
+    """Window total across every chunking file -- the `~N window(s)` the
+    gate names, same unit as the per-chunk progress counter."""
+    skipped_files: int
+
+
+def _reingest_will_skip(src: Path, layout: config.WorkspaceLayout) -> bool:
+    """Predict #773's convergence skip for one batch file, read-only and
+    fail-open (#775): `True` only when the SAME conditions `_ingest_single`
+    checks all hold -- a byte-identical raw match resolving to an existing
+    Source that records an `origin_key` and carries no retryable-debt
+    marker (`_extraction_retry_due`, the shared predicate). Any read or
+    parse failure returns `False`, which merely over-states the estimate;
+    the authoritative decision stays inside `_ingest_single`."""
+    try:
+        origin_key = okf.origin_key_for(src)
+        destination = _resolve_raw_destination(src, layout, origin_key)
+        if not destination.regenerate:
+            return False
+        slug = _slugify(Path(destination.name).stem)
+        concept_path = layout.bundle_dir / "sources" / f"{slug}.md"
+        if not concept_path.exists():
+            return False
+        metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if metadata.get(okf.ORIGIN_KEY_KEY) is None:
+        return False
+    return not _extraction_retry_due(metadata)
+
+
+def _estimate_batch_calls(
+    matches: list[Path],
+    layout: config.WorkspaceLayout,
+    cfg: config.Config,
+    *,
+    include_confidential: bool,
+    re_extract: bool,
+) -> _BatchCallEstimate:
+    """Sum fan-out-aware per-file estimates for the batch cost gate (#775),
+    replacing the `{n} file(s) -> {n} LLM call(s)` identity that was wrong
+    by 7x on a chunking source: the unit of cost is the WINDOW (plus the
+    judge and the participant pass), not the file, and
+    `extraction.concept.estimate_extraction_calls` owns that arithmetic so
+    this gate cannot re-derive the thresholds.
+
+    Per-file zeros mirror the pipeline's own no-LLM paths: an undecodable
+    or blank source degrades to Source-only, the confidential floor gate
+    skips extraction wholesale unless `--include-confidential`, and a file
+    `_reingest_will_skip` predicts converges under #773. The title fed to
+    the estimator is derived exactly as `_ingest_single` derives it, so a
+    meeting-shaped transcript is estimated on the meeting threshold."""
+    calls = 0
+    chunked_files = 0
+    chunked_windows = 0
+    skipped_files = 0
+    floor_gated = cfg.default_sensitivity == "confidential" and not include_confidential
+    for path in matches:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue  # undecodable -> Source-only, no model call
+        except OSError:
+            # Fail OPEN, distinct from undecodable: a file the gate cannot
+            # READ right now (permissions, a race) may still extract fine
+            # when the run reaches it, so it is billed at the unchunked
+            # ordinary cost rather than silently dropped from the count --
+            # the spec's "billed at the full estimate, never silently
+            # dropped". Without the text there is no window arithmetic to
+            # do, so the unchunked estimate is the honest floor.
+            calls += 3 if cfg.union_judge else 1
+            continue
+        if not text.strip():
+            continue  # blank -> no extractable text, no model call
+        if floor_gated:
+            continue  # S3b: extraction never reaches the LLM
+        if not re_extract and _reingest_will_skip(path, layout):
+            skipped_files += 1
+            continue
+        derived = source_title.derive_source_title(text)
+        title = derived if derived is not None else _titleize(path.stem)
+        estimate = estimate_extraction_calls(
+            text, source_title=title, union_judge=cfg.union_judge
+        )
+        calls += estimate.calls
+        if estimate.windows:
+            chunked_files += 1
+            chunked_windows += estimate.windows
+    return _BatchCallEstimate(
+        calls=calls,
+        chunked_files=chunked_files,
+        chunked_windows=chunked_windows,
+        skipped_files=skipped_files,
+    )
+
+
 def _ingest_batch(
     src: Path,
     matches: list[Path],
@@ -4238,9 +4344,32 @@ def _ingest_batch(
 
     total = len(matches)
     if not auto and cfg.review:
+        # #775: a fan-out-aware estimate, computed only when the gate will
+        # actually ask -- the unit of cost is the window, not the file, and
+        # a gate wrong by 7x fails at its only job. `suggest-relations`
+        # stays exact because there the unit really is 1:1; here the
+        # number is honest about being an estimate.
+        estimate = _estimate_batch_calls(
+            matches,
+            config.WorkspaceLayout(root),
+            cfg,
+            include_confidential=include_confidential,
+            re_extract=re_extract,
+        )
+        details = []
+        if estimate.skipped_files:
+            details.append(
+                f"{estimate.skipped_files} unchanged -- extraction will be skipped"
+            )
+        if estimate.chunked_files:
+            details.append(
+                f"{estimate.chunked_files} will be split into "
+                f"~{estimate.chunked_windows} window(s)"
+            )
+        detail_note = f" ({'; '.join(details)})" if details else ""
         typer.echo(
-            f"{total} file(s) -> {total} LLM call(s), one extraction per file "
-            "(this can take a while). Pass --auto to skip this prompt.",
+            f"{total} file(s){detail_note} -> ~{estimate.calls} LLM call(s) "
+            "(estimate; this can take a while). Pass --auto to skip this prompt.",
             err=True,
         )
         if sys.stdin.isatty():
