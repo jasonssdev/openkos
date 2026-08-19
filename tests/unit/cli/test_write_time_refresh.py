@@ -107,6 +107,9 @@ def _fake_matched_answer() -> AnswerResult:
         llm_invoked=True,
         no_match_cause="none",
         skip_notices=[],
+        # A compliant answer: these tests exercise the write-time refresh,
+        # not the #774 unverified-grounding gate, which `absent` would trip.
+        attribution="reported",
     )
 
 

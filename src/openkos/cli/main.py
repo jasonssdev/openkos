@@ -14535,6 +14535,16 @@ def query(
         "--auto",
         help="With --save, skip the confirmation prompt and write immediately.",
     ),
+    allow_unattributed: bool = typer.Option(
+        False,
+        "--allow-unattributed",
+        help=(
+            "With --save, file an answer whose citation list is the "
+            "retrieval fallback (attribution absent or unparsed) without "
+            "the #774 gate -- the citations become provenance without the "
+            "model ever accounting for them."
+        ),
+    ),
 ) -> None:
     """Answer a natural-language question from the compiled bundle, with citations.
 
@@ -15026,6 +15036,20 @@ def query(
             "  ! confidential: excluded from query, contradictions, and "
             "suggest-relations against a non-local backend."
         )
+    # #774: when the attribution fell back (`absent`/`unparsed`), the
+    # citations about to become permanent provenance are the retrieval set,
+    # not anything the answer accounted for. Measured on the field bundle
+    # that produced the issue: 30 of 30 fabricated answers were `absent`
+    # while 63 of 63 grounded or compliant answers were `reported`
+    # (evals/query_entailment/). Disclosed in the plan, then gated below.
+    unattributed = result.llm_invoked and result.attribution != "reported"
+    if unattributed:
+        typer.echo(
+            "  ! unverified grounding: the answer never accounted for its "
+            f"citations (attribution: {result.attribution}), so the "
+            f"{len(result.citations)} citation(s) above are the retrieval "
+            "set and would be filed as provenance verbatim."
+        )
     typer.echo(f"  ~ {save_index_path.name} (new entry)")
     typer.echo(f"  ~ {save_log_path.name} (new dated entry)")
 
@@ -15098,7 +15122,31 @@ def query(
             err=True,
         )
 
-    if not auto and cfg.review:
+    # #774 gate first: it is deliberately STRONGER than the ordinary review
+    # gate -- `--auto` and `review: false` bypass the prompt below, and an
+    # unattended pipeline filing fabricated provenance is the exact harm the
+    # issue documents. On a TTY its question REPLACES the ordinary one (one
+    # prompt, covering more); off a TTY it refuses unless the caller opted
+    # in with `--allow-unattributed` -- the escape hatch that keeps a
+    # backend that never emits the attribution line (the deliberate
+    # pre-#753 fallback population, where EVERY answer is `absent`) usable
+    # unattended, by saying so explicitly.
+    if unattributed and not allow_unattributed:
+        if sys.stdin.isatty():
+            typer.confirm(
+                "File it with these unverified citations as provenance?",
+                abort=True,
+            )
+        else:
+            typer.echo(
+                "openkos query: refusing to save -- the answer's grounding "
+                f"is unverified (attribution: {result.attribution}) and "
+                "stdin is not a TTY. Re-run with --allow-unattributed to "
+                "accept the retrieval set as provenance.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+    elif not auto and cfg.review:
         if sys.stdin.isatty():
             typer.confirm("Proceed with these changes?", abort=True)
         else:
