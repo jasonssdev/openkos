@@ -48,7 +48,7 @@ from openkos.extraction.concept import (
     fans_out,
 )
 from openkos.graph import proximity, sqlite_graph
-from openkos.graph.base import GraphStore
+from openkos.graph.base import Edge, GraphStore
 from openkos.graph.sqlite_graph import build_graph
 from openkos.graph.summary import graph_edge_summary
 from openkos.llm.base import LLMBackend
@@ -115,6 +115,7 @@ from openkos.retrieval.answer import NO_MATCH, Citation, NoMatchCause, answer
 from openkos.sensitivity import blocks_llm_send
 from openkos.state import adjudications as adjudications_store
 from openkos.state import derived, findings, fts, question_vectors
+from openkos.state import edge_suggestions as edge_suggestions_store
 from openkos.state import reindex as reindex_module
 from openkos.state.derived import stale_derived_stores
 from openkos.state.fts import FtsUnavailable
@@ -928,14 +929,21 @@ def _sweep_findings_for_ids(
             # tenant and their rationales can quote member bodies verbatim
             # -- same sweep, same erasure discipline, same connection.
             adjudications_store.delete_adjudications_referencing(conn, set(purge_ids))
+            # #799: the edge_suggestions tables are the same file's THIRD
+            # tenant and their rationales quote both endpoints' bodies --
+            # same sweep, same erasure discipline, same connection.
+            edge_suggestions_store.delete_edge_suggestions_referencing(
+                conn, set(purge_ids)
+            )
         finally:
             conn.close()
     except (OSError, sqlite3.Error) as exc:
         typer.echo(
             "openkos forget: warning -- failed to sweep persisted findings/"
-            f"adjudications ({exc}); '.openkos/findings.db' may still quote "
-            "the forgotten concept(s). Delete the file to clear the residue "
-            "(both stores are recomputable at LLM cost).",
+            f"adjudications/edge suggestions ({exc}); '.openkos/findings.db' "
+            "may still quote the forgotten concept(s). Delete the file to "
+            "clear the residue (all three stores are recomputable at LLM "
+            "cost).",
             err=True,
         )
 
@@ -12544,6 +12552,15 @@ def suggest_relations_cmd(
         "--include-confidential",
         help="Include confidential concepts (excluded by default).",
     ),
+    fresh: bool = typer.Option(
+        False,
+        "--fresh",
+        help=(
+            "Bypass the persisted-suggestions serve and re-type every "
+            "candidate edge with the model (#799), re-persisting the fresh "
+            "suggestions -- the same lever `adjudicate --fresh` is."
+        ),
+    ),
     edge_offset: int = typer.Option(
         0,
         "--edge-offset",
@@ -12753,10 +12770,40 @@ def suggest_relations_cmd(
     # not needed once `edges` is materialized, so the minutes-long LLM run
     # and its progress loop stay out of the store's lifetime
     # (graph-projection-reuse design §4).
-    if not auto:
+    # #799: the serve partition runs BEFORE the cost gate, so the gate
+    # states the calls this run will ACTUALLY make rather than the worst
+    # case -- announcing 49 and spending 0 is as dishonest as the reverse.
+    # It keys on the EFFECTIVE confidential inclusion (`--include-
+    # confidential` OR the verified local-backend exemption, the same
+    # disjunction `sensitivity.should_block` applies), which is why it runs
+    # after `local_exemption` is resolved above.
+    effective_confidential = include_confidential or local_exemption
+    served_by_key: dict[str, EdgeSuggestion] = {}
+    to_type = edges
+    # The split line is reported when a store was actually CONSULTED, not
+    # on every run: a first-ever run has no cache to have missed, and the
+    # cost gate below already states its price. A store that exists and
+    # served nothing IS worth saying out loud -- that is drift, and a
+    # silent re-spend is the #799 complaint.
+    consulted = not fresh and layout.findings_db_path.exists()
+    if not fresh:
+        served_by_key, to_type = _partition_edge_suggestion_serves(
+            layout, edges, include_confidential=effective_confidential
+        )
+    if consulted:
         typer.echo(
-            f"{total} untyped edge(s) -> {total} LLM call(s), one per edge "
-            "(this can take a while). Pass --auto to skip this prompt.",
+            f"openkos suggest-relations: {len(served_by_key)} of {total} "
+            "candidate edge(s) served from persisted suggestions; "
+            f"{len(to_type)} typed fresh.",
+            err=True,
+        )
+
+    if not auto:
+        served_clause = f", {len(served_by_key)} served" if served_by_key else ""
+        typer.echo(
+            f"{total} untyped edge(s){served_clause} -> {len(to_type)} LLM "
+            "call(s), one per edge (this can take a while). Pass --auto to "
+            "skip this prompt.",
             err=True,
         )
         if not typer.confirm("Proceed?"):
@@ -12773,8 +12820,11 @@ def suggest_relations_cmd(
         )
 
     try:
+        # Still called with an empty `to_type` (a fully-served run): zero
+        # edges means zero `llm.chat` calls by construction, and the
+        # pre-#799 seam contract stays byte-identical.
         batch = suggest_edge_types(
-            edges,
+            to_type,
             bundle_dir=layout.bundle_dir,
             llm=llm,
             include_confidential=include_confidential,
@@ -12805,10 +12855,34 @@ def suggest_relations_cmd(
         typer.echo(f"openkos suggest-relations: failed -- {exc}.", err=True)
         raise typer.Exit(code=1) from exc
 
-    if apply:
-        _run_suggest_relations_apply(root, layout, batch.results)
+    # #799: fresh suggestions persist even on a partial batch (the paid-for
+    # work is kept, mirroring #441's own posture), then the run's results
+    # are rebuilt in CANDIDATE order so a served suggestion and a fresh one
+    # are indistinguishable downstream -- `--apply`, the listing, and
+    # curate all read this one list.
+    _persist_edge_suggestions(
+        layout, batch.results, include_confidential=effective_confidential
+    )
+    if served_by_key:
+        fresh_by_key = {
+            edge_suggestions_store.pair_key_for(
+                result.edge.source_id, result.edge.target_id
+            ): result
+            for result in batch.results
+        }
+        results: list[EdgeSuggestion] = []
+        for edge in edges:
+            key = edge_suggestions_store.pair_key_for(edge.source_id, edge.target_id)
+            found = served_by_key.get(key) or fresh_by_key.get(key)
+            if found is not None:
+                results.append(found)
     else:
-        for result in batch.results:
+        results = list(batch.results)
+
+    if apply:
+        _run_suggest_relations_apply(root, layout, results)
+    else:
+        for result in results:
             edge = result.edge
             if result.suggested_type is None:
                 typer.echo(f"[?] {edge.source_id} -> {edge.target_id}")
@@ -13149,6 +13223,135 @@ def _partition_adjudication_serves(
             rationale=stored.rationale,
         )
     return served, to_judge
+
+
+def _partition_edge_suggestion_serves(
+    layout: config.WorkspaceLayout,
+    edges: "list[Edge]",
+    *,
+    include_confidential: bool,
+) -> "tuple[dict[str, EdgeSuggestion], list[Edge]]":
+    """Split `edges` into suggestions servable from `.openkos/findings.db`
+    and the edges that still need a model call (#799) -- the edge-typing
+    twin of `_partition_adjudication_serves`, same posture throughout.
+
+    An edge is SERVED iff its latest persisted row matches this run's
+    EFFECTIVE `include_confidential` bit (a suggestion computed over a
+    different graph projection must never serve), carries a digest row
+    for BOTH current endpoints and no others, every stored digest equals
+    the endpoint's CURRENT content hash, and the stored type still
+    validates. Everything else re-types, conservatively -- including a
+    present-but-corrupt store, which degrades to one stderr advisory and
+    a full fresh run rather than crashing before any model spend.
+
+    The key is DIRECTED (`edge_suggestions_store.pair_key_for`): half the
+    vocabulary is asymmetric, so `a -> b` and `b -> a` are different
+    questions and one must never answer for the other."""
+    if not layout.findings_db_path.exists():
+        return {}, edges
+    try:
+        conn = derived.open_derived_connection(layout.findings_db_path)
+        try:
+            persisted = edge_suggestions_store.open_edge_suggestions(conn)
+        finally:
+            conn.close()
+    except (OSError, sqlite3.Error) as exc:
+        typer.echo(
+            "openkos suggest-relations: warning -- failed to read persisted "
+            f"suggestions ({exc}); typing every edge fresh.",
+            err=True,
+        )
+        return {}, edges
+    latest: dict[str, edge_suggestions_store.PersistedEdgeSuggestion] = {}
+    for row in persisted:
+        latest[edge_suggestions_store.pair_key_for(row.source_id, row.target_id)] = row
+
+    current_digest = _current_finding_digest(layout.bundle_dir)
+    served: dict[str, EdgeSuggestion] = {}
+    to_type: list[Edge] = []
+    for edge in edges:
+        key = edge_suggestions_store.pair_key_for(edge.source_id, edge.target_id)
+        stored = latest.get(key)
+        if stored is None or stored.include_confidential != include_confidential:
+            to_type.append(edge)
+            continue
+        endpoints = {edge.source_id, edge.target_id}
+        if {digest.input_ref for digest in stored.input_digests} != endpoints or any(
+            current_digest(digest.input_ref) != digest.digest
+            for digest in stored.input_digests
+        ):
+            to_type.append(edge)
+            continue
+        try:
+            validate_relation_type(stored.suggested_type)
+        except ValueError:
+            to_type.append(edge)
+            continue
+        served[key] = EdgeSuggestion(
+            edge=edge,
+            suggested_type=stored.suggested_type,
+            rationale=stored.rationale,
+        )
+    return served, to_type
+
+
+def _persist_edge_suggestions(
+    layout: config.WorkspaceLayout,
+    results: "Sequence[EdgeSuggestion]",
+    *,
+    include_confidential: bool,
+) -> None:
+    """Persist freshly computed edge-typing suggestions (#799), fail-open:
+    a failed persist costs one stderr advisory, never the run -- the same
+    posture `_persist_adjudications` takes.
+
+    Two results are skipped rather than stored. A `suggested_type` of
+    `None` is the fail-closed degrade (malformed reply, unparseable or
+    invalid type): a FAILURE, not a verdict, and caching it would never
+    retry. An endpoint with no current digest (unreadable) is skipped for
+    the adjudication tenant's reason -- a row whose staleness can never be
+    checked would serve forever."""
+    if not results:
+        return
+    current_digest = _current_finding_digest(layout.bundle_dir)
+    batch: list[edge_suggestions_store.PersistedEdgeSuggestion] = []
+    for result in results:
+        if result.suggested_type is None:
+            continue
+        edge = result.edge
+        digests: list[edge_suggestions_store.InputDigest] = []
+        for endpoint_id in (edge.source_id, edge.target_id):
+            digest = current_digest(endpoint_id)
+            if digest is None:
+                break
+            digests.append(
+                edge_suggestions_store.InputDigest(input_ref=endpoint_id, digest=digest)
+            )
+        else:
+            batch.append(
+                edge_suggestions_store.PersistedEdgeSuggestion(
+                    source_id=edge.source_id,
+                    target_id=edge.target_id,
+                    suggested_type=result.suggested_type,
+                    rationale=result.rationale,
+                    include_confidential=include_confidential,
+                    input_digests=tuple(digests),
+                )
+            )
+    if not batch:
+        return
+    try:
+        conn = derived.open_derived_connection(layout.findings_db_path)
+        try:
+            edge_suggestions_store.record_edge_suggestions(conn, batch)
+        finally:
+            conn.close()
+    except (OSError, sqlite3.Error) as exc:
+        typer.echo(
+            "openkos suggest-relations: warning -- failed to persist edge "
+            f"suggestions ({exc}); the next run will re-type them.",
+            err=True,
+        )
 
 
 def _persist_adjudications(

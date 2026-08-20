@@ -450,8 +450,17 @@ class WorkspaceLayout:
 
     @property
     def findings_db_path(self) -> Path:
-        """`.openkos/findings.db`: the persisted contradiction-finding
-        store (durable-pending-work, design Decision 1).
+        """`.openkos/findings.db`: the persisted machine-verdict store
+        (durable-pending-work, design Decision 1).
+
+        THREE tenants share this one file, each its own table family and
+        module: contradiction findings (`state.findings`, #653),
+        adjudication verdicts (`state.adjudications`, #779), and
+        edge-typing suggestions (`state.edge_suggestions`, #799). They
+        share the file deliberately -- `purge` deletes it wholesale and
+        `forget` sweeps it for purge-id membership, so a new tenant
+        inherits both erasure paths instead of opening a new privacy
+        surface. A new tenant MUST be added to `_sweep_findings_for_ids`.
 
         Mirrors `vectors_db_path`'s pure-derivation contract: written ONLY
         by `state.findings.record_findings`, lazily -- this property never
