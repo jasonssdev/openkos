@@ -985,11 +985,20 @@ def _decisions_history_targets(bundle_dir: Path, purge_ids: Iterable[str]) -> li
         # `concept_id` content, so a drifted or hostile id cannot redirect
         # this read outside the bundle (F1b read-side traversal).
         records = bundle_decisions.read_decisions_at(decisions_path)
+        # #797: the sidecar carries TWO kinds of human ruling and a purge
+        # must cover both. An identity decision names its members in
+        # `member_ids`, a field the contradiction records have no notion
+        # of -- reading only `pair_ids` would leave a purged id sitting in
+        # a keep-distinct record's history blob.
+        identity_records = bundle_decisions.read_identity_decisions_at(decisions_path)
         references_purge_set = any(
             record.pair_ids[0] in purge_ids_set
             or record.pair_ids[1] in purge_ids_set
             or record.merged_absorbed_id in purge_ids_set
             for record in records
+        ) or any(
+            any(member in purge_ids_set for member in record.member_ids)
+            for record in identity_records
         )
         if references_purge_set:
             targets.append(
@@ -1061,10 +1070,24 @@ def _sweep_decisions_for_ids(bundle_dir: Path, purge_ids: Iterable[str]) -> list
             and record.pair_ids[1] not in purge_ids_set
             and record.merged_absorbed_id not in purge_ids_set
         ]
-        if len(remaining) == len(records):
+        # #797: the identity list is swept on its own terms -- a
+        # keep-distinct ruling names EVERY member, so any member landing in
+        # the purge set drops the whole record.
+        identity_records = bundle_decisions.read_identity_decisions_at(decisions_path)
+        identity_remaining = [
+            record
+            for record in identity_records
+            if not any(member in purge_ids_set for member in record.member_ids)
+        ]
+        if len(remaining) == len(records) and len(identity_remaining) == len(
+            identity_records
+        ):
             continue
-        bundle_decisions.rewrite_decisions_at(
-            decisions_path, concept_id=concept_id, records=remaining
+        bundle_decisions.rewrite_both_at(
+            decisions_path,
+            concept_id=concept_id,
+            records=remaining,
+            identity_records=identity_remaining,
         )
         touched.append(decisions_path)
     return touched
@@ -2366,6 +2389,14 @@ def _run_adjudicate_apply(
         ):
             declined.append(
                 f"{prepared.absorbed_canonical} -> {prepared.survivor_canonical}"
+            )
+            # #797: recorded HERE too, not only in `curate`'s Identity
+            # walk. The two walks share a prompt and a write path by
+            # design; a decline persisted in one and forgotten in the other
+            # is exactly the drift the shared `_CROSS_SOURCE_WALK_NOTE`
+            # constant above exists to prevent.
+            _record_identity_decline_from_walk(
+                root, layout, group.member_ids, verb="adjudicate --apply"
             )
             continue
 
@@ -9447,6 +9478,15 @@ def merge(
     typer.echo(f"  ~ {log_path.name} (new dated entry)")
     typer.echo(f"  ~ bundle/{survivor_canonical}.md (merged content)")
     typer.echo(f"  - bundle/{absorbed_canonical}.md")
+    # #796: `merge` is the command `duplicates` and `adjudicate` BOTH name
+    # in their closing hints, and it was the one path #776's cross-source
+    # guardrail never reached -- the batch door was locked while the door
+    # the tool recommends stayed open. Printed after the plan and before
+    # the gate, so it is the last thing read before consenting.
+    if _cross_source_same_pair(
+        layout.bundle_dir, (survivor_canonical, absorbed_canonical)
+    ):
+        typer.echo(_CROSS_SOURCE_WALK_NOTE)
 
     if not auto and prepared.review:
         if sys.stdin.isatty():
@@ -11199,7 +11239,16 @@ def status() -> None:
     # O(n^2) pairwise `near_match_score` pass whose LOW groups this line
     # discarded. `duplicates`/`adjudicate` still call `find_candidates_report`
     # (curate-call-budget): they use both tiers.
-    exact_title_groups = len(find_exact_title_groups(layout.bundle_dir))
+    # #797: a group the human ruled distinct is no longer "needs attention"
+    # -- that is the whole point of recording the ruling. Filtered here
+    # rather than inside `find_exact_title_groups`, which is deliberately
+    # uncapped and shared, so the suppression stays a presentation choice
+    # each consumer makes for itself.
+    exact_title_groups = sum(
+        1
+        for group in find_exact_title_groups(layout.bundle_dir)
+        if not _is_group_kept_distinct(layout, group.member_ids)
+    )
     if exact_title_groups:
         needs_attention.append(
             f"{exact_title_groups} candidate group{_plural(exact_title_groups)} with "
@@ -11822,8 +11871,45 @@ def duplicates(
         "--include-deprecated",
         help="Include deprecated and superseded concepts (excluded by default).",
     ),
+    keep_distinct: list[str] | None = typer.Option(
+        None,
+        "--keep-distinct",
+        help=(
+            "Record that these concepts are NOT the same entity and stop "
+            "offering to merge them (#797). Repeat the flag once per member, "
+            "at least twice. Reversible with --reopen; listed by "
+            "--kept-distinct."
+        ),
+    ),
+    reopen: list[str] | None = typer.Option(
+        None,
+        "--reopen",
+        help=(
+            "Undo a --keep-distinct ruling for these concepts, so the group "
+            "is offered for review again. Repeat once per member."
+        ),
+    ),
+    kept_distinct: bool = typer.Option(
+        False,
+        "--kept-distinct",
+        help="List every group a human has ruled distinct, and exit.",
+    ),
 ) -> None:
-    """Report cross-source candidate duplicates: read-only, Phase-A only.
+    """Report cross-source candidate duplicates.
+
+    The REPORT is read-only and Phase-A only. Since #797 the command also
+    exposes three decision verbs that DO write -- under `bundle/.state/`
+    only, never to a concept file -- so "read-only" describes the report,
+    not every flag.
+
+    `--keep-distinct`/`--reopen`/`--kept-distinct` (#797) are the three
+    write/list verbs this command additionally exposes, mirroring
+    `contradictions --decline/--reopen/--declined` exactly: each
+    short-circuits BEFORE the bundle walk, writes or reads
+    `bundle/.state/decisions/**` only, and never adjudicates. An ordinary
+    run hides any group already ruled distinct -- the human's answer
+    outranks the model's, and re-offering a merge the human refused is what
+    turned a wrong SAME verdict into an eventual certainty.
 
     A THIRD read command, mirroring `status`/`lint`'s shape exactly: no
     Phase B, no confirm gate, no `--auto`. Refuses (exit 1) via the shared
@@ -11872,16 +11958,52 @@ def duplicates(
         raise typer.Exit(code=1)
 
     layout = config.WorkspaceLayout(root)
+
+    # #797: the three decision verbs short-circuit BEFORE the whole-bundle
+    # walk, mirroring `contradictions --decline/--reopen/--declined`. A
+    # human ruling must be recordable on a workspace whose candidate set is
+    # expensive to compute, or slow to write is slow to use.
+    if keep_distinct:
+        members = _validated_identity_members(keep_distinct, "--keep-distinct")
+        rel_path = _apply_identity_decision(layout, members, target_state="declined")
+        typer.echo(f"openkos duplicates: keeping distinct {' + '.join(members)}.")
+        _autocommit(root, [rel_path], f"openkos: keep distinct {'/'.join(members)}")
+        return
+    if reopen:
+        members = _validated_identity_members(reopen, "--reopen")
+        rel_path = _apply_identity_decision(layout, members, target_state="open")
+        typer.echo(f"openkos duplicates: reopened {' + '.join(members)}.")
+        _autocommit(root, [rel_path], f"openkos: reopen identity {'/'.join(members)}")
+        return
+    if kept_distinct:
+        _duplicates_kept_distinct_view(root, layout)
+        return
+
     report = find_candidates_report(
         layout.bundle_dir, include_deprecated=include_deprecated
     )
-    groups = list(report.groups)
+    # The suppression runs AFTER the walk, never inside it: the cap and its
+    # truncation notice describe what the corpus PRODUCED, and filtering
+    # before them would let a ruled-distinct group silently consume a cap
+    # slot's worth of accounting.
+    groups = [
+        group
+        for group in report.groups
+        if not _is_group_kept_distinct(layout, group.member_ids)
+    ]
+    suppressed = len(report.groups) - len(groups)
     notice = candidate_group_truncation_notice(report)
     if notice is not None:
         typer.echo(notice, err=True)
 
     typer.echo(f"openkos duplicates: workspace at {root}")
     typer.echo()
+    if suppressed:
+        typer.echo(
+            f"Hiding {suppressed} group{_plural(suppressed)} you ruled "
+            "distinct (`openkos duplicates --kept-distinct` lists them)."
+        )
+        typer.echo()
     if not groups:
         typer.echo("No candidates found.")
         return
@@ -13132,6 +13254,165 @@ def _apply_contradiction_decision(
         owner_id, layout.bundle_dir, records=records
     )
     return f"bundle/{path.relative_to(layout.bundle_dir).as_posix()}"
+
+
+def _record_identity_decline_from_walk(
+    root: Path,
+    layout: config.WorkspaceLayout,
+    member_ids: Sequence[str],
+    *,
+    verb: str,
+) -> None:
+    """Persist a human "keep distinct" ruling observed at a per-item merge
+    prompt (#797), fail-open with one stderr advisory.
+
+    ONE helper for both interactive walks -- `adjudicate --apply` here and
+    `curate`'s Identity stage -- so the two cannot record the same answer
+    differently. Fail-open because the decline already took effect: no
+    merge happened, and the worst case is that the group is offered again,
+    which is precisely the pre-#797 behaviour. Losing the operator's place
+    mid-walk to persist a suppression would be the larger harm."""
+    try:
+        rel_path = _apply_identity_decision(
+            layout, tuple(member_ids), target_state="declined"
+        )
+        _autocommit(root, [rel_path], f"openkos: keep distinct {'/'.join(member_ids)}")
+    except (OSError, ValueError) as exc:
+        typer.echo(
+            f"openkos {verb}: warning -- failed to record the keep-distinct "
+            f"ruling ({exc}); this group will be offered again.",
+            err=True,
+        )
+
+
+def _validated_identity_members(
+    raw_members: Sequence[str], flag: str
+) -> tuple[str, ...]:
+    """Canonicalize operator-supplied member ids for an identity ruling
+    (#797): deduped and sorted, so either typing order reaches the same
+    record and the same owning sidecar.
+
+    Every id goes through `_canonicalize_concept_id` FIRST -- the documented
+    path-safety gate `forget`/`merge` apply. These ids reach
+    `bundle_decisions.decisions_path_for`, which joins them onto the
+    decisions root, so an absolute id or a `..` segment would otherwise
+    write a sidecar OUTSIDE the bundle. It also collapses `./` and repeated
+    slashes, so two spellings of one id cannot key two rulings. Existence is
+    NOT required (the `unmerge` variant): a ruling may name a concept absent
+    right now, and demanding a live file would make the human's answer
+    depend on the machine's state -- the dependency this feature removes.
+
+    Refuses (exit 2) below two DISTINCT members. A one-member "group" is
+    not a duplicate ruling at all, and a repeated id silently collapsing to
+    one would write a record no candidate group can ever match -- a ruling
+    that appears to have been recorded and suppresses nothing is worse than
+    a refusal."""
+    canonical: set[str] = set()
+    for member in raw_members:
+        stripped = member.strip()
+        if not stripped:
+            continue
+        try:
+            canonical.add(_canonicalize_concept_id(stripped))
+        except ValueError as exc:
+            typer.echo(
+                f"openkos duplicates: refusing to run -- {flag} {exc}.", err=True
+            )
+            raise typer.Exit(code=2) from exc
+    members = tuple(sorted(canonical))
+    if len(members) < 2:
+        typer.echo(
+            f"openkos duplicates: refusing to run -- {flag} needs at least two "
+            "distinct concept ids; repeat the flag once per member.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    return members
+
+
+def _duplicates_kept_distinct_view(root: Path, layout: config.WorkspaceLayout) -> None:
+    """`--kept-distinct`: every group a human ruled distinct, so the ruling
+    is visible and reversible rather than an invisible suppression (#797).
+
+    Reads the WALKED sidecar path, never one rebuilt from a sidecar's own
+    `concept_id` frontmatter field -- the same traversal guard
+    `_contradictions_declined_view` applies."""
+    typer.echo(f"openkos duplicates --kept-distinct: workspace at {root}")
+    typer.echo()
+    records: list[bundle_decisions.IdentityDecisionRecord] = []
+    for decisions_path in bundle_decisions.iter_decisions(layout.bundle_dir):
+        records.extend(
+            record
+            for record in bundle_decisions.read_identity_decisions_at(decisions_path)
+            if record.state == "declined"
+        )
+    if not records:
+        typer.echo("No groups kept distinct.")
+        return
+    for record in sorted(records, key=lambda item: item.decision_key):
+        typer.echo(f"[KEPT DISTINCT] {' + '.join(record.member_ids)}")
+        typer.echo(f"  decided: {record.decided_at}")
+        typer.echo()
+    typer.echo("Reopen one with: openkos duplicates --reopen <id> --reopen <id>")
+
+
+def _apply_identity_decision(
+    layout: config.WorkspaceLayout,
+    member_ids: tuple[str, ...],
+    *,
+    target_state: bundle_decisions.DecisionState,
+) -> str:
+    """Write (or update in place) the single identity ruling for
+    `member_ids` to `target_state` (#797), returning the workspace-relative
+    path for the caller's `_autocommit` list -- the identity twin of
+    `_apply_contradiction_decision`, same posture throughout.
+
+    Never opens `.openkos/findings.db`. A keep-distinct ruling must be
+    writable with NO adjudication row behind it: the human may be
+    overruling a verdict the model has not produced yet, or one that was
+    recomputed away. Requiring a matching row would make the human's answer
+    depend on the machine's, which is the dependency this issue removes.
+
+    Members are sorted before keying AND before choosing the owning
+    sidecar, so an operator typing the two ids in either order reaches the
+    same record."""
+    members = tuple(sorted(member_ids))
+    key = bundle_decisions.identity_decision_key_for(members)
+    owner_id = members[0]
+    existing = bundle_decisions.read_identity_decisions(owner_id, layout.bundle_dir)
+    records = [record for record in existing if record.decision_key != key]
+    records.append(
+        bundle_decisions.IdentityDecisionRecord(
+            decision_key=key,
+            member_ids=members,
+            state=target_state,
+            decided_at=datetime.now(UTC).isoformat(),
+        )
+    )
+    path = bundle_decisions.write_identity_decisions(
+        owner_id, layout.bundle_dir, records=records
+    )
+    return f"bundle/{path.relative_to(layout.bundle_dir).as_posix()}"
+
+
+def _is_group_kept_distinct(
+    layout: config.WorkspaceLayout, member_ids: Sequence[str]
+) -> bool:
+    """`True` iff a human has ruled this exact member set distinct and has
+    not reopened it (#797) -- the identity twin of
+    `_is_contradiction_declined`.
+
+    `CandidateGroup.member_ids` arrives sorted, but this is also reachable
+    from operator-supplied ids, so it sorts defensively rather than
+    trusting the caller."""
+    members = tuple(sorted(member_ids))
+    key = bundle_decisions.identity_decision_key_for(members)
+    for record in bundle_decisions.read_identity_decisions(
+        members[0], layout.bundle_dir
+    ):
+        if record.decision_key == key:
+            return record.state == "declined"
+    return False
 
 
 def _is_contradiction_declined(

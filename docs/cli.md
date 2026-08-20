@@ -274,9 +274,18 @@ Output is grouped by OKF type, then HIGH before ACRONYM before LOW, and renders 
 
 The ACRONYM tier exists because subset containment structurally cannot see that shape: every token of the smaller title must find a near-match in the larger one, so `Google ADK` fails on `google` and the pair never reaches the adjudicator — a recall failure in the gate rather than a judgment failure downstream. An embedding-proximity tier was measured as the alternative and rejected: it surfaced the same true positive but would have added 18 same-type pairs on a 19-document bundle to deliver it, because embedding distance measures topical relatedness rather than identity. The acronym rule fired on 2 of those 18 — the genuine duplicate and one expansion twin — and on nothing else. An empty result prints a clear "No candidates found." line instead of an empty section.
 
+**Your "these are different" answer is durable.** Since [#797](https://github.com/jasonssdev/openkos/issues/797) a human ruling that two concepts are NOT the same entity is persisted to `bundle/.state/decisions/**` — the same store `contradictions --decline` already writes to, so `forget` sweeps it and `purge` expunges it from history with no new privacy surface. A ruled group is hidden from `duplicates`, dropped from `status`'s **Needs attention**, and no longer routes `next` back to `curate`; `curate`'s Identity stage skips it before the cost gate, so it costs no model call either. Declining the per-item merge prompt in `curate` or `adjudicate --apply` records the ruling automatically — that prompt is already where you answer.
+
+Before this, the answer lived exactly as long as the session. `next` routed to `curate`, whose Identity stage re-adjudicated the pair and re-offered the merge; declining left the workspace in the state that sends `next` straight back. **The only way to reach a clean `status` was to perform the merge you had just refused** — which is what turned a wrong SAME verdict from an error into an eventual certainty.
+
+The ruling is keyed on the exact member set (order-independent), never on a candidate-group position — a group is recomputed every run, so keying on its position would evaporate the ruling on the next one. A neighbouring pair sharing one member is a separate question and stays offered.
+
 | Flag | Meaning |
 | --- | --- |
 | `--include-deprecated` | Include deprecated and superseded concepts in candidate groups. Excluded by default — `duplicates` shares `adjudicate`'s `find_candidates` call and gets the same flag for consistency. |
+| `--keep-distinct <id>` | Record that these concepts are **not** the same entity, and stop offering to merge them. Repeat once per member, at least two distinct ids. Writes only under `bundle/.state/`, never adjudicates, and needs no adjudication row behind it — you may be overruling a verdict the model has not produced yet. |
+| `--reopen <id>` | Undo a `--keep-distinct` ruling, so the group is offered for review again. Repeat once per member. |
+| `--kept-distinct` | List every group you have ruled distinct, with the date, and exit. The suppression is visible and reversible rather than silent. |
 
 Refuses (exit 1) outside an initialized workspace, using the same shared workspace check `status`/`lint` use. Every successful read exits 0, whether or not any candidates are found. No file under the workspace is ever created, modified, or deleted, and no `--json` or other structured output mode is offered.
 
@@ -364,6 +373,8 @@ The model is offered the seeded vocabulary **minus `derived_from`**, and a reply
 | `--include-confidential` | Include confidential concepts. Excluded by default when the LLM backend is **not** verifiably on this machine — an untyped edge with a confidential endpoint is then dropped before `llm.chat` is ever called for it. See [Sensitivity and the local backend](#sensitivity-and-the-local-backend). |
 | `--fresh` | Bypass the persisted-suggestions serve and re-type every candidate edge with the model, re-persisting the results — the same lever `adjudicate --fresh` and `contradictions --fresh` are. |
 | `--edge-offset N` | Skip the first N **ranked** candidate edges, sliding the per-run candidate cap's window so the batch beyond it is browsable without first typing the batch before it. A capped run names the next batch's exact offset; an offset at or past the candidate set says so instead of claiming nothing is untyped. Default 0 — identical to before. |
+
+**A cross-source merge is named before you confirm.** Since [#796](https://github.com/jasonssdev/openkos/issues/796), when both concepts carry `provenance:` and the two sets are **disjoint** — extracted from different sources with no overlap, the exact shape that fuses two meetings held a week apart — `merge` prints `note: cross-source SAME -- members share no source; the two may be distinct real-world items` after the change plan and before the gate. [#776](https://github.com/jasonssdev/openkos/issues/776) gave that guard to `adjudicate --apply-same`, `adjudicate --apply` and `curate`'s Identity stage; `merge` is the command both `duplicates` and `adjudicate` name in their closing hints, and it was the one path the guardrail never reached. Absence of provenance is deliberately **not** a risk signal — flagging on absence would mark every hand-authored concept forever.
 
 ### `openkos relate <source-id> <type> <target-id>`
 

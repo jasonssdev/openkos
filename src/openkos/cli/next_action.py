@@ -58,7 +58,7 @@ exactly once.
 """
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -286,9 +286,16 @@ class _BundleSignals:
         `_iter_eligible` plus `lifecycle.deprecated_concept_ids`), read only
         by tier 4 -- the last and most expensive tier."""
         if self._exact_title_groups is None:
-            self._exact_title_groups = list(
-                find_exact_title_groups(self._layout.bundle_dir)
-            )
+            # #797: a group the human ruled distinct must not keep routing
+            # `next` back to `curate`. Before this, declining the merge left
+            # the workspace in the state that recommends `curate`, whose
+            # Identity stage re-offers the same merge -- a loop whose only
+            # exit was performing the merge the human had refused.
+            self._exact_title_groups = [
+                group
+                for group in find_exact_title_groups(self._layout.bundle_dir)
+                if not _is_group_kept_distinct(self._layout, group.member_ids)
+            ]
         return self._exact_title_groups
 
     @property
@@ -393,6 +400,24 @@ def _current_finding_digest(bundle_dir: Path) -> Callable[[str], str | None]:
         return content_hash(raw)
 
     return _digest
+
+
+def _is_group_kept_distinct(
+    layout: config.WorkspaceLayout, member_ids: Sequence[str]
+) -> bool:
+    """`True` iff a human has ruled this exact member set distinct and has
+    not reopened it (#797). Local to this module for the same
+    circular-import reason as `_is_contradiction_declined` -- `cli.main`
+    imports this module, so the reverse would be circular, and the two
+    copies must stay behaviourally identical."""
+    members = tuple(sorted(member_ids))
+    key = bundle_decisions.identity_decision_key_for(members)
+    for record in bundle_decisions.read_identity_decisions(
+        members[0], layout.bundle_dir
+    ):
+        if record.decision_key == key:
+            return record.state == "declined"
+    return False
 
 
 def _is_contradiction_declined(

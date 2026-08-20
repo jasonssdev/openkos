@@ -1710,3 +1710,80 @@ def test_merge_reconciliation_preview_lands_before_the_confirm_gate(
     assert "reconcile merged body" in result.stdout
     assert calls == []
     assert _snapshot(tmp_path) == before
+
+
+# --- #796: the cross-source warning reaches plain `merge` too --------------
+
+
+def test_cross_source_merge_warns_before_the_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#776 locked the batch door and left this one open. `merge` is what
+    `duplicates` and `adjudicate` BOTH print as their closing hint, so it is
+    the path a user most likely takes — and it was the only one of the four
+    that never named the class that fuses two distinct real-world items."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept_with_provenance(
+        tmp_path,
+        "events/afg-eval",
+        title="AFG Eval",
+        provenance=["sources/transcript-1"],
+    )
+    _write_concept_with_provenance(
+        tmp_path,
+        "events/afg-eval-2",
+        title="AFG Eval",
+        provenance=["sources/transcript-3"],
+    )
+
+    result = runner.invoke(
+        app, ["merge", "events/afg-eval", "events/afg-eval-2", "--auto"]
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert "cross-source SAME" in result.stdout
+    assert "may be distinct real-world items" in result.stdout
+
+
+def test_a_shared_source_merge_carries_no_cross_source_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The warning names one specific risky class. Printing it on every
+    merge would make it furniture, and the two concepts here came from the
+    SAME source, which is the ordinary duplicate case."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept_with_provenance(
+        tmp_path,
+        "events/afg-eval",
+        title="AFG Eval",
+        provenance=["sources/transcript-1"],
+    )
+    _write_concept_with_provenance(
+        tmp_path,
+        "events/afg-eval-2",
+        title="AFG Eval",
+        provenance=["sources/transcript-1"],
+    )
+
+    result = runner.invoke(
+        app, ["merge", "events/afg-eval", "events/afg-eval-2", "--auto"]
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert "cross-source" not in result.stdout
+
+
+def test_a_hand_written_concept_merge_carries_no_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Absence of provenance is no signal, not a risk signal — flagging on
+    absence would mark every hand-authored concept forever
+    (`_cross_source_same_pair`'s own documented posture)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept_with_provenance(tmp_path, "concepts/a", title="A")
+    _write_concept_with_provenance(tmp_path, "concepts/b", title="A")
+
+    result = runner.invoke(app, ["merge", "concepts/a", "concepts/b", "--auto"])
+
+    assert result.exit_code == 0, result.stderr
+    assert "cross-source" not in result.stdout

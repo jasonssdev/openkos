@@ -601,3 +601,41 @@ would trade that fact for a probability (issue #695).
 - GIVEN a reconciled reply that opens with prose
 - WHEN the reply passes every refusal gate
 - THEN the returned body is byte-identical to the reply
+
+### Requirement: The Cross-Source Warning Reaches Every Merge Surface
+
+Every surface that offers to merge two concepts MUST name the cross-source
+class before the operator consents: members that each carry a non-empty
+`provenance:` whose sets are DISJOINT (issue #796, extending #776).
+
+That includes plain `merge`, not only the adjudication walks. `merge` is
+the command `duplicates` and `adjudicate` both name in their closing hints,
+so guarding only the batch and walk paths leaves the most-travelled door
+open.
+
+The wording MUST come from the one shared constant the other surfaces use,
+so the four cannot drift apart. Absence of provenance MUST NOT be treated
+as a risk signal: a hand-written concept gives no evidence either way, and
+flagging on absence would mark every hand-authored concept forever.
+
+This requirement governs DISCLOSURE only. It does not change any verdict,
+and it does not block the merge.
+
+#### Scenario: A cross-source merge is named before the gate
+
+- GIVEN two concepts whose provenance sets are disjoint
+- WHEN `openkos merge` runs
+- THEN the cross-source note is printed after the change plan and before
+  the confirmation gate
+
+#### Scenario: A shared-source merge is not marked
+
+- GIVEN two concepts that share a provenance entry
+- WHEN `openkos merge` runs
+- THEN no cross-source note is printed
+
+#### Scenario: A hand-written concept is not marked
+
+- GIVEN two concepts with no `provenance:` at all
+- WHEN `openkos merge` runs
+- THEN no cross-source note is printed
