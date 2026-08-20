@@ -14,6 +14,41 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+### Added
+
+- **`suggest-relations` persists its suggestions, and serves them before
+  re-typing** ([#799](https://github.com/jasonssdev/openkos/issues/799)).
+  `contradictions` has cached its verdicts since #653 and `adjudicate` since
+  #779; `suggest-relations` — the most expensive of the three per run — still
+  re-bought every answer on every invocation. In the end-to-end run that filed
+  this, it printed 49 suggestions for review, and `curate`'s Structure stage,
+  which the verb's own closing hint names as the next step, paid the same 49
+  again minutes later on an unchanged bundle. Both surfaces now read and write
+  the `edge_suggestions` tables of `.openkos/findings.db` — a third tenant in
+  the file `purge` deletes wholesale and `forget` sweeps, so no new privacy
+  surface — keyed on a **directed** pair plus one content hash per endpoint.
+  An edge is served, with no model call, when both endpoints are unchanged,
+  the effective confidential inclusion matches, and the stored type still
+  validates. `--fresh` bypasses the serve and re-persists, mirroring the other
+  two verbs.
+
+### Changed
+
+- **The edge-typing cost gates now price the real spend.** Both
+  `suggest-relations` and `curate`'s Structure stage state what the run will
+  actually cost with served edges subtracted (`7 untyped edge(s), 5 served ->
+  2 LLM call(s)`) rather than the worst case. The split is also reported on
+  stderr whenever a store was consulted (`N of M candidate edge(s) served from
+  persisted suggestions; K typed fresh.`). Reporting the reduced number for
+  both halves of the gate line was rejected: `0 untyped edge(s)` over a bundle
+  that has one is a false claim about the projection, not a discount.
+- **`suggest-relations` and `curate`'s Structure stage now write derived
+  state on a read-only run.** The bundle is still never touched without
+  per-item consent — only `.openkos/findings.db` is written, the same
+  knowledge-versus-derived-state line `contradictions` already draws. A
+  declined suggestion is still persisted: declining withholds the write, not
+  the answer you paid for.
+
 ## [0.2.8] - 2026-08-19
 
 Every change in this release comes from one source: a full manual walkthrough

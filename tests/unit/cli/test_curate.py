@@ -164,13 +164,18 @@ class _FakeConfig:
 
 class _FakeLayout:
     """Just enough surface for engine-only tests (fake stages never touch
-    it): a `bundle_dir`/`vectors_db_path` pair, matching
-    `config.WorkspaceLayout`'s public shape."""
+    it): a `bundle_dir`/`vectors_db_path`/`findings_db_path` trio, matching
+    `config.WorkspaceLayout`'s public shape.
+
+    `findings_db_path` joined the trio with #799: the Structure probe now
+    consults the persisted-suggestion store to price its cost gate, so a
+    double without it no longer models what the probe reads."""
 
     def __init__(self, root: Path) -> None:
         self.root = root
         self.bundle_dir = root / "bundle"
         self.vectors_db_path = root / ".openkos" / "vectors.db"
+        self.findings_db_path = root / ".openkos" / "findings.db"
 
 
 def _fake_ctx(
@@ -2121,7 +2126,11 @@ def test_structure_declined_suggestion_writes_nothing(
 
     assert result.exit_code == 0
     assert "Structure: applied 0, skipped 1." in _lines(result.stdout)
-    assert changed_paths(before, _snapshot(tmp_path)) == set()
+    # Scoped to the derived store since #799: the declined suggestion is
+    # still PERSISTED, so the next run need not re-buy it. Declining
+    # withholds the bundle write, never the paid-for answer -- everything
+    # outside `.openkos/findings.db` must still be untouched.
+    assert changed_paths(before, _snapshot(tmp_path)) == {Path(".openkos/findings.db")}
 
 
 def test_structure_sees_post_merge_identity_state(
@@ -4950,3 +4959,77 @@ def test_identity_walk_states_the_survivor_criterion_and_cross_source_note(
     assert out.index("note: cross-source SAME") < out.index(
         "Merge events/m1 into events/m2? [y/N]"
     )
+
+
+# --- issue #799: Structure serves what suggest-relations already paid for -
+
+
+def test_structure_serves_what_suggest_relations_already_paid_for(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The #799 scenario end to end: `suggest-relations` types an edge,
+    then `curate` -- the next step the verb's own closing hint names --
+    hands the model ZERO edges for it and prices its gate accordingly.
+
+    Before this, following that hint re-bought every suggestion: 49 calls
+    printed, reviewed, then 49 paid again minutes later on an unchanged
+    bundle."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _reindexed_workspace(tmp_path, monkeypatch)
+
+    from openkos.graph.base import Edge
+    from openkos.resolution.edge_typing import EdgeSuggestion, EdgeSuggestionBatch
+
+    edge = Edge(source_id="concepts/a", target_id="concepts/b", relation_type=None)
+    handed: list[int] = []
+
+    def _fake_suggest(edges: object, **kwargs: object) -> EdgeSuggestionBatch:
+        listed = list(edges)  # type: ignore[call-overload]
+        handed.append(len(listed))
+        return EdgeSuggestionBatch(
+            results=[
+                EdgeSuggestion(edge=e, suggested_type="references", rationale="stub")
+                for e in listed
+            ]
+        )
+
+    monkeypatch.setattr("openkos.cli.main.candidate_edges", lambda *a, **k: [edge])
+    monkeypatch.setattr("openkos.cli.main.suggest_edge_types", _fake_suggest)
+    first = runner.invoke(app, ["suggest-relations", "--auto"])
+    assert first.exit_code == 0, first.stderr
+    assert handed == [1]
+
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(),
+    )
+    monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [edge])
+    monkeypatch.setattr("openkos.cli.curate.suggest_edge_types", _fake_suggest)
+    monkeypatch.setattr("openkos.cli.curate._concept_type_names", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "openkos.cli.curate._contradiction_plan", lambda *a, **k: _empty_plan()
+    )
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["curate"], input="y\nn\n")
+
+    assert result.exit_code == 0, result.stderr
+    assert handed == [1, 0], "curate must hand the model zero already-typed edges"
+    assert "1 untyped edge(s), 1 served -> 0 LLM call(s)" in result.stderr
+    assert (
+        "1 of 1 candidate edge(s) served from persisted suggestions; "
+        "0 typed fresh." in result.stderr
+    )
+    # The served suggestion still reaches the walk: it is offered for
+    # review exactly as a fresh one would be, and declining it here is
+    # what makes "skipped 1" -- not an empty queue.
+    assert "Structure: applied 0, skipped 1." in _lines(result.stdout)
+    # #798's actual complaint, pinned: what curate offers for consent is
+    # the SAME type suggest-relations printed for review, not a second,
+    # independently re-derived proposal that differs ~10% of the time.
+    assert "[references] concepts/a -> concepts/b" in first.stdout
+    assert "concepts/a -> concepts/b [references]" in result.stdout

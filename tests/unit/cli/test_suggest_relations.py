@@ -1484,13 +1484,20 @@ def test_suggest_relations_apply_declined_suggestion_writes_nothing(
     tmp_path_factory: pytest.TempPathFactory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A declined item writes nothing and is listed in the decline report
-    (the #483/#398 revisitable-decline contract), so a typo-free decline
-    set survives the run."""
+    """A declined item writes nothing to the BUNDLE and is listed in the
+    decline report (the #483/#398 revisitable-decline contract), so a
+    typo-free decline set survives the run.
+
+    Scoped to `bundle/` since #799: the run now persists its suggestion to
+    `.openkos/findings.db` so the next one need not re-buy it. That is
+    derived state, not knowledge -- the same distinction `contradictions`
+    and `adjudicate` already draw on their own read-only runs -- and the
+    assertion below pins that it landed, rather than letting a widened
+    snapshot quietly stop noticing either write."""
     _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
     _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Alpha")
     _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Beta")
-    before = _snapshot(tmp_path)
+    before = _snapshot(tmp_path / "bundle")
     _patch_candidate_edges(
         monkeypatch, [Edge(source_id="concepts/a", target_id="concepts/b")]
     )
@@ -1504,9 +1511,18 @@ def test_suggest_relations_apply_declined_suggestion_writes_nothing(
     result = runner.invoke(app, ["suggest-relations", "--auto", "--apply"], input="n\n")
 
     assert result.exit_code == 0
-    assert _snapshot(tmp_path) == before
+    assert _snapshot(tmp_path / "bundle") == before
     assert "applied 0" in result.stdout
     assert "declined: concepts/a -> concepts/b [references]" in result.stdout
+    # The decline withholds the WRITE, never the paid-for suggestion: it
+    # is persisted regardless, so declining does not force the next run to
+    # re-buy the same answer (#799).
+    store = sqlite3.connect(tmp_path / ".openkos" / "findings.db")
+    try:
+        rows = store.execute("SELECT suggested_type FROM edge_suggestions").fetchall()
+    finally:
+        store.close()
+    assert rows == [("references",)]
 
 
 def test_suggest_relations_apply_degraded_suggestion_is_never_prompted(
@@ -1804,3 +1820,297 @@ def test_apply_prompt_carries_the_direction_disclaimer(
         "Relate concepts/a -> projects/b [produced_by] "
         "(direction model-suggested, unverified)? [y/N]" in result.stdout
     )
+
+
+# --- issue #799: persisted suggestions are served before re-typing --------
+
+
+def _stub_one_edge_with_call_log(
+    monkeypatch: pytest.MonkeyPatch,
+    calls: list[int],
+    *,
+    source: str = "concepts/a",
+    target: str = "concepts/b",
+    suggested_type: str | None = "references",
+) -> None:
+    """Patch both seams so a test can count how many edges the MODEL was
+    handed per run (#779's own idiom, one verb over): `calls == [1, 0]`
+    reads "the first run typed one edge, the second served it"."""
+    edge = Edge(source_id=source, target_id=target)
+    _patch_candidate_edges(monkeypatch, [edge])
+
+    def _fake_suggest(edges: object, **kwargs: object) -> EdgeSuggestionBatch:
+        handed = list(edges)  # type: ignore[call-overload]
+        calls.append(len(handed))
+        return EdgeSuggestionBatch(
+            results=[
+                _suggestion(
+                    source=e.source_id,
+                    target=e.target_id,
+                    suggested_type=suggested_type,
+                )
+                for e in handed
+            ]
+        )
+
+    monkeypatch.setattr("openkos.cli.main.suggest_edge_types", _fake_suggest)
+
+
+def test_repeat_run_serves_persisted_suggestions_with_zero_model_calls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A repeat run on an unchanged bundle hands the model zero edges and
+    still prints the same suggestion (spec: Persisted Suggestions Are
+    Served Before Re-Typing)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="B")
+    calls: list[int] = []
+    _stub_one_edge_with_call_log(monkeypatch, calls)
+
+    first = runner.invoke(app, ["suggest-relations", "--auto"])
+    second = runner.invoke(app, ["suggest-relations", "--auto"])
+
+    assert first.exit_code == 0, first.stderr
+    assert second.exit_code == 0, second.stderr
+    assert calls == [1, 0]
+    assert "[references] concepts/a -> concepts/b" in second.stdout
+    assert (
+        "1 of 1 candidate edge(s) served from persisted suggestions; "
+        "0 typed fresh." in second.stderr
+    )
+
+
+def test_the_cost_gate_states_the_served_subtracted_call_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The pre-spend gate must name the calls the run will ACTUALLY make.
+    Announcing the worst case after a paid run is the #799 defect."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="B")
+    calls: list[int] = []
+    _stub_one_edge_with_call_log(monkeypatch, calls)
+
+    runner.invoke(app, ["suggest-relations", "--auto"])
+    gated = runner.invoke(app, ["suggest-relations"], input="y\n")
+
+    assert gated.exit_code == 0, gated.stderr
+    assert "1 untyped edge(s), 1 served -> 0 LLM call(s)" in gated.stderr
+    assert calls == [1, 0]
+
+
+def test_endpoint_drift_retypes_fresh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An edited endpoint invalidates the stored digest, so the edge is
+    typed fresh rather than served stale."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="A")
+    target = tmp_path / "bundle" / "concepts" / "b.md"
+    _write_doc(target, title="B")
+    calls: list[int] = []
+    _stub_one_edge_with_call_log(monkeypatch, calls)
+
+    runner.invoke(app, ["suggest-relations", "--auto"])
+    target.write_text(
+        "---\ntype: Concept\ntitle: B\n---\n# B\n\nEdited since.\n",
+        encoding="utf-8",
+    )
+    second = runner.invoke(app, ["suggest-relations", "--auto"])
+
+    assert second.exit_code == 0, second.stderr
+    assert calls == [1, 1]
+    assert (
+        "0 of 1 candidate edge(s) served from persisted suggestions; "
+        "1 typed fresh." in second.stderr
+    )
+
+
+def test_the_reverse_direction_never_serves(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Direction is identity: half the vocabulary is asymmetric, so a
+    suggestion for `a -> b` must never answer for `b -> a`."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="B")
+    calls: list[int] = []
+    _stub_one_edge_with_call_log(monkeypatch, calls)
+    runner.invoke(app, ["suggest-relations", "--auto"])
+
+    calls.clear()
+    _stub_one_edge_with_call_log(
+        monkeypatch, calls, source="concepts/b", target="concepts/a"
+    )
+    reversed_run = runner.invoke(app, ["suggest-relations", "--auto"])
+
+    assert reversed_run.exit_code == 0, reversed_run.stderr
+    assert calls == [1], "the reverse pair must be typed fresh, not served"
+
+
+def test_fresh_flag_bypasses_the_serve(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--fresh` re-types every edge and re-persists, mirroring
+    `adjudicate --fresh` and `contradictions --fresh`."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="B")
+    calls: list[int] = []
+    _stub_one_edge_with_call_log(monkeypatch, calls)
+
+    runner.invoke(app, ["suggest-relations", "--auto"])
+    second = runner.invoke(app, ["suggest-relations", "--auto", "--fresh"])
+    third = runner.invoke(app, ["suggest-relations", "--auto"])
+
+    assert second.exit_code == 0, second.stderr
+    assert calls == [1, 1, 0], "--fresh re-types, and its result is re-persisted"
+    assert third.exit_code == 0, third.stderr
+
+
+def test_include_confidential_mismatch_retypes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A suggestion computed over a different projection must not serve a
+    run whose EFFECTIVE confidential inclusion differs."""
+    _init_workspace(tmp_path, monkeypatch)
+    disable_local_exemption(tmp_path)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="B")
+    calls: list[int] = []
+    _stub_one_edge_with_call_log(monkeypatch, calls)
+
+    runner.invoke(app, ["suggest-relations", "--auto"])
+    second = runner.invoke(
+        app, ["suggest-relations", "--auto", "--include-confidential"]
+    )
+
+    assert second.exit_code == 0, second.stderr
+    assert calls == [1, 1]
+
+
+def test_a_degrade_is_never_cached_and_never_costs_its_batch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fail-closed `None` type is a FAILURE, not a verdict: storing it
+    would cache a transport hiccup as a durable answer and never retry.
+
+    The batch is MIXED on purpose. `suggested_type` is `NOT NULL` in the
+    schema, so a degrade that reached the insert raises `IntegrityError`
+    for the whole `record_edge_suggestions` transaction -- which
+    `_persist_edge_suggestions` catches as one advisory. One malformed
+    reply among N would then silently cost all N their cache entry. Only
+    a mixed batch can tell that apart from correct behaviour: the valid
+    edge must still serve on the next run while the degraded one retries."""
+    _init_workspace(tmp_path, monkeypatch)
+    for name in ("a", "b", "c", "d"):
+        _write_doc(tmp_path / "bundle" / "concepts" / f"{name}.md", title=name.upper())
+    good = Edge(source_id="concepts/a", target_id="concepts/b")
+    bad = Edge(source_id="concepts/c", target_id="concepts/d")
+    _patch_candidate_edges(monkeypatch, [good, bad])
+    handed: list[list[str]] = []
+
+    def _fake_suggest(edges: object, **kwargs: object) -> EdgeSuggestionBatch:
+        listed = list(edges)  # type: ignore[call-overload]
+        handed.append([f"{e.source_id}->{e.target_id}" for e in listed])
+        return EdgeSuggestionBatch(
+            results=[
+                _suggestion(
+                    source=e.source_id,
+                    target=e.target_id,
+                    suggested_type=None
+                    if e.source_id == "concepts/c"
+                    else "references",
+                )
+                for e in listed
+            ]
+        )
+
+    monkeypatch.setattr("openkos.cli.main.suggest_edge_types", _fake_suggest)
+
+    first = runner.invoke(app, ["suggest-relations", "--auto"])
+    second = runner.invoke(app, ["suggest-relations", "--auto"])
+
+    assert first.exit_code == 0, first.stderr
+    assert second.exit_code == 0, second.stderr
+    assert handed[0] == ["concepts/a->concepts/b", "concepts/c->concepts/d"]
+    # The degraded edge retries; the valid one in the SAME batch does not.
+    assert handed[1] == ["concepts/c->concepts/d"]
+    assert "failed to persist" not in second.stderr
+    assert (
+        "1 of 2 candidate edge(s) served from persisted suggestions; "
+        "1 typed fresh." in second.stderr
+    )
+
+
+def test_corrupt_store_degrades_to_a_full_fresh_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A present-but-unreadable store costs one stderr advisory and a full
+    fresh run, never a crash before any model spend."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="B")
+    calls: list[int] = []
+    _stub_one_edge_with_call_log(monkeypatch, calls)
+    runner.invoke(app, ["suggest-relations", "--auto"])
+    (tmp_path / ".openkos" / "findings.db").write_bytes(b"not a database at all")
+
+    second = runner.invoke(app, ["suggest-relations", "--auto"])
+
+    assert second.exit_code == 0, second.stderr
+    assert calls == [1, 1]
+    assert "failed to read persisted suggestions" in second.stderr
+    assert "Traceback" not in second.stderr
+
+
+def test_a_row_missing_an_endpoint_digest_never_serves(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A row whose digest set no longer matches the edge's endpoints was
+    computed over a different prompt, however fresh each digest is."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="B")
+    calls: list[int] = []
+    _stub_one_edge_with_call_log(monkeypatch, calls)
+    runner.invoke(app, ["suggest-relations", "--auto"])
+
+    conn = sqlite3.connect(tmp_path / ".openkos" / "findings.db")
+    conn.execute(
+        "DELETE FROM edge_suggestion_input_digests WHERE input_ref = ?",
+        ("concepts/b",),
+    )
+    conn.commit()
+    conn.close()
+    second = runner.invoke(app, ["suggest-relations", "--auto"])
+
+    assert second.exit_code == 0, second.stderr
+    assert calls == [1, 1]
+
+
+def test_forget_sweep_erases_suggestions_referencing_the_endpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The rationale quotes both endpoints' bodies, so a suggestion naming
+    a forgotten concept must not survive it."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="B")
+    calls: list[int] = []
+    _stub_one_edge_with_call_log(monkeypatch, calls)
+    runner.invoke(app, ["suggest-relations", "--auto"])
+
+    conn = sqlite3.connect(tmp_path / ".openkos" / "findings.db")
+    before = conn.execute("SELECT COUNT(*) FROM edge_suggestions").fetchone()[0]
+    conn.close()
+    assert before == 1
+
+    forgotten = runner.invoke(app, ["forget", "concepts/b", "--auto"])
+
+    assert forgotten.exit_code == 0, forgotten.stderr
+    conn = sqlite3.connect(tmp_path / ".openkos" / "findings.db")
+    after = conn.execute("SELECT COUNT(*) FROM edge_suggestions").fetchone()[0]
+    conn.close()
+    assert after == 0

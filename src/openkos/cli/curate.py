@@ -91,6 +91,7 @@ from openkos.resolution.edge_typing import (
 )
 from openkos.resolution.volatility_typing import TierSuggestion, suggest_volatility
 from openkos.state import derived, findings
+from openkos.state import edge_suggestions as edge_suggestions_store
 from openkos.state.vectorstore import content_hash
 
 _DOCTOR_HINT = " Or run `openkos doctor` to diagnose the environment."
@@ -113,6 +114,10 @@ class StageProbe:
 
     items: tuple[object, ...] = ()
     llm_calls: int = 0
+    served: int = 0
+    """How many queue items a persisted store already answers, so
+    `llm_calls` is BELOW the queue size (#799). Zero for every stage that
+    has no cache, which keeps `cost_line` byte-identical for them."""
     unavailable: str | None = None
     empty_message: str | None = None
     notice: str | None = None
@@ -326,6 +331,14 @@ def cost_line(stage: Stage, probe: StageProbe) -> str:
     cost unit) report a call count that is NOT a 1:1 count of its queue
     without this helper needing to change."""
     n = probe.llm_calls
+    if probe.served:
+        # #799: the queue and the price have come apart -- a served item is
+        # still IN the queue (the walk offers it for review) but costs no
+        # call. Reporting `n` for both halves would claim the queue is
+        # smaller than it is: "0 untyped edge(s)" over a bundle that has
+        # one is a false statement about the projection, not a discount.
+        queued = n + probe.served
+        return f"{queued} {stage.noun}(s), {probe.served} served -> {n} LLM call(s)"
     return f"{n} {stage.noun}(s) -> {n} LLM call(s)"
 
 
@@ -951,9 +964,22 @@ def _structure_probe(ctx: CurateContext) -> StageProbe:
             local_exemption=ctx.local_exemption,
         )
 
+    # #799: the cost gate must state the calls this stage will ACTUALLY
+    # make. `suggest-relations`' own closing hint names `curate` as the
+    # next step, so the two surfaces re-deriving the same edges minutes
+    # apart -- and the gate quoting the worst case while the store already
+    # holds the answers -- is the defect. `items` still carries EVERY
+    # candidate edge (the walk must offer served suggestions too); only
+    # the price drops.
+    served, to_type = cli_main._partition_edge_suggestion_serves(
+        ctx.layout,
+        edges,
+        include_confidential=ctx.include_confidential or ctx.local_exemption,
+    )
     return StageProbe(
         items=tuple(edges),
-        llm_calls=len(edges),
+        llm_calls=len(to_type),
+        served=len(served),
         empty_message="No untyped edges found." if not edges else None,
         notice=notice,
     )
@@ -1008,15 +1034,50 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
             err=True,
         )
 
+    # #799: serve what `suggest-relations` (or an earlier curate) already
+    # paid for. The partition is rebuilt here rather than carried from
+    # `probe` -- design D4's no-memoization rule -- and costs no model
+    # call. Keyed on the EFFECTIVE confidential inclusion, the same
+    # disjunction the standalone verb applies.
+    effective_confidential = ctx.include_confidential or ctx.local_exemption
+    served_by_key, to_type = cli_main._partition_edge_suggestion_serves(
+        ctx.layout, edges, include_confidential=effective_confidential
+    )
+    if served_by_key:
+        typer.echo(
+            f"openkos curate: Structure: {len(served_by_key)} of {len(edges)} "
+            "candidate edge(s) served from persisted suggestions; "
+            f"{len(to_type)} typed fresh.",
+            err=True,
+        )
+
     batch = suggest_edge_types(
-        edges,
+        to_type,
         bundle_dir=ctx.layout.bundle_dir,
         llm=llm,
         include_confidential=ctx.include_confidential,
         local_exemption=ctx.local_exemption,
         on_progress=observability.progress_callback("curate", "untyped edge"),
     )
-    suggestions: Sequence[EdgeSuggestion] = batch.results
+    cli_main._persist_edge_suggestions(
+        ctx.layout, batch.results, include_confidential=effective_confidential
+    )
+    if served_by_key:
+        fresh_by_key = {
+            edge_suggestions_store.pair_key_for(
+                result.edge.source_id, result.edge.target_id
+            ): result
+            for result in batch.results
+        }
+        ordered: list[EdgeSuggestion] = []
+        for edge in edges:
+            key = edge_suggestions_store.pair_key_for(edge.source_id, edge.target_id)
+            found = served_by_key.get(key) or fresh_by_key.get(key)
+            if found is not None:
+                ordered.append(found)
+        suggestions: Sequence[EdgeSuggestion] = ordered
+    else:
+        suggestions = batch.results
 
     layout = ctx.layout
     log_path = layout.bundle_dir / "log.md"

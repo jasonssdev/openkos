@@ -233,3 +233,96 @@ absent.
 - WHEN `suggest-relations` runs
 - THEN it prints a message stating candidates are not computable yet due
   to missing embeddings, distinct from both other messages, and exits 0
+
+### Requirement: Persisted Suggestions Are Served Before Re-Typing
+
+`openkos suggest-relations` MUST persist every freshly computed
+suggestion to the `edge_suggestions` tables of `.openkos/findings.db`
+(issue #799 -- `state.edge_suggestions`, the findings store's third
+tenant, so `purge`'s wholesale deletion and `forget`'s sweep cover it
+with no new privacy surface), alongside one content-hash digest per
+endpoint computed at persist time. `curate`'s Structure stage MUST read
+and write that SAME store, since the verb's own closing hint names it as
+the next step -- the two surfaces re-deriving the same 49 edges minutes
+apart is the defect.
+
+A later run MUST serve a candidate edge from the store, with NO model
+call for it, exactly when: the latest persisted row for the edge's
+ORDERED `(source, target)` pair matches the run's EFFECTIVE confidential
+inclusion (`--include-confidential` OR the verified local-backend
+exemption -- the same disjunction `sensitivity.should_block` applies, so
+the partition runs only after the exemption is resolved), carries a
+digest row for BOTH current endpoints and no others, every stored digest
+equals the endpoint's CURRENT content hash, and the stored type is
+accepted by `validate_relation_type`.
+
+The pair key MUST preserve direction. Half the vocabulary is asymmetric
+(`relations.ASYMMETRIC_RELATION_TYPES`), so a suggestion computed for
+`a -> b` MUST NOT serve as the answer for `b -> a`.
+
+A fail-closed degrade (`suggested_type` of `None` -- malformed reply,
+unparseable type, or one that failed validation) MUST NOT be persisted.
+It is a failure, not a verdict; storing one would cache a transport
+hiccup as a durable answer and never retry it. Everything else
+re-derives, conservatively -- including a present-but-corrupt store,
+which degrades to one stderr advisory and a full fresh run, and a
+persist failure, which costs one advisory, never the run. A suggestion
+either of whose endpoints has no current digest MUST NOT be persisted (a
+row whose staleness can never be checked would serve forever).
+
+The run MUST report the split on stderr
+(`N of M candidate edge(s) served from persisted suggestions; K typed
+fresh.`), mirroring `adjudicate`'s and `contradictions`' line, and a
+`--fresh` flag MUST bypass the serve and re-persist, mirroring theirs.
+The pre-spend cost gate MUST state the number of calls the run will
+ACTUALLY make -- served edges subtracted -- rather than the worst case,
+on both surfaces. Served and fresh suggestions MUST render identically,
+in candidate order. Writes stay confined to derived state under
+`.openkos/`; the bundle remains untouched on a read-only run.
+
+#### Scenario: A repeat run on an unchanged bundle costs zero model calls
+
+- GIVEN a bundle whose untyped edges were suggested once, unchanged since
+- WHEN `openkos suggest-relations` runs again
+- THEN every edge is served from the store, the model receives zero
+  edges, and the split line reports `N of N ... 0 typed fresh`
+
+#### Scenario: The verb's own next step reuses what it paid for
+
+- GIVEN a completed `suggest-relations` run over N untyped edges
+- WHEN `openkos curate` runs its Structure stage on the unchanged bundle
+- THEN its cost gate states 0 LLM calls for those edges and it serves
+  every suggestion from the store
+
+#### Scenario: Endpoint drift re-types
+
+- GIVEN a persisted suggestion and one endpoint edited since
+- WHEN `openkos suggest-relations` runs
+- THEN that edge is typed fresh and the new suggestion re-persisted
+
+#### Scenario: The reverse direction never serves
+
+- GIVEN a persisted suggestion for `a -> b`
+- WHEN a run's candidate set contains `b -> a`
+- THEN `b -> a` is typed fresh, never served from `a -> b`'s row
+
+#### Scenario: An effective-inclusion mismatch never serves
+
+- GIVEN a suggestion persisted from a run whose EFFECTIVE inclusion was
+  exclusive (no flag, local exemption disabled)
+- WHEN `openkos suggest-relations --include-confidential` runs on the
+  unchanged bundle
+- THEN the edge is typed fresh
+
+#### Scenario: A degrade is never cached
+
+- GIVEN a run in which one edge's reply was malformed, yielding no valid
+  type
+- WHEN the run persists its results and a later run repeats
+- THEN that edge has no stored row and is typed fresh again
+
+#### Scenario: The store stays bounded by the live candidate set
+
+- GIVEN an edge re-typed (drift or `--fresh`)
+- WHEN the fresh suggestion is persisted
+- THEN the edge's superseded rows are replaced, not accumulated
