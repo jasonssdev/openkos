@@ -22,6 +22,7 @@ from typer.testing import CliRunner
 from openkos.bundle import index as bundle_index
 from openkos.bundle import ledger as bundle_ledger
 from openkos.cli.main import app
+from tests.unit.cli.conftest import commit_pending_fixture_docs
 
 runner = CliRunner()
 
@@ -73,6 +74,9 @@ def _write_concept(
         ),
         encoding="utf-8",
     )
+    # The workspace's git state must match a real session's before a verb
+    # that deletes this document reaches its auto-commit (issue #819).
+    commit_pending_fixture_docs()
 
 
 def _merge_pair(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

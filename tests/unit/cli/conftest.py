@@ -33,12 +33,14 @@ deliberately defined once, at the unit-suite root.
 """
 
 import sqlite3
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 import pytest
 import typer
+
+from openkos.vcs import git as vcs_git
 
 _EXCLUDED_DIRS = (".git",)
 """Directories whose CONTENTS a workspace snapshot must not compare -- the
@@ -128,6 +130,159 @@ def _classify_with_mtime(path: Path) -> MtimeEntry:
     if isinstance(classified, bytes):
         return (classified, path.stat().st_mtime_ns)
     return classified
+
+
+# --------------------------------------------------------------------- #
+# Untracked-fixture auto-commit guard (issue #819)
+# --------------------------------------------------------------------- #
+
+
+def _is_absent_and_untracked(root: Path, rel_path: str) -> bool:
+    """Whether `rel_path` is BOTH gone from disk and unknown to the index.
+
+    That pair is exactly what makes `git add -- <rel_path>` fail: there is
+    no file to stage and no tracked entry to record a deletion for. Asked
+    of the filesystem and of git's INDEX rather than of git's error text,
+    because that text is translated under a non-English locale and `_run`
+    does not pin one -- a guard that matched on the English wording would
+    simply stop guarding, silently, which is the failure class this whole
+    fixture exists to prevent (issue #817, review R2).
+
+    `git ls-files` answers with the path or with nothing, so "tracked" is
+    read as machine-readable presence, never as prose. Reaching through
+    `vcs_git._run` follows this suite's existing convention for asking git
+    a one-off question from a fixture, and `_run` is deliberately the
+    single subprocess seam the whole codebase goes through.
+
+    A non-zero probe means the question could not be ANSWERED -- outside a
+    repository, `git ls-files` exits non-zero with empty output, which is
+    byte-identical to a confident "untracked". Returning False there is
+    what keeps the guard from relabelling an unrelated failure as this
+    story: an unclassifiable error is not this fixture's business, and the
+    caller re-raises the original untouched (issue #817, review R2/R4)."""
+    if (root / rel_path).exists():
+        return False
+    probe = vcs_git._run(["git", "ls-files", "--", rel_path], cwd=root)
+    if probe.returncode != 0:
+        return False
+    return not probe.stdout.strip()
+
+
+@pytest.fixture(autouse=True)
+def _fail_loudly_on_an_untracked_fixture_degrade(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Turn the ONE auto-commit degradation a fixture can cause by accident
+    into a test failure (issue #817, item 1).
+
+    `_write_doc` writes concept documents straight to disk, so they stay
+    untracked. Identity's merge then DELETES the absorbed one, and the
+    auto-commit's `git add -- bundle/concepts/b.md` fails because that path
+    is now neither on disk nor in the index -- silently, because
+    `_autocommit` degrades to a stderr WARNING and no test asserted a
+    commit had happened. 169 tests across ten modules in this package were
+    running against that state, which is a workspace no real session ever
+    has: every prior mutating verb has already auto-committed its own
+    writes.
+
+    A fixture that quietly puts the code under test on its degradation path
+    proves less than it appears to, so this makes the state impossible to
+    reach without saying so, for every test under this package including
+    ones not yet written (issue #819).
+
+    It is narrow on purpose. A deliberately degraded run -- identity unset,
+    a monkeypatched failure, a workspace that is not a repository -- either
+    returns before `commit_paths` or raises for a different reason, and
+    `_is_absent_and_untracked` reports False for all of those, so the
+    original `GitError` propagates untouched and those tests keep working."""
+    real = vcs_git.commit_paths
+
+    def guarded(cwd: Path, rel_paths: Sequence[str], message: str) -> str | None:
+        try:
+            return real(cwd, rel_paths, message)
+        except vcs_git.GitError:
+            never_tracked = [
+                rel for rel in rel_paths if _is_absent_and_untracked(cwd, rel)
+            ]
+            if not never_tracked:
+                raise
+            raise AssertionError(
+                "auto-commit degraded because a fixture document was never "
+                f"tracked before it was deleted: {never_tracked}. Call "
+                "`commit_pending_fixture_docs()` from the helper that wrote "
+                "it, so this test exercises the commit path a real session "
+                "takes."
+            ) from None
+
+    monkeypatch.setattr(vcs_git, "commit_paths", guarded)
+
+
+def commit_pending_fixture_docs() -> None:
+    """Commit whatever a module's own document-writing helper just wrote
+    (issue #819).
+
+    Called at the bottom of each module's own `_write_concept`/`_write_doc`
+    helper, which is what let 169 affected tests be fixed by editing the
+    handful of helpers they share instead of the tests themselves. It takes
+    no arguments on purpose: those helpers disagree about whether they
+    receive a workspace root or a full document path, and every one of them
+    runs after `_init_workspace` has already `chdir`-ed into the workspace,
+    so `Path.cwd()` is the one thing they all share.
+
+    It commits the whole pending `bundle/` rather than the single document,
+    because these helpers typically write a concept AND hand-author its
+    `index.md` bullet, and a real session has both committed.
+
+    It COMMITS rather than merely staging. Staging alone would keep a later
+    `git add` from failing on a deleted document, but `commit_paths` runs a
+    bare `git commit`, which takes the whole INDEX -- so a fixture document
+    left staged would be swept into the verb's own auto-commit and change
+    what that commit contains.
+
+    Silent when there is no repository or no identity: in both of those the
+    auto-commit under test skips before it can degrade, so there is nothing
+    to restore and nothing the guard could catch.
+
+    It also REFUSES to act outside an openkos workspace. Resolving the
+    repository from `Path.cwd()` is what lets it take no arguments, and the
+    cost of that is a call site that runs before its module has `chdir`-ed
+    -- where the current directory is the checkout this suite is running
+    from, and a commit here would land fixture noise in a developer's real
+    working tree. `openkos.yaml` is the workspace marker `require_workspace`
+    itself checks, and this repository has none at its root, so the check
+    separates the two cases exactly (issue #819, review R3)."""
+    cwd = Path.cwd()
+    if not (cwd / "openkos.yaml").is_file():
+        return
+    root = vcs_git.repo_root(cwd)
+    if root is None or not vcs_git.has_git_identity(root):
+        return
+    seed_workspace_docs(root)
+
+
+def seed_workspace_docs(root: Path) -> None:
+    """Commit every fixture document written under `bundle/` so far.
+
+    The bulk sibling of the per-module `_seed_commit` helpers (issue #817,
+    item 1), for the tests that write their documents through a helper
+    rather than naming each path. Same reason, same precondition: in a real
+    workspace every document a merge is about to absorb was already
+    committed by the verb that wrote it, so a merge deleting an UNTRACKED
+    file is a state no session reaches.
+
+    Names the `bundle` directory rather than enumerating documents, so a
+    test that adds one later is covered without touching this; still a
+    scoped `git add -- bundle`, never `-A`/`-a`, so the repository rule
+    `test_no_blanket_add_flags_anywhere` guards is unaffected.
+
+    A no-op when nothing is pending, because `git commit` over an empty
+    index is an ERROR, not a success. The emptiness question goes to
+    `vcs_git.paths_dirty`, the same scoped porcelain check `commit_paths`
+    itself is paired with elsewhere -- machine-readable, and so unaffected
+    by locale or human-facing wording (issue #817, review R2)."""
+    if not vcs_git.paths_dirty(root, ["bundle"]):
+        return
+    vcs_git.commit_paths(root, ["bundle"], "seed fixture documents")
 
 
 def snapshot_bytes(root: Path) -> dict[Path, Entry]:

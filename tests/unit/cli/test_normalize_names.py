@@ -17,6 +17,7 @@ from typer.testing import CliRunner, _NamedTextIOWrapper
 from openkos import fsio
 from openkos.cli.main import app
 from openkos.vcs import git as vcs_git
+from tests.unit.cli.conftest import commit_pending_fixture_docs
 from tests.unit.vcs.conftest import isolate_git_identity
 
 runner = CliRunner()
@@ -76,6 +77,15 @@ def _write_nfd_file(
     nfd_name = unicodedata.normalize("NFD", stem) + ext
     path = directory / nfd_name
     path.write_text("body\n", encoding="utf-8")
+    # `normalize-names` RENAMES this file, which deletes the decomposed
+    # path, so it has to be tracked first or the auto-commit degrades
+    # (issue #819).
+    #
+    # Invisible on macOS: its filesystems normalize names, so the NFD and
+    # NFC spellings resolve to one file there and no path is ever deleted.
+    # On Linux they are two distinct paths and the rename is real, which is
+    # why this only ever failed in CI.
+    commit_pending_fixture_docs()
     return path
 
 
@@ -577,9 +587,15 @@ def test_byte_exact_fs_commit_shows_delete_and_add_per_rename(
     caught on Linux (review R3-002)."""
     _init_workspace_git(tmp_path, tmp_path_factory, monkeypatch)
     _write_nfd_file(tmp_path, "", "café")
-    vcs_git.commit_paths(
-        tmp_path, [f"bundle/{NFD_CAFE}.md"], "test: track the decomposed name"
-    )
+    # `_write_nfd_file` now tracks what it writes (issue #819), so this
+    # explicit commit is usually a no-op -- kept because it states at the
+    # call site that this test DEPENDS on the decomposed name being
+    # tracked, and guarded because a bare `git commit` over an empty index
+    # is an ERROR, not a success.
+    if vcs_git.paths_dirty(tmp_path, [f"bundle/{NFD_CAFE}.md"]):
+        vcs_git.commit_paths(
+            tmp_path, [f"bundle/{NFD_CAFE}.md"], "test: track the decomposed name"
+        )
 
     result = runner.invoke(app, ["normalize-names", "--auto"])
 
@@ -625,9 +641,15 @@ def test_run_commits_successfully_with_no_warning_for_renamed_paths(
     (review R3-002)."""
     _init_workspace_git(tmp_path, tmp_path_factory, monkeypatch)
     _write_nfd_file(tmp_path, "", "café")
-    vcs_git.commit_paths(
-        tmp_path, [f"bundle/{NFD_CAFE}.md"], "test: track the decomposed name"
-    )
+    # `_write_nfd_file` now tracks what it writes (issue #819), so this
+    # explicit commit is usually a no-op -- kept because it states at the
+    # call site that this test DEPENDS on the decomposed name being
+    # tracked, and guarded because a bare `git commit` over an empty index
+    # is an ERROR, not a success.
+    if vcs_git.paths_dirty(tmp_path, [f"bundle/{NFD_CAFE}.md"]):
+        vcs_git.commit_paths(
+            tmp_path, [f"bundle/{NFD_CAFE}.md"], "test: track the decomposed name"
+        )
 
     result = runner.invoke(app, ["normalize-names", "--auto"])
 

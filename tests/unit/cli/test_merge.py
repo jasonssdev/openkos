@@ -18,7 +18,12 @@ from openkos.bundle import links as bundle_links
 from openkos.cli import main
 from openkos.cli.main import _apply_link_rewrite_idempotently, app
 from openkos.model import okf
-from tests.unit.cli.conftest import changed_paths, confirm_after, echo_after
+from tests.unit.cli.conftest import (
+    changed_paths,
+    commit_pending_fixture_docs,
+    confirm_after,
+    echo_after,
+)
 from tests.unit.cli.conftest import snapshot_with_mtime as _snapshot
 
 runner = CliRunner()
@@ -79,6 +84,9 @@ def _write_concept(
         description=f"{title}.",
     )
     index_path.write_text(new_index_text, encoding="utf-8")
+    # The workspace's git state must match a real session's before a verb
+    # that deletes this document reaches its auto-commit (issue #819).
+    commit_pending_fixture_docs()
 
 
 def _write_concept_with_relations(
@@ -100,6 +108,9 @@ def _write_concept_with_relations(
     concept_path.write_text(
         okf.dump_frontmatter(metadata, f"# {title}\n\nBody.\n"), encoding="utf-8"
     )
+    # The workspace's git state must match a real session's before a verb
+    # that deletes this document reaches its auto-commit (issue #819).
+    commit_pending_fixture_docs()
 
 
 def _write_concept_with_provenance(
@@ -122,6 +133,9 @@ def _write_concept_with_provenance(
     concept_path.write_text(
         okf.dump_frontmatter(metadata, f"# {title}\n\nBody.\n"), encoding="utf-8"
     )
+    # The workspace's git state must match a real session's before a verb
+    # that deletes this document reaches its auto-commit (issue #819).
+    commit_pending_fixture_docs()
 
 
 def test_successful_merge_writes_ledger_rewrites_links_removes_absorbed(

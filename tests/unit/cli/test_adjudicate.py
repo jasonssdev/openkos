@@ -47,7 +47,11 @@ from openkos.resolution.adjudication import (
 )
 from openkos.resolution.candidates import CandidateGroup, CandidateGroupReport, Tier
 from openkos.vcs import git as vcs_git
-from tests.unit.cli.conftest import changed_paths, disable_local_exemption
+from tests.unit.cli.conftest import (
+    changed_paths,
+    commit_pending_fixture_docs,
+    disable_local_exemption,
+)
 from tests.unit.cli.conftest import snapshot_with_mtime as _snapshot
 from tests.unit.conftest import LOCAL_BACKEND_LOCALITY
 from tests.unit.vcs.conftest import isolate_git_identity
@@ -100,6 +104,9 @@ def _write_doc(
         f"# {title}\n{body}",
         encoding="utf-8",
     )
+    # The workspace's git state must match a real session's before a verb
+    # that deletes this document reaches its auto-commit (issue #819).
+    commit_pending_fixture_docs()
 
 
 def _adjudicated(
@@ -1386,7 +1393,16 @@ def _seed_commit(root: Path, rel_paths: list[str], message: str = "seed") -> Non
     """Pre-track paths via `commit_paths` -- test setup only, mirrors
     `test_main_autocommit.py::_seed_commit`: `git add -- <deleted-untracked-
     path>` fails, so a merge's absorbed-file removal must already be
-    tracked before `_autocommit` can stage its deletion."""
+    tracked before `_autocommit` can stage its deletion.
+
+    A no-op when those paths are already clean (issue #819). `_write_doc`
+    now commits what it writes, so most callers of this find nothing left
+    to seed -- and a bare `git commit` over an empty index is an ERROR, not
+    a success. The explicit calls are kept rather than deleted because they
+    document, at the call site, that this test depends on the pair being
+    tracked; they simply no longer have to be the thing that tracks it."""
+    if not vcs_git.paths_dirty(root, rel_paths):
+        return
     vcs_git.commit_paths(root, rel_paths, message)
 
 
@@ -1838,6 +1854,9 @@ def test_adjudicate_apply_plans_and_applies_the_merged_body_reconciliation(
             f"---\ntype: Concept\ntitle: {title}\n---\n# {title}\n\n{body}\n",
             encoding="utf-8",
         )
+    # Written inline rather than through `_write_doc`, so the tracking
+    # that helper does has to be repeated here (issue #819).
+    commit_pending_fixture_docs()
     group = CandidateGroup(
         okf_type="Concept",
         member_ids=("concepts/a", "concepts/b"),
@@ -1890,12 +1909,16 @@ def _seed_reconcilable_pair(
             f"---\ntype: Concept\ntitle: {title}\n---\n# {title}\n\n{body}\n",
             encoding="utf-8",
         )
+    # Written inline rather than through `_write_doc`, so the tracking
+    # that helper does has to be repeated here (issue #819).
+    commit_pending_fixture_docs()
     group = CandidateGroup(
         okf_type="Concept",
         member_ids=("concepts/a", "concepts/b"),
         tier=Tier.HIGH,
         trigger="stub",
     )
+
     monkeypatch.setattr(
         "openkos.cli.main.find_candidates_report",
         lambda *a, **k: CandidateGroupReport(groups=(group,), produced=1, retained=1),
@@ -2106,6 +2129,9 @@ def test_adjudicate_apply_merge_unions_provenance_from_both_sources(
         "# Stoicism\n",
         encoding="utf-8",
     )
+    # Written inline rather than through `_write_doc`, so the tracking that
+    # helper does has to be repeated here (issue #819).
+    commit_pending_fixture_docs()
 
     result = runner.invoke(app, ["adjudicate", "--apply"], input="y\n")
 
@@ -2970,6 +2996,9 @@ def _write_bodied_doc(path: Path, *, title: str, body: str) -> None:
         f"---\ntype: Concept\ntitle: {title}\n---\n# {title}\n\n{body}\n",
         encoding="utf-8",
     )
+    # The workspace's git state must match a real session's before a verb
+    # that deletes this document reaches its auto-commit (issue #819).
+    commit_pending_fixture_docs()
 
 
 def test_adjudicate_apply_same_richer_body_survivor_defuses_domination(

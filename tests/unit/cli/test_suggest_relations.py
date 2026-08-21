@@ -35,7 +35,7 @@ from openkos.llm.ollama import (
     OllamaUnavailable,
 )
 from openkos.resolution.edge_typing import EdgeSuggestion, EdgeSuggestionBatch
-from tests.unit.cli.conftest import disable_local_exemption
+from tests.unit.cli.conftest import commit_pending_fixture_docs, disable_local_exemption
 from tests.unit.cli.conftest import snapshot_with_mtime as _snapshot
 
 runner = CliRunner()
@@ -73,6 +73,9 @@ def _write_doc(path: Path, *, doc_type: str = "Concept", title: str = "Stub") ->
         f"---\ntype: {doc_type}\ntitle: {title}\n---\n# {title}\n",
         encoding="utf-8",
     )
+    # The workspace's git state must match a real session's before a verb
+    # that deletes this document reaches its auto-commit (issue #819).
+    commit_pending_fixture_docs()
 
 
 def _write_confidential_doc(path: Path, *, title: str = "Stub") -> None:
@@ -82,6 +85,9 @@ def _write_confidential_doc(path: Path, *, title: str = "Stub") -> None:
         f"# {title}\n",
         encoding="utf-8",
     )
+    # The workspace's git state must match a real session's before a verb
+    # that deletes this document reaches its auto-commit (issue #819).
+    commit_pending_fixture_docs()
 
 
 def _suggestion(

@@ -36,6 +36,7 @@ from openkos.resolution.edge_typing import EdgeSuggestion, EdgeSuggestionBatch
 from openkos.retrieval.answer import AnswerResult, Citation
 from openkos.state import reindex as state_reindex
 from openkos.state.derived import stale_derived_stores
+from tests.unit.cli.conftest import commit_pending_fixture_docs
 from tests.unit.vcs.conftest import isolate_git_identity
 
 runner = CliRunner()
@@ -75,6 +76,9 @@ def _write_doc(path: Path, *, doc_type: str = "Concept", title: str = "Stub") ->
         f"---\ntype: {doc_type}\ntitle: {title}\n---\n# {title}\n",
         encoding="utf-8",
     )
+    # The workspace's git state must match a real session's before a verb
+    # that deletes this document reaches its auto-commit (issue #819).
+    commit_pending_fixture_docs()
 
 
 def _ingest_source(tmp_path: Path, name: str) -> str:
