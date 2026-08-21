@@ -1656,3 +1656,34 @@ def test_status_without_a_findings_db_says_nothing_about_contradictions(
     assert result.exit_code == 0
     assert "contradiction" not in result.stdout
     assert not findings_db_path.exists()
+
+
+# --- #797: a group ruled distinct leaves "Needs attention" -----------------
+
+
+def test_a_group_ruled_distinct_leaves_needs_attention(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`status` counted the group under "Needs attention" for as long as the
+    model kept proposing it, so a workspace whose only pending item was a
+    correctly-refused merge could never reach a clean status (#797)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "dup-a.md", title="Stoicism")
+    _write_doc(tmp_path / "bundle" / "concepts" / "dup-b.md", title="STOICISM")
+    before = runner.invoke(app, ["status"])
+    assert "candidate group" in before.stdout
+
+    runner.invoke(
+        app,
+        [
+            "duplicates",
+            "--keep-distinct",
+            "concepts/dup-a",
+            "--keep-distinct",
+            "concepts/dup-b",
+        ],
+    )
+    after = runner.invoke(app, ["status"])
+
+    assert after.exit_code == 0, after.stderr
+    assert "candidate group" not in after.stdout

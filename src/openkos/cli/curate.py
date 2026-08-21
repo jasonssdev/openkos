@@ -739,13 +739,24 @@ def _identity_probe(ctx: CurateContext) -> StageProbe:
     report.retained`, and is `None` (unchanged wiring) otherwise
     (curate-command delta: Identity Cost Line Discloses Truncation,
     Below-Cap Cost-Line Output Is Byte-Identical To Pre-Change Behavior)."""
+    from openkos.cli import main as cli_main
+
     report = find_candidates_report(
         ctx.layout.bundle_dir, include_deprecated=ctx.include_deprecated
     )
+    # #797: a group the human already ruled distinct is dropped BEFORE the
+    # cost line, so it costs no model call and is never re-offered. The
+    # truncation notice still describes what the corpus produced --
+    # suppression is the human's answer, not a smaller candidate set.
+    groups = tuple(
+        group
+        for group in report.groups
+        if not cli_main._is_group_kept_distinct(ctx.layout, group.member_ids)
+    )
     return StageProbe(
-        items=tuple(report.groups),
-        llm_calls=report.retained,
-        empty_message="No candidate groups found." if not report.groups else None,
+        items=groups,
+        llm_calls=len(groups),
+        empty_message="No candidate groups found." if not groups else None,
         notice=candidate_group_truncation_notice(report),
     )
 
@@ -862,6 +873,15 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
             skipped += 1
             declined.append(
                 f"{prepared.absorbed_canonical} -> {prepared.survivor_canonical}"
+            )
+            # #797: the "no" is PERSISTED, not just tallied. Before this it
+            # lived exactly as long as the session, so the next run
+            # re-adjudicated the pair, re-offered the merge, and left the
+            # workspace in the state that routes `next` straight back here
+            # -- a loop whose only exit was performing the merge the human
+            # had just refused.
+            cli_main._record_identity_decline_from_walk(
+                ctx.root, ctx.layout, group.member_ids, verb="curate"
             )
             continue
 

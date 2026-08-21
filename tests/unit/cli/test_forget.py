@@ -2665,3 +2665,106 @@ def test_forget_findings_sweep_unreadable_store_warns_and_does_not_abort(
     assert not (tmp_path / "bundle" / "concepts" / "target.md").exists()
     assert "failed to sweep persisted findings" in result.stderr
     assert "failed while writing the forget" not in result.stderr
+
+
+# --- #797: the sweep covers identity decisions too -------------------------
+
+
+def _identity_record(
+    members: tuple[str, ...],
+) -> bundle_decisions.IdentityDecisionRecord:
+    return bundle_decisions.IdentityDecisionRecord(
+        decision_key=bundle_decisions.identity_decision_key_for(members),
+        member_ids=members,
+        state="declined",
+        decided_at="2026-08-20T00:00:00Z",
+    )
+
+
+def test_sweep_drops_identity_decisions_naming_a_purged_member(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An identity ruling names its members in `member_ids`, a field the
+    contradiction records have no notion of. Sweeping only `pair_ids` would
+    leave a purged id sitting in a keep-distinct record."""
+    _init_workspace(tmp_path, monkeypatch)
+    bundle_dir = tmp_path / "bundle"
+    referencing = _identity_record(("concepts/host", "concepts/purge-target"))
+    unrelated = _identity_record(("concepts/host", "concepts/unrelated"))
+    sidecar = bundle_decisions.write_identity_decisions(
+        "concepts/host", bundle_dir, records=[referencing, unrelated]
+    )
+
+    touched = main._sweep_decisions_for_ids(bundle_dir, ["concepts/purge-target"])
+
+    assert sidecar in touched
+    remaining = bundle_decisions.read_identity_decisions_at(sidecar)
+    assert [record.member_ids for record in remaining] == [
+        ("concepts/host", "concepts/unrelated")
+    ]
+
+
+def test_sweep_drops_an_identity_record_naming_a_purged_member_anywhere(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every member counts, not just the first: the owner id is only where
+    the record happens to be filed."""
+    _init_workspace(tmp_path, monkeypatch)
+    bundle_dir = tmp_path / "bundle"
+    sidecar = bundle_decisions.write_identity_decisions(
+        "concepts/aaa",
+        bundle_dir,
+        records=[_identity_record(("concepts/aaa", "concepts/mmm", "concepts/zzz"))],
+    )
+
+    main._sweep_decisions_for_ids(bundle_dir, ["concepts/zzz"])
+
+    assert bundle_decisions.read_identity_decisions_at(sidecar) == []
+
+
+def test_sweep_scrubs_one_kind_without_disturbing_the_other(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both kinds share the sidecar, so the sweep must rewrite it without
+    collateral loss of the kind that references nothing purged."""
+    _init_workspace(tmp_path, monkeypatch)
+    bundle_dir = tmp_path / "bundle"
+    keeper = bundle_decisions.DecisionRecord(
+        decision_key=bundle_decisions.decision_key_for(
+            ("concepts/host", "concepts/unrelated"), None
+        ),
+        pair_ids=("concepts/host", "concepts/unrelated"),
+        merged_absorbed_id=None,
+        state="declined",
+        decided_at="2026-08-20T00:00:00Z",
+    )
+    bundle_decisions.write_decisions("concepts/host", bundle_dir, records=[keeper])
+    sidecar = bundle_decisions.write_identity_decisions(
+        "concepts/host",
+        bundle_dir,
+        records=[_identity_record(("concepts/host", "concepts/purge-target"))],
+    )
+
+    main._sweep_decisions_for_ids(bundle_dir, ["concepts/purge-target"])
+
+    assert bundle_decisions.read_decisions_at(sidecar) == [keeper]
+    assert bundle_decisions.read_identity_decisions_at(sidecar) == []
+
+
+def test_history_targets_include_a_sidecar_referenced_only_by_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`purge`'s whole-history expunge must reach a sidecar whose ONLY link
+    to the purge set is an identity ruling -- otherwise the purged id
+    survives in a historical blob."""
+    _init_workspace(tmp_path, monkeypatch)
+    bundle_dir = tmp_path / "bundle"
+    bundle_decisions.write_identity_decisions(
+        "concepts/host",
+        bundle_dir,
+        records=[_identity_record(("concepts/host", "concepts/purge-target"))],
+    )
+
+    targets = main._decisions_history_targets(bundle_dir, ["concepts/purge-target"])
+
+    assert targets == ["bundle/.state/decisions/concepts/host.decisions.okf"]

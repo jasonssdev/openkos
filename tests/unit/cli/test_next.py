@@ -1885,3 +1885,68 @@ def test_a_declined_multi_source_finding_is_named_beside_a_recommended_one(
     # ...and the one that could not be is still named, not swallowed.
     assert "concepts/a b/early" in result.stdout
     assert "not a runnable argument" in result.stdout
+
+
+# --- #797: a group ruled distinct stops routing back to curate -------------
+
+
+def test_a_group_ruled_distinct_no_longer_routes_next_to_curate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """The loop #797 reports, closed. `next` routed to `curate`, whose
+    Identity stage re-offered the merge; declining left the workspace in
+    the state that sends `next` straight back. The only exit was performing
+    the merge the human had refused."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors_db(tmp_path)
+    _write_doc(tmp_path / "bundle" / "concepts" / "dup-a.md", title="Stoicism")
+    _write_doc(tmp_path / "bundle" / "concepts" / "dup-b.md", title="STOICISM")
+    before = runner.invoke(app, ["next"])
+    assert "candidate group with identical titles" in before.stdout
+
+    runner.invoke(
+        app,
+        [
+            "duplicates",
+            "--keep-distinct",
+            "concepts/dup-a",
+            "--keep-distinct",
+            "concepts/dup-b",
+        ],
+    )
+    after = runner.invoke(app, ["next"])
+
+    assert after.exit_code == 0, after.stderr
+    assert "candidate group with identical titles" not in after.stdout
+
+
+def test_reopening_restores_the_next_recommendation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """Reversible in `next` too, not only in `duplicates`."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors_db(tmp_path)
+    _write_doc(tmp_path / "bundle" / "concepts" / "dup-a.md", title="Stoicism")
+    _write_doc(tmp_path / "bundle" / "concepts" / "dup-b.md", title="STOICISM")
+    runner.invoke(
+        app,
+        [
+            "duplicates",
+            "--keep-distinct",
+            "concepts/dup-a",
+            "--keep-distinct",
+            "concepts/dup-b",
+        ],
+    )
+
+    runner.invoke(
+        app,
+        ["duplicates", "--reopen", "concepts/dup-a", "--reopen", "concepts/dup-b"],
+    )
+    after = runner.invoke(app, ["next"])
+
+    assert "candidate group with identical titles" in after.stdout

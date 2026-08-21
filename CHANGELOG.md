@@ -16,6 +16,60 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Added
 
+- **A human "keep distinct" ruling is persisted, and outranks the model**
+  ([#797](https://github.com/jasonssdev/openkos/issues/797)). Declining a
+  proposed merge lived exactly as long as the session. `next` routed to
+  `curate`, whose Identity stage re-adjudicated the pair and re-offered the
+  merge; declining again left the workspace in the state that sends `next`
+  back to `curate`. The only way to reach a clean `status` was to perform the
+  merge that was wrong — which is what turned a wrong SAME verdict from an
+  error into an eventual certainty.
+
+  `duplicates` gains `--keep-distinct`, `--reopen` and `--kept-distinct`,
+  mirroring `contradictions --decline/--reopen/--declined` exactly. The ruling
+  is stored in `bundle/.state/decisions/**` — the same sidecar family, so
+  `forget`'s sweep and `purge`'s whole-history expunge cover it with no new
+  privacy surface — under its own `identity_decisions` key and its own
+  `identity/v1` digest namespace. That namespace matters: "these two do not
+  contradict each other" and "these two are not the same entity" are opposite
+  rulings that can both be made about one pair, and a shared key would let one
+  silently answer for the other.
+
+  A ruled group is hidden from `duplicates`, dropped from `status`'s **Needs
+  attention**, no longer routes `next` back to `curate`, and is skipped by
+  `curate`'s Identity stage *before* the cost gate, so it costs no model call.
+  Declining the per-item prompt in `curate` or `adjudicate --apply` records the
+  ruling automatically — both walks go through one recorder, so they cannot
+  drift.
+
+### Fixed
+
+- **`merge` now carries the cross-source warning the other three surfaces
+  already had** ([#796](https://github.com/jasonssdev/openkos/issues/796),
+  partial). [#776](https://github.com/jasonssdev/openkos/issues/776) added a
+  guard for the class that fuses two distinct real-world items — members whose
+  `provenance:` sets are disjoint — to `adjudicate --apply-same`,
+  `adjudicate --apply`, and `curate`'s Identity stage. Plain `openkos merge`
+  never got it, and it is precisely the command `duplicates` and `adjudicate`
+  BOTH print as their closing hint. The batch door was locked while the door
+  the tool recommends stayed open. The note is printed after the change plan
+  and before the confirmation gate, from the same shared constant the other
+  three use, so the four cannot drift.
+
+  This does not change any verdict. The rest of #796 — a type-aware identity
+  frame that reads `Event` title identity as evidence of a recurring series
+  rather than of one entity — changes adjudication judgment and is held for
+  measurement.
+
+### Changed
+
+- **The decisions sidecar carries two kinds of ruling** (schema
+  `openkos.decisions/v2`). Purely additive: a v1 sidecar has no identity list
+  and reads as zero identity rulings, and the `decisions` list is unchanged in
+  shape. Writing one kind preserves the other, and the file is removed only
+  when both are empty.
+
+
 - **`suggest-relations` persists its suggestions, and serves them before
   re-typing** ([#799](https://github.com/jasonssdev/openkos/issues/799)).
   `contradictions` has cached its verdicts since #653 and `adjudicate` since
@@ -32,7 +86,6 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   validates. `--fresh` bypasses the serve and re-persists, mirroring the other
   two verbs.
 
-### Changed
 
 - **The edge-typing cost gates now price the real spend.** Both
   `suggest-relations` and `curate`'s Structure stage state what the run will

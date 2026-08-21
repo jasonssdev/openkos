@@ -540,3 +540,265 @@ def test_duplicates_below_cap_bundle_emits_no_truncation_notice(
 
     assert result.exit_code == 0
     assert result.stderr == ""
+
+
+# --- #797: a human "keep distinct" ruling, persisted and honored ----------
+
+
+def _two_event_group() -> CandidateGroupReport:
+    return CandidateGroupReport(
+        groups=(
+            CandidateGroup(
+                okf_type="Event",
+                member_ids=("events/afg-eval", "events/afg-eval-2"),
+                tier=Tier.HIGH,
+                trigger="afg eval",
+            ),
+        ),
+        produced=1,
+        retained=1,
+    )
+
+
+def test_keep_distinct_then_the_group_is_hidden(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The core #797 loop: a human rules the pair distinct, and the group
+    stops being offered."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", lambda *a, **k: _two_event_group()
+    )
+
+    ruled = runner.invoke(
+        app,
+        [
+            "duplicates",
+            "--keep-distinct",
+            "events/afg-eval",
+            "--keep-distinct",
+            "events/afg-eval-2",
+        ],
+    )
+    listed = runner.invoke(app, ["duplicates"])
+
+    assert ruled.exit_code == 0, ruled.stderr
+    assert listed.exit_code == 0, listed.stderr
+    assert "No candidates found." in listed.stdout
+    assert "Hiding 1 group you ruled distinct" in listed.stdout
+    assert "events/afg-eval" not in listed.stdout.split("Hiding")[0]
+
+
+def test_the_ruling_is_order_independent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A group is a set; typing the members in the other order must reach
+    the same ruling, not write a second one that suppresses nothing."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", lambda *a, **k: _two_event_group()
+    )
+
+    runner.invoke(
+        app,
+        [
+            "duplicates",
+            "--keep-distinct",
+            "events/afg-eval-2",
+            "--keep-distinct",
+            "events/afg-eval",
+        ],
+    )
+    listed = runner.invoke(app, ["duplicates"])
+
+    assert "No candidates found." in listed.stdout
+
+
+def test_reopen_restores_the_group(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ruling is reversible -- a suppression with no way back would be
+    a worse trap than the loop it replaces."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", lambda *a, **k: _two_event_group()
+    )
+    runner.invoke(
+        app,
+        [
+            "duplicates",
+            "--keep-distinct",
+            "events/afg-eval",
+            "--keep-distinct",
+            "events/afg-eval-2",
+        ],
+    )
+
+    reopened = runner.invoke(
+        app,
+        ["duplicates", "--reopen", "events/afg-eval", "--reopen", "events/afg-eval-2"],
+    )
+    listed = runner.invoke(app, ["duplicates"])
+
+    assert reopened.exit_code == 0, reopened.stderr
+    assert "[HIGH] Event -- afg eval" in listed.stdout
+    assert "Hiding" not in listed.stdout
+
+
+def test_kept_distinct_lists_the_ruling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The suppression is visible, not silent."""
+    _init_workspace(tmp_path, monkeypatch)
+    runner.invoke(
+        app,
+        [
+            "duplicates",
+            "--keep-distinct",
+            "events/afg-eval",
+            "--keep-distinct",
+            "events/afg-eval-2",
+        ],
+    )
+
+    view = runner.invoke(app, ["duplicates", "--kept-distinct"])
+
+    assert view.exit_code == 0, view.stderr
+    assert "[KEPT DISTINCT] events/afg-eval + events/afg-eval-2" in view.stdout
+
+
+def test_kept_distinct_on_a_clean_workspace_says_so(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+
+    view = runner.invoke(app, ["duplicates", "--kept-distinct"])
+
+    assert view.exit_code == 0
+    assert "No groups kept distinct." in view.stdout
+
+
+def test_keep_distinct_needs_two_distinct_members(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A one-member ruling suppresses nothing and would look recorded.
+    Refusing is better than a ruling no group can ever match."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    one = runner.invoke(app, ["duplicates", "--keep-distinct", "events/afg-eval"])
+    repeated = runner.invoke(
+        app,
+        [
+            "duplicates",
+            "--keep-distinct",
+            "events/afg-eval",
+            "--keep-distinct",
+            "events/afg-eval",
+        ],
+    )
+
+    assert one.exit_code == 2
+    assert repeated.exit_code == 2, "a repeated id collapses to one member"
+    assert "at least two distinct concept ids" in repeated.stderr
+
+
+def test_an_identity_ruling_does_not_suppress_a_different_group(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ruling is keyed on the exact member set -- a neighbouring pair
+    sharing one member is a separate question."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", lambda *a, **k: _two_event_group()
+    )
+
+    runner.invoke(
+        app,
+        [
+            "duplicates",
+            "--keep-distinct",
+            "events/afg-eval",
+            "--keep-distinct",
+            "events/other",
+        ],
+    )
+    listed = runner.invoke(app, ["duplicates"])
+
+    assert "[HIGH] Event -- afg eval" in listed.stdout
+
+
+def test_keep_distinct_refuses_a_traversal_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ids reach `decisions_path_for`, which joins them onto the
+    decisions root, so an unguarded `..` would write a sidecar OUTSIDE the
+    bundle (review lineage review-a8bb71e84e878ff3, R1)."""
+    _init_workspace(tmp_path, monkeypatch)
+    escaped = tmp_path.parent / "pwned.decisions.okf"
+
+    result = runner.invoke(
+        app,
+        [
+            "duplicates",
+            "--keep-distinct",
+            "../../../pwned",
+            "--keep-distinct",
+            "events/afg-eval",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "'..' segments" in result.stderr
+    assert not escaped.exists(), "no sidecar may be written outside the bundle"
+
+
+# --- #797: the interactive walk records a decline --------------------------
+
+
+def test_apply_walk_decline_persists_the_keep_distinct_ruling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Declining the per-item merge prompt records the ruling through
+    `_record_identity_decline_from_walk` -- the ONE recorder `curate`'s
+    Identity stage and `adjudicate --apply` share, so proving it here proves
+    the wiring both walks use (review lineage review-a8bb71e84e878ff3, R3)."""
+    from openkos.bundle import decisions as bundle_decisions
+    from openkos.resolution.adjudication import (
+        AdjudicatedCandidate,
+        AdjudicationBatch,
+        Verdict,
+    )
+
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    group = CandidateGroup(
+        okf_type="Concept",
+        member_ids=("concepts/a", "concepts/b"),
+        tier=Tier.HIGH,
+        trigger="stub",
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(groups=(group,), produced=1, retained=1),
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.adjudicate_candidates",
+        lambda *a, **k: AdjudicationBatch(
+            results=[
+                AdjudicatedCandidate(
+                    candidate=group,
+                    verdict=Verdict.SAME,
+                    confidence=0.9,
+                    rationale="same",
+                )
+            ]
+        ),
+    )
+
+    result = runner.invoke(app, ["adjudicate", "--apply"], input="n\n")
+
+    assert result.exit_code == 0, result.stderr
+    stored = bundle_decisions.read_identity_decisions("concepts/a", tmp_path / "bundle")
+    assert [r.member_ids for r in stored] == [("concepts/a", "concepts/b")]
+    assert (tmp_path / "bundle" / "concepts" / "b.md").is_file(), "merge withheld"

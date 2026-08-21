@@ -259,3 +259,156 @@ def test_iter_decisions_with_no_decisions_root_returns_empty_list(
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()
     assert decisions.iter_decisions(bundle_dir) == []
+
+
+# --- #797: identity decisions, the store's second kind ----------------------
+
+
+def _identity(
+    *,
+    member_ids: tuple[str, ...] = ("events/a", "events/b"),
+    state: decisions.DecisionState = "declined",
+    decided_at: str = "2026-08-20T00:00:00+00:00",
+) -> decisions.IdentityDecisionRecord:
+    return decisions.IdentityDecisionRecord(
+        decision_key=decisions.identity_decision_key_for(member_ids),
+        member_ids=member_ids,
+        state=state,
+        decided_at=decided_at,
+    )
+
+
+def test_identity_decision_key_is_a_stable_32_hex_char_digest() -> None:
+    key = decisions.identity_decision_key_for(("events/a", "events/b"))
+    assert len(key) == 32
+    int(key, 16)
+
+
+def test_identity_decision_key_is_order_independent() -> None:
+    """A group is a SET of members; the same two concepts must key equally
+    whichever order the candidate report happened to list them in."""
+    assert decisions.identity_decision_key_for(
+        ("events/b", "events/a")
+    ) == decisions.identity_decision_key_for(("events/a", "events/b"))
+
+
+def test_identity_decision_key_differs_by_member_set() -> None:
+    assert decisions.identity_decision_key_for(
+        ("events/a", "events/b")
+    ) != decisions.identity_decision_key_for(("events/a", "events/c"))
+    # An N>2 group is its own ruling, never the 2-member one plus extras.
+    assert decisions.identity_decision_key_for(
+        ("events/a", "events/b")
+    ) != decisions.identity_decision_key_for(("events/a", "events/b", "events/c"))
+
+
+def test_identity_and_contradiction_keys_never_collide_on_the_same_pair() -> None:
+    """ "These do not contradict each other" and "these are not the same
+    entity" are OPPOSITE human rulings about one pair. Sharing a key would
+    let one silently answer for the other."""
+    pair = ("concepts/a", "concepts/b")
+    assert decisions.identity_decision_key_for(pair) != decisions.decision_key_for(
+        pair, None
+    )
+
+
+def test_write_then_read_identity_decisions_round_trips(tmp_path: Path) -> None:
+    bundle_dir = tmp_path / "bundle"
+    record = _identity()
+
+    decisions.write_identity_decisions("events/a", bundle_dir, records=[record])
+    read_back = decisions.read_identity_decisions("events/a", bundle_dir)
+
+    assert read_back == [record]
+
+
+def test_identity_records_share_the_sidecar_without_disturbing_contradictions(
+    tmp_path: Path,
+) -> None:
+    """Both kinds live in one file so one privacy sweep covers both, but in
+    SEPARATE lists: `_decode_record` requires a 2-item `pair_ids`, so an
+    identity row in the `decisions` list would break the contradiction
+    reader outright."""
+    bundle_dir = tmp_path / "bundle"
+    contradiction = decisions.DecisionRecord(
+        decision_key=decisions.decision_key_for(("events/a", "events/b"), None),
+        pair_ids=("events/a", "events/b"),
+        merged_absorbed_id=None,
+        state="declined",
+        decided_at="2026-08-20T00:00:00+00:00",
+    )
+    decisions.write_decisions("events/a", bundle_dir, records=[contradiction])
+
+    decisions.write_identity_decisions("events/a", bundle_dir, records=[_identity()])
+
+    assert decisions.read_decisions("events/a", bundle_dir) == [contradiction]
+    assert decisions.read_identity_decisions("events/a", bundle_dir) == [_identity()]
+
+
+def test_writing_contradictions_preserves_existing_identity_records(
+    tmp_path: Path,
+) -> None:
+    """The two writers each own their own list. A full-replace of one kind
+    must not silently erase the other kind's rulings from the same file."""
+    bundle_dir = tmp_path / "bundle"
+    decisions.write_identity_decisions("events/a", bundle_dir, records=[_identity()])
+
+    contradiction = decisions.DecisionRecord(
+        decision_key=decisions.decision_key_for(("events/a", "events/b"), None),
+        pair_ids=("events/a", "events/b"),
+        merged_absorbed_id=None,
+        state="declined",
+        decided_at="2026-08-20T00:00:00+00:00",
+    )
+    decisions.write_decisions("events/a", bundle_dir, records=[contradiction])
+
+    assert decisions.read_identity_decisions("events/a", bundle_dir) == [_identity()]
+    assert decisions.read_decisions("events/a", bundle_dir) == [contradiction]
+
+
+def test_a_v1_sidecar_reads_as_no_identity_decisions(tmp_path: Path) -> None:
+    """Backward compatibility: a sidecar written before this slice carries
+    no identity list at all and must read as empty, never raise."""
+    bundle_dir = tmp_path / "bundle"
+    contradiction = decisions.DecisionRecord(
+        decision_key=decisions.decision_key_for(("events/a", "events/b"), None),
+        pair_ids=("events/a", "events/b"),
+        merged_absorbed_id=None,
+        state="declined",
+        decided_at="2026-08-20T00:00:00+00:00",
+    )
+    decisions.write_decisions("events/a", bundle_dir, records=[contradiction])
+
+    assert decisions.read_identity_decisions("events/a", bundle_dir) == []
+
+
+def test_empty_identity_records_leaves_the_file_when_contradictions_remain(
+    tmp_path: Path,
+) -> None:
+    """Clearing one kind must not delete a sidecar the other kind still
+    needs -- the file is only removed when BOTH lists are empty."""
+    bundle_dir = tmp_path / "bundle"
+    contradiction = decisions.DecisionRecord(
+        decision_key=decisions.decision_key_for(("events/a", "events/b"), None),
+        pair_ids=("events/a", "events/b"),
+        merged_absorbed_id=None,
+        state="declined",
+        decided_at="2026-08-20T00:00:00+00:00",
+    )
+    decisions.write_decisions("events/a", bundle_dir, records=[contradiction])
+    decisions.write_identity_decisions("events/a", bundle_dir, records=[_identity()])
+
+    decisions.write_identity_decisions("events/a", bundle_dir, records=[])
+
+    assert decisions.decisions_path_for("events/a", bundle_dir).is_file()
+    assert decisions.read_decisions("events/a", bundle_dir) == [contradiction]
+    assert decisions.read_identity_decisions("events/a", bundle_dir) == []
+
+
+def test_clearing_both_kinds_removes_the_sidecar(tmp_path: Path) -> None:
+    bundle_dir = tmp_path / "bundle"
+    decisions.write_identity_decisions("events/a", bundle_dir, records=[_identity()])
+
+    decisions.write_identity_decisions("events/a", bundle_dir, records=[])
+
+    assert not decisions.decisions_path_for("events/a", bundle_dir).is_file()

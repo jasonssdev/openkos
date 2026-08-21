@@ -144,3 +144,75 @@ current and MUST NOT be silently dropped.
 - GIVEN a finding marked stale
 - WHEN `status` or the declined-listing view runs
 - THEN the stale finding is shown labeled stale, not silently omitted
+
+### Requirement: A Human Identity Ruling Is Durable And Outranks The Model
+
+An operator MUST be able to record that the members of a duplicate-candidate
+group are NOT the same entity, through a non-interactive command surface,
+and that ruling MUST survive the session that produced it (issue #797).
+
+The ruling's identity MUST be derived from the group's MEMBER SET, sorted so
+it is independent of the order the members were supplied in, and MUST NOT be
+derived from a candidate group's position or row id — a group is recomputed
+on every run, so a position-derived key would evaporate the ruling on the
+next one.
+
+The identity MUST occupy a namespace disjoint from the contradiction
+decision key. "These two do not contradict each other" and "these two are
+not the same entity" are opposite rulings that can both be made about the
+same pair, and a shared key would let one silently answer for the other.
+
+Recording a ruling MUST NOT require a matching adjudication row: the human
+may be overruling a verdict the model has not produced yet, or one that was
+recomputed away. Requiring one would make the human's answer depend on the
+machine's, which is the dependency this requirement removes.
+
+A ruled group MUST NOT appear in ordinary `duplicates`, `status`, or `next`
+output, MUST NOT be adjudicated by `curate`'s Identity stage, and MUST be
+excluded before that stage's cost gate so it costs no model call. An
+explicit listing view MUST exist, and the ruling MUST be reversible.
+
+Declining a per-item merge prompt MUST record the ruling, on EVERY
+interactive walk that offers one — a decline persisted on one surface and
+forgotten on another is drift between two paths that share a prompt.
+
+#### Scenario: The re-offer loop terminates
+
+- GIVEN a candidate group whose merge an operator declined
+- WHEN `next`, `status`, and `duplicates` run afterwards
+- THEN none of them reports the group as pending, and reaching a clean
+  status no longer requires performing the refused merge
+
+#### Scenario: The ruling is order-independent
+
+- GIVEN an operator rules a two-member group distinct
+- WHEN the same two members are supplied in the opposite order
+- THEN the same ruling is addressed, not a second one that suppresses
+  nothing
+
+#### Scenario: A neighbouring group is unaffected
+
+- GIVEN a ruling over members A and B
+- WHEN a candidate group pairs A with C
+- THEN that group is still offered for review
+
+#### Scenario: The ruling costs no model call
+
+- GIVEN a ruled group
+- WHEN `curate`'s Identity stage runs
+- THEN the group is absent from the stage's cost line and no adjudication
+  call is issued for it
+
+#### Scenario: A ruled group is reversible and visible
+
+- GIVEN a ruled group
+- WHEN the operator invokes the listing view, then reopens it
+- THEN the ruling is shown before the reopen and the group is offered again
+  after it
+
+#### Scenario: The privacy sweep covers identity rulings
+
+- GIVEN a ruling naming a concept that is later forgotten or purged
+- WHEN the sweep runs
+- THEN the ruling is removed, and for `purge` its sidecar is included in the
+  whole-history expunge
