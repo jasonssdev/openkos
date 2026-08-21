@@ -1871,13 +1871,18 @@ def test_adjudicate_apply_plans_and_applies_the_merged_body_reconciliation(
 
 
 def _seed_reconcilable_pair(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    body_a: str = "Alpha states the shared subject at length. " * 8,
+    body_b: str = "Beta restates the same subject in a second voice. " * 8,
 ) -> list[str]:
-    """Two bodied concepts adjudicated SAME, sized to clear the #645
-    reconciliation thresholds, with `_reconcile_merged_survivor` stubbed to
-    record the absorbed ids it was called for."""
-    body_a = "Alpha states the shared subject at length. " * 8
-    body_b = "Beta restates the same subject in a second voice. " * 8
+    """Two bodied concepts adjudicated SAME, sized by default to clear the
+    #645 reconciliation thresholds, with `_reconcile_merged_survivor`
+    stubbed to record the absorbed ids it was called for.
+
+    The bodies are overridable so the #803 opt-in tests can seed a pair
+    that clears NEITHER threshold and still assert the forced pass."""
     for name, title, body in (("a", "Concept A", body_a), ("b", "Concept B", body_b)):
         path = tmp_path / "bundle" / "concepts" / f"{name}.md"
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1972,6 +1977,93 @@ def test_adjudicate_apply_same_no_reconcile_opts_out(
     assert result.exit_code == 0, result.output
     assert "reconcile merged body" not in result.stdout
     assert reconciled == []
+
+
+# --- #803: `--reconcile`, the explicit counterpart to `--no-reconcile` -----
+
+_TINY_BODY_A = "A short standalone note about the shared subject."
+
+_TINY_BODY_B = "Tiny."
+
+
+def test_adjudicate_apply_reconcile_forces_the_pass_below_the_thresholds(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#803: the opt-in reaches `adjudicate --apply` as the SAME lever
+    `merge` and `curate` take -- the #688 ruling applies to the opt-in
+    exactly as it did to the opt-out."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    reconciled = _seed_reconcilable_pair(
+        tmp_path, monkeypatch, body_a=_TINY_BODY_A, body_b=_TINY_BODY_B
+    )
+
+    result = runner.invoke(app, ["adjudicate", "--apply", "--reconcile"], input="y\n")
+
+    assert result.exit_code == 0, result.output
+    assert "reconcile merged body" in result.stdout
+    # #776: `a` has the richer body, so it survives and `b` is absorbed.
+    assert reconciled == ["concepts/b"]
+
+
+def test_adjudicate_apply_below_the_thresholds_needs_the_opt_in(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The control for the test above: without `--reconcile` this same pair
+    clears neither threshold and no pass is planned, so the opt-in is what
+    the forced pass proves."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    reconciled = _seed_reconcilable_pair(
+        tmp_path, monkeypatch, body_a=_TINY_BODY_A, body_b=_TINY_BODY_B
+    )
+
+    result = runner.invoke(app, ["adjudicate", "--apply"], input="y\n")
+
+    assert result.exit_code == 0, result.output
+    assert "reconcile merged body" not in result.stdout
+    assert reconciled == []
+
+
+def test_adjudicate_apply_same_reconcile_forces_the_pass_below_the_thresholds(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The batch path takes the same opt-in."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    reconciled = _seed_reconcilable_pair(
+        tmp_path, monkeypatch, body_a=_TINY_BODY_A, body_b=_TINY_BODY_B
+    )
+
+    result = runner.invoke(
+        app,
+        ["adjudicate", "--apply-same", "--confirm-count", "1", "--reconcile"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "reconcile merged body" in result.stdout
+    assert reconciled == ["concepts/b"]
+
+
+def test_adjudicate_refuses_reconcile_together_with_no_reconcile(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#803: the contradiction is REFUSED, not silently resolved -- the same
+    up-front, exit-2 shape this command already uses for `--apply` plus
+    `--json`."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+
+    result = runner.invoke(
+        app, ["adjudicate", "--apply", "--reconcile", "--no-reconcile"]
+    )
+
+    assert result.exit_code == 2
+    assert "--reconcile and --no-reconcile are mutually exclusive" in result.stderr
 
 
 def test_adjudicate_apply_merge_unions_provenance_from_both_sources(

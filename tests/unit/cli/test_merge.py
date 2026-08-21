@@ -1620,8 +1620,13 @@ def test_merge_below_the_threshold_never_calls_the_model(
 def test_merge_below_the_absolute_floor_never_calls_the_model(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Two one-line bodies stack at ~50% share while carrying nothing worth
-    a model call -- the absolute char floor keeps the pass off."""
+    """Two one-line bodies stack at a share above the threshold while
+    carrying nothing worth a model call -- the absolute floor keeps the
+    pass off.
+
+    The counter-example the floor exists for, and it still lands below the
+    floor after #803 re-anchored it onto the MERGED body: the whole merged
+    document here is well under 200 chars."""
     _init_workspace(tmp_path, monkeypatch)
     _write_concept(tmp_path, "concepts/survivor", title="Survivor", body="One line.")
     _write_concept(tmp_path, "concepts/absorbed", title="Absorbed", body="One line.")
@@ -1634,6 +1639,56 @@ def test_merge_below_the_absolute_floor_never_calls_the_model(
     assert result.exit_code == 0, result.stderr
     assert "reconcile merged body" not in result.stdout
     assert calls == []
+
+
+# The issue #803 shape, transposed: two SHORT `Person`-sized documents whose
+# absorbed half is nearly 40% of the result but well under 200 chars. The
+# pre-#803 absolute floor read `absorbed_chars`, which a short document can
+# never clear no matter how large its share; the re-anchored floor reads
+# `merged_chars`, which this pair does clear.
+_SHORT_SURVIVOR_BODY = (
+    "Primary datastore advocate. Marta argued for PostgreSQL 16 over MySQL "
+    "because the billing service already runs Postgres and the operational "
+    "burden of a second engine was judged not worth it."
+)
+
+_SHORT_ABSORBED_BODY = (
+    "Technical lead of the Helios Data Platform. She owns the roadmap for "
+    "the ingestion tier and reports to the platform director."
+)
+
+
+def test_merge_short_document_above_the_share_is_reconciled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#803: a short pair whose absorbed half is ~36% of the merged body but
+    contributes only ~137 chars is reconciled.
+
+    The pre-#803 gate refused it on the absolute `absorbed_chars` floor
+    alone -- the exact blind spot the issue reports, where two `Person`
+    documents at 39%/40% share missed the floor by 11 and 19 characters and
+    landed on disk with two `# ` document roots."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(
+        tmp_path, "concepts/survivor", title="Survivor", body=_SHORT_SURVIVOR_BODY
+    )
+    _write_concept(
+        tmp_path, "concepts/absorbed", title="Absorbed", body=_SHORT_ABSORBED_BODY
+    )
+    calls = _patch_reconciliation(monkeypatch, _RECONCILED_BODY)
+
+    result = runner.invoke(
+        app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert "reconcile merged body" in result.stdout
+    assert len(calls) == 1
+    survivor_text = (tmp_path / "bundle" / "concepts" / "survivor.md").read_text(
+        encoding="utf-8"
+    )
+    assert _RECONCILED_BODY in survivor_text
+    assert "## Merged content" not in survivor_text
 
 
 def test_merge_no_reconcile_flag_keeps_the_stacked_body(
@@ -1663,6 +1718,97 @@ def test_merge_no_reconcile_flag_keeps_the_stacked_body(
         encoding="utf-8"
     )
     assert "## Merged content (concepts/absorbed)" in survivor_text
+
+
+# #803: a pair that clears NEITHER threshold -- a short survivor and a tiny
+# absorbed body, so the share sits far below 0.2 and the merged body below
+# the 200-char floor. `--reconcile` must plan and run the pass anyway.
+_TINY_SURVIVOR_BODY = "A short standalone note about the shared subject."
+
+_TINY_ABSORBED_BODY = "Tiny."
+
+
+def test_merge_reconcile_flag_forces_the_pass_below_both_thresholds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#803: `--reconcile` is the explicit counterpart to `--no-reconcile`.
+
+    The preview already told the operator that bodies were appended rather
+    than reconciled; this is the lever that acts on it. It bypasses BOTH
+    thresholds -- a deliberate operator opt-in outranks a heuristic tuned
+    for the unattended default."""
+    _init_workspace(tmp_path, monkeypatch)
+    for suffix in ("", "2"):
+        _write_concept(
+            tmp_path,
+            f"concepts/survivor{suffix}",
+            title=f"Survivor{suffix}",
+            body=_TINY_SURVIVOR_BODY,
+        )
+        _write_concept(
+            tmp_path,
+            f"concepts/absorbed{suffix}",
+            title=f"Absorbed{suffix}",
+            body=_TINY_ABSORBED_BODY,
+        )
+    calls = _patch_reconciliation(monkeypatch, _RECONCILED_BODY)
+
+    # The control pair, with no flag: neither threshold is cleared, so the
+    # pass is not planned. Without this the opt-in would prove nothing.
+    without = runner.invoke(
+        app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+    assert without.exit_code == 0, without.stderr
+    assert "reconcile merged body" not in without.stdout
+    assert calls == []
+
+    result = runner.invoke(
+        app,
+        [
+            "merge",
+            "concepts/survivor2",
+            "concepts/absorbed2",
+            "--auto",
+            "--reconcile",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert "reconcile merged body" in result.stdout
+    assert len(calls) == 1
+    survivor_text = (tmp_path / "bundle" / "concepts" / "survivor2.md").read_text(
+        encoding="utf-8"
+    )
+    assert _RECONCILED_BODY in survivor_text
+    assert "## Merged content" not in survivor_text
+
+
+def test_merge_refuses_reconcile_together_with_no_reconcile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#803: the two levers contradict each other, so the pair is REFUSED
+    rather than silently resolved -- the same up-front, exit-2 shape
+    `adjudicate` uses for `--apply` plus `--json`."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/survivor", title="Survivor", body=_LONG_BODY)
+    _write_concept(tmp_path, "concepts/absorbed", title="Absorbed", body=_LONG_BODY)
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(
+        app,
+        [
+            "merge",
+            "concepts/survivor",
+            "concepts/absorbed",
+            "--auto",
+            "--reconcile",
+            "--no-reconcile",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "--reconcile and --no-reconcile are mutually exclusive" in result.stderr
+    assert _snapshot(tmp_path) == before
 
 
 def test_merge_reconciliation_failure_falls_back_to_the_stacked_body(

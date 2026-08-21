@@ -1354,6 +1354,150 @@ def test_build_merged_document_body_appends_absorbed_under_delimited_heading() -
     assert body.index("## Merged content") < body.index("Absorbed body.")
 
 
+def test_build_merged_document_never_inherits_absorbed_type_alternative() -> None:
+    """#803: `type_alternative` records ONE extraction's uncertainty about
+    ONE document's classification -- it is not a property of the entity.
+
+    The generic `elif key not in merged` branch used to copy it across, so
+    the reported `Marta Ruiz` came out of a merge newly flagged as possibly
+    an `Organization`: doubt no extraction ever expressed about the
+    survivor."""
+    merged, _ = okf.build_merged_document(
+        _survivor_metadata(),
+        "Survivor body.",
+        _absorbed_metadata(type_alternative="Organization"),
+        "Absorbed body.",
+        "concepts/absorbed-id",
+        "concepts/survivor-id",
+    )
+
+    assert okf.TYPE_ALTERNATIVE_KEY not in merged
+
+
+def test_build_merged_document_keeps_the_survivors_own_type_alternative() -> None:
+    """#803: only the ABSORBED side's value is refused. A survivor that
+    carries its own keeps it -- `merged` starts as `dict(survivor_metadata)`
+    and the key is simply never imported over."""
+    merged, _ = okf.build_merged_document(
+        _survivor_metadata(type_alternative="Project"),
+        "Survivor body.",
+        _absorbed_metadata(type_alternative="Organization"),
+        "Absorbed body.",
+        "concepts/absorbed-id",
+        "concepts/survivor-id",
+    )
+
+    assert merged[okf.TYPE_ALTERNATIVE_KEY] == "Project"
+
+
+def test_build_merged_document_type_alternative_cannot_equal_merged_type() -> None:
+    """#803, the latent hazard the refusal also removes: `build_concept`
+    rejects `type_alternative == type` outright, but the merge path has no
+    such check. A cross-type merge whose absorbed side named the SURVIVOR's
+    type as its runner-up would have produced a document `build_concept`
+    refuses to build."""
+    merged, _ = okf.build_merged_document(
+        _survivor_metadata(type="Person"),
+        "Survivor body.",
+        _absorbed_metadata(type="Organization", type_alternative="Person"),
+        "Absorbed body.",
+        "concepts/absorbed-id",
+        "concepts/survivor-id",
+    )
+
+    assert merged["type"] == "Person"
+    assert okf.TYPE_ALTERNATIVE_KEY not in merged
+
+
+def test_build_merged_document_demotes_the_absorbed_leading_heading() -> None:
+    """#803: the stacked form must not produce a second DOCUMENT ROOT.
+
+    `build_merged_document` used to append the absorbed body byte for byte,
+    so a merged document carried two `# ` H1 headings -- two document roots
+    in one file. The `## Merged content (<absorbed-id>)` delimiter already
+    names the absorbed document, so its own title heading is the redundant
+    one AND the one creating the second root; `### ` puts it below the
+    level-2 delimiter."""
+    _, body = okf.build_merged_document(
+        _survivor_metadata(),
+        "# Survivor\n\nSurvivor body.",
+        _absorbed_metadata(),
+        "# Absorbed\n\nAbsorbed body.",
+        "concepts/absorbed-id",
+        "concepts/survivor-id",
+    )
+
+    assert body == (
+        "# Survivor\n\nSurvivor body.\n\n"
+        "## Merged content (concepts/absorbed-id)\n\n"
+        "### Absorbed\n\nAbsorbed body.\n"
+    )
+
+
+def test_build_merged_document_leaves_the_absorbed_deeper_sections_verbatim() -> None:
+    """#803, deliberately out of scope: only the LEADING heading is
+    demoted.
+
+    Folding the absorbed document's deeper sections -- deduping its
+    `## Related` bullets, renumbering its `[N]` citation markers -- needs
+    section-merging semantics no helper in this codebase provides, and doing
+    it byte-wise would silently change meaning. `# Citations` is an OKF
+    section-8 reserved heading and must not be demoted blind."""
+    absorbed_body = (
+        "# Absorbed\n\nAbsorbed body.\n\n"
+        "## Related\n- [sources/s](/sources/s.md) - source\n\n"
+        "# Citations\n[1] sources/s\n"
+    )
+
+    _, body = okf.build_merged_document(
+        _survivor_metadata(),
+        "# Survivor\n\nSurvivor body.",
+        _absorbed_metadata(),
+        absorbed_body,
+        "concepts/absorbed-id",
+        "concepts/survivor-id",
+    )
+
+    assert "### Absorbed\n" in body
+    assert "## Related\n- [sources/s](/sources/s.md) - source\n" in body
+    assert "# Citations\n[1] sources/s\n" in body
+    assert "### Citations" not in body
+    assert "### Related" not in body
+
+
+def test_build_merged_document_never_invents_an_absorbed_heading() -> None:
+    """An absorbed body that opens with PROSE is stacked unchanged: the
+    demotion rewrites a heading that exists, it never invents one (the same
+    fail-closed shape `_pin_leading_heading` follows)."""
+    _, body = okf.build_merged_document(
+        _survivor_metadata(),
+        "# Survivor\n\nSurvivor body.",
+        _absorbed_metadata(),
+        "Absorbed body with no heading at all.",
+        "concepts/absorbed-id",
+        "concepts/survivor-id",
+    )
+
+    assert body.endswith("\n\nAbsorbed body with no heading at all.\n")
+    assert "###" not in body
+
+
+def test_build_merged_document_leaves_the_survivor_heading_alone() -> None:
+    """The survivor's `# ` heading IS the merged document's root and stays
+    a level-1 heading -- the demotion is scoped to the absorbed side."""
+    _, body = okf.build_merged_document(
+        _survivor_metadata(),
+        "# Survivor\n\nSurvivor body.",
+        _absorbed_metadata(),
+        "# Absorbed\n\nAbsorbed body.",
+        "concepts/absorbed-id",
+        "concepts/survivor-id",
+    )
+
+    assert body.startswith("# Survivor\n")
+    assert body.count("\n# ") == 0
+
+
 def test_build_merged_document_body_already_newline_terminated_is_not_doubled() -> None:
     """When the absorbed body already ends with a trailing newline, no
     extra blank line is appended on top of it."""

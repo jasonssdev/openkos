@@ -1145,6 +1145,117 @@ def test_identity_no_reconcile_opts_out(
     assert called == []
 
 
+# --- #803: `--reconcile`, the explicit counterpart to `--no-reconcile` -----
+
+
+def _seed_identity_reconcile_pair(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, body_a: str, body_b: str
+) -> list[str]:
+    """One Identity SAME pair with the given bodies, `_reconcile_merged_survivor`
+    stubbed to record the absorbed ids it was called for."""
+    _write_bodied_doc(
+        tmp_path / "bundle" / "concepts" / "a.md", title="Concept A", body=body_a
+    )
+    _write_bodied_doc(
+        tmp_path / "bundle" / "concepts" / "b.md", title="Concept B", body=body_b
+    )
+    _reindexed_workspace(tmp_path, monkeypatch)
+
+    group = CandidateGroup(
+        okf_type="Concept",
+        member_ids=("concepts/a", "concepts/b"),
+        tier=Tier.HIGH,
+        trigger="stub",
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(groups=(group,), produced=1, retained=1),
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate.adjudicate_candidates",
+        lambda *a, **k: AdjudicationBatch(
+            results=[
+                AdjudicatedCandidate(
+                    candidate=group,
+                    verdict=Verdict.SAME,
+                    confidence=0.9,
+                    rationale="same",
+                )
+            ]
+        ),
+    )
+    reconciled: list[str] = []
+
+    def _fake_reconcile(root: Path, prepared: object) -> tuple[object, None]:
+        reconciled.append(getattr(prepared, "absorbed_canonical", "?"))
+        return prepared, None
+
+    monkeypatch.setattr("openkos.cli.main._reconcile_merged_survivor", _fake_reconcile)
+    _simulate_tty(monkeypatch)
+    return reconciled
+
+
+_TINY_BODY_A = "A short standalone note about the shared subject."
+
+_TINY_BODY_B = "Tiny."
+
+
+def test_identity_reconcile_forces_the_pass_below_the_thresholds(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#803: `curate --reconcile` is the SAME opt-in lever `merge` and
+    `adjudicate` take, reaching the path the product recommends."""
+    _stub_later_stages_empty(monkeypatch)
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    reconciled = _seed_identity_reconcile_pair(
+        tmp_path, monkeypatch, body_a=_TINY_BODY_A, body_b=_TINY_BODY_B
+    )
+
+    result = runner.invoke(app, ["curate", "--reconcile"], input="y\ny\n")
+
+    assert result.exit_code == 0, result.output
+    assert "reconcile merged body" in result.stdout
+    # #776: `a` has the richer body, so it survives and `b` is absorbed.
+    assert reconciled == ["concepts/b"]
+
+
+def test_identity_below_the_thresholds_needs_the_opt_in(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The control for the test above: the same pair clears neither
+    threshold, so without the flag no pass is planned."""
+    _stub_later_stages_empty(monkeypatch)
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    reconciled = _seed_identity_reconcile_pair(
+        tmp_path, monkeypatch, body_a=_TINY_BODY_A, body_b=_TINY_BODY_B
+    )
+
+    result = runner.invoke(app, ["curate"], input="y\ny\n")
+
+    assert result.exit_code == 0, result.output
+    assert "reconcile merged body" not in result.stdout
+    assert reconciled == []
+
+
+def test_curate_refuses_reconcile_together_with_no_reconcile(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#803: the contradiction is REFUSED, not silently resolved, with the
+    same up-front exit-2 shape the other two verbs use."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+
+    result = runner.invoke(app, ["curate", "--reconcile", "--no-reconcile"])
+
+    assert result.exit_code == 2
+    assert "--reconcile and --no-reconcile are mutually exclusive" in result.stderr
+
+
 # ---------------------------------------------------------------------------
 # issue #441 -- a partial adjudication batch keeps its completed verdicts
 # ---------------------------------------------------------------------------

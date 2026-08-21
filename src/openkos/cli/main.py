@@ -2122,7 +2122,9 @@ def _prepare_one_merge(
     )
 
 
-def _reconcile_planned(prepared: "PreparedMerge", *, no_reconcile: bool) -> bool:
+def _reconcile_planned(
+    prepared: "PreparedMerge", *, no_reconcile: bool, reconcile: bool = False
+) -> bool:
     """Whether the #645 merged-body reconciliation pass runs for `prepared`.
 
     THE single source of truth for that decision (issue #688). It previously
@@ -2136,13 +2138,46 @@ def _reconcile_planned(prepared: "PreparedMerge", *, no_reconcile: bool) -> bool
 
     Both the plan DISCLOSURE and the APPLICATION read this one predicate, so
     a caller can no longer promise a pass it does not run, or run one it did
-    not disclose."""
+    not disclose.
+
+    Precedence, in the order the clauses read (issue #803):
+
+    1. `no_reconcile` wins over everything, `reconcile` included. The two
+       flags are refused TOGETHER at each command's front door, so a caller
+       reaching here with both set holds a bug rather than a request -- and
+       the safe reading of a contradiction is the one that makes no model
+       call.
+    2. A `prepared` with no `stacked_body` returns `False` even under
+       `reconcile`: an empty or whitespace-only absorbed body stacked
+       nothing, so there is nothing to reconcile and the pass would send
+       the survivor's own text to the model to be rewritten against
+       nothing.
+    3. `reconcile` then forces the pass, bypassing BOTH thresholds. They
+       are a heuristic tuned for the unattended default; a human who has
+       just read the preview's "bodies were appended, not reconciled" line
+       and typed the flag has better evidence than the heuristic does.
+    4. Otherwise the thresholds decide."""
+    if no_reconcile:
+        return False
+    if prepared.stacked_body is None:
+        return False
+    if reconcile:
+        return True
     return (
-        not no_reconcile
-        and prepared.stacked_body is not None
-        and prepared.stacked_body.share >= _RECONCILE_SHARE_THRESHOLD
-        and prepared.stacked_body.absorbed_chars >= _RECONCILE_MIN_ABSORBED_CHARS
+        prepared.stacked_body.share >= _RECONCILE_SHARE_THRESHOLD
+        and prepared.stacked_body.merged_chars >= _RECONCILE_MIN_MERGED_CHARS
     )
+
+
+_RECONCILE_CONFLICT_MESSAGE: Final = (
+    "--reconcile and --no-reconcile are mutually exclusive."
+)
+"""The refusal text shared by the three verbs that take both levers
+(issue #803), so the wording cannot drift between them.
+
+A contradiction is REFUSED rather than silently resolved: either
+precedence rule would carry out half of what the operator asked for while
+discarding the other half, with no signal that it did."""
 
 
 _RECONCILE_PLAN_NOTE: Final = (
@@ -2155,7 +2190,12 @@ the one-line preview every other consenting caller prints cannot drift."""
 
 
 def _apply_reconciliation(
-    root: Path, prepared: "PreparedMerge", *, no_reconcile: bool, verb: str
+    root: Path,
+    prepared: "PreparedMerge",
+    *,
+    no_reconcile: bool,
+    verb: str,
+    reconcile: bool = False,
 ) -> "PreparedMerge":
     """Run the #645 pass when `_reconcile_planned`, else return `prepared`
     unchanged -- the shared post-consent half of the disclosure above.
@@ -2164,8 +2204,12 @@ def _apply_reconciliation(
     re-check, so the slow model call sits inside the window the drift guard
     re-validates rather than after it. Any failure keeps the stacked body
     and notices on stderr: the merge itself never gains a new failure mode
-    from an improvement pass."""
-    if not _reconcile_planned(prepared, no_reconcile=no_reconcile):
+    from an improvement pass.
+
+    `reconcile` (issue #803) is threaded through to the same predicate the
+    disclosure read, never re-tested here: a second inline condition is
+    exactly how the #688 defect got in."""
+    if not _reconcile_planned(prepared, no_reconcile=no_reconcile, reconcile=reconcile):
         return prepared
     prepared, failure = _reconcile_merged_survivor(root, prepared)
     if failure is not None:
@@ -2178,7 +2222,7 @@ def _apply_reconciliation(
 
 
 def _format_merge_preview_line(
-    prepared: "PreparedMerge", *, no_reconcile: bool = False
+    prepared: "PreparedMerge", *, no_reconcile: bool = False, reconcile: bool = False
 ) -> str:
     """The "merge X into Y (...)" preview line for one prepared merge,
     extracted verbatim from the former inline body (issue #137 closing
@@ -2191,7 +2235,10 @@ def _format_merge_preview_line(
     caller shows it without having to remember to. `no_reconcile` DEFAULTS
     to `False` deliberately -- a caller that forgets to thread its opt-out
     through over-discloses rather than under-discloses, and `merge`'s own
-    multi-line plan is the one caller that renders the note itself."""
+    multi-line plan is the one caller that renders the note itself.
+    `reconcile` (issue #803) defaults to `False` on the mirrored reasoning:
+    a caller that forgets to thread the opt-IN through discloses the pass
+    exactly as the thresholds decided, never a pass it was not asked for."""
     stacked_note = ""
     guardrail_note = ""
     if prepared.stacked_body is not None:
@@ -2213,7 +2260,7 @@ def _format_merge_preview_line(
                 "object. Verify before accepting."
             )
     reconcile_note = ""
-    if _reconcile_planned(prepared, no_reconcile=no_reconcile):
+    if _reconcile_planned(prepared, no_reconcile=no_reconcile, reconcile=reconcile):
         reconcile_note = f"\n  ~ {_RECONCILE_PLAN_NOTE}"
     return (
         f"  merge {prepared.absorbed_canonical} into {prepared.survivor_canonical} "
@@ -2290,6 +2337,7 @@ def _run_adjudicate_apply(
     results: Sequence[AdjudicatedCandidate],
     *,
     no_reconcile: bool = False,
+    reconcile: bool = False,
 ) -> None:
     """The interactive `adjudicate --apply` merge walk (issue #137 Slice
     2b-ii, design D2-D9): per SAME 2-member group (D3), re-verify both
@@ -2371,7 +2419,11 @@ def _run_adjudicate_apply(
             skipped_already_merged += 1
             continue
 
-        typer.echo(_format_merge_preview_line(prepared, no_reconcile=no_reconcile))
+        typer.echo(
+            _format_merge_preview_line(
+                prepared, no_reconcile=no_reconcile, reconcile=reconcile
+            )
+        )
         # #776: the choice is deterministic and STATED -- an unexplained
         # arbitrary survivor is what the issue reports.
         typer.echo(f"  survivor: {prepared.survivor_canonical} ({survivor_criterion})")
@@ -2405,7 +2457,11 @@ def _run_adjudicate_apply(
         # drives `_prepare_one_merge`/`_commit_one_merge` directly too, so
         # it had the identical silent-stacking gap.
         prepared = _apply_reconciliation(
-            root, prepared, no_reconcile=no_reconcile, verb="adjudicate --apply"
+            root,
+            prepared,
+            no_reconcile=no_reconcile,
+            reconcile=reconcile,
+            verb="adjudicate --apply",
         )
 
         # Issue #346: every byte `_commit_one_merge` writes below was
@@ -2474,6 +2530,7 @@ def _run_adjudicate_apply_same(
     *,
     confirm_count: str | None,
     no_reconcile: bool = False,
+    reconcile: bool = False,
     include_cross_source: bool = False,
 ) -> None:
     """The guarded batch `adjudicate --apply-same` merge (issue #137
@@ -2604,7 +2661,11 @@ def _run_adjudicate_apply_same(
             refused_stacked += 1
             continue
         previewed_groups.append((group, survivor_id, absorbed_id))
-        typer.echo(_format_merge_preview_line(prepared, no_reconcile=no_reconcile))
+        typer.echo(
+            _format_merge_preview_line(
+                prepared, no_reconcile=no_reconcile, reconcile=reconcile
+            )
+        )
         # #776: the batch survivor rule is deterministic and STATED.
         typer.echo(f"  survivor: {prepared.survivor_canonical} ({survivor_criterion})")
     total = len(previewed_groups)
@@ -2700,7 +2761,11 @@ def _run_adjudicate_apply_same(
         # the post-consent slot here too -- still before the drift
         # re-validation, matching every other consenting caller.
         prepared = _apply_reconciliation(
-            root, prepared, no_reconcile=no_reconcile, verb="adjudicate --apply-same"
+            root,
+            prepared,
+            no_reconcile=no_reconcile,
+            reconcile=reconcile,
+            verb="adjudicate --apply-same",
         )
 
         # Issue #346: every byte `_commit_one_merge` writes below was
@@ -8592,13 +8657,34 @@ _RECONCILE_SHARE_THRESHOLD = 0.2
 (#645, opt-out by ruling). Below it the absorbed contribution is a stacked
 sentence or two -- an honest append, not worth a model call; the measured
 production shares (0.31-0.47, every merge of the 2026-08-13 e2e session)
-all land above it. `--no-reconcile` skips the pass regardless."""
+all land above it. Both levers overrule it: `--no-reconcile` skips the
+pass regardless, `--reconcile` forces it regardless."""
 
-_RECONCILE_MIN_ABSORBED_CHARS = 200
+_RECONCILE_MIN_MERGED_CHARS = 200
 """Absolute floor under which the pass is never planned, whatever the
-share: two one-line bodies can stack at 50% share while carrying nothing
-worth a model call, and appending them is already readable. The #645
-evidence merges contributed 384-615 absorbed chars each."""
+share -- measured on the MERGED body, the quantity the floor was always
+describing.
+
+It preserves the old floor's stated intent exactly: two one-line bodies
+can stack at 50% share while carrying nothing worth a model call, and
+appending them is already readable. That counter-example still lands well
+below 200 MERGED chars and is still skipped.
+
+What it removes is the short-document blind spot (#803). The floor used to
+read `absorbed_chars`, which made it a stricter, unstated second rule for
+any merged document below `200 / _RECONCILE_SHARE_THRESHOLD` = 1000 chars:
+a short document is short in both halves, so it could never clear an
+absolute absorbed floor no matter how large its share. The reported case
+was two `Person` merges carrying 189 and 181 absorbed chars at 39% and 40%
+share -- nearly half the document each -- refused by 11 and 19 characters,
+and left on disk with two `# ` document roots.
+
+The change is MONOTONE: `merged_chars >= absorbed_chars` always (the
+merged body is the survivor's body plus the delimiter plus the absorbed
+body), so every merge the old gate planned the new gate still plans. The
+newly admitted set is exactly the short-but-substantially-absorbed case.
+The #645 evidence merges contributed 384-615 absorbed chars each and are
+unaffected."""
 
 _STACKED_SHARE_GUARDRAIL = 0.8
 """Merged-body share at or above which a proposed merge is flagged as a
@@ -9289,6 +9375,15 @@ def merge(
             "'## Merged content' heading, with no model call."
         ),
     ),
+    reconcile: bool = typer.Option(
+        False,
+        "--reconcile",
+        help=(
+            "Force the reconciliation pass (#645) even below the share "
+            "and merged-length thresholds that decide it by default. "
+            "Refused together with --no-reconcile."
+        ),
+    ),
 ) -> None:
     """Fuse two distinct concept-ids into one: the first DESTRUCTIVE
     entity-resolution write (spec: Merge Fuses Two Distinct Concept-IDs).
@@ -9393,6 +9488,13 @@ def merge(
     `git` or `unmerge`, same as `forget`'s own non-transactional
     limitation.
     """
+    if reconcile and no_reconcile:
+        # #803: rejected up front, before any workspace gate or read,
+        # matching the shape `adjudicate` uses for its own contradictory
+        # flag pairs.
+        typer.echo(f"openkos merge: {_RECONCILE_CONFLICT_MESSAGE}", err=True)
+        raise typer.Exit(code=2)
+
     root = Path.cwd()
     layout = config.WorkspaceLayout(root)
     index_path = layout.bundle_dir / "index.md"
@@ -9458,7 +9560,9 @@ def merge(
     # the consent gate -- so the model call is part of what the human
     # approves. `--no-reconcile` is the opt-out; failure falls back to the
     # stacked body after the gate.
-    reconcile_planned = _reconcile_planned(prepared, no_reconcile=no_reconcile)
+    reconcile_planned = _reconcile_planned(
+        prepared, no_reconcile=no_reconcile, reconcile=reconcile
+    )
     if prepared.stacked_body is not None:
         typer.echo(
             f"  + stack absorbed body: {prepared.stacked_body.absorbed_chars} "
@@ -9505,7 +9609,7 @@ def merge(
     # Any failure keeps the stacked body and notices -- the merge itself
     # never fails on an improvement pass.
     prepared = _apply_reconciliation(
-        root, prepared, no_reconcile=no_reconcile, verb="merge"
+        root, prepared, no_reconcile=no_reconcile, reconcile=reconcile, verb="merge"
     )
 
     # Issue #334: every byte `merge_core` writes below was computed from a
@@ -12090,6 +12194,16 @@ def adjudicate(
             "and `curate` take."
         ),
     ),
+    reconcile: bool = typer.Option(
+        False,
+        "--reconcile",
+        help=(
+            "Force the reconciliation pass (#645) on merges applied by "
+            "--apply/--apply-same, even below the share and merged-length "
+            "thresholds that decide it by default. The same opt-in `merge` "
+            "and `curate` take. Refused together with --no-reconcile."
+        ),
+    ),
     include_cross_source: bool = typer.Option(
         False,
         "--include-cross-source",
@@ -12209,6 +12323,10 @@ def adjudicate(
             "openkos adjudicate: --apply-same and --json are mutually exclusive.",
             err=True,
         )
+        raise typer.Exit(code=2)
+    if reconcile and no_reconcile:
+        # #803: the same up-front, exit-2 shape as the pairs above.
+        typer.echo(f"openkos adjudicate: {_RECONCILE_CONFLICT_MESSAGE}", err=True)
         raise typer.Exit(code=2)
     if include_cross_source and not apply_same:
         # #776: the flag consents to batch-merging the risky class; without
@@ -12387,7 +12505,13 @@ def adjudicate(
         )
     elif apply:
         _run_adjudicate_apply(
-            root, layout, index_path, log_path, results, no_reconcile=no_reconcile
+            root,
+            layout,
+            index_path,
+            log_path,
+            results,
+            no_reconcile=no_reconcile,
+            reconcile=reconcile,
         )
     elif apply_same:
         _run_adjudicate_apply_same(
@@ -12398,6 +12522,7 @@ def adjudicate(
             results,
             confirm_count=confirm_count,
             no_reconcile=no_reconcile,
+            reconcile=reconcile,
             include_cross_source=include_cross_source,
         )
     else:
@@ -16813,6 +16938,16 @@ def curate(
             "call. The same opt-out `merge` takes."
         ),
     ),
+    reconcile: bool = typer.Option(
+        False,
+        "--reconcile",
+        help=(
+            "Force the reconciliation pass (#645) on Identity's merges, "
+            "even below the share and merged-length thresholds that decide "
+            "it by default. The same opt-in `merge` takes. Refused together "
+            "with --no-reconcile."
+        ),
+    ),
 ) -> None:
     """One dependency-ordered decision session over the five kinds of
     pending human judgment: Preconditions, Identity, Structure, Metadata,
@@ -16869,6 +17004,13 @@ def curate(
     failure or a failed mid-walk write, 2 on a Typer usage error, 3 on a
     drift refusal (#319, propagated unchanged from
     `_reject_drifted_targets`)."""
+    if reconcile and no_reconcile:
+        # #803: rejected up front, before any workspace gate or read,
+        # matching the shape `adjudicate` uses for its contradictory flag
+        # pairs.
+        typer.echo(f"openkos curate: {_RECONCILE_CONFLICT_MESSAGE}", err=True)
+        raise typer.Exit(code=2)
+
     # `--accept`'s vocabulary is checked BEFORE the workspace gate, so a
     # typo is reported as itself rather than as a missing workspace --
     # `list`'s TYPE and `set-volatility`'s tier already refuse in this
@@ -16919,6 +17061,7 @@ def curate(
         local_exemption=local_exemption,
         accepted_stages=accepted_stages,
         no_reconcile=no_reconcile,
+        reconcile=reconcile,
     )
     outcomes = curate_module.run_curate(ctx)
     for line in curate_module.render_summary(outcomes):

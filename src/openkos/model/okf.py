@@ -1387,6 +1387,50 @@ def _union_dedup(first: list[object], second: list[object]) -> list[object]:
     return result
 
 
+def _demote_absorbed_heading(absorbed_body: str) -> str:
+    """Demote an absorbed body's LEADING `# ` heading to `### ` before it is
+    stacked under the `## Merged content (<id>)` delimiter (issue #803).
+
+    Appended byte for byte, the absorbed body brought its own `# ` title
+    heading along, so the merged document ended up with TWO level-1
+    headings -- two document roots in one file, which is what the reported
+    `Marta Ruiz` merge produced. The delimiter directly above already names
+    the absorbed document, so that title heading is the redundant one AND
+    the one creating the second root. `### ` puts it one level below the
+    level-2 delimiter, which keeps the absorbed content nested where the
+    delimiter says it belongs.
+
+    Scope is EXACTLY the leading heading, and that limit is deliberate. The
+    absorbed document's deeper sections -- its `## Related`, a hand-written
+    `# Citations` -- are left verbatim: folding them into the survivor's
+    own would need section-merging semantics no helper in this codebase
+    provides (deduping `## Related` bullets, renumbering `[N]` citation
+    markers), and shifting them byte-wise would silently change meaning.
+    `# Citations` in particular is an OKF section-8 RESERVED heading, so
+    demoting it blind would rewrite a structural marker on a guess. The
+    reconciliation pass (#645) is what actually folds two documents into
+    one; this only stops the unreconciled fallback from asserting two
+    roots.
+
+    Fails CLOSED the same way `resolution/reconciliation._pin_leading_heading`
+    does: only an exact leading `# ` ATX heading is rewritten, and a body
+    that opens with prose is returned unchanged -- this demotes a heading
+    that exists, it never invents or relocates one.
+
+    Presentation-only and reversible. Every consumer that reconstructs the
+    absorbed document does so from the ledger's verbatim
+    `absorbed_snapshot`/`survivor_before` bytes (`unmerge`), or finds the
+    absorbed segment by the `## Merged content (` MARKER (`forget`/`purge`'s
+    excision, `contradictions`' own-body cut, `plan_merge`'s
+    `carried_content_ids`) -- never by matching the absorbed body's bytes.
+    """
+    stripped = absorbed_body.lstrip("\n")
+    if not stripped.startswith("# "):
+        return absorbed_body
+    leading_blanks = absorbed_body[: len(absorbed_body) - len(stripped)]
+    return f"{leading_blanks}##{stripped}"
+
+
 def build_merged_document(
     survivor_metadata: dict[str, object],
     survivor_body: str,
@@ -1414,7 +1458,19 @@ def build_merged_document(
     type, and the absorbed side's `type` is discarded via the generic
     `elif key not in merged` branch below -- it is never surfaced as a
     "conflict" requiring resolution, the same as any other scalar already
-    present on the survivor. `sensitivity` is RECOMPUTED via
+    present on the survivor. `type_alternative` is EXCLUDED from that
+    generic branch (issue #803), so the absorbed side's value is never
+    imported: it records ONE extraction's uncertainty about ONE document's
+    classification, not a property of the entity, and importing it
+    manufactures doubt no extraction ever expressed about the survivor --
+    the reported `Marta Ruiz` came out of a merge newly flagged as possibly
+    an `Organization`. Excluding it also removes a latent hazard:
+    `build_concept` REFUSES `type_alternative == type`, while this path has
+    no such check, so inheritance could leave a survivor carrying
+    `type: X` + `type_alternative: X` -- a state the builder will not
+    produce. A survivor that carries its OWN `type_alternative` keeps it,
+    since `merged` starts as `dict(survivor_metadata)`.
+    `sensitivity` is RECOMPUTED via
     `combine_sensitivity`, never copied; `freshness`+`timestamp` are
     taken TOGETHER from whichever side has the strictly more recent
     `timestamp` (`_absorbed_is_more_recent`), falling back to the
@@ -1432,7 +1488,11 @@ def build_merged_document(
     Body: the survivor's body, then a delimited
     `## Merged content ({absorbed_id})` heading, then the absorbed body --
     an APPEND, never an overwrite, per the spec's "Successful merge"
-    scenario.
+    scenario. The absorbed body's own LEADING `# ` heading is demoted to
+    `### ` on the way in (`_demote_absorbed_heading`, issue #803), so the
+    merged document has ONE document root instead of two; everything below
+    that heading, the absorbed document's deeper sections included, is
+    stacked verbatim.
     """
     merged: dict[str, object] = dict(survivor_metadata)
     merged.pop(MERGED_FROM_KEY, None)
@@ -1452,6 +1512,7 @@ def build_merged_document(
         "timestamp",
         MERGED_FROM_KEY,
         RELATIONS_KEY,
+        TYPE_ALTERNATIVE_KEY,
     )
     for key, absorbed_value in absorbed_metadata.items():
         if key in _SPECIAL_KEYS:
@@ -1481,7 +1542,9 @@ def build_merged_document(
         merged.pop(RELATIONS_KEY, None)
 
     separator = f"{merged_content_heading(absorbed_id)}\n\n"
-    merged_body = survivor_body.rstrip("\n") + separator + absorbed_body
+    merged_body = (
+        survivor_body.rstrip("\n") + separator + _demote_absorbed_heading(absorbed_body)
+    )
     if not merged_body.endswith("\n"):
         merged_body += "\n"
 
