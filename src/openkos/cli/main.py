@@ -1371,7 +1371,8 @@ def _autocommit(root: Path, paths: Sequence[str], message: str) -> None:
     best-effort git-setup block below. Every mutating verb calls this
     exactly once, on the success path -- `grep _autocommit(` is exact and
     never goes stale, where the enumeration this sentence replaces had
-    quietly stopped at six callers while thirteen existed -- strictly
+    quietly stopped at six callers while the real list kept growing past
+    it (the same rot a count written here would start over) -- strictly
     AFTER its own confirm gate and Phase-B writes
     have already landed on disk -- so no failure mode here ever changes
     the caller's exit code or leaves a canonical write unfinished; the
@@ -6531,8 +6532,22 @@ def _purge_rebuild_indexes(layout: config.WorkspaceLayout) -> None:
 
 @app.command(
     help=(
-        "Irreversibly expunge a concept AND the source material behind it. "
-        "There is no undo."
+        # This one line is the ONLY user-facing summary of what `purge`
+        # removes -- it feeds both the `openkos --help` group listing and
+        # `openkos purge --help` (a `help=` argument replaces the docstring
+        # on the command's own page), so the docstring's accurate account
+        # below never reaches a reader. It must therefore carry the
+        # CONDITION, not just the promise: the raw source material goes only
+        # when the purged member is a Source with a resolvable `resource`,
+        # and a derived concept -- the common case -- contributes only its
+        # own bundle file. It must also stay ONE paragraph: the group
+        # listing renders only the first paragraph of this text (Typer
+        # splits on a blank line and collapses single newlines), and it
+        # WRAPS rather than truncates -- so the qualification survives the
+        # listing as a second sentence, but would vanish from it if a blank
+        # line were ever put in front of it.
+        "Irreversibly expunge a concept -- and, when that concept is a "
+        "Source, the raw source material behind it. There is no undo."
     ),
     rich_help_panel="Remove",
 )
@@ -6731,6 +6746,15 @@ def purge(
         # WARNED about, never refused, and simply contributes no raw path
         # (this Source's own `bundle/<id>.md` is still targeted).
         expunge_targets: list[str] = []
+        # The raw paths are collected into their OWN list as they resolve,
+        # rather than sniffed back out of `expunge_targets` by prefix at
+        # preview time: that list is deliberately MIXED (raw paths, bundle
+        # files, ledger sidecars, decisions sidecars), so a `raw/` prefix
+        # test would be a silent liability the day another target kind
+        # gains a similar prefix. This list answers exactly one question --
+        # did anything in this purge set resolve source material? -- and
+        # cannot drift from the answer.
+        resolved_raw_paths: list[str] = []
         resource_warnings: list[str] = []
         raw_dir_resolved = layout.raw_dir.resolve()
         for member in sorted(purge_ids):
@@ -6748,6 +6772,7 @@ def purge(
                     except ValueError:
                         valid = False
                 if valid:
+                    resolved_raw_paths.append(resource)
                     expunge_targets.append(resource)
                 else:
                     resource_warnings.append(
@@ -6796,10 +6821,11 @@ def purge(
         raise typer.Exit(code=1) from exc
 
     # Preview: every path targeted for expunge, any raw-path resolution
-    # warnings, and the cascade count (source scope only) -- all printed
-    # before rail 1. Slice 2 removes the (now-obsolete) mandatory
-    # residual-leak warning: the history content-scrub below means no
-    # residual is left to warn about.
+    # warnings, the absence of raw material when none resolved, and the
+    # cascade count (source scope only) -- all printed before rail 1.
+    # Slice 2 removes the (now-obsolete) mandatory residual-leak warning:
+    # the history content-scrub below means no residual is left to warn
+    # about.
     typer.echo("openkos purge: proposed IRREVERSIBLE history rewrite:")
     for target in expunge_targets:
         typer.echo(f"  - {target}")
@@ -6808,6 +6834,30 @@ def purge(
         # (stdout, not stderr) -- an operator capturing only stdout must
         # not silently lose a malformed-resource warning printed here.
         typer.echo(f"  ! {warning}")
+    if not resolved_raw_paths:
+        # State the ABSENCE, do not merely omit the line. The preview is the
+        # last thing read before the irreversible typed phrase, and a list
+        # that is simply shorter reads the same as a list that is complete:
+        # nothing in it reveals that the one distinction deciding whether
+        # the source material survives -- Source with a resolvable
+        # `resource`, or derived concept -- fell the quiet way.
+        #
+        # This corrects a real asymmetry in the disclosure. A member whose
+        # `resource` is MALFORMED already earns a `!` warning above, so the
+        # rare, broken case announced itself while the common, correct one
+        # (a derived concept, which has no `resource` at all) said nothing.
+        # The two now speak with the same marker and the same prominence.
+        #
+        # Worded to stay true in BOTH ways the set can resolve nothing: a
+        # set of derived concepts, and a Source whose `resource` failed
+        # validation (whose own `!` warning above supplies the specific
+        # reason). Hence the general rule in the parenthesis rather than a
+        # claim about this particular set's membership.
+        typer.echo(
+            "  ! no raw source material is part of this purge -- no "
+            "purge-set member contributes a raw source path (only a "
+            "Source does)"
+        )
     if scope == "source":
         typer.echo(f"  Total: {len(purge_ids)} concept(s) to purge.")
     typer.echo()

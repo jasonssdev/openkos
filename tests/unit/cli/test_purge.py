@@ -1241,12 +1241,64 @@ def test_purge_derived_concept_has_no_raw_path_to_skip(
     assert "raw/" not in result.output
 
 
+def test_purge_preview_names_the_absence_of_raw_material(
+    tmp_git_repo: TmpGitRepo,
+) -> None:
+    """When the purge set resolves NO raw source path, the preview says so
+    in words instead of merely omitting one.
+
+    The preview is the last thing an operator reads before typing the
+    irreversible confirmation phrase, and an omission reads exactly like a
+    short list: the distinction that decides whether the source material
+    survives -- is this id a Source or a derived concept -- is invisible at
+    the call site. A member whose `resource` is MALFORMED already earns a
+    `!` warning, so the case that stayed silent was the common one."""
+    _write_child_concept(
+        tmp_git_repo.root,
+        "concepts/child-a",
+        provenance=[tmp_git_repo.source_id],
+        title="Child A",
+    )
+
+    result = runner.invoke(app, ["purge", "concepts/child-a", "--scope", "self"])
+
+    assert (
+        "no raw source material is part of this purge -- no purge-set member "
+        "contributes a raw source path (only a Source does)"
+    ) in result.output
+
+
+def test_purge_preview_omits_the_absence_line_when_a_raw_path_resolves(
+    tmp_git_repo: TmpGitRepo,
+) -> None:
+    """The absence line is CONDITIONAL: purging a Source whose `resource`
+    resolves lists that raw path and says nothing about an absence.
+
+    Without this negative case the line could be printed unconditionally --
+    contradicting the very targets printed a line above it -- and the
+    positive test would not notice."""
+    result = runner.invoke(app, ["purge", tmp_git_repo.source_id])
+
+    assert "raw/notes.txt" in result.output
+    assert "no raw source material" not in result.output
+
+
 def test_purge_malformed_resource_warns_not_refuses(
     tmp_git_repo: TmpGitRepo,
 ) -> None:
     """A Source whose `resource` frontmatter is malformed (escapes `raw/`)
     is WARNED about, not refused -- its own bundle file is still targeted,
-    but its raw path is skipped."""
+    but its raw path is skipped.
+
+    This is also the COMBINED path: the member is a Source, so the
+    malformed-resource warning fires, AND nothing resolved, so the absence
+    line fires too. Both are asserted here because the absence line is
+    worded as a general rule ("only a Source does") precisely so that it
+    stays true when the set DOES contain a Source whose `resource` merely
+    failed validation -- a wording that would be false if it claimed the
+    set held no Source. The specific reason is the `!` warning's job; the
+    absence line's job is that the operator never reads a short list and
+    mistakes it for a complete one."""
     source_path = tmp_git_repo.root / "bundle" / f"{tmp_git_repo.source_id}.md"
     text = source_path.read_text(encoding="utf-8")
     assert "resource: raw/notes.txt" in text
@@ -1262,6 +1314,7 @@ def test_purge_malformed_resource_warns_not_refuses(
     assert result.exit_code != 0  # refuses later (no --confirm-phrase), not here
     assert "malformed" in result.output.lower()
     assert f"bundle/{tmp_git_repo.source_id}.md" in result.output
+    assert "no raw source material is part of this purge" in result.output
 
 
 # -- #321: re-validate every write AND delete target after the typed phrase --

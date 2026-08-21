@@ -57,6 +57,33 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Fixed
 
+- **`purge` no longer promises to expunge source material it leaves in place**
+  ([#794](https://github.com/jasonssdev/openkos/issues/794)). The published
+  summary read "Irreversibly expunge a concept AND the source material behind
+  it" — unconditionally, on both `openkos --help` and `openkos purge --help`,
+  which are the only copies a reader meets. The raw material only goes when
+  the purged member is a Source carrying a resolvable `resource: raw/<name>`;
+  a derived concept, the common case, contributes just its own bundle file,
+  exactly as the command's internal docstring already said. Nothing about
+  what `purge` expunges changed — the code was right and the prose was not —
+  but a reader who wants sensitive text gone reads the promise, types an
+  irreversible confirmation phrase, sees `permanently expunged ... from ALL
+  git history`, and concludes the job is done while the text sits in `raw/`.
+  The summary now carries the condition, and `docs/cli.md`, which stated the
+  unqualified promise and its correct qualification two lines apart, agrees
+  with itself again.
+
+- **The `purge` preview states the absence of raw source material**
+  ([#794](https://github.com/jasonssdev/openkos/issues/794)). The preview is
+  the last thing read before the irreversible typed phrase, and it listed
+  only what WOULD be removed: a purge set that resolved no raw path at all
+  looked exactly like a complete list that happened to be short, so the one
+  distinction deciding whether the source material survives was invisible at
+  the moment of decision. It now says so in words. This also closes a real
+  asymmetry in the disclosure — a member whose `resource` is *malformed*
+  already earned a warning line, so the rare broken case announced itself
+  while the common correct one said nothing.
+
 - **The batch summary now has a channel for `extraction_notice`**
   ([#805](https://github.com/jasonssdev/openkos/issues/805)). A three-file
   batch closed with `3 ingested, 0 re-ingested, 0 skipped, 0
