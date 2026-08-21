@@ -57,6 +57,37 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Fixed
 
+- **The workspace says it is version-controlled, and the verbs that need it
+  name the way back** ([#800](https://github.com/jasonssdev/openkos/issues/800)).
+  `init` turns the workspace into a git repository and every mutating verb
+  commits what it wrote — 67 commits in an ordinary session — and nothing
+  ever said so. `init` enumerated five artifacts and mentioned neither
+  `.git/` nor the ~5KB `.gitignore` it had just written; the generated
+  `AGENTS.md`, the orientation document for whoever works in the bundle,
+  contained the words git, commit and version control nowhere; and no verb's
+  success line referred to the commit behind it. That history is the only
+  recovery path for everything `unmerge` cannot reverse — a mistaken
+  `forget`, an ingest that went badly, a Structure stage that applied
+  relations nobody wanted — and a safety net nobody knows about catches
+  nobody.
+
+  Nothing about the commits themselves changed: the behaviour is deliberate
+  and load-bearing, since `purge` requires a clean tree and only gets one
+  because the engine has been committing all along. What changed is that it
+  is now stated. `init` prints one line, from inside its git block rather
+  than folded into the success line that runs before it, naming what this run
+  actually created (`.git/` and `.gitignore`, or neither when the directory
+  was already a repository), that every command commits its own changes, and
+  both halves of the recovery path (`git log`, `git revert <commit>`). The
+  generated `AGENTS.md` gains a **Version control** section saying the same.
+  `forget`, `merge` and `curate` — the verbs whose writes are most often
+  wanted back, with `curate` disclosing each of its three commit points
+  separately — now name the short sha they just committed and the
+  `git revert <sha>` that undoes it. Every one of those lines is silent when
+  the auto-commit degraded: with no git repository or no configured git
+  identity nothing commits, and pointing a user at a commit that does not
+  exist would be worse than the silence it replaced.
+
 - **`purge` no longer promises to expunge source material it leaves in place**
   ([#794](https://github.com/jasonssdev/openkos/issues/794)). The published
   summary read "Irreversibly expunge a concept AND the source material behind

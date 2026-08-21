@@ -503,21 +503,78 @@ def has_reset_point(cwd: Path) -> bool:
     return result.returncode == 0
 
 
-def commit_paths(cwd: Path, rel_paths: Sequence[str], message: str) -> None:
+def commit_paths(cwd: Path, rel_paths: Sequence[str], message: str) -> str | None:
     """Stage EXACTLY `rel_paths` (`git add -- <rel_paths>`, never `-A`/
-    `-a`) and commit them with `message`.
+    `-a`), commit them with `message`, and return the new commit's
+    ABBREVIATED sha -- or `None` if that sha cannot be read back.
 
     The `--` end-of-options guard keeps a leading-dash path from being
     re-parsed as a flag. Scoped staging is deliberate (design: `commit_paths`
     decision) -- in an existing host repo, a blanket `-A`/`-a` would sweep
     unrelated dirty content into openkos's own commit. Raises `GitError` if
-    either the `add` or the `commit` step exits non-zero."""
+    either the `add` or the `commit` step exits non-zero.
+
+    The return value exists so callers can NAME the commit they just wrote
+    and the `git revert` that undoes it (issue #800): the whole workspace is
+    version-controlled and every mutating verb commits, but nothing said so,
+    and a safety net nobody knows about catches nobody. Every pre-existing
+    caller ignores the value, so widening the signature changes no behavior.
+
+    The sha comes from a second process, `git rev-parse --short HEAD`, NOT
+    from parsing the `[main abc1234] <subject>` line `git commit` prints.
+    That line is free, and it is not a contract: `commit.verbose` and
+    `commit.status` change what `git commit` writes, the surrounding words
+    (`root-commit`, and the branch decoration) are translated under a
+    non-English `LC_ALL`, and a `pre-commit`/`post-commit`/`prepare-commit-
+    msg` hook writes to the SAME stdout, so arbitrary text can precede it.
+    A parser that guessed wrong under any of those would either print a
+    wrong sha -- worse than silence, since the whole point is to hand the
+    user something they can paste into `git revert` -- or need branch-name
+    and locale heuristics that rot. `rev-parse --short` is plumbing: fixed,
+    machine-readable output, unaffected by locale, config, or hooks, at the
+    cost of one more short-lived subprocess on a path that has already paid
+    for two. Its argv is fixed and contains no `add`, so it stays outside
+    the scoped-staging surface `test_no_blanket_add_flags_anywhere` guards.
+
+    A failed/empty read-back returns `None` rather than raising: the commit
+    already landed, so a naming problem must not become a write failure --
+    it degrades into the same silence as every other auto-commit
+    degradation path. That is why the read-back catches `GitError` rather
+    than only checking `returncode`. `_run` maps EVERY invocation failure
+    to a typed `GitError` (a vanished binary, a permission race, non-UTF-8
+    output), so an unguarded read-back would raise past this function into
+    `_autocommit`'s `except (GitError, OSError)` and report "auto-commit
+    did not complete" for a commit that DID complete -- telling the user
+    their write was not saved when it was, which is the one thing an
+    auto-commit disclosure must never do.
+
+    The sha is read immediately after the commit, in a single-threaded CLI
+    process, so `HEAD` is what this call just wrote. A `post-commit` hook
+    that itself commits, or a concurrent writer in the same workspace,
+    would move `HEAD` first and this would name that commit instead --
+    accepted, because both are outside what openkos drives, and because
+    the alternative (parsing `git commit`'s own output) fails on the far
+    more ordinary cases named above.
+
+    A read-back that fails emits no WARNING of its own, unlike the three
+    degradations in `_autocommit`. Deliberate: those three mean NOTHING WAS
+    COMMITTED and the user must act, while this one means the commit
+    landed and only its name is missing. The verb's own success line is
+    already true and complete; a WARNING here would raise an alarm about
+    a cosmetic gap."""
     add_result = _run(["git", "add", "--", *rel_paths], cwd=cwd)
     if add_result.returncode != 0:
         raise GitError(f"git add failed: {add_result.stderr.strip()}")
     commit_result = _run(["git", "commit", "-m", message], cwd=cwd)
     if commit_result.returncode != 0:
         raise GitError(f"git commit failed: {commit_result.stderr.strip()}")
+    try:
+        sha_result = _run(["git", "rev-parse", "--short", "HEAD"], cwd=cwd)
+    except GitError:
+        return None
+    if sha_result.returncode != 0:
+        return None
+    return sha_result.stdout.strip() or None
 
 
 def paths_dirty(cwd: Path, rel_paths: Sequence[str]) -> bool:

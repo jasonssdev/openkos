@@ -18,7 +18,9 @@ On success, it MUST write a confirmation message to stdout that names what
 was created, and MUST additionally write a next-step hint to stdout naming
 `openkos ingest <path>` as the next command to run. This hint MUST be
 printed unconditionally on every successful run — init has no TTY/quiet
-gating.
+gating — and MUST be printed AFTER the git-setup step, so the
+version-control disclosure and any git WARNING reach the reader before the
+call to action rather than under it.
 
 #### Scenario: Fresh empty directory
 
@@ -41,6 +43,7 @@ gating.
 - THEN stdout also contains a next-step hint that names `openkos ingest
   <path>` as the next command to run
 - AND this hint is printed regardless of whether stdin is a TTY
+- AND it is printed after the git-setup step's own output
 
 ### Requirement: Bundle Index Shape
 
@@ -478,13 +481,32 @@ appear as selectable entries in the picker's numbered list.
 ### Requirement: Static AGENTS.md Template
 
 `AGENTS.md` MUST be a byte-identical copy of the packaged template, with no
-per-workspace substitution.
+per-workspace substitution. The template's content is not constrained by
+this requirement beyond that identity; where a section is required, it is
+required of the template and inherited by every generated copy.
 
 #### Scenario: Byte-identical template
 
 - GIVEN a successful init
 - WHEN the generated `AGENTS.md` is compared to the packaged template
 - THEN the content is byte-identical
+
+### Requirement: Generated AGENTS.md Documents Version Control
+
+The packaged `AGENTS.md` template MUST carry a version-control section
+stating that the workspace is a git repository, that every openkos command
+that changes the bundle commits what it wrote, how to inspect that history
+(`git log`), and how to undo one operation (`git revert`). The workspace's
+operating manual is the orientation document for whoever works in the
+bundle, and the recovery path the engine maintains for free is unusable by
+anyone who is never told it exists.
+
+#### Scenario: Generated manual names the repository and the undo path
+
+- GIVEN a successful init
+- WHEN the generated `AGENTS.md` is read
+- THEN it contains a version-control section naming the git repository, the
+  per-command commit, `git log`, and `git revert`
 
 ### Requirement: No Concept-Type Folders
 
@@ -830,6 +852,53 @@ staged but not committed), the WARNING MUST NOT claim setup was cleanly
   cleanly skipped and DOES point at a concrete recovery step (e.g.
   `git status`), and `init` exits 0 with the workspace itself still fully
   valid
+
+### Requirement: Version-Control Disclosure
+
+WHEN the git-setup step completes its scoped initial commit successfully,
+`init` MUST write one message to stdout stating that the workspace is
+version-controlled, naming what this run itself created (`.git/` and/or
+`.gitignore`, or neither when the directory was already a git repository
+with a `.gitignore` of its own), stating that every openkos command commits
+its own changes, and naming both halves of the recovery path — `git log` to
+review the history and `git revert <commit>` to undo one operation.
+
+This message MUST NOT be folded into the workspace-creation confirmation
+line, because that line is written before the git-setup step runs and can
+therefore assert nothing about the repository, the `.gitignore`, or whether
+a commit happened. It MUST NOT claim `init` created a repository or a
+`.gitignore` it did not create.
+
+WHEN the commit does not happen — git unavailable, identity unset, or any
+other git failure — `init` MUST NOT emit this message at all: nothing
+commits in that state, so a promise that `git revert <commit>` undoes an
+operation would name a commit that does not exist. The Non-Fatal Git
+Degradation requirement's WARNINGs remain the whole report for those cases.
+
+#### Scenario: Fresh directory is told it is version-controlled
+
+- GIVEN an empty current directory outside any git working tree, and a
+  configured git identity
+- WHEN `openkos init` runs
+- THEN stdout contains a message naming `.git/` and `.gitignore` as created,
+  stating that every openkos command commits its own changes, and naming
+  `git log` and `git revert`
+- AND that message appears before the next-step hint
+
+#### Scenario: Existing repository is not told it was created
+
+- GIVEN `cwd` is inside an existing git working tree that already has a
+  `.gitignore`, and a configured git identity
+- WHEN `openkos init` runs
+- THEN the disclosure states the directory was already a git repository and
+  claims no creation of `.git/` or `.gitignore`
+
+#### Scenario: No commit, no disclosure
+
+- GIVEN `git` is available but `user.name` and/or `user.email` are unset
+- WHEN `openkos init` runs
+- THEN no version-control disclosure is printed on any stream, and only the
+  existing non-fatal WARNING reports what happened
 
 ### Requirement: Git Step Ordering and Layering
 

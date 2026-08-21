@@ -1365,7 +1365,33 @@ def _require_member_baseline(
     return baseline
 
 
-def _autocommit(root: Path, paths: Sequence[str], message: str) -> None:
+def _echo_commit_disclosure(sha: str, *, prefix: str = "") -> None:
+    """Print the ONE sentence naming a commit openkos just wrote and the way
+    back out of it (issue #800).
+
+    `forget`, `merge` and `curate` share this instead of building five
+    f-strings of their own. They are the verbs whose writes a user most
+    often wants back -- a deleted concept, a document folded into another, a
+    batch of applied relations -- and none of them had any way of saying
+    that the engine had already made the undo available. There is no shared
+    renderer for those verbs' other trailing success lines, so each of the
+    five call sites would have spelled this one by hand and the five
+    spellings would have drifted; one literal here is what makes that
+    impossible.
+
+    Callers pass `prefix` to place the line in their own output: the
+    top-level verbs use their `openkos <verb>: ` prefix, and `curate`'s
+    per-item stages use the two-space indent their `  rationale:` lines
+    already use, since their commit is per accepted item.
+
+    Only ever called with a real sha. `_autocommit` returns `None` on every
+    degradation (not a repo, identity unset, commit failed, sha unreadable),
+    and a caller that printed this anyway would be pointing the user at a
+    commit that does not exist."""
+    typer.echo(f"{prefix}committed as {sha} -- undo with `git revert {sha}`.")
+
+
+def _autocommit(root: Path, paths: Sequence[str], message: str) -> str | None:
     """Best-effort, non-fatal auto-commit after a mutating verb's Phase B
     (git-lifecycle Slice 2), structurally cloned from `init`'s own
     best-effort git-setup block below. Every mutating verb calls this
@@ -1381,7 +1407,15 @@ def _autocommit(root: Path, paths: Sequence[str], message: str) -> None:
     `paths` MUST be workspace-relative, POSIX paths; staging always goes
     through `commit_paths`' scoped `git add -- <paths>` (never `-A`/`-a`),
     so a pre-existing unrelated dirty file elsewhere in the workspace is
-    never swept into this commit."""
+    never swept into this commit.
+
+    Returns the new commit's abbreviated sha, or `None` on EVERY degradation
+    path -- not a repository, identity unset, `commit_paths` raising, or a
+    sha that could not be read back (issue #800). The value is what lets a
+    caller name the commit and the `git revert` that undoes it; `None` means
+    there is no commit to name, so a caller must print nothing rather than
+    invent one. Every pre-existing caller ignores the return value, so this
+    is purely additive."""
     repo = vcs_git.repo_root(root)
     if repo is None:
         typer.echo(
@@ -1389,23 +1423,23 @@ def _autocommit(root: Path, paths: Sequence[str], message: str) -> None:
             "(writes are on disk).",
             err=True,
         )
-        return
+        return None
     if not vcs_git.has_git_identity(root):
         typer.echo(
             "openkos: WARNING -- git identity unset; skipped auto-commit "
             "(writes are on disk).",
             err=True,
         )
-        return
+        return None
     try:
-        vcs_git.commit_paths(root, paths, message)
+        sha = vcs_git.commit_paths(root, paths, message)
     except (vcs_git.GitError, OSError) as exc:
         typer.echo(
             f"openkos: WARNING -- auto-commit did not complete ({exc}); "
             "run `git status` to inspect.",
             err=True,
         )
-        return
+        return None
     if _commit_has_confidential(root, paths):
         typer.echo(
             "openkos: NOTICE -- this commit includes content marked "
@@ -1413,6 +1447,7 @@ def _autocommit(root: Path, paths: Sequence[str], message: str) -> None:
             "only and never pushes to a remote.",
             err=True,
         )
+    return sha
 
 
 @app.command(
@@ -1561,8 +1596,6 @@ def init(
             "next time `openkos reindex` runs.",
             err=True,
         )
-    typer.echo("Next: run `openkos ingest <path>` to import your first source.")
-
     # Best-effort git setup (Slice 1, git-lifecycle): runs strictly AFTER
     # Phase B's last write (`openkos.yaml`, just above), so any git failure
     # happens only once the workspace is already valid -- mirroring the
@@ -1600,6 +1633,41 @@ def init(
             vcs_git.commit_paths(
                 root, git_paths, "chore(openkos): initialize workspace"
             )
+            # Version-control disclosure (issue #800). It is emitted from
+            # INSIDE this block, not folded into the enumeration line above,
+            # and the choice is the whole point: that line runs BEFORE any
+            # of this, so at the moment it prints, the code has established
+            # nothing about `.git/`, nothing about `.gitignore`, and nothing
+            # about whether a commit will happen at all. Naming them there
+            # would publish a claim the code had not earned -- the exact
+            # defect #794 removed from `purge`'s help. Moving the whole
+            # enumeration below the git block was the alternative, and it
+            # loses more than it buys: the workspace-created confirmation
+            # would then arrive after a stderr WARNING on every degraded
+            # run, reading as though the warning came first.
+            #
+            # So the sentence is assembled from what actually happened, per
+            # branch, and it is printed ONLY on the path where the commit
+            # itself succeeded. Identity unset, a `git commit` failure, and
+            # every other degradation fall through to the WARNINGs below
+            # with no disclosure at all: `_autocommit` skips on the same
+            # identity probe, so in that state "every openkos command
+            # commits its own changes" is false and `git revert <commit>`
+            # would name a commit that does not exist.
+            if repo is None and wrote_gitignore:
+                setup = "created .git/ and .gitignore"
+            elif repo is None:
+                setup = "created .git/"
+            elif wrote_gitignore:
+                setup = "already a git repository; created .gitignore"
+            else:
+                setup = "already a git repository"
+            typer.echo(
+                f"openkos init: the workspace is version-controlled "
+                f"({setup}) and the files above are committed. Every openkos "
+                "command commits its own changes: `git log` reviews them, "
+                "`git revert <commit>` undoes one."
+            )
         else:
             typer.echo(
                 "openkos init: WARNING -- git identity unset; skipped the "
@@ -1618,6 +1686,15 @@ def init(
             "inspect and finish git setup manually if needed.",
             err=True,
         )
+
+    # The call to action lands AFTER the git block (issue #800), because the
+    # disclosure that block emits has to reach the reader before it. #389
+    # settled this shape for the stickiness note: a line printed below "here
+    # is what to do next" has already lost the reader it was written for,
+    # and that applies with more force to a safety net than to a warning.
+    # Moving it here also puts the degradation WARNINGs above the hint
+    # instead of orphaning them under it.
+    typer.echo("Next: run `openkos ingest <path>` to import your first source.")
 
     # Non-fatal Ollama preflight (D2): purely observational, runs strictly
     # after the workspace already exists. `except Exception` (not
@@ -2309,13 +2386,21 @@ def _commit_one_merge(
     index_path: Path,
     log_path: Path,
     prepared: "PreparedMerge",
-) -> None:
+) -> str | None:
     """`merge_core` + `_autocommit` for one prepared merge, extracted
     verbatim from the former inline body (issue #137 closing slice, Phase 1
     refactor). Raises `OSError`/`ValueError` straight from `merge_core`,
-    unchanged -- callers decide how to report and whether to stop."""
+    unchanged -- callers decide how to report and whether to stop.
+
+    Returns `_autocommit`'s sha (issue #800) rather than echoing the
+    disclosure itself, because this helper is NOT curate-only: `adjudicate
+    --apply` and `--apply-same` drive it too, and #800 scopes the new line
+    to `forget`, `merge` and `curate`. Printing here would silently widen it
+    to `adjudicate`. The Identity caller in `cli/curate.py` echoes; the two
+    `adjudicate` walks ignore the value, exactly as they did when it was
+    `None`."""
     merge_result = merge_core(layout.bundle_dir, index_path, log_path, prepared)
-    _autocommit(
+    return _autocommit(
         root,
         [
             "bundle/index.md",
@@ -6371,7 +6456,7 @@ def forget(
     forget_message = f"openkos: forget {canonical_id}"
     if len(purge_ids) > 1:
         forget_message += f" (+{len(purge_ids) - 1} descendants)"
-    _autocommit(
+    forget_sha = _autocommit(
         root,
         [
             "bundle/index.md",
@@ -6384,6 +6469,12 @@ def forget(
         ],
         forget_message,
     )
+    # #800: after the removal line above, never instead of it -- `forget`
+    # echoes what it removed before `_autocommit` runs, so this reads as the
+    # postscript it is. Silent when `_autocommit` degraded: a workspace with
+    # no git identity must not be sent after a commit that was never made.
+    if forget_sha is not None:
+        _echo_commit_disclosure(forget_sha, prefix="openkos forget: ")
 
     # #640: also prunes the forgotten concept(s) from `vectors.db` via the
     # vector stage's prune pass, not only the manifest-gated stores.
@@ -9837,7 +9928,7 @@ def merge(
         f"({index_path.name}, {log_path.name} updated)."
     )
 
-    _autocommit(
+    merge_sha = _autocommit(
         root,
         [
             "bundle/index.md",
@@ -9849,6 +9940,11 @@ def merge(
         ],
         f"openkos: merge {absorbed_canonical} into {survivor_canonical}",
     )
+    # #800: `unmerge` reverses a merge, but only through the ledger and only
+    # in last-in-first-out order; the commit is the unconditional way back,
+    # so it is named here, after the success line and only when it exists.
+    if merge_sha is not None:
+        _echo_commit_disclosure(merge_sha, prefix="openkos merge: ")
 
     # #640: `cfg=None` -- `merge` never reads config; the helper reads its
     # own copy inside the vector stage's fail-open envelope.

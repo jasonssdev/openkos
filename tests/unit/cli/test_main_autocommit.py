@@ -154,6 +154,12 @@ def _last_commit_files(root: Path) -> set[str]:
     return {line for line in result.stdout.splitlines() if line}
 
 
+def _lines(output: str) -> list[str]:
+    """Split captured output so a WHOLE line can be compared, never a
+    substring of one (mirrors `test_curate.py::_lines`)."""
+    return output.splitlines()
+
+
 def _status_porcelain(root: Path) -> str:
     return vcs_git._run(["git", "status", "--porcelain"], cwd=root).stdout
 
@@ -258,6 +264,61 @@ def test_autocommit_success_scoped_add_single_commit(
     assert _last_commit_subject(tmp_path) == "openkos: test commit"
     assert _last_commit_files(tmp_path) == {"file.txt"}
     assert "unrelated.txt" in _status_porcelain(tmp_path)
+
+
+def test_autocommit_returns_the_short_sha_on_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_autocommit` hands the caller the sha of the commit it just made
+    (issue #800), so a verb can name it and the way back to it."""
+    vcs_git.init_repo(tmp_path)
+    isolate_git_identity(
+        monkeypatch, tmp_path, name="Tester", email="t@example.invalid"
+    )
+    (tmp_path / "file.txt").write_text("content", encoding="utf-8")
+
+    sha = main._autocommit(tmp_path, ["file.txt"], "openkos: test commit")
+
+    head = vcs_git._run(["git", "rev-parse", "--short", "HEAD"], cwd=tmp_path)
+    assert sha == head.stdout.strip()
+
+
+def test_autocommit_returns_none_when_not_a_repo(tmp_path: Path) -> None:
+    """No repository -> no sha (issue #800). The caller must print nothing:
+    there is no commit to revert."""
+    assert main._autocommit(tmp_path, ["file.txt"], "openkos: test") is None
+
+
+def test_autocommit_returns_none_when_identity_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Identity unset -> the commit is skipped, so there is no sha to hand
+    back (issue #800). This is the degradation that makes an unconditional
+    disclosure line a lie: `git revert <commit>` would name nothing."""
+    vcs_git.init_repo(tmp_path)
+    isolate_git_identity(monkeypatch, tmp_path)
+    (tmp_path / "file.txt").write_text("content", encoding="utf-8")
+
+    assert main._autocommit(tmp_path, ["file.txt"], "openkos: test") is None
+
+
+@pytest.mark.parametrize("exc_type", [vcs_git.GitError, OSError])
+def test_autocommit_returns_none_when_the_commit_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, exc_type: type[Exception]
+) -> None:
+    """A raising `commit_paths` -> no sha (issue #800), on the same path
+    that already emits the non-fatal WARNING."""
+    vcs_git.init_repo(tmp_path)
+    isolate_git_identity(
+        monkeypatch, tmp_path, name="Tester", email="t@example.invalid"
+    )
+
+    def _raise(root: Path, rel_paths: list[str], message: str) -> str | None:
+        raise exc_type("boom")
+
+    monkeypatch.setattr("openkos.cli.main.vcs_git.commit_paths", _raise)
+
+    assert main._autocommit(tmp_path, ["file.txt"], "openkos: test") is None
 
 
 def _write_frontmatter_file(
@@ -729,6 +790,116 @@ def test_reindex_never_autocommits(
         assert verb_result.exit_code == 0, verb_result.stderr
         stat_result = vcs_git._run(["git", "show", "--stat", "-1"], cwd=tmp_path)
         assert ".openkos/" not in stat_result.stdout
+
+
+# --------------------------------------------------------------------------
+# Issue #800: `forget` and `merge` name the commit they just wrote
+#
+# Scoped deliberately. `forget`, `merge` and `curate` are the verbs whose
+# writes a user is most likely to want back -- a concept deleted, a document
+# folded into another, a batch of relations applied -- so those are the ones
+# that say where the undo lives. Every other mutating verb keeps its output
+# exactly as it was: a line on all of them would be noise, and noise is how a
+# safety net stops being read.
+# --------------------------------------------------------------------------
+
+
+def _head_short_sha(root: Path) -> str:
+    return vcs_git._run(
+        ["git", "rev-parse", "--short", "HEAD"], cwd=root
+    ).stdout.strip()
+
+
+def test_forget_names_the_commit_and_the_way_back(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`forget` prints the sha it just committed and the `git revert` that
+    undoes it (issue #800).
+
+    A `forget` is the single most recoverable-looking irreversible-looking
+    operation openkos has: `unmerge` cannot reverse it, and the only way
+    back is the commit the engine silently wrote. Naming it at the moment
+    it was written is the whole point -- that is when the user is most
+    likely to want it."""
+    _init_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    spec = _mk_forget(tmp_path)
+
+    result = runner.invoke(app, spec.success_args)
+
+    assert result.exit_code == 0, result.stderr
+    sha = _head_short_sha(tmp_path)
+    assert (
+        f"openkos forget: committed as {sha} -- undo with `git revert {sha}`."
+        in _lines(result.stdout)
+    )
+
+
+def test_merge_names_the_commit_and_the_way_back(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`merge` prints the sha it just committed and the `git revert` that
+    undoes it (issue #800). `unmerge` reverses a merge, but only through
+    the ledger and only in last-in-first-out order; the commit is the
+    unconditional way back."""
+    _init_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    spec = _mk_merge(tmp_path)
+
+    result = runner.invoke(app, spec.success_args)
+
+    assert result.exit_code == 0, result.stderr
+    sha = _head_short_sha(tmp_path)
+    assert (
+        f"openkos merge: committed as {sha} -- undo with `git revert {sha}`."
+        in _lines(result.stdout)
+    )
+
+
+def test_forget_commit_line_lands_after_its_success_line(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The new line reads as a postscript to the write, not as a
+    replacement for it (issue #800): `forget` echoes what it removed
+    BEFORE `_autocommit` runs, so the commit line lands underneath it."""
+    _init_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    spec = _mk_forget(tmp_path)
+
+    result = runner.invoke(app, spec.success_args)
+
+    assert result.exit_code == 0, result.stderr
+    assert result.stdout.index("openkos forget: removed") < result.stdout.index(
+        "openkos forget: committed as"
+    )
+
+
+@pytest.mark.parametrize("verb_builder", [_mk_forget, _mk_merge])
+def test_no_commit_line_when_autocommit_degraded(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+    verb_builder: Callable[[Path], _VerbSpec],
+) -> None:
+    """No sha, no line (issue #800).
+
+    This is the case the whole design turns on. With git identity unset,
+    `_autocommit` skips the commit and warns -- so a `git revert <commit>`
+    printed here would send the user after a commit that does not exist.
+    Without this test the new line could be unconditional and nothing in
+    the suite would notice."""
+    _init_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    spec = verb_builder(tmp_path)
+    monkeypatch.setattr("openkos.cli.main.vcs_git.has_git_identity", lambda root: False)
+
+    result = runner.invoke(app, spec.success_args)
+
+    assert result.exit_code == 0
+    assert "committed as" not in result.output
+    assert "git revert" not in result.output
 
 
 def _collect_call_argvs(source: str) -> list[list[ast.expr]]:

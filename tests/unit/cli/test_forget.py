@@ -1342,13 +1342,27 @@ def test_invalid_scope_value_refuses(
     assert _snapshot(tmp_path) == before
 
 
+def _mask_commit_sha(output: str) -> str:
+    """Replace every abbreviated commit sha in `output` with a fixed token.
+
+    Only the hex run is masked, never the sentence around it (issue #800)."""
+    return re.sub(r"\b[0-9a-f]{7,40}\b", "<sha>", output)
+
+
 def test_scope_self_default_byte_identical_to_no_scope_flag(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """`--scope self` and the implicit default (no `--scope` flag at all)
     produce byte-identical stdout/stderr and filesystem effects -- the
     unified Phase-A data path collapses to the same single-member purge set
-    either way (spec: "Default scope is self"; design decision 6)."""
+    either way (spec: "Default scope is self"; design decision 6).
+
+    The commit sha `forget` now names (issue #800) is masked before the
+    comparison: the two runs happen in two DIFFERENT git repositories, so
+    their shas differ for reasons that have nothing to do with `--scope`.
+    Masking is scoped to the sha itself -- the surrounding sentence, and
+    every other byte of both streams, is still compared verbatim, so a
+    wording change or a missing line still fails this test."""
     ws_a = tmp_path / "a"
     ws_b = tmp_path / "b"
     ws_a.mkdir()
@@ -1365,7 +1379,7 @@ def test_scope_self_default_byte_identical_to_no_scope_flag(
     result_b = runner.invoke(app, ["forget", concept_id, "--scope", "self", "--auto"])
     assert result_b.exit_code == 0
 
-    assert result_a.output == result_b.output
+    assert _mask_commit_sha(result_a.output) == _mask_commit_sha(result_b.output)
     assert not (ws_a / "bundle" / f"{concept_id}.md").exists()
     assert not (ws_b / "bundle" / f"{concept_id}.md").exists()
 

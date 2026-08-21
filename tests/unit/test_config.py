@@ -2642,3 +2642,27 @@ def test_the_template_documents_the_sufficiency_check_key() -> None:
     ).read_text(encoding="utf-8")
 
     assert "sufficiency_check" in template
+
+
+def test_generated_agents_carries_version_control_section(tmp_path: Path) -> None:
+    """The generated `AGENTS.md` orients its reader about version control
+    (issue #800).
+
+    `init` turns the workspace into a git repository and every mutating verb
+    commits what it wrote, but the operating manual `init` writes INTO that
+    workspace never said so -- the words git, commit and version control
+    appeared nowhere in it. A recovery mechanism nobody is told about
+    recovers nobody, so the manual must name the repository, the fact that
+    commits happen per command, and both halves of the undo path (`git log`
+    to inspect, `git revert` to reverse an operation).
+
+    Asserted against the WRITTEN file rather than the template, so this
+    covers the copy the user actually reads."""
+    config.write_agents(tmp_path)
+
+    written = (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
+
+    assert "## Version control" in written
+    assert "git repository" in written
+    assert "git log" in written
+    assert "git revert" in written
