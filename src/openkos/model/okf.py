@@ -1387,35 +1387,77 @@ def _union_dedup(first: list[object], second: list[object]) -> list[object]:
     return result
 
 
-def _demote_absorbed_heading(absorbed_body: str) -> str:
-    """Demote an absorbed body's LEADING `# ` heading to `### ` before it is
-    stacked under the `## Merged content (<id>)` delimiter (issue #803).
+_ABSORBED_HEADING_SHIFT: Final = 2
+"""How many levels every absorbed heading moves down (#803, #811).
 
-    Appended byte for byte, the absorbed body brought its own `# ` title
-    heading along, so the merged document ended up with TWO level-1
-    headings -- two document roots in one file, which is what the reported
-    `Marta Ruiz` merge produced. The delimiter directly above already names
-    the absorbed document, so that title heading is the redundant one AND
-    the one creating the second root. `### ` puts it one level below the
-    level-2 delimiter, which keeps the absorbed content nested where the
-    delimiter says it belongs.
+Two, because the delimiter the absorbed body is stacked under
+(`## Merged content (<id>)`) is itself level 2, so the absorbed document's
+own `# ` root has to land at level 3 to be a CHILD of it rather than a
+sibling."""
 
-    Scope is EXACTLY the leading heading, and that limit is deliberate. The
-    absorbed document's deeper sections -- its `## Related`, a hand-written
-    `# Citations` -- are left verbatim: folding them into the survivor's
-    own would need section-merging semantics no helper in this codebase
-    provides (deduping `## Related` bullets, renumbering `[N]` citation
-    markers), and shifting them byte-wise would silently change meaning.
-    `# Citations` in particular is an OKF section-8 RESERVED heading, so
-    demoting it blind would rewrite a structural marker on a guess. The
-    reconciliation pass (#645) is what actually folds two documents into
-    one; this only stops the unreconciled fallback from asserting two
-    roots.
+_MAX_HEADING_LEVEL: Final = 6
+"""Markdown's deepest heading. `####### x` is literal text, not a level-7
+heading, so the shift clamps here instead of overflowing (#811)."""
 
-    Fails CLOSED the same way `resolution/reconciliation._pin_leading_heading`
-    does: only an exact leading `# ` ATX heading is rewritten, and a body
-    that opens with prose is returned unchanged -- this demotes a heading
-    that exists, it never invents or relocates one.
+_ATX_HEADING_RE: Final = re.compile(r"^(#{1,6})(\s.*)?$")
+"""An ATX heading at column 0: one to six hashes, then whitespace or the
+end of the line. Deliberately anchored, so an indented `#` (four spaces is
+a code block) and a `#hashtag` with no space after it are both left alone.
+"""
+
+_FENCE_RE: Final = re.compile(r"^\s{0,3}(`{3,}|~{3,})[ \t]*(.*)$")
+"""A fenced-code-block delimiter, either spelling, with the up-to-three
+spaces of indentation CommonMark allows before it. Group 1 is the RUN --
+its length matters, not just its character -- and group 2 is whatever
+follows it on the line."""
+
+
+def _demote_absorbed_headings(absorbed_body: str) -> str:
+    """Shift EVERY heading in an absorbed body two levels down, so the
+    whole document arrives as one subtree of the `## Merged content (<id>)`
+    delimiter it is stacked under (issues #803 and #811).
+
+    #803 demoted only the LEADING heading, which stopped the merged
+    document asserting two document ROOTS. It left a second defect
+    untouched: the absorbed body's own deeper sections kept their original
+    levels, so a `## Related` came out a SIBLING of the level-2 delimiter
+    rather than a child, and a hand-written `# Citations` outranked it
+    outright. Read as markdown, the absorbed document's links belonged to
+    the merged document's own Related section -- which is exactly the
+    reading the delimiter exists to prevent.
+
+    Shifting the whole tree by the same amount preserves the absorbed
+    document's internal structure exactly while nesting all of it where the
+    delimiter says it belongs. Nothing is folded, and that is deliberate:
+    deduping two `## Related` bullet lists and renumbering `[N]` citation
+    markers needs section-merging semantics no helper here provides, and
+    doing it byte-wise would silently change meaning. Two Related sections
+    that are correctly nested are honest; one section built by guessing is
+    not. The #645 reconciliation pass is what actually folds two documents
+    into one; this only fixes the unreconciled fallback's structure.
+
+    `# Citations` is an OKF section-8 RESERVED heading, and moving it is
+    safe here in a way folding it would not be: its `[N]` markers point at
+    entries in the SAME subtree, which travels with it, so the shift
+    renumbers nothing and breaks no reference.
+
+    Two boundaries the shift respects. A `#` line inside a FENCED code
+    block is a comment in whatever language the absorbed document quoted,
+    never a heading, so fenced regions are skipped -- rewriting one would
+    corrupt the quoted code. Closing a fence takes a run of the SAME
+    character at least as long as the one that opened it, and carrying no
+    info string, because a longer fence is exactly how markdown quotes a
+    shorter one: a four-backtick block showing fenced markdown inside it
+    would otherwise end at the first inner ``` and hand every line after it
+    back to the rewriter. And a heading deep enough that the shift would
+    overflow is CLAMPED to level 6 rather than emitted as `####### `, which
+    markdown renders as literal text: two absorbed levels can collapse into
+    one, which is a bounded loss of nesting and strictly better than
+    turning a heading into a paragraph of hashes.
+
+    Fails CLOSED, the same shape as before: a body with no ATX heading at
+    column 0 comes back unchanged. This moves headings that exist; it never
+    invents or relocates one.
 
     Presentation-only and reversible. Every consumer that reconstructs the
     absorbed document does so from the ledger's verbatim
@@ -1424,11 +1466,29 @@ def _demote_absorbed_heading(absorbed_body: str) -> str:
     excision, `contradictions`' own-body cut, `plan_merge`'s
     `carried_content_ids`) -- never by matching the absorbed body's bytes.
     """
-    stripped = absorbed_body.lstrip("\n")
-    if not stripped.startswith("# "):
-        return absorbed_body
-    leading_blanks = absorbed_body[: len(absorbed_body) - len(stripped)]
-    return f"{leading_blanks}##{stripped}"
+    lines = absorbed_body.split("\n")
+    fence: tuple[str, int] | None = None
+    out: list[str] = []
+    for line in lines:
+        fence_match = _FENCE_RE.match(line)
+        if fence_match is not None:
+            run, trailing = fence_match.group(1), fence_match.group(2)
+            if fence is None:
+                fence = (run[0], len(run))
+            elif run[0] == fence[0] and len(run) >= fence[1] and not trailing.strip():
+                fence = None
+            out.append(line)
+            continue
+        if fence is not None:
+            out.append(line)
+            continue
+        heading = _ATX_HEADING_RE.match(line)
+        if heading is None:
+            out.append(line)
+            continue
+        level = min(len(heading.group(1)) + _ABSORBED_HEADING_SHIFT, _MAX_HEADING_LEVEL)
+        out.append("#" * level + (heading.group(2) or ""))
+    return "\n".join(out)
 
 
 def build_merged_document(
@@ -1488,11 +1548,12 @@ def build_merged_document(
     Body: the survivor's body, then a delimited
     `## Merged content ({absorbed_id})` heading, then the absorbed body --
     an APPEND, never an overwrite, per the spec's "Successful merge"
-    scenario. The absorbed body's own LEADING `# ` heading is demoted to
-    `### ` on the way in (`_demote_absorbed_heading`, issue #803), so the
-    merged document has ONE document root instead of two; everything below
-    that heading, the absorbed document's deeper sections included, is
-    stacked verbatim.
+    scenario. EVERY heading in the absorbed body is shifted two levels
+    down on the way in (`_demote_absorbed_headings`, issues #803 and
+    #811), so the merged document has ONE document root instead of two AND
+    the absorbed document's own sections nest UNDER the delimiter rather
+    than competing with it; its prose, and the relative structure of its
+    headings, are otherwise stacked verbatim.
     """
     merged: dict[str, object] = dict(survivor_metadata)
     merged.pop(MERGED_FROM_KEY, None)
@@ -1543,7 +1604,9 @@ def build_merged_document(
 
     separator = f"{merged_content_heading(absorbed_id)}\n\n"
     merged_body = (
-        survivor_body.rstrip("\n") + separator + _demote_absorbed_heading(absorbed_body)
+        survivor_body.rstrip("\n")
+        + separator
+        + _demote_absorbed_headings(absorbed_body)
     )
     if not merged_body.endswith("\n"):
         merged_body += "\n"

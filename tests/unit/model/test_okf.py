@@ -1434,19 +1434,64 @@ def test_build_merged_document_demotes_the_absorbed_leading_heading() -> None:
     )
 
 
-def test_build_merged_document_leaves_the_absorbed_deeper_sections_verbatim() -> None:
-    """#803, deliberately out of scope: only the LEADING heading is
-    demoted.
+def test_build_merged_document_nests_the_absorbed_deeper_sections() -> None:
+    """#811: the absorbed document's OWN sections must not OUTRANK the
+    delimiter they are supposed to sit inside.
 
-    Folding the absorbed document's deeper sections -- deduping its
-    `## Related` bullets, renumbering its `[N]` citation markers -- needs
-    section-merging semantics no helper in this codebase provides, and doing
-    it byte-wise would silently change meaning. `# Citations` is an OKF
-    section-8 reserved heading and must not be demoted blind."""
+    #803 demoted only the LEADING heading, so a merged document still
+    carried the absorbed body's `## Related` at level 2 -- a SIBLING of the
+    `## Merged content (<id>)` delimiter above it, not a child. Read as
+    markdown, those bullets belonged to the merged document's own Related
+    section rather than to the absorbed one, and a hand-written
+    `# Citations` outranked the delimiter outright.
+
+    Every heading now shifts by the same two levels the leading one does,
+    so the absorbed document arrives as one SUBTREE of the delimiter and
+    its internal structure is preserved exactly. Nothing is folded: the two
+    `## Related` sections stay two sections, which is the point -- deduping
+    their bullets and renumbering `[N]` citation markers needs
+    section-merging semantics this codebase does not have, and doing it
+    byte-wise would silently change meaning."""
     absorbed_body = (
         "# Absorbed\n\nAbsorbed body.\n\n"
         "## Related\n- [sources/s](/sources/s.md) - source\n\n"
         "# Citations\n[1] sources/s\n"
+    )
+
+    _, body = okf.build_merged_document(
+        _survivor_metadata(),
+        "# Survivor\n\nSurvivor body.\n\n## Related\n- [sources/t](/sources/t.md) - source",
+        _absorbed_metadata(),
+        absorbed_body,
+        "concepts/absorbed-id",
+        "concepts/survivor-id",
+    )
+
+    # The absorbed subtree, nested under the level-2 delimiter.
+    assert "### Absorbed\n" in body
+    assert "#### Related\n- [sources/s](/sources/s.md) - source\n" in body
+    assert "### Citations\n[1] sources/s\n" in body
+    # ...and nothing of the absorbed document is left at a level that
+    # competes with the delimiter or with the survivor's own sections.
+    assert "\n## Related\n- [sources/s]" not in body
+    assert "\n# Citations\n" not in body
+    # The survivor's own Related section is untouched and still level 2.
+    assert "## Related\n- [sources/t](/sources/t.md) - source" in body
+
+
+def test_build_merged_document_never_demotes_inside_a_fenced_block() -> None:
+    """A `#` line inside a fenced code block is a COMMENT, not a heading,
+    and rewriting it would corrupt the code the absorbed document quoted
+    (#811).
+
+    Both fence spellings are exercised, and the fenced text is asserted
+    byte-for-byte: a demoter that tracked only backticks would still pass a
+    backtick-only test."""
+    absorbed_body = (
+        "# Absorbed\n\n"
+        "```sh\n# not a heading\nrm -rf /tmp/x\n```\n\n"
+        "~~~python\n## also not a heading\n~~~\n\n"
+        "## Real Heading\n"
     )
 
     _, body = okf.build_merged_document(
@@ -1458,11 +1503,104 @@ def test_build_merged_document_leaves_the_absorbed_deeper_sections_verbatim() ->
         "concepts/survivor-id",
     )
 
+    assert "```sh\n# not a heading\nrm -rf /tmp/x\n```" in body
+    assert "~~~python\n## also not a heading\n~~~" in body
+    assert "#### Real Heading\n" in body
+
+
+def test_build_merged_document_fence_closes_only_on_a_long_enough_run() -> None:
+    """A longer fence is exactly how markdown quotes a shorter one, so a
+    shorter run inside it must NOT close it (#811, review R3).
+
+    A block opened with four backticks is the standard way to show fenced
+    markdown inside fenced markdown. Closing on any run of three would end
+    the block early, and every line after it -- still code, as far as the
+    author is concerned -- would be back in heading-rewriting territory.
+    The `# still inside the block` line is the one that proves it: it
+    survives only if the four-backtick fence is still open."""
+    absorbed_body = (
+        "# Absorbed\n\n"
+        "````markdown\n"
+        "```\n"
+        "# still inside the block\n"
+        "```\n"
+        "````\n\n"
+        "## After The Block\n"
+    )
+
+    _, body = okf.build_merged_document(
+        _survivor_metadata(),
+        "# Survivor\n\nSurvivor body.",
+        _absorbed_metadata(),
+        absorbed_body,
+        "concepts/absorbed-id",
+        "concepts/survivor-id",
+    )
+
+    assert "# still inside the block\n" in body
+    assert "### still inside the block" not in body
+    # The heading after the block really is outside it, so it still moves --
+    # without this the test would also pass on a demoter that gave up at the
+    # first fence and never resumed.
+    assert "#### After The Block\n" in body
+
+
+def test_build_merged_document_leaves_an_unclosed_fence_tail_alone() -> None:
+    """An unclosed fence runs to the END of the document, and everything
+    after it stays code (#811, review R3).
+
+    That is CommonMark's own rule, not a shortcut: a fence with no closing
+    run is closed by the end of its container. Pinned because the
+    alternative -- guessing that the author meant the block to end and
+    resuming heading rewrites -- would corrupt exactly the code the author
+    failed to close, and the failure would be silent.
+
+    The cost is stated rather than hidden: a heading below an unclosed
+    fence keeps its original level, so it can still outrank the delimiter.
+    That is the #811 defect surviving in one malformed case, and it is the
+    right trade -- the body is already broken markdown at that point, and
+    rewriting inside what the document says is code is the worse error."""
+    absorbed_body = "# Absorbed\n\n```sh\necho hi\n\n## Never Reached\n"
+
+    _, body = okf.build_merged_document(
+        _survivor_metadata(),
+        "# Survivor\n\nSurvivor body.",
+        _absorbed_metadata(),
+        absorbed_body,
+        "concepts/absorbed-id",
+        "concepts/survivor-id",
+    )
+
+    # The leading heading is above the fence, so it still shifts.
     assert "### Absorbed\n" in body
-    assert "## Related\n- [sources/s](/sources/s.md) - source\n" in body
-    assert "# Citations\n[1] sources/s\n" in body
-    assert "### Citations" not in body
-    assert "### Related" not in body
+    # Everything from the unclosed fence onward is left byte-for-byte.
+    assert "```sh\necho hi\n\n## Never Reached\n" in body
+    assert "#### Never Reached" not in body
+
+
+def test_build_merged_document_caps_absorbed_demotion_at_level_six() -> None:
+    """Markdown has no level 7: `####### x` renders as literal text, not a
+    heading. A heading already deep enough that +2 would overflow is
+    clamped to level 6 instead, so it stays a heading (#811).
+
+    The cost is honest and bounded: two absorbed headings that were
+    distinct levels can arrive at the same one. Losing a level of nesting
+    is strictly better than turning a heading into a paragraph of hashes,
+    and only a document already five levels deep can reach it."""
+    absorbed_body = "# Absorbed\n\n##### Deep\n\n###### Deeper\n"
+
+    _, body = okf.build_merged_document(
+        _survivor_metadata(),
+        "# Survivor\n\nSurvivor body.",
+        _absorbed_metadata(),
+        absorbed_body,
+        "concepts/absorbed-id",
+        "concepts/survivor-id",
+    )
+
+    assert "###### Deep\n" in body
+    assert "###### Deeper\n" in body
+    assert "####### " not in body
 
 
 def test_build_merged_document_never_invents_an_absorbed_heading() -> None:
