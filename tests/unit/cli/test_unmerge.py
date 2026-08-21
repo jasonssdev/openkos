@@ -24,7 +24,12 @@ from openkos.bundle import ledger as bundle_ledger
 from openkos.cli import main
 from openkos.cli.main import app
 from openkos.model import okf
-from tests.unit.cli.conftest import changed_paths, confirm_after, echo_after
+from tests.unit.cli.conftest import (
+    changed_paths,
+    commit_pending_fixture_docs,
+    confirm_after,
+    echo_after,
+)
 from tests.unit.cli.conftest import snapshot_with_mtime as _snapshot
 
 runner = CliRunner()
@@ -77,6 +82,9 @@ def _write_concept(
         description=f"{title}.",
     )
     index_path.write_text(new_index_text, encoding="utf-8")
+    # The workspace's git state must match a real session's before a verb
+    # that deletes this document reaches its auto-commit (issue #819).
+    commit_pending_fixture_docs()
 
 
 def _write_raw_ledger_sidecar(
@@ -100,6 +108,9 @@ def _write_raw_ledger_sidecar(
         ),
         encoding="utf-8",
     )
+    # The workspace's git state must match a real session's before a verb
+    # that deletes this document reaches its auto-commit (issue #819).
+    commit_pending_fixture_docs()
 
 
 def _write_concept_with_provenance(
@@ -124,6 +135,9 @@ def _write_concept_with_provenance(
     concept_path.write_text(
         okf.dump_frontmatter(metadata, f"# {title}\n\n{body}\n"), encoding="utf-8"
     )
+    # The workspace's git state must match a real session's before a verb
+    # that deletes this document reaches its auto-commit (issue #819).
+    commit_pending_fixture_docs()
 
 
 def test_unmerge_restores_survivor_absorbed_index_log_and_reverses_links(

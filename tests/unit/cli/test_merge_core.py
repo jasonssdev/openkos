@@ -28,6 +28,7 @@ from openkos.cli.main import (
 )
 from openkos.model import okf
 from openkos.vcs import git as vcs_git
+from tests.unit.cli.conftest import commit_pending_fixture_docs
 
 runner = CliRunner()
 
@@ -72,6 +73,9 @@ def _write_concept(
         description=f"{title}.",
     )
     index_path.write_text(new_index_text, encoding="utf-8")
+    # The workspace's git state must match a real session's before a verb
+    # that deletes this document reaches its auto-commit (issue #819).
+    commit_pending_fixture_docs()
 
 
 def _write_concept_with_provenance(
@@ -97,6 +101,9 @@ def _write_concept_with_provenance(
     concept_path.write_text(
         okf.dump_frontmatter(metadata, f"# {title}\n\n{body}\n"), encoding="utf-8"
     )
+    # The workspace's git state must match a real session's before a verb
+    # that deletes this document reaches its auto-commit (issue #819).
+    commit_pending_fixture_docs()
 
 
 def _resolve(
@@ -407,6 +414,14 @@ def test_merge_core_makes_zero_vcs_side_effect_and_is_unmerge_reversible(
     )
     head_after = (tmp_path / ".git" / "HEAD").read_text(encoding="utf-8")
     assert head_before == head_after
+
+    # Everything above is the point of this test: `merge_core` commits
+    # nothing. But the `merge` COMMAND does, right after calling it -- and
+    # this test calls the core directly, so the ledger sidecar the core just
+    # wrote is untracked in a way no real session leaves it. Committing here
+    # restores the state `unmerge` actually runs against, and it happens
+    # AFTER the zero-side-effect assertions it must not disturb (issue #819).
+    commit_pending_fixture_docs()
 
     result = runner.invoke(
         app, ["unmerge", survivor_canonical, absorbed_canonical, "--auto"]

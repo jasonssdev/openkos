@@ -30,6 +30,7 @@ from openkos.cli.main import app
 from openkos.model import okf
 from tests.unit.cli.conftest import (
     changed_paths,
+    commit_pending_fixture_docs,
     confirm_after,
     echo_after,
     snapshot_with_mtime,
@@ -75,6 +76,9 @@ def _write_hand_authored_concept(
     index_text = index_path.read_text(encoding="utf-8")
     bullet = f"* [Test]({link_form}) - A hand-authored entry.\n"
     index_path.write_text(index_text + f"\n# {section}\n\n{bullet}", encoding="utf-8")
+    # The workspace's git state must match a real session's before a verb
+    # that deletes this document reaches its auto-commit (issue #819).
+    commit_pending_fixture_docs()
 
 
 def _write_plain_concept(
@@ -89,6 +93,9 @@ def _write_plain_concept(
         f"---\ntype: Concept\ntitle: {title}\n---\n\n# {title}\n\n{body}",
         encoding="utf-8",
     )
+    # The workspace's git state must match a real session's before a verb
+    # that deletes this document reaches its auto-commit (issue #819).
+    commit_pending_fixture_docs()
 
 
 def _write_concept_with_relations(
@@ -110,6 +117,9 @@ def _write_concept_with_relations(
         "relations": relations,
     }
     concept_path.write_text(okf.dump_frontmatter(metadata, "Body.\n"), encoding="utf-8")
+    # The workspace's git state must match a real session's before a verb
+    # that deletes this document reaches its auto-commit (issue #819).
+    commit_pending_fixture_docs()
 
 
 def test_traversal_concept_id_refuses(
@@ -584,7 +594,11 @@ def _write_decision(
         state=state,
         decided_at="2026-08-12T00:00:00Z",
     )
-    return bundle_decisions.write_decisions(concept_id, bundle_dir, records=[record])
+    sidecar = bundle_decisions.write_decisions(concept_id, bundle_dir, records=[record])
+    # The workspace's git state must match a real session's before a verb
+    # that deletes this document reaches its auto-commit (issue #819).
+    commit_pending_fixture_docs()
+    return sidecar
 
 
 def test_forgetting_a_concept_removes_its_live_decision_entry(
@@ -1216,6 +1230,9 @@ def test_tombstone_title_falls_back_to_canonical_id(
     concept_path.write_text(
         f"---\ntype: Concept\n{title_line}---\n\nBody.\n", encoding="utf-8"
     )
+    # Written inline rather than through a `_write_*` helper, so the
+    # tracking those helpers do has to be repeated here (issue #819).
+    commit_pending_fixture_docs()
 
     result = runner.invoke(app, ["forget", concept_id, "--auto"])
 
@@ -1322,6 +1339,9 @@ def _write_child_concept(
         description="Test fixture.",
     )
     index_path.write_text(new_index_text, encoding="utf-8")
+    # The workspace's git state must match a real session's before a verb
+    # that deletes this document reaches its auto-commit (issue #819).
+    commit_pending_fixture_docs()
 
 
 # -- PR2: `--scope {self,source}` cascade wiring -----------------------------

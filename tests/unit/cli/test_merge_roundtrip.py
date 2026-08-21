@@ -19,6 +19,7 @@ from typer.testing import CliRunner, _NamedTextIOWrapper
 from openkos.bundle import index as bundle_index
 from openkos.cli.main import app
 from openkos.model import okf
+from tests.unit.cli.conftest import commit_pending_fixture_docs
 from tests.unit.cli.conftest import snapshot_with_mtime as _snapshot
 
 runner = CliRunner()
@@ -83,6 +84,9 @@ def _write_concept(
         description=f"{title}.",
     )
     index_path.write_text(new_index_text, encoding="utf-8")
+    # The workspace's git state must match a real session's before a verb
+    # that deletes this document reaches its auto-commit (issue #819).
+    commit_pending_fixture_docs()
 
 
 def _write_concept_with_relations(
@@ -118,6 +122,9 @@ def _write_concept_with_relations(
         description=f"{title}.",
     )
     index_path.write_text(new_index_text, encoding="utf-8")
+    # The workspace's git state must match a real session's before a verb
+    # that deletes this document reaches its auto-commit (issue #819).
+    commit_pending_fixture_docs()
 
 
 def _write_concept_with_provenance(
@@ -156,6 +163,9 @@ def _write_concept_with_provenance(
         description=f"{title}.",
     )
     index_path.write_text(new_index_text, encoding="utf-8")
+    # The workspace's git state must match a real session's before a verb
+    # that deletes this document reaches its auto-commit (issue #819).
+    commit_pending_fixture_docs()
 
 
 def _assert_byte_parity_except_log(root: Path, pre_snapshot: dict[Path, bytes]) -> None:
