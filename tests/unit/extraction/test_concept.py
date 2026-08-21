@@ -6351,3 +6351,228 @@ def test_the_cap_still_applies_when_the_judge_replied_but_matched_nothing() -> N
 
     assert outcome.report.judge_status == "empty"
     assert len(outcome.objects) == concept_mod._UNION_BACKSTOP
+
+
+# --- Quoted-evidence advisory (#801) ---------------------------------------
+
+_HELIOS_SOURCE = (
+    "# Project Helios sync\n"
+    "\n"
+    "- Priya owns the schema migration plan.\n"
+    "- The team chose PostgreSQL as the primary datastore.\n"
+)
+"""The shape of the real source behind #801, reduced to the lines that
+decide the check. The migration-ownership sentence is the one the defect
+dropped."""
+
+_UNEVIDENCED_DECISION = concept_mod.ExtractionResult(
+    type="Decision",
+    title="Schema migration ownership decision",
+    description="Who owns the schema migration plan for Project Helios.",
+    body=(
+        "# Schema migration ownership decision\n"
+        "The decision regarding who owns the schema migration plan for "
+        "Project Helios."
+    ),
+)
+"""#801's actual stored object, strings intact: its whole body restates its
+own description, and the source sentence it came from is gone."""
+
+_EVIDENCED_DECISION = concept_mod.ExtractionResult(
+    type="Decision",
+    title="Primary datastore decision",
+    description="The datastore the team settled on.",
+    body="The team chose PostgreSQL as the primary datastore.",
+)
+
+_EVIDENCED_PERSON = concept_mod.ExtractionResult(
+    type="Person",
+    title="Priya Nair",
+    description="Owns the schema migration plan.",
+    body="Priya owns the schema migration plan.",
+)
+
+
+def test_unevidenced_titles_flags_only_the_object_that_quotes_nothing() -> None:
+    """#801's regression, built from the reported run's own strings.
+
+    The `Decision` whose body restates its description is flagged, while
+    the two siblings from the SAME source are not. That contrast is the
+    whole test: seven of eight objects in the reported run DID carry a
+    quoted line, so a check that flagged them all would be measuring
+    nothing about #801 -- it would just be reporting every object."""
+    results = [_UNEVIDENCED_DECISION, _EVIDENCED_DECISION, _EVIDENCED_PERSON]
+
+    unevidenced = concept_mod._unevidenced_titles(results, source_text=_HELIOS_SOURCE)
+
+    assert unevidenced == ("Schema migration ownership decision",)
+
+
+def test_unevidenced_titles_reports_in_results_order() -> None:
+    """Order is the caller's contract, mirroring every other named-title
+    field on the report: the operator reads the notice against the objects
+    the run wrote, in the order it wrote them."""
+    other = dataclasses.replace(
+        _UNEVIDENCED_DECISION, title="Another Ungrounded Decision"
+    )
+    results = [_UNEVIDENCED_DECISION, _EVIDENCED_PERSON, other]
+
+    unevidenced = concept_mod._unevidenced_titles(results, source_text=_HELIOS_SOURCE)
+
+    assert unevidenced == (
+        "Schema migration ownership decision",
+        "Another Ungrounded Decision",
+    )
+
+
+def test_unevidenced_titles_falls_back_to_description_on_a_blank_body() -> None:
+    """The check must read the text that will BE WRITTEN.
+    `ExtractionResult.body` is documented as optionally blank, with the
+    builder falling back to `description` -- so checking `body` alone would
+    let every blank-body object through unexamined, and a blank body is
+    precisely how #801's object would have escaped if the model had put its
+    restatement in `description` instead.
+
+    Here the description DOES quote the source, so the object is grounded
+    and must not be flagged."""
+    results = [
+        concept_mod.ExtractionResult(
+            type="Person",
+            title="Priya Nair",
+            description="Priya owns the schema migration plan.",
+            body="",
+        )
+    ]
+
+    assert concept_mod._unevidenced_titles(results, source_text=_HELIOS_SOURCE) == ()
+
+
+def test_unevidenced_titles_flags_a_blank_body_whose_description_quotes_nothing() -> (
+    None
+):
+    """The other half of the fallback: falling back must not mean passing.
+    A blank body with a paraphrasing description is exactly as ungrounded
+    as #801's object and is flagged the same way."""
+    results = [
+        concept_mod.ExtractionResult(
+            type="Decision",
+            title="Schema migration ownership decision",
+            description=(
+                "The decision regarding who owns the schema migration plan "
+                "for Project Helios."
+            ),
+            body="",
+        )
+    ]
+
+    assert concept_mod._unevidenced_titles(results, source_text=_HELIOS_SOURCE) == (
+        "Schema migration ownership decision",
+    )
+
+
+def test_unevidenced_titles_is_empty_when_every_object_quotes_its_source() -> None:
+    """The healthy path stays silent, like every other advisory in this
+    module -- one that fires on correct runs is one the operator learns to
+    skip."""
+    results = [_EVIDENCED_DECISION, _EVIDENCED_PERSON]
+
+    assert concept_mod._unevidenced_titles(results, source_text=_HELIOS_SOURCE) == ()
+
+
+def test_single_run_path_reports_unevidenced_titles() -> None:
+    """The LEGACY single-run path reports the advisory too. `cli/main.py`
+    picks `extract_concept_union if union_judge else extract_concept`, so
+    wiring only the union path would store ungrounded objects and surface
+    nothing whenever `union_judge` is off -- the "computed but never read"
+    defect #690 already cost a PR, and #712's participant advisory carries
+    the same comment for the same reason."""
+    ungrounded = (
+        '{"type": "Decision", "title": "Schema migration ownership decision", '
+        '"description": "Who owns the schema migration plan.", '
+        '"body": "The decision regarding who owns the schema migration plan '
+        'for Project Helios."}'
+    )
+    grounded = (
+        '{"type": "Decision", "title": "Primary datastore decision", '
+        '"description": "The datastore the team settled on.", '
+        '"body": "The team chose PostgreSQL as the primary datastore."}'
+    )
+    llm = _FakeLLM(reply=_array(ungrounded, grounded))
+
+    outcome = concept_mod.extract_concept(
+        _HELIOS_SOURCE, source_title="Project Helios sync", llm=llm
+    )
+
+    assert outcome.report.unevidenced_titles == ("Schema migration ownership decision",)
+
+
+def test_union_path_reports_unevidenced_titles() -> None:
+    """And the DEFAULT path reports it as well. Both sites, deliberately:
+    the two return sites are the pair #712's comment names, and a report
+    field populated on one of them is a field whose reader cannot trust
+    it."""
+    ungrounded = (
+        '{"type": "Decision", "title": "Schema migration ownership decision", '
+        '"description": "Who owns the schema migration plan.", '
+        '"body": "The decision regarding who owns the schema migration plan '
+        'for Project Helios."}'
+    )
+    grounded = (
+        '{"type": "Decision", "title": "Primary datastore decision", '
+        '"description": "The datastore the team settled on.", '
+        '"body": "The team chose PostgreSQL as the primary datastore."}'
+    )
+    llm = _SequencedLLM(
+        [
+            _array(ungrounded, grounded),
+            _array(grounded),
+            _keep_reply(
+                "Schema migration ownership decision", "Primary datastore decision"
+            ),
+        ]
+    )
+
+    outcome = concept_mod.extract_concept_union(
+        _HELIOS_SOURCE, source_title="Project Helios sync", llm=llm
+    )
+
+    assert outcome.report.unevidenced_titles == ("Schema migration ownership decision",)
+
+
+def test_unevidenced_titles_are_scored_on_the_retained_set() -> None:
+    """Computed on what the bundle STORES, never on the pre-cap list -- the
+    same rule `sole_object_restates_source` and
+    `participant_names_absent_from_source` both state. An object the
+    backstop discarded is not stored, so it is not a claim the bundle
+    makes, and naming it would send the operator looking for a document
+    that does not exist."""
+    ungrounded_items = [
+        (
+            f'{{"type": "Concept", "title": "Subject {i}", '
+            f'"description": "A paraphrase of nothing in the source.", '
+            f'"body": "This body quotes no line of the source at all."}}'
+        )
+        for i in range(1, concept_mod._UNION_BACKSTOP + 4)
+    ]
+    judge_reply = _keep_reply(
+        *(f"Subject {i}" for i in range(1, concept_mod._UNION_BACKSTOP + 4))
+    )
+    llm = _SequencedLLM([_array(*ungrounded_items), _array(), judge_reply])
+
+    outcome = concept_mod.extract_concept_union(
+        _HELIOS_SOURCE, source_title="Project Helios sync", llm=llm
+    )
+
+    assert outcome.report.discarded_titles != ()
+    assert len(outcome.report.unevidenced_titles) == len(outcome.objects)
+    assert set(outcome.report.unevidenced_titles).isdisjoint(
+        outcome.report.discarded_titles
+    )
+
+
+def test_unevidenced_titles_defaults_to_empty_on_a_bare_report() -> None:
+    """Defaulted so every existing construction site -- both
+    `evals/model_spike/` harnesses included -- keeps working unchanged, and
+    `()` is the honest default: it claims no disclosure, which is what an
+    untouched site is entitled to claim."""
+    assert concept_mod.ExtractionReport().unevidenced_titles == ()

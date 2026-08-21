@@ -209,6 +209,7 @@ ExtractionNotice = Literal[
     "sole-object-restates-source",
     "judge-selection-unavailable",
     "judge-selection-empty",
+    "objects-without-evidence",
 ]
 """The closed vocabulary for `EXTRACTION_NOTICE_KEY`.
 
@@ -227,7 +228,20 @@ replied and its admitted set matched no candidate
 than one for the same reason #754 split the terminal notices: the causes
 carry different retry expectations, and a persistent marker that erased
 the distinction would force the reader back to a terminal transcript that
-no longer exists. `lint.check_unjudged` reads BOTH as retryable debt."""
+no longer exists. `lint.check_unjudged` reads BOTH as retryable debt.
+
+The fourth token is #801's: at least one derived object the run STORED
+carries no line quoted verbatim from the source, so it records that its
+subject exists while dropping the fact worth storing -- and then becomes a
+citation that provably cannot support the answer it is attached to. Its
+own token rather than a widening of any above, because it answers a
+different question: the three before it are statements about the PIPELINE
+(a judge that never answered, a judge that named nothing, a set reduced to
+a single restatement), while this one is a statement about the CONTENT of
+objects the pipeline was otherwise happy with. Folding it into the judge
+pair would tell a reader to re-run the judge, which repairs nothing here.
+`lint.check_unevidenced` reads it, under its own section and its own
+finding kind for the same reason."""
 
 EXTRACTION_NOTICE_VALUES: Final[tuple[ExtractionNotice, ...]] = get_args(
     ExtractionNotice
@@ -252,6 +266,16 @@ EXTRACTION_NOTICE_JUDGE_EMPTY: Final[ExtractionNotice] = "judge-selection-empty"
 """#772's quarantine token for `judge_status == "empty"`: the judge
 REPLIED with a valid shape whose admitted set matched no candidate, so the
 full (backstop-capped) union was stored unfiltered."""
+
+EXTRACTION_NOTICE_OBJECTS_WITHOUT_EVIDENCE: Final[ExtractionNotice] = (
+    "objects-without-evidence"
+)
+"""#801's disclosure token: at least one RETAINED derived object's written
+text carries no line quoted verbatim from the source
+(`extraction.concept.ExtractionReport.unevidenced_titles`,
+`extraction.evidence.evidence_line` underneath). The objects are kept --
+#585's rejected degrade-to-`[]` settles that trade -- and this token is
+what keeps the bundle honest about storing them."""
 
 EXTRACTION_STATUS_FAILED: Final[ExtractionStatus] = "failed"
 """The one `EXTRACTION_STATUS_VALUES` member that represents retryable

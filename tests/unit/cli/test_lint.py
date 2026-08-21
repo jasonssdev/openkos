@@ -465,6 +465,85 @@ def test_lint_ignores_the_sole_object_notice(
     assert "  No unjudged extractions." in result.stdout
 
 
+# --- issue #801: Unevidenced objects section --------------------------------
+
+
+def test_lint_renders_empty_unevidenced_section(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fresh, empty bundle renders the `Unevidenced objects:` section with
+    its own empty-state line.
+
+    Its OWN section, beside `Unjudged extractions:` rather than inside it:
+    a check computed but never rendered is the #690 defect, and a check
+    rendered under someone else's heading is the same defect wearing a
+    disguise."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["lint"])
+
+    assert result.exit_code == 0
+    assert "Unevidenced objects:" in result.stdout
+    assert "  No unevidenced objects." in result.stdout
+
+
+def test_lint_flags_an_unevidenced_extraction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Source with `extraction_notice: objects-without-evidence` is
+    reported under `Unevidenced objects:`, and the command still exits 0
+    (#801: the disclosure becomes visible work, never an exit-code
+    change)."""
+    _init_workspace(tmp_path, monkeypatch)
+    sources_dir = tmp_path / "bundle" / "sources"
+    sources_dir.mkdir()
+    (sources_dir / "notes.md").write_text(
+        "---\ntype: Source\ntitle: Notes\nresource: raw/notes.txt\n"
+        "extraction_notice: objects-without-evidence\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["lint"])
+
+    assert result.exit_code == 0
+    assert "sources/notes:" in result.stdout
+    assert "no line quoted from this source" in result.stdout
+    assert "  No unjudged extractions." in result.stdout
+
+
+def test_lint_keeps_the_two_extraction_notice_sections_apart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A judge-degrade Source and an unevidenced Source in one bundle land
+    in DIFFERENT sections. Two questions with two repairs: re-run the judge
+    versus check what the stored object actually quotes."""
+    _init_workspace(tmp_path, monkeypatch)
+    sources_dir = tmp_path / "bundle" / "sources"
+    sources_dir.mkdir()
+    (sources_dir / "judged.md").write_text(
+        "---\ntype: Source\ntitle: Judged\nresource: raw/judged.txt\n"
+        "extraction_notice: judge-selection-unavailable\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    (sources_dir / "quoted.md").write_text(
+        "---\ntype: Source\ntitle: Quoted\nresource: raw/quoted.txt\n"
+        "extraction_notice: objects-without-evidence\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["lint"])
+
+    assert result.exit_code == 0
+    unjudged_at = result.stdout.index("Unjudged extractions:")
+    unevidenced_at = result.stdout.index("Unevidenced objects:")
+    unjudged_section = result.stdout[unjudged_at:unevidenced_at]
+    unevidenced_section = result.stdout[unevidenced_at:]
+    assert "sources/judged:" in unjudged_section
+    assert "sources/judged:" not in unevidenced_section
+    assert "sources/quoted:" in unevidenced_section
+    assert "sources/quoted:" not in unjudged_section
+
+
 # --- issue #231 (PR2): below-source-sensitivity / multi-source-uncovered ---
 
 

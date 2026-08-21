@@ -668,6 +668,7 @@ def test_extraction_notice_vocabulary_constants() -> None:
         "sole-object-restates-source",
         "judge-selection-unavailable",
         "judge-selection-empty",
+        "objects-without-evidence",
     )
     assert okf.EXTRACTION_NOTICE_SOLE_OBJECT_RESTATES == "sole-object-restates-source"
     # #772: the two judge-degrade tokens quarantine an unjudged extraction.
@@ -678,6 +679,13 @@ def test_extraction_notice_vocabulary_constants() -> None:
     # one happened.
     assert okf.EXTRACTION_NOTICE_JUDGE_UNAVAILABLE == "judge-selection-unavailable"
     assert okf.EXTRACTION_NOTICE_JUDGE_EMPTY == "judge-selection-empty"
+    # #801: a fourth token, and the first one that presupposes objects were
+    # written AND says something about their CONTENT. The three above are
+    # statements about the pipeline (a judge that did not answer, a set
+    # reduced to one restatement); this one is a statement about what some
+    # stored object quotes, so it needed its own token rather than a
+    # widening of any existing one.
+    assert okf.EXTRACTION_NOTICE_OBJECTS_WITHOUT_EVIDENCE == "objects-without-evidence"
 
 
 def test_build_source_concept_omits_extraction_notice_by_default() -> None:

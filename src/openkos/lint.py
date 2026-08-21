@@ -104,7 +104,10 @@ class LintDoc:
     the two judge-degrade tokens -- #585's `sole-object-restates-source`
     and any unrecognized token are ignored fail-silent (the same
     write-side-typed/read-side-fail-silent policy `extraction_status`
-    documents)."""
+    documents) -- and `check_unevidenced` (#801), which matches ONLY
+    `objects-without-evidence` and ignores the rest the same way. One
+    field, two readers, disjoint by construction: a Source carries at most
+    one token, and the two checks answer different questions about it."""
 
     resource: str = ""
     """The doc's frontmatter `resource` field, or `""` if absent (issue
@@ -135,9 +138,9 @@ class LintFinding:
 
     kind: str
     """`"stale"`, `"orphan"`, `"dangling"`, `"unextracted"`,
-    `"below-source-sensitivity"`, `"multi-source-uncovered"`,
-    `"dangling-provenance"`, `"unbacked-provenance"`, or
-    `"non-nfc-name"`."""
+    `"unjudged"`, `"unevidenced"`, `"below-source-sensitivity"`,
+    `"multi-source-uncovered"`, `"dangling-provenance"`,
+    `"unbacked-provenance"`, or `"non-nfc-name"`."""
     path: str
     """The finding's bundle-relative `.md` path -- except for
     `"non-nfc-name"` (#474), where it may name a directory or a non-`.md`
@@ -199,6 +202,17 @@ class LintReport:
     carries a judge-degrade token, meaning its derived objects were stored
     without quality selection -- retryable debt, rendered under its own
     `Unjudged extractions:` section (see `check_unjudged`)."""
+    unevidenced: list[LintFinding] = field(default_factory=list)
+    """`"unevidenced"` findings (#801): a Source whose `extraction_notice`
+    carries `objects-without-evidence`, meaning at least one derived object
+    it stored quotes no line of it and therefore cannot support a citation
+    -- rendered under its own `Unevidenced objects:` section (see
+    `check_unevidenced`).
+
+    Its own field rather than a widening of `unjudged`, for the reason that
+    check's docstring gives: the two answer different questions and have
+    different repairs, and one shared list would leave `lint` unable to
+    render them apart."""
     below_source: list[LintFinding] = field(default_factory=list)
     """`"below-source-sensitivity"` findings (#231, PR2): a descendant
     inside exactly one `type: Source` closure whose `sensitivity` differs
@@ -1060,6 +1074,70 @@ def check_unjudged(docs: list[LintDoc]) -> list[LintFinding]:
                 detail=(
                     "derived objects were stored without judge selection "
                     f"during ingest ({cause}) — {_ingest_retry_hint(doc)}"
+                ),
+            )
+        )
+    return findings
+
+
+_UNEVIDENCED_NOTICE: Final = "objects-without-evidence"
+"""Spelled as a literal rather than
+`okf.EXTRACTION_NOTICE_OBJECTS_WITHOUT_EVIDENCE`, for exactly the reason
+`_UNJUDGED_NOTICE_CAUSES` and `check_unextracted` give for theirs: a typo
+in either module then fails a test instead of silently agreeing with
+itself, which a shared constant cannot do."""
+
+
+def check_unevidenced(docs: list[LintDoc]) -> list[LintFinding]:
+    """Flag each Source that stored a derived object carrying NO line
+    quoted from it (issue #801).
+
+    Matches ONLY `objects-without-evidence`. Both judge-degrade tokens,
+    #585's `sole-object-restates-source`, and any unrecognized,
+    out-of-vocabulary token are ignored fail-silent -- the same
+    write-side-typed/read-side-fail-silent policy `check_unextracted`
+    follows for `extraction_status`.
+
+    A NEW kind (`"unevidenced"`), deliberately not folded into
+    `check_unjudged`'s `_UNJUDGED_NOTICE_CAUSES`. The two answer different
+    questions and have different repairs: an unjudged extraction means no
+    quality selection ran over the set, and a re-ingest whose judge answers
+    fixes it; this means some object the run stored quotes nothing from its
+    source, which a judge cannot repair because the judge already kept it.
+    Merging distinct signals into one key is a defect in this repo, not a
+    tidying (`extraction_notice` is itself a separate key from
+    `extraction_status` for the same reason).
+
+    Same structural no-fifth-walk guard as every sibling: the signature
+    takes ONLY `docs`, so this function is incapable of opening a walk.
+
+    The detail deliberately does NOT reuse `_ingest_retry_hint`, which is
+    the one place this check departs from `check_unjudged`'s shape. That
+    hint spells a plain `openkos ingest <resource>`, and on an unchanged
+    source that command SKIPS extraction entirely (#773's convergence
+    short-circuit) -- this token is excluded from
+    `cli/main._extraction_retry_due` on purpose, because it is a disclosure
+    rather than retryable debt. Printing a command that provably does
+    nothing is worse than printing none, so the detail names the defect,
+    points at the source the reader can check it against, and names
+    `--re-extract` as the flag that actually forces a redo. The flag is
+    named WITHOUT the resource for the reason #274/#285 established: a
+    doc-controlled value interpolated into a backtick span is forgeable,
+    and the finding's `concept_id` already locates the document.
+    """
+    findings: list[LintFinding] = []
+    for doc in docs:
+        if doc.extraction_notice != _UNEVIDENCED_NOTICE:
+            continue
+        findings.append(
+            LintFinding(
+                kind="unevidenced",
+                path=f"{doc.identity}.md",
+                detail=(
+                    "a derived object was stored with no line quoted from "
+                    "this source — it cannot support a citation; check the "
+                    "derived objects against the source, and re-ingest with "
+                    "--re-extract to redo extraction"
                 ),
             )
         )
