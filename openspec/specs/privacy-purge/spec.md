@@ -31,8 +31,9 @@ path-safety/resolution, `--scope source` Provenance Descendant Resolution
 #### Scenario: Source scope cascades to orphaned descendants
 - GIVEN Source X and a concept C with `provenance: [X]` only
 - WHEN `openkos purge X --scope source` runs
-- THEN the purge set contains X and C, and both their `raw/<name>` and
-  `bundle/<id>.md` paths are targeted for history expunge
+- THEN the purge set contains X and C, and X's `raw/<name>` plus both
+  `bundle/<id>.md` paths are targeted for history expunge — C, a derived
+  concept with no `resource` of its own, contributes no raw path
 
 ### Requirement: Fail-Closed Safety Rails Run In Fixed Order Before Any Write
 
@@ -92,6 +93,40 @@ assumption; the git-root/dirty-tree/remote-state rails run after it.)
   exact typed-phrase match
 - WHEN `openkos purge <concept-id>` runs
 - THEN the history rewrite begins
+
+### Requirement: Preview Names Every Target And Any Absence Of Raw Material
+
+Before rail 1, `purge` MUST print to stdout a preview naming EVERY path the
+rewrite would expunge — each purge-set member's `bundle/<id>.md`, each
+resolved `raw/<name>`, each ledger sidecar and each decision sidecar — plus
+one warning line per member whose `resource` frontmatter is absent or fails
+validation, and, under `--scope source`, the total purge-set count. When the
+purge set resolves NO raw source path at all, the preview MUST state that
+absence in words rather than leaving it to be inferred from a shorter list.
+The preview is the LAST thing shown before rail 6's typed confirmation
+phrase, so it — not `--help` — is what an operator acts on, and the one
+distinction deciding whether the source material survives (a Source with a
+resolvable `resource`, or a derived concept) MUST be legible there.
+
+#### Scenario: Preview lists every expunge target before any rail runs
+- GIVEN a purge set whose members resolve raw paths, bundle files and
+  sidecars
+- WHEN `openkos purge <concept-id>` runs
+- THEN every one of those paths is printed to stdout before rail 1 is
+  evaluated
+
+#### Scenario: A purge set resolving no raw source path says so
+- GIVEN `openkos purge <concept-id>` where no purge-set member contributes a
+  raw source path — for example a derived concept, which carries no
+  `resource` at all
+- WHEN the preview is printed
+- THEN it states that no raw source material is part of this purge
+
+#### Scenario: The absence is not stated when a raw path resolves
+- GIVEN `openkos purge <concept-id>` on a Source whose `resource` validates
+- WHEN the preview is printed
+- THEN it lists that `raw/<name>` as a target and does NOT state an absence
+  of raw source material
 
 ### Requirement: Whole-History Expunge Via git-filter-repo
 

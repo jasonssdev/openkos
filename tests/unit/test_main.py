@@ -299,6 +299,57 @@ def test_top_level_help_prints_panels_in_reading_order() -> None:
     )
 
 
+def _collapsed_command_listing(stdout: str) -> str:
+    """The rendered top-level command listing as one flat string: styling
+    dropped, Rich's box borders removed, and every run of whitespace
+    collapsed to a single space.
+
+    The listing is a two-column Rich table inside a panel, so a command's
+    summary is laid out as `name`, padding, then the summary -- wrapped
+    across as many bordered rows as the terminal width forces. Asserting on
+    raw stdout would therefore couple the assertion to the wrap points,
+    which move with the width and with the longest command name in the
+    panel. Collapsing rebuilds the sentence the reader actually reads while
+    KEEPING the command name glued to the front of its own summary, which is
+    what lets an assertion prove that a given summary belongs to a given
+    command rather than merely appearing somewhere on the page."""
+    return re.sub(r"\s+", " ", _strip_ansi(stdout).replace("│", " "))
+
+
+def test_top_level_help_qualifies_the_purge_source_material_promise() -> None:
+    """`purge`'s summary states the CONDITION under which the raw source
+    material goes with the concept, and states it in the group listing --
+    not only on `openkos purge --help`.
+
+    The unqualified predecessor ("expunge a concept AND the source material
+    behind it") promised unconditionally what the command only does when the
+    purged member is a Source carrying a resolvable `resource`. A derived
+    concept -- the common case -- contributes only its own bundle file, so a
+    reader following that promise could type an irreversible confirmation
+    phrase believing sensitive text was about to be erased that in fact
+    stays on disk. That is the exact failure this verb exists to prevent, so
+    the qualification has to reach the page a reader meets FIRST.
+
+    Asserting the summary INTACT, glued to `purge`, is what makes this test
+    load-bearing rather than a spot-check for the word "Source". The listing
+    renders only the first PARAGRAPH of a command's help -- Typer splits on
+    a blank line and collapses single newlines, then Rich wraps to the
+    terminal width rather than truncating -- so a qualification appended as
+    a second sentence survives here, while the same qualification moved
+    behind a blank line would silently disappear from the page a reader
+    meets first and stay visible only on `openkos purge --help`. Only an
+    assertion on the whole sentence can tell those two apart."""
+    runner = CliRunner()
+
+    result = runner.invoke(openkos.cli.main.app, ["--help"], env={"COLUMNS": "200"})
+
+    assert result.exit_code == 0
+    assert (
+        "purge Irreversibly expunge a concept -- and, when that concept is a "
+        "Source, the raw source material behind it. There is no undo."
+    ) in _collapsed_command_listing(result.stdout)
+
+
 def test_every_command_belongs_to_a_known_panel() -> None:
     """Every registered command declares a panel from `PANEL_ORDER` (#389).
 
