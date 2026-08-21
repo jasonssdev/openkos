@@ -3399,14 +3399,44 @@ def _judge_selection_notice(report: ExtractionReport) -> str | None:
     named titles) for the judge's OWN drop, distinct from the FINAL numeric
     cap: a judge-dropped title is never also a cap-discarded title, since
     `report.discarded_titles` is built from what SURVIVED judge selection
-    (see `extract_concept_union`'s docstring)."""
+    (see `extract_concept_union`'s docstring).
+
+    The titles are QUOTED (issue #805, item 2), and this is the FIRST
+    notice in this block to quote them -- every sibling here lists titles
+    bare, so there was no existing style to match and this one sets it.
+    The report that asked for it read:
+
+        openkos ingest: judge dropped 1 candidate(s): Schema migration ownership
+        openkos ingest: proposed changes:
+          + bundle/decisions/schema-migration-ownership-decision.md
+
+    Nothing was wrong there -- the surviving title is one word longer, and
+    re-admission is `Person`/`Organization`-only, so it could not have
+    restored the dropped candidate -- but two lines differing by a single
+    word read as the tool contradicting itself. The ambiguity is exactly
+    where each title ENDS, which is what a quote settles; single quotes
+    because that is how this module already quotes a name or a path.
+    """
     if report.judge_status != "ok" or not report.judged_out_titles:
         return None
     shown = report.judged_out_titles[:_CAP_NOTICE_TITLE_LIMIT]
     remainder = len(report.judged_out_titles) - len(shown)
-    listed = ", ".join(shown)
+    # Quote each title INDIVIDUALLY, and leave `(+N more)` outside the
+    # quotes: it is this notice's own bookkeeping, never part of a title.
+    listed = ", ".join(f"'{title}'" for title in shown)
     if remainder > 0:
         listed = f"{listed} (+{remainder} more)"
+    # The rejected alternative, recorded so it is not re-opened: printing
+    # this list AFTER the proposed-changes block instead. (1) This line
+    # goes to stderr and that block to stdout, so their adjacency in the
+    # report is a terminal interleave, not a stream ordering -- moving it
+    # would change only what a TTY user happens to see. (2) The line sits
+    # in a notice block whose order is deliberate and documented
+    # (wrong-language -> recombined -> re-ask -> pre-judge ceiling ->
+    # judge -> participant-unreadmitted -> participant-ungrounded -> cap),
+    # and `_participant_unreadmitted_notice` is documented as rendering
+    # immediately after the judge notice it qualifies; moving the judge
+    # line alone would separate that pair.
     return f"judge dropped {len(report.judged_out_titles)} candidate(s): {listed}"
 
 
@@ -4313,6 +4343,34 @@ class _SingleIngestOutcome:
     `_echo_type_floor_summary`, mirroring the `alternative_pairs`/
     `_echo_type_alternative_summary` precedent exactly."""
 
+    extraction_notice: okf.ExtractionNotice | None = None
+    """The `extraction_notice` token the Source CARRIES now that this run
+    has finished, or `None` -- carried so `_ingest_batch`'s summary can
+    tally it (issue #805, item 1).
+
+    `_stage_derived_objects` already computed this to re-render the Source
+    document, and it died there: the batch summary, deliberately the run's
+    LAST word (#349), had no field for it while the per-file notices went
+    to stderr partway through what can be a seventeen-minute run.
+
+    The token this run STAMPED is the same thing on every path that
+    re-renders the Source, but not on #773's convergence short-circuit,
+    which stamps nothing and leaves a document that may still carry the
+    prior run's marker -- reachably #585's `sole-object-restates-source`.
+    That path reads the carried token back out of `prior_metadata`
+    (`_carried_extraction_notice`), because a summary term reading "N with
+    an extraction notice" answers what is on disk when the run ends, and
+    "stamped this run" would silently under-count every converged
+    re-ingest. `None` therefore means the Source carries no token this
+    build can spell: a fresh or re-extracted run that produced no notice, a
+    converged re-ingest of a clean Source, or a refusal (which raises
+    rather than returning).
+
+    The TOKEN rather than a bool, because the vocabulary is closed
+    (`okf.ExtractionNotice`) and the three values do not mean the same
+    thing -- a later term that wants to split judge debt from #585's
+    disclosure can read this field instead of re-deriving it."""
+
 
 def _echo_type_alternative_summary(
     derived_count: int, pairs: Sequence[tuple[str, str]]
@@ -4632,6 +4690,14 @@ def _ingest_batch(
     lines plus an aggregate summary on stdout -- outcome lines FIRST, the
     summary as the batch's last word (issue #349).
 
+    That summary carries five terms: ingested / re-ingested / skipped /
+    extraction-degraded / with-extraction-notice(s) (issue #805, item 1).
+    The last one is the newest and the widest: it counts a file whose
+    Source finished carrying ANY `okf.ExtractionNotice` token, including
+    #585's `sole-object-restates-source`, which no later surface flags.
+    See the comment above the summary line itself for why that set is
+    deliberately wider than `lint`'s "Unjudged extractions".
+
     Exit ladder (issue #349): 0 when every file succeeded (idempotent
     re-ingests count as success); 3 when EVERY skip was the per-file
     pipeline's drift refusal (exit 3, #319) -- nothing those files would
@@ -4731,6 +4797,7 @@ def _ingest_batch(
     ingested_count = 0
     reingested_count = 0
     degraded_count = 0
+    noticed_count = 0
     skipped_count = 0
     hard_skip_count = 0
     derived_total = 0
@@ -4764,6 +4831,12 @@ def _ingest_batch(
         derived_total += outcome.derived_count
         alternative_pairs.extend(outcome.alternative_pairs)
         type_floor_pairs.extend(outcome.type_floor_pairs)
+        if outcome.extraction_notice is not None:
+            # Counts EVERY member of `okf.ExtractionNotice`, not just the
+            # two judge tokens -- see the summary's own docstring block
+            # below for why this is deliberately a WIDER set than `lint`'s
+            # "Unjudged extractions" section reports.
+            noticed_count += 1
         if outcome.regenerated:
             reingested_count += 1
             marker, label = "~", "re-ingested"
@@ -4799,10 +4872,38 @@ def _ingest_batch(
     # (issue #349).
     for line in outcome_lines:
         typer.echo(line)
+    # `noticed_count` counts a file whose Source finished carrying ANY
+    # `okf.ExtractionNotice` token -- all three of them, not only the two
+    # retryable judge causes. Deliberately a WIDER set than the one
+    # `lint`'s "Unjudged extractions" section reports
+    # (`lint._UNJUDGED_NOTICE_CAUSES` and `_extraction_retry_due` both
+    # match exactly `judge-selection-unavailable` and
+    # `judge-selection-empty`): #585's `sole-object-restates-source` is a
+    # disclosure rather than debt, so no surface flags it for repair --
+    # which is precisely why the run's last word must still say it
+    # happened. Read the two numbers as different questions: this term
+    # answers "how many files finished with something disclosed on the
+    # Source", `lint` answers "how many of those are worth re-running".
+    #
+    # The term never double-counts `extraction-degraded`. That one counts a
+    # `skip_reason` (Source-only, zero derived objects); a notice
+    # presupposes at least one object was written, and
+    # `_stage_derived_objects` returns the two on mutually exclusive paths.
+    notice_pointer = ""
+    if noticed_count:
+        # Only when there is something to recover -- an advisory that fires
+        # on the healthy path is noise (the `_echo_type_*_summary` rule).
+        # It names BOTH surfaces honestly: the frontmatter key carries
+        # every kind, `lint` flags only the retryable ones.
+        notice_pointer = (
+            " Their Sources carry `extraction_notice`; "
+            "`openkos lint` names the retryable ones."
+        )
     typer.echo(
         f"openkos ingest: batch summary -- {total} file(s): "
         f"{ingested_count} ingested, {reingested_count} re-ingested, "
-        f"{skipped_count} skipped, {degraded_count} extraction-degraded."
+        f"{skipped_count} skipped, {degraded_count} extraction-degraded, "
+        f"{noticed_count} with extraction notice(s).{notice_pointer}"
     )
     if skipped_count:
         # Exit ladder (issue #349): every skip a drift refusal -> exit 3,
@@ -4880,10 +4981,10 @@ def ingest(
     mirroring the single-file convention. A per-file refusal skips that
     file (reason on stderr) and CONTINUES; per-file outcome lines plus an
     aggregate summary (ingested / re-ingested / skipped /
-    extraction-degraded) close the run, in that order. The batch exits 0
-    when every file succeeded (re-ingests count as success), 3 when every
-    skip was a drift refusal (the retryable failure, exit 3 per file),
-    and 1 when any skip was a hard refusal (issue #349). An empty
+    extraction-degraded / with extraction notice(s)) close the run, in that
+    order. The batch exits 0 when every file succeeded (re-ingests count as
+    success), 3 when every skip was a drift refusal (the retryable failure,
+    exit 3 per file), and 1 when any skip was a hard refusal (issue #349). An empty
     directory or a glob matching nothing refuses (exit 1, nothing
     written). See `_ingest_batch` for the full batch contract.
     """
@@ -4947,6 +5048,32 @@ def _extraction_retry_due(metadata: Mapping[str, object]) -> bool:
         okf.EXTRACTION_NOTICE_JUDGE_UNAVAILABLE,
         okf.EXTRACTION_NOTICE_JUDGE_EMPTY,
     )
+
+
+def _carried_extraction_notice(
+    metadata: Mapping[str, object],
+) -> okf.ExtractionNotice | None:
+    """The `extraction_notice` a Source's frontmatter CARRIES, narrowed to
+    the closed vocabulary (`okf.EXTRACTION_NOTICE_VALUES`) by matching a
+    member rather than casting -- so the returned value is one this build
+    can actually spell.
+
+    It FAILS CLOSED: an absent key and an unrecognised value are both
+    `None`. Frontmatter is hand-editable, and a Source written by a later
+    release may carry a token this one does not know; neither is a reason to
+    crash a run that is otherwise writing nothing, and neither may be
+    counted under a summary term whose wording promises a vocabulary member.
+    Leaving it out is the honest answer -- the Source document itself stays
+    the record, and `okf` stays the one place the vocabulary is defined.
+
+    The one caller is #773's convergence short-circuit, which needs the
+    PRIOR run's token because the summary term counts what a Source carries
+    when the run ends, not what the run stamped (#805, item 1)."""
+    value = metadata.get(okf.EXTRACTION_NOTICE_KEY)
+    for token in okf.EXTRACTION_NOTICE_VALUES:
+        if value == token:
+            return token
+    return None
 
 
 def _ingest_single(
@@ -5313,6 +5440,20 @@ def _ingest_single(
                     regenerated=True,
                     extraction_degraded=False,
                     extraction_skipped=True,
+                    # This run stamps nothing, but the Source it just left
+                    # untouched may STILL carry the prior run's disclosure
+                    # -- reachably #585's `sole-object-restates-source`,
+                    # since `_extraction_retry_due` above sends the two
+                    # judge tokens back through a full extraction. The
+                    # summary term counts what a Source CARRIES when the run
+                    # ends (#805, item 1), so reporting `None` here would
+                    # under-count it to zero. This is NOT a new frontmatter
+                    # read-back: `prior_metadata` is the mapping the guard
+                    # on the line above already reads
+                    # `okf.EXTRACTION_NOTICE_KEY` out of, and the
+                    # never-read-back rule (see the comment block above)
+                    # governs WRITES -- nothing here is merged onto disk.
+                    extraction_notice=_carried_extraction_notice(prior_metadata),
                 )
 
         def _build_source_document(
@@ -5598,6 +5739,7 @@ def _ingest_single(
     return _SingleIngestOutcome(
         regenerated=regenerate,
         extraction_degraded=skip_reason is not None,
+        extraction_notice=extraction_notice,
         derived_count=len(derived_plans),
         alternative_pairs=tuple(
             (plan.doc_type, plan.type_alternative)
@@ -9663,10 +9805,31 @@ def merge(
     _refresh_derived_after_write(layout, None, verb="merge")
 
 
+_UNMERGE_ARGUMENT_RULE: Final = "exactly one of the two is required"
+"""The ONE spelling of `unmerge`'s argument rule (issue #805, item 4).
+
+Naming the survivor does not identify a merge on it, so `unmerge` refuses
+without an absorbed id -- and the published one-liner used to read
+"Reverse the most recent merge on a concept", which says the opposite.
+Shared here so the three PUBLISHED help strings -- the command help, the
+positional argument's help, and `--to`'s help -- cannot drift into three
+near-synonyms of the same rule.
+
+The command's docstring below and `docs/cli.md` spell the same clause
+verbatim, but by hand: neither can interpolate this constant. A docstring
+assembled from an f-string is not a literal, so Python stores no `__doc__`
+for it at all, and a Markdown file interpolates nothing. Prose is the
+right place to accept that duplication -- it is one short clause a reader
+sees whole -- but it is duplication, so a change here is a change to make
+in those two places too."""
+
+
 @app.command(
     help=(
-        "Reverse the most recent merge on a concept (or unwind a chain of "
-        "merges with --to), restoring documents to their pre-merge state."
+        "Reverse a recorded merge on a concept, restoring documents to "
+        "their pre-merge state. Name the absorbed id: the positional "
+        "<absorbed-id> reverses the survivor's most recent merge, or --to "
+        f"<absorbed-id> unwinds the chain down to it -- {_UNMERGE_ARGUMENT_RULE}."
     ),
     rich_help_panel="Curate",
 )
@@ -9679,7 +9842,8 @@ def unmerge(
         None,
         help=(
             "Concept id expected to be the LIFO-tail absorbed_id of "
-            "survivor's merged_from ledger. Mutually exclusive with --to."
+            "survivor's merged_from ledger. This argument or --to: "
+            f"{_UNMERGE_ARGUMENT_RULE}, never both."
         ),
     ),
     to: str | None = typer.Option(
@@ -9688,8 +9852,8 @@ def unmerge(
         help=(
             "Unwind the survivor's merge ledger tail-first, one unmerge per "
             "entry, down to and including the entry that absorbed this id -- "
-            "one confirm gate for the whole plan. Mutually exclusive with "
-            "the positional absorbed-id."
+            "one confirm gate for the whole plan. This option or the "
+            f"positional absorbed-id: {_UNMERGE_ARGUMENT_RULE}, never both."
         ),
     ),
     auto: bool = typer.Option(
@@ -9698,12 +9862,24 @@ def unmerge(
         help="Skip the confirmation prompt and write immediately (unattended).",
     ),
 ) -> None:
-    """Reverse the most recent `merge` on `survivor_id`, restoring both
-    concept files to byte parity with their pre-merge state (spec: Unmerge
-    Achieves Round-Trip Parity) -- the reversal `merged_from` (ADR-0002)
-    exists to make possible. Two mutually exclusive forms (issue #562):
-    supplying BOTH the positional `absorbed_id` and `--to`, or NEITHER, is
-    a clean exit-1 refusal before any other gate.
+    """Reverse a recorded `merge` on `survivor_id`, restoring both concept
+    files to byte parity with their pre-merge state (spec: Unmerge Achieves
+    Round-Trip Parity) -- the reversal `merged_from` (ADR-0002) exists to
+    make possible. Two mutually exclusive forms (issue #562), and exactly
+    one of the two is required: supplying BOTH the positional
+    `absorbed_id` and `--to`, or NEITHER, is a clean exit-1 refusal before
+    any other gate.
+
+    The absorbed id stays REQUIRED rather than defaulting to the ledger's
+    most recent entry (issue #805, item 4, which offered that as the
+    alternative fix). `unmerge` is a destructive restore, and this
+    project's canon is "human curates, engine maintains -- consequential
+    changes stay reviewable, not silently automatic". An implicit target
+    would let `openkos unmerge <survivor> --auto` reverse a merge the
+    operator never named, on a survivor whose ledger they may not have
+    read. The refusal below is immediate and costs one round trip, which
+    is the cheap half of that trade; only the HELP was wrong, and it is
+    the help that was fixed.
 
     `unmerge <survivor-id> <absorbed-id>` is the classic two-arg,
     LIFO-ENFORCED form: it targets ONLY the most-recent unreversed

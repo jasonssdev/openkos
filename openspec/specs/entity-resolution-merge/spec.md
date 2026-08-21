@@ -443,7 +443,18 @@ drift/collision check included, per-step audit line and sidecar pop
 included), down to AND INCLUDING the entry that absorbed the target,
 behind ONE whole-plan preview and ONE confirm gate (same precedence as the
 two-arg form); the positional `absorbed-id` and `--to` are mutually
-exclusive, and supplying both or neither refuses cleanly. A mid-chain
+exclusive, and supplying both or neither refuses cleanly.
+
+The absorbed id MUST stay explicit: `unmerge` MUST NOT default to the
+survivor's most recent ledger entry (issue #805, item 4). It is a
+destructive restore, and a consequential change stays reviewable rather
+than silently automatic — an implicit target would let an `--auto` run
+reverse a merge the operator never named. Because that makes the argument
+required, the command's PUBLISHED help MUST say so: the one-liner, the
+positional `absorbed-id`'s help, and `--to`'s help MUST each state that
+exactly one of the two is required, in ONE shared spelling, and MUST NOT
+describe the command in terms that imply the survivor alone identifies the
+merge. A mid-chain
 failure stops immediately, reports the failed step and that earlier steps
 completed, and never rolls completed steps back — each intermediate state
 is a consistent bundle. A `survivor-id` whose concept file does not exist
@@ -506,6 +517,14 @@ first (an absorbed ex-survivor's own sidecar survives its absorption).
   ledger at all
 - WHEN `unmerge <survivor> --to <target>` runs
 - THEN it exits non-zero and writes nothing
+
+#### Scenario: Published help states that an absorbed id is required
+- GIVEN `openkos unmerge --help`
+- WHEN the rendered page is read
+- THEN the command one-liner, the positional `absorbed-id`'s help, and
+  `--to`'s help each state in one shared spelling that exactly one of the
+  two is required, and no text describes the command as reversing "the
+  most recent merge on a concept"
 
 #### Scenario: A mid-chain --to failure stops without rolling back
 - GIVEN a `--to` unwind whose step N fails Phase A or Phase B

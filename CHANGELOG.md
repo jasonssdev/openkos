@@ -57,6 +57,45 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Fixed
 
+- **The batch summary now has a channel for `extraction_notice`**
+  ([#805](https://github.com/jasonssdev/openkos/issues/805)). A three-file
+  batch closed with `3 ingested, 0 re-ingested, 0 skipped, 0
+  extraction-degraded.` while two of those three sources had been marked
+  `extraction_notice: judge-selection-unavailable` earlier in the same run.
+  The counts were right — `extraction-degraded` means Source-only, and a
+  quarantined source is not that — but the summary is deliberately the run's
+  last word, and it had no field for the notice at all, while the notices
+  themselves went to stderr partway through a seventeen-minute run. The
+  summary gains a fifth term, `N with extraction notice(s)`, and names where
+  to recover when the count is non-zero. It counts **every** notice kind,
+  which is deliberately wider than what `lint` reports under
+  `Unjudged extractions:`: that section covers only the two retryable judge
+  causes, and `sole-object-restates-source` — a disclosure rather than debt —
+  is flagged nowhere else, which is exactly why the run's last word has to
+  say it happened.
+
+- **`judge dropped <title>` no longer reads as a contradiction**
+  ([#805](https://github.com/jasonssdev/openkos/issues/805)). The notice
+  printed `judge dropped 1 candidate(s): Schema migration ownership`, and the
+  proposed-changes block interleaved directly underneath with
+  `+ bundle/decisions/schema-migration-ownership-decision.md`. Nothing was
+  wrong — the surviving title is one word longer, and re-admission is
+  `Person`/`Organization`-only, so it could not have restored the dropped
+  candidate — but two adjacent lines differing by a single word read as the
+  tool contradicting itself. The dropped titles are now quoted, which is what
+  settles where each one ends.
+
+- **`unmerge`'s help no longer implies the survivor alone identifies the
+  merge** ([#805](https://github.com/jasonssdev/openkos/issues/805)). It read
+  "Reverse the most recent merge on a concept", and the ledger does know which
+  merge was most recent — so `openkos unmerge people/marta-ruiz` looked like a
+  complete command, and refused for want of an absorbed id. The absorbed id
+  stays required rather than defaulting to the ledger tail: `unmerge` is a
+  destructive restore, and an implicit target would let `--auto` reverse a
+  merge nobody named. The one-liner, the positional argument's help, `--to`'s
+  help, and `docs/cli.md` now state in one shared spelling that exactly one of
+  the two is required.
+
 - **The reconciliation floor no longer has a short-document blind spot**
   ([#803](https://github.com/jasonssdev/openkos/issues/803)). The
   merged-body reconciliation pass was gated on a 20% stacked share AND an
