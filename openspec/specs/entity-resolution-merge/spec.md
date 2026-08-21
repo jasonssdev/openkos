@@ -35,6 +35,59 @@ ids MUST be rejected with no write.
 - WHEN `merge` runs
 - THEN it exits non-zero and writes nothing
 
+### Requirement: The Stacked Form Keeps One Document Root
+
+The APPEND stacks the absorbed body under a
+`## Merged content (<absorbed-id>)` delimiter. The absorbed body carries
+its own `# ` title heading, so appending it verbatim produced a merged
+document with TWO level-1 headings — two document roots in one file
+(issue #803).
+
+The absorbed body's LEADING `# ` heading MUST therefore be demoted to
+`### ` before it is stacked. The delimiter directly above already names
+the absorbed document, so that heading is both the redundant one and the
+one creating the second root; `### ` nests it under the level-2 delimiter.
+The demotion MUST fail closed, exactly as the reconciled-body heading pin
+does: only an exact leading `# ` ATX heading is rewritten, and a body that
+opens with prose is stacked unchanged — this demotes a heading that
+exists, it never invents or relocates one.
+
+The absorbed document's DEEPER sections MUST be left verbatim. Folding
+them requires section-merging semantics this engine does not provide
+(deduping `## Related` bullets, renumbering `[N]` citation markers), and
+shifting them byte-wise would silently change meaning; `# Citations` is an
+OKF §8 RESERVED heading and MUST NOT be demoted blind. Reconciliation is
+what folds two documents into one; this requirement only stops the
+unreconciled fallback from asserting two roots.
+
+The demotion is PRESENTATION-ONLY and MUST NOT affect reversibility.
+`unmerge` restores from the ledger's verbatim pre-merge snapshots, and
+every other consumer of a merged body locates the absorbed segment by the
+`## Merged content (` marker rather than by the absorbed body's bytes.
+
+#### Scenario: The absorbed leading heading is demoted
+- GIVEN an absorbed body opening with a `# ` heading
+- WHEN the merged body is built
+- THEN that heading is stacked as `### ` and the merged body carries
+  exactly one level-1 heading, the survivor's
+
+#### Scenario: Deeper absorbed sections are stacked verbatim
+- GIVEN an absorbed body carrying a `## Related` section and a
+  `# Citations` section below its title heading
+- WHEN the merged body is built
+- THEN both are present unchanged, at their original heading levels
+
+#### Scenario: A heading-less absorbed body is stacked unchanged
+- GIVEN an absorbed body that opens with prose
+- WHEN the merged body is built
+- THEN the absorbed text is stacked byte-identically, with no heading
+  invented
+
+#### Scenario: A demoted stack still unmerges to byte parity
+- GIVEN a merge whose absorbed body carried a demoted leading heading
+- WHEN `unmerge` reverses it
+- THEN both documents are restored byte-for-byte from the ledger snapshots
+
 ### Requirement: Frontmatter-Conflict Resolution
 
 | Field kind | Rule |
@@ -55,6 +108,19 @@ incidental side effect of generic scalar-merge logic.
 behavior on a cross-type merge was an implicit consequence never named or
 pinned by a dedicated test.)
 
+`type_alternative` is EXCLUDED from the generic fill-the-gap branch: the
+absorbed side's value MUST NEVER be imported into the merged document
+(issue #803). It records ONE extraction's uncertainty about ONE document's
+classification, not a property of the entity, so importing it manufactures
+doubt no extraction ever expressed about the survivor — the reported case
+came out of a merge newly flagged as possibly an `Organization`. The
+exclusion also removes a latent hazard: the concept builder REFUSES
+`type_alternative == type`, while the merge path has no such check, so
+inheritance could leave a survivor carrying `type: X` plus
+`type_alternative: X`, a state the builder will not produce. A survivor
+carrying its OWN `type_alternative` MUST keep it; the absorbed document's
+value MUST be restored to it unchanged by `unmerge`.
+
 #### Scenario: Conflicting fields resolved and surfaced
 - GIVEN differing scalar and list-field values on both sides
 - WHEN `merge` runs
@@ -68,6 +134,20 @@ pinned by a dedicated test.)
 - WHEN `merge <survivor> <absorbed>` is confirmed
 - THEN the merged document's `type` is `Concept`, and the absorbed object's
   `Entity` type is discarded
+
+#### Scenario: The absorbed `type_alternative` does not cross the merge
+
+- GIVEN a survivor with no `type_alternative` and an absorbed object
+  declaring one
+- WHEN `merge <survivor> <absorbed>` is confirmed
+- THEN the merged document carries no `type_alternative`, and `unmerge`
+  restores the absorbed document's own value unchanged
+
+#### Scenario: The survivor keeps its own `type_alternative`
+
+- GIVEN both sides declaring a DIFFERENT `type_alternative`
+- WHEN `merge <survivor> <absorbed>` is confirmed
+- THEN the merged document carries the survivor's value
 
 ### Requirement: Sensitivity High-Water-Mark Recomputation
 
@@ -548,6 +628,33 @@ MUST be reconciliation ON, per #645's opt-out ruling. A caller that plans
 the pass without offering the opt-out would send both note bodies to the
 model with no way for the operator to refuse.
 
+Every consenting caller MUST likewise expose the OPT-IN, `--reconcile`,
+under the same one-lever rule: `merge --reconcile`, `curate --reconcile`,
+and `adjudicate --reconcile`. It MUST force the pass even when neither
+threshold is met, because the thresholds are a heuristic tuned for the
+unattended default while the flag is a human acting on a preview that has
+just said "bodies were appended, not reconciled". Without it that
+disclosure names a problem the operator has no way to act on: re-running
+the merge produces the same stacked result (issue #803).
+
+`--reconcile` and `--no-reconcile` together MUST be REFUSED, not silently
+resolved, before any workspace gate or read. Either precedence rule would
+carry out half of what the operator asked for and discard the other half
+with no signal. The predicate MUST still read the opt-out first, so a
+caller reaching it with both set makes no model call.
+
+The absolute floor MUST measure the MERGED body, not the absorbed
+contribution. Read against the absorbed side it is a stricter, unstated
+second rule: a merged document below `floor / share-threshold` chars can
+never clear it, however large the absorbed share, so short documents were
+stacked no matter how much of the result the absorbed half was — the
+reported case being two `Person` merges at 39% and 40% share that missed
+by 11 and 19 characters (issue #803). Re-anchoring is monotone
+(`merged_chars >= absorbed_chars` always), so it admits merges without
+withdrawing any, and it preserves the floor's stated intent: two one-line
+bodies stacking at a high share while carrying nothing worth a model call
+still fall below the floor and are still skipped.
+
 The application MUST run AFTER that caller's consent and BEFORE its drift
 re-check, so the slow model call sits inside the window the drift guard
 re-validates. Any failure MUST keep the stacked body and notice on stderr:
@@ -570,6 +677,33 @@ thresholds at which the standalone verb offered the pass at 27%.
 - WHEN the preview is printed and the merge is accepted
 - THEN the preview does not disclose the pass and no reconciliation call is
   made
+
+#### Scenario: A short document above the share is reconciled
+- GIVEN a pair whose absorbed body is a large share of the merged body but
+  contributes fewer chars than the absolute floor, and whose merged body is
+  at or above that floor
+- WHEN the merge is planned
+- THEN the reconciliation pass is disclosed and applied
+
+#### Scenario: Two one-line bodies are still skipped
+- GIVEN a pair whose merged body falls below the absolute floor, at any
+  stacked share
+- WHEN the merge is planned
+- THEN the reconciliation pass is neither disclosed nor applied
+
+#### Scenario: The opt-in forces the pass below both thresholds
+- GIVEN a pair that clears NEITHER the share threshold nor the absolute
+  floor, and `--reconcile`
+- WHEN the preview is printed and the merge is accepted
+- THEN the preview discloses the reconciliation and the accepted merge runs
+  the pass
+
+#### Scenario: The opt-in and the opt-out together are refused
+- GIVEN `--reconcile` and `--no-reconcile` on the same invocation of any
+  consenting caller
+- WHEN the command runs
+- THEN it refuses on stderr, before any workspace gate or read, with no
+  write and no model call
 
 ### Requirement: The Reconciled Body's Leading Heading Names The Survivor
 

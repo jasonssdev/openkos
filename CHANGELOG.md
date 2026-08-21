@@ -16,6 +16,19 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Added
 
+- **`--reconcile`, the explicit counterpart to `--no-reconcile`**
+  ([#803](https://github.com/jasonssdev/openkos/issues/803)). The merge
+  preview told the operator that "bodies were appended, not reconciled" and
+  offered no lever to act on it: re-running the merge produced the same
+  stacked result. `merge --reconcile`, `adjudicate --reconcile` and
+  `curate --reconcile` force the reconciliation pass below both thresholds
+  that decide it by default — one lever across every consenting caller, the
+  same rule [#688](https://github.com/jasonssdev/openkos/issues/688) settled
+  for the opt-out. Passing `--reconcile` together with `--no-reconcile` is
+  refused up front (exit 2) rather than silently resolved: either precedence
+  rule would carry out half the request and discard the other half with no
+  signal.
+
 - **A human "keep distinct" ruling is persisted, and outranks the model**
   ([#797](https://github.com/jasonssdev/openkos/issues/797)). Declining a
   proposed merge lived exactly as long as the session. `next` routed to
@@ -43,6 +56,48 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   drift.
 
 ### Fixed
+
+- **The reconciliation floor no longer has a short-document blind spot**
+  ([#803](https://github.com/jasonssdev/openkos/issues/803)). The
+  merged-body reconciliation pass was gated on a 20% stacked share AND an
+  absolute 200-character floor measured on the ABSORBED body. Those two
+  numbers are only mutually consistent for merged documents of 1000
+  characters or more; below that length the floor is a stricter, unstated
+  second rule a short document can never clear, no matter how large its
+  share. Two `Person` merges carrying 189 and 181 absorbed characters at
+  39% and 40% share — nearly half the document each — missed it by 11 and
+  19 characters. The floor now measures the MERGED body, the quantity it was
+  always describing. The change is monotone: `merged_chars >=
+  absorbed_chars` always, so every merge the old gate planned the new gate
+  still plans, and the counter-example the floor exists for — two one-line
+  bodies stacking at a high share while carrying nothing worth a model call
+  — still lands below 200 merged characters and is still skipped.
+
+- **A stacked merge no longer produces two document roots**
+  ([#803](https://github.com/jasonssdev/openkos/issues/803)). The absorbed
+  body was appended byte for byte, so a merged document carried two `# ` H1
+  headings. The `## Merged content (<absorbed-id>)` delimiter already names
+  the absorbed document, so its own title heading is both the redundant one
+  and the one creating the second root; it is now demoted to `### `. The
+  absorbed document's deeper sections are deliberately left verbatim —
+  folding them needs section-merging semantics (deduping `## Related`
+  bullets, renumbering `[N]` citation markers) that doing byte-wise would
+  silently change meaning, and `# Citations` is an OKF §8 reserved heading.
+  The demotion is presentation-only: `unmerge` restores from the ledger's
+  verbatim pre-merge snapshots, and every other consumer of a merged body
+  locates the absorbed segment by the `## Merged content (` marker, never by
+  its bytes.
+
+- **`type_alternative` is no longer inherited by a merge survivor**
+  ([#803](https://github.com/jasonssdev/openkos/issues/803)). The generic
+  fill-the-gap branch copied the absorbed document's `type_alternative` into
+  a survivor that had none, so a merged `Person` came out newly flagged as
+  possibly an `Organization` — metadata got worse, not better. The key
+  records one extraction's uncertainty about one document's classification,
+  not a property of the entity. Excluding it also removes a latent hazard:
+  `build_concept` refuses `type_alternative == type`, while the merge path
+  has no such check, so inheritance could produce a document the builder
+  will not build. A survivor carrying its own value keeps it.
 
 - **`merge` now carries the cross-source warning the other three surfaces
   already had** ([#796](https://github.com/jasonssdev/openkos/issues/796),

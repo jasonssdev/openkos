@@ -267,6 +267,18 @@ class CurateContext:
     should fail: reconciling a merge that did not need it costs one model
     call, while stacking one that did produces the stapled document this
     issue was filed about."""
+    reconcile: bool = False
+    """Whether Identity's merges FORCE the #645 merged-body reconciliation
+    pass, below the thresholds included (issue #803) -- `curate
+    --reconcile`, the explicit counterpart to `--no-reconcile` and the same
+    opt-in lever `merge` and `adjudicate` take.
+
+    Defaults to `False` on the mirrored reasoning to `no_reconcile`: a
+    forgotten thread-through leaves the thresholds deciding, which is the
+    documented default, never a model call the operator never asked for.
+    Setting BOTH is refused at the command's front door, so a context
+    carrying both holds a bug; `_reconcile_planned` reads `no_reconcile`
+    first regardless."""
     ollama_client: LLMBackend | None = field(default=None, init=False)
     """The client for the stage currently running -- reassigned by the
     sequencer before each `needs_llm` stage's `run`.
@@ -856,7 +868,9 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
             continue
 
         typer.echo(
-            cli_main._format_merge_preview_line(prepared, no_reconcile=ctx.no_reconcile)
+            cli_main._format_merge_preview_line(
+                prepared, no_reconcile=ctx.no_reconcile, reconcile=ctx.reconcile
+            )
         )
         # #776: the survivor rule is deterministic and STATED, and the
         # risky cross-source class is named BEFORE the prompt -- the same
@@ -890,7 +904,11 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         # call sits inside the window the guard re-validates -- the exact
         # ordering `merge` uses, via the exact same helper.
         prepared = cli_main._apply_reconciliation(
-            ctx.root, prepared, no_reconcile=ctx.no_reconcile, verb="curate"
+            ctx.root,
+            prepared,
+            no_reconcile=ctx.no_reconcile,
+            reconcile=ctx.reconcile,
+            verb="curate",
         )
 
         absorbed_path = layout.bundle_dir / f"{prepared.absorbed_canonical}.md"

@@ -54,12 +54,15 @@ def _write_concept(
     section: str = "Concepts",
     sensitivity: str | None = None,
     body: str = "Body.",
+    type_alternative: str | None = None,
 ) -> None:
     concept_path = tmp_path / "bundle" / f"{concept_id}.md"
     concept_path.parent.mkdir(parents=True, exist_ok=True)
     lines = ["---", "type: Concept", f"title: {title}"]
     if sensitivity is not None:
         lines.append(f"sensitivity: {sensitivity}")
+    if type_alternative is not None:
+        lines.append(f"type_alternative: {type_alternative}")
     lines.append("---")
     lines.append("")
     lines.append(f"# {title}")
@@ -218,6 +221,137 @@ def test_single_merge_then_unmerge_is_byte_identical_modulo_log(
     pre_log_text = pre_snapshot[Path("bundle/log.md")].decode("utf-8")
     assert log_text != pre_log_text
     assert "**Unmerge**" in log_text
+
+
+def test_absorbed_type_alternative_never_crosses_the_merge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#803: a survivor with no `type_alternative` must not acquire one from
+    the absorbed side, and `unmerge` must then have nothing to remove.
+
+    The reported defect was metadata getting WORSE through a merge: the
+    survivor came out newly flagged as possibly another type, on the
+    strength of an uncertainty recorded about a different document."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(
+        tmp_path, "concepts/survivor", title="Survivor", body="Survivor body."
+    )
+    _write_concept(
+        tmp_path,
+        "concepts/absorbed",
+        title="Absorbed",
+        body="Absorbed body.",
+        type_alternative="Organization",
+    )
+
+    pre_snapshot = _bundle_bytes_snapshot(tmp_path)
+
+    merge_result = runner.invoke(
+        app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+    assert merge_result.exit_code == 0, merge_result.stderr
+
+    merged_metadata, _ = okf.load_frontmatter(
+        (tmp_path / "bundle" / "concepts" / "survivor.md").read_text(encoding="utf-8")
+    )
+    assert okf.TYPE_ALTERNATIVE_KEY not in merged_metadata
+
+    unmerge_result = runner.invoke(
+        app, ["unmerge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+    assert unmerge_result.exit_code == 0, unmerge_result.stderr
+
+    # The absorbed document gets its OWN value back verbatim -- the refusal
+    # is scoped to the import, it never edits the absorbed side.
+    _assert_byte_parity_except_log(tmp_path, pre_snapshot)
+    restored_metadata, _ = okf.load_frontmatter(
+        (tmp_path / "bundle" / "concepts" / "absorbed.md").read_text(encoding="utf-8")
+    )
+    assert restored_metadata[okf.TYPE_ALTERNATIVE_KEY] == "Organization"
+
+
+def test_survivor_keeps_its_own_type_alternative_through_a_merge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#803: only the IMPORT is refused. A survivor that already declares a
+    runner-up type keeps it -- the merged metadata starts as the
+    survivor's."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(
+        tmp_path,
+        "concepts/survivor",
+        title="Survivor",
+        body="Survivor body.",
+        type_alternative="Project",
+    )
+    _write_concept(
+        tmp_path,
+        "concepts/absorbed",
+        title="Absorbed",
+        body="Absorbed body.",
+        type_alternative="Organization",
+    )
+
+    merge_result = runner.invoke(
+        app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+    assert merge_result.exit_code == 0, merge_result.stderr
+
+    merged_metadata, _ = okf.load_frontmatter(
+        (tmp_path / "bundle" / "concepts" / "survivor.md").read_text(encoding="utf-8")
+    )
+    assert merged_metadata[okf.TYPE_ALTERNATIVE_KEY] == "Project"
+
+
+def test_demoted_absorbed_heading_still_unmerges_byte_for_byte(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#803: the stacked form demotes the absorbed body's leading `# ` to
+    `### `, and that demotion must stay PRESENTATION-ONLY.
+
+    `unmerge` restores from the ledger's verbatim `absorbed_snapshot` /
+    `survivor_before` bytes, never by splitting the merged body back apart,
+    so a rewritten heading cannot cost reversibility. Both halves are
+    asserted here: the merged survivor really does carry the demoted
+    heading (without which the parity claim would be vacuous), and the
+    round trip is still byte-identical modulo `log.md`."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(
+        tmp_path,
+        "concepts/survivor",
+        title="Survivor",
+        body="Survivor body.",
+    )
+    _write_concept(
+        tmp_path,
+        "concepts/absorbed",
+        title="Absorbed",
+        body="Absorbed body.\n\n## Related\n- [concepts/other](/concepts/other.md)",
+    )
+
+    pre_snapshot = _bundle_bytes_snapshot(tmp_path)
+
+    merge_result = runner.invoke(
+        app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+    assert merge_result.exit_code == 0, merge_result.stderr
+
+    merged_text = (tmp_path / "bundle" / "concepts" / "survivor.md").read_text(
+        encoding="utf-8"
+    )
+    assert "### Absorbed\n" in merged_text
+    _, merged_body = okf.load_frontmatter(merged_text)
+    assert merged_body.count("\n# ") == 0, "one document root, not two"
+    assert "## Related\n- [concepts/other](/concepts/other.md)" in merged_text, (
+        "the absorbed document's deeper sections stay verbatim"
+    )
+
+    unmerge_result = runner.invoke(
+        app, ["unmerge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+    assert unmerge_result.exit_code == 0, unmerge_result.stderr
+
+    _assert_byte_parity_except_log(tmp_path, pre_snapshot)
 
 
 def test_sequential_lifo_merge_then_unmerge_is_byte_identical_modulo_log(
