@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 from pathlib import Path, PurePosixPath
-from typing import Final, Literal, TypedDict
+from typing import Final, Literal, NamedTuple, TypedDict
 
 import typer
 from rich.console import Console
@@ -13382,17 +13382,24 @@ def suggest_relations_cmd(
     effective_confidential = include_confidential or local_exemption
     served_by_key: dict[str, EdgeSuggestion] = {}
     to_type = edges
-    # The split line is reported when a store was actually CONSULTED, not
-    # on every run: a first-ever run has no cache to have missed, and the
-    # cost gate below already states its price. A store that exists and
+    # The split line is reported when a store was actually READ, not on
+    # every run: a first-ever run has no cache to have missed, and the
+    # cost gate below already states its price. A store that was read and
     # served nothing IS worth saying out loud -- that is drift, and a
     # silent re-spend is the #799 complaint.
-    consulted = not fresh and layout.findings_db_path.exists()
+    #
+    # READ, not merely PRESENT (#809). The gate used to be file existence,
+    # so an unreadable store printed `0 of N served` directly beneath the
+    # warning saying the read had failed -- a count of zero meaning "could
+    # not look", rendered in the words of a count meaning "looked, found
+    # nothing". `_partition_edge_suggestion_serves` answers the honest
+    # question, and `curate`'s Structure stage gates on the same one.
+    store_read = False
     if not fresh:
-        served_by_key, to_type = _partition_edge_suggestion_serves(
+        served_by_key, to_type, store_read = _partition_edge_suggestion_serves(
             layout, edges, include_confidential=effective_confidential
         )
-    if consulted:
+    if store_read:
         typer.echo(
             f"openkos suggest-relations: {len(served_by_key)} of {total} "
             "candidate edge(s) served from persisted suggestions; "
@@ -13465,21 +13472,11 @@ def suggest_relations_cmd(
     _persist_edge_suggestions(
         layout, batch.results, include_confidential=effective_confidential
     )
-    if served_by_key:
-        fresh_by_key = {
-            edge_suggestions_store.pair_key_for(
-                result.edge.source_id, result.edge.target_id
-            ): result
-            for result in batch.results
-        }
-        results: list[EdgeSuggestion] = []
-        for edge in edges:
-            key = edge_suggestions_store.pair_key_for(edge.source_id, edge.target_id)
-            found = served_by_key.get(key) or fresh_by_key.get(key)
-            if found is not None:
-                results.append(found)
-    else:
-        results = list(batch.results)
+    results: list[EdgeSuggestion] = (
+        _reassemble_edge_suggestions(edges, served_by_key, batch.results)
+        if served_by_key
+        else list(batch.results)
+    )
 
     if apply:
         _run_suggest_relations_apply(root, layout, results)
@@ -13986,15 +13983,74 @@ def _partition_adjudication_serves(
     return served, to_judge
 
 
+class EdgeSuggestionServes(NamedTuple):
+    """What `_partition_edge_suggestion_serves` answers (#809).
+
+    `store_read` is the third value because the count alone cannot carry
+    the difference between "looked, found nothing" and "could not look".
+    Both produce an empty `served`, and only one of them is worth
+    reporting as a split -- so every caller that renders that line gates
+    on this flag rather than re-deriving a proxy for it. Two callers
+    previously derived two DIFFERENT proxies (file existence on one
+    surface, a non-empty served map on the other) and disagreed about the
+    same failure as a result."""
+
+    served: "dict[str, EdgeSuggestion]"
+    to_type: "list[Edge]"
+    store_read: bool
+
+
+def _reassemble_edge_suggestions(
+    edges: "list[Edge]",
+    served: "dict[str, EdgeSuggestion]",
+    fresh: "Sequence[EdgeSuggestion]",
+) -> "list[EdgeSuggestion]":
+    """Rebuild a run's suggestions in CANDIDATE order, merging what the
+    store served with what the model just typed (#809).
+
+    Shared by `suggest-relations` and `curate`'s Structure stage, which
+    had a near-verbatim copy each. The helpers immediately beside this one
+    -- `_partition_edge_suggestion_serves` and `_persist_edge_suggestions`
+    -- were already shared, so the duplication was against this seam's own
+    convention, and a later fix to the merge (a key collision, an ordering
+    rule) would have landed in one copy and silently missed the other.
+
+    A served suggestion wins over a fresh one for the same key. That is
+    not arbitrary: a key can only appear in both when the partition served
+    it AND the model typed it anyway, which the caller's own flow makes
+    impossible, so the precedence is a tiebreak that should never fire
+    rather than a policy. Ordering follows `edges` so a served suggestion
+    and a fresh one are indistinguishable downstream."""
+    fresh_by_key = {
+        edge_suggestions_store.pair_key_for(
+            result.edge.source_id, result.edge.target_id
+        ): result
+        for result in fresh
+    }
+    rebuilt: list[EdgeSuggestion] = []
+    for edge in edges:
+        key = edge_suggestions_store.pair_key_for(edge.source_id, edge.target_id)
+        found = served.get(key) or fresh_by_key.get(key)
+        if found is not None:
+            rebuilt.append(found)
+    return rebuilt
+
+
 def _partition_edge_suggestion_serves(
     layout: config.WorkspaceLayout,
     edges: "list[Edge]",
     *,
     include_confidential: bool,
-) -> "tuple[dict[str, EdgeSuggestion], list[Edge]]":
+) -> EdgeSuggestionServes:
     """Split `edges` into suggestions servable from `.openkos/findings.db`
     and the edges that still need a model call (#799) -- the edge-typing
     twin of `_partition_adjudication_serves`, same posture throughout.
+
+    Also reports whether the store was READ (#809). An absent file and an
+    unreadable one both mean no suggestion can serve, but only the second
+    is a failure, and neither is the same as a store that was read and
+    held nothing for these edges. Answering it HERE is what stops each
+    caller inventing its own proxy.
 
     An edge is SERVED iff its latest persisted row matches this run's
     EFFECTIVE `include_confidential` bit (a suggestion computed over a
@@ -14009,7 +14065,7 @@ def _partition_edge_suggestion_serves(
     vocabulary is asymmetric, so `a -> b` and `b -> a` are different
     questions and one must never answer for the other."""
     if not layout.findings_db_path.exists():
-        return {}, edges
+        return EdgeSuggestionServes({}, edges, store_read=False)
     try:
         conn = derived.open_derived_connection(layout.findings_db_path)
         try:
@@ -14022,7 +14078,7 @@ def _partition_edge_suggestion_serves(
             f"suggestions ({exc}); typing every edge fresh.",
             err=True,
         )
-        return {}, edges
+        return EdgeSuggestionServes({}, edges, store_read=False)
     latest: dict[str, edge_suggestions_store.PersistedEdgeSuggestion] = {}
     for row in persisted:
         latest[edge_suggestions_store.pair_key_for(row.source_id, row.target_id)] = row
@@ -14053,7 +14109,7 @@ def _partition_edge_suggestion_serves(
             suggested_type=stored.suggested_type,
             rationale=stored.rationale,
         )
-    return served, to_type
+    return EdgeSuggestionServes(served, to_type, store_read=True)
 
 
 def _persist_edge_suggestions(

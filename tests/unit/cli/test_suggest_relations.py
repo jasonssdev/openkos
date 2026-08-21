@@ -2065,6 +2065,44 @@ def test_corrupt_store_degrades_to_a_full_fresh_run(
     assert "Traceback" not in second.stderr
 
 
+def test_an_unreadable_store_reports_no_split_it_could_not_measure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #809, finding 2: the split line must not contradict the
+    warning printed one line above it.
+
+    The gate was `layout.findings_db_path.exists()` -- file EXISTENCE --
+    so a present-but-unreadable store produced this pair, in this order:
+
+        openkos suggest-relations: warning -- failed to read persisted
+          suggestions (...); typing every edge fresh.
+        openkos suggest-relations: 0 of 1 candidate edge(s) served from
+          persisted suggestions; 1 typed fresh.
+
+    The second line implies the store was consulted successfully,
+    immediately after the first says the read failed. The honest condition
+    is whether the store was READ, not whether the file is there, and a
+    count of zero that means "could not look" must not be presented as a
+    count of zero that means "looked, found nothing".
+
+    The warning itself must still appear -- silence here would be a
+    different defect, and asserting only the absence of the split line
+    would pass on a run that reported nothing at all."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="B")
+    calls: list[int] = []
+    _stub_one_edge_with_call_log(monkeypatch, calls)
+    runner.invoke(app, ["suggest-relations", "--auto"])
+    (tmp_path / ".openkos" / "findings.db").write_bytes(b"not a database at all")
+
+    second = runner.invoke(app, ["suggest-relations", "--auto"])
+
+    assert second.exit_code == 0, second.stderr
+    assert "failed to read persisted suggestions" in second.stderr
+    assert "served from persisted suggestions" not in second.stderr
+
+
 def test_a_row_missing_an_endpoint_digest_never_serves(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

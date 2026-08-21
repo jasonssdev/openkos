@@ -91,7 +91,6 @@ from openkos.resolution.edge_typing import (
 )
 from openkos.resolution.volatility_typing import TierSuggestion, suggest_volatility
 from openkos.state import derived, findings
-from openkos.state import edge_suggestions as edge_suggestions_store
 from openkos.state.vectorstore import content_hash
 
 _DOCTOR_HINT = " Or run `openkos doctor` to diagnose the environment."
@@ -1017,7 +1016,10 @@ def _structure_probe(ctx: CurateContext) -> StageProbe:
     # holds the answers -- is the defect. `items` still carries EVERY
     # candidate edge (the walk must offer served suggestions too); only
     # the price drops.
-    served, to_type = cli_main._partition_edge_suggestion_serves(
+    # Destructured positionally like the other two call sites (#809
+    # review): the probe has no split line to render, so it discards
+    # `store_read` rather than reading it back off the tuple.
+    served, to_type, _ = cli_main._partition_edge_suggestion_serves(
         ctx.layout,
         edges,
         include_confidential=ctx.include_confidential or ctx.local_exemption,
@@ -1086,10 +1088,15 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
     # call. Keyed on the EFFECTIVE confidential inclusion, the same
     # disjunction the standalone verb applies.
     effective_confidential = ctx.include_confidential or ctx.local_exemption
-    served_by_key, to_type = cli_main._partition_edge_suggestion_serves(
+    served_by_key, to_type, store_read = cli_main._partition_edge_suggestion_serves(
         ctx.layout, edges, include_confidential=effective_confidential
     )
-    if served_by_key:
+    # Gated on whether the store was READ, the same fact the standalone
+    # verb gates on (#809). This used to gate on `served_by_key` being
+    # non-empty, so a store that was read and served nothing -- drift, and
+    # exactly the silent re-spend #799 exists to surface -- was reported by
+    # one surface and hidden by the other.
+    if store_read:
         typer.echo(
             f"openkos curate: Structure: {len(served_by_key)} of {len(edges)} "
             "candidate edge(s) served from persisted suggestions; "
@@ -1108,22 +1115,11 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
     cli_main._persist_edge_suggestions(
         ctx.layout, batch.results, include_confidential=effective_confidential
     )
-    if served_by_key:
-        fresh_by_key = {
-            edge_suggestions_store.pair_key_for(
-                result.edge.source_id, result.edge.target_id
-            ): result
-            for result in batch.results
-        }
-        ordered: list[EdgeSuggestion] = []
-        for edge in edges:
-            key = edge_suggestions_store.pair_key_for(edge.source_id, edge.target_id)
-            found = served_by_key.get(key) or fresh_by_key.get(key)
-            if found is not None:
-                ordered.append(found)
-        suggestions: Sequence[EdgeSuggestion] = ordered
-    else:
-        suggestions = batch.results
+    suggestions: Sequence[EdgeSuggestion] = (
+        cli_main._reassemble_edge_suggestions(edges, served_by_key, batch.results)
+        if served_by_key
+        else batch.results
+    )
 
     layout = ctx.layout
     log_path = layout.bundle_dir / "log.md"

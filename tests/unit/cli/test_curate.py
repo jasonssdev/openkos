@@ -5577,3 +5577,142 @@ def test_structure_serves_what_suggest_relations_already_paid_for(
     # independently re-derived proposal that differs ~10% of the time.
     assert "[references] concepts/a -> concepts/b" in first.stdout
     assert "concepts/a -> concepts/b [references]" in result.stdout
+
+
+def test_structure_reports_no_split_for_a_store_it_could_not_read(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #809, finding 2, on the OTHER surface: an unreadable store
+    must not produce a split line here either.
+
+    `suggest-relations` had the visible defect -- it printed `0 of N
+    served` directly beneath its own "failed to read" warning -- and
+    `curate` escaped it only because it happened to gate on a different
+    proxy. Now that both gate on the SAME fact, curate inherits that
+    fact's other half, and this is what proves the shared gate did not
+    just move the inconsistency rather than remove it.
+
+    Paired with the drift test below, which is the case where the store IS
+    readable and serves nothing. The two differ only in whether the read
+    succeeded, and the split line is the one thing that must differ with
+    them -- so neither test can stand in for the other."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _reindexed_workspace(tmp_path, monkeypatch)
+
+    from openkos.graph.base import Edge
+    from openkos.resolution.edge_typing import EdgeSuggestion, EdgeSuggestionBatch
+
+    edge = Edge(source_id="concepts/a", target_id="concepts/b", relation_type=None)
+
+    def _fake_suggest(edges: object, **kwargs: object) -> EdgeSuggestionBatch:
+        return EdgeSuggestionBatch(
+            results=[
+                EdgeSuggestion(edge=e, suggested_type="references", rationale="stub")
+                for e in edges  # type: ignore[attr-defined]
+            ]
+        )
+
+    monkeypatch.setattr("openkos.cli.main.candidate_edges", lambda *a, **k: [edge])
+    monkeypatch.setattr("openkos.cli.main.suggest_edge_types", _fake_suggest)
+    first = runner.invoke(app, ["suggest-relations", "--auto"])
+    assert first.exit_code == 0, first.stderr
+    store = tmp_path / ".openkos" / "findings.db"
+    assert store.is_file()
+    store.write_bytes(b"not a database at all")
+
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(),
+    )
+    monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [edge])
+    monkeypatch.setattr("openkos.cli.curate.suggest_edge_types", _fake_suggest)
+    monkeypatch.setattr("openkos.cli.curate._concept_type_names", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "openkos.cli.curate._contradiction_plan", lambda *a, **k: _empty_plan()
+    )
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["curate"], input="y\nn\n")
+
+    assert result.exit_code == 0, result.stderr
+    # The read failure is still REPORTED -- silence would be a different
+    # defect, and asserting only the split line's absence would pass on a
+    # run that said nothing at all.
+    assert "failed to read persisted suggestions" in result.stderr
+    assert "served from persisted suggestions" not in result.stderr
+
+
+def test_structure_reports_a_store_it_read_even_when_nothing_served(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #809, finding 2: the two surfaces gated the split line on
+    different facts, so they disagreed about when to report it.
+
+    `suggest-relations` reported it whenever the store had been consulted,
+    on the reasoning that a store which EXISTS and served nothing is drift
+    worth saying out loud -- a silent re-spend is #799's whole complaint.
+    `curate`'s Structure stage gated on `served_by_key` being non-empty
+    instead, so in exactly that case it said nothing. One feature, two
+    surfaces, two behaviours.
+
+    Here the store is written by a real `suggest-relations` run and then
+    made unable to serve, by editing an endpoint so its content digest no
+    longer matches the stored row. The store is perfectly READABLE -- this
+    is the drift case, not the corrupt one -- so Structure must report the
+    zero rather than hide it."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    doc_a = tmp_path / "bundle" / "concepts" / "a.md"
+    _write_doc(doc_a, title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _reindexed_workspace(tmp_path, monkeypatch)
+
+    from openkos.graph.base import Edge
+    from openkos.resolution.edge_typing import EdgeSuggestion, EdgeSuggestionBatch
+
+    edge = Edge(source_id="concepts/a", target_id="concepts/b", relation_type=None)
+
+    def _fake_suggest(edges: object, **kwargs: object) -> EdgeSuggestionBatch:
+        return EdgeSuggestionBatch(
+            results=[
+                EdgeSuggestion(edge=e, suggested_type="references", rationale="stub")
+                for e in edges  # type: ignore[attr-defined]
+            ]
+        )
+
+    monkeypatch.setattr("openkos.cli.main.candidate_edges", lambda *a, **k: [edge])
+    monkeypatch.setattr("openkos.cli.main.suggest_edge_types", _fake_suggest)
+    first = runner.invoke(app, ["suggest-relations", "--auto"])
+    assert first.exit_code == 0, first.stderr
+    assert (tmp_path / ".openkos" / "findings.db").is_file()
+
+    # Drift, not corruption: the row is still there and still readable, it
+    # simply no longer describes THIS content.
+    doc_a.write_text(
+        doc_a.read_text(encoding="utf-8") + "\nA later edit.\n", encoding="utf-8"
+    )
+
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(),
+    )
+    monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [edge])
+    monkeypatch.setattr("openkos.cli.curate.suggest_edge_types", _fake_suggest)
+    monkeypatch.setattr("openkos.cli.curate._concept_type_names", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "openkos.cli.curate._contradiction_plan", lambda *a, **k: _empty_plan()
+    )
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["curate"], input="y\nn\n")
+
+    assert result.exit_code == 0, result.stderr
+    assert (
+        "0 of 1 candidate edge(s) served from persisted suggestions; "
+        "1 typed fresh." in result.stderr
+    )
