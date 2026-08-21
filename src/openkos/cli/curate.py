@@ -920,7 +920,9 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         )
 
         try:
-            cli_main._commit_one_merge(ctx.root, layout, index_path, log_path, prepared)
+            merge_sha = cli_main._commit_one_merge(
+                ctx.root, layout, index_path, log_path, prepared
+            )
         except (OSError, ValueError) as exc:
             typer.echo(
                 "openkos curate: Identity: failed while merging "
@@ -929,6 +931,12 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
                 err=True,
             )
             raise typer.Exit(code=1) from exc
+        # #800: Identity commits per accepted pair, before the next pair is
+        # even previewed, so the way back is per-item too. Indented like the
+        # `  survivor:` line above, since it belongs to this item. Silent
+        # when `_autocommit` degraded -- no sha, no commit to revert.
+        if merge_sha is not None:
+            cli_main._echo_commit_disclosure(merge_sha, prefix="  ")
         applied += 1
 
     if isinstance(batch.failure, OllamaUnavailable | OllamaModelNotFound):
@@ -1201,12 +1209,17 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
             )
             raise typer.Exit(code=1) from exc
 
-        cli_main._autocommit(
+        relate_sha = cli_main._autocommit(
             ctx.root,
             [f"bundle/{edge.source_id}.md", "bundle/log.md"],
             f"openkos: relate {edge.source_id} -> {edge.target_id} "
             f"({suggestion.suggested_type})",
         )
+        # #800: one commit per accepted edge, so one line per accepted edge
+        # -- a session that applied dozens of relations is exactly the case
+        # where "which of these do I take back" needs a per-item answer.
+        if relate_sha is not None:
+            cli_main._echo_commit_disclosure(relate_sha, prefix="  ")
         applied += 1
 
     if isinstance(batch.failure, OllamaUnavailable | OllamaModelNotFound):
@@ -1403,11 +1416,17 @@ def _metadata_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
             )
             raise typer.Exit(code=1) from exc
 
-        cli_main._autocommit(
+        volatility_sha = cli_main._autocommit(
             ctx.root,
             ["openkos.yaml"],
             f"openkos: set-volatility {result.type_name} -> {result.suggested_tier}",
         )
+        # #800: this stage writes `openkos.yaml`, not the bundle, so neither
+        # `unmerge` nor `forget` has anything to say about undoing it -- the
+        # commit is the only way back, which makes naming it worth more here
+        # than anywhere else in the session.
+        if volatility_sha is not None:
+            cli_main._echo_commit_disclosure(volatility_sha, prefix="  ")
         applied += 1
 
     for concept_id in sorted(_sensitivity_gap_ids(ctx.layout.bundle_dir)):

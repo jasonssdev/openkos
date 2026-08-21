@@ -1008,6 +1008,246 @@ def test_accepted_identity_pair_commits_via_shared_merge_cores(
     assert "Identity: applied 1, skipped 0." in _lines(result.stdout)
 
 
+def _head_short_sha(root: Path) -> str:
+    """The abbreviated sha at `HEAD` -- what the per-item commit disclosure
+    (issue #800) must name."""
+    from openkos.vcs import git as vcs_git
+
+    return vcs_git._run(
+        ["git", "rev-parse", "--short", "HEAD"], cwd=root
+    ).stdout.strip()
+
+
+def _seed_commit(root: Path, rel_paths: list[str]) -> None:
+    """Track hand-authored fixture documents before a DESTRUCTIVE stage runs.
+
+    `_write_doc` writes concept files straight to disk, so they stay
+    untracked -- and Identity's merge DELETES the absorbed one, after which
+    `git add -- bundle/concepts/b.md` fails ("did not match any files") and
+    the auto-commit degrades to a WARNING. That is faithful to a real
+    workspace only if the file was never committed, which never happens
+    there: every prior mutating verb already auto-committed its own writes.
+    Seeding restores that precondition, so a test about the commit line
+    actually exercises the commit path (mirrors
+    `test_main_autocommit.py::_seed_commit`)."""
+    from openkos.vcs import git as vcs_git
+
+    vcs_git.commit_paths(root, rel_paths, "seed")
+
+
+def test_identity_applied_merge_names_the_commit_and_the_way_back(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Identity commits per accepted pair, and each one says so (issue
+    #800).
+
+    Identity is the stage that DELETES a concept, and it commits before
+    the next pair is even previewed -- so the way back is per-item too,
+    and naming it per item is what makes a mid-session mistake recoverable
+    without reconstructing which of several merges went wrong."""
+    _stub_later_stages_empty(monkeypatch)
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _seed_commit(
+        tmp_path,
+        ["bundle/concepts/a.md", "bundle/concepts/b.md", "bundle/index.md"],
+    )
+    _reindexed_workspace(tmp_path, monkeypatch)
+
+    group = CandidateGroup(
+        okf_type="Concept",
+        member_ids=("concepts/a", "concepts/b"),
+        tier=Tier.HIGH,
+        trigger="stub",
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(groups=(group,), produced=1, retained=1),
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate.adjudicate_candidates",
+        lambda *a, **k: AdjudicationBatch(
+            results=[
+                AdjudicatedCandidate(
+                    candidate=group,
+                    verdict=Verdict.SAME,
+                    confidence=0.9,
+                    rationale="same",
+                )
+            ]
+        ),
+    )
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["curate"], input="y\ny\n")
+
+    assert result.exit_code == 0
+    sha = _head_short_sha(tmp_path)
+    assert f"  committed as {sha} -- undo with `git revert {sha}`." in _lines(
+        result.stdout
+    )
+
+
+def test_identity_applied_merge_prints_no_commit_line_when_degraded(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No sha, no line (issue #800) -- the Identity half of the guard that
+    keeps the disclosure from being unconditional."""
+    _stub_later_stages_empty(monkeypatch)
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _seed_commit(
+        tmp_path,
+        ["bundle/concepts/a.md", "bundle/concepts/b.md", "bundle/index.md"],
+    )
+    _reindexed_workspace(tmp_path, monkeypatch)
+
+    group = CandidateGroup(
+        okf_type="Concept",
+        member_ids=("concepts/a", "concepts/b"),
+        tier=Tier.HIGH,
+        trigger="stub",
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(groups=(group,), produced=1, retained=1),
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate.adjudicate_candidates",
+        lambda *a, **k: AdjudicationBatch(
+            results=[
+                AdjudicatedCandidate(
+                    candidate=group,
+                    verdict=Verdict.SAME,
+                    confidence=0.9,
+                    rationale="same",
+                )
+            ]
+        ),
+    )
+    monkeypatch.setattr("openkos.cli.main.vcs_git.has_git_identity", lambda root: False)
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["curate"], input="y\ny\n")
+
+    assert result.exit_code == 0
+    assert "committed as" not in result.output
+    assert "git revert" not in result.output
+
+
+def test_structure_applied_edge_names_the_commit_and_the_way_back(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Structure commits per accepted edge, and each one says so (issue
+    #800). A Structure stage that applied dozens of relations is the exact
+    case the issue was filed from: the operator wanted the ones they did
+    not mean, back, and had no idea a commit per edge existed."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _reindexed_workspace(tmp_path, monkeypatch)
+
+    from openkos.graph.base import Edge
+    from openkos.resolution.edge_typing import EdgeSuggestion, EdgeSuggestionBatch
+
+    edge = Edge(source_id="concepts/a", target_id="concepts/b", relation_type=None)
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(),
+    )
+    monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [edge])
+    monkeypatch.setattr("openkos.cli.curate._concept_type_names", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "openkos.cli.curate._contradiction_plan", lambda *a, **k: _empty_plan()
+    )
+
+    def _fake_suggest(edges: object, **kwargs: object) -> EdgeSuggestionBatch:
+        on_progress = kwargs.get("on_progress")
+        suggestion = EdgeSuggestion(
+            edge=edge, suggested_type="references", rationale="stub rationale"
+        )
+        if on_progress is not None:
+            on_progress(1, 1, suggestion)  # type: ignore[operator]
+        return EdgeSuggestionBatch(results=[suggestion])
+
+    monkeypatch.setattr("openkos.cli.curate.suggest_edge_types", _fake_suggest)
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["curate"], input="y\ny\n")
+
+    assert result.exit_code == 0
+    sha = _head_short_sha(tmp_path)
+    assert f"  committed as {sha} -- undo with `git revert {sha}`." in _lines(
+        result.stdout
+    )
+
+
+def test_metadata_applied_tier_names_the_commit_and_the_way_back(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Metadata commits per accepted tier, and each one says so (issue
+    #800). It writes `openkos.yaml`, not the bundle, so `unmerge` and
+    `forget` have nothing to say about it at all -- git is the only way
+    back."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _reindexed_workspace(tmp_path, monkeypatch)
+
+    from openkos.resolution.volatility_typing import (
+        TierSuggestion,
+        TierSuggestionBatch,
+    )
+
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(),
+    )
+    monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "openkos.cli.curate._concept_type_names", lambda *a, **k: ["Concept"]
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate._contradiction_plan", lambda *a, **k: _empty_plan()
+    )
+
+    def _fake_suggest_volatility(
+        bundle_dir: Path, **kwargs: object
+    ) -> TierSuggestionBatch:
+        on_progress = kwargs.get("on_progress")
+        suggestion = TierSuggestion(
+            type_name="Concept",
+            current_default="static",
+            suggested_tier="volatile",
+            rationale="stub rationale",
+        )
+        if on_progress is not None:
+            on_progress(1, 1, suggestion)  # type: ignore[operator]
+        return TierSuggestionBatch(results=[suggestion])
+
+    monkeypatch.setattr(
+        "openkos.cli.curate.suggest_volatility", _fake_suggest_volatility
+    )
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["curate"], input="y\ny\n")
+
+    assert result.exit_code == 0
+    sha = _head_short_sha(tmp_path)
+    assert f"  committed as {sha} -- undo with `git revert {sha}`." in _lines(
+        result.stdout
+    )
+
+
 def _write_bodied_doc(path: Path, *, title: str, body: str) -> None:
     """A concept with a real body, so a merge of two of them clears the
     #645 reconciliation thresholds (share >= 0.2 AND absorbed >= 200 chars)."""

@@ -1679,6 +1679,91 @@ def test_git_setup_runs_after_workspace_marker_exists(
     assert observed["openkos_yaml_exists"] is True
 
 
+def test_git_fresh_directory_discloses_the_repository(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A fresh directory is told, on stdout, that it is now a git
+    repository and that every command commits (issue #800).
+
+    `init` creates `.git/` and a ~5KB `.gitignore` and used to enumerate
+    neither, so the recovery mechanism the whole engine leans on -- every
+    mutating verb auto-commits, and `purge` only works because of it -- was
+    invisible to the one person who would ever need it. The disclosure has
+    to carry BOTH halves of the undo path (`git log` to look, `git revert`
+    to reverse), and it has to arrive BEFORE the `Next:` call to action:
+    #389 already established that a note landing under "here is what to do
+    next" has lost the reader it was written for."""
+    monkeypatch.chdir(tmp_path)
+    config_dir = tmp_path_factory.mktemp("git-identity-config")
+    isolate_git_identity(
+        monkeypatch, config_dir, name="Isolated Tester", email="tester@example.invalid"
+    )
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 0
+    assert "version-controlled" in result.stdout
+    assert ".git/" in result.stdout
+    assert ".gitignore" in result.stdout
+    assert "git log" in result.stdout
+    assert "git revert" in result.stdout
+    assert result.stdout.index("version-controlled") < result.stdout.index("Next: run")
+
+
+def test_git_existing_repo_disclosure_claims_no_creation_it_did_not_do(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Inside a repository that already has a `.gitignore`, the disclosure
+    must not claim `init` created either one (issue #800).
+
+    This is the branch that makes the enumeration approach unsafe: the
+    success line is echoed BEFORE the git block runs, so at that point the
+    code has established nothing about `.git/` or `.gitignore`. Printing a
+    creation claim there would be the same defect #794 removed from
+    `purge`'s help -- a published sentence the code had not earned."""
+    monkeypatch.chdir(tmp_path)
+    config_dir = tmp_path_factory.mktemp("git-identity-config")
+    isolate_git_identity(
+        monkeypatch, config_dir, name="Isolated Tester", email="tester@example.invalid"
+    )
+    vcs_git.init_repo(tmp_path)
+    (tmp_path / ".gitignore").write_text("# mine\nnode_modules/\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 0
+    assert "version-controlled" in result.stdout
+    assert "created .git/" not in result.stdout
+    assert "created .gitignore" not in result.stdout
+    assert "already a git repository" in result.stdout
+    assert "git revert" in result.stdout
+
+
+def test_git_identity_unset_makes_no_version_control_promise(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With git identity unset, nothing commits -- so nothing may promise a
+    commit to revert (issue #800).
+
+    `_autocommit` skips on exactly the same probe, so in this state the
+    claim "every openkos command commits its own changes" is false and
+    `git revert <commit>` names a commit that does not exist. The existing
+    WARNING already reports what happened; the disclosure must stay
+    silent."""
+    monkeypatch.chdir(tmp_path)
+    isolate_git_identity(monkeypatch, tmp_path)
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 0
+    assert "version-controlled" not in result.output
+    assert "git revert" not in result.output
+
+
 def test_sticky_note_precedes_the_call_to_action(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

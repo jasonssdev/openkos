@@ -61,3 +61,7 @@ not hand-author them.
 ## After changes
 
 Update `bundle/index.md` and append to `bundle/log.md` (newest date first, `## YYYY-MM-DD` headings). Consequential changes are proposed for review, not applied silently.
+
+## Version control
+
+This workspace is a **git repository**, created by `openkos init` together with a `.gitignore` that excludes the rebuildable `.openkos/` stores. Every OpenKOS command that changes the bundle commits exactly the files it wrote, so the history builds itself and nobody has to run git by hand. Read it with `git log`; reverse one bad operation — a merge, a forget, a batch of applied relations — with `git revert <commit>`. If you edit the bundle yourself, commit that work too: it is the same history, and `openkos purge` refuses to run on a dirty tree.

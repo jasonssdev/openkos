@@ -7,7 +7,7 @@ correctly, so its tests must prove that against the real binary."""
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import IO
 
@@ -183,6 +183,100 @@ def test_commit_paths_stages_exactly_the_given_paths(
     assert committed_files == {"openkos.yaml", "AGENTS.md"}
     message = git._run(["git", "log", "-1", "--format=%s"], cwd=repo)
     assert message.stdout.strip() == "chore: initialize"
+
+
+def test_commit_paths_returns_the_new_commits_short_sha(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`commit_paths` hands back the abbreviated sha of the commit it just
+    made (issue #800), so a caller can name it and the way back to it.
+
+    Read through `git rev-parse --short HEAD` rather than scraped from
+    `git commit`'s own `[main abc1234] <subject>` line -- see the
+    function's docstring for why that porcelain line is not a contract."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo_with_identity(repo, monkeypatch, tmp_path)
+    (repo / "openkos.yaml").write_text("name: x\n", encoding="utf-8")
+
+    sha = git.commit_paths(repo, ["openkos.yaml"], "chore: initialize")
+
+    expected = git._run(["git", "rev-parse", "--short", "HEAD"], cwd=repo)
+    assert sha == expected.stdout.strip()
+    assert sha
+
+
+def test_commit_paths_returns_none_when_the_sha_cannot_be_read_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `git rev-parse --short HEAD` that fails after a SUCCESSFUL commit
+    yields `None`, never a raise and never a fabricated sha (issue #800).
+
+    The commit itself already landed, so failing the caller here would
+    turn a naming problem into a write failure. `None` degrades to the
+    same silence every other auto-commit degradation path uses."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo_with_identity(repo, monkeypatch, tmp_path)
+    (repo / "openkos.yaml").write_text("name: x\n", encoding="utf-8")
+    real_run = git._run
+
+    def _fail_rev_parse(
+        argv: Sequence[str],
+        cwd: Path,
+        env: Mapping[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        if list(argv)[1:2] == ["rev-parse"]:
+            return subprocess.CompletedProcess(list(argv), 128, "", "boom")
+        return real_run(argv, cwd, env)
+
+    monkeypatch.setattr(git, "_run", _fail_rev_parse)
+
+    assert git.commit_paths(repo, ["openkos.yaml"], "chore: initialize") is None
+    assert real_run(["git", "log", "--format=%s"], cwd=repo).stdout.strip() == (
+        "chore: initialize"
+    )
+
+
+def test_commit_paths_returns_none_when_the_sha_read_back_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A read-back that RAISES after a successful commit yields `None` too,
+    not a propagated error (issue #800).
+
+    This is the branch that matters more than the non-zero one. `_run` maps
+    every invocation failure to a typed `GitError` -- a vanished binary, a
+    permission race, non-UTF-8 output -- so an unguarded read-back would
+    raise past `commit_paths` into `_autocommit`'s
+    `except (GitError, OSError)`, which reports "auto-commit did not
+    complete". The commit HAS completed. Telling someone their write was
+    not saved when it was is the one failure an auto-commit disclosure
+    must never produce, and it would be reported for a purely cosmetic
+    read-back problem.
+
+    The assertion on `git log` is the load-bearing half: it proves the
+    commit survived the raise rather than the call merely swallowing it."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo_with_identity(repo, monkeypatch, tmp_path)
+    (repo / "openkos.yaml").write_text("name: x\n", encoding="utf-8")
+    real_run = git._run
+
+    def _raise_on_rev_parse(
+        argv: Sequence[str],
+        cwd: Path,
+        env: Mapping[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        if list(argv)[1:2] == ["rev-parse"]:
+            raise git.GitError("failed to invoke git: simulated exec failure")
+        return real_run(argv, cwd, env)
+
+    monkeypatch.setattr(git, "_run", _raise_on_rev_parse)
+
+    assert git.commit_paths(repo, ["openkos.yaml"], "chore: initialize") is None
+    assert real_run(["git", "log", "--format=%s"], cwd=repo).stdout.strip() == (
+        "chore: initialize"
+    )
 
 
 def test_commit_paths_does_not_stage_unrelated_dirty_file(
