@@ -416,6 +416,30 @@ def test_status_lists_unjudged_under_needs_attention(
     assert "openkos ingest raw/notes.txt" in result.stdout
 
 
+def test_status_lists_unevidenced_under_needs_attention(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Source with `extraction_notice: objects-without-evidence` is listed
+    under "needs attention", and `status` still exits 0.
+
+    `status` is the surface an operator checks without being told to, so a
+    check `lint` renders and `status` does not is half-wired -- the same
+    reasoning #772 recorded when it folded the unjudged finding in here."""
+    _init_workspace(tmp_path, monkeypatch)
+    sources_dir = tmp_path / "bundle" / "sources"
+    sources_dir.mkdir()
+    (sources_dir / "notes.md").write_text(
+        "---\ntype: Source\ntitle: Notes\nresource: raw/notes.txt\n"
+        "extraction_notice: objects-without-evidence\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    assert "no line quoted from this source" in result.stdout
+
+
 def test_status_blocked_by_sensitivity_never_in_retry_prompt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

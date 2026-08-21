@@ -3631,6 +3631,41 @@ def _participant_ungrounded_notice(report: ExtractionReport) -> str | None:
     )
 
 
+def _unevidenced_notice(report: ExtractionReport) -> str | None:
+    """Name the stored objects whose written text quotes no line of the
+    source (#801), or `None` when every object quotes one -- the common
+    case, and the one #801 measured (seven of eight objects in the reported
+    run carried a quoted line).
+
+    Mirrors `_participant_ungrounded_notice`'s shape, because it discloses
+    the same kind of thing: objects that WERE stored and are worth checking
+    against the source. Advisory, and worded to say so.
+
+    The titles are load-bearing, not decoration. A notice that only counted
+    would leave the operator opening every derived document to find the
+    one, and the whole value of this check is that it discriminates -- an
+    advisory naming the healthy majority alongside the defect is one nobody
+    reads twice.
+
+    The line says what the reader can DO about it, which for this notice is
+    not a re-run: an object with no quoted span cannot support a citation,
+    so the check is against the source itself. `lint` names the same
+    Source under `Unevidenced objects:` once the run is over."""
+    if not report.unevidenced_titles:
+        return None
+    titles = report.unevidenced_titles
+    shown = titles[:_CAP_NOTICE_TITLE_LIMIT]
+    remainder = len(titles) - len(shown)
+    listed = ", ".join(shown)
+    if remainder > 0:
+        listed = f"{listed} (+{remainder} more)"
+    return (
+        f"{len(titles)} derived object(s) carry no line quoted from the "
+        f"source -- stored anyway, but they cannot support a citation; "
+        f"check them against the source: {listed}."
+    )
+
+
 def _extraction_cap_notice(report: ExtractionReport) -> str | None:
     """Render the `_MAX_OBJECTS_PER_SOURCE` truncation notice, or `None` when
     the cap did not fire (#404).
@@ -4013,6 +4048,17 @@ def _stage_derived_objects(
     if ungrounded_notice is not None:
         typer.echo(f"openkos ingest: {ungrounded_notice}", err=True)
 
+    # #801: the third advisory about objects the pipeline KEPT, rendered
+    # beside the two above it because it answers the same operator
+    # question from a different angle -- those two ask whether a stored
+    # participant is real, this one asks whether a stored object quotes the
+    # source at all. Echoed unconditionally on its own condition, never
+    # gated on the persisted token: the frontmatter key can hold one value,
+    # the terminal has room for every condition that fired.
+    unevidenced_notice = _unevidenced_notice(outcome.report)
+    if unevidenced_notice is not None:
+        typer.echo(f"openkos ingest: {unevidenced_notice}", err=True)
+
     # #404: the cap was the ONE drop in this function that said nothing --
     # empty slug, in-batch collision, existing file and failed build all
     # report per candidate below. A source proposing 20 objects and one
@@ -4028,13 +4074,29 @@ def _stage_derived_objects(
     # here -- the predicate lives in `extraction/concept.py` beside the
     # re-ask trigger it shares, and a second spelling in this layer is
     # exactly the drift that helper exists to prevent.
-    # #772: a judge degrade quarantines the Source. The three notice
+    # #772: a judge degrade quarantines the Source. The first three notice
     # conditions are mutually exclusive by construction -- both degrade
     # statuses imply a multi-candidate union (a single-candidate union
     # skips the judge entirely, #644), while sole-object requires exactly
     # one retained object -- but the precedence is still written out so a
     # future overlap picks the judge marker, the one `lint.check_unjudged`
     # reads as retryable debt, over #585's disclosure.
+    #
+    # #801's token goes LAST, and it is the one condition here that really
+    # does overlap the others rather than merely being ordered against
+    # them: any run that wrote objects can also have written one that
+    # quotes nothing. It ranks below all three deliberately. The two judge
+    # tokens are retryable debt `lint.check_unjudged` reads and a re-ingest
+    # clears, and #585's token is a statement about the only object there
+    # is; this one presupposes objects WERE written and discloses a quality
+    # defect in some of them, which no re-run is promised to fix.
+    #
+    # Stated honestly, because the key holds one value: a Source hitting
+    # more than one condition persists only the highest-precedence token,
+    # so its `objects-without-evidence` disclosure does not reach `lint`
+    # on that run. Nothing is silently dropped -- the stderr echoes above
+    # are unconditional and name every condition that fired -- but the
+    # persisted marker is a single slot, and this is which claim wins it.
     extraction_notice: okf.ExtractionNotice | None
     if outcome.report.judge_status == "failed":
         extraction_notice = okf.EXTRACTION_NOTICE_JUDGE_UNAVAILABLE
@@ -4042,6 +4104,8 @@ def _stage_derived_objects(
         extraction_notice = okf.EXTRACTION_NOTICE_JUDGE_EMPTY
     elif outcome.report.sole_object_restates_source:
         extraction_notice = okf.EXTRACTION_NOTICE_SOLE_OBJECT_RESTATES
+    elif outcome.report.unevidenced_titles:
+        extraction_notice = okf.EXTRACTION_NOTICE_OBJECTS_WITHOUT_EVIDENCE
     else:
         extraction_notice = None
     sole_object_notice = _sole_object_notice(outcome.report)
@@ -4992,17 +5056,20 @@ def _ingest_batch(
     for line in outcome_lines:
         typer.echo(line)
     # `noticed_count` counts a file whose Source finished carrying ANY
-    # `okf.ExtractionNotice` token -- all three of them, not only the two
-    # retryable judge causes. Deliberately a WIDER set than the one
-    # `lint`'s "Unjudged extractions" section reports
-    # (`lint._UNJUDGED_NOTICE_CAUSES` and `_extraction_retry_due` both
-    # match exactly `judge-selection-unavailable` and
-    # `judge-selection-empty`): #585's `sole-object-restates-source` is a
-    # disclosure rather than debt, so no surface flags it for repair --
-    # which is precisely why the run's last word must still say it
-    # happened. Read the two numbers as different questions: this term
-    # answers "how many files finished with something disclosed on the
-    # Source", `lint` answers "how many of those are worth re-running".
+    # `okf.ExtractionNotice` token -- all FOUR of them, not only the two
+    # retryable judge causes. Still a WIDER set than any single `lint`
+    # section, but the margin narrowed with #801 and the reason changed
+    # with it. `lint` now reports three of the four across two sections:
+    # the two judge tokens under "Unjudged extractions"
+    # (`lint._UNJUDGED_NOTICE_CAUSES`, which `_extraction_retry_due`
+    # matches exactly) and `objects-without-evidence` under "Unevidenced
+    # objects" (`lint._UNEVIDENCED_NOTICE`). #585's
+    # `sole-object-restates-source` is the ONE token no `lint` section
+    # flags -- a disclosure with no repair to name -- which is precisely
+    # why the run's last word must still say it happened. Read the two
+    # numbers as different questions: this term answers "how many files
+    # finished with something disclosed on the Source", `lint` answers
+    # "how many of those have a next step".
     #
     # The term never double-counts `extraction-degraded`. That one counts a
     # `skip_reason` (Source-only, zero derived objects); a notice
@@ -5013,10 +5080,14 @@ def _ingest_batch(
         # Only when there is something to recover -- an advisory that fires
         # on the healthy path is noise (the `_echo_type_*_summary` rule).
         # It names BOTH surfaces honestly: the frontmatter key carries
-        # every kind, `lint` flags only the retryable ones.
+        # every kind, `lint` flags all but #585's sole-object disclosure.
+        # It said "the retryable ones" until #801 added a token that is NOT
+        # retryable debt and that `lint.check_unevidenced` reports anyway --
+        # wording a reader with only that notice would have taken to mean
+        # `lint` had nothing for them.
         notice_pointer = (
             " Their Sources carry `extraction_notice`; "
-            "`openkos lint` names the retryable ones."
+            "`openkos lint` names all but the sole-object disclosure."
         )
     typer.echo(
         f"openkos ingest: batch summary -- {total} file(s): "
@@ -5157,10 +5228,18 @@ def _extraction_retry_due(metadata: Mapping[str, object]) -> bool:
 
     Every other state -- markers absent, a deliberate-policy
     `extraction_status` (`no-extractable-text`/`blocked-by-sensitivity`/
-    `no-concepts-found`), or #585's sole-object disclosure -- means the
-    previous extraction ran to its intended conclusion, so an unchanged
-    source has nothing to retry and the re-ingest skips extraction unless
-    `--re-extract` asks for a deliberate redo."""
+    `no-concepts-found`), #585's sole-object disclosure, or #801's
+    `objects-without-evidence` -- means the previous extraction ran to its
+    intended conclusion, so an unchanged source has nothing to retry and
+    the re-ingest skips extraction unless `--re-extract` asks for a
+    deliberate redo.
+
+    #801's token is excluded on the same grounds as #585's, and the
+    exclusion is load-bearing rather than incidental: both are disclosures
+    about output the pipeline produced as designed, not failures of a step.
+    A plain re-ingest re-runs the SAME prompt over the SAME bytes, which is
+    promised to fix neither -- which is exactly why `lint.check_unevidenced`
+    names `--re-extract` instead of a bare re-ingest."""
     if metadata.get(okf.EXTRACTION_STATUS_KEY) == okf.EXTRACTION_STATUS_FAILED:
         return True
     return metadata.get(okf.EXTRACTION_NOTICE_KEY) in (
@@ -11658,6 +11737,10 @@ def status() -> None:
     # extraction check is the quarantine's read half, and it must cost no
     # new walk for the same reason every sibling check does not.
     unjudged = lint_check.check_unjudged(docs)
+    # issue #801: and again -- the quoted-evidence disclosure. `status` is
+    # the surface an operator checks without being told to, so a check
+    # `lint` renders and this one does not is only half-wired (#690).
+    unevidenced = lint_check.check_unevidenced(docs)
     # issue #231 (PR2): reuses this SAME in-memory `docs` list too -- no
     # third `collect_docs()` call (design D3's no-fifth-walk guard).
     sensitivity_findings = lint_check.check_below_source_sensitivity(docs)
@@ -11677,6 +11760,9 @@ def status() -> None:
     )
     needs_attention.extend(
         f"{finding.concept_id}: {finding.detail}" for finding in unjudged
+    )
+    needs_attention.extend(
+        f"{finding.concept_id}: {finding.detail}" for finding in unevidenced
     )
     needs_attention.extend(
         f"{finding.concept_id}: [{finding.kind}] {finding.detail}"
@@ -12190,6 +12276,8 @@ def lint() -> None:
     unextracted = lint_check.check_unextracted(docs)
     # #772: reuses this SAME `docs` list -- the quarantine's read half.
     unjudged = lint_check.check_unjudged(docs)
+    # #801: and again -- the read half of the quoted-evidence disclosure.
+    unevidenced = lint_check.check_unevidenced(docs)
     # #231 (PR2): reuses this SAME `docs` list -- no new bundle walk
     # (design D3's no-fifth-walk guard).
     sensitivity_findings = lint_check.check_below_source_sensitivity(docs)
@@ -12223,6 +12311,7 @@ def lint() -> None:
         dangling=dangling,
         unextracted=unextracted,
         unjudged=unjudged,
+        unevidenced=unevidenced,
         below_source=below_source,
         multi_source_uncovered=multi_source_uncovered,
         dangling_provenance=dangling_provenance,
@@ -12276,6 +12365,18 @@ def lint() -> None:
         typer.echo("  No unjudged extractions.")
     else:
         for finding in report.unjudged:
+            typer.echo(f"  {finding.concept_id}: {finding.detail}")
+    typer.echo()
+    # #801: its OWN section, immediately after the one it is most likely to
+    # be confused with. The judge tokens mean no quality selection ran over
+    # the set; this means some object the run stored quotes nothing from
+    # its source. Different question, different repair -- and one shared
+    # heading would leave the reader unable to tell which they have.
+    typer.echo("Unevidenced objects:")
+    if not report.unevidenced:
+        typer.echo("  No unevidenced objects.")
+    else:
+        for finding in report.unevidenced:
             typer.echo(f"  {finding.concept_id}: {finding.detail}")
     typer.echo()
     typer.echo("Below-source sensitivity:")

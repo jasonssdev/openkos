@@ -159,6 +159,20 @@ def _default_llm(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_llm(monkeypatch)
 
 
+_CONCEPT_BODY_LINE = "Elaboration on applying the framework day to day."
+"""The body every `_concept_reply` carries, named once so a fixture source
+can QUOTE it. Since #801 an object whose written text reproduces no line of
+its source is disclosed on the Source, and a healthy-path fixture whose
+source says nothing the object quotes is not a healthy path -- it is #801's
+defect, and it would stamp `objects-without-evidence` onto every test that
+means to assert a clean run. Two copies of this string is how a later edit
+to one silently re-breaks those tests, so there is one."""
+
+_GROUNDED_NOTES = f"Some raw notes about self-control.\n{_CONCEPT_BODY_LINE}\n"
+"""A source text a `_concept_reply` object genuinely quotes -- the fixture
+for every test that asserts a run finished with NO `extraction_notice`."""
+
+
 def _concept_reply(title: str = "Stoic Dichotomy Of Control") -> str:
     """A well-formed `extract_concept` JSON reply classifying as `Concept`."""
     return json.dumps(
@@ -169,7 +183,7 @@ def _concept_reply(title: str = "Stoic Dichotomy Of Control") -> str:
             "description": (
                 "A framework distinguishing what is and is not within our control."
             ),
-            "body": "Elaboration on applying the framework day to day.",
+            "body": _CONCEPT_BODY_LINE,
         }
     )
 
@@ -1641,6 +1655,199 @@ def test_ingest_judge_empty_admission_quarantines_with_the_empty_token(
     assert metadata["extraction_notice"] == "judge-selection-empty"
 
 
+_HELIOS_NOTES = (
+    "Priya owns the schema migration plan.\n"
+    "The team chose PostgreSQL as the primary datastore.\n"
+)
+"""#801's source, reduced to the two lines that decide the check."""
+
+
+def _ungrounded_decision_reply() -> str:
+    """#801's actual stored object: its body restates its own description
+    and quotes no line of the source."""
+    return json.dumps(
+        {
+            "type": "Decision",
+            "title": "Schema Migration Ownership Decision",
+            "description": "Who owns the schema migration plan.",
+            "body": (
+                "The decision regarding who owns the schema migration plan "
+                "for Project Helios."
+            ),
+        }
+    )
+
+
+def _grounded_decision_reply() -> str:
+    """A sibling object from the same source that DOES quote a line of it --
+    the seven-of-eight case #801 measured."""
+    return json.dumps(
+        {
+            "type": "Decision",
+            "title": "Primary Datastore Decision",
+            "description": "The datastore the team settled on.",
+            "body": "The team chose PostgreSQL as the primary datastore.",
+        }
+    )
+
+
+def test_ingest_marks_a_source_whose_object_quotes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#801: an object with no quoted span is KEPT and the Source is
+    MARKED -- `extraction_notice: objects-without-evidence` lands in its
+    frontmatter, and the terminal names the offending title.
+
+    Marking rather than dropping, on #585's settled reasoning: a genuinely
+    thin source is indistinguishable from the defect by this signal alone,
+    so a drop would emit nothing for real content while a mark cannot
+    regress recall."""
+    _init_workspace(tmp_path, monkeypatch)
+    run = _multi_object_reply(_ungrounded_decision_reply(), _grounded_decision_reply())
+    _patch_sequenced_llm(
+        monkeypatch,
+        [
+            run,
+            run,
+            json.dumps(
+                {
+                    "keep": [
+                        "Schema Migration Ownership Decision",
+                        "Primary Datastore Decision",
+                    ]
+                }
+            ),
+        ],
+    )
+    (tmp_path / "notes.txt").write_text(_HELIOS_NOTES, encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    metadata, _ = okf.load_frontmatter(
+        (tmp_path / "bundle" / "sources" / "notes.md").read_text(encoding="utf-8")
+    )
+    assert metadata["extraction_notice"] == "objects-without-evidence"
+    # The object is kept, not dropped -- that is the decision.
+    assert (
+        tmp_path / "bundle" / "decisions" / "schema-migration-ownership-decision.md"
+    ).is_file()
+    assert "no line quoted from the source" in result.stderr
+    assert "Schema Migration Ownership Decision" in result.stderr
+    assert "cannot support a citation" in result.stderr
+
+
+def test_ingest_names_only_the_object_that_quotes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The notice must DISCRIMINATE. Seven of eight objects in #801's
+    reported run carried a quoted line, so a notice naming every object
+    would be reporting the healthy majority and burying the one case worth
+    opening the source over."""
+    _init_workspace(tmp_path, monkeypatch)
+    run = _multi_object_reply(_ungrounded_decision_reply(), _grounded_decision_reply())
+    _patch_sequenced_llm(
+        monkeypatch,
+        [
+            run,
+            run,
+            json.dumps(
+                {
+                    "keep": [
+                        "Schema Migration Ownership Decision",
+                        "Primary Datastore Decision",
+                    ]
+                }
+            ),
+        ],
+    )
+    (tmp_path / "notes.txt").write_text(_HELIOS_NOTES, encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    evidence_line = next(
+        line
+        for line in result.stderr.splitlines()
+        if "no line quoted from the source" in line
+    )
+    assert "Schema Migration Ownership Decision" in evidence_line
+    assert "Primary Datastore Decision" not in evidence_line
+
+
+def test_ingest_stamps_no_evidence_notice_when_every_object_quotes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The healthy path stays clean, and the marker is recomputed fresh
+    every run -- a disclosure from an earlier degraded run never outlives
+    the condition it described (#187's anti-merge rule, inherited by every
+    notice token)."""
+    _init_workspace(tmp_path, monkeypatch)
+    run = _multi_object_reply(
+        _grounded_decision_reply(),
+        json.dumps(
+            {
+                "type": "Person",
+                "title": "Priya Nair",
+                "description": "Owns the migration plan.",
+                "body": "Priya owns the schema migration plan.",
+            }
+        ),
+    )
+    _patch_sequenced_llm(
+        monkeypatch,
+        [
+            run,
+            run,
+            json.dumps({"keep": ["Primary Datastore Decision", "Priya Nair"]}),
+        ],
+    )
+    (tmp_path / "notes.txt").write_text(_HELIOS_NOTES, encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    metadata, _ = okf.load_frontmatter(
+        (tmp_path / "bundle" / "sources" / "notes.md").read_text(encoding="utf-8")
+    )
+    assert "extraction_notice" not in metadata
+    assert "no line quoted from the source" not in result.stderr
+
+
+def test_a_judge_degrade_outranks_the_evidence_notice_on_the_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Precedence, #801: a run that BOTH lost its judge and stored an
+    object quoting nothing persists the judge token, not this one.
+
+    The judge tokens are retryable debt `lint.check_unjudged` reads and a
+    re-ingest clears; this one presupposes objects were written and
+    discloses a quality defect in some of them. Only one token fits in the
+    frontmatter key, so the retryable marker wins.
+
+    The disclosure is NOT lost, and that is the other half of the contract:
+    stderr names every condition that fired, so the run's own output stays
+    complete even though the persisted key can only carry one."""
+    _init_workspace(tmp_path, monkeypatch)
+    run = _multi_object_reply(_ungrounded_decision_reply(), _grounded_decision_reply())
+    _patch_sequenced_llm(
+        monkeypatch,
+        [run, run, OllamaUnavailable("boom"), OllamaUnavailable("boom")],
+    )
+    (tmp_path / "notes.txt").write_text(_HELIOS_NOTES, encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    metadata, _ = okf.load_frontmatter(
+        (tmp_path / "bundle" / "sources" / "notes.md").read_text(encoding="utf-8")
+    )
+    assert metadata["extraction_notice"] == "judge-selection-unavailable"
+    # Both conditions are still reported to the operator.
+    assert "no line quoted from the source" in result.stderr
+    assert "Schema Migration Ownership Decision" in result.stderr
+
+
 def test_ingest_healthy_judge_selection_stamps_no_extraction_notice(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1660,7 +1867,9 @@ def test_ingest_healthy_judge_selection_stamps_no_extraction_notice(
         ],
     )
     source = tmp_path / "notes.txt"
-    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+    # Grounded on purpose (#801): the assertion below is that NO notice is
+    # written, so the objects must quote their source.
+    source.write_text(_GROUNDED_NOTES, encoding="utf-8")
 
     result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
 
@@ -1802,7 +2011,9 @@ def test_reingest_of_quarantined_source_retries_and_self_clears(
     run2 = _concept_reply(title="Negative Visualization")
     _patch_sequenced_llm(monkeypatch, [run1, run2, OllamaUnavailable("boom")])
     source = tmp_path / "notes.txt"
-    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+    # Grounded (#801) so the SELF-CLEARED run below carries no notice at
+    # all, which is what this test is about.
+    source.write_text(_GROUNDED_NOTES, encoding="utf-8")
     result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
     assert result.exit_code == 0
     source_path = tmp_path / "bundle" / "sources" / "notes.md"
@@ -2018,7 +2229,7 @@ def test_healthy_ingest_builds_the_source_document_exactly_once(
 
     monkeypatch.setattr(okf, "build_source_concept", _spy)
     source = tmp_path / "notes.txt"
-    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+    source.write_text(_GROUNDED_NOTES, encoding="utf-8")
 
     result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
 
@@ -6225,7 +6436,14 @@ def test_batch_summary_counts_files_that_finished_with_an_extraction_notice(
             json.dumps({"keep": ["Morning Review Ritual", "Evening Review Ritual"]}),
         ],
     )
-    _write_notes(tmp_path, {"a.txt": "Alpha notes.", "b.txt": "Beta notes."})
+    # `b.txt` is grounded (#801) so it finishes with NO notice, which is
+    # what makes the term below discriminate. `a.txt` is left ungrounded:
+    # its judge token outranks the evidence one, so it still carries
+    # exactly `judge-selection-unavailable`.
+    _write_notes(
+        tmp_path,
+        {"a.txt": "Alpha notes.", "b.txt": f"Beta notes.\n{_CONCEPT_BODY_LINE}\n"},
+    )
 
     result = runner.invoke(app, ["ingest", "notes", "--auto"])
 
@@ -6290,7 +6508,11 @@ def test_batch_summary_counts_a_converged_reingest_that_still_carries_a_notice(
                 "Replica Lag\n\nA replica trails its primary, and a read "
                 "routed to it can miss a write the client just made.\n"
             ),
-            "zeta.txt": "Notes on two separate review rituals.",
+            "zeta.txt": (
+                # Grounded (#801) so this file finishes with no notice and
+                # the term below still counts exactly one.
+                f"Notes on two separate review rituals.\n{_CONCEPT_BODY_LINE}\n"
+            ),
         },
     )
     first = runner.invoke(app, ["ingest", "notes", "--auto"])
@@ -6480,14 +6702,62 @@ def test_batch_summary_notice_term_is_zero_and_silent_on_a_healthy_batch(
             json.dumps({"keep": ["Negative Visualization"]}),
         ],
     )
-    _write_notes(tmp_path, {"a.txt": "Alpha notes.", "b.txt": "Beta notes."})
+    # Both grounded (#801): a healthy batch means zero notices of ANY kind.
+    _write_notes(
+        tmp_path,
+        {
+            "a.txt": f"Alpha notes.\n{_CONCEPT_BODY_LINE}\n",
+            "b.txt": f"Beta notes.\n{_CONCEPT_BODY_LINE}\n",
+        },
+    )
 
     result = runner.invoke(app, ["ingest", "notes", "--auto"])
 
     assert result.exit_code == 0
     assert "0 with extraction notice(s)." in result.stdout
-    assert "names the retryable ones" not in result.stdout
+    assert "names all but the sole-object disclosure" not in result.stdout
     assert "`extraction_notice`" not in result.stdout
+
+
+def test_batch_notice_pointer_names_what_lint_actually_reports(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The pointer must describe the `lint` this build ships (#801).
+
+    It read "`openkos lint` names the retryable ones" while `lint` reported
+    exactly the two judge tokens. That stopped being true when
+    `check_unevidenced` landed: `lint` now also reports #801's token, which
+    is a disclosure rather than retryable debt. A reader whose only notice
+    was that one would have taken the old wording to mean `lint` had
+    nothing for them, which is precisely backwards.
+
+    The sole-object disclosure remains the one token no `lint` section
+    names, which is what the summary term is still wider than."""
+    _init_workspace(tmp_path, monkeypatch)
+    run = _multi_object_reply(_ungrounded_decision_reply(), _grounded_decision_reply())
+    _patch_sequenced_llm(
+        monkeypatch,
+        [
+            run,
+            run,
+            json.dumps(
+                {
+                    "keep": [
+                        "Schema Migration Ownership Decision",
+                        "Primary Datastore Decision",
+                    ]
+                }
+            ),
+        ],
+    )
+    _write_notes(tmp_path, {"a.txt": _HELIOS_NOTES})
+
+    result = runner.invoke(app, ["ingest", "notes", "--auto"])
+
+    assert result.exit_code == 0
+    assert "1 with extraction notice(s)." in result.stdout
+    assert "Their Sources carry `extraction_notice`" in result.stdout
+    assert "`openkos lint` names all but the sole-object disclosure." in result.stdout
 
 
 def test_batch_commits_per_file_not_per_batch(
@@ -6851,7 +7121,14 @@ def test_stage_derived_objects_carries_the_alternative_on_the_plan_silently(
     signal) is untouched.
     """
     plans, _, _notice = main._stage_derived_objects(
-        **_stage_kwargs(tmp_path, llm=_FakeLLM(_NEAR_BOUNDARY_REPLY))  # type: ignore[arg-type]
+        **_stage_kwargs(  # type: ignore[arg-type]
+            tmp_path,
+            llm=_FakeLLM(_NEAR_BOUNDARY_REPLY),
+            # Grounded (#801): this test asserts the title is NOT echoed to
+            # stderr, and an object quoting nothing is named there by its
+            # own notice.
+            raw_content="Notes. A seminar taught this term. Mostly Hellenistic ethics.",
+        )
     )
 
     assert len(plans) == 1
@@ -7095,6 +7372,55 @@ def test_sole_object_restating_the_source_stamps_the_extraction_notice(
     assert "extraction_status" not in metadata
 
 
+def test_a_sole_object_restating_the_source_outranks_the_evidence_notice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Precedence, the OTHER adjacent pair (#801): a run whose sole
+    retained object both restates the source title AND quotes no line of it
+    persists `sole-object-restates-source`, not `objects-without-evidence`.
+
+    This is the co-occurrence most likely to happen in the field, which is
+    why it gets a test of its own rather than being left to chance. An
+    object that merely restates the topic its source names is very likely
+    to quote nothing from it either -- the two conditions describe the same
+    thin extraction from two angles -- so in practice they fire together.
+
+    Three #585/#773 tests already turn red if the two branches are swapped,
+    but every one of them covers this pair by ACCIDENT: their fixtures
+    happen to be ungrounded, and grounding any of them (as eight other
+    fixtures in this file were, deliberately, when #801 landed) would
+    silently retire the coverage with no test naming what was lost.
+
+    Both conditions are asserted to have actually fired. Without the stderr
+    assertion this would silently degrade into a plain #585 test the moment
+    the fixture stopped being ungrounded -- a green negative control, which
+    is the failure this repo has paid for before."""
+    _init_workspace(tmp_path, monkeypatch)
+    twin = _concept_reply(title="Replica Lag")
+    _patch_sequenced_llm(monkeypatch, [twin, twin, "[]", '{"keep": ["Replica Lag"]}'])
+    source = tmp_path / "replica-lag.txt"
+    # Deliberately ungrounded: `_CONCEPT_BODY_LINE` appears nowhere here, so
+    # the sole object restates the source title AND quotes none of it.
+    source.write_text(
+        "Replica Lag\n\nA replica trails its primary, and a read routed to "
+        "it can miss a write the client just made.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["ingest", "replica-lag.txt", "--auto"])
+
+    assert result.exit_code == 0
+    # The evidence condition really fired -- stderr names every condition,
+    # even though only one token reaches the frontmatter.
+    assert "no line quoted from the source" in result.stderr
+    assert "Replica Lag" in result.stderr
+    # ...and the sole-object token is the one that got persisted.
+    metadata, _ = okf.load_frontmatter(
+        (tmp_path / "bundle" / "sources" / "replica-lag.md").read_text(encoding="utf-8")
+    )
+    assert metadata["extraction_notice"] == "sole-object-restates-source"
+
+
 def test_sole_object_restating_the_source_is_reported_on_stderr(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -7127,7 +7453,7 @@ def test_successful_extraction_writes_no_extraction_notice_key(
     _init_workspace(tmp_path, monkeypatch)
     _patch_llm(monkeypatch, _concept_reply())
     source = tmp_path / "notes.txt"
-    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+    source.write_text(_GROUNDED_NOTES, encoding="utf-8")
 
     result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
 
@@ -7838,6 +8164,54 @@ def test_participant_unreadmitted_notice_is_silent_when_the_gate_discarded_none(
     )
 
     assert main._participant_unreadmitted_notice(report) is None
+
+
+def test_unevidenced_notice_truncates_past_the_title_limit() -> None:
+    """The `(+N more)` branch of #801's notice, which every other test of
+    it leaves unexecuted.
+
+    Same coverage gap PR #705's review named for the participant notice one
+    function below: each ingest test drives exactly ONE unevidenced title,
+    so the slice and the remainder arithmetic shipped unproven -- an
+    off-by-one in either reads as a passing suite, and the first run that
+    exceeds the limit is precisely the run where the operator most needs
+    the count to be right.
+
+    The COUNT stays exact while the LIST is capped: a source that produced
+    twenty ungrounded objects must not dump twenty titles into a terminal,
+    but it must also not under-report how many there were."""
+    titles = tuple(f"Ungrounded {index}" for index in range(1, 6))
+    report = concept_mod.ExtractionReport(
+        produced=5, retained=5, unevidenced_titles=titles
+    )
+
+    notice = main._unevidenced_notice(report)
+
+    assert notice is not None
+    assert "5 derived object(s)" in notice
+    assert "Ungrounded 1, Ungrounded 2, Ungrounded 3 (+2 more)" in notice
+    assert "Ungrounded 4" not in notice
+    assert "Ungrounded 5" not in notice
+
+
+def test_unevidenced_notice_names_every_title_at_the_limit() -> None:
+    """Exactly `_CAP_NOTICE_TITLE_LIMIT` titles are all named, with NO
+    `(+0 more)` suffix -- the boundary the truncation test above cannot
+    see. An off-by-one in the slice shows up here as a dropped title or a
+    stray `(+0 more)`, and nowhere else."""
+    titles = tuple(
+        f"Ungrounded {index}" for index in range(1, main._CAP_NOTICE_TITLE_LIMIT + 1)
+    )
+    report = concept_mod.ExtractionReport(
+        produced=len(titles), retained=len(titles), unevidenced_titles=titles
+    )
+
+    notice = main._unevidenced_notice(report)
+
+    assert notice is not None
+    assert "more)" not in notice
+    for title in titles:
+        assert title in notice
 
 
 def test_participant_unreadmitted_notice_truncates_past_the_title_limit() -> None:

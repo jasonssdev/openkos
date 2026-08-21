@@ -11,6 +11,7 @@ link. The clock and window are always injected -- `lint.py` never calls
 `datetime.now()`.
 """
 
+import inspect
 import re
 from datetime import date, timedelta
 from pathlib import Path, PurePosixPath
@@ -1203,6 +1204,131 @@ def test_check_unjudged_declines_an_unspellable_resource() -> None:
     assert "`" not in findings[0].detail
     assert "evil" not in findings[0].detail
     assert "rename the raw file" in findings[0].detail
+
+
+# --- issue #801: check_unevidenced(docs) (quoted-evidence surfacing) ------
+
+
+def test_check_unevidenced_flags_the_objects_without_evidence_notice() -> None:
+    """A `LintDoc` carrying #801's token produces exactly one
+    `unevidenced` finding. Same reasoning #772 recorded for its own
+    quarantine: a marker stamped at ingest is only a disclosure if some
+    later surface is guaranteed to look, and stderr scrolls away."""
+    docs = [
+        _doc(
+            "sources/notes",
+            "Body.",
+            extraction_notice="objects-without-evidence",
+            resource="raw/notes.txt",
+        )
+    ]
+
+    findings = lint.check_unevidenced(docs)
+
+    assert len(findings) == 1
+    assert findings[0].kind == "unevidenced"
+    assert findings[0].path == "sources/notes.md"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "",
+        "sole-object-restates-source",
+        "judge-selection-unavailable",
+        "judge-selection-empty",
+        "some-unrecognized-value",
+    ],
+)
+def test_check_unevidenced_ignores_every_other_notice_value(value: str) -> None:
+    """Every other `extraction_notice` value -- including BOTH judge tokens,
+    #585's sole-object token, and an out-of-vocabulary one -- produces no
+    `unevidenced` finding.
+
+    The judge tokens are the load-bearing arms here. They are the two this
+    check is most likely to be mistakenly widened to cover, and folding
+    them in would tell the operator to re-run a judge, which repairs
+    nothing about an object that quotes nothing."""
+    docs = [_doc("sources/notes", "Body.", extraction_notice=value)]
+
+    assert lint.check_unevidenced(docs) == []
+
+
+def test_check_unevidenced_is_a_distinct_kind_from_unjudged() -> None:
+    """One Source cannot carry two tokens, so the two checks are compared
+    across two docs. The kinds must not collide: `lint` renders them under
+    separate sections because they ask different questions -- "did anything
+    quality-select this set" versus "does what we stored quote its source"
+    -- and one shared key would make the two indistinguishable to every
+    reader downstream."""
+    unjudged_docs = [
+        _doc("sources/a", "Body.", extraction_notice="judge-selection-empty")
+    ]
+    unevidenced_docs = [
+        _doc("sources/b", "Body.", extraction_notice="objects-without-evidence")
+    ]
+
+    assert lint.check_unjudged(unjudged_docs)[0].kind == "unjudged"
+    assert lint.check_unevidenced(unevidenced_docs)[0].kind == "unevidenced"
+    assert lint.check_unjudged(unevidenced_docs) == []
+    assert lint.check_unevidenced(unjudged_docs) == []
+
+
+def test_check_unevidenced_detail_says_what_is_wrong_and_what_to_do() -> None:
+    """The finding has to be ACTIONABLE without being false. It names the
+    defect (a stored object quotes no line of this source, so it cannot
+    support a citation) and points at the source, which is where the reader
+    can check it."""
+    docs = [
+        _doc(
+            "sources/notes",
+            "Body.",
+            extraction_notice="objects-without-evidence",
+            resource="raw/notes.txt",
+        )
+    ]
+
+    detail = lint.check_unevidenced(docs)[0].detail
+
+    assert "no line quoted from this source" in detail
+    assert "citation" in detail
+    assert "--re-extract" in detail
+
+
+def test_check_unevidenced_names_no_bare_reingest_command() -> None:
+    """Deliberately NOT `_ingest_retry_hint`, which every other
+    retryable-debt kind reuses. A plain `openkos ingest <resource>` on an
+    unchanged source SKIPS extraction entirely (#773's convergence
+    short-circuit), and this token is excluded from
+    `main._extraction_retry_due` on purpose -- it is a disclosure, not
+    retryable debt. So naming a bare re-ingest as the remedy would print a
+    command that provably does nothing, which is worse than printing none.
+
+    Asserted through the same span scanner the #274/#285 guards use, so a
+    later edit cannot reintroduce the command without this failing."""
+    docs = [
+        _doc(
+            "sources/notes",
+            "Body.",
+            extraction_notice="objects-without-evidence",
+            resource="raw/notes.txt",
+        )
+    ]
+
+    detail = lint.check_unevidenced(docs)[0].detail
+
+    assert "raw/notes.txt" not in detail
+    assert _ingest_spans_with_an_argument(detail) == []
+
+
+def test_check_unevidenced_takes_only_docs() -> None:
+    """The structural no-fifth-walk guard every sibling check carries: a
+    function that never receives a directory is incapable of opening a
+    second bundle walk, which is a stronger guarantee than a promise not
+    to."""
+    signature = inspect.signature(lint.check_unevidenced)
+
+    assert list(signature.parameters) == ["docs"]
 
 
 def _ingest_spans_with_an_argument(detail: str) -> list[str]:

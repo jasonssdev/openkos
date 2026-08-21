@@ -24,6 +24,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from typing import Any, Final
 
+from openkos.extraction import evidence as evidence_mod
 from openkos.extraction import judge as judge_mod
 from openkos.llm import parsing
 from openkos.llm.base import LLMBackend, Message
@@ -1316,6 +1317,47 @@ def _names_absent_from_source(
         if result.type in _PARTICIPANT_TYPES
         and (name := _fold_for_name_match(result.title))
         and not re.search(rf"(?<!\w){re.escape(name)}(?!\w)", grounded_source)
+    )
+
+
+def _unevidenced_titles(
+    results: list[ExtractionResult], *, source_text: str
+) -> tuple[str, ...]:
+    """Titles of the objects whose written text quotes NO line of the
+    source (#801), in `results` order.
+
+    ADVISORY, exactly like `_names_absent_from_source` beside it: it names
+    titles for a caller to report and drops nothing. #585 already settled
+    the shape of this trade for the analogous collapse -- a degrade to `[]`
+    was REJECTED there because a genuinely thin source is indistinguishable
+    from the defect by the signal alone, so dropping would emit nothing for
+    real content. The same holds here: a source really can state a fact in
+    words no single line reproduces, and marking is strictly
+    information-adding where dropping is not.
+
+    Delegates the predicate to `evidence.evidence_line`, which is a leaf
+    dealing in plain strings. Two things follow from that split and both
+    are deliberate: the normalization stays byte-identical to
+    `_quoted_verbatim`'s (one definition of "quoted verbatim" for the whole
+    module), and the word floor that keeps the check from being vacuous
+    lives beside the comparison it qualifies rather than here.
+
+    It checks `result.body.strip() or result.description` -- the text that
+    will BE WRITTEN, not `body` alone. `ExtractionResult.body`'s own
+    docstring records that the builder falls back to `description` when the
+    body is blank, so a `body`-only check would pass every blank-body
+    object unexamined while the bundle went on to store its description as
+    the object's whole content. That is not a hypothetical gap: #801's
+    object is exactly a body that adds nothing over its description, and
+    the same model that writes one writes the other.
+    """
+    return tuple(
+        result.title
+        for result in results
+        if evidence_mod.evidence_line(
+            result.body.strip() or result.description, source_text
+        )
+        is None
     )
 
 
@@ -2731,6 +2773,27 @@ class ExtractionReport:
     NOT a claim the judge or re-admission ultimately kept it -- read
     `participant_judge_selected_titles`/`participant_readmitted_titles` for
     that."""
+    unevidenced_titles: tuple[str, ...] = ()
+    """Titles among the RETAINED objects whose written text quotes no line
+    of the source (#801), computed by `_unevidenced_titles`.
+
+    ADVISORY. Nothing is dropped for appearing here -- see that function
+    for why #585's rejected degrade-to-`[]` settles this trade too. The
+    object is stored, and this is the disclosure that keeps the bundle
+    honest about what it is storing: an object with no quoted span cannot
+    support a citation, which is how the defect surfaced (a stored object
+    became a citation that provably could not support the answer it was
+    attached to).
+
+    Scored on the RETAINED set rather than every candidate, the same rule
+    `sole_object_restates_source` and `participant_names_absent_from_source`
+    both state: an object the cap discarded is not stored, so it is not a
+    claim the bundle makes, and naming it would send the reader looking for
+    a document that does not exist.
+
+    Defaulted so every existing construction site keeps working unchanged,
+    and `()` is the honest default -- it claims no disclosure, which is
+    what an untouched site is entitled to claim."""
 
 
 @dataclass(frozen=True)
@@ -2917,6 +2980,11 @@ def extract_concept(
             participant_names_absent_from_source=_names_absent_from_source(
                 retained, source_text=source_text
             ),
+            # #801, and BOTH return sites for the same reason the advisory
+            # one line above names: this path is what `union_judge: false`
+            # selects, so wiring only the union path would store objects
+            # quoting nothing and surface nothing here.
+            unevidenced_titles=_unevidenced_titles(retained, source_text=source_text),
         ),
     )
 
@@ -3377,5 +3445,6 @@ def extract_concept_union(
             ),
             participant_capture_runs=participant_capture_runs,
             participant_capture_added_titles=participant_capture_added_titles,
+            unevidenced_titles=_unevidenced_titles(retained, source_text=source_text),
         ),
     )
