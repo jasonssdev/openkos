@@ -1743,6 +1743,78 @@ def test_git_existing_repo_disclosure_claims_no_creation_it_did_not_do(
     assert "git revert" in result.stdout
 
 
+def test_git_repository_without_an_ignore_file_claims_only_the_ignore_file(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #817, item 2: the first of the two MIXED setup branches.
+
+    The disclosure composes its parenthetical from a four-way branch on
+    (was there already a repository, did we write the ignore file), and
+    only the two EXTREMES were covered -- fresh directory, and an existing
+    repository that already had an ignore file. The two mixed branches are
+    the realistic partial-setup cases, and they are exactly where the
+    spec's requirement that the message must not claim `init` created
+    something it did not create can break: each one has a creation to
+    report AND a creation to stay silent about, so a branch that collapsed
+    to either extreme's wording would still read plausibly.
+
+    Here the directory is already a repository but carries no ignore file.
+    `init` writes one, so it must say so -- and must NOT claim `.git/`."""
+    monkeypatch.chdir(tmp_path)
+    config_dir = tmp_path_factory.mktemp("git-identity-config")
+    isolate_git_identity(
+        monkeypatch, config_dir, name="Isolated Tester", email="tester@example.invalid"
+    )
+    vcs_git.init_repo(tmp_path)
+    assert not (tmp_path / ".gitignore").exists()
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 0
+    assert "already a git repository; created .gitignore" in result.stdout
+    assert "created .git/" not in result.stdout
+    assert (tmp_path / ".gitignore").is_file()
+    assert "git revert" in result.stdout
+
+
+def test_ignore_file_without_a_repository_claims_only_the_repository(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #817, item 2: the second MIXED branch, and its mirror.
+
+    A directory with a hand-written ignore file but no repository. `init`
+    creates `.git/` and must say so, while the ignore file it deliberately
+    did NOT overwrite must not be claimed -- and its contents must survive,
+    which is the consequence a wording-only assertion would miss.
+
+    Paired with the sibling above rather than folded into it: the two
+    branches differ in WHICH half is silent, and a single test covering
+    one of them cannot tell a correct four-way branch from one that
+    reports whichever creation happened to be checked first."""
+    monkeypatch.chdir(tmp_path)
+    config_dir = tmp_path_factory.mktemp("git-identity-config")
+    isolate_git_identity(
+        monkeypatch, config_dir, name="Isolated Tester", email="tester@example.invalid"
+    )
+    (tmp_path / ".gitignore").write_text("# mine\nnode_modules/\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 0
+    assert "(created .git/)" in result.stdout
+    assert "created .gitignore" not in result.stdout
+    # The hand-written file is never overwritten, so the disclosure's
+    # silence about it is backed by what is on disk.
+    assert (tmp_path / ".gitignore").read_text(encoding="utf-8") == (
+        "# mine\nnode_modules/\n"
+    )
+    assert "git revert" in result.stdout
+
+
 def test_git_identity_unset_makes_no_version_control_promise(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

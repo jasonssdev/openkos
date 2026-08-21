@@ -1387,7 +1387,19 @@ def _echo_commit_disclosure(sha: str, *, prefix: str = "") -> None:
     Only ever called with a real sha. `_autocommit` returns `None` on every
     degradation (not a repo, identity unset, commit failed, sha unreadable),
     and a caller that printed this anyway would be pointing the user at a
-    commit that does not exist."""
+    commit that does not exist.
+
+    `sha` stays NON-OPTIONAL, and each of the five call sites keeps its own
+    `if <x>_sha is not None:` (issue #817, item 3, decided deliberately).
+    Widening the parameter to `str | None` with an early return would
+    delete those five lines, and the reason not to is not style: `sha: str`
+    is a contract the TYPE CHECKER enforces. `_autocommit` returns
+    `str | None`, so a caller that forgets the check is an `arg-type` error
+    today, and mypy would accept that same forgetful caller in silence the
+    moment this accepted `str | None` -- trading a machine-checked
+    guarantee for five lines. The guard also puts the degradation where the
+    output is composed, which is where a reader looks to see what a verb
+    does and does not print."""
     typer.echo(f"{prefix}committed as {sha} -- undo with `git revert {sha}`.")
 
 
