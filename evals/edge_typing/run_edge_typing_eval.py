@@ -84,13 +84,21 @@ def _materialize_bundle(bundle_dir: pathlib.Path) -> None:
 
 def _run_once(
     bundle_dir: pathlib.Path, client: OllamaClient
-) -> list[tuple[str | None, float]]:
+) -> list[tuple[str | None, float, str]]:
     """One pass over every labelled edge; returns `(suggested_type,
-    confidence)` per edge, `(None, 0.0)` where the reply degraded.
+    confidence, rationale)` per edge, `(None, 0.0, "")` where the reply
+    degraded.
 
     `confidence` is `0.0` on the baseline arm, whose prompt never asks for
     one -- the field fails closed, so a baseline run reads as "no stated
-    confidence" rather than as a confident zero."""
+    confidence" rather than as a confident zero.
+
+    The RATIONALE is retained (issue #807). It was previously discarded
+    here, which made this harness unable to score the one thing #807 is
+    about: a reply whose rationale argues for the reverse of the direction
+    it asserts. Storing it costs nothing -- it is already in the reply --
+    and keeps the stored runs re-analyzable for that question without
+    re-spending them, exactly as the confidences arrays do."""
     edges = [Edge(source_id=e.source_id, target_id=e.target_id) for e in EDGES]
     batch = suggest_edge_types(edges, bundle_dir=bundle_dir, llm=client)
     by_pair = {
@@ -102,10 +110,11 @@ def _run_once(
         (s.edge.source_id, s.edge.target_id): (
             s.suggested_type,
             float(getattr(s, "confidence", 0.0)),
+            s.rationale,
         )
         for s in batch.results
     }
-    return [by_pair.get((e.source_id, e.target_id), (None, 0.0)) for e in EDGES]
+    return [by_pair.get((e.source_id, e.target_id), (None, 0.0, "")) for e in EDGES]
 
 
 def main() -> None:
@@ -127,7 +136,7 @@ def main() -> None:
         max_generation_tokens=DEFAULT_MAX_GENERATION_TOKENS,
         context_window=DEFAULT_CONTEXT_WINDOW,
     )
-    observed: list[list[tuple[str | None, float]]] = []
+    observed: list[list[tuple[str | None, float, str]]] = []
     latencies: list[float] = []
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -140,7 +149,7 @@ def main() -> None:
             latencies.append(time.monotonic() - started)
             print(f"  run {index + 1}/{args.runs} done ({latencies[-1]:.1f}s)")
 
-    per_edge: dict[int, list[tuple[str | None, float]]] = defaultdict(list)
+    per_edge: dict[int, list[tuple[str | None, float, str]]] = defaultdict(list)
     for run in observed:
         for position, pair in enumerate(run):
             per_edge[position].append(pair)
@@ -152,7 +161,7 @@ def main() -> None:
 
     for position, labelled in enumerate(EDGES):
         pairs = per_edge[position]
-        answers = [a for a, _ in pairs]
+        answers = [a for a, _, _ in pairs]
         counts = Counter(a for a in answers if a is not None)
         distribution.update(counts)
         modal, modal_count = counts.most_common(1)[0] if counts else ("<none>", 0)
@@ -170,7 +179,8 @@ def main() -> None:
                 "stability": stability,
                 "accuracy": hits / len(answers) if answers else 0.0,
                 "answers": answers,
-                "confidences": [c for _, c in pairs],
+                "confidences": [c for _, c, _ in pairs],
+                "rationales": [r for _, _, r in pairs],
             }
         )
 
@@ -191,7 +201,7 @@ def main() -> None:
     for position, labelled in enumerate(EDGES):
         if labelled.trap_type is None:
             continue
-        for answer, _ in per_edge[position]:
+        for answer, _, _ in per_edge[position]:
             trap_total += 1
             if answer == labelled.trap_type:
                 trap_hits += 1

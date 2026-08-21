@@ -19,6 +19,7 @@ from openkos.graph.proximity import ProximityPair
 from openkos.graph.sqlite_graph import CandidateReport, build_graph
 from openkos.llm.base import Message
 from openkos.llm.ollama import OllamaGenerationCapped, OllamaUnavailable
+from openkos.model.relations import ASYMMETRIC_RELATION_TYPES
 from openkos.resolution import edge_typing as edge_typing_mod
 
 
@@ -1507,3 +1508,304 @@ def test_candidate_truncation_notice_counts_the_offset_window(
     notice = edge_typing_mod.candidate_truncation_notice(report, bundle_dir)
 
     assert notice == "2 of 5 candidate edge(s) shown (cap reached)"
+
+
+# --- #807: a rationale that argues for the reverse direction --------------
+
+
+def test_contradicted_direction_withdraws_the_specific_type() -> None:
+    """Issue #807: when the rationale casts the TARGET in the subordinate
+    role, the asymmetric type it asserts is withdrawn.
+
+    The reported run proposed `[part_of] A -> B` while its rationale argued
+    that B was "a structural component" -- the two halves of one reply
+    disagreeing about which document is inside which. That is a stronger
+    claim than the `(direction model-suggested, unverified)` marker #778
+    already carries: this is not uncertainty, it is self-contradiction, and
+    it is detectable in the reply itself."""
+    suggested, rationale = edge_typing_mod._withdraw_contradicted_direction(
+        "part_of",
+        "The Contact Decision is a structural component of the overall process.",
+        ("Analyze Methodology", "body"),
+        ("Contact Decision", "body"),
+    )
+
+    assert suggested == "related_to"
+    assert "withdrawn" in rationale
+    # The model's own words survive: the note explains the withdrawal, it
+    # does not replace the reasoning the operator is meant to read.
+    assert "structural component" in rationale
+
+
+def test_a_rationale_naming_the_source_first_is_left_alone() -> None:
+    """The control, and the case that killed the first design.
+
+    "The aortic valve is a structural component of the human heart, forming
+    part of its anatomy" is a CORRECT `part_of`, and a proximity window
+    flagged it anyway -- the target is the nearest thing before the SECOND
+    clause's marker. Measured over a 15-run arm that rule scored 0.40
+    precision and would have withdrawn 25 correct suggestions to catch 17
+    wrong ones. Requiring the target to precede the marker with no source
+    mention before it is what fixed that, so this exact sentence is the
+    regression guard."""
+    suggested, rationale = edge_typing_mod._withdraw_contradicted_direction(
+        "part_of",
+        (
+            "The aortic valve is a structural component of the human heart, "
+            "forming part of its anatomy and essential for its function."
+        ),
+        ("Aortic Valve", "body"),
+        ("Human Heart", "body"),
+    )
+
+    assert suggested == "part_of"
+    assert "withdrawn" not in rationale
+
+
+def test_a_symmetric_type_is_never_withdrawn() -> None:
+    """Only the five asymmetric types have a direction to contradict.
+    `related_to` and `references` are outside the check entirely, so a
+    marker phrase in their rationale can never cost them their type."""
+    for symmetric in ("related_to", "references"):
+        suggested, rationale = edge_typing_mod._withdraw_contradicted_direction(
+            symmetric,
+            "The Target Doc is a component of the wider system.",
+            ("Source Doc", "body"),
+            ("Target Doc", "body"),
+        )
+
+        assert suggested == symmetric
+        assert "withdrawn" not in rationale
+
+
+def test_a_degraded_reply_is_not_resurrected_as_related_to() -> None:
+    """A `None` suggested type is the fail-closed degrade for a reply that
+    could not be READ, and this check must not turn it into an answer: the
+    two failures are different and only one of them has a rationale worth
+    believing."""
+    suggested, _ = edge_typing_mod._withdraw_contradicted_direction(
+        None,
+        "malformed reply: could not parse a valid suggestion JSON object",
+        ("Source Doc", "body"),
+        ("Target Doc", "body"),
+    )
+
+    assert suggested is None
+
+
+def test_the_marker_must_share_a_sentence_with_the_target() -> None:
+    """The sentence bound, stated as its own case: a marker in a LATER
+    sentence than the target's mention is not evidence about that target's
+    role, and treating it as such is what produced the false positives the
+    first design was rejected for."""
+    assert not edge_typing_mod._contradicts_direction(
+        "part_of",
+        "The Human Heart is discussed at length. The valve is a component of it.",
+        "Aortic Valve",
+        "Human Heart",
+    )
+
+
+def test_a_repeated_sentence_is_analysed_at_its_own_offset() -> None:
+    """Each sentence is located from a running cursor, so a rationale that
+    repeats one verbatim analyses the SECOND copy at the second copy's
+    position (review R3 on #807).
+
+    Locating every sentence with `find` from the start of the string
+    resolves each later copy back to the first one's offset, and the title
+    positions are then filtered against the wrong window. Here the
+    contradiction lives only in the LAST sentence: a run that kept
+    re-examining the first copy would never see it."""
+    rationale = (
+        "Both documents discuss the same system. "
+        "Both documents discuss the same system. "
+        "The Human Heart is a component of the wider anatomy."
+    )
+
+    assert edge_typing_mod._contradicts_direction(
+        "part_of", rationale, "Aortic Valve", "Human Heart"
+    )
+
+
+def test_every_asymmetric_type_has_a_working_marker() -> None:
+    """All five asymmetric types share one detection path, so all five are
+    driven through it (review R3 on #807).
+
+    `part_of` alone would leave the other four markers -- including the
+    deliberately generic "one of" and "requires" -- asserted by the table
+    and executed by nothing. Each case names the TARGET as the subordinate
+    one, which is the contradiction: the rubric puts that role on SOURCE
+    for every one of these types."""
+    contradicting = {
+        "part_of": "The Target Doc is a component of the wider system.",
+        "member_of": "The Target Doc is one of the collected items.",
+        "caused_by": "The Target Doc came about because of the earlier work.",
+        "depends_on": "The Target Doc depends on the underlying platform.",
+        "produced_by": "The Target Doc was authored by the platform team.",
+    }
+    for asymmetric_type, rationale in contradicting.items():
+        assert edge_typing_mod._contradicts_direction(
+            asymmetric_type, rationale, "Source Doc", "Target Doc"
+        ), asymmetric_type
+
+
+def test_a_spanish_rationale_fails_closed_rather_than_flagging() -> None:
+    """The English-only bound, on the language that opened the issue.
+
+    The run reported in #807 had a Spanish rationale, and this table would
+    not have fired on it. That is a stated limitation, not an accident, and
+    it has to fail CLOSED: an unmatched language must leave the suggestion
+    exactly as the model gave it, never withdraw a type on a marker the
+    table cannot read.
+
+    Both halves are asserted. The Spanish sentence really does put the
+    TARGET in the subordinate role -- an English-marker table reading it
+    would flag it -- and the check leaves it alone anyway; the English
+    control uses the SAME titles, so a rule that had simply stopped working
+    on this pair would fail there instead of passing here."""
+    spanish = "La Metodologia es un componente del sistema mas amplio."
+
+    assert not edge_typing_mod._contradicts_direction(
+        "part_of", spanish, "Profesor Tutor", "Metodologia"
+    )
+    assert edge_typing_mod._contradicts_direction(
+        "part_of",
+        "The Metodologia is a component of the wider system.",
+        "Profesor Tutor",
+        "Metodologia",
+    )
+
+
+def test_titles_sharing_a_token_fail_closed() -> None:
+    """When both titles share a distinctive token the check cannot tell
+    them apart, so it declines to flag (issue #807).
+
+    `_title_positions` falls back to four-plus-character tokens because the
+    model paraphrases titles rather than quoting them, and that fallback
+    cannot separate `Documento Origen` from `Documento Destino`: the shared
+    `documento` matches for BOTH. Failing closed there is the whole design
+    -- withdrawing a correct asymmetric edge costs real structure, and an
+    ambiguous match is not evidence of a contradiction. Pinned because the
+    alternative reading of this behaviour is "the check is broken", and it
+    is not."""
+    assert not edge_typing_mod._contradicts_direction(
+        "part_of",
+        "The Documento Destino is a component of the wider system.",
+        "Documento Origen",
+        "Documento Destino",
+    )
+
+
+def test_the_marker_table_covers_exactly_the_asymmetric_vocabulary() -> None:
+    """The marker table and `ASYMMETRIC_RELATION_TYPES` live in different
+    modules, so nothing but this test stops them drifting (review R3 on
+    #807).
+
+    A type added to the vocabulary without a marker entry becomes silently
+    un-checkable -- the lookup is a `.get`, so it degrades to "not examined"
+    rather than raising, which is the safe runtime behaviour and exactly
+    why the drift needs catching HERE instead. Equality both ways, because
+    a stale marker entry for a type that is no longer asymmetric is the
+    same drift running the other direction."""
+    assert set(edge_typing_mod._SUBORDINATE_ROLE_MARKERS) == set(
+        ASYMMETRIC_RELATION_TYPES
+    )
+
+
+def test_suggest_edge_types_withdraws_a_contradicted_direction(tmp_path: Path) -> None:
+    """The check reaches callers through the public seam, not just through
+    its own helpers (review R3 on #807).
+
+    Every other test here drives `_contradicts_direction` or
+    `_withdraw_contradicted_direction` directly, which cannot tell a
+    working check from one wired into nothing. This runs the real
+    `suggest_edge_types` loop over two edges: the first reply contradicts
+    the direction it asserts and must come back `related_to` with the note,
+    the second is an ordinary asymmetric answer whose rationale names the
+    SOURCE as subordinate and must come back untouched.
+
+    Two edges rather than one on purpose -- a wiring that withdrew every
+    asymmetric suggestion would pass a one-edge test."""
+    _write_doc(tmp_path / "aortic-valve.md", title="Aortic Valve")
+    _write_doc(tmp_path / "human-heart.md", title="Human Heart")
+    edges = [
+        Edge(source_id="aortic-valve", target_id="human-heart"),
+        Edge(source_id="human-heart", target_id="aortic-valve"),
+    ]
+    llm = _FakeLLM(
+        replies=[
+            # Asserts valve part_of heart, but argues the HEART is the part.
+            _valid_reply(
+                "part_of", "The Human Heart is a component of the wider anatomy."
+            ),
+            # Asserts heart part_of valve, and argues it consistently -- wrong
+            # about the world, but not self-contradicting, so it is left alone.
+            _valid_reply(
+                "part_of", "The Human Heart is a component of the Aortic Valve."
+            ),
+        ]
+    )
+
+    results = edge_typing_mod.suggest_edge_types(
+        edges, bundle_dir=tmp_path, llm=llm
+    ).results
+
+    assert results[0].suggested_type == "related_to"
+    assert edge_typing_mod.DIRECTION_WITHDRAWN_NOTE in results[0].rationale
+    assert results[1].suggested_type == "part_of"
+    assert edge_typing_mod.DIRECTION_WITHDRAWN_NOTE not in results[1].rationale
+
+
+def test_a_title_is_not_found_inside_a_longer_word() -> None:
+    """Title matching is word-anchored on BOTH branches (review R3 on
+    #807).
+
+    The whole-title branch originally used a bare substring search while
+    the token fallback anchored on `\\b`, so a title like `Heart` was
+    "found" in a rationale that only ever said `hearth`. A role marker
+    would then be attributed to a document nobody named, and a correct
+    asymmetric suggestion withdrawn on the strength of it.
+
+    Here the rationale never mentions the target at all -- `hearth` is a
+    different word -- so nothing may be flagged. Under the unanchored
+    search it is, which is what makes this the fix's regression guard."""
+    assert not edge_typing_mod._contradicts_direction(
+        "part_of",
+        "The hearth is a component of the kitchen.",
+        "Aortic Valve",
+        "Heart",
+    )
+    # ...and the same sentence naming the target for real IS flagged, so
+    # this cannot pass on a matcher that simply stopped finding anything.
+    assert edge_typing_mod._contradicts_direction(
+        "part_of",
+        "The Heart is a component of the kitchen.",
+        "Aortic Valve",
+        "Heart",
+    )
+
+
+def test_a_marker_is_not_found_inside_a_longer_word() -> None:
+    """Marker phrases are word-anchored too (review R3 on #807).
+
+    `"part of"` sits inside `"counterpart of"`, so an unanchored search
+    reads "the Human Heart is the counterpart of this valve" as the heart
+    being declared a PART -- and withdraws a correct `part_of` on a phrase
+    the rationale never used. Same failure mode as the title matching, one
+    layer down, and it needs its own guard because fixing one did nothing
+    for the other.
+
+    The second assertion uses the same sentence shape with a real marker,
+    so a matcher that had simply stopped finding markers cannot pass."""
+    assert not edge_typing_mod._contradicts_direction(
+        "part_of",
+        "The Human Heart is the counterpart of this valve.",
+        "Aortic Valve",
+        "Human Heart",
+    )
+    assert edge_typing_mod._contradicts_direction(
+        "part_of",
+        "The Human Heart is part of this valve.",
+        "Aortic Valve",
+        "Human Heart",
+    )
