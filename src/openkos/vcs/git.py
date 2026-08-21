@@ -556,6 +556,19 @@ def commit_paths(cwd: Path, rel_paths: Sequence[str], message: str) -> str | Non
     the alternative (parsing `git commit`'s own output) fails on the far
     more ordinary cases named above.
 
+    REVISITED for issue #817, item 5, on the standing that "documented as
+    accepted" should stay a revisitable decision rather than a closed one.
+    The bar was a CHEAP identifier tied to the commit OBJECT this call
+    created, which would be strictly better than a `HEAD` read. There is
+    none. Every candidate either has the same race (`git log -1`,
+    `rev-parse` on the branch ref -- a hook's own commit moves those too),
+    reads `.git` internals and matches on our own message heuristically
+    (the `HEAD` reflog), changes user-visible behaviour by suppressing
+    hooks, or reimplements the commit out of plumbing (`write-tree` +
+    `commit-tree` + `update-ref`), which abandons `commit.gpgsign`,
+    `commit.template`, and every hook a user configured. So the bound
+    stands, now on a checked answer instead of an untested assumption.
+
     A read-back that fails emits no WARNING of its own, unlike the three
     degradations in `_autocommit`. Deliberate: those three mean NOTHING WAS
     COMMITTED and the user must act, while this one means the commit

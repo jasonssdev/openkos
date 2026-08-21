@@ -10,7 +10,7 @@ gates, per-item confirms, exit codes, `--auto`) follow `test_adjudicate.py`'s
 
 import os
 import sys
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -33,6 +33,7 @@ from openkos.resolution.adjudication import (
 )
 from openkos.resolution.candidates import CandidateGroup, CandidateGroupReport, Tier
 from openkos.resolution.contradiction import CandidatePlan, _CandidateSpec
+from openkos.vcs import git as vcs_git
 from tests.unit.cli.conftest import changed_paths, disable_local_exemption
 from tests.unit.cli.conftest import snapshot_with_mtime as _snapshot
 from tests.unit.conftest import LOCAL_BACKEND_LOCALITY
@@ -92,6 +93,85 @@ def _init_apply_workspace(
     )
     result = runner.invoke(app, ["init"])
     assert result.exit_code == 0
+
+
+def _is_absent_and_untracked(root: Path, rel_path: str) -> bool:
+    """Whether `rel_path` is BOTH gone from disk and unknown to the index.
+
+    That pair is exactly what makes `git add -- <rel_path>` fail: there is
+    no file to stage and no tracked entry to record a deletion for. Asked
+    of the filesystem and of git's INDEX rather than of git's error text,
+    because that text is translated under a non-English locale and `_run`
+    does not pin one -- a guard that matched on the English wording would
+    simply stop guarding, silently, which is the failure class this whole
+    fixture exists to prevent (issue #817, review R2).
+
+    `git ls-files` answers with the path or with nothing, so "tracked" is
+    read as machine-readable presence, never as prose. Reaching through
+    `vcs_git._run` follows this module's existing convention for asking git
+    a question inside a fixture -- `_head_short_sha` above does the same,
+    and `_run` is deliberately the single subprocess seam the whole
+    codebase goes through.
+
+    A non-zero probe means the question could not be ANSWERED -- outside a
+    repository, `git ls-files` exits non-zero with empty output, which is
+    byte-identical to a confident "untracked". Returning False there is
+    what keeps the guard from relabelling an unrelated failure as this
+    story: an unclassifiable error is not this fixture's business, and the
+    caller re-raises the original untouched (issue #817, review R2/R4)."""
+    if (root / rel_path).exists():
+        return False
+    probe = vcs_git._run(["git", "ls-files", "--", rel_path], cwd=root)
+    if probe.returncode != 0:
+        return False
+    return not probe.stdout.strip()
+
+
+@pytest.fixture(autouse=True)
+def _fail_loudly_on_an_untracked_fixture_degrade(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Turn the ONE auto-commit degradation a fixture can cause by accident
+    into a test failure (issue #817, item 1).
+
+    `_write_doc` writes concept documents straight to disk, so they stay
+    untracked. Identity's merge then DELETES the absorbed one, and the
+    auto-commit's `git add -- bundle/concepts/b.md` fails because that path
+    is now neither on disk nor in the index -- silently, because
+    `_autocommit` degrades to a stderr WARNING and no test asserted a
+    commit had happened. Twelve tests in this file were running against
+    that state, which is a workspace no real session ever has: every prior
+    mutating verb has already auto-committed its own writes.
+
+    A fixture that quietly puts the code under test on its degradation path
+    proves less than it appears to, so this makes the state impossible to
+    reach without saying so, for every test in this file including ones not
+    yet written.
+
+    It is narrow on purpose. A deliberately degraded run -- identity unset,
+    a monkeypatched failure, a workspace that is not a repository -- either
+    returns before `commit_paths` or raises for a different reason, and
+    `_is_absent_and_untracked` reports False for all of those, so the
+    original `GitError` propagates untouched and those tests keep working."""
+    real = vcs_git.commit_paths
+
+    def guarded(cwd: Path, rel_paths: Sequence[str], message: str) -> str | None:
+        try:
+            return real(cwd, rel_paths, message)
+        except vcs_git.GitError:
+            never_tracked = [
+                rel for rel in rel_paths if _is_absent_and_untracked(cwd, rel)
+            ]
+            if not never_tracked:
+                raise
+            raise AssertionError(
+                "auto-commit degraded because a fixture document was never "
+                f"tracked before it was deleted: {never_tracked}. Seed it with "
+                "`_seed_commit` or `_seed_workspace_docs` so this test "
+                "exercises the commit path a real session takes."
+            ) from None
+
+    monkeypatch.setattr(vcs_git, "commit_paths", guarded)
 
 
 def _simulate_tty(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -972,6 +1052,8 @@ def test_accepted_identity_pair_commits_via_shared_merge_cores(
     _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
     _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
     _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    # Track them before Identity deletes the absorbed one (#817).
+    _seed_workspace_docs(tmp_path)
     _reindexed_workspace(tmp_path, monkeypatch)
 
     group = CandidateGroup(
@@ -1033,6 +1115,96 @@ def _seed_commit(root: Path, rel_paths: list[str]) -> None:
     from openkos.vcs import git as vcs_git
 
     vcs_git.commit_paths(root, rel_paths, "seed")
+
+
+def _seed_workspace_docs(root: Path) -> None:
+    """Commit every fixture document written under `bundle/` so far.
+
+    The bulk sibling of `_seed_commit` (issue #817, item 1), for the tests
+    that write their documents through a helper rather than naming each
+    path. Same reason, same precondition: in a real workspace every
+    document Identity is about to merge was already committed by the verb
+    that wrote it, so a merge deleting an UNTRACKED file is a state no
+    session reaches.
+
+    Stages the `bundle` directory itself rather than enumerating names, so
+    a test that adds a document later is covered without touching this;
+    still a scoped `git add -- bundle`, never `-A`/`-a`, so the repository
+    rule `test_no_blanket_add_flags_anywhere` guards is unaffected. A
+    no-op when nothing is pending, because `git commit` with an empty
+    index is an error, not a success. `--porcelain` is asked for by name:
+    it is git's stable machine-readable form, so the emptiness check does
+    not depend on locale or on human-facing wording. Asking through
+    `vcs_git._run` matches `_head_short_sha` above and the codebase's rule
+    that `_run` is the single subprocess seam, in production and fixtures
+    alike (issue #817, review R2)."""
+    pending = vcs_git._run(
+        ["git", "status", "--porcelain", "--", "bundle"], cwd=root
+    ).stdout.strip()
+    if not pending:
+        return
+    vcs_git.commit_paths(root, ["bundle"], "seed fixture documents")
+
+
+def test_untracked_fixture_guard_fires_only_on_the_shape_it_names(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The autouse guard is new machinery, so it gets its own test (issue
+    #817, review R3).
+
+    Both directions matter and neither proves the other. A guard that
+    raised on EVERY `GitError` would pass a fire-only test while breaking
+    the deliberately-degraded tests in this file; a guard that never fired
+    would pass a stays-quiet test while protecting nothing.
+
+    The first half drives the real defect shape -- a document written to
+    disk, never tracked, then deleted -- and the auto-commit that follows
+    must fail loudly. The second half drives a `GitError` that has nothing
+    to do with tracking, and the guard must let it through unchanged, so a
+    test asserting a genuine degradation still sees the error it expects."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    doc = tmp_path / "bundle" / "concepts" / "never-tracked.md"
+    _write_doc(doc, title="Never Tracked")
+    doc.unlink()
+
+    with pytest.raises(AssertionError, match=r"never.*tracked"):
+        vcs_git.commit_paths(
+            tmp_path, ["bundle/concepts/never-tracked.md"], "should not survive"
+        )
+
+    # An unrelated failure is NOT this guard's business: the path exists
+    # and is tracked, so the original GitError must reach the caller.
+    tracked = tmp_path / "bundle" / "concepts" / "tracked.md"
+    _write_doc(tracked, title="Tracked")
+    _seed_workspace_docs(tmp_path)
+    # Its own context, NOT the test's `monkeypatch`: the autouse guard
+    # above installs itself through that same instance, so `undo()` here
+    # would tear the guard down along with this patch and the case below
+    # would then be testing nothing.
+    with pytest.MonkeyPatch.context() as unrelated:
+        unrelated.setattr(
+            vcs_git,
+            "_run",
+            lambda *a, **k: (_ for _ in ()).throw(
+                vcs_git.GitError("unrelated failure")
+            ),
+        )
+        with pytest.raises(vcs_git.GitError, match="unrelated failure"):
+            vcs_git.commit_paths(tmp_path, ["bundle/concepts/tracked.md"], "unrelated")
+
+    # Third: the path IS absent, but the question cannot be ANSWERED --
+    # outside a repository `git ls-files` exits non-zero with empty output,
+    # which is byte-identical to a confident "untracked". Without the
+    # return-code check the guard would relabel this unrelated failure as
+    # the never-tracked story, so this is the case that pins it. The two
+    # halves above both short-circuit on `.exists()` and never reach the
+    # probe at all.
+    outside = tmp_path_factory.mktemp("not-a-repository")
+    with pytest.raises(vcs_git.GitError) as caught:
+        vcs_git.commit_paths(outside, ["bundle/concepts/absent.md"], "not a repo")
+    assert not isinstance(caught.value, AssertionError)
 
 
 def test_identity_applied_merge_names_the_commit_and_the_way_back(
@@ -1282,6 +1454,8 @@ def test_identity_plans_and_applies_the_merged_body_reconciliation(
     _write_bodied_doc(
         tmp_path / "bundle" / "concepts" / "b.md", title="Concept B", body=body_b
     )
+    # Track them before Identity deletes the absorbed one (#817).
+    _seed_workspace_docs(tmp_path)
     _reindexed_workspace(tmp_path, monkeypatch)
 
     group = CandidateGroup(
@@ -1344,6 +1518,8 @@ def test_identity_no_reconcile_opts_out(
     _write_bodied_doc(
         tmp_path / "bundle" / "concepts" / "b.md", title="Concept B", body=body
     )
+    # Track them before Identity deletes the absorbed one (#817).
+    _seed_workspace_docs(tmp_path)
     _reindexed_workspace(tmp_path, monkeypatch)
 
     group = CandidateGroup(
@@ -1432,6 +1608,9 @@ def _seed_identity_reconcile_pair(
 
     monkeypatch.setattr("openkos.cli.main._reconcile_merged_survivor", _fake_reconcile)
     _simulate_tty(monkeypatch)
+    # The pair this helper just wrote must be TRACKED before Identity
+    # deletes the absorbed one (issue #817, item 1).
+    _seed_workspace_docs(tmp_path)
     return reconciled
 
 
@@ -1555,6 +1734,8 @@ def test_identity_partial_batch_applies_completed_then_reports_failed_with_count
     _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
     _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
     _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    # Track them before Identity deletes the absorbed one (#817).
+    _seed_workspace_docs(tmp_path)
     _reindexed_workspace(tmp_path, monkeypatch)
     _partial_identity_batch(tmp_path, monkeypatch, OllamaError("boom"))
     _simulate_tty(monkeypatch)
@@ -1594,6 +1775,8 @@ def test_identity_partial_batch_unavailable_still_walks_then_skips_later_stages(
     _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
     _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
     _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    # Track them before Identity deletes the absorbed one (#817).
+    _seed_workspace_docs(tmp_path)
     _reindexed_workspace(tmp_path, monkeypatch)
     _partial_identity_batch(
         tmp_path, monkeypatch, OllamaUnavailable("connection refused")
@@ -1635,6 +1818,8 @@ def test_identity_partial_batch_model_not_found_still_walks_then_skips_later_sta
     _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
     _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
     _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    # Track them before Identity deletes the absorbed one (#817).
+    _seed_workspace_docs(tmp_path)
     _reindexed_workspace(tmp_path, monkeypatch)
 
     from openkos.graph.base import Edge
@@ -2496,6 +2681,8 @@ def test_structure_sees_post_merge_identity_state(
     _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
     _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
     _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    # Track them before Identity deletes the absorbed one (#817).
+    _seed_workspace_docs(tmp_path)
     _reindexed_workspace(tmp_path, monkeypatch)
 
     group = CandidateGroup(
@@ -4047,6 +4234,8 @@ def test_identity_unrecognized_answer_reprompts_then_applies(
     _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
     _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
     _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    # Track them before Identity deletes the absorbed one (#817).
+    _seed_workspace_docs(tmp_path)
     _reindexed_workspace(tmp_path, monkeypatch)
     _seed_identity_pair(tmp_path, monkeypatch)
     _simulate_tty(monkeypatch)
@@ -4096,6 +4285,8 @@ def test_identity_applied_only_run_prints_no_declined_lines(
     _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
     _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
     _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    # Track them before Identity deletes the absorbed one (#817).
+    _seed_workspace_docs(tmp_path)
     _reindexed_workspace(tmp_path, monkeypatch)
     _seed_identity_pair(tmp_path, monkeypatch)
     _simulate_tty(monkeypatch)
@@ -4119,6 +4310,8 @@ def test_identity_applied_summary_line_names_its_stage_once(
     _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
     _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
     _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    # Track them before Identity deletes the absorbed one (#817).
+    _seed_workspace_docs(tmp_path)
     _reindexed_workspace(tmp_path, monkeypatch)
     _seed_identity_pair(tmp_path, monkeypatch)
     _simulate_tty(monkeypatch)

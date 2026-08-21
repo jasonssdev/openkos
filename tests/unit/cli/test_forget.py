@@ -1342,11 +1342,62 @@ def test_invalid_scope_value_refuses(
     assert _snapshot(tmp_path) == before
 
 
-def _mask_commit_sha(output: str) -> str:
-    """Replace every abbreviated commit sha in `output` with a fixed token.
+_COMMIT_DISCLOSURE_RE = re.compile(
+    r"committed as [0-9a-f]{7,40} -- undo with `git revert [0-9a-f]{7,40}`"
+)
+"""The auto-commit disclosure, with its two shas left as capture-free hex
+runs -- the ONE place a byte-for-byte parity comparison must tolerate a
+difference (issue #817, item 4)."""
 
-    Only the hex run is masked, never the sentence around it (issue #800)."""
-    return re.sub(r"\b[0-9a-f]{7,40}\b", "<sha>", output)
+
+def _mask_commit_sha(output: str) -> str:
+    """Replace the commit shas in the auto-commit DISCLOSURE with a fixed
+    token, and nothing else.
+
+    Only the hex runs are masked, never the sentence around them (issue
+    #800). The first spelling was a bare `\\b[0-9a-f]{7,40}\\b`, which
+    matched any hex-shaped token ANYWHERE in the output -- so an unrelated
+    hex-like divergence between the two runs this file compares would have
+    been tolerated instead of failing the assertion, and the parity test
+    would have lost the discriminating power it was written for (issue
+    #817, item 4). Anchoring on the surrounding wording keeps the
+    tolerance to the one difference that is legitimate: two runs in two
+    DIFFERENT repositories necessarily write two different shas."""
+    return _COMMIT_DISCLOSURE_RE.sub(
+        "committed as <sha> -- undo with `git revert <sha>`", output
+    )
+
+
+def test_mask_commit_sha_tolerates_only_the_disclosure_it_is_written_for() -> None:
+    """The mask must not swallow an unrelated hex-shaped divergence
+    (issue #817, item 4).
+
+    `test_scope_self_default_byte_identical_to_no_scope_flag` compares two
+    runs byte for byte and masks the shas because the two repositories
+    legitimately produce different ones. Everything else in both streams
+    is supposed to be compared verbatim -- so a mask broad enough to hide
+    any hex run would quietly excuse a real difference, and the parity
+    test would keep passing while proving less.
+
+    Two outputs differing in BOTH places at once: the disclosure sha
+    (which must be tolerated) and a hex-shaped id elsewhere (which must
+    not be). Asserting only the first would pass under the old broad
+    pattern too."""
+    left = (
+        "openkos forget: removed 'concepts/deadbeef1234567'.\n"
+        "openkos forget: committed as 1a2b3c4 -- undo with `git revert 1a2b3c4`.\n"
+    )
+    right = (
+        "openkos forget: removed 'concepts/cafebabe7654321'.\n"
+        "openkos forget: committed as 9f8e7d6 -- undo with `git revert 9f8e7d6`.\n"
+    )
+
+    assert _mask_commit_sha(left) != _mask_commit_sha(right)
+    # ...and the disclosure sha alone IS tolerated, which is the mask's
+    # whole purpose -- without this the test would pass on a mask that
+    # simply did nothing.
+    right_same_id = right.replace("cafebabe7654321", "deadbeef1234567")
+    assert _mask_commit_sha(left) == _mask_commit_sha(right_same_id)
 
 
 def test_scope_self_default_byte_identical_to_no_scope_flag(
