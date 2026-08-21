@@ -2053,3 +2053,74 @@ are out of the documented cost table's.
 - WHEN `openkos ingest <path> --auto` runs
 - THEN the ingest itself succeeds with an unchanged exit code, and one
   stderr notice names `openkos reindex`
+
+### Requirement: Batch Summary Discloses Extraction Notices
+
+The batch summary — deliberately the run's LAST word on stdout, after every
+per-file outcome line (issue #349) — MUST carry a term counting the files
+whose Source concept finished the run carrying an `extraction_notice`
+(issue #805, item 1), beside the existing ingested / re-ingested / skipped /
+extraction-degraded terms.
+
+The term MUST count EVERY member of the `extraction_notice` vocabulary, not
+only the two retryable judge-degrade tokens. It is therefore deliberately a
+WIDER set than `lint`'s unjudged-extraction scan reports:
+`sole-object-restates-source` is a disclosure rather than debt, so no later
+surface flags it for repair, which is exactly why the run's last word must
+still say it happened. The two numbers answer different questions and MUST
+NOT be presented as the same one.
+
+The term MUST NOT overlap `extraction-degraded`: that term counts a
+Source-only degrade (zero derived objects), while a notice presupposes at
+least one derived object was written, and staging produces the two on
+mutually exclusive paths.
+
+When the count is non-zero the summary MUST also name where the notices are
+recoverable — the `extraction_notice` frontmatter key carries every kind,
+`openkos lint` flags the retryable ones — and MUST stay silent about that on
+a run with no notices, following the same healthy-path-is-quiet rule as
+every other ingest advisory.
+
+#### Scenario: A batch counts only the files that finished with a notice
+
+- GIVEN a two-file batch in which one file's judge is unusable on every
+  attempt and the other's judge selects normally
+- WHEN the batch summary renders
+- THEN it reports one file with an extraction notice, and the healthy file
+  is not counted
+
+The term counts what a Source CARRIES when the run ends, not what the run
+stamped. A byte-identical re-ingest converges without re-extracting and
+stamps nothing (issue #773), yet leaves the prior run's notice untouched on
+disk — so that file MUST still be counted. Reading the prior token back for
+this purpose is a READ of frontmatter the convergence guard already
+inspects, never a write-back: the never-read-back rule governs what is
+written, and this path writes nothing. An absent or unrecognised token MUST
+narrow to "no notice" rather than raising, since frontmatter is
+hand-editable and a Source written by a later release may spell a token this
+build does not know.
+
+The term MUST be rendered like every other count-dependent noun on that
+line, with no article that a count above one contradicts.
+
+#### Scenario: A healthy batch reports zero and names nothing
+
+- GIVEN a batch in which every file extracted and was judged
+- WHEN the batch summary renders
+- THEN the term is present and reads zero, and no recovery pointer is
+  printed
+
+#### Scenario: A converged re-ingest still counts its carried notice
+
+- GIVEN a source whose first ingest stamped an `extraction_notice` that is
+  not retryable debt
+- WHEN the identical bytes are re-ingested in a batch, converge, and no
+  extraction runs
+- THEN the Source document is unchanged on disk and the batch summary still
+  counts that file under the notice term
+
+#### Scenario: The term reads correctly for more than one file
+
+- GIVEN a batch in which two files finish carrying a notice
+- WHEN the batch summary renders
+- THEN the term names both without asserting a single one

@@ -11,6 +11,7 @@ collision, link drift, confirm gate, path safety).
 """
 
 import dataclasses
+import re
 from pathlib import Path
 
 import pytest
@@ -1763,6 +1764,78 @@ def test_unmerge_with_neither_absorbed_id_nor_to_refuses(
     assert "--to" in result.stderr
     assert "Traceback" not in result.stderr
     assert _snapshot(tmp_path) == before
+
+
+_ARGUMENT_RULE = "exactly one of the two is required"
+"""The ONE spelling of `unmerge`'s argument rule (issue #805, item 4).
+
+Published help, the command's own docstring, the positional argument's
+help, the `--to` option's help, and `docs/cli.md` all say it this way, so
+the rule cannot drift into four near-synonyms that a reader has to
+reconcile.
+
+Hand-typed ON PURPOSE, not an oversight: importing `main._UNMERGE_ARGUMENT_RULE`
+here would assert the constant against itself and could never fail, whereas
+this copy is what catches the PUBLISHED wording drifting away from the
+wording this suite (and the docs) promise."""
+
+
+def _rendered_help(argv: list[str]) -> str:
+    """`--help` as a reader sees it: ANSI dropped, Rich's table borders
+    turned into spaces, and every run of whitespace collapsed.
+
+    Rich wraps and boxes help text according to the terminal width, so a
+    raw-substring assertion on a sentence longer than one rendered line
+    fails for a reason that has nothing to do with the wording. Collapsing
+    first asserts the WORDS, which is what this test is about."""
+    result = runner.invoke(app, argv, env={"COLUMNS": "200"})
+    assert result.exit_code == 0, result.output
+    text = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+    text = re.sub(r"[\u2500-\u257f]", " ", text)
+    return re.sub(r"\s+", " ", text)
+
+
+def test_unmerge_help_states_that_an_absorbed_id_is_required(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #805, item 4: the published help must not imply that naming
+    the survivor is enough to identify the merge.
+
+    The old one-liner read "Reverse the most recent merge on a concept (or
+    unwind a chain of merges with --to)". The ledger does know which merge
+    was most recent, so that sentence reads as though the survivor alone
+    identifies it -- and then `openkos unmerge people/marta-ruiz` refuses
+    for want of an absorbed id. The refusal is immediate and costs one
+    round trip, but the help sent the reader there.
+
+    There was NO test on this text before, which is how a one-liner and
+    the refusal it describes drifted apart in the first place. Both halves
+    are asserted: the rule is stated, and the sentence that implied
+    otherwise is gone."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    help_text = _rendered_help(["unmerge", "--help"])
+
+    assert _ARGUMENT_RULE in help_text
+    assert "Reverse the most recent merge on a concept" not in help_text
+
+
+def test_unmerge_argument_and_option_help_share_one_spelling_of_the_rule(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The rule is stated with ONE spelling in all three published places
+    -- the command one-liner, the positional `absorbed-id`'s help, and
+    `--to`'s help -- so a reader meeting it twice does not have to work
+    out whether two wordings mean the same thing.
+
+    Counted rather than merely found: a single occurrence would pass a
+    presence check while two of the three surfaces still said something
+    else."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    help_text = _rendered_help(["unmerge", "--help"])
+
+    assert help_text.count(_ARGUMENT_RULE) == 3
 
 
 def _survivor_with_chained_merges(

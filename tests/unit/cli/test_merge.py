@@ -1783,6 +1783,64 @@ def test_merge_reconcile_flag_forces_the_pass_below_both_thresholds(
     assert "## Merged content" not in survivor_text
 
 
+def _blank_the_body(tmp_path: Path, concept_id: str) -> None:
+    """Reduce an already-written concept to frontmatter plus whitespace.
+
+    `_write_concept` always emits an `# {title}` heading, and the stacking
+    report reads the WHOLE post-frontmatter body, so `body=""` alone still
+    stacks the heading. This is the only shape that reaches
+    `_reconcile_planned`'s clause 2."""
+    path = tmp_path / "bundle" / f"{concept_id}.md"
+    metadata, _ = okf.load_frontmatter(path.read_text(encoding="utf-8"))
+    path.write_text(okf.dump_frontmatter(metadata) + "\n   \n", encoding="utf-8")
+
+
+def test_merge_reconcile_flag_still_skips_an_absorbed_body_that_stacks_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_reconcile_planned` clause 2 outranks clause 3: an absorbed body
+    that strips to nothing returns `False` EVEN under `--reconcile`.
+
+    Raised as a reliability finding by #803's four-lens review, which had
+    no correction slot because nothing blocked. Every other `--reconcile`
+    test pairs the flag with a real absorbed body, so clauses 2 and 3
+    could be swapped and the whole suite would still pass -- while the
+    reconciliation pass sent the survivor's OWN text to the model to be
+    rewritten against nothing.
+
+    Asserted on the MODEL CALL, not on the preview line: a pass that is
+    disclosed but not run and a pass that is run but not disclosed are
+    different defects, and the expensive, output-changing half is the
+    call."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(
+        tmp_path, "concepts/survivor", title="Survivor", body=_TINY_SURVIVOR_BODY
+    )
+    _write_concept(tmp_path, "concepts/absorbed", title="Absorbed")
+    _blank_the_body(tmp_path, "concepts/absorbed")
+    calls = _patch_reconciliation(monkeypatch, _RECONCILED_BODY)
+
+    result = runner.invoke(
+        app,
+        [
+            "merge",
+            "concepts/survivor",
+            "concepts/absorbed",
+            "--auto",
+            "--reconcile",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert calls == []
+    assert "reconcile merged body" not in result.stdout
+    survivor_text = (tmp_path / "bundle" / "concepts" / "survivor.md").read_text(
+        encoding="utf-8"
+    )
+    assert _RECONCILED_BODY not in survivor_text
+    assert _TINY_SURVIVOR_BODY in survivor_text
+
+
 def test_merge_refuses_reconcile_together_with_no_reconcile(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

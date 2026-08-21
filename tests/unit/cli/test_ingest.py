@@ -6191,6 +6191,196 @@ def test_batch_extraction_failure_stays_per_file_nonfatal(
     assert "2 extraction-degraded" in result.stdout
 
 
+def test_batch_summary_counts_files_that_finished_with_an_extraction_notice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The batch summary carries a term for `extraction_notice` (issue
+    #805, item 1).
+
+    The summary is deliberately the run's last word (#349), and it had no
+    field for the notice at all, while the notice's own stderr line can sit
+    seventeen minutes upstream in a long batch. `extraction-degraded`
+    cannot absorb it: that term counts a `skip_reason` (Source-only), and
+    `_stage_derived_objects` returns `skip_reason` and `extraction_notice`
+    on mutually exclusive paths -- zero derived objects versus at least
+    one -- so the two counts never overlap.
+
+    Two files, one notice: the term must DISCRIMINATE, not count every
+    file that finished. `a.txt`'s judge is unusable on both attempts
+    (#754), which quarantines its Source; `b.txt`'s judge answers, so that
+    file carries nothing."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_sequenced_llm(
+        monkeypatch,
+        [
+            # a.txt: two distinct candidates, then a judge that fails every
+            # attempt -> `extraction_notice: judge-selection-unavailable`.
+            _concept_reply(title="Stoic Dichotomy Of Control"),
+            _concept_reply(title="Negative Visualization"),
+            OllamaUnavailable("boom"),
+            OllamaUnavailable("boom"),
+            # b.txt: the judge replies and admits both -- no notice.
+            _concept_reply(title="Morning Review Ritual"),
+            _concept_reply(title="Evening Review Ritual"),
+            json.dumps({"keep": ["Morning Review Ritual", "Evening Review Ritual"]}),
+        ],
+    )
+    _write_notes(tmp_path, {"a.txt": "Alpha notes.", "b.txt": "Beta notes."})
+
+    result = runner.invoke(app, ["ingest", "notes", "--auto"])
+
+    assert result.exit_code == 0
+    a_metadata, _ = okf.load_frontmatter(
+        (tmp_path / "bundle" / "sources" / "a.md").read_text(encoding="utf-8")
+    )
+    b_metadata, _ = okf.load_frontmatter(
+        (tmp_path / "bundle" / "sources" / "b.md").read_text(encoding="utf-8")
+    )
+    assert a_metadata["extraction_notice"] == "judge-selection-unavailable"
+    assert "extraction_notice" not in b_metadata
+    assert (
+        "2 file(s): 2 ingested, 0 re-ingested, 0 skipped, 0 extraction-degraded, "
+        "1 with extraction notice(s)." in result.stdout
+    )
+
+
+def test_batch_summary_counts_a_converged_reingest_that_still_carries_a_notice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The term counts what the Source CARRIES when the run ends, not what
+    the run stamped -- so #773's convergence short-circuit must still be
+    counted (issue #805, item 1).
+
+    A byte-identical re-ingest of a source whose previous extraction ran to
+    its intended conclusion writes nothing at all: `_ingest_single` returns
+    before staging, so no `extraction_notice` is computed. But the Source it
+    deliberately left untouched on disk still carries the PRIOR run's
+    marker, and #585's `sole-object-restates-source` is exactly the token
+    that survives there -- `_extraction_retry_due` sends the two judge
+    tokens back through a full extraction, so the disclosure is the one
+    notice a converged re-ingest can still be sitting on.
+
+    That is the case the summary exists for. The disclosure was echoed to
+    stderr on a run that may have happened days ago; the operator re-running
+    the batch today sees only this line, and a zero here would tell them the
+    bundle is clean when it is not."""
+    _init_workspace(tmp_path, monkeypatch)
+    twin = _concept_reply(title="Replica Lag")
+    _patch_sequenced_llm(
+        monkeypatch,
+        [
+            # replica-lag.txt: both extraction runs return the same object,
+            # and it restates the source -> `sole-object-restates-source`.
+            twin,
+            twin,
+            "[]",
+            '{"keep": ["Replica Lag"]}',
+            # zeta.txt: two distinct objects the judge admits -> no notice,
+            # so the term has to DISCRIMINATE on the re-ingest too.
+            _concept_reply(title="Morning Review Ritual"),
+            _concept_reply(title="Evening Review Ritual"),
+            "[]",
+            json.dumps({"keep": ["Morning Review Ritual", "Evening Review Ritual"]}),
+        ],
+    )
+    _write_notes(
+        tmp_path,
+        {
+            "replica-lag.txt": (
+                "Replica Lag\n\nA replica trails its primary, and a read "
+                "routed to it can miss a write the client just made.\n"
+            ),
+            "zeta.txt": "Notes on two separate review rituals.",
+        },
+    )
+    first = runner.invoke(app, ["ingest", "notes", "--auto"])
+    assert first.exit_code == 0
+    source_path = tmp_path / "bundle" / "sources" / "replica-lag.md"
+    first_metadata, _ = okf.load_frontmatter(source_path.read_text(encoding="utf-8"))
+    assert first_metadata["extraction_notice"] == "sole-object-restates-source"
+    before = source_path.read_bytes()
+
+    result = runner.invoke(app, ["ingest", "notes", "--auto"])
+
+    assert result.exit_code == 0
+    # The short-circuit really did take the untouched-on-disk path: the
+    # marker is still there because nothing rewrote the document.
+    assert source_path.read_bytes() == before
+    assert "skipping extraction" in result.stderr
+    assert (
+        "2 file(s): 0 ingested, 2 re-ingested, 0 skipped, 0 extraction-degraded, "
+        "1 with extraction notice(s)." in result.stdout
+    )
+
+
+def test_batch_summary_notice_term_pluralizes_like_every_other_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The notice term renders `N with extraction notice(s)` -- the `(s)`
+    idiom this module already uses for `file(s)`, `candidate(s)` and
+    `derived object(s)` (issue #805, item 1).
+
+    The four terms beside it are bare participles (`ingested`,
+    `re-ingested`, `skipped`, `extraction-degraded`), so none of them ever
+    had to agree with its count. This one names a noun, and the first
+    spelling put an article in front of it, which made a two-file batch
+    close on `2 with an extraction notice.` -- the run's LAST word (#349),
+    read by an operator who was not watching the stderr it summarizes."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_sequenced_llm(
+        monkeypatch,
+        [
+            # Both files: two distinct candidates, then a judge that fails
+            # every attempt -> `judge-selection-unavailable` on each Source.
+            _concept_reply(title="Stoic Dichotomy Of Control"),
+            _concept_reply(title="Negative Visualization"),
+            OllamaUnavailable("boom"),
+            OllamaUnavailable("boom"),
+            _concept_reply(title="Morning Review Ritual"),
+            _concept_reply(title="Evening Review Ritual"),
+            OllamaUnavailable("boom"),
+            OllamaUnavailable("boom"),
+        ],
+    )
+    _write_notes(tmp_path, {"a.txt": "Alpha notes.", "b.txt": "Beta notes."})
+
+    result = runner.invoke(app, ["ingest", "notes", "--auto"])
+
+    assert result.exit_code == 0
+    assert "2 with extraction notice(s)." in result.stdout
+    assert "2 with an extraction notice" not in result.stdout
+
+
+def test_batch_summary_notice_term_is_zero_and_silent_on_a_healthy_batch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The term is always present (a zero says "checked, none found",
+    exactly like the four terms beside it), but the pointer clause that
+    names where to recover is NOT: an advisory that fires on the healthy
+    path is noise, the same rule every ingest advisory follows."""
+    _init_workspace(tmp_path, monkeypatch)
+    keep_reply = json.dumps({"keep": ["Stoic Dichotomy Of Control"]})
+    _patch_sequenced_llm(
+        monkeypatch,
+        [
+            _concept_reply(title="Stoic Dichotomy Of Control"),
+            "[]",
+            keep_reply,
+            _concept_reply(title="Negative Visualization"),
+            "[]",
+            json.dumps({"keep": ["Negative Visualization"]}),
+        ],
+    )
+    _write_notes(tmp_path, {"a.txt": "Alpha notes.", "b.txt": "Beta notes."})
+
+    result = runner.invoke(app, ["ingest", "notes", "--auto"])
+
+    assert result.exit_code == 0
+    assert "0 with extraction notice(s)." in result.stdout
+    assert "names the retryable ones" not in result.stdout
+    assert "`extraction_notice`" not in result.stdout
+
+
 def test_batch_commits_per_file_not_per_batch(
     tmp_path: Path,
     tmp_path_factory: pytest.TempPathFactory,
@@ -7338,6 +7528,56 @@ def test_ingest_recombination_drop_notice_is_distinct_from_the_language_one(
     ).exists()
 
 
+def test_judge_selection_notice_quotes_the_dropped_titles() -> None:
+    """Issue #805, item 2: the dropped title is QUOTED.
+
+    The reported run printed `judge dropped 1 candidate(s): Schema
+    migration ownership` on stderr, and the proposed-changes block on
+    stdout interleaved right underneath it with `+
+    bundle/decisions/schema-migration-ownership-decision.md`. Nothing was
+    wrong -- the survivor's title is one word longer, and re-admission is
+    `Person`/`Organization`-only, so it could not have restored the
+    dropped one -- but two adjacent lines differing by a single word read
+    as the tool contradicting itself. Quotes make the title's extent
+    visible, which is the whole ambiguity.
+
+    Asserted as an EXACT string: the notice is one short format, and a
+    substring check would pass on a run that quoted only the first
+    title."""
+    report = concept_mod.ExtractionReport(
+        produced=2,
+        retained=1,
+        judge_status="ok",
+        judged_out_titles=("Schema migration ownership",),
+    )
+
+    notice = main._judge_selection_notice(report)
+
+    assert notice == "judge dropped 1 candidate(s): 'Schema migration ownership'"
+
+
+def test_judge_selection_notice_quotes_every_shown_title_not_just_the_first() -> None:
+    """Each shown title is quoted independently, and the `(+N more)`
+    remainder stays OUTSIDE the quotes -- it is the notice's own
+    bookkeeping, not part of anybody's title.
+
+    Two titles plus a truncation, because a single-title assertion cannot
+    tell "quote each item" from "wrap the whole joined list"."""
+    titles = tuple(f"Subject {index}" for index in range(1, 6))
+    report = concept_mod.ExtractionReport(
+        produced=9,
+        retained=4,
+        judge_status="ok",
+        judged_out_titles=titles,
+    )
+
+    notice = main._judge_selection_notice(report)
+
+    assert notice == (
+        "judge dropped 5 candidate(s): 'Subject 1', 'Subject 2', 'Subject 3' (+2 more)"
+    )
+
+
 def test_participant_unreadmitted_notice_names_the_real_second_decision() -> None:
     """Issue #690: the engine has known since #668 which participant
     candidates re-admission declined to restore --
@@ -7465,7 +7705,9 @@ def test_ingest_reports_the_unreadmitted_participant_when_the_judge_drops_it(
     assert "1 participant candidate(s) not re-admitted" in result.stderr
     assert "not meeting-shaped" in result.stderr
     assert "Ana" in result.stderr
-    assert "judge dropped" in result.stderr
+    # #805 item 2: the quoting reaches a REAL run, not only the helper --
+    # the same one-layer-up gap this test was written for.
+    assert "judge dropped 1 candidate(s): 'Ana'" in result.stderr
 
 
 # ---------------------------------------------------------------------------
