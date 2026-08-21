@@ -3500,8 +3500,29 @@ def _judge_selection_notice(report: ExtractionReport) -> str | None:
     re-admission is `Person`/`Organization`-only, so it could not have
     restored the dropped candidate -- but two lines differing by a single
     word read as the tool contradicting itself. The ambiguity is exactly
-    where each title ENDS, which is what a quote settles; single quotes
-    because that is how this module already quotes a name or a path.
+    where each title ENDS, which is what a quote settles; single quotes by
+    default, because that is how this module already quotes a name or a
+    path.
+
+    That default is `repr`'s, not a hand-written `f"'{title}'"` (issue
+    #814, item 3), and `repr` is what supplies the ONE case where the
+    delimiter is not a single quote. A title carrying its own apostrophe
+    -- `Marta's plan` -- rendered as `'Marta's plan'` under the
+    hand-written form, which reads as ending after `Marta`: the case that
+    most needs the delimiter was the one it failed on, and the reliability
+    lens flagged it on two independent candidates. `repr` resolves that
+    from one rule -- swap to double quotes when, and only when, the title
+    holds an apostrophe, and escape only when it holds BOTH shapes -- so
+    the single-quote default above still describes every other title, and
+    an ordinary one renders byte-identically to the form this replaces.
+    Non-ASCII is left intact either way.
+
+    It also escapes a newline or other control character the old form
+    passed through verbatim, which keeps this notice to ONE line. That is
+    a narrowing, not a cost: titles come from model extraction over
+    arbitrary source text, and a title carrying a newline used to split
+    the notice so that its tail arrived looking like a line openkos had
+    printed itself.
     """
     if report.judge_status != "ok" or not report.judged_out_titles:
         return None
@@ -3509,7 +3530,7 @@ def _judge_selection_notice(report: ExtractionReport) -> str | None:
     remainder = len(report.judged_out_titles) - len(shown)
     # Quote each title INDIVIDUALLY, and leave `(+N more)` outside the
     # quotes: it is this notice's own bookkeeping, never part of a title.
-    listed = ", ".join(f"'{title}'" for title in shown)
+    listed = ", ".join(repr(title) for title in shown)
     if remainder > 0:
         listed = f"{listed} (+{remainder} more)"
     # The rejected alternative, recorded so it is not re-opened: printing

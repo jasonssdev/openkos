@@ -6313,6 +6313,115 @@ def test_batch_summary_counts_a_converged_reingest_that_still_carries_a_notice(
     )
 
 
+def test_carried_extraction_notice_returns_every_vocabulary_member() -> None:
+    """Issue #814, item 1, positive control: a Source carrying a token this
+    build knows is reported as that exact token.
+
+    Asserted over the WHOLE of `okf.EXTRACTION_NOTICE_VALUES` rather than
+    one sample, so a token added to the vocabulary without a matching
+    branch here is caught. This test exists to keep its fail-closed
+    sibling below falsifiable -- a helper that simply returned `None`
+    would satisfy the fail-closed assertions on its own."""
+    for token in okf.EXTRACTION_NOTICE_VALUES:
+        metadata = {okf.EXTRACTION_NOTICE_KEY: token}
+
+        assert main._carried_extraction_notice(metadata) == token
+
+
+def test_carried_extraction_notice_fails_closed_outside_the_vocabulary() -> None:
+    """Issue #814, item 1: both fail-closed branches the helper documents,
+    neither of which any existing test reached.
+
+    Every test added with the helper feeds a RECOGNISED token via a real
+    prior run, so the contract it states in prose -- an absent key and an
+    unrecognised value both narrow to `None` -- was never executed. The
+    reasoning matters and is worth pinning: frontmatter is hand-editable,
+    and a Source written by a LATER release may carry a token this build
+    cannot spell. Neither may crash a run that is otherwise writing
+    nothing, and neither may be counted under a summary term whose wording
+    promises a vocabulary member.
+
+    The unknown-token case uses a plausible future spelling rather than
+    junk, because that is the case the contract was written for: a real
+    token from a newer release, not a typo."""
+    assert main._carried_extraction_notice({}) is None
+    assert (
+        main._carried_extraction_notice(
+            {okf.EXTRACTION_NOTICE_KEY: "judge-selection-postponed"}
+        )
+        is None
+    )
+    # A non-string value cannot match a token either -- frontmatter is
+    # hand-editable, so `extraction_notice: true` is a YAML boolean.
+    assert main._carried_extraction_notice({okf.EXTRACTION_NOTICE_KEY: True}) is None
+    assert main._carried_extraction_notice({okf.EXTRACTION_NOTICE_KEY: None}) is None
+
+
+def test_batch_summary_never_counts_one_file_under_both_notice_and_degraded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #814, item 2: the disjointness the spec argues in prose, run.
+
+    `openspec/specs/ingestion/spec.md` requires the notice term to never
+    overlap `extraction-degraded`, on the reasoning that
+    `extraction-degraded` counts a Source-only degrade (zero derived
+    objects) while a notice presupposes at least one object WAS written,
+    and `_stage_derived_objects` returns `skip_reason` and
+    `extraction_notice` on mutually exclusive paths.
+
+    That is argued and implemented, but no test had ever put both kinds of
+    file in ONE batch, so the two counters had never been observed to be
+    disjoint in practice -- exactly the kind of requirement that stays true
+    silently until it does not.
+
+    One file of each: `a.txt`'s extraction reaches the model and produces
+    nothing, so it lands Source-only; `b.txt` produces two objects and then
+    loses its judge, so its Source finishes carrying a notice. The summary
+    is asserted as a WHOLE line rather than term by term, because the
+    failure this guards against is a single file counted twice -- which
+    only the full line can show, since each term alone still reads 1."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_sequenced_llm(
+        monkeypatch,
+        [
+            # a.txt: both extraction arms decline -> zero derived objects
+            # -> `skip_reason` -> extraction-degraded, and NO notice.
+            '{"extract": false}',
+            '{"extract": false}',
+            # b.txt: two distinct candidates, then a judge unusable on every
+            # attempt (#754) -> `judge-selection-unavailable`, and NOT
+            # degraded, because objects were written.
+            _concept_reply(title="Morning Review Ritual"),
+            _concept_reply(title="Evening Review Ritual"),
+            OllamaUnavailable("boom"),
+            OllamaUnavailable("boom"),
+        ],
+    )
+    _write_notes(
+        tmp_path,
+        {"a.txt": "Alpha notes.", "b.txt": "Notes on two separate review rituals."},
+    )
+
+    result = runner.invoke(app, ["ingest", "notes", "--auto"])
+
+    assert result.exit_code == 0
+    a_metadata, _ = okf.load_frontmatter(
+        (tmp_path / "bundle" / "sources" / "a.md").read_text(encoding="utf-8")
+    )
+    b_metadata, _ = okf.load_frontmatter(
+        (tmp_path / "bundle" / "sources" / "b.md").read_text(encoding="utf-8")
+    )
+    # The premise: one file really did degrade, the OTHER really did carry
+    # a notice. Without this the summary assertion could pass on a batch
+    # where neither condition occurred.
+    assert "extraction_notice" not in a_metadata
+    assert b_metadata["extraction_notice"] == "judge-selection-unavailable"
+    assert (
+        "2 file(s): 2 ingested, 0 re-ingested, 0 skipped, 1 extraction-degraded, "
+        "1 with extraction notice(s)." in result.stdout
+    )
+
+
 def test_batch_summary_notice_term_pluralizes_like_every_other_count(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -7576,6 +7685,105 @@ def test_judge_selection_notice_quotes_every_shown_title_not_just_the_first() ->
     assert notice == (
         "judge dropped 5 candidate(s): 'Subject 1', 'Subject 2', 'Subject 3' (+2 more)"
     )
+
+
+def test_judge_selection_notice_settles_the_extent_of_a_title_holding_a_quote() -> None:
+    """Issue #814, item 3: a title that itself carries a single quote must
+    not reintroduce the ambiguity the quoting was added to settle.
+
+    #805's item 2 wrapped each shown title in single quotes to answer one
+    question -- where does this title END. A title holding its own
+    apostrophe rendered as `'Marta's plan'`, which reads as ending after
+    `Marta`, so the very case that most needs the delimiter was the one it
+    failed on. The reliability lens flagged it on TWO independent
+    candidates, so it is not a one-sample artefact.
+
+    Settled with `repr` rather than a hand-rolled backslash escape or a
+    rarer delimiter, for three reasons. It switches to double quotes for a
+    title holding an apostrophe and only escapes when a title holds BOTH,
+    so the common case stays free of backslashes. It leaves non-ASCII
+    intact (Python 3 `repr` does not escape it, and Spanish sources are
+    ordinary here). And it renders an ordinary title BYTE-IDENTICALLY to
+    the hand-written `f"'{title}'"` it replaces -- pinned by the two tests
+    above, which pass unchanged -- so the notice a reader already knows
+    does not move.
+
+    Both quote shapes in one report, because a single-apostrophe assertion
+    cannot tell `repr` from a hardcoded swap to double quotes. The third
+    title is non-ASCII and carries the docstring's other claim: Python 3
+    `repr` does not escape it, so an accented title stays readable rather
+    than turning into a run of `\\x..` escapes. Spanish sources are
+    ordinary here -- the run that opened issue #807 was one -- so this is
+    a real title shape, not a synthetic one."""
+    report = concept_mod.ExtractionReport(
+        produced=5,
+        retained=2,
+        judge_status="ok",
+        judged_out_titles=(
+            "Marta's plan",
+            'The "big" rewrite',
+            "Metodología de análisis",
+        ),
+    )
+
+    notice = main._judge_selection_notice(report)
+
+    assert notice == (
+        'judge dropped 3 candidate(s): "Marta\'s plan", \'The "big" rewrite\', '
+        "'Metodología de análisis'"
+    )
+
+
+def test_judge_selection_notice_escapes_a_title_holding_both_quote_shapes() -> None:
+    """The one case `repr` cannot settle by switching delimiters -- a title
+    carrying an apostrophe AND a double quote -- still ends unambiguously,
+    because `repr` falls back to escaping the inner single quote.
+
+    Split from the test above so the fallback is pinned on its own: a
+    delimiter-switching implementation that stopped there would still pass
+    that one."""
+    report = concept_mod.ExtractionReport(
+        produced=2,
+        retained=1,
+        judge_status="ok",
+        judged_out_titles=('Marta\'s "big" rewrite',),
+    )
+
+    notice = main._judge_selection_notice(report)
+
+    assert notice == ("judge dropped 1 candidate(s): 'Marta\\'s \"big\" rewrite'")
+
+
+def test_judge_selection_notice_keeps_a_control_character_title_on_one_line() -> None:
+    """A title carrying a newline still renders as ONE notice line.
+
+    This is the half of the `repr` swap the quote-shape tests do not
+    reach, and it is the one with a resilience consequence rather than a
+    cosmetic one. Under the hand-written `f"'{title}'"` the newline
+    passed through verbatim, so a title reading `Q3 plan\nrm -rf /` broke
+    the stderr notice across two lines and the second of them arrived
+    looking like output openkos had produced itself. Titles come from
+    model extraction over arbitrary source text, so this is reachable
+    input, not a hypothetical.
+
+    `repr` escapes it to a literal backslash-n inside the quotes, which
+    keeps the notice one line AND keeps the title's real bytes visible.
+    Backslashes are asserted in the same test because they are the other
+    character class whose rendering the swap changed, and a title holding
+    one is ordinary (a Windows path in a filename-derived title)."""
+    report = concept_mod.ExtractionReport(
+        produced=3,
+        retained=1,
+        judge_status="ok",
+        judged_out_titles=("Q3 plan\nrm -rf /", "C:\\Users\\plan"),
+    )
+
+    notice = main._judge_selection_notice(report)
+
+    assert notice == (
+        "judge dropped 2 candidate(s): 'Q3 plan\\nrm -rf /', 'C:\\\\Users\\\\plan'"
+    )
+    assert "\n" not in notice
 
 
 def test_participant_unreadmitted_notice_names_the_real_second_decision() -> None:

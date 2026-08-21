@@ -1771,7 +1771,7 @@ _ARGUMENT_RULE = "exactly one of the two is required"
 
 Published help, the command's own docstring, the positional argument's
 help, the `--to` option's help, and `docs/cli.md` all say it this way, so
-the rule cannot drift into four near-synonyms that a reader has to
+the rule cannot drift into five near-synonyms that a reader has to
 reconcile.
 
 Hand-typed ON PURPOSE, not an oversight: importing `main._UNMERGE_ARGUMENT_RULE`
