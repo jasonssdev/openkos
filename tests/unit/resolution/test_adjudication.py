@@ -1148,3 +1148,284 @@ def test_local_exemption_defaults_to_false_on_adjudicate_candidates(
 
     assert result[0].verdict is adjudication_mod.Verdict.UNCERTAIN
     assert llm.calls == []
+
+
+# --------------------------------------------------------------------------- #
+# #796: a SAME verdict whose rationale argues the members are two occurrences
+# --------------------------------------------------------------------------- #
+
+
+def test_a_rationale_calling_them_separate_occurrences_withdraws_same() -> None:
+    """The reported defect's signature. The model answered `same` and its
+    own rationale said the two are different instances of one recurring
+    event -- an argument for `different` written under a `same` verdict."""
+    verdict, rationale = adjudication_mod.withdraw_self_refuting_same(
+        adjudication_mod.Verdict.SAME,
+        "Both members refer to the same recurring event called 'Weekly "
+        "Design Review', indicating they are different instances of the "
+        "same event.",
+    )
+
+    assert verdict is adjudication_mod.Verdict.DIFFERENT
+    assert adjudication_mod.OCCURRENCE_WITHDRAWN_NOTE in rationale
+    assert rationale.startswith("Both members refer")
+
+
+def test_a_negated_marker_is_not_a_self_refutation() -> None:
+    """`There is no indication of different occurrences` ARGUES FOR the
+    verdict it carries. A rule that read the phrase without its negation
+    would withdraw a correct answer -- measured at 9 of 60 correct `same`
+    verdicts before this guard existed."""
+    verdict, rationale = adjudication_mod.withdraw_self_refuting_same(
+        adjudication_mod.Verdict.SAME,
+        "The dates, attendees and figures match exactly. There is no "
+        "indication of different occurrences or different entities.",
+    )
+
+    assert verdict is adjudication_mod.Verdict.SAME
+    assert adjudication_mod.OCCURRENCE_WITHDRAWN_NOTE not in rationale
+
+
+def test_the_negation_must_share_the_markers_sentence() -> None:
+    """A negation belonging to a DIFFERENT claim cannot excuse the marker.
+    Scoped per sentence, the same way #807 scopes its direction markers."""
+    verdict, _ = adjudication_mod.withdraw_self_refuting_same(
+        adjudication_mod.Verdict.SAME,
+        "The attendees do not overlap. These are different occurrences of "
+        "one standing meeting.",
+    )
+
+    assert verdict is adjudication_mod.Verdict.DIFFERENT
+
+
+def test_the_negation_must_precede_the_marker() -> None:
+    """`different occurrences, not one event` negates AFTER the claim is
+    made, which does not unmake it."""
+    verdict, _ = adjudication_mod.withdraw_self_refuting_same(
+        adjudication_mod.Verdict.SAME,
+        "These are different occurrences of the series, not one event.",
+    )
+
+    assert verdict is adjudication_mod.Verdict.DIFFERENT
+
+
+def test_only_a_same_verdict_is_ever_withdrawn() -> None:
+    """`different` and `uncertain` already refuse the merge; re-deciding
+    them would be the rule inventing a verdict rather than withdrawing
+    one."""
+    for verdict in (
+        adjudication_mod.Verdict.DIFFERENT,
+        adjudication_mod.Verdict.UNCERTAIN,
+    ):
+        got, rationale = adjudication_mod.withdraw_self_refuting_same(
+            verdict, "They are different instances of the same event."
+        )
+        assert got is verdict
+        assert adjudication_mod.OCCURRENCE_WITHDRAWN_NOTE not in rationale
+
+
+def test_a_rationale_without_the_signature_is_left_alone() -> None:
+    """The rule fires on a self-refutation, never on the topic. A `same`
+    verdict about two records of one meeting keeps its verdict and its
+    rationale byte-for-byte."""
+    original = (
+        "Identical date, identical attendees, identical figures. Two sets "
+        "of notes from one meeting."
+    )
+
+    assert adjudication_mod.withdraw_self_refuting_same(
+        adjudication_mod.Verdict.SAME, original
+    ) == (
+        adjudication_mod.Verdict.SAME,
+        original,
+    )
+
+
+def test_a_spanish_self_refutation_is_caught_too() -> None:
+    """The corpus is bilingual and #812 lets a run pin the rationale's
+    language, so an English-only marker table would fail closed on exactly
+    the workspaces that reported this."""
+    verdict, _ = adjudication_mod.withdraw_self_refuting_same(
+        adjudication_mod.Verdict.SAME,
+        "Ambas entradas describen la misma reunión recurrente, por lo que "
+        "son ocurrencias distintas de la serie.",
+    )
+
+    assert verdict is adjudication_mod.Verdict.DIFFERENT
+
+
+def test_the_withdrawal_is_idempotent() -> None:
+    """It runs on freshly judged verdicts AND on verdicts served from the
+    store, and a served row may already carry the note. Applying it twice
+    must not stack a second one."""
+    once = adjudication_mod.withdraw_self_refuting_same(
+        adjudication_mod.Verdict.SAME, "They are different instances of the same event."
+    )
+    twice = adjudication_mod.withdraw_self_refuting_same(*once)
+
+    assert twice == once
+
+
+def test_adjudicate_candidates_withdraws_a_self_refuting_same(
+    tmp_path: Path,
+) -> None:
+    """The public seam: a model reply that answers `same` while arguing for
+    two occurrences comes back `different`."""
+    _write_doc(tmp_path / "a.md", doc_type="Event", title="Weekly Design Review")
+    _write_doc(tmp_path / "b.md", doc_type="Event", title="Weekly Design Review")
+    llm = _FakeLLM(
+        replies=[
+            _valid_reply(
+                "same",
+                0.95,
+                "These are different occurrences of one recurring meeting",
+            )
+        ]
+    )
+
+    batch = adjudication_mod.adjudicate_candidates(
+        [_group("a", "b", okf_type="Event")], bundle_dir=tmp_path, llm=llm
+    )
+
+    assert batch.results[0].verdict is adjudication_mod.Verdict.DIFFERENT
+    assert adjudication_mod.OCCURRENCE_WITHDRAWN_NOTE in batch.results[0].rationale
+
+
+def test_naming_the_series_is_not_claiming_two_of_its_occurrences() -> None:
+    """Every marker must carry a DISTINCTNESS word.
+
+    `the same recurring meeting` names the SERIES; it does not say the two
+    members are two of its sessions, and a correct `same` rationale about
+    one meeting recorded twice says exactly this. An earlier marker table
+    matched the bare phrase and withdrew that verdict.
+    """
+    for rationale in (
+        "Both entries describe the same recurring meeting and record "
+        "identical attendees and decisions.",
+        "The title names a recurring event, and both notes cover the same session.",
+    ):
+        verdict, unchanged = adjudication_mod.withdraw_self_refuting_same(
+            adjudication_mod.Verdict.SAME, rationale
+        )
+        assert verdict is adjudication_mod.Verdict.SAME
+        assert unchanged == rationale
+
+
+def test_a_downgrader_negates_as_firmly_as_a_denial() -> None:
+    """`hardly any indication of different occurrences` makes the same
+    claim as `no indication`, and a guard reading only the flat denials
+    withdraws a correct verdict on a rewording."""
+    for rationale in (
+        "There is hardly any indication of different occurrences.",
+        "Never do the entries describe different occurrences.",
+        "Nunca se observan ocurrencias distintas entre ambas entradas.",
+    ):
+        verdict, _ = adjudication_mod.withdraw_self_refuting_same(
+            adjudication_mod.Verdict.SAME, rationale
+        )
+        assert verdict is adjudication_mod.Verdict.SAME
+
+
+def test_the_rubric_tells_the_model_what_an_identical_event_title_means() -> None:
+    """#796's fix is a rubric paragraph, and a rubric paragraph is only a
+    fix while it is in the rubric. Pinned by its load-bearing claims rather
+    than byte-for-byte, so rewording stays possible and deletion does not.
+
+    Measured before adoption (`evals/adjudication/README.md`): it takes the
+    recurrence class from 0.33 to 1.00 at stability 1.00, and costs nothing
+    on one-meeting-recorded-twice, an identical Person name, an alias pair,
+    or a part-whole.
+    """
+    rubric = adjudication_mod._SYSTEM_PROMPT.lower()
+
+    assert "recurring series" in rubric
+    assert "occurrences" in rubric
+    assert "person" in rubric, "the frame is type-aware, not Event-only"
+    # The reported rationale disqualified itself in exactly these words.
+    assert "continuation" in rubric
+    assert "follow-up" in rubric
+
+
+def test_cannot_negates_as_firmly_as_can_not() -> None:
+    """`\\bnot\\b` never matches inside `cannot` -- there is no word boundary
+    before it -- so the one-word spelling slipped the guard and withdrew a
+    correct verdict."""
+    verdict, _ = adjudication_mod.withdraw_self_refuting_same(
+        adjudication_mod.Verdict.SAME,
+        "The bodies cannot be different occurrences: every detail matches.",
+    )
+
+    assert verdict is adjudication_mod.Verdict.SAME
+
+
+@pytest.mark.parametrize(
+    "rationale",
+    [
+        pytest.param(
+            "The event appears to be a continuation of the same meeting.",
+            id="continuation-of",
+        ),
+        pytest.param(
+            "The second entry is a follow-up to the first.", id="follow-up-to"
+        ),
+        pytest.param(
+            "These notes record a follow up of the earlier discussion.",
+            id="follow-up-unhyphenated",
+        ),
+        pytest.param(
+            "This is a later session of the same standing meeting.",
+            id="later-session",
+        ),
+        pytest.param(
+            "It records a subsequent meeting of the same group.",
+            id="subsequent-meeting",
+        ),
+        pytest.param(
+            "Ambas describen una continuación de la sesión anterior.",
+            id="continuacion-de",
+        ),
+        pytest.param(
+            "La segunda es una sesión posterior de la misma serie.",
+            id="sesion-posterior",
+        ),
+    ],
+)
+def test_every_marker_alternative_withdraws(rationale: str) -> None:
+    """Each alternative in the table must actually fire.
+
+    `continuation`/`follow-up` carry the phrasing of the ORIGINALLY
+    reported rationale -- *"the event appears to be a continuation or
+    follow-up of the same meeting"* -- so a table that grew a typo there
+    would leave the reported defect unguarded while every other test
+    stayed green.
+    """
+    verdict, rendered = adjudication_mod.withdraw_self_refuting_same(
+        adjudication_mod.Verdict.SAME, rationale
+    )
+
+    assert verdict is adjudication_mod.Verdict.DIFFERENT
+    assert adjudication_mod.OCCURRENCE_WITHDRAWN_NOTE in rendered
+
+
+def test_a_later_marker_in_a_negated_sentence_stays_negated() -> None:
+    """Examining only the first marker in a sentence is not a shortcut that
+    loses verdicts.
+
+    The negation window is the sentence PREFIX, and a prefix only grows: a
+    cue standing before the first marker stands before every later one in
+    that sentence as well. So a sentence whose first marker is negated
+    cannot hold a second, un-negated one, and stopping at the first is
+    equivalent to iterating them.
+    """
+    for rationale in (
+        "There is no indication of different occurrences, but these are "
+        "separate sessions.",
+        "Nothing suggests different instances; still, this is a follow-up "
+        "to the first.",
+        "No hay ocurrencias distintas, aunque son sesiones posteriores de la serie.",
+    ):
+        verdict, unchanged = adjudication_mod.withdraw_self_refuting_same(
+            adjudication_mod.Verdict.SAME, rationale
+        )
+        assert verdict is adjudication_mod.Verdict.SAME
+        assert unchanged == rationale

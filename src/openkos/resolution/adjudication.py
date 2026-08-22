@@ -28,6 +28,7 @@ group whose members are ALL unreadable short-circuits to `Verdict.UNCERTAIN`
 """
 
 import math
+import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
@@ -65,6 +66,18 @@ _SYSTEM_PROMPT = (
     "SAME verdict feeds a DESTRUCTIVE merge that collapses the members into "
     "one, so whenever the relationship is part-whole, or you are unsure, "
     "prefer different or uncertain over same.\n\n"
+    "Type changes what an identical title is evidence OF. For a Person or "
+    "an Organization, one name is strong evidence of one entity. For an "
+    "Event it is not: an identical title usually names a RECURRING SERIES, "
+    "and two records under it are usually two OCCURRENCES of it. Before "
+    "answering same for two Events, look for agreement on something only "
+    "one occurrence could carry -- a date, who was present, or a decision "
+    "one of them records. If the bodies DISAGREE on any of those, they are "
+    "different occurrences. If one carries such a signal and the other is "
+    "silent, their subject matter must substantively overlap before you "
+    "answer same. And if you find yourself writing that one is a "
+    "continuation, a follow-up, or a later session of the other, you have "
+    "already decided they are different.\n\n"
     "Return ONLY a JSON object, with NO prose, NO markdown, and NO code "
     "fences around it, matching exactly this shape:\n"
     '{"verdict": "same"|"different"|"uncertain", "confidence": <0.0-1.0>, '
@@ -73,7 +86,19 @@ _SYSTEM_PROMPT = (
 """Stable system half of the 2-message prompt (mirrors
 `concept._build_messages`): the closed 3-value verdict vocabulary and the
 JSON-only instruction baked into system text; the `user` message carries the
-OKF type, tier, and each readable member's title + full body."""
+OKF type, tier, and each readable member's title + full body.
+
+The recurrence paragraph is #796's fix and it was measured before it was
+adopted (`evals/adjudication/README.md`): it takes the recurrence class
+from 0.33 to 1.00 at stability 1.00, and costs nothing on the four control
+classes -- one meeting recorded twice, an identical Person name, an alias
+pair, and a part-whole. It is placed BEFORE the reply-shape instruction so
+the JSON contract stays the prompt's last word.
+
+`withdraw_self_refuting_same` below is a second, independent mechanism, not
+a redundant one: it recovers 0.30 of the same failures on its own and is
+the only one that reaches a verdict already persisted, because it reads the
+stored rationale rather than re-asking the model."""
 
 
 class Verdict(Enum):
@@ -270,6 +295,134 @@ def _build_messages(
     ]
 
 
+_OCCURRENCE_MARKERS: re.Pattern[str] = re.compile(
+    r"(?:different|distinct|separate) (?:instances|occurrences|sessions)"
+    r"|continuation of|follow[- ]?up (?:to|of)|later session|subsequent meeting"
+    r"|(?:instancias|ocurrencias|sesiones) (?:diferentes|distintas)"
+    r"|continuaci[oó]n de|sesi[oó]n posterior",
+    re.IGNORECASE,
+)
+"""Phrases that ASSERT the members are two occurrences of one series.
+
+Every alternative carries a DISTINCTNESS word, and that is the load-bearing
+property rather than a stylistic one. An earlier version also matched a
+bare `recurring event|meeting|series`, which names the SERIES without
+claiming the members are two of its occurrences -- so `"Both entries
+describe the same recurring meeting and record identical attendees"`, a
+correct `same` rationale, was withdrawn. The eval never sampled that
+phrasing; three review lenses did.
+
+Bilingual on purpose. The corpus is, and #812 lets a run pin the language
+its rationales are written in, so an English-only table would fail closed
+on exactly the workspaces that reported this (#796). A phrasing neither
+list covers simply does not fire -- the rule never invents a withdrawal it
+cannot read."""
+
+_NEGATION_CUES: re.Pattern[str] = re.compile(
+    r"\bno\b|\bnot\b|\bcannot\b|\bnothing\b|\bneither\b|\bnever\b"
+    r"|\bwithout\b|n't\b"
+    r"|\bhardly\b|\bbarely\b|\bscarcely\b|\brarely\b|\bseldom\b"
+    r"|\bning[uú]n|\bninguna\b|\bnunca\b|\bjam[aá]s\b|\bapenas\b"
+    r"|\bsin\b|\btampoco\b",
+    re.IGNORECASE,
+)
+"""Words that turn a marker into its opposite.
+
+Not optional, and not defensive coding: `"There is no indication of
+different occurrences"` ARGUES FOR the `same` verdict it carries, and a
+rule reading the phrase without its negation withdrew 9 of 60 correct
+`same` verdicts when it was measured that way
+(`evals/adjudication/README.md`).
+
+Downgraders count as negation (`hardly`, `barely`, `apenas`): `"there is
+hardly any indication of different occurrences"` is the same claim as the
+flat denial, and reading only the flat forms let it through.
+
+The scope is the sentence prefix, not the marker's own clause, so a
+negation belonging to a DIFFERENT claim in the same sentence suppresses a
+withdrawal that was warranted. That direction is deliberate: a missed
+withdrawal leaves a candidate group for the operator to judge, while a
+wrong one silently contradicts a verdict the model actually reached.
+
+A consequence worth naming, because it reads as a bug and is not:
+examining only the FIRST marker in a sentence costs nothing. The prefix
+grows, so a cue standing before the first marker stands before every later
+one in that sentence too, and iterating them would reach the same verdict
+by a longer road."""
+
+OCCURRENCE_WITHDRAWN_NOTE: str = (
+    " [openkos: the same verdict was withdrawn -- this rationale argues the "
+    "members are separate occurrences of one recurring event (issue #796)]"
+)
+"""Appended to the rationale a withdrawal acted on, so the operator sees
+that the engine intervened and on what evidence -- the same disclosure
+shape `edge_typing.DIRECTION_WITHDRAWN_NOTE` uses for #807."""
+
+
+def withdraw_self_refuting_same(
+    verdict: Verdict, rationale: str
+) -> tuple[Verdict, str]:
+    """Turn a `SAME` verdict into `DIFFERENT` when its own rationale argues
+    the members are two occurrences of one recurring event (issue #796).
+
+    The reported defect is not that the model failed to notice. It noticed
+    and answered anyway: it wrote that the two are *"different instances of
+    the same event"* and returned `same`, which feeds a DESTRUCTIVE merge
+    and costs a meeting. That signature -- a rationale arguing against the
+    verdict it carries -- is the same one #807 already withdraws for
+    relation direction, and it is what this reads.
+
+    `DIFFERENT`, not `UNCERTAIN`: the rationale does not express doubt, it
+    makes a claim, and the claim is that these are separate occurrences.
+    Recording that as "we do not know" would discard the evidence the model
+    itself supplied.
+
+    Applied on read as well as on judgment, and deliberately NOT written
+    back: the corrected verdict is re-derived every time the row is served,
+    which is free because the rule is pure, and it keeps the store holding
+    what the model actually said rather than a verdict no model produced.
+    Making the STORE notice that its rows predate a rubric is #838's job,
+    not this function's.
+
+    Three properties the tests pin, each of which was a real failure mode
+    when this was measured:
+
+    - Only `SAME` is ever withdrawn. `DIFFERENT` and `UNCERTAIN` already
+      refuse the merge, so re-deciding them would be inventing a verdict
+      rather than withdrawing one.
+    - A marker negated EARLIER IN ITS OWN SENTENCE does not fire. Scoped
+      per sentence, like #807's direction markers: a negation belonging to
+      a different claim cannot excuse this one, and one that arrives after
+      the claim does not unmake it.
+    - Idempotent. It runs on freshly judged verdicts and again on verdicts
+      served from `.openkos/findings.db`, which may already carry the note;
+      a second pass must not stack a second one. Idempotence falls out of
+      only ever acting on `SAME`.
+
+    NOT gated on the group's OKF type, deliberately, though #796 reports it
+    on Events and the fixtures measure it there. What the markers assert is
+    that two records are separate occurrences of one thing, and that is an
+    argument against identity whichever type carries it: a `Decision` whose
+    rationale calls it a follow-up TO the other decision is not that
+    decision either. Gating on `Event` would also drop the cross-type group
+    (`Event+Concept`), which is exactly where a mis-typed second record of
+    one meeting lands. The narrowing that does the work is in the markers
+    themselves -- every one of them names distinctness -- not in the type.
+
+    `confidence` is deliberately not touched by the caller: it is the
+    model's stated confidence in the reply it actually produced, the CLI
+    never renders it, and re-scoring it here would be the engine inventing
+    a number no one supplied.
+    """
+    if verdict is not Verdict.SAME:
+        return verdict, rationale
+    for sentence in re.split(r"(?<=[.!?])\s+", rationale):
+        marker = _OCCURRENCE_MARKERS.search(sentence)
+        if marker is not None and not _NEGATION_CUES.search(sentence[: marker.start()]):
+            return Verdict.DIFFERENT, rationale + OCCURRENCE_WITHDRAWN_NOTE
+    return verdict, rationale
+
+
 def _map_verdict(raw_verdict: object) -> Verdict | None:
     """Case-insensitive mapping of the reply's `verdict` field to `Verdict`.
     `None` (not `Verdict.UNCERTAIN`) signals "unrecognized" so the caller can
@@ -441,6 +594,7 @@ def adjudicate_candidates(
                     results=results, failure=exc, failed_index=index
                 )
             verdict, confidence, rationale = _parse_reply(reply)
+            verdict, rationale = withdraw_self_refuting_same(verdict, rationale)
             result = AdjudicatedCandidate(
                 candidate=candidate,
                 verdict=verdict,

@@ -167,6 +167,105 @@ filtered by `adjudicate_candidates` itself.
 - THEN that group's `AdjudicatedCandidate` with `Verdict.DIFFERENT` is
   present in the returned list
 
+### Requirement: The Rubric Is Type-Aware About What An Identical Title Means
+
+The adjudication system prompt MUST state that the OKF type changes what an
+identical title is evidence OF. For a `Person` or an `Organization` an
+identical name is strong evidence of one entity; for an `Event` an identical
+title usually names a RECURRING SERIES, and two records under it are usually
+two occurrences of it.
+
+The rubric MUST ask, before two Events are judged the same, for agreement on
+a signal only one occurrence could carry — a date, who was present, or a
+decision one of them records — and MUST say that a rationale calling one
+member a continuation, a follow-up, or a later session of the other has
+already decided they are different.
+
+The paragraph MUST sit BEFORE the reply-shape instruction, so the JSON
+contract stays the prompt's last word.
+
+This is a judgment change and MUST NOT be adopted unmeasured. The
+measurement MUST carry both directions: the recurring-occurrence class the
+change is for, AND at minimum one class of Events that ARE one meeting
+recorded twice, without which a rubric that simply stopped merging Events
+would score perfectly.
+
+#### Scenario: The rubric names the recurrence frame
+
+- GIVEN the shipped adjudication system prompt
+- WHEN it is inspected
+- THEN it names a recurring series, names occurrences, distinguishes the
+  Person case, and names continuation and follow-up as already-decided
+
+#### Scenario: One meeting recorded twice is still SAME
+
+- GIVEN two Events sharing a title whose bodies agree on the date, the
+  attendees, and the decisions recorded
+- WHEN they are adjudicated
+- THEN the verdict is `SAME`
+
+### Requirement: A `SAME` Verdict Whose Rationale Argues For Two Occurrences Is Withdrawn
+
+When a `SAME` verdict's own rationale asserts that the members are separate
+occurrences, instances, or sessions of one recurring event, the engine MUST
+withdraw the verdict to `DIFFERENT` and MUST append a note to the rationale
+naming the withdrawal, so the operator sees that the engine intervened and
+on what evidence.
+
+`DIFFERENT`, not `UNCERTAIN`: such a rationale does not express doubt, it
+makes a claim, and recording that claim as "we do not know" would discard
+evidence the model itself supplied.
+
+The rule MUST be pure, deterministic, and reply-only — it reads the verdict
+and the rationale, never the bundle, and never issues a model call. It MUST
+be idempotent, because it runs both on freshly judged verdicts and on
+verdicts served from the store, and a served row may already carry the note.
+
+It MUST NOT act on a `DIFFERENT` or `UNCERTAIN` verdict: both already refuse
+the merge, so re-deciding them would be inventing a verdict rather than
+withdrawing one.
+
+A marker phrase that is NEGATED earlier in its own sentence MUST NOT fire.
+`"There is no indication of different occurrences"` argues FOR the verdict
+it carries, and a rule reading the phrase without its negation withdraws
+correct verdicts. The negation MUST share the marker's sentence and MUST
+precede it: a negation belonging to a different claim cannot excuse this
+one, and one arriving after the claim does not unmake it.
+
+The marker vocabulary MUST cover the languages a rationale can be written
+in, and MUST fail closed on a phrasing it does not cover — no withdrawal,
+rather than a guessed one.
+
+#### Scenario: A rationale calling the members separate occurrences withdraws SAME
+
+- GIVEN a backend returning `same` with a rationale stating the members are
+  different instances of the same recurring event
+- WHEN `adjudicate_candidates` runs
+- THEN the returned verdict is `DIFFERENT` and the rationale carries the
+  withdrawal note
+
+#### Scenario: A negated marker is not a self-refutation
+
+- GIVEN a backend returning `same` with a rationale stating there is no
+  indication of different occurrences
+- WHEN `adjudicate_candidates` runs
+- THEN the verdict stays `SAME` and the rationale is unchanged
+
+#### Scenario: Only a SAME verdict is ever withdrawn
+
+- GIVEN a `DIFFERENT` or `UNCERTAIN` verdict whose rationale carries a
+  marker phrase
+- WHEN the withdrawal runs
+- THEN the verdict and the rationale are returned unchanged
+
+#### Scenario: A verdict served from the store is withdrawn on read
+
+- GIVEN a persisted `SAME` row, servable on every digest, whose stored
+  rationale argues the members are separate occurrences
+- WHEN `adjudicate` serves that row
+- THEN the rendered verdict is `DIFFERENT`, the rationale carries the
+  withdrawal note, and no model call is made
+
 ### Requirement: `OllamaError`-Family Propagates Unswallowed From The Leaf
 
 Any `OllamaError`-family exception raised by `llm.chat` MUST propagate
@@ -415,7 +514,13 @@ The run MUST report the split on stderr
 fresh.`), mirroring `contradictions`' line, and a `--fresh` flag MUST
 bypass the serve and re-persist, mirroring `contradictions --fresh`.
 Served and fresh verdicts MUST render identically through every output
-mode, in candidate order. Writes stay confined to derived state under
+mode, in candidate order — and that identity is what obliges a served
+verdict to pass through the SAME reply-only judgment a fresh one does
+(see Requirement: A `SAME` Verdict Whose Rationale Argues For Two
+Occurrences Is Withdrawn). A row written before that withdrawal existed
+still carries the verdict its own rationale argues against; re-deciding it
+on read costs no model call, because the rule is pure and reads only the
+rationale the row already stores. Writes stay confined to derived state under
 `.openkos/` -- the bundle remains untouched on a read-only run, exactly
 as before.
 
