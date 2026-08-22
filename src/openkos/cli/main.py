@@ -13678,6 +13678,15 @@ def suggest_relations_cmd(
             llm=llm,
             include_confidential=include_confidential,
             local_exemption=local_exemption,
+            # #812: the same workspace key `curate`'s Structure stage
+            # reads, forwarded here for the reason `Config.models`'s
+            # docstring gives for being keyed by TASK and not by verb --
+            # this verb and that stage run one suggester, and a setting
+            # that reached only one of them would print one workspace's
+            # rationales in two languages depending on what was typed.
+            # `None` on a workspace that never set it: the pre-#812 prompt,
+            # byte for byte.
+            rationale_language=cfg.rationale_language,
             on_progress=_on_progress,
         )
     except OllamaUnavailable as exc:
@@ -13863,6 +13872,9 @@ def suggest_volatility_cmd(
             llm=llm,
             include_confidential=include_confidential,
             local_exemption=local_exemption,
+            # #812, the mirror of `suggest-relations`' own forwarding --
+            # see the note at that call site.
+            rationale_language=cfg.rationale_language,
             # TTY-gated per-type progress on stderr; `None` (silent) when
             # output is piped (issue #190, mirrors `suggest-relations`' #134
             # per-edge line).

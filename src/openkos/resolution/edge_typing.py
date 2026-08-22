@@ -54,7 +54,7 @@ from typing import Final
 from openkos import sensitivity
 from openkos.graph.base import Edge, GraphStore
 from openkos.graph.sqlite_graph import CandidateReport, CandidateSource, build_graph
-from openkos.llm import parsing
+from openkos.llm import parsing, prompting
 from openkos.llm.base import LLMBackend, Message
 from openkos.llm.ollama import OllamaError
 from openkos.model import okf
@@ -383,11 +383,30 @@ def _load_doc(
 
 
 def _build_messages(
-    edge: Edge, src_doc: tuple[str, str], tgt_doc: tuple[str, str]
+    edge: Edge,
+    src_doc: tuple[str, str],
+    tgt_doc: tuple[str, str],
+    rationale_language: str | None = None,
 ) -> list[Message]:
     """Assemble the 2-message prompt (mirrors `adjudication._build_messages`):
     system rubric + a user turn listing the edge's source/target concept ids,
-    titles, and bodies."""
+    titles, and bodies.
+
+    `rationale_language` (issue #812) appends
+    `prompting.RATIONALE_LANGUAGE_TEMPLATE` to the SYSTEM turn, and only
+    when a workspace pinned one. `None` -- the default, and what every
+    workspace that never set the key gets -- sends `_SYSTEM_PROMPT`
+    verbatim, so the unpinned prompt is byte-identical to the pre-#812 one
+    rather than merely equivalent. That is deliberate and load-bearing: the
+    rationale's language is inherited from whichever documents dominate the
+    pair, which is the defect, but a longer prompt on this common path is
+    the kind of change `extraction.concept._LANGUAGE_ANCHOR`'s docstring
+    records as owing a measurement, so an operator who did not ask for one
+    owes nothing.
+
+    The clause goes in the SYSTEM half on purpose: the user turn is the
+    documents' own text, and it is precisely because that half speaks the
+    corpus's language that the reply drifts with it."""
     src_title, src_body = src_doc
     tgt_title, tgt_body = tgt_doc
     user_content = (
@@ -395,7 +414,12 @@ def _build_messages(
         f"TARGET: [{edge.target_id} — {tgt_title}]\n{tgt_body}"
     )
     return [
-        {"role": "system", "content": _SYSTEM_PROMPT},
+        {
+            "role": "system",
+            "content": prompting.with_rationale_language(
+                _SYSTEM_PROMPT, rationale_language
+            ),
+        },
         {"role": "user", "content": user_content},
     ]
 
@@ -614,6 +638,7 @@ def suggest_edge_types(
     llm: LLMBackend,
     include_confidential: bool = False,
     local_exemption: bool = False,
+    rationale_language: str | None = None,
     on_progress: Callable[[int, int, EdgeSuggestion], None] | None = None,
 ) -> EdgeSuggestionBatch:
     """Suggest a relation type + rationale for every edge in `edges`
@@ -650,6 +675,14 @@ def suggest_edge_types(
     gets today's blanket blocking, so forgetting the parameter can only ever
     be MORE restrictive.
 
+    `rationale_language` (issue #812) pins the language the model writes its
+    `rationale` in, threaded straight through to `_build_messages` and
+    never re-derived here. `None` -- the default -- assembles the pre-#812
+    prompt byte for byte, so a caller that never passes it (every eval
+    harness arm, every library caller) is measuring exactly what shipped.
+    The CLI resolves it once from `config.Config.rationale_language`; this
+    module stays config-free.
+
     `on_progress`, if given, is called once per COMPLETED edge in input
     order, AFTER that edge's `EdgeSuggestion` is built, with `(index, total,
     suggestion)` where `index` is 1-based and `total == len(edges)` -- a
@@ -673,7 +706,9 @@ def suggest_edge_types(
             include_confidential=include_confidential,
             local_exemption=local_exemption,
         )
-        messages = _build_messages(edge, src_doc, tgt_doc)
+        messages = _build_messages(
+            edge, src_doc, tgt_doc, rationale_language=rationale_language
+        )
         # Guard ONLY the chat call (#441): a transport/model failure must
         # not discard the completed suggestions, while parse/validate/
         # progress failures keep their own existing contracts untouched.

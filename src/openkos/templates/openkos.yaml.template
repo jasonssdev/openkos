@@ -63,6 +63,25 @@ context_window: 12288     # tokens the model holds at once (prompt + reply); unp
                           # An on/off switch, not a worker count: the count is
                           # fixed at 2, where the measured speedup saturates.
                           # See evals/ingest_concurrency/report.md.
+# rationale_language: Spanish  # language `curate` writes its Metadata and
+                          # Structure RATIONALES in. UNSET by default, and
+                          # unset does NOT mean English: it means each item's
+                          # rationale is written in whichever language that
+                          # concept type's (or that edge's) documents happen to
+                          # dominate, so one report can mix English and Spanish
+                          # rows. Set it to pin them to one language.
+                          # Free-form -- the name is passed to the model
+                          # verbatim, so a name it does not recognise is not an
+                          # error: you get whatever it makes of it, visible in
+                          # the very next curate table. Blank, multi-line and
+                          # non-string values are refused.
+                          # Setting it appends one sentence to both rationale
+                          # prompts; leaving it unset sends the prompt that
+                          # shipped, byte for byte, which is the configuration
+                          # every measurement in evals/ was taken under.
+                          # Affects those two rationales only -- extraction,
+                          # query and adjudication still follow the source
+                          # language, which is correct there.
 
 # Layout is fixed: `raw/` (immutable sources) and `bundle/` (the OKF
 # bundle root) live next to this file. The engine does not read layout

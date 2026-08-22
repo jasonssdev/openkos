@@ -33,6 +33,45 @@ before adopting.
 confidence on correct answers against wrong ones. A threshold policy is only
 meaningful if the second is clearly below the first.
 
+## The pinned-language arm (#812) — not yet run
+
+`--rationale-language Spanish` appends one sentence to the system prompt
+telling the model which language to write each `rationale` in. It is the
+opt-in half of #812: with the key unset, `curate` sends the system prompt
+**byte for byte** as it shipped, so every arm already stored in `results/`
+remains the baseline and nothing below is re-based by this change.
+
+```bash
+python evals/edge_typing/run_edge_typing_eval.py --arm baseline --runs 5
+python evals/edge_typing/run_edge_typing_eval.py --arm es --runs 5 \
+    --rationale-language Spanish
+```
+
+**What this arm is looking for is collateral, not a win.** The labels score
+`type`, and the pinned clause changes only the language of `rationale` — a
+field nothing here scores. So the question is whether a longer prompt moves
+the `type` decision, its stability, or the type distribution *at all*. It
+should not. The reason to spend the runs anyway is that the last prompt
+everybody was sure about — a longer extraction prompt — lost its A/B here
+with recall down, decay up and runaway generations, and `evidence-first`
+below cost 0.15 accuracy for a change that also read as harmless.
+
+Read **stability** first, per the rule above: it needs no labels, and a
+prompt that makes the model less sure of itself shows up there even when
+accuracy sits inside the 0.41–0.45 noise band.
+
+The arm is wired and unmeasured. Its wiring is pinned by
+`tests/unit/test_edge_typing_rationale_language_arm.py`; the pinned value
+actually reaching the prompt is pinned by
+`tests/unit/resolution/test_rationale_language.py`. **No result is claimed
+for it here, because none has been produced.**
+
+There is no equivalent arm for `curate`'s Metadata stage: no harness scores
+`suggest_volatility` at all. The two suggesters take the identical clause
+through the identical seam, so this arm is the closest available evidence
+for both — which is a real limitation, not a claim that one measurement
+covers two prompts.
+
 ## Never compare arms on different fixtures
 
 The fixture set grew from 7 edges to 15 mid-investigation, and the first

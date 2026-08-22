@@ -29,6 +29,24 @@ Usage:
 
     python evals/edge_typing/run_edge_typing_eval.py --arm baseline --runs 5
 
+**The pinned-language arm (#812).** `--rationale-language Spanish` appends
+one sentence to the system prompt, telling the model which language to write
+each `rationale` in. It exists because #812's fix is a prompt change on a
+common path, and this repository does not adopt one on intuition -- a longer
+extraction prompt has already been measured here to lose its A/B. Run it
+against a baseline arm from the same session:
+
+    python evals/edge_typing/run_edge_typing_eval.py --arm baseline --runs 5
+    python evals/edge_typing/run_edge_typing_eval.py --arm es --runs 5 \
+        --rationale-language Spanish
+
+Read **stability** first, as always, and read accuracy second: the labels
+are constructed, and the pinned arm changes only the language of a field
+the labels do not score. What the arm is looking for is COLLATERAL -- a
+longer prompt moving the `type` decision, or the type distribution, at all.
+It should not, and the reason to measure is that the last prompt everyone
+was sure about did.
+
 Writes `results/edge-typing-<arm>-<stamp>.md` and a sibling `runs-*.json`
 in the same shape the cap harness uses, so the stored emissions stay
 re-analyzable without re-spending them.
@@ -83,7 +101,9 @@ def _materialize_bundle(bundle_dir: pathlib.Path) -> None:
 
 
 def _run_once(
-    bundle_dir: pathlib.Path, client: OllamaClient
+    bundle_dir: pathlib.Path,
+    client: OllamaClient,
+    rationale_language: str | None = None,
 ) -> list[tuple[str | None, float, str]]:
     """One pass over every labelled edge; returns `(suggested_type,
     confidence, rationale)` per edge, `(None, 0.0, "")` where the reply
@@ -98,9 +118,22 @@ def _run_once(
     about: a reply whose rationale argues for the reverse of the direction
     it asserts. Storing it costs nothing -- it is already in the reply --
     and keeps the stored runs re-analyzable for that question without
-    re-spending them, exactly as the confidences arrays do."""
+    re-spending them, exactly as the confidences arrays do.
+
+    `rationale_language` (issue #812) is the pinned-language arm. `None` --
+    the default, and every arm measured before #812 -- sends the system
+    prompt byte for byte as it shipped, so the baseline in `results/` stays
+    the baseline. A pinned value appends one sentence to that prompt, which
+    is the whole point of measuring it: this repository does not adopt a
+    longer prompt on a common path on intuition, and the operator turning
+    the key on is entitled to the accuracy and stability cost."""
     edges = [Edge(source_id=e.source_id, target_id=e.target_id) for e in EDGES]
-    batch = suggest_edge_types(edges, bundle_dir=bundle_dir, llm=client)
+    batch = suggest_edge_types(
+        edges,
+        bundle_dir=bundle_dir,
+        llm=client,
+        rationale_language=rationale_language,
+    )
     by_pair = {
         # `getattr` on purpose: `EdgeSuggestion` carries no `confidence`
         # today, and the #508 investigation concluded it should not. An arm
@@ -122,6 +155,17 @@ def main() -> None:
     parser.add_argument("--arm", default="baseline", help="label for this arm")
     parser.add_argument("--runs", type=int, default=DEFAULT_RUNS)
     parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument(
+        "--rationale-language",
+        default=None,
+        help=(
+            "pin the language the model writes each `rationale` in (issue "
+            "#812), e.g. --rationale-language Spanish. Omit it for the "
+            "unpinned baseline: every arm stored in results/ was measured "
+            "with no language pinned, and the unpinned prompt is byte-"
+            "identical to the one that ships."
+        ),
+    )
     args = parser.parse_args()
 
     # Production's own generation ceiling and context window, not the client's
@@ -145,7 +189,7 @@ def main() -> None:
         _materialize_bundle(bundle_dir)
         for index in range(args.runs):
             started = time.monotonic()
-            observed.append(_run_once(bundle_dir, client))
+            observed.append(_run_once(bundle_dir, client, args.rationale_language))
             latencies.append(time.monotonic() - started)
             print(f"  run {index + 1}/{args.runs} done ({latencies[-1]:.1f}s)")
 
@@ -222,6 +266,12 @@ def main() -> None:
                 # note in `evals/contradictions/run_contradictions_eval.py`.
                 "max_generation_tokens": DEFAULT_MAX_GENERATION_TOKENS,
                 "context_window": DEFAULT_CONTEXT_WINDOW,
+                # Part of the arm's identity too (#812): a pinned language
+                # is a different system prompt, so a stored run that did not
+                # say which one it used could not be told apart from a
+                # baseline run afterwards. `null` IS the answer for every
+                # arm measured before #812.
+                "rationale_language": args.rationale_language,
                 "outcomes": rows,
             },
             indent=2,
@@ -242,6 +292,19 @@ def main() -> None:
         arm_identity_line(
             max_generation_tokens=DEFAULT_MAX_GENERATION_TOKENS,
             context_window=DEFAULT_CONTEXT_WINDOW,
+        ),
+        "",
+        # Stated in the report and not only in the JSON, on #740's own
+        # reasoning: the artifact a person opens must say which prompt it
+        # measured. The unpinned case renders "**none** — the baseline
+        # prompt, byte-identical to what ships" rather than a blank, so an
+        # unpinned run reads as a deliberate configuration instead of a
+        # field the runner forgot to fill in.
+        (
+            f"Rationale language pinned: **{args.rationale_language}** (#812)."
+            if args.rationale_language is not None
+            else "Rationale language pinned: **none** — the baseline prompt,"
+            " byte-identical to what ships (#812)."
         ),
         "",
         "Labels are CONSTRUCTED, not adjudicated — see `fixtures.py`. Read"

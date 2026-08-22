@@ -298,6 +298,38 @@ turning it off restores the pre-#760 path byte-for-byte. The `USED:`
 attribution still strips citations off an ungrounded answer either way, so
 `False` is degraded, never unguarded."""
 
+DEFAULT_RATIONALE_LANGUAGE: Final[str | None] = None
+"""Packaged default for `rationale_language` (issue #812): the language
+`curate`'s Metadata and Structure stages write their per-item RATIONALES in.
+
+`None` -- pin nothing -- and that is the whole point of the key rather than
+an undecided default. Unset does NOT mean English: it means the language is
+inherited per item from whichever documents dominate that concept type or
+that edge's pair, so one table the operator reads top to bottom arrives four
+rows in English and two in Spanish. That is the defect #812 reports, and it
+still ships as the default because fixing it costs a prompt change on a
+common path.
+
+Both rationale prompts (`resolution.edge_typing._SYSTEM_PROMPT`,
+`resolution.volatility_typing._SYSTEM_PROMPT`) are English system text whose
+user turn carries the concept bodies; pinning appends one sentence to the
+SYSTEM half (`llm.prompting.RATIONALE_LANGUAGE_TEMPLATE`). This repo does
+not adopt a longer prompt on a common path unmeasured --
+`extraction.concept._LANGUAGE_ANCHOR`'s docstring records exactly that rule
+for exactly this instruction, and a longer extraction prompt has already
+been measured here to lose its A/B. So the unset path assembles the pre-#812
+prompt BYTE FOR BYTE, the pinned path is the one an operator opted into, and
+the cost of opting in is what `evals/edge_typing/`'s `--rationale-language`
+arm exists to measure.
+
+Deliberately a WORKSPACE key rather than a majority vote over the bundle.
+The only language machinery the engine has is
+`extraction.concept._dominant_language`: module-private, es/en only,
+`None` when neither wins, and computed per SOURCE TEXT at extraction time --
+never persisted, never bundle-wide. Promoting it would have shipped a
+"bundle language" that cannot name most languages and abstains exactly when
+a mixed corpus needs it most."""
+
 DEFAULT_VOLATILITY_WINDOWS: dict[str, str] = {"slow": "90d", "volatile": "7d"}
 """Packaged per-tier default windows (freshness-lint-v1, design: "Per-tier
 windows (CONCRETE, FINAL)"): `slow` = 90d, `volatile` = 7d -- continuity
@@ -306,6 +338,27 @@ value (never flagged), so it is never a key of this map. Raw passthrough
 only, like `DEFAULT_FRESHNESS_WINDOW` -- the duration grammar and the
 tier-resolution precedence are `lint.resolve_windows`'s job, not
 `config`'s."""
+
+_MAX_RATIONALE_LANGUAGE_CHARS: Final = 40
+"""Length cap on `rationale_language` (issue #812), measured on the
+STRIPPED value.
+
+A language name is short. The longest spellings an operator plausibly
+writes -- `Traditional Chinese (Taiwan)` at 28, `Latin American Spanish` at
+22, `Brazilian Portuguese` at 20 -- clear this with room to spare, so the
+cap costs no real value and refuses the shape a language name never has: a
+sentence. Chosen generously for that reason; it is a sanity bound, not a
+filter."""
+
+_RATIONALE_LANGUAGE_SENTENCE_MARKS: Final = ".!?"
+"""Characters `rationale_language` refuses (issue #812).
+
+Sentence-ending punctuation only, and a DENY list rather than an allow list
+on purpose: the key is free-form across every script (`config.Config`), so
+an allow list would have to enumerate Han, Cyrillic, Devanagari and the
+punctuation real names carry (`Chinese (Simplified)`, `Serbo-Croatian`) and
+would silently refuse whatever it forgot. A name needs no full stop; a
+value carrying one is prose that was typed into a name field."""
 
 _MODEL_TOKEN_RE = re.compile(r"[A-Za-z0-9._:/-]+")
 
@@ -906,6 +959,51 @@ class Config:
     produces a run that looks completely ordinary.
 
     Consumed by `type_birth_sensitivity`, never by `read_config` itself."""
+    rationale_language: str | None
+    """The language `curate`'s Metadata and Structure stages write their
+    per-item RATIONALES in (issue #812), or `None` -- the default -- to pin
+    nothing and send the pre-#812 prompt byte for byte. See
+    `DEFAULT_RATIONALE_LANGUAGE` for why unset is not English.
+
+    **Free-form, and validated only for SHAPE.** A present value must be a
+    non-blank, single-line string, no longer than
+    `_MAX_RATIONALE_LANGUAGE_CHARS` once stripped, carrying no
+    sentence-ending punctuation; it is stripped and then interpolated
+    verbatim into both rationale prompts. There is no accepted vocabulary
+    because there is nothing to check one against: the engine holds no
+    language registry, the model is the only component that resolves the
+    name, and an enum would have inherited `_dominant_language`'s es/en
+    horizon (`DEFAULT_RATIONALE_LANGUAGE`).
+
+    **What the shape checks are for.** They bound the value to the shape a
+    language name has -- one short line without a full stop -- so that a
+    YAML block scalar, a pasted multi-line answer, or a sentence typed into
+    a name field fails at `read_config` rather than reaching the model. They
+    are NOT a prompt-injection defence and do not make this field untrusted
+    input. `openkos.yaml` is the operator's own file: this key is trusted
+    exactly as `model:` and every other prompt-affecting key in it is
+    trusted, and an operator who wants these prompts to say something else
+    can already say so by editing the repository. A short, unpunctuated
+    instruction would pass every check here, and that is the trust boundary
+    working as designed, not a gap in it.
+
+    **The failure mode that buys.** A name the model does not resolve --
+    a typo, a language it was not trained on, a dialect it collapses -- is
+    NOT an error anywhere. `read_config` accepts it, the prompt carries it,
+    and the model writes the rationales in whatever it decided the name
+    meant. The operator sees that in the very next `curate` table, which is
+    the same place they would see a language they did not want, so the loop
+    is short; but nothing in the engine will tell them the value was wrong.
+    None of the shape checks above sees this: a typo is short, single-line
+    and unpunctuated, which is exactly what a real name looks like.
+
+    Scope: the two rationale prompts only. Extraction, adjudication,
+    contradiction detection and `query` are untouched -- their outputs are
+    the corpus's own content, where following the source language is
+    correct, not a defect. It also does not reach ALREADY-persisted edge
+    suggestions: a run that serves a suggestion an earlier run paid for
+    (#799) shows that earlier run's rationale, in that run's language, and
+    curate's own served-count notice is where that shows up."""
 
 
 def read_config(root: Path) -> Config:
@@ -958,6 +1056,7 @@ def read_config(root: Path) -> Config:
     sufficiency_check = raw.get("sufficiency_check")
     concurrent_extraction = raw.get("concurrent_extraction")
     type_sensitivity_defaults = raw.get("type_sensitivity_defaults")
+    rationale_language = raw.get("rationale_language")
     if model is not None and not isinstance(model, str):
         raise ValueError(
             f"{layout.config_path.name}: 'model' must be a string, got "
@@ -1186,6 +1285,57 @@ def read_config(root: Path) -> Config:
                     f"offset between 0 and {len(okf.SENSITIVITY_ORDER) - 1}, "
                     f"got {offset!r}"
                 )
+    if rationale_language is not None and (
+        not isinstance(rationale_language, str)
+        or not rationale_language.strip()
+        or "\n" in rationale_language
+        or "\r" in rationale_language
+        or len(rationale_language.strip()) > _MAX_RATIONALE_LANGUAGE_CHARS
+        or any(
+            mark in rationale_language for mark in _RATIONALE_LANGUAGE_SENTENCE_MARKS
+        )
+    ):
+        # One guard and one message for six rejections, because they share
+        # one remedy: write a language name. That is the opposite of
+        # `models:`'s entry-by-entry messages, and deliberately -- there is
+        # no sub-key here to name, only a value that is or is not usable.
+        #
+        # `isinstance(x, str)` catches the YAML-reserved-word case FIRST,
+        # the same int-as-bool hazard `chat_timeout` guards pointed at a
+        # different type: `rationale_language: no` resolves to `False`, and
+        # `no` is a genuinely plausible thing to write here meaning "do not
+        # pin one" -- which is spelled by leaving the key out, and must not
+        # be silently accepted as a language named `False`.
+        #
+        # WHAT THE SHAPE CHECKS ARE AND ARE NOT. This value is interpolated
+        # verbatim into the SYSTEM turn of both rationale prompts (#812), so
+        # every rejection here is about the value not being SHAPED like a
+        # language name: a line break (a YAML block scalar or a pasted
+        # multi-line answer that arrives here by accident), a value longer
+        # than any language is spelled, and sentence-ending punctuation --
+        # the three things a name never has and a sentence always does.
+        #
+        # They are NOT a prompt-injection defence, and must not be read as
+        # one. `openkos.yaml` is the operator's own file; `rationale_language`
+        # is trusted exactly as `model:`, `models:` and every other
+        # prompt-affecting key in it is trusted, and an operator who wants to
+        # change what these two prompts say can edit this repository. What
+        # the checks buy is the ACCIDENT: a YAML shape nobody meant to write,
+        # and a value that is obviously not a language, caught at
+        # `read_config` instead of surfacing as rationales that read wrong in
+        # the next `curate` table. A short, single-line, unpunctuated
+        # instruction still passes, and that is not a hole -- it is the
+        # trust boundary this file has always had.
+        #
+        # NOT validated against any vocabulary either: see
+        # `Config.rationale_language` for why there is nothing to check a
+        # language name against, and what it costs when the name is wrong.
+        raise ValueError(
+            f"{layout.config_path.name}: 'rationale_language' must be a "
+            f"non-blank, single-line language name of at most "
+            f"{_MAX_RATIONALE_LANGUAGE_CHARS} characters and no sentence "
+            f"punctuation, got {rationale_language!r}"
+        )
     return Config(
         model=model if model is not None else DEFAULT_MODEL,
         review=review if review is not None else DEFAULT_REVIEW,
@@ -1247,6 +1397,15 @@ def read_config(root: Path) -> Config:
             type_sensitivity_defaults
             if type_sensitivity_defaults is not None
             else dict(DEFAULT_TYPE_SENSITIVITY_DEFAULTS)
+        ),
+        # Stripped, not merely passed through, on `chat_timeout`'s
+        # normalise-at-the-boundary reasoning: the value is interpolated
+        # into a sentence in two prompts, so padding a quoted value carries
+        # would otherwise ship to the model inside it, twice.
+        rationale_language=(
+            rationale_language.strip()
+            if rationale_language is not None
+            else DEFAULT_RATIONALE_LANGUAGE
         ),
     )
 
