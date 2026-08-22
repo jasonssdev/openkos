@@ -161,6 +161,7 @@ def _cfg(exemption: bool) -> config.Config:
         sufficiency_check=config.DEFAULT_SUFFICIENCY_CHECK,
         concurrent_extraction=config.DEFAULT_CONCURRENT_EXTRACTION,
         type_sensitivity_defaults=dict(config.DEFAULT_TYPE_SENSITIVITY_DEFAULTS),
+        rationale_language=config.DEFAULT_RATIONALE_LANGUAGE,
     )
 
 

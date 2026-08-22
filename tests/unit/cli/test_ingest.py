@@ -1129,6 +1129,7 @@ def _default_cfg(**overrides: object) -> config.Config:
         "sufficiency_check": config.DEFAULT_SUFFICIENCY_CHECK,
         "concurrent_extraction": config.DEFAULT_CONCURRENT_EXTRACTION,
         "type_sensitivity_defaults": {"Person": 1},
+        "rationale_language": config.DEFAULT_RATIONALE_LANGUAGE,
     }
     fields.update(overrides)
     return config.Config(**fields)  # type: ignore[arg-type]

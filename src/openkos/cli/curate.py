@@ -1110,6 +1110,13 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         llm=llm,
         include_confidential=ctx.include_confidential,
         local_exemption=ctx.local_exemption,
+        # #812: read off the workspace config, never re-derived here, and
+        # `None` on a workspace that never set it -- which sends the
+        # pre-#812 prompt byte for byte. Passed at both this call site and
+        # Metadata's because the two stages' rationales land in ONE table
+        # the operator reads top to bottom; pinning one alone would leave
+        # exactly the mixed-language report #812 was filed about.
+        rationale_language=ctx.cfg.rationale_language,
         on_progress=observability.progress_callback("curate", "untyped edge"),
     )
     cli_main._persist_edge_suggestions(
@@ -1361,6 +1368,8 @@ def _metadata_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         llm=llm,
         include_confidential=ctx.include_confidential,
         local_exemption=ctx.local_exemption,
+        # #812, the other half of the pair -- see `_structure_run`'s note.
+        rationale_language=ctx.cfg.rationale_language,
         on_progress=observability.progress_callback("curate", "concept type"),
     )
     results: Sequence[TierSuggestion] = batch.results

@@ -677,3 +677,60 @@ def test_suggest_volatility_partial_batch_model_not_found_keeps_pull_hint(
     assert "failed after suggesting 1 concept type(s)" in result.stderr
     assert f"ollama pull {configured_model}" in result.stderr
     assert "kept work" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# issue #812 -- the workspace's pinned rationale language reaches this verb too
+# ---------------------------------------------------------------------------
+
+
+def test_suggest_volatility_forwards_the_pinned_rationale_language(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`rationale_language` is forwarded unchanged from `openkos.yaml`.
+
+    The mirror of `test_suggest_relations.py`'s own #812 test: this verb
+    and curate's Metadata stage run the same suggester, so a value that
+    reached only one of them would let one workspace print its tier
+    rationales in two languages depending on which verb was typed."""
+    _init_workspace(tmp_path, monkeypatch)
+    path = tmp_path / "openkos.yaml"
+    path.write_text(
+        path.read_text(encoding="utf-8") + "rationale_language: Spanish\n",
+        encoding="utf-8",
+    )
+    captured: dict[str, object] = {}
+
+    def _recording_suggest(bundle_dir: Path, **kwargs: object) -> TierSuggestionBatch:
+        captured["kwargs"] = kwargs
+        return TierSuggestionBatch(results=[])
+
+    monkeypatch.setattr("openkos.cli.main.suggest_volatility", _recording_suggest)
+
+    result = runner.invoke(app, ["suggest-volatility"])
+
+    assert result.exit_code == 0
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["rationale_language"] == "Spanish"
+
+
+def test_suggest_volatility_forwards_no_language_when_unpinned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stock workspace forwards `None`, which is the pre-#812 prompt."""
+    _init_workspace(tmp_path, monkeypatch)
+    captured: dict[str, object] = {}
+
+    def _recording_suggest(bundle_dir: Path, **kwargs: object) -> TierSuggestionBatch:
+        captured["kwargs"] = kwargs
+        return TierSuggestionBatch(results=[])
+
+    monkeypatch.setattr("openkos.cli.main.suggest_volatility", _recording_suggest)
+
+    result = runner.invoke(app, ["suggest-volatility"])
+
+    assert result.exit_code == 0
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["rationale_language"] is None

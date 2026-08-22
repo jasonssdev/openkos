@@ -2158,3 +2158,67 @@ def test_forget_sweep_erases_suggestions_referencing_the_endpoint(
     after = conn.execute("SELECT COUNT(*) FROM edge_suggestions").fetchone()[0]
     conn.close()
     assert after == 0
+
+
+# ---------------------------------------------------------------------------
+# issue #812 -- the workspace's pinned rationale language reaches this verb too
+# ---------------------------------------------------------------------------
+
+
+def test_suggest_relations_forwards_the_pinned_rationale_language(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`rationale_language` is forwarded unchanged from `openkos.yaml`.
+
+    Forwarded HERE and not only in `curate` for the reason `models:`'s own
+    docstring gives for being keyed by task rather than by verb: this verb
+    and curate's Structure stage run the same suggester, and a setting that
+    reached only one of them would let the two print rationales in
+    different languages from one workspace."""
+    _init_workspace(tmp_path, monkeypatch)
+    path = tmp_path / "openkos.yaml"
+    path.write_text(
+        path.read_text(encoding="utf-8") + "rationale_language: Spanish\n",
+        encoding="utf-8",
+    )
+    _patch_candidate_edges(
+        monkeypatch, [Edge(source_id="concepts/a", target_id="concepts/b")]
+    )
+    captured: dict[str, object] = {}
+
+    def _fake_suggest(edges: object, **kwargs: object) -> EdgeSuggestionBatch:
+        captured["kwargs"] = kwargs
+        return EdgeSuggestionBatch(results=[])
+
+    monkeypatch.setattr("openkos.cli.main.suggest_edge_types", _fake_suggest)
+
+    result = runner.invoke(app, ["suggest-relations", "--auto"])
+
+    assert result.exit_code == 0
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["rationale_language"] == "Spanish"
+
+
+def test_suggest_relations_forwards_no_language_when_unpinned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stock workspace forwards `None`, which is the pre-#812 prompt."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_candidate_edges(
+        monkeypatch, [Edge(source_id="concepts/a", target_id="concepts/b")]
+    )
+    captured: dict[str, object] = {}
+
+    def _fake_suggest(edges: object, **kwargs: object) -> EdgeSuggestionBatch:
+        captured["kwargs"] = kwargs
+        return EdgeSuggestionBatch(results=[])
+
+    monkeypatch.setattr("openkos.cli.main.suggest_edge_types", _fake_suggest)
+
+    result = runner.invoke(app, ["suggest-relations", "--auto"])
+
+    assert result.exit_code == 0
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["rationale_language"] is None

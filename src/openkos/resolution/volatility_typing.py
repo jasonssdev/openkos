@@ -32,7 +32,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from openkos import lint, sensitivity
-from openkos.llm import parsing
+from openkos.llm import parsing, prompting
 from openkos.llm.base import LLMBackend, Message
 from openkos.llm.ollama import OllamaError
 from openkos.model import okf, types
@@ -229,17 +229,34 @@ def _sample_docs_by_type(docs: list[lint.LintDoc]) -> dict[str, list[lint.LintDo
 
 
 def _build_messages(
-    type_name: str, current_default: str, bodies: list[str]
+    type_name: str,
+    current_default: str,
+    bodies: list[str],
+    rationale_language: str | None = None,
 ) -> list[Message]:
     """Assemble the 2-message prompt (mirrors `edge_typing._build_messages`):
     system rubric + a user turn listing the type name, its current default
-    tier, and the sampled concept bodies."""
+    tier, and the sampled concept bodies.
+
+    `rationale_language` (issue #812) appends
+    `prompting.RATIONALE_LANGUAGE_TEMPLATE` to the SYSTEM turn, and only
+    when a workspace pinned one. `None` -- the default -- sends
+    `_SYSTEM_PROMPT` verbatim, byte-identical to the pre-#812 prompt; see
+    `edge_typing._build_messages` for the full reasoning, which is the same
+    here for the same reason. It bites HARDER at this seam: one call covers
+    a whole concept TYPE, so a single type whose sampled bodies lean
+    Spanish reports its whole row in Spanish beside English neighbours."""
     body_block = "\n\n".join(bodies)
     user_content = (
         f"TYPE: {type_name}\nCURRENT DEFAULT TIER: {current_default}\n\n{body_block}"
     )
     return [
-        {"role": "system", "content": _SYSTEM_PROMPT},
+        {
+            "role": "system",
+            "content": prompting.with_rationale_language(
+                _SYSTEM_PROMPT, rationale_language
+            ),
+        },
         {"role": "user", "content": user_content},
     ]
 
@@ -280,6 +297,7 @@ def suggest_volatility(
     llm: LLMBackend,
     include_confidential: bool = False,
     local_exemption: bool = False,
+    rationale_language: str | None = None,
     on_progress: Callable[[int, int, TierSuggestion], None] | None = None,
 ) -> TierSuggestionBatch:
     """Suggest a volatility tier + rationale for every distinct concept TYPE
@@ -343,7 +361,16 @@ def suggest_volatility(
     `include_confidential` lives ONLY in `sensitivity.py` (see its module
     docstring). Defaults to `False`: a caller that cannot prove locality
     gets today's blanket blocking, so forgetting the parameter can only ever
-    be MORE restrictive."""
+    be MORE restrictive.
+
+    `rationale_language` (issue #812) pins the language the model writes its
+    `rationale` in, threaded straight through to `_build_messages` and never
+    re-derived here -- the same contract, wording and default as
+    `edge_typing.suggest_edge_types`'s own parameter, because curate renders
+    both suggesters' rationales into one table the operator reads top to
+    bottom. `None` -- the default -- assembles the pre-#812 prompt byte for
+    byte. The CLI resolves it once from `config.Config.rationale_language`;
+    this module stays config-free."""
     blocked = sensitivity.sensitive_concept_ids(
         bundle_dir,
         include_confidential=include_confidential,
@@ -369,7 +396,12 @@ def suggest_volatility(
             continue
         bodies = [doc.body[:M_TRUNCATE_CHARS] for doc in type_docs]
         current_default = types.TYPE_TO_DEFAULT_VOLATILITY.get(type_name, "")
-        messages = _build_messages(type_name, current_default, bodies)
+        messages = _build_messages(
+            type_name,
+            current_default,
+            bodies,
+            rationale_language=rationale_language,
+        )
         # Guard ONLY the chat call (#441): a transport/model failure must
         # not discard the completed suggestions, while parse/validate/
         # progress failures keep their own existing contracts untouched.

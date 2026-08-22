@@ -5693,3 +5693,164 @@ def test_structure_reports_a_store_it_read_even_when_nothing_served(
         "0 of 1 candidate edge(s) served from persisted suggestions; "
         "1 typed fresh." in result.stderr
     )
+
+
+# ---------------------------------------------------------------------------
+# issue #812 -- the pinned rationale language reaches BOTH stage prompts
+# ---------------------------------------------------------------------------
+
+
+class _RecordingOllama(_OfflineOllama):
+    """`_OfflineOllama` that keeps every `chat` payload and answers with one
+    fixed reply.
+
+    The reply is deliberately DEGRADED for both stages -- no `type`, no
+    `tier` -- so each walk reports the item and moves on without a `[y/N]`
+    prompt. The call under test is the one that already happened by then:
+    what matters here is the bytes that left, not what the reply was worth.
+    """
+
+    def __init__(self, reply: str = '{"rationale": "sin tipo"}') -> None:
+        self._reply = reply
+        self.calls: list[list[dict[str, str]]] = []
+
+    def chat(self, messages: object) -> str:
+        assert isinstance(messages, list)
+        self.calls.append(list(messages))
+        return self._reply
+
+
+def _write_typed_doc(path: Path, *, title: str) -> None:
+    """A `Concept` doc carrying an explicit `sensitivity`.
+
+    `_write_doc` omits it, and `suggest_volatility` fails closed on a doc
+    whose own frontmatter carries no level -- so a fixture without it
+    reaches zero `llm.chat` calls and a language assertion would pass by
+    never being exercised."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"---\ntype: Concept\ntitle: {title}\nsensitivity: private\n---\n"
+        f"# {title}\n\nBody about {title}.\n",
+        encoding="utf-8",
+    )
+
+
+def _pin_rationale_language(tmp_path: Path, language: str) -> None:
+    """Append a real `rationale_language` key to the workspace's own
+    `openkos.yaml`, so the value under test travels the production path --
+    file, `read_config`, `CurateContext.cfg` -- rather than a hand-built
+    `Config` that could agree with a seam nobody wired."""
+    path = tmp_path / "openkos.yaml"
+    path.write_text(
+        path.read_text(encoding="utf-8") + f"rationale_language: {language}\n",
+        encoding="utf-8",
+    )
+
+
+def test_structure_run_sends_the_pinned_rationale_language(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`curate`'s Structure stage carries `cfg.rationale_language` into the
+    prompt it actually sends (#812).
+
+    Asserted on the recorded chat payload, from a real workspace config,
+    through the real `_structure_run` -- not on a parameter's presence in a
+    signature. A value threaded to a seam and never passed is the
+    "computed but never read" defect this repo has already paid for twice
+    (#690), and a signature-level test cannot see it."""
+    from openkos.graph.base import Edge
+
+    _init_workspace(tmp_path, monkeypatch)
+    _write_typed_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_typed_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _pin_rationale_language(tmp_path, "Spanish")
+    _reindexed_workspace(tmp_path, monkeypatch)
+
+    ctx = curate.CurateContext(
+        root=tmp_path,
+        layout=config.WorkspaceLayout(tmp_path),
+        cfg=config.read_config(tmp_path),
+        auto=True,
+    )
+    llm = _RecordingOllama()
+    ctx.ollama_client = llm
+
+    curate._structure_run(
+        ctx,
+        curate.StageProbe(
+            items=(Edge(source_id="concepts/a", target_id="concepts/b"),)
+        ),
+    )
+
+    assert len(llm.calls) == 1, f"expected one chat call, got {len(llm.calls)}"
+    assert "Spanish" in llm.calls[0][0]["content"]
+
+
+def test_metadata_run_sends_the_pinned_rationale_language(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`curate`'s Metadata stage carries the same value into its own prompt.
+
+    Paired with the Structure test above on purpose: #812 is about ONE
+    table the operator reads top to bottom, so a fix that reaches one
+    suggester and not the other leaves the reported defect in place while
+    both stages look wired."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_typed_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _pin_rationale_language(tmp_path, "Spanish")
+    _reindexed_workspace(tmp_path, monkeypatch)
+
+    ctx = curate.CurateContext(
+        root=tmp_path,
+        layout=config.WorkspaceLayout(tmp_path),
+        cfg=config.read_config(tmp_path),
+        auto=True,
+    )
+    llm = _RecordingOllama()
+    ctx.ollama_client = llm
+
+    curate._metadata_run(ctx, curate.StageProbe(items=("Concept",)))
+
+    assert len(llm.calls) == 1, f"expected one chat call, got {len(llm.calls)}"
+    assert "Spanish" in llm.calls[0][0]["content"]
+
+
+def test_unpinned_curate_stages_send_the_pre_812_prompt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A workspace that never set the key sends both prompts unchanged.
+
+    The other half of the promise, asserted at the STAGE level rather than
+    at `_build_messages`: the default has to survive the whole config ->
+    context -> stage -> suggester chain, because a layer that substitutes
+    its own fallback for `None` would silently opt every existing workspace
+    into an unmeasured prompt."""
+    from openkos.graph.base import Edge
+    from openkos.resolution import edge_typing as edge_typing_mod
+    from openkos.resolution import volatility_typing as volatility_typing_mod
+
+    _init_workspace(tmp_path, monkeypatch)
+    _write_typed_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_typed_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _reindexed_workspace(tmp_path, monkeypatch)
+
+    ctx = curate.CurateContext(
+        root=tmp_path,
+        layout=config.WorkspaceLayout(tmp_path),
+        cfg=config.read_config(tmp_path),
+        auto=True,
+    )
+    llm = _RecordingOllama()
+    ctx.ollama_client = llm
+
+    curate._structure_run(
+        ctx,
+        curate.StageProbe(
+            items=(Edge(source_id="concepts/a", target_id="concepts/b"),)
+        ),
+    )
+    curate._metadata_run(ctx, curate.StageProbe(items=("Concept",)))
+
+    assert len(llm.calls) == 2, f"expected two chat calls, got {len(llm.calls)}"
+    assert llm.calls[0][0]["content"] == edge_typing_mod._SYSTEM_PROMPT
+    assert llm.calls[1][0]["content"] == volatility_typing_mod._SYSTEM_PROMPT

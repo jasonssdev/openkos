@@ -739,6 +739,9 @@ context_window: 12288     # tokens the model holds at once (prompt + reply); unp
                           # needs OLLAMA_NUM_PARALLEL>=2 on the server
 # type_sensitivity_defaults:  # per-type birth floor: offset above default_sensitivity
 #   Person: 1               # ships EMPTY; this is the recommended opt-in (ADR-0015)
+# rationale_language: Spanish  # language curate writes its Metadata/Structure
+                          # rationales in; unset means each row follows its own
+                          # documents, which is why one report can mix languages
 
 # Layout — where the engine keeps things, relative to this file.
 raw: raw/                 # immutable sources; any extension, never rewritten
@@ -756,6 +759,18 @@ The born level is `combine_sensitivity(base, raise_by(default_sensitivity, offse
 An **absent** field (or explicit null) means the shipped default applies, which is now the empty mapping; an explicit **`{}`** says the same thing out loud; an offset of `0` declines the raise for that one type while keeping the map. Validation is **eager and fails closed** at config read, following the `models:` precedent: an unknown type key (keys must be buildable OKF types — `Source` is not one), a boolean, a negative offset, or an offset too large to matter at any floor (`>= 3` on the three-level ladder) refuses the config load rather than silently disabling a security default.
 
 Birth-time only: nothing is migrated or backfilled — concepts already on disk keep their level, and `set-sensitivity <id> <level> --allow-downgrade` can still lower a type-defaulted object freely.
+
+### `rationale_language`
+
+**Pins the language `curate` writes its per-item *rationales* in** — the Metadata stage's tier explanations and the Structure stage's relation explanations ([#812](https://github.com/jasonssdev/openkos/issues/812)). `suggest-volatility` and `suggest-relations`, which run the same two suggesters, honour it too.
+
+**Unset is the default, and unset does not mean English.** Both prompts are English system text whose user turn carries the concept bodies, so with nothing pinned the model follows whatever language *that type's* or *that pair's* documents happen to dominate. On a mixed corpus that produces exactly what #812 reports: one table you read top to bottom with four rows in English and two in Spanish, item by item, with nothing choosing.
+
+**Why it is a key rather than a fix.** Pinning appends one sentence to both prompts, and this project does not adopt a longer prompt on a common path without measuring it — a longer *extraction* prompt was measured here and lost its A/B, with recall down, decay up and runaway generations. So with the key unset the assembled prompt is **byte-identical** to the one that shipped before #812: your runs do not move, and nothing is owed. The pinned path is the one you opted into, and `evals/edge_typing/` carries a `--rationale-language` arm to measure what it costs.
+
+**Free-form.** Write the language the way you would say it — `Spanish`, `español`, `Deutsch`, `日本語`. There is no accepted vocabulary because there is nothing to check one against: the model is the only thing that resolves the name. That is also the failure mode — a name it does not recognise is **not an error anywhere**. The config loads, the prompt carries it, and you find out in the next `curate` table. Non-string, blank, multi-line, over-long and sentence-punctuated values *are* refused at config read. Those checks bound the value to the SHAPE of a language name — short, one line, no full stop — so an accidental YAML shape or a value that is plainly not a language fails at load rather than in the next table. They are **not** a prompt-injection defence and this key is not untrusted input: a short unpunctuated instruction still passes, exactly as `model:` and every other prompt-affecting key in this file is trusted. `openkos.yaml` is your own file, and that is the trust boundary, not a hole in it.
+
+**Scope is deliberately narrow.** Extraction, `query`, adjudication and contradiction detection are untouched — their output is the corpus's own content, where following the source language is correct rather than a defect. It also does not rewrite rationales already persisted by an earlier run: a `curate` that serves a suggestion an earlier one paid for shows that run's rationale, in that run's language, and the served-count line on stderr is where you see it.
 
 ### `chat_timeout`
 
