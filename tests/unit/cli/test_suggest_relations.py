@@ -34,7 +34,12 @@ from openkos.llm.ollama import (
     OllamaModelNotFound,
     OllamaUnavailable,
 )
-from openkos.resolution.edge_typing import EdgeSuggestion, EdgeSuggestionBatch
+from openkos.model.relations import ASYMMETRIC_RELATION_TYPES
+from openkos.resolution.edge_typing import (
+    LEAST_SPECIFIC_RELATION_TYPE,
+    EdgeSuggestion,
+    EdgeSuggestionBatch,
+)
 from tests.unit.cli.conftest import commit_pending_fixture_docs, disable_local_exemption
 from tests.unit.cli.conftest import snapshot_with_mtime as _snapshot
 
@@ -1758,11 +1763,13 @@ def test_listing_marks_an_asymmetric_type_direction_unverified(
     )
 
 
-def test_listing_leaves_a_symmetric_type_unmarked(
+def test_listing_leaves_a_specific_symmetric_type_unmarked(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`related_to` is symmetric by definition -- no direction to doubt, no
-    disclaimer to print."""
+    """`references` is symmetric -- no direction to doubt -- and specific,
+    so it asserts something. Neither caveat applies, and inventing one
+    would train the operator to ignore them. (`related_to` is symmetric
+    too, but carries #802's caveat for a different reason.)"""
     _init_workspace(tmp_path, monkeypatch)
     _patch_candidate_edges(
         monkeypatch, [Edge(source_id="concepts/a", target_id="concepts/b")]
@@ -1774,8 +1781,8 @@ def test_listing_leaves_a_symmetric_type_unmarked(
                 _suggestion(
                     source="concepts/a",
                     target="concepts/b",
-                    suggested_type="related_to",
-                    rationale="the two are discussed together",
+                    suggested_type="references",
+                    rationale="the first names the second",
                 )
             ]
         ),
@@ -1784,7 +1791,9 @@ def test_listing_leaves_a_symmetric_type_unmarked(
     result = runner.invoke(app, ["suggest-relations", "--auto"])
 
     assert result.exit_code == 0
+    assert "[references] concepts/a -> concepts/b\n" in result.stdout
     assert "direction model-suggested" not in result.stdout
+    assert "the documents do not say how" not in result.stdout
 
 
 def test_apply_prompt_carries_the_direction_disclaimer(
@@ -1825,6 +1834,87 @@ def test_apply_prompt_carries_the_direction_disclaimer(
     assert (
         "Relate concepts/a -> projects/b [produced_by] "
         "(direction model-suggested, unverified)? [y/N]" in result.stdout
+    )
+
+
+def test_listing_states_what_the_least_specific_type_does_not_say(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#802 on the read-only listing.
+
+    Tested end to end, not against the helper: #778's defect was a surface
+    that never CALLED the helper, and a helper-level assertion passes just
+    as happily in that world.
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_candidate_edges(
+        monkeypatch, [Edge(source_id="concepts/a", target_id="concepts/b")]
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.suggest_edge_types",
+        lambda edges, **kwargs: EdgeSuggestionBatch(
+            results=[
+                _suggestion(
+                    source="concepts/a",
+                    target="concepts/b",
+                    suggested_type="related_to",
+                    rationale="the two are discussed together",
+                )
+            ]
+        ),
+    )
+
+    result = runner.invoke(app, ["suggest-relations", "--auto"])
+
+    assert result.exit_code == 0
+    assert (
+        "[related_to] concepts/a -> concepts/b "
+        "(connected; the documents do not say how)" in result.stdout
+    )
+    assert "direction model-suggested" not in result.stdout
+
+
+def test_apply_prompt_states_what_the_least_specific_type_does_not_say(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#802 on the consent surface -- the one that actually writes the edge,
+    and the one where the operator is answering a question about a claim
+    nobody had stated."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="B")
+    _patch_candidate_edges(
+        monkeypatch, [Edge(source_id="concepts/a", target_id="concepts/b")]
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.suggest_edge_types",
+        lambda edges, **kwargs: EdgeSuggestionBatch(
+            results=[
+                _suggestion(
+                    source="concepts/a",
+                    target="concepts/b",
+                    suggested_type="related_to",
+                    rationale=(
+                        "both are discussed in the same meeting, but "
+                        "neither causes, produces or contains the other"
+                    ),
+                )
+            ]
+        ),
+    )
+
+    result = runner.invoke(app, ["suggest-relations", "--auto", "--apply"], input="n\n")
+
+    assert result.exit_code == 0
+    assert (
+        "[related_to] concepts/a -> concepts/b "
+        "(connected; the documents do not say how)" in result.stdout
+    )
+    assert (
+        "Relate concepts/a -> concepts/b [related_to] "
+        "(connected; the documents do not say how)? [y/N]" in result.stdout
     )
 
 
@@ -2222,3 +2312,41 @@ def test_suggest_relations_forwards_no_language_when_unpinned(
     kwargs = captured["kwargs"]
     assert isinstance(kwargs, dict)
     assert kwargs["rationale_language"] is None
+
+
+# --------------------------------------------------------------------------- #
+# #802: the least-specific type says what it does not assert
+# --------------------------------------------------------------------------- #
+
+
+def test_the_least_specific_type_carries_its_own_caveat() -> None:
+    """`related_to` is the rubric's honest answer when no specific type
+    holds -- "the two are connected, and the documents do not support
+    saying how". The operator was shown `[related_to]` above a rationale
+    explaining why it is NOT any specific type, and asked to approve it,
+    with nothing saying what approving it asserts."""
+    assert main._suggestion_caveat("related_to") == (
+        " (connected; the documents do not say how)"
+    )
+
+
+def test_the_direction_caveat_is_unchanged_byte_for_byte() -> None:
+    """#778 fixed exactly one surface spelling a caveat while another
+    stayed silent, and `docs/testing.md` documents this wording as the
+    contract. Widening the helper must not reword it."""
+    assert main._suggestion_caveat("caused_by") == (
+        " (direction model-suggested, unverified)"
+    )
+
+
+def test_a_specific_symmetric_type_carries_no_caveat() -> None:
+    """`references` asserts something and is symmetric: neither caveat
+    applies, and inventing one would train the operator to ignore them."""
+    assert main._suggestion_caveat("references") == ""
+
+
+def test_the_two_caveats_can_never_collide() -> None:
+    """One helper answers for every type because the two classes are
+    disjoint -- the least-specific type is symmetric. A type in both would
+    silently get whichever branch is written first."""
+    assert LEAST_SPECIFIC_RELATION_TYPE not in ASYMMETRIC_RELATION_TYPES

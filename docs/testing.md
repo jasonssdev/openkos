@@ -830,6 +830,13 @@ not:
   particular are presented as `(direction model-suggested, unverified)`. That
   wording is the engine telling you it cannot vouch for the direction, not a
   defect. Rejecting those proposals is the intended use.
+- **`related_to` is an answer, not a failure.** It is presented as
+  `(connected; the documents do not say how)`, and its rationale will often
+  explain why the pair is *not* caused-by, depends-on, part-of and so on.
+  That is the type meaning what it says: the two documents are connected and
+  nothing in them supports a stronger claim. Accepting it writes exactly that
+  much into the graph, so the question to ask is whether the connection is
+  worth recording at all, not which specific relationship it stands for.
 - **A merged body may still be a staple — and the plan tells you which you are
   getting.** When the absorbed text is a meaningful share of the merged
   document, `merge` plans a reconciliation pass (one model call that rewrites

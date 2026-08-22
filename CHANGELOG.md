@@ -16,6 +16,20 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Added
 
+- **`related_to` says what it does not assert**
+  ([#802](https://github.com/jasonssdev/openkos/issues/802)). The listing
+  line, `--apply`'s preview and prompt, and `curate`'s Structure stage now
+  suffix the least-specific type with `(connected; the documents do not say
+  how)` — the same three surfaces, from the same helper that spells #778's
+  direction caveat, so a surface cannot carry one and miss the other.
+
+  The operator was shown `[related_to]` above a rationale explaining why the
+  pair is *not* caused-by, depends-on, part-of or any other specific type,
+  and asked to approve it, with nothing stating what approving it writes.
+  The caveat states the type's own meaning rather than warning about it: the
+  answer is correct — it is the rubric's honest response when no specific
+  type holds — and only the claim it records is weaker than a bare type
+  label implies.
 - **The identity judge is told what an identical Event title means**
   ([#796](https://github.com/jasonssdev/openkos/issues/796)). Two Events
   sharing one title are usually two sessions of a standing meeting, and the

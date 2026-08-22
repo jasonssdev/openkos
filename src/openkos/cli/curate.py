@@ -1153,13 +1153,15 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         # says so, and it is never bulk-acceptable.
         asymmetric = suggestion.suggested_type in ASYMMETRIC_RELATION_TYPES
         # #778: ONE spelling for the caveat, shared with suggest-relations'
-        # listing and --apply prompt via the same helper.
-        direction_caveat = cli_main._direction_caveat(suggestion.suggested_type)
+        # listing and --apply prompt via the same helper -- which since #802
+        # also answers for the least-specific type, so a surface cannot
+        # carry one caveat and miss the other.
+        caveat = cli_main._suggestion_caveat(suggestion.suggested_type)
         if not _confirm_item(
             ctx,
             "Structure",
             f"Relate {edge.source_id} -> {edge.target_id} "
-            f"[{suggestion.suggested_type}]{direction_caveat}? [y/N]",
+            f"[{suggestion.suggested_type}]{caveat}? [y/N]",
             # #508: the least-specific type asserts nothing beyond the
             # untyped link that already existed, so it still reaches a
             # human even in a bulk-accepted run; #624 extends the same
