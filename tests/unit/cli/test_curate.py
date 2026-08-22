@@ -4692,7 +4692,10 @@ def test_accept_structure_still_prompts_for_a_related_to_suggestion(
 
     assert result.exit_code == 0
     assert "Relate concepts/a -> concepts/b" not in result.stdout
-    assert "Relate concepts/a -> concepts/c [related_to]? [y/N]" in result.stdout
+    assert (
+        "Relate concepts/a -> concepts/c [related_to] "
+        "(connected; the documents do not say how)? [y/N]" in result.stdout
+    )
     assert "Structure: applied 1, skipped 1." in _lines(result.stdout)
     assert "  declined: concepts/a -> concepts/c [related_to]" in result.stdout
 

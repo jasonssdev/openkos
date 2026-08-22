@@ -100,6 +100,7 @@ from openkos.resolution.contradiction import (
 )
 from openkos.resolution.contradiction import Verdict as ContradictionVerdictValue
 from openkos.resolution.edge_typing import (
+    LEAST_SPECIFIC_RELATION_TYPE,
     EdgeSuggestion,
     EdgeSuggestionBatch,
     candidate_edges,
@@ -13236,19 +13237,38 @@ def _zero_edge_state_message(
     return none_survived.format(count=count)
 
 
-def _direction_caveat(suggested_type: str) -> str:
-    """#624's asymmetric-direction caveat, spelled ONCE (#778): `" (direction
-    model-suggested, unverified)"` when `suggested_type` is asymmetric, else
-    `""`. Shared by `suggest-relations`' listing, its `--apply` preview and
-    prompt, and `curate`'s Structure stage -- `docs/testing.md` documents
-    the wording as the contract wherever a suggested direction is
-    presented, and #778 was exactly one surface spelling it while the
-    other stayed silent."""
-    return (
-        " (direction model-suggested, unverified)"
-        if suggested_type in ASYMMETRIC_RELATION_TYPES
-        else ""
-    )
+def _suggestion_caveat(suggested_type: str) -> str:
+    """What a suggested type does NOT establish, spelled ONCE (#778).
+
+    Two caveats, one helper, because they are answered at the same moment
+    and by the same three surfaces -- `suggest-relations`' listing, its
+    `--apply` preview and prompt, and `curate`'s Structure stage. #778 was
+    exactly one surface spelling a caveat while another stayed silent, and
+    two helpers would let that happen again one caveat at a time.
+
+    - **Asymmetric types** carry #624's direction caveat. `docs/testing.md`
+      documents this wording as the contract wherever a suggested direction
+      is presented, so it is reproduced byte-for-byte.
+    - **The least-specific type** carries #802's. `related_to` is the
+      rubric's honest answer when no specific type holds -- "the two are
+      connected, and the documents do not support saying how" -- but the
+      operator saw `[related_to]` above a rationale explaining why it is
+      NOT any specific type, and was asked to approve it with nothing
+      saying what approving it asserts. The caveat says what the type
+      itself means, which is also why it is not a warning: the answer is
+      correct, and the graph edge it writes claims less than the reader of
+      a bare type label would assume.
+
+    A single `if/elif` is safe because the two classes are disjoint -- the
+    least-specific type is symmetric -- and a test pins that, so a future
+    asymmetric least-specific type cannot silently take whichever branch
+    happens to be written first.
+    """
+    if suggested_type in ASYMMETRIC_RELATION_TYPES:
+        return " (direction model-suggested, unverified)"
+    if suggested_type == LEAST_SPECIFIC_RELATION_TYPE:
+        return " (connected; the documents do not say how)"
+    return ""
 
 
 def _run_suggest_relations_apply(
@@ -13291,15 +13311,14 @@ def _run_suggest_relations_apply(
         # that most invites bulk application must not be the one surface
         # missing the documented warning. Rendered on the preview line
         # AND inside the consent prompt, mirroring curate exactly.
-        direction_caveat = _direction_caveat(result.suggested_type)
+        caveat = _suggestion_caveat(result.suggested_type)
         typer.echo(
-            f"[{result.suggested_type}] {edge.source_id} -> "
-            f"{edge.target_id}{direction_caveat}"
+            f"[{result.suggested_type}] {edge.source_id} -> {edge.target_id}{caveat}"
         )
         typer.echo(f"  rationale: {result.rationale}")
         if not curate_module._confirm(
             f"Relate {edge.source_id} -> {edge.target_id} "
-            f"[{result.suggested_type}]{direction_caveat}? [y/N]"
+            f"[{result.suggested_type}]{caveat}? [y/N]"
         ):
             skipped += 1
             declined.append(
@@ -13742,7 +13761,7 @@ def suggest_relations_cmd(
                 # it wherever a relation direction is presented.
                 typer.echo(
                     f"[{result.suggested_type}] {edge.source_id} -> "
-                    f"{edge.target_id}{_direction_caveat(result.suggested_type)}"
+                    f"{edge.target_id}{_suggestion_caveat(result.suggested_type)}"
                 )
                 typer.echo(f"  rationale: {result.rationale}")
             typer.echo()

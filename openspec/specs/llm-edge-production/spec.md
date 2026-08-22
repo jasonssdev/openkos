@@ -45,7 +45,24 @@ wording is the documented contract (`docs/testing.md`, Known issues) and
 spelling the caveat while the surface that most invites bulk application
 stayed silent was the defect. The spelling MUST come from one shared
 helper so the surfaces cannot drift. A symmetric type MUST NOT carry the
-suffix.
+direction suffix.
+
+The LEAST-SPECIFIC type (`edge_typing.LEAST_SPECIFIC_RELATION_TYPE`) MUST
+carry `(connected; the documents do not say how)` on the SAME three
+surfaces (issue #802). It is the rubric's honest answer when no specific
+type holds, so its rationale routinely explains why the pair is NOT any
+of the specific types -- and the operator was shown that explanation under
+a bare type label, with nothing stating what accepting it asserts. The
+caveat states the type's own meaning; it is not a warning, because the
+answer is correct and only the claim it writes is weaker than a bare label
+implies.
+
+Both caveats MUST come from ONE shared helper. Two helpers would let a
+surface carry one and miss the other, which is the #778 defect one caveat
+at a time. The two classes MUST stay disjoint -- the least-specific type
+is symmetric -- and that disjointness MUST be pinned by a test, so a
+future asymmetric least-specific type cannot silently take whichever
+branch is written first.
 
 #### Scenario: Verb lists every untyped edge with a valid suggestion
 
@@ -64,9 +81,17 @@ suffix.
 
 #### Scenario: A symmetric suggestion is unmarked
 
-- GIVEN an untyped edge whose suggestion is `related_to`
+- GIVEN an untyped edge whose suggestion is `references`
 - WHEN the suggestion verb runs
-- THEN no direction caveat is printed for it
+- THEN no caveat is printed for it
+
+#### Scenario: The least-specific suggestion states what it does not say
+
+- GIVEN an untyped edge whose suggestion is `related_to`
+- WHEN the suggestion verb runs (listing), and again with `--apply`, and
+  again through `curate`'s Structure stage
+- THEN each carries `(connected; the documents do not say how)` and none
+  carries the direction caveat
 
 #### Scenario: Verb performs zero writes
 
