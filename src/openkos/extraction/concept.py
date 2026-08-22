@@ -2233,14 +2233,61 @@ def _dedup_merged(results: list[ExtractionResult]) -> list[ExtractionResult]:
     return out
 
 
+OPTIONAL_CALL_REASK: Final = "reask"
+OPTIONAL_CALL_PARTICIPANT_CAPTURE: Final = "participant_capture"
+"""Stable identifiers for the two OPTIONAL extraction calls, named after the
+pass each one is (#828), and the prefix of every entry those calls
+contribute to `ExtractionReport.optional_call_failures`.
+
+Constants rather than literals for the reason `judge.JUDGE_FAILURE_*` are:
+a harness or a test pinning the wrong spelling of a diagnostic reports a
+silent zero, not an error. The two calls are named separately because they
+ask different questions with different prompts and fail for different
+reasons -- a runaway inside the participant capture on a long transcript is
+a different investigation from a re-ask that timed out on a short note."""
+
+
+@dataclass(frozen=True)
+class OptionalCallOutcome:
+    """What one OPTIONAL extraction call produced, cause included (#828).
+
+    ONE dataclass for BOTH `_reask_for_further_subjects` (#584) and
+    `_capture_further_participants` (#668 design D6), because they are the
+    same KIND of call: an extra ask sitting on top of an already-complete
+    result, additive only, whose own failure must degrade to "added
+    nothing" rather than destroy validated extraction work. A second,
+    identical shape per call site would be two places to keep the degrade
+    contract honest.
+
+    `additions` carries exactly what those two functions used to return --
+    the validated, filtered candidates, empty when there are none -- so the
+    contract that failure costs the caller nothing is unchanged.
+
+    `failure` names WHY the call added nothing, or `None` when the call
+    ran. The distinction is the whole point: empty additions with `None` is
+    the answer both prompts name as CORRECT and expected ("nothing further
+    here"), while empty additions with a cause is a paid call that produced
+    nothing -- #828 measured one such runaway costing 222 seconds against
+    the 8192-token generation ceiling, indistinguishable in a run's output
+    from an honest "found nothing".
+    """
+
+    additions: list[ExtractionResult]
+    failure: str | None = None
+
+
 def _reask_for_further_subjects(
     source_text: str, source_title: str, kept: ExtractionResult, llm: LLMBackend
-) -> list[ExtractionResult]:
-    """One re-ask call's validated ADDITIONS (#584), or `[]`.
+) -> OptionalCallOutcome:
+    """One re-ask call's validated ADDITIONS (#584), and why it added
+    nothing when a backend failure is why (#828).
 
-    Never raises. The re-ask is an OPTIONAL extra call sitting on top of an
-    already-complete result, which is `judge.select`'s situation exactly
-    (design D7), so it takes the same answer: a backend failure degrades to
+    Never raises, and the additions are EMPTY on failure -- both halves of
+    the guard below are unchanged by #828, which only stopped discarding the
+    cause on the way out. The re-ask is an OPTIONAL extra call sitting on
+    top of an already-complete result, which is `judge.select`'s situation
+    exactly (design D7), so it takes the same answer: a backend failure
+    degrades to
     "found nothing", never to losing the object the first pass produced. The
     module's propagate-unswallowed contract governs the extraction calls
     that PRODUCE the result; letting a bonus call destroy one would break the
@@ -2277,22 +2324,34 @@ def _reask_for_further_subjects(
     """
     try:
         reply = llm.chat(_build_reask_messages(source_text, source_title, kept.title))
-    except Exception:  # broad, and for the same reason `judge.select` is:
-        # the re-ask's own failure must never destroy already-validated
+    except Exception as exc:  # broad, and for the same reason `judge.select`
+        # is: the re-ask's own failure must never destroy already-validated
         # extraction work. Whatever `llm.chat` raises -- the `OllamaError`
         # family or anything else -- means only "this ask added nothing".
-        return []
+        #
+        # The TYPE is carried out (#828) and the message is NOT, exactly as
+        # `judge._select_once` carries the judge's: a type separates a
+        # timeout from a refusal from a generation cap, which is the
+        # distinction that changes what an operator does, while a message
+        # can carry a host, a path, or a model's own text into a line this
+        # repo also writes to a Source's frontmatter.
+        return OptionalCallOutcome(
+            additions=[],
+            failure=f"{OPTIONAL_CALL_REASK}: {type(exc).__name__}",
+        )
     results = [
         result
         for result in (_validate(item) for item in parsing.extract_json_items(reply))
         if result is not None
     ]
     results = _strip_ungrounded_expansions(results, source_text=source_text)
-    return [
-        result
-        for result in results
-        if not _restates_source_title(result, source_title=source_title)
-    ]
+    return OptionalCallOutcome(
+        additions=[
+            result
+            for result in results
+            if not _restates_source_title(result, source_title=source_title)
+        ]
+    )
 
 
 _REASK_LOW_YIELD_THRESHOLD: Final = 2000
@@ -2317,14 +2376,17 @@ def _add_reask_subjects(
     source_title: str,
     llm: LLMBackend,
     on_progress: ProgressHook | None = None,
-) -> tuple[list[ExtractionResult], int, tuple[str, ...]]:
+) -> tuple[list[ExtractionResult], int, tuple[str, ...], str | None]:
     """Bounded re-ask on a sole object that restates the source title (#584),
     or on a sole object from a long source whatever its title (#642).
 
-    Returns `(objects, reask_runs, added_titles)`. When the trigger does not
-    fire, `results` is handed straight back with `(0, ())` and NO call is
-    made -- the re-ask must not fire on every source, which would silently
-    double extraction cost.
+    Returns `(objects, reask_runs, added_titles, failure)`. When the trigger
+    does not fire, `results` is handed straight back with `(0, (), None)`
+    and NO call is made -- the re-ask must not fire on every source, which
+    would silently double extraction cost. `failure` is `None` there for a
+    stronger reason than "nothing went wrong": a call that was never spent
+    cannot have failed, which is the same rule `judge_failure_causes` keeps
+    for a judge that was never invoked.
 
     The trigger's first arm is the collapse #584 measured: the FINAL,
     filtered list is exactly one object AND that object restates the source's
@@ -2403,15 +2465,15 @@ def _add_reask_subjects(
             or len(source_text) >= _REASK_LOW_YIELD_THRESHOLD
         )
     ):
-        return results, 0, ()
+        return results, 0, (), None
     # Reported HERE rather than at the call site, past the trigger: the
-    # helper returns `(0, ())` and makes no call when the trigger does not
-    # fire, so a label printed before this point would name a wait that
+    # helper returns `(0, (), None)` and makes no call when the trigger does
+    # not fire, so a label printed before this point would name a wait that
     # never happens (#701).
     _report(on_progress, "re-asking for a further subject")
-    added = _reask_for_further_subjects(source_text, source_title, results[0], llm)
-    combined = _dedup_merged(results + added)
-    return combined, 1, tuple(result.title for result in combined[1:])
+    outcome = _reask_for_further_subjects(source_text, source_title, results[0], llm)
+    combined = _dedup_merged(results + outcome.additions)
+    return combined, 1, tuple(result.title for result in combined[1:]), outcome.failure
 
 
 _PARTICIPANT_CAPTURE_SYSTEM_PROMPT = (
@@ -2516,12 +2578,15 @@ def _build_participant_capture_messages(
 
 def _capture_further_participants(
     source_text: str, source_title: str, llm: LLMBackend
-) -> list[ExtractionResult]:
+) -> OptionalCallOutcome:
     """One scoped participant-capture call's validated ADDITIONS (#668
-    design D6), or `[]`. Never raises -- mirrors `_reask_for_further_subjects`
-    (#584): an optional extra call sitting on top of an already-complete
-    result must degrade to "found nothing" on any backend failure, never
-    destroy work the first pass already produced.
+    design D6), and why it added nothing when a backend failure is why
+    (#828). Never raises, and the additions are EMPTY on failure -- mirrors
+    `_reask_for_further_subjects` (#584) in both halves: an optional extra
+    call sitting on top of an already-complete result must degrade to
+    "found nothing" on any backend failure, never destroy work the first
+    pass already produced. #828 changed only what happens to the CAUSE,
+    which was discarded and is now returned.
 
     Only `Person`/`Organization` candidates survive this function, even
     though the prompt's own closed two-value vocabulary already asks for
@@ -2530,17 +2595,26 @@ def _capture_further_participants(
     returns anyway is dropped here rather than trusted."""
     try:
         reply = llm.chat(_build_participant_capture_messages(source_text, source_title))
-    except Exception:  # broad, and for the same reason the #584 re-ask is:
-        # a bonus call's own failure must never destroy already-validated
-        # extraction work.
-        return []
+    except Exception as exc:  # broad, and for the same reason the #584
+        # re-ask is: a bonus call's own failure must never destroy
+        # already-validated extraction work.
+        #
+        # TYPE only (#828), never `str(exc)` -- see the same guard in
+        # `_reask_for_further_subjects` for why the message must not cross
+        # this boundary.
+        return OptionalCallOutcome(
+            additions=[],
+            failure=f"{OPTIONAL_CALL_PARTICIPANT_CAPTURE}: {type(exc).__name__}",
+        )
     results = [
         result
         for result in (_validate(item) for item in parsing.extract_json_items(reply))
         if result is not None
     ]
     results = _strip_ungrounded_expansions(results, source_text=source_text)
-    return [result for result in results if result.type in _PARTICIPANT_TYPES]
+    return OptionalCallOutcome(
+        additions=[result for result in results if result.type in _PARTICIPANT_TYPES]
+    )
 
 
 def _add_participant_capture(
@@ -2551,7 +2625,7 @@ def _add_participant_capture(
     meeting_shaped: bool,
     llm: LLMBackend,
     on_progress: ProgressHook | None = None,
-) -> tuple[list[ExtractionResult], int, tuple[str, ...]]:
+) -> tuple[list[ExtractionResult], int, tuple[str, ...], str | None]:
     """Scoped Person/Organization capture pass (#668 design D6), gated on
     the SAME `_is_meeting_shaped` predicate `extract_concept_union`
     already computes for judge re-admission (design D3) -- never a second,
@@ -2574,25 +2648,33 @@ def _add_participant_capture(
     narrower trigger tied to the existing candidate set would simply not
     fire on the sources this pass is for.
 
-    Returns `(objects, capture_runs, added_titles)`. `capture_runs` is `1`
-    when the pass fired (whether or not it found anything) and `0` when
-    `meeting_shaped` is false -- mirrors `reask_runs`'s own "spent a call"
-    accounting. `results` carries no internal duplicate keys by
+    Returns `(objects, capture_runs, added_titles, failure)`. `capture_runs`
+    is `1` when the pass fired (whether or not it found anything) and `0`
+    when `meeting_shaped` is false -- mirrors `reask_runs`'s own "spent a
+    call" accounting, and `failure` (#828) is what tells the two ways of
+    finding nothing apart. It is `None` on the ungated path for the same
+    reason it is in `_add_reask_subjects`: a call that was never spent
+    cannot have failed. `results` carries no internal duplicate keys by
     construction at this call site (already deduped by the branch above),
     so `_dedup_merged` keeps every original entry at its original position
     and appends only the surviving new ones after it -- `added_titles` can
     therefore be read off the tail of `combined` exactly like the #584
     re-ask reads its own single-original tail."""
     if not meeting_shaped:
-        return results, 0, ()
+        return results, 0, (), None
     # Past the gate, for the same reason the re-ask reports past its
     # trigger: a non-meeting-shaped source never spends this call (#701).
     _report(on_progress, "capturing further participants")
-    added = _capture_further_participants(source_text, source_title, llm)
-    if not added:
-        return results, 1, ()
-    combined = _dedup_merged(results + added)
-    return combined, 1, tuple(result.title for result in combined[len(results) :])
+    outcome = _capture_further_participants(source_text, source_title, llm)
+    if not outcome.additions:
+        return results, 1, (), outcome.failure
+    combined = _dedup_merged(results + outcome.additions)
+    return (
+        combined,
+        1,
+        tuple(result.title for result in combined[len(results) :]),
+        outcome.failure,
+    )
 
 
 @dataclass(frozen=True)
@@ -2684,11 +2766,22 @@ class ExtractionReport:
     because it is a real model call the user pays for, and a silent extra
     call is the kind of cost this project surfaces rather than hides.
 
-    `1` with an empty `reask_added_titles` covers both "the second ask
+    `1` with an empty `reask_added_titles` still covers both "the second ask
     honestly found nothing further" -- the answer the re-ask prompt names as
-    correct and expected -- and a re-ask whose backend call failed. The two
-    are deliberately not distinguished here: neither changed the objects,
-    and both spent the call."""
+    correct and expected -- and a re-ask whose backend call failed, because
+    neither changed the objects and both spent the call. Those two were
+    deliberately not distinguished ANYWHERE before #828; that half of the
+    choice is reversed, and `optional_call_failures` is where the two now
+    come apart. This field keeps its own reading: it is a COST, and the cost
+    is identical either way.
+
+    Why the calculus changed. The old reasoning held while a failure was
+    assumed to be a cheap non-answer. #828 measured what one actually costs:
+    an Ollama runaway against the 8192-token generation ceiling, 222 seconds
+    burned, producing nothing -- and reported to the operator as a bonus call
+    that honestly found nothing further. A paid call that failed and an
+    honest "nothing here" are the same OUTCOME and opposite EVENTS, and a
+    batch is exactly where the difference is unaffordable to hide."""
     reask_added_titles: tuple[str, ...] = ()
     """Titles the sole-twin re-ask CONTRIBUTED, in re-ask reply order --
     always `()` when the trigger never fired. The object the first pass
@@ -2779,9 +2872,10 @@ class ExtractionReport:
     #584 sole-twin re-ask -- a different call, with a different prompt and
     a different trigger. Mirrors `reask_runs`'s own accounting: `1` with an
     empty `participant_capture_added_titles` covers both "the call honestly
-    found nothing further" and a call whose backend failed; the two are not
-    distinguished here, matching `_reask_for_further_subjects`'s own
-    fail-degrades-to-nothing contract."""
+    found nothing further" and a call whose backend failed, because this
+    field reports the COST and the cost is the same either way. Since #828
+    the two are told apart in `optional_call_failures`, not here -- see
+    `reask_runs` for why that half of the earlier choice was reversed."""
     participant_capture_added_titles: tuple[str, ...] = ()
     """Titles the scoped participant-capture pass (#668 design D6)
     CONTRIBUTED, in the pass's own reply order -- always `()` when the pass
@@ -2811,6 +2905,37 @@ class ExtractionReport:
     Defaulted so every existing construction site keeps working unchanged,
     and `()` is the honest default -- it claims no disclosure, which is
     what an untouched site is entitled to claim."""
+    optional_call_failures: tuple[str, ...] = ()
+    """Why each OPTIONAL extraction call added nothing, when a backend
+    failure is why (#828). One entry per FAILED call, shaped
+    `"<call>: <ExceptionType>"` -- the call named by `OPTIONAL_CALL_REASK`
+    or `OPTIONAL_CALL_PARTICIPANT_CAPTURE`, and the exception by TYPE only
+    (never its message, for `judge._select_once`'s reason).
+
+    `reask_runs` and `participant_capture_runs` name the COST -- a call was
+    spent -- and this names the CAUSE when that call produced nothing. #828
+    is exactly the gap between them: `_reask_for_further_subjects` and
+    `_capture_further_participants` both swallowed every backend failure
+    into `[]`, which reads identically to the answer their own prompts name
+    as correct and expected, so an Ollama runaway that burned 222 seconds
+    against the 8192-token generation ceiling reported as "this bonus call
+    honestly found nothing".
+
+    NOT redundant with the two run counters, in both directions. A run
+    counter of `1` is populated whether the call succeeded or failed, so it
+    cannot separate them; and this stays EMPTY when a call was never spent
+    (the re-ask trigger did not fire, the source was not meeting-shaped),
+    because a call that never ran failed at nothing -- the same rule
+    `judge_failure_causes` keeps for a judge that was never invoked.
+
+    Also empty, and this is the common healthy case, whenever every optional
+    call that DID run answered: an empty additions list beside no cause is
+    the honest "nothing further here" both prompts ask for.
+
+    Ordered by when the pipeline spends the calls -- the #584 re-ask first,
+    the #668 participant capture second -- so the sequence reads the way the
+    run happened. Defaulted so every existing construction site keeps
+    working unchanged."""
 
 
 @dataclass(frozen=True)
@@ -2965,7 +3090,7 @@ def extract_concept(
     # #584: the list is final and filtered here, which is the only place the
     # trigger's "the source returned exactly one object" is a true statement
     # about the source. Additions then take the same cap as everything else.
-    results, reask_runs, reask_added_titles = _add_reask_subjects(
+    results, reask_runs, reask_added_titles, reask_failure = _add_reask_subjects(
         results,
         source_text=source_text,
         source_title=source_title,
@@ -3002,6 +3127,14 @@ def extract_concept(
             # selects, so wiring only the union path would store objects
             # quoting nothing and surface nothing here.
             unevidenced_titles=_unevidenced_titles(retained, source_text=source_text),
+            # #828, and reported here for that same reason: the re-ask is
+            # the ONE optional call this path spends, and a runaway inside
+            # it costs exactly what it costs on the union path. The
+            # participant capture never runs here, so it can contribute no
+            # entry -- the tuple is single-sourced rather than padded.
+            optional_call_failures=(
+                (reask_failure,) if reask_failure is not None else ()
+            ),
         ),
     )
 
@@ -3277,7 +3410,7 @@ def extract_concept_union(
     # single-run path's additions take its cap -- a re-ask finding the judge
     # never saw could not be selected against, and would leave two
     # inconsistent notions of what the candidate set was.
-    merged, reask_runs, reask_added_titles = _add_reask_subjects(
+    merged, reask_runs, reask_added_titles, reask_failure = _add_reask_subjects(
         merged,
         source_text=source_text,
         source_title=source_title,
@@ -3293,15 +3426,31 @@ def extract_concept_union(
     # `_add_participant_capture` for why phase 1a's re-admission alone
     # could not fix a general pass that never proposed a participant to
     # re-admit in the first place.
-    merged, participant_capture_runs, participant_capture_added_titles = (
-        _add_participant_capture(
-            merged,
-            source_text=source_text,
-            source_title=source_title,
-            meeting_shaped=meeting_shaped,
-            llm=llm,
-            on_progress=on_progress,
-        )
+    (
+        merged,
+        participant_capture_runs,
+        participant_capture_added_titles,
+        participant_capture_failure,
+    ) = _add_participant_capture(
+        merged,
+        source_text=source_text,
+        source_title=source_title,
+        meeting_shaped=meeting_shaped,
+        llm=llm,
+        on_progress=on_progress,
+    )
+
+    # #828: both optional calls have now been spent-or-skipped, so their
+    # causes are complete here -- ahead of the judge, and ahead of BOTH
+    # return sites below, including the empty-union early return that also
+    # paid for them. Ordered by when the pipeline spends them (re-ask, then
+    # participant capture) rather than by severity: the sequence is what
+    # tells an operator which call the wait belonged to, and there is no
+    # severity to rank -- each entry is one bonus call that added nothing.
+    optional_call_failures = tuple(
+        failure
+        for failure in (reask_failure, participant_capture_failure)
+        if failure is not None
     )
 
     pre_judge_dropped = max(0, len(merged) - _MAX_JUDGE_CANDIDATES)
@@ -3326,6 +3475,7 @@ def extract_concept_union(
                 recombined_dropped_titles=recombined_dropped,
                 participant_capture_runs=participant_capture_runs,
                 participant_capture_added_titles=participant_capture_added_titles,
+                optional_call_failures=optional_call_failures,
             ),
         )
 
@@ -3493,5 +3643,6 @@ def extract_concept_union(
             participant_capture_added_titles=participant_capture_added_titles,
             unevidenced_titles=_unevidenced_titles(retained, source_text=source_text),
             judge_failure_causes=judge_failure_causes,
+            optional_call_failures=optional_call_failures,
         ),
     )

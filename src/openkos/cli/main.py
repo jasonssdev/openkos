@@ -3529,6 +3529,54 @@ def _reask_notice(report: ExtractionReport) -> str | None:
     )
 
 
+def _optional_call_failure_notice(report: ExtractionReport) -> str | None:
+    """Name the optional extraction calls that added nothing BECAUSE their
+    backend failed (#828), or `None` when none did -- the common case.
+
+    `_reask_notice` and the participant-capture accounting report the COST
+    of these calls, and both read the same whether the call answered or
+    never got an answer at all. That is the gap: `_reask_for_further_subjects`
+    and `_capture_further_participants` swallowed every backend failure into
+    `[]`, so a runaway that burned 222 seconds against the 8192-token
+    generation ceiling printed as a bonus call that honestly found nothing
+    further. An operator watching a batch could not see it.
+
+    ADVISORY, and worded to say so: nothing degraded beyond the bonus call
+    adding nothing, no object was lost, and no `extraction_notice` is
+    stamped on the Source. The degrade vocabulary belongs to the judge
+    notices, which describe a source whose objects skipped quality
+    selection; borrowing it here would send an operator looking for damage
+    that is not there.
+
+    Its OWN function and its OWN call site, deliberately NOT a branch inside
+    `_judge_failure_notice`. That function's branch ordering is documented
+    as load-bearing -- its recovered-retry branch is last precisely so it
+    cannot swallow a real degrade -- and it is reached through an `or`
+    chain, so any branch added there would suppress a sibling notice.
+
+    Every entry is named, with no `_CAP_NOTICE_TITLE_LIMIT` truncation. The
+    bound is structural rather than a count written down here: `extraction`
+    contributes at most ONE entry per OPTIONAL call -- the calls
+    `concept.OPTIONAL_CALL_REASK` and
+    `concept.OPTIONAL_CALL_PARTICIPANT_CAPTURE` name -- so the tuple's length
+    is the number of those calls and nothing a source's content can inflate.
+    That, not a literal two, is what rules out the terminal-flooding case
+    `_CAP_NOTICE_TITLE_LIMIT` exists for; a cap here would only hide one of
+    the calls this notice exists to tell apart. A later third optional call
+    therefore widens this line by exactly one NAMED entry, which is the
+    intended behavior and is pinned rather than assumed -- see
+    `test_optional_call_failure_notice_names_every_entry_it_is_given`.
+    """
+    if not report.optional_call_failures:
+        return None
+    failures = report.optional_call_failures
+    return (
+        f"{len(failures)} optional extraction call(s) failed and added "
+        f"nothing ({', '.join(failures)}); advisory only -- the extracted "
+        "objects are unaffected and the Source is not marked"
+    )
+
+
 def _sole_object_notice(report: ExtractionReport) -> str | None:
     """Render the honest-degrade notice for a source whose SOLE derived
     object restates it (#585), or `None` -- the common case.
@@ -4085,6 +4133,17 @@ def _stage_derived_objects(
     reask_notice = _reask_notice(outcome.report)
     if reask_notice is not None:
         typer.echo(f"openkos ingest: {reask_notice}", err=True)
+
+    # #828: right after the re-ask line and still ahead of the judge, which
+    # is where BOTH optional calls happen -- the re-ask feeds the merged
+    # candidate list, the participant capture joins it -- so the notices
+    # keep reading in the order the pipeline produced them. It qualifies
+    # the line above whenever the re-ask was the call that failed: that one
+    # says a call was spent and found nothing further, and this one says
+    # the call never got an answer at all.
+    optional_call_notice = _optional_call_failure_notice(outcome.report)
+    if optional_call_notice is not None:
+        typer.echo(f"openkos ingest: {optional_call_notice}", err=True)
 
     # The pre-judge ceiling fires FIRST of all: it cut candidates before
     # the judge ever saw them, so it renders ahead of what the judge did.

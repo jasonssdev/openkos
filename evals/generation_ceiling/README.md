@@ -52,10 +52,14 @@ its own right:
 
 Only `_extract_once` can produce a `raised`. Every other call swallows its own
 backend failures by contract — `judge.select`'s D7 fail-closed rule, and the
-`except Exception: return []` in `_reask_for_further_subjects` and
-`_capture_further_participants`. A cut-off judge reply silently becomes
+broad `except Exception` in `_reask_for_further_subjects` and
+`_capture_further_participants`. A cut-off judge reply becomes
 `judge_status="failed"` and the run keeps its **full unfiltered candidate set**;
-a cut-off participant pass silently finds nobody.
+a cut-off participant pass finds nobody.
+
+Since #828 the last two name the cause on `ExtractionReport.optional_call_failures`
+instead of discarding it, so a cut-off bonus call is no longer silent outside
+this probe. It still does not raise, so nothing below changes.
 
 Those runs read as clean. A probe that counted only raised exceptions would
 report them as zero — so the ledger records `done_reason` per call, off the raw

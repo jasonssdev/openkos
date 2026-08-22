@@ -26,7 +26,7 @@ import pytest
 from openkos.extraction import concept as concept_mod
 from openkos.extraction import judge as judge_mod
 from openkos.llm.base import Message
-from openkos.llm.ollama import OllamaUnavailable
+from openkos.llm.ollama import OllamaGenerationCapped, OllamaUnavailable
 from openkos.model.types import CLASSIFIABLE_TYPES
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -6687,3 +6687,258 @@ def test_a_judge_that_never_ran_reports_no_causes() -> None:
 
     assert outcome.report.judge_status == "skipped"
     assert outcome.report.judge_failure_causes == ()
+
+
+# --- an optional call names WHY it added nothing (#828) ---------------------
+#
+# `_reask_for_further_subjects` and `_capture_further_participants` both
+# collapsed every backend failure into `[]`, which is byte-identical to the
+# answer their own prompts name as correct and expected -- "nothing further
+# here". #828 measured an Ollama runaway hitting the 8192-token generation
+# ceiling inside one of them: 222 seconds paid, and the run reported nothing
+# at all. This is the gap #795 closed for the judge, in the two places that
+# still had it, and the degrade contract those two functions are built on is
+# unchanged: the additions are still empty and the exception still never
+# propagates.
+
+_MEETING_TITLE = "Weekly platform meeting"
+"""Meeting-shaped by `_MEETING_SHAPED_TITLE_RE`, so the participant-capture
+pass fires on it and `extract_concept_union` spends BOTH optional calls."""
+
+
+def _long_meeting_text() -> str:
+    """At least `_REASK_LOW_YIELD_THRESHOLD` chars and well under
+    `_CHUNK_THRESHOLD`: long enough for the #642 low-yield re-ask arm to
+    trigger on a sole object, short enough to keep the unchunked two-run
+    union path (and therefore a countable call sequence)."""
+    line = "The team reviewed the nightly backup pipeline once again. "
+    text = line * 40
+    assert len(text) >= concept_mod._REASK_LOW_YIELD_THRESHOLD
+    assert len(text) < concept_mod._CHUNK_THRESHOLD
+    return text
+
+
+_SOLE_SUBJECT_ITEM = (
+    '{"type": "Concept", "title": "Backup Encryption", '
+    '"description": "Nightly backups are encrypted at rest.", "body": ""}'
+)
+"""One object whose title neither restates `_MEETING_TITLE` nor matches
+`_MEETING_SHAPED_TITLE_RE`, so it survives every filter and leaves the
+merged list at exactly one candidate -- the re-ask trigger, and the
+single-candidate union that skips the judge call entirely (#644)."""
+
+
+def _kept_subject() -> "concept_mod.ExtractionResult":
+    return concept_mod.ExtractionResult(
+        type="Concept",
+        title="Backup Encryption",
+        description="Nightly backups are encrypted at rest.",
+        body="",
+    )
+
+
+def test_the_reask_names_the_exception_type_when_the_backend_fails() -> None:
+    """The cause the pre-#828 `except Exception: return []` destroyed."""
+    llm = _SequencedLLM([OllamaUnavailable("ollama is not running")])
+
+    outcome = concept_mod._reask_for_further_subjects(
+        _long_meeting_text(), _MEETING_TITLE, _kept_subject(), llm
+    )
+
+    assert outcome.failure == f"{concept_mod.OPTIONAL_CALL_REASK}: OllamaUnavailable"
+
+
+def test_the_reask_reports_no_failure_when_the_call_succeeds() -> None:
+    """`None` means the call ran, so an empty `additions` beside it is the
+    honest "found nothing further" the re-ask prompt asks for."""
+    llm = _SequencedLLM([_array(_CONCEPT_ITEM)])
+
+    outcome = concept_mod._reask_for_further_subjects(
+        _long_meeting_text(), _MEETING_TITLE, _kept_subject(), llm
+    )
+
+    assert outcome.failure is None
+    assert [result.title for result in outcome.additions] == ["Stoicism"]
+
+
+def test_the_reask_still_adds_nothing_and_never_raises_when_the_backend_fails() -> None:
+    """The guard the whole #584 design rests on, unchanged by #828: a bonus
+    call's failure must never destroy the object the first pass produced,
+    so it degrades to empty additions and the exception stays inside."""
+    llm = _SequencedLLM([OllamaGenerationCapped("generation hit the ceiling")])
+
+    outcome = concept_mod._reask_for_further_subjects(
+        _long_meeting_text(), _MEETING_TITLE, _kept_subject(), llm
+    )
+
+    assert outcome.additions == []
+
+
+def test_the_participant_capture_names_the_exception_type_when_it_fails() -> None:
+    llm = _SequencedLLM([OllamaUnavailable("ollama is not running")])
+
+    outcome = concept_mod._capture_further_participants(
+        _long_meeting_text(), _MEETING_TITLE, llm
+    )
+
+    assert outcome.failure == (
+        f"{concept_mod.OPTIONAL_CALL_PARTICIPANT_CAPTURE}: OllamaUnavailable"
+    )
+
+
+def test_the_participant_capture_reports_no_failure_when_the_call_succeeds() -> None:
+    llm = _SequencedLLM([_array(_PERSON_ITEM)])
+
+    outcome = concept_mod._capture_further_participants(
+        _long_meeting_text(), _MEETING_TITLE, llm
+    )
+
+    assert outcome.failure is None
+    assert [result.title for result in outcome.additions] == ["Epictetus"]
+
+
+def test_the_participant_capture_adds_nothing_and_never_raises_when_it_fails() -> None:
+    llm = _SequencedLLM([OllamaGenerationCapped("generation hit the ceiling")])
+
+    outcome = concept_mod._capture_further_participants(
+        _long_meeting_text(), _MEETING_TITLE, llm
+    )
+
+    assert outcome.additions == []
+
+
+def test_an_optional_call_records_the_exception_type_and_never_its_message() -> None:
+    """#795's rule, binding here for the same reason: the TYPE separates a
+    timeout from a refusal, which is what changes an operator's next move,
+    while a MESSAGE can carry a host, a path, or a model's own text into a
+    line this repo also writes to a Source's frontmatter. A switch to
+    `str(exc)` fails here and nowhere else."""
+    leaky = OllamaUnavailable(
+        "cannot reach http://192.168.1.42:11434/api/generate while reading "
+        "/Users/someone/private/notes.md"
+    )
+
+    outcomes = (
+        concept_mod._reask_for_further_subjects(
+            _long_meeting_text(),
+            _MEETING_TITLE,
+            _kept_subject(),
+            _SequencedLLM([leaky]),
+        ),
+        concept_mod._capture_further_participants(
+            _long_meeting_text(), _MEETING_TITLE, _SequencedLLM([leaky])
+        ),
+    )
+
+    for outcome in outcomes:
+        assert outcome.failure is not None
+        assert "OllamaUnavailable" in outcome.failure
+        assert "192.168.1.42" not in outcome.failure
+        assert "/Users/someone/private/notes.md" not in outcome.failure
+        assert "cannot reach" not in outcome.failure
+
+
+def test_union_carries_both_optional_call_failures_in_pipeline_order() -> None:
+    """One sole-object, meeting-shaped source spends BOTH optional calls,
+    and both fail with DIFFERENT types -- so the order is readable and a
+    single collapsed entry would be visible.
+
+    The order is the order the pipeline spends them: the #584 re-ask feeds
+    the merged candidate list first, the #668 participant capture second.
+    """
+    llm = _SequencedLLM(
+        [
+            _array(_SOLE_SUBJECT_ITEM),
+            _array(_SOLE_SUBJECT_ITEM),
+            OllamaUnavailable("ollama is not running"),
+            OllamaGenerationCapped("generation hit the ceiling"),
+        ]
+    )
+
+    outcome = concept_mod.extract_concept_union(
+        _long_meeting_text(), source_title=_MEETING_TITLE, llm=llm
+    )
+
+    assert outcome.report.optional_call_failures == (
+        f"{concept_mod.OPTIONAL_CALL_REASK}: OllamaUnavailable",
+        f"{concept_mod.OPTIONAL_CALL_PARTICIPANT_CAPTURE}: OllamaGenerationCapped",
+    )
+    assert [result.title for result in outcome.objects] == ["Backup Encryption"]
+
+
+def test_union_leaves_the_optional_call_failures_empty_when_neither_fails() -> None:
+    """Both calls RAN and both honestly found nothing: that is the answer
+    their prompts name as correct, and it must stay distinguishable from a
+    backend that never answered."""
+    llm = _SequencedLLM(
+        [_array(_SOLE_SUBJECT_ITEM), _array(_SOLE_SUBJECT_ITEM), "[]", "[]"]
+    )
+
+    outcome = concept_mod.extract_concept_union(
+        _long_meeting_text(), source_title=_MEETING_TITLE, llm=llm
+    )
+
+    assert outcome.report.reask_runs == 1
+    assert outcome.report.participant_capture_runs == 1
+    assert outcome.report.optional_call_failures == ()
+
+
+def test_the_empty_union_early_return_carries_the_optional_call_failure() -> None:
+    """`extract_concept_union` has TWO return sites, and the empty-union one
+    (`judge_input` empty, no judge call spent) paid for the participant
+    capture exactly as the judged return did.
+
+    Both other union tests script a non-empty union, so neither reaches this
+    branch: wiring the cause into the judged return alone would leave this
+    one computing `optional_call_failures` and dropping it on the way out --
+    the "computed but never read" defect #690 already cost a PR, cited by
+    the single-run path's own test above and binding here for the same
+    reason.
+
+    The shape that reaches it: a meeting-shaped source whose two extraction
+    passes yield no valid candidate at all. The re-ask never fires (its
+    trigger reads "exactly one object"), while the participant capture
+    fires UNCONDITIONALLY on a meeting-shaped source -- so the run spends a
+    real bonus call, that call fails, and the report it returns is the only
+    place that failure can still be named."""
+    llm = _SequencedLLM(["[]", "[]", OllamaGenerationCapped("hit the ceiling")])
+
+    outcome = concept_mod.extract_concept_union(
+        _long_meeting_text(), source_title=_MEETING_TITLE, llm=llm
+    )
+
+    assert outcome.objects == []
+    # Three calls, not two: the third IS the spent participant capture, and
+    # an assertion on the report alone could not tell a swallowed failure
+    # from a call that was never made.
+    assert len(llm.calls) == 3
+    assert outcome.report.reask_runs == 0
+    assert outcome.report.participant_capture_runs == 1
+    assert outcome.report.judge_status == "skipped"
+    assert outcome.report.optional_call_failures == (
+        f"{concept_mod.OPTIONAL_CALL_PARTICIPANT_CAPTURE}: OllamaGenerationCapped",
+    )
+
+
+def test_the_single_run_path_carries_the_reask_failure_too() -> None:
+    """`cli/main.py` picks `extract_concept` whenever `union_judge` is off,
+    so wiring only the union path would spend the call and report nothing
+    there -- the "computed but never read" defect #690 already cost a PR."""
+    llm = _SequencedLLM(
+        [_array(_SOLE_SUBJECT_ITEM), OllamaGenerationCapped("hit the ceiling")]
+    )
+
+    outcome = concept_mod.extract_concept(
+        _long_meeting_text(), source_title=_MEETING_TITLE, llm=llm
+    )
+
+    assert outcome.report.optional_call_failures == (
+        f"{concept_mod.OPTIONAL_CALL_REASK}: OllamaGenerationCapped",
+    )
+
+
+def test_optional_call_failures_defaults_to_empty_on_a_bare_report() -> None:
+    """Defaulted so every existing construction site keeps working, and `()`
+    is the honest default: it claims no failure, which is what an untouched
+    site is entitled to claim."""
+    assert concept_mod.ExtractionReport().optional_call_failures == ()
