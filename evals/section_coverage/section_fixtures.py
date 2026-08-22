@@ -81,6 +81,22 @@ class Fixture:
     text: str
     must_fire: tuple[str, ...]
     must_stay_quiet: tuple[str, ...]
+    reported_objects: tuple[str, ...] = ()
+    """The objects the reported run produced, as `type: title`.
+
+    The other half of the same adjudicated outcome `must_fire` records, and
+    the half an ABLATION needs: `must_fire` says which sections produced
+    nothing, this says what the run produced instead. The probe's `--ablate`
+    mode keeps only these objects out of a stored healthy run and scores the
+    remainder, so the reported failure is reconstructed from the model's own
+    real texts rather than from section bodies handed back to themselves.
+
+    `type: title` rather than the object texts, because this repo does not
+    hold the 0.2.8 run's texts -- only which objects came out of it. Empty
+    for a fixture whose reported run nobody itemised, and `--ablate` then
+    says so rather than ablating against an empty set, which would delete
+    every object and report a total loss as a finding.
+    """
 
 
 PREAMBLE: Final = "(preamble)"
@@ -115,6 +131,14 @@ Technical lead: Marta Ruiz. Product: Tom Becker.
 """,
     must_fire=("## Storage", "## Components"),
     must_stay_quiet=("# Helios Data Platform (HDP) — Overview", "## Ownership"),
+    # The three the 0.2.8 run produced: one Concept from the title section
+    # and two Person from `## Ownership`. Nothing from `## Storage` or
+    # `## Components`, which is `must_fire` said from the object side.
+    reported_objects=(
+        "Concept: Helios Data Platform",
+        "Person: Marta Ruiz",
+        "Person: Tom Becker",
+    ),
 )
 
 
@@ -144,6 +168,11 @@ loader that has been failing roughly twice a month since October.
     # It is listed as must-stay-quiet in full rather than left unannotated,
     # because a signal that fires here is over-firing and the probe should
     # say so in the same table as everything else.
+    #
+    # No `reported_objects`: the issue records that eight objects came out of
+    # this source, not which eight, and an ablation needs the identities. It
+    # is also the arm where an ablation would answer nothing -- there is no
+    # lost section here to reconstruct.
     must_fire=(),
     must_stay_quiet=(
         "# Project Helios — Kickoff Meeting",

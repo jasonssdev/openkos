@@ -5,9 +5,17 @@ REAL pipeline -- `openkos.extraction.concept.extract_concept_union` over
 `openkos.llm.ollama.OllamaClient` -- across the two sources #793 compares,
 and asks ONE question:
 
-  When `coverage.uncovered_sections` flags a section, is that a section the
-  extraction actually lost, or is it flagging sections that produced
-  objects perfectly well?
+  When the coverage signal flags a section, is that a section the extraction
+  actually lost, or is it flagging sections that produced objects perfectly
+  well?
+
+The first predicate measured, `quote`, answered the second: it is REFUTED
+and `evals/section_coverage/README.md` carries the numbers. The second,
+`overlap`, has since been swept over a threshold ladder on the same arms and
+DOES separate -- at B in [0.20, 0.25], which is not the value its constant
+still holds, on 17 runs of one model, with the window selected from two of
+the three arms it is reported from. Read the README's *Predicate 2* before
+quoting any of it.
 
 ## It imports the shipped function, and that is the point
 
@@ -15,8 +23,66 @@ and asks ONE question:
 chain and then pin, in its self-test, that the copy still agreed -- because
 the thing it measures is buried inside `select()`. This signal is a leaf
 taking plain strings, so there is nothing to copy: the probe calls
-`openkos.extraction.coverage.uncovered_sections` itself. A number measured
-here is a number about the code that ships, with no drift to guard against.
+`section_coverage` itself, whose `quote` predicate is shipped
+`extraction/evidence.py` unchanged. A number measured here is a number about
+the code that ships, with no drift to guard against.
+
+## Predicates, and why rescoring is free
+
+`--predicate NAME` selects the covering test; repeat it to score several
+over ONE sweep and read them side by side. The comparison IS the finding --
+a single column cannot tell an improvement from a relabelling.
+
+Every stored run carries its full `objects` (type/title/description/body),
+so any predicate can be scored against a stored sweep with ZERO model
+calls:
+
+    --rescore results/runs-....json --predicate quote --predicate overlap
+
+`--rescore` therefore always RECOMPUTES from the stored objects rather than
+reading the stored verdicts back. The stored verdicts are `quote`'s, and
+the self-test pins that recomputing them reproduces the committed file
+exactly -- which is what makes the refactor behind this seam
+behaviour-preserving rather than merely plausible.
+
+## The two published tables, and the commands that regenerate them
+
+A number this repository cannot re-derive from its own harness is a number
+nobody can check, so both of the README's `overlap` tables are modes of this
+probe rather than throwaway scripts:
+
+- `--overlap-threshold B`, repeatable, scores `overlap` at B. Each rung gets
+  its OWN `overlap@B` column, because `overlap_predicate(B)` names the
+  predicate after the value it used and `summarize` heads every column with
+  that name -- a ladder reached by editing `OVERLAP_COVERED_FRACTION` would
+  print eight columns all labelled `overlap`. The constant is not touched by
+  any of this and is still the shipped default.
+- `--ablate`, with `--rescore`, is the UNDER-FIRE arm: each stored run is cut
+  down to `Fixture.reported_objects` -- the three objects the reported 0.2.8
+  run produced -- and scored, reporting both the uncovered share and whether
+  the run named BOTH sections the issue says were lost. The loss is
+  constructed by deletion, so nothing here grades a run against what it
+  should have found.
+
+Both are `--rescore` paths: zero model calls, milliseconds, no GPU.
+
+## What would make a candidate predicate ship, and what would kill it
+
+Stated here BEFORE any new number exists, because a criterion written after
+the measurement is a criterion fitted to it:
+
+- The reported #793 failure -- `helios-overview` with `## Storage` and
+  `## Components` lost -- must score HIGH uncovered.
+- Healthy runs on ORDINARY sources must score LOW. Especially discursive
+  meeting transcripts, which are the corpus openkos is for and are where
+  `quote` scored 98.0%/31.3%/97.6% against the defect's 62.0%.
+- A candidate that cannot put the first above the second is REFUTED exactly
+  as `quote` was. Not "needs tuning": `quote` inverted, and a signal whose
+  distributions cross has no threshold to tune to.
+
+The probe prints both halves side by side and computes the reported
+failure's score under each predicate, so that comparison can be read
+without arithmetic.
 
 ## What is automated, and what is not
 
@@ -67,10 +133,19 @@ uv run python -u evals/section_coverage/run_section_coverage_probe.py --self-tes
 uv run python -u evals/section_coverage/run_section_coverage_probe.py --runs 5
 uv run python -u evals/section_coverage/run_section_coverage_probe.py --runs 3 \
     --source ~/corpus/transcript.md --source-title "Some Meeting"
-uv run python -u evals/section_coverage/run_section_coverage_probe.py --rescore <runs.json>
+uv run python -u evals/section_coverage/run_section_coverage_probe.py \
+    --rescore evals/section_coverage/results/runs-20260821T233809Z-qwen3-8b.json \
+    --predicate all
+uv run python -u evals/section_coverage/run_section_coverage_probe.py \
+    --rescore evals/section_coverage/results/runs-20260821T233809Z-qwen3-8b.json \
+    --overlap-threshold 0.15 --overlap-threshold 0.20 --overlap-threshold 0.25
+uv run python -u evals/section_coverage/run_section_coverage_probe.py \
+    --rescore evals/section_coverage/results/runs-20260821T233809Z-qwen3-8b.json \
+    --ablate --overlap-threshold 0.15 --overlap-threshold 0.20
 ```
 
-`--self-test` makes no model calls and needs no Ollama.
+`--self-test`, `--rescore`, `--overlap-threshold` and `--ablate` make no model
+calls and need no Ollama.
 """
 
 from __future__ import annotations
@@ -98,10 +173,35 @@ from openkos.llm.ollama import OllamaClient  # noqa: E402
 _MAX_GENERATION_TOKENS: Final = 8_192
 RESULTS_DIR: Final = pathlib.Path(__file__).resolve().parent / "results"
 
+COMMITTED_RUNS: Final = RESULTS_DIR / "runs-20260821T233809Z-qwen3-8b.json"
+"""The sweep the README's first three rows are read from.
+
+The self-test rescores it under `quote` and requires the recomputed
+verdicts to equal the stored ones exactly. That equivalence is the entire
+safety net under the predicate seam: `quote` is supposed to be the shipped
+behaviour moved, not changed, and nothing else in this repo would notice if
+it drifted.
+"""
+
+ALL_PREDICATES: Final = "all"
+"""`--predicate all`, expanding to every registered predicate in report
+order. Spelled as a name rather than as a separate flag so the common case
+-- score everything over one stored sweep -- is one token, and so adding a
+third predicate needs no change at any call site."""
+
 
 @dataclass
 class RunRecord:
-    """One extraction of one fixture, with what the signal said about it."""
+    """One extraction of one fixture, with what the signal said about it.
+
+    The flat verdict fields (`uncovered`, `checkable`, `uncovered_chars`,
+    `checkable_chars`) are `quote`'s, and the stored schema is unchanged
+    from the committed sweep on purpose. They are NOT the report's input:
+    `rescore` recomputes every predicate's verdicts, `quote` included, from
+    `objects`. Keeping them serves two things -- an older file still reads,
+    and the self-test has a committed value to prove the recomputation
+    against.
+    """
 
     fixture: str
     run: int
@@ -114,6 +214,77 @@ class RunRecord:
     judge_status: str = ""
     uncovered_chars: int = 0
     checkable_chars: int = 0
+
+
+def resolve_predicates(names: list[str]) -> tuple[coverage.CoveragePredicate, ...]:
+    """The predicates `names` selects, in registry order, deduplicated.
+
+    Registry order rather than the order they were typed, so `--predicate
+    overlap --predicate quote` and `--predicate all` render identical
+    tables: the baseline column is always the leftmost one, and a reader
+    comparing two runs of this probe is never comparing transposed
+    columns.
+
+    Raises `KeyError` on an unknown name rather than silently dropping it.
+    A typo that quietly scored one predicate instead of two would print a
+    table that looks complete.
+    """
+    wanted = set(names)
+    if ALL_PREDICATES in wanted:
+        wanted.discard(ALL_PREDICATES)
+        wanted.update(coverage.PREDICATES)
+    unknown = sorted(wanted - set(coverage.PREDICATES))
+    if unknown:
+        raise KeyError(
+            f"unknown predicate(s) {unknown}; known: "
+            f"{sorted(coverage.PREDICATES)} plus {ALL_PREDICATES!r}"
+        )
+    return tuple(p for name, p in coverage.PREDICATES.items() if name in wanted)
+
+
+def select_predicates(
+    names: list[str] | None, thresholds: list[float] | None
+) -> tuple[coverage.CoveragePredicate, ...]:
+    """The registry selections, then one `overlap` column per swept
+    threshold -- a whole ladder in ONE invocation.
+
+    A ladder has to be one process, not one process per rung. The README
+    publishes a threshold table, and a table assembled by hand from eight
+    separate runs is a table nobody can regenerate; that is the defect this
+    function exists to close.
+
+    Registry columns first and swept columns after, in the order the
+    thresholds were typed, so a ladder reads low-to-high down the table
+    beside the baseline it is being compared against. `resolve_predicates`
+    normalises the registry half to registry order for the reason it
+    documents; the swept half deliberately does NOT sort, because the
+    reader's chosen ladder order is information.
+
+    Deduplicated BY NAME, which is how `--overlap-threshold 0.5` alongside
+    `--predicate overlap` resolves to one column rather than two identical
+    ones: the factory names the default `overlap`, so the two genuinely are
+    the same predicate.
+
+    With thresholds given and no `--predicate`, only the swept columns are
+    scored. Defaulting to `quote` there would put the refuted baseline
+    beside a ladder that says nothing about it, and a reader who wants both
+    asks for both.
+    """
+    wanted = list(dict.fromkeys(thresholds or ()))
+    if names:
+        chosen = list(resolve_predicates(names))
+    elif wanted:
+        chosen = []
+    else:
+        chosen = [coverage.QUOTE]
+    seen = {predicate.name for predicate in chosen}
+    for threshold in wanted:
+        predicate = coverage.overlap_predicate(threshold)
+        if predicate.name in seen:
+            continue
+        seen.add(predicate.name)
+        chosen.append(predicate)
+    return tuple(chosen)
 
 
 def run_share(record: dict[str, Any]) -> float | None:
@@ -175,13 +346,289 @@ def object_texts(objects: list[dict[str, str]]) -> list[str]:
     ]
 
 
-def run_once(fixture: Fixture, run: int, llm: Any, model: str) -> RunRecord:
-    """Extract once and record what the signal reports about the result."""
-    checkable = [
+def checkable_headings(
+    fixture: Fixture, predicate: coverage.CoveragePredicate
+) -> list[str]:
+    """The headings this predicate's gate admits, one entry per SECTION.
+
+    Per section rather than per distinct heading, because `evaluate` divides
+    by `checkable.count(section)` to rate a repeated `## Notes`. Computed
+    from the predicate's own gate, never from `is_quotable`: two predicates
+    do not admit the same sections, and that difference is exactly what the
+    report has to show rather than average away.
+    """
+    return [
         section.heading
         for section in coverage.split_sections(fixture.text)
-        if coverage.is_quotable(section.body)
+        if predicate.checkable(section.body)
     ]
+
+
+def rescore(
+    record: dict[str, Any], fixture: Fixture, predicate: coverage.CoveragePredicate
+) -> dict[str, Any]:
+    """One stored run's verdicts recomputed under `predicate`, from its
+    stored objects alone. NO model call, for any predicate.
+
+    This is why the stored sweep carries whole objects rather than only the
+    verdicts derived from them: a sweep costs minutes of GPU and can be
+    scored by every future predicate for free, so a candidate is never
+    rejected because re-measuring it was expensive.
+
+    An errored run is returned untouched -- `evaluate` excludes it, and
+    inventing verdicts for a run that never produced objects would render a
+    backend failure as a clean run that found nothing.
+
+    A run stored WITHOUT an `objects` key is converted into an errored one.
+    It predates this file's storage schema, nothing can be recomputed from
+    it, and reading its stored `quote` verdicts back instead would put one
+    predicate's numbers in another predicate's column -- the single failure
+    the whole seam exists to make impossible. An empty `objects` list is a
+    different thing entirely and is scored normally: a run that produced no
+    objects covers nothing, which is a real reading.
+    """
+    if record["error"] is not None:
+        return record
+    if "objects" not in record:
+        return {
+            **record,
+            "error": "stored without objects: nothing to rescore from",
+        }
+    report = coverage.coverage_report(
+        object_texts(record["objects"]), fixture.text, predicate
+    )
+    return {
+        **record,
+        "uncovered": list(report.uncovered),
+        "uncovered_chars": report.uncovered_chars,
+        "checkable_chars": report.checkable_chars,
+        "checkable": checkable_headings(fixture, predicate),
+    }
+
+
+def rescored_runs(
+    records: list[dict[str, Any]],
+    fixture: Fixture,
+    predicate: coverage.CoveragePredicate,
+) -> list[dict[str, Any]]:
+    """`records` belonging to `fixture`, each rescored under `predicate`."""
+    return [
+        rescore(record, fixture, predicate)
+        for record in records
+        if record["fixture"] == fixture.name
+    ]
+
+
+def reported_failure_share(
+    fixture: Fixture, predicate: coverage.CoveragePredicate
+) -> float | None:
+    """What the run #793 REPORTS would score under `predicate`, or `None`
+    for a fixture that records no lost section.
+
+    A RECONSTRUCTION, and the word is load-bearing. This repo does not hold
+    the 0.2.8 run's object texts, only the adjudicated outcome recorded in
+    `Fixture.must_fire`: `## Storage` and `## Components` produced nothing,
+    every other section produced objects. So the reconstruction hands each
+    surviving section its OWN body as the object text -- perfect coverage
+    for the half that was covered -- and lets the predicate score the rest.
+
+    That makes this the FLOOR of what the reported failure scores, not a
+    measurement of it: a predicate that also over-fires on a surviving
+    section scores higher here in reality. The floor is the useful end,
+    because the criterion in the module docstring asks this number to be
+    HIGH, and a floor that is already low refutes the candidate outright.
+
+    Predicate-dependent through the gate, which is the whole reason it is
+    not a constant: `quote` and `overlap` admit different sections, so the
+    same lost text is a different share of a different denominator. Under
+    `quote` it is 276/445 = 62.0%, the figure the README publishes.
+    """
+    if not fixture.must_fire:
+        return None
+    covered = [
+        section.body
+        for section in coverage.split_sections(fixture.text)
+        if section.heading not in fixture.must_fire
+    ]
+    return coverage.coverage_report(covered, fixture.text, predicate).uncovered_share
+
+
+def object_identity(obj: dict[str, str]) -> str:
+    """One object as `type: title` -- the shape `Fixture.reported_objects`
+    names the 0.2.8 objects in, and the shape the report already prints.
+
+    Identity by type AND title, not title alone: `Concept: Marta Ruiz` and
+    `Person: Marta Ruiz` are different objects, and a run that produced the
+    wrong type of the right title is not the run the issue reports.
+    """
+    return f"{obj['type']}: {obj['title']}"
+
+
+def ablate(record: dict[str, Any], keep: tuple[str, ...]) -> dict[str, Any]:
+    """`record` with every object outside `keep` removed.
+
+    The under-fire reconstruction that does NOT hand a section its own body
+    back. `reported_failure_share` does exactly that, and says so: it is a
+    FLOOR computed from text the model never wrote. This is the same
+    reported failure built from a real run's real object texts instead --
+    keep the three objects the 0.2.8 run produced, drop the rest, and the
+    two sections the issue says produced nothing have nothing behind them.
+
+    Ablation, not judgment. Nothing here grades a run against what it should
+    have found -- the probe's whole under-fire discipline is that it does
+    not -- because the loss is CONSTRUCTED by deletion and the outcome is
+    therefore known before the predicate is asked.
+
+    An errored run is returned untouched, on the same terms as `rescore`:
+    it has no objects to ablate, and inventing a total loss for a backend
+    failure would put the loudest possible number in the arm this is
+    reported from.
+    """
+    if record["error"] is not None:
+        return record
+    return {
+        **record,
+        "objects": [
+            obj for obj in record.get("objects", []) if object_identity(obj) in keep
+        ],
+    }
+
+
+@dataclass(frozen=True)
+class AblationRow:
+    """One predicate's row of the under-fire ablation table.
+
+    `named_both` is the column to read first, and it is deliberately not a
+    share. The share says how LOUD the signal is; `named_both` says whether
+    it is pointing at the two sections the issue reports as lost. A ladder
+    point can be loud and wrong -- the README's 0.15 rung scores a third of
+    the source while naming both lost sections in none of five runs -- and a
+    table carrying only shares would read that as a smaller version of the
+    right answer.
+    """
+
+    predicate: str
+    ablated: tuple[float | None, ...]
+    named_both: int
+    ok_runs: int
+    full: tuple[float | None, ...]
+
+
+def ablation_rows(
+    records: list[dict[str, Any]],
+    fixture: Fixture,
+    predicates: tuple[coverage.CoveragePredicate, ...],
+) -> tuple[AblationRow, ...]:
+    """Each predicate scored twice over `fixture`'s stored runs: once with
+    the objects ablated to `fixture.reported_objects`, once whole.
+
+    Both columns from ONE stored sweep and no model call, which is the
+    point: the ablated share alone cannot be read. 62% uncovered is a
+    finding only beside the same runs scoring 0% unablated, or the number is
+    just a property of the source.
+    """
+    ok = [
+        record
+        for record in records
+        if record["fixture"] == fixture.name and record["error"] is None
+    ]
+    rows: list[AblationRow] = []
+    for predicate in predicates:
+        ablated: list[float | None] = []
+        full: list[float | None] = []
+        named_both = 0
+        for record in ok:
+            cut = rescore(ablate(record, fixture.reported_objects), fixture, predicate)
+            whole = rescore(record, fixture, predicate)
+            # `run_share`, never `0.0`, for a run whose char accounting is
+            # missing: 0.0 is the value a PERFECTLY covered run gets, so
+            # defaulting would print the worst-recorded run as the best one.
+            # `render_shares` names the gap instead.
+            ablated.append(run_share(cut))
+            full.append(run_share(whole))
+            if set(fixture.must_fire) <= set(cut["uncovered"]):
+                named_both += 1
+        rows.append(
+            AblationRow(
+                predicate=predicate.name,
+                ablated=tuple(ablated),
+                named_both=named_both,
+                ok_runs=len(ok),
+                full=tuple(full),
+            )
+        )
+    return tuple(rows)
+
+
+def ablation_table(
+    records: list[dict[str, Any]],
+    fixtures: tuple[Fixture, ...],
+    predicates: tuple[coverage.CoveragePredicate, ...],
+) -> str:
+    """The README's under-fire arm, regenerated from a stored sweep.
+
+    Only fixtures carrying BOTH an adjudicated `must_fire` and the
+    `reported_objects` that survived it can be ablated. The others are named
+    and skipped rather than silently absent: a table that quietly dropped an
+    arm would read as an arm that came back clean.
+    """
+    lines: list[str] = ["", "=" * 72, "UNDER-FIRE ABLATION (#793)", "=" * 72, ""]
+    lines.append(_CRITERION)
+    lines.append("")
+    lines.append(
+        "Each stored healthy run is cut down to the objects the reported 0.2.8 "
+        "run produced, then scored. The loss is CONSTRUCTED by deletion, so "
+        "the outcome is known before any predicate is asked -- this grades no "
+        "run against what it should have found."
+    )
+    for fixture in fixtures:
+        lines.append("")
+        lines.append(f"## {fixture.name}")
+        if not fixture.must_fire or not fixture.reported_objects:
+            lines.append("")
+            lines.append(
+                "   NOT ABLATABLE: needs both an adjudicated must-fire section "
+                "and the objects the reported run produced; this fixture "
+                f"records must_fire={list(fixture.must_fire)} and "
+                f"reported_objects={list(fixture.reported_objects)}"
+            )
+            continue
+        lines.append("")
+        lines.append(f"   kept objects: {', '.join(fixture.reported_objects)}")
+        lines.append(f"   must fire: {', '.join(fixture.must_fire)}")
+        lines.append("")
+        width = max(len("predicate"), *(len(p.name) for p in predicates))
+        lines.append(
+            f"   {'predicate':<{width}}  {'names BOTH':>10}  "
+            "ablated share per run / full healthy run"
+        )
+        for row in ablation_rows(records, fixture, predicates):
+            share = render_shares(list(row.ablated)) or "(no ok runs)"
+            whole = render_shares(list(row.full)) or "(no ok runs)"
+            lines.append(
+                f"   {row.predicate:<{width}}  "
+                f"{f'{row.named_both}/{row.ok_runs}':>10}  {share}"
+            )
+            lines.append(f"   {'':<{width}}  {'':>10}  full: {whole}")
+    lines.append("")
+    lines.append(
+        "Read `names BOTH` before the shares. A rung can be loud and still "
+        "point somewhere else, and only the naming column tells the two apart."
+    )
+    return "\n".join(lines)
+
+
+def run_once(fixture: Fixture, run: int, llm: Any, model: str) -> RunRecord:
+    """Extract once and record what `quote` reports about the result.
+
+    Only `quote`'s verdicts are stored, and that is not a preference for it:
+    the stored `objects` are what every predicate is scored from, so the
+    verdict fields are a cross-check on the recomputation rather than the
+    report's input. Storing one predicate's numbers keeps the file's schema
+    identical to the committed sweep, which is what lets the self-test
+    compare the two.
+    """
+    checkable = checkable_headings(fixture, coverage.QUOTE)
     started = time.monotonic()
     try:
         outcome = concept_mod.extract_concept_union(
@@ -234,6 +681,11 @@ class FixtureVerdict:
 
 def evaluate(fixture: Fixture, records: list[dict[str, Any]]) -> FixtureVerdict:
     """Read the mechanical verdicts off one fixture's runs.
+
+    `records` must already be rescored under ONE predicate (`rescored_runs`)
+    -- this function reads `uncovered` and `checkable` and has no way to
+    tell which predicate produced them, which is why the caller labels the
+    column.
 
     `OVER-FIRES` is the condemning one and it takes precedence over both
     `VACUOUS` and `BLIND`: a signal that flags a section which produced
@@ -301,8 +753,8 @@ def evaluate(fixture: Fixture, records: list[dict[str, Any]]) -> FixtureVerdict:
     unchecked = tuple(s for s in fixture.must_stay_quiet if s not in rate)
     for section in unchecked:
         reasons.append(
-            f"{section!r} carries no line clearing the evidence floor, so it "
-            "was never checked -- it cannot over-fire, and it cannot help"
+            f"{section!r} is skipped by this predicate's checkability gate, so "
+            "it was never checked -- it cannot over-fire, and it cannot help"
         )
 
     if over_fired:
@@ -328,51 +780,154 @@ def evaluate(fixture: Fixture, records: list[dict[str, Any]]) -> FixtureVerdict:
     )
 
 
-def summarize(records: list[dict[str, Any]], fixtures: tuple[Fixture, ...]) -> str:
-    lines: list[str] = ["", "=" * 72, "SECTION COVERAGE (#793)", "=" * 72]
+_CRITERION: Final = (
+    "SHIP/KILL CRITERION (fixed before any predicate was written): the "
+    "reported #793 failure must score HIGH uncovered while healthy runs on "
+    "ordinary sources -- above all discursive transcripts -- score LOW. A "
+    "predicate that cannot put the first above the second is REFUTED, as "
+    "`quote` was: its distributions did not overlap, they inverted."
+)
+"""Printed at the top of every report, under every predicate.
+
+In the output and not only in the README, because the number and the bar it
+has to clear should not be readable one without the other. A criterion a
+reader has to go looking for is one that gets written after the result.
+"""
+
+
+def _rate_cell(rate: dict[str, float], section: str, width: int) -> str:
+    """One predicate's cell for one section: its flagged rate, or `skipped`.
+
+    `skipped` is not 0%. A section this predicate's gate rejected entered
+    NEITHER total, so it was never given the chance to fire; printing 0%
+    would read as "checked, and clean" and would make two predicates with
+    different denominators look like they measured the same source.
+    """
+    if section not in rate:
+        return f"{'skipped':>{width}}"
+    return f"{rate[section]:>{width - 1}.0%} "
+
+
+def summarize(
+    records: list[dict[str, Any]],
+    fixtures: tuple[Fixture, ...],
+    predicates: tuple[coverage.CoveragePredicate, ...] = (coverage.QUOTE,),
+) -> str:
+    """The report: every predicate scored over the same runs, side by side.
+
+    Side by side and never one table per predicate. The finding is the
+    COMPARISON -- `quote`'s refutation is not that 62.0% is low, it is that
+    98.0% on an ordinary transcript sits above it -- and two tables a page
+    apart are read as two results.
+    """
+    lines: list[str] = ["", "=" * 72, "SECTION COVERAGE (#793)", "=" * 72, ""]
+    lines.append(_CRITERION)
+    lines.append("")
+    lines.append("predicates scored:")
+    for predicate in predicates:
+        lines.append(f"   {predicate.name:<10} {predicate.describe}")
+
+    # Wide enough for the widest predicate name AND for the word `predicate`
+    # heading the column, so the verdict table cannot shear when a short name
+    # like `quote` is scored alone.
+    name_width = max(len("predicate"), *(len(p.name) for p in predicates))
+    cell = max(name_width + 2, 9)
+
     for fixture in fixtures:
-        verdict = evaluate(fixture, records)
         lines.append("")
+        lines.append(f"## {fixture.name}")
+        lines.append("")
+
+        # Rescored ONCE per predicate, then read three times below: for the
+        # verdicts, for the shares line, and for the objects-per-run loop.
+        # Recomputing each time ran `coverage_report` over the whole source
+        # three times per run per predicate, and under `overlap` that
+        # retokenizes every object text once per section.
+        #
+        # `rescored_runs` filters on `record["fixture"]` and preserves order,
+        # so `own[i]` and `rescored[name][i]` are the same run. That
+        # alignment is what lets the objects loop index instead of rescoring.
+        own = [record for record in records if record["fixture"] == fixture.name]
+        rescored = {
+            predicate.name: rescored_runs(records, fixture, predicate)
+            for predicate in predicates
+        }
+        verdicts = {
+            predicate.name: evaluate(fixture, rescored[predicate.name])
+            for predicate in predicates
+        }
+
         lines.append(
-            f"## {fixture.name} -- {verdict.verdict} ({verdict.ok_runs} ok runs)"
+            f"   {'predicate':<{name_width}}  {'verdict':<14} {'ok':>3}  "
+            "uncovered share of checkable text per run"
         )
-        for reason in verdict.reasons:
-            lines.append(f"   - {reason}")
+        for predicate in predicates:
+            verdict = verdicts[predicate.name]
+            shares = [
+                run_share(r) for r in rescored[predicate.name] if r["error"] is None
+            ]
+            lines.append(
+                f"   {predicate.name:<{name_width}}  {verdict.verdict:<14} "
+                f"{verdict.ok_runs:>3}  {render_shares(shares) or '(no ok runs)'}"
+            )
+
+        floor = {p.name: reported_failure_share(fixture, p) for p in predicates}
+        if any(v is not None for v in floor.values()):
+            rendered = "   ".join(
+                f"{name} {value:.1%}"
+                for name, value in floor.items()
+                if value is not None
+            )
+            lines.append("")
+            lines.append(
+                f"   the failure #793 reports would score at least: {rendered}"
+            )
+            lines.append(
+                "   (reconstruction from the adjudicated outcome -- see "
+                "`reported_failure_share`)"
+            )
+
         lines.append("")
-        lines.append(f"   {'section':<45} {'flagged':>8}  expectation")
-        for section, rate in verdict.flagged_rate:
+        header = "".join(f"{p.name:>{cell - 1}} " for p in predicates)
+        lines.append(f"   {'section':<45}{header}  expectation")
+        rates = {name: dict(v.flagged_rate) for name, v in verdicts.items()}
+        for section in dict.fromkeys(
+            s.heading for s in coverage.split_sections(fixture.text)
+        ):
             if section in fixture.must_fire:
                 expect = "MUST FIRE"
             elif section in fixture.must_stay_quiet:
                 expect = "must stay quiet"
             else:
                 expect = "(unadjudicated)"
-            lines.append(f"   {section:<45} {rate:>7.0%}  {expect}")
-        lines.append("")
-        shares = [
-            run_share(r)
-            for r in records
-            if r["fixture"] == fixture.name and r["error"] is None
-        ]
-        if shares:
-            lines.append(
-                "   uncovered share of checkable text per run: " + render_shares(shares)
+            cells = "".join(
+                _rate_cell(rates[p.name], section, cell) for p in predicates
             )
-            lines.append("")
+            lines.append(f"   {section:<45}{cells}  {expect}")
+
+        lines.append("")
+        for predicate in predicates:
+            for reason in verdicts[predicate.name].reasons:
+                lines.append(f"   - [{predicate.name}] {reason}")
+
+        lines.append("")
         lines.append("   objects per run (adjudicate the under-fire half by hand):")
-        for record in records:
-            if record["fixture"] != fixture.name:
-                continue
+        for index, record in enumerate(own):
             if record["error"]:
                 lines.append(f"     run {record['run']}: ERROR {record['error']}")
                 continue
             titles = (
-                ", ".join(f"{o['type']}:{o['title']}" for o in record["objects"])
+                ", ".join(object_identity(o) for o in record.get("objects", []))
                 or "(none)"
             )
-            flagged = ", ".join(record["uncovered"]) or "(none flagged)"
             lines.append(f"     run {record['run']}: {titles}")
-            lines.append(f"             flagged: {flagged}")
+            for predicate in predicates:
+                scored = rescored[predicate.name][index]
+                if scored["error"]:
+                    lines.append(f"             [{predicate.name}] {scored['error']}")
+                    continue
+                flagged = ", ".join(scored["uncovered"]) or "(none flagged)"
+                lines.append(f"             [{predicate.name}] flagged: {flagged}")
     lines.append("")
     lines.append(
         "The under-fire half is NOT scored here: whether a run lost a section "
@@ -381,10 +936,33 @@ def summarize(records: list[dict[str, Any]], fixtures: tuple[Fixture, ...]) -> s
     return "\n".join(lines)
 
 
+# The paraphrase the `overlap` hypothesis exists for, and the exact case
+# `quote` fails on: the object reorders the sentence, nominalizes its verb
+# and drops nothing, so every content word survives and no substring does.
+# Spanish because that is the corpus, and because it exercises the accent
+# folding at the same time.
+_PARAPHRASE_SOURCE: Final = (
+    "El equipo acordó migrar el servicio de facturación a PostgreSQL 16 "
+    "antes de la entrega de marzo."
+)
+_PARAPHRASE_OBJECT: Final = (
+    "Migración del servicio de facturación a PostgreSQL 16: el equipo lo "
+    "acordó antes de la entrega de marzo."
+)
+
+# The README's own hand-checked mechanism example, verbatim from the
+# transcript arm's `## Resumen`.
+_RESUMEN_SOURCE: Final = (
+    "El equipo definió el alcance del sistema y acordó usar minutas reales "
+    "para validar la arquitectura propuesta."
+)
+_RESUMEN_OBJECT: Final = "Uso de Minutas Reales para Validación"
+
+
 def _self_test() -> int:
     """Prove the harness's own machinery with no model running.
 
-    The FIRST assertion is that the signal can see a section AT ALL when the
+    The FIRST assertion is that a predicate can see a section AT ALL when the
     section's own text is handed to it as an object -- the floor every other
     reading rests on. A probe whose signal cannot cover a section under
     perfect input would report `VACUOUS` on any model and look like a
@@ -396,21 +974,25 @@ def _self_test() -> int:
         if not condition:
             failures.append(why)
 
-    for fixture in build_fixtures():
-        sections = coverage.split_sections(fixture.text)
-        perfect = [section.body for section in sections]
-        check(
-            coverage.uncovered_sections(perfect, fixture.text) == (),
-            f"{fixture.name}: every section must be covered when its own body "
-            f"is the object text (got {coverage.uncovered_sections(perfect, fixture.text)})",
-        )
-        headings = {section.heading for section in sections}
-        for named in fixture.must_fire + fixture.must_stay_quiet:
+    every = tuple(coverage.PREDICATES.values())
+
+    for predicate in every:
+        for fixture in build_fixtures():
+            sections = coverage.split_sections(fixture.text)
+            perfect = [section.body for section in sections]
+            got = coverage.uncovered_sections(perfect, fixture.text, predicate)
             check(
-                named in headings,
-                f"{fixture.name}: fixture names section {named!r}, which the "
-                f"splitter does not produce (it produces {sorted(headings)})",
+                got == (),
+                f"[{predicate.name}] {fixture.name}: every section must be covered "
+                f"when its own body is the object text (got {got})",
             )
+            headings = {section.heading for section in sections}
+            for named in fixture.must_fire + fixture.must_stay_quiet:
+                check(
+                    named in headings,
+                    f"{fixture.name}: fixture names section {named!r}, which the "
+                    f"splitter does not produce (it produces {sorted(headings)})",
+                )
 
     helios = build_fixtures()[0]
     check(
@@ -423,6 +1005,265 @@ def _self_test() -> int:
         ),
         "with no objects at all, every checkable section of helios-overview "
         f"must be flagged (got {coverage.uncovered_sections([], helios.text)})",
+    )
+
+    # ------------------------------------------------------------------
+    # The refactor's safety net: `quote` is the shipped behaviour MOVED,
+    # not changed. Recomputing the committed sweep from its stored objects
+    # must reproduce its stored verdicts exactly. Nothing else in this repo
+    # would notice if the seam altered them.
+    # ------------------------------------------------------------------
+    # Read inside a guard, for the same reason `resolve_predicates` is
+    # called inside one about a hundred lines below: an uncaught
+    # `FileNotFoundError` here aborts `_self_test` before `failures` is
+    # printed, so renaming or losing this file would suppress every
+    # assertion already collected above -- reporting a traceback where the
+    # real outcome is "and also these six other things are broken". A
+    # missing or unreadable sweep is the equivalence pin failing, so it is
+    # recorded as one failure and the rest of the run continues on an empty
+    # list, which the `reproduced == 9` count below then also catches.
+    committed: list[dict[str, Any]] = []
+    try:
+        committed = json.loads(COMMITTED_RUNS.read_text())
+    except (OSError, ValueError) as exc:
+        check(
+            False,
+            f"the committed sweep {COMMITTED_RUNS.name} must be readable JSON -- "
+            f"it is the only pin under `quote` being the shipped behaviour "
+            f"moved rather than changed ({type(exc).__name__}: {exc})",
+        )
+    by_name = {f.name: f for f in build_fixtures()}
+    reproduced = 0
+    for record in committed:
+        if record["error"] is not None:
+            continue
+        again = rescore(record, by_name[record["fixture"]], coverage.QUOTE)
+        check(
+            (
+                again["uncovered"],
+                again["uncovered_chars"],
+                again["checkable_chars"],
+                again["checkable"],
+            )
+            == (
+                record["uncovered"],
+                record["uncovered_chars"],
+                record["checkable_chars"],
+                record["checkable"],
+            ),
+            f"[quote] {COMMITTED_RUNS.name} {record['fixture']} run {record['run']}: "
+            f"rescoring the stored objects must reproduce the stored verdicts "
+            f"(stored {record['uncovered']}/{record['uncovered_chars']}/"
+            f"{record['checkable_chars']}, recomputed {again['uncovered']}/"
+            f"{again['uncovered_chars']}/{again['checkable_chars']})",
+        )
+        reproduced += 1
+    # A loop over an empty list passes every assertion inside it. Count the
+    # exposure, or a renamed results file turns this net into a decoration.
+    check(
+        reproduced == 9,
+        f"the committed sweep must contribute 9 rescorable runs to the "
+        f"equivalence pin (got {reproduced})",
+    )
+
+    published = reported_failure_share(helios, coverage.QUOTE)
+    check(
+        published is not None and abs(published - 276 / 445) < 1e-12,
+        "[quote] the reported #793 failure must still score exactly 276/445 = "
+        f"62.0%, the figure the README publishes (got {published})",
+    )
+    check(
+        reported_failure_share(build_fixtures()[1], coverage.QUOTE) is None,
+        "a fixture recording no lost section has no reported-failure share to "
+        "reconstruct, and must answer None rather than 0.0",
+    )
+
+    # `reported_failure_share` is printed for EVERY selected predicate, as the
+    # first half of the stated ship/kill criterion. Pinning it under `quote`
+    # alone left the number the report presents as evidence unconstrained the
+    # moment a second predicate was selected -- which is now every ladder
+    # invocation. Pinned here at the shipped default AND at both edges of the
+    # measured window, because those are the three values the README quotes.
+    #
+    # It coming out at 276/445 under both predicates is not a tautology and
+    # not a copy: the two gates admit sections on unrelated grounds (a
+    # four-WORD evidence line against four DISTINCT content words) and the
+    # covering tests share no code. They agree here because this source's four
+    # sections all clear both gates and the same two are lost. Raise
+    # `OVERLAP_MIN_CONTENT_WORDS` past a section's content-word count and this
+    # denominator moves while `quote`'s does not.
+    for threshold in (
+        coverage.OVERLAP_COVERED_FRACTION,
+        *coverage.OVERLAP_MEASURED_WINDOW,
+    ):
+        swept = coverage.overlap_predicate(threshold)
+        floor_share = reported_failure_share(helios, swept)
+        check(
+            floor_share is not None and abs(floor_share - 276 / 445) < 1e-12,
+            f"[{swept.name}] the reported #793 failure must score exactly "
+            f"276/445 = 62.0% under overlap too -- same four sections admitted, "
+            f"same two lost, a different covering test (got {floor_share})",
+        )
+        check(
+            reported_failure_share(build_fixtures()[1], swept) is None,
+            f"[{swept.name}] a fixture recording no lost section must answer "
+            "None rather than 0.0, under every predicate and not only `quote`",
+        )
+
+    # ------------------------------------------------------------------
+    # Each predicate carries its OWN checkability gate, and the two gates
+    # genuinely disagree. Both directions are pinned: a single direction
+    # would also pass if one gate merely delegated to the other.
+    # ------------------------------------------------------------------
+    stopwords_only = "de la que en el"
+    check(
+        coverage.QUOTE.checkable(stopwords_only)
+        and not coverage.OVERLAP.checkable(stopwords_only),
+        "a line of pure function words clears the four-WORD evidence floor "
+        "but carries no content word, so `quote` must check it and `overlap` "
+        f"must skip it (quote {coverage.QUOTE.checkable(stopwords_only)}, "
+        f"overlap {coverage.OVERLAP.checkable(stopwords_only)})",
+    )
+    short_lines = "Marta Ruiz\nTom Becker"
+    check(
+        not coverage.QUOTE.checkable(short_lines)
+        and coverage.OVERLAP.checkable(short_lines),
+        "four content words spread over two-word LINES clear no evidence line "
+        "but do clear a content-word floor, so `overlap` must check it and "
+        f"`quote` must skip it (quote {coverage.QUOTE.checkable(short_lines)}, "
+        f"overlap {coverage.OVERLAP.checkable(short_lines)})",
+    )
+
+    # ...and a skipped section enters NEITHER total, for each gate on its own
+    # terms. Measured against the same source scored without the thin
+    # section, so the assertion cannot pass by the numbers merely being
+    # equal to something.
+    keeper = "## Kept\na sentence with several real content words in it\n"
+    for predicate, thin in ((coverage.QUOTE, "TBD"), (coverage.OVERLAP, "de la que")):
+        alone = coverage.coverage_report([], keeper, predicate)
+        withthin = coverage.coverage_report([], f"{keeper}## Thin\n{thin}\n", predicate)
+        check(
+            (withthin.uncovered, withthin.checkable_chars, withthin.uncovered_chars)
+            == (alone.uncovered, alone.checkable_chars, alone.uncovered_chars),
+            f"[{predicate.name}] a section its gate skips must change nothing: "
+            f"not `uncovered`, not the numerator, not the denominator "
+            f"(alone {alone}, with the thin section {withthin})",
+        )
+
+    # ------------------------------------------------------------------
+    # The `overlap` hypothesis, pinned against its own reason for existing.
+    # ------------------------------------------------------------------
+    section = f"## Decisión\n{_PARAPHRASE_SOURCE}\n"
+    check(
+        coverage.uncovered_sections([_PARAPHRASE_OBJECT], section, coverage.QUOTE)
+        == ("## Decisión",),
+        "the paraphrase case must be one `quote` MISSES, or the next "
+        "assertion proves nothing about overlap",
+    )
+    check(
+        coverage.uncovered_sections([_PARAPHRASE_OBJECT], section, coverage.OVERLAP)
+        == (),
+        "[overlap] a reordered, nominalized paraphrase that keeps every "
+        "content word must be covered -- this is the entire hypothesis, and "
+        "the accented Spanish is half of it",
+    )
+
+    # The README's OWN mechanism example, which is a harder paraphrase: the
+    # object keeps four of eleven content words, scoring 0.1818. `quote` sees
+    # a hard nothing; `overlap` sees a non-zero score that clears no threshold
+    # anyone has proposed. Both halves are asserted, and the second is
+    # asserted against the named constant rather than a literal -- so lowering
+    # the threshold past this case turns this line red and makes the reader
+    # decide deliberately instead of discovering it in a sweep.
+    #
+    # The message below no longer says UNCALIBRATED, because the ladder in
+    # the README measured one. It says what that ladder does NOT rescue:
+    # 0.1818 sits below the measured window's own floor of 0.20, so `overlap`
+    # at the separating threshold ALSO reports this correct extraction as
+    # uncovered. The mechanism that killed `quote` is not repaired here, only
+    # outvoted by the rest of the source -- and that is the finding, not a
+    # detail. The numeric bound is unchanged: no measurement contradicts it.
+    resumen = coverage.overlap_fraction([_RESUMEN_OBJECT], _RESUMEN_SOURCE)
+    check(
+        not coverage.QUOTE.covers([_RESUMEN_OBJECT], _RESUMEN_SOURCE),
+        "the README's `## Resumen` example must remain one `quote` reports as "
+        "uncovered -- it is the mechanism the refutation rests on",
+    )
+    check(
+        0.0 < resumen < coverage.OVERLAP_COVERED_FRACTION,
+        "[overlap] the README's `## Resumen` example scores above zero and "
+        f"below the threshold this constant holds "
+        f"({coverage.OVERLAP_COVERED_FRACTION}); got {resumen:.4f}, which is "
+        "also below the 0.20 floor of the MEASURED window, so overlap does "
+        "not rescue this hand-checked paraphrase at any separating value",
+    )
+
+    # ------------------------------------------------------------------
+    # An object is scored against EACH section's own body. Quoting one
+    # section must not clear its neighbour, for any predicate -- otherwise
+    # one well-covered section would launder a whole source.
+    # ------------------------------------------------------------------
+    two = (
+        "## Storage\nHDP standardized on MySQL 8 as its primary datastore.\n"
+        "## Ownership\nMarta Ruiz leads the platform team day to day.\n"
+    )
+    for predicate in every:
+        got = coverage.uncovered_sections(
+            ["HDP standardized on MySQL 8 as its primary datastore."], two, predicate
+        )
+        check(
+            got == ("## Ownership",),
+            f"[{predicate.name}] an object covering `## Storage` must leave "
+            f"`## Ownership` uncovered, not be credited to it (got {got})",
+        )
+
+    # ------------------------------------------------------------------
+    # The registry and its selector.
+    # ------------------------------------------------------------------
+    check(
+        all(name == p.name for name, p in coverage.PREDICATES.items()),
+        f"every registry key must equal its predicate's name (got "
+        f"{[(k, p.name) for k, p in coverage.PREDICATES.items()]})",
+    )
+    # Caught rather than allowed to propagate: an uncaught raise here would
+    # abort `_self_test` before the failure list is printed, hiding every
+    # assertion already collected above it. A raise on a KNOWN name is the
+    # same claim failing, so it is recorded as one.
+    try:
+        check(
+            resolve_predicates([ALL_PREDICATES]) == every,
+            f"--predicate all must expand to every predicate in registry order "
+            f"(got {[p.name for p in resolve_predicates([ALL_PREDICATES])]})",
+        )
+        check(
+            resolve_predicates(["overlap", "quote"]) == every,
+            "predicates must render in registry order however they were typed, "
+            "so the baseline column is always leftmost",
+        )
+    except KeyError as exc:
+        check(
+            False,
+            f"every registry key must resolve as a --predicate name, and "
+            f"{exc.args[0]!r} says one does not",
+        )
+    try:
+        resolve_predicates(["quoet"])
+    except KeyError:
+        pass
+    else:
+        check(False, "an unknown predicate name must raise, never score silently")
+
+    # A run stored before `objects` existed cannot be rescored under ANY
+    # predicate, and must not fall back to its stored `quote` verdicts.
+    legacy = rescore(
+        {"fixture": "helios-overview", "run": 1, "error": None, "uncovered": ["## A"]},
+        helios,
+        coverage.OVERLAP,
+    )
+    check(
+        legacy["error"] is not None,
+        "a run stored without objects must become an errored run, never be "
+        f"read back under another predicate's column (got {legacy})",
     )
 
     # Verdict logic, each branch triggered independently.
@@ -576,12 +1417,316 @@ def _self_test() -> int:
         == ["real body"],
         "a non-blank body must win over the description",
     )
+    # A skipped section must render as `skipped`, never as 0%: the two mean
+    # opposite things and the whole side-by-side table turns on the
+    # difference.
+    check(
+        _rate_cell({}, "## Thin", 9).strip() == "skipped"
+        and _rate_cell({"## Thin": 0.0}, "## Thin", 9).strip() == "0%",
+        "a gate-skipped cell must read `skipped` and a clean checked one `0%` "
+        f"(got {_rate_cell({}, '## Thin', 9)!r} and "
+        f"{_rate_cell({'## Thin': 0.0}, '## Thin', 9)!r})",
+    )
+
+    # ------------------------------------------------------------------
+    # The threshold FACTORY. A swept value must announce itself, or a
+    # ladder prints eight columns all headed `overlap` and every published
+    # number becomes unattributable to the threshold that produced it.
+    # ------------------------------------------------------------------
+    check(
+        coverage.overlap_predicate().name == "overlap"
+        and coverage.PREDICATES["overlap"] is coverage.OVERLAP,
+        "the factory at its default must BE the registry entry, or "
+        "`--predicate overlap` and the committed numbers stop meaning the "
+        f"same thing (got {coverage.overlap_predicate().name!r})",
+    )
+    swept_names = [coverage.overlap_predicate(b).name for b in (0.15, 0.2, 0.25, 0.5)]
+    check(
+        swept_names == ["overlap@0.15", "overlap@0.2", "overlap@0.25", "overlap"]
+        and len(set(swept_names)) == len(swept_names),
+        "every swept threshold must produce its OWN name, and only the "
+        f"shipped default may be the bare `overlap` (got {swept_names})",
+    )
+    check(
+        all(
+            f"{b:.10g}" in coverage.overlap_predicate(b).describe
+            for b in (0.15, 0.2, 0.5)
+        ),
+        "a predicate's `describe` must state the threshold it actually used -- "
+        "it is the only line of the report that carries the value",
+    )
+    check(
+        "inside" in coverage.overlap_predicate(0.2).describe
+        and "outside" in coverage.OVERLAP.describe,
+        "`describe` must say whether THIS value sits in the measured window "
+        f"{coverage.OVERLAP_MEASURED_WINDOW}; the shipped default does not "
+        f"(got {coverage.OVERLAP.describe!r})",
+    )
+    # The swept threshold must actually drive the covering test, against the
+    # README's own hand-checked 0.1818 case -- so this pins the factory AND
+    # the floor of the measured window in one assertion. A factory that
+    # ignored its argument and read the module constant would score BOTH of
+    # these uncovered and turn the first check red.
+    check(
+        coverage.overlap_predicate(0.15).covers([_RESUMEN_OBJECT], _RESUMEN_SOURCE)
+        and not coverage.overlap_predicate(coverage.OVERLAP_MEASURED_WINDOW[0]).covers(
+            [_RESUMEN_OBJECT], _RESUMEN_SOURCE
+        ),
+        "the README's 0.1818 `## Resumen` case must be COVERED at B = 0.15 and "
+        "UNCOVERED at the window's own floor -- the swept value has to reach "
+        "the covering test, not just the column header",
+    )
+    for bad in (0.0, -0.1, 1.5):
+        try:
+            coverage.overlap_predicate(bad)
+        except ValueError:
+            pass
+        else:
+            check(
+                False,
+                f"a threshold outside (0.0, 1.0] must raise, never print a "
+                f"column of 0% or 100% that looks measured (got {bad})",
+            )
+
+    # ------------------------------------------------------------------
+    # `select_predicates`: a ladder is ONE invocation, or the published
+    # table is assembled by hand and nobody can regenerate it.
+    # ------------------------------------------------------------------
+    def selected(names: list[str] | None, thresholds: list[float] | None) -> list[str]:
+        return [p.name for p in select_predicates(names, thresholds)]
+
+    def line_with(report: str, *needles: str) -> str:
+        """The first line of `report` carrying every needle, or `""`.
+
+        Total, and `next(...)` deliberately is not. A report missing the line
+        is the assertion below failing; a `StopIteration` here would abort
+        `_self_test` and suppress every failure already collected -- the exact
+        hazard the committed-sweep read a hundred lines above is guarded
+        against, arriving through the assertions added to catch it.
+        """
+        for line in report.splitlines():
+            if all(needle in line for needle in needles):
+                return line
+        return ""
+
+    check(
+        selected(None, None) == ["quote"],
+        f"no flags at all must still score the refuted baseline "
+        f"(got {selected(None, None)})",
+    )
+    check(
+        selected(None, [0.05, 0.2, 0.15])
+        == ["overlap@0.05", "overlap@0.2", "overlap@0.15"],
+        "a ladder must keep the order it was typed in, and must not drag the "
+        f"baseline in uninvited (got {selected(None, [0.05, 0.2, 0.15])})",
+    )
+    check(
+        selected(["quote"], [0.2, 0.2]) == ["quote", "overlap@0.2"],
+        f"a repeated threshold is one column, and registry columns come first "
+        f"(got {selected(['quote'], [0.2, 0.2])})",
+    )
+    check(
+        selected(["overlap"], [coverage.OVERLAP_COVERED_FRACTION]) == ["overlap"],
+        "sweeping the shipped default alongside `--predicate overlap` is the "
+        "same predicate twice and must render as ONE column "
+        f"(got {selected(['overlap'], [coverage.OVERLAP_COVERED_FRACTION])})",
+    )
+
+    # ------------------------------------------------------------------
+    # The under-fire ablation, pinned against the exact table the README
+    # publishes. This is the arm the whole `overlap` result rests on, and
+    # before this it was produced by a script that is not in the repo.
+    # ------------------------------------------------------------------
+    kept = ablate(
+        {
+            "error": None,
+            "objects": [
+                {"type": "Concept", "title": "Helios Data Platform"},
+                {"type": "Concept", "title": "MySQL 8"},
+                {"type": "Person", "title": "Marta Ruiz"},
+            ],
+        },
+        helios.reported_objects,
+    )
+    check(
+        [object_identity(o) for o in kept["objects"]]
+        == ["Concept: Helios Data Platform", "Person: Marta Ruiz"],
+        "ablation must keep exactly the objects the reported run produced and "
+        f"drop the rest (got {[object_identity(o) for o in kept['objects']]})",
+    )
+    check(
+        ablate({"error": "boom", "objects": [{"type": "C", "title": "x"}]}, ())[
+            "objects"
+        ]
+        == [{"type": "C", "title": "x"}],
+        "an errored run must be returned untouched, never ablated into the "
+        "loudest possible number",
+    )
+
+    # The two rungs the README's arm 1 turns on: at 0.15 the signal is
+    # already loud and names neither lost section; at 0.20 it names both in
+    # every run. The flip is the finding, and it is a flip in WHAT IS NAMED
+    # rather than in how much fires.
+    for threshold, expect_named, expect_shares in (
+        (0.15, 0, (0.337, 0.337, 0.337, 0.445, 0.337)),
+        (coverage.OVERLAP_MEASURED_WINDOW[0], 5, (0.620, 0.620, 0.620, 0.728, 0.620)),
+    ):
+        rows = ablation_rows(
+            committed, helios, (coverage.overlap_predicate(threshold),)
+        )
+        row = rows[0]
+        check(
+            row.ok_runs == 5 and row.named_both == expect_named,
+            f"[{row.predicate}] the README publishes {expect_named}/5 runs "
+            f"naming BOTH lost sections at B = {threshold} "
+            f"(got {row.named_both}/{row.ok_runs})",
+        )
+        check(
+            len(row.ablated) == len(expect_shares)
+            and all(
+                got is not None and abs(got - want) < 5e-4
+                for got, want in zip(row.ablated, expect_shares, strict=True)
+            ),
+            f"[{row.predicate}] the ablated shares must reproduce the README's "
+            f"ladder row {expect_shares} (got {row.ablated})",
+        )
+        check(
+            all(value == 0.0 for value in row.full),
+            f"[{row.predicate}] the SAME runs unablated must score 0% -- the "
+            f"ablated number is a finding only beside that column "
+            f"(got {row.full})",
+        )
+
+    # 276/445 arriving from a second, independent direction: the ablation
+    # keeps the model's own real object texts, `reported_failure_share` hands
+    # each surviving section its own body. Two reconstructions, one number.
+    inside_window = ablation_rows(
+        committed,
+        helios,
+        (coverage.overlap_predicate(coverage.OVERLAP_MEASURED_WINDOW[0]),),
+    )[0]
+    # Indexed through a guard rather than directly: a sweep that failed to
+    # load leaves this row empty, and an `IndexError` here would abort the
+    # run and hide the failure that already recorded WHY it is empty.
+    inside_first = inside_window.ablated[0] if inside_window.ablated else None
+    check(
+        inside_first is not None and abs(inside_first - 276 / 445) < 1e-12,
+        "inside the window the ablated share must be exactly 276/445, the same "
+        "numerator over the same denominator the README publishes for `quote` "
+        f"(got {inside_first})",
+    )
+
+    ablated_report = ablation_table(
+        committed, build_fixtures(), (coverage.overlap_predicate(0.2),)
+    )
+    check(
+        "NOT ABLATABLE" in ablated_report and "kickoff" in ablated_report,
+        "a fixture with no reported object list must be NAMED and skipped, "
+        "never silently absent -- a missing arm reads as a clean one",
+    )
+    check(
+        "names BOTH" in ablated_report and "5/5" in ablated_report,
+        f"the ablation table must carry the naming column, not shares alone "
+        f"(got {ablated_report!r})",
+    )
+
+    # ------------------------------------------------------------------
+    # `summarize` itself. Everything above tests the numbers it prints;
+    # nothing tested the printing, which carries the multi-column header,
+    # the per-section cell loop and the floor line.
+    # ------------------------------------------------------------------
+    swept = coverage.overlap_predicate(coverage.OVERLAP_MEASURED_WINDOW[0])
+    report = summarize(committed, build_fixtures(), (coverage.QUOTE, swept))
+    for wanted in (
+        "## helios-overview",
+        "## kickoff",
+        swept.describe,
+        # The floor line, under BOTH predicates and labelled by name.
+        f"quote 62.0%   {swept.name} 62.0%",
+        # An errored run must not render in the shape of a result.
+        "ERROR OllamaGenerationCapped",
+        "Concept: Helios Data Platform",
+        f"[{swept.name}] flagged: (none flagged)",
+    ):
+        check(
+            wanted in report,
+            f"the report must carry {wanted!r} (it does not; "
+            f"{len(report.splitlines())} lines rendered)",
+        )
+    # The multi-column table must not SHEAR: the cells occupy the same width
+    # on the header line and on every section row, whatever the predicate
+    # names are. A long swept name is what stresses it -- `overlap@0.2` is
+    # wider than the word `predicate` the header column is sized against.
+    header_line = line_with(report, "section", "expectation")
+    storage_line = line_with(report, "## Storage", "MUST FIRE")
+    check(
+        len(header_line) - len("  expectation")
+        == len(storage_line) - len("  MUST FIRE"),
+        "the section rows must line up under the column header for every "
+        f"selected predicate (header {header_line!r}, row {storage_line!r})",
+    )
+    # A gate DISAGREEMENT rendered end to end: `quote` checks a line of pure
+    # function words, `overlap` skips it, and the row has to say so in the
+    # two columns rather than printing 0% under both.
+    thin_fixture = Fixture(
+        name="thin",
+        title="thin",
+        text="## Kept\na sentence with several real content words in it\n"
+        "## Thin\nde la que en el\n",
+        must_fire=(),
+        must_stay_quiet=(),
+    )
+    thin_report = summarize(
+        [{"fixture": "thin", "run": 1, "error": None, "objects": []}],
+        (thin_fixture,),
+        (coverage.QUOTE, coverage.OVERLAP),
+    )
+    thin_line = line_with(thin_report, "## Thin")
+    check(
+        "skipped" in thin_line and "100%" in thin_line,
+        "a section one gate checks and the other skips must render as `100%` "
+        f"and `skipped` side by side, never as two zeros (got {thin_line!r})",
+    )
+    # The objects-per-run block reads a list rescored ONCE, by index, rather
+    # than rescoring each record a third time. Two runs of one fixture with
+    # OPPOSITE outcomes pin that alignment: an off-by-one, or one cached
+    # entry reused for every row, prints one run's flags under another run's
+    # objects -- a wrong verdict that reads as a correct one.
+    aligned = summarize(
+        [
+            {
+                "fixture": "thin",
+                "run": 1,
+                "error": None,
+                "objects": [
+                    {
+                        "type": "Concept",
+                        "title": "kept",
+                        "body": "a sentence with several real content words in it",
+                        "description": "",
+                    }
+                ],
+            },
+            {"fixture": "thin", "run": 2, "error": None, "objects": []},
+        ],
+        (thin_fixture,),
+        (coverage.QUOTE,),
+    )
+    check(
+        "run 1: Concept: kept\n             [quote] flagged: ## Thin" in aligned
+        and "run 2: (none)\n             [quote] flagged: ## Kept, ## Thin" in aligned,
+        f"each run's flags must be printed beside ITS OWN objects (got {aligned!r})",
+    )
+    check(
+        "NO DATA" in summarize([], build_fixtures(), (coverage.QUOTE,)),
+        "a report over no runs at all must say NO DATA rather than raise",
+    )
 
     if failures:
         for why in failures:
             print(f"SELF-TEST FAILED: {why}")
         return 1
-    print("self-test OK")
+    print(f"self-test OK ({len(every)} predicate(s), no model calls)")
     return 0
 
 
@@ -592,6 +1737,43 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--temperature", type=float, default=None)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--rescore", type=pathlib.Path, default=None)
+    parser.add_argument(
+        "--predicate",
+        action="append",
+        default=None,
+        metavar="NAME",
+        help=(
+            "covering predicate; repeat to score several over ONE sweep and "
+            f"read them side by side, or {ALL_PREDICATES!r} for every one. "
+            f"Known: {', '.join(coverage.PREDICATES)}. Default: quote (the "
+            "refuted baseline the committed numbers were measured under)"
+        ),
+    )
+    parser.add_argument(
+        "--overlap-threshold",
+        type=float,
+        action="append",
+        default=None,
+        metavar="B",
+        dest="overlap_threshold",
+        help=(
+            "score `overlap` at B instead of its shipped default; repeat for a "
+            "whole ladder in ONE invocation. Each value becomes its own "
+            "`overlap@B` column, so no column can be read under a threshold it "
+            f"did not use. Default: {coverage.OVERLAP_COVERED_FRACTION} "
+            f"(unchanged; the measured window is "
+            f"{coverage.OVERLAP_MEASURED_WINDOW})"
+        ),
+    )
+    parser.add_argument(
+        "--ablate",
+        action="store_true",
+        help=(
+            "the under-fire arm: cut each stored run's objects down to the "
+            "ones the reported run produced, then score. Needs --rescore, and "
+            "makes no model call"
+        ),
+    )
     parser.add_argument(
         "--source",
         type=pathlib.Path,
@@ -607,6 +1789,20 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.self_test:
         return _self_test()
+
+    try:
+        predicates = select_predicates(args.predicate, args.overlap_threshold)
+    except KeyError as exc:
+        parser.error(str(exc.args[0]))
+    except ValueError as exc:
+        parser.error(str(exc))
+
+    if args.ablate and args.rescore is None:
+        # The arm is defined as a reconstruction FROM stored runs -- it keeps
+        # the objects the reported run produced out of runs somebody already
+        # paid for. Ablating a live sweep would spend GPU to build a loss
+        # that is then constructed by deletion anyway.
+        parser.error("--ablate scores a stored sweep: pass --rescore PATH too")
 
     fixtures = build_fixtures()
     if args.source is not None:
@@ -633,7 +1829,11 @@ def main(argv: list[str] | None = None) -> int:
         # Named apart from the live `records` below: one is stored dicts read
         # back from disk, the other is `RunRecord`s this process built, and
         # reusing the name made them one variable of two types.
-        print(summarize(json.loads(args.rescore.read_text()), fixtures))
+        stored_records = json.loads(args.rescore.read_text())
+        if args.ablate:
+            print(ablation_table(stored_records, fixtures, predicates))
+            return 0
+        print(summarize(stored_records, fixtures, predicates))
         return 0
 
     llm = OllamaClient(
@@ -642,7 +1842,10 @@ def main(argv: list[str] | None = None) -> int:
         seed=args.seed,
         max_generation_tokens=_MAX_GENERATION_TOKENS,
     )
-    print(f"model {args.model}, {args.runs} run(s) per fixture\n")
+    print(
+        f"model {args.model}, {args.runs} run(s) per fixture, "
+        f"predicate(s) {', '.join(p.name for p in predicates)}\n"
+    )
 
     records: list[RunRecord] = []
     for fixture in fixtures:
@@ -661,11 +1864,14 @@ def main(argv: list[str] | None = None) -> int:
                     f"{record.latency_s}s -- {record.error}"
                 )
                 continue
-            flagged = ", ".join(record.uncovered) or "(none)"
             print(
                 f"  {fixture.name} run {run}: {len(record.objects)} object(s), "
-                f"{record.latency_s}s, flagged: {flagged}"
+                f"{record.latency_s}s"
             )
+            for predicate in predicates:
+                scored = rescore(asdict(record), fixture, predicate)
+                flagged = ", ".join(scored["uncovered"]) or "(none)"
+                print(f"      [{predicate.name}] flagged: {flagged}")
 
     stored = [asdict(r) for r in records]
     if not stores_results(args.source):
@@ -688,7 +1894,7 @@ def main(argv: list[str] | None = None) -> int:
         path = RESULTS_DIR / f"runs-{stamp}-{args.model.replace(':', '-')}.json"
         path.write_text(json.dumps(stored, indent=2, ensure_ascii=False))
         print(f"\nstored {path}")
-    print(summarize(stored, fixtures))
+    print(summarize(stored, fixtures, predicates))
     return 0
 
 
