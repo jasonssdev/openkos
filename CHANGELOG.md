@@ -16,6 +16,32 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Added
 
+- **A recorded `type_alternative` bridges duplicate detection's per-type
+  block** ([#804](https://github.com/jasonssdev/openkos/issues/804)). Two
+  documents describing one subject under two names *and* two types fell
+  through every candidate tier by construction rather than by scoring: the
+  HIGH tier needs an exact shared key, and the ACRONYM and LOW tiers compare
+  within a single type. The extractor had already written down the
+  uncertainty that justifies the comparison — each object records the type it
+  nearly chose — and no consumer read it. When one document's
+  `type_alternative` names another's declared `type`, the pair is now
+  admitted to the same ACRONYM/LOW comparison the partition would have
+  skipped, with the same rules and the same thresholds: what widens is which
+  pairs are compared, never how a compared pair is scored. One direction is
+  enough, a pair recorded from both sides is reported once, and the group
+  carries both member types with a joined display label.
+
+  This does **not** reach the pair the issue reports. `Project Helios` and
+  `Helios Data Platform` still fail the near-match rule once compared,
+  because containment needs an equivalent for `project` and the larger title
+  has none. Excusing a title token that restates its own type was built and
+  measured as the second half, and
+  [refuted](https://github.com/jasonssdev/openkos/tree/main/evals/type_restatement):
+  over 558 stored titles it recovered 18 duplicates and introduced 11 false
+  positives of one recognisable class — an occurrent matched to the thing it
+  is about, such as a design meeting matched to the design project. The
+  harness ships with the negative result.
+
 - **`--reconcile`, the explicit counterpart to `--no-reconcile`**
   ([#803](https://github.com/jasonssdev/openkos/issues/803)). The merge
   preview told the operator that "bodies were appended, not reconciled" and

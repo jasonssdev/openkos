@@ -208,7 +208,7 @@ type: Event
 type_alternative: Project
 ```
 
-`type` remains the answer: nothing reads `type_alternative` to route or file a document. The field exists so that a close call is **recorded as a close call** rather than filed as a settled fact. It is absent — no sentinel value — whenever the classification was clear, which is the normal case.
+`type` remains the answer: nothing reads `type_alternative` to route or file a document. One consumer does read it, and only to widen a comparison it would otherwise have skipped: duplicate detection compares objects within a single type, so two records of one subject filed under two types are invisible to it. When one of them recorded the other's type as its runner-up, the pair is compared after all — proposed for review, never merged, and scored by exactly the same rules as a same-type pair. The field exists so that a close call is **recorded as a close call** rather than filed as a settled fact. It is absent — no sentinel value — whenever the classification was clear, which is the normal case.
 
 This does not make classification deterministic, and is not meant to. It makes the uncertainty legible to whoever reads the bundle later, which is the same posture the format takes toward provenance and freshness: record what is actually known, including how firmly.
 

@@ -1,0 +1,180 @@
+{
+  "titles": 558,
+  "pairs": 155372,
+  "delta": [
+    {
+      "title_a": "Button-less Remote Project",
+      "title_b": "Development of a Button-less Remote",
+      "excused": "project",
+      "key": "button less remote project || development of a button less remote"
+    },
+    {
+      "title_a": "Button-less Remote Project",
+      "title_b": "Development of a Button-less Remote Control",
+      "excused": "project",
+      "key": "button less remote project || development of a button less remote control"
+    },
+    {
+      "title_a": "Capacitación del equipo nuevo con un procedimiento de onboarding",
+      "title_b": "Onboarding Procedure",
+      "excused": "procedure",
+      "key": "capacitacion del equipo nuevo con un procedimiento de onboarding || onboarding procedure"
+    },
+    {
+      "title_a": "Decisión sobre el re-ranking del retrieval",
+      "title_b": "Re-ranking Procedure",
+      "excused": "procedure",
+      "key": "decision sobre el re ranking del retrieval || re ranking procedure"
+    },
+    {
+      "title_a": "Development of Multi-Agent Research Application",
+      "title_b": "Research Agent Development Project",
+      "excused": "project",
+      "key": "development of multi agent research application || research agent development project"
+    },
+    {
+      "title_a": "Evaluation Pipeline Project",
+      "title_b": "Evaluation Pipeline and Language Leakage Harness",
+      "excused": "project",
+      "key": "evaluation pipeline and language leakage harness || evaluation pipeline project"
+    },
+    {
+      "title_a": "Evaluation Pipeline Project",
+      "title_b": "Evaluation Pipeline and Language Leakage Measurement",
+      "excused": "project",
+      "key": "evaluation pipeline and language leakage measurement || evaluation pipeline project"
+    },
+    {
+      "title_a": "Knowledge Recovery Project",
+      "title_b": "Knowledge Recovery System",
+      "excused": "project",
+      "key": "knowledge recovery project || knowledge recovery system"
+    },
+    {
+      "title_a": "Knowledge Recovery Project",
+      "title_b": "Knowledge Recovery System Integration",
+      "excused": "project",
+      "key": "knowledge recovery project || knowledge recovery system integration"
+    },
+    {
+      "title_a": "Knowledge Recovery Project",
+      "title_b": "Migración del knowledge recovery system al nuevo formato de bundle",
+      "excused": "project",
+      "key": "knowledge recovery project || migracion del knowledge recovery system al nuevo formato de bundle"
+    },
+    {
+      "title_a": "Knowledge Recovery Project",
+      "title_b": "Reunión del equipo de knowledge recovery system",
+      "excused": "project",
+      "key": "knowledge recovery project || reunion del equipo de knowledge recovery system"
+    },
+    {
+      "title_a": "Knowledge Recovery System Integration",
+      "title_b": "Recovery of Knowledge Project",
+      "excused": "project",
+      "key": "knowledge recovery system integration || recovery of knowledge project"
+    },
+    {
+      "title_a": "Meeting Discussion on Remote Control Design",
+      "title_b": "Remote Control Design Project",
+      "excused": "project",
+      "key": "meeting discussion on remote control design || remote control design project"
+    },
+    {
+      "title_a": "Migración del knowledge recovery system al nuevo formato de bundle",
+      "title_b": "Recovery of Knowledge Project",
+      "excused": "project",
+      "key": "migracion del knowledge recovery system al nuevo formato de bundle || recovery of knowledge project"
+    },
+    {
+      "title_a": "Multi-Agent Research Application Development",
+      "title_b": "Research Agent Development Project",
+      "excused": "project",
+      "key": "multi agent research application development || research agent development project"
+    },
+    {
+      "title_a": "Onboarding Procedure",
+      "title_b": "Procedimiento de Onboarding",
+      "excused": "procedure",
+      "key": "onboarding procedure || procedimiento de onboarding"
+    },
+    {
+      "title_a": "Onboarding Procedure",
+      "title_b": "Procedimiento de Onboarding para el Equipo Nuevo",
+      "excused": "procedure",
+      "key": "onboarding procedure || procedimiento de onboarding para el equipo nuevo"
+    },
+    {
+      "title_a": "Re-ranking Procedure",
+      "title_b": "Re-ranking del retrieval con el judge ensemble",
+      "excused": "procedure",
+      "key": "re ranking del retrieval con el judge ensemble || re ranking procedure"
+    },
+    {
+      "title_a": "Re-ranking del retrieval con el judge ensemble",
+      "title_b": "Retrieval Re-ranking Project",
+      "excused": "project",
+      "key": "re ranking del retrieval con el judge ensemble || retrieval re ranking project"
+    },
+    {
+      "title_a": "Re-ranking Procedure",
+      "title_b": "Re-ranking del Retrieval",
+      "excused": "procedure",
+      "key": "re ranking del retrieval || re ranking procedure"
+    },
+    {
+      "title_a": "Re-ranking Procedure",
+      "title_b": "Retrieval Re-ranking Project",
+      "excused": "procedure",
+      "key": "re ranking procedure || retrieval re ranking project"
+    },
+    {
+      "title_a": "Re-ranking Procedure",
+      "title_b": "Retrieval Re-ranking with Judge Ensemble",
+      "excused": "procedure",
+      "key": "re ranking procedure || retrieval re ranking with judge ensemble"
+    },
+    {
+      "title_a": "Recovery of Knowledge Project",
+      "title_b": "Reunión del equipo de knowledge recovery system",
+      "excused": "project",
+      "key": "recovery of knowledge project || reunion del equipo de knowledge recovery system"
+    },
+    {
+      "title_a": "Remote Control Design Project",
+      "title_b": "Remote Control Design for Television",
+      "excused": "project",
+      "key": "remote control design for television || remote control design project"
+    },
+    {
+      "title_a": "Remote Control Design Project",
+      "title_b": "Remote Control Design Specifications",
+      "excused": "project",
+      "key": "remote control design project || remote control design specifications"
+    },
+    {
+      "title_a": "Remote Control Design Project",
+      "title_b": "Remote Control Interface Design",
+      "excused": "project",
+      "key": "remote control design project || remote control interface design"
+    },
+    {
+      "title_a": "Remote Control Design Project",
+      "title_b": "Television Remote Control Interface Design",
+      "excused": "project",
+      "key": "remote control design project || television remote control interface design"
+    },
+    {
+      "title_a": "Remote Control Design Project",
+      "title_b": "User Preferences for Remote Control Design",
+      "excused": "project",
+      "key": "remote control design project || user preferences for remote control design"
+    },
+    {
+      "title_a": "Retrieval Re-ranking Project",
+      "title_b": "Retrieval Re-ranking with Judge Ensemble",
+      "excused": "project",
+      "key": "retrieval re ranking project || retrieval re ranking with judge ensemble"
+    }
+  ]
+}
