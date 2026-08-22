@@ -15,6 +15,7 @@ membership is the positive per-item signal (no more `extract` field), and
 import ast
 import dataclasses
 import hashlib
+import json
 import threading
 import time
 from collections.abc import Callable, Sequence
@@ -23,6 +24,7 @@ from pathlib import Path
 import pytest
 
 from openkos.extraction import concept as concept_mod
+from openkos.extraction import judge as judge_mod
 from openkos.llm.base import Message
 from openkos.llm.ollama import OllamaUnavailable
 from openkos.model.types import CLASSIFIABLE_TYPES
@@ -6576,3 +6578,112 @@ def test_unevidenced_titles_defaults_to_empty_on_a_bare_report() -> None:
     `()` is the honest default: it claims no disclosure, which is what an
     untouched site is entitled to claim."""
     assert concept_mod.ExtractionReport().unevidenced_titles == ()
+
+
+# --- the judge's failure causes reach the report (#795) --------------------
+#
+# `judge.select` names WHY each attempt failed since #795, and
+# `extract_concept_union` carries that onto `ExtractionReport`. Nothing
+# between the two was executed end to end: `test_judge.py` calls `select`
+# directly and `test_judge_failure_notice.py` builds the report by hand, so a
+# bug in the wiring itself would have been caught by neither.
+
+
+def _two_subject_reply() -> str:
+    return json.dumps(
+        [
+            {
+                "type": "Concept",
+                "title": "Trazabilidad documental",
+                "description": "Un principio de registro verificable.",
+                "body": "",
+            },
+            {
+                "type": "Decision",
+                "title": "Cifrado de respaldos",
+                "description": "Se acuerda cifrar los respaldos nocturnos.",
+                "body": "",
+            },
+        ],
+        ensure_ascii=False,
+    )
+
+
+def test_union_carries_the_judge_failure_causes_onto_the_report() -> None:
+    """Two extraction passes, then a judge whose every attempt is unusable.
+
+    The causes must arrive on the report NAMED, not merely counted: the
+    whole point of #795 is that a timeout, a parse failure and a backend
+    refusal need different fixes.
+    """
+    llm = _SequencedLLM(
+        [_two_subject_reply(), _two_subject_reply()]
+        + ["not json at all"] * judge_mod.JUDGE_ATTEMPTS
+    )
+
+    outcome = concept_mod.extract_concept_union(
+        "Un documento breve sobre trazabilidad y respaldos.",
+        source_title="Notas",
+        llm=llm,
+    )
+
+    assert outcome.report.judge_status == "failed"
+    assert (
+        outcome.report.judge_failure_causes
+        == (f"{judge_mod.JUDGE_FAILURE_UNPARSEABLE}: no-json",)
+        * judge_mod.JUDGE_ATTEMPTS
+    )
+
+
+def test_union_carries_a_recovered_failure_onto_the_report() -> None:
+    """The half that the retry hid.
+
+    The judge fails once and succeeds on the retry, so the SELECTION is
+    fine -- and the run still had a real judge failure. Reporting only when
+    the selection is unusable would under-count by exactly these, which is
+    the rate #795 measured at 2 of 3 and could not see from a run's output.
+    """
+    llm = _SequencedLLM(
+        [
+            _two_subject_reply(),
+            _two_subject_reply(),
+            "not json at all",
+            json.dumps({"keep": ["Trazabilidad documental"]}),
+        ]
+    )
+
+    outcome = concept_mod.extract_concept_union(
+        "Un documento breve sobre trazabilidad y respaldos.",
+        source_title="Notas",
+        llm=llm,
+    )
+
+    assert outcome.report.judge_status == "ok"
+    assert outcome.report.judge_failure_causes == (
+        f"{judge_mod.JUDGE_FAILURE_UNPARSEABLE}: no-json",
+    )
+
+
+def test_a_judge_that_never_ran_reports_no_causes() -> None:
+    """A single merged candidate skips the judge call entirely (#644), so
+    it failed at nothing. Empty causes and "the judge was not called" stay
+    one value rather than needing a sentinel."""
+    single = json.dumps(
+        [
+            {
+                "type": "Concept",
+                "title": "Trazabilidad documental",
+                "description": "Un principio de registro verificable.",
+                "body": "",
+            }
+        ],
+        ensure_ascii=False,
+    )
+    llm = _SequencedLLM([single, single])
+
+    outcome = concept_mod.extract_concept_union(
+        "Un documento breve sobre trazabilidad.", source_title="Notas", llm=llm
+    )
+
+    assert outcome.report.judge_status == "skipped"
+    assert outcome.report.judge_failure_causes == ()

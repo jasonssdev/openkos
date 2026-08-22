@@ -160,7 +160,7 @@ def capture(llm: OllamaClient, source_path: Path) -> dict[str, Any]:
         judge_input: list[ExtractionResult],
         llm: LLMBackend,
         on_progress: Callable[[str], None] | None,
-    ) -> tuple[str, ...] | None:
+    ) -> judge_mod.JudgeOutcome:
         # Parameter NAMES mirror `_select_with_progress` exactly, not just the
         # types: mypy compares callables by name too, and a rebind that only
         # matched positionally would break any keyword call site.
@@ -253,16 +253,6 @@ def load_judge_call(
 # --------------------------------------------------------------------------- #
 
 
-def _unparseable_detail(reply: str) -> str:
-    """Why `extract_json_object` said no: no JSON at all, or JSON that is not
-    an object. Probe-side annotation only -- see `UNPARSEABLE`."""
-    try:
-        json.loads(reply.strip())
-    except (json.JSONDecodeError, ValueError):
-        return NO_JSON
-    return JSON_NOT_OBJECT
-
-
 def classify_reply(
     reply: str,
     candidates: list[judge_mod.JudgeCandidate] | tuple[judge_mod.JudgeCandidate, ...],
@@ -270,21 +260,22 @@ def classify_reply(
     """`(outcome, selected_titles, unparseable_detail)` for a reply that
     arrived without raising.
 
-    Calls production's OWN `parsing.extract_json_object`,
-    `judge._validate_selection` and `judge._salvage_full_line_echoes` in
-    `select()`'s order, so the only thing this probe adds is WHICH stage said
-    no. `--self-test` pins that agreement: for every synthetic reply, this
-    returning `ok` must coincide with production `select()` returning a
-    non-`None` value, or the probe is measuring a chain production does not
-    run.
+    A thin adapter over production's `judge.classify_reply`, which returns
+    `(selected, cause)` with the cause already named. This probe kept its
+    OWN copy of that chain until #795, purely to report WHICH stage said no,
+    and pinned in its self-test that the copy still agreed. Production now
+    answers the question itself, so the copy is gone and the agreement it
+    guarded is structural rather than asserted.
+
+    The shape here is unchanged so the stored `runs-*.json` from the
+    2026-08-17 sweeps stay comparable: this splits production's single cause
+    string back into the outcome and its detail.
     """
-    parsed = parsing.extract_json_object(reply)
-    if parsed is None:
-        return UNPARSEABLE, None, _unparseable_detail(reply)
-    validated = judge_mod._validate_selection(parsed)
-    if validated is None:
-        return WRONG_SHAPE, None, None
-    return OK, judge_mod._salvage_full_line_echoes(validated, candidates), None
+    selected, cause = judge_mod.classify_reply(reply, candidates)
+    if cause is None:
+        return OK, selected, None
+    outcome, _, detail = cause.partition(": ")
+    return outcome, None, detail or None
 
 
 # --------------------------------------------------------------------------- #
@@ -660,10 +651,16 @@ def _self_test() -> int:
         got, _selected, got_detail = classify_reply(reply, candidates)
         check(f"classifier: {label}", got, want)
         check(f"detail: {label}", got_detail, want_detail)
+        # Still worth asserting even though `classify_reply` IS production's
+        # since #795: this checks the OTHER half -- that `select`'s retry
+        # loop and its `_select_once` wiring reach the same verdict the
+        # classifier does. `.selected`, not the outcome object: `select`
+        # returns a `JudgeOutcome` now and that is never `None`, so the old
+        # `is not None` would pass for every reply shape.
         production = judge_mod.select("src", candidates, _Canned(reply))
         check(
             f"agrees with production select(): {label}",
-            production is not None,
+            production.selected is not None,
             want == OK,
         )
 

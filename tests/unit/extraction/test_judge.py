@@ -84,7 +84,7 @@ def test_select_returns_titles_in_reply_order_on_valid_keep_list() -> None:
     on it, since a bare string array has no dict elements)."""
     llm = _FakeLLM('{"keep": ["Epictetus", "Stoicism"]}')
 
-    selected = judge_mod.select("source text", _CANDIDATES, llm)
+    selected = judge_mod.select("source text", _CANDIDATES, llm).selected
 
     assert selected == ("Epictetus", "Stoicism")
 
@@ -96,7 +96,7 @@ def test_select_rejects_a_bare_json_array_reply() -> None:
     list rather than failing -- this reply shape must be rejected."""
     llm = _FakeLLM('["Stoicism", "Epictetus"]')
 
-    selected = judge_mod.select("source text", _CANDIDATES, llm)
+    selected = judge_mod.select("source text", _CANDIDATES, llm).selected
 
     assert selected is None
 
@@ -107,31 +107,31 @@ def test_select_rejects_a_bare_json_array_reply() -> None:
 def test_select_returns_none_on_non_json_reply() -> None:
     llm = _FakeLLM("not json at all")
 
-    assert judge_mod.select("source text", _CANDIDATES, llm) is None
+    assert judge_mod.select("source text", _CANDIDATES, llm).selected is None
 
 
 def test_select_returns_none_when_keep_key_is_missing() -> None:
     llm = _FakeLLM('{"selected": ["Stoicism"]}')
 
-    assert judge_mod.select("source text", _CANDIDATES, llm) is None
+    assert judge_mod.select("source text", _CANDIDATES, llm).selected is None
 
 
 def test_select_returns_none_when_keep_is_not_a_list() -> None:
     llm = _FakeLLM('{"keep": "Stoicism"}')
 
-    assert judge_mod.select("source text", _CANDIDATES, llm) is None
+    assert judge_mod.select("source text", _CANDIDATES, llm).selected is None
 
 
 def test_select_returns_none_when_keep_has_non_string_elements() -> None:
     llm = _FakeLLM('{"keep": ["Stoicism", 7]}')
 
-    assert judge_mod.select("source text", _CANDIDATES, llm) is None
+    assert judge_mod.select("source text", _CANDIDATES, llm).selected is None
 
 
 def test_select_returns_none_when_keep_is_an_empty_list() -> None:
     llm = _FakeLLM('{"keep": []}')
 
-    assert judge_mod.select("source text", _CANDIDATES, llm) is None
+    assert judge_mod.select("source text", _CANDIDATES, llm).selected is None
 
 
 # --- full-line echo salvage (#644) ----------------------------------------
@@ -147,7 +147,7 @@ def test_select_salvages_a_full_candidate_line_echo_with_single_quotes() -> None
     line = "type='Concept' title='Stoicism' description='A school of philosophy.'"
     llm = _FakeLLM(json.dumps({"keep": [line]}))
 
-    selected = judge_mod.select("source text", _CANDIDATES, llm)
+    selected = judge_mod.select("source text", _CANDIDATES, llm).selected
 
     assert selected == ("Stoicism",)
 
@@ -159,7 +159,7 @@ def test_select_salvages_a_full_candidate_line_echo_with_double_quotes() -> None
     line = '2. type="Person" title="Epictetus" description="A Stoic philosopher."'
     llm = _FakeLLM(json.dumps({"keep": [line]}))
 
-    selected = judge_mod.select("source text", _CANDIDATES, llm)
+    selected = judge_mod.select("source text", _CANDIDATES, llm).selected
 
     assert selected == ("Epictetus",)
 
@@ -172,7 +172,7 @@ def test_select_salvage_replaces_a_case_drifted_echoed_title() -> None:
     line = "1. type='Concept' title='STOICISM' description='A school of philosophy.'"
     llm = _FakeLLM(json.dumps({"keep": [line]}))
 
-    selected = judge_mod.select("source text", _CANDIDATES, llm)
+    selected = judge_mod.select("source text", _CANDIDATES, llm).selected
 
     assert selected == ("Stoicism",)
 
@@ -185,7 +185,7 @@ def test_select_leaves_an_unresolvable_kept_string_as_is() -> None:
     fabricated = "type='Concept' title='Fabricated' description='Not a candidate.'"
     llm = _FakeLLM(json.dumps({"keep": ["utter garbage", fabricated, "Stoicism"]}))
 
-    selected = judge_mod.select("source text", _CANDIDATES, llm)
+    selected = judge_mod.select("source text", _CANDIDATES, llm).selected
 
     assert selected == ("utter garbage", fabricated, "Stoicism")
 
@@ -197,7 +197,7 @@ def test_select_leaves_a_clean_title_list_untouched() -> None:
     line = "type='Concept' title='Stoicism' description='A school of philosophy.'"
     llm = _FakeLLM(json.dumps({"keep": ["Epictetus", line]}))
 
-    selected = judge_mod.select("source text", _CANDIDATES, llm)
+    selected = judge_mod.select("source text", _CANDIDATES, llm).selected
 
     assert selected == ("Epictetus", "Stoicism")
 
@@ -211,14 +211,14 @@ def test_select_returns_none_when_llm_chat_raises() -> None:
     must never propagate (design D7)."""
     llm = _FakeLLM(raises=OllamaUnavailable("boom"))
 
-    assert judge_mod.select("source text", _CANDIDATES, llm) is None
+    assert judge_mod.select("source text", _CANDIDATES, llm).selected is None
 
 
 def test_select_does_not_propagate_an_arbitrary_exception() -> None:
     """Any exception from `llm.chat`, not only `OllamaError`, is caught."""
     llm = _FakeLLM(raises=RuntimeError("unexpected"))
 
-    assert judge_mod.select("source text", _CANDIDATES, llm) is None
+    assert judge_mod.select("source text", _CANDIDATES, llm).selected is None
 
 
 # --- module boundary (task 1.9) -------------------------------------------
@@ -272,7 +272,7 @@ def test_select_retries_once_after_a_raising_chat_call() -> None:
     llm = _SequencedLLM(
         OllamaUnavailable("connection refused"), '{"keep": ["Stoicism"]}'
     )
-    assert judge_mod.select("source", _CANDIDATES, llm) == ("Stoicism",)
+    assert judge_mod.select("source", _CANDIDATES, llm).selected == ("Stoicism",)
     assert len(llm.calls) == 2
 
 
@@ -282,7 +282,7 @@ def test_select_retries_once_after_an_unparseable_reply() -> None:
     dropped connection on a sampling model, and telling the two apart at this
     seam would need a distinction `select`'s contract does not make."""
     llm = _SequencedLLM("Sure! I kept the first one.", '{"keep": ["Stoicism"]}')
-    assert judge_mod.select("source", _CANDIDATES, llm) == ("Stoicism",)
+    assert judge_mod.select("source", _CANDIDATES, llm).selected == ("Stoicism",)
     assert len(llm.calls) == 2
 
 
@@ -290,14 +290,14 @@ def test_select_retries_once_after_a_wrong_shaped_reply() -> None:
     """A valid JSON object whose `keep` fails `_validate_selection` is the
     third cause, and it retries too."""
     llm = _SequencedLLM('{"keep": []}', '{"keep": ["Epictetus"]}')
-    assert judge_mod.select("source", _CANDIDATES, llm) == ("Epictetus",)
+    assert judge_mod.select("source", _CANDIDATES, llm).selected == ("Epictetus",)
     assert len(llm.calls) == 2
 
 
 def test_select_returns_none_after_the_retry_also_fails() -> None:
     """The bound is ONE retry, not a loop: two failures is unavailable."""
     llm = _SequencedLLM("nope", "still nope")
-    assert judge_mod.select("source", _CANDIDATES, llm) is None
+    assert judge_mod.select("source", _CANDIDATES, llm).selected is None
     assert len(llm.calls) == 2
 
 
@@ -305,7 +305,7 @@ def test_select_spends_no_retry_when_the_first_attempt_succeeds() -> None:
     """The healthy path must cost exactly what it cost before. A retry that
     also fired on success would double every judge call in the product."""
     llm = _SequencedLLM('{"keep": ["Stoicism"]}')
-    assert judge_mod.select("source", _CANDIDATES, llm) == ("Stoicism",)
+    assert judge_mod.select("source", _CANDIDATES, llm).selected == ("Stoicism",)
     assert len(llm.calls) == 1
 
 
@@ -322,3 +322,114 @@ def test_judge_attempts_is_two() -> None:
     """The bound is a named constant, so the notice and the tests cannot
     drift from what the code spends."""
     assert judge_mod.JUDGE_ATTEMPTS == 2
+
+
+# --- failure causes (#795) ------------------------------------------------
+#
+# `select` used to answer `None` for three different failures, so
+# `judge selection unavailable` named an OUTCOME and hid the CAUSE. #795
+# reports a 2-of-3 failure rate on ordinary transcripts with no diagnostic
+# at all, and says plainly why that matters: "timeout, parse failure, and
+# backend refusal need different fixes and are currently indistinguishable."
+#
+# The vocabulary is not invented here. `evals/judge_cold_start/` already
+# measured 45 judge calls under exactly these four names, so production
+# adopting them keeps every stored result comparable and lets that harness
+# drop the classifier copy it had to keep in sync.
+
+
+def test_a_successful_selection_reports_no_failures() -> None:
+    llm = _FakeLLM('{"keep": ["Stoicism"]}')
+
+    outcome = judge_mod.select("source text", _CANDIDATES, llm)
+
+    assert outcome.selected == ("Stoicism",)
+    assert outcome.failures == ()
+
+
+def test_a_raised_chat_names_the_exception_type() -> None:
+    """The exception TYPE is the whole point: a timeout and a refusal both
+    arrive through `chat`, and they need different fixes. A bare
+    `chat_error` would leave them exactly as indistinguishable as `None`
+    already did."""
+    llm = _FakeLLM(raises=OllamaUnavailable("connection refused"))
+
+    outcome = judge_mod.select("source text", _CANDIDATES, llm)
+
+    assert outcome.selected is None
+    assert (
+        outcome.failures
+        == (f"{judge_mod.JUDGE_FAILURE_CHAT_ERROR}: OllamaUnavailable",)
+        * judge_mod.JUDGE_ATTEMPTS
+    )
+
+
+def test_a_reply_carrying_no_json_is_told_apart_from_one_carrying_the_wrong_json() -> (
+    None
+):
+    """Both are `unparseable` to `extract_json_object`, and they mean
+    different things: prose instead of a reply, against a reply that is
+    valid JSON of the wrong kind."""
+    prose = judge_mod.select("source text", _CANDIDATES, _FakeLLM("not json at all"))
+    array = judge_mod.select("source text", _CANDIDATES, _FakeLLM('["Stoicism"]'))
+
+    assert prose.failures[0] == f"{judge_mod.JUDGE_FAILURE_UNPARSEABLE}: no-json"
+    assert array.failures[0] == (
+        f"{judge_mod.JUDGE_FAILURE_UNPARSEABLE}: json-not-object"
+    )
+
+
+def test_a_json_object_of_the_wrong_shape_is_reported_as_wrong_shape() -> None:
+    llm = _FakeLLM('{"selected": ["Stoicism"]}')
+
+    outcome = judge_mod.select("source text", _CANDIDATES, llm)
+
+    assert outcome.selected is None
+    assert outcome.failures == (judge_mod.JUDGE_FAILURE_WRONG_SHAPE,) * (
+        judge_mod.JUDGE_ATTEMPTS
+    )
+
+
+def test_one_failure_then_a_success_reports_the_failure_it_recovered_from() -> None:
+    """The retry hides a real event. A source whose judge failed once and
+    succeeded on the retry looks identical to one that never failed, so the
+    rate #795 measured could not be seen from a run's own output."""
+
+    class _FlakyLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def chat(self, messages: Sequence[Message]) -> str:
+            self.calls += 1
+            if self.calls == 1:
+                return "not json at all"
+            return '{"keep": ["Stoicism"]}'
+
+    outcome = judge_mod.select("source text", _CANDIDATES, _FlakyLLM())
+
+    assert outcome.selected == ("Stoicism",)
+    assert outcome.failures == (f"{judge_mod.JUDGE_FAILURE_UNPARSEABLE}: no-json",)
+
+
+def test_every_attempt_is_recorded_in_attempt_order() -> None:
+    """Two attempts failing differently must both be named. Collapsing them
+    to the last cause would report a parse failure as if the backend had
+    been fine all along."""
+
+    class _TwoWaysLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def chat(self, messages: Sequence[Message]) -> str:
+            self.calls += 1
+            if self.calls == 1:
+                raise OllamaUnavailable("connection refused")
+            return '{"keep": []}'
+
+    outcome = judge_mod.select("source text", _CANDIDATES, _TwoWaysLLM())
+
+    assert outcome.selected is None
+    assert outcome.failures == (
+        f"{judge_mod.JUDGE_FAILURE_CHAT_ERROR}: OllamaUnavailable",
+        judge_mod.JUDGE_FAILURE_WRONG_SHAPE,
+    )

@@ -451,7 +451,13 @@ class _StageRecorder:
             source_text: Any, judge_input: Any, llm: Any, on_progress: Any
         ) -> Any:
             entered = _snapshot(judge_input)
-            selected = original(source_text, judge_input, llm, on_progress)
+            # `_select_with_progress` returns a `JudgeOutcome` since #795, so
+            # the selection is read off `.selected`. The failure CAUSES it
+            # also carries are not recorded here on purpose: this probe
+            # measures per-stage attrition, and a cause is not a candidate
+            # entering or leaving a stage.
+            outcome = original(source_text, judge_input, llm, on_progress)
+            selected = outcome.selected
             if selected is None:
                 left = entered  # a failed judge degrades to the whole set
             else:
@@ -462,7 +468,7 @@ class _StageRecorder:
                     if concept_mod._normalize_title(c["title"]) in chosen
                 ]
             events.append(StageEvent(stage="judge.select", entered=entered, left=left))
-            return selected
+            return outcome
 
         concept_mod._select_with_progress = recording
 

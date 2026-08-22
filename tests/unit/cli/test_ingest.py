@@ -8651,3 +8651,88 @@ def test_ingest_judge_unavailable_notice_names_both_compounding_failures(
     assert "no quality selection ran" in result.stderr
     assert "cap reached" not in result.stderr
     assert "judge dropped" not in result.stderr
+
+
+def _many_grounded_concepts_reply(count: int) -> str:
+    """One reply carrying `count` distinct, non-framing Concept candidates,
+    every body QUOTING the fixture source.
+
+    Enough of them to push the merged union past `_MAX_JUDGE_CANDIDATES`, so
+    the pre-judge ceiling has something to cut.
+
+    Separate from `_many_concepts_reply` above, whose bodies are `Body {i}.`
+    and therefore quote nothing: on that reply #801's evidence notice fires
+    for every object, and a test reading stderr for the judge and the ceiling
+    would be reading it through six lines about something else.
+    """
+    return json.dumps(
+        [
+            {
+                "extract": True,
+                "type": "Concept",
+                "title": f"Practice Number {i:02d}",
+                "description": f"A distinct practice, the {i}th, with its own scope.",
+                "body": _CONCEPT_BODY_LINE,
+            }
+            for i in range(count)
+        ]
+    )
+
+
+def test_ingest_says_a_source_is_unfiltered_when_the_ceiling_and_the_judge_both_fail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#795 point 3, end to end through the CLI.
+
+    On the reported file 3 both degrades fired at once: the 24-candidate
+    pre-judge ceiling held candidates back, and the judge then failed, so
+    the survivors were kept with the positional cap skipped too. That source
+    produced 24 objects filtered by nothing at all.
+
+    The compound line ADDS to the two partial ones; both must still be
+    present, because an operator who greps for either has to keep finding
+    it. Unit tests cover the notice functions themselves -- this proves the
+    CLI actually reaches them, which is the wiring neither of those can see.
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    many = _many_grounded_concepts_reply(26)
+    _patch_sequenced_llm(
+        monkeypatch,
+        [many, many, OllamaUnavailable("boom"), OllamaUnavailable("boom")],
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text(_GROUNDED_NOTES, encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert "never reached the judge" in result.stderr
+    assert "judge selection unavailable" in result.stderr
+    assert "effectively UNFILTERED" in result.stderr
+    # The cause travels all the way to the terminal, which is what #795 asks
+    # for: an operator can tell a refused backend from a bad reply.
+    assert "chat_error: OllamaUnavailable" in result.stderr
+
+
+def test_ingest_stays_quiet_about_being_unfiltered_when_only_the_judge_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The floor for the test above. A judge failure alone is one degrade,
+    not the compound state, and claiming otherwise would make the louder
+    line fire on the ordinary case it exists to stand out from."""
+    _init_workspace(tmp_path, monkeypatch)
+    run1 = _concept_reply(title="Stoic Dichotomy Of Control")
+    run2 = _concept_reply(title="Negative Visualization")
+    _patch_sequenced_llm(
+        monkeypatch,
+        [run1, run2, OllamaUnavailable("boom"), OllamaUnavailable("boom")],
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text(_GROUNDED_NOTES, encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert "judge selection unavailable" in result.stderr
+    assert "effectively UNFILTERED" not in result.stderr
+    assert "never reached the judge" not in result.stderr
