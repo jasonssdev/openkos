@@ -7,9 +7,11 @@ proposes candidate GROUPS via three deterministic, stdlib-only tiers:
 HIGH (an exact shared `normalize.normalize_key`, bucketed ACROSS all
 declared OKF types -- issue #437), ACRONYM (`similarity.
 acronym_expansion_match`), and LOW (a `similarity.is_near_match`,
-excluding any pair already HIGH or ACRONYM). ACRONYM and LOW remain
-STRICTLY per-type -- only HIGH is exempt from type partitioning. Output is
-ephemeral -- frozen dataclasses only, never a persisted OKF type or
+excluding any pair already HIGH or ACRONYM). ACRONYM and LOW stay
+per-type, with two exemptions: HIGH is not partitioned by type at all
+(#437), and a pair one document's own `type_alternative` bridges is
+admitted to the ACRONYM/LOW comparison the partition would otherwise have
+prevented (#804, `_bridged_cross_type_pairs`). Output is ephemeral -- frozen dataclasses only, never a persisted OKF type or
 `bundle`/`state` file -- and this module never writes a byte of the
 bundle.
 
@@ -22,6 +24,14 @@ candidate group, carrying both types via `CandidateGroup.member_types`
 per-type rule: HIGH's zero-cost bucket-by-key shape extends naturally
 across types with no pairwise cost, while ACRONYM/LOW's pairwise passes
 stay scoped per type for cost-profile reasons.
+
+Bridged cross-type pairs (#804): two documents describing one thing under
+two names AND two types fall through every tier by construction -- HIGH
+needs an exact shared key, and the partition hides them from the fuzzy
+tiers that exist for exactly this case. Where the extractor wrote down the
+uncertainty that justifies comparing them (`type_alternative` naming the
+other's declared type), the pair is compared. The comparison is unchanged;
+only its membership widens.
 
 `find_exact_title_groups` (issue #216) is the same pass with the
 ACRONYM/LOW tiers left out: it returns exactly the `Tier.HIGH` groups
@@ -206,8 +216,9 @@ def candidate_group_truncation_notice(report: CandidateGroupReport) -> str | Non
     )
 
 
-def _iter_eligible(bundle_dir: Path) -> list[tuple[str, str, str]]:
-    """Return `(concept_id, okf_type, title)` for every eligible document.
+def _iter_eligible(bundle_dir: Path) -> list[tuple[str, str, str, str | None]]:
+    """Return `(concept_id, okf_type, title, type_alternative)` for every
+    eligible document.
 
     Mirrors `_iter_docs`'s skip-and-continue degrade contract: a read
     error or parse error excludes the document from consideration, never
@@ -216,8 +227,17 @@ def _iter_eligible(bundle_dir: Path) -> list[tuple[str, str, str]]:
     excluded (design: "Reading the bundle"). `concept_id` is the
     bundle-relative path with the `.md` suffix removed -- the same
     identity `state/fts.py` uses.
+
+    `type_alternative` is the type the extractor recorded as its runner-up
+    (#804), or `None`. It is advisory in exactly the way the rest of this
+    walk is: a non-string value normalizes to `None` rather than raising,
+    because a hand-edited bundle must not be able to crash a read-only
+    scan, and surrounding whitespace is stripped so a quoted `" Entity "`
+    names the same type `Entity` does. A value left blank by that strip is
+    `None` too. Whether the recorded type is USABLE is not decided here --
+    `_bridged_cross_type_pairs` owns that.
     """
-    eligible: list[tuple[str, str, str]] = []
+    eligible: list[tuple[str, str, str, str | None]] = []
     for scan in okf._iter_docs(bundle_dir):
         if scan.read_error is not None or scan.parse_error is not None:
             continue
@@ -228,14 +248,18 @@ def _iter_eligible(bundle_dir: Path) -> list[tuple[str, str, str]]:
         title = metadata.get("title")
         if not isinstance(title, str) or not title.strip():
             continue
+        alternative = metadata.get(okf.TYPE_ALTERNATIVE_KEY)
+        alternative = (
+            alternative.strip() if isinstance(alternative, str) else None
+        ) or None
         concept_id = okf.concept_id_for(scan.path, bundle_dir)
-        eligible.append((concept_id, str(okf_type), title))
+        eligible.append((concept_id, str(okf_type), title, alternative))
     return eligible
 
 
 def _eligible_keyed_docs(
     bundle_dir: Path, *, include_deprecated: bool
-) -> list[tuple[str, str, str]]:
+) -> list[tuple[str, str, str, str | None]]:
     """The shared, FLAT I/O prelude of BOTH public entry points (design D1).
 
     Walks the bundle via `_iter_eligible`, applies the
@@ -254,19 +278,15 @@ def _eligible_keyed_docs(
     eligible = _iter_eligible(bundle_dir)
     if not include_deprecated:
         deprecated = lifecycle.deprecated_concept_ids(bundle_dir)
-        eligible = [
-            (concept_id, okf_type, title)
-            for concept_id, okf_type, title in eligible
-            if concept_id not in deprecated
-        ]
+        eligible = [doc for doc in eligible if doc[0] not in deprecated]
     return [
-        (concept_id, okf_type, normalize_key(title))
-        for concept_id, okf_type, title in eligible
+        (concept_id, okf_type, normalize_key(title), alternative)
+        for concept_id, okf_type, title, alternative in eligible
     ]
 
 
 def _keyed_docs_by_type(
-    keyed: list[tuple[str, str, str]],
+    keyed: list[tuple[str, str, str, str | None]],
 ) -> list[tuple[str, list[tuple[str, str]]]]:
     """PURE partition of the flat `_eligible_keyed_docs` output by exact
     `okf_type` (design D1) -- the SAME output shape the pre-#437 shared
@@ -278,7 +298,7 @@ def _keyed_docs_by_type(
     (see `_high_candidate_groups`, which buckets the FLAT list instead).
     """
     by_type: dict[str, list[tuple[str, str]]] = defaultdict(list)
-    for concept_id, okf_type, key in keyed:
+    for concept_id, okf_type, key, _ in keyed:
         by_type[okf_type].append((concept_id, key))
 
     keyed_by_type: list[tuple[str, list[tuple[str, str]]]] = []
@@ -288,7 +308,9 @@ def _keyed_docs_by_type(
     return keyed_by_type
 
 
-def _high_candidate_groups(keyed: list[tuple[str, str, str]]) -> list[CandidateGroup]:
+def _high_candidate_groups(
+    keyed: list[tuple[str, str, str, str | None]],
+) -> list[CandidateGroup]:
     """Build HIGH `CandidateGroup`s from the FLAT `(concept_id, okf_type,
     normalized_key)` list, bucketed by exact key ACROSS ALL declared OKF
     types (#437, design D1) -- one bucket-then-sort pass, no pairwise work
@@ -306,7 +328,7 @@ def _high_candidate_groups(keyed: list[tuple[str, str, str]]) -> list[CandidateG
     implementation detail, not part of either entry point's contract.
     """
     by_key: dict[str, list[tuple[str, str]]] = defaultdict(list)
-    for concept_id, okf_type, key in keyed:
+    for concept_id, okf_type, key, _ in keyed:
         by_key[key].append((concept_id, okf_type))
 
     groups: list[CandidateGroup] = []
@@ -353,6 +375,113 @@ def _pairs_covered_by_high_groups(
     }
 
 
+def _pair_group(
+    left: tuple[str, str, str],
+    right: tuple[str, str, str],
+) -> CandidateGroup | None:
+    """The ACRONYM-then-LOW verdict for one `(concept_id, key, okf_type)`
+    pair, or `None` when neither tier fires.
+
+    ACRONYM is evaluated BEFORE the near-match rule so a pair qualifying
+    under both is emitted once, under the stronger of the two (#397). Every
+    group costs one adjudication call (#382), so double-reporting one pair
+    would buy nothing and charge twice.
+
+    Shared by the per-type pass and the bridged cross-type pass (#804) so
+    the two cannot drift in tier order, trigger format, or member ordering.
+    A same-type pair's `_type_label` is that bare type and its
+    `member_types` is what `__post_init__` would have defaulted to, so the
+    per-type pass emits exactly what it emitted before this helper existed.
+    """
+    (id_a, key_a, type_a), (id_b, key_b, type_b) = left, right
+    ordered = sorted(((id_a, type_a), (id_b, type_b)), key=lambda doc: doc[0])
+    member_ids = tuple(doc[0] for doc in ordered)
+    member_types = tuple(doc[1] for doc in ordered)
+    acronym = acronym_expansion_match(key_a, key_b)
+    if acronym is not None:
+        return CandidateGroup(
+            okf_type=_type_label(member_types),
+            member_ids=member_ids,
+            tier=Tier.ACRONYM,
+            trigger=acronym,
+            member_types=member_types,
+        )
+    score = near_match_score(key_a, key_b)
+    if score is None:
+        return None
+    return CandidateGroup(
+        okf_type=_type_label(member_types),
+        member_ids=member_ids,
+        tier=Tier.LOW,
+        trigger=f"{score:.3f}",
+        member_types=member_types,
+    )
+
+
+def _bridged_cross_type_pairs(
+    keyed: list[tuple[str, str, str, str | None]],
+) -> list[tuple[tuple[str, str, str], tuple[str, str, str]]]:
+    """PURE: the cross-type pairs `_keyed_docs_by_type` cannot reach, opened
+    by a document's own recorded `type_alternative` (#804).
+
+    ACRONYM and LOW compare within one exact type, so two documents
+    describing one thing under two names AND two types fall through every
+    tier by construction rather than by scoring -- HIGH needs an exact
+    shared key, and the per-type partition hides the pair from the fuzzy
+    tiers that exist for exactly this case.
+
+    The extractor already wrote down the uncertainty that justifies the
+    comparison: `type_alternative` is the type it nearly chose. When one
+    document's runner-up names another document's declared type, the two are
+    admitted to the SAME comparison the per-type pass would have run. What
+    happens there is unchanged -- the same `acronym_expansion_match`, the
+    same `near_match_score`, the same thresholds -- so this widens WHO is
+    compared and never HOW.
+
+    One direction is enough: both extractions being uncertain at once is
+    luck, not stronger evidence. A pair recorded from both sides is still
+    one bridge, and is yielded once. Order within each pair and across the
+    list is deterministic (`concept_id` ascending), so a bundle's candidate
+    set does not depend on filesystem walk order.
+
+    An alternative naming the document's OWN type opens nothing. Downstream
+    would absorb it -- those pairs are the per-type pass's own, already
+    emitted or already declined -- so the skip buys no verdict, only the
+    work of re-deciding them. It is enforced HERE, where it is observable,
+    rather than in the walk, where two guards would drift.
+    """
+    by_type: dict[str, list[tuple[str, str, str]]] = defaultdict(list)
+    for concept_id, okf_type, key, _ in keyed:
+        by_type[okf_type].append((concept_id, key, okf_type))
+
+    bridged: dict[frozenset[str], tuple[tuple[str, str, str], ...]] = {}
+    for concept_id, okf_type, key, alternative in sorted(keyed):
+        if alternative is None or alternative == okf_type:
+            continue
+        for other in by_type.get(alternative, ()):
+            if other[0] == concept_id:
+                continue
+            left = (concept_id, key, okf_type)
+            # Keyed by the unordered pair, and each side builds the SAME
+            # sorted tuple, so a bridge recorded from both directions
+            # collapses to one entry rather than needing a guard.
+            bridged[frozenset((concept_id, other[0]))] = tuple(
+                sorted((left, other), key=lambda doc: doc[0])
+            )
+    return [
+        (pair[0], pair[1]) for _, pair in sorted(bridged.items(), key=_bridge_order)
+    ]
+
+
+def _bridge_order(
+    item: tuple[frozenset[str], tuple[tuple[str, str, str], ...]],
+) -> tuple[str, ...]:
+    """Sort key for `_bridged_cross_type_pairs`: the pair's member ids,
+    ascending. A `frozenset` has no order of its own, so sorting on it
+    directly would make the output depend on hash seeding."""
+    return tuple(doc[0] for doc in item[1])
+
+
 def find_candidates_report(
     bundle_dir: Path, *, include_deprecated: bool = False
 ) -> CandidateGroupReport:
@@ -392,38 +521,26 @@ def find_candidates_report(
     high_pairs = _pairs_covered_by_high_groups(high_groups)
 
     groups: list[CandidateGroup] = list(high_groups)
+    seen: set[frozenset[str]] = set(high_pairs)
     for okf_type, keyed in _keyed_docs_by_type(eligible):
         for (id_a, key_a), (id_b, key_b) in combinations(keyed, 2):
             pair = frozenset((id_a, id_b))
-            if pair in high_pairs:
+            if pair in seen:
                 continue
-            # ACRONYM is evaluated BEFORE the near-match rule so a pair
-            # qualifying under both is emitted once, under the stronger of
-            # the two (#397). Every group costs one adjudication call
-            # (#382), so double-reporting one pair would buy nothing and
-            # charge twice.
-            acronym = acronym_expansion_match(key_a, key_b)
-            if acronym is not None:
-                groups.append(
-                    CandidateGroup(
-                        okf_type=okf_type,
-                        member_ids=tuple(sorted((id_a, id_b))),
-                        tier=Tier.ACRONYM,
-                        trigger=acronym,
-                    )
-                )
+            group = _pair_group((id_a, key_a, okf_type), (id_b, key_b, okf_type))
+            if group is None:
                 continue
-            score = near_match_score(key_a, key_b)
-            if score is None:
-                continue
-            groups.append(
-                CandidateGroup(
-                    okf_type=okf_type,
-                    member_ids=tuple(sorted((id_a, id_b))),
-                    tier=Tier.LOW,
-                    trigger=f"{score:.3f}",
-                )
-            )
+            seen.add(pair)
+            groups.append(group)
+    for left, right in _bridged_cross_type_pairs(eligible):
+        pair = frozenset((left[0], right[0]))
+        if pair in seen:
+            continue
+        group = _pair_group(left, right)
+        if group is None:
+            continue
+        seen.add(pair)
+        groups.append(group)
 
     produced = len(groups)
     retained_groups = sorted(groups, key=_cap_rank_key)[:_MAX_CANDIDATE_GROUPS]

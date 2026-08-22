@@ -37,6 +37,7 @@ def _write_doc(
     title: str = "Stub",
     status: str | None = None,
     relations: list[tuple[str, str]] | None = None,
+    type_alternative: str | None = None,
 ) -> None:
     """Write a minimal `doc_type` document. Optional `status`/`relations`
     lifecycle frontmatter (status-aware-retrieval, Phase 3) -- `relations`
@@ -44,6 +45,8 @@ def _write_doc(
     `test_answer.py`/`test_contradiction.py`'s equivalent helper."""
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = ["---", f"type: {doc_type}", f"title: {title}"]
+    if type_alternative is not None:
+        lines.append(f"type_alternative: {type_alternative}")
     if status is not None:
         lines.append(f"status: {status}")
     if relations is not None:
@@ -1297,3 +1300,305 @@ def test_cap_rank_tie_break_stays_stable_with_a_joined_okf_type_label(
     sort_keys = [(g.okf_type, g.member_ids) for g in first.groups]
     assert sort_keys == sorted(sort_keys)
     assert first.groups[-1].okf_type == "Concept+Entity"
+
+
+# --------------------------------------------------------------------------- #
+# #804: type_alternative bridges the per-type block for ACRONYM and LOW
+# --------------------------------------------------------------------------- #
+
+
+def test_a_recorded_alternative_bridges_a_cross_type_near_match(tmp_path: Path) -> None:
+    """The reported defect. Two documents describe one thing under two
+    names and two types, and each records the other's type as the one it
+    nearly chose. HIGH cannot reach them (the keys differ) and the per-type
+    block hides them from LOW, so the pair falls through by construction
+    rather than by scoring."""
+    bundle = tmp_path / "bundle"
+    _write_doc(
+        bundle / "concepts" / "stoicism.md",
+        doc_type="Concept",
+        title="Stoicism",
+        type_alternative="Entity",
+    )
+    _write_doc(
+        bundle / "entities" / "stoic-philosophy.md",
+        doc_type="Entity",
+        title="Stoic Philosophy",
+        type_alternative="Concept",
+    )
+
+    groups = find_candidates(bundle)
+
+    assert [(g.tier, g.member_ids) for g in groups] == [
+        (Tier.LOW, ("concepts/stoicism", "entities/stoic-philosophy"))
+    ]
+    assert groups[0].okf_type == "Concept+Entity"
+    assert (
+        groups[0].trigger
+        == f"{similarity.near_match_score('stoicism', 'stoic philosophy'):.3f}"
+    )
+
+
+def test_without_a_recorded_alternative_the_block_still_holds(tmp_path: Path) -> None:
+    """The bridge is the extractor's OWN recorded uncertainty, never a
+    blanket un-blocking. The identical titles and types, with nothing
+    written down, stay invisible exactly as before."""
+    bundle = tmp_path / "bundle"
+    _write_doc(bundle / "concepts" / "stoicism.md", title="Stoicism")
+    _write_doc(
+        bundle / "entities" / "stoic-philosophy.md",
+        doc_type="Entity",
+        title="Stoic Philosophy",
+    )
+
+    assert find_candidates(bundle) == []
+
+
+def test_one_side_recording_the_alternative_is_enough(tmp_path: Path) -> None:
+    """Both extractions being uncertain at once is luck, not evidence. One
+    document saying 'I might have been an Entity' is already a reason to
+    compare it with the Entities."""
+    bundle = tmp_path / "bundle"
+    _write_doc(
+        bundle / "concepts" / "stoicism.md",
+        title="Stoicism",
+        type_alternative="Entity",
+    )
+    _write_doc(
+        bundle / "entities" / "stoic-philosophy.md",
+        doc_type="Entity",
+        title="Stoic Philosophy",
+    )
+
+    assert [g.member_ids for g in find_candidates(bundle)] == [
+        ("concepts/stoicism", "entities/stoic-philosophy")
+    ]
+
+
+def test_a_bridged_pair_is_reported_once(tmp_path: Path) -> None:
+    """Both directions recorded is one bridge, not two. Every group costs an
+    adjudication call, so double-reporting one pair would charge twice for
+    the same question."""
+    bundle = tmp_path / "bundle"
+    _write_doc(
+        bundle / "concepts" / "stoicism.md",
+        title="Stoicism",
+        type_alternative="Entity",
+    )
+    _write_doc(
+        bundle / "entities" / "stoic-philosophy.md",
+        doc_type="Entity",
+        title="Stoic Philosophy",
+        type_alternative="Concept",
+    )
+
+    assert len(find_candidates(bundle)) == 1
+
+
+def test_a_bridged_group_carries_each_members_own_type(tmp_path: Path) -> None:
+    """`member_types` is what adjudication reads to tell the model the group
+    spans two types. A bridged group that reported one shared type would
+    send the cross-type note nowhere."""
+    bundle = tmp_path / "bundle"
+    _write_doc(
+        bundle / "concepts" / "stoicism.md",
+        title="Stoicism",
+        type_alternative="Entity",
+    )
+    _write_doc(
+        bundle / "entities" / "stoic-philosophy.md",
+        doc_type="Entity",
+        title="Stoic Philosophy",
+    )
+
+    group = find_candidates(bundle)[0]
+
+    assert group.member_ids == ("concepts/stoicism", "entities/stoic-philosophy")
+    assert group.member_types == ("Concept", "Entity")
+
+
+def test_the_bridge_reaches_the_acronym_tier_too(tmp_path: Path) -> None:
+    """ACRONYM is blocked by type for the same reason LOW is, and the
+    reported bundle's own acronym case (`HDP`) crossed a type boundary."""
+    bundle = tmp_path / "bundle"
+    _write_doc(
+        bundle / "concepts" / "adk.md",
+        title="ADK",
+        type_alternative="Entity",
+    )
+    _write_doc(
+        bundle / "entities" / "agent-development-kit.md",
+        doc_type="Entity",
+        title="Agent Development Kit",
+    )
+
+    groups = find_candidates(bundle)
+
+    assert [(g.tier, g.trigger) for g in groups] == [(Tier.ACRONYM, "adk")]
+
+
+def test_a_bridged_pair_already_covered_by_high_is_not_repeated(
+    tmp_path: Path,
+) -> None:
+    """HIGH already crosses types on an exact key (#437). A bridged pair
+    must obey the same disjointness every other pair does."""
+    bundle = tmp_path / "bundle"
+    _write_doc(
+        bundle / "concepts" / "stoicism.md",
+        title="Stoicism",
+        type_alternative="Entity",
+    )
+    _write_doc(
+        bundle / "entities" / "stoicism.md",
+        doc_type="Entity",
+        title="Stoicism",
+        type_alternative="Concept",
+    )
+
+    groups = find_candidates(bundle)
+
+    assert [g.tier for g in groups] == [Tier.HIGH]
+
+
+def test_an_alternative_naming_an_absent_type_changes_nothing(tmp_path: Path) -> None:
+    """A bridge to a type no document in the bundle carries is inert, not an
+    error."""
+    bundle = tmp_path / "bundle"
+    _write_doc(
+        bundle / "concepts" / "stoicism.md",
+        title="Stoicism",
+        type_alternative="Place",
+    )
+    _write_doc(
+        bundle / "entities" / "stoic-philosophy.md",
+        doc_type="Entity",
+        title="Stoic Philosophy",
+    )
+
+    assert find_candidates(bundle) == []
+
+
+def test_a_bridge_never_reaches_a_deprecated_document(tmp_path: Path) -> None:
+    """Deprecation is excluded before pairing, and the bridge is pairing."""
+    bundle = tmp_path / "bundle"
+    _write_doc(
+        bundle / "concepts" / "stoicism.md",
+        title="Stoicism",
+        type_alternative="Entity",
+    )
+    _write_doc(
+        bundle / "entities" / "stoic-philosophy.md",
+        doc_type="Entity",
+        title="Stoic Philosophy",
+        status="deprecated",
+    )
+
+    assert find_candidates(bundle) == []
+
+
+def test_a_non_string_alternative_degrades_instead_of_crashing(
+    tmp_path: Path,
+) -> None:
+    """`type_alternative` is hand-editable frontmatter, so it can hold a
+    list. The read-only scan must survive it -- the walk's whole contract is
+    skip-and-continue -- and it must open no bridge."""
+    bundle = tmp_path / "bundle"
+    stoicism = bundle / "concepts" / "stoicism.md"
+    stoicism.parent.mkdir(parents=True, exist_ok=True)
+    stoicism.write_text(
+        "---\ntype: Concept\ntitle: Stoicism\ntype_alternative:\n  - Entity\n---\n"
+        "# Stoicism\n",
+        encoding="utf-8",
+    )
+    _write_doc(
+        bundle / "entities" / "stoic-philosophy.md",
+        doc_type="Entity",
+        title="Stoic Philosophy",
+    )
+
+    assert find_candidates(bundle) == []
+
+
+def test_an_unusable_alternative_normalizes_to_absent(tmp_path: Path) -> None:
+    """The walk decides only whether the recorded value is a type NAME. A
+    non-string and a blank one both become `None` there, so no downstream
+    reader has to re-ask."""
+    bundle = tmp_path / "bundle"
+    blank = bundle / "concepts" / "blank.md"
+    blank.parent.mkdir(parents=True, exist_ok=True)
+    blank.write_text(
+        '---\ntype: Concept\ntitle: Blank\ntype_alternative: "   "\n---\n# Blank\n',
+        encoding="utf-8",
+    )
+    listed = bundle / "concepts" / "listed.md"
+    listed.write_text(
+        "---\ntype: Concept\ntitle: Listed\ntype_alternative:\n  - Entity\n---\n"
+        "# Listed\n",
+        encoding="utf-8",
+    )
+
+    alternatives = {
+        concept_id: alternative
+        for concept_id, _, _, alternative in candidates_mod._iter_eligible(bundle)
+    }
+
+    assert alternatives == {"concepts/blank": None, "concepts/listed": None}
+
+
+def test_a_pair_group_keeps_each_member_beside_its_own_type() -> None:
+    """`member_ids` sorts by concept_id while the display label sorts by
+    type name, and only `member_types` holds them together.
+
+    No bundle can separate the two orders -- a concept_id begins with the
+    type's own directory, so `concepts/...` sorts before `entities/...`
+    exactly as `Concept` sorts before `Entity`. The ordering contract is
+    therefore only observable HERE, on the pure builder, given an argument
+    order a bundle would never produce.
+    """
+    group = candidates_mod._pair_group(
+        ("entities/stoic-philosophy", "stoic philosophy", "Entity"),
+        ("concepts/stoicism", "stoicism", "Concept"),
+    )
+
+    assert group is not None
+    assert group.member_ids == ("concepts/stoicism", "entities/stoic-philosophy")
+    assert group.member_types == ("Concept", "Entity")
+    assert group.okf_type == "Concept+Entity"
+
+
+def test_surrounding_whitespace_does_not_hide_a_recorded_alternative(
+    tmp_path: Path,
+) -> None:
+    """A quoted `" Entity "` names the type `Entity` names. Treating it as
+    unusable would fail the bridge silently, which is the failure mode this
+    field already had before anything read it at all."""
+    bundle = tmp_path / "bundle"
+    stoicism = bundle / "concepts" / "stoicism.md"
+    stoicism.parent.mkdir(parents=True, exist_ok=True)
+    stoicism.write_text(
+        '---\ntype: Concept\ntitle: Stoicism\ntype_alternative: " Entity "\n---\n'
+        "# Stoicism\n",
+        encoding="utf-8",
+    )
+    _write_doc(
+        bundle / "entities" / "stoic-philosophy.md",
+        doc_type="Entity",
+        title="Stoic Philosophy",
+    )
+
+    assert [g.member_ids for g in find_candidates(bundle)] == [
+        ("concepts/stoicism", "entities/stoic-philosophy")
+    ]
+
+
+def test_an_alternative_naming_its_own_type_opens_no_bridge() -> None:
+    """Enforced where it is observable. Downstream would absorb a same-type
+    pair either way -- the per-type pass has already decided it -- so the
+    public result cannot show the difference, and only the pure generator
+    can prove the work is not being done twice."""
+    keyed = [
+        ("concepts/stoicism", "Concept", "stoicism", "Concept"),
+        ("concepts/stoic-philosophy", "Concept", "stoic philosophy", None),
+    ]
+
+    assert candidates_mod._bridged_cross_type_pairs(keyed) == []

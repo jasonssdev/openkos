@@ -41,22 +41,94 @@ for the ACRONYM and LOW tiers, and MUST NOT produce an ACRONYM or LOW
 candidate between objects of different types, regardless of title or
 acronym similarity. The HIGH (exact normalized-key) tier is exempt from
 this blocking — see Requirement: Cross-Type Exact-Title Bucketing (HIGH
-Tier).
+Tier). A recorded `type_alternative` is the one further exemption — see
+Requirement: A Recorded Type Alternative Bridges The Per-Type Block.
 (Previously: this requirement applied to ALL tiers including HIGH, with no
 exemption.)
 
 #### Scenario: Cross-type similar-but-not-identical titles produce no candidate
 
 - GIVEN a Concept and an Entity whose titles are similar but do not
-  normalize identically (LOW-tier similarity only)
+  normalize identically (LOW-tier similarity only), and neither records a
+  `type_alternative`
 - WHEN `find_candidates` runs
 - THEN no candidate is returned for that pair
 
 #### Scenario: Cross-type acronym match produces no candidate
 
-- GIVEN a Concept and an Entity that would match under the ACRONYM rule
+- GIVEN a Concept and an Entity that would match under the ACRONYM rule,
+  and neither records a `type_alternative`
 - WHEN `find_candidates` runs
 - THEN no candidate is returned for that pair
+
+### Requirement: A Recorded Type Alternative Bridges The Per-Type Block
+
+When a document's `type_alternative` names another document's declared OKF
+`type`, `find_candidates` MUST admit that pair to the ACRONYM and LOW
+comparison the per-type partition would otherwise have prevented. The
+comparison itself MUST be unchanged: the same acronym rule, the same
+near-match rule, the same thresholds. The bridge widens WHICH pairs are
+compared, never HOW a compared pair is scored.
+
+One direction MUST be sufficient — requiring both documents to have
+recorded each other would make the bridge depend on two extractions being
+uncertain at once. A pair bridged from both directions MUST be reported
+exactly once, because every candidate group costs one adjudication call.
+
+A bridged group MUST carry each member's own declared type in
+`member_types` and the joined display label on `okf_type`, exactly as a
+cross-type HIGH group does.
+
+`type_alternative` is hand-editable frontmatter, so a value that is absent,
+blank, non-string, or equal to the document's own `type` MUST open no
+bridge, and a non-string one MUST normalize to absent during the walk
+rather than raising — the read-only scan's skip-and-continue contract
+covers this field like every other. Surrounding whitespace MUST NOT hide a
+recorded alternative: a quoted `" Entity "` names the type `Entity` names.
+
+#### Scenario: A recorded alternative bridges a cross-type near-match
+
+- GIVEN a Concept and an Entity whose titles near-match but do not
+  normalize identically, and the Concept records `type_alternative: Entity`
+- WHEN `find_candidates` runs
+- THEN one LOW candidate is returned for the pair, with both concept_ids,
+  both member types, and the joined `okf_type` display label
+
+#### Scenario: A recorded alternative bridges a cross-type acronym match
+
+- GIVEN a Concept and an Entity that match under the ACRONYM rule, and one
+  records the other's type as its `type_alternative`
+- WHEN `find_candidates` runs
+- THEN one ACRONYM candidate is returned for the pair
+
+#### Scenario: A pair bridged from both directions is reported once
+
+- GIVEN two documents of different types that near-match, each recording
+  the other's type as its `type_alternative`
+- WHEN `find_candidates` runs
+- THEN exactly one candidate group is returned for the pair
+
+#### Scenario: Surrounding whitespace does not hide a recorded alternative
+
+- GIVEN a Concept and an Entity whose titles near-match, and the Concept
+  records `type_alternative: " Entity "`
+- WHEN `find_candidates` runs
+- THEN one candidate is returned for the pair
+
+#### Scenario: A non-string alternative degrades instead of crashing
+
+- GIVEN a document whose `type_alternative` frontmatter holds a list rather
+  than a type name
+- WHEN `find_candidates` runs
+- THEN the scan completes and no candidate is returned for that document
+
+#### Scenario: An alternative naming an absent type changes nothing
+
+- GIVEN a Concept recording `type_alternative: Place` in a bundle holding
+  no Place document
+- WHEN `find_candidates` runs
+- THEN the result is byte-identical to the same bundle without that
+  `type_alternative`
 
 ### Requirement: Exact Normalized-Key Match (HIGH Confidence)
 
@@ -222,7 +294,8 @@ HIGH-confidence (exact normalized-key) candidate groups that
 `include_deprecated` value, in the same order, and MUST do so without
 running the near-match tier: the similarity computation MUST NOT be invoked
 at all. Every other candidate-building contract in this spec applies to it
-unchanged — strict per-type blocking, deterministic read-only building, no
+unchanged — per-type blocking and its exemptions, deterministic read-only
+building, no
 self-pairing, unordered pairs once, trivial bundles, and degrade-not-crash
 on unreadable or malformed documents. It MUST be a distinct public function
 rather than a tier-filter parameter on `find_candidates`, so that no caller
