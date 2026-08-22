@@ -16,6 +16,43 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Added
 
+- **The identity judge is told what an identical Event title means**
+  ([#796](https://github.com/jasonssdev/openkos/issues/796)). Two Events
+  sharing one title are usually two sessions of a standing meeting, and the
+  judge read title identity the way it reads it for a Person. The reported
+  failure was not the judge missing that: it wrote that the members were
+  *"different instances of the same event"* and answered `same` anyway,
+  which feeds a destructive merge and costs a meeting. The rubric now says
+  that type changes what an identical title is evidence OF, and asks for
+  agreement on a date, on who was present, or on a decision one of them
+  records before two Events can be the same.
+
+  Measured before adoption, and measured by ablation afterwards, in
+  [`evals/adjudication/`](https://github.com/jasonssdev/openkos/tree/main/evals/adjudication)
+  — the first harness to score this judge at all. Over 15 runs on five probe
+  classes the clause takes the recurring-meeting class from **0.33 to 1.00**
+  at stability 1.00, and costs **nothing** on the four controls: one meeting
+  recorded twice, an identical Person name, an alias pair, and a part-whole.
+  It costs 15% more latency.
+
+  Shipping alongside it, and honestly second: a deterministic check that
+  withdraws a `same` verdict whose own rationale argues the members are
+  separate occurrences. On its own it recovers a third of the failures
+  (0.33 → 0.51); on top of the clause it adds **0.00**, because the clause
+  already answers them. It ships because it does something the clause
+  structurally cannot — it is pure and reads the stored rationale, so it
+  corrects a verdict **already persisted** under the old rubric, which the
+  clause never reaches
+  ([#838](https://github.com/jasonssdev/openkos/issues/838)). It recovers
+  0.30 of those, not all: the model does not always word its mistake in a way
+  a deterministic rule can read. Zero false withdrawals over 120 correct
+  verdicts.
+
+  **An existing workspace keeps its cached verdicts.** A stored verdict is
+  served whenever the member digests still match, whatever rubric produced
+  it, so re-run `openkos adjudicate --fresh` once to judge under the new
+  rubric — or wait for #838, which makes the store notice by itself.
+
 - **A recorded `type_alternative` bridges duplicate detection's per-type
   block** ([#804](https://github.com/jasonssdev/openkos/issues/804)). Two
   documents describing one subject under two names *and* two types fell

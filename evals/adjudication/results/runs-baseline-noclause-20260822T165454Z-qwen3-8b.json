@@ -1,0 +1,708 @@
+{
+  "arm": "baseline",
+  "clause_ablated": true,
+  "withdrawal_ablated": false,
+  "model": "qwen3:8b",
+  "runs": 15,
+  "generated_at": "20260822T165454Z",
+  "max_generation_tokens": 8192,
+  "context_window": 12288,
+  "outcomes": [
+    {
+      "left_id": "events/comite-evaluacion-coordinacion",
+      "right_id": "events/comite-evaluacion-coordinacion-2",
+      "probe": "recurrence",
+      "expected": "different",
+      "note": "A de-identified analogue of the pair #796 reports, matched on the properties that make the class hard rather than on its content: one body carries an abbreviated Spanish date and three named attendees the other never mentions, and the agendas do not overlap. The reported documents are a private meeting transcript naming real people, and eval fixtures are committed, published and quoted back inside stored model rationales -- so they carry invented names.",
+      "modal": "same",
+      "stability": 0.9333333333333333,
+      "accuracy": 0.06666666666666667,
+      "outcomes": [
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same entity, the 'Comité de Evaluación (coordinación)' meeting. The differences in the content and dates suggest they are different meetings of the same committee, but the core entity being referred to is the same committee."
+        ],
+        [
+          "same",
+          0.95,
+          "Both members refer to the same entity, the 'Comité de Evaluación (coordinación)', with different meeting details and dates. The content and context clearly indicate they are the same event or series of meetings under the same committee."
+        ],
+        [
+          "same",
+          0.95,
+          "Both members refer to the same entity, the 'Comité de Evaluación (coordinación)', with slightly different descriptions and dates. The core entity is the same committee, and the differences are in the details of the meetings, not in the identity of the entity itself."
+        ],
+        [
+          "same",
+          0.95,
+          "Both members refer to the same entity, the 'Comité de Evaluación (coordinación)', with slight variations in description and date, indicating the same meeting or series of meetings."
+        ],
+        [
+          "same",
+          0.95,
+          "Both members refer to the same entity, the 'Comité de Evaluación (coordinación)', with slight variations in description and date, indicating the same meeting or series of meetings under the same name."
+        ],
+        [
+          "same",
+          0.95,
+          "Both members refer to the same entity, the 'Comité de Evaluación (coordinación)', with slight differences in description and date, but they are clearly the same meeting or series of meetings."
+        ],
+        [
+          "same",
+          0.95,
+          "Both members refer to the same entity, a meeting of the Evaluation Committee focused on coordination. They share the same title, 'Comité de Evaluación (coordinación)', and both describe meetings of the committee, with overlapping details about the purpose and participants."
+        ],
+        [
+          "same",
+          0.95,
+          "Both members refer to the same entity, the 'Comité de Evaluación (coordinación)', with slight differences in description and date, but they are clearly the same meeting or series of meetings."
+        ],
+        [
+          "different",
+          0.95,
+          "Both members refer to the same entity, the 'Comité de Evaluación (coordinación)', with slightly different descriptions and dates. The core identity and purpose of the event are the same, indicating they are the same entity under different instances or records. [openkos: the same verdict was withdrawn -- this rationale argues the members are separate occurrences of one recurring event (issue #796)]"
+        ],
+        [
+          "same",
+          0.95,
+          "Both members refer to the same entity, the 'Comité de Evaluación (coordinación)', with slight variations in description and date, indicating the same meeting or series of meetings."
+        ],
+        [
+          "same",
+          0.95,
+          "Both members refer to the same entity, the 'Comité de Evaluación (coordinación)', with slight variations in description and date, indicating they are the same event or series of events under different documentation."
+        ],
+        [
+          "same",
+          0.95,
+          "Both members refer to the same entity, the 'Comité de Evaluación (coordinación)', with slightly different descriptions and dates. The first entry is a general description of the committee's work, while the second provides a specific meeting date and participants, but both are instances of the same committee meeting."
+        ],
+        [
+          "same",
+          0.95,
+          "Both members refer to the same entity, the 'Comité de Evaluación (coordinación)', with the same title and similar content about meetings and discussions. The slight differences in content (e.g., dates, participants, specific topics discussed) are consistent with different meeting instances of the same committee, not different entities."
+        ],
+        [
+          "same",
+          0.95,
+          "Both members refer to the same entity, the 'Comité de Evaluación (coordinación)', with different meeting details and dates. The titles and descriptions are identical, indicating the same event or series of events with different meeting instances."
+        ],
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same entity, the 'Comité de Evaluación (coordinación)', with slightly different details about the meeting (date, participants, and discussion topics). The core entity is the same committee meeting, and the differences are just additional contextual information."
+        ]
+      ]
+    },
+    {
+      "left_id": "events/weekly-design-review",
+      "right_id": "events/weekly-design-review-2",
+      "probe": "recurrence",
+      "expected": "different",
+      "note": "Dates one week apart, different subjects, different decisions, and only one attendee in common. The title names the series, not either meeting.",
+      "modal": "same",
+      "stability": 0.5333333333333333,
+      "accuracy": 0.4666666666666667,
+      "outcomes": [
+        [
+          "same",
+          0.95,
+          "Both members refer to the same recurring event called 'Weekly Design Review' with similar structure, attendees, and content, indicating they are instances of the same event under different names or variations."
+        ],
+        [
+          "different",
+          0.95,
+          "Both members refer to the same event series called 'Weekly Design Review' with similar descriptions, dates, and attendees, indicating they are the same entity under different instances. [openkos: the same verdict was withdrawn -- this rationale argues the members are separate occurrences of one recurring event (issue #796)]"
+        ],
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same recurring event called 'Weekly Design Review', with similar structure, content, and attendees, indicating they are instances of the same event."
+        ],
+        [
+          "different",
+          0.95,
+          "Both members are instances of the same event, 'Weekly Design Review', with different dates and details. They are considered the same entity as they refer to the same recurring event with different occurrences. [openkos: the same verdict was withdrawn -- this rationale argues the members are separate occurrences of one recurring event (issue #796)]"
+        ],
+        [
+          "same",
+          0.95,
+          "Both members refer to the same recurring event called 'Weekly Design Review', with similar descriptions, dates, and attendees, indicating they are instances of the same event."
+        ],
+        [
+          "different",
+          0.95,
+          "Both entries refer to the same recurring event called 'Weekly Design Review' with similar structure, content, and attendees, indicating they are different instances of the same event. [openkos: the same verdict was withdrawn -- this rationale argues the members are separate occurrences of one recurring event (issue #796)]"
+        ],
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same recurring event called 'Weekly Design Review' with similar descriptions, dates, and attendees, indicating they are instances of the same event."
+        ],
+        [
+          "different",
+          0.95,
+          "Both members refer to the same recurring event called 'Weekly Design Review' with similar descriptions, dates, and attendees, indicating they are the same entity under different instances. [openkos: the same verdict was withdrawn -- this rationale argues the members are separate occurrences of one recurring event (issue #796)]"
+        ],
+        [
+          "different",
+          0.95,
+          "Both members refer to the same recurring event called 'Weekly Design Review', with slightly different names (e.g., 'Weekly Design Review' vs. 'Weekly Design Review-2'), but they represent the same event with different instances (dates and topics). [openkos: the same verdict was withdrawn -- this rationale argues the members are separate occurrences of one recurring event (issue #796)]"
+        ],
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same recurring event 'Weekly Design Review' with similar descriptions, dates, and attendees, indicating they are instances of the same event."
+        ],
+        [
+          "different",
+          0.95,
+          "Both members refer to the same recurring event 'Weekly Design Review' with similar descriptions, dates, and attendees, indicating they are the same entity under different instances. [openkos: the same verdict was withdrawn -- this rationale argues the members are separate occurrences of one recurring event (issue #796)]"
+        ],
+        [
+          "different",
+          0.95,
+          "Both members refer to the same recurring event called 'Weekly Design Review', with different dates and specific topics discussed. They are instances of the same event type, indicating they are the same entity under different occurrences. [openkos: the same verdict was withdrawn -- this rationale argues the members are separate occurrences of one recurring event (issue #796)]"
+        ],
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same recurring event called 'Weekly Design Review' with similar structure, content, and attendees, indicating they are instances of the same event."
+        ],
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same recurring event called 'Weekly Design Review', with similar descriptions, dates, and attendees, indicating they are instances of the same event."
+        ],
+        [
+          "same",
+          0.95,
+          "Both members refer to the same recurring event called 'Weekly Design Review', with different dates and slightly different content details, indicating they are instances of the same event."
+        ]
+      ]
+    },
+    {
+      "left_id": "events/sprint-retrospective",
+      "right_id": "events/sprint-retrospective-2",
+      "probe": "recurrence",
+      "expected": "different",
+      "note": "Each body names its own sprint, and the second refers back to the first's decision as a previous one. A meeting cannot be a duplicate of the meeting it reports on.",
+      "modal": "different",
+      "stability": 1.0,
+      "accuracy": 1.0,
+      "outcomes": [
+        [
+          "different",
+          0.95,
+          "The two events are distinct retrospectives for different sprints (sprint 14 and sprint 15). They refer to separate meetings with different outcomes and focus areas, indicating they are different entities."
+        ],
+        [
+          "different",
+          0.95,
+          "The two events are distinct retrospectives for different sprints (sprint 14 and sprint 15). They describe separate meetings with different outcomes and focus areas, indicating they are different entities."
+        ],
+        [
+          "different",
+          0.95,
+          "The two events are distinct retrospectives for different sprints (sprint 14 and sprint 15). They involve different issues (code review queues vs. flaky integration tests) and different resolutions, indicating they are separate events."
+        ],
+        [
+          "different",
+          0.95,
+          "The two events are distinct retrospectives for different sprints (sprint 14 and sprint 15). They refer to separate meetings with different outcomes and actions, indicating they are different entities."
+        ],
+        [
+          "different",
+          0.95,
+          "The two events are distinct retrospectives for different sprints (sprint 14 and sprint 15). They refer to separate meetings with different outcomes and actions, indicating they are different entities."
+        ],
+        [
+          "different",
+          0.95,
+          "The two members refer to different retrospectives for different sprints (sprint 14 and sprint 15). While the titles are similar, they are distinct events with different content and context, indicating they are separate entities."
+        ],
+        [
+          "different",
+          0.95,
+          "The two members refer to different sprints (14 and 15) and distinct retrospective meetings with different issues and resolutions. They are separate events in the same category but not the same entity."
+        ],
+        [
+          "different",
+          0.95,
+          "The two events are distinct retrospectives for different sprints (sprint 14 and sprint 15). They refer to separate meetings with different outcomes and focus areas, indicating they are different entities."
+        ],
+        [
+          "different",
+          0.95,
+          "The two events are distinct retrospectives for different sprints (sprint 14 and sprint 15). They involve different topics (code review queues vs. flaky integration tests) and different actions (capping reviews vs. quarantining tests). These are separate instances of the same type of event but occur in different contexts and timeframes."
+        ],
+        [
+          "different",
+          0.95,
+          "The two members refer to different sprint retrospectives (sprint 14 and sprint 15) with distinct content and outcomes. They are separate events in the same category but represent different instances."
+        ],
+        [
+          "different",
+          0.95,
+          "The two events are distinct retrospectives for different sprints (sprint 14 and sprint 15). They involve different topics (code review queues vs. flaky integration tests) and different actions (capping reviews vs. quarantining tests). These are separate instances of the same type of event but occur in different contexts and timeframes."
+        ],
+        [
+          "different",
+          0.95,
+          "The two members refer to different instances of the same event type (Sprint Retrospective) but for different sprints (14 and 15). They are distinct events with unique content and context, making them different entities."
+        ],
+        [
+          "different",
+          0.95,
+          "The two entries refer to different sprints (14 and 15) and distinct retrospective discussions with different issues and resolutions. They are separate events in the same category but not the same entity."
+        ],
+        [
+          "different",
+          0.95,
+          "The two members refer to different retrospectives for different sprints (sprint 14 and sprint 15). They are distinct events with different content and context, so they are different entities."
+        ],
+        [
+          "different",
+          0.95,
+          "The two members refer to different retrospectives for different sprints (sprint 14 and sprint 15). They are distinct events with different contexts and outcomes, therefore they are different entities."
+        ]
+      ]
+    },
+    {
+      "left_id": "events/kickoff-plataforma-orion",
+      "right_id": "events/kickoff-plataforma-orion-2",
+      "probe": "event-same",
+      "expected": "same",
+      "note": "The same date written two ways, the same two attendees, and the same deliverable with the same deadline. Two sets of notes from one meeting; the second simply records one more remark.",
+      "modal": "same",
+      "stability": 1.0,
+      "accuracy": 1.0,
+      "outcomes": [
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same event, the Kickoff Plataforma Orión, held on May 12, 2026, with the same participants (Lucía Ferrer and Diego Salas) and the same key details about the first deliverable (connector for ingestion by June 30). The only differences are minor variations in phrasing and formatting, which do not indicate different entities."
+        ],
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same event, the 'Kickoff Plataforma Orión', held on 12 de mayo de 2026, with the same participants (Lucía Ferrer and Diego Salas) and the same key details about the first deliverable (connector for ingestion by June 30). The only differences are minor variations in phrasing and formatting, which indicate the same event under different entries."
+        ],
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same event, the Kickoff Plataforma Orión, held on May 12, 2026, with the same participants and same key details about the first deliverable and risks mentioned."
+        ],
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same event, the Kickoff Plataforma Orión, held on 12 de mayo de 2026, with the same participants (Lucía Ferrer and Diego Salas) and the same key details about the first deliverable (connector de ingesta by 30 de junio). The only differences are minor formatting and additional notes, but they clearly describe the same event."
+        ],
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same event, the Kickoff Plataforma Orión, held on May 12, 2026, with the same participants and same key details about the first deliverable and risks mentioned. The only differences are minor variations in phrasing and formatting, which do not indicate different entities."
+        ],
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same event, the Kickoff Plataforma Orión, held on May 12, 2026, with the same participants (Lucía Ferrer and Diego Salas) and the same key details about the first deliverable (connector for ingestion by June 30). The only differences are minor formatting and additional notes, but they clearly refer to the same event."
+        ],
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same event, 'Kickoff Plataforma Orión', held on 12 de mayo de 2026, with the same participants (Lucía Ferrer and Diego Salas) and the same key details about the first deliverable (connector of ingestion by 30 de junio). The only differences are minor formatting and additional notes, but they clearly refer to the same event."
+        ],
+        [
+          "same",
+          0.95,
+          "Both members refer to the same event, 'Kickoff Plataforma Orión', held on May 12, 2026, with the same participants (Lucía Ferrer and Diego Salas) and the same key details about the first deliverable (connector of ingestion by June 30). The differences are merely in formatting and additional notes, not in the entity itself."
+        ],
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same event: the Kickoff Plataforma Orión on May 12, 2026, involving Lucía Ferrer and Diego Salas, with the same key details about the first deliverable and risks mentioned. The only differences are minor formatting and phrasing variations, indicating the same event under different entries."
+        ],
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same event, 'Kickoff Plataforma Orión', held on May 12, 2026, with the same participants and same key details about the first deliverable and risks mentioned. The only differences are minor variations in formatting and phrasing, indicating the same event under different records."
+        ],
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same event, 'Kickoff Plataforma Orión', with identical dates, participants, and key details about the first deliverable and risks mentioned. The slight variation in title and formatting does not indicate a different entity."
+        ],
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same event, 'Kickoff Plataforma Orión', held on May 12, 2026, with the same participants (Lucía Ferrer and Diego Salas) and the same key details about the first deliverable (connector for ingestion by June 30). The slight differences in phrasing and structure do not indicate different entities, but rather variations in how the same event is described."
+        ],
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same event, the 'Kickoff Plataforma Orión' held on 12 de mayo de 2026, with the same participants (Lucía Ferrer and Diego Salas) and the same key details about the first deliverable (connector de ingesta by 30 de junio). The only differences are minor variations in phrasing and formatting, which do not indicate different entities."
+        ],
+        [
+          "same",
+          0.95,
+          "Both members refer to the same event, 'Kickoff Plataforma Orión', held on 12 de mayo de 2026, with the same participants (Lucía Ferrer and Diego Salas) and the same agreed deliverable (connector for ingestion by 30 de junio). The content and structure of the notes are identical, confirming they are the same event under different entries."
+        ],
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same event, 'Kickoff Plataforma Orión', with identical dates, participants, and key details about the first deliverable and risks mentioned. The slight differences in formatting and phrasing do not indicate different entities."
+        ]
+      ]
+    },
+    {
+      "left_id": "events/q3-budget-signoff",
+      "right_id": "events/q3-budget-signoff-2",
+      "probe": "event-same",
+      "expected": "same",
+      "note": "Identical date, identical figure, identical freeze, identical attendees. Nothing in either body distinguishes an occurrence.",
+      "modal": "same",
+      "stability": 1.0,
+      "accuracy": 1.0,
+      "outcomes": [
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same event, the 'Q3 Budget Sign-off', with identical details about the date, budget amount, attendees, and hiring freeze. The slight differences in phrasing and formatting do not indicate different entities."
+        ],
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same event, the 'Q3 Budget Sign-off', with identical details about the date, budget amount, attendees, and the hiring freeze. The slight differences in phrasing and formatting do not indicate different entities."
+        ],
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same event, the Q3 Budget Sign-off, with identical details about the date, budget amount, attendees, and the hiring freeze. The only differences are minor variations in phrasing and formatting, which do not indicate different entities."
+        ],
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same event, the 'Q3 Budget Sign-off', with identical details including the date, budget amount, attendees, and the hiring freeze duration. The slight differences in phrasing and formatting do not indicate different entities."
+        ],
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same event, the 'Q3 Budget Sign-off', with identical details about the date, budget amount, attendees, and the hiring freeze period."
+        ],
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same event, the Q3 Budget Sign-off, with identical details about the date, budget amount, attendees, and hiring freeze."
+        ],
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same event: the Q3 Budget Sign-off meeting on 2 July 2026, with identical details about the budget amount, attendees, and hiring freeze."
+        ],
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same event: the Q3 Budget Sign-off meeting on 2026-07-02, with the same attendees (Marta Ruiz, Sam Oyelaran) and the same outcome (budget approved at 1.4M, hiring freeze until October). The titles and descriptions are identical, and the details match exactly."
+        ],
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same event, the 'Q3 Budget Sign-off', with identical details about the date, budget amount, attendees, and the hiring freeze. The slight differences in phrasing and formatting do not indicate different entities."
+        ],
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same event, the 'Q3 Budget Sign-off', with identical details about the date, budget amount, participants, and the hiring freeze. The slight differences in phrasing (e.g., 'signed off' vs. 'approved') do not indicate different entities, and the content is consistent."
+        ],
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same event: the Q3 Budget Sign-off meeting on 2 July 2026, with identical details about the budget amount, attendees, and hiring freeze."
+        ],
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same event, the Q3 Budget Sign-off, with identical details about the date, budget amount, attendees, and the hiring freeze. The slight differences in phrasing and formatting do not indicate different entities."
+        ],
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same event, the Q3 Budget Sign-off, with identical details about the date, budget amount, attendees, and the hiring freeze. The only differences are minor variations in phrasing and formatting, which indicate the same event under different entries."
+        ],
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same event, the 'Q3 Budget Sign-off', with identical details about the date, budget amount, attendees, and hiring freeze. The slight differences in phrasing and formatting do not indicate different entities."
+        ],
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same event, the 'Q3 Budget Sign-off', with identical details about the date, budget amount, attendees, and the hiring freeze. The slight differences in phrasing and formatting do not indicate different entities."
+        ]
+      ]
+    },
+    {
+      "left_id": "people/marta-ruiz",
+      "right_id": "people/marta-ruiz-2",
+      "probe": "person-same",
+      "expected": "same",
+      "note": "One name, one role, compatible facts. For a Person an identical name is strong evidence of one entity -- the control the issue names, and the answer an Event-specific rule must not disturb.",
+      "modal": "same",
+      "stability": 1.0,
+      "accuracy": 1.0,
+      "outcomes": [
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same person named Marta Ruiz, with identical names and overlapping roles in finance leadership. The slight differences in description (e.g., 'signs off quarterly budgets' vs. 'approved the Q3 budget') are consistent with the same role and entity."
+        ],
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same person named Marta Ruiz, with identical names and overlapping roles in finance leadership. The slight differences in description (e.g., 'signs off quarterly budgets' vs. 'approved the Q3 budget') are consistent with the same role and entity."
+        ],
+        [
+          "same",
+          0.95,
+          "Both members refer to the same person named Marta Ruiz, with identical names and overlapping roles in finance leadership. The differences in descriptions are minor and consistent with the same individual's responsibilities."
+        ],
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same person named Marta Ruiz, with identical names and overlapping roles in finance leadership, indicating they are the same entity."
+        ],
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same person named Marta Ruiz, with identical names and overlapping roles in finance leadership. The differences in description are minor variations in responsibilities, indicating the same entity."
+        ],
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same person named Marta Ruiz, with identical names and overlapping roles in finance leadership. The slight differences in description (e.g., 'signs off quarterly budgets' vs. 'approved the Q3 budget') are consistent with the same role and entity."
+        ],
+        [
+          "same",
+          0.95,
+          "Both members refer to the same person named Marta Ruiz, with identical names and overlapping roles in finance leadership. The slight differences in descriptions (e.g., 'signs off quarterly budgets' vs. 'approved the Q3 budget') are consistent with the same role and entity."
+        ],
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same person named Marta Ruiz, with identical names and overlapping roles in finance leadership. The slight differences in descriptions (e.g., 'signs off quarterly budgets' vs. 'approved the Q3 budget') are consistent with the same role and entity."
+        ],
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same person named Marta Ruiz, with identical names and overlapping roles in finance leadership. The second entry provides additional details about her responsibilities, which align with the first entry's description of her role as finance lead."
+        ],
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same person named Marta Ruiz, with identical names and overlapping roles in finance leadership. The slight differences in descriptions (e.g., 'signs off quarterly budgets' vs. 'approved the Q3 budget') are consistent with the same role and do not indicate different entities."
+        ],
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same person named Marta Ruiz, with identical names and overlapping roles in finance leadership, indicating they are the same entity."
+        ],
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same person named Marta Ruiz, with identical names and overlapping roles in finance leadership, indicating they are the same entity."
+        ],
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same person named Marta Ruiz, with identical names and overlapping roles in finance leadership. The differences in description are minor variations in responsibilities, not distinct entities."
+        ],
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same person named Marta Ruiz, with identical names and overlapping roles in finance leadership, indicating they are the same entity."
+        ],
+        [
+          "same",
+          0.95,
+          "Both members refer to the same person, Marta Ruiz, with identical names and overlapping roles in finance leadership, including budget approval and hiring decisions."
+        ]
+      ]
+    },
+    {
+      "left_id": "concepts/model-context-protocol",
+      "right_id": "concepts/protocolo-model-context",
+      "probe": "alias-same",
+      "expected": "same",
+      "note": "One protocol named in two languages, with the same definition restated. The general recall an identity change must not cost -- and a shape this bilingual corpus actually produces.",
+      "modal": "same",
+      "stability": 1.0,
+      "accuracy": 1.0,
+      "outcomes": [
+        [
+          "same",
+          0.95,
+          "The two members refer to the same concept, with one being the English version and the other the Spanish version of the 'Model Context Protocol'. They describe the same protocol with identical functionality and purpose, differing only in language."
+        ],
+        [
+          "same",
+          0.95,
+          "The two members refer to the same concept, with the first being in English and the second in Spanish. Both describe an open protocol that allows a model to access tools and data sources through a uniform interface, and they are translations of each other."
+        ],
+        [
+          "same",
+          0.95,
+          "The two members refer to the same concept, with the first being in English and the second in Spanish. Both describe an open protocol that allows models to access tools and data sources through a uniform interface, and the Spanish version is a direct translation of the English one."
+        ],
+        [
+          "same",
+          0.95,
+          "The two members refer to the same concept, 'Model Context Protocol,' with one being an English version and the other a Spanish version. They describe the same open protocol that allows models to access tools and data sources through a uniform interface."
+        ],
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same concept, the 'Model Context Protocol,' with the first entry in English and the second in Spanish. The descriptions are identical in meaning, and the only difference is language and formatting, indicating the same entity under different names."
+        ],
+        [
+          "same",
+          0.95,
+          "The two entries refer to the same concept, with the first being in English and the second in Spanish. Both describe an open protocol that allows a model to access tools and data sources through a uniform interface, and they are essentially translations of each other."
+        ],
+        [
+          "same",
+          0.95,
+          "The two entries refer to the same concept, 'Model Context Protocol,' with one being the English version and the other the Spanish version. They describe the same protocol and have identical meanings, just in different languages."
+        ],
+        [
+          "same",
+          0.95,
+          "The two members refer to the same concept, 'Model Context Protocol,' with one being the English version and the other the Spanish version. They describe the same protocol with identical functionality and purpose, differing only in language."
+        ],
+        [
+          "same",
+          0.95,
+          "The two entries refer to the same concept, 'Model Context Protocol,' with one being the English version and the other the Spanish version. They describe the same protocol with identical functionality and purpose, differing only in language."
+        ],
+        [
+          "same",
+          0.95,
+          "The two entries refer to the same concept, with the first being in English and the second in Spanish. Both describe an open protocol that allows a model to access tools and data sources through a uniform interface, indicating they are the same entity under different language names."
+        ],
+        [
+          "same",
+          0.95,
+          "The two entries refer to the same concept, 'Model Context Protocol,' with one being the English version and the other the Spanish version. They describe the same protocol with identical functionality and purpose, differing only in language."
+        ],
+        [
+          "same",
+          0.95,
+          "The two members refer to the same concept, 'Model Context Protocol,' with one being an English version and the other a Spanish version. They describe the same protocol with identical functionality and purpose, differing only in language."
+        ],
+        [
+          "same",
+          0.95,
+          "The two members refer to the same concept, with the first being an English version and the second a Spanish version of the 'Model Context Protocol'. They are synonyms and describe the same protocol, just in different languages."
+        ],
+        [
+          "same",
+          0.95,
+          "Both entries refer to the same concept, the 'Model Context Protocol,' with one entry in English and the other in Spanish. The descriptions are identical in meaning, and the terms are direct translations of each other, indicating the same real-world entity."
+        ],
+        [
+          "same",
+          0.95,
+          "The two members refer to the same concept, with the first being in English and the second in Spanish. Both describe an open protocol that allows a model to access tools and data sources through a uniform interface, indicating they are the same entity under different language names."
+        ]
+      ]
+    },
+    {
+      "left_id": "concepts/ingest-pipeline",
+      "right_id": "concepts/ingest-pipeline-scheduler",
+      "probe": "part-whole",
+      "expected": "different",
+      "note": "The second body says it is a component INSIDE the first. The part-whole exclusion the shipped prompt already states.",
+      "modal": "different",
+      "stability": 1.0,
+      "accuracy": 1.0,
+      "outcomes": [
+        [
+          "different",
+          0.95,
+          "The 'Ingest Pipeline' is a stage or process that copies data into the workspace and compiles it, while the 'Ingest Pipeline Scheduler' is a specific component within the ingest pipeline that manages the order and concurrency of processing. They are part of the same system but represent different roles and are not the same entity."
+        ],
+        [
+          "different",
+          0.95,
+          "The 'Ingest Pipeline' is a broader stage in the workflow, while the 'Ingest Pipeline Scheduler' is a specific component within that pipeline. They are part-whole relationships, not the same entity."
+        ],
+        [
+          "different",
+          0.95,
+          "The 'Ingest Pipeline' is a broader stage in the workflow, while the 'Ingest Pipeline Scheduler' is a specific component within that pipeline. They are part-whole relationships, not the same entity."
+        ],
+        [
+          "different",
+          0.95,
+          "The 'Ingest Pipeline' is a broader concept referring to the entire stage of copying, compiling, and updating indexes. The 'Ingest Pipeline Scheduler' is a specific component within that pipeline, responsible for ordering and managing source processing. Since one is a part of the other, they are different entities."
+        ],
+        [
+          "different",
+          0.95,
+          "The 'Ingest Pipeline' is a broader stage in the workflow, while the 'Ingest Pipeline Scheduler' is a specific component within that pipeline. They are part-whole relationships, not the same entity."
+        ],
+        [
+          "different",
+          0.95,
+          "The 'Ingest Pipeline' refers to the overall stage of copying data into the workspace and compiling it, while the 'Ingest Pipeline Scheduler' is a specific component within that pipeline responsible for managing processing order and concurrency. They are part-whole relationships, not the same entity."
+        ],
+        [
+          "different",
+          0.95,
+          "The 'Ingest Pipeline' is a broader concept that encompasses the entire process of copying data into the workspace and compiling it, while the 'Ingest Pipeline Scheduler' is a specific component within that pipeline that manages the order and concurrency of source processing. They are part of the same system but represent different entities."
+        ],
+        [
+          "different",
+          0.95,
+          "The 'Ingest Pipeline' is a broader stage in the workflow, while the 'Ingest Pipeline Scheduler' is a specific component within that pipeline. The scheduler is a part of the ingest pipeline, not a separate entity, so they are different."
+        ],
+        [
+          "different",
+          0.95,
+          "The 'Ingest Pipeline' is a broader process that includes the 'Ingest Pipeline Scheduler' as a component. Since the scheduler is a part of the pipeline, they are different entities."
+        ],
+        [
+          "different",
+          0.95,
+          "The 'Ingest Pipeline' is a broader concept that includes the 'Ingest Pipeline Scheduler' as a component. Since the scheduler is a part of the pipeline, they are different entities."
+        ],
+        [
+          "different",
+          0.95,
+          "The 'Ingest Pipeline' is a broader process that includes the 'Ingest Pipeline Scheduler' as a component. Since the scheduler is a part of the pipeline, they are different entities."
+        ],
+        [
+          "different",
+          0.95,
+          "The 'Ingest Pipeline' is a broader stage in the workflow, while the 'Ingest Pipeline Scheduler' is a specific component within that pipeline. The scheduler is a part of the ingest pipeline, not a separate entity, so they are different."
+        ],
+        [
+          "different",
+          0.95,
+          "The 'Ingest Pipeline' is a broader concept that includes the 'Ingest Pipeline Scheduler' as a component. Since the scheduler is a part of the pipeline, they are different entities."
+        ],
+        [
+          "different",
+          0.95,
+          "The 'Ingest Pipeline' is a broader concept that includes the 'Ingest Pipeline Scheduler' as a component. Since the scheduler is a part of the pipeline, they are different entities."
+        ],
+        [
+          "different",
+          0.95,
+          "The 'Ingest Pipeline' is a broader stage in the workflow, while the 'Ingest Pipeline Scheduler' is a specific component within that pipeline. They are part-whole relationships, not the same entity."
+        ]
+      ]
+    }
+  ]
+}

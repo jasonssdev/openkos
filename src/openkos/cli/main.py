@@ -80,6 +80,7 @@ from openkos.resolution.adjudication import (
     AdjudicationBatch,
     Verdict,
     adjudicate_candidates,
+    withdraw_self_refuting_same,
 )
 from openkos.resolution.candidates import (
     CandidateGroup,
@@ -14226,11 +14227,19 @@ def _partition_adjudication_serves(
         except ValueError:
             to_judge.append(group)
             continue
+        # The SAME judgment path a fresh verdict goes through (#796). A
+        # row stored before that withdrawal existed still carries the
+        # verdict its own rationale argues against, and serving it would
+        # hand the operator a merge the engine now refuses to propose.
+        # Re-deciding costs nothing here: the rule is pure, reads only the
+        # rationale the row already carries, and is idempotent, so a row
+        # written after the rule shipped passes through untouched.
+        verdict, rationale = withdraw_self_refuting_same(verdict, stored.rationale)
         served[key] = AdjudicatedCandidate(
             candidate=group,
             verdict=verdict,
             confidence=stored.confidence,
-            rationale=stored.rationale,
+            rationale=rationale,
         )
     return served, to_judge
 

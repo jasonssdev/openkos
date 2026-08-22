@@ -5052,11 +5052,18 @@ def test_adjudicate_json_carries_the_cross_source_flag(
 
 
 def _stub_one_same_group_with_call_log(
-    monkeypatch: pytest.MonkeyPatch, calls: list[int]
+    monkeypatch: pytest.MonkeyPatch,
+    calls: list[int],
+    *,
+    rationale: str = "stable",
 ) -> CandidateGroup:
     """ONE SAME group over real docs; `_fake_adjudicate` appends the group
     count it received to `calls`, so a test can prove exactly how many
-    groups reached the model layer."""
+    groups reached the model layer.
+
+    `rationale` is a parameter because the stub stands where the production
+    judge stands: a test about what a stored rationale later does to its
+    own verdict (#796) needs to choose it."""
     group = _two_member_group(("concepts/a", "concepts/b"))
 
     def _fake_find_candidates(
@@ -5070,7 +5077,7 @@ def _stub_one_same_group_with_call_log(
         calls.append(len(candidates))
         return AdjudicationBatch(
             results=[
-                _adjudicated(candidate, verdict=Verdict.SAME, rationale="stable")
+                _adjudicated(candidate, verdict=Verdict.SAME, rationale=rationale)
                 for candidate in candidates
             ]
         )
@@ -5344,3 +5351,46 @@ def test_a_row_missing_a_member_digest_never_serves(
     assert result.exit_code == 0
     assert calls == [1], "a partial-digest row must re-judge, never serve"
     assert "0 of 1 candidate group(s) served" in result.stderr
+
+
+def test_a_stored_self_refuting_same_is_corrected_on_serve(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#796 reaches the rows already on disk.
+
+    A verdict persisted before the withdrawal existed still carries the
+    `same` its own rationale argues against, and the serve path would hand
+    it straight to the operator under `Next: openkos merge ...`. Re-deciding
+    on read costs nothing -- the rule is pure and reads only the rationale
+    the row already stores -- and it is what keeps a workspace that ran
+    `adjudicate` before this change from being offered the merge the change
+    exists to refuse.
+
+    The stale row is produced by a FIRST run whose judge is stubbed, which
+    is how a pre-change row really came to exist: the stub stands where the
+    un-withdrawn production function stood.
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    calls: list[int] = []
+    _stub_one_same_group_with_call_log(
+        monkeypatch,
+        calls,
+        rationale=(
+            "Both members refer to the same recurring event, indicating "
+            "they are different instances of the same event."
+        ),
+    )
+
+    first = runner.invoke(app, ["adjudicate"])
+    assert first.exit_code == 0
+    assert "verdict: SAME" in first.stdout, "the stub stands in for the old judge"
+
+    second = runner.invoke(app, ["adjudicate"])
+
+    assert second.exit_code == 0
+    assert calls == [1, 0], "the row is servable; it must not cost a model call"
+    assert "verdict: DIFFERENT" in second.stdout
+    assert "verdict: SAME" not in second.stdout
+    assert "issue #796" in second.stdout
