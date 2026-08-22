@@ -2656,6 +2656,23 @@ class ExtractionReport:
     """Merged candidates cut by `_MAX_JUDGE_CANDIDATES` BEFORE the judge
     ever saw them -- distinct from `discarded_titles`, which is the FINAL
     backstop cap's casualty list. `0` on every non-union path."""
+    judge_failure_causes: tuple[str, ...] = ()
+    """Why each FAILED judge attempt failed, in attempt order (#795).
+
+    `judge_status` names the OUTCOME; this names the CAUSE, and #795 is
+    exactly the gap between them: a 2-of-3 failure rate on ordinary
+    transcripts, with "no diagnostic about *why* the judge could not run",
+    where "timeout, parse failure, and backend refusal need different fixes
+    and are currently indistinguishable".
+
+    NOT redundant with `judge_status == "failed"`, in both directions. It is
+    populated on a SUCCESSFUL selection whose earlier attempt failed -- the
+    retry hides a real event, and that half of the rate was invisible from a
+    run's output. And it stays empty when the judge was never called
+    (`"skipped"`), because a judge that did not run failed at nothing.
+
+    Empty on every non-union path, like `pre_judge_dropped`: `extract_concept`
+    has no judge."""
     reask_runs: int = 0
     """EXTRA chat calls spent on the bounded sole-twin re-ask (#584): `1`
     when the trigger fired, `0` -- the common case -- when it did not.
@@ -3068,7 +3085,7 @@ def _select_with_progress(
     judge_input: list[ExtractionResult],
     llm: LLMBackend,
     on_progress: ProgressHook | None,
-) -> tuple[str, ...] | None:
+) -> "judge_mod.JudgeOutcome":
     """Report the judge phase, then run it (issue #701).
 
     One function so the label and the call cannot drift apart. Reporting
@@ -3320,6 +3337,37 @@ def extract_concept_union(
     participant_readmitted_titles: tuple[str, ...] = ()
     participant_unreadmitted_discarded_titles: tuple[str, ...] = ()
 
+    # #795. Defaults to empty on the branch that never calls the judge, so
+    # "no causes" and "judge not run" stay one value rather than needing a
+    # sentinel: a judge that did not run failed at nothing.
+    #
+    # Captured by `_run_judge` below, on EVERY branch that ran the judge --
+    # not only the failing one. A run whose first attempt failed and whose
+    # retry succeeded has a real failure to report, and recording the causes
+    # only on the failure branch would under-report by exactly those
+    # recovered cases: the half of the rate that was invisible from a run's
+    # own output, and the reason #795 exists.
+    judge_failure_causes: tuple[str, ...] = ()
+
+    def _run_judge(
+        text: str,
+        candidates: list[ExtractionResult],
+        backend: LLMBackend,
+        progress: ProgressHook | None,
+    ) -> tuple[str, ...] | None:
+        """Run the judge, record its failure causes, return its selection.
+
+        A closure over `judge_failure_causes` rather than a nested walrus in
+        the `elif` below: binding the outcome inside a condition, then
+        reaching for one of its attributes on two separate branches, was
+        both hard to read and duplicated the capture in two places a later
+        edit could update singly.
+        """
+        nonlocal judge_failure_causes
+        outcome = _select_with_progress(text, candidates, backend, progress)
+        judge_failure_causes = outcome.failures
+        return outcome.selected
+
     if len(judge_input) == 1:
         # A single candidate makes the judge call a provable no-op (#644):
         # every possible outcome keeps that candidate -- its title echoed
@@ -3334,9 +3382,7 @@ def extract_concept_union(
         kept = judge_input
         judge_status = "skipped"
         judged_out_titles: tuple[str, ...] = ()
-    elif (
-        selected := _select_with_progress(source_text, judge_input, llm, on_progress)
-    ) is None:
+    elif (selected := _run_judge(source_text, judge_input, llm, on_progress)) is None:
         kept = judge_input
         judge_status = "failed"
         judged_out_titles = ()
@@ -3446,5 +3492,6 @@ def extract_concept_union(
             participant_capture_runs=participant_capture_runs,
             participant_capture_added_titles=participant_capture_added_titles,
             unevidenced_titles=_unevidenced_titles(retained, source_text=source_text),
+            judge_failure_causes=judge_failure_causes,
         ),
     )

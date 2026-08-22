@@ -19,9 +19,10 @@ unparseable, or wrong-shaped reply degrades the same way. The caller
 candidate set, backstop-truncated, whenever `select()` returns `None`.
 """
 
+import json
 import re
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Final
 
 from openkos.llm import parsing
 from openkos.llm.base import LLMBackend, Message
@@ -186,53 +187,149 @@ and `OllamaClient.embed`'s backoff exists for a different reason: an embedding
 batch competes with itself, while this is one call."""
 
 
+JUDGE_FAILURE_CHAT_ERROR: Final = "chat_error"
+JUDGE_FAILURE_UNPARSEABLE: Final = "unparseable"
+JUDGE_FAILURE_WRONG_SHAPE: Final = "wrong_shape"
+"""The three causes an attempt can fail for, named after the branch that
+produces each (#795).
+
+They are NOT new names. `evals/judge_cold_start/` had to grow its own copy
+of this parse chain to say which stage said no, and measured 45 judge calls
+under exactly these strings. Production adopting them keeps every stored
+result comparable and lets that harness delete the copy it was pinning
+against drift.
+
+Why the distinction is load-bearing, in #795's own words: "timeout, parse
+failure, and backend refusal need different fixes and are currently
+indistinguishable." A single `None` for all three is what made a 2-of-3
+failure rate undiagnosable.
+"""
+
+_UNPARSEABLE_NO_JSON: Final = "no-json"
+_UNPARSEABLE_JSON_NOT_OBJECT: Final = "json-not-object"
+"""Which way `extract_json_object` said no: nothing parsed at all, or
+something parsed and was not an object. Prose instead of a reply is a
+different problem from a reply of the wrong kind."""
+
+
+@dataclass(frozen=True)
+class JudgeOutcome:
+    """What one `select` call did, cause included.
+
+    `selected` carries exactly what `select` used to return -- the kept
+    titles, or `None` when no attempt produced a usable reply -- so the
+    fail-closed contract (design D7) is unchanged and callers still degrade
+    on `None`.
+
+    `failures` names one cause per FAILED attempt, in attempt order. It is
+    non-empty on a success too, when an earlier attempt failed and the retry
+    recovered: that run's judge did fail once, and #795 exists because a
+    retry that hides its own failures makes the rate invisible from a run's
+    output. A caller reporting only on `selected is None` would still
+    under-report by exactly the recovered cases.
+    """
+
+    selected: tuple[str, ...] | None
+    failures: tuple[str, ...] = ()
+
+
+def _unparseable_cause(reply: str) -> str:
+    """Which way the reply failed `extract_json_object`."""
+    try:
+        json.loads(reply.strip())
+    except (json.JSONDecodeError, ValueError):
+        return f"{JUDGE_FAILURE_UNPARSEABLE}: {_UNPARSEABLE_NO_JSON}"
+    return f"{JUDGE_FAILURE_UNPARSEABLE}: {_UNPARSEABLE_JSON_NOT_OBJECT}"
+
+
 def _select_once(
     source_text: str,
     candidates: "list[JudgeCandidate] | tuple[JudgeCandidate, ...]",
     llm: LLMBackend,
-) -> tuple[str, ...] | None:
-    """One judge attempt: chat, parse, validate, salvage. `None` on any of
-    the three failure causes, exactly as `select`'s contract describes."""
+) -> "tuple[tuple[str, ...], None] | tuple[None, str]":
+    """One judge attempt: chat, parse, validate, salvage.
+
+    Returns `(selected, cause)` -- EXACTLY ONE is set, and the return type
+    says so rather than a comment claiming it. A plain
+    `tuple[... | None, str | None]` let the caller reach a state the
+    function cannot produce, and the `cause or <default>` guard that state
+    needed would have mislabelled a real failure as a wrong-shape reply if
+    the invariant ever broke -- quietly defeating the per-cause diagnostics
+    this change exists to add. Under this type mypy narrows `cause` to `str`
+    once `selected` is `None`, so no fallback is needed and none is written.
+
+    The cause is returned rather than logged so the decision about what to
+    do with it stays with the caller, and so this leaf keeps taking and
+    returning plain values.
+    """
     try:
         reply = llm.chat(_build_judge_messages(source_text, candidates))
-    except Exception:  # broad: design D7 -- the judge's failure must
+    except Exception as exc:  # broad: design D7 -- the judge's failure must
         # never destroy already-validated extraction work. Every exception
         # `llm.chat` can raise -- the `OllamaError` family or anything else
-        # a backend implementation might throw -- degrades to `None` here,
-        # in this ONE named place, rather than propagating or being caught
-        # piecemeal at each call site.
-        return None
+        # a backend implementation might throw -- degrades here, in this ONE
+        # named place, rather than propagating or being caught piecemeal at
+        # each call site.
+        #
+        # The TYPE is carried out (#795) and the message is not: a type
+        # separates a timeout from a refusal, which is the distinction that
+        # changes what an operator does, while a message can carry a host,
+        # a path, or a model's own text into a line this repo also writes
+        # to a Source's frontmatter.
+        return None, f"{JUDGE_FAILURE_CHAT_ERROR}: {type(exc).__name__}"
 
+    return classify_reply(reply, candidates)
+
+
+def classify_reply(
+    reply: str,
+    candidates: "list[JudgeCandidate] | tuple[JudgeCandidate, ...]",
+) -> "tuple[tuple[str, ...], None] | tuple[None, str]":
+    """`(selected, cause)` for a reply that arrived without raising.
+
+    Exactly one of the two is set, spelled in the type. Split out of `_select_once` (#795) so
+    the parse chain and the names for its failure stages live in ONE place:
+    `evals/judge_cold_start/` previously kept its own copy of this ordering
+    purely to report WHICH stage said no, and pinned in its self-test that
+    the copy still agreed with production. That copy existed only because
+    production discarded the answer; now it does not, so the harness calls
+    this and there is nothing left to drift.
+    """
     parsed = parsing.extract_json_object(reply)
     if parsed is None:
-        return None
+        return None, _unparseable_cause(reply)
     validated = _validate_selection(parsed)
     if validated is None:
-        return None
-    return _salvage_full_line_echoes(validated, candidates)
+        return None, JUDGE_FAILURE_WRONG_SHAPE
+    return _salvage_full_line_echoes(validated, candidates), None
 
 
 def select(
     source_text: str,
     candidates: "list[JudgeCandidate] | tuple[JudgeCandidate, ...]",
     llm: LLMBackend,
-) -> tuple[str, ...] | None:
+) -> JudgeOutcome:
     """Ask `llm` which of `candidates` are genuine, distinct subjects.
 
-    Returns the titles it keeps, echoed verbatim from the closed candidate
-    list, in reply order -- a kept string that instead echoes a whole
-    candidate line is first resolved back to its bare candidate title
-    (`_salvage_full_line_echoes`, #644). `None` means unusable -- `llm.chat`
-    raised any exception, the reply was not valid JSON, or the parsed shape
-    failed `_validate_selection` -- and the caller must fail closed to the
-    whole candidate set (design D7). Never raises.
+    `JudgeOutcome.selected` carries the titles it keeps, echoed verbatim
+    from the closed candidate list, in reply order -- a kept string that
+    instead echoes a whole candidate line is first resolved back to its bare
+    candidate title (`_salvage_full_line_echoes`, #644). `None` means
+    unusable -- `llm.chat` raised any exception, the reply was not valid
+    JSON, or the parsed shape failed `_validate_selection` -- and the caller
+    must fail closed to the whole candidate set (design D7). Never raises.
 
-    Asks up to `JUDGE_ATTEMPTS` times (#754), re-sending the IDENTICAL prompt.
-    The retry covers all three failure causes rather than only a raised
-    exception: `select` deliberately does not distinguish them at this seam,
-    and a sampling model producing prose one call and clean JSON the next is
-    as transient as a dropped connection. A first attempt that succeeds costs
-    exactly what it always did -- the retry is reached only after a failure.
+    `JudgeOutcome.failures` names WHY each failed attempt failed (#795).
+    The retry still covers all three causes without distinguishing them --
+    a sampling model producing prose one call and clean JSON the next is as
+    transient as a dropped connection, so retrying is right for all of them.
+    What changed is that the causes are no longer discarded on the way out:
+    they were the only evidence that could tell a timeout from a refusal
+    from a bad reply, and the caller has to be able to report them.
+
+    Asks up to `JUDGE_ATTEMPTS` times (#754), re-sending the IDENTICAL
+    prompt. A first attempt that succeeds costs exactly what it always did --
+    the retry is reached only after a failure.
 
     Deliberate bound (#457): the reply is TITLE-ONLY, so it cannot
     disambiguate two candidates of different types sharing one normalized
@@ -240,8 +337,14 @@ def select(
     is selected, damage bounded by its backstop cap. The reply-protocol
     change that could tell them apart is tracked in #457.
     """
+    failures: list[str] = []
     for _attempt in range(JUDGE_ATTEMPTS):
-        selected = _select_once(source_text, candidates, llm)
-        if selected is not None:
-            return selected
-    return None
+        # Indexed rather than unpacked: mypy narrows the
+        # `tuple[selection, None] | tuple[None, cause]` union on `[0] is not
+        # None`, but loses it across a destructuring assignment -- and the
+        # narrowing is the whole reason the union is spelled that way.
+        attempt = _select_once(source_text, candidates, llm)
+        if attempt[0] is not None:
+            return JudgeOutcome(selected=attempt[0], failures=tuple(failures))
+        failures.append(attempt[1])
+    return JudgeOutcome(selected=None, failures=tuple(failures))

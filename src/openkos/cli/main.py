@@ -3312,6 +3312,53 @@ A source that proposed 61 objects would otherwise dump 56 titles into the
 terminal -- name enough to judge whether the loss mattered, then count."""
 
 
+def _judge_cause_clause(report: ExtractionReport) -> str:
+    """` (cause, cause)` for a notice, or `""` when none were recorded.
+
+    #795 asks for the underlying error rather than only the outcome, because
+    "timeout, parse failure, and backend refusal need different fixes and are
+    currently indistinguishable". One entry per FAILED attempt, in attempt
+    order, so two attempts failing differently both show -- collapsing them
+    to the last would report a parse failure as if the backend had been fine.
+
+    Returns the EMPTY string rather than a placeholder when nothing was
+    recorded: a report from a path that never collected causes must not
+    render a dangling `because:` with nothing after it.
+    """
+    if not report.judge_failure_causes:
+        return ""
+    return f" ({', '.join(report.judge_failure_causes)})"
+
+
+def _unfiltered_source_notice(report: ExtractionReport) -> str | None:
+    """Render the compound degrade (#795 point 3), or `None`.
+
+    > Treat "ceiling truncation AND judge unavailable in the same
+    > extraction" as its own louder state: individually each is degraded,
+    > together the source is effectively unfiltered.
+
+    On the reported file 3 both fired: 5 merged candidates never reached the
+    judge, and the judge then failed, so all 24 survivors were kept with the
+    positional cap skipped too. That source produced 24 objects filtered by
+    nothing at all -- action items typed as `Decision` among them -- and the
+    two existing lines each described only their own half.
+
+    This ADDS a line; it never replaces either. Both halves remain true and
+    an operator grepping for the ceiling notice must still find it, so the
+    compound state is a third sentence rather than a rewrite of the other
+    two. Kept as its own predicate for the same reason `_judge_cause_clause`
+    is: a condition spelled inside an f-string is one no test can fail.
+    """
+    if report.judge_status != "failed" or report.pre_judge_dropped <= 0:
+        return None
+    return (
+        f"this source is effectively UNFILTERED: {report.pre_judge_dropped} "
+        "candidate(s) never reached the judge AND the judge gave up on the "
+        f"rest, so none of the {report.retained} stored object(s) passed any "
+        "quality gate"
+    )
+
+
 def _judge_failure_notice(report: ExtractionReport) -> str | None:
     """Render the union+judge failure-degrade notice (#456/#456), or `None`
     when the judge succeeded or was never invoked.
@@ -3345,7 +3392,8 @@ def _judge_failure_notice(report: ExtractionReport) -> str | None:
         # to judge whether the stored objects were ever filtered.
         return (
             "judge selection unavailable after "
-            f"{judge_mod.JUDGE_ATTEMPTS} attempts; no quality selection ran, "
+            f"{judge_mod.JUDGE_ATTEMPTS} attempts"
+            f"{_judge_cause_clause(report)}; no quality selection ran, "
             f"so all {report.retained} merged candidate(s) were kept and the "
             "positional cap was NOT applied to them; marking the Source "
             f"(extraction_notice: {okf.EXTRACTION_NOTICE_JUDGE_UNAVAILABLE})"
@@ -3353,9 +3401,31 @@ def _judge_failure_notice(report: ExtractionReport) -> str | None:
     if report.judge_status == "empty":
         return (
             "judge reply matched no candidate; kept the full merged "
-            f"extraction union ({report.retained} object(s)) unfiltered; "
+            f"extraction union ({report.retained} object(s)) unfiltered"
+            f"{_judge_cause_clause(report)}; "
             "marking the Source (extraction_notice: "
             f"{okf.EXTRACTION_NOTICE_JUDGE_EMPTY})"
+        )
+    if report.judge_failure_causes:
+        # #795: the judge SUCCEEDED, on a retry, after failing at least once.
+        # Reported anyway, because the retry is exactly what made the failure
+        # rate invisible: a source whose first attempt failed reads identical
+        # to one that never failed, so an operator watching a batch could not
+        # see the 2-of-3 rate the issue measured. Advisory only -- nothing
+        # degraded, nothing is marked on the Source.
+        #
+        # LAST of the branches, and that ordering is load-bearing. Causes are
+        # recorded on every run that called the judge, INCLUDING the two that
+        # degrade, so testing them earlier swallowed the `"failed"` and
+        # `"empty"` notices whenever a retry had recovered along the way --
+        # replacing a real degrade with "the selection itself is unaffected",
+        # which is false exactly when it matters. Those two branches carry
+        # the causes in their own wording instead.
+        attempts = len(report.judge_failure_causes)
+        return (
+            f"judge selection succeeded on retry after {attempts} failed "
+            f"attempt(s){_judge_cause_clause(report)}; the selection itself "
+            "is unaffected"
         )
     return None
 
@@ -4030,6 +4100,16 @@ def _stage_derived_objects(
     )
     if judge_notice is not None:
         typer.echo(f"openkos ingest: {judge_notice}", err=True)
+
+    # #795 point 3: LAST of the three, because it is the only one that
+    # describes their conjunction. The ceiling line above says what never
+    # reached the judge and the judge line says the judge did not run; each
+    # is a partial degrade an operator might reasonably tolerate. Together
+    # they mean nothing filtered this source at all, and that reading is
+    # available only after both have been stated.
+    unfiltered_notice = _unfiltered_source_notice(outcome.report)
+    if unfiltered_notice is not None:
+        typer.echo(f"openkos ingest: {unfiltered_notice}", err=True)
 
     # #690: renders immediately after the judge notice it qualifies. The
     # judge line names WHAT was dropped; this one names WHY the re-admission
