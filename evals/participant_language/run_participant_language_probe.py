@@ -245,6 +245,26 @@ def score_result(
     return scores
 
 
+ERROR_RAISED: Final = "raised"
+ERROR_SWALLOWED: Final = "swallowed"
+"""The two ways one participant-capture call can fail, and the ONLY two labels
+`RunRecord.error` is ever written with.
+
+One vocabulary, `"<cause>: <detail>"`, because the column is tallied and
+grouped: a bare `OllamaUnavailable` beside a prefixed
+`participant_capture: OllamaUnavailable` would split ONE failure across two
+values and halve whichever count someone read. The two causes are kept APART
+inside that one shape because they are different facts about the contract:
+
+- `raised` -- the exception escaped `_capture_further_participants`, which by
+  its own contract never raises. That is a broken contract or a broken probe,
+  not a backend failure, and it must not be tallied with one.
+- `swallowed` -- the call degraded to no additions and NAMED why (#828). The
+  detail is the production string verbatim, `participant_capture: <Type>`, so
+  the spelling this column stores is the one `OPTIONAL_CALL_PARTICIPANT_CAPTURE`
+  pins rather than a second copy of it that could drift."""
+
+
 @dataclass(frozen=True)
 class RunRecord:
     fixture: str
@@ -253,6 +273,16 @@ class RunRecord:
     model: str
     seconds: float
     error: str
+    """Why this run's single capture call failed, or `""` when it did not.
+
+    `""` is NOT comparable across the #828 boundary, and a `--rescore` over a
+    mixed set of files must not read it as one value. In a file stored BEFORE
+    #828 the call discarded its own cause, so `""` there means "did not RAISE"
+    and silently covers every swallowed backend failure -- a runaway against
+    the generation ceiling was recorded as a clean run that found nobody. In a
+    file stored since, `""` means the call genuinely reported no failure.
+    Nothing in the record distinguishes the two, so an old file's zero error
+    rate is unmeasured, not measured-as-zero."""
     candidates: int
     scores: list[dict[str, Any]]
 
@@ -273,11 +303,26 @@ def run_fixture(
             error = ""
             results: list[ExtractionResult] = []
             try:
-                results = _capture_further_participants(
+                outcome = _capture_further_participants(
                     fixture.text, fixture.title, llm
                 )
             except Exception as exc:  # broad: every failure is data here
-                error = type(exc).__name__
+                error = f"{ERROR_RAISED}: {type(exc).__name__}"
+            else:
+                results = outcome.additions
+                # The two causes are ALTERNATIVES, never a merge: this branch
+                # runs only when the `except` above did not, so the assignment
+                # cannot overwrite a raised cause and the column never has to
+                # represent both at once.
+                #
+                # #828: the call still swallows its own backend failure, and
+                # now NAMES it. Until then the `except` above could not fire
+                # -- the function returned `[]` for every failure -- so a
+                # runaway against the generation ceiling was scored here as a
+                # clean run that found nobody, with `error` empty.
+                error = (
+                    f"{ERROR_SWALLOWED}: {outcome.failure}" if outcome.failure else ""
+                )
             seconds = round(time.monotonic() - started, 1)
             scores = [
                 asdict(score)

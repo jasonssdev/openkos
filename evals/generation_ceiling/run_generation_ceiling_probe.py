@@ -313,11 +313,17 @@ class RunRecord:
 
     Only `_extract_once` can produce this. Every other call in the run swallows
     its own backend failures by contract -- `judge.select`'s D7 fail-closed
-    rule, and the `except Exception: return []` in `_reask_for_further_subjects`
-    and `_capture_further_participants` -- so a truncated reply there degrades
-    the result instead of raising. That is why #714's `OllamaGenerationCapped`
-    is necessarily an EXTRACTION cut-off, and why `_CHUNK_THRESHOLD` is aimed at
-    the right call."""
+    rule, and the broad `except Exception` in `_reask_for_further_subjects` and
+    `_capture_further_participants` -- so a truncated reply there degrades the
+    result instead of raising. That is why #714's `OllamaGenerationCapped` is
+    necessarily an EXTRACTION cut-off, and why `_CHUNK_THRESHOLD` is aimed at
+    the right call.
+
+    Since #828 those two swallowed failures are NAMED rather than discarded:
+    they degrade to empty additions exactly as before, and the cause reaches
+    `ExtractionReport.optional_call_failures`. Nothing here changes -- what
+    escapes is still only the extraction call -- but a cut-off bonus call is
+    no longer invisible outside this probe."""
     capped_phases: list[str]
     """Every phase whose reply Ollama cut off, INCLUDING the ones swallowed.
 

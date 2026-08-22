@@ -33,6 +33,7 @@ from openkos.extraction import concept as concept_mod
 from openkos.llm.base import EMBED_DIM, Message
 from openkos.llm.ollama import (
     OllamaError,
+    OllamaGenerationCapped,
     OllamaModelNotFound,
     OllamaUnavailable,
 )
@@ -8736,3 +8737,131 @@ def test_ingest_stays_quiet_about_being_unfiltered_when_only_the_judge_fails(
     assert "judge selection unavailable" in result.stderr
     assert "effectively UNFILTERED" not in result.stderr
     assert "never reached the judge" not in result.stderr
+
+
+def test_optional_call_failure_notice_names_every_failed_call() -> None:
+    """#828: the two optional extraction calls swallowed their backend
+    failure into `[]`, which reads as "this bonus call honestly found
+    nothing". Both entries must be named, in the order the pipeline spends
+    the calls -- a runaway inside the re-ask and one inside the participant
+    capture are different investigations."""
+    report = concept_mod.ExtractionReport(
+        produced=1,
+        retained=1,
+        reask_runs=1,
+        participant_capture_runs=1,
+        optional_call_failures=(
+            f"{concept_mod.OPTIONAL_CALL_REASK}: OllamaUnavailable",
+            f"{concept_mod.OPTIONAL_CALL_PARTICIPANT_CAPTURE}: OllamaGenerationCapped",
+        ),
+    )
+
+    notice = main._optional_call_failure_notice(report)
+
+    assert notice is not None
+    assert "reask: OllamaUnavailable" in notice
+    assert "participant_capture: OllamaGenerationCapped" in notice
+    assert notice.index("reask: OllamaUnavailable") < notice.index(
+        "participant_capture: OllamaGenerationCapped"
+    )
+    assert "2 optional extraction call(s)" in notice
+
+
+def test_optional_call_failure_notice_names_every_entry_it_is_given() -> None:
+    """The notice's no-truncation rule, pinned WITHOUT the "there are exactly
+    two optional calls" assumption its docstring used to rest on.
+
+    That assumption was a comment-only claim about a tuple built two modules
+    away, and nothing here enforced it: a third optional extraction call
+    would have widened this line with no signal at all. What the line
+    actually promises is one NAMED entry per failed optional call, whatever
+    that number is -- so the fixture carries three, one more than ships
+    today, and every one of them must appear. A `_CAP_NOTICE_TITLE_LIMIT`
+    style cap sneaked in here would hide exactly the call an operator is
+    reading this line to identify."""
+    failures = (
+        f"{concept_mod.OPTIONAL_CALL_REASK}: OllamaUnavailable",
+        f"{concept_mod.OPTIONAL_CALL_PARTICIPANT_CAPTURE}: OllamaGenerationCapped",
+        "third_optional_call: OllamaTimeout",
+    )
+    report = concept_mod.ExtractionReport(
+        produced=1, retained=1, optional_call_failures=failures
+    )
+
+    notice = main._optional_call_failure_notice(report)
+
+    assert notice is not None
+    assert "3 optional extraction call(s)" in notice
+    for failure in failures:
+        assert failure in notice
+
+
+def test_optional_call_failure_notice_is_silent_when_no_optional_call_failed() -> None:
+    """The healthy path, and the common one: a spent call that answered
+    "nothing further here" is the answer both prompts name as correct, and
+    a call that never fired failed at nothing."""
+    report = concept_mod.ExtractionReport(
+        produced=1, retained=1, reask_runs=1, participant_capture_runs=1
+    )
+
+    assert main._optional_call_failure_notice(report) is None
+
+
+def test_optional_call_failure_notice_says_the_extraction_is_unaffected() -> None:
+    """Advisory only. Nothing degraded beyond the bonus call adding nothing,
+    and nothing is marked on the Source -- so the wording must not borrow
+    the degrade vocabulary the judge notices own."""
+    report = concept_mod.ExtractionReport(
+        produced=3,
+        retained=3,
+        reask_runs=1,
+        optional_call_failures=(
+            f"{concept_mod.OPTIONAL_CALL_REASK}: OllamaGenerationCapped",
+        ),
+    )
+
+    notice = main._optional_call_failure_notice(report)
+
+    assert notice is not None
+    assert "unaffected" in notice
+    assert "extraction_notice" not in notice
+    assert "unfiltered" not in notice
+
+
+def test_ingest_reports_a_failed_optional_call_on_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The render path, not only the helper (PR #705's review: a notice
+    computed and never printed is the same defect one layer up).
+
+    A meeting-titled source whose two extraction runs agree on ONE object
+    spends BOTH optional calls -- the #642 low-yield re-ask arm on a source
+    past 2000 chars, then the #668 participant capture on a meeting-shaped
+    one -- and both backends fail. The judge is never called (a
+    single-candidate union is a provable no-op, #644), so no judge notice
+    may appear: this is a distinct condition with distinct wording."""
+    _init_workspace(tmp_path, monkeypatch)
+    single = _concept_reply(title="Backup Encryption")
+    _patch_sequenced_llm(
+        monkeypatch,
+        [
+            single,
+            single,
+            OllamaUnavailable("boom"),
+            OllamaGenerationCapped("hit the ceiling"),
+        ],
+    )
+    source = tmp_path / "weekly-meeting.txt"
+    source.write_text(
+        "The team reviewed the nightly backup pipeline once again. " * 40,
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["ingest", "weekly-meeting.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert "2 optional extraction call(s) failed" in result.stderr
+    assert "reask: OllamaUnavailable" in result.stderr
+    assert "participant_capture: OllamaGenerationCapped" in result.stderr
+    assert "judge selection unavailable" not in result.stderr
+    assert (tmp_path / "bundle" / "concepts" / "backup-encryption.md").is_file()
