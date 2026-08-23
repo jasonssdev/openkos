@@ -73,7 +73,8 @@ from typing import Any, Final
 
 from openkos.extraction import concept as concept_mod
 from openkos.extraction.concept import ExtractionResult, _capture_further_participants
-from openkos.llm.ollama import OllamaClient
+from openkos.llm.base import LLMBackend
+from openkos.llm.ollama import OllamaClient, OllamaGenerationCapped
 
 HERE = Path(__file__).resolve().parent
 RESULTS_DIR = HERE / "results"
@@ -288,13 +289,20 @@ class RunRecord:
 
 
 def run_fixture(
-    fixture: Fixture, arm: Arm, llm: OllamaClient, runs: int, model: str, leak: Any
+    fixture: Fixture, arm: Arm, llm: LLMBackend, runs: int, model: str, leak: Any
 ) -> list[RunRecord]:
     """`runs` real `_capture_further_participants` calls, scored.
 
     The production function, not a reimplementation: it owns the prompt, the
     validation and the `Person`/`Organization` narrowing, and a probe that
-    rebuilt any of that would be measuring itself."""
+    rebuilt any of that would be measuring itself.
+
+    `llm` is annotated as the PROTOCOL rather than `OllamaClient`, which is
+    all this function ever needed: it hands the backend straight to
+    `_capture_further_participants`, whose own parameter is `LLMBackend`. The
+    narrower annotation was over-constrained, and it is what kept the
+    self-test from driving this function with a scripted backend -- the gap
+    #833 point 4 reports."""
     records: list[RunRecord] = []
     original = _install_arm(arm)
     try:
@@ -528,6 +536,116 @@ def _self_test() -> int:
     if concept_mod._build_participant_capture_messages is not original:
         print("FAIL: the arm was left installed")
         return 1
+
+    # ------------------------------------------------------------------
+    # The error vocabulary (#833 point 4). `raised:` and `swallowed:`
+    # arrived with #828 and nothing drove `run_fixture`, so the split that
+    # tells a broken contract from a backend failure had no check at all --
+    # in a column that is tallied and grouped, where the two collapsing
+    # into one would halve whichever count somebody read.
+    #
+    # Three runs, one per outcome, against a fake backend. No model, no
+    # network: `_capture_further_participants` takes any `LLMBackend`, and
+    # `chat` is its whole surface.
+    # ------------------------------------------------------------------
+    class _Backend:
+        """One scripted `chat`: raise, or answer with these bytes."""
+
+        def __init__(self, reply: str | None = None, error: Exception | None = None):
+            self._reply = reply
+            self._error = error
+
+        def chat(self, messages: Any) -> str:
+            if self._error is not None:
+                raise self._error
+            return self._reply or ""
+
+    vocab_fixture = build_fixtures()[0]
+    vocab_arm = Arm(name="anchored", strip_language_anchor=False)
+
+    # SWALLOWED -- the backend fails and `_capture_further_participants`
+    # degrades by contract, naming its cause. This is the live case #828
+    # created and the one a real runaway takes.
+    capped = OllamaGenerationCapped("generation hit the ceiling")
+    swallowed = run_fixture(
+        vocab_fixture, vocab_arm, _Backend(error=capped), 1, "fake", leak
+    )[0]
+    expected_swallowed = (
+        f"{ERROR_SWALLOWED}: {concept_mod.OPTIONAL_CALL_PARTICIPANT_CAPTURE}: "
+        "OllamaGenerationCapped"
+    )
+    if swallowed.error != expected_swallowed:
+        print(
+            f"FAIL: a swallowed backend failure must be recorded as "
+            f"{expected_swallowed!r}, got {swallowed.error!r}"
+        )
+        return 1
+    if swallowed.candidates != 0:
+        print(f"FAIL: a failed capture added candidates: {swallowed.candidates}")
+        return 1
+
+    # CLEAN -- a call that ran leaves the column EMPTY. Without this the two
+    # labels above could both be produced by a probe that stamped an error
+    # on every run.
+    reply = json.dumps(
+        [
+            {
+                "type": "Person",
+                "title": "Ana Ríos",
+                "description": "Dicta el ramo de sistemas distribuidos",
+                "body": "yo dicto el ramo de sistemas distribuidos.",
+            }
+        ]
+    )
+    clean = run_fixture(
+        vocab_fixture, vocab_arm, _Backend(reply=reply), 1, "fake", leak
+    )[0]
+    if clean.error != "":
+        print(f"FAIL: a capture that ran must leave `error` empty, got {clean.error!r}")
+        return 1
+    # The POSITIVE CONTROL, without which the swallowed arm's
+    # `candidates != 0` proves nothing: if this scripted reply did not parse
+    # into a candidate either, both arms would report zero and the check
+    # above would be measuring a backend that never works rather than one
+    # that failed.
+    if clean.candidates != 1:
+        print(
+            "FAIL: the scripted clean reply must produce exactly one candidate, "
+            f"or the swallowed arm's zero-candidate check is vacuous: got "
+            f"{clean.candidates}"
+        )
+        return 1
+
+    # RAISED -- reserved for a BROKEN CONTRACT: `_capture_further_participants`
+    # never raises, so this label can only be produced by rebinding it. Left
+    # untested it would be a branch nobody could tell from the swallowed one.
+    # Rebinding the MODULE-LEVEL name is the target that matters: `run_fixture`
+    # calls the bare name, so patching anywhere else would leave the real
+    # function running and this check passing while asserting nothing.
+    def _explode(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("contract broken")
+
+    original_capture = globals()["_capture_further_participants"]
+    globals()["_capture_further_participants"] = _explode
+    try:
+        raised = run_fixture(
+            vocab_fixture, vocab_arm, _Backend(reply=reply), 1, "fake", leak
+        )[0]
+    finally:
+        globals()["_capture_further_participants"] = original_capture
+    if raised.error != f"{ERROR_RAISED}: RuntimeError":
+        print(
+            f"FAIL: an escaped exception must be recorded as "
+            f"{ERROR_RAISED}: RuntimeError, got {raised.error!r}"
+        )
+        return 1
+    # No "was the stub uninstalled?" check follows. The `finally` above
+    # performs that exact assignment, so comparing against it immediately
+    # afterwards is unconditionally true -- a check that cannot fail, which
+    # is the whole class of defect #833 exists to remove. That the rebinding
+    # took effect at all is already proved by the assertion above: the real
+    # function does not raise `RuntimeError`.
+
     print(f"self-test OK ({len(build_fixtures())} fixture(s))")
     return 0
 
