@@ -2388,3 +2388,222 @@ def test_is_timeout_failure_says_no_to_what_a_refused_connection_raises() -> Non
         client.chat([Message(role="user", content="hi")])
 
     assert not is_timeout_failure(caught.value)
+
+
+def _capped_body(*, prompt_tokens: int, generated: int) -> bytes:
+    """A `done_reason == "length"` body carrying Ollama's own counters.
+
+    `_ok_body_with_done_reason` omits them, which is what let the capped
+    message blame the ceiling without ever checking whether the ceiling was
+    reached (#829)."""
+    return json.dumps(
+        {
+            "message": {"role": "assistant", "content": "truncated mid-"},
+            "done": True,
+            "done_reason": "length",
+            "prompt_eval_count": prompt_tokens,
+            "eval_count": generated,
+        }
+    ).encode("utf-8")
+
+
+def test_generation_capped_blames_the_context_window_when_that_is_what_bound() -> None:
+    """#829: `num_ctx` bounds prompt AND completion together, so a large
+    prompt can leave less generation room than the configured ceiling — and
+    the old message named the ceiling anyway.
+
+    On the shipped defaults a 5398-token prompt leaves `12288 - 5398 = 6890`
+    tokens of room against a ceiling of 8192. A reply cut at 6890 was
+    reported as having hit a ceiling it never reached, sending the operator
+    to raise `max_generation_tokens`, which changes nothing because `num_ctx`
+    is what has to move."""
+    captured: list[urllib.request.Request] = []
+    client = OllamaClient(
+        "qwen3",
+        max_generation_tokens=8192,
+        context_window=12288,
+        urlopen=_fake_urlopen(
+            _capped_body(prompt_tokens=5398, generated=6900), captured
+        ),
+    )
+
+    with pytest.raises(OllamaGenerationCapped) as caught:
+        client.chat([{"role": "user", "content": "hi"}])
+
+    # Pinned against the WHOLE sentence, not against substrings. `generated`
+    # is 6900 against a room of 12288 - 5398 = 6890 so the two numbers
+    # differ -- and substring assertions still would not have separated
+    # them, because both appear whichever slot they land in. Swapping the
+    # two interpolations passes `"6890" in message and "6900" in message`
+    # and tells the operator something false; it fails here. (The repo
+    # already learned this on the no-ceiling message below.)
+    assert str(caught.value) == (
+        "Ollama stopped generation because the context_window (12288) "
+        "filled, NOT the max_generation_tokens ceiling (8192), which was "
+        "never reached: the prompt took 5398 tokens, leaving 6890 for the "
+        "reply, and generation stopped at 6900. Raise context_window (or "
+        "shorten the prompt); raising max_generation_tokens will not help. "
+        "The response is truncated and unusable."
+    )
+    # And the request really did carry the window this message blames, so
+    # the number is not merely echoed back from the constructor.
+    assert json.loads(cast("bytes", captured[0].data))["options"]["num_ctx"] == 12288
+
+
+def test_generation_capped_still_names_the_ceiling_when_the_ceiling_bound() -> None:
+    """The other side of the same branch: when generation really did reach
+    the configured ceiling, the ceiling is what the message must name.
+
+    Without this the fix could name `context_window` unconditionally and
+    move the misattribution rather than remove it."""
+    captured: list[urllib.request.Request] = []
+    client = OllamaClient(
+        "qwen3",
+        max_generation_tokens=8192,
+        context_window=12288,
+        urlopen=_fake_urlopen(
+            _capped_body(prompt_tokens=1000, generated=8192), captured
+        ),
+    )
+
+    with pytest.raises(OllamaGenerationCapped) as caught:
+        client.chat([{"role": "user", "content": "hi"}])
+
+    message = str(caught.value)
+    assert "max_generation_tokens ceiling (8192)" in message
+    assert "context_window" not in message
+    assert json.loads(cast("bytes", captured[0].data))["options"]["num_predict"] == 8192
+
+
+def test_generation_capped_blames_neither_when_neither_was_reached() -> None:
+    """Counters present and NEITHER bound explains the stop: the honest
+    report names both and blames neither.
+
+    `done_reason == "length"` is reachable without either binding — the
+    model's own limits can cut a reply short — and #440 already established
+    that this exception must not invent a cause. The counters are what make
+    that case distinguishable at all."""
+    captured: list[urllib.request.Request] = []
+    client = OllamaClient(
+        "qwen3",
+        max_generation_tokens=8192,
+        context_window=12288,
+        urlopen=_fake_urlopen(_capped_body(prompt_tokens=100, generated=200), captured),
+    )
+
+    with pytest.raises(OllamaGenerationCapped) as caught:
+        client.chat([{"role": "user", "content": "hi"}])
+
+    assert str(caught.value) == (
+        "Ollama stopped generation for length before the reply finished, and "
+        "NEITHER configured bound was reached: the prompt took 100 tokens "
+        "and generation stopped at 200, against a max_generation_tokens "
+        "ceiling of 8192 and a context_window of 12288. The backend's own "
+        "limit cut it off; the response is truncated and unusable."
+    )
+
+
+def test_generation_capped_never_names_a_context_window_that_is_not_set() -> None:
+    """The `neither bound` message must not render "a context_window of
+    None".
+
+    `context_window` is optional, and #440 removed exactly this
+    self-contradiction from the ceiling half of the same exception: a
+    message naming a setting the client does not have sends the operator
+    looking for something they never configured."""
+    captured: list[urllib.request.Request] = []
+    client = OllamaClient(
+        "qwen3",
+        max_generation_tokens=8192,
+        context_window=None,
+        urlopen=_fake_urlopen(_capped_body(prompt_tokens=100, generated=200), captured),
+    )
+
+    with pytest.raises(OllamaGenerationCapped) as caught:
+        client.chat([{"role": "user", "content": "hi"}])
+
+    message = str(caught.value)
+    assert "None" not in message
+    assert "no context_window set on this client" in message
+
+
+def test_generation_capped_blames_the_window_even_with_no_ceiling_set() -> None:
+    """The symmetric half. With no ceiling configured the old message always
+    reached for "the backend's own limit" -- true only when the window was
+    not what filled. The counters are present on that branch too, so it can
+    say which it was."""
+    captured: list[urllib.request.Request] = []
+    client = OllamaClient(
+        "qwen3",
+        max_generation_tokens=None,
+        context_window=8192,
+        urlopen=_fake_urlopen(
+            _capped_body(prompt_tokens=6000, generated=2200), captured
+        ),
+    )
+
+    with pytest.raises(OllamaGenerationCapped) as caught:
+        client.chat([{"role": "user", "content": "hi"}])
+
+    # Whole sentence, for the reason the sibling test above records.
+    assert str(caught.value) == (
+        "Ollama stopped generation because the context_window (8192) filled: "
+        "the prompt took 6000 tokens, leaving 2192 for the reply, and "
+        "generation stopped at 2200. No max_generation_tokens ceiling is set "
+        "on this client; raise context_window (or shorten the prompt). The "
+        "response is truncated and unusable."
+    )
+
+
+def test_generation_capped_ignores_boolean_counters() -> None:
+    """`bool` subclasses `int`, so an `isinstance(x, int)` pair alone would
+    accept `true`/`false` as counters and build an account out of 1 and 0.
+
+    A counter this code cannot trust must fall through to the unmeasured
+    message, not produce a confident wrong one."""
+    body = json.dumps(
+        {
+            "message": {"role": "assistant", "content": "truncated mid-"},
+            "done": True,
+            "done_reason": "length",
+            "prompt_eval_count": True,
+            "eval_count": False,
+        }
+    ).encode("utf-8")
+    captured: list[urllib.request.Request] = []
+    client = OllamaClient(
+        "qwen3",
+        max_generation_tokens=8192,
+        context_window=12288,
+        urlopen=_fake_urlopen(body, captured),
+    )
+
+    with pytest.raises(OllamaGenerationCapped) as caught:
+        client.chat([{"role": "user", "content": "hi"}])
+
+    message = str(caught.value)
+    assert message == (
+        "Ollama stopped generation at the configured max_generation_tokens "
+        "ceiling (8192) before the reply finished; the response is truncated "
+        "and unusable."
+    )
+
+
+def test_generation_capped_falls_back_when_the_counters_are_absent() -> None:
+    """The counters-absent branch, named rather than merely reached by an
+    older test: with nothing to measure, the configured-and-forwarded
+    ceiling remains the best available account."""
+    captured: list[urllib.request.Request] = []
+    client = OllamaClient(
+        "qwen3",
+        max_generation_tokens=8192,
+        context_window=12288,
+        urlopen=_fake_urlopen(
+            _ok_body_with_done_reason("truncated mid-", "length"), captured
+        ),
+    )
+
+    with pytest.raises(OllamaGenerationCapped) as caught:
+        client.chat([{"role": "user", "content": "hi"}])
+
+    assert "max_generation_tokens ceiling (8192)" in str(caught.value)
