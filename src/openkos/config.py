@@ -198,13 +198,43 @@ this is the unfavourable case):
 - `query` with `limit`=5 retrieved bodies packed in full (13516
   characters): **3263 tokens**.
 
-`query` is the real bound, not extraction: it has no per-body budget of its
-own, so it builds the largest prompt in the product. 4096 leaves 833 tokens
-of headroom over it and 1389 over extraction.
-
 Deliberately NOT tuned down to the extraction case alone: `num_ctx` is one
 setting shared by every chat seam, so it must be sized for the largest
-prompt any of them builds."""
+prompt any of them builds.
+
+**This value is UNDERSTATED for the unchunked band, and the reading above
+that `query` is the real bound is WRONG (issue #829).** Both measurements
+above are of a CHUNKED window, but `extraction.concept._CHUNK_THRESHOLD` is
+18 000, so a source up to that length is sent WHOLE in one call. Re-measured
+2026-08-23 against the unchunked extraction prompt, Spanish (the
+unfavourable case), reading Ollama's own `prompt_eval_count` per call:
+
+| source chars | prompt tokens | tokens/char |
+| --- | --- | --- |
+| 4 000 (one chunk) | 2 782 | 0.696 |
+| 9 688 | 4 140 | 0.427 |
+| 12 000 | 4 720 | 0.393 |
+| 16 000 | 5 666 | 0.354 |
+| 17 999 (at the threshold) | **6 142** | 0.341 |
+
+The 4 000-char row reproduces the 2 707 above, so the original calibration
+stands for the chunked band; what it does not cover is the other one.
+Extraction at the threshold takes **6 142 tokens, 2 046 over this reserve**,
+which makes extraction the largest prompt in the product rather than
+`query`'s 3 263.
+
+Note the shape, because #829 extrapolated it the other way and got ~7 700:
+tokens/char FALLS with length as the fixed system prompt amortizes, so a
+rate read off a short source overstates a long one.
+
+The consequence is live on shipped defaults: 6 142 + 8 192 = 14 334 exceeds
+`DEFAULT_CONTEXT_WINDOW`, so the window -- not the ceiling -- is what bounds
+a reply at the threshold. `llm.ollama` now reads both counters back and
+names whichever bound actually bound, so the misattribution is fixed; the
+RESERVE is deliberately left at 4096, because raising it raises
+`minimum_context_window` and therefore `DEFAULT_CONTEXT_WINDOW`, which is a
+memory-footprint decision (see that constant's own 7.2 GB note) rather than
+a calibration one."""
 
 DEFAULT_CONTEXT_WINDOW = 12288
 """Packaged default for `context_window`, in tokens, forwarded to Ollama as

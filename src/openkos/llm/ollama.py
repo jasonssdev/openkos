@@ -565,13 +565,118 @@ class OllamaClient:
             # context window filling -- so an unconfigured client blaming
             # "the configured ceiling (None)" would contradict itself and
             # send the operator looking for a setting they never set.
+            prompt_tokens = data.get("prompt_eval_count")
+            generated = data.get("eval_count")
+            # `bool` is a subclass of `int`, so an `isinstance(x, int)` pair
+            # alone would accept `true`/`false` as counters and build a
+            # message out of 1 and 0. Excluded explicitly: a counter this
+            # code cannot trust must fall through to the unmeasured account,
+            # not produce a confident wrong one.
+            measured = (
+                isinstance(prompt_tokens, int)
+                and not isinstance(prompt_tokens, bool)
+                and isinstance(generated, int)
+                and not isinstance(generated, bool)
+            )
             if self._max_generation_tokens is None:
+                # The window can bind here too, and #440's rule -- never name
+                # a cause that was not the cause -- does not stop applying
+                # just because no ceiling is set. With counters in hand this
+                # branch can say which it was rather than always reaching for
+                # "the backend's own limit".
+                if (
+                    measured
+                    and self._context_window is not None
+                    and prompt_tokens + generated >= self._context_window  # type: ignore[operator]
+                ):
+                    raise OllamaGenerationCapped(
+                        "Ollama stopped generation because the context_window "
+                        f"({self._context_window}) filled: the prompt took "
+                        f"{prompt_tokens} tokens, leaving "
+                        f"{max(self._context_window - prompt_tokens, 0)} for "  # type: ignore[operator]
+                        f"the reply, and generation stopped at {generated}. "
+                        "No max_generation_tokens ceiling is set on this "
+                        "client; raise context_window (or shorten the "
+                        "prompt). The response is truncated and unusable."
+                    )
                 raise OllamaGenerationCapped(
                     "Ollama stopped generation for length before the reply "
                     "finished, with no max_generation_tokens ceiling set on "
                     "this client -- the backend's own limit cut it off; the "
                     "response is truncated and unusable."
                 )
+            # WHICH bound actually bound (#829). `num_ctx` covers prompt AND
+            # completion together, so a large prompt can leave less
+            # generation room than `num_predict` allows -- measured on the
+            # shipped defaults, a 5398-token prompt leaves 12288 - 5398 =
+            # 6890 against a ceiling of 8192. Blaming the ceiling there is
+            # not merely imprecise: it sends the operator to raise
+            # `max_generation_tokens`, which changes nothing, when `num_ctx`
+            # is what has to move.
+            #
+            # The response carries both counters, so this is read rather
+            # than inferred. #440 established that this exception must not
+            # invent a cause; this is the same rule applied to the branch
+            # where a ceiling IS set.
+            if (
+                isinstance(prompt_tokens, int)
+                and not isinstance(prompt_tokens, bool)
+                and isinstance(generated, int)
+                and not isinstance(generated, bool)
+            ):
+                if generated >= self._max_generation_tokens:
+                    raise OllamaGenerationCapped(
+                        "Ollama stopped generation at the configured "
+                        f"max_generation_tokens ceiling "
+                        f"({self._max_generation_tokens}) before the reply "
+                        "finished; the response is truncated and unusable."
+                    )
+                if (
+                    self._context_window is not None
+                    and prompt_tokens + generated >= self._context_window
+                ):
+                    raise OllamaGenerationCapped(
+                        "Ollama stopped generation because the context_window "
+                        f"({self._context_window}) filled, NOT the "
+                        f"max_generation_tokens ceiling "
+                        f"({self._max_generation_tokens}), which was never "
+                        f"reached: the prompt took {prompt_tokens} tokens, "
+                        f"leaving "
+                        f"{max(self._context_window - prompt_tokens, 0)} for "
+                        f"the reply, and generation stopped at {generated}. "
+                        "Raise context_window (or shorten the prompt); "
+                        "raising max_generation_tokens will not help. The "
+                        "response is truncated and unusable."
+                    )
+                # Counters read, and NEITHER bound explains the stop. Naming
+                # one anyway is the defect this branch exists to avoid --
+                # `done_reason == "length"` is reachable on the model's own
+                # limits, exactly as the no-ceiling branch above records.
+                # `context_window` is optional, so it is named only when
+                # one is set. Interpolating it unconditionally would render
+                # "a context_window of None" -- the same self-contradiction
+                # #440 removed from the ceiling half of this message.
+                window_clause = (
+                    f" and a context_window of {self._context_window}"
+                    if self._context_window is not None
+                    else " and no context_window set on this client"
+                )
+                raise OllamaGenerationCapped(
+                    "Ollama stopped generation for length before the reply "
+                    f"finished, and NEITHER configured bound was reached: "
+                    f"the prompt took {prompt_tokens} tokens and generation "
+                    f"stopped at {generated}, against a "
+                    f"max_generation_tokens ceiling of "
+                    f"{self._max_generation_tokens}{window_clause}. The "
+                    "backend's own limit cut it off; the response is "
+                    "truncated and unusable."
+                )
+            # No counters to read. Fail-open on the SIGNAL, exactly as the
+            # `done_reason` guard above does: the ceiling is configured and
+            # forwarded as `num_predict`, so naming it remains the best
+            # available account. Every real Ollama reply carries both
+            # counters, so this is the shape a stub or a future backend
+            # produces rather than the common path.
             raise OllamaGenerationCapped(
                 "Ollama stopped generation at the configured "
                 f"max_generation_tokens ceiling ({self._max_generation_tokens}) "
