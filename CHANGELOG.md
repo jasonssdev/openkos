@@ -16,6 +16,23 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Added
 
+- **CI runs the eval harness self-tests**
+  ([#831](https://github.com/jasonssdev/openkos/issues/831)). The harnesses
+  carry `--self-test` entry points precisely to catch production drifting out
+  from under a measurement, and nothing ever ran them. Two were red: one since
+  [#754](https://github.com/jasonssdev/openkos/issues/754) gave the judge a
+  retry, one since
+  [#719](https://github.com/jasonssdev/openkos/issues/719) renamed a report
+  label. A self-test nobody runs reads as a guarantee while guaranteeing
+  nothing, and does so exactly when a number from that harness is being
+  trusted.
+
+  `uv run python evals/run_self_tests.py` runs all 30 in about two seconds.
+  Harnesses are **discovered, never listed** — a checked-in list would leave a
+  new harness silently unguarded, which is the same rot the job exists to
+  catch — and discovering none is itself a failure. `OLLAMA_HOST` is poisoned
+  to a closed port, so "these are model-free" is a check rather than a claim.
+
 - **`related_to` says what it does not assert**
   ([#802](https://github.com/jasonssdev/openkos/issues/802)). The listing
   line, `--apply`'s preview and prompt, and `curate`'s Structure stage now
@@ -133,6 +150,20 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   drift.
 
 ### Fixed
+
+- **Two harness self-tests that were red, and would have stayed red**
+  ([#831](https://github.com/jasonssdev/openkos/issues/831)).
+  `generation_ceiling` asserted a hardcoded call count that
+  [#754](https://github.com/jasonssdev/openkos/issues/754) invalidated when the
+  judge gained a retry — #831 attributes this to #795, but the constant it
+  names arrived with #754 and the expectation was already stale one commit
+  later; it now derives the number from the scripted
+  replies plus `judge.JUDGE_ATTEMPTS`, so the next move of that constant is
+  absorbed rather than discovered. `decision_extraction`'s type-coverage probe
+  still expected the label #719 renamed, and its attribution check was a bare
+  substring over the whole report — satisfied by the count appearing anywhere.
+  It now pins the count on each source block, which is what its own failure
+  message had always claimed.
 
 - **The workspace says it is version-controlled, and the verbs that need it
   name the way back** ([#800](https://github.com/jasonssdev/openkos/issues/800)).

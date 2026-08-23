@@ -80,6 +80,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from openkos.extraction import concept as concept_mod
+from openkos.extraction import judge as judge_mod
 from openkos.extraction.concept import _is_meeting_shaped, extract_concept_union
 from openkos.llm.ollama import OllamaClient, OllamaGenerationCapped
 
@@ -731,11 +732,22 @@ def _self_test() -> int:
     # Scenario 1 -- the judge is cut off. `judge.select`'s D7 contract swallows
     # the exception, so the run SUCCEEDS with a silently degraded result. The
     # ledger must still name it; `capped` must not.
+    # The unchunked union path sends the identical prompt twice and merges
+    # (`concept.py`, the `pass 1/2` / `pass 2/2` branch). Named so the call
+    # count asserted below is derived from this script rather than written
+    # down a second time.
+    union_passes = [
+        _ok_body(candidates, 100, "stop"),  # pass 1/2
+        _ok_body(candidates, 100, "stop"),  # pass 2/2
+    ]
     judge_cut, sent = _scenario(
         [
-            _ok_body(candidates, 100, "stop"),  # pass 1/2
-            _ok_body(candidates, 100, "stop"),  # pass 2/2
-            _ok_body("[]", 4242, "length"),  # the judge, cut off
+            *union_passes,
+            # The judge, cut off. `_fake` repeats the LAST scripted reply
+            # once the script runs out, so EVERY judge attempt is cut off
+            # however many `judge.JUDGE_ATTEMPTS` allows -- the script does
+            # not need to know that number, and neither does the assertion.
+            _ok_body("[]", 4242, "length"),
         ]
     )
     if judge_cut.capped:
@@ -746,8 +758,22 @@ def _self_test() -> int:
             f"FAIL: judge cut-off missing from the ledger: {judge_cut.capped_phases!r}"
         )
         return 1
-    if len(judge_cut.calls) != 3:
-        print(f"FAIL: expected 3 recorded calls, got {len(judge_cut.calls)}")
+    # Two extraction passes, then one judge call per allowed attempt. DERIVED
+    # from the shipped constant, not written down: this assertion was `3`,
+    # correct until #754 gave the judge a retry (`JUDGE_ATTEMPTS`, which did
+    # not exist one commit earlier), and silently wrong from that commit on,
+    # because nothing ever ran this self-test. (#831 attributes the change to
+    # #795; the constant it names arrived with #754.) The probe already reads
+    # the engine's resolved chunk threshold rather than assuming its own arm
+    # took effect; this is the same discipline applied to the one number that
+    # was still a guess.
+    expected_calls = len(union_passes) + judge_mod.JUDGE_ATTEMPTS
+    if len(judge_cut.calls) != expected_calls:
+        print(
+            f"FAIL: expected {expected_calls} recorded calls "
+            f"({len(union_passes)} union passes + {judge_mod.JUDGE_ATTEMPTS} "
+            f"judge attempt(s)), got {len(judge_cut.calls)}"
+        )
         return 1
     if (
         judge_cut.calls[0]["gen_tokens"] != 100
