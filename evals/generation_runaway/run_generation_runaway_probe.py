@@ -156,7 +156,15 @@ _RecordingTransport = _ceiling._RecordingTransport
 """#714's `urlopen` stand-in: logs every chat call's counters and replays the
 bytes unchanged, so no production file is touched and the request that goes out
 is byte-identical to a real `ingest`'s. Borrowed whole -- the phase-attribution
-guarantee it documents is the same guarantee #828 needs."""
+guarantee it documents is the same guarantee #828 needs.
+
+#833 point 2 claimed the `phase` tag survives a scenario boundary here, and it
+does NOT: `reset()` clears `phase` alongside `calls`, and `run_fixture` calls it
+at the top of every run, so the first call of a scenario can only ever carry the
+sentinel. Recorded rather than fixed, because there was nothing to fix -- the
+reviewer read `reset()` clearing the ledger and did not read the next line. The
+reset has been there since #714 (2026-08-15), a week before the claim was
+filed."""
 
 _ReplayResponse = _ceiling._ReplayResponse
 
@@ -877,6 +885,15 @@ def write_results(
 # --------------------------------------------------------------------------- #
 
 
+class _ScriptExhausted(AssertionError):
+    """A scenario's script ran out before the pipeline stopped calling.
+
+    Its own type, rather than a bare `AssertionError`, because `run_fixture`
+    records every exception by CLASS NAME as run data. A shared type would
+    make "this scenario is under-scripted" indistinguishable from whatever
+    else the run raised, in the one column the assertion reads."""
+
+
 def _self_test() -> int:
     """Prove the ledger and the bound arithmetic before any GPU second is spent.
 
@@ -918,7 +935,19 @@ def _self_test() -> int:
 
         def _fake(request: Any, timeout: float | None = None) -> Any:
             sent.append(request.data)
-            return _ReplayResponse(scripted[min(len(sent) - 1, len(scripted) - 1)])
+            index = len(sent) - 1
+            if index >= len(scripted):
+                # NOT a clamp. Replaying the last body would let a scenario
+                # keep passing while the pipeline made calls nobody wrote a
+                # body for -- the silent-success failure this whole self-test
+                # exists to refuse, arriving through the transport instead of
+                # through the ledger.
+                raise _ScriptExhausted(
+                    f"call {index + 1} has no scripted body "
+                    f"({len(scripted)} scripted); the pipeline made more calls "
+                    "than this scenario describes"
+                )
+            return _ReplayResponse(scripted[index])
 
         real_urlopen = urllib.request.urlopen
         urllib.request.urlopen = _fake  # type: ignore[assignment]
@@ -1022,6 +1051,39 @@ def _self_test() -> int:
     if not any(row.raised == 1 and row.swallowed == 0 for row in extract_rows):
         failures.append(
             f"extraction row is not 1 raised / 0 swallowed: {extract_rows!r}"
+        )
+
+    # Scenario 2b -- the SCRIPT ITSELF. Every scenario above rests on the
+    # fake transport handing back the body it was scripted with, and until
+    # now a script that ran short silently replayed its LAST body instead.
+    # In scenario 2 the script holds one entry and the run happens to abort
+    # on it -- so if the pipeline ever stopped raising there, every later
+    # call would replay that same cut-off body and the `capped` assertions
+    # would still pass while measuring a pipeline that no longer behaves as
+    # claimed. A test that cannot fail in the case it exists for.
+    #
+    # Scripting ONE successful extraction pass makes the second pass ask for
+    # a body that is not there. `run_fixture` records every exception as
+    # data rather than propagating it, so the exhaustion arrives as the
+    # run's `error` -- which is exactly where a real short script would show
+    # up too.
+    short, short_sent = _scenario([_body(candidates, 900, "stop")])
+    if short.error != _ScriptExhausted.__name__:
+        failures.append(
+            "a script that runs short must FAIL the run, not replay its last "
+            f"body: got error={short.error!r}, capped={short.capped}, "
+            f"{len(short.calls)} call(s)"
+        )
+    # WHICH call exhausted it, not merely that something did. The error
+    # alone would also be produced by a script that ran short on call 7,
+    # which is a different scenario from the one this comment describes.
+    # The transport records only calls that returned a body, so the one
+    # scripted call is recorded and the second is the one that raised.
+    elif (len(short.calls), len(short_sent)) != (1, 2):
+        failures.append(
+            "exhaustion must arrive on the SECOND call, with the first "
+            f"recorded: got {len(short.calls)} recorded of "
+            f"{len(short_sent)} attempted"
         )
 
     # Scenario 3 -- the bound arithmetic, on a hand-built ledger whose numbers

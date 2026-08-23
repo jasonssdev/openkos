@@ -6942,3 +6942,57 @@ def test_optional_call_failures_defaults_to_empty_on_a_bare_report() -> None:
     is the honest default: it claims no failure, which is what an untouched
     site is entitled to claim."""
     assert concept_mod.ExtractionReport().optional_call_failures == ()
+
+
+def test_a_capture_that_both_fails_and_adds_still_reports_its_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`_add_participant_capture` propagates `outcome.failure` on BOTH of its
+    branches, and only the empty-additions one is reachable today: a failure
+    implies `additions == []` everywhere in production.
+
+    That makes the non-empty branch dead-but-correct wiring, and dead-but-
+    correct is exactly what rots. Every other test of a capture failure
+    scripts an EMPTY-additions failure, so dropping `failure` from the
+    non-empty return would be caught by nothing -- until something made that
+    state reachable, at which point a paid call that ran away would be
+    reported as a clean run that found somebody.
+
+    The state is therefore constructed rather than provoked. `additions`
+    carries a real candidate so `_dedup_merged` runs and the tail is read,
+    which is the branch under test, and the assertion is that the cause
+    survives the merge rather than being dropped alongside it.
+    """
+    addition = concept_mod.ExtractionResult(
+        type="Person",
+        title="Epictetus",
+        description="Runs the ingestion pipeline",
+        body="Epictetus runs the ingestion pipeline.",
+    )
+    cause = f"{concept_mod.OPTIONAL_CALL_PARTICIPANT_CAPTURE}: OllamaGenerationCapped"
+    monkeypatch.setattr(
+        concept_mod,
+        "_capture_further_participants",
+        lambda *args, **kwargs: concept_mod.OptionalCallOutcome(
+            additions=[addition], failure=cause
+        ),
+    )
+    existing = concept_mod.ExtractionResult(
+        type="Concept",
+        title="Ingestion pipeline",
+        description="The pipeline under discussion",
+        body="The pipeline under discussion.",
+    )
+
+    objects, capture_runs, added_titles, failure = concept_mod._add_participant_capture(
+        [existing],
+        source_text=_long_meeting_text(),
+        source_title=_MEETING_TITLE,
+        meeting_shaped=True,
+        llm=_SequencedLLM([]),
+    )
+
+    assert failure == cause
+    assert capture_runs == 1
+    assert added_titles == ("Epictetus",)
+    assert [result.title for result in objects] == ["Ingestion pipeline", "Epictetus"]
