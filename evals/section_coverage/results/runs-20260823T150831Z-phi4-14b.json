@@ -1,0 +1,547 @@
+[
+  {
+    "fixture": "helios-overview",
+    "run": 1,
+    "model": "phi4:14b",
+    "error": null,
+    "latency_s": 55.91,
+    "objects": [
+      {
+        "type": "Concept",
+        "title": "MySQL 8 as Primary Datastore",
+        "description": "HDP standardized on MySQL 8 as its primary datastore, driven by existing operational tooling within the team.",
+        "body": "The choice of MySQL 8 for HDP's primary data storage solution was influenced by the operations team's established familiarity and existing tools designed around MySQL. This decision highlights a strategic alignment with current technical resources to optimize performance and efficiency in handling analytics data."
+      },
+      {
+        "type": "Concept",
+        "title": "Components of HDP",
+        "description": "Key components within the Helios Data Platform include ingest workers, query API, and Redis cache.",
+        "body": "HDP's architecture comprises several critical components: Ingest workers that are responsible for pulling in source records and normalizing them for further processing; a Query API that serves as the interface for analytics dashboards; and a Redis cache positioned strategically to enhance the performance of data queries by acting as an intermediary layer ahead of the query API."
+      },
+      {
+        "type": "Person",
+        "title": "Marta Ruiz",
+        "description": "Technical lead responsible for overseeing the Helios Data Platform.",
+        "body": "As the technical lead, Marta Ruiz plays a pivotal role in guiding the development and maintenance of the Helios Data Platform. Her responsibilities include ensuring that the platform's architecture meets the team's analytical needs while facilitating seamless integration with existing data management tools."
+      },
+      {
+        "type": "Person",
+        "title": "Tom Becker",
+        "description": "Product manager for the Helios Data Platform.",
+        "body": "Tom Becker holds the product management role for HDP, overseeing its strategic direction and ensuring alignment with organizational goals. His duties involve coordinating between technical teams and stakeholders to deliver a platform that effectively supports data-driven decision-making processes."
+      }
+    ],
+    "uncovered": [
+      "# Helios Data Platform (HDP) — Overview",
+      "## Storage",
+      "## Components",
+      "## Ownership"
+    ],
+    "checkable": [
+      "# Helios Data Platform (HDP) — Overview",
+      "## Storage",
+      "## Components",
+      "## Ownership"
+    ],
+    "judge_status": "ok",
+    "uncovered_chars": 445,
+    "checkable_chars": 445
+  },
+  {
+    "fixture": "helios-overview",
+    "run": 2,
+    "model": "phi4:14b",
+    "error": null,
+    "latency_s": 29.53,
+    "objects": [
+      {
+        "type": "Decision",
+        "title": "Standardization on MySQL 8",
+        "description": "The decision to standardize on MySQL 8 as its primary datastore was driven by the operations team's existing MySQL tooling.",
+        "body": "HDP standardized on MySQL 8 as its primary datastore. The decision was driven by the operations team's existing MySQL tooling."
+      },
+      {
+        "type": "Person",
+        "title": "Marta Ruiz",
+        "description": "Technical lead for the Helios Data Platform.",
+        "body": "Technical lead: Marta Ruiz."
+      },
+      {
+        "type": "Person",
+        "title": "Tom Becker",
+        "description": "Product manager for the Helios Data Platform.",
+        "body": "Product: Tom Becker."
+      },
+      {
+        "type": "Procedure",
+        "title": "Ingestion and Query Process",
+        "description": "Components involved in data ingestion and query execution.",
+        "body": "- Ingest workers: pull source records and normalize them.\n- Query API: serves the analytics dashboards.\n- Redis cache: sits in front of the query API."
+      }
+    ],
+    "uncovered": [
+      "# Helios Data Platform (HDP) — Overview"
+    ],
+    "checkable": [
+      "# Helios Data Platform (HDP) — Overview",
+      "## Storage",
+      "## Components",
+      "## Ownership"
+    ],
+    "judge_status": "ok",
+    "uncovered_chars": 121,
+    "checkable_chars": 445
+  },
+  {
+    "fixture": "helios-overview",
+    "run": 3,
+    "model": "phi4:14b",
+    "error": null,
+    "latency_s": 29.01,
+    "objects": [
+      {
+        "type": "Concept",
+        "title": "MySQL 8 Standardization",
+        "description": "Standardization decision for using MySQL 8 as a datastore.",
+        "body": "HDP standardized on MySQL 8 as its primary datastore. The decision was driven by the operations team's existing MySQL tooling."
+      },
+      {
+        "type": "Person",
+        "title": "Marta Ruiz",
+        "description": "Technical lead for the Helios Data Platform (HDP).",
+        "body": "Marta Ruiz is identified as the technical lead responsible for overseeing the development and maintenance of HDP."
+      },
+      {
+        "type": "Person",
+        "title": "Tom Becker",
+        "description": "Product manager associated with the Helios Data Platform (HDP).",
+        "body": "Tom Becker is responsible for managing the product aspects of HDP, which likely involves defining product strategy and ensuring that development aligns with user needs."
+      },
+      {
+        "type": "Procedure",
+        "title": "Storage decision procedure",
+        "description": "The process and reasoning behind choosing MySQL 8 as the primary datastore for HDP.",
+        "body": "HDP standardized on MySQL 8 as its primary datastore. The decision was driven by the operations team's existing MySQL tooling, indicating a procedural approach to selecting the technology stack based on current capabilities and resources."
+      }
+    ],
+    "uncovered": [
+      "# Helios Data Platform (HDP) — Overview",
+      "## Components",
+      "## Ownership"
+    ],
+    "checkable": [
+      "# Helios Data Platform (HDP) — Overview",
+      "## Storage",
+      "## Components",
+      "## Ownership"
+    ],
+    "judge_status": "ok",
+    "uncovered_chars": 319,
+    "checkable_chars": 445
+  },
+  {
+    "fixture": "helios-overview",
+    "run": 4,
+    "model": "phi4:14b",
+    "error": null,
+    "latency_s": 32.29,
+    "objects": [
+      {
+        "type": "Decision",
+        "title": "Standardization on MySQL 8 for HDP",
+        "description": "The decision to use MySQL 8 as the primary datastore for Helios Data Platform.",
+        "body": "This decision was driven by the operations team's existing tooling, making MySQL 8 a suitable choice for standardization."
+      },
+      {
+        "type": "Person",
+        "title": "Marta Ruiz",
+        "description": "Technical lead of Helios Data Platform.",
+        "body": "Marta Ruiz holds the position of technical lead for HDP, overseeing its development and technical decisions."
+      },
+      {
+        "type": "Person",
+        "title": "Tom Becker",
+        "description": "The product owner for the Helios Data Platform.",
+        "body": "Tom Becker holds the role of product manager, responsible for guiding the platform's product direction and features."
+      }
+    ],
+    "uncovered": [
+      "# Helios Data Platform (HDP) — Overview",
+      "## Storage",
+      "## Components",
+      "## Ownership"
+    ],
+    "checkable": [
+      "# Helios Data Platform (HDP) — Overview",
+      "## Storage",
+      "## Components",
+      "## Ownership"
+    ],
+    "judge_status": "ok",
+    "uncovered_chars": 445,
+    "checkable_chars": 445
+  },
+  {
+    "fixture": "helios-overview",
+    "run": 5,
+    "model": "phi4:14b",
+    "error": null,
+    "latency_s": 28.87,
+    "objects": [
+      {
+        "type": "Project",
+        "title": "Helios Data Platform (HDP)",
+        "description": "A platform used by the internal analytics team for data ingestion and querying.",
+        "body": "The Helios Data Platform, usually shortened to HDP, is the ingestion and query layer used by the internal analytics team."
+      },
+      {
+        "type": "Decision",
+        "title": "Standardization on MySQL 8",
+        "description": "HDP standardized on using MySQL 8 as its primary datastore.",
+        "body": "HDP standardized on MySQL 8 as its primary datastore. The decision was driven by the operations team's existing MySQL tooling."
+      },
+      {
+        "type": "Person",
+        "title": "Marta Ruiz",
+        "description": "Technical lead for the Helios Data Platform (HDP).",
+        "body": "Technical lead: Marta Ruiz."
+      },
+      {
+        "type": "Person",
+        "title": "Tom Becker",
+        "description": "Product manager for the Helios Data Platform (HDP).",
+        "body": "Product: Tom Becker."
+      },
+      {
+        "type": "Concept",
+        "title": "Helios Data Platform (HDP)",
+        "description": "The Helios Data Platform is an ingestion and query layer used by the internal analytics team.",
+        "body": "The Helios Data Platform, usually shortened to HDP, is the ingestion and query layer used by the internal analytics team."
+      }
+    ],
+    "uncovered": [
+      "## Components"
+    ],
+    "checkable": [
+      "# Helios Data Platform (HDP) — Overview",
+      "## Storage",
+      "## Components",
+      "## Ownership"
+    ],
+    "judge_status": "ok",
+    "uncovered_chars": 150,
+    "checkable_chars": 445
+  },
+  {
+    "fixture": "kickoff",
+    "run": 1,
+    "model": "phi4:14b",
+    "error": null,
+    "latency_s": 44.34,
+    "objects": [
+      {
+        "type": "Decision",
+        "title": "Primary datastore decision",
+        "description": "The choice of PostgreSQL 16 as the primary datastore for Project Helios.",
+        "body": "Marta argued for using PostgreSQL 16 over MySQL because we already run Postgres in the billing service."
+      },
+      {
+        "type": "Decision",
+        "title": "Delivery deadline decision",
+        "description": "Setting a delivery deadline for the first internal release of Project Helios.",
+        "body": "Tom set the delivery deadline at 2026-03-15 for the first internal release."
+      },
+      {
+        "type": "Decision",
+        "title": "Schema migration ownership decision",
+        "description": "Assigning ownership of the schema migration plan to Priya Nair.",
+        "body": "Priya owns the schema migration plan."
+      },
+      {
+        "type": "Person",
+        "title": "Marta Ruiz",
+        "description": "Project participant who argued for PostgreSQL 16 as the primary datastore.",
+        "body": "Marta Ruiz participated in the meeting and argued that PostgreSQL 16 should be used over MySQL because it is already utilized within another service."
+      },
+      {
+        "type": "Person",
+        "title": "Tom Becker",
+        "description": "Project participant who set the delivery deadline.",
+        "body": "Tom Becker was present at the meeting and set the first internal release deadline for 2026-03-15."
+      },
+      {
+        "type": "Person",
+        "title": "Priya Nair",
+        "description": "Project participant responsible for the schema migration plan.",
+        "body": "Priya Nair owns the schema migration plan as decided in the meeting."
+      }
+    ],
+    "uncovered": [
+      "# Project Helios — Kickoff Meeting",
+      "## Context",
+      "## Open questions"
+    ],
+    "checkable": [
+      "# Project Helios — Kickoff Meeting",
+      "## Context",
+      "## Decisions",
+      "## Open questions"
+    ],
+    "judge_status": "ok",
+    "uncovered_chars": 296,
+    "checkable_chars": 545
+  },
+  {
+    "fixture": "kickoff",
+    "run": 2,
+    "model": "phi4:14b",
+    "error": null,
+    "latency_s": 46.69,
+    "objects": [
+      {
+        "type": "Decision",
+        "title": "Primary datastore decision for Helios",
+        "description": "The team decided on PostgreSQL 16 as the primary datastore, based on existing use in another service.",
+        "body": "Primary datastore will be PostgreSQL 16. Marta argued for it over MySQL because we already run Postgres in the billing service."
+      },
+      {
+        "type": "Decision",
+        "title": "Delivery deadline set by Tom Becker",
+        "description": "Tom Becker established a delivery deadline for the first internal release of Project Helios.",
+        "body": "At the kickoff meeting for Project Helios, Tom Becker was responsible for setting a critical timeline. He designated March 15, 2026, as the delivery deadline for the project's first internal release."
+      },
+      {
+        "type": "Decision",
+        "title": "Schema migration plan ownership assigned to Priya Nair",
+        "description": "Priya Nair is responsible for the schema migration plan.",
+        "body": "Priya owns the schema migration plan."
+      },
+      {
+        "type": "Person",
+        "title": "Marta Ruiz",
+        "description": "Attendee and decision-maker during the meeting",
+        "body": "Argued for using PostgreSQL 16 over MySQL as the primary datastore."
+      },
+      {
+        "type": "Person",
+        "title": "Tom Becker",
+        "description": "Attendee and deadline setter",
+        "body": "Set the delivery deadline at 2026-03-15 for the first internal release of Project Helios."
+      },
+      {
+        "type": "Person",
+        "title": "Priya Nair",
+        "description": "Attendee responsible for schema migration plan",
+        "body": "Owns the schema migration plan for Project Helios."
+      }
+    ],
+    "uncovered": [
+      "# Project Helios — Kickoff Meeting",
+      "## Context",
+      "## Open questions"
+    ],
+    "checkable": [
+      "# Project Helios — Kickoff Meeting",
+      "## Context",
+      "## Decisions",
+      "## Open questions"
+    ],
+    "judge_status": "ok",
+    "uncovered_chars": 296,
+    "checkable_chars": 545
+  },
+  {
+    "fixture": "kickoff",
+    "run": 3,
+    "model": "phi4:14b",
+    "error": null,
+    "latency_s": 37.1,
+    "objects": [
+      {
+        "type": "Project",
+        "title": "Project Helios",
+        "description": "An internal ingestion platform designed to replace the existing nightly batch loader.",
+        "body": "Helios is our internal ingestion platform. It replaces the nightly batch loader that has been failing roughly twice a month since October."
+      },
+      {
+        "type": "Decision",
+        "title": "Primary Datastore Decision",
+        "description": "The decision to use PostgreSQL 16 as the primary datastore for Helios.",
+        "body": "Primary datastore will be PostgreSQL 16. Marta argued for it over MySQL because we already run Postgres in the billing service."
+      },
+      {
+        "type": "Decision",
+        "title": "Delivery Deadline Decision",
+        "description": "The decision to set a delivery deadline for the first internal release of Helios.",
+        "body": "Tom set the delivery deadline at 2026-03-15 for the first internal release."
+      },
+      {
+        "type": "Decision",
+        "title": "Schema Migration Plan Ownership Decision",
+        "description": "The decision to assign Priya Nair as the owner of the schema migration plan.",
+        "body": "Priya owns the schema migration plan."
+      },
+      {
+        "type": "Person",
+        "title": "Marta Ruiz",
+        "description": "Participated in the Project Helios Kickoff Meeting",
+        "body": "Marta argued for using PostgreSQL 16 over MySQL as the primary datastore, citing that the organization already runs Postgres in the billing service."
+      },
+      {
+        "type": "Person",
+        "title": "Tom Becker",
+        "description": "Participated in the Project Helios Kickoff Meeting",
+        "body": "Tom set the delivery deadline for the first internal release of Project Helios at 2026-03-15."
+      },
+      {
+        "type": "Person",
+        "title": "Priya Nair",
+        "description": "Participated in the Project Helios Kickoff Meeting",
+        "body": "Priya is responsible for owning the schema migration plan for Project Helios."
+      }
+    ],
+    "uncovered": [
+      "# Project Helios — Kickoff Meeting",
+      "## Open questions"
+    ],
+    "checkable": [
+      "# Project Helios — Kickoff Meeting",
+      "## Context",
+      "## Decisions",
+      "## Open questions"
+    ],
+    "judge_status": "ok",
+    "uncovered_chars": 158,
+    "checkable_chars": 545
+  },
+  {
+    "fixture": "kickoff",
+    "run": 4,
+    "model": "phi4:14b",
+    "error": null,
+    "latency_s": 39.75,
+    "objects": [
+      {
+        "type": "Project",
+        "title": "Project Helios",
+        "description": "An internal ingestion platform designed to replace the failing nightly batch loader.",
+        "body": "Helios aims to address issues with the existing system that has been experiencing failures roughly twice a month since October. The project is internally focused and involves key stakeholders in its development."
+      },
+      {
+        "type": "Decision",
+        "title": "Primary datastore choice for Project Helios",
+        "description": "The decision to use PostgreSQL 16 as the primary datastore for Helios.",
+        "body": "Primary datastore will be PostgreSQL 16. Marta argued for it over MySQL because we already run Postgres in the billing service."
+      },
+      {
+        "type": "Decision",
+        "title": "Delivery deadline for Project Helios",
+        "description": "The decision to set a delivery deadline for the first internal release of Helios.",
+        "body": "Tom set the delivery deadline at 2026-03-15 for the first internal release."
+      },
+      {
+        "type": "Decision",
+        "title": "Schema migration plan ownership for Project Helios",
+        "description": "The decision that Priya owns the schema migration plan.",
+        "body": "Priya owns the schema migration plan."
+      },
+      {
+        "type": "Person",
+        "title": "Marta Ruiz",
+        "description": "Participant in Project Helios — Kickoff Meeting",
+        "body": "Argued for using PostgreSQL 16 as the primary datastore over MySQL."
+      },
+      {
+        "type": "Person",
+        "title": "Tom Becker",
+        "description": "Participant in Project Helios — Kickoff Meeting",
+        "body": "Set the delivery deadline at 2026-03-15 for the first internal release."
+      },
+      {
+        "type": "Person",
+        "title": "Priya Nair",
+        "description": "Participant in Project Helios — Kickoff Meeting",
+        "body": "Owes the schema migration plan."
+      }
+    ],
+    "uncovered": [
+      "# Project Helios — Kickoff Meeting",
+      "## Context",
+      "## Open questions"
+    ],
+    "checkable": [
+      "# Project Helios — Kickoff Meeting",
+      "## Context",
+      "## Decisions",
+      "## Open questions"
+    ],
+    "judge_status": "ok",
+    "uncovered_chars": 296,
+    "checkable_chars": 545
+  },
+  {
+    "fixture": "kickoff",
+    "run": 5,
+    "model": "phi4:14b",
+    "error": null,
+    "latency_s": 44.75,
+    "objects": [
+      {
+        "type": "Decision",
+        "title": "Primary Datastore Decision",
+        "description": "A decision made to use PostgreSQL 16 as the primary datastore for Project Helios.",
+        "body": "Marta argued in favor of PostgreSQL 16 over MySQL because it is already used in another service. This decision aims to leverage existing infrastructure and expertise."
+      },
+      {
+        "type": "Decision",
+        "title": "Delivery Deadline Decision",
+        "description": "Tom set the delivery deadline for the first internal release of Project Helios.",
+        "body": "The deadline was established as 2026-03-15, providing a clear timeline for project milestones and progress."
+      },
+      {
+        "type": "Decision",
+        "title": "Schema Migration Plan Ownership",
+        "description": "Priya Nair owns the schema migration plan for Project Helios.",
+        "body": "Priya is responsible for overseeing and executing the schema migration process as part of the project's development."
+      },
+      {
+        "type": "Concept",
+        "title": "Open Questions about Caching Layer and On-call Rotation",
+        "description": "Discussion points regarding the necessity of a caching layer and who will manage the on-call rotation once Helios is operational.",
+        "body": "The meeting identified two open questions: whether a caching layer is needed for version 1, and determining who will handle the on-call rotation after Helios goes live."
+      },
+      {
+        "type": "Person",
+        "title": "Marta Ruiz",
+        "description": "Attendee and participant in the Project Helios — Kickoff Meeting",
+        "body": "Argued for PostgreSQL 16 as the primary datastore over MySQL"
+      },
+      {
+        "type": "Person",
+        "title": "Tom Becker",
+        "description": "Attendee and participant in the Project Helios — Kickoff Meeting",
+        "body": "Set the delivery deadline at 2026-03-15 for the first internal release"
+      },
+      {
+        "type": "Person",
+        "title": "Priya Nair",
+        "description": "Attendee and participant in the Project Helios — Kickoff Meeting",
+        "body": "Owns the schema migration plan"
+      }
+    ],
+    "uncovered": [
+      "# Project Helios — Kickoff Meeting",
+      "## Context",
+      "## Open questions"
+    ],
+    "checkable": [
+      "# Project Helios — Kickoff Meeting",
+      "## Context",
+      "## Decisions",
+      "## Open questions"
+    ],
+    "judge_status": "ok",
+    "uncovered_chars": 296,
+    "checkable_chars": 545
+  }
+]

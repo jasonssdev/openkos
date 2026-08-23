@@ -243,7 +243,9 @@ def resolve_predicates(names: list[str]) -> tuple[coverage.CoveragePredicate, ..
 
 
 def select_predicates(
-    names: list[str] | None, thresholds: list[float] | None
+    names: list[str] | None,
+    thresholds: list[float] | None,
+    min_word_gates: list[int] | None = None,
 ) -> tuple[coverage.CoveragePredicate, ...]:
     """The registry selections, then one `overlap` column per swept
     threshold -- a whole ladder in ONE invocation.
@@ -269,21 +271,39 @@ def select_predicates(
     scored. Defaulting to `quote` there would put the refuted baseline
     beside a ladder that says nothing about it, and a reader who wants both
     asks for both.
+
+    Two swept constants make the ladder a CROSS PRODUCT, and it is built as
+    one deliberately. `overlap` has two knobs -- the covering threshold and
+    `OVERLAP_MIN_CONTENT_WORDS`, the gate deciding which sections are
+    scorable at all -- and every number committed in this directory was
+    measured at the second one's 4 without ever varying it. Sweeping them
+    independently would answer neither question: the gate changes the
+    DENOMINATOR, so a threshold's share is not comparable across two gates,
+    and a table pairing each threshold with one gate would hide exactly that
+    interaction. Gate-major order keeps each gate's whole threshold ladder
+    together, which is how a reader compares two denominators.
     """
     wanted = list(dict.fromkeys(thresholds or ()))
+    gates = list(dict.fromkeys(min_word_gates or ()))
     if names:
         chosen = list(resolve_predicates(names))
-    elif wanted:
+    elif wanted or gates:
         chosen = []
     else:
         chosen = [coverage.QUOTE]
     seen = {predicate.name for predicate in chosen}
-    for threshold in wanted:
-        predicate = coverage.overlap_predicate(threshold)
-        if predicate.name in seen:
-            continue
-        seen.add(predicate.name)
-        chosen.append(predicate)
+    # Only when something was ACTUALLY swept. Falling back to both defaults
+    # unconditionally would append an `overlap` column to a bare invocation,
+    # which asked for nothing and must keep scoring the baseline alone.
+    if not wanted and not gates:
+        return tuple(chosen)
+    for gate in gates or [coverage.OVERLAP_MIN_CONTENT_WORDS]:
+        for threshold in wanted or [coverage.OVERLAP_COVERED_FRACTION]:
+            predicate = coverage.overlap_predicate(threshold, gate)
+            if predicate.name in seen:
+                continue
+            seen.add(predicate.name)
+            chosen.append(predicate)
     return tuple(chosen)
 
 
@@ -614,6 +634,228 @@ def ablation_table(
     lines.append(
         "Read `names BOTH` before the shares. A rung can be loud and still "
         "point somewhere else, and only the naming column tells the two apart."
+    )
+    return "\n".join(lines)
+
+
+def usable_runs(
+    records: list[dict[str, Any]], fixture_name: str
+) -> list[dict[str, Any]]:
+    """The runs of `fixture_name` both leave-one-out functions agree are
+    scorable, in stored order.
+
+    ONE predicate, shared, because the two had drifted: the table's NO DATA
+    guard asked `record.get("error") is None`, which a record carrying no
+    `"error"` key at all satisfies, and the tally then subscripted
+    `record["fixture"]` and raised `KeyError` on that same record -- a raw
+    traceback from inside the tally where the guard had been written to
+    print an honest NO DATA. A stored file predating the current record
+    shape is exactly how that arrives.
+
+    Every key the tally reads is required here, so a record that reaches the
+    tally cannot fail in it.
+    """
+    return [
+        record
+        for record in records
+        if record.get("error") is None
+        and record.get("fixture") == fixture_name
+        and "objects" in record
+    ]
+
+
+@dataclass(frozen=True)
+class LeaveOneOutTally:
+    """One predicate's leave-one-out result over every run of one source.
+
+    `blind` is the column this arm exists to produce, and it is the only one
+    that is bad news: a section that WAS covered, whose quoting objects were
+    then deleted, and which the predicate still calls covered. That is a
+    real loss the signal would not have reported.
+
+    `trials` counts only rows carrying `covered_before`. A section the
+    predicate already flagged cannot be made more flagged by deleting
+    objects, so including it would pad the denominator with rows that were
+    decided before the arm ran.
+    """
+
+    predicate: str
+    trials: int
+    named: int
+    blind: int
+    skipped_uncovered: int
+    ok_runs: int
+    excluded_unscorable: int = 0
+    """Sections the predicate could not check, summed over the runs."""
+    excluded_unquoted: int = 0
+    """Sections no object quoted, so no loss could be constructed. The
+    dominant exclusion on a discursive source and the reason its `trials`
+    is small; without it the denominator cannot be audited."""
+    excluded_total_removal: int = 0
+    """Sections every object quoted, where the trial would be vacuous."""
+    refused: str | None = None
+    """Why this predicate cannot be scored by this arm at all, or `None`.
+
+    Carried as a value rather than raised past the table, because a
+    refusal has to be PRINTED. A predicate silently dropped from the rows
+    reads as one that was measured and came back clean, which is the exact
+    misreading `ablation_table` already refuses for a non-ablatable
+    fixture."""
+
+    @property
+    def hit_rate(self) -> float | None:
+        """`named / trials`, or `None` when nothing was scorable -- never
+        `0.0`, which is the value a signal that saw NOTHING would also get
+        and is exactly the confusion `render_shares` exists to prevent."""
+        if not self.trials:
+            return None
+        return self.named / self.trials
+
+
+def leave_one_out_tallies(
+    records: list[dict[str, Any]],
+    fixture: Fixture,
+    predicates: tuple[coverage.CoveragePredicate, ...],
+) -> tuple[LeaveOneOutTally, ...]:
+    """Every ok run of `fixture` put through `coverage.leave_one_section_out`,
+    tallied per predicate.
+
+    Costs no model call: the trials are built by DELETING objects a stored
+    or just-completed run already produced. That is what lets this arm run
+    over a private transcript without persisting anything from it -- the
+    tally is counts, and counts are publishable where objects are not.
+    """
+    ok = usable_runs(records, fixture.name)
+    tallies: list[LeaveOneOutTally] = []
+    for predicate in predicates:
+        if predicate.covers_by_quoting:
+            tallies.append(
+                LeaveOneOutTally(
+                    predicate=predicate.name,
+                    trials=0,
+                    named=0,
+                    blind=0,
+                    skipped_uncovered=0,
+                    ok_runs=len(ok),
+                    refused=(
+                        "covers by the same verbatim-quoting rule this arm "
+                        "attributes by: every trial is a hit by construction"
+                    ),
+                )
+            )
+            continue
+        trials = named = blind = skipped = 0
+        unscorable = unquoted = total_removal = 0
+        for record in ok:
+            texts = object_texts(record.get("objects", []))
+            scan = coverage.leave_one_out_report(texts, fixture.text, predicate)
+            unscorable += scan.unscorable
+            unquoted += scan.unquoted
+            total_removal += scan.total_removal
+            for row in scan.rows:
+                if not row.covered_before:
+                    skipped += 1
+                    continue
+                trials += 1
+                if row.named_after:
+                    named += 1
+                else:
+                    blind += 1
+        tallies.append(
+            LeaveOneOutTally(
+                predicate=predicate.name,
+                trials=trials,
+                named=named,
+                blind=blind,
+                skipped_uncovered=skipped,
+                ok_runs=len(ok),
+                excluded_unscorable=unscorable,
+                excluded_unquoted=unquoted,
+                excluded_total_removal=total_removal,
+            )
+        )
+    return tuple(tallies)
+
+
+def leave_one_out_table(
+    records: list[dict[str, Any]],
+    fixtures: tuple[Fixture, ...],
+    predicates: tuple[coverage.CoveragePredicate, ...],
+) -> str:
+    """The under-fire arm that reaches a discursive source.
+
+    Reported beside `--ablate` rather than replacing it. The two construct
+    different losses and neither subsumes the other: `--ablate` reconstructs
+    ONE reported failure exactly, with the objects that real run produced;
+    this one builds many small losses from any run's own objects and can
+    therefore be pointed at a transcript nobody has adjudicated.
+    """
+    lines: list[str] = [
+        "",
+        "=" * 72,
+        "LEAVE-ONE-SECTION-OUT (#793)",
+        "=" * 72,
+        "",
+        _CRITERION,
+        "",
+        "Per section, the objects that QUOTE it verbatim are deleted and the "
+        "predicate is asked again. Attribution is `evidence_line`; coverage "
+        "is the predicate under test -- two different mechanisms, so a row "
+        "is not true by construction. Sections nothing quotes, sections the "
+        "predicate cannot check, and sections whose deletion would empty the "
+        "object list are not scored, and none of those is a hit declined.",
+        "",
+        "Read BLIND first. It counts a section that was covered, lost every "
+        "object quoting it, and was STILL called covered -- a real loss this "
+        "signal would not report.",
+    ]
+    for fixture in fixtures:
+        lines.append("")
+        lines.append(f"## {fixture.name}")
+        # PER FIXTURE, not table-wide. A guard spanning the whole table
+        # stays silent whenever ANY other fixture has runs, so a fixture
+        # with none would print trials 0 NAMED 0 BLIND 0 beside a populated
+        # one -- a signal that was never asked reading exactly like one that
+        # was asked and found nothing. `hit_rate` refuses that confusion one
+        # level down by answering None rather than 0.0; this is the report
+        # saying it out loud, and it has to say it where the rows are.
+        if not usable_runs(records, fixture.name):
+            lines.append("")
+            lines.append("   NO DATA -- no ok run to build a trial from.")
+            continue
+        lines.append("")
+        width = max(len("predicate"), *(len(p.name) for p in predicates))
+        lines.append(
+            f"   {'predicate':<{width}}  {'trials':>6}  {'NAMED':>6}  "
+            f"{'BLIND':>6}  {'hit rate':>8}  (skipped: already uncovered)"
+        )
+        for tally in leave_one_out_tallies(records, fixture, predicates):
+            if tally.refused is not None:
+                lines.append(
+                    f"   {tally.predicate:<{width}}  NOT SCORABLE -- {tally.refused}"
+                )
+                continue
+            rate = tally.hit_rate
+            shown = "     n/a" if rate is None else f"{rate * 100:7.1f}%"
+            lines.append(
+                f"   {tally.predicate:<{width}}  {tally.trials:>6}  "
+                f"{tally.named:>6}  {tally.blind:>6}  {shown}  "
+                f"({tally.skipped_uncovered} over {tally.ok_runs} ok run(s))"
+            )
+            # The denominator, spelled out. `trials` alone reads the same
+            # whether one section was excluded or forty, and three of the
+            # four exclusions produce no row to notice.
+            lines.append(
+                f"   {'':<{width}}  excluded: {tally.excluded_unquoted} "
+                f"unquoted, {tally.excluded_unscorable} unscorable, "
+                f"{tally.excluded_total_removal} total-removal"
+            )
+    lines.append("")
+    lines.append(
+        "A hit rate of 100% is NOT a validated signal on its own: it says "
+        "the predicate notices a loss it was pointed at, not that it stays "
+        "quiet on a healthy run. Read it against the over-fire arm, which is "
+        "the half that fails when a threshold is too loud."
     )
     return "\n".join(lines)
 
@@ -1722,6 +1964,441 @@ def _self_test() -> int:
         "a report over no runs at all must say NO DATA rather than raise",
     )
 
+    # ------------------------------------------------------------------
+    # LEAVE-ONE-SECTION-OUT (#793): the under-fire arm that needs no
+    # adjudication and therefore reaches a DISCURSIVE source.
+    #
+    # `--ablate` cuts a run down to the objects one reported run produced,
+    # which pins it to the two committed fixtures and to the one terse
+    # bullet-shaped file the README names as its single biggest gap. This
+    # arm constructs the loss per SECTION instead: drop the objects that
+    # demonstrably QUOTE a section, then ask the predicate whether it
+    # notices. Attribution is `evidence_line`, verbatim quoting; coverage
+    # is the predicate under test. Two different mechanisms, which is what
+    # keeps the row from being true by construction.
+    # ------------------------------------------------------------------
+    loso_source = (
+        "# Title\n"
+        "The platform is the ingestion and query layer for the team.\n"
+        "## Storage\n"
+        "The platform standardized on MySQL 8 as its primary datastore.\n"
+        "## Ownership\n"
+        "The technical lead for this workstream is Marta Ruiz.\n"
+    )
+    quoting_object = "The platform standardized on MySQL 8 as its primary datastore."
+    other_object = "The technical lead for this workstream is Marta Ruiz."
+    # `quote` CANNOT be scored by this arm, and that is an assertion rather
+    # than a caveat. Its covering test IS `evidence_line`, the same rule
+    # `quoting_objects` attributes with, so deleting the quoting objects
+    # makes `any(...)` false by construction and every row would be a hit.
+    # The arm's first published table printed `quote` at 100.0% and that
+    # number measured nothing at all.
+    try:
+        coverage.leave_one_section_out(
+            [quoting_object, other_object], loso_source, coverage.QUOTE
+        )
+    except ValueError:
+        pass
+    else:
+        check(
+            False,
+            "leave-one-out must REFUSE a predicate that covers by the same "
+            "rule it attributes by -- scoring `quote` there yields 100% by "
+            "construction and reads as a result",
+        )
+
+    loso = coverage.leave_one_section_out(
+        [quoting_object, other_object], loso_source, coverage.OVERLAP
+    )
+    by_heading = {row.heading: row for row in loso}
+    check(
+        "## Storage" in by_heading,
+        "a section a supplied object quotes verbatim must produce a "
+        f"leave-one-out row (got {sorted(by_heading)})",
+    )
+    storage = by_heading.get("## Storage")
+    if storage is not None:
+        check(
+            storage.quoting == 1,
+            "exactly the one object quoting `## Storage` must be attributed to "
+            f"it (got {storage.quoting})",
+        )
+        check(
+            storage.covered_before,
+            "`## Storage` must be COVERED before its own quoting object is "
+            "removed, or the row measures nothing",
+        )
+        check(
+            storage.remaining == 1,
+            "removing `## Storage`'s one quoting object must leave the other "
+            f"object behind (got {storage.remaining})",
+        )
+        check(
+            storage.named_after,
+            "with its only quoting object removed, `overlap` must name "
+            "`## Storage` -- the floor the arm rests on, and NOT a tautology "
+            "here: `overlap` scores content-word share, so the remaining "
+            "object could have kept the section covered",
+        )
+
+    # ------------------------------------------------------------------
+    # The SECOND swept constant (#793). `OVERLAP_MIN_CONTENT_WORDS` gates
+    # which sections are scorable at all, and every published number in
+    # this directory was measured at its 4 without ever testing it. A
+    # ladder over it has the same naming duty the threshold ladder has: the
+    # swept value must reach the predicate's `name`, or a column lies about
+    # which gate produced it.
+    # ------------------------------------------------------------------
+    check(
+        coverage.overlap_predicate().name == "overlap",
+        "the fully-default predicate must keep the bare registry name, which "
+        "every committed number here was recorded under (got "
+        f"{coverage.overlap_predicate().name!r})",
+    )
+    check(
+        coverage.overlap_predicate(min_content_words=8).name == "overlap@0.5/8",
+        "a swept WORD GATE must reach the name even when the threshold is the "
+        f"default (got {coverage.overlap_predicate(min_content_words=8).name!r})",
+    )
+    check(
+        coverage.overlap_predicate(0.2, min_content_words=8).name == "overlap@0.2/8",
+        "both swept values must reach the name (got "
+        f"{coverage.overlap_predicate(0.2, min_content_words=8).name!r})",
+    )
+    five_words = "alpha beta gamma delta epsilon"
+    check(
+        coverage.overlap_predicate(min_content_words=4).checkable(five_words)
+        and not coverage.overlap_predicate(min_content_words=8).checkable(five_words),
+        "the swept word gate must actually reach `checkable`, not just the "
+        "name -- a five-content-word section is scorable at 4 and not at 8",
+    )
+    try:
+        coverage.overlap_predicate(min_content_words=0)
+    except ValueError:
+        pass
+    else:
+        check(
+            False,
+            "a word gate below 1 must raise: at 0 every section is scorable "
+            "including an empty one, which is vacuity rather than leniency",
+        )
+
+    # ------------------------------------------------------------------
+    # The TALLY arithmetic, which produces every published leave-one-out
+    # number and was asserted by nothing until a review said so. The three
+    # regimes are built into one source so a single run exercises all of
+    # them, and the expected counts are hand-derived below rather than read
+    # back from the function under test.
+    # ------------------------------------------------------------------
+    tally_source = (
+        "# Title\n"
+        "Alpha beta gamma delta epsilon zeta.\n"
+        "## Sec A\n"
+        "The quick brown fox jumps over the lazy dog today.\n"
+        "## Sec B\n"
+        "Sailing vessels navigate treacherous northern waters annually.\n"
+        "## Sec C\n"
+        "The quick brown fox jumps over the lazy dog today.\n"
+        "Meanwhile numerous unrelated tangential subjects occupy considerable "
+        "additional discussion throughout the session.\n"
+    )
+    # `a_quote` quotes Sec A and Sec C verbatim; `b_quote` quotes Sec B;
+    # `a_paraphrase` reorders Sec A's words so it quotes NOTHING while still
+    # carrying every one of Sec A's seven content words.
+    a_quote = "The quick brown fox jumps over the lazy dog today."
+    b_quote = "Sailing vessels navigate treacherous northern waters annually."
+    a_paraphrase = "Today the lazy dog and the quick brown fox jumps."
+    tally_fixture = Fixture(
+        name="tally",
+        title="Tally",
+        text=tally_source,
+        must_fire=(),
+        must_stay_quiet=(),
+    )
+    tally_record = {
+        "fixture": "tally",
+        "run": 1,
+        "error": None,
+        "objects": [
+            {"type": "Concept", "title": "a", "body": a_quote, "description": ""},
+            {"type": "Concept", "title": "b", "body": b_quote, "description": ""},
+            {"type": "Concept", "title": "c", "body": a_paraphrase, "description": ""},
+        ],
+    }
+    # Derived by hand from the four sections, and each one lands in a
+    # DIFFERENT bucket, which is the whole point of this fixture:
+    #   `# Title`  no object quotes it            -> no row at all
+    #   `## Sec A` covered; its quoting object removed, but `a_paraphrase`
+    #             still carries all seven content words                 -> BLIND
+    #   `## Sec B` covered; nothing else carries its words              -> NAMED
+    #   `## Sec C` 18 content words, only 7 shared, so overlap is 0.389
+    #             and it is UNCOVERED before the arm runs         -> skipped
+    (tally,) = leave_one_out_tallies([tally_record], tally_fixture, (coverage.OVERLAP,))
+    check(
+        (tally.trials, tally.named, tally.blind, tally.skipped_uncovered)
+        == (2, 1, 1, 1),
+        "the tally must count one NAMED, one BLIND and one already-uncovered "
+        "section as skipped, over two trials (got "
+        f"trials={tally.trials} named={tally.named} blind={tally.blind} "
+        f"skipped={tally.skipped_uncovered})",
+    )
+    check(
+        tally.trials == tally.named + tally.blind,
+        "every trial must land in exactly one of NAMED or BLIND -- a count "
+        f"that does not partition is arithmetic nobody can read (got "
+        f"{tally.trials} != {tally.named} + {tally.blind})",
+    )
+    check(
+        tally.hit_rate == 0.5,
+        f"hit_rate must be named/trials (got {tally.hit_rate})",
+    )
+    # `None`, never `0.0`. The docstring says why and nothing proved it: a
+    # signal that saw NOTHING and a signal that saw everything and named
+    # none of it would otherwise print the same number.
+    (empty_tally,) = leave_one_out_tallies([], tally_fixture, (coverage.OVERLAP,))
+    check(
+        empty_tally.hit_rate is None and empty_tally.trials == 0,
+        "a tally with no trials must report hit_rate None rather than 0.0, "
+        "which is also what a signal that named nothing would score (got "
+        f"{empty_tally.hit_rate!r})",
+    )
+    # The DENOMINATOR must be auditable. Three of the four exclusions produce
+    # no row at all, so without counts a table reading "5 trials" is the same
+    # whether 1 section or 40 were dropped -- the silent-cap failure this
+    # directory refuses everywhere else.
+    tally_texts = [a_quote, b_quote, a_paraphrase]
+    scan = coverage.leave_one_out_report(tally_texts, tally_source, coverage.OVERLAP)
+    check(
+        len(scan.rows) == 3,
+        f"the scan must carry one row per scorable section (got {len(scan.rows)})",
+    )
+    check(
+        scan.unquoted == 1,
+        "`# Title` is checkable and nothing quotes it, so it must be counted "
+        f"as an unquoted exclusion rather than vanish (got {scan.unquoted})",
+    )
+    check(
+        (scan.unscorable, scan.total_removal) == (0, 0),
+        "this source has no section the predicate cannot check and none whose "
+        "ablation empties the object list (got "
+        f"unscorable={scan.unscorable} total_removal={scan.total_removal})",
+    )
+    check(
+        coverage.leave_one_section_out(tally_texts, tally_source, coverage.OVERLAP)
+        == scan.rows,
+        "the rows-only accessor must return exactly the report's rows -- two "
+        "spellings of the same scan is how a published count and its audit "
+        "drift apart",
+    )
+    check(
+        (
+            tally.excluded_unquoted,
+            tally.excluded_unscorable,
+            tally.excluded_total_removal,
+        )
+        == (1, 0, 0),
+        "the tally must carry every exclusion count forward, not only the "
+        f"already-uncovered one (got unquoted={tally.excluded_unquoted} "
+        f"unscorable={tally.excluded_unscorable} "
+        f"total_removal={tally.excluded_total_removal})",
+    )
+
+    # A record shape the NO DATA guard accepts must not then raise inside the
+    # tally. The guard was the lenient one and it runs first, so a stale
+    # stored file produced a raw KeyError where the honest line was written.
+    malformed = [{"run": 1, "objects": []}]
+    check(
+        "NO DATA"
+        in leave_one_out_table(malformed, (tally_fixture,), (coverage.OVERLAP,)),
+        "a record the NO DATA guard accepts must not raise inside the tally -- "
+        "the guard and its consumer must agree on what a usable run is",
+    )
+
+    check(
+        "NO DATA" in leave_one_out_table([], (tally_fixture,), (coverage.OVERLAP,)),
+        "a leave-one-out report over no runs at all must say NO DATA rather "
+        "than print a table of zeroes that reads as a measurement",
+    )
+
+    refused_table = leave_one_out_table(
+        [
+            {
+                "fixture": "thin",
+                "run": 1,
+                "error": None,
+                "objects": [
+                    {
+                        "type": "Concept",
+                        "title": "kept",
+                        "body": "a sentence with several real content words in it",
+                        "description": "",
+                    }
+                ],
+            }
+        ],
+        (thin_fixture,),
+        (coverage.QUOTE, coverage.OVERLAP),
+    )
+    check(
+        any(
+            "quote" in line and "NOT SCORABLE" in line
+            for line in refused_table.splitlines()
+        ),
+        "the refused predicate's NAME and its refusal must share ONE LINE -- "
+        "two independent substring searches over the whole table pass even "
+        "when the refusal is printed against a different predicate, which is "
+        f"the one thing this assertion exists to catch (got {refused_table!r})",
+    )
+
+    # Both new refusals in `main()` are user-facing failure paths, and a
+    # failure path no test walks is one nobody can prove still fires. Each
+    # must exit non-zero AND say which flag is wrong: the two were written
+    # in the wrong order once, so `--ablate --leave-one-out` reported "no
+    # scorable predicate" and sent the reader to fix an argument that was
+    # not the problem.
+    def refusal(argv: list[str]) -> str:
+        import contextlib
+        import io
+
+        err = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(err):
+                main(argv)
+        except SystemExit as exit_code:
+            return f"exit={exit_code.code} {err.getvalue()}"
+        return f"NO REFUSAL {err.getvalue()}"
+
+    both_arms = refusal(
+        ["--rescore", str(COMMITTED_RUNS), "--ablate", "--leave-one-out"]
+    )
+    check(
+        "exit=2" in both_arms and "neither subsumes the other" in both_arms,
+        "--ablate with --leave-one-out must refuse and name the FLAG CONFLICT, "
+        f"not some other complaint (got {both_arms!r})",
+    )
+    no_scorable = refusal(["--rescore", str(COMMITTED_RUNS), "--leave-one-out"])
+    check(
+        "exit=2" in no_scorable and "no scorable predicate" in no_scorable,
+        "--leave-one-out selecting only `quote` must refuse rather than print "
+        f"a table whose every row reads NOT SCORABLE (got {no_scorable!r})",
+    )
+
+    # The branch that actually PRINTS the arm, walked through `main` rather
+    # than by calling the table directly: a refusal path that is tested and
+    # a success path that is not leaves the wiring itself unproved.
+    import contextlib
+    import io
+
+    printed = io.StringIO()
+    with contextlib.redirect_stdout(printed):
+        rescore_exit = main(
+            [
+                "--rescore",
+                str(COMMITTED_RUNS),
+                "--leave-one-out",
+                "--predicate",
+                "overlap",
+            ]
+        )
+    rendered = printed.getvalue()
+    check(
+        rescore_exit == 0
+        and "LEAVE-ONE-SECTION-OUT" in rendered
+        and "excluded:" in rendered,
+        "the --rescore --leave-one-out branch must print the arm's table "
+        f"including its exclusion counts and exit 0 (exit={rescore_exit}, "
+        f"got {rendered[:200]!r})",
+    )
+    check(
+        "NO DATA"
+        in leave_one_out_table(
+            [
+                {
+                    "fixture": "tally",
+                    "run": 1,
+                    "error": None,
+                    "objects": tally_record["objects"],
+                }
+            ],
+            (tally_fixture, thin_fixture),
+            (coverage.OVERLAP,),
+        ),
+        "a fixture with no usable run must say NO DATA even when a SIBLING "
+        "fixture has runs -- a table-wide guard prints zeroes for the empty "
+        "one beside real numbers, which reads as a measurement",
+    )
+
+    # The positional-scoring rule the report docstring calls load-bearing:
+    # headings are not unique, and a scan that keyed rows by heading would
+    # score one `## Notes` against the other's objects.
+    repeated = (
+        "## Notes\n"
+        "The quick brown fox jumps over the lazy dog today.\n"
+        "## Notes\n"
+        "Sailing vessels navigate treacherous northern waters annually.\n"
+    )
+    repeated_rows = coverage.leave_one_section_out(
+        [a_quote, b_quote, a_paraphrase], repeated, coverage.OVERLAP
+    )
+    check(
+        [r.heading for r in repeated_rows] == ["## Notes", "## Notes"]
+        and [r.named_after for r in repeated_rows] == [False, True],
+        "two sections sharing a heading must each get their OWN row and their "
+        "OWN verdict -- the first stays covered by the paraphrase, the second "
+        f"does not (got {[(r.heading, r.named_after) for r in repeated_rows]})",
+    )
+
+    # The early return in `select_predicates` is load-bearing: without it a
+    # bare invocation grows an `overlap` column it never asked for. An
+    # existing assertion covers that, and this one names the guard so a
+    # reader of either finds the other.
+    check(
+        [p.name for p in select_predicates(None, None, None)] == ["quote"],
+        "with nothing swept, no `overlap` column may be appended -- the "
+        "`if not wanted and not gates` early return is what holds that (got "
+        f"{[p.name for p in select_predicates(None, None, None)]})",
+    )
+
+    # The ladder is a CROSS PRODUCT once there are two swept constants, and
+    # the column names have to prove it: 2 thresholds x 2 gates is 4
+    # distinct predicates, and any collapse would silently drop a rung.
+    crossed = select_predicates(None, [0.2, 0.25], [4, 8])
+    check(
+        [p.name for p in crossed]
+        == ["overlap@0.2", "overlap@0.25", "overlap@0.2/8", "overlap@0.25/8"],
+        "two thresholds and two word gates must produce four uniquely named "
+        f"columns (got {[p.name for p in crossed]})",
+    )
+    check(
+        [p.name for p in select_predicates(None, [0.2], None)] == ["overlap@0.2"],
+        "a threshold ladder with no gate given must stay on the default gate "
+        "and keep its committed column names (got "
+        f"{[p.name for p in select_predicates(None, [0.2], None)]})",
+    )
+
+    # The row that must NOT exist. A section no object quotes has no
+    # constructed loss to measure, so it cannot be scored -- and inventing a
+    # row for it would count the model's own silence as a hit.
+    check(
+        "# Title" not in by_heading,
+        "a section no object quotes must produce NO row: there is nothing to "
+        "ablate, and scoring one would grade the run against what it should "
+        "have found",
+    )
+
+    # Non-vacuity, stated as an assertion rather than as prose. If EVERY
+    # object quotes the section, removing them leaves nothing at all, and a
+    # predicate handed an empty list flags every section it can check. Such
+    # a row is true by construction and must be excluded from the arm.
+    only_quoting = coverage.leave_one_section_out(
+        [quoting_object], loso_source, coverage.OVERLAP
+    )
+    check(
+        all(row.remaining > 0 for row in only_quoting),
+        "a row whose ablation empties the object list is true by construction "
+        f"and must not be scored (got {[(r.heading, r.remaining) for r in only_quoting]})",
+    )
+
     if failures:
         for why in failures:
             print(f"SELF-TEST FAILED: {why}")
@@ -1775,6 +2452,32 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--overlap-min-words",
+        type=int,
+        action="append",
+        default=None,
+        metavar="W",
+        dest="overlap_min_words",
+        help=(
+            "score `overlap` with a word gate of W instead of its shipped "
+            f"{coverage.OVERLAP_MIN_CONTENT_WORDS}; repeat to sweep it. "
+            "Crossed with every --overlap-threshold, because the gate moves "
+            "the denominator and a share is not comparable across two gates. "
+            "Each rung becomes its own `overlap@B/W` column"
+        ),
+    )
+    parser.add_argument(
+        "--leave-one-out",
+        action="store_true",
+        dest="leave_one_out",
+        help=(
+            "the under-fire arm that needs no adjudication: per section, "
+            "delete the objects quoting it and ask the predicate again. "
+            "Unlike --ablate it works on ANY source, including a --source "
+            "transcript, and makes no model call"
+        ),
+    )
+    parser.add_argument(
         "--source",
         type=pathlib.Path,
         default=None,
@@ -1791,11 +2494,37 @@ def main(argv: list[str] | None = None) -> int:
         return _self_test()
 
     try:
-        predicates = select_predicates(args.predicate, args.overlap_threshold)
+        predicates = select_predicates(
+            args.predicate, args.overlap_threshold, args.overlap_min_words
+        )
     except KeyError as exc:
         parser.error(str(exc.args[0]))
     except ValueError as exc:
         parser.error(str(exc))
+
+    if args.ablate and args.leave_one_out:
+        # Both are under-fire arms and neither subsumes the other, so the
+        # rescore branch would have to pick one -- and picking silently is
+        # the failure this directory refuses everywhere else. Two
+        # invocations, two tables, no arm dropped without saying so.
+        parser.error(
+            "--ablate and --leave-one-out are different under-fire arms and "
+            "neither subsumes the other; run them as two invocations so both "
+            "tables are printed"
+        )
+
+    if args.leave_one_out and all(p.covers_by_quoting for p in predicates):
+        # The bare `--rescore FILE --leave-one-out` invocation selects
+        # `quote` alone, which this arm refuses, so every row would read
+        # NOT SCORABLE and the run would exit 0 having measured nothing.
+        # The refusal is honest per row and useless as a whole report.
+        parser.error(
+            "--leave-one-out has no scorable predicate: "
+            f"every selected predicate ({', '.join(p.name for p in predicates)}) "
+            "covers by the same verbatim-quoting rule this arm attributes "
+            "by. Pass --predicate "
+            "overlap, or an --overlap-threshold ladder"
+        )
 
     if args.ablate and args.rescore is None:
         # The arm is defined as a reconstruction FROM stored runs -- it keeps
@@ -1832,6 +2561,9 @@ def main(argv: list[str] | None = None) -> int:
         stored_records = json.loads(args.rescore.read_text())
         if args.ablate:
             print(ablation_table(stored_records, fixtures, predicates))
+            return 0
+        if args.leave_one_out:
+            print(leave_one_out_table(stored_records, fixtures, predicates))
             return 0
         print(summarize(stored_records, fixtures, predicates))
         return 0
@@ -1895,6 +2627,12 @@ def main(argv: list[str] | None = None) -> int:
         path.write_text(json.dumps(stored, indent=2, ensure_ascii=False))
         print(f"\nstored {path}")
     print(summarize(stored, fixtures, predicates))
+    if args.leave_one_out:
+        # Printed from the SAME `stored` dicts the summary reads, live run
+        # or not. That is what lets a --source transcript be measured
+        # without ever being written to results/: the tally is counts, and
+        # the objects behind them stay on this terminal.
+        print(leave_one_out_table(stored, fixtures, predicates))
     return 0
 
 

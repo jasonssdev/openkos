@@ -63,3 +63,70 @@ which of these sections SHOULD have produced an object, so a high share here
 cannot be told apart from a run that genuinely extracted badly. It measures
 loudness. The 3-run block above is the earlier, narrower sample of the same
 source and is kept rather than replaced.
+
+# The under-fire arm on the same private source, 2026-08-23
+
+`--source ~/openkos-e2e-028/raw/transcription2.md`, `qwen3:8b`,
+`--leave-one-out`, run TWICE at 5 runs each. Same discipline as every arm
+above: counts and verdicts only, never the source's text and never its
+objects.
+
+Per section, the objects that verbatim-quote it are deleted and the
+predicate is asked again. `BLIND` counts a section that was covered, lost
+every object quoting it, and was STILL called covered.
+
+**Observation 1** (5 runs producing 10, 6, 9, 10 and 9 objects):
+
+```
+   predicate     trials   NAMED   BLIND  hit rate
+   overlap@0.2        5       0       5      0.0%
+   overlap@0.25       5       0       5      0.0%
+```
+
+**Observation 2**, an independent 5 runs producing 6, 17, 12, 2 and 13
+objects, and the first to carry the exclusion counts:
+
+```
+   predicate     trials   NAMED   BLIND  hit rate  (skipped: already uncovered)
+   overlap@0.2        6       0       6      0.0%  (0 over 5 ok run(s))
+                 excluded: 34 unquoted, 10 unscorable, 0 total-removal
+   overlap@0.25       6       0       6      0.0%  (0 over 5 ok run(s))
+                 excluded: 34 unquoted, 10 unscorable, 0 total-removal
+```
+
+Two independent 5-run observations, both unanimous: at both rungs of the
+measured window the signal named **none** of the constructed losses. In the
+same runs it flagged `## Información de la reunión` and `## Notas de Gemini`
+on every run of observation 1 — both of which produced objects.
+
+## Read the exclusions before the trials
+
+Observation 2's denominator is the finding underneath the finding. Across 5
+runs the arm reached **6 scorable section-trials out of 50 section-runs**:
+34 were excluded because no object quoted the section verbatim, and 10
+because `overlap` could not check them at all.
+
+So the small `trials` number is not this source having few sections — it is
+discursive extraction rarely quoting verbatim, which is the same fact that
+refuted `quote`. It caps how much this arm can ever say about a transcript,
+and it is why the two observations are reported side by side rather than
+pooled into one larger-looking number.
+
+Observation 1 predates the exclusion counts and cannot be re-derived: its
+run was never stored, on this arm's own privacy rule. It is kept as an
+independent replication of the verdict, not as an audited denominator.
+
+## `quote` was not selected here, and could not have been
+
+An earlier draft of this file claimed the table showed `quote` as
+`NOT SCORABLE`. It does not, and the claim was false of these runs while
+being true of the code — the one direction a results file must never drift.
+
+Both invocations pass `--overlap-threshold` with no `--predicate`, and
+`select_predicates` scores only the swept columns on that branch, so `quote`
+was never selected and no row for it could be printed. The arm does refuse
+it — `leave_one_section_out` raises on any predicate whose `covers_by_quoting`
+is set, because it covers by the same `evidence_line` rule the arm
+attributes by — and since this round the CLI refuses the whole invocation
+rather than printing a table of `NOT SCORABLE` rows. That refusal is proved
+in the probe's self-test, not here.
