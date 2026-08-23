@@ -537,6 +537,30 @@ def read_participant_baseline(text: str) -> dict[tuple[str, str], dict[str, int]
     return rows
 
 
+def _block(report: str, source: str) -> str:
+    """The one source block of a participant report, stripped.
+
+    Raises rather than degrading to the whole report: a header this cannot
+    find means the report shape moved, and an expectation that silently
+    widens to the entire text is exactly the rot #831 was filed about.
+    """
+    header = f"## {source}"
+    lines = report.splitlines()
+    # Anchored on the whole line, not a substring: a source whose name is a
+    # PREFIX of another would otherwise slice the wrong block and report a
+    # confident wrong answer instead of raising.
+    try:
+        start = lines.index(header)
+    except ValueError:
+        raise AssertionError(f"participant report has no {header!r} block") from None
+    body: list[str] = []
+    for line in lines[start + 1 :]:
+        if line.startswith("## "):
+            break
+        body.append(line)
+    return "\n".join(body).strip()
+
+
 def _self_test() -> int:
     """Exercise the verdict logic with no model.
 
@@ -647,8 +671,19 @@ def _self_test() -> int:
             "NOT read as unexplained by the floor-zero precision check",
         ),
         (
-            "anchor-less discards (Person+Organization): 2" in participant_report,
-            "B's 2 anchor-less discards must be reported on B's block",
+            # Both halves, because either alone is unfalsifiable. A bare
+            # substring check over the whole report is satisfied by the
+            # count appearing ANYWHERE, and slicing on a header that has
+            # been renamed silently yields the whole report again. Pinning
+            # A's 0 beside B's 2 is what makes a swapped attribution fail.
+            _block(participant_report, "A.transcript.txt").endswith(
+                "unreadmitted discards (Person+Organization): 0"
+            )
+            and _block(participant_report, "B.transcript.txt").endswith(
+                "unreadmitted discards (Person+Organization): 2"
+            ),
+            "the unreadmitted-discard count must be reported PER SOURCE "
+            "BLOCK -- 0 on A, 2 on B",
         ),
         (
             parsed_baseline.get(("A", "Person"), {}).get("readmitted") == 3
