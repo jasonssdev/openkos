@@ -1,13 +1,18 @@
 # section_coverage — can a per-section coverage signal see a lost section? (#793)
 
-**Verdict, one predicate per line. `quote`, built on verbatim quoting, was
-measured, REFUTED, and not shipped. `overlap`, built on content-word
-overlap, has now been swept over a threshold ladder and it SEPARATES — the
-reported failure high, healthy runs low — but only inside `B` ∈ [0.20, 0.25],
-which is NOT the value its constant still holds, on 17 runs of one model,
-with the window selected from two of the three arms it is reported from and
-no under-fire arm on a discursive source. That is a MEASURED WINDOW, NOT A
-VALIDATED DEFAULT. Nothing is shipped, and no constant here changed.**
+**Verdict, one predicate per line. BOTH ARE REFUTED, and the answer to the
+question in the title is NO on the evidence assembled here.** `quote`, built
+on verbatim quoting, was measured and refuted first. `overlap`, built on
+content-word overlap, separated on `qwen3:8b` inside `B` ∈ [0.20, 0.25] —
+and on 2026-08-23 the three gaps that verdict named were closed, and it
+failed all three. A second model (`phi4:14b`) OVER-FIRES at every rung on
+`kickoff`, the one arm that was genuinely out of sample and the floor the
+window rested on. A leave-one-section-out arm — the under-fire arm on a
+discursive source the refutation asked for — finds it BLIND to a majority of
+constructed losses at that same window. Sweeping the second constant
+(`OVERLAP_MIN_CONTENT_WORDS`) does not rescue it: raising the gate only
+deletes the sections it was failing on. **Nothing is shipped, no constant
+changed, and `ingest` is untouched.**
 
 #793 reports that `helios-overview.md` lost its whole `## Storage` and
 `## Components` sections while `ingest` printed unqualified success, and
@@ -31,7 +36,19 @@ uv run python -u evals/section_coverage/run_section_coverage_probe.py \
     --predicate all
 ```
 
+```
+uv run python -u evals/section_coverage/run_section_coverage_probe.py \
+    --rescore evals/section_coverage/results/runs-20260821T233809Z-qwen3-8b.json \
+    --leave-one-out --overlap-threshold 0.20 --overlap-min-words 4 \
+    --overlap-min-words 8
+```
+
 `--self-test` and `--rescore` make no model calls and need no Ollama.
+
+`--leave-one-out` is the under-fire arm that needs no adjudication and so
+reaches a discursive source; `--overlap-min-words W` sweeps the second
+constant and is crossed with every `--overlap-threshold`, since the gate
+moves the denominator.
 
 Every published table below names the ONE command that regenerates it, and
 every one of those commands is a `--rescore` of the committed sweep: no model
@@ -172,7 +189,13 @@ The report prints `skipped`, never `0%`, for a section a gate rejected. The
 two mean opposite things, and the whole side-by-side table turns on the
 difference.
 
-## Predicate 2: `overlap` — measured. It SEPARATES, at B ∈ [0.20, 0.25]
+## Predicate 2: `overlap` — separated on one model, then REFUTED
+
+**Read this section together with *The window does not survive a second
+model* below.** What follows is the ladder as it was measured on `qwen3:8b`,
+kept verbatim because it is the evidence the window was built from; the
+refutation that followed is not a correction to it but a second measurement
+it did not survive.
 
 A section is covered when the fraction of its **distinct content words**
 appearing in the union of the objects' texts clears a threshold `B`. Content
@@ -306,6 +329,11 @@ runs score 0.0% at every rung and the verdict is `BLIND` — collateral finding
 1 below, that #793's reported defect no longer reproduces, restated under
 `overlap`.
 
+**This arm is the one that later collapsed.** On `phi4:14b` the same
+`kickoff` fixture over-fires at every rung, including 0.15. Since it was the
+only out-of-sample evidence the window had, its collapse is the refutation:
+see *The window does not survive a second model*.
+
 ### The window, and what `quote` scored on the same 8 runs
 
 **B ∈ [0.20, 0.25].** Below it the reconstructed failure is not named at all
@@ -355,6 +383,10 @@ number and says so.
 
 ### What would have to be measured before this could ship
 
+This list was written on 2026-08-22 and is kept verbatim, because what
+happened next is that three of its four items were measured and the window
+did not survive them. The sections after it carry the numbers.
+
 - An **under-fire arm on a discursive source**: an adjudicated transcript
   where somebody has recorded which sections genuinely produced nothing.
   Without it, the only evidence that `overlap` catches a real loss comes from
@@ -373,6 +405,204 @@ number and says so.
 
 Until then the constant stays at 0.5, `overlap` stays behind the seam, and
 nothing is wired into `ingest`.
+
+## The window does not survive a second model — `overlap` is REFUTED
+
+**2026-08-23.** The list above asked for the window to be re-measured on a
+model that did not choose it. It was, on `phi4:14b` — a different family, not
+a different size of the same one — with the same fixtures, the same 5 runs
+each and the same ladder.
+
+```
+uv run python -u evals/section_coverage/run_section_coverage_probe.py \
+    --runs 5 --model phi4:14b
+uv run python -u evals/section_coverage/run_section_coverage_probe.py \
+    --rescore evals/section_coverage/results/runs-20260823T150831Z-phi4-14b.json \
+    --overlap-threshold 0.15 --overlap-threshold 0.20 \
+    --overlap-threshold 0.25 --overlap-threshold 0.30
+```
+
+`kickoff` is the arm that matters, and it is the one this directory already
+named as its only genuinely out-of-sample evidence. On `qwen3:8b` it scored
+**0.0% uncovered at 0.15, 0.20, 0.25 and 0.30, on all four runs, with
+`NO OVER-FIRE` at every rung.** That was the floor the whole window rested
+on. On `phi4:14b`, same fixture, same rungs:
+
+| rung | verdict | uncovered share per run |
+| --- | --- | --- |
+| `overlap@0.15` | **OVER-FIRES** | 42.9%, 42.9%, 0.0%, 17.6%, 25.3% |
+| `overlap@0.2` | **OVER-FIRES** | 42.9%, 42.9%, 0.0%, 17.6%, 25.3% |
+| `overlap@0.25` | **OVER-FIRES** | 42.9%, 42.9%, 17.6%, 17.6%, 36.7% |
+| `overlap@0.3` | **OVER-FIRES** | 42.9%, 42.9%, 17.6%, 17.6%, 36.7% |
+
+Per section, and this is the sharper reading: `## Context` produced objects
+in the reported run and is flagged in **60% of runs at every rung including
+0.15**, and `## Open questions` in 60–80%. `helios-overview` over-fires too,
+on `# Helios Data Platform (HDP) — Overview` at 20–40%.
+
+Nothing about the window was rescued by a lower rung. There is no value of
+`B` at which this model's healthy runs stay quiet on `kickoff`, so the
+window is not a window — it is a property of `qwen3:8b`'s output on two
+files.
+
+**The criterion at the top of this file was fixed before any predicate was
+written, and `overlap` now fails it on the same terms `quote` did.** Healthy
+runs on an ordinary source do not score LOW. Both predicates in this
+directory are refuted, and the answer to the question in the title is, on the
+evidence assembled here, NO.
+
+## The under-fire arm on a discursive source: leave-one-section-out
+
+The gap this directory named as its biggest: *"an adjudicated transcript
+where somebody has recorded which sections genuinely produced nothing"*. It
+was closed WITHOUT adjudication, because adjudication turned out not to be
+what the arm needs.
+
+`--ablate` reconstructs one reported failure by keeping the objects that one
+real 0.2.8 run produced. That pins it to a fixture somebody itemised by
+hand. `--leave-one-out` constructs the loss per SECTION instead: delete the
+objects that verbatim-QUOTE a section, then ask the predicate again. The
+outcome is known before the predicate is asked, so nothing is graded against
+what it should have found — the probe's whole under-fire discipline is
+preserved — and it works on any source with headings, including a private
+transcript, because the output is counts.
+
+```
+uv run python -u evals/section_coverage/run_section_coverage_probe.py \
+    --rescore evals/section_coverage/results/runs-20260821T233809Z-qwen3-8b.json \
+    --leave-one-out --overlap-threshold 0.20 --overlap-threshold 0.25
+```
+
+### Attribution must not be the predicate under test
+
+The first version of this arm scored `quote` at **100.0% over 36 trials**,
+and that number measured nothing at all. `quote` covers by
+`evidence.evidence_line`; the attribution deletes objects by
+`evidence.evidence_line`; so the section is uncovered afterwards **by
+construction** and every trial is a hit.
+
+A predicate cannot be asked at runtime which rule it is — `covers` is an
+opaque callable, and inferring the answer from behaviour would be guessing
+about the one thing that must not be guessed. So `CoveragePredicate` now
+carries `covers_by_quoting`, `leave_one_section_out` RAISES on it, and the
+table prints `NOT SCORABLE` beside the name rather than dropping the row. A
+third predicate built on `evidence_line` has to set that flag rather than
+remember a caveat.
+
+Two more rows are excluded for the same reason and none of them is a hit
+declined: a section no object quotes has no constructed loss, and a section
+every object quotes empties the list, where any predicate flags everything.
+
+### What it found
+
+`BLIND` is the column to read: a section that was covered, lost every object
+quoting it, and was **still** called covered — a real loss this signal would
+not have reported.
+
+This table takes THREE commands, not one, and says so rather than leaving a
+reader to discover it — the two committed sweeps rescore for free, and the
+third row cannot be regenerated from anything this repo holds:
+
+```
+# rows 1-2, and rows 3-4, from the two committed sweeps -- no model call
+uv run python -u evals/section_coverage/run_section_coverage_probe.py \
+    --rescore evals/section_coverage/results/runs-20260821T233809Z-qwen3-8b.json \
+    --leave-one-out --predicate overlap \
+    --overlap-threshold 0.20 --overlap-threshold 0.25
+uv run python -u evals/section_coverage/run_section_coverage_probe.py \
+    --rescore evals/section_coverage/results/runs-20260823T150831Z-phi4-14b.json \
+    --leave-one-out --predicate overlap \
+    --overlap-threshold 0.20 --overlap-threshold 0.25
+
+# row 5 -- a PRIVATE source, never stored to results/, so this one costs GPU
+# and reproduces only for somebody holding that file
+uv run python -u evals/section_coverage/run_section_coverage_probe.py \
+    --source <transcript.md> --source-title "<title>" --runs 5 \
+    --leave-one-out --overlap-threshold 0.20 --overlap-threshold 0.25
+```
+
+| source | model | rung | trials | NAMED | BLIND | hit rate | excluded |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `helios-overview` | qwen3:8b | `overlap@0.2` / `@0.25` | 20 | 11 | **9** | 55.0% | 0 |
+| `kickoff` | qwen3:8b | `overlap@0.2` / `@0.25` | 16 | 12 | **4** | 75.0% | 0 |
+| `helios-overview` | phi4:14b | `overlap@0.2` / `@0.25` | 7 | 5 | **2** | 71.4% | 13 unquoted |
+| `kickoff` | phi4:14b | `overlap@0.2` / `@0.25` | 6 | 1 | **5** | 16.7% | 14 unquoted |
+| `transcription2` (private), obs. 1 | qwen3:8b | `overlap@0.2` / `@0.25` | 5 | 0 | **5** | **0.0%** | not recorded |
+| `transcription2` (private), obs. 2 | qwen3:8b | `overlap@0.2` / `@0.25` | 6 | 0 | **6** | **0.0%** | 34 unquoted, 10 unscorable |
+
+The last two rows are the ones the refutation asked for, they are two
+INDEPENDENT 5-run observations of the same source, and both are unanimous:
+on a real discursive transcript, at the measured window, the signal caught
+**none** of the constructed losses. In the same runs it flagged
+`## Información de la reunión` and `## Notas de Gemini` on every run, both of
+which produced objects. It is not merely quiet in the wrong place — on this
+source it is anti-correlated with what it claims to measure.
+
+The `excluded` column is the denominator, and it is why it exists. It is
+also the column that caught a false zero in this table's first draft, where
+the two `phi4:14b` rows were written as `0` without being measured.
+
+Read down it and the rows stop being comparable, which is the point:
+
+- **`qwen3:8b` on the committed fixtures excludes nothing.** Every section is
+  checkable and quoted, so 20 and 16 trials are those sources entire.
+- **`phi4:14b` on the SAME two fixtures excludes 13 and 14.** Same sources,
+  same sections — a different model, whose objects quote the source verbatim
+  far less often. Its `16.7%` therefore rests on 6 trials drawn from 20
+  section-runs, not on the whole file.
+- **The transcript excludes almost all of it** — 6 scorable trials out of 50
+  section-runs, 34 dropped because nothing quoted the section.
+
+Without this column `0 of 5`, `0 of 6` and `1 of 6` read as measurements of
+comparable things. They are not, and the gap is not noise: how much of a
+source this arm can reach at all is itself model-dependent.
+
+### Three caveats, and the first one is large
+
+1. **5 and 6 trials on the discursive source, out of 50 section-runs.** The
+   arm can only score a section some object QUOTES, and discursive
+   extraction rarely quotes verbatim — the same fact that refuted `quote`.
+   A 0-of-6 is not a rate; it is six failures in a row where a working
+   signal should have produced hits, twice over, and it is reported as such.
+   The exclusion counts are printed beside every tally so this cap is
+   visible rather than inferred.
+2. **Trials are pooled across runs and sections**, so a run with more
+   quoting objects contributes more rows. `ok runs` is printed beside every
+   tally for that reason.
+3. **`overlap` at its own default 0.5 scores better here** (100% on both
+   qwen3 fixtures) — and 0.5 is the value the over-fire ladder rules out
+   entirely. That is the whole shape of the result: the thresholds that see
+   a loss are the thresholds that flag healthy sections, and no rung does
+   both.
+
+## The second constant, swept at last
+
+`OVERLAP_MIN_CONTENT_WORDS` was held at 4 for every number published before
+today. `overlap_predicate` now takes it, names the predicate `overlap@B/W`
+when it is not the default, and the CLI crosses it with every threshold —
+the gate moves the DENOMINATOR, so a share is not comparable across two
+gates and pairing each threshold with one gate would hide exactly that.
+
+```
+uv run python -u evals/section_coverage/run_section_coverage_probe.py \
+    --rescore evals/section_coverage/results/runs-20260821T233809Z-qwen3-8b.json \
+    --leave-one-out --overlap-threshold 0.20 --overlap-threshold 0.25 \
+    --overlap-threshold 0.30 --overlap-min-words 4 --overlap-min-words 8 \
+    --overlap-min-words 12
+```
+
+Raising the gate does not improve the signal; it removes the sections the
+signal was failing on. On `helios-overview` the leave-one-out trials fall
+from 20 to 15 as W goes 4 → 8, and on `kickoff` from 16 to 8 at W = 12 —
+where the hit rate then reads 100% over half the evidence. A gate is not a
+tuning knob for this predicate. It is what decides which sections are
+allowed to count, and every rung of it that looks better looks better by
+discarding a harder case.
+
+The threshold ladder is also **flat between 0.20 and 0.30** on these
+fixtures under leave-one-out: identical trials, identical hits, at all three
+rungs. The separation the earlier ladder measured lives in the over-fire
+half only.
 
 ## The two options deliberately NOT tried
 
@@ -421,12 +651,24 @@ would notice if the seam had altered the baseline.
 A sweep costs minutes of GPU. A predicate scored against it costs nothing. No
 future candidate should be rejected because re-measuring it was expensive.
 
-## Two collateral findings
+## Three collateral findings
+
+(The heading said "Two" while listing three items, from the round that added
+the third. Counted, not renumbered.)
 
 1. **#793's reported defect no longer reproduces.** All 5 runs of
    `helios-overview` cover `## Storage` and `## Components`, producing
    `Concept: MySQL 8`, `Ingest workers`, `Query API` and `Redis cache`. The
-   0.2.8 run produced 3 objects; today's produce 5 to 9.
+   0.2.8 run produced 3 objects; today's produce **4 or 7**.
+
+   *Corrected 2026-08-23.* This line read "5 to 9" until somebody counted
+   the committed sweep instead of quoting the sentence: the five stored
+   `qwen3:8b` runs produce 7, 7, 7, 4 and 7 objects, so neither bound was
+   right and no run ever produced 5, 6, 8 or 9. The 4 is run 4, which is the
+   one-object-per-heading run collateral finding 3 describes. `phi4:14b`
+   produces 4, 4, 4, 3 and 5. Regenerate with:
+   `python3 -c` over `results/*.json`, or read the `objects per run` block
+   any `--rescore` prints.
 2. **3 of 10 `kickoff` runs died with `OllamaGenerationCapped`** at 8192
    tokens on a **631-byte** source, across two sweeps, taking 222 and 238
    seconds before failing. A runaway rate that high on a source that small
@@ -465,6 +707,16 @@ cut down to the three the 0.2.8 run actually produced, so the loss is
 constructed rather than judged, and what is scored afterwards is a known
 outcome. That is still one reconstruction of one reported failure, and it is
 counted as such.
+
+`--leave-one-out` extends that same licence rather than widening it. It
+constructs the loss per SECTION by deleting the objects that quote one, so
+the outcome is again known before the predicate is asked and again nothing
+is graded against what it should have found. What it buys is reach: an
+ablation keyed to one hand-itemised run works on two fixtures, while a
+per-section deletion works on any source with headings — which is how the
+under-fire half finally got measured on a discursive transcript. What it
+costs is a new way to be vacuous, and `covers_by_quoting` is the guard: see
+*Attribution must not be the predicate under test*.
 
 ## The private-corpus arm
 

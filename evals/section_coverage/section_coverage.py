@@ -220,6 +220,23 @@ class CoveragePredicate:
     covers: Callable[[Sequence[str], str], bool]
     checkable: Callable[[str], bool]
     describe: str
+    covers_by_quoting: bool = False
+    """Whether `covers` IS `evidence.evidence_line` -- the same rule
+    `quoting_objects` attributes with.
+
+    Declared rather than detected, because it decides whether a whole arm
+    of this harness means anything. `leave_one_section_out` builds a loss by
+    deleting the objects that QUOTE a section; if the covering test is that
+    same rule, the section is uncovered afterwards by construction and every
+    trial is a hit. The arm's first table printed `quote` at 100.0% over 36
+    trials, and that number measured nothing.
+
+    A predicate cannot be asked at runtime which rule it is -- `covers` is
+    an opaque callable, and a probe that inferred the answer from behaviour
+    would be guessing about the one thing that must not be guessed. So the
+    predicate declares it, `leave_one_section_out` refuses on it, and adding
+    a third predicate built on `evidence_line` requires setting this flag
+    rather than remembering a caveat."""
 
 
 @dataclass(frozen=True)
@@ -311,6 +328,7 @@ QUOTE: Final = CoveragePredicate(
     covers=_quote_covers,
     checkable=is_quotable,
     describe="verbatim quoting, shipped extraction/evidence.py -- REFUTED (#793)",
+    covers_by_quoting=True,
 )
 """The predicate the committed numbers were measured under.
 
@@ -322,7 +340,9 @@ altered it would invalidate the refutation this directory exists to record.
 
 
 # --------------------------------------------------------------------------
-# Predicate 2 of 2: `overlap` -- a CANDIDATE. Measured, separates, unshipped.
+# Predicate 2 of 2: `overlap` -- measured, and REFUTED (2026-08-23). It
+# separated on one model and does not survive a second: see the README's
+# "The window does not survive a second model".
 # --------------------------------------------------------------------------
 
 OVERLAP_COVERED_FRACTION: Final = 0.5
@@ -350,8 +370,17 @@ What the window means, and what it does NOT mean:
   and around the window -- is genuinely out of sample, and only for
   over-firing. That makes this a MEASURED window, not a validated default.
 
-`OVERLAP_MIN_CONTENT_WORDS` was held at 4 for every point on that ladder;
-only this constant was swept, so nothing here says anything about the gate.
+**And that third arm did not survive a second model.** On `phi4:14b` the
+same `kickoff` fixture OVER-FIRES at every rung including 0.15, with
+`## Context` flagged in 60% of runs while it produced objects. There is no
+value of this constant at which that model's healthy runs stay quiet, so
+the window is not a property of the predicate -- it is a property of
+`qwen3:8b` on two files. `overlap` is refuted on the criterion this
+directory fixed before either predicate was written.
+
+`OVERLAP_MIN_CONTENT_WORDS` was held at 4 for every point on that ladder.
+It is swept now, and what it showed is that raising it does not improve the
+signal, it deletes the sections the signal was failing on.
 
 The ladder is not folklore: `overlap_predicate(threshold)` builds the
 predicate for any point on it, and the README names the one command that
@@ -359,13 +388,22 @@ regenerates the published table from the committed sweep with no model calls.
 """
 
 OVERLAP_MEASURED_WINDOW: Final = (0.20, 0.25)
-"""The window the README's ladder measured, as `(low, high)` inclusive.
+"""The window the README's ladder measured on `qwen3:8b`, as `(low, high)`
+inclusive. **It did not survive a second model, and is kept as a record of
+what was measured rather than as a recommendation.**
 
 Named here rather than written into prose twice, so `overlap_predicate`'s
 `describe` -- which tells a reader whether the value in front of them is
 inside it -- cannot drift from the README's own bounds. It is a MEASURED
 window and not a default: `OVERLAP_COVERED_FRACTION` deliberately sits
 outside it, and that constant carries why.
+
+Not deleted along with the refutation, and not widened to swallow it. A
+reader arriving at a `overlap@0.22` column needs to know that value was
+once the best candidate and on which evidence, or the refutation reads as
+though nobody ever had a reason. `describe` says `inside` for such a value
+and then says it is refuted anyway; both halves are true and the second
+does not make the first uninteresting.
 """
 
 OVERLAP_MIN_CONTENT_WORDS: Final = 4
@@ -549,13 +587,10 @@ def overlap_fraction(texts: Iterable[str], body: str) -> float:
     return len(section & produced) / len(section)
 
 
-def _overlap_checkable(body: str) -> bool:
-    """`overlap`'s checkability gate: enough distinct content words for the
-    fraction to be a measurement. See `OVERLAP_MIN_CONTENT_WORDS`."""
-    return len(content_words(body)) >= OVERLAP_MIN_CONTENT_WORDS
-
-
-def overlap_predicate(threshold: float = OVERLAP_COVERED_FRACTION) -> CoveragePredicate:
+def overlap_predicate(
+    threshold: float = OVERLAP_COVERED_FRACTION,
+    min_content_words: int = OVERLAP_MIN_CONTENT_WORDS,
+) -> CoveragePredicate:
     """The `overlap` predicate at `threshold`, NAMED for the value it used.
 
     A factory, and the shape is forced by the report rather than chosen for
@@ -599,6 +634,14 @@ def overlap_predicate(threshold: float = OVERLAP_COVERED_FRACTION) -> CoveragePr
             f"overlap threshold must be in (0.0, 1.0], got {threshold!r}; it is "
             "a share of a section's distinct content words"
         )
+    # Below 1 the gate admits a section with NO content words, whose overlap
+    # fraction is a division no reading rescues -- vacuity rather than
+    # leniency, the same failure the threshold's own `0.0` bound refuses.
+    if min_content_words < 1:
+        raise ValueError(
+            f"overlap word gate must be >= 1, got {min_content_words!r}; below "
+            "that it admits a section with nothing to measure"
+        )
     rendered = f"{threshold:.10g}"
     low, high = OVERLAP_MEASURED_WINDOW
     inside = "inside" if low <= threshold <= high else "outside"
@@ -608,30 +651,52 @@ def overlap_predicate(threshold: float = OVERLAP_COVERED_FRACTION) -> CoveragePr
         distinct content words."""
         return overlap_fraction(texts, body) >= threshold
 
+    def checkable(body: str) -> bool:
+        """`overlap`'s gate at THIS factory's word floor -- the closure, not
+        a module-level gate pinned to the default, so a swept value
+        reaches the gate rather than only the label above it."""
+        return len(content_words(body)) >= min_content_words
+
+    # The bare registry name is reserved for the FULLY default predicate.
+    # Both constants are swept now, and a name that tracked only the
+    # threshold would print two different gates in one `overlap` column --
+    # exactly the mislabelling this factory exists to make impossible. The
+    # word gate joins the name as `/W`, and only when it is not the default,
+    # so no committed column is renamed by this widening.
+    default_threshold = threshold == OVERLAP_COVERED_FRACTION
+    default_words = min_content_words == OVERLAP_MIN_CONTENT_WORDS
+    if default_threshold and default_words:
+        name = "overlap"
+    elif default_words:
+        name = f"overlap@{rendered}"
+    else:
+        name = f"overlap@{rendered}/{min_content_words}"
+
     return CoveragePredicate(
-        name="overlap"
-        if threshold == OVERLAP_COVERED_FRACTION
-        else f"overlap@{rendered}",
+        name=name,
         covers=covers,
-        checkable=_overlap_checkable,
+        checkable=checkable,
         describe=(
             f"content-word overlap >= {rendered} "
-            f"(>= {OVERLAP_MIN_CONTENT_WORDS} content words) -- separates at "
-            f"{low:g}-{high:g} on 3 arms, 1 model; THIS value is {inside} "
-            "that window"
+            f"(>= {min_content_words} content words) -- REFUTED (#793): "
+            f"separated at {low:g}-{high:g} on 1 model, over-fires at every "
+            f"rung on a second; THIS value is {inside} that dead window"
         ),
     )
 
 
 OVERLAP: Final = overlap_predicate()
-"""A candidate, no longer an unmeasured one -- and still not a shipped one.
+"""A candidate that was measured and REFUTED (2026-08-23), like `quote`
+before it.
 
-Swept over a threshold ladder and it SEPARATES, but at B in [0.20, 0.25]
+Swept over a threshold ladder and it separated -- at B in [0.20, 0.25]
 rather than at the 0.5 this object is built with, on three arms totalling
-17 runs of one model, with the window selected from two of those same three
-arms. `OVERLAP_COVERED_FRACTION` carries the ladder and the caveats; the
-README carries the arms and the command that regenerates them. Nothing in
-either licenses wiring this into the pipeline.
+17 runs of ONE model, with the window selected from two of those same three
+arms. A second model (`phi4:14b`) then over-fired at every rung on the one
+arm that was genuinely out of sample, and a leave-one-section-out arm found
+it blind to a majority of constructed losses at the same window. Kept, not
+deleted: it is the second refutation this directory exists to record, and a
+third candidate needs to be comparable against it.
 
 The DEFAULT instance, and the only one in `PREDICATES`. Any other point on
 the ladder is `overlap_predicate(B)`, which names itself `overlap@B` so its
@@ -711,3 +776,176 @@ def uncovered_sections(
     """The headings `coverage_report` reports as uncovered -- the naming
     half alone, for callers that do not need the weights."""
     return coverage_report(texts, source_text, predicate).uncovered
+
+
+@dataclass(frozen=True)
+class LeaveOneOutRow:
+    """One section's leave-one-out trial: what was removed, and whether the
+    predicate noticed.
+
+    `quoting` and `remaining` are counts rather than the texts themselves
+    because this row is reported for PRIVATE sources too -- the discursive
+    transcripts `--source` reads carry real names, and a row that carried
+    object text would launder it into a report. Counts and booleans are the
+    whole finding.
+
+    `covered_before` is the control, and a row without it measures nothing:
+    a section the predicate ALREADY flags cannot be made more flagged by
+    deleting objects, so scoring it as a hit would credit the signal for a
+    verdict it reached before the arm ran.
+    """
+
+    heading: str
+    quoting: int
+    remaining: int
+    covered_before: bool
+    named_after: bool
+
+
+def quoting_objects(texts: Sequence[str], section_body: str) -> tuple[int, ...]:
+    """Indices of `texts` that demonstrably QUOTE `section_body`, via
+    `evidence.evidence_line` -- the shipped verbatim-quoting rule, not a
+    second spelling of it.
+
+    This is the arm's attribution mechanism, and it is deliberately NOT the
+    predicate under test. Attributing by the predicate's own covering rule
+    would make every leave-one-out row true by construction: remove exactly
+    the objects that cover a section and the section is uncovered, which
+    proves nothing about the predicate except that it is a function.
+
+    Verbatim quoting is a strictly narrower claim than coverage, so a
+    section can keep several non-quoting objects that still cover it. That
+    gap is the whole measurement: it is where a real loss stays invisible.
+    """
+    return tuple(
+        index
+        for index, text in enumerate(texts)
+        if evidence_mod.evidence_line(text, section_body) is not None
+    )
+
+
+@dataclass(frozen=True)
+class LeaveOneOutReport:
+    """The scan `leave_one_section_out` reads, WITH the sections it could not
+    score and why.
+
+    The rows alone are not an auditable measurement. Three of the four
+    exclusions produce no row at all, so a table reading "5 trials" says the
+    same thing whether one section was excluded or forty -- and this
+    directory's own rule is that a bounded arm names what it dropped. These
+    three counts are that disclosure, and they are what makes the word-gate
+    ladder's `20 -> 15` legible as "five sections stopped being scorable"
+    rather than as a smaller measurement of the same thing.
+
+    Mirrors `coverage_report`/`uncovered_sections`: the report carries the
+    weights, the bare accessor carries the naming half for callers that do
+    not need them.
+    """
+
+    rows: tuple[LeaveOneOutRow, ...]
+    unscorable: int
+    """Sections `predicate.checkable` rejected -- the pair's own invariant."""
+    unquoted: int
+    """Sections no object quotes, so no loss could be constructed. The
+    largest of the three on a discursive source, and the reason that arm has
+    5 trials rather than 40."""
+    total_removal: int
+    """Sections every object quotes, where ablation would empty the list and
+    any predicate flags everything."""
+
+
+def leave_one_out_report(
+    texts: Sequence[str],
+    source_text: str,
+    predicate: CoveragePredicate,
+) -> LeaveOneOutReport:
+    """One trial per section whose loss can be CONSTRUCTED: drop the objects
+    quoting it, rescore, and record whether `predicate` then names it.
+
+    The under-fire arm that needs no adjudicated ground truth, and therefore
+    the one that reaches a discursive source. `--ablate` cuts a run down to
+    the objects one REPORTED run produced, which pins it to a fixture
+    somebody itemised by hand -- the README names that as its single biggest
+    gap, because the only evidence a predicate catches a real loss comes
+    from one terse bullet-shaped file. Here the loss is built per section
+    from the run's own texts, so any source with headings can be measured
+    and nothing is graded against what it should have found.
+
+    Three sections are skipped, each for its own reason, and none of them is
+    a hit the arm declined to count:
+
+    - `predicate.checkable` rejects it -- the pair's own invariant; a
+      section that cannot be SCORED cannot be scored here either.
+    - No object quotes it. There is nothing to remove, so there is no
+      constructed loss; counting the model's own silence would turn this
+      into exactly the judgment the probe refuses to make.
+    - Every object quotes it. Removing them empties the list, and a
+      predicate handed no objects flags every section it can check, so the
+      row would be true by construction -- the same vacuity
+      `quoting_objects` avoids one level up.
+
+    Raises `ValueError` on a predicate whose `covers_by_quoting` is set. That
+    is not a limitation to work around: on such a predicate the trial is
+    decided before it is run, and a refusal is the only honest output. See
+    `CoveragePredicate.covers_by_quoting`.
+
+    `predicate` is REQUIRED, unlike `coverage_report`'s, and the asymmetry is
+    deliberate. This module's default everywhere else is `QUOTE`, because it
+    is the baseline every committed number was measured under -- and `QUOTE`
+    is exactly the predicate this function refuses. A default that always
+    raised would be a trap dressed as a convenience, so there is none.
+
+    Sections are scored BY POSITION, never by heading name: headings are not
+    unique (`CoverageReport` documents the repeated-`## Notes` collapse that
+    cost 95 characters of denominator), and a leave-one-out trial that
+    round-tripped through a heading-keyed dict would score one `## Notes`
+    against the other's objects.
+    """
+    if predicate.covers_by_quoting:
+        raise ValueError(
+            f"{predicate.name!r} covers by the same verbatim-quoting rule this "
+            "arm attributes by, so deleting a section's quoting objects leaves "
+            "it uncovered by construction and every trial is a hit; the arm "
+            "has nothing to measure on it"
+        )
+    kept = list(texts)
+    rows: list[LeaveOneOutRow] = []
+    unscorable = unquoted = total_removal = 0
+    for section in split_sections(source_text):
+        if not predicate.checkable(section.body):
+            unscorable += 1
+            continue
+        attributed = set(quoting_objects(kept, section.body))
+        if not attributed:
+            unquoted += 1
+            continue
+        remaining = [text for index, text in enumerate(kept) if index not in attributed]
+        if not remaining:
+            total_removal += 1
+            continue
+        rows.append(
+            LeaveOneOutRow(
+                heading=section.heading,
+                quoting=len(attributed),
+                remaining=len(remaining),
+                covered_before=predicate.covers(kept, section.body),
+                named_after=not predicate.covers(remaining, section.body),
+            )
+        )
+    return LeaveOneOutReport(
+        rows=tuple(rows),
+        unscorable=unscorable,
+        unquoted=unquoted,
+        total_removal=total_removal,
+    )
+
+
+def leave_one_section_out(
+    texts: Sequence[str],
+    source_text: str,
+    predicate: CoveragePredicate,
+) -> tuple[LeaveOneOutRow, ...]:
+    """The rows `leave_one_out_report` scans, without its exclusion counts --
+    for callers that score rather than audit. Reads the report rather than
+    repeating the walk, so the two can never disagree about what a row is."""
+    return leave_one_out_report(texts, source_text, predicate).rows
