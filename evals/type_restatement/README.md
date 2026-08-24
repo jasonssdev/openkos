@@ -92,8 +92,59 @@ a **pairwise lexical** comparison can tell them apart -- which is the same
 wall `near_match_score`'s own docstring describes for `cats` ⊂ `carts and
 currency` versus `stoicism` ⊂ `stoic philosophy`. Separating them needs a
 signal this function does not have: how often the surviving token occurs
-across the bundle. That is a different design, at a different layer, and it
-is filed rather than guessed at here.
+across the bundle. That was filed as [#837][issue-837] and measured below.
+
+## The filed follow-up, measured: corpus frequency does not separate either (#837)
+
+`--df-floor` scores #837's proposed signal -- allow the excusal only when
+what survives it is *distinctive in the bundle* -- over the same 29
+adjudicated pairs, with document frequency counted across the corpus's 527
+distinct normalized keys through the same token pipeline the rule scores
+with. Deterministic, stdlib-only, and re-derivable from the committed delta
+and rulings. The full table is `results/df_floor_report.md`.
+
+**Result: REFUTED, structurally rather than by threshold.** Five
+required-token sets carry BOTH rulings:
+
+| required set | duplicates | distinct |
+| --- | --- | --- |
+| `{ranking}` | 3 | 2 |
+| `{onboarding}` | 2 | 1 |
+| `{ranking, retrieval}` | 1 | 1 |
+| `{knowledge, recovery}` | 3 | 4 |
+| `{remote, control, design}` | 3 | 3 |
+
+Every statistic a floor could consult -- max, min, sum, any weighting -- is
+a function of the required tokens alone, so within each of these groups the
+duplicate and the distinct produce the **identical** number, at every
+threshold. The sweep half agrees: the largest zero-false-positive floor
+keeps **0 of 18** adjudicated duplicates on maxDF and **2 of 18** on minDF
+(the two `button less remote` pairs, whose rarest token has DF 4).
+
+Two facts the filing conjectured and the count corrects:
+
+- **`ranking` is not common here: DF 6 of 527.** The filing's rare/common
+  axis (`helios` in two titles, `ranking` in dozens) does not exist in the
+  measured corpus.
+- **The motivating pair cannot even be scored by the floor it motivated.**
+  Neither `Project Helios` nor `Helios Data Platform` is a stored title
+  (`helios` has DF 0), so the pair is not in the delta at all -- a floor
+  tuned to admit it would be tuned against no observation.
+
+What actually separates the identical-requirement cases is visible in the
+table's larger titles: `reunión del equipo de`, `migración ... al nuevo
+formato`, `meeting discussion on`, `user preferences for`, `decisión
+sobre` -- what the pair is *about*, not how rare its shared tokens are.
+That is the same occurrent-versus-thing distinction named above, it is
+semantic, and `near_match_score`'s contract already defers precision at
+this tier to LLM adjudication over the review queue, which is where these
+pairs land today.
+
+Contested-ruling check, run before scoring: `knowledge recovery project` ‖
+`knowledge recovery system` is ruled a duplicate on a reading this README
+already flags as reading-dependent. Flipping it does not rescue the signal
+-- the `{knowledge, recovery}` group still carries both rulings through its
+other members.
 
 ## What this does NOT establish
 
@@ -120,9 +171,12 @@ is filed rather than guessed at here.
 uv run python -u evals/type_restatement/run_type_restatement_probe.py --self-test
 uv run python -u evals/type_restatement/run_type_restatement_probe.py
 uv run python -u evals/type_restatement/run_type_restatement_probe.py --rescore
+uv run python -u evals/type_restatement/run_type_restatement_probe.py --df-floor
 ```
 
 `--rescore` re-derives every verdict from `results/delta.json` after
-`adjudication.json` is edited, with no re-scan.
+`adjudication.json` is edited, with no re-scan. `--df-floor` scores the
+corpus-frequency floor (#837) over the same stored delta and rulings.
 
 [issue]: https://github.com/jasonssdev/openkos/issues/804
+[issue-837]: https://github.com/jasonssdev/openkos/issues/837
