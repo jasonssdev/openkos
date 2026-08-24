@@ -5184,9 +5184,12 @@ def _ingest_batch(
                 f"~{estimate.chunked_windows} window(s)"
             )
         detail_note = f" ({'; '.join(details)})" if details else ""
+        # #872's sibling: over ~0 calls (every file skipped or unbillable)
+        # the pace warning is false; the count stays labelled an estimate.
+        pace_note = "estimate; this can take a while" if estimate.calls else "estimate"
         typer.echo(
             f"{total} file(s){detail_note} -> ~{estimate.calls} LLM call(s) "
-            "(estimate; this can take a while). Pass --auto to skip this prompt.",
+            f"({pace_note}). Pass --auto to skip this prompt.",
             err=True,
         )
         if sys.stdin.isatty():
@@ -13815,10 +13818,14 @@ def suggest_relations_cmd(
 
     if not auto:
         served_clause = f", {len(served_by_key)} served" if served_by_key else ""
+        # #872: the pace clause rides the paid path only -- a fully-served
+        # run makes zero calls, so "one per edge (this can take a while)"
+        # would be false two tokens after the count said so. The `--auto`
+        # hint stays either way: the prompt it names still fires.
+        pace_note = ", one per edge (this can take a while)" if to_type else ""
         typer.echo(
             f"{total} untyped edge(s){served_clause} -> {len(to_type)} LLM "
-            "call(s), one per edge (this can take a while). Pass --auto to "
-            "skip this prompt.",
+            f"call(s){pace_note}. Pass --auto to skip this prompt.",
             err=True,
         )
         if not typer.confirm("Proceed?"):

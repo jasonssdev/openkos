@@ -6324,7 +6324,7 @@ def test_batch_cost_gate_prints_counts_and_confirms_once(
 
     assert result.exit_code == 0
     assert "2 file(s) -> ~6 LLM call(s)" in result.stderr
-    assert "estimate" in result.stderr
+    assert "estimate; this can take a while" in result.stderr
     assert (tmp_path / "raw" / "a.txt").is_file()
     assert (tmp_path / "raw" / "b.txt").is_file()
     # ONE gate: the batch prompt appears exactly once and the single-file
@@ -6385,6 +6385,14 @@ def test_batch_cost_gate_counts_zero_for_a_convergent_reingest(
     assert fake.calls == []
     assert "1 unchanged -- extraction will be skipped" in result.stderr
     assert "~0 LLM call(s)" in result.stderr
+    # #872: a gate consenting to ~0 calls has nothing slow to warn about --
+    # the pace clause is priced for the paid path only. The positive half
+    # pins the rendered parenthetical, so an empty or malformed `()` cannot
+    # pass on the absence assertion alone.
+    assert "~0 LLM call(s) (estimate). Pass --auto to skip this prompt." in (
+        result.stderr
+    )
+    assert "this can take a while" not in result.stderr
 
 
 def test_batch_cost_gate_bills_zero_for_blank_and_undecodable_sources(
