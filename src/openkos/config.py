@@ -243,6 +243,29 @@ DEFAULT_CONTEXT_WINDOW = 12288
 Exactly `minimum_context_window(DEFAULT_MAX_GENERATION_TOKENS)`, so the
 shipped value and the enforced floor cannot drift apart.
 
+What that identity does NOT guarantee is that the window never binds before
+the ceiling: the reserve half of the sum is calibrated for the CHUNKED band
+(see `PROMPT_CONTEXT_ALLOWANCE`), and an unchunked extraction prompt at the
+`extraction.concept._CHUNK_THRESHOLD` boundary measures 6 142 tokens, which
+leaves 12288 - 6142 = 6 146 tokens of generation room against the 8 192
+ceiling. Issue #829 weighed the three ways out -- raise this window to
+~14 336, lower the prose chunk threshold, or leave both -- and chose to
+LEAVE BOTH, deliberately:
+
+- Every legitimate reply ever measured fits with 2.6x room to spare: the
+  largest across the #828/#830 sweeps is 2 315 tokens
+  (`evals/generation_runaway/`), against the 6 146 of worst-case room. Only
+  a runaway -- a reply that generates up to whatever bound exists -- meets
+  the window first, and a runaway cut at 6 146 costs strictly less than one
+  cut at 8 192 while being exactly as unusable.
+- Raising the window charges every user more KV cache (the 7.2 GB note
+  below) to protect headroom no legitimate reply uses; lowering
+  `_CHUNK_THRESHOLD` costs more chat calls per source, and #454 measured
+  why the threshold sits where it does.
+- The one real harm the gap caused -- the capped exception blaming the
+  wrong setting -- was fixed at the source in #848: `llm.ollama` reads both
+  counters back and names whichever bound actually bound.
+
 Left unpinned, `ollama ps` showed `qwen3:8b` reserving a 32768-token window
 and 10 GB (2026-08-14) -- weights are ~5 GB, the rest is KV cache for a
 window the engine never fills. KV cache scales linearly with the window, and
@@ -253,12 +276,21 @@ between one slot that eats the whole machine and room to work."""
 
 
 def minimum_context_window(max_generation_tokens: int) -> int:
-    """The smallest `context_window` that cannot truncate (issue #691).
+    """The smallest `context_window` that cannot truncate a reply the
+    ceiling permits, for a prompt within `PROMPT_CONTEXT_ALLOWANCE`
+    (issue #691).
 
     Ollama's `num_ctx` bounds the prompt and the completion TOGETHER, so the
     floor is the prompt allowance plus the generation ceiling -- a window
     sized for the prompt alone would cut off exactly the replies
     `max_generation_tokens` is set to permit.
+
+    The guarantee is exactly as strong as the reserve, and the reserve is
+    calibrated for the CHUNKED band: an unchunked extraction prompt at the
+    `_CHUNK_THRESHOLD` boundary exceeds it by 2 046 tokens, so at that
+    extreme the window binds before the ceiling. Weighed and accepted, not
+    an oversight -- `DEFAULT_CONTEXT_WINDOW`'s docstring records the #829
+    decision and the measurements behind it.
 
     Kept as a function rather than a constant because the two settings are
     not independent: a workspace that raises its generation ceiling raises
