@@ -1,0 +1,1126 @@
+{
+  "embedding_model": "bge-m3",
+  "stats": [
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 1,
+      "heading": "# Helios Data Platform (HDP) — Overview",
+      "klass": "quiet",
+      "objects": 7,
+      "similarity": 0.9702
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 1,
+      "heading": "# Helios Data Platform (HDP) — Overview",
+      "klass": "loss",
+      "objects": 6,
+      "similarity": 0.6966
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 1,
+      "heading": "## Storage",
+      "klass": "quiet",
+      "objects": 7,
+      "similarity": 0.9305
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 1,
+      "heading": "## Storage",
+      "klass": "loss",
+      "objects": 6,
+      "similarity": 0.5927
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 1,
+      "heading": "## Components",
+      "klass": "quiet",
+      "objects": 7,
+      "similarity": 0.7825
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 1,
+      "heading": "## Components",
+      "klass": "loss",
+      "objects": 4,
+      "similarity": 0.6039
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 1,
+      "heading": "# Helios Data Platform (HDP) — Overview",
+      "klass": "reported-quiet",
+      "objects": 3,
+      "similarity": 0.9702
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 1,
+      "heading": "## Storage",
+      "klass": "reported-loss",
+      "objects": 3,
+      "similarity": 0.5927
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 1,
+      "heading": "## Components",
+      "klass": "reported-loss",
+      "objects": 3,
+      "similarity": 0.6039
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 1,
+      "heading": "## Ownership",
+      "klass": "reported-quiet",
+      "objects": 3,
+      "similarity": 0.6926
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 2,
+      "heading": "# Helios Data Platform (HDP) — Overview",
+      "klass": "quiet",
+      "objects": 7,
+      "similarity": 0.9702
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 2,
+      "heading": "# Helios Data Platform (HDP) — Overview",
+      "klass": "loss",
+      "objects": 6,
+      "similarity": 0.6966
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 2,
+      "heading": "## Storage",
+      "klass": "quiet",
+      "objects": 7,
+      "similarity": 0.9305
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 2,
+      "heading": "## Storage",
+      "klass": "loss",
+      "objects": 6,
+      "similarity": 0.5927
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 2,
+      "heading": "## Components",
+      "klass": "quiet",
+      "objects": 7,
+      "similarity": 0.7825
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 2,
+      "heading": "## Components",
+      "klass": "loss",
+      "objects": 4,
+      "similarity": 0.6039
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 2,
+      "heading": "# Helios Data Platform (HDP) — Overview",
+      "klass": "reported-quiet",
+      "objects": 3,
+      "similarity": 0.9702
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 2,
+      "heading": "## Storage",
+      "klass": "reported-loss",
+      "objects": 3,
+      "similarity": 0.5927
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 2,
+      "heading": "## Components",
+      "klass": "reported-loss",
+      "objects": 3,
+      "similarity": 0.6039
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 2,
+      "heading": "## Ownership",
+      "klass": "reported-quiet",
+      "objects": 3,
+      "similarity": 0.6926
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 3,
+      "heading": "# Helios Data Platform (HDP) — Overview",
+      "klass": "quiet",
+      "objects": 7,
+      "similarity": 0.9702
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 3,
+      "heading": "# Helios Data Platform (HDP) — Overview",
+      "klass": "loss",
+      "objects": 6,
+      "similarity": 0.6966
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 3,
+      "heading": "## Storage",
+      "klass": "quiet",
+      "objects": 7,
+      "similarity": 0.9305
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 3,
+      "heading": "## Storage",
+      "klass": "loss",
+      "objects": 6,
+      "similarity": 0.5927
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 3,
+      "heading": "## Components",
+      "klass": "quiet",
+      "objects": 7,
+      "similarity": 0.7825
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 3,
+      "heading": "## Components",
+      "klass": "loss",
+      "objects": 4,
+      "similarity": 0.6039
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 3,
+      "heading": "# Helios Data Platform (HDP) — Overview",
+      "klass": "reported-quiet",
+      "objects": 3,
+      "similarity": 0.9702
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 3,
+      "heading": "## Storage",
+      "klass": "reported-loss",
+      "objects": 3,
+      "similarity": 0.5927
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 3,
+      "heading": "## Components",
+      "klass": "reported-loss",
+      "objects": 3,
+      "similarity": 0.6039
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 3,
+      "heading": "## Ownership",
+      "klass": "reported-quiet",
+      "objects": 3,
+      "similarity": 0.6926
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 4,
+      "heading": "# Helios Data Platform (HDP) — Overview",
+      "klass": "quiet",
+      "objects": 4,
+      "similarity": 0.9702
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 4,
+      "heading": "# Helios Data Platform (HDP) — Overview",
+      "klass": "loss",
+      "objects": 3,
+      "similarity": 0.7375
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 4,
+      "heading": "## Storage",
+      "klass": "quiet",
+      "objects": 4,
+      "similarity": 0.8626
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 4,
+      "heading": "## Storage",
+      "klass": "loss",
+      "objects": 3,
+      "similarity": 0.5927
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 4,
+      "heading": "## Components",
+      "klass": "quiet",
+      "objects": 4,
+      "similarity": 0.8138
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 4,
+      "heading": "## Components",
+      "klass": "loss",
+      "objects": 3,
+      "similarity": 0.6039
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 4,
+      "heading": "## Ownership",
+      "klass": "quiet",
+      "objects": 4,
+      "similarity": 0.6841
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 4,
+      "heading": "## Ownership",
+      "klass": "loss",
+      "objects": 3,
+      "similarity": 0.3468
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 4,
+      "heading": "# Helios Data Platform (HDP) — Overview",
+      "klass": "reported-quiet",
+      "objects": 1,
+      "similarity": 0.9702
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 4,
+      "heading": "## Storage",
+      "klass": "reported-loss",
+      "objects": 1,
+      "similarity": 0.5927
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 4,
+      "heading": "## Components",
+      "klass": "reported-loss",
+      "objects": 1,
+      "similarity": 0.6039
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 4,
+      "heading": "## Ownership",
+      "klass": "reported-quiet",
+      "objects": 1,
+      "similarity": 0.3368
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 5,
+      "heading": "# Helios Data Platform (HDP) — Overview",
+      "klass": "quiet",
+      "objects": 7,
+      "similarity": 0.9702
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 5,
+      "heading": "# Helios Data Platform (HDP) — Overview",
+      "klass": "loss",
+      "objects": 6,
+      "similarity": 0.6966
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 5,
+      "heading": "## Storage",
+      "klass": "quiet",
+      "objects": 7,
+      "similarity": 0.9305
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 5,
+      "heading": "## Storage",
+      "klass": "loss",
+      "objects": 6,
+      "similarity": 0.5927
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 5,
+      "heading": "## Components",
+      "klass": "quiet",
+      "objects": 7,
+      "similarity": 0.7825
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 5,
+      "heading": "## Components",
+      "klass": "loss",
+      "objects": 4,
+      "similarity": 0.6039
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 5,
+      "heading": "# Helios Data Platform (HDP) — Overview",
+      "klass": "reported-quiet",
+      "objects": 3,
+      "similarity": 0.9702
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 5,
+      "heading": "## Storage",
+      "klass": "reported-loss",
+      "objects": 3,
+      "similarity": 0.5927
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 5,
+      "heading": "## Components",
+      "klass": "reported-loss",
+      "objects": 3,
+      "similarity": 0.6039
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "helios-overview",
+      "run": 5,
+      "heading": "## Ownership",
+      "klass": "reported-quiet",
+      "objects": 3,
+      "similarity": 0.6926
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "kickoff",
+      "run": 1,
+      "heading": "# Project Helios — Kickoff Meeting",
+      "klass": "quiet",
+      "objects": 11,
+      "similarity": 0.4789
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "kickoff",
+      "run": 1,
+      "heading": "# Project Helios — Kickoff Meeting",
+      "klass": "loss",
+      "objects": 10,
+      "similarity": 0.4789
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "kickoff",
+      "run": 1,
+      "heading": "## Context",
+      "klass": "quiet",
+      "objects": 11,
+      "similarity": 0.9567
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "kickoff",
+      "run": 1,
+      "heading": "## Context",
+      "klass": "loss",
+      "objects": 9,
+      "similarity": 0.5659
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "kickoff",
+      "run": 1,
+      "heading": "## Decisions",
+      "klass": "quiet",
+      "objects": 11,
+      "similarity": 0.7653
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "kickoff",
+      "run": 1,
+      "heading": "## Decisions",
+      "klass": "loss",
+      "objects": 3,
+      "similarity": 0.4419
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "kickoff",
+      "run": 1,
+      "heading": "## Open questions",
+      "klass": "quiet",
+      "objects": 11,
+      "similarity": 0.7313
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "kickoff",
+      "run": 1,
+      "heading": "## Open questions",
+      "klass": "loss",
+      "objects": 8,
+      "similarity": 0.553
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "kickoff",
+      "run": 2,
+      "heading": "# Project Helios — Kickoff Meeting",
+      "klass": "quiet",
+      "objects": 11,
+      "similarity": 0.4706
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "kickoff",
+      "run": 2,
+      "heading": "# Project Helios — Kickoff Meeting",
+      "klass": "loss",
+      "objects": 10,
+      "similarity": 0.4706
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "kickoff",
+      "run": 2,
+      "heading": "## Context",
+      "klass": "quiet",
+      "objects": 11,
+      "similarity": 0.9354
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "kickoff",
+      "run": 2,
+      "heading": "## Context",
+      "klass": "loss",
+      "objects": 9,
+      "similarity": 0.5632
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "kickoff",
+      "run": 2,
+      "heading": "## Decisions",
+      "klass": "quiet",
+      "objects": 11,
+      "similarity": 0.7858
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "kickoff",
+      "run": 2,
+      "heading": "## Decisions",
+      "klass": "loss",
+      "objects": 3,
+      "similarity": 0.4873
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "kickoff",
+      "run": 2,
+      "heading": "## Open questions",
+      "klass": "quiet",
+      "objects": 11,
+      "similarity": 0.7413
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "kickoff",
+      "run": 2,
+      "heading": "## Open questions",
+      "klass": "loss",
+      "objects": 8,
+      "similarity": 0.5586
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "kickoff",
+      "run": 3,
+      "heading": "# Project Helios — Kickoff Meeting",
+      "klass": "quiet",
+      "objects": 8,
+      "similarity": 0.4706
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "kickoff",
+      "run": 3,
+      "heading": "# Project Helios — Kickoff Meeting",
+      "klass": "loss",
+      "objects": 7,
+      "similarity": 0.4706
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "kickoff",
+      "run": 3,
+      "heading": "## Context",
+      "klass": "quiet",
+      "objects": 8,
+      "similarity": 0.8305
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "kickoff",
+      "run": 3,
+      "heading": "## Context",
+      "klass": "loss",
+      "objects": 6,
+      "similarity": 0.5548
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "kickoff",
+      "run": 3,
+      "heading": "## Decisions",
+      "klass": "quiet",
+      "objects": 8,
+      "similarity": 0.7845
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "kickoff",
+      "run": 3,
+      "heading": "## Decisions",
+      "klass": "loss",
+      "objects": 1,
+      "similarity": 0.4176
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "kickoff",
+      "run": 3,
+      "heading": "## Open questions",
+      "klass": "quiet",
+      "objects": 8,
+      "similarity": 0.6294
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "kickoff",
+      "run": 3,
+      "heading": "## Open questions",
+      "klass": "loss",
+      "objects": 7,
+      "similarity": 0.5337
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "kickoff",
+      "run": 5,
+      "heading": "# Project Helios — Kickoff Meeting",
+      "klass": "quiet",
+      "objects": 14,
+      "similarity": 0.4789
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "kickoff",
+      "run": 5,
+      "heading": "# Project Helios — Kickoff Meeting",
+      "klass": "loss",
+      "objects": 13,
+      "similarity": 0.4789
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "kickoff",
+      "run": 5,
+      "heading": "## Context",
+      "klass": "quiet",
+      "objects": 14,
+      "similarity": 0.9561
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "kickoff",
+      "run": 5,
+      "heading": "## Context",
+      "klass": "loss",
+      "objects": 10,
+      "similarity": 0.5821
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "kickoff",
+      "run": 5,
+      "heading": "## Decisions",
+      "klass": "quiet",
+      "objects": 14,
+      "similarity": 0.7858
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "kickoff",
+      "run": 5,
+      "heading": "## Decisions",
+      "klass": "loss",
+      "objects": 4,
+      "similarity": 0.4898
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "kickoff",
+      "run": 5,
+      "heading": "## Open questions",
+      "klass": "quiet",
+      "objects": 14,
+      "similarity": 0.8741
+    },
+    {
+      "model": "qwen3:8b",
+      "fixture": "kickoff",
+      "run": 5,
+      "heading": "## Open questions",
+      "klass": "loss",
+      "objects": 12,
+      "similarity": 0.5914
+    },
+    {
+      "model": "phi4:14b",
+      "fixture": "helios-overview",
+      "run": 1,
+      "heading": "# Helios Data Platform (HDP) — Overview",
+      "klass": "reported-quiet",
+      "objects": 2,
+      "similarity": 0.6176
+    },
+    {
+      "model": "phi4:14b",
+      "fixture": "helios-overview",
+      "run": 1,
+      "heading": "## Storage",
+      "klass": "reported-loss",
+      "objects": 2,
+      "similarity": 0.517
+    },
+    {
+      "model": "phi4:14b",
+      "fixture": "helios-overview",
+      "run": 1,
+      "heading": "## Components",
+      "klass": "reported-loss",
+      "objects": 2,
+      "similarity": 0.4464
+    },
+    {
+      "model": "phi4:14b",
+      "fixture": "helios-overview",
+      "run": 1,
+      "heading": "## Ownership",
+      "klass": "reported-quiet",
+      "objects": 2,
+      "similarity": 0.5987
+    },
+    {
+      "model": "phi4:14b",
+      "fixture": "helios-overview",
+      "run": 2,
+      "heading": "## Storage",
+      "klass": "quiet",
+      "objects": 4,
+      "similarity": 0.9287
+    },
+    {
+      "model": "phi4:14b",
+      "fixture": "helios-overview",
+      "run": 2,
+      "heading": "## Storage",
+      "klass": "loss",
+      "objects": 3,
+      "similarity": 0.4552
+    },
+    {
+      "model": "phi4:14b",
+      "fixture": "helios-overview",
+      "run": 2,
+      "heading": "## Components",
+      "klass": "quiet",
+      "objects": 4,
+      "similarity": 0.8827
+    },
+    {
+      "model": "phi4:14b",
+      "fixture": "helios-overview",
+      "run": 2,
+      "heading": "## Components",
+      "klass": "loss",
+      "objects": 3,
+      "similarity": 0.495
+    },
+    {
+      "model": "phi4:14b",
+      "fixture": "helios-overview",
+      "run": 2,
+      "heading": "# Helios Data Platform (HDP) — Overview",
+      "klass": "reported-quiet",
+      "objects": 2,
+      "similarity": 0.5626
+    },
+    {
+      "model": "phi4:14b",
+      "fixture": "helios-overview",
+      "run": 2,
+      "heading": "## Storage",
+      "klass": "reported-loss",
+      "objects": 2,
+      "similarity": 0.4552
+    },
+    {
+      "model": "phi4:14b",
+      "fixture": "helios-overview",
+      "run": 2,
+      "heading": "## Components",
+      "klass": "reported-loss",
+      "objects": 2,
+      "similarity": 0.4851
+    },
+    {
+      "model": "phi4:14b",
+      "fixture": "helios-overview",
+      "run": 2,
+      "heading": "## Ownership",
+      "klass": "reported-quiet",
+      "objects": 2,
+      "similarity": 0.6942
+    },
+    {
+      "model": "phi4:14b",
+      "fixture": "helios-overview",
+      "run": 3,
+      "heading": "## Storage",
+      "klass": "quiet",
+      "objects": 4,
+      "similarity": 0.9338
+    },
+    {
+      "model": "phi4:14b",
+      "fixture": "helios-overview",
+      "run": 3,
+      "heading": "## Storage",
+      "klass": "loss",
+      "objects": 2,
+      "similarity": 0.5262
+    },
+    {
+      "model": "phi4:14b",
+      "fixture": "helios-overview",
+      "run": 3,
+      "heading": "# Helios Data Platform (HDP) — Overview",
+      "klass": "reported-quiet",
+      "objects": 2,
+      "similarity": 0.6386
+    },
+    {
+      "model": "phi4:14b",
+      "fixture": "helios-overview",
+      "run": 3,
+      "heading": "## Storage",
+      "klass": "reported-loss",
+      "objects": 2,
+      "similarity": 0.5262
+    },
+    {
+      "model": "phi4:14b",
+      "fixture": "helios-overview",
+      "run": 3,
+      "heading": "## Components",
+      "klass": "reported-loss",
+      "objects": 2,
+      "similarity": 0.4574
+    },
+    {
+      "model": "phi4:14b",
+      "fixture": "helios-overview",
+      "run": 3,
+      "heading": "## Ownership",
+      "klass": "reported-quiet",
+      "objects": 2,
+      "similarity": 0.6085
+    },
+    {
+      "model": "phi4:14b",
+      "fixture": "helios-overview",
+      "run": 4,
+      "heading": "# Helios Data Platform (HDP) — Overview",
+      "klass": "reported-quiet",
+      "objects": 2,
+      "similarity": 0.6249
+    },
+    {
+      "model": "phi4:14b",
+      "fixture": "helios-overview",
+      "run": 4,
+      "heading": "## Storage",
+      "klass": "reported-loss",
+      "objects": 2,
+      "similarity": 0.5022
+    },
+    {
+      "model": "phi4:14b",
+      "fixture": "helios-overview",
+      "run": 4,
+      "heading": "## Components",
+      "klass": "reported-loss",
+      "objects": 2,
+      "similarity": 0.4464
+    },
+    {
+      "model": "phi4:14b",
+      "fixture": "helios-overview",
+      "run": 4,
+      "heading": "## Ownership",
+      "klass": "reported-quiet",
+      "objects": 2,
+      "similarity": 0.6207
+    },
+    {
+      "model": "phi4:14b",
+      "fixture": "helios-overview",
+      "run": 5,
+      "heading": "# Helios Data Platform (HDP) — Overview",
+      "klass": "quiet",
+      "objects": 5,
+      "similarity": 0.9645
+    },
+    {
+      "model": "phi4:14b",
+      "fixture": "helios-overview",
+      "run": 5,
+      "heading": "# Helios Data Platform (HDP) — Overview",
+      "klass": "loss",
+      "objects": 3,
+      "similarity": 0.618
+    },
+    {
+      "model": "phi4:14b",
+      "fixture": "helios-overview",
+      "run": 5,
+      "heading": "## Storage",
+      "klass": "quiet",
+      "objects": 5,
+      "similarity": 0.9522
+    },
+    {
+      "model": "phi4:14b",
+      "fixture": "helios-overview",
+      "run": 5,
+      "heading": "## Storage",
+      "klass": "loss",
+      "objects": 4,
+      "similarity": 0.6047
+    },
+    {
+      "model": "phi4:14b",
+      "fixture": "helios-overview",
+      "run": 5,
+      "heading": "# Helios Data Platform (HDP) — Overview",
+      "klass": "reported-quiet",
+      "objects": 2,
+      "similarity": 0.618
+    },
+    {
+      "model": "phi4:14b",
+      "fixture": "helios-overview",
+      "run": 5,
+      "heading": "## Storage",
+      "klass": "reported-loss",
+      "objects": 2,
+      "similarity": 0.5071
+    },
+    {
+      "model": "phi4:14b",
+      "fixture": "helios-overview",
+      "run": 5,
+      "heading": "## Components",
+      "klass": "reported-loss",
+      "objects": 2,
+      "similarity": 0.4774
+    },
+    {
+      "model": "phi4:14b",
+      "fixture": "helios-overview",
+      "run": 5,
+      "heading": "## Ownership",
+      "klass": "reported-quiet",
+      "objects": 2,
+      "similarity": 0.685
+    },
+    {
+      "model": "phi4:14b",
+      "fixture": "kickoff",
+      "run": 1,
+      "heading": "## Decisions",
+      "klass": "quiet",
+      "objects": 6,
+      "similarity": 0.7669
+    },
+    {
+      "model": "phi4:14b",
+      "fixture": "kickoff",
+      "run": 1,
+      "heading": "## Decisions",
+      "klass": "loss",
+      "objects": 3,
+      "similarity": 0.7151
+    },
+    {
+      "model": "phi4:14b",
+      "fixture": "kickoff",
+      "run": 2,
+      "heading": "## Decisions",
+      "klass": "quiet",
+      "objects": 6,
+      "similarity": 0.782
+    },
+    {
+      "model": "phi4:14b",
+      "fixture": "kickoff",
+      "run": 2,
+      "heading": "## Decisions",
+      "klass": "loss",
+      "objects": 4,
+      "similarity": 0.72
+    },
+    {
+      "model": "phi4:14b",
+      "fixture": "kickoff",
+      "run": 3,
+      "heading": "## Context",
+      "klass": "quiet",
+      "objects": 7,
+      "similarity": 0.957
+    },
+    {
+      "model": "phi4:14b",
+      "fixture": "kickoff",
+      "run": 3,
+      "heading": "## Context",
+      "klass": "loss",
+      "objects": 6,
+      "similarity": 0.5828
+    },
+    {
+      "model": "phi4:14b",
+      "fixture": "kickoff",
+      "run": 3,
+      "heading": "## Decisions",
+      "klass": "quiet",
+      "objects": 7,
+      "similarity": 0.7723
+    },
+    {
+      "model": "phi4:14b",
+      "fixture": "kickoff",
+      "run": 3,
+      "heading": "## Decisions",
+      "klass": "loss",
+      "objects": 4,
+      "similarity": 0.7199
+    },
+    {
+      "model": "phi4:14b",
+      "fixture": "kickoff",
+      "run": 4,
+      "heading": "## Decisions",
+      "klass": "quiet",
+      "objects": 7,
+      "similarity": 0.7576
+    },
+    {
+      "model": "phi4:14b",
+      "fixture": "kickoff",
+      "run": 4,
+      "heading": "## Decisions",
+      "klass": "loss",
+      "objects": 4,
+      "similarity": 0.6914
+    }
+  ],
+  "exclusions": {
+    "unattributed": 34,
+    "total_removal": 0,
+    "unmatched_reported_runs": 0
+  }
+}

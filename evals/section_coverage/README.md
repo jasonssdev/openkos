@@ -1,9 +1,9 @@
 # section_coverage — can a per-section coverage signal see a lost section? (#793)
 
-**Verdict, one predicate per line. BOTH ARE REFUTED, and the answer to the
-question in the title is NO on the evidence assembled here.** `quote`, built
-on verbatim quoting, was measured and refuted first. `overlap`, built on
-content-word overlap, separated on `qwen3:8b` inside `B` ∈ [0.20, 0.25] —
+**Verdict, one predicate per line. ALL THREE ARE REFUTED, and the answer to
+the question in the title is NO on the evidence assembled here.** `quote`,
+built on verbatim quoting, was measured and refuted first. `overlap`, built
+on content-word overlap, separated on `qwen3:8b` inside `B` ∈ [0.20, 0.25] —
 and on 2026-08-23 the three gaps that verdict named were closed, and it
 failed all three. A second model (`phi4:14b`) OVER-FIRES at every rung on
 `kickoff`, the one arm that was genuinely out of sample and the floor the
@@ -11,8 +11,11 @@ window rested on. A leave-one-section-out arm — the under-fire arm on a
 discursive source the refutation asked for — finds it BLIND to a majority of
 constructed losses at that same window. Sweeping the second constant
 (`OVERLAP_MIN_CONTENT_WORDS`) does not rescue it: raising the gate only
-deletes the sections it was failing on. **Nothing is shipped, no constant
-changed, and `ingest` is untouched.**
+deletes the sections it was failing on. **`embedding`**, the semantic
+candidate the refutation had left untried, was measured on 2026-08-24 under
+the shipped `bge-m3` and OVERLAPS on both models — see *Predicate 3* below;
+the reconstruction of the reported failure itself is what breaks it.
+**Nothing is shipped, no constant changed, and `ingest` is untouched.**
 
 #793 reports that `helios-overview.md` lost its whole `## Storage` and
 `## Components` sections while `ingest` printed unqualified success, and
@@ -604,24 +607,60 @@ fixtures under leave-one-out: identical trials, identical hits, at all three
 rungs. The separation the earlier ladder measured lives in the over-fire
 half only.
 
-## The two options deliberately NOT tried
+## Predicate 3: embedding similarity — measured (2026-08-24), and REFUTED
 
-The refutation named three fuzzy predicates. One is implemented; the other
-two are deferred, with reasons rather than as an oversight:
+The refutation above named embedding similarity as one of two candidates
+deliberately not tried. It is now tried:
+`run_embedding_coverage_probe.py` scores every section of both committed
+sweeps (`qwen3:8b` and `phi4:14b`, the same stored runs every prior verdict
+used) by **max cosine similarity** under the shipped embedder (`bge-m3`,
+the model `state/vectorstore` retrieves with). Attribution stays the
+verbatim-quoting rule while scoring is by embedding, so the trials are not
+decided by construction; the raw statistic is stored per row
+(`results/embedding-coverage-20260824T154528Z.json`), so every threshold is
+swept offline and `--rescore` re-renders with no embed call.
 
-- **Embedding similarity.** Every section-by-object comparison becomes an
-  embedding call. Measuring it contends with whatever sweep is on the GPU —
-  Ollama serializes by default, so a probe run is not free of the experiment
-  running beside it — and it costs real wall-clock time per calibration pass,
-  where `overlap` and `quote` rescore a stored sweep in milliseconds.
+**It OVERLAPS on both models, and the reported failure itself is what
+kills it.**
+
+| model | lowest covered section | highest constructed/reported loss |
+| --- | --- | --- |
+| `qwen3:8b` | **0.3368** | 0.7375 |
+| `phi4:14b` | **0.5626** | 0.7200 |
+
+A threshold catching every loss flags sections that produced objects, on
+both models — the zero-false-flag criterion fixed at the top of this file.
+The most instructive row is the one this directory's own fixture predicted:
+`## Ownership` produced two CORRECT `Person` objects in the reported run,
+and against those objects it scores **0.3368** (`qwen3:8b`) — far BELOW the
+genuinely lost `## Storage` at 0.5927–0.6039. A `Person` object's body is
+written about the person, not about the section line that named them, so a
+correct extraction does not resemble its source section — the same
+inversion that refuted `quote` (discursive extraction rarely quotes) and
+`overlap` (a healthy transcript out-scored the constructed loss), now
+reproduced on the third and last cheap representation of "resembles".
+
+The leave-one-section-out cells alone would have flattered it: `phi4:14b`
+separates on both fixtures under LOSO (0.8827 vs 0.6180; 0.7576 vs 0.7200)
+— and then the reconstruction of the ACTUAL 0.2.8 failure, the one case
+the signal exists to catch, is what breaks the window on both models. A
+verdict read off the constructed-loss cells alone would have shipped a
+signal refuted by its own motivating case.
+
+## The one option still NOT tried
+
 - **Asking the model.** This puts a non-deterministic call on the common
   ingest path, for a signal whose entire appeal was costing nothing and being
   reproducible. It would also make the notice unreproducible from stored
-  runs: `--rescore` is free precisely because every predicate so far is a
-  pure function of text this repo already holds.
+  runs: `--rescore` is free precisely because every other predicate is a
+  pure function of text and vectors this repo already holds or can
+  regenerate.
 
-Neither is ruled out. Both need their own calibration, and neither should be
-added without reading this section first.
+It is not ruled out, but three failed representations of "the objects
+resemble the section" (verbatim, lexical, semantic) now say the difficulty
+is not the representation: a correct extraction legitimately does not
+resemble its source section, and any similarity-shaped signal inherits
+that.
 
 ## Rescoring is free, and that is the point
 
