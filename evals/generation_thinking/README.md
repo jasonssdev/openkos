@@ -164,3 +164,52 @@ that needs a RATE needs more of them.
 What the small n does not weaken is the shape: every TOTAL LOSS in both
 sweeps was a `think` run, and every one of them carried zero content — which
 is the observation the detector's blindness follows from.
+
+## The A/B this file named as the gate — run (2026-08-24), and `think=false` does NOT ship
+
+`run_think_quality_ab.py` measures the extraction-quality cost this file
+said was unmeasured, at the scale this file said ten runs was not: **15
+interleaved runs per fixture per arm through the FULL shipped pipeline**
+(`extract_concept_union`, judge and participant capture included) at the
+shipped `num_predict` 8192 / `num_ctx` 12288, on the same two public
+fixtures. The `no-think` arm injects `"think": false` at the transport seam
+(`OllamaClient` takes `urlopen` as a constructor argument), so production
+code is untouched and the `think` arm's request stays byte-identical to
+what every shipped call sends.
+
+The pre-registered bar: `think=false` ships only if no fixture's median
+anchor recall drops AND pooled failed runs do not increase. It fails the
+second clause:
+
+| arm | fixture | n | failed | med anchors | med objects | med s |
+| --- | --- | --- | --- | --- | --- | --- |
+| `think` | `helios-overview` | 15 | 0 | 4 of 4 | 7 | 18.3 |
+| `think` | `kickoff` | 15 | **1** | 4 of 5 | 9 | 45.0 |
+| `no-think` | `helios-overview` | 15 | 0 | 4 of 4 | 7 | 16.9 |
+| `no-think` | `kickoff` | 15 | **2** | 4 of 5 | 11 | 40.7 |
+
+**VERDICT: KEEP `think`** — equal median recall everywhere, and MORE
+failed runs (2 against 1, every one an `OllamaGenerationCapped` on
+`kickoff` at 218–239 s).
+
+Three observations that close the question rather than merely losing it:
+
+- **The runaway relocates; it does not die.** Under `think=false` the
+  deliberation this directory measured going into `thinking` goes into
+  CONTENT instead, and the ceiling cuts it exactly as before. The runaway
+  follows the SOURCE (`kickoff`, on both arms), which is what #830's own
+  measurement said, now reconfirmed under the opposite `think` setting.
+- **The sibling probe's "usable content" does not survive the pipeline.**
+  A single-call cut-off under `no-think` carried usable text; in the
+  shipped pipeline `OllamaGenerationCapped` raises before that content is
+  used, so a capped run costs the whole call in BOTH arms and the
+  total-loss asymmetry this file measured stops mattering where it counts.
+- **`no-think` over-produces.** Median 12 completed-run objects against 9
+  on `kickoff` (19 twice, 20 once against anchors that need 5) — the
+  deliberation is buying selectivity, which is presumably why equal anchor
+  recall costs more objects without it.
+
+With this, both of #830's candidate remedies are measured and dead: the
+repetition detector (this file) and the `think` lever (this section). What
+stands is what already shipped — #848 names whichever bound actually bound
+— and #830's own asymmetry argument for leaving the ceiling at 8192.
