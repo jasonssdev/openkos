@@ -3201,6 +3201,18 @@ def _first_free_raw_name(family: list[Path], name: str) -> str:
     return f"{stem}-{n}{ext}"
 
 
+def _member_source_exists(bundle_dir: Path, member: Path) -> bool:
+    """Whether raw file `member` has an owning Source document at all
+    (#865). Distinguishes the two cases `_raw_member_origin_key` folds into
+    `None`: a Source that records no key (legacy, identity = its absence,
+    preserved by a same-path re-ingest) versus NO Source (a file placed in
+    `raw/` by hand, whose fresh ingest must stamp the computed digest)."""
+    slug = _slugify(Path(member.name).stem)
+    if not slug:
+        return False
+    return okf.concept_path_for(f"sources/{slug}", bundle_dir).exists()
+
+
 def _raw_member_origin_key(bundle_dir: Path, member: Path) -> str | None:
     """The `origin_key` recorded by the Source owning raw file `member`, or
     `None` when it has none or cannot be read (#552).
@@ -3235,6 +3247,17 @@ class _RawDestination:
     """Whether an existing raw copy was matched -- an idempotent re-ingest."""
     disambiguated_from: str | None
     """The basename that was already taken, `None` when none was."""
+    origin_key: str | None
+    """The `origin_key` the rebuilt Source records (#865). The candidate
+    path's own digest on every branch EXCEPT the same-PATH match on a
+    member with an owning Source, where it is that Source's recorded value
+    instead (possibly `None`, and then preserved as absent): the
+    workspace's `raw/` copy is not a new origin, and stamping its digest
+    would orphan the original external path's identity -- so the NEXT
+    external re-ingest would mismatch on the key and spawn exactly the
+    duplicate Source #865 reports. A same-path member with NO owning
+    Source has no identity to preserve, so its fresh ingest stamps the
+    computed digest like any other."""
 
 
 def _resolve_raw_destination(
@@ -3257,7 +3280,18 @@ def _resolve_raw_destination(
 
     - a member whose recorded `origin_key` EQUALS `origin_key` is the same
       file -> re-ingest it (the caller still applies raw immutability to its
-      bytes);
+      bytes). Checked first because it is a string comparison, no extra
+      filesystem contact;
+    - a member whose file IS `src` -- same resolved PATH -- is the
+      workspace's own `raw/` copy (#865). A recorded key digests the
+      ORIGINAL external path, so the raw copy's own digest can never equal
+      it, and before #865 the retry command `lint`/`status` print
+      (`openkos ingest raw/<name>`) fell through to disambiguation and
+      duplicated the source it meant to repair. Re-ingest it, preserving
+      an owning Source's recorded identity; a member with NO owning Source
+      at all (a file placed in `raw/` by hand, ingested for the first
+      time) stamps the computed digest instead (see
+      `_RawDestination.origin_key`);
     - a member with a recorded but DIFFERENT `origin_key` is a different
       file -> keep scanning;
     - a member with NO recorded origin is a pre-#552 Source. Match it on
@@ -3277,17 +3311,29 @@ def _resolve_raw_destination(
     """
     family = _raw_collision_family(layout.raw_dir, src.name)
     if not family:
-        return _RawDestination(src.name, False, None)
+        return _RawDestination(src.name, False, None, origin_key=origin_key)
+    resolved_src = src.resolve(strict=False)
     src_bytes = src.read_bytes()
     for member in family:
         member_origin = _raw_member_origin_key(layout.bundle_dir, member)
+        if member_origin is not None and member_origin == origin_key:
+            return _RawDestination(member.name, True, None, origin_key=origin_key)
+        if member.resolve(strict=False) == resolved_src:
+            return _RawDestination(
+                member.name,
+                True,
+                None,
+                origin_key=member_origin
+                if _member_source_exists(layout.bundle_dir, member)
+                else origin_key,
+            )
         if member_origin is not None:
-            if member_origin == origin_key:
-                return _RawDestination(member.name, True, None)
             continue
         if member.read_bytes() == src_bytes:
-            return _RawDestination(member.name, True, None)
-    return _RawDestination(_first_free_raw_name(family, src.name), False, src.name)
+            return _RawDestination(member.name, True, None, origin_key=origin_key)
+    return _RawDestination(
+        _first_free_raw_name(family, src.name), False, src.name, origin_key=origin_key
+    )
 
 
 def _first_free_disambiguated_slug(
@@ -5876,7 +5922,9 @@ def _ingest_single(
                 raw_content=raw_content,
                 extraction_status=extraction_status,
                 extraction_notice=extraction_notice,
-                origin_key=origin_key,
+                # Which key this is per branch: `_RawDestination.origin_key`
+                # (#865).
+                origin_key=destination.origin_key,
             )
 
         concept_content = _build_source_document(None)

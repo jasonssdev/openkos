@@ -8020,6 +8020,155 @@ def test_a_legacy_source_with_differing_bytes_disambiguates(
     )
 
 
+def test_the_printed_judge_retry_remedy_reingests_in_place(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#865's headline evidence, followed verbatim. A judge-quarantined
+    Source has `lint`/`status` print `openkos ingest raw/<name>` as THE
+    retry; running exactly that command must take the re-ingest path --
+    ownership recognized, judge retried in place -- never spawn a second
+    Source with a duplicate object family.
+
+    The workspace's own `raw/` copy resolves to the SAME file as the family
+    member holding its name, and that is the strongest identity there is --
+    stronger than `origin_key`, whose recorded value (the ORIGINAL external
+    path's digest) can never equal the raw path's digest. Before #865 that
+    mismatch sent the remedy down the disambiguation branch."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_sequenced_llm(
+        monkeypatch,
+        [
+            # First ingest: two distinct candidates, then a judge that
+            # fails every attempt -> `judge-selection-unavailable` (#754).
+            _concept_reply(title="Stoic Dichotomy Of Control"),
+            _concept_reply(title="Negative Visualization"),
+            OllamaUnavailable("boom"),
+            OllamaUnavailable("boom"),
+            # The remedy re-ingest: retryable debt falls through the #773
+            # short-circuit, extraction re-runs, and this time the judge
+            # answers -- the retry the remedy promises.
+            _concept_reply(title="Stoic Dichotomy Of Control"),
+            _concept_reply(title="Negative Visualization"),
+            json.dumps(
+                {"keep": ["Stoic Dichotomy Of Control", "Negative Visualization"]}
+            ),
+        ],
+    )
+    origin = _folder_source(
+        tmp_path, "course-a", "notes.md", f"Alpha notes.\n{_CONCEPT_BODY_LINE}\n"
+    )
+    assert runner.invoke(app, ["ingest", "course-a/notes.md", "--auto"]).exit_code == 0
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+    stamped, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert stamped["extraction_notice"] == "judge-selection-unavailable"
+
+    result = runner.invoke(app, ["ingest", "raw/notes.md", "--auto"])
+
+    assert result.exit_code == 0
+    assert "already held by a different source" not in result.stderr
+    assert sorted(p.name for p in (tmp_path / "raw").glob("*")) == ["notes.md"]
+    assert sorted(p.name for p in (tmp_path / "bundle" / "sources").glob("*.md")) == [
+        "notes.md"
+    ]
+    refreshed, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert "extraction_notice" not in refreshed
+    # The raw copy is not a new origin: the recorded identity survives, so
+    # a later re-ingest from the original external path still matches.
+    assert refreshed["origin_key"] == okf.origin_key_for(origin)
+
+
+def test_reingesting_the_raw_copy_of_a_clean_source_converges(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`openkos ingest raw/<name>` on a Source WITHOUT retryable debt is a
+    byte-identical re-ingest like any other: #773's convergence
+    short-circuit fires, nothing is written, and no disambiguated copy
+    appears (#865). This pins the fix to the ownership fact, not to the
+    debt: the raw copy is recognized whether or not a retry is due."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_sequenced_llm(
+        monkeypatch,
+        [
+            _concept_reply(title="Stoic Dichotomy Of Control"),
+            _concept_reply(title="Negative Visualization"),
+            json.dumps(
+                {"keep": ["Stoic Dichotomy Of Control", "Negative Visualization"]}
+            ),
+        ],
+    )
+    origin = _folder_source(
+        tmp_path, "course-a", "notes.md", f"Alpha notes.\n{_CONCEPT_BODY_LINE}\n"
+    )
+    assert runner.invoke(app, ["ingest", "course-a/notes.md", "--auto"]).exit_code == 0
+
+    result = runner.invoke(app, ["ingest", "raw/notes.md", "--auto"])
+
+    assert result.exit_code == 0
+    assert "source unchanged and already extracted" in result.stderr
+    assert sorted(p.name for p in (tmp_path / "raw").glob("*")) == ["notes.md"]
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+    refreshed, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert refreshed["origin_key"] == okf.origin_key_for(origin)
+
+
+def test_reingesting_the_raw_copy_of_a_legacy_source_stays_legacy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A legacy Source (no `origin_key`) already matched its own raw copy
+    by bytes -- but the regenerate used to BACKFILL the raw path's digest,
+    poisoning the recorded identity: a later re-ingest from the original
+    external path would mismatch the key, skip the byte check, and spawn
+    the duplicate #865 documents. A same-file re-ingest preserves the
+    recorded identity state instead -- here, its absence -- so the external
+    path's byte-match self-migration (#552) still works afterwards."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch)
+    origin = _folder_source(tmp_path, "course-a", "notes.md", "# A\n\nWelcome to A.\n")
+    assert runner.invoke(app, ["ingest", "course-a/notes.md", "--auto"]).exit_code == 0
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+    metadata, body = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    del metadata["origin_key"]
+    concept_path.write_text(okf.dump_frontmatter(metadata, body), encoding="utf-8")
+
+    raw_result = runner.invoke(app, ["ingest", "raw/notes.md", "--auto"])
+
+    assert raw_result.exit_code == 0
+    assert sorted(p.name for p in (tmp_path / "raw").glob("*")) == ["notes.md"]
+    after_raw, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert "origin_key" not in after_raw
+
+    external_result = runner.invoke(app, ["ingest", "course-a/notes.md", "--auto"])
+
+    assert external_result.exit_code == 0
+    assert sorted(p.name for p in (tmp_path / "raw").glob("*")) == ["notes.md"]
+    backfilled, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert backfilled["origin_key"] == okf.origin_key_for(origin)
+
+
+def test_fresh_ingest_of_a_file_already_in_raw_records_its_origin_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A first-time ingest of a file the user placed in `raw/` by hand has
+    NO owning Source, so the same-file preservation rule (#865) has no
+    recorded identity to preserve -- it must fall back to the computed
+    digest, exactly what the pre-#865 byte-match stamped for this case. A
+    `None` here would leave the fresh Source permanently legacy: a later
+    same-basename different file would byte-mismatch it and disambiguate,
+    but an identical-bytes different file would silently absorb into it."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch)
+    placed = tmp_path / "raw" / "notes.md"
+    placed.write_text("# A\n\nWelcome to A.\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "raw/notes.md", "--auto"])
+
+    assert result.exit_code == 0
+    assert sorted(p.name for p in (tmp_path / "raw").glob("*")) == ["notes.md"]
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["origin_key"] == okf.origin_key_for(placed)
+
+
 # --- #553: ingest builds the FTS index once at the end of each run ---------
 
 
