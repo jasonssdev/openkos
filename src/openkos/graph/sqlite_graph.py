@@ -238,6 +238,22 @@ def _skip_note(concept_id: str, *, reason: str) -> str:
     return f"{concept_id}.md: skipped ({reason})"
 
 
+@dataclass(frozen=True)
+class WithheldCandidate:
+    """One candidate pair pass 3 withheld under #841's unjudged-source
+    gate, with the quarantined source(s) both endpoints cite. The
+    attribution is stored per pair -- not as one flat source list beside a
+    flat pair list -- because the disclosure must name ONLY sources at
+    least one VISIBLE pair is attributed to: filtering pairs and sources
+    independently lets a caller without confidential access learn that a
+    source's (entirely confidential) pairs exist."""
+
+    pair: tuple[str, str]
+    """Canonical `(min, max)` endpoint ids."""
+    source_ids: tuple[str, ...]
+    """The quarantined Source concept ids both endpoints cite, sorted."""
+
+
 _MAX_CANDIDATE_EDGES: Final[int] = 50
 """Hard ceiling on candidate edges one build may emit. Bounds `curate`'s
 one-LLM-call-per-untyped-edge run to ~2-4 minutes at 3-5s/call instead of the
@@ -278,6 +294,18 @@ class CandidateReport:
     so the pre-#567 `pairs[:retained]` invariant is the `offset == 0`
     special case. Defaults to `0` so every existing constructor and the
     `candidates=None` build are untouched."""
+    quarantine_withheld: tuple["WithheldCandidate", ...] = ()
+    """The pairs pass 3 WITHHELD because both endpoints derive from one
+    source under #772's judge-degrade quarantine (#841), sorted by pair,
+    each carrying the quarantined source(s) it was attributed to. Withheld
+    BEFORE `best`, so these never enter `pairs`, never consume a cap slot,
+    and never shift the paging window. Same sensitivity caveat as `pairs`:
+    raw, unfiltered -- a notice must re-derive its visible count AND name
+    only sources a visible pair is actually attributed to
+    (`resolution.edge_typing.quarantined_candidate_notice`); the
+    attribution rides each entry precisely so that restriction is
+    computable. Defaulted empty so every existing constructor is
+    untouched."""
 
 
 class SqliteGraphStore:
@@ -508,6 +536,35 @@ def _populate_graph_tables(
         # after (`contradiction.py`'s post-review HIGH correction: filtering
         # after a cap lets discarded rows consume cap slots and starve
         # eligible ones).
+        # #841: one source's degraded extraction must not become O(N^2)
+        # candidate structure. Objects stored WITHOUT judge selection
+        # (#772's quarantine tokens on their Source) are near-boilerplate
+        # by construction, so their mutual pairs are proximity's cheapest
+        # false positives -- each one an LLM call downstream and permanent
+        # typed structure once accepted. A pair is withheld exactly when
+        # both endpoints CITE a common quarantined source (`provenance:`);
+        # a cross pair keeping one healthy endpoint survives, because the
+        # gate bounds the degraded cluster, never the healthy neighbor's
+        # connectivity. Withheld BEFORE `best` -- the filter-before-cap
+        # rule -- so withheld pairs never starve cap slots, and recorded on
+        # the report so the drop is never silent. The tokens are spelled as
+        # literals, not imported from `okf`, for the same reason
+        # `lint._UNJUDGED_NOTICE_CAUSES` gives for its own copies: a typo
+        # in either module then fails a test instead of silently agreeing
+        # with itself, which a shared constant cannot do. An endpoint with
+        # no `provenance:` cannot cite a quarantined source and keeps its
+        # pair -- attribution fails open, since withholding on missing
+        # data would punish hand-authored documents. The projection is
+        # derived state: a re-ingest whose judge answers clears the
+        # marker, and the next rebuild reconsiders the pairs.
+        quarantined_sources = {
+            concept_id
+            for concept_id, metadata in metadatas
+            if metadata.get("type") == "Source"
+            and metadata.get("extraction_notice")
+            in ("judge-selection-unavailable", "judge-selection-empty")
+        }
+        quarantine_dropped: dict[tuple[str, str], set[str]] = {}
         best: dict[tuple[str, str], float] = {}
         for pair in candidates.pairs(sorted(seed_node_ids)):
             if (
@@ -523,6 +580,14 @@ def _populate_graph_tables(
                 min(pair.source_id, pair.target_id),
                 max(pair.source_id, pair.target_id),
             )
+            common_quarantined = (
+                provenance_by_source.get(pair.source_id, set())
+                & provenance_by_source.get(pair.target_id, set())
+                & quarantined_sources
+            )
+            if common_quarantined:
+                quarantine_dropped.setdefault(key, set()).update(common_quarantined)
+                continue
             if key not in best or pair.distance < best[key]:
                 best[key] = pair.distance
         # Rank by distance ascending, tie-broken by `(source_id, target_id)`
@@ -545,6 +610,10 @@ def _populate_graph_tables(
             retained=len(retained_keys),
             pairs=tuple(ranked),
             offset=candidate_offset,
+            quarantine_withheld=tuple(
+                WithheldCandidate(pair=pair, source_ids=tuple(sorted(sources)))
+                for pair, sources in sorted(quarantine_dropped.items())
+            ),
         )
         for source_id, target_id in retained:
             conn.execute(_INSERT_EDGE_SQL, (source_id, target_id, None))

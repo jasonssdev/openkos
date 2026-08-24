@@ -868,6 +868,67 @@ def candidate_truncation_notice(
     return f"{visible_retained} of {visible_produced} candidate edge(s) shown (cap reached)"
 
 
+def quarantined_candidate_notice(
+    report: CandidateReport,
+    bundle_dir: Path,
+    *,
+    include_confidential: bool = False,
+    local_exemption: bool = False,
+) -> str | None:
+    """Render pass 3's unjudged-source withholding notice (#841), restricted
+    to what THIS caller may see.
+
+    `report.quarantine_withheld` is raw and unfiltered, exactly like
+    `report.pairs` (`CandidateReport`'s own caveat), so the visible count is
+    re-derived through the SAME `sensitivity.sensitive_concept_ids` walk
+    `candidate_truncation_notice` runs -- a withholding made purely of
+    material the caller cannot see stays silent, or this line discloses a
+    volume the edge list beside it deliberately withholds. The named
+    sources are restricted to those AT LEAST ONE VISIBLE pair is attributed
+    to (each `WithheldCandidate` carries its own attribution for exactly
+    this), then filtered through the same blocked set: naming a source
+    whose every withheld pair is confidential would tell a caller without
+    access that such pairs exist, the same aggregate-disclosure defect the
+    truncation notice's re-derivation exists to prevent.
+
+    The disclosure exists for #560's rule: silent truncation reads as
+    "covered everything" when it did not. The remedy named is the one that
+    actually clears the state -- #772's quarantine is retryable debt, a
+    re-ingest whose judge answers removes the marker, and the projection is
+    derived state a `reindex` rebuilds with the pairs reconsidered."""
+    if not report.quarantine_withheld:
+        return None
+    blocked = sensitivity.sensitive_concept_ids(
+        bundle_dir,
+        include_confidential=include_confidential,
+        local_exemption=local_exemption,
+    )
+    visible = [
+        withheld
+        for withheld in report.quarantine_withheld
+        if withheld.pair[0] not in blocked and withheld.pair[1] not in blocked
+    ]
+    if not visible:
+        return None
+    named = ", ".join(
+        sorted(
+            {
+                source_id
+                for withheld in visible
+                for source_id in withheld.source_ids
+                if source_id not in blocked
+            }
+        )
+    )
+    subject = f"unjudged source(s) {named}" if named else "an unjudged source"
+    return (
+        f"{len(visible)} candidate edge(s) withheld among objects of "
+        f"{subject}: their extraction was stored without judge selection "
+        "(#772); re-ingest the source so a judge selects, then reindex to "
+        "reconsider them"
+    )
+
+
 def next_candidate_offset(
     report: CandidateReport,
     bundle_dir: Path,

@@ -2169,3 +2169,138 @@ def test_pass_three_offset_at_or_beyond_the_set_retains_nothing(
     assert report.produced == 1
     assert report.retained == 0
     assert report.offset == 5
+
+
+# --- issue #841: unjudged-source quarantine gate (pass 3) -------------------
+
+
+def _write_source_with_notice(path: Path, *, title: str, notice: str) -> None:
+    """A `type: Source` doc carrying an `extraction_notice` token, mirroring
+    what `ingest` stamps (#772) -- the read half #841's gate consumes."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"---\ntype: Source\ntitle: {title}\nresource: raw/{title}.txt\n"
+        f"extraction_notice: {notice}\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+
+def test_pass_three_withholds_same_source_pairs_of_an_unjudged_source(
+    tmp_path: Path,
+) -> None:
+    """#841: a pair whose BOTH endpoints derive from one source stamped with
+    a judge-degrade token (#772's quarantine) is withheld from the candidate
+    set -- objects stored without quality selection are mutually proximate
+    almost by construction, and each retained pair becomes an LLM call and
+    permanent typed structure. A cross pair keeping one healthy endpoint
+    survives: the gate bounds the degraded source's own cluster, never the
+    healthy neighbor's connectivity. The report carries the withheld pairs
+    and the source so the drop is never silent."""
+    bundle = tmp_path / "bundle"
+    _write_source_with_notice(
+        bundle / "sources" / "s.md", title="s", notice="judge-selection-unavailable"
+    )
+    _write_doc(bundle / "sources" / "t.md", doc_type="Source", title="t")
+    _write_doc_with_provenance(
+        bundle / "concepts" / "a.md", title="A", provenance=["sources/s"]
+    )
+    _write_doc_with_provenance(
+        bundle / "concepts" / "b.md", title="B", provenance=["sources/s"]
+    )
+    _write_doc_with_provenance(
+        bundle / "concepts" / "c.md", title="C", provenance=["sources/t"]
+    )
+    source = _StubCandidateSource(
+        [("concepts/a", "concepts/b"), ("concepts/a", "concepts/c")]
+    )
+
+    with sqlite_graph.build_graph(bundle, candidates=source) as store:
+        rows = _edge_rows(store)
+        report = store.candidate_report
+
+    candidate_rows = [row for row in rows if row[2] is None]
+    assert ("concepts/a", "concepts/c", None) in candidate_rows
+    assert ("concepts/a", "concepts/b", None) not in candidate_rows
+    assert report.quarantine_withheld == (
+        sqlite_graph.WithheldCandidate(
+            pair=("concepts/a", "concepts/b"), source_ids=("sources/s",)
+        ),
+    )
+    # Withheld pairs never consume cap slots or ranked positions.
+    assert report.produced == 1
+    assert report.pairs == (("concepts/a", "concepts/c"),)
+
+
+@pytest.mark.parametrize(
+    "notice",
+    [
+        "sole-object-restates-source",
+        "objects-without-evidence",
+        "candidates-dropped-in-staging",
+        "some-unrecognized-value",
+    ],
+)
+def test_pass_three_gate_matches_only_the_judge_tokens(
+    tmp_path: Path, notice: str
+) -> None:
+    """#841's gate reads EXACTLY #772's two judge-degrade tokens -- the
+    quarantine whose objects skipped quality selection. Every other
+    `extraction_notice` value is a disclosure about output the pipeline
+    produced as designed, and gating on it would punish sources whose
+    objects were judged and kept."""
+    bundle = tmp_path / "bundle"
+    _write_source_with_notice(bundle / "sources" / "s.md", title="s", notice=notice)
+    _write_doc_with_provenance(
+        bundle / "concepts" / "a.md", title="A", provenance=["sources/s"]
+    )
+    _write_doc_with_provenance(
+        bundle / "concepts" / "b.md", title="B", provenance=["sources/s"]
+    )
+    source = _StubCandidateSource([("concepts/a", "concepts/b")])
+
+    with sqlite_graph.build_graph(bundle, candidates=source) as store:
+        rows = _edge_rows(store)
+        report = store.candidate_report
+
+    assert ("concepts/a", "concepts/b", None) in rows
+    assert report.quarantine_withheld == ()
+
+
+def test_pass_three_gate_requires_a_common_quarantined_source(
+    tmp_path: Path,
+) -> None:
+    """#841: the pair is attributed to a source both endpoints CITE -- a
+    multi-provenance endpoint sharing only a HEALTHY source with its
+    neighbor keeps its pair, while sharing the quarantined one loses it.
+    The boundary is the shared unjudged extraction, never mere contact
+    with a degraded source."""
+    bundle = tmp_path / "bundle"
+    _write_source_with_notice(
+        bundle / "sources" / "s.md", title="s", notice="judge-selection-empty"
+    )
+    _write_doc(bundle / "sources" / "t.md", doc_type="Source", title="t")
+    _write_doc_with_provenance(
+        bundle / "concepts" / "a.md", title="A", provenance=["sources/s", "sources/t"]
+    )
+    _write_doc_with_provenance(
+        bundle / "concepts" / "b.md", title="B", provenance=["sources/t"]
+    )
+    _write_doc_with_provenance(
+        bundle / "concepts" / "c.md", title="C", provenance=["sources/s"]
+    )
+    source = _StubCandidateSource(
+        [("concepts/a", "concepts/b"), ("concepts/a", "concepts/c")]
+    )
+
+    with sqlite_graph.build_graph(bundle, candidates=source) as store:
+        rows = _edge_rows(store)
+        report = store.candidate_report
+
+    candidate_rows = [row for row in rows if row[2] is None]
+    assert ("concepts/a", "concepts/b", None) in candidate_rows
+    assert ("concepts/a", "concepts/c", None) not in candidate_rows
+    assert report.quarantine_withheld == (
+        sqlite_graph.WithheldCandidate(
+            pair=("concepts/a", "concepts/c"), source_ids=("sources/s",)
+        ),
+    )

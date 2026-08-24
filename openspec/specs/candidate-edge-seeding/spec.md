@@ -45,6 +45,56 @@ MUST produce identical, identically-ordered output.
 - WHEN the scoring function runs
 - THEN only candidates within the cutoff are returned, capped at top-K
 
+### Requirement: An Unjudged Source's Own Pairs Are Withheld And Disclosed
+
+The candidate pass MUST withhold any nominated pair whose BOTH endpoints
+cite (`provenance:`) a common source carrying one of #772's judge-degrade
+`extraction_notice` tokens (`judge-selection-unavailable` or
+`judge-selection-empty`) — issue #841: objects stored without judge
+selection are mutually proximate almost by construction, and each retained
+pair becomes one LLM call downstream and permanent typed structure once
+accepted. The gate MUST match EXACTLY those two tokens (every other
+`extraction_notice` value discloses output produced as designed, and
+gating on it would punish judged sources), and a cross pair with one
+healthy endpoint MUST survive. Withheld pairs MUST be removed BEFORE
+ranking and the per-run cap, so they never consume cap slots or shift the
+paging window, and MUST be recorded on the candidate report (pairs and
+quarantined source ids).
+
+The withholding MUST be disclosed, never silent, on every surface that
+renders the cap's truncation notice (`suggest-relations`,
+`contradictions`, `curate`'s Structure gate), with the visible count
+re-derived through the same sensitivity filter the truncation notice uses
+and the remedy named (a re-ingest whose judge answers clears the
+quarantine; the projection is derived state a rebuild reconsiders).
+
+A generic per-source share cap is deliberately NOT specified: no
+threshold separates a productive source from a degraded one without a
+measurement harness (issue #841's own analysis), while this gate bounds
+the documented failure at deterministic cost.
+
+#### Scenario: A quarantined source's mutual pair is withheld
+
+- GIVEN a source stamped `judge-selection-unavailable` with two derived
+  objects, and a healthy source with one
+- WHEN the graph builds with a candidate source nominating the mutual
+  pair and a cross pair
+- THEN only the cross pair becomes a candidate edge, AND the report
+  carries the withheld pair and the quarantined source id
+
+#### Scenario: Non-judge notice tokens do not gate
+
+- GIVEN a source carrying any other `extraction_notice` value
+- WHEN its derived objects' mutual pair is nominated
+- THEN the pair becomes a candidate edge and nothing is withheld
+
+#### Scenario: The withholding is disclosed with the remedy
+
+- GIVEN a build that withheld at least one visible pair
+- WHEN `openkos suggest-relations` runs
+- THEN stdout carries one line with the withheld count, the unjudged
+  source, and the re-ingest-then-reindex remedy
+
 ### Requirement: Candidate Edges Reach Suggestion And Are Excluded From Contradiction Candidates
 
 Regardless of the internal row-typing representation chosen at design

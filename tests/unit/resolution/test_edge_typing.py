@@ -16,7 +16,11 @@ import pytest
 
 from openkos.graph.base import Edge, GraphStore
 from openkos.graph.proximity import ProximityPair
-from openkos.graph.sqlite_graph import CandidateReport, build_graph
+from openkos.graph.sqlite_graph import (
+    CandidateReport,
+    WithheldCandidate,
+    build_graph,
+)
 from openkos.llm.base import Message
 from openkos.llm.ollama import OllamaGenerationCapped, OllamaUnavailable
 from openkos.model.relations import ASYMMETRIC_RELATION_TYPES
@@ -1809,3 +1813,109 @@ def test_a_marker_is_not_found_inside_a_longer_word() -> None:
         "Aortic Valve",
         "Human Heart",
     )
+
+
+# --- issue #841: quarantined_candidate_notice ------------------------------
+
+
+def test_quarantined_candidate_notice_none_when_nothing_was_withheld(
+    tmp_path: Path,
+) -> None:
+    """The advisory must not fire on the healthy path: a build that
+    withheld nothing says nothing."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    report = CandidateReport(produced=2, retained=2)
+
+    assert edge_typing_mod.quarantined_candidate_notice(report, bundle_dir) is None
+
+
+def test_quarantined_candidate_notice_names_count_source_and_remedy(
+    tmp_path: Path,
+) -> None:
+    """#841: the withholding is disclosed the way the cap's truncation
+    already is -- silent truncation reads as "covered everything" when it
+    did not (#560's rule). The notice carries the visible withheld count,
+    the unjudged source, and the remedy that clears the quarantine (a
+    re-ingest whose judge answers, then reindex)."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    report = CandidateReport(
+        produced=1,
+        retained=1,
+        pairs=(("concepts/x", "concepts/y"),),
+        quarantine_withheld=(
+            WithheldCandidate(
+                pair=("concepts/a", "concepts/b"), source_ids=("sources/s",)
+            ),
+            WithheldCandidate(
+                pair=("concepts/a", "concepts/c"), source_ids=("sources/s",)
+            ),
+        ),
+    )
+
+    notice = edge_typing_mod.quarantined_candidate_notice(report, bundle_dir)
+
+    assert notice is not None
+    assert "2 candidate edge(s) withheld" in notice
+    assert "sources/s" in notice
+    assert "re-ingest" in notice
+    assert "reindex" in notice
+
+
+def test_quarantined_candidate_notice_suppressed_when_every_pair_is_confidential(
+    tmp_path: Path,
+) -> None:
+    """The same sensitivity posture `candidate_truncation_notice` takes: a
+    withholding made purely of material the caller cannot see must stay
+    silent, or the notice discloses a volume the edge list beside it
+    deliberately withholds."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "concepts").mkdir()
+    _confidential_doc(bundle_dir, "concepts/secret")
+    report = CandidateReport(
+        quarantine_withheld=(
+            WithheldCandidate(
+                pair=("concepts/secret", "concepts/b"), source_ids=("sources/s",)
+            ),
+        ),
+    )
+
+    notice = edge_typing_mod.quarantined_candidate_notice(report, bundle_dir)
+
+    assert notice is None
+
+
+def test_quarantined_candidate_notice_names_only_sources_with_a_visible_pair(
+    tmp_path: Path,
+) -> None:
+    """The named-source list is restricted to sources at least one VISIBLE
+    withheld pair is attributed to. A source whose every withheld pair has
+    a confidential endpoint must not be named: doing so would tell a caller
+    without access that such pairs exist -- the aggregate-disclosure defect
+    the truncation notice's re-derivation exists to prevent, one field
+    over."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "concepts").mkdir()
+    _write_doc(bundle_dir / "concepts" / "a.md", title="a")
+    _write_doc(bundle_dir / "concepts" / "b.md", title="b")
+    _confidential_doc(bundle_dir, "concepts/secret")
+    report = CandidateReport(
+        quarantine_withheld=(
+            WithheldCandidate(
+                pair=("concepts/a", "concepts/b"), source_ids=("sources/s",)
+            ),
+            WithheldCandidate(
+                pair=("concepts/b", "concepts/secret"), source_ids=("sources/hidden",)
+            ),
+        ),
+    )
+
+    notice = edge_typing_mod.quarantined_candidate_notice(report, bundle_dir)
+
+    assert notice is not None
+    assert "1 candidate edge(s) withheld" in notice
+    assert "sources/s" in notice
+    assert "sources/hidden" not in notice

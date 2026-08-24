@@ -107,6 +107,7 @@ from openkos.resolution.edge_typing import (
     candidate_edges,
     candidate_truncation_notice,
     next_candidate_offset,
+    quarantined_candidate_notice,
     suggest_edge_types,
 )
 from openkos.resolution.reconciliation import reconcile_merged_body
@@ -13683,6 +13684,16 @@ def suggest_relations_cmd(
             include_confidential=include_confidential,
             local_exemption=local_exemption,
         )
+        # #841: the unjudged-source withholding, disclosed beside the cap's
+        # truncation -- both say the queue is smaller than the bundle could
+        # produce, and both re-derive their visible counts through the same
+        # sensitivity walk.
+        quarantine_notice = quarantined_candidate_notice(
+            store.candidate_report,
+            layout.bundle_dir,
+            include_confidential=include_confidential,
+            local_exemption=local_exemption,
+        )
         # #567: computed inside the `with` block (the report lives on
         # `store`), printed beside the #560 pointer after the run below.
         batch_offset = next_candidate_offset(
@@ -13693,6 +13704,9 @@ def suggest_relations_cmd(
         )
         if notice is not None:
             typer.echo(notice)
+            typer.echo()
+        if quarantine_notice is not None:
+            typer.echo(quarantine_notice)
             typer.echo()
         total = len(edges)
         if total == 0:
@@ -15273,6 +15287,18 @@ def contradictions(
         )
         if notice is not None:
             typer.echo(notice)
+            typer.echo()
+        # #841: the unjudged-source withholding, disclosed here too -- the
+        # contradiction engine reads the same candidate projection, so its
+        # queue is also smaller than the bundle could produce.
+        quarantine_notice = quarantined_candidate_notice(
+            store.candidate_report,
+            layout.bundle_dir,
+            include_confidential=include_confidential,
+            local_exemption=local_exemption,
+        )
+        if quarantine_notice is not None:
+            typer.echo(quarantine_notice)
             typer.echo()
         if not verdicts and batch.failure is None:
             # Guarded on a clean run only (#441): a first-candidate failure
