@@ -968,6 +968,20 @@ def _self_test() -> int:
             records = run_fixture(fixture, client, transport, 1, "fake")
         finally:
             urllib.request.urlopen = real_urlopen
+        # The SYMMETRIC guard to `_ScriptExhausted`: a scenario scripting
+        # more bodies than the pipeline consumes is the same defect from the
+        # other direction -- the script no longer describes the run, and the
+        # assertions downstream measure a pipeline that stopped calling
+        # where the author did not expect. Checked here rather than per
+        # scenario so no future scenario can forget it. Over-consumption is
+        # already loud (the transport raises); this side cannot arrive
+        # through the transport, so it lands in `failures`.
+        if len(sent) < len(scripted):
+            failures.append(
+                f"scenario scripted {len(scripted)} bodies but the pipeline "
+                f"consumed only {len(sent)}; the leftover script means the "
+                "scenario no longer describes the run"
+            )
         return records[0], sent
 
     # Scenario 1 -- the JUDGE's first attempt is cut off and its retry answers.
