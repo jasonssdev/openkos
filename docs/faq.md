@@ -47,7 +47,7 @@ You need to be comfortable running a command-line tool. You do not need to under
 
 ## What models does it use? Do I need API keys?
 
-OpenKOS is designed for open-weight local models via runtimes like Ollama, so you do not need API keys or a paid account. The candidate families are Qwen3 and Mistral Small. Model licences change, and OpenKOS does not vouch for them — check the vendor's terms for the release you pull, and prefer a permissive one. You may plug in other models if you prefer: the model is a config value behind an interface, so OpenKOS never blesses one.
+OpenKOS is designed for open-weight local models via runtimes like Ollama, so you do not need API keys or a paid account. The measured defaults are `qwen3:8b` for chat and `bge-m3` for embeddings (see the ADRs for how they were chosen), with one optional measured upgrade for relation naming (`gemma2:27b`, opt-in via `models:` in `openkos.yaml`). Model licences change, and OpenKOS does not vouch for them — check the vendor's terms for the release you pull, and prefer a permissive one. You may plug in other models if you prefer: the model is a config value behind an interface, so OpenKOS never blesses one.
 
 ## Why markdown? Why not a "real" database?
 

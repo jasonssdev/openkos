@@ -149,6 +149,53 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   ruling automatically — both walks go through one recorder, so they cannot
   drift.
 
+- **A derived object that quotes no line of its source says so**
+  ([#801](https://github.com/jasonssdev/openkos/issues/801)). An extraction
+  can store an object whose written text reproduces no line of the source —
+  which later becomes a citation that provably cannot support the answer it
+  is attached to. The check is deliberately dumb and checkable by hand: the
+  text that will be written is compared line-by-line against the source
+  (casefolded, whitespace-collapsed, markdown markers stripped — the same
+  normalisation the wrong-language gate uses, so "quoted" means one thing
+  across both), in **both directions**, with a four-word floor that keeps it
+  from being vacuous. Offenders are named on stderr, the Source is stamped
+  `extraction_notice: objects-without-evidence`, `openkos lint` reports them
+  under a new **Unevidenced objects:** section, and `openkos status` folds
+  them into needs-attention. The objects are kept unchanged — a genuinely
+  terse source can state a fact no single line reproduces — and the token is
+  **not** retryable debt: re-running the same prompt over the same bytes is
+  promised to fix nothing, so the repair is reading the object against its
+  source, and `--re-extract` is the named redo.
+
+- **A candidate lost in staging is durable, not just a stderr line**
+  ([#843](https://github.com/jasonssdev/openkos/issues/843)). Each staged
+  candidate can be dropped independently — an empty slug, an in-batch slug
+  collision, a failed concept build — and each drop printed one stderr note
+  that a seventeen-minute batch scrolls far away. The three drops that lose
+  content now also stamp
+  `extraction_notice: candidates-dropped-in-staging` onto the Source,
+  `openkos lint` reports it under its own **Staging-dropped candidates:**
+  section, and `openkos status` folds it into needs-attention — so a source
+  the bundle may under-represent stays visible after the terminal has moved
+  on. The create-only skip is deliberately not a cause: the slug this source
+  already owns is on disk from an earlier run, so nothing was lost. Like
+  #801's token it is not retryable debt; `--re-extract` is the named redo.
+
+- **`rationale_language` pins the language `curate` writes its rationales
+  in** ([#812](https://github.com/jasonssdev/openkos/issues/812)). The
+  Metadata and Structure stages emitted each rationale in whichever language
+  that concept type's documents happened to dominate, so one table read top
+  to bottom mixed English and Spanish rows. The new `openkos.yaml` key pins
+  them to one language. **Unset is the default, and unset sends the prompt
+  that shipped, byte for byte** — structurally, not incidentally: the helper
+  returns the prompt object itself when the key is absent. That matters
+  because this project does not adopt a longer prompt on a common path
+  without measuring it, and a longer extraction prompt was measured here and
+  lost its A/B. The value is free-form (the model sees it verbatim), bounded
+  only to the shape of a language name, and affects those two rationales
+  only — extraction, query, and adjudication still follow the source
+  language, which is correct there.
+
 ### Fixed
 
 - **Two harness self-tests that were red, and would have stayed red**
@@ -316,10 +363,108 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   and before the confirmation gate, from the same shared constant the other
   three use, so the four cannot drift.
 
-  This does not change any verdict. The rest of #796 — a type-aware identity
-  frame that reads `Event` title identity as evidence of a recurring series
-  rather than of one entity — changes adjudication judgment and is held for
-  measurement.
+  This does not change any verdict. The rest of #796 — the type-aware
+  identity frame that reads `Event` title identity as evidence of a
+  recurring series rather than of one entity — was measured in
+  `evals/adjudication/` and shipped; see *The identity judge is told what an
+  identical Event title means* under **Added** above.
+
+- **`suggest-relations` withdraws an asymmetric type whose rationale argues
+  the reverse** ([#807](https://github.com/jasonssdev/openkos/issues/807)).
+  A suggestion read `[part_of] A -> B` while its own rationale argued that B
+  was "a structural component" — one reply disagreeing with itself about
+  which document is inside which, a stronger fact than #778's
+  direction-unverified marker. The issue required an `evals/edge_typing/`
+  arm before any fix, and that gate rejected the first rule: a proximity
+  window around the role marker scored 0.40 precision — it would have
+  withdrawn 25 correct suggestions to catch 17 wrong ones — and one of its
+  false positives is now a regression test. The shipped rule bounds the
+  marker to one sentence and requires the target named before it with no
+  source mention earlier — 1.00 precision on the tuned arm and on a held-out
+  arm collected afterwards. A caught suggestion is degraded to `related_to`
+  rather than dropped, and its rationale gains a note saying the specific
+  type was withdrawn because the prose argues the reverse — without it the
+  pair reads as the tool contradicting itself, which is the very complaint.
+  The marker table is English-only and fails closed: a non-English rationale
+  is left as it is, so the cost is missed detections, never withdrawn
+  correct answers.
+
+- **A stacked merge nests the whole absorbed heading tree under the
+  delimiter** ([#811](https://github.com/jasonssdev/openkos/issues/811)).
+  #803 demoted only the absorbed body's leading `# ` heading, which stopped
+  the two-roots defect but left the deeper sections at their original
+  levels: a `## Related` arrived as a *sibling* of the
+  `## Merged content (<id>)` delimiter, and a hand-written `# Citations`
+  outranked it — read as markdown, the absorbed document's links belonged to
+  the survivor's own Related section, exactly the reading the delimiter
+  exists to prevent. Every heading in the absorbed body now shifts by the
+  same two levels, so the absorbed document arrives as one subtree with its
+  internal structure preserved. Nothing is folded, deliberately: merging two
+  `## Related` lists byte-wise would silently change meaning. `#` lines
+  inside fenced code blocks are never treated as headings, and the shift is
+  presentation-only — `unmerge` restores from the ledger's verbatim
+  snapshots.
+
+- **The served/fresh split is answered from one fact, and both edge-typing
+  surfaces share it** ([#809](https://github.com/jasonssdev/openkos/issues/809)).
+  `suggest-relations` gated its split line on the store file *existing*, so
+  a present-but-unreadable store printed "failed to read persisted
+  suggestions" and, immediately below, "0 of 1 served from persisted
+  suggestions" — a line that implies the store was consulted successfully.
+  `curate`'s Structure stage used the opposite proxy and paid with the
+  opposite bug: silent when a store was read and served nothing, which is
+  the silent re-spend #799 exists to surface. Neither proxy survives: the
+  shared partition now carries `store_read` — "looked, found nothing" and
+  "could not look" produce the same empty map, and only one of them may
+  print the split — and both call sites render from the same reassembly, so
+  they can no longer drift.
+
+- **A bonus call's cut-off is named, not swallowed**
+  ([#828](https://github.com/jasonssdev/openkos/issues/828)). The re-ask and
+  participant-capture calls degraded every backend failure into `[]`, so a
+  generation that ran away against the 8192-token ceiling — 222 seconds
+  spent for an unusable reply — reported as the honest "this bonus call
+  found nothing". #795 closed that gap for the judge; this closes the two
+  places left. The failure CAUSE travels as the exception type only, never
+  its message — a message can carry a host or a model's own text into a
+  line this repo also writes to frontmatter — and `ingest` renders an
+  advisory notice. The degrade contract is unchanged: additions stay empty
+  on failure and nothing propagates. `evals/generation_runaway/` measured
+  the failure itself: only the two extraction passes ever reach the ceiling,
+  and the runaway follows the SOURCE, not the settings.
+
+- **`OllamaGenerationCapped` names whichever limit actually bound**
+  ([#829](https://github.com/jasonssdev/openkos/issues/829)). `num_ctx`
+  bounds prompt and completion together, so a large prompt can leave less
+  generation room than `num_predict` allows — and the capped exception named
+  the ceiling regardless, sending the operator to raise
+  `max_generation_tokens` when `context_window` is what has to move. The
+  response carries both counters, so which bound bound is now **read**
+  rather than inferred: ceiling reached, window filled (with the prompt
+  size, the room it left, and where the reply stopped), neither, or nothing
+  measurable — each with its own message, on the no-ceiling branch too. The
+  prompt reserve was re-measured against the *unchunked* extraction prompt
+  (6 142 tokens at the chunk threshold, in Spanish — the original 4 096 was
+  calibrated on a chunked window), and the deliberate decision to move
+  neither the window nor the chunk threshold is recorded where the constants
+  live: every legitimate reply ever measured fits the worst-case room with
+  2.6× to spare, so only a runaway meets the window first, and cutting a
+  runaway earlier costs strictly less.
+
+- **One degraded extraction cannot flood the edge set**
+  ([#841](https://github.com/jasonssdev/openkos/issues/841)). The graph
+  projection's candidate pass now withholds any pair whose *both* endpoints
+  derive from a source under #772's judge quarantine: objects stored without
+  judge selection are near-boilerplate and mutually proximate almost by
+  construction — the reported run turned one failed judge into 9 objects and
+  ~31 of 49 candidate edges, each an LLM call and, once accepted, permanent
+  typed structure. The gate reads exactly the two retryable-debt tokens; a
+  cross pair keeping one healthy endpoint survives, so a healthy neighbor is
+  never punished for contact with a degraded source. The withholding is
+  never silent — `suggest-relations`, `contradictions`, and `curate`'s
+  Structure gate all print the count with the remedy — and it is
+  self-clearing: a re-ingest whose judge answers removes the marker and the
+  next rebuild reconsiders the pairs.
 
 ### Changed
 
