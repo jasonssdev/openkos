@@ -659,6 +659,55 @@ def _tier_unextracted_source(signals: _BundleSignals) -> NextAction | None:
     return None
 
 
+def _tier_unjudged_extraction(signals: _BundleSignals) -> NextAction | None:
+    """Rank between unextracted source and below-source sensitivity:
+    derived objects stored WITHOUT judge selection (#772's quarantine
+    tokens, read via `lint_check.check_unjudged`) are knowledge that
+    passed no quality gate yet feeds retrieval, adjudication, and the
+    graph -- and the repair is computed, one-command, and self-clearing
+    (issue #868). Under the module's ordering principle that puts it below
+    a FAILED extraction (absence outranks unvetted presence: tier 5's
+    documents are still missing) and above a mislabelled sensitivity or a
+    pending duplicate group, which are label problems over content that
+    did pass its gates.
+
+    Everything else is `_tier_unextracted_source`'s contract verbatim, on
+    purpose: the detail comes from the same `_ingest_retry_hint` remedy
+    (`lint.py`, shared by `check_unextracted` and `check_unjudged` so the
+    two debts cannot drift on how they spell it), so the #274 corroboration
+    against `doc.resource`, trap 2's bare-command declination, and #276's
+    named declinations all apply unchanged. The recommended command became
+    RUNNABLE with #865 -- `ingest raw/<name>` now resolves to the owning
+    Source's re-ingest instead of duplicating it -- which is why this tier
+    lands after that fix rather than with the token (#868: "the tier
+    should land with, or after, the remedy fix")."""
+    docs_by_identity = {doc.identity: doc for doc in signals.docs}
+    for finding in lint_check.check_unjudged(signals.docs):
+        doc = docs_by_identity.get(finding.concept_id)
+        if doc is None or not doc.resource:
+            signals.record_declination(
+                f"{finding.concept_id}: derived objects lack judge "
+                "selection, but the document records no resource to "
+                "re-ingest"
+            )
+            continue
+        command = _command_from_detail(
+            finding.detail, _INGEST_VERB, takes_argument=True
+        )
+        if command != f"{_INGEST_VERB} {doc.resource}":
+            signals.record_declination(
+                f"{finding.concept_id}: derived objects lack judge "
+                "selection, but its resource is not a runnable argument -- "
+                "rename the file and re-ingest"
+            )
+            continue
+        return NextAction(
+            command=command,
+            reason=f"{finding.concept_id}: {finding.detail}",
+        )
+    return None
+
+
 def _tier_below_source_sensitivity(signals: _BundleSignals) -> NextAction | None:
     """Rank 3: below-source-sensitivity descendant. Ranked above tier 4 --
     its single-document sibling (#693), where this tier's sweep repairs a
@@ -887,6 +936,7 @@ _TIERS: tuple[Tier, ...] = (
     _tier_missing_fts_index,
     _tier_stale_derived_indexes,
     _tier_unextracted_source,
+    _tier_unjudged_extraction,
     _tier_below_source_sensitivity,
     _tier_multi_source_uncovered,
     _tier_duplicate_groups,
@@ -894,8 +944,9 @@ _TIERS: tuple[Tier, ...] = (
     _tier_open_contradictions,
 )
 """D1 order: ingest-first (empty bundle, #386), reindex (missing vectors),
-reindex (missing FTS, #553), reindex (stale, #381), ingest,
-backfill-sensitivity, set-sensitivity (#693), curate, normalize-names,
+reindex (missing FTS, #553), reindex (stale, #381), ingest (failed
+extraction), ingest (judge debt, #868), backfill-sensitivity,
+set-sensitivity (#693), curate, normalize-names,
 contradictions (durable-pending-work, Decision 6). A higher-ranked tier's finding always
 wins; a lower-ranked tier is never even evaluated once a higher one fires
 (first-hit short-circuit) -- which is also what keeps the three reindex

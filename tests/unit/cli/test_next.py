@@ -1950,3 +1950,189 @@ def test_reopening_restores_the_next_recommendation(
     after = runner.invoke(app, ["next"])
 
     assert "candidate group with identical titles" in after.stdout
+
+
+# --- #868: retryable judge debt has its own tier ---------------------------
+
+
+def _write_unjudged_source(
+    tmp_path: Path,
+    *,
+    name: str = "notes",
+    resource: str = "raw/notes.txt",
+    notice: str = "judge-selection-unavailable",
+) -> None:
+    """A Source whose derived objects were stored WITHOUT judge selection
+    (#772's quarantine token), extraction itself having succeeded."""
+    sources_dir = tmp_path / "bundle" / "sources"
+    sources_dir.mkdir(parents=True, exist_ok=True)
+    resource_line = f"resource: {resource}\n" if resource else ""
+    (sources_dir / f"{name}.md").write_text(
+        f"---\ntype: Source\ntitle: {name.title()}\n{resource_line}"
+        f"extraction_notice: {notice}\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+
+def test_unjudged_source_recommends_the_lint_retry_command(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """#868's gap: retryable judge debt appeared in no tier, so it could
+    never be the one recommended action however much of the bundle it
+    covered. The tier prints the SAME command `lint` computes -- one shared
+    fact, the #865 contract."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors_db(tmp_path)
+    _write_unjudged_source(tmp_path)
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "Run: openkos ingest raw/notes.txt" in result.stdout
+    assert "without judge selection" in result.stdout
+
+
+def test_judge_selection_empty_also_fires_the_judge_debt_tier(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """Both judge-degrade tokens are the same retryable debt -- the tier
+    matches `lint.check_unjudged`'s vocabulary, not one member of it."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors_db(tmp_path)
+    _write_unjudged_source(tmp_path, notice="judge-selection-empty")
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "Run: openkos ingest raw/notes.txt" in result.stdout
+
+
+def test_unextracted_source_outranks_judge_debt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """Absence outranks unfiltered presence: a failed extraction is
+    knowledge missing from the bundle, judge debt is knowledge present but
+    unvetted, so the existing tier 5 stays above the new tier."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors_db(tmp_path)
+    _write_unextracted_source(tmp_path, name="failed", resource="raw/failed.txt")
+    _write_unjudged_source(tmp_path, name="unjudged", resource="raw/unjudged.txt")
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "Run: openkos ingest raw/failed.txt" in result.stdout
+    assert "raw/unjudged.txt" not in result.stdout
+
+
+def test_judge_debt_outranks_below_source_sensitivity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """The issue's ranking argument: objects that passed no quality gate
+    feed retrieval, adjudication, and the graph, and the repair is
+    computed, one-command, and self-clearing -- so it ranks between tier 5
+    (unextracted) and tier 6 (mislabelled sensitivity)."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors_db(tmp_path)
+    _write_below_source_sensitivity_bundle(tmp_path)
+    _write_unjudged_source(tmp_path)
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "Run: openkos ingest raw/notes.txt" in result.stdout
+    assert "openkos backfill-sensitivity" not in result.stdout
+
+
+def test_judge_debt_outranks_a_pending_duplicate_group(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """#868's reported walkthrough: 46 of 61 objects unjudged, and `next`
+    walked past them to point at one duplicate pair. A duplicate group is
+    'merely ambiguous' under the ladder's own ordering principle."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors_db(tmp_path)
+    _write_doc(tmp_path / "bundle" / "concepts" / "dup-a.md", title="Stoicism")
+    _write_doc(tmp_path / "bundle" / "concepts" / "dup-b.md", title="STOICISM")
+    _write_unjudged_source(tmp_path)
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "Run: openkos ingest raw/notes.txt" in result.stdout
+    assert "openkos curate" not in result.stdout
+
+
+def test_unjudged_with_no_resource_is_declined_not_dropped(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """The #276 honesty guard, inherited by the new tier: a Source with
+    judge debt and no recorded resource cannot be recommended (a bare
+    `openkos ingest` is not runnable), but declining SILENTLY would leave
+    the bundle's largest quality debt with no trace at all."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors_db(tmp_path)
+    _write_unjudged_source(tmp_path, resource="")
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "Run: openkos ingest" not in result.stdout
+    assert "sources/notes" in result.stdout
+    assert "records no resource" in result.stdout
+
+
+def test_unjudged_unspellable_resource_is_declined_with_the_rename_repair(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """The #274/#285 traps apply verbatim: an unspellable `resource` is
+    declined with the rename repair, never echoed back, and never printed
+    as a truncated command naming a different file."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors_db(tmp_path)
+    _write_unjudged_source(tmp_path, resource="raw/notes.txt`; rm -rf /")
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "Run: openkos ingest" not in result.stdout
+    assert "sources/notes" in result.stdout
+    assert "not a runnable argument" in result.stdout
+    assert "rm -rf" not in result.stdout
+
+
+def test_a_declined_unjudged_finding_falls_through_to_the_next(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """A declination is a `continue`, not a `return`: the tier keeps
+    evaluating the remaining judge-debt findings, so one unrecommendable
+    Source cannot hide a runnable repair behind it. Both halves are
+    asserted -- the declination is still named, and the next finding's
+    command is still recommended."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors_db(tmp_path)
+    _write_unjudged_source(tmp_path, name="broken", resource="")
+    _write_unjudged_source(tmp_path, name="notes", resource="raw/notes.txt")
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "Run: openkos ingest raw/notes.txt" in result.stdout
+    assert "sources/broken" in result.stdout
+    assert "records no resource" in result.stdout
