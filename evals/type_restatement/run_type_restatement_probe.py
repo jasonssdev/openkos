@@ -63,6 +63,7 @@ Usage:
     uv run python -u evals/type_restatement/run_type_restatement_probe.py --self-test
     uv run python -u evals/type_restatement/run_type_restatement_probe.py
     uv run python -u evals/type_restatement/run_type_restatement_probe.py --rescore
+    uv run python -u evals/type_restatement/run_type_restatement_probe.py --df-floor
 """
 
 from __future__ import annotations
@@ -72,6 +73,7 @@ import importlib.util
 import itertools
 import json
 import sys
+from collections import Counter
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -187,6 +189,211 @@ def synthetic_type(key: str) -> str | None:
         if token in TYPE_WORDS:
             return token
     return None
+
+
+# --------------------------------------------------------------------------- #
+# The corpus-frequency floor (#837)
+# --------------------------------------------------------------------------- #
+
+
+def token_document_frequency(titles: list[str]) -> Counter[str]:
+    """Content-token document frequency over the DISTINCT normalized keys of
+    `titles`.
+
+    One vote per distinct key, not per stored title: the same title harvested
+    from two runs is one document form, and counting it twice would let the
+    corpus's storage layout move a number the rule would read as linguistic
+    rarity. Tokens pass through the SAME `_content_tokens(_match_tokens(...))`
+    pipeline the near-match rule scores with, so a function word the rule
+    never scores cannot acquire a frequency, and a token the rule retains
+    cannot lack one.
+    """
+    df: Counter[str] = Counter()
+    for key in {normalize_key(title) for title in titles}:
+        for token in set(_content_tokens(_match_tokens(key))):
+            df[token] += 1
+    return df
+
+
+def required_tokens(pair: DeltaPair) -> tuple[str, ...]:
+    """The tokens the excusal leaves behind, RECOMPUTED from the pair's own
+    titles -- never read from the stored `excused` field, so a hand-edited
+    delta cannot drift from the rule that produced it."""
+    key_a = normalize_key(pair.title_a)
+    key_b = normalize_key(pair.title_b)
+    tokens_a = _content_tokens(_match_tokens(key_a))
+    tokens_b = _content_tokens(_match_tokens(key_b))
+    smaller, smaller_key = (
+        (tokens_a, key_a) if len(tokens_a) <= len(tokens_b) else (tokens_b, key_b)
+    )
+    excused = synthetic_type(smaller_key)
+    return tuple(token for token in smaller if token != excused)
+
+
+@dataclass(frozen=True)
+class DfRow:
+    """One delta pair with the only facts a corpus-frequency floor can see."""
+
+    pair: DeltaPair
+    ruling: str | None
+    required: tuple[str, ...]
+    max_df: int
+    min_df: int
+
+
+def df_rows(
+    delta: list[DeltaPair], labels: dict[str, str], df: Counter[str]
+) -> list[DfRow]:
+    rows = []
+    for pair in delta:
+        required = required_tokens(pair)
+        frequencies = [df[token] for token in required]
+        if not frequencies:
+            # The excusal rule cannot produce an emptied requirement --
+            # `candidate_near_match_score` returns None for it -- so the pair
+            # can only come from a stored delta that drifted from the rule.
+            # Refusing loudly beats a bare max()-of-empty ValueError, and
+            # beats silently skipping a row the report would then undercount.
+            raise SystemExit(
+                f"stored delta pair {pair.key!r} leaves no required token "
+                "after the excusal; the rule cannot produce such a pair, so "
+                "results/delta.json has drifted -- re-run without flags to "
+                "regenerate it."
+            )
+        rows.append(
+            DfRow(
+                pair=pair,
+                ruling=labels.get(pair.key),
+                required=required,
+                max_df=max(frequencies),
+                min_df=min(frequencies),
+            )
+        )
+    return rows
+
+
+def opposite_ruling_collisions(rows: list[DfRow]) -> list[tuple[str, ...]]:
+    """Required-token sets carried by BOTH a duplicate and a distinct ruling.
+
+    This is the structural half of the measurement, and it is decided before
+    any threshold is: every corpus statistic the floor could consult -- max,
+    min, sum, any weighting -- is a function of the required tokens alone, so
+    two pairs sharing a required set produce the identical statistic. If
+    their rulings differ, NO floor separates them, and sweeping one would
+    only obscure that.
+    """
+    by_required: dict[frozenset[str], set[str]] = {}
+    for row in rows:
+        if row.ruling in (DUPLICATE, DISTINCT):
+            by_required.setdefault(frozenset(row.required), set()).add(row.ruling)
+    return sorted(
+        tuple(sorted(required))
+        for required, rulings in by_required.items()
+        if rulings == {DUPLICATE, DISTINCT}
+    )
+
+
+def zero_fp_operating_point(
+    rows: list[DfRow], statistic: Any
+) -> tuple[int, int] | None:
+    """The LARGEST floor admitting zero distinct pairs, with the duplicate
+    count it keeps -- or `None` when no adjudicated rows exist. The floor
+    keeps a pair when `statistic(row) <= floor`, so the answer is one under
+    the lowest distinct pair's statistic; #630's bar is zero false positives,
+    and this is the best that bar allows this signal."""
+    adjudicated = [row for row in rows if row.ruling in (DUPLICATE, DISTINCT)]
+    if not adjudicated:
+        return None
+    distinct = [statistic(r) for r in adjudicated if r.ruling == DISTINCT]
+    floor = (min(distinct) - 1) if distinct else max(statistic(r) for r in adjudicated)
+    kept = sum(
+        1 for r in adjudicated if r.ruling == DUPLICATE and statistic(r) <= floor
+    )
+    return floor, kept
+
+
+def render_df_report(rows: list[DfRow], *, corpus_keys: int) -> str:
+    """The #837 measurement: can bundle-level token rarity separate the
+    surviving-token cases the pairwise rule cannot?"""
+    adjudicated = [row for row in rows if row.ruling in (DUPLICATE, DISTINCT)]
+    duplicates = sum(1 for row in adjudicated if row.ruling == DUPLICATE)
+    distincts = sum(1 for row in adjudicated if row.ruling == DISTINCT)
+    collisions = opposite_ruling_collisions(rows)
+    max_point = zero_fp_operating_point(rows, lambda row: row.max_df)
+    min_point = zero_fp_operating_point(rows, lambda row: row.min_df)
+
+    lines = [
+        "# Can corpus frequency separate the surviving token? (#837)",
+        "",
+        f"Document frequency is counted over **{corpus_keys}** distinct "
+        "normalized keys, through the same token pipeline the near-match "
+        "rule scores with. Deterministic, stdlib-only -- no model, no GPU.",
+        "",
+        f"Adjudicated delta pairs: **{duplicates}** duplicate, "
+        f"**{distincts}** distinct.",
+        "",
+        "| ruling | maxDF | minDF | required tokens (df) | pair |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for row in sorted(
+        adjudicated, key=lambda r: (r.ruling or "", r.max_df, r.pair.key)
+    ):
+        tokens = ", ".join(f"`{token}`" for token in row.required)
+        lines.append(
+            f"| {row.ruling} | {row.max_df} | {row.min_df} | {tokens} "
+            f"| `{row.pair.key}` |"
+        )
+    lines += [
+        "",
+        "## Identical requirements, opposite rulings",
+        "",
+        "Every statistic a floor could consult is a function of the required "
+        "tokens alone, so these groups are undecidable by ANY corpus-"
+        "frequency rule, at any threshold:",
+        "",
+    ]
+    if collisions:
+        lines += [f"- {{{', '.join(f'`{t}`' for t in group)}}}" for group in collisions]
+    else:
+        lines.append("- none")
+    lines += [
+        "",
+        "## Zero-false-positive operating points",
+        "",
+        "| statistic | largest zero-FP floor | duplicates kept |",
+        "| --- | --- | --- |",
+        f"| maxDF | {max_point[0] if max_point else '-'} "
+        f"| {max_point[1] if max_point else 0} of {duplicates} |",
+        f"| minDF | {min_point[0] if min_point else '-'} "
+        f"| {min_point[1] if min_point else 0} of {duplicates} |",
+        "",
+        f"**Verdict:** {_df_verdict(collisions, max_point, min_point, duplicates)}",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def _df_verdict(
+    collisions: list[tuple[str, ...]],
+    max_point: tuple[int, int] | None,
+    min_point: tuple[int, int] | None,
+    duplicates: int,
+) -> str:
+    best_kept = max(max_point[1] if max_point else 0, min_point[1] if min_point else 0)
+    if not collisions and best_kept == duplicates and duplicates:
+        return "SHIPPABLE at this bar."
+    parts = []
+    if collisions:
+        parts.append(
+            f"{len(collisions)} required-token set(s) carry both rulings, so "
+            "no frequency floor -- indeed no corpus statistic at all -- "
+            "separates them"
+        )
+    parts.append(
+        "the best zero-false-positive floor keeps "
+        f"{best_kept} of {duplicates} adjudicated duplicates"
+    )
+    return "REFUTED -- " + ", and ".join(parts) + "."
 
 
 # --------------------------------------------------------------------------- #
@@ -514,6 +721,83 @@ def _self_test() -> int:
     check("synthetic type reads the title", synthetic_type(helios), "project")
     check("synthetic type is None when absent", synthetic_type(platform), None)
 
+    # --- The corpus-frequency floor (#837) ---
+
+    # DF counts once per DISTINCT normalized key, over content tokens.
+    df = token_document_frequency(["Remote App", "remote app", "Remote Control"])
+    check("df counts a token once per distinct key", df["remote"], 2)
+    check("df counts a single-key token once", df["app"], 1)
+    check(
+        "df never counts a function word a multi-word title can drop",
+        token_document_frequency(["Plan de Marketing"])["de"],
+        0,
+    )
+
+    # The surviving requirement is recomputed from the titles, never read
+    # from the stored `excused` field.
+    check(
+        "required tokens survive the excusal",
+        required_tokens(DeltaPair("Project Helios", "Helios Data Platform", "project")),
+        ("helios",),
+    )
+
+    # Identical required sets are the structural refutation: any corpus
+    # statistic is a function of the required tokens, so two pairs sharing
+    # them and ruled opposite ways cannot be separated by ANY floor.
+    twin_dup = DeltaPair(
+        "Onboarding Procedure", "Procedimiento de onboarding", "procedure"
+    )
+    twin_dis = DeltaPair(
+        "Onboarding Procedure",
+        "Capacitación del equipo nuevo con un procedimiento de onboarding",
+        "procedure",
+    )
+    rows = df_rows(
+        [twin_dup, twin_dis],
+        {twin_dup.key: DUPLICATE, twin_dis.key: DISTINCT},
+        token_document_frequency(["Onboarding Procedure"]),
+    )
+    check(
+        "a shared requirement with opposite rulings collides",
+        len(opposite_ruling_collisions(rows)),
+        1,
+    )
+
+    # The zero-FP operating point is the LARGEST floor admitting no distinct
+    # pair, and reports the duplicates it keeps.
+    toy = [
+        DfRow(twin_dup, DUPLICATE, ("a",), 2, 2),
+        DfRow(twin_dup, DUPLICATE, ("b",), 9, 9),
+        DfRow(twin_dis, DISTINCT, ("c",), 5, 5),
+    ]
+    check(
+        "zero-FP point keeps only what sits under the lowest distinct",
+        zero_fp_operating_point(toy, lambda row: row.max_df),
+        (4, 1),
+    )
+
+    # A drifted stored delta refuses loudly instead of crashing on max(()).
+    emptied = DeltaPair("Project", "Helios Data Platform", "project")
+    try:
+        df_rows([emptied], {}, Counter())
+    except SystemExit as refusal:
+        check("an emptied requirement names the pair", "project" in str(refusal), True)
+    else:
+        check("an emptied requirement is refused", "no refusal", "SystemExit")
+
+    # The report's verdict is asserted, not eyeballed: a collision refutes,
+    # a clean separation ships.
+    check(
+        "a collision renders REFUTED",
+        "REFUTED" in render_df_report(rows, corpus_keys=1),
+        True,
+    )
+    check(
+        "a clean separation renders SHIPPABLE",
+        "SHIPPABLE at this bar." in render_df_report(toy[:2], corpus_keys=1),
+        True,
+    )
+
     for failure in failures:
         print(f"FAIL {failure}")
     print("self-test OK" if not failures else f"{len(failures)} self-test failure(s)")
@@ -533,10 +817,30 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="re-derive verdicts from the stored delta, with no re-scan",
     )
+    parser.add_argument(
+        "--df-floor",
+        action="store_true",
+        help="score the corpus-frequency floor (#837) over the stored delta",
+    )
     args = parser.parse_args(argv)
 
     if args.self_test:
         return _self_test()
+
+    if args.df_floor:
+        stored = RESULTS_DIR / "delta.json"
+        if not stored.is_file():
+            raise SystemExit(f"no stored delta at {stored}; run without --df-floor")
+        delta, _, _ = read_delta(stored)
+        harvested = harvest_titles(_EVALS_ROOT)
+        rows = df_rows(delta, load_labels(), token_document_frequency(harvested))
+        report = render_df_report(
+            rows, corpus_keys=len({normalize_key(title) for title in harvested})
+        )
+        RESULTS_DIR.mkdir(exist_ok=True)
+        (RESULTS_DIR / "df_floor_report.md").write_text(report, encoding="utf-8")
+        print(report)
+        return 0
 
     if args.rescore:
         stored = RESULTS_DIR / "delta.json"
