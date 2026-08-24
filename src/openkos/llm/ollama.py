@@ -348,6 +348,31 @@ def classify_backend_host(raw: str | None) -> BackendHostLocality:
     return BackendHostLocality(is_local=is_local, display_host=hostport)
 
 
+def _measured_counters(
+    prompt_tokens: object, generated: object
+) -> tuple[int, int] | None:
+    """Both token counters, iff BOTH are trustworthy -- else `None`.
+
+    `bool` is a subclass of `int`, so an `isinstance(x, int)` pair alone
+    would accept `true`/`false` as counters and build a message out of 1
+    and 0. Excluded explicitly: a counter this code cannot trust must fall
+    through to the unmeasured account, not produce a confident wrong one.
+
+    ONE spelling, shared by the ceiling and no-ceiling branches of the
+    `done_reason == "length"` handling (#849): the same predicate written
+    twice is how the two drift, and returning the narrowed pair is what
+    lets both branches do arithmetic without `type: ignore`.
+    """
+    if (
+        isinstance(prompt_tokens, int)
+        and not isinstance(prompt_tokens, bool)
+        and isinstance(generated, int)
+        and not isinstance(generated, bool)
+    ):
+        return prompt_tokens, generated
+    return None
+
+
 def is_timeout_failure(exc: BaseException) -> bool:
     """Whether `exc` is a request that ran out of TIME, rather than one that
     failed for any other reason (issue #746).
@@ -565,18 +590,11 @@ class OllamaClient:
             # context window filling -- so an unconfigured client blaming
             # "the configured ceiling (None)" would contradict itself and
             # send the operator looking for a setting they never set.
-            prompt_tokens = data.get("prompt_eval_count")
-            generated = data.get("eval_count")
-            # `bool` is a subclass of `int`, so an `isinstance(x, int)` pair
-            # alone would accept `true`/`false` as counters and build a
-            # message out of 1 and 0. Excluded explicitly: a counter this
-            # code cannot trust must fall through to the unmeasured account,
-            # not produce a confident wrong one.
-            measured = (
-                isinstance(prompt_tokens, int)
-                and not isinstance(prompt_tokens, bool)
-                and isinstance(generated, int)
-                and not isinstance(generated, bool)
+            # The trustworthiness rule lives in `_measured_counters` -- one
+            # spelling for both branches below, returning the narrowed pair
+            # or nothing.
+            counters = _measured_counters(
+                data.get("prompt_eval_count"), data.get("eval_count")
             )
             if self._max_generation_tokens is None:
                 # The window can bind here too, and #440's rule -- never name
@@ -584,21 +602,21 @@ class OllamaClient:
                 # just because no ceiling is set. With counters in hand this
                 # branch can say which it was rather than always reaching for
                 # "the backend's own limit".
-                if (
-                    measured
-                    and self._context_window is not None
-                    and prompt_tokens + generated >= self._context_window  # type: ignore[operator]
-                ):
-                    raise OllamaGenerationCapped(
-                        "Ollama stopped generation because the context_window "
-                        f"({self._context_window}) filled: the prompt took "
-                        f"{prompt_tokens} tokens, leaving "
-                        f"{max(self._context_window - prompt_tokens, 0)} for "  # type: ignore[operator]
-                        f"the reply, and generation stopped at {generated}. "
-                        "No max_generation_tokens ceiling is set on this "
-                        "client; raise context_window (or shorten the "
-                        "prompt). The response is truncated and unusable."
-                    )
+                if counters is not None and self._context_window is not None:
+                    prompt_tokens, generated = counters
+                    if prompt_tokens + generated >= self._context_window:
+                        raise OllamaGenerationCapped(
+                            "Ollama stopped generation because the "
+                            f"context_window ({self._context_window}) "
+                            f"filled: the prompt took {prompt_tokens} "
+                            "tokens, leaving "
+                            f"{max(self._context_window - prompt_tokens, 0)} "
+                            f"for the reply, and generation stopped at "
+                            f"{generated}. No max_generation_tokens ceiling "
+                            "is set on this client; raise context_window "
+                            "(or shorten the prompt). The response is "
+                            "truncated and unusable."
+                        )
                 raise OllamaGenerationCapped(
                     "Ollama stopped generation for length before the reply "
                     "finished, with no max_generation_tokens ceiling set on "
@@ -618,12 +636,8 @@ class OllamaClient:
             # than inferred. #440 established that this exception must not
             # invent a cause; this is the same rule applied to the branch
             # where a ceiling IS set.
-            if (
-                isinstance(prompt_tokens, int)
-                and not isinstance(prompt_tokens, bool)
-                and isinstance(generated, int)
-                and not isinstance(generated, bool)
-            ):
+            if counters is not None:
+                prompt_tokens, generated = counters
                 if generated >= self._max_generation_tokens:
                     raise OllamaGenerationCapped(
                         "Ollama stopped generation at the configured "
