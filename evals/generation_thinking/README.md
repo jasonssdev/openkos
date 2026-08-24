@@ -71,6 +71,25 @@ Latency separates on `helios-overview` (29.6s against 8.1s) and much less on
 `kickoff` (24.3s against 18.4s), so "thinking is slower" is supported and
 "thinking roughly doubles latency" is not.
 
+Two caveats on that sentence, both about this stored sweep:
+
+- **The interleaving covered one axis, not both.** Arms alternated call by
+  call, but `fixture` was the outer loop, so the twenty kickoff rows ran as
+  one solid time block before the twenty helios-overview rows — the same
+  exposure the arm axis paid to remove, one loop up. The two per-fixture
+  deltas that sentence compares were therefore measured in disjoint time
+  windows, and a cross-FIXTURE conclusion inherits whatever drifted between
+  them. The probe now interleaves fixtures run by run as well; this stored
+  sweep predates that fix and its cross-fixture comparison should be read
+  with the same caution the ordering section below applies to rates.
+- **One `helios-overview` `no-think` row is a order-of-magnitude outlier.**
+  Run 10 returned 64 tokens / 304 chars in 1.7s where the other nine rows
+  cluster at 313–334 tokens / 1327–1622 chars / 7.7–8.2s, all `stop`. It is
+  a legitimate reply by every rule this probe applies, and it enters the
+  8.1s median (which, being a median, barely moves) — but that cell is nine
+  comparable calls plus one degenerate one, and a reader of the table could
+  not have known.
+
 ### The ordering mattered, and that is a finding about the method
 
 An earlier sweep of these same cells ran every `think` call before every

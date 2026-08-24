@@ -12,6 +12,7 @@
     "thinking_chars": 9441,
     "repetition_content": 0.0,
     "repetition_thinking": 0.1043,
+    "repetition_window": 8,
     "seconds": 57.6
   },
   {
@@ -27,6 +28,7 @@
     "thinking_chars": 0,
     "repetition_content": 0.3409,
     "repetition_thinking": 0.0,
+    "repetition_window": 8,
     "seconds": 15.1
   },
   {
@@ -42,6 +44,7 @@
     "thinking_chars": 2360,
     "repetition_content": 0.0,
     "repetition_thinking": 0.0026,
+    "repetition_window": 8,
     "seconds": 20.2
   },
   {
@@ -57,6 +60,7 @@
     "thinking_chars": 0,
     "repetition_content": 0.0821,
     "repetition_thinking": 0.0,
+    "repetition_window": 8,
     "seconds": 9.8
   },
   {
@@ -72,6 +76,7 @@
     "thinking_chars": 3130,
     "repetition_content": 0.0,
     "repetition_thinking": 0.0079,
+    "repetition_window": 8,
     "seconds": 24.7
   },
   {
@@ -87,6 +92,7 @@
     "thinking_chars": 0,
     "repetition_content": 0.3477,
     "repetition_thinking": 0.0,
+    "repetition_window": 8,
     "seconds": 14.4
   },
   {
@@ -102,6 +108,7 @@
     "thinking_chars": 2108,
     "repetition_content": 0.0,
     "repetition_thinking": 0.0,
+    "repetition_window": 8,
     "seconds": 14.8
   },
   {
@@ -117,6 +124,7 @@
     "thinking_chars": 0,
     "repetition_content": 0.0435,
     "repetition_thinking": 0.0,
+    "repetition_window": 8,
     "seconds": 9.8
   },
   {
@@ -132,6 +140,7 @@
     "thinking_chars": 4275,
     "repetition_content": 0.1246,
     "repetition_thinking": 0.0118,
+    "repetition_window": 8,
     "seconds": 35.1
   },
   {
@@ -147,6 +156,7 @@
     "thinking_chars": 0,
     "repetition_content": 0.2948,
     "repetition_thinking": 0.0,
+    "repetition_window": 8,
     "seconds": 20.8
   },
   {
@@ -162,6 +172,7 @@
     "thinking_chars": 3275,
     "repetition_content": 0.0,
     "repetition_thinking": 0.0,
+    "repetition_window": 8,
     "seconds": 23.9
   },
   {
@@ -177,6 +188,7 @@
     "thinking_chars": 0,
     "repetition_content": 0.3636,
     "repetition_thinking": 0.0,
+    "repetition_window": 8,
     "seconds": 17.8
   },
   {
@@ -192,6 +204,7 @@
     "thinking_chars": 3280,
     "repetition_content": 0.0,
     "repetition_thinking": 0.0019,
+    "repetition_window": 8,
     "seconds": 23.1
   },
   {
@@ -207,6 +220,7 @@
     "thinking_chars": 0,
     "repetition_content": 0.3299,
     "repetition_thinking": 0.0,
+    "repetition_window": 8,
     "seconds": 18.9
   },
   {
@@ -222,6 +236,7 @@
     "thinking_chars": 1545,
     "repetition_content": 0.0,
     "repetition_thinking": 0.0,
+    "repetition_window": 8,
     "seconds": 15.9
   },
   {
@@ -237,6 +252,7 @@
     "thinking_chars": 0,
     "repetition_content": 0.7279,
     "repetition_thinking": 0.0,
+    "repetition_window": 8,
     "seconds": 50.6
   },
   {
@@ -252,6 +268,7 @@
     "thinking_chars": 6851,
     "repetition_content": 0.0,
     "repetition_thinking": 0.0284,
+    "repetition_window": 8,
     "seconds": 44.1
   },
   {
@@ -267,6 +284,7 @@
     "thinking_chars": 0,
     "repetition_content": 0.3213,
     "repetition_thinking": 0.0,
+    "repetition_window": 8,
     "seconds": 50.6
   },
   {
@@ -282,6 +300,7 @@
     "thinking_chars": 9184,
     "repetition_content": 0.0,
     "repetition_thinking": 0.2527,
+    "repetition_window": 8,
     "seconds": 50.7
   },
   {
@@ -297,6 +316,7 @@
     "thinking_chars": 0,
     "repetition_content": 0.3271,
     "repetition_thinking": 0.0,
+    "repetition_window": 8,
     "seconds": 20.2
   },
   {
@@ -312,6 +332,7 @@
     "thinking_chars": 7545,
     "repetition_content": 0.0274,
     "repetition_thinking": 0.0772,
+    "repetition_window": 8,
     "seconds": 49.7
   },
   {
@@ -327,6 +348,7 @@
     "thinking_chars": 0,
     "repetition_content": 0.0,
     "repetition_thinking": 0.0,
+    "repetition_window": 8,
     "seconds": 7.7
   },
   {
@@ -342,6 +364,7 @@
     "thinking_chars": 3897,
     "repetition_content": 0.0331,
     "repetition_thinking": 0.0414,
+    "repetition_window": 8,
     "seconds": 28.2
   },
   {
@@ -357,6 +380,7 @@
     "thinking_chars": 0,
     "repetition_content": 0.0,
     "repetition_thinking": 0.0,
+    "repetition_window": 8,
     "seconds": 7.8
   },
   {
@@ -372,6 +396,7 @@
     "thinking_chars": 6901,
     "repetition_content": 0.0556,
     "repetition_thinking": 0.0617,
+    "repetition_window": 8,
     "seconds": 44.3
   },
   {
@@ -387,6 +412,7 @@
     "thinking_chars": 0,
     "repetition_content": 0.0,
     "repetition_thinking": 0.0,
+    "repetition_window": 8,
     "seconds": 8.2
   },
   {
@@ -402,6 +428,7 @@
     "thinking_chars": 1541,
     "repetition_content": 0.0,
     "repetition_thinking": 0.0,
+    "repetition_window": 8,
     "seconds": 12.0
   },
   {
@@ -417,6 +444,7 @@
     "thinking_chars": 0,
     "repetition_content": 0.0,
     "repetition_thinking": 0.0,
+    "repetition_window": 8,
     "seconds": 8.1
   },
   {
@@ -432,6 +460,7 @@
     "thinking_chars": 3368,
     "repetition_content": 0.0721,
     "repetition_thinking": 0.0155,
+    "repetition_window": 8,
     "seconds": 23.2
   },
   {
@@ -447,6 +476,7 @@
     "thinking_chars": 0,
     "repetition_content": 0.0,
     "repetition_thinking": 0.0,
+    "repetition_window": 8,
     "seconds": 8.2
   },
   {
@@ -462,6 +492,7 @@
     "thinking_chars": 6015,
     "repetition_content": 0.0615,
     "repetition_thinking": 0.0462,
+    "repetition_window": 8,
     "seconds": 38.6
   },
   {
@@ -477,6 +508,7 @@
     "thinking_chars": 0,
     "repetition_content": 0.0,
     "repetition_thinking": 0.0,
+    "repetition_window": 8,
     "seconds": 7.9
   },
   {
@@ -492,6 +524,7 @@
     "thinking_chars": 3120,
     "repetition_content": 0.0179,
     "repetition_thinking": 0.0,
+    "repetition_window": 8,
     "seconds": 22.2
   },
   {
@@ -507,6 +540,7 @@
     "thinking_chars": 0,
     "repetition_content": 0.0,
     "repetition_thinking": 0.0,
+    "repetition_window": 8,
     "seconds": 8.2
   },
   {
@@ -522,6 +556,7 @@
     "thinking_chars": 5856,
     "repetition_content": 0.0,
     "repetition_thinking": 0.0244,
+    "repetition_window": 8,
     "seconds": 34.0
   },
   {
@@ -537,6 +572,7 @@
     "thinking_chars": 0,
     "repetition_content": 0.0,
     "repetition_thinking": 0.0,
+    "repetition_window": 8,
     "seconds": 8.2
   },
   {
@@ -552,6 +588,7 @@
     "thinking_chars": 3499,
     "repetition_content": 0.0,
     "repetition_thinking": 0.0068,
+    "repetition_window": 8,
     "seconds": 21.6
   },
   {
@@ -567,6 +604,7 @@
     "thinking_chars": 0,
     "repetition_content": 0.0,
     "repetition_thinking": 0.0,
+    "repetition_window": 8,
     "seconds": 8.1
   },
   {
@@ -582,6 +620,7 @@
     "thinking_chars": 4717,
     "repetition_content": 0.0,
     "repetition_thinking": 0.0498,
+    "repetition_window": 8,
     "seconds": 31.0
   },
   {
@@ -597,6 +636,7 @@
     "thinking_chars": 0,
     "repetition_content": 0.0,
     "repetition_thinking": 0.0,
+    "repetition_window": 8,
     "seconds": 1.7
   }
 ]
