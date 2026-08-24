@@ -58,6 +58,122 @@ def test_record_and_open_round_trip(conn: sqlite3.Connection) -> None:
     )
 
 
+def test_rubric_digest_round_trips(conn: sqlite3.Connection) -> None:
+    """#838: the rubric digest a row was computed under persists and reads
+    back verbatim -- the same one-column-wider shape `include_confidential`
+    already has."""
+    row_in = adjudications.Adjudication(
+        member_ids=("concepts/a", "concepts/b"),
+        verdict="same",
+        confidence=0.9,
+        rationale="stub rationale",
+        include_confidential=False,
+        input_digests=(
+            adjudications.InputDigest(input_ref="concepts/a", digest="sha-a"),
+        ),
+        rubric_digest="sha256:feedface",
+    )
+    adjudications.record_adjudications(conn, [row_in])
+
+    rows = adjudications.open_adjudications(conn)
+
+    assert rows[0].rubric_digest == "sha256:feedface"
+
+
+_PRE_838_CREATE_SQL = """
+CREATE TABLE adjudications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_key TEXT NOT NULL,
+    verdict TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    rationale TEXT NOT NULL,
+    include_confidential INTEGER NOT NULL
+)
+"""
+"""The `adjudications` table shape every pre-#838 build created -- no
+`rubric_digest` column. `CREATE TABLE IF NOT EXISTS` will not widen it, so
+these tests pin the real migration path."""
+
+_PRE_838_DIGESTS_CREATE_SQL = """
+CREATE TABLE adjudication_input_digests (
+    adjudication_id INTEGER NOT NULL REFERENCES adjudications(id),
+    ordinal INTEGER NOT NULL,
+    input_ref TEXT NOT NULL,
+    digest TEXT NOT NULL
+)
+"""
+"""Its sibling, unchanged by #838 -- a real pre-#838 store always carries
+both tables, so the fixture creates both."""
+
+
+def _create_pre_838_store(conn: sqlite3.Connection) -> None:
+    conn.execute(_PRE_838_CREATE_SQL)
+    conn.execute(_PRE_838_DIGESTS_CREATE_SQL)
+    conn.execute(
+        "INSERT INTO adjudications "
+        "(group_key, verdict, confidence, rationale, include_confidential) "
+        "VALUES ('concepts/x\ny', 'same', 0.8, 'old row', 0)"
+    )
+    conn.commit()
+
+
+def test_record_migrates_a_pre_rubric_table(conn: sqlite3.Connection) -> None:
+    """#838: recording into a store created by a pre-#838 build ALTERs the
+    missing column in rather than raising -- and the pre-migration row
+    reads back with `rubric_digest is None` (not servable), never a crash
+    that degrades the whole store to a failed read."""
+    _create_pre_838_store(conn)
+
+    adjudications.record_adjudications(
+        conn,
+        [
+            adjudications.Adjudication(
+                member_ids=("concepts/a", "concepts/b"),
+                verdict="different",
+                confidence=0.7,
+                rationale="new row",
+                include_confidential=False,
+                input_digests=(),
+                rubric_digest="sha256:cafe",
+            )
+        ],
+    )
+
+    rows = adjudications.open_adjudications(conn)
+    by_rationale = {row.rationale: row for row in rows}
+    assert by_rationale["old row"].rubric_digest is None
+    assert by_rationale["new row"].rubric_digest == "sha256:cafe"
+
+
+def test_migration_race_loser_swallows_the_duplicate_column(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#838: two concurrent runs on one pre-#838 store can both observe the
+    column missing; the loser's ALTER raises `duplicate column name` and
+    must be a no-op, not a crash. Simulated by lying to the check -- the
+    column already exists, the checker reports it missing, the ALTER
+    collides -- while any OTHER OperationalError still propagates."""
+    adjudications.record_adjudications(conn, [_adjudication()])
+    monkeypatch.setattr(adjudications, "_has_rubric_digest_column", lambda _conn: False)
+
+    adjudications.record_adjudications(conn, [_adjudication()])
+
+    monkeypatch.undo()
+    assert adjudications.open_adjudications(conn)
+
+
+def test_open_tolerates_the_pre_migration_shape(conn: sqlite3.Connection) -> None:
+    """#838: a read-only path over an un-migrated store must not raise --
+    it reads the old shape and reports every row's `rubric_digest` as
+    `None`, the fail-closed "unknown rubric" answer."""
+    _create_pre_838_store(conn)
+
+    rows = adjudications.open_adjudications(conn)
+
+    assert len(rows) == 1
+    assert rows[0].rubric_digest is None
+
+
 def test_open_on_empty_store_returns_nothing(conn: sqlite3.Connection) -> None:
     """A store with no adjudication tables yet answers `()` -- the same
     absent-table posture `state.findings.open_findings` takes."""

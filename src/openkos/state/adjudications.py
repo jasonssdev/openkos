@@ -23,7 +23,19 @@ and neither module reads the other's rows.
 `include_confidential` is stored per row and matched at serve time: a
 verdict computed with confidential members excluded was computed over a
 DIFFERENT prompt than one computed with them included, so the two must
-never serve for each other even when every digest matches."""
+never serve for each other even when every digest matches.
+
+`rubric_digest` (#838) is the same argument generalized: a verdict
+computed under a different judgment RUBRIC -- the adjudication system
+prompt plus the deterministic post-parse rule that can change a verdict
+-- was also computed over a different prompt, a much larger difference
+than a member subset. It is stored per row
+(`resolution.adjudication.rubric_digest` at persist time) and matched at
+serve time; a row carrying `None` (written before the column existed)
+is never servable, because a verdict from an unknown rubric is not a
+verdict this build would produce. The re-spend is proportional and
+targeted: it happens exactly when the rubric actually changed, and a
+build that changes no prompt re-judges nothing."""
 
 import sqlite3
 from collections.abc import Sequence
@@ -37,7 +49,8 @@ CREATE TABLE IF NOT EXISTS adjudications (
     verdict TEXT NOT NULL,
     confidence REAL NOT NULL,
     rationale TEXT NOT NULL,
-    include_confidential INTEGER NOT NULL
+    include_confidential INTEGER NOT NULL,
+    rubric_digest TEXT
 )
 """
 
@@ -52,8 +65,9 @@ CREATE TABLE IF NOT EXISTS adjudication_input_digests (
 
 _INSERT_ADJUDICATION_SQL = """
 INSERT INTO adjudications
-    (group_key, verdict, confidence, rationale, include_confidential)
-VALUES (?, ?, ?, ?, ?)
+    (group_key, verdict, confidence, rationale, include_confidential,
+     rubric_digest)
+VALUES (?, ?, ?, ?, ?, ?)
 """
 
 _INSERT_DIGEST_SQL = """
@@ -63,10 +77,22 @@ VALUES (?, ?, ?, ?)
 """
 
 _SELECT_ADJUDICATIONS_SQL = """
-SELECT id, group_key, verdict, confidence, rationale, include_confidential
+SELECT id, group_key, verdict, confidence, rationale, include_confidential,
+       rubric_digest
 FROM adjudications
 ORDER BY id
 """
+
+_SELECT_ADJUDICATIONS_PRE_838_SQL = """
+SELECT id, group_key, verdict, confidence, rationale, include_confidential,
+       NULL
+FROM adjudications
+ORDER BY id
+"""
+"""The same projection over a store a pre-#838 build created: the missing
+`rubric_digest` column is synthesized as NULL, so a read-only path never
+raises over the old shape and every pre-migration row reads as "unknown
+rubric" -- the fail-closed, not-servable answer."""
 
 _SELECT_DIGESTS_SQL = """
 SELECT input_ref, digest
@@ -108,6 +134,35 @@ class Adjudication:
     rationale: str
     include_confidential: bool
     input_digests: tuple[InputDigest, ...]
+    rubric_digest: str | None = None
+    """The judgment-rubric fingerprint this verdict was computed under
+    (#838, `resolution.adjudication.rubric_digest`). `None` on a row read
+    from a store a pre-#838 build wrote -- an unknown rubric, which the
+    serve gate treats as never servable. Defaulted so every pre-#838
+    construction site keeps working unchanged, mirroring
+    `findings.Finding.conflicting_claims`' precedent."""
+
+
+def _ensure_rubric_digest_column(conn: sqlite3.Connection) -> None:
+    """#838's migration, in the ONE place the tables are created: `CREATE
+    TABLE IF NOT EXISTS` will not add a column to an existing table, so a
+    store a pre-#838 build created is widened here. Rows written before
+    the column existed keep NULL -- the serve gate's "unknown rubric",
+    never servable.
+
+    The check-then-ALTER pair is racy across processes: two concurrent
+    runs against the same pre-#838 store can both observe the column
+    missing, and the second ALTER raises `duplicate column name`. The
+    loser's ALTER is a no-op in intent, so exactly that error is
+    swallowed; any other OperationalError still propagates into the
+    caller's fail-open advisory path."""
+    if _has_rubric_digest_column(conn):
+        return
+    try:
+        conn.execute("ALTER TABLE adjudications ADD COLUMN rubric_digest TEXT")
+    except sqlite3.OperationalError as exc:
+        if "duplicate column name" not in str(exc).lower():
+            raise
 
 
 def record_adjudications(
@@ -125,6 +180,7 @@ def record_adjudications(
     erasure `delete_adjudications_referencing` performs."""
     conn.execute(_CREATE_ADJUDICATIONS_TABLE_SQL)
     conn.execute(_CREATE_ADJUDICATION_DIGESTS_TABLE_SQL)
+    _ensure_rubric_digest_column(conn)
     for adjudication in batch:
         superseded = [
             row[0]
@@ -152,6 +208,7 @@ def record_adjudications(
                 adjudication.confidence,
                 adjudication.rationale,
                 1 if adjudication.include_confidential else 0,
+                adjudication.rubric_digest,
             ),
         )
         adjudication_id = cursor.lastrowid
@@ -163,11 +220,26 @@ def record_adjudications(
     conn.commit()
 
 
+def _has_rubric_digest_column(conn: sqlite3.Connection) -> bool:
+    """Whether the `adjudications` table carries #838's `rubric_digest`
+    column -- `False` on a store a pre-#838 build created. PRAGMA, not a
+    speculative SELECT: probing by exception would swallow the very error
+    class the read paths are meant to fail loudly on."""
+    return "rubric_digest" in {
+        row[1] for row in conn.execute("PRAGMA table_info(adjudications)").fetchall()
+    }
+
+
 def open_adjudications(conn: sqlite3.Connection) -> tuple[Adjudication, ...]:
     """Read every persisted adjudication, in insertion order. A store with
     no `adjudications` table yet (a fresh `findings.db`, or one predating
     this slice) returns `()` rather than raising -- the same absent-table
-    posture `findings.open_findings` takes."""
+    posture `findings.open_findings` takes.
+
+    A store whose table predates #838's `rubric_digest` column is read
+    through the pre-838 projection (the column synthesized as NULL) rather
+    than degrading the whole store to a failed read -- the issue's own
+    requirement: the read path tolerates the pre-migration shape."""
     tables = {
         row[0]
         for row in conn.execute(
@@ -176,6 +248,11 @@ def open_adjudications(conn: sqlite3.Connection) -> tuple[Adjudication, ...]:
     }
     if "adjudications" not in tables:
         return ()
+    select_sql = (
+        _SELECT_ADJUDICATIONS_SQL
+        if _has_rubric_digest_column(conn)
+        else _SELECT_ADJUDICATIONS_PRE_838_SQL
+    )
     results: list[Adjudication] = []
     for (
         adjudication_id,
@@ -184,7 +261,8 @@ def open_adjudications(conn: sqlite3.Connection) -> tuple[Adjudication, ...]:
         confidence,
         rationale,
         include_confidential,
-    ) in conn.execute(_SELECT_ADJUDICATIONS_SQL).fetchall():
+        rubric_digest,
+    ) in conn.execute(select_sql).fetchall():
         digests = tuple(
             InputDigest(input_ref=input_ref, digest=digest)
             for input_ref, digest in conn.execute(
@@ -199,6 +277,7 @@ def open_adjudications(conn: sqlite3.Connection) -> tuple[Adjudication, ...]:
                 rationale=rationale,
                 include_confidential=bool(include_confidential),
                 input_digests=digests,
+                rubric_digest=rubric_digest,
             )
         )
     return tuple(results)

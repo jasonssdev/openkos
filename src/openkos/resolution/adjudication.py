@@ -27,6 +27,7 @@ group whose members are ALL unreadable short-circuits to `Verdict.UNCERTAIN`
 `llm.chat` for that group -- there is nothing to prompt with.
 """
 
+import hashlib
 import math
 import re
 from collections.abc import Callable, Mapping, Sequence
@@ -359,6 +360,44 @@ that the engine intervened and on what evidence -- the same disclosure
 shape `edge_typing.DIRECTION_WITHDRAWN_NOTE` uses for #807."""
 
 
+_SENTENCE_SPLIT: re.Pattern[str] = re.compile(r"(?<=[.!?])\s+")
+"""`withdraw_self_refuting_same`'s per-sentence scoping boundary. Hoisted
+to a named constant (#838) so `rubric_digest` below can cover it: the
+split decides which negation excuses which marker, so changing it changes
+verdicts for fixed rationale bytes exactly as a marker edit does."""
+
+
+def rubric_digest() -> str:
+    """The judgment rubric's fingerprint (#838): a stable digest over
+    everything that can change a verdict for FIXED member bytes -- the
+    system prompt, plus the deterministic post-parse withdrawal rule's
+    defining data (`withdraw_self_refuting_same`'s marker and negation
+    patterns, its sentence boundary, and the note it appends).
+
+    Stored per adjudication row at persist time and required to match at
+    serve time, the same shape `include_confidential` already has: a
+    verdict computed under a different rubric was computed over a
+    different prompt, so serving it would hand the operator exactly the
+    stale judgment a rubric fix exists to replace. Covering the post-parse
+    data as well as the prompt keeps the two halves from drifting apart --
+    a marker edit re-judges precisely like a prompt edit, which is correct
+    because both change what this build would answer.
+
+    Derived from the DATA, never from function source: a docstring or
+    comment edit must not re-judge a whole workspace, while any change to
+    what the rubric actually says must. The parts are joined with a NUL
+    separator so no boundary ambiguity can make two different rubrics
+    digest equal."""
+    parts = (
+        _SYSTEM_PROMPT,
+        _OCCURRENCE_MARKERS.pattern,
+        _NEGATION_CUES.pattern,
+        _SENTENCE_SPLIT.pattern,
+        OCCURRENCE_WITHDRAWN_NOTE,
+    )
+    return "sha256:" + hashlib.sha256("\x00".join(parts).encode("utf-8")).hexdigest()
+
+
 def withdraw_self_refuting_same(
     verdict: Verdict, rationale: str
 ) -> tuple[Verdict, str]:
@@ -416,7 +455,7 @@ def withdraw_self_refuting_same(
     """
     if verdict is not Verdict.SAME:
         return verdict, rationale
-    for sentence in re.split(r"(?<=[.!?])\s+", rationale):
+    for sentence in _SENTENCE_SPLIT.split(rationale):
         marker = _OCCURRENCE_MARKERS.search(sentence)
         if marker is not None and not _NEGATION_CUES.search(sentence[: marker.start()]):
             return Verdict.DIFFERENT, rationale + OCCURRENCE_WITHDRAWN_NOTE

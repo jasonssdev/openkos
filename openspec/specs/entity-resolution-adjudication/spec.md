@@ -497,10 +497,21 @@ group's member set matches the run's EFFECTIVE confidential inclusion
 (`--include-confidential` OR the verified local-backend exemption -- the
 same disjunction `sensitivity.should_block` applies, so the partition
 runs only after the exemption is resolved; a verdict computed over a
-different member subset must never serve), carries a digest row for
+different member subset must never serve), was computed under the
+CURRENT judgment rubric (issue #838 -- the row's stored `rubric_digest`
+equals `resolution.adjudication.rubric_digest()`, a fingerprint over the
+adjudication system prompt plus the deterministic post-parse withdrawal
+rule's defining data, so the prompt and the rule cannot drift apart; a
+row with no stored digest, written before the column existed, is never
+servable, because a verdict from an unknown rubric is not a verdict this
+build would produce), carries a digest row for
 EVERY current group member and no others, every stored digest equals the
 member's CURRENT content hash, and the stored verdict is in the
-vocabulary.
+vocabulary. The `rubric_digest` column MUST be added to a store a
+pre-#838 build created by a real migration at the one place the tables
+are created, and the read path MUST tolerate the pre-migration shape
+(reporting those rows' rubric as unknown) rather than degrading the
+whole store to a failed read.
 Everything else re-judges, conservatively -- including a
 present-but-corrupt store, which degrades to one stderr advisory and a
 full fresh judge, and a persist failure, which costs one advisory, never
@@ -513,6 +524,13 @@ The run MUST report the split on stderr
 (`N of M candidate group(s) served from persisted adjudications; K judged
 fresh.`), mirroring `contradictions`' line, and a `--fresh` flag MUST
 bypass the serve and re-persist, mirroring `contradictions --fresh`.
+The rubric-driven re-spend MUST be announced, not silent (issue #838's
+explicit ruling): when at least one group re-judges only because its row
+predates the current rubric (mismatched or absent digest), one stderr
+line names the rubric as the cause -- a rubric change re-judging every
+cached group would otherwise surface as a sudden `0 of N served` with no
+stated reason. The line MUST be absent on the healthy path and on
+ordinary member drift.
 Served and fresh verdicts MUST render identically through every output
 mode, in candidate order — and that identity is what obliges a served
 verdict to pass through the SAME reply-only judgment a fresh one does
@@ -550,6 +568,28 @@ as before.
 - GIVEN a group re-judged (drift or `--fresh`)
 - WHEN the fresh verdict is persisted
 - THEN the group's superseded rows are replaced, not accumulated
+
+#### Scenario: A rubric change re-judges and names the reason
+
+- GIVEN a persisted verdict whose stored `rubric_digest` differs from the
+  current build's
+- WHEN `openkos adjudicate` runs on the unchanged bundle
+- THEN the group is judged fresh, AND stderr carries one line naming the
+  judgment rubric as the cause of the re-spend
+
+#### Scenario: A pre-rubric row never serves
+
+- GIVEN a persisted verdict row carrying no `rubric_digest` (written
+  before the column existed)
+- WHEN `openkos adjudicate` runs on the unchanged bundle
+- THEN the group is judged fresh under the same announced reason
+
+#### Scenario: The rubric line is absent when nothing was rubric-stale
+
+- GIVEN a fully served repeat run, or a re-judge caused only by member
+  drift
+- WHEN `openkos adjudicate` runs
+- THEN stderr carries no judgment-rubric line
 
 ### Requirement: Machine-Readable `--json` Output Mode
 

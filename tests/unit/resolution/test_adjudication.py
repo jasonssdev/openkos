@@ -1429,3 +1429,65 @@ def test_a_later_marker_in_a_negated_sentence_stays_negated() -> None:
         )
         assert verdict is adjudication_mod.Verdict.SAME
         assert unchanged == rationale
+
+
+# --- issue #838: rubric_digest() (the serve gate's rubric fingerprint) ------
+
+
+def test_rubric_digest_is_stable_within_a_build() -> None:
+    """#838: two calls agree, and the shape is a prefixed sha256 hex -- a
+    value `state.adjudications` can store and compare byte-for-byte."""
+    first = adjudication_mod.rubric_digest()
+
+    assert first == adjudication_mod.rubric_digest()
+    assert first.startswith("sha256:")
+    assert len(first) == len("sha256:") + 64
+
+
+def test_rubric_digest_tracks_the_system_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#838's core claim: a verdict computed under a different system
+    prompt was computed over a DIFFERENT prompt -- the same argument
+    `include_confidential` already encodes, one input wider. A prompt
+    edit MUST change the digest, or the serve gate lets a stale rubric
+    keep answering."""
+    before = adjudication_mod.rubric_digest()
+    monkeypatch.setattr(
+        adjudication_mod, "_SYSTEM_PROMPT", adjudication_mod._SYSTEM_PROMPT + " edited"
+    )
+
+    assert adjudication_mod.rubric_digest() != before
+
+
+@pytest.mark.parametrize(
+    "attribute",
+    [
+        "_OCCURRENCE_MARKERS",
+        "_NEGATION_CUES",
+        "_SENTENCE_SPLIT",
+        "OCCURRENCE_WITHDRAWN_NOTE",
+    ],
+)
+def test_rubric_digest_tracks_every_post_parse_component(
+    monkeypatch: pytest.MonkeyPatch, attribute: str
+) -> None:
+    """#838: the digest covers EVERY input of the deterministic post-parse
+    rule that can change a verdict -- the occurrence markers, the negation
+    cues, the sentence boundary that scopes them to each other, and the
+    note the withdrawal appends -- so the prompt and the rule cannot drift
+    apart. Parametrized over all four rather than sampling one: a
+    component silently dropped from the digest's part list would otherwise
+    keep serving verdicts across an edit to it."""
+    import re as _re
+
+    before = adjudication_mod.rubric_digest()
+    current = getattr(adjudication_mod, attribute)
+    edited: object
+    if isinstance(current, str):
+        edited = current + " edited"
+    else:
+        edited = _re.compile(current.pattern + "|extra-alternative")
+    monkeypatch.setattr(adjudication_mod, attribute, edited)
+
+    assert adjudication_mod.rubric_digest() != before
