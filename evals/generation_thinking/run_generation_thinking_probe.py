@@ -27,7 +27,7 @@ import statistics
 import sys
 import time
 import urllib.request
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 from typing import Any, Final
 
 _HERE: Final = pathlib.Path(__file__).resolve().parent
@@ -38,7 +38,7 @@ RESULTS_DIR: Final = _HERE / "results"
 sys.path.insert(0, str(_REPO / "src"))
 sys.path.insert(0, str(_HERE))
 
-from detector import repetition_share  # noqa: E402
+from detector import DEFAULT_WINDOW, repetition_share  # noqa: E402
 
 from openkos.extraction import concept as concept_mod  # noqa: E402
 
@@ -98,6 +98,16 @@ class ReplyRecord:
     thinking_chars: int
     repetition_content: float
     repetition_thinking: float
+    repetition_window: int
+    """The n-gram window both repetition scores were computed under.
+
+    Stored per row for the same reason `ceiling` is: `--rescore` re-renders
+    stored scores rather than recomputing, so a later change to
+    `detector.DEFAULT_WINDOW` moves what the self-test pins while a
+    committed file stays at the old detector's scale -- and without this
+    field, nothing in the row could reveal which scale produced it. `render`
+    prints a notice whenever a row's window differs from the current
+    default."""
     seconds: float
 
     @property
@@ -109,6 +119,89 @@ class ReplyRecord:
         """Cut off AND carrying no content at all -- the paid call that
         produced nothing, which is the failure #828 measured at 222s."""
         return self.cut_off and self.content_chars == 0
+
+    @property
+    def unusable(self) -> bool:
+        """A row whose `done_reason` is neither of the two values every
+        verdict partitions on -- `_done_reason`'s sentinel included.
+
+        `render` partitions rows into cut-off (`"length"`) and legitimate
+        (everything else), so a corrupt row would silently land in the
+        LEGITIMATE class and feed `best_ok`, the term the OVERLAPS or
+        SEPARATES verdict turns on -- the quiet skew `_done_reason`'s
+        docstring promises to make visible. Naming the class here is what
+        lets `render` exclude such rows and report them loudly instead."""
+        return self.done_reason not in _RECOGNIZED_REASONS
+
+
+_RECOGNIZED_REASONS: Final = frozenset({"stop", "length"})
+"""Every `done_reason` a verdict may be computed over.
+
+`stop` is a completed reply, `length` is a cut-off; anything else -- the
+`(absent)` sentinel, or a value a future backend invents -- is data this
+probe has not classified and must not silently score."""
+
+_FIELD_NAMES: Final = tuple(field.name for field in fields(ReplyRecord))
+
+_FIELD_KINDS: Final[dict[str, tuple[type, ...]]] = {
+    field.name: (str,)
+    if field.type == "str"
+    # JSON has one number type, so an int is a legitimate spelling of a
+    # float field (a whole-second `seconds`); the reverse is not.
+    else (int, float)
+    if field.type == "float"
+    else (int,)
+    for field in fields(ReplyRecord)
+}
+"""What each stored field may hold -- the VALUE half of the rescore gate.
+
+Keys alone are not a schema: a row with every right key and a string
+`seconds` passes a key-set check and then raises out of
+`statistics.median` three frames deep, which is exactly the traceback the
+gate exists to replace with a sentence."""
+
+
+def _parse_records(value: object) -> list[ReplyRecord]:
+    """The rescore path's shape gate: the parsed JSON, as `ReplyRecord`s,
+    or a `SystemExit` NAMING the offending row.
+
+    `--rescore` is the one entry point the README presents as the free way
+    to regenerate every published number, and it used to index arbitrary
+    parsed JSON directly -- a file from an earlier schema, a truncated
+    write, or simply the wrong file surfaced as a bare `KeyError` three
+    stack frames deep. A wrong file deserves a sentence, not a traceback.
+    """
+    if not isinstance(value, list):
+        raise SystemExit(
+            "rescore file must hold a JSON array of run rows, got "
+            f"{type(value).__name__}"
+        )
+    records: list[ReplyRecord] = []
+    for index, row in enumerate(value):
+        if not isinstance(row, dict):
+            raise SystemExit(
+                f"rescore row {index} is {type(row).__name__}, not an object"
+            )
+        missing = [name for name in _FIELD_NAMES if name not in row]
+        extra = sorted(set(row) - set(_FIELD_NAMES))
+        if missing or extra:
+            raise SystemExit(
+                f"rescore row {index} does not match this probe's schema: "
+                f"missing {missing or 'nothing'}, unexpected {extra or 'nothing'}"
+            )
+        for name in _FIELD_NAMES:
+            cell = row[name]
+            # `bool` subclasses `int`, so it must be refused explicitly or
+            # `true` reads as a 1-token count -- the same rule
+            # `_measured_counters` applies in `openkos.llm.ollama`.
+            if isinstance(cell, bool) or not isinstance(cell, _FIELD_KINDS[name]):
+                kinds = " or ".join(k.__name__ for k in _FIELD_KINDS[name])
+                raise SystemExit(
+                    f"rescore row {index}: field {name!r} holds "
+                    f"{type(cell).__name__} {cell!r}, not {kinds}"
+                )
+        records.append(ReplyRecord(**row))
+    return records
 
 
 def _done_reason(data: dict[str, Any]) -> str:
@@ -171,25 +264,55 @@ def run_once(fixture: Any, *, arm: str, run: int, model: str, host: str) -> Repl
         thinking_chars=len(thinking),
         repetition_content=round(repetition_share(content), 4),
         repetition_thinking=round(repetition_share(thinking), 4),
+        repetition_window=DEFAULT_WINDOW,
         seconds=seconds,
     )
 
 
-def _rows(
-    records: list[dict[str, Any]], arm: str, fixture: str
-) -> list[dict[str, Any]]:
-    return [r for r in records if r["arm"] == arm and r["fixture"] == fixture]
+def _rows(records: list[ReplyRecord], arm: str, fixture: str) -> list[ReplyRecord]:
+    return [r for r in records if r.arm == arm and r.fixture == fixture]
 
 
-def render(records: list[dict[str, Any]]) -> str:
+def render(records: list[ReplyRecord]) -> str:
     """The two questions, side by side: where the tokens went, and whether
-    the proposed detector could have told."""
+    the proposed detector could have told.
+
+    Consumes `ReplyRecord`s, not raw dicts, and reads `cut_off` and
+    `total_loss` off the properties the self-test proves: this table used to
+    re-derive both with inline expressions, which is a second implementation
+    the self-test never saw -- the two could disagree while both looked
+    right, and the README's central claim is read off this column.
+    """
     lines: list[str] = ["", "=" * 78, "WHERE A RUNAWAY GOES (#830)", "=" * 78, ""]
+    # Unrecognised `done_reason` rows -- `_done_reason`'s sentinel included
+    # -- are excluded BEFORE any partition and said out loud. Partitioning
+    # on `cut_off` alone would drop them into the legitimate class, where
+    # they feed `best_ok` and quietly move a verdict.
+    unusable = [r for r in records if r.unusable]
+    if unusable:
+        reasons = sorted({r.done_reason for r in unusable})
+        lines.append(
+            f"   UNUSABLE: {len(unusable)} row(s) carry a done_reason this "
+            f"probe has not classified ({', '.join(reasons)}); they enter no "
+            "class and no verdict below."
+        )
+        lines.append("")
+        records = [r for r in records if not r.unusable]
+    stale_windows = sorted({r.repetition_window for r in records})
+    if any(window != DEFAULT_WINDOW for window in stale_windows):
+        lines.append(
+            f"   NOTE: rows scored under repetition window(s) "
+            f"{', '.join(str(w) for w in stale_windows)} against a current "
+            f"detector default of {DEFAULT_WINDOW}. --rescore re-renders "
+            "stored scores and does not recompute, so these figures are not "
+            "comparable to a fresh sweep."
+        )
+        lines.append("")
     if not records:
         lines.append("NO DATA -- no run to report.")
         return "\n".join(lines)
-    arms = sorted({r["arm"] for r in records})
-    fixtures = sorted({r["fixture"] for r in records})
+    arms = sorted({r.arm for r in records})
+    fixtures = sorted({r.fixture for r in records})
     lines.append(
         f"   {'arm':<10}{'fixture':<18}{'n':>3}{'cut':>5}{'TOTAL LOSS':>12}"
         f"{'median s':>10}{'med think':>11}"
@@ -199,16 +322,12 @@ def render(records: list[dict[str, Any]]) -> str:
             rows = _rows(records, arm, fixture)
             if not rows:
                 continue
-            cut = sum(1 for r in rows if r["done_reason"] == "length")
-            loss = sum(
-                1
-                for r in rows
-                if r["done_reason"] == "length" and r["content_chars"] == 0
-            )
+            cut = sum(1 for r in rows if r.cut_off)
+            loss = sum(1 for r in rows if r.total_loss)
             lines.append(
                 f"   {arm:<10}{fixture:<18}{len(rows):>3}{cut:>5}{loss:>12}"
-                f"{statistics.median(r['seconds'] for r in rows):>10.1f}"
-                f"{statistics.median(r['thinking_chars'] for r in rows):>11.0f}"
+                f"{statistics.median(r.seconds for r in rows):>10.1f}"
+                f"{statistics.median(r.thinking_chars for r in rows):>11.0f}"
             )
     lines.append("")
     lines.append(
@@ -234,20 +353,9 @@ def render(records: list[dict[str, Any]]) -> str:
     # replies have nothing to do with each other.
     for arm in arms:
         for fixture in fixtures:
-            cut_rows = [
-                r
-                for r in records
-                if r["arm"] == arm
-                and r["fixture"] == fixture
-                and r["done_reason"] == "length"
-            ]
-            ok_rows = [
-                r
-                for r in records
-                if r["arm"] == arm
-                and r["fixture"] == fixture
-                and r["done_reason"] != "length"
-            ]
+            cell = _rows(records, arm, fixture)
+            cut_rows = [r for r in cell if r.cut_off]
+            ok_rows = [r for r in cell if not r.cut_off]
             lines.extend(_detector_block(arm, fixture, cut_rows, ok_rows))
     return "\n".join(lines)
 
@@ -255,8 +363,8 @@ def render(records: list[dict[str, Any]]) -> str:
 def _detector_block(
     arm: str,
     fixture: str,
-    cut_rows: list[dict[str, Any]],
-    ok_rows: list[dict[str, Any]],
+    cut_rows: list[ReplyRecord],
+    ok_rows: list[ReplyRecord],
 ) -> list[str]:
     """One arm/fixture cell of the detector table, verdict included."""
     lines = [f"   -- arm: {arm} / {fixture}"]
@@ -264,16 +372,16 @@ def _detector_block(
         if not rows:
             lines.append(f"      {label:<12} (none recorded)")
             continue
-        scores = sorted(r["repetition_content"] for r in rows)
-        empty = sum(1 for r in rows if r["content_chars"] == 0)
+        scores = sorted(r.repetition_content for r in rows)
+        empty = sum(1 for r in rows if r.content_chars == 0)
         lines.append(
             f"      {label:<12} n={len(rows):<4} content repetition: "
             f"min {scores[0]:.3f}  max {scores[-1]:.3f}"
             f"   (no content at all: {empty})"
         )
     if cut_rows and ok_rows:
-        worst_cut = min(r["repetition_content"] for r in cut_rows)
-        best_ok = max(r["repetition_content"] for r in ok_rows)
+        worst_cut = min(r.repetition_content for r in cut_rows)
+        best_ok = max(r.repetition_content for r in ok_rows)
         # The bar is ZERO false cuts (#830's own kill criterion), so the
         # comparison is the LOWEST-scoring cut-off against the
         # HIGHEST-scoring legitimate reply. Comparing maxima instead would
@@ -373,6 +481,7 @@ def _self_test() -> int:
             thinking_chars=0,
             repetition_content=0.0,
             repetition_thinking=0.0,
+            repetition_window=DEFAULT_WINDOW,
             seconds=1.0,
         )
         base.update(kw)
@@ -386,8 +495,8 @@ def _self_test() -> int:
     )
 
     overlapping = [
-        asdict(_rec(done_reason="length", content_chars=0, repetition_content=0.0)),
-        asdict(_rec(done_reason="stop", repetition_content=0.064)),
+        _rec(done_reason="length", content_chars=0, repetition_content=0.0),
+        _rec(done_reason="stop", repetition_content=0.064),
     ]
     check(
         "OVERLAPS" in render(overlapping),
@@ -395,8 +504,8 @@ def _self_test() -> int:
         f"(got {render(overlapping)!r})",
     )
     separating = [
-        asdict(_rec(done_reason="length", content_chars=10, repetition_content=0.9)),
-        asdict(_rec(done_reason="stop", repetition_content=0.064)),
+        _rec(done_reason="length", content_chars=10, repetition_content=0.9),
+        _rec(done_reason="stop", repetition_content=0.064),
     ]
     check(
         "SEPARATES" in render(separating),
@@ -406,9 +515,9 @@ def _self_test() -> int:
     # the bar is zero false cuts, so the lowest cut-off is what a threshold
     # has to clear. Comparing maxima would call this pair separating.
     narrow = [
-        asdict(_rec(done_reason="length", content_chars=10, repetition_content=0.294)),
-        asdict(_rec(done_reason="length", content_chars=10, repetition_content=0.633)),
-        asdict(_rec(done_reason="stop", repetition_content=0.300)),
+        _rec(done_reason="length", content_chars=10, repetition_content=0.294),
+        _rec(done_reason="length", content_chars=10, repetition_content=0.633),
+        _rec(done_reason="stop", repetition_content=0.300),
     ]
     check(
         "OVERLAPS" in render(narrow),
@@ -420,24 +529,20 @@ def _self_test() -> int:
     # SEPARATES over an inverted arm.
     two_arms = render(
         [
-            asdict(
-                _rec(
-                    arm="think",
-                    done_reason="length",
-                    content_chars=0,
-                    repetition_content=0.0,
-                )
+            _rec(
+                arm="think",
+                done_reason="length",
+                content_chars=0,
+                repetition_content=0.0,
             ),
-            asdict(_rec(arm="think", done_reason="stop", repetition_content=0.041)),
-            asdict(
-                _rec(
-                    arm="no-think",
-                    done_reason="length",
-                    content_chars=10,
-                    repetition_content=0.633,
-                )
+            _rec(arm="think", done_reason="stop", repetition_content=0.041),
+            _rec(
+                arm="no-think",
+                done_reason="length",
+                content_chars=10,
+                repetition_content=0.633,
             ),
-            asdict(_rec(arm="no-think", done_reason="stop", repetition_content=0.100)),
+            _rec(arm="no-think", done_reason="stop", repetition_content=0.100),
         ]
     )
     check(
@@ -446,6 +551,168 @@ def _self_test() -> int:
         f"{two_arms.count('VERDICT:')})",
     )
     check("NO DATA" in render([]), "an empty report must say NO DATA rather than raise")
+
+    # The SUMMARY TABLE's cut and TOTAL LOSS columns, asserted by value
+    # (#851). The table used to re-derive both with inline expressions the
+    # self-test never saw; now that it reads the proven properties, this
+    # pins the wiring so a second implementation cannot quietly return.
+    summary = render(
+        [
+            _rec(done_reason="length", content_chars=10),
+            _rec(done_reason="length", content_chars=0, run=2),
+            _rec(done_reason="stop", run=3),
+        ]
+    )
+    check(
+        f"   {'think':<10}{'f':<18}{3:>3}{2:>5}{1:>12}" in summary,
+        "the summary row must count 2 cut-offs of which 1 is a TOTAL LOSS, "
+        f"via the ReplyRecord properties (got {summary!r})",
+    )
+
+    # `_done_reason` itself, never exercised before #851: the sentinel for
+    # a missing key, for a non-string, for an empty string, and the
+    # pass-through for a present one.
+    check(
+        _done_reason({}) == "(absent)"
+        and _done_reason({"done_reason": 42}) == "(absent)"
+        and _done_reason({"done_reason": ""}) == "(absent)"
+        and _done_reason({"done_reason": "stop"}) == "stop",
+        "a missing, non-string or empty done_reason must become the sentinel "
+        "and a present one must pass through",
+    )
+
+    # And the sentinel must be VISIBLE on the rescore path, as its docstring
+    # promises: a row carrying it enters neither class. The 0.9 here is the
+    # tell -- if the unusable row leaked into the legitimate class it would
+    # become best_ok and flip this cell to OVERLAPS.
+    with_sentinel = render(
+        [
+            _rec(done_reason="length", content_chars=10, repetition_content=0.5),
+            _rec(done_reason="stop", repetition_content=0.1, run=2),
+            _rec(done_reason="(absent)", repetition_content=0.9, run=3),
+        ]
+    )
+    check(
+        "UNUSABLE: 1 row(s)" in with_sentinel and "(absent)" in with_sentinel,
+        f"a sentinel row must be reported loudly (got {with_sentinel!r})",
+    )
+    check(
+        "SEPARATES" in with_sentinel,
+        "a sentinel row must enter NO class: leaked into the legitimate "
+        "class its 0.9 becomes best_ok and flips this cell to OVERLAPS "
+        f"(got {with_sentinel!r})",
+    )
+
+    # The repetition-window disclosure (#851): a row scored under another
+    # window must be flagged, and rows at the current default must not be.
+    check(
+        "NOTE: rows scored under repetition window(s) 4"
+        in render([_rec(repetition_window=4)]),
+        "a row scored under a non-default window must carry the notice",
+    )
+    check(
+        "NOTE: rows scored" not in two_arms,
+        "rows at the current default window must NOT carry the notice",
+    )
+    mixed_windows = render([_rec(), _rec(repetition_window=4, run=2)])
+    check(
+        "NOTE: rows scored under repetition window(s) 4, 8" in mixed_windows,
+        "a file MIXING windows must carry the notice naming every window -- "
+        "ANY stale row taints the file, not only a uniformly stale one (got "
+        f"{mixed_windows!r})",
+    )
+
+    # `_parse_records` (#851): the rescore path's shape gate. A wrong file
+    # must produce a sentence naming the row, never a bare KeyError.
+    roundtrip = _parse_records(
+        json.loads(json.dumps([asdict(_rec()), asdict(_rec(run=2))]))
+    )
+    check(
+        roundtrip == [_rec(), _rec(run=2)],
+        "a stored sweep must round-trip through _parse_records unchanged",
+    )
+
+    def _refused(value: Any) -> str:
+        try:
+            _parse_records(value)
+        except SystemExit as exc:
+            return str(exc)
+        return "NO REFUSAL"
+
+    check(
+        "JSON array" in _refused({"not": "a list"}),
+        f"a non-list rescore file must be refused (got {_refused({'not': 'a list'})!r})",
+    )
+    check(
+        "row 1" in _refused([asdict(_rec()), "not a row"]),
+        "a non-object row must be refused NAMING its index (got "
+        f"{_refused([asdict(_rec()), 'not a row'])!r})",
+    )
+    truncated = asdict(_rec())
+    del truncated["done_reason"]
+    check(
+        "row 0" in _refused([truncated]) and "done_reason" in _refused([truncated]),
+        "a row missing a field must be refused naming the row AND the field "
+        f"(got {_refused([truncated])!r})",
+    )
+    aged = asdict(_rec())
+    aged["legacy_key"] = 1
+    check(
+        "legacy_key" in _refused([aged]),
+        "a row carrying an unknown field must be refused naming it (got "
+        f"{_refused([aged])!r})",
+    )
+    # The VALUE half of the gate: right keys, wrong type. Keys alone would
+    # pass this row and hand render() a string to take a median of.
+    mistyped = asdict(_rec())
+    mistyped["seconds"] = "1.7"
+    check(
+        "row 0" in _refused([mistyped]) and "'seconds'" in _refused([mistyped]),
+        "a shape-valid row holding a wrong-typed value must be refused "
+        f"naming row and field (got {_refused([mistyped])!r})",
+    )
+    disguised = asdict(_rec())
+    disguised["eval_count"] = True
+    check(
+        "'eval_count'" in _refused([disguised]),
+        "a boolean where a counter belongs must be refused -- bool "
+        f"subclasses int (got {_refused([disguised])!r})",
+    )
+    whole_seconds = asdict(_rec())
+    whole_seconds["seconds"] = 2
+    check(
+        _parse_records([whole_seconds])[0].seconds == 2,
+        "an int is a legitimate JSON spelling of a float field and must "
+        "parse, not be refused",
+    )
+
+    # `--runs` below 1 (#851): the sweep loop would run zero times, write no
+    # file, and still print a stored-file banner naming a path that does not
+    # exist. Refused at the parser instead.
+    try:
+        main(["--runs", "0"])
+    except SystemExit as exc:
+        check(
+            exc.code == 2,
+            f"--runs 0 must be refused by the parser with exit 2 (got {exc.code!r})",
+        )
+    else:
+        check(False, "--runs 0 must be refused rather than print a stored banner")
+    # ...and the gate must not reach the rescore path, which never reads
+    # `--runs`: refusing `--rescore <file> --runs 0` would reject a valid
+    # operation for a flag it does not use.
+    import contextlib
+    import io
+
+    committed = RESULTS_DIR / "runs-20260823T232849Z-qwen3-8b.json"
+    rescore_out = io.StringIO()
+    with contextlib.redirect_stdout(rescore_out):
+        rescore_exit = main(["--rescore", str(committed), "--runs", "0"])
+    check(
+        rescore_exit == 0 and "WHERE A RUNAWAY GOES" in rescore_out.getvalue(),
+        "--rescore must run whatever --runs says, since it never reads it "
+        f"(exit={rescore_exit!r})",
+    )
 
     if failures:
         for why in failures:
@@ -468,8 +735,16 @@ def main(argv: list[str] | None = None) -> int:
         return _self_test()
 
     if args.rescore is not None:
-        print(render(json.loads(args.rescore.read_text())))
+        print(render(_parse_records(json.loads(args.rescore.read_text()))))
         return 0
+
+    # Refused HERE -- after the rescore branch, which never reads it, and
+    # before the sweep, where a non-positive count would run the loop zero
+    # times, never reach `path.write_text` (inside the loop body), and
+    # still print a stored-file banner naming a path that does not exist
+    # (#851).
+    if args.runs < 1:
+        parser.error(f"--runs must be >= 1, got {args.runs}")
 
     fixtures = [_fixtures.KICKOFF, _fixtures.HELIOS_OVERVIEW]
     records: list[ReplyRecord] = []
@@ -481,13 +756,17 @@ def main(argv: list[str] | None = None) -> int:
         f"num_predict {CEILING}, num_ctx {CONTEXT_WINDOW}\n",
         flush=True,
     )
-    # INTERLEAVED, run by run. Running every `think` call before every
-    # `no-think` call confounds the arm with anything that drifts over a
-    # twenty-minute sweep -- and the headline this probe produces is a
-    # LATENCY comparison, which is the measurement most exposed to that.
-    # Alternating costs nothing and removes it.
-    for fixture in fixtures:
-        for run in range(1, args.runs + 1):
+    # INTERLEAVED, run by run, on BOTH axes. Running every `think` call
+    # before every `no-think` call confounds the arm with anything that
+    # drifts over a twenty-minute sweep -- and the headline this probe
+    # produces is a LATENCY comparison, which is the measurement most
+    # exposed to that. The same argument applies one loop up (#851): with
+    # `fixture` as the outer loop, fixtures run as two solid time blocks
+    # and every cross-fixture comparison inherits the drift the arm axis
+    # just paid to remove. `run` is outermost so each pass touches every
+    # fixture and every arm before any cell gets its second sample.
+    for run in range(1, args.runs + 1):
+        for fixture in fixtures:
             for arm in ("think", "no-think"):
                 record = run_once(
                     fixture, arm=arm, run=run, model=args.model, host=args.host
@@ -510,7 +789,7 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 )
 
-    print(render([asdict(r) for r in records]))
+    print(render(records))
     print(f"\nstored {path}")
     return 0
 
