@@ -104,10 +104,12 @@ class LintDoc:
     the two judge-degrade tokens -- #585's `sole-object-restates-source`
     and any unrecognized token are ignored fail-silent (the same
     write-side-typed/read-side-fail-silent policy `extraction_status`
-    documents) -- and `check_unevidenced` (#801), which matches ONLY
-    `objects-without-evidence` and ignores the rest the same way. One
-    field, two readers, disjoint by construction: a Source carries at most
-    one token, and the two checks answer different questions about it."""
+    documents) -- `check_unevidenced` (#801), which matches ONLY
+    `objects-without-evidence` and ignores the rest the same way -- and
+    `check_staging_dropped` (#843), which matches ONLY
+    `candidates-dropped-in-staging`, again the same way. One field, three
+    readers, disjoint by construction: a Source carries at most one token,
+    and the checks answer different questions about it."""
 
     resource: str = ""
     """The doc's frontmatter `resource` field, or `""` if absent (issue
@@ -213,6 +215,12 @@ class LintReport:
     check's docstring gives: the two answer different questions and have
     different repairs, and one shared list would leave `lint` unable to
     render them apart."""
+    staging_dropped: list[LintFinding] = field(default_factory=list)
+    """`"staging-dropped"` findings (#843): a Source whose
+    `extraction_notice` carries `candidates-dropped-in-staging`, meaning
+    extraction produced at least one candidate the run could not store --
+    the bundle may under-represent the source -- rendered under its own
+    `Staging-dropped candidates:` section (see `check_staging_dropped`)."""
     below_source: list[LintFinding] = field(default_factory=list)
     """`"below-source-sensitivity"` findings (#231, PR2): a descendant
     inside exactly one `type: Source` closure whose `sensitivity` differs
@@ -1138,6 +1146,63 @@ def check_unevidenced(docs: list[LintDoc]) -> list[LintFinding]:
                     "this source — it cannot support a citation; check the "
                     "derived objects against the source, and re-ingest with "
                     "--re-extract to redo extraction"
+                ),
+            )
+        )
+    return findings
+
+
+_STAGING_DROP_NOTICE: Final = "candidates-dropped-in-staging"
+"""Spelled as a literal rather than
+`okf.EXTRACTION_NOTICE_CANDIDATES_DROPPED`, for exactly the reason
+`_UNEVIDENCED_NOTICE` and `_UNJUDGED_NOTICE_CAUSES` give for theirs: a
+typo in either module then fails a test instead of silently agreeing with
+itself, which a shared constant cannot do."""
+
+
+def check_staging_dropped(docs: list[LintDoc]) -> list[LintFinding]:
+    """Flag each Source that lost at least one extracted candidate while
+    staging (issue #843).
+
+    Matches ONLY `candidates-dropped-in-staging`. Both judge-degrade
+    tokens, #585's `sole-object-restates-source`, #801's
+    `objects-without-evidence`, and any unrecognized, out-of-vocabulary
+    token are ignored fail-silent -- the same write-side-typed/
+    read-side-fail-silent policy every sibling follows.
+
+    A NEW kind (`"staging-dropped"`), deliberately not folded into any
+    sibling. The judge tokens mean no quality selection ran over the
+    stored set; #801's means a stored object quotes nothing; this one
+    means the bundle stores LESS than extraction produced -- content was
+    lost, not degraded -- and nothing about that loss survived the
+    terminal until the marker did.
+
+    Same structural no-fifth-walk guard as every sibling: the signature
+    takes ONLY `docs`, so this function is incapable of opening a walk.
+
+    The detail follows `check_unevidenced`'s shape, not
+    `_ingest_retry_hint`'s, and for its exact reason: the token is
+    excluded from `cli/main._extraction_retry_due` on purpose (a staging
+    drop is a property of the specific sample, and re-running the same
+    prompt over the same bytes is promised to fix nothing), so a plain
+    re-ingest of an unchanged source SKIPS extraction entirely (#773) and
+    naming it would print a command that provably does nothing. The
+    detail names `--re-extract`, the flag that actually forces a redo,
+    WITHOUT the resource (#274/#285: a doc-controlled value interpolated
+    into a backtick span is forgeable, and the finding's `concept_id`
+    already locates the document)."""
+    findings: list[LintFinding] = []
+    for doc in docs:
+        if doc.extraction_notice != _STAGING_DROP_NOTICE:
+            continue
+        findings.append(
+            LintFinding(
+                kind="staging-dropped",
+                path=f"{doc.identity}.md",
+                detail=(
+                    "at least one extracted candidate was dropped while "
+                    "staging, so the bundle may under-represent this "
+                    "source; re-ingest with --re-extract to redo extraction"
                 ),
             )
         )

@@ -3996,7 +3996,16 @@ def _stage_derived_objects(
     Every one of these four main.py-visible drops (empty slug, collision,
     exists, build failure) is reported to stderr, per candidate (design D4
     drop transparency); a candidate dropped inside `extract_concept`'s own
-    validation stays silent there, unchanged from today.
+    validation stays silent there, unchanged from today. Since #843 the
+    three CONTENT-LOSING drops (empty slug, collision, build failure) are
+    also durable: they resolve the returned `notice` to
+    `candidates-dropped-in-staging` unless a judge-degrade token outranks
+    it, so `lint`/`status` can keep reporting the loss after the terminal
+    has scrolled. The create-only skip stays out of that count -- the slug
+    this same source already owns is on disk, so nothing was lost -- and
+    the formerly silent `plans == [] and skip_reason is None` state (every
+    candidate dropped below) now carries the marker while still writing no
+    `extraction_status` key.
 
     sensitivity-fail-closed-filter (S3b): unless `include_confidential` is
     `True`, `extract` gates on the WORKSPACE floor (`workspace_floor`,
@@ -4238,6 +4247,8 @@ def _stage_derived_objects(
     # on that run. Nothing is silently dropped -- the stderr echoes above
     # are unconditional and name every condition that fired -- but the
     # persisted marker is a single slot, and this is which claim wins it.
+    # This resolution is PRE-staging; #843's staging-loss override runs
+    # after the loop below and re-ranks everything except the judge pair.
     extraction_notice: okf.ExtractionNotice | None
     if outcome.report.judge_status == "failed":
         extraction_notice = okf.EXTRACTION_NOTICE_JUDGE_UNAVAILABLE
@@ -4263,6 +4274,12 @@ def _stage_derived_objects(
 
     plans: list[_DerivedPlan] = []
     seen_slugs: set[str] = set()
+    # #843: the three staging drops that LOSE content -- empty slug,
+    # in-batch collision, failed build. The create-only skip below is
+    # deliberately not counted: the slug this same source already owns is
+    # on disk, put there by an earlier run, so the bundle still represents
+    # the source and a marker would report a loss that never happened.
+    lost_in_staging = 0
     for extraction in extractions:
         derived_slug = _slugify(extraction.title)
         if not derived_slug:
@@ -4271,6 +4288,7 @@ def _stage_derived_objects(
                 "slug; skipping this candidate.",
                 err=True,
             )
+            lost_in_staging += 1
             continue
 
         if derived_slug in seen_slugs:
@@ -4280,6 +4298,7 @@ def _stage_derived_objects(
                 "candidate.",
                 err=True,
             )
+            lost_in_staging += 1
             continue
 
         # An LLM-extracted title carrying a markdown link delimiter (`[`/`]`)
@@ -4350,6 +4369,7 @@ def _stage_derived_objects(
                 "skipping this candidate.",
                 err=True,
             )
+            lost_in_staging += 1
             continue
 
         seen_slugs.add(derived_slug)
@@ -4373,6 +4393,30 @@ def _stage_derived_objects(
                 sensitivity=resolved_sensitivity,
                 type_floor_raised=(resolved_sensitivity != stamp_sensitivity),
             )
+        )
+
+    # #843: the drop is a deterministic fact this loop already formatted a
+    # sentence about; this is the durable half. It outranks everything but
+    # the judge pair: those two stay retryable debt a plain re-ingest
+    # clears, while a staging loss means the bundle LACKS content the run
+    # extracted -- a stronger claim than #585's statement about a stored
+    # object or #801's quality defect in one, and the only marker `lint`
+    # can turn into the `--re-extract` redo that actually revisits staging.
+    # (The overlap that decides the sole-object ordering: a sole restating
+    # object that then fails staging was never written, so persisting the
+    # sole-object token would disclose a stored object that does not
+    # exist.) The per-candidate stderr echoes above stay unconditional;
+    # only the persisted slot collapses to one.
+    if lost_in_staging and extraction_notice not in (
+        okf.EXTRACTION_NOTICE_JUDGE_UNAVAILABLE,
+        okf.EXTRACTION_NOTICE_JUDGE_EMPTY,
+    ):
+        extraction_notice = okf.EXTRACTION_NOTICE_CANDIDATES_DROPPED
+        typer.echo(
+            f"openkos ingest: {lost_in_staging} extracted candidate(s) "
+            "could not be staged and were dropped; marking the Source "
+            f"(extraction_notice: {okf.EXTRACTION_NOTICE_CANDIDATES_DROPPED}).",
+            err=True,
         )
 
     return plans, None, extraction_notice
@@ -5197,14 +5241,16 @@ def _ingest_batch(
     for line in outcome_lines:
         typer.echo(line)
     # `noticed_count` counts a file whose Source finished carrying ANY
-    # `okf.ExtractionNotice` token -- all FOUR of them, not only the two
+    # `okf.ExtractionNotice` token -- all FIVE of them, not only the two
     # retryable judge causes. Still a WIDER set than any single `lint`
-    # section, but the margin narrowed with #801 and the reason changed
-    # with it. `lint` now reports three of the four across two sections:
-    # the two judge tokens under "Unjudged extractions"
+    # section, but the margin narrowed with #801/#843 and the reason
+    # changed with them. `lint` now reports four of the five across three
+    # sections: the two judge tokens under "Unjudged extractions"
     # (`lint._UNJUDGED_NOTICE_CAUSES`, which `_extraction_retry_due`
-    # matches exactly) and `objects-without-evidence` under "Unevidenced
-    # objects" (`lint._UNEVIDENCED_NOTICE`). #585's
+    # matches exactly), `objects-without-evidence` under "Unevidenced
+    # objects" (`lint._UNEVIDENCED_NOTICE`), and
+    # `candidates-dropped-in-staging` under "Staging-dropped candidates"
+    # (`lint._STAGING_DROP_NOTICE`). #585's
     # `sole-object-restates-source` is the ONE token no `lint` section
     # flags -- a disclosure with no repair to name -- which is precisely
     # why the run's last word must still say it happened. Read the two
@@ -5213,9 +5259,12 @@ def _ingest_batch(
     # "how many of those have a next step".
     #
     # The term never double-counts `extraction-degraded`. That one counts a
-    # `skip_reason` (Source-only, zero derived objects); a notice
-    # presupposes at least one object was written, and
-    # `_stage_derived_objects` returns the two on mutually exclusive paths.
+    # `skip_reason` (Source-only, zero derived objects), and
+    # `_stage_derived_objects` returns the two on mutually exclusive
+    # paths. Since #843 a notice no longer presupposes a written object --
+    # a run whose every candidate was lost in staging carries the staging
+    # marker with zero objects -- but that state returns `skip_reason is
+    # None`, so the exclusivity holds by construction, not by count.
     notice_pointer = ""
     if noticed_count:
         # Only when there is something to recover -- an advisory that fires
@@ -11882,6 +11931,10 @@ def status() -> None:
     # the surface an operator checks without being told to, so a check
     # `lint` renders and this one does not is only half-wired (#690).
     unevidenced = lint_check.check_unevidenced(docs)
+    # issue #843: and again -- the staging-loss disclosure. Same
+    # half-wired reasoning as #801's line above: `status` is the surface
+    # an operator checks without being told to.
+    staging_dropped = lint_check.check_staging_dropped(docs)
     # issue #231 (PR2): reuses this SAME in-memory `docs` list too -- no
     # third `collect_docs()` call (design D3's no-fifth-walk guard).
     sensitivity_findings = lint_check.check_below_source_sensitivity(docs)
@@ -11904,6 +11957,9 @@ def status() -> None:
     )
     needs_attention.extend(
         f"{finding.concept_id}: {finding.detail}" for finding in unevidenced
+    )
+    needs_attention.extend(
+        f"{finding.concept_id}: {finding.detail}" for finding in staging_dropped
     )
     needs_attention.extend(
         f"{finding.concept_id}: [{finding.kind}] {finding.detail}"
@@ -12419,6 +12475,8 @@ def lint() -> None:
     unjudged = lint_check.check_unjudged(docs)
     # #801: and again -- the read half of the quoted-evidence disclosure.
     unevidenced = lint_check.check_unevidenced(docs)
+    # #843: and again -- the read half of the staging-loss disclosure.
+    staging_dropped = lint_check.check_staging_dropped(docs)
     # #231 (PR2): reuses this SAME `docs` list -- no new bundle walk
     # (design D3's no-fifth-walk guard).
     sensitivity_findings = lint_check.check_below_source_sensitivity(docs)
@@ -12453,6 +12511,7 @@ def lint() -> None:
         unextracted=unextracted,
         unjudged=unjudged,
         unevidenced=unevidenced,
+        staging_dropped=staging_dropped,
         below_source=below_source,
         multi_source_uncovered=multi_source_uncovered,
         dangling_provenance=dangling_provenance,
@@ -12518,6 +12577,18 @@ def lint() -> None:
         typer.echo("  No unevidenced objects.")
     else:
         for finding in report.unevidenced:
+            typer.echo(f"  {finding.concept_id}: {finding.detail}")
+    typer.echo()
+    # #843: its OWN section, beside the two other extraction_notice
+    # readers. The judge tokens mean the stored set skipped selection,
+    # #801's means a stored object quotes nothing, this one means content
+    # extraction produced was never stored at all -- three questions,
+    # three repairs, three headings.
+    typer.echo("Staging-dropped candidates:")
+    if not report.staging_dropped:
+        typer.echo("  No staging-dropped candidates.")
+    else:
+        for finding in report.staging_dropped:
             typer.echo(f"  {finding.concept_id}: {finding.detail}")
     typer.echo()
     typer.echo("Below-source sensitivity:")

@@ -440,6 +440,28 @@ def test_status_lists_unevidenced_under_needs_attention(
     assert "no line quoted from this source" in result.stdout
 
 
+def test_status_lists_staging_dropped_under_needs_attention(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Source with `extraction_notice: candidates-dropped-in-staging` is
+    listed under "needs attention", and `status` still exits 0 (#843: the
+    same half-wired reasoning #772 and #801 recorded -- `status` is the
+    surface an operator checks without being told to)."""
+    _init_workspace(tmp_path, monkeypatch)
+    sources_dir = tmp_path / "bundle" / "sources"
+    sources_dir.mkdir()
+    (sources_dir / "notes.md").write_text(
+        "---\ntype: Source\ntitle: Notes\nresource: raw/notes.txt\n"
+        "extraction_notice: candidates-dropped-in-staging\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    assert "under-represent" in result.stdout
+
+
 def test_status_blocked_by_sensitivity_never_in_retry_prompt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

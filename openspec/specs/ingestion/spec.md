@@ -1842,10 +1842,11 @@ WHEN a single `ingest` run's extraction retains EXACTLY ONE derived object and
 that object restates the topic the Source's own title names, the system MUST
 write an `extraction_notice` frontmatter key on the Source concept with the
 value `sole-object-restates-source`. When no `extraction_notice` vocabulary
-token applies (this one, or #772's judge-degrade quarantine tokens — see
-"Judge-Degrade Quarantine Marker"), the key MUST be ABSENT — no `ok`/`none`
-sentinel, mirroring `extraction_status`. Readers MUST ignore any value
-outside this vocabulary without raising.
+token applies (this one, #772's judge-degrade quarantine tokens — see
+"Judge-Degrade Quarantine Marker" — #843's staging-loss marker — see
+"Staging-Loss Disclosure Marker" — or any other vocabulary member), the key
+MUST be ABSENT — no `ok`/`none` sentinel, mirroring `extraction_status`.
+Readers MUST ignore any value outside this vocabulary without raising.
 
 The object itself MUST be kept, unchanged. The system MUST NOT degrade to
 zero derived objects on this condition: a genuinely single-subject source
@@ -1890,7 +1891,8 @@ content each run and never merged onto on-disk frontmatter.
 #### Scenario: A sole distinct subject writes no key
 
 - GIVEN extraction retains exactly one derived object whose title does NOT
-  restate the Source's title
+  restate the Source's title, and staging stores it (no content-losing drop
+  — see "Staging-Loss Disclosure Marker")
 - WHEN the Source concept's frontmatter is inspected
 - THEN it contains no `extraction_notice` key
 
@@ -1898,7 +1900,8 @@ content each run and never merged onto on-disk frontmatter.
 
 - GIVEN extraction retains two or more derived objects under a judge that
   SELECTED (`judge_status == "ok"`, or a path where the judge was rightly
-  skipped), including the case where one of them restates the Source's title
+  skipped), including the case where one of them restates the Source's
+  title, and staging stores every candidate (no content-losing drop)
 - WHEN the Source concept's frontmatter is inspected
 - THEN it contains no `extraction_notice` key
 
@@ -1982,6 +1985,89 @@ a re-ingest whose judge selects rebuilds the Source without the marker.
   judge-selection-unavailable`
 - WHEN `openkos ingest raw/<name>` is re-run and the judge now selects
 - THEN the rewritten Source's frontmatter has NO `extraction_notice` key
+
+### Requirement: Staging-Loss Disclosure Marker
+
+WHEN staging drops at least one extracted candidate on a CONTENT-LOSING path
+— an unslugifiable title, an in-batch slug collision, or a
+`okf.build_concept` validation failure — the system MUST write an
+`extraction_notice` frontmatter key on the Source concept with the value
+`candidates-dropped-in-staging` (issue #843). The per-candidate stderr
+echoes remain; the marker is the durable half, so a later `lint`/`status`
+pass can learn the bundle may under-represent this source after the
+terminal has scrolled. One aggregate stderr line MUST disclose the marking,
+mirroring the judge notices' `marking the Source (extraction_notice:
+<token>)` shape.
+
+The create-only skip (a slug this same source already owns is on disk) MUST
+NOT count toward the marker: the bundle still represents the source, so a
+marker would report a loss that never happened. The foreign-source
+disambiguation path drops nothing and is likewise out of scope.
+
+Precedence, because the key holds one value: the two judge-degrade tokens
+outrank this marker (they are retryable debt whose re-ingest re-runs
+staging too); this marker outranks `sole-object-restates-source` and
+`objects-without-evidence` (a loss of content outranks a disclosure about
+content that was stored — and a sole restating object that then fails
+staging was never written, so the sole-object claim would be false).
+
+The token MUST NOT be retryable debt (`cli/main._extraction_retry_due`
+excludes it, on #801's exact grounds): a plain re-ingest re-runs the same
+prompt over the same bytes and is promised to fix nothing about the sample
+that failed staging. The `lint` finding (`check_staging_dropped`, kind
+`staging-dropped`, its own `Staging-dropped candidates:` section) MUST name
+`--re-extract` as the redo and MUST NOT spell a bare re-ingest command.
+`status` MUST fold the finding into "needs attention".
+
+This marker covers the formerly silent `plans == [] and skip_reason is
+None` state (every candidate individually dropped): that state still writes
+no `extraction_status` key, and now carries this notice.
+
+#### Scenario: A sole candidate lost in staging marks the Source
+
+- GIVEN extraction retains exactly one candidate and staging drops it (its
+  title slugifies to nothing)
+- WHEN `openkos ingest <path>` completes
+- THEN the Source's `extraction_notice` is `candidates-dropped-in-staging`,
+  AND its frontmatter has no `extraction_status` key, AND stderr disclosed
+  the marking
+
+#### Scenario: A partial staging loss marks the Source beside written objects
+
+- GIVEN extraction retains two candidates, staging stores one and drops the
+  other on a content-losing path
+- WHEN `openkos ingest <path>` completes
+- THEN the stored object is written AND the Source's `extraction_notice` is
+  `candidates-dropped-in-staging`
+
+#### Scenario: The create-only skip writes no staging marker
+
+- GIVEN a re-extraction whose only candidate's slug is already on disk for
+  this same source
+- WHEN `openkos ingest <path> --re-extract` completes
+- THEN the rewritten Source's frontmatter has NO `extraction_notice` key
+
+#### Scenario: A judge degrade outranks the staging marker
+
+- GIVEN a union+judge run whose judge call is unusable on every attempt AND
+  whose staging drops a candidate
+- WHEN `openkos ingest <path>` completes
+- THEN the Source's `extraction_notice` is `judge-selection-unavailable`
+
+#### Scenario: The staging marker outranks the evidence disclosure
+
+- GIVEN a run where at least one stored object quotes no line of the source
+  AND staging drops another candidate on a content-losing path
+- WHEN `openkos ingest <path>` completes
+- THEN the Source's `extraction_notice` is `candidates-dropped-in-staging`
+
+#### Scenario: The marker is not retryable debt
+
+- GIVEN a Source whose frontmatter carries `extraction_notice:
+  candidates-dropped-in-staging`
+- WHEN a byte-identical `openkos ingest` re-run converges on it
+- THEN extraction is skipped (zero model calls), the Source is untouched on
+  disk, and the marker survives for `lint`/`status` to keep reporting
 
 ### Requirement: Ingest Builds The FTS Index Once At The End Of Each Run
 

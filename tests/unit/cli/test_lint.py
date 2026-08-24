@@ -511,6 +511,46 @@ def test_lint_flags_an_unevidenced_extraction(
     assert "  No unjudged extractions." in result.stdout
 
 
+def test_lint_renders_empty_staging_dropped_section(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fresh, empty bundle renders the `Staging-dropped candidates:`
+    section with its own empty-state line (#843) -- a check computed but
+    never rendered is the #690 defect."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["lint"])
+
+    assert result.exit_code == 0
+    assert "Staging-dropped candidates:" in result.stdout
+    assert "  No staging-dropped candidates." in result.stdout
+
+
+def test_lint_flags_a_staging_dropped_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Source with `extraction_notice: candidates-dropped-in-staging` is
+    reported under `Staging-dropped candidates:`, and the command still
+    exits 0 (#843: the disclosure becomes visible work, never an exit-code
+    change)."""
+    _init_workspace(tmp_path, monkeypatch)
+    sources_dir = tmp_path / "bundle" / "sources"
+    sources_dir.mkdir()
+    (sources_dir / "notes.md").write_text(
+        "---\ntype: Source\ntitle: Notes\nresource: raw/notes.txt\n"
+        "extraction_notice: candidates-dropped-in-staging\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["lint"])
+
+    assert result.exit_code == 0
+    assert "sources/notes:" in result.stdout
+    assert "under-represent" in result.stdout
+    assert "  No unjudged extractions." in result.stdout
+    assert "  No unevidenced objects." in result.stdout
+
+
 def test_lint_keeps_the_two_extraction_notice_sections_apart(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

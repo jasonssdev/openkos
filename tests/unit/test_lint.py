@@ -1331,6 +1331,81 @@ def test_check_unevidenced_takes_only_docs() -> None:
     assert list(signature.parameters) == ["docs"]
 
 
+# --- issue #843: check_staging_dropped(docs) (staging-loss surfacing) -------
+
+
+def test_check_staging_dropped_flags_the_candidates_dropped_notice() -> None:
+    """A `LintDoc` carrying #843's token produces exactly one
+    `staging-dropped` finding. Same reasoning #772 and #801 recorded for
+    theirs: a marker stamped at ingest is only a disclosure if some later
+    surface is guaranteed to look, and stderr scrolls away."""
+    docs = [
+        _doc(
+            "sources/notes",
+            "Body.",
+            extraction_notice="candidates-dropped-in-staging",
+            resource="raw/notes.txt",
+        )
+    ]
+
+    findings = lint.check_staging_dropped(docs)
+
+    assert len(findings) == 1
+    assert findings[0].kind == "staging-dropped"
+    assert findings[0].path == "sources/notes.md"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "",
+        "sole-object-restates-source",
+        "judge-selection-unavailable",
+        "judge-selection-empty",
+        "objects-without-evidence",
+        "some-unrecognized-value",
+    ],
+)
+def test_check_staging_dropped_ignores_every_other_notice_value(value: str) -> None:
+    """Every other `extraction_notice` value -- both judge tokens, #585's
+    sole-object token, #801's evidence token, and an out-of-vocabulary one
+    -- produces no `staging-dropped` finding. Write-side-typed,
+    read-side-fail-silent, same as every sibling."""
+    docs = [_doc("sources/notes", "Body.", extraction_notice=value)]
+
+    assert lint.check_staging_dropped(docs) == []
+
+
+def test_check_staging_dropped_detail_says_what_is_wrong_and_what_to_do() -> None:
+    """The finding names the defect (extraction produced a candidate this
+    run could not store, so the bundle may under-represent the source) and
+    names `--re-extract` as the redo -- never a bare re-ingest, which
+    #773's convergence short-circuit turns into a no-op on an unchanged
+    source (the same grounds `check_unevidenced` records)."""
+    docs = [
+        _doc(
+            "sources/notes",
+            "Body.",
+            extraction_notice="candidates-dropped-in-staging",
+            resource="raw/notes.txt",
+        )
+    ]
+
+    detail = lint.check_staging_dropped(docs)[0].detail
+
+    assert "under-represent" in detail
+    assert "--re-extract" in detail
+    assert "raw/notes.txt" not in detail
+    assert _ingest_spans_with_an_argument(detail) == []
+
+
+def test_check_staging_dropped_takes_only_docs() -> None:
+    """The structural no-fifth-walk guard every sibling check carries."""
+    signature = inspect.signature(lint.check_staging_dropped)
+
+    assert list(signature.parameters) == ["docs"]
+
+
 def _ingest_spans_with_an_argument(detail: str) -> list[str]:
     """Every complete backtick span in `detail` that reads as `openkos
     ingest <argument>` -- the exact shape `next_action._command_from_detail`
