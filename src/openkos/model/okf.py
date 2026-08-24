@@ -210,6 +210,7 @@ ExtractionNotice = Literal[
     "judge-selection-unavailable",
     "judge-selection-empty",
     "objects-without-evidence",
+    "candidates-dropped-in-staging",
 ]
 """The closed vocabulary for `EXTRACTION_NOTICE_KEY`.
 
@@ -241,7 +242,17 @@ a single restatement), while this one is a statement about the CONTENT of
 objects the pipeline was otherwise happy with. Folding it into the judge
 pair would tell a reader to re-run the judge, which repairs nothing here.
 `lint.check_unevidenced` reads it, under its own section and its own
-finding kind for the same reason."""
+finding kind for the same reason.
+
+The fifth token is #843's: at least one candidate the run's extraction
+produced was DROPPED while staging (an unslugifiable title, an in-batch
+slug collision, or content that failed `build_concept`'s stricter gate),
+so the bundle stores LESS than extraction produced and nothing else about
+the drop reaches disk. The create-only skip is deliberately NOT one of its
+causes -- the slug this same source already owns is on disk, put there by
+an earlier run, so no content was lost. `lint.check_staging_dropped`
+reads it, under its own section and its own finding kind, again for the
+different-question-different-repair reason above."""
 
 EXTRACTION_NOTICE_VALUES: Final[tuple[ExtractionNotice, ...]] = get_args(
     ExtractionNotice
@@ -276,6 +287,19 @@ text carries no line quoted verbatim from the source
 `extraction.evidence.evidence_line` underneath). The objects are kept --
 #585's rejected degrade-to-`[]` settles that trade -- and this token is
 what keeps the bundle honest about storing them."""
+
+EXTRACTION_NOTICE_CANDIDATES_DROPPED: Final[ExtractionNotice] = (
+    "candidates-dropped-in-staging"
+)
+"""#843's disclosure token: at least one candidate extraction produced was
+dropped on a content-losing staging path (empty slug, in-batch slug
+collision, or a `build_concept` validation failure) -- each drop already
+echoes to stderr per candidate, and this token is the durable half, so
+`lint`/`status` can keep reporting a source the bundle may under-represent
+after the terminal has scrolled. NOT retryable debt (`objects-without-
+evidence`'s grounds exactly): a plain re-ingest re-runs the same prompt
+over the same bytes and is promised to fix nothing about the sample that
+failed staging, so the named redo is `--re-extract`."""
 
 EXTRACTION_STATUS_FAILED: Final[ExtractionStatus] = "failed"
 """The one `EXTRACTION_STATUS_VALUES` member that represents retryable

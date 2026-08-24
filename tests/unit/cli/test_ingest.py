@@ -4161,6 +4161,226 @@ def test_empty_slug_item_skipped_other_items_still_staged(
     assert okf.check_conformance(tmp_path / "bundle") == []
 
 
+# --- issue #843: staging drops are disclosed on the Source ------------------
+
+
+def test_sole_candidate_lost_in_staging_marks_the_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#843: a run whose ONLY candidate is dropped while staging (here: a
+    title that slugifies to nothing) leaves the bundle with no derived
+    object AND no `extraction_status` -- the formerly silent `plans == []
+    and skip_reason is None` state. The drop is a deterministic fact the
+    code already formats a sentence about; this pins the missing half:
+    durability. The Source carries `extraction_notice:
+    candidates-dropped-in-staging`, and stderr disclose the marking the
+    way #772's judge notice does."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _concept_reply(title="!!!"))
+    source = tmp_path / "notes.txt"
+    source.write_text("content", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    source_text = (tmp_path / "bundle" / "sources" / "notes.md").read_text(
+        encoding="utf-8"
+    )
+    metadata, _ = okf.load_frontmatter(source_text)
+    assert metadata["extraction_notice"] == "candidates-dropped-in-staging"
+    assert "extraction_status" not in metadata
+    assert (
+        "marking the Source (extraction_notice: candidates-dropped-in-staging)"
+        in result.stderr
+    )
+
+
+def test_partial_staging_loss_marks_the_source_beside_written_objects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#843: the marker presupposes nothing about the run being empty --
+    one candidate is written, another is dropped while staging, and the
+    Source still discloses that this run stored LESS than extraction
+    produced. Both retained objects quote the source, so no other notice
+    condition is in play and the marker below is exactly the staging
+    disclosure."""
+    _init_workspace(tmp_path, monkeypatch)
+    reply = _multi_object_reply(_person_reply(), _concept_reply(title="!!!"))
+    _patch_sequenced_llm(
+        monkeypatch,
+        [reply, reply, '{"keep": ["Epictetus", "!!!"]}'],
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text(
+        "Epictetus lectured at Nicopolis.\n"
+        "Taught that we control only our own judgments.\n"
+        f"{_CONCEPT_BODY_LINE}\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert (tmp_path / "bundle" / "people" / "epictetus.md").is_file()
+    source_text = (tmp_path / "bundle" / "sources" / "notes.md").read_text(
+        encoding="utf-8"
+    )
+    metadata, _ = okf.load_frontmatter(source_text)
+    assert metadata["extraction_notice"] == "candidates-dropped-in-staging"
+    assert "could not be turned into a slug" in result.stderr
+
+
+def test_create_only_reingest_drop_writes_no_staging_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#843's marker fires on the drops that LOSE content. The create-only
+    skip is not one of them: the slug this same source already owns is on
+    disk, put there by the earlier run, so the bundle still represents the
+    source and a marker would report a loss that never happened."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _concept_reply())
+    source = tmp_path / "notes.txt"
+    source.write_text(_GROUNDED_NOTES, encoding="utf-8")
+    first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert first.exit_code == 0
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto", "--re-extract"])
+
+    assert result.exit_code == 0
+    assert "already exists" in result.stderr
+    source_text = (tmp_path / "bundle" / "sources" / "notes.md").read_text(
+        encoding="utf-8"
+    )
+    metadata, _ = okf.load_frontmatter(source_text)
+    assert "extraction_notice" not in metadata
+    assert "extraction_status" not in metadata
+
+
+def test_judge_degrade_outranks_the_staging_drop_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#843 precedence, upper bound: the key holds one value, and the two
+    judge tokens stay retryable debt a plain re-ingest clears -- a run that
+    lost its judge AND dropped a candidate in staging persists
+    `judge-selection-unavailable`, never the staging marker."""
+    _init_workspace(tmp_path, monkeypatch)
+    reply = _multi_object_reply(
+        _concept_reply(title="Stoic Practice"),
+        _entity_reply(title="Stoic Practice"),
+    )
+    _patch_sequenced_llm(monkeypatch, [reply, reply, OllamaUnavailable("boom")])
+    source = tmp_path / "notes.txt"
+    source.write_text("Notes about Stoic practice.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert "duplicate slug" in result.stderr
+    source_text = (tmp_path / "bundle" / "sources" / "notes.md").read_text(
+        encoding="utf-8"
+    )
+    metadata, _ = okf.load_frontmatter(source_text)
+    assert metadata["extraction_notice"] == "judge-selection-unavailable"
+
+
+def test_staging_drop_outranks_the_unevidenced_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#843 precedence, lower bound: a staging drop means the bundle LACKS
+    content the run extracted, while #801's token discloses a quality
+    defect in objects that were stored -- the absence outranks the defect
+    when both fire. The stderr echoes still name every condition; only the
+    persisted slot collapses to one."""
+    _init_workspace(tmp_path, monkeypatch)
+    reply = _multi_object_reply(_concept_reply(), _person_reply(title="!!!"))
+    _patch_sequenced_llm(
+        monkeypatch,
+        [reply, reply, '{"keep": ["Stoic Dichotomy Of Control", "!!!"]}'],
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert "carry no line quoted from the source" in result.stderr
+    source_text = (tmp_path / "bundle" / "sources" / "notes.md").read_text(
+        encoding="utf-8"
+    )
+    metadata, _ = okf.load_frontmatter(source_text)
+    assert metadata["extraction_notice"] == "candidates-dropped-in-staging"
+
+
+def test_reingest_with_staging_marker_skips_extraction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#843's marker is NOT retryable debt: a plain byte-identical re-ingest
+    re-runs the same prompt over the same bytes, which is promised to fix
+    nothing about the sample that failed staging -- the same grounds #801
+    recorded. The convergence short-circuit takes the untouched-on-disk
+    path (zero model calls) and the marker survives there for `lint` and
+    `status` to keep reporting; `--re-extract` is the named redo."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _concept_reply(title="!!!"))
+    source = tmp_path / "notes.txt"
+    source.write_text("content", encoding="utf-8")
+    first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert first.exit_code == 0
+    source_path = tmp_path / "bundle" / "sources" / "notes.md"
+    before = source_path.read_bytes()
+
+    fake = _patch_sequenced_llm(monkeypatch, [])
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert fake.calls == []
+    assert "skipping extraction" in result.stderr
+    assert "--re-extract" in result.stderr
+    assert source_path.read_bytes() == before
+
+
+def test_stage_derived_objects_counts_collision_and_build_failure_drops(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """#843: each of the three content-losing paths feeds the SAME counter
+    -- this pins the two the CLI-level tests above reach only under a
+    judge degrade (in-batch collision) or not at all (build failure), so
+    dropping either `lost_in_staging += 1` fails a test. The aggregate
+    marking line carries the real count, and the create-only exclusion is
+    proven by the sibling CLI test, not here."""
+    _init_workspace(tmp_path, monkeypatch)
+    cfg = config.read_config(tmp_path)
+    reply = _multi_object_reply(
+        _concept_reply(title="Stoic Practice"),
+        _entity_reply(title="Stoic Practice"),
+        _concept_reply(title="Stoic Framework\nExtra Line"),
+    )
+
+    plans, skip_reason, notice = main._stage_derived_objects(
+        raw_content="Notes about Stoic practice.",
+        source_title="notes",
+        source_slug="notes",
+        workspace_floor="private",
+        stamp_sensitivity="private",
+        timestamp="2026-08-24",
+        bundle_dir=tmp_path / "bundle",
+        llm=_FakeLLM(reply),
+        cfg=cfg,
+        union_judge=False,
+    )
+
+    assert len(plans) == 1
+    assert plans[0].slug == "stoic-practice"
+    assert skip_reason is None
+    assert notice == "candidates-dropped-in-staging"
+    err = capsys.readouterr().err
+    assert "duplicate slug" in err
+    assert "failed validation" in err
+    assert "2 extracted candidate(s) could not be staged" in err
+
+
 def test_reingest_reconciles_per_slug_skips_existing_inserts_new(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -669,6 +669,7 @@ def test_extraction_notice_vocabulary_constants() -> None:
         "judge-selection-unavailable",
         "judge-selection-empty",
         "objects-without-evidence",
+        "candidates-dropped-in-staging",
     )
     assert okf.EXTRACTION_NOTICE_SOLE_OBJECT_RESTATES == "sole-object-restates-source"
     # #772: the two judge-degrade tokens quarantine an unjudged extraction.
@@ -686,6 +687,10 @@ def test_extraction_notice_vocabulary_constants() -> None:
     # stored object quotes, so it needed its own token rather than a
     # widening of any existing one.
     assert okf.EXTRACTION_NOTICE_OBJECTS_WITHOUT_EVIDENCE == "objects-without-evidence"
+    # #843: a fifth token, the first that presupposes NOTHING about what was
+    # written -- it says extraction produced a candidate the run could not
+    # store, which can be true beside stored objects or with none at all.
+    assert okf.EXTRACTION_NOTICE_CANDIDATES_DROPPED == "candidates-dropped-in-staging"
 
 
 def test_build_source_concept_omits_extraction_notice_by_default() -> None:
