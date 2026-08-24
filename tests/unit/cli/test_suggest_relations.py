@@ -1996,6 +1996,37 @@ def test_the_cost_gate_states_the_served_subtracted_call_count(
     assert calls == [1, 0]
 
 
+def test_a_fully_served_gate_drops_the_slow_path_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#872: the gate's numbers are honest since #799/#809, but the
+    trailing prose stayed priced for the worst case -- `one per edge (this
+    can take a while)` over `0 LLM call(s)` is false two tokens after the
+    line said so itself. The pace clause rides the paid path only; the
+    `--auto` hint stays, because the prompt it names still fires."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="B")
+    calls: list[int] = []
+    _stub_one_edge_with_call_log(monkeypatch, calls)
+
+    fresh = runner.invoke(app, ["suggest-relations"], input="y\n")
+    served = runner.invoke(app, ["suggest-relations"], input="y\n")
+
+    assert fresh.exit_code == 0, fresh.stderr
+    assert served.exit_code == 0, served.stderr
+    assert calls == [1, 0]
+    assert (
+        "1 untyped edge(s) -> 1 LLM call(s), one per edge (this can take a "
+        "while). Pass --auto to skip this prompt." in fresh.stderr
+    )
+    assert (
+        "1 untyped edge(s), 1 served -> 0 LLM call(s). Pass --auto to skip "
+        "this prompt." in served.stderr
+    )
+    assert "this can take a while" not in served.stderr
+
+
 def test_endpoint_drift_retypes_fresh(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
