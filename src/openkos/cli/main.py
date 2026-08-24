@@ -80,6 +80,7 @@ from openkos.resolution.adjudication import (
     AdjudicationBatch,
     Verdict,
     adjudicate_candidates,
+    rubric_digest,
     withdraw_self_refuting_same,
 )
 from openkos.resolution.candidates import (
@@ -13063,8 +13064,9 @@ def adjudicate(
     effective_confidential = include_confidential or local_exemption
     served_by_key: dict[str, AdjudicatedCandidate] = {}
     to_judge = candidates
+    rubric_stale = 0
     if candidates and not fresh:
-        served_by_key, to_judge = _partition_adjudication_serves(
+        served_by_key, to_judge, rubric_stale = _partition_adjudication_serves(
             layout, candidates, include_confidential=effective_confidential
         )
     if candidates:
@@ -13072,6 +13074,17 @@ def adjudicate(
             f"openkos adjudicate: {len(served_by_key)} of {len(candidates)} "
             "candidate group(s) served from persisted adjudications; "
             f"{len(to_judge)} judged fresh.",
+            err=True,
+        )
+    # #838: name the reason a rubric change empties the serve. The split
+    # line above is honest but silent about WHY, and a sudden `0 of N
+    # served` after an upgrade reads as a surprising cost; naming the
+    # rubric turns it into an explained, deliberate one. Absent on the
+    # healthy path and on ordinary member drift.
+    if rubric_stale:
+        typer.echo(
+            f"openkos adjudicate: {rubric_stale} cached verdict(s) predate "
+            "the current judgment rubric; re-judging them fresh.",
             err=True,
         )
     observability.warn_if_walk_incomplete(
@@ -14254,26 +14267,55 @@ def _is_contradiction_declined(
     return False
 
 
+class AdjudicationServes(NamedTuple):
+    """What `_partition_adjudication_serves` answers (#779, widened by
+    #838). A NamedTuple for `EdgeSuggestionServes`' exact reason: a widening
+    positional tuple makes every unpack order-sensitive by convention
+    alone, and `rubric_stale` is a count a caller could silently swap with
+    nothing but a type checker noticing."""
+
+    served: "dict[str, AdjudicatedCandidate]"
+    to_judge: "list[CandidateGroup]"
+    rubric_stale: int
+    """How many groups re-judge with a persisted row predating the current
+    judgment rubric (#838) -- the caller names the reason so the re-spend
+    is announced, never a surprising `0 of N served`. Counted whether or
+    not the group's members ALSO drifted: the rubric check runs before the
+    costlier per-member hashing, and the claim the stderr line makes (the
+    row predates the rubric) is true either way."""
+
+
 def _partition_adjudication_serves(
     layout: config.WorkspaceLayout,
     candidates: "list[CandidateGroup]",
     *,
     include_confidential: bool,
-) -> "tuple[dict[str, AdjudicatedCandidate], list[CandidateGroup]]":
+) -> AdjudicationServes:
     """Split `candidates` into verdicts servable from `.openkos/findings.db`
     and the groups that still need a model call (#779) -- the adjudication
     twin of `_partition_persisted_serves`, same posture throughout.
 
     A group is SERVED iff its latest persisted row matches this run's
     `include_confidential` bit (a verdict computed over a different member
-    subset must never serve), carries at least one digest row, every
-    stored `(member, digest)` equals the member's CURRENT content hash,
-    and the stored verdict is in the enum. Everything else re-judges,
-    conservatively -- including a present-but-corrupt store, which
-    degrades to one stderr advisory and a full fresh judge rather than
-    crashing before any model spend (the #685 item-4 posture)."""
+    subset must never serve), was computed under THIS build's judgment
+    rubric (#838: `rubric_digest` equality -- the same argument one input
+    wider, since a different rubric is a different prompt; a row carrying
+    no digest predates the column and is never servable), carries at
+    least one digest row, every stored `(member, digest)` equals the
+    member's CURRENT content hash, and the stored verdict is in the enum.
+    Everything else re-judges, conservatively -- including a
+    present-but-corrupt store, which degrades to one stderr advisory and
+    a full fresh judge rather than crashing before any model spend (the
+    #685 item-4 posture).
+
+    `rubric_stale` counts the groups refused with a row predating the
+    current rubric (mismatched or absent digest) -- whether or not their
+    members also drifted, since the rubric gate runs first -- so the
+    caller can name the reason: a rubric change re-judging every cached
+    group would otherwise read as a surprising `0 of N served` with no
+    stated cause (#838's announced-re-spend ruling)."""
     if not layout.findings_db_path.exists():
-        return {}, candidates
+        return AdjudicationServes({}, candidates, 0)
     try:
         conn = derived.open_derived_connection(layout.findings_db_path)
         try:
@@ -14286,18 +14328,31 @@ def _partition_adjudication_serves(
             f"adjudications ({exc}); judging every group fresh.",
             err=True,
         )
-        return {}, candidates
+        return AdjudicationServes({}, candidates, 0)
     latest: dict[str, adjudications_store.Adjudication] = {}
     for row in persisted:
         latest[adjudications_store.group_key_for(row.member_ids)] = row
 
     current_digest = _current_finding_digest(layout.bundle_dir)
+    current_rubric = rubric_digest()
     served: dict[str, AdjudicatedCandidate] = {}
     to_judge: list[CandidateGroup] = []
+    rubric_stale = 0
     for group in candidates:
         key = adjudications_store.group_key_for(group.member_ids)
         stored = latest.get(key)
         if stored is None or stored.include_confidential != include_confidential:
+            to_judge.append(group)
+            continue
+        # #838: a row from a different (or unknown, pre-column) rubric is
+        # a verdict this build would not produce; the operator who
+        # upgraded to a judgment fix must not keep being served the exact
+        # verdict the fix exists to replace. Checked BEFORE the member
+        # digests because it is the cheap comparison -- so a group whose
+        # members also drifted still counts here, which stays honest: the
+        # row does predate the rubric, whatever else is stale about it.
+        if stored.rubric_digest != current_rubric:
+            rubric_stale += 1
             to_judge.append(group)
             continue
         # The stored ref SET must equal the group's current member set
@@ -14331,7 +14386,7 @@ def _partition_adjudication_serves(
             confidence=stored.confidence,
             rationale=rationale,
         )
-    return served, to_judge
+    return AdjudicationServes(served, to_judge, rubric_stale)
 
 
 class EdgeSuggestionServes(NamedTuple):
@@ -14537,6 +14592,10 @@ def _persist_adjudications(
     if not results:
         return
     current_digest = _current_finding_digest(layout.bundle_dir)
+    # #838: every fresh verdict records the rubric it was computed under,
+    # so the serve gate can refuse it after a judgment fix ships. Computed
+    # once -- it is constant within a build.
+    current_rubric = rubric_digest()
     batch: list[adjudications_store.Adjudication] = []
     for result in results:
         digests: list[adjudications_store.InputDigest] = []
@@ -14556,6 +14615,7 @@ def _persist_adjudications(
                     rationale=result.rationale,
                     include_confidential=include_confidential,
                     input_digests=tuple(digests),
+                    rubric_digest=current_rubric,
                 )
             )
     if not batch:

@@ -22,6 +22,7 @@ candidates.
 import json
 import os
 import re
+import sqlite3
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
@@ -5205,6 +5206,101 @@ def test_include_confidential_mismatch_rejudges(
 
     assert second.exit_code == 0
     assert calls == [1, 1]
+
+
+def test_rubric_change_rejudges_and_names_the_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#838: a persisted verdict computed under a DIFFERENT judgment rubric
+    never serves, digests notwithstanding -- the same argument
+    `include_confidential` already encodes (a different prompt is a
+    different computation), one input wider. And the re-spend is ANNOUNCED:
+    a sudden `0 of N served` with no stated reason reads as a surprise
+    cost, so the run names the rubric as the cause."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    calls: list[int] = []
+    _stub_one_same_group_with_call_log(monkeypatch, calls)
+    assert runner.invoke(app, ["adjudicate"]).exit_code == 0
+
+    layout = okf_config.WorkspaceLayout(tmp_path)
+    conn = sqlite3.connect(layout.findings_db_path)
+    conn.execute("UPDATE adjudications SET rubric_digest = 'sha256:someotherrubric'")
+    conn.commit()
+    conn.close()
+    second = runner.invoke(app, ["adjudicate"])
+
+    assert second.exit_code == 0
+    assert calls == [1, 1]
+    assert "0 of 1 candidate group(s) served" in second.stderr
+    assert "judgment rubric" in second.stderr
+    assert "re-judging" in second.stderr
+
+    # The re-spend is proportional, not perpetual: the fresh verdict was
+    # re-persisted under the CURRENT rubric, so a third run converges back
+    # to a full serve -- one re-judge per rubric change, never one per run.
+    third = runner.invoke(app, ["adjudicate"])
+
+    assert third.exit_code == 0
+    assert calls == [1, 1, 0]
+    assert "1 of 1 candidate group(s) served" in third.stderr
+    assert "judgment rubric" not in third.stderr
+
+
+def test_pre_rubric_row_never_serves(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#838, fail-closed: a row written before the rubric column existed
+    carries no digest, and a verdict from an unknown rubric is not a
+    verdict this build would produce -- it re-judges, under the same
+    announced reason."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    calls: list[int] = []
+    _stub_one_same_group_with_call_log(monkeypatch, calls)
+    assert runner.invoke(app, ["adjudicate"]).exit_code == 0
+
+    layout = okf_config.WorkspaceLayout(tmp_path)
+    conn = sqlite3.connect(layout.findings_db_path)
+    conn.execute("UPDATE adjudications SET rubric_digest = NULL")
+    conn.commit()
+    conn.close()
+    second = runner.invoke(app, ["adjudicate"])
+
+    assert second.exit_code == 0
+    assert calls == [1, 1]
+    assert "0 of 1 candidate group(s) served" in second.stderr
+    assert "judgment rubric" in second.stderr
+
+
+def test_rubric_line_is_absent_when_nothing_was_rubric_stale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#838's advisory must not fire on the healthy path (the
+    `_echo_type_*_summary` rule): a fully served repeat run and a
+    member-drift re-judge both say nothing about the rubric."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    calls: list[int] = []
+    _stub_one_same_group_with_call_log(monkeypatch, calls)
+    assert runner.invoke(app, ["adjudicate"]).exit_code == 0
+
+    served_run = runner.invoke(app, ["adjudicate"])
+    assert "judgment rubric" not in served_run.stderr
+
+    _write_doc(
+        tmp_path / "bundle" / "concepts" / "a.md",
+        title="Concept A",
+        body="Edited since the verdict was computed.\n",
+    )
+    drift_run = runner.invoke(app, ["adjudicate"])
+
+    assert drift_run.exit_code == 0
+    assert "0 of 1 candidate group(s) served" in drift_run.stderr
+    assert "judgment rubric" not in drift_run.stderr
 
 
 def test_forget_sweep_erases_adjudications_referencing_the_member(
