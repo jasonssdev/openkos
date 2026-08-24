@@ -14,6 +14,24 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+## [0.2.9] - 2026-08-24
+
+Thirty-eight commits since v0.2.8, and the backlog they worked ends at
+**zero open issues**. Three threads run through the sections below. Runs now
+disclose what they did: the workspace says it is version-controlled and the
+recovery-critical verbs name the commit that undoes them, the batch summary
+carries a channel for extraction notices, a candidate lost in staging is
+durable rather than a scrolled-away stderr line, and an object that quotes
+no line of its source says so. Stored answers are served honestly:
+adjudication verdicts gate on the judgment rubric that produced them, edge
+suggestions persist across runs with a served/fresh split answered from one
+fact, and a `SAME` verdict whose own rationale argues the members apart is
+withdrawn. And the judged/unjudged boundary now bounds damage instead of
+merely being reported: one failed judge can no longer flood the typed edge
+set with candidate pairs. The remedies that did **not** ship are recorded
+too — measured against pre-registered bars in `evals/` and refuted there,
+which is why several issues close with a measurement instead of a change.
+
 ### Added
 
 - **CI runs the eval harness self-tests**
