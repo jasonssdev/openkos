@@ -2470,3 +2470,54 @@ def test_contradictions_persist_failure_degrades_to_advisory(
     assert "[CONTRADICTS] concepts/a <-> concepts/b" in result.stdout
     assert "failed to persist findings" in result.stderr
     assert "database is locked" in result.stderr
+
+
+def test_contradictions_discloses_unjudged_source_withholding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#841: the contradiction engine reads the same candidate projection,
+    so its queue is also smaller than the bundle could produce when the
+    unjudged-source gate withheld pairs -- and the same never-silent rule
+    applies. All nominated pairs are withheld here, so the run makes zero
+    judge calls and still names the withholding with its remedy."""
+    from openkos.graph.proximity import ProximityPair
+
+    _init_workspace(tmp_path, monkeypatch)
+    (tmp_path / "bundle" / "sources").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "bundle" / "sources" / "s.md").write_text(
+        "---\ntype: Source\ntitle: s\nresource: raw/s.txt\n"
+        "extraction_notice: judge-selection-empty\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "bundle" / "concepts").mkdir(parents=True, exist_ok=True)
+    for slug, title in (("a", "A"), ("b", "B")):
+        (tmp_path / "bundle" / "concepts" / f"{slug}.md").write_text(
+            f"---\ntype: Concept\ntitle: {title}\nprovenance:\n"
+            "  - sources/s\n---\nBody.\n",
+            encoding="utf-8",
+        )
+
+    class _StubSource:
+        def pairs(self, concept_ids: object) -> list[ProximityPair]:
+            return [
+                ProximityPair(
+                    source_id="concepts/a", target_id="concepts/b", distance=0.1
+                )
+            ]
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        contradiction_main, "_open_proximity_or_degrade", lambda p: _StubSource()
+    )
+    monkeypatch.setattr(
+        contradiction_main, "find_contradictions", lambda *a, **k: _found([], 0)
+    )
+
+    result = runner.invoke(app, ["contradictions"])
+
+    assert result.exit_code == 0
+    assert "1 candidate edge(s) withheld" in result.stdout
+    assert "sources/s" in result.stdout
+    assert "re-ingest" in result.stdout

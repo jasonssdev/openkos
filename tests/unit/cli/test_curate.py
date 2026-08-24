@@ -5857,3 +5857,42 @@ def test_unpinned_curate_stages_send_the_pre_812_prompt(
     assert len(llm.calls) == 2, f"expected two chat calls, got {len(llm.calls)}"
     assert llm.calls[0][0]["content"] == edge_typing_mod._SYSTEM_PROMPT
     assert llm.calls[1][0]["content"] == volatility_typing_mod._SYSTEM_PROMPT
+
+
+def test_structure_probe_joins_truncation_and_quarantine_notices(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#841: Structure's probe is the one that can carry two advisories --
+    the cap's truncation and the unjudged-source withholding -- joined into
+    the single `notice` field `gate()` echoes. Both must survive the join;
+    either alone must render exactly as before."""
+    from openkos.graph.sqlite_graph import CandidateReport, WithheldCandidate
+
+    ctx = _fake_ctx(tmp_path)
+    pairs = tuple((f"concepts/a{i:03d}", f"concepts/b{i:03d}") for i in range(1, 61))
+    monkeypatch.setattr(
+        "openkos.cli.curate.build_graph",
+        lambda *a, **k: _FakeCandidateStore(
+            CandidateReport(
+                produced=60,
+                retained=50,
+                pairs=pairs,
+                quarantine_withheld=(
+                    WithheldCandidate(
+                        pair=("concepts/qa", "concepts/qb"),
+                        source_ids=("sources/s",),
+                    ),
+                ),
+            )
+        ),
+    )
+    monkeypatch.setattr("openkos.cli.main._open_proximity_or_degrade", lambda p: None)
+    monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [])
+
+    probe = curate._structure_probe(ctx)
+
+    assert probe.notice is not None
+    lines = probe.notice.split("\n")
+    assert lines[0] == "50 of 60 candidate edge(s) shown (cap reached)"
+    assert "1 candidate edge(s) withheld" in lines[1]
+    assert "sources/s" in lines[1]

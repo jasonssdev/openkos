@@ -2350,3 +2350,57 @@ def test_the_two_caveats_can_never_collide() -> None:
     disjoint -- the least-specific type is symmetric. A type in both would
     silently get whichever branch is written first."""
     assert LEAST_SPECIFIC_RELATION_TYPE not in ASYMMETRIC_RELATION_TYPES
+
+
+def test_suggest_relations_withholds_and_discloses_unjudged_source_pairs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#841: a pair whose both endpoints derive from a judge-quarantined
+    source (#772) never reaches the suggestion queue -- one degraded
+    extraction must not become O(N^2) model calls and permanent typed
+    structure -- and the withholding is DISCLOSED with the remedy that
+    clears it, mirroring the cap's own never-silent rule. The cross pair
+    keeping a healthy endpoint survives and is offered normally."""
+    _init_workspace(tmp_path, monkeypatch)
+    (tmp_path / "bundle" / "sources").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "bundle" / "sources" / "s.md").write_text(
+        "---\ntype: Source\ntitle: s\nresource: raw/s.txt\n"
+        "extraction_notice: judge-selection-unavailable\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "bundle" / "concepts").mkdir(parents=True, exist_ok=True)
+    for slug, title in (("a", "A"), ("b", "B")):
+        (tmp_path / "bundle" / "concepts" / f"{slug}.md").write_text(
+            f"---\ntype: Concept\ntitle: {title}\nprovenance:\n"
+            "  - sources/s\n---\nBody.\n",
+            encoding="utf-8",
+        )
+    (tmp_path / "bundle" / "concepts" / "c.md").write_text(
+        "---\ntype: Concept\ntitle: C\n---\nBody.\n", encoding="utf-8"
+    )
+
+    class _StubSource:
+        def pairs(self, concept_ids: Sequence[str]) -> list[ProximityPair]:
+            return [
+                ProximityPair(
+                    source_id="concepts/a", target_id="concepts/b", distance=0.1
+                ),
+                ProximityPair(
+                    source_id="concepts/a", target_id="concepts/c", distance=0.2
+                ),
+            ]
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(main, "_open_proximity_or_degrade", lambda path: _StubSource())
+
+    result = runner.invoke(app, ["suggest-relations", "--auto"])
+
+    assert result.exit_code == 0, (result.stdout, result.stderr)
+    assert "1 candidate edge(s) withheld" in result.stdout
+    assert "sources/s" in result.stdout
+    assert "re-ingest" in result.stdout
+    # The withheld pair is absent from the queue; the healthy cross pair
+    # is the one edge the run reports.
+    assert "concepts/a -> concepts/b" not in result.stdout

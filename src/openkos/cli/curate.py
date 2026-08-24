@@ -87,6 +87,7 @@ from openkos.resolution.edge_typing import (
     EdgeSuggestion,
     candidate_edges,
     candidate_truncation_notice,
+    quarantined_candidate_notice,
     suggest_edge_types,
 )
 from openkos.resolution.volatility_typing import TierSuggestion, suggest_volatility
@@ -120,10 +121,13 @@ class StageProbe:
     unavailable: str | None = None
     empty_message: str | None = None
     notice: str | None = None
-    """A one-line, non-blocking advisory `gate()` echoes to stderr
-    immediately before `cost_line` (design D4, #378 slice 2) -- Structure's
-    probe sets this to the candidate-edge cap truncation notice when pass 3
-    truncated its output; `None` (the default) prints nothing extra."""
+    """One or more newline-joined, non-blocking advisory line(s) `gate()`
+    echoes to stderr immediately before `cost_line` (design D4, #378
+    slice 2) -- Structure's probe sets this to the candidate-edge cap
+    truncation notice when pass 3 truncated its output, joined with #841's
+    unjudged-source withholding notice when that fired too (the one probe
+    that can carry two advisories); `None` (the default) prints nothing
+    extra."""
 
 
 @dataclass(frozen=True)
@@ -1008,6 +1012,17 @@ def _structure_probe(ctx: CurateContext) -> StageProbe:
             include_confidential=ctx.include_confidential,
             local_exemption=ctx.local_exemption,
         )
+        # #841: pass 3's unjudged-source withholding, disclosed beside the
+        # cap's truncation through the same probe advisory seam -- both are
+        # "the queue is smaller than the bundle could produce" facts, and
+        # both re-derive their visible counts through the sensitivity walk.
+        quarantine_notice = quarantined_candidate_notice(
+            store.candidate_report,
+            ctx.layout.bundle_dir,
+            include_confidential=ctx.include_confidential,
+            local_exemption=ctx.local_exemption,
+        )
+        notice = "\n".join(line for line in (notice, quarantine_notice) if line) or None
 
     # #799: the cost gate must state the calls this stage will ACTUALLY
     # make. `suggest-relations`' own closing hint names `curate` as the
