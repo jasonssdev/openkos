@@ -9,6 +9,7 @@ gates, per-item confirms, exit codes, `--auto`) follow `test_adjudicate.py`'s
 """
 
 import os
+import sqlite3
 import sys
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
@@ -1951,7 +1952,15 @@ def test_identity_toctou_drift_exits_three_nothing_written(
     assert "refusing to write --" in result.stderr
     after = _snapshot(tmp_path)
     changed = changed_paths(before, after)
-    assert changed == {Path("bundle/concepts/a.md")}
+    # `.openkos/findings.db` is the #867 persist of the verdict this run
+    # PAID for, written before the walk exactly as the standalone verb
+    # writes it (#441's keep-the-paid-work posture) -- derived state, not a
+    # bundle write. The drift refusal's own claim is unchanged: nothing in
+    # `bundle/` moved except the concurrent hand-edit itself.
+    assert changed == {
+        Path("bundle/concepts/a.md"),
+        Path(".openkos/findings.db"),
+    }
     assert survivor_path.read_text(encoding="utf-8") == concurrent
 
 
@@ -2047,7 +2056,16 @@ def test_identity_confidential_member_never_reaches_the_llm_payload(
     assert result.exit_code == 0
     assert all("TOP-SECRET-BODY" not in payload for payload in payloads)
     assert secret_path.exists()
-    assert changed_paths(before, _snapshot(tmp_path)) == set()
+    # The UNCERTAIN verdict persists to the derived store (#867) exactly as
+    # the standalone verb persists it -- verdict and rationale only, never
+    # member content, keyed to this run's confidential-exclusion. The
+    # fail-closed claim is unchanged: nothing in `bundle/` was written --
+    # and the never-member-content claim is checked against the written
+    # bytes, not just asserted in prose (#867 review).
+    assert changed_paths(before, _snapshot(tmp_path)) == {Path(".openkos/findings.db")}
+    assert (
+        b"TOP-SECRET-BODY" not in (tmp_path / ".openkos" / "findings.db").read_bytes()
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -5622,7 +5640,15 @@ def test_structure_reports_no_split_for_a_store_it_could_not_read(
     # The read failure is still REPORTED -- silence would be a different
     # defect, and asserting only the split line's absence would pass on a
     # run that said nothing at all.
-    assert "failed to read persisted suggestions" in result.stderr
+    # Reported ONCE per curate run (#867 review): the pricing probe reads
+    # the store too, but only the stage run's read warns -- and the
+    # warning names the command the user actually ran, never the
+    # standalone verb.
+    assert result.stderr.count("failed to read persisted suggestions") == 1
+    assert (
+        "openkos curate: warning -- failed to read persisted suggestions"
+        in result.stderr
+    )
     assert "served from persisted suggestions" not in result.stderr
 
 
@@ -5695,6 +5721,358 @@ def test_structure_reports_a_store_it_read_even_when_nothing_served(
     assert (
         "0 of 1 candidate edge(s) served from persisted suggestions; "
         "1 typed fresh." in result.stderr
+    )
+
+
+# --- issue #867: Identity serves what adjudicate already paid for ----------
+
+
+def _stub_identity_group_with_call_log(
+    monkeypatch: pytest.MonkeyPatch,
+    calls: list[int],
+    *,
+    verdict: Verdict = Verdict.SAME,
+) -> CandidateGroup:
+    """ONE group over real docs, discovered and adjudicated identically by
+    the `adjudicate` verb and curate's Identity stage; the fake judge
+    appends the group count it received to `calls`, so a test can prove
+    exactly how many groups reached the model layer from EITHER surface."""
+    group = CandidateGroup(
+        okf_type="Concept",
+        member_ids=("concepts/a", "concepts/b"),
+        tier=Tier.HIGH,
+        trigger="stub",
+    )
+
+    def _fake_find(bundle_dir: object, **kwargs: object) -> CandidateGroupReport:
+        return CandidateGroupReport(groups=(group,), produced=1, retained=1)
+
+    def _fake_adjudicate(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> AdjudicationBatch:
+        calls.append(len(candidates))
+        return AdjudicationBatch(
+            results=[
+                AdjudicatedCandidate(
+                    candidate=candidate,
+                    verdict=verdict,
+                    confidence=0.9,
+                    rationale="stable",
+                )
+                for candidate in candidates
+            ]
+        )
+
+    monkeypatch.setattr("openkos.cli.main.find_candidates_report", _fake_find)
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
+    monkeypatch.setattr("openkos.cli.curate.find_candidates_report", _fake_find)
+    monkeypatch.setattr("openkos.cli.curate.adjudicate_candidates", _fake_adjudicate)
+    return group
+
+
+def test_identity_serves_what_adjudicate_already_paid_for(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The #867 scenario end to end: `adjudicate` judges and persists every
+    group, then `curate` -- minutes later, on an unchanged bundle -- hands
+    the model ZERO groups for them, prices its gate accordingly, and says
+    so with the same split line the verb prints.
+
+    Before this, Identity called `adjudicate_candidates` on ALL groups with
+    no store read before and no persist after: six calls priced, ~21s
+    re-judged, no split line -- while Structure, two stages later in the
+    SAME run, served correctly and said so."""
+    _stub_later_stages_empty(monkeypatch)
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _reindexed_workspace(tmp_path, monkeypatch)
+    calls: list[int] = []
+    _stub_identity_group_with_call_log(monkeypatch, calls)
+
+    first = runner.invoke(app, ["adjudicate"])
+    assert first.exit_code == 0, first.stderr
+    assert calls == [1]
+
+    _simulate_tty(monkeypatch)
+    result = runner.invoke(app, ["curate"], input="y\nn\n")
+
+    assert result.exit_code == 0, result.stderr
+    assert calls == [1, 0], "curate must hand the model zero already-judged groups"
+    assert "1 candidate group(s), 1 served -> 0 LLM call(s)" in result.stderr
+    assert (
+        "openkos curate: Identity: 1 of 1 candidate group(s) served from "
+        "persisted adjudications; 0 judged fresh." in result.stderr
+    )
+    # The served SAME verdict still reaches the walk: the merge is offered
+    # for per-item consent exactly as a fresh one would be, and declining
+    # it here is what makes "skipped 1" -- not an empty queue.
+    assert "Merge concepts/b into concepts/a? [y/N]" in result.stdout
+    assert "Identity: applied 0, skipped 1." in _lines(result.stdout)
+
+
+def test_identity_persists_fresh_verdicts_for_the_next_run(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#867's other half: the verdicts curate pays for must not be lost to
+    the next run. Curate judges fresh, persists; a standalone `adjudicate`
+    minutes later serves every one of them with zero model calls.
+
+    DIFFERENT verdicts on purpose: a declined SAME merge records a
+    kept-distinct decision (#797) that would drop the group from the second
+    run's queue entirely, proving suppression rather than serving."""
+    _stub_later_stages_empty(monkeypatch)
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _reindexed_workspace(tmp_path, monkeypatch)
+    calls: list[int] = []
+    _stub_identity_group_with_call_log(monkeypatch, calls, verdict=Verdict.DIFFERENT)
+
+    _simulate_tty(monkeypatch)
+    first = runner.invoke(app, ["curate"], input="y\n")
+    assert first.exit_code == 0, first.stderr
+    assert calls == [1]
+    assert "0 of 1 candidate group(s) served" not in first.stderr
+
+    second = runner.invoke(app, ["adjudicate"])
+
+    assert second.exit_code == 0, second.stderr
+    assert calls == [1, 0], "the verb must hand the model zero curate-judged groups"
+    assert (
+        "1 of 1 candidate group(s) served from persisted adjudications; "
+        "0 judged fresh." in second.stderr
+    )
+
+
+def test_identity_rubric_stale_notice_names_the_reason(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#838's announced-re-spend ruling holds on THIS surface too: a
+    persisted verdict from a different judgment rubric re-judges fresh, and
+    curate names the rubric as the cause rather than rendering a surprising
+    `0 of 1 served`."""
+    _stub_later_stages_empty(monkeypatch)
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _reindexed_workspace(tmp_path, monkeypatch)
+    calls: list[int] = []
+    _stub_identity_group_with_call_log(monkeypatch, calls, verdict=Verdict.DIFFERENT)
+
+    first = runner.invoke(app, ["adjudicate"])
+    assert first.exit_code == 0, first.stderr
+
+    conn = sqlite3.connect(tmp_path / ".openkos" / "findings.db")
+    conn.execute("UPDATE adjudications SET rubric_digest = 'sha256:someotherrubric'")
+    conn.commit()
+    conn.close()
+
+    _simulate_tty(monkeypatch)
+    result = runner.invoke(app, ["curate"], input="y\n")
+
+    assert result.exit_code == 0, result.stderr
+    assert calls == [1, 1]
+    assert (
+        "openkos curate: Identity: 0 of 1 candidate group(s) served from "
+        "persisted adjudications; 1 judged fresh." in result.stderr
+    )
+    assert (
+        "openkos curate: Identity: 1 cached verdict(s) predate the current "
+        "judgment rubric; re-judging them fresh." in result.stderr
+    )
+
+
+def test_identity_reports_no_split_for_a_store_it_could_not_read(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The #809 gate, inherited whole: an unreadable store degrades to the
+    read-failure warning and a full fresh judge, with NO split line -- a
+    count of zero meaning "could not look" must not render in the words of
+    a count meaning "looked, found nothing"."""
+    _stub_later_stages_empty(monkeypatch)
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _reindexed_workspace(tmp_path, monkeypatch)
+    calls: list[int] = []
+    _stub_identity_group_with_call_log(monkeypatch, calls, verdict=Verdict.DIFFERENT)
+
+    store = tmp_path / ".openkos" / "findings.db"
+    store.parent.mkdir(exist_ok=True)
+    store.write_bytes(b"not a database at all")
+
+    _simulate_tty(monkeypatch)
+    result = runner.invoke(app, ["curate"], input="y\n")
+
+    assert result.exit_code == 0, result.stderr
+    assert calls == [1]
+    # Reported ONCE per curate run (#867 review): the pricing probe reads
+    # the store too, but only the stage run's read warns -- and the
+    # warning names the command the user actually ran, never the
+    # standalone verb.
+    assert result.stderr.count("failed to read persisted adjudications") == 1
+    assert (
+        "openkos curate: warning -- failed to read persisted adjudications"
+        in result.stderr
+    )
+    assert "served from persisted adjudications" not in result.stderr
+
+
+def _stub_two_groups_with_call_log(
+    monkeypatch: pytest.MonkeyPatch,
+    calls: list[int],
+    *,
+    verdict: Verdict = Verdict.SAME,
+) -> tuple[CandidateGroup, CandidateGroup]:
+    """TWO groups over four real docs, wired into both surfaces exactly as
+    `_stub_identity_group_with_call_log` wires one -- the mixed-partition
+    fixture: drift one member after the first run and the second run must
+    serve one group and judge the other."""
+    group1 = CandidateGroup(
+        okf_type="Concept",
+        member_ids=("concepts/a", "concepts/b"),
+        tier=Tier.HIGH,
+        trigger="stub",
+    )
+    group2 = CandidateGroup(
+        okf_type="Concept",
+        member_ids=("concepts/c", "concepts/d"),
+        tier=Tier.HIGH,
+        trigger="stub",
+    )
+
+    def _fake_find(bundle_dir: object, **kwargs: object) -> CandidateGroupReport:
+        return CandidateGroupReport(groups=(group1, group2), produced=2, retained=2)
+
+    def _fake_adjudicate(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> AdjudicationBatch:
+        calls.append(len(candidates))
+        return AdjudicationBatch(
+            results=[
+                AdjudicatedCandidate(
+                    candidate=candidate,
+                    verdict=verdict,
+                    confidence=0.9,
+                    rationale="stable",
+                )
+                for candidate in candidates
+            ]
+        )
+
+    monkeypatch.setattr("openkos.cli.main.find_candidates_report", _fake_find)
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
+    monkeypatch.setattr("openkos.cli.curate.find_candidates_report", _fake_find)
+    monkeypatch.setattr("openkos.cli.curate.adjudicate_candidates", _fake_adjudicate)
+    return group1, group2
+
+
+def test_identity_mixed_run_serves_and_judges_in_candidate_order(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The MIXED partition through the shared reassembly (#867 review): one
+    group served from the store, one judged fresh in the same curate run --
+    the model receives ONLY the drifted group, the split line counts both
+    halves, and the walk offers both verdicts in candidate order, served
+    and fresh indistinguishable downstream."""
+    _stub_later_stages_empty(monkeypatch)
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _write_doc(tmp_path / "bundle" / "concepts" / "c.md", title="Concept C")
+    _write_doc(tmp_path / "bundle" / "concepts" / "d.md", title="Concept D")
+    _reindexed_workspace(tmp_path, monkeypatch)
+    calls: list[int] = []
+    _stub_two_groups_with_call_log(monkeypatch, calls)
+
+    first = runner.invoke(app, ["adjudicate"])
+    assert first.exit_code == 0, first.stderr
+    assert calls == [2]
+
+    # Drift, not corruption: group2's member no longer matches its stored
+    # digest, so only group2 re-judges.
+    doc_d = tmp_path / "bundle" / "concepts" / "d.md"
+    doc_d.write_text(
+        doc_d.read_text(encoding="utf-8") + "\nA later, richer edit.\n",
+        encoding="utf-8",
+    )
+
+    _simulate_tty(monkeypatch)
+    result = runner.invoke(app, ["curate"], input="y\nn\nn\n")
+
+    assert result.exit_code == 0, result.stderr
+    assert calls == [2, 1], "the model must receive only the drifted group"
+    assert "2 candidate group(s), 1 served -> 1 LLM call(s)" in result.stderr
+    assert (
+        "openkos curate: Identity: 1 of 2 candidate group(s) served from "
+        "persisted adjudications; 1 judged fresh." in result.stderr
+    )
+    # Both SAME verdicts reach the walk, in candidate order -- the served
+    # one first because group1 comes first, not because it was served.
+    out = result.stdout
+    assert "Merge concepts/b into concepts/a? [y/N]" in out
+    assert "Merge concepts/c into concepts/d? [y/N]" in out
+    assert out.index("Merge concepts/b into concepts/a?") < out.index(
+        "Merge concepts/c into concepts/d?"
+    )
+    assert "Identity: applied 0, skipped 2." in _lines(result.stdout)
+
+
+def test_identity_partial_failure_notice_reconciles_served_counts(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#867 review: a mid-batch failure on a run that also SERVED verdicts
+    names the served count in its notice -- without it, the walk's
+    applied/skipped tallies (which span served groups too) could exceed the
+    adjudicated-of-total clause and read as self-contradictory."""
+    _stub_later_stages_empty(monkeypatch)
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _write_doc(tmp_path / "bundle" / "concepts" / "c.md", title="Concept C")
+    _write_doc(tmp_path / "bundle" / "concepts" / "d.md", title="Concept D")
+    _reindexed_workspace(tmp_path, monkeypatch)
+    calls: list[int] = []
+    _stub_two_groups_with_call_log(monkeypatch, calls, verdict=Verdict.DIFFERENT)
+
+    first = runner.invoke(app, ["adjudicate"])
+    assert first.exit_code == 0, first.stderr
+
+    doc_d = tmp_path / "bundle" / "concepts" / "d.md"
+    doc_d.write_text(
+        doc_d.read_text(encoding="utf-8") + "\nA later edit.\n", encoding="utf-8"
+    )
+
+    def _failing_adjudicate(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> AdjudicationBatch:
+        calls.append(len(candidates))
+        return AdjudicationBatch(
+            results=[], failure=OllamaError("boom"), failed_index=1
+        )
+
+    monkeypatch.setattr("openkos.cli.curate.adjudicate_candidates", _failing_adjudicate)
+    _simulate_tty(monkeypatch)
+    result = runner.invoke(app, ["curate"], input="y\n")
+
+    assert result.exit_code == 0, result.stderr
+    assert calls == [2, 1]
+    assert (
+        "Identity: failed -- boom (served 1, adjudicated 0 of 1 candidate "
+        "group(s); applied 0, skipped 0)." in _lines(result.stdout)
     )
 
 

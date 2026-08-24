@@ -961,9 +961,9 @@ def test_adjudicate_partial_batch_reports_completed_verdicts_then_exits_one(
     assert isinstance(result.exception, SystemExit)
     assert "adjudicated 1: 1 SAME" in result.stdout
     assert "kept work" in result.stdout
+    # No split line: a first-ever run has no store to have consulted
+    # (#867 adopting #809's gate), so the failure line stands alone.
     assert result.stderr == (
-        "openkos adjudicate: 0 of 2 candidate group(s) served from "
-        "persisted adjudications; 2 judged fresh.\n"
         "openkos adjudicate: failed after adjudicating 1 of 2 candidate "
         "group(s) -- boom.\n"
     )
@@ -1031,9 +1031,9 @@ def test_adjudicate_json_partial_batch_emits_completed_verdicts_then_exits_one(
             }
         ],
     }
+    # No split line: a first-ever run has no store to have consulted
+    # (#867 adopting #809's gate), so the failure line stands alone.
     assert result.stderr == (
-        "openkos adjudicate: 0 of 2 candidate group(s) served from "
-        "persisted adjudications; 2 judged fresh.\n"
         "openkos adjudicate: failed after adjudicating 1 of 2 candidate "
         "group(s) -- boom.\n"
     )
@@ -5126,9 +5126,10 @@ def test_repeat_run_serves_persisted_verdicts_with_zero_model_calls(
     first = runner.invoke(app, ["adjudicate"])
     assert first.exit_code == 0
     assert calls == [1]
-    assert "0 of 1 candidate group(s) served from persisted adjudications" in (
-        first.stderr
-    )
+    # #867 adopts the #809 gate here too: a first-ever run has no store to
+    # have consulted, so it prints no split -- a `0 of 1 served` here was a
+    # count of "could not look" in the words of "looked, found nothing".
+    assert "served from persisted adjudications" not in first.stderr
 
     second = runner.invoke(app, ["adjudicate"])
 
@@ -5168,6 +5169,30 @@ def test_changed_member_rejudges_fresh(
     assert "0 of 1 candidate group(s) served" in second.stderr
 
 
+def test_reports_no_split_for_a_store_it_could_not_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#867, the #809 gate on this family's verb: an unreadable store
+    degrades to the read-failure warning and a full fresh judge, with NO
+    split line beneath it -- the exact contradiction #809 fixed on
+    `suggest-relations`."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    calls: list[int] = []
+    _stub_one_same_group_with_call_log(monkeypatch, calls)
+    store = tmp_path / ".openkos" / "findings.db"
+    store.parent.mkdir(exist_ok=True)
+    store.write_bytes(b"not a database at all")
+
+    result = runner.invoke(app, ["adjudicate"])
+
+    assert result.exit_code == 0
+    assert calls == [1]
+    assert "failed to read persisted adjudications" in result.stderr
+    assert "served from persisted adjudications" not in result.stderr
+
+
 def test_fresh_flag_bypasses_the_serve(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -5184,6 +5209,10 @@ def test_fresh_flag_bypasses_the_serve(
 
     assert second.exit_code == 0
     assert calls == [1, 1]
+    # No split line on a deliberate bypass (#867, mirroring
+    # `suggest-relations --fresh`): the store was never consulted, and the
+    # full re-spend is exactly what the flag asked for.
+    assert "served from persisted adjudications" not in second.stderr
 
 
 def test_include_confidential_mismatch_rejudges(
