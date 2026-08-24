@@ -547,9 +547,28 @@ def _self_test() -> int:
     # Three runs, one per outcome, against a fake backend. No model, no
     # network: `_capture_further_participants` takes any `LLMBackend`, and
     # `chat` is its whole surface.
+    #
+    # The distinction itself, before any run: both expectations below are
+    # built from the same constants the production code stamps -- deliberate,
+    # a second spelling is what ERROR_SWALLOWED's docstring argues against --
+    # so if the two constants ever held one string, the column would collapse
+    # exactly as the vocabulary docstring warns and every check below would
+    # still pass. This is the one assertion that catches that.
     # ------------------------------------------------------------------
-    class _Backend:
-        """One scripted `chat`: raise, or answer with these bytes."""
+    if len({ERROR_RAISED, ERROR_SWALLOWED}) != 2:
+        print(
+            "FAIL: ERROR_RAISED and ERROR_SWALLOWED must be distinct labels, "
+            f"got {ERROR_RAISED!r} and {ERROR_SWALLOWED!r}"
+        )
+        return 1
+
+    class _Backend(LLMBackend):
+        """One scripted `chat`: raise, or answer with these bytes.
+
+        Declared AGAINST `LLMBackend` rather than as a bare duck type: the
+        protocol is structural today, but `openkos/llm/base.py` is not this
+        file, and an explicit base makes mypy hold `chat`'s signature to the
+        contract here rather than only at the three call sites."""
 
         def __init__(self, reply: str | None = None, error: Exception | None = None):
             self._reply = reply
@@ -645,6 +664,15 @@ def _self_test() -> int:
     # is the whole class of defect #833 exists to remove. That the rebinding
     # took effect at all is already proved by the assertion above: the real
     # function does not raise `RuntimeError`.
+
+    # The arm-restoration invariant, REPEATED after the vocabulary runs: the
+    # check above this block covered only the earlier `run_fixture` calls,
+    # and the three added here each install and restore the arm again. This
+    # one is not vacuous the way the stub check would be -- no `finally`
+    # in this block performs this assignment.
+    if concept_mod._build_participant_capture_messages is not original:
+        print("FAIL: the arm was left installed after the vocabulary runs")
+        return 1
 
     print(f"self-test OK ({len(build_fixtures())} fixture(s))")
     return 0
