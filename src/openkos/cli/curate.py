@@ -745,8 +745,9 @@ def _preconditions_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
 
 def _identity_probe(ctx: CurateContext) -> StageProbe:
     """`resolution.find_candidates_report` (design D1/D4) -- one LLM call
-    per RETAINED candidate group, since `adjudicate_candidates` issues
-    exactly one `llm.chat` per group (`resolution/adjudication.py`).
+    per RETAINED candidate group the adjudication store cannot serve
+    (#867), since `adjudicate_candidates` issues exactly one `llm.chat`
+    per group it is handed (`resolution/adjudication.py`).
     `_MAX_CANDIDATE_GROUPS` bounds `probe.llm_calls` transitively
     (entity-resolution delta: Bounded Candidate-Group Output Per Call);
     `probe.notice` carries `candidate_group_truncation_notice`'s "N of M
@@ -768,16 +769,32 @@ def _identity_probe(ctx: CurateContext) -> StageProbe:
         for group in report.groups
         if not cli_main._is_group_kept_distinct(ctx.layout, group.member_ids)
     )
+    # #867: price what a run would actually pay. The partition is rebuilt
+    # in `run` rather than carried from here -- design D4's no-memoization
+    # rule -- and costs no model call. Keyed on the EFFECTIVE confidential
+    # inclusion, the same disjunction the standalone verb applies.
+    effective_confidential = ctx.include_confidential or ctx.local_exemption
+    served, to_judge, _, _ = cli_main._partition_adjudication_serves(
+        ctx.layout,
+        list(groups),
+        include_confidential=effective_confidential,
+        # The run's own partition warns on an unreadable store; warning
+        # here too would print the same line twice per curate run.
+        warn_on_failure=False,
+    )
     return StageProbe(
         items=groups,
-        llm_calls=len(groups),
+        llm_calls=len(to_judge),
+        served=len(served),
         empty_message="No candidate groups found." if not groups else None,
         notice=candidate_group_truncation_notice(report),
     )
 
 
 def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
-    """`adjudicate_candidates` then, per SAME 2-member group, the exact
+    """The store partition + `adjudicate_candidates` over the fresh
+    remainder + persist (#867, the verb's own serve contract via the same
+    shared helpers), then, per SAME 2-member group, the exact
     `_prepare_one_merge` / preview / `[y/N]` / `_reject_drifted_targets`
     / `_commit_one_merge` walk `adjudicate --apply` already performs (design
     D4/D6) -- reused verbatim rather than re-implemented, so the two write
@@ -821,15 +838,74 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
     llm = ctx.ollama_client
     if llm is None:  # pragma: no cover -- sequencer invariant (needs_llm)
         raise RuntimeError("Identity stage requires an LLM client")
+
+    # #867: serve what `adjudicate` (or an earlier curate) already paid
+    # for, persist what this run pays, and say which was which. The
+    # partition, persist, and reassembly are the verb's own shared
+    # helpers, so the two surfaces cannot disagree about WHICH groups
+    # serve or what persists; the stderr lines below are rendered per
+    # surface (each with its own prefix), mirroring the verb's wording.
+    # The partition is rebuilt here rather than carried from `probe`
+    # (design D4's no-memoization rule) and costs no model call.
+    #
+    # The serve/persist keys use the pre-combined disjunction below, while
+    # `adjudicate_candidates` still receives the raw flag pair -- the same
+    # split the standalone verb keeps, and safe for the same reason: the
+    # disjunction lives ONLY in `sensitivity.should_block` (its module
+    # docstring pins that), so the judge computes the identical value.
+    effective_confidential = ctx.include_confidential or ctx.local_exemption
+    served_by_key, to_judge, rubric_stale, store_read = (
+        cli_main._partition_adjudication_serves(
+            layout,
+            groups,
+            include_confidential=effective_confidential,
+            surface="curate",
+        )
+    )
+    # Gated on whether the store was READ, the same fact the verb and the
+    # Structure stage gate on (#809): a store that was read and served
+    # nothing is drift worth saying out loud, while an absent or
+    # unreadable one has nothing to split.
+    if store_read:
+        typer.echo(
+            f"openkos curate: Identity: {len(served_by_key)} of {len(groups)} "
+            "candidate group(s) served from persisted adjudications; "
+            f"{len(to_judge)} judged fresh.",
+            err=True,
+        )
+    # #838: name the reason a rubric change empties the serve, exactly as
+    # the verb does -- a sudden `0 of N served` after an upgrade reads as
+    # a surprising cost; naming the rubric turns it into an explained one.
+    if rubric_stale:
+        typer.echo(
+            f"openkos curate: Identity: {rubric_stale} cached verdict(s) "
+            "predate the current judgment rubric; re-judging them fresh.",
+            err=True,
+        )
+
     batch = adjudicate_candidates(
-        groups,
+        to_judge,
         bundle_dir=layout.bundle_dir,
         llm=llm,
         include_confidential=ctx.include_confidential,
         local_exemption=ctx.local_exemption,
         on_progress=observability.progress_callback("curate", "adjudicating group"),
     )
-    results: Sequence[AdjudicatedCandidate] = batch.results
+    # Fresh verdicts persist even on a partial batch (#441's posture: the
+    # paid-for work is kept), then the walk runs over the run's verdicts
+    # rebuilt in candidate order -- served verdict, else fresh one; groups
+    # past a mid-batch failure appear in neither and stay absent.
+    cli_main._persist_adjudications(
+        layout,
+        batch.results,
+        include_confidential=effective_confidential,
+        surface="curate",
+    )
+    results: Sequence[AdjudicatedCandidate] = (
+        cli_main._reassemble_adjudications(groups, served_by_key, batch.results)
+        if served_by_key
+        else batch.results
+    )
 
     applied = 0
     skipped = 0
@@ -953,14 +1029,22 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         ctx.partial_progress = _partial_progress(applied, skipped, declined)
         raise batch.failure
     if batch.failure is not None:
+        # `to_judge`, not `groups` (#867): the batch only ever held the
+        # fresh remainder, and counting served groups as un-adjudicated
+        # would overstate what the failure cost. The served clause
+        # (present only when something served) is what reconciles the
+        # counts: the walk runs over served AND completed-fresh verdicts,
+        # so applied+skipped can exceed the adjudicated count exactly by
+        # the served groups.
+        served_clause = f"served {len(served_by_key)}, " if served_by_key else ""
         return StageOutcome(
             status="failed",
             applied=applied,
             skipped=skipped,
             notice=(
-                f"failed -- {batch.failure} (adjudicated "
-                f"{len(batch.results)} of {len(groups)} candidate group(s); "
-                f"applied {applied}, skipped {skipped})."
+                f"failed -- {batch.failure} ({served_clause}adjudicated "
+                f"{len(batch.results)} of {len(to_judge)} candidate "
+                f"group(s); applied {applied}, skipped {skipped})."
             ),
             skipped_items=tuple(declined),
         )
@@ -1038,6 +1122,10 @@ def _structure_probe(ctx: CurateContext) -> StageProbe:
         ctx.layout,
         edges,
         include_confidential=ctx.include_confidential or ctx.local_exemption,
+        # The run's own partition warns on an unreadable store; warning
+        # here too would print the same line twice per curate run (#867
+        # review, the Identity probe's exact reason).
+        warn_on_failure=False,
     )
     return StageProbe(
         items=tuple(edges),
@@ -1104,7 +1192,10 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
     # disjunction the standalone verb applies.
     effective_confidential = ctx.include_confidential or ctx.local_exemption
     served_by_key, to_type, store_read = cli_main._partition_edge_suggestion_serves(
-        ctx.layout, edges, include_confidential=effective_confidential
+        ctx.layout,
+        edges,
+        include_confidential=effective_confidential,
+        surface="curate",
     )
     # Gated on whether the store was READ, the same fact the standalone
     # verb gates on (#809). This used to gate on `served_by_key` being
@@ -1135,7 +1226,10 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         on_progress=observability.progress_callback("curate", "untyped edge"),
     )
     cli_main._persist_edge_suggestions(
-        ctx.layout, batch.results, include_confidential=effective_confidential
+        ctx.layout,
+        batch.results,
+        include_confidential=effective_confidential,
+        surface="curate",
     )
     suggestions: Sequence[EdgeSuggestion] = (
         cli_main._reassemble_edge_suggestions(edges, served_by_key, batch.results)

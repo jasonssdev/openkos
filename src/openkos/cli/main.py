@@ -13117,11 +13117,19 @@ def adjudicate(
     served_by_key: dict[str, AdjudicatedCandidate] = {}
     to_judge = candidates
     rubric_stale = 0
+    store_read = False
     if candidates and not fresh:
-        served_by_key, to_judge, rubric_stale = _partition_adjudication_serves(
-            layout, candidates, include_confidential=effective_confidential
+        served_by_key, to_judge, rubric_stale, store_read = (
+            _partition_adjudication_serves(
+                layout, candidates, include_confidential=effective_confidential
+            )
         )
-    if candidates:
+    # READ, not merely attempted (#809's gate, adopted by #867 when curate's
+    # Identity became this line's second surface): a first-ever run has no
+    # store to have consulted, and an unreadable one already printed its own
+    # warning -- a `0 of N served` beneath either would be a count of "could
+    # not look" in the words of "looked, found nothing".
+    if store_read:
         typer.echo(
             f"openkos adjudicate: {len(served_by_key)} of {len(candidates)} "
             "candidate group(s) served from persisted adjudications; "
@@ -13194,21 +13202,7 @@ def adjudicate(
         layout, batch.results, include_confidential=effective_confidential
     )
     if served_by_key:
-        fresh_by_key = {
-            adjudications_store.group_key_for(result.candidate.member_ids): result
-            for result in batch.results
-        }
-        results = [
-            resolved
-            for group in candidates
-            if (
-                resolved := served_by_key.get(
-                    adjudications_store.group_key_for(group.member_ids)
-                )
-                or fresh_by_key.get(adjudications_store.group_key_for(group.member_ids))
-            )
-            is not None
-        ]
+        results = _reassemble_adjudications(candidates, served_by_key, batch.results)
     else:
         # Nothing served -> the batch IS the run, byte-identical to the
         # pre-#779 contract (and tolerant of a test double returning
@@ -14353,12 +14347,53 @@ class AdjudicationServes(NamedTuple):
     costlier per-member hashing, and the claim the stderr line makes (the
     row predates the rubric) is true either way."""
 
+    store_read: bool
+    """Whether the store was actually READ (#809's fact, adopted here by
+    #867 when curate's Identity became this partition's second caller).
+    An absent file and an unreadable one both serve nothing, but neither
+    is a store that was read and held nothing for these groups -- and the
+    split line renders only for the last of the three, on BOTH surfaces,
+    so the two can never disagree the way #809 found the edge family's
+    had."""
+
+
+def _reassemble_adjudications(
+    candidates: "list[CandidateGroup]",
+    served: "dict[str, AdjudicatedCandidate]",
+    fresh: "Sequence[AdjudicatedCandidate]",
+) -> "list[AdjudicatedCandidate]":
+    """Rebuild a run's verdicts in CANDIDATE order, merging what the store
+    served with what the model just judged (#867) -- the adjudication twin
+    of `_reassemble_edge_suggestions`, extracted from the `adjudicate` verb
+    for the same #809 reason: `curate`'s Identity stage is now a second
+    caller, and a later fix to the merge would otherwise land in one copy
+    and silently miss the other.
+
+    A served verdict wins over a fresh one for the same key -- a tiebreak
+    the callers' own partition makes unreachable, not a policy. Groups past
+    a mid-batch failure (#441) appear in neither map and stay absent.
+    Ordering follows `candidates`, so a served verdict and a fresh one are
+    indistinguishable downstream."""
+    fresh_by_key = {
+        adjudications_store.group_key_for(result.candidate.member_ids): result
+        for result in fresh
+    }
+    rebuilt: list[AdjudicatedCandidate] = []
+    for group in candidates:
+        key = adjudications_store.group_key_for(group.member_ids)
+        found = served.get(key) or fresh_by_key.get(key)
+        if found is not None:
+            rebuilt.append(found)
+    return rebuilt
+
 
 def _partition_adjudication_serves(
     layout: config.WorkspaceLayout,
     candidates: "list[CandidateGroup]",
     *,
     include_confidential: bool,
+    warn_on_failure: bool = True,
+    surface: str = "adjudicate",
 ) -> AdjudicationServes:
     """Split `candidates` into verdicts servable from `.openkos/findings.db`
     and the groups that still need a model call (#779) -- the adjudication
@@ -14384,7 +14419,7 @@ def _partition_adjudication_serves(
     group would otherwise read as a surprising `0 of N served` with no
     stated cause (#838's announced-re-spend ruling)."""
     if not layout.findings_db_path.exists():
-        return AdjudicationServes({}, candidates, 0)
+        return AdjudicationServes({}, candidates, 0, store_read=False)
     try:
         conn = derived.open_derived_connection(layout.findings_db_path)
         try:
@@ -14392,12 +14427,20 @@ def _partition_adjudication_serves(
         finally:
             conn.close()
     except (OSError, sqlite3.Error) as exc:
-        typer.echo(
-            "openkos adjudicate: warning -- failed to read persisted "
-            f"adjudications ({exc}); judging every group fresh.",
-            err=True,
-        )
-        return AdjudicationServes({}, candidates, 0)
+        # `warn_on_failure=False` is curate's pricing probe (#867 review):
+        # the stage RUN rebuilds this partition minutes later and warns
+        # then, so an unreadable store costs one warning per curate run,
+        # not one per read -- the standalone verb partitions once and
+        # always warns. `surface` names the command the user actually ran
+        # (#867 review): a warning during a curate run must not be
+        # attributed to the standalone verb.
+        if warn_on_failure:
+            typer.echo(
+                f"openkos {surface}: warning -- failed to read persisted "
+                f"adjudications ({exc}); judging every group fresh.",
+                err=True,
+            )
+        return AdjudicationServes({}, candidates, 0, store_read=False)
     latest: dict[str, adjudications_store.Adjudication] = {}
     for row in persisted:
         latest[adjudications_store.group_key_for(row.member_ids)] = row
@@ -14455,7 +14498,7 @@ def _partition_adjudication_serves(
             confidence=stored.confidence,
             rationale=rationale,
         )
-    return AdjudicationServes(served, to_judge, rubric_stale)
+    return AdjudicationServes(served, to_judge, rubric_stale, store_read=True)
 
 
 class EdgeSuggestionServes(NamedTuple):
@@ -14516,6 +14559,8 @@ def _partition_edge_suggestion_serves(
     edges: "list[Edge]",
     *,
     include_confidential: bool,
+    warn_on_failure: bool = True,
+    surface: str = "suggest-relations",
 ) -> EdgeSuggestionServes:
     """Split `edges` into suggestions servable from `.openkos/findings.db`
     and the edges that still need a model call (#799) -- the edge-typing
@@ -14548,11 +14593,19 @@ def _partition_edge_suggestion_serves(
         finally:
             conn.close()
     except (OSError, sqlite3.Error) as exc:
-        typer.echo(
-            "openkos suggest-relations: warning -- failed to read persisted "
-            f"suggestions ({exc}); typing every edge fresh.",
-            err=True,
-        )
+        # `warn_on_failure=False` is curate's pricing probe (#867 review):
+        # the stage RUN rebuilds this partition minutes later and warns
+        # then, so an unreadable store costs one warning per curate run,
+        # not one per read -- the standalone verb partitions once and
+        # always warns. `surface` names the command the user actually ran
+        # (#867 review): a warning during a curate run must not be
+        # attributed to the standalone verb.
+        if warn_on_failure:
+            typer.echo(
+                f"openkos {surface}: warning -- failed to read persisted "
+                f"suggestions ({exc}); typing every edge fresh.",
+                err=True,
+            )
         return EdgeSuggestionServes({}, edges, store_read=False)
     latest: dict[str, edge_suggestions_store.PersistedEdgeSuggestion] = {}
     for row in persisted:
@@ -14592,6 +14645,7 @@ def _persist_edge_suggestions(
     results: "Sequence[EdgeSuggestion]",
     *,
     include_confidential: bool,
+    surface: str = "suggest-relations",
 ) -> None:
     """Persist freshly computed edge-typing suggestions (#799), fail-open:
     a failed persist costs one stderr advisory, never the run -- the same
@@ -14639,8 +14693,10 @@ def _persist_edge_suggestions(
         finally:
             conn.close()
     except (OSError, sqlite3.Error) as exc:
+        # `surface` names the command the user actually ran (#867 review):
+        # curate's Structure stage persists through this helper too.
         typer.echo(
-            "openkos suggest-relations: warning -- failed to persist edge "
+            f"openkos {surface}: warning -- failed to persist edge "
             f"suggestions ({exc}); the next run will re-type them.",
             err=True,
         )
@@ -14651,6 +14707,7 @@ def _persist_adjudications(
     results: "Sequence[AdjudicatedCandidate]",
     *,
     include_confidential: bool,
+    surface: str = "adjudicate",
 ) -> None:
     """Persist freshly judged adjudication verdicts (#779), fail-open: a
     failed persist costs one stderr advisory, never the run -- the same
@@ -14696,8 +14753,10 @@ def _persist_adjudications(
         finally:
             conn.close()
     except (OSError, sqlite3.Error) as exc:
+        # `surface` names the command the user actually ran (#867 review):
+        # curate's Identity stage persists through this helper too.
         typer.echo(
-            "openkos adjudicate: warning -- failed to persist adjudication "
+            f"openkos {surface}: warning -- failed to persist adjudication "
             f"verdicts ({exc}); the next run will re-judge them.",
             err=True,
         )
