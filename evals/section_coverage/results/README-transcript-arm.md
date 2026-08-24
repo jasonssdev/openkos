@@ -128,5 +128,9 @@ was never selected and no row for it could be printed. The arm does refuse
 it — `leave_one_section_out` raises on any predicate whose `covers_by_quoting`
 is set, because it covers by the same `evidence_line` rule the arm
 attributes by — and since this round the CLI refuses the whole invocation
-rather than printing a table of `NOT SCORABLE` rows. That refusal is proved
-in the probe's self-test, not here.
+when EVERY selected predicate is quote-covering, so a table whose every row
+would read `NOT SCORABLE` is never printed. A mixed selection such as
+`--predicate quote --predicate overlap` still prints the table, with a
+`quote  NOT SCORABLE` row beside the scorable column — that row is a
+supported output the probe's self-test asserts. Both behaviours are proved
+in the self-test, not here.

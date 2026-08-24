@@ -2309,6 +2309,31 @@ def _self_test() -> int:
         f"including its exclusion counts and exit 0 (exit={rescore_exit}, "
         f"got {rendered[:200]!r})",
     )
+    # The second swept constant walked through `main()`, same standard as
+    # the walk above: `--overlap-min-words` is wired to `select_predicates`
+    # at exactly one call site, and dropping that third argument fails
+    # SILENTLY -- the ladder falls back to the default gate while printing
+    # the same column names, so only the rendered `/W` suffix proves the
+    # flag reached the factory.
+    gate_printed = io.StringIO()
+    with contextlib.redirect_stdout(gate_printed):
+        gate_exit = main(
+            [
+                "--rescore",
+                str(COMMITTED_RUNS),
+                "--leave-one-out",
+                "--overlap-min-words",
+                "8",
+            ]
+        )
+    gate_rendered = gate_printed.getvalue()
+    check(
+        gate_exit == 0 and "overlap@0.5/8" in gate_rendered,
+        "--overlap-min-words must reach `select_predicates` through `main()` "
+        "and render the gate into the column name -- a run scoring the "
+        "default gate under a swept flag is indistinguishable from a correct "
+        f"one otherwise (exit={gate_exit}, got {gate_rendered[:200]!r})",
+    )
     check(
         "NO DATA"
         in leave_one_out_table(
@@ -2389,14 +2414,51 @@ def _self_test() -> int:
     # Non-vacuity, stated as an assertion rather than as prose. If EVERY
     # object quotes the section, removing them leaves nothing at all, and a
     # predicate handed an empty list flags every section it can check. Such
-    # a row is true by construction and must be excluded from the arm.
-    only_quoting = coverage.leave_one_section_out(
+    # a row is true by construction and must be excluded from the arm --
+    # and the exclusion must land in the `total_removal` bucket, not merely
+    # produce no row. The earlier draft asserted `all(row.remaining > 0)`
+    # over a scan that yields NO rows here, which is `all(())`: green
+    # whichever counter the branch increments, while the README publishes
+    # those exact buckets as the audit column. Assert the counter itself.
+    only_quoting = coverage.leave_one_out_report(
         [quoting_object], loso_source, coverage.OVERLAP
     )
     check(
-        all(row.remaining > 0 for row in only_quoting),
+        only_quoting.rows == (),
         "a row whose ablation empties the object list is true by construction "
-        f"and must not be scored (got {[(r.heading, r.remaining) for r in only_quoting]})",
+        "and must not be scored (got "
+        f"{[(r.heading, r.remaining) for r in only_quoting.rows]})",
+    )
+    check(
+        (only_quoting.unscorable, only_quoting.unquoted, only_quoting.total_removal)
+        == (0, 2, 1),
+        "`## Storage` is quoted by the ONLY object, so its exclusion must be "
+        "counted as total-removal while the two unquoted sections land in "
+        "unquoted -- misattributing which gate dropped a section is exactly "
+        "what the published `excluded:` line would then lie about (got "
+        f"unscorable={only_quoting.unscorable} unquoted={only_quoting.unquoted} "
+        f"total_removal={only_quoting.total_removal})",
+    )
+
+    # The third bucket, observed INCREMENTING rather than asserted zero.
+    # `## Thin` is pure function words, so `overlap.checkable` rejects it
+    # and the scan must count it unscorable -- not unquoted, which is where
+    # it would land if the branches were swapped, and not a silent skip.
+    sparse_scan = coverage.leave_one_out_report(
+        [quoting_object, other_object],
+        "## Thin\nde la que en el\n"
+        "## Storage\n"
+        "The platform standardized on MySQL 8 as its primary datastore.\n",
+        coverage.OVERLAP,
+    )
+    check(
+        (sparse_scan.unscorable, sparse_scan.unquoted, sparse_scan.total_removal)
+        == (1, 0, 0)
+        and len(sparse_scan.rows) == 1,
+        "a section the predicate cannot check must be counted UNSCORABLE "
+        "while the quoted section beside it still gets its row (got "
+        f"unscorable={sparse_scan.unscorable} unquoted={sparse_scan.unquoted} "
+        f"total_removal={sparse_scan.total_removal} rows={len(sparse_scan.rows)})",
     )
 
     if failures:
