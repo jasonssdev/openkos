@@ -90,6 +90,22 @@ def _build_judge_messages(
     ]
 
 
+def prompt_overhead_chars(
+    candidates: "list[JudgeCandidate] | tuple[JudgeCandidate, ...]",
+) -> int:
+    """Chars the judge prompt spends on everything EXCEPT the source text
+    (#866): the system rules, the rendered candidate lines, and the fixed
+    scaffold labels.
+
+    Public so `extract_concept_union` can budget the source excerpt it
+    passes to `select` against the model's context window without this
+    module's prompt encoding leaking out of it: the overhead is DEFINED as
+    "the prompt built over an empty source", so a change to the system
+    prompt or the candidate-line encoding moves this number automatically
+    and the two can never drift."""
+    return sum(len(m["content"]) for m in _build_judge_messages("", candidates))
+
+
 def _validate_selection(data: dict[str, Any]) -> tuple[str, ...] | None:
     """Fail-closed validation of a parsed judge reply: `keep` MUST be a
     present, non-empty list of strings. Any other shape returns `None`

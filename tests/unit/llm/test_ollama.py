@@ -2720,3 +2720,13 @@ def test_generation_capped_ignores_boolean_counters_with_no_ceiling_set(
         "backend's own limit cut it off; the response is truncated and "
         "unusable."
     )
+
+
+def test_context_window_property_exposes_the_configured_window() -> None:
+    """`context_window` reads back exactly what was configured (#866):
+    the prompt-bounding seam in `extraction.concept` plans its excerpt
+    against the window the client will ACTUALLY send as `num_ctx`, and it
+    must read that fact off the client rather than re-deriving it from
+    config -- the same read-the-real-send rationale as `resolved_host`."""
+    assert OllamaClient(model="m", context_window=12288).context_window == 12288
+    assert OllamaClient(model="m").context_window is None
