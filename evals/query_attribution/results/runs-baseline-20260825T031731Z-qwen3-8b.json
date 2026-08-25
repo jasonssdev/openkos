@@ -1,0 +1,612 @@
+{
+  "arm": "baseline",
+  "model": "qwen3:8b",
+  "runs": 3,
+  "generated_at": "20260825T031731Z",
+  "limit": 5,
+  "max_generation_tokens": 8192,
+  "context_window": 12288,
+  "rows": [
+    {
+      "run": 0,
+      "language": "es",
+      "regime": "short",
+      "question": "¿qué se decidió sobre el historial de decisiones?",
+      "attribution": "reported",
+      "cited": 2,
+      "blocks": 5,
+      "answer_chars": 230
+    },
+    {
+      "run": 0,
+      "language": "es",
+      "regime": "short",
+      "question": "¿qué pasa si ingiero el mismo archivo dos veces?",
+      "attribution": "reported",
+      "cited": 2,
+      "blocks": 5,
+      "answer_chars": 264
+    },
+    {
+      "run": 0,
+      "language": "es",
+      "regime": "short",
+      "question": "¿quién quedó como responsable de la migración?",
+      "attribution": "reported",
+      "cited": 1,
+      "blocks": 5,
+      "answer_chars": 90
+    },
+    {
+      "run": 0,
+      "language": "es",
+      "regime": "short",
+      "question": "¿el bundle o el índice es la fuente de verdad?",
+      "attribution": "reported",
+      "cited": 2,
+      "blocks": 5,
+      "answer_chars": 332
+    },
+    {
+      "run": 0,
+      "language": "es",
+      "regime": "short",
+      "question": "¿por qué se exigen citas textuales?",
+      "attribution": "reported",
+      "cited": 2,
+      "blocks": 5,
+      "answer_chars": 333
+    },
+    {
+      "run": 0,
+      "language": "es",
+      "regime": "long",
+      "question": "haz un resumen completo y estructurado, con secciones, de todas las decisiones tomadas en las reuniones, quién propuso cada una y qué condiciones se agregaron",
+      "attribution": "absent",
+      "cited": 5,
+      "blocks": 5,
+      "answer_chars": 2295
+    },
+    {
+      "run": 0,
+      "language": "es",
+      "regime": "long",
+      "question": "explica en detalle el modelo de privacidad del proyecto: sensibilidad, borrado, snapshots de fusión y todo lo acordado al respecto",
+      "attribution": "reported",
+      "cited": 4,
+      "blocks": 5,
+      "answer_chars": 1409
+    },
+    {
+      "run": 0,
+      "language": "es",
+      "regime": "long",
+      "question": "describe el flujo completo desde la ingesta hasta la publicación de objetos derivados, incluyendo curación, idempotencia y responsables",
+      "attribution": "reported",
+      "cited": 4,
+      "blocks": 5,
+      "answer_chars": 701
+    },
+    {
+      "run": 0,
+      "language": "es",
+      "regime": "long",
+      "question": "redacta un informe detallado sobre la trazabilidad del compilador de conocimiento: qué problema resuelve, qué se decidió y cómo se audita",
+      "attribution": "reported",
+      "cited": 3,
+      "blocks": 5,
+      "answer_chars": 736
+    },
+    {
+      "run": 0,
+      "language": "es",
+      "regime": "long",
+      "question": "enumera y desarrolla todos los principios de arquitectura del proyecto que aparecen en las reuniones, con su justificación",
+      "attribution": "reported",
+      "cited": 5,
+      "blocks": 5,
+      "answer_chars": 2199
+    },
+    {
+      "run": 1,
+      "language": "es",
+      "regime": "short",
+      "question": "¿qué se decidió sobre el historial de decisiones?",
+      "attribution": "reported",
+      "cited": 2,
+      "blocks": 5,
+      "answer_chars": 232
+    },
+    {
+      "run": 1,
+      "language": "es",
+      "regime": "short",
+      "question": "¿qué pasa si ingiero el mismo archivo dos veces?",
+      "attribution": "reported",
+      "cited": 2,
+      "blocks": 5,
+      "answer_chars": 270
+    },
+    {
+      "run": 1,
+      "language": "es",
+      "regime": "short",
+      "question": "¿quién quedó como responsable de la migración?",
+      "attribution": "reported",
+      "cited": 1,
+      "blocks": 5,
+      "answer_chars": 90
+    },
+    {
+      "run": 1,
+      "language": "es",
+      "regime": "short",
+      "question": "¿el bundle o el índice es la fuente de verdad?",
+      "attribution": "reported",
+      "cited": 3,
+      "blocks": 5,
+      "answer_chars": 406
+    },
+    {
+      "run": 1,
+      "language": "es",
+      "regime": "short",
+      "question": "¿por qué se exigen citas textuales?",
+      "attribution": "reported",
+      "cited": 2,
+      "blocks": 5,
+      "answer_chars": 302
+    },
+    {
+      "run": 1,
+      "language": "es",
+      "regime": "long",
+      "question": "haz un resumen completo y estructurado, con secciones, de todas las decisiones tomadas en las reuniones, quién propuso cada una y qué condiciones se agregaron",
+      "attribution": "absent",
+      "cited": 5,
+      "blocks": 5,
+      "answer_chars": 1717
+    },
+    {
+      "run": 1,
+      "language": "es",
+      "regime": "long",
+      "question": "explica en detalle el modelo de privacidad del proyecto: sensibilidad, borrado, snapshots de fusión y todo lo acordado al respecto",
+      "attribution": "reported",
+      "cited": 3,
+      "blocks": 5,
+      "answer_chars": 954
+    },
+    {
+      "run": 1,
+      "language": "es",
+      "regime": "long",
+      "question": "describe el flujo completo desde la ingesta hasta la publicación de objetos derivados, incluyendo curación, idempotencia y responsables",
+      "attribution": "reported",
+      "cited": 3,
+      "blocks": 5,
+      "answer_chars": 620
+    },
+    {
+      "run": 1,
+      "language": "es",
+      "regime": "long",
+      "question": "redacta un informe detallado sobre la trazabilidad del compilador de conocimiento: qué problema resuelve, qué se decidió y cómo se audita",
+      "attribution": "reported",
+      "cited": 3,
+      "blocks": 5,
+      "answer_chars": 891
+    },
+    {
+      "run": 1,
+      "language": "es",
+      "regime": "long",
+      "question": "enumera y desarrolla todos los principios de arquitectura del proyecto que aparecen en las reuniones, con su justificación",
+      "attribution": "reported",
+      "cited": 5,
+      "blocks": 5,
+      "answer_chars": 2321
+    },
+    {
+      "run": 2,
+      "language": "es",
+      "regime": "short",
+      "question": "¿qué se decidió sobre el historial de decisiones?",
+      "attribution": "reported",
+      "cited": 2,
+      "blocks": 5,
+      "answer_chars": 232
+    },
+    {
+      "run": 2,
+      "language": "es",
+      "regime": "short",
+      "question": "¿qué pasa si ingiero el mismo archivo dos veces?",
+      "attribution": "reported",
+      "cited": 2,
+      "blocks": 5,
+      "answer_chars": 346
+    },
+    {
+      "run": 2,
+      "language": "es",
+      "regime": "short",
+      "question": "¿quién quedó como responsable de la migración?",
+      "attribution": "reported",
+      "cited": 1,
+      "blocks": 5,
+      "answer_chars": 90
+    },
+    {
+      "run": 2,
+      "language": "es",
+      "regime": "short",
+      "question": "¿el bundle o el índice es la fuente de verdad?",
+      "attribution": "reported",
+      "cited": 2,
+      "blocks": 5,
+      "answer_chars": 376
+    },
+    {
+      "run": 2,
+      "language": "es",
+      "regime": "short",
+      "question": "¿por qué se exigen citas textuales?",
+      "attribution": "reported",
+      "cited": 2,
+      "blocks": 5,
+      "answer_chars": 247
+    },
+    {
+      "run": 2,
+      "language": "es",
+      "regime": "long",
+      "question": "haz un resumen completo y estructurado, con secciones, de todas las decisiones tomadas en las reuniones, quién propuso cada una y qué condiciones se agregaron",
+      "attribution": "absent",
+      "cited": 5,
+      "blocks": 5,
+      "answer_chars": 2394
+    },
+    {
+      "run": 2,
+      "language": "es",
+      "regime": "long",
+      "question": "explica en detalle el modelo de privacidad del proyecto: sensibilidad, borrado, snapshots de fusión y todo lo acordado al respecto",
+      "attribution": "reported",
+      "cited": 5,
+      "blocks": 5,
+      "answer_chars": 1279
+    },
+    {
+      "run": 2,
+      "language": "es",
+      "regime": "long",
+      "question": "describe el flujo completo desde la ingesta hasta la publicación de objetos derivados, incluyendo curación, idempotencia y responsables",
+      "attribution": "reported",
+      "cited": 4,
+      "blocks": 5,
+      "answer_chars": 572
+    },
+    {
+      "run": 2,
+      "language": "es",
+      "regime": "long",
+      "question": "redacta un informe detallado sobre la trazabilidad del compilador de conocimiento: qué problema resuelve, qué se decidió y cómo se audita",
+      "attribution": "reported",
+      "cited": 3,
+      "blocks": 5,
+      "answer_chars": 823
+    },
+    {
+      "run": 2,
+      "language": "es",
+      "regime": "long",
+      "question": "enumera y desarrolla todos los principios de arquitectura del proyecto que aparecen en las reuniones, con su justificación",
+      "attribution": "reported",
+      "cited": 5,
+      "blocks": 5,
+      "answer_chars": 1970
+    },
+    {
+      "run": 0,
+      "language": "en",
+      "regime": "short",
+      "question": "what was decided about the decision history?",
+      "attribution": "reported",
+      "cited": 2,
+      "blocks": 5,
+      "answer_chars": 332
+    },
+    {
+      "run": 0,
+      "language": "en",
+      "regime": "short",
+      "question": "what happens if I ingest the same file twice?",
+      "attribution": "reported",
+      "cited": 2,
+      "blocks": 5,
+      "answer_chars": 276
+    },
+    {
+      "run": 0,
+      "language": "en",
+      "regime": "short",
+      "question": "who was assigned as owner of the migration?",
+      "attribution": "reported",
+      "cited": 1,
+      "blocks": 5,
+      "answer_chars": 73
+    },
+    {
+      "run": 0,
+      "language": "en",
+      "regime": "short",
+      "question": "is the bundle or the index the source of truth?",
+      "attribution": "absent",
+      "cited": 5,
+      "blocks": 5,
+      "answer_chars": 240
+    },
+    {
+      "run": 0,
+      "language": "en",
+      "regime": "short",
+      "question": "why are verbatim citations required?",
+      "attribution": "reported",
+      "cited": 2,
+      "blocks": 5,
+      "answer_chars": 522
+    },
+    {
+      "run": 0,
+      "language": "en",
+      "regime": "long",
+      "question": "write a complete, structured summary, with sections, of every decision taken in the meetings, who proposed each one and what conditions were added",
+      "attribution": "reported",
+      "cited": 3,
+      "blocks": 5,
+      "answer_chars": 1342
+    },
+    {
+      "run": 0,
+      "language": "en",
+      "regime": "long",
+      "question": "explain in detail the project's privacy model: sensitivity, deletion, merge snapshots and everything agreed about it",
+      "attribution": "reported",
+      "cited": 4,
+      "blocks": 5,
+      "answer_chars": 1236
+    },
+    {
+      "run": 0,
+      "language": "en",
+      "regime": "long",
+      "question": "describe the full flow from ingestion to publishing derived objects, including curation, idempotency and owners",
+      "attribution": "absent",
+      "cited": 5,
+      "blocks": 5,
+      "answer_chars": 805
+    },
+    {
+      "run": 0,
+      "language": "en",
+      "regime": "long",
+      "question": "write a detailed report on the knowledge compiler's traceability: what problem it solves, what was decided and how it is audited",
+      "attribution": "reported",
+      "cited": 2,
+      "blocks": 5,
+      "answer_chars": 1250
+    },
+    {
+      "run": 0,
+      "language": "en",
+      "regime": "long",
+      "question": "list and elaborate every architecture principle of the project that appears in the meetings, with its justification",
+      "attribution": "absent",
+      "cited": 5,
+      "blocks": 5,
+      "answer_chars": 753
+    },
+    {
+      "run": 1,
+      "language": "en",
+      "regime": "short",
+      "question": "what was decided about the decision history?",
+      "attribution": "reported",
+      "cited": 2,
+      "blocks": 5,
+      "answer_chars": 332
+    },
+    {
+      "run": 1,
+      "language": "en",
+      "regime": "short",
+      "question": "what happens if I ingest the same file twice?",
+      "attribution": "reported",
+      "cited": 2,
+      "blocks": 5,
+      "answer_chars": 266
+    },
+    {
+      "run": 1,
+      "language": "en",
+      "regime": "short",
+      "question": "who was assigned as owner of the migration?",
+      "attribution": "reported",
+      "cited": 1,
+      "blocks": 5,
+      "answer_chars": 73
+    },
+    {
+      "run": 1,
+      "language": "en",
+      "regime": "short",
+      "question": "is the bundle or the index the source of truth?",
+      "attribution": "reported",
+      "cited": 2,
+      "blocks": 5,
+      "answer_chars": 231
+    },
+    {
+      "run": 1,
+      "language": "en",
+      "regime": "short",
+      "question": "why are verbatim citations required?",
+      "attribution": "reported",
+      "cited": 2,
+      "blocks": 5,
+      "answer_chars": 530
+    },
+    {
+      "run": 1,
+      "language": "en",
+      "regime": "long",
+      "question": "write a complete, structured summary, with sections, of every decision taken in the meetings, who proposed each one and what conditions were added",
+      "attribution": "reported",
+      "cited": 3,
+      "blocks": 5,
+      "answer_chars": 1447
+    },
+    {
+      "run": 1,
+      "language": "en",
+      "regime": "long",
+      "question": "explain in detail the project's privacy model: sensitivity, deletion, merge snapshots and everything agreed about it",
+      "attribution": "reported",
+      "cited": 4,
+      "blocks": 5,
+      "answer_chars": 1772
+    },
+    {
+      "run": 1,
+      "language": "en",
+      "regime": "long",
+      "question": "describe the full flow from ingestion to publishing derived objects, including curation, idempotency and owners",
+      "attribution": "reported",
+      "cited": 4,
+      "blocks": 5,
+      "answer_chars": 984
+    },
+    {
+      "run": 1,
+      "language": "en",
+      "regime": "long",
+      "question": "write a detailed report on the knowledge compiler's traceability: what problem it solves, what was decided and how it is audited",
+      "attribution": "reported",
+      "cited": 2,
+      "blocks": 5,
+      "answer_chars": 917
+    },
+    {
+      "run": 1,
+      "language": "en",
+      "regime": "long",
+      "question": "list and elaborate every architecture principle of the project that appears in the meetings, with its justification",
+      "attribution": "absent",
+      "cited": 5,
+      "blocks": 5,
+      "answer_chars": 789
+    },
+    {
+      "run": 2,
+      "language": "en",
+      "regime": "short",
+      "question": "what was decided about the decision history?",
+      "attribution": "absent",
+      "cited": 5,
+      "blocks": 5,
+      "answer_chars": 339
+    },
+    {
+      "run": 2,
+      "language": "en",
+      "regime": "short",
+      "question": "what happens if I ingest the same file twice?",
+      "attribution": "reported",
+      "cited": 2,
+      "blocks": 5,
+      "answer_chars": 318
+    },
+    {
+      "run": 2,
+      "language": "en",
+      "regime": "short",
+      "question": "who was assigned as owner of the migration?",
+      "attribution": "reported",
+      "cited": 1,
+      "blocks": 5,
+      "answer_chars": 73
+    },
+    {
+      "run": 2,
+      "language": "en",
+      "regime": "short",
+      "question": "is the bundle or the index the source of truth?",
+      "attribution": "absent",
+      "cited": 5,
+      "blocks": 5,
+      "answer_chars": 240
+    },
+    {
+      "run": 2,
+      "language": "en",
+      "regime": "short",
+      "question": "why are verbatim citations required?",
+      "attribution": "reported",
+      "cited": 2,
+      "blocks": 5,
+      "answer_chars": 542
+    },
+    {
+      "run": 2,
+      "language": "en",
+      "regime": "long",
+      "question": "write a complete, structured summary, with sections, of every decision taken in the meetings, who proposed each one and what conditions were added",
+      "attribution": "reported",
+      "cited": 4,
+      "blocks": 5,
+      "answer_chars": 1661
+    },
+    {
+      "run": 2,
+      "language": "en",
+      "regime": "long",
+      "question": "explain in detail the project's privacy model: sensitivity, deletion, merge snapshots and everything agreed about it",
+      "attribution": "reported",
+      "cited": 4,
+      "blocks": 5,
+      "answer_chars": 1611
+    },
+    {
+      "run": 2,
+      "language": "en",
+      "regime": "long",
+      "question": "describe the full flow from ingestion to publishing derived objects, including curation, idempotency and owners",
+      "attribution": "reported",
+      "cited": 4,
+      "blocks": 5,
+      "answer_chars": 635
+    },
+    {
+      "run": 2,
+      "language": "en",
+      "regime": "long",
+      "question": "write a detailed report on the knowledge compiler's traceability: what problem it solves, what was decided and how it is audited",
+      "attribution": "reported",
+      "cited": 2,
+      "blocks": 5,
+      "answer_chars": 1005
+    },
+    {
+      "run": 2,
+      "language": "en",
+      "regime": "long",
+      "question": "list and elaborate every architecture principle of the project that appears in the meetings, with its justification",
+      "attribution": "absent",
+      "cited": 5,
+      "blocks": 5,
+      "answer_chars": 858
+    }
+  ],
+  "failures": []
+}

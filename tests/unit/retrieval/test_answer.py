@@ -2187,6 +2187,33 @@ def test_system_prompt_does_not_invite_inlining_concept_ids(tmp_path: Path) -> N
     assert "concept id" in system
 
 
+def test_the_attribution_instruction_anchors_against_omission() -> None:
+    """#871's fix is one anchor sentence on the attribution instruction, and
+    an anchor is only a fix while it is in the prompt. Pinned by its
+    load-bearing claims rather than byte-for-byte, the same contract as the
+    contradiction and adjudication rubric tests.
+
+    Measured before adoption (`evals/query_attribution/README.md`, two
+    pooled 3-run sweeps per arm, n=30 per cell): the issue's language
+    hypothesis did not survive (en-short compliance 0.63 vs es-short 1.00
+    at baseline -- omission is question-shaped, concentrated in one-line
+    answers and the longest structured ones), and the anchor moved every
+    cell non-negatively: es-long 0.83 -> 1.00 (the reported `--save`
+    regime), en-short 0.63 -> 0.77, en-long 0.77 -> 0.83, overall
+    0.81 -> 0.90.
+    """
+    prompt = answer_mod._SYSTEM_PROMPT.lower()
+
+    # The anchor's three claims: the line is unconditional ("every time"),
+    # across both measured omission regimes -- length extremes and answer
+    # language -- and it is machinery, never translated or omitted.
+    assert "every time" in prompt
+    assert "however short or long" in prompt
+    assert "whatever language" in prompt
+    assert "never translate" in prompt
+    assert "never omit" in prompt
+
+
 # --- issue #240: the confidential local exemption on the query path ----------
 
 
