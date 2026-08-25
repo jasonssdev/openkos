@@ -1,4 +1,4 @@
-# `contradictions` — the judge harness issue #558 needed
+# `contradictions` — the judge harness issues #558 and #870 needed
 
 Issue #558: the contradiction judge read antonymy (two concepts defined in
 opposition) as factual contradiction — two of three findings in a real run
@@ -8,17 +8,23 @@ carried no discriminating information. Nothing scored this judge, so a
 prompt fix would have been adopted on intuition, which this project has
 already paid for (`evals/edge_typing/README.md`).
 
+Issue #870 (see [its section below](#the-benefit-vs-limitation-class-870)):
+a benefit and a limitation of one technique judged `contradicts` at 0.95 in
+the field. Its fix was measured here, adopted, and took the #558 residual
+with it.
+
 ```bash
-python evals/contradictions/run_contradictions_eval.py --arm baseline --runs 5
-python evals/contradictions/run_contradictions_eval.py --arm treatment --runs 5
+python evals/contradictions/run_contradictions_eval.py --arm baseline --runs 15
+python evals/contradictions/run_contradictions_eval.py --arm treatment --runs 15
 ```
 
 `baseline` always runs the LIVE production prompt; `treatment` swaps in
 `contradiction_prompts.TREATMENT_SYSTEM_PROMPT`. The runner drives the real
 `find_contradictions` path — graph build, candidate seeding, prompt
-assembly, fail-closed parse — over a 12-pair constructed fixture
+assembly, fail-closed parse — over an 18-pair constructed fixture
 (`contradiction_fixtures.py`): 4 factual contradictions, 5 antonym pairs,
-2 plain-consistent pairs, 1 definitional-phrased contradiction.
+2 plain-consistent pairs, 1 definitional-phrased contradiction, 4
+benefit-limitation pairs and 2 evaluative-contradiction guards (#870).
 
 ## What it measures
 
@@ -69,6 +75,68 @@ every measured arm.
   verdicts are the MOST confident). This is why the fix targets emission,
   not thresholding, and why `--all`'s display gate must not be trusted as a
   precision knob.
+
+## The benefit-vs-limitation class (#870)
+
+The 0.2.9 E2E reported a benefit and a limitation of one technique (RAG
+improves decision extraction / RAG loses traceability) judged `contradicts`
+at 0.95 — sharper, the benefit body had already integrated the limitation
+in its own prose ("Sin embargo, ..."), so the judge flagged a tension one
+member resolves internally. Six pairs joined the fixture:
+`benefit-limitation` ×4 (expected `consistent`; the first mirrors the wild
+pair exactly, integration included) and `evaluative-contradiction` ×2 (the
+guard: opposite claims about the SAME measured aspect phrased evaluatively,
+expected `contradicts` — a carve-out must not wash these out).
+
+**All prior arms in this file predate this fixture change and are not
+comparable to anything below.** Both arms re-measured whole: `qwen3:8b`,
+**15 runs per arm**, production client settings, 2026-08-25.
+
+| arm | benefit-limitation FP | antonym FP | TP retention | evaluative guard | accuracy | stability |
+| --- | --- | --- | --- | --- | --- | --- |
+| baseline (stamp `20260825T023011Z`) | **0.15** | 0.32 | 1.00 | 1.00 | 0.86 | 0.95 |
+| treatment, ADOPTED (stamp `20260825T024424Z`) | **0.00** | **0.00** | 1.00 | 1.00 | **1.00** | 1.00 |
+
+The baseline's whole class failure sits in the wild-mirror pair: **wrong 14
+of 15 runs** (9 `contradicts` at 0.95, 5 `uncertain`, stability 0.60), while
+the three pairs whose benefit body and limitation body discuss DIFFERENT
+properties are clean.
+The failing shape is precise: both bodies acknowledge the SAME limitation —
+one in passing, one in depth — so the claims agree and only the tone
+opposes, and the judge read opposing tone as incompatibility.
+
+The treatment is ONE sentence inserted after the antonymy carve-out
+(benefit-vs-limitation names different properties; shared acknowledgement
+of a limitation is agreement; contradicts needs incompatible values for one
+property, never opposite tone). Result: a perfect arm — 270 of 270
+judgements right, every pair at stability 1.00 — including **antonym FP
+0.32 → 0.00**, which closes the allowlist/denylist residual the #558
+section above records as unfixable at this model size: opposing DEFAULTS
+phrased as parallel claims stop reading as a conflict once tone is named
+as a non-property. Adopted into production
+(`resolution/contradiction.py`); `TREATMENT_SYSTEM_PROMPT` now equals
+production, per this module's convention.
+
+Two caveats, stated rather than implied:
+
+- **The class rode one pair.** The other three benefit-limitation pairs
+  were already clean, so the 0.15 → 0.00 headline is one pair going from
+  14-of-15 wrong to 15-of-15 right — but that pair is the wild shape, its
+  wrongness was persistent, and the treatment arm is 270 of 270 across the
+  whole fixture, far beyond this harness's measured self-swing (the n=5
+  warning below).
+- **The evaluative guards are value-anchored.** Both guard pairs carry
+  citable quantities (80ms/120ms swapped; halved vs doubled), so a
+  same-property conflict with NO citable values — the shape the sentence's
+  "incompatible values for one property" wording would be likeliest to
+  wash out — is not measured here. It was not measured before #870 either
+  (the #558 prompt already demanded citable conflicting claims); stated so
+  the 1.00 guard row is not read wider than its fixtures.
+- **Persisted findings do not re-judge.** `finding_input_digests` covers
+  member bytes and the relation label, not the rubric, so a finding stored
+  under the old prompt keeps serving until its members change or
+  `contradictions --fresh` re-judges. The #838 rubric-digest gate covers
+  the adjudication store only.
 
 ## What a smaller model costs here (#700 lever 3) — REJECTED
 

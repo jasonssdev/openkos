@@ -13,6 +13,7 @@ import contextlib
 import dataclasses
 import inspect
 import math
+import re
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 
@@ -1116,6 +1117,36 @@ def test_find_contradictions_builds_a_two_message_json_only_prompt(
     assert "Beta body text." in messages[1]["content"]
     assert "references" in messages[1]["content"]
     assert "JSON" in messages[0]["content"]
+
+
+def test_the_rubric_separates_tone_from_property() -> None:
+    """#870's fix is a rubric sentence, and a rubric sentence is only a fix
+    while it is in the rubric. Pinned by its load-bearing claims rather than
+    byte-for-byte, so rewording stays possible and deletion does not --
+    the same pinning contract as adjudication's rubric test.
+
+    Measured before adoption (`evals/contradictions/README.md`, 15 runs per
+    arm): benefit-limitation FP 0.15 -> 0.00 with the wild-mirror pair going
+    from 14-of-15 wrong to 15-of-15 right, antonym FP 0.32 -> 0.00 including
+    the allowlist/denylist residual #558 recorded as unfixable, and TP
+    retention plus the evaluative-contradiction guard pinned at 1.00.
+    """
+    rubric = contradiction_mod._SYSTEM_PROMPT.lower()
+
+    # The #558 clauses the #870 sentence extends -- a rewrite that dropped
+    # either would resurrect the antonymy class the earlier fix bought.
+    assert "opposition" in rubric
+    assert "incompatible" in rubric
+    # #870's own load-bearing claims: benefit-vs-limitation names different
+    # properties, shared acknowledgement of a limitation is agreement, and
+    # tone is never the property a contradiction is about. `\bagree\b`
+    # rather than a bare substring: "disagree" contains "agree" and would
+    # satisfy the weaker check while inverting the claim; "opposite tone"
+    # rather than "tone" for the same reason (any word containing it).
+    assert "limitation" in rubric
+    assert "different properties" in rubric
+    assert re.search(r"\bagree\b", rubric)
+    assert "opposite tone" in rubric
 
 
 # ---------------------------------------------------------------------------

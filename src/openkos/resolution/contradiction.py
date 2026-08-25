@@ -132,7 +132,12 @@ _SYSTEM_PROMPT = (
     "status, a cause). Two concepts defined in OPPOSITION to each other -- "
     "complementary or opposite types in one taxonomy -- are NOT a "
     "contradiction: their definitions differ by design and assert nothing "
-    "incompatible about any shared fact, so judge them consistent. Assert "
+    "incompatible about any shared fact, so judge them consistent. "
+    "Likewise, one concept praising what a technique improves and another "
+    "describing a limitation it has make claims about DIFFERENT properties, "
+    "and two bodies that both acknowledge the same limitation AGREE about "
+    "it: judge contradicts only on incompatible values for one property, "
+    "never on opposite tone toward one subject. Assert "
     "contradicts ONLY when you can cite specific conflicting claims from "
     "both concepts; otherwise use consistent or uncertain. Set confidence "
     "to how sure you are of the verdict, and reserve values above 0.9 for "
@@ -157,12 +162,27 @@ original prompt judged 2 of 5 antonym pairs `contradicts` at confidence
 that to 0.24 with true-positive retention unchanged at 1.00. A longer
 variant that also asked "do the two documents describe the SAME thing?"
 measured WORSE (0.28), so the carve-out stays surgical -- do not extend it
-without re-running both arms of the harness. Known residual: a pair whose
-opposing DEFAULTS are phrased as parallel claims (allowlist/denylist) still
-reads as a conflict at full confidence, and the stated confidence carries
-no correctness signal at this model size (0.98 on correct verdicts, 1.00 on
-wrong ones) -- the display gate cannot rescue a wrong verdict, which is why
-the fix targets emission, not thresholding."""
+without re-running both arms of the harness.
+
+The tone-is-not-a-property sentence is issue #870's measured fix (one
+sentence inserted, nothing else moved): a benefit and a limitation of one
+technique had been judged `contradicts` at 0.95 in the field, and on the
+18-pair fixture the baseline failed the wild-mirror pair 14 of 15 runs.
+With the sentence (`evals/contradictions/README.md`, 15 runs per arm):
+benefit-limitation FP 0.15 -> 0.00, TP retention and the
+evaluative-contradiction guard (opposite claims about the SAME measured
+aspect, phrased evaluatively) both pinned at 1.00 -- and antonym FP fell
+0.32 -> 0.00, closing the allowlist/denylist residual #558 had recorded as
+unfixable at this model size. Stated confidence still carries no
+correctness signal (wrong verdicts are as confident as right ones), so the
+fix targets emission, not thresholding, and the display gate is still not a
+precision knob.
+
+Serve-time caveat: persisted contradiction findings gate on MEMBER digests
+plus the relation label (`cli.curate.finding_input_digests`), not on this
+prompt -- a finding judged under an older rubric keeps serving until its
+members change or `contradictions --fresh` re-judges. The #838 rubric-digest
+gate covers the adjudication store only."""
 
 
 class Verdict(Enum):
