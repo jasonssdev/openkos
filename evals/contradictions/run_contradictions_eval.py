@@ -219,6 +219,15 @@ def main() -> None:
     tp_hc = _rate(class_hc_contradicts, tp_probes)
     fp_raw = _rate(class_raw_contradicts, ("antonym",))
     fp_hc = _rate(class_hc_contradicts, ("antonym",))
+    # #870's classes are reported as their OWN metrics rather than folded
+    # into the two above: every stored arm's "TP retention" and "antonym FP
+    # rate" keep meaning exactly what they measured, and the new headline
+    # number (benefit-limitation FP) stays readable next to its guard
+    # (evaluative-contradiction retention) instead of diluting either.
+    bl_fp_raw = _rate(class_raw_contradicts, ("benefit-limitation",))
+    bl_fp_hc = _rate(class_hc_contradicts, ("benefit-limitation",))
+    ec_raw = _rate(class_raw_contradicts, ("evaluative-contradiction",))
+    ec_hc = _rate(class_hc_contradicts, ("evaluative-contradiction",))
 
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     results_dir = pathlib.Path(__file__).resolve().parent / "results"
@@ -269,6 +278,10 @@ def main() -> None:
         f"| TP retention, high-confidence | {tp_hc:.2f} |",
         f"| **antonym FP rate, raw contradicts** | **{fp_raw:.2f}** |",
         f"| **antonym FP rate, high-confidence** | **{fp_hc:.2f}** |",
+        f"| **benefit-limitation FP rate, raw contradicts** | **{bl_fp_raw:.2f}** |",
+        f"| **benefit-limitation FP rate, high-confidence** | **{bl_fp_hc:.2f}** |",
+        f"| evaluative-contradiction retention, raw contradicts | {ec_raw:.2f} |",
+        f"| evaluative-contradiction retention, high-confidence | {ec_hc:.2f} |",
         f"| mean stability (modal share) | {mean_stability:.2f} |",
         f"| mean run latency | {statistics.fmean(latencies):.1f}s |",
         f"| mean confidence, CORRECT verdicts | "

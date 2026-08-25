@@ -26,6 +26,21 @@ Four classes, keyed by `LabelledPair.probe`:
   WRAPPED in definitional prose, so a judge that learns "definitional
   language means consistent" from the antonym rule gets caught. Expected
   `contradicts`.
+- `benefit-limitation` (#870): one concept describes what a technique is
+  FOR, the other a limitation it has -- claims about DIFFERENT properties
+  of one subject. Expected `consistent`. This is the class the 0.2.9 E2E
+  reported judged `contradicts` at 0.95: "the first presents RAG as
+  improving X while the second presents it as limited in Y" is most honest
+  descriptions of any technique. The first pair mirrors the wild one
+  exactly, down to the benefit body already integrating the limitation in
+  its own prose ("Sin embargo, ...") -- the judge flagged a tension one
+  member resolves internally. Per the fixture trap above, no body
+  self-describes the pair as complementary or non-contradictory.
+- `evaluative-contradiction` (#870): opposite claims about the SAME
+  measured aspect of one technique, phrased evaluatively. Expected
+  `contradicts`. The guard the new class needs: a benefit/limitation
+  carve-out must not wash out real conflicts that arrive dressed as
+  evaluations.
 """
 
 from dataclasses import dataclass, field
@@ -224,6 +239,106 @@ DOCS: tuple[ConceptDoc, ...] = (
         "frontmatter carrying type, title, and relations, followed by a "
         "prose body.",
     ),
+    # -- benefit-limitation (different aspects of one technique) --------------
+    ConceptDoc(
+        "concepts/generacion-aumentada-por-recuperacion",
+        "Generación Aumentada por Recuperación (RAG)",
+        "La generación aumentada por recuperación (RAG) es una técnica que "
+        "mejora la extracción de decisiones a partir de reuniones: recupera "
+        "los fragmentos relevantes del corpus y los entrega al modelo como "
+        "contexto, lo que reduce las respuestas inventadas. Sin embargo, se "
+        "discute su limitación en cuanto a la pérdida de trazabilidad del "
+        "origen de cada afirmación una vez fusionado el contexto.",
+        relations=(("concepts/trazabilidad-en-sistemas-rag", "related_to"),),
+    ),
+    ConceptDoc(
+        "concepts/trazabilidad-en-sistemas-rag",
+        "Trazabilidad en Sistemas RAG",
+        "Los sistemas RAG presentan limitaciones de trazabilidad: cuando "
+        "varios fragmentos recuperados se fusionan en un solo contexto, la "
+        "respuesta final no conserva qué afirmación proviene de qué "
+        "fragmento, y reconstruir esa procedencia exige instrumentación "
+        "adicional fuera del propio sistema.",
+    ),
+    ConceptDoc(
+        "concepts/caching-layer",
+        "Caching Layer",
+        "The caching layer cuts read latency by an order of magnitude: hot "
+        "keys are served from memory without touching the primary store, "
+        "and page loads that depend on them stop being IO-bound.",
+        relations=(("concepts/cache-invalidation", "related_to"),),
+    ),
+    ConceptDoc(
+        "concepts/cache-invalidation",
+        "Cache Invalidation",
+        "Cache invalidation is where the caching layer falls short: an "
+        "entry can outlive the data it copies, so a write that succeeds "
+        "against the primary store may keep being answered with the stale "
+        "value until the entry expires or is explicitly evicted.",
+    ),
+    ConceptDoc(
+        "concepts/microservices-autonomy",
+        "Microservices Autonomy",
+        "A microservice architecture lets each team deploy independently: "
+        "one service can release, roll back, or scale without coordinating "
+        "a shared release train, which shortens the path from commit to "
+        "production.",
+        relations=(("concepts/microservices-operational-load", "related_to"),),
+    ),
+    ConceptDoc(
+        "concepts/microservices-operational-load",
+        "Microservices Operational Load",
+        "Operating a microservice architecture is expensive: every service "
+        "needs its own deployment pipeline, monitoring, and on-call story, "
+        "and a single user request may cross a dozen services, so "
+        "debugging requires distributed tracing that a monolith never "
+        "needed.",
+    ),
+    ConceptDoc(
+        "concepts/secondary-indexes-reads",
+        "Secondary Indexes for Reads",
+        "Secondary indexes make selective reads fast: a query that filters "
+        "on an indexed column stops scanning the table and resolves "
+        "through the index in logarithmic time.",
+        relations=(("concepts/index-write-amplification", "related_to"),),
+    ),
+    ConceptDoc(
+        "concepts/index-write-amplification",
+        "Index Write Amplification",
+        "Each secondary index amplifies writes: every insert or update "
+        "must also update every index that covers the touched columns, so "
+        "a table with many indexes pays for them on every single write.",
+    ),
+    # -- evaluative-contradiction (same aspect, opposite claims) --------------
+    ConceptDoc(
+        "concepts/compression-benchmark-result",
+        "Compression Benchmark Result",
+        "Enabling response compression improved the API benchmark: average "
+        "query latency dropped from 120ms to 80ms with compression on, "
+        "measured on the same workload and hardware.",
+        relations=(("concepts/compression-latency-review", "related_to"),),
+    ),
+    ConceptDoc(
+        "concepts/compression-latency-review",
+        "Compression Latency Review",
+        "The review of the API benchmark found that enabling response "
+        "compression hurt latency: average query latency rose from 80ms "
+        "to 120ms with compression on, on the same workload and hardware.",
+    ),
+    ConceptDoc(
+        "concepts/event-bus-rollout-outcome",
+        "Event Bus Rollout Outcome",
+        "After the event bus rollout, deployment failures fell by half "
+        "over the second quarter compared with the first.",
+        relations=(("concepts/event-bus-rollout-retrospective", "related_to"),),
+    ),
+    ConceptDoc(
+        "concepts/event-bus-rollout-retrospective",
+        "Event Bus Rollout Retrospective",
+        "The retrospective recorded that deployment failures doubled over "
+        "the second quarter following the event bus rollout, compared "
+        "with the first.",
+    ),
     # -- definitional-contradiction -------------------------------------------
     ConceptDoc(
         "concepts/client-default-timeout",
@@ -315,5 +430,41 @@ PAIRS: tuple[LabelledPair, ...] = (
         "concepts/client-timeout-behavior",
         "contradicts",
         "definitional-contradiction",
+    ),
+    LabelledPair(
+        "concepts/generacion-aumentada-por-recuperacion",
+        "concepts/trazabilidad-en-sistemas-rag",
+        "consistent",
+        "benefit-limitation",
+    ),
+    LabelledPair(
+        "concepts/caching-layer",
+        "concepts/cache-invalidation",
+        "consistent",
+        "benefit-limitation",
+    ),
+    LabelledPair(
+        "concepts/microservices-autonomy",
+        "concepts/microservices-operational-load",
+        "consistent",
+        "benefit-limitation",
+    ),
+    LabelledPair(
+        "concepts/secondary-indexes-reads",
+        "concepts/index-write-amplification",
+        "consistent",
+        "benefit-limitation",
+    ),
+    LabelledPair(
+        "concepts/compression-benchmark-result",
+        "concepts/compression-latency-review",
+        "contradicts",
+        "evaluative-contradiction",
+    ),
+    LabelledPair(
+        "concepts/event-bus-rollout-outcome",
+        "concepts/event-bus-rollout-retrospective",
+        "contradicts",
+        "evaluative-contradiction",
     ),
 )
