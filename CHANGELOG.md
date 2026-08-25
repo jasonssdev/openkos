@@ -14,6 +14,48 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+## [0.2.10] - 2026-08-25
+
+Eight commits since v0.2.9, and every one of them answers something the
+0.2.9 end-to-end walkthrough found on real material. Two were silent
+failures with a single arithmetic cause between them: a whole-source prompt
+that outgrew the context window was decapitated by the server rather than
+refused, and the command printed to repair the damage created a second
+source instead of repairing the first. Two were work already paid for and
+then thrown away — verdicts re-bought every run, and a cost gate warning
+about a slow path over zero calls. One is new: retryable judge debt now
+ranks as its own tier in `openkos next`, which it could not do until the
+retry command it names became runnable. And three are prompt-precision
+fixes measured rather than reasoned: a contradiction judge that read tone as
+a property, an attribution line that went missing where nobody predicted,
+and an identity miss whose two candidate remedies were both measured and
+**rejected** — recorded here as a negative result, because a remedy that
+does not clear the bar is a finding, not a gap.
+
+### Added
+
+- **Retryable judge debt is its own tier in `openkos next`**
+  ([#868](https://github.com/jasonssdev/openkos/issues/868)). Objects stored
+  without judge selection passed no quality gate, yet they feed retrieval,
+  adjudication, and the graph all the same
+  ([#772](https://github.com/jasonssdev/openkos/issues/772) quarantines them
+  and `lint` reports them; nothing ever recommended fixing them). The new
+  tier reads `lint`'s own findings — both judge-degrade notice tokens — and
+  prints the same re-ingest retry `lint` computes, so the two surfaces
+  cannot disagree about the repair.
+
+  It ranks **below** a failed extraction and **above** sensitivity labels and
+  duplicate groups: absence outranks unvetted presence, and unvetted
+  presence outranks everything whose content is at least known-good. The
+  placement is what the tier is worth arguing about — the repair is
+  computed, one command, and self-clearing, which is exactly the profile
+  `next` exists to surface. The [#274](https://github.com/jasonssdev/openkos/issues/274)
+  corroboration rule, the bare-command declination, and
+  [#276](https://github.com/jasonssdev/openkos/issues/276)'s named
+  declinations all apply verbatim. The tier lands after
+  [#865](https://github.com/jasonssdev/openkos/issues/865) below, and not
+  by accident: until that fix the command it recommends made things worse.
+
 ### Fixed
 
 - **Whole-source prompts are bounded to fit the model's context window**
@@ -37,6 +79,142 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   one stderr advisory naming the calls and the `context_window` lever). New
   `evals/judge_overflow/` records the failing call's counters and the
   post-fix verification on the same corpus.
+
+- **Re-ingesting the workspace's own raw copy repairs the source instead of
+  duplicating it** ([#865](https://github.com/jasonssdev/openkos/issues/865)).
+  The retry command `lint` and `status` print for retryable extraction debt
+  names the raw copy itself — `openkos ingest raw/<name>` — and that path's
+  own digest can never equal the `origin_key` the owning Source recorded,
+  which digests the *original external* path. So the
+  [#552](https://github.com/jasonssdev/openkos/issues/552) ownership scan
+  found no match and disambiguated the workspace's own file into a **second**
+  Source with a duplicate object family: the one command printed to repair a
+  source silently created another one.
+
+  The scan now recognises a family member whose resolved path **is** the
+  candidate — the strongest identity available, stronger than any digest
+  comparison — and re-ingests it in place, preserving the owning Source's
+  recorded identity (its key, or the absence of one on a legacy Source)
+  rather than stamping the raw path's digest. Stamping it would orphan the
+  original external path, so the *next* ordinary re-ingest would mismatch on
+  the key and spawn exactly the duplicate this issue reports. A same-path
+  member with no owning Source at all — a file placed in `raw/` by hand and
+  ingested for the first time — has no identity to preserve and stamps the
+  computed digest like any other fresh ingest.
+
+- **`curate`'s Identity stage serves, persists, and discloses like every
+  other stage** ([#867](https://github.com/jasonssdev/openkos/issues/867)).
+  Identity judged every candidate group fresh on every run: no store read
+  before the model call, no persist after, and no served/fresh split line —
+  while Structure, two stages later in the *same run*, served correctly and
+  said so. Six verdicts were re-bought minutes after `adjudicate` had paid
+  for them, and the verdicts `curate` itself paid for were lost to the next
+  run.
+
+  Identity now partitions through the shared adjudication-serve helper (the
+  probe prices the gate, the run serves), persists fresh verdicts, and
+  reassembles served and fresh in candidate order through the
+  [#809](https://github.com/jasonssdev/openkos/issues/809) one-fact
+  reassembly, extracted now that it has a second caller. The split line
+  gates on the store read at **both** surfaces — #809's rule, adopted over
+  the verb's unconditional print — so a first-ever run and a corrupt-store
+  run no longer announce `0 of N served`. Store-helper warnings name the
+  surface you actually ran, `curate`'s pricing probes no longer duplicate the
+  read-failure warning, the partial-failure notice reconciles its counts with
+  a served clause, and [#838](https://github.com/jasonssdev/openkos/issues/838)'s
+  rubric-stale notice renders on the `curate` surface too.
+
+- **A fully-served cost gate no longer warns about a slow path it will not
+  take** ([#872](https://github.com/jasonssdev/openkos/issues/872)). A
+  `suggest-relations` run whose every candidate was served from the store
+  prompted with `one per edge (this can take a while)` over `0 LLM call(s)` —
+  both clauses false, two tokens after the same line said so itself. The pace
+  clause now rides the paid path only; the `--auto` hint stays, because the
+  prompt it names still fires. The ingest batch gate had the same class: over
+  ~0 estimated calls (every file skipped or unbillable) the parenthetical
+  keeps `estimate` and drops the pace warning.
+
+- **Tone is not a property: benefit-versus-limitation contradictions measured
+  to zero** ([#870](https://github.com/jasonssdev/openkos/issues/870)). A
+  concept praising what a technique improves and another describing a
+  limitation it has were judged `CONTRADICTS` at 0.95 confidence in the
+  field. They make claims about **different properties**, and two bodies that
+  both acknowledge the same limitation *agree* about it. The prompt now says
+  so in one inserted sentence — judge `contradicts` only on incompatible
+  values for one property, never on opposite tone toward one subject — with
+  nothing else moved.
+
+  Measured in `evals/contradictions/` over an 18-pair fixture (six pairs
+  added: four benefit-limitation, two evaluative-contradiction guards), 15
+  runs per arm: benefit-limitation false positives **0.15 → 0.00**, and
+  antonym false positives **0.32 → 0.00**, which closes the
+  allowlist/denylist residual
+  [#558](https://github.com/jasonssdev/openkos/issues/558) had recorded as
+  unfixable at this model size. True-positive retention and the
+  evaluative-contradiction guard both stayed pinned at 1.00. Stated
+  confidence still carries no correctness signal — wrong verdicts are as
+  confident as right ones — so the fix targets emission, not thresholding.
+  Serve-time caveat: persisted findings gate on member digests plus the
+  relation label, not on this prompt, so a finding judged under the older
+  rubric keeps serving until its members change or `contradictions --fresh`
+  re-judges it.
+
+- **The attribution line is anchored against omission, measured across
+  language and length**
+  ([#871](https://github.com/jasonssdev/openkos/issues/871)). The report said
+  Spanish answers drop the `USED:` line that
+  [#753](https://github.com/jasonssdev/openkos/issues/753) made the citation
+  set. The measurement said otherwise, and that is the finding: omission is
+  **question-shaped, not language-shaped**. On mirrored ES/EN corpora crossed
+  with a short/long question regime (`evals/query_attribution/`, two pooled
+  3-run sweeps per arm, n=30 per cell), the worst cells were English one-line
+  answers (0.63) and the longest structured answers, while Spanish short
+  answers sat at 1.00 — the opposite of the reported shape.
+
+  The prompt now closes by naming that line as machinery rather than prose:
+  emitted every time, in exactly that form, however short or long the answer
+  and whatever language it is written in, never translated. Every cell moved
+  non-negatively — es-long 0.83 → 1.00 (the reported `--save` case), en-short
+  0.63 → 0.77, en-long 0.77 → 0.83, overall **0.81 → 0.90**. A residual
+  remains in English question-shaped answers (including, ironically, *why are
+  verbatim citations required?*), which is what the conservative
+  absent-fallback and `--save`'s
+  [#774](https://github.com/jasonssdev/openkos/issues/774)
+  unverified-grounding gate are there to catch.
+
+### Changed
+
+- **The asymmetric-members identity miss is a class, and both remedies were
+  measured and rejected**
+  ([#869](https://github.com/jasonssdev/openkos/issues/869)). Production is
+  **untouched**; this entry records a negative result. A wild pair from the
+  0.2.9 corpus was judged `same` on a rationale asserting overlap its members
+  do not carry — one body dated and attended, the other bare, action items
+  disjoint — because the detailed body *elaborates* the sparse body's stated
+  purpose, and shared purpose read as shared substance. The
+  [#796](https://github.com/jasonssdev/openkos/issues/796) rubric's own
+  asymmetric branch was satisfied by assertion.
+
+  Class, not sample: five asymmetric pairs joined the fixture set
+  (`evals/adjudication/`), and over 15 baseline runs the pair mirroring the
+  wild shape is judged `same` 13 of 15 times, stably, at 0.95 confidence,
+  while every other probe class holds at 1.00. **Remedy 1** — replacing
+  "their subject matter must substantively overlap" with a checkable
+  requirement (an identical concrete fact stated by both bodies) — moved the
+  class 0.67 → 0.67 and cost a genuine duplicate (0.97 → 0.93): the model
+  asserts the overlap either way, and a wording it can satisfy by assertion
+  is not a constraint. That is the fifth prompt treatment this repository has
+  measured and rejected. **Remedy 2** — extending the self-refutation marker
+  to catch rationales that concede the point — withdraws 3 of 82 wrong `same`
+  verdicts and 0 of 417 correct ones, on a phrasing lottery, while a marker
+  edit re-digests the rubric
+  ([#838](https://github.com/jasonssdev/openkos/issues/838)) and re-spends
+  every stored workspace's verdicts for a 0.04 recovery. What holds is the
+  layered defense the issue itself names: the verdict is advisory, the
+  [#776](https://github.com/jasonssdev/openkos/issues/776) cross-source note
+  flags the pair at review time, and `duplicates --keep-distinct`
+  ([#797](https://github.com/jasonssdev/openkos/issues/797)) records the
+  human ruling every surface honors.
 
 ## [0.2.9] - 2026-08-24
 
@@ -1896,7 +2074,9 @@ and Memory) work.
 - Default embedding model is `bge-m3` (ADR-0006), superseding the earlier
   `qwen3-embedding:0.6b` default.
 
-[Unreleased]: https://github.com/jasonssdev/openkos/compare/v0.2.8...HEAD
+[Unreleased]: https://github.com/jasonssdev/openkos/compare/v0.2.10...HEAD
+[0.2.10]: https://github.com/jasonssdev/openkos/compare/v0.2.9...v0.2.10
+[0.2.9]: https://github.com/jasonssdev/openkos/compare/v0.2.8...v0.2.9
 [0.2.8]: https://github.com/jasonssdev/openkos/compare/v0.2.7...v0.2.8
 [0.2.7]: https://github.com/jasonssdev/openkos/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/jasonssdev/openkos/compare/v0.2.5...v0.2.6
