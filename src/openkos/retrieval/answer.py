@@ -160,7 +160,11 @@ _SYSTEM_PROMPT = (
     "your answer actually draws on. List a block only if your answer genuinely "
     "uses what it says, never merely because it was provided, and write "
     f"'{_ATTRIBUTION_KEYWORD}: {_ATTRIBUTION_NONE}' if your answer draws on "
-    "none of them. The caller cites exactly the blocks this line names."
+    "none of them. The caller cites exactly the blocks this line names. "
+    "Close with that line every time, in exactly that form, however short "
+    "or long the answer and whatever language it is written in: the "
+    f"{_ATTRIBUTION_KEYWORD} line is machinery, not prose -- never "
+    "translate it, never omit it."
 )
 """Stable system half of the 2-message prompt (D5): local-first grounding
 rules (answer only from CONTEXT, keep internal ids out of the prose, admit
@@ -174,7 +178,21 @@ answer -- and the label it copied is the one `_assemble_context` writes at
 the head of every block. The leak was an instruction, not a model quirk,
 which is why `_strip_concept_id_scaffolding` is a backstop here rather than
 the fix: leaving the old wording would have the prompt fighting the
-post-processor on every single call."""
+post-processor on every single call.
+
+The closing anchor sentence is issue #871's measured fix. The report said
+Spanish answers drop the attribution line; the measurement
+(`evals/query_attribution/`, mirrored ES/EN corpora crossed with a
+short/long question regime, two pooled 3-run sweeps per arm, n=30 per cell)
+said otherwise: omission is QUESTION-shaped, not language-shaped -- worst
+in English one-line answers (en-short 0.63) and the longest structured
+answers, while es-short sat at 1.00. The anchor names both measured
+regimes plus language, and moved every cell non-negatively: es-long
+0.83 -> 1.00 (the reported `--save` case), en-short 0.63 -> 0.77, en-long
+0.77 -> 0.83, overall 0.81 -> 0.90. A residual remains (English,
+question-shaped -- including, ironically, "why are verbatim citations
+required?"); the conservative absent-fallback below and `--save`'s
+unverified-provenance consent gate continue to catch it."""
 
 
 _CONCEPT_ID_SCAFFOLD = r"""
