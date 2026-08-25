@@ -3546,6 +3546,32 @@ def _recombined_title_notice(report: ExtractionReport) -> str | None:
     )
 
 
+def _bounded_prompt_notice(report: ExtractionReport) -> str | None:
+    """Render the whole-source prompt bound advisory (#866), or `None` when
+    every prompt fit -- which is the common case.
+
+    Advisory, not a degrade: the bound is what KEEPS a call's instructions
+    intact where the server-side truncation it replaces silently cut them.
+    It says nothing about whether each named call then SUCCEEDED -- a
+    bounded judge can still fail to parse, and that failure reports through
+    its own channel (`judge_status`, the causes, the optional-call
+    failures) exactly as before. It is still surfaced, for the #795 reason
+    the recovered-retry line is: a
+    judge that read a quarter of the source reads identically to one that
+    read all of it in the run's other output, and the operator deciding
+    whether to raise `context_window` needs the fact and its cause on one
+    line."""
+    if not report.bounded_prompt_calls:
+        return None
+    calls = ", ".join(report.bounded_prompt_calls)
+    return (
+        "the source is larger than the model's context window, so "
+        f"{len(report.bounded_prompt_calls)} call(s) ({calls}) read an "
+        "even-coverage excerpt of it instead of the full text; raise "
+        "context_window in openkos.yaml to widen what they see"
+    )
+
+
 def _reask_notice(report: ExtractionReport) -> str | None:
     """Render the bounded sole-twin re-ask notice (#584), or `None` when no
     re-ask was spent -- which is the common case.
@@ -4186,6 +4212,14 @@ def _stage_derived_objects(
     recombined_notice = _recombined_title_notice(outcome.report)
     if recombined_notice is not None:
         typer.echo(f"openkos ingest: {recombined_notice}", err=True)
+
+    # #866: rendered ahead of the per-call notices below because it
+    # qualifies all of them at once -- any call the ladder goes on to
+    # describe may have read an excerpt, and that fact should be on screen
+    # before the calls it applies to are discussed.
+    bounded_notice = _bounded_prompt_notice(outcome.report)
+    if bounded_notice is not None:
+        typer.echo(f"openkos ingest: {bounded_notice}", err=True)
 
     # #584: the re-ask fires before the judge ever runs (it feeds the merged
     # candidate list), so its notice renders ahead of every other one below.

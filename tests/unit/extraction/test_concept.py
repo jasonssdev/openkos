@@ -6984,12 +6984,14 @@ def test_a_capture_that_both_fails_and_adds_still_reports_its_failure(
         body="The pipeline under discussion.",
     )
 
-    objects, capture_runs, added_titles, failure = concept_mod._add_participant_capture(
-        [existing],
-        source_text=_long_meeting_text(),
-        source_title=_MEETING_TITLE,
-        meeting_shaped=True,
-        llm=_SequencedLLM([]),
+    objects, capture_runs, added_titles, failure, _prompt_bounded = (
+        concept_mod._add_participant_capture(
+            [existing],
+            source_text=_long_meeting_text(),
+            source_title=_MEETING_TITLE,
+            meeting_shaped=True,
+            llm=_SequencedLLM([]),
+        )
     )
 
     assert failure == cause

@@ -1,0 +1,90 @@
+[
+  {
+    "source": "9b9ff878ee97",
+    "run": 1,
+    "source_chars": 53578,
+    "num_ctx": 12288,
+    "num_predict": 8192,
+    "model": "qwen3:8b",
+    "pipeline_seconds": 307.3,
+    "pipeline": {
+      "judge_source_chars": 22547,
+      "judge_status": "ok",
+      "judge_failure_causes": [],
+      "bounded_prompt_calls": [
+        "judge"
+      ],
+      "produced": 12,
+      "retained": 12,
+      "chunks": 14
+    },
+    "judge_calls": [
+      {
+        "phase": "judging 12 candidates",
+        "prompt_chars": 29409,
+        "prompt_eval_count": 7226,
+        "eval_count": 115,
+        "done_reason": "stop",
+        "content_chars": 384,
+        "thinking_chars": 0,
+        "seconds": 21.4
+      }
+    ],
+    "judge_prompt_fits_window": true,
+    "unbounded_prompt_chars": 57262,
+    "unbounded_judge": {
+      "prompt_eval_count": 6146,
+      "eval_count": 1923,
+      "done_reason": "stop",
+      "content_chars": 7138,
+      "thinking_chars": 0,
+      "parse_cause": "unparseable: no-json",
+      "seconds": 67.0
+    },
+    "true_prompt_tokens": 15871
+  },
+  {
+    "source": "a5d1134ec410",
+    "run": 1,
+    "source_chars": 55296,
+    "num_ctx": 12288,
+    "num_predict": 8192,
+    "model": "qwen3:8b",
+    "pipeline_seconds": 382.0,
+    "pipeline": {
+      "judge_source_chars": 24026,
+      "judge_status": "ok",
+      "judge_failure_causes": [],
+      "bounded_prompt_calls": [
+        "judge"
+      ],
+      "produced": 5,
+      "retained": 5,
+      "chunks": 15
+    },
+    "judge_calls": [
+      {
+        "phase": "judging 11 candidates",
+        "prompt_chars": 30663,
+        "prompt_eval_count": 7489,
+        "eval_count": 64,
+        "done_reason": "stop",
+        "content_chars": 249,
+        "thinking_chars": 0,
+        "seconds": 21.5
+      }
+    ],
+    "judge_prompt_fits_window": true,
+    "unbounded_prompt_chars": 58747,
+    "unbounded_judge": {
+      "prompt_eval_count": 6146,
+      "eval_count": 1401,
+      "done_reason": "stop",
+      "content_chars": 5104,
+      "thinking_chars": 0,
+      "parse_cause": "unparseable: no-json",
+      "seconds": 55.1
+    },
+    "true_prompt_tokens": 16419
+  }
+]

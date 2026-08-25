@@ -14,6 +14,30 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+### Fixed
+
+- **Whole-source prompts are bounded to fit the model's context window**
+  ([#866](https://github.com/jasonssdev/openkos/issues/866)). The 0.2.9 E2E
+  found every chunked large source losing its judge — `judge selection
+  unavailable after 2 attempts (unparseable: no-json, unparseable: no-json)`
+  at ~8 minutes a run, 3 of 3 — leaving a whole class of sources permanently
+  storing unfiltered extractions. The mandated measurement found the cause is
+  arithmetic, not the suspected thinking runaway: the judge (like the #584
+  re-ask and the #668 participant capture) sends the WHOLE source in one
+  prompt while extraction fans out over windows, the assembled prompt reached
+  16,091 real tokens against the default 12,288-token window, and Ollama
+  silently keeps only the last half of the window — cutting the system prompt,
+  so the model answered a decapitated transcript in prose, identically on both
+  retry attempts. All three whole-source calls now bound their prompt: when it
+  cannot fit, the source portion becomes a deterministic even-coverage excerpt
+  of the source's own windows (first and last included whenever at least
+  two windows fit, elisions marked) while instructions and candidates survive intact; a fitting prompt
+  ships byte-identical to before, grounding checks still read the full text,
+  and the bound is disclosed per run (`bounded_prompt_calls` on the report,
+  one stderr advisory naming the calls and the `context_window` lever). New
+  `evals/judge_overflow/` records the failing call's counters and the
+  post-fix verification on the same corpus.
+
 ## [0.2.9] - 2026-08-24
 
 Thirty-eight commits since v0.2.8, and the backlog they worked ends at

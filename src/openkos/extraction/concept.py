@@ -2083,6 +2083,163 @@ def _chunk_lines(text: str, target: int | None = None) -> list[str]:
     return chunks
 
 
+_PROMPT_PLANNING_CONTEXT_WINDOW: Final = 12_288
+"""Planning window (tokens) for the whole-source prompt bound (#866) when
+the backend does not advertise one -- `config.DEFAULT_CONTEXT_WINDOW`
+mirrored as a literal, because this module is a config-free leaf exactly
+like the chunking constants above it. A backend that DOES advertise its
+pinned window (`OllamaClient.context_window`) overrides this."""
+
+_PROMPT_TOKENS_PER_CHAR: Final = 0.40
+"""Conservative planning ratio for converting the window's token budget
+into a char budget. Every whole-prompt ratio this repo has measured sits
+well under it -- 0.277 on the 58K-char Spanish judge prompt that motivated
+#866, 0.341 on the extraction prompt at `_CHUNK_THRESHOLD` (#829), with
+tokens/char FALLING as prompts grow -- and it is deliberately not higher:
+at 0.50 the budget re-classifies prompts that fit today (an 18K-char
+unchunked source under 24 candidates) as oversized, changing model input
+on a working class. Same declared char-not-token bias as `_CHUNK_TARGET`:
+a script far denser than the latin-text measurements (CJK) can defeat a
+char budget, exactly as it can defeat the chunk thresholds."""
+
+_JUDGE_REPLY_RESERVE_TOKENS: Final = 512
+"""Generation room (tokens) the judge bound leaves inside the window.
+`num_ctx` covers prompt AND reply together (#829), so a prompt planned to
+the full window would push a legitimate reply into the truncation the
+bound exists to avoid. The judge's measured legitimate reply is <= 132
+tokens across 30 recorded runs (#828); 512 is ~4x that."""
+
+_OPTIONAL_CALL_RESERVE_TOKENS: Final = 2_048
+"""Generation room for the two optional whole-source calls (#584 re-ask,
+#668 participant capture). Larger than the judge's: their replies are full
+candidate ARRAYS with descriptions and bodies, not a list of echoed
+titles."""
+
+_SOURCE_ELISION_MARKER: Final = "\n[... source elided to fit the context window ...]\n"
+"""Rendered between non-adjacent windows of an excerpted source, so the
+model is told text is missing rather than left to read two spliced
+passages as contiguous."""
+
+
+def _prompt_overhead_chars(messages: "list[Message]") -> int:
+    """Chars a prompt spends on everything EXCEPT the source text: the
+    message list built over an EMPTY source, summed -- the same
+    defined-by-construction idiom as `judge.prompt_overhead_chars`, shared
+    by the two optional-call bounds so the calculation cannot drift between
+    them."""
+    return sum(len(m["content"]) for m in messages)
+
+
+def _bounded_prompt_source(
+    source_text: str,
+    *,
+    overhead_chars: int,
+    llm: LLMBackend,
+    generation_reserve_tokens: int,
+) -> tuple[str, bool]:
+    """`source_text` if the whole prompt can fit the context window, else a
+    deterministic even-coverage excerpt that can -- and whether it was
+    excerpted (#866).
+
+    The defect this closes: three seams (the judge, the re-ask, the
+    participant capture) send the WHOLE source in one prompt while
+    extraction itself fans out over `_chunk_lines` windows. Ollama does not
+    raise on an oversized prompt -- llama.cpp keeps a few head tokens plus
+    the LAST half of the window, measured on the reported 54K-char
+    transcript as `truncating input prompt: limit=6146 prompt=16091 keep=4`
+    -- so the system prompt and most of the source were silently cut, the
+    model answered a decapitated transcript in prose, and both identical
+    judge retries failed `unparseable: no-json`, deterministically.
+
+    The budget is planned in chars against the window the backend will
+    actually enforce: `llm.context_window` when the client advertises a
+    pinned one (duck-typed -- any backend without the attribute, and an
+    unpinned `None`, both plan at `_PROMPT_PLANNING_CONTEXT_WINDOW`, since a
+    conservative excerpt is strictly safer than a decapitated prompt), minus
+    `generation_reserve_tokens` for the reply, divided by
+    `_PROMPT_TOKENS_PER_CHAR`, minus the prompt's own `overhead_chars`
+    (system rules, candidate lines, labels -- they spend the same window).
+
+    A fitting source is returned BYTE-IDENTICAL with the flag down: the
+    bound must not change model input on any prompt that already fits.
+
+    The excerpt maximizes window count: evenly spaced `_chunk_lines`
+    windows -- including the first and the last whenever at least two
+    windows fit -- joined with
+    `_SOURCE_ELISION_MARKER` across gaps and plain newlines when adjacent,
+    at the largest count that fits the budget. Even coverage rather than a
+    head or tail cut, because the candidates under judgment were extracted
+    from ALL the windows, and the server-side truncation this replaces is
+    precisely a tail-only view. When not even two windows fit, the first
+    window is hard-truncated to the budget as the last resort -- and a
+    budget the overhead has swallowed entirely (a small pinned window under
+    many long candidate lines) sends an EMPTY source portion: the call
+    keeps its instructions and candidate list, which is strictly safer than
+    the decapitated prompt an over-budget send would produce. There is
+    deliberately no floor ABOVE the budget: a floor that sends more than
+    fits re-creates the overflow this function exists to close.
+
+    Never raises, and never silently skips the bound either -- the two
+    halves of one rule. The body below is pure string/integer arithmetic
+    over its own arguments (`_chunk_lines` included), so the ONE seam that
+    can throw is reading the backend's `context_window` -- a property on a
+    custom backend can raise. That read alone is guarded, degrading to the
+    packaged-default planning window: the source still gets BOUNDED, so a
+    throwing backend can neither abort the union pipeline (this ran
+    unguarded once, a review CRITICAL) nor silently receive the full
+    oversized prompt (a whole-body guard did that, the next review's
+    CRITICAL). Both failure modes are closed by giving the guard exactly
+    the one frame that needs it."""
+    try:
+        window = getattr(llm, "context_window", None)
+    except Exception:
+        window = None
+    planning = (
+        window
+        if isinstance(window, int) and not isinstance(window, bool) and window > 0
+        else _PROMPT_PLANNING_CONTEXT_WINDOW
+    )
+    budget = (
+        int((planning - generation_reserve_tokens) / _PROMPT_TOKENS_PER_CHAR)
+        - overhead_chars
+    )
+    budget = max(budget, 0)
+    if len(source_text) <= budget:
+        return source_text, False
+
+    windows = _chunk_lines(source_text)
+    marker = _SOURCE_ELISION_MARKER
+    total_windows = len(windows)
+    for count in range(total_windows - 1, 1, -1):
+        picked = sorted(
+            {round(i * (total_windows - 1) / (count - 1)) for i in range(count)}
+        )
+        # Sized arithmetically first; the excerpt string is built ONCE,
+        # for the single count that fits. The search over counts remains
+        # O(total_windows^2) -- integer additions, negligible at realistic
+        # window counts -- but building every candidate excerpt STRING made
+        # it quadratic in source CHARS, which is the cost this ordering
+        # removes from the synchronous ingest path.
+        size = sum(len(windows[index]) for index in picked)
+        for position, index in enumerate(picked[1:], start=1):
+            adjacent = index == picked[position - 1] + 1
+            size += 1 if adjacent else len(marker)
+        if size > budget:
+            continue
+        parts: list[str] = []
+        previous: int | None = None
+        for index in picked:
+            if previous is not None:
+                parts.append(marker if index > previous + 1 else "\n")
+            parts.append(windows[index])
+            previous = index
+        return "".join(parts), True
+    # Not even two windows fit: hard-truncate the first window to the
+    # budget -- empty when the overhead swallowed it -- rather than sending
+    # an oversized prompt to be decapitated server-side.
+    return windows[0][:budget], True
+
+
 def _extract_once(
     source_text: str, source_title: str, llm: LLMBackend
 ) -> list[ExtractionResult]:
@@ -2246,6 +2403,13 @@ ask different questions with different prompts and fail for different
 reasons -- a runaway inside the participant capture on a long transcript is
 a different investigation from a re-ask that timed out on a short note."""
 
+BOUNDED_CALL_JUDGE: Final = "judge"
+"""The third name `ExtractionReport.bounded_prompt_calls` can carry (#866).
+Not an `OPTIONAL_CALL_*`: the judge is not an optional bonus call and never
+appears in `optional_call_failures`, but it sends the same whole-source
+prompt the two optional calls do, and the bound's disclosure names all
+three through one field."""
+
 
 @dataclass(frozen=True)
 class OptionalCallOutcome:
@@ -2274,6 +2438,13 @@ class OptionalCallOutcome:
 
     additions: list[ExtractionResult]
     failure: str | None = None
+    prompt_bounded: bool = False
+    """Whether this call's chat prompt read an even-coverage excerpt of the
+    source instead of the full text (#866) -- a fact about the CALL, not
+    about its yield, so it is set whether or not anything came back. The
+    default keeps every no-call path (`meeting_shaped` false, trigger not
+    fired) honest for the same reason `failure` is `None` there: a call
+    that was never made read nothing."""
 
 
 def _reask_for_further_subjects(
@@ -2322,8 +2493,20 @@ def _reask_for_further_subjects(
     has no such floor under it, which is precisely why the exemption lives
     there and only there.
     """
+    # #866: the prompt reads a window-fitting view of the source; the
+    # grounding filters below keep reading the FULL text -- the excerpt
+    # exists for the model's eyes only, and an expansion grounded in an
+    # elided window must not be stripped for it.
+    prompt_source, prompt_bounded = _bounded_prompt_source(
+        source_text,
+        overhead_chars=_prompt_overhead_chars(
+            _build_reask_messages("", source_title, kept.title)
+        ),
+        llm=llm,
+        generation_reserve_tokens=_OPTIONAL_CALL_RESERVE_TOKENS,
+    )
     try:
-        reply = llm.chat(_build_reask_messages(source_text, source_title, kept.title))
+        reply = llm.chat(_build_reask_messages(prompt_source, source_title, kept.title))
     except Exception as exc:  # broad, and for the same reason `judge.select`
         # is: the re-ask's own failure must never destroy already-validated
         # extraction work. Whatever `llm.chat` raises -- the `OllamaError`
@@ -2338,6 +2521,7 @@ def _reask_for_further_subjects(
         return OptionalCallOutcome(
             additions=[],
             failure=f"{OPTIONAL_CALL_REASK}: {type(exc).__name__}",
+            prompt_bounded=prompt_bounded,
         )
     results = [
         result
@@ -2350,7 +2534,8 @@ def _reask_for_further_subjects(
             result
             for result in results
             if not _restates_source_title(result, source_title=source_title)
-        ]
+        ],
+        prompt_bounded=prompt_bounded,
     )
 
 
@@ -2376,7 +2561,7 @@ def _add_reask_subjects(
     source_title: str,
     llm: LLMBackend,
     on_progress: ProgressHook | None = None,
-) -> tuple[list[ExtractionResult], int, tuple[str, ...], str | None]:
+) -> tuple[list[ExtractionResult], int, tuple[str, ...], str | None, bool]:
     """Bounded re-ask on a sole object that restates the source title (#584),
     or on a sole object from a long source whatever its title (#642).
 
@@ -2465,7 +2650,7 @@ def _add_reask_subjects(
             or len(source_text) >= _REASK_LOW_YIELD_THRESHOLD
         )
     ):
-        return results, 0, (), None
+        return results, 0, (), None, False
     # Reported HERE rather than at the call site, past the trigger: the
     # helper returns `(0, (), None)` and makes no call when the trigger does
     # not fire, so a label printed before this point would name a wait that
@@ -2473,7 +2658,13 @@ def _add_reask_subjects(
     _report(on_progress, "re-asking for a further subject")
     outcome = _reask_for_further_subjects(source_text, source_title, results[0], llm)
     combined = _dedup_merged(results + outcome.additions)
-    return combined, 1, tuple(result.title for result in combined[1:]), outcome.failure
+    return (
+        combined,
+        1,
+        tuple(result.title for result in combined[1:]),
+        outcome.failure,
+        outcome.prompt_bounded,
+    )
 
 
 _PARTICIPANT_CAPTURE_SYSTEM_PROMPT = (
@@ -2593,8 +2784,19 @@ def _capture_further_participants(
     nothing else: this call's only license is to answer the participant
     question it was asked, so a candidate of any other type the model
     returns anyway is dropped here rather than trusted."""
+    # #866: same bound as the re-ask, same full-text grounding below.
+    prompt_source, prompt_bounded = _bounded_prompt_source(
+        source_text,
+        overhead_chars=_prompt_overhead_chars(
+            _build_participant_capture_messages("", source_title)
+        ),
+        llm=llm,
+        generation_reserve_tokens=_OPTIONAL_CALL_RESERVE_TOKENS,
+    )
     try:
-        reply = llm.chat(_build_participant_capture_messages(source_text, source_title))
+        reply = llm.chat(
+            _build_participant_capture_messages(prompt_source, source_title)
+        )
     except Exception as exc:  # broad, and for the same reason the #584
         # re-ask is: a bonus call's own failure must never destroy
         # already-validated extraction work.
@@ -2605,6 +2807,7 @@ def _capture_further_participants(
         return OptionalCallOutcome(
             additions=[],
             failure=f"{OPTIONAL_CALL_PARTICIPANT_CAPTURE}: {type(exc).__name__}",
+            prompt_bounded=prompt_bounded,
         )
     results = [
         result
@@ -2613,7 +2816,8 @@ def _capture_further_participants(
     ]
     results = _strip_ungrounded_expansions(results, source_text=source_text)
     return OptionalCallOutcome(
-        additions=[result for result in results if result.type in _PARTICIPANT_TYPES]
+        additions=[result for result in results if result.type in _PARTICIPANT_TYPES],
+        prompt_bounded=prompt_bounded,
     )
 
 
@@ -2625,7 +2829,7 @@ def _add_participant_capture(
     meeting_shaped: bool,
     llm: LLMBackend,
     on_progress: ProgressHook | None = None,
-) -> tuple[list[ExtractionResult], int, tuple[str, ...], str | None]:
+) -> tuple[list[ExtractionResult], int, tuple[str, ...], str | None, bool]:
     """Scoped Person/Organization capture pass (#668 design D6), gated on
     the SAME `_is_meeting_shaped` predicate `extract_concept_union`
     already computes for judge re-admission (design D3) -- never a second,
@@ -2661,19 +2865,20 @@ def _add_participant_capture(
     therefore be read off the tail of `combined` exactly like the #584
     re-ask reads its own single-original tail."""
     if not meeting_shaped:
-        return results, 0, (), None
+        return results, 0, (), None, False
     # Past the gate, for the same reason the re-ask reports past its
     # trigger: a non-meeting-shaped source never spends this call (#701).
     _report(on_progress, "capturing further participants")
     outcome = _capture_further_participants(source_text, source_title, llm)
     if not outcome.additions:
-        return results, 1, (), outcome.failure
+        return results, 1, (), outcome.failure, outcome.prompt_bounded
     combined = _dedup_merged(results + outcome.additions)
     return (
         combined,
         1,
         tuple(result.title for result in combined[len(results) :]),
         outcome.failure,
+        outcome.prompt_bounded,
     )
 
 
@@ -2937,6 +3142,17 @@ class ExtractionReport:
     run happened. Defaulted so every existing construction site keeps
     working unchanged."""
 
+    bounded_prompt_calls: tuple[str, ...] = ()
+    """Which whole-source calls read an even-coverage excerpt instead of
+    the full text because the assembled prompt could not fit the model's
+    context window (#866). Entries are `OPTIONAL_CALL_REASK`,
+    `OPTIONAL_CALL_PARTICIPANT_CAPTURE`, and `BOUNDED_CALL_JUDGE`, in the
+    order the pipeline spends them. Empty on every run where every prompt
+    fit -- the common case, and byte-identical model input to before the
+    bound existed. Advisory, not a degrade: the bound is what KEEPS the
+    call's instructions intact where the server-side truncation it
+    replaces silently cut them."""
+
 
 @dataclass(frozen=True)
 class ExtractionOutcome:
@@ -3090,12 +3306,14 @@ def extract_concept(
     # #584: the list is final and filtered here, which is the only place the
     # trigger's "the source returned exactly one object" is a true statement
     # about the source. Additions then take the same cap as everything else.
-    results, reask_runs, reask_added_titles, reask_failure = _add_reask_subjects(
-        results,
-        source_text=source_text,
-        source_title=source_title,
-        llm=llm,
-        on_progress=on_progress,
+    results, reask_runs, reask_added_titles, reask_failure, reask_prompt_bounded = (
+        _add_reask_subjects(
+            results,
+            source_text=source_text,
+            source_title=source_title,
+            llm=llm,
+            on_progress=on_progress,
+        )
     )
     retained = results[:_MAX_OBJECTS_PER_SOURCE]
     return ExtractionOutcome(
@@ -3134,6 +3352,11 @@ def extract_concept(
             # entry -- the tuple is single-sourced rather than padded.
             optional_call_failures=(
                 (reask_failure,) if reask_failure is not None else ()
+            ),
+            # #866, single-sourced for the same reason: the re-ask is the
+            # one whole-source call this path can bound.
+            bounded_prompt_calls=(
+                (OPTIONAL_CALL_REASK,) if reask_prompt_bounded else ()
             ),
         ),
     )
@@ -3410,12 +3633,14 @@ def extract_concept_union(
     # single-run path's additions take its cap -- a re-ask finding the judge
     # never saw could not be selected against, and would leave two
     # inconsistent notions of what the candidate set was.
-    merged, reask_runs, reask_added_titles, reask_failure = _add_reask_subjects(
-        merged,
-        source_text=source_text,
-        source_title=source_title,
-        llm=llm,
-        on_progress=on_progress,
+    merged, reask_runs, reask_added_titles, reask_failure, reask_prompt_bounded = (
+        _add_reask_subjects(
+            merged,
+            source_text=source_text,
+            source_title=source_title,
+            llm=llm,
+            on_progress=on_progress,
+        )
     )
 
     # #668 design D6: a scoped second call, shaped like the #584 re-ask,
@@ -3431,6 +3656,7 @@ def extract_concept_union(
         participant_capture_runs,
         participant_capture_added_titles,
         participant_capture_failure,
+        participant_capture_prompt_bounded,
     ) = _add_participant_capture(
         merged,
         source_text=source_text,
@@ -3451,6 +3677,18 @@ def extract_concept_union(
         failure
         for failure in (reask_failure, participant_capture_failure)
         if failure is not None
+    )
+
+    # #866, same spend-order rule as the tuple above: the two optional
+    # calls' bounds are settled here; the judge's own entry is appended at
+    # the one place the judge demonstrably ran.
+    bounded_prompt_calls = tuple(
+        name
+        for name, bounded in (
+            (OPTIONAL_CALL_REASK, reask_prompt_bounded),
+            (OPTIONAL_CALL_PARTICIPANT_CAPTURE, participant_capture_prompt_bounded),
+        )
+        if bounded
     )
 
     pre_judge_dropped = max(0, len(merged) - _MAX_JUDGE_CANDIDATES)
@@ -3476,6 +3714,9 @@ def extract_concept_union(
                 participant_capture_runs=participant_capture_runs,
                 participant_capture_added_titles=participant_capture_added_titles,
                 optional_call_failures=optional_call_failures,
+                # #866: the judge never ran on an empty union, but the two
+                # optional calls above may still have read an excerpt.
+                bounded_prompt_calls=bounded_prompt_calls,
             ),
         )
 
@@ -3518,6 +3759,30 @@ def extract_concept_union(
         judge_failure_causes = outcome.failures
         return outcome.selected
 
+    # #866: the judge sends the whole source in one prompt while extraction
+    # itself fanned out over windows, so on a large chunked source the
+    # assembled prompt exceeded the context window and the server silently
+    # kept only its TAIL -- system rules cut, reply prose, `no-json` on
+    # both identical retries. Bounded here, only when the judge will
+    # actually run (the single-candidate skip below never sends it).
+    judge_prompt_source = source_text
+    if len(judge_input) > 1:
+        judge_prompt_source, judge_prompt_bounded = _bounded_prompt_source(
+            source_text,
+            overhead_chars=judge_mod.prompt_overhead_chars(
+                tuple(
+                    judge_mod.JudgeCandidate(
+                        type=c.type, title=c.title, description=c.description
+                    )
+                    for c in judge_input
+                )
+            ),
+            llm=llm,
+            generation_reserve_tokens=_JUDGE_REPLY_RESERVE_TOKENS,
+        )
+        if judge_prompt_bounded:
+            bounded_prompt_calls = (*bounded_prompt_calls, BOUNDED_CALL_JUDGE)
+
     if len(judge_input) == 1:
         # A single candidate makes the judge call a provable no-op (#644):
         # every possible outcome keeps that candidate -- its title echoed
@@ -3532,7 +3797,9 @@ def extract_concept_union(
         kept = judge_input
         judge_status = "skipped"
         judged_out_titles: tuple[str, ...] = ()
-    elif (selected := _run_judge(source_text, judge_input, llm, on_progress)) is None:
+    elif (
+        selected := _run_judge(judge_prompt_source, judge_input, llm, on_progress)
+    ) is None:
         kept = judge_input
         judge_status = "failed"
         judged_out_titles = ()
@@ -3644,5 +3911,6 @@ def extract_concept_union(
             unevidenced_titles=_unevidenced_titles(retained, source_text=source_text),
             judge_failure_causes=judge_failure_causes,
             optional_call_failures=optional_call_failures,
+            bounded_prompt_calls=bounded_prompt_calls,
         ),
     )

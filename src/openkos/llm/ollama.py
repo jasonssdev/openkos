@@ -508,6 +508,20 @@ class OllamaClient:
         measurable gain."""
         return classify_backend_host(self._host)
 
+    @property
+    def context_window(self) -> int | None:
+        """The `num_ctx` this client will ACTUALLY send with every chat
+        call, or `None` when the workspace left the window unpinned (#866).
+
+        Public for the same read-the-real-send reason as `resolved_host`:
+        the whole-source prompt bound in `extraction.concept` plans its
+        excerpt against the window the backend will truncate to, and
+        re-deriving that from config at the call site would answer a
+        different question the moment a client is constructed with an
+        explicit override. Returns a value stored at construction time --
+        no I/O, never raises."""
+        return self._context_window
+
     def chat(self, messages: Sequence[Message]) -> str:
         """POST `messages` to `{host}/api/chat` and return `message.content`
         (D5, D6). Raises `OllamaGenerationCapped` if the response reports
