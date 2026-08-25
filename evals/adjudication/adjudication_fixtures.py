@@ -21,6 +21,25 @@ would be paid for.
 - `part-whole` -- a component and its whole. Expected `different`. The
   exclusion the shipped prompt already states, carried here so a rewrite
   cannot quietly drop it.
+- `asym-recurrence` (#869) -- two occurrences of a standing meeting where
+  only ONE member carries a date and an attendee list, and the detailed
+  member ELABORATES the sparse member's stated purpose. Expected
+  `different`. This is the shape the wild pair #869 reports: the rubric's
+  own asymmetric branch ("if one carries such a signal and the other is
+  silent, their subject matter must substantively overlap") was answered
+  by ASSERTING overlap the members do not carry -- shared purpose read as
+  shared substance, when the concrete specifics (agendas, next steps) are
+  disjoint. The plain `recurrence` class does not cover it: its one
+  asymmetric pair keeps both bodies short and topically disjoint, so
+  nothing in it invites the richer-elaborates-poorer misreading.
+- `asym-same` (#869) -- the same detail asymmetry, but the members ARE one
+  meeting: the sparse body restates a concrete fact only that meeting
+  could carry (the specific decision or deliverable the detailed body
+  records), just without a date or attendee list of its own. Expected
+  `same`. The guard the new class needs: without it, a rubric tweak that
+  answered `different` whenever detail is asymmetric would score
+  perfectly on `asym-recurrence` while costing every sparse-but-genuine
+  duplicate.
 
 Labels are CONSTRUCTED, not adjudicated: each pair is written to be
 unambiguous under the rubric the prompt states, so a wrong verdict is a
@@ -216,6 +235,190 @@ _EVENT_SAME: Final[tuple[LabelledPair, ...]] = (
 
 
 # --------------------------------------------------------------------------- #
+# asym-recurrence -- one detailed member, one sparse member, two occurrences
+# --------------------------------------------------------------------------- #
+
+_ASYM_RECURRENCE: Final[tuple[LabelledPair, ...]] = (
+    LabelledPair(
+        left=FixtureDoc(
+            "events/grupo-calidad-datos",
+            "Event",
+            "Grupo de Trabajo de Calidad de Datos",
+            "Reunión del grupo de trabajo de calidad de datos. El propósito "
+            "del grupo es mejorar la trazabilidad del pipeline de datos y "
+            "reducir los errores de ingesta que llegan a producción. Se "
+            "repasaron las prioridades del trimestre. Queda pendiente "
+            "asignar un responsable del glosario de campos.",
+        ),
+        right=FixtureDoc(
+            "events/grupo-calidad-datos-2",
+            "Event",
+            "Grupo de Trabajo de Calidad de Datos",
+            "sep 3, 2026. Reunión del grupo de trabajo de calidad de datos "
+            "con Irene Vallejo, Marco Sandoval y Petra Ilić. Se profundizó "
+            "en la trazabilidad del pipeline: la metodología de validación "
+            "por lotes, los retos con los esquemas heredados del sistema "
+            "anterior y el estado actual de las reglas de limpieza. También "
+            "se discutieron los errores de ingesta recientes y cómo "
+            "clasificarlos. Acciones: documentar las reglas de validación "
+            "por lotes y agendar la revisión del esquema heredado con el "
+            "equipo de plataforma.",
+        ),
+        probe="asym-recurrence",
+        expected="different",
+        note=(
+            "The wild #869 shape: the dated, attended body ELABORATES the "
+            "sparse body's stated purpose (pipeline traceability, ingest "
+            "errors), so shared purpose invites a same verdict -- but the "
+            "concrete content is disjoint: the sparse body's pending item "
+            "(assign a glossary owner) appears nowhere in the detailed "
+            "body, whose action items (document batch validation rules, "
+            "schedule the legacy-schema review) appear nowhere in the "
+            "sparse one. Purpose is carried by the SERIES; these are two "
+            "occurrences of it."
+        ),
+    ),
+    LabelledPair(
+        left=FixtureDoc(
+            "events/platform-reliability-sync",
+            "Event",
+            "Platform Reliability Sync",
+            "Reliability sync for the platform group. The sync exists to "
+            "improve service reliability and bring the on-call load down. "
+            "General discussion of where the pain is concentrated. Still "
+            "open: choosing a postmortem template the whole group will use.",
+        ),
+        right=FixtureDoc(
+            "events/platform-reliability-sync-2",
+            "Event",
+            "Platform Reliability Sync",
+            "2026-05-14. Platform reliability sync with Dana Whitfield, "
+            "Óscar Peña, and Li Wen. Went deep on the reliability push: the "
+            "SLO review methodology, the alert-fatigue problem on the "
+            "storage rotation, and what the on-call handoff is missing. "
+            "Challenges raised: flaky synthetic checks and a noisy paging "
+            "policy. Action items: tune the paging thresholds for the "
+            "storage tier and pilot error budgets on two services.",
+        ),
+        probe="asym-recurrence",
+        expected="different",
+        note=(
+            "Same asymmetry in English: the detailed body develops exactly "
+            "the purpose the sparse body states (reliability, on-call "
+            "load), which is the elaboration-reads-as-alignment trap. "
+            "Knowable as different because the sparse body's one open item "
+            "(pick a postmortem template) and the detailed body's action "
+            "items (tune paging thresholds, pilot error budgets) are "
+            "disjoint, and neither body mentions the other's."
+        ),
+    ),
+    LabelledPair(
+        left=FixtureDoc(
+            "events/onboarding-working-group",
+            "Event",
+            "Onboarding Working Group",
+            "Session of the onboarding working group. The group's purpose "
+            "is to redesign the customer onboarding flow so new accounts "
+            "reach first value sooner. High-level review of the funnel. "
+            "Pending: pull the support tickets that mention onboarding.",
+        ),
+        right=FixtureDoc(
+            "events/onboarding-working-group-2",
+            "Event",
+            "Onboarding Working Group",
+            "22 June 2026. Onboarding working group with Priya Raman, "
+            "Jonas Eklund, and Sofía Arrieta. Detailed pass over the "
+            "redesign: the funnel-analysis methodology and which cohorts "
+            "to segment by, the challenge of legacy accounts that predate "
+            "the current signup flow, and early sketches of the first-run "
+            "experience. Action items: prototype the welcome checklist and "
+            "schedule two usability tests with recent signups.",
+        ),
+        probe="asym-recurrence",
+        expected="different",
+        note=(
+            "The detailed member elaborates the sparse member's purpose "
+            "(onboarding redesign, funnel) with methodology, a named "
+            "challenge, and action items the sparse body never carries; "
+            "the sparse body's pending item (pull support tickets) is "
+            "absent from the detailed one. Two sessions of one working "
+            "group, distinguishable only by their disjoint specifics."
+        ),
+    ),
+)
+
+
+# --------------------------------------------------------------------------- #
+# asym-same -- one detailed member, one sparse member, ONE meeting
+# --------------------------------------------------------------------------- #
+
+_ASYM_SAME: Final[tuple[LabelledPair, ...]] = (
+    LabelledPair(
+        left=FixtureDoc(
+            "events/sync-arquitectura",
+            "Event",
+            "Sync de Arquitectura",
+            "Sync de arquitectura. Se decidió adoptar un bus de eventos "
+            "para la mensajería interna en lugar de colas punto a punto, "
+            "empezando por el servicio de notificaciones.",
+        ),
+        right=FixtureDoc(
+            "events/sync-arquitectura-2",
+            "Event",
+            "Sync de Arquitectura",
+            "9 de abril de 2026. Sync de arquitectura con Camila Reyes y "
+            "Andrés Bolaño. Se evaluaron colas punto a punto frente a un "
+            "bus de eventos para la mensajería interna, repasando costes "
+            "operativos, garantías de entrega y la experiencia del equipo. "
+            "Decisión: adoptar el bus de eventos, con el servicio de "
+            "notificaciones como primer caso. Próximo paso: preparar la "
+            "prueba de concepto del conector.",
+        ),
+        probe="asym-same",
+        expected="same",
+        note=(
+            "The guard for the asymmetric class: the sparse body carries "
+            "no date and no attendees, but it records the SAME specific "
+            "decision the detailed body records -- event bus over "
+            "point-to-point queues, notifications service first. A "
+            "decision one occurrence records is exactly the signal the "
+            "rubric names, restated by both members; a rule that reads "
+            "detail asymmetry itself as distinctness would get this wrong."
+        ),
+    ),
+    LabelledPair(
+        left=FixtureDoc(
+            "events/vendor-selection-review",
+            "Event",
+            "Vendor Selection Review",
+            "Vendor selection review. Outcome: Nimbus was chosen for the "
+            "data warehouse on a three-year contract.",
+        ),
+        right=FixtureDoc(
+            "events/vendor-selection-review-2",
+            "Event",
+            "Vendor Selection Review",
+            "2026-02-19. Vendor selection review with Marta Ruiz, Kofi "
+            "Mensah, and Elif Demir. Compared the three shortlisted data "
+            "warehouse vendors on pricing, migration support, and regional "
+            "availability; walked through the reference calls. Decision: "
+            "Nimbus, on a three-year contract. Next: legal review of the "
+            "contract terms and a migration plan draft.",
+        ),
+        probe="asym-same",
+        expected="same",
+        note=(
+            "One meeting, two records at very different levels of detail: "
+            "the sparse body restates the unique outcome (Nimbus, data "
+            "warehouse, three-year contract) that the detailed body "
+            "records as its decision. Nothing in the sparse body is "
+            "disjoint with the detailed one -- it is a strict summary."
+        ),
+    ),
+)
+
+
+# --------------------------------------------------------------------------- #
 # person-same, alias-same, part-whole -- the surrounding regimes
 # --------------------------------------------------------------------------- #
 
@@ -292,11 +495,15 @@ _CONTROLS: Final[tuple[LabelledPair, ...]] = (
 )
 
 
-PAIRS: Final[tuple[LabelledPair, ...]] = _RECURRENCE + _EVENT_SAME + _CONTROLS
+PAIRS: Final[tuple[LabelledPair, ...]] = (
+    _RECURRENCE + _EVENT_SAME + _ASYM_RECURRENCE + _ASYM_SAME + _CONTROLS
+)
 
 PROBES: Final[tuple[str, ...]] = (
     "recurrence",
     "event-same",
+    "asym-recurrence",
+    "asym-same",
     "person-same",
     "alias-same",
     "part-whole",

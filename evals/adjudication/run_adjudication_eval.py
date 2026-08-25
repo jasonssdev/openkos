@@ -51,10 +51,13 @@ changes the verdict.
 Usage:
 
     python evals/adjudication/run_adjudication_eval.py --arm baseline --runs 15
+    python evals/adjudication/run_adjudication_eval.py --arm treatment --runs 15
     python evals/adjudication/run_adjudication_eval.py --arm baseline --ablate-clause --runs 15
     python evals/adjudication/run_adjudication_eval.py --self-test
 
-`baseline` runs production untouched. The two ablation flags remove one
+`baseline` runs production untouched. `treatment` swaps in #869's candidate
+asymmetry sentence (measured, REJECTED -- kept so its stored arm stays
+reproducible; see the README). The two ablation flags remove one
 shipped mechanism each -- `--ablate-clause` swaps
 `adjudication._SYSTEM_PROMPT` for `adjudication_prompts.ABLATED_SYSTEM_PROMPT`,
 and `--ablate-withdrawal` disables the deterministic self-refutation check.
@@ -98,8 +101,11 @@ sys.path.append(str(REPO_ROOT / "evals"))
 
 from adjudication_fixtures import PAIRS, PROBES, LabelledPair, documents  # noqa: E402
 from adjudication_prompts import (  # noqa: E402
+    _ASYMMETRY_SENTENCE_SHIPPED,
+    _ASYMMETRY_SENTENCE_TREATMENT,
     _RECURRENCE_CLAUSE,
     ABLATED_SYSTEM_PROMPT,
+    TREATMENT_SYSTEM_PROMPT,
 )
 from harness_report import arm_identity_line  # noqa: E402
 
@@ -263,6 +269,16 @@ def _self_test() -> int:
         and _RECURRENCE_CLAUSE not in ABLATED_SYSTEM_PROMPT,
         True,
     )
+    check(
+        "the #869 treatment prompt differs from the shipped one",
+        shipped != TREATMENT_SYSTEM_PROMPT,
+        True,
+    )
+    check(
+        "and differs from it by exactly the swapped asymmetry sentence",
+        shipped.replace(_ASYMMETRY_SENTENCE_SHIPPED, _ASYMMETRY_SENTENCE_TREATMENT, 1),
+        TREATMENT_SYSTEM_PROMPT,
+    )
 
     if failures:
         print("self-test FAILED:")
@@ -283,7 +299,7 @@ def main(argv: list[str] | None = None) -> int:
     # Not `required=True`: `--self-test` runs no arm at all, and a required
     # `--arm` would force the caller to name one the self-test then ignores,
     # which is how a harness starts reporting an arm it never ran.
-    parser.add_argument("--arm", choices=["baseline"])
+    parser.add_argument("--arm", choices=["baseline", "treatment"])
     parser.add_argument("--runs", type=int, default=DEFAULT_RUNS)
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument(
@@ -322,6 +338,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.arm is None:
         parser.error("--arm is required unless --self-test is given")
 
+    if args.arm == "treatment":
+        if args.ablate_clause or args.ablate_withdrawal:
+            parser.error(
+                "--arm treatment measures the #869 candidate rubric against "
+                "full production; combining it with an ablation would name "
+                "an arm no question is asking about"
+            )
+        adjudication_mod._SYSTEM_PROMPT = TREATMENT_SYSTEM_PROMPT
     if args.ablate_clause:
         adjudication_mod._SYSTEM_PROMPT = ABLATED_SYSTEM_PROMPT
     if args.ablate_withdrawal:
@@ -434,6 +458,8 @@ def main(argv: list[str] | None = None) -> int:
 
     recurrence_precision = _share("recurrence", "different")
     event_same_retention = _share("event-same", "same")
+    asym_recurrence_precision = _share("asym-recurrence", "different")
+    asym_same_retention = _share("asym-same", "same")
     person_same_retention = _share("person-same", "same")
     alias_same_retention = _share("alias-same", "same")
     part_whole_rate = _share("part-whole", "different")
@@ -504,6 +530,9 @@ def main(argv: list[str] | None = None) -> int:
         f"| **recurrence precision (judged `different`)** | "
         f"**{recurrence_precision:.2f}** |",
         f"| **event-same retention (judged `same`)** | **{event_same_retention:.2f}** |",
+        f"| **asym-recurrence precision (judged `different`)** | "
+        f"**{asym_recurrence_precision:.2f}** |",
+        f"| **asym-same retention (judged `same`)** | **{asym_same_retention:.2f}** |",
         f"| person-same retention (judged `same`) | {person_same_retention:.2f} |",
         f"| alias-same retention (judged `same`) | {alias_same_retention:.2f} |",
         f"| part-whole (judged `different`) | {part_whole_rate:.2f} |",
