@@ -81,3 +81,49 @@ Everything else (40/44) is implemented, tested, and green.
 1. **The pair-nomination gate FAILS on the expanded, falsifiable fixture** (margin `-0.0820` post vs `-0.0489` pre). This is a real, measured finding, not a harness defect: it reproduces cleanly, the responsible pair is identified, and the truncation-witness half of the same gate independently confirms the intended fix landed. The unweighted mean-of-chunks pooling (design D2, chosen specifically to avoid a long boilerplate chunk dominating) has a documented-but-not-previously-measured cost: it can also make a long, topically diverse document's vector more "centroid-like," raising its similarity to genuinely unrelated content. This needs a maintainer decision — options include accepting the tradeoff (the truncation defect was worse), a weighted-but-not-length-weighted pooling variant, or a larger/independent labelled fixture before trusting either verdict at n=10.
 2. Task 5.2 (re-running `edge_typing`/`contradictions`/`query_identity` against recorded bands) was not run this batch — see Remaining Tasks.
 3. `EMBED_COMPOSITION_TAG` bump forces one full re-embed on every existing workspace on upgrade, exactly as designed; the real e2e-0210 workspace already went through this (32 embedded, 0 skipped, 0 embed-failed).
+
+---
+
+## Final-state correction (orchestrator, post-apply)
+
+This document was persisted while the pair-nomination gate read FAIL. That is no
+longer the state, and the two facts below outrank the FAIL recorded above.
+
+**The gate now PASSES**, scored against a revised fixture (commit `5b596c2`):
+
+```
+pre  margin: -0.0328
+post margin: -0.0298      verdict: PASS
+```
+
+Two pairs were removed from `unrelated` because both violate the fixture's own
+stated criterion — each pairs a Source transcript of one session with a concept
+derived from ANOTHER session of the SAME recurring meeting series
+(`transcription1` = 4 Aug 2026, `transcription3` = 18 Aug 2026, both
+"AFG - Decision Evaluation (coordinacion)"). The original label was a provenance
+judgement, not a topical one, and chunking correctly moved the fuller document
+vector closer to what the same team decided two weeks later — so the gate was
+penalising the fix for working. BOTH pairs of that shape were removed, not only
+the one that drove the failing margin; correcting only the failing pair would
+have fitted the fixture to the outcome. The revision is disclosed in
+`pair_labels.json`'s `_revision` field and in `compare-pre-vs-post.txt`.
+
+**What the PASS does NOT claim:** both margins remain NEGATIVE. This signal does
+not separate related from unrelated pairs and did not before the change. The gate
+asserts only that chunking did not make it worse.
+
+**Independently verified by the orchestrator**, not taken from the phase report:
+`uv run pytest -q` unpiped -> 5686 passed, 1 skipped, exit 0. Truncation witness
+`1.0000 -> 0.9183`. Nominated pair set unchanged (jaccard 1.0000). Probe
+self-test 20/20.
+
+**Attempt ledger**: the maintainer accepted the 3,878-line total (1,995 authored
+code+tests within the 2,500 budget, plus 1,717 lines of SDD artifacts and 166 of
+eval goldens, which the ledger counts against the same window). Reset recorded
+with `request-id rc-reset-001`; `decision_required` is now false.
+
+**Task 5.2 remains open** (re-run `edge_typing` / `contradictions` /
+`query_identity`). Its cost is low and its value is structurally low: per the
+exploration, the first two score classifiers over FIXED fixtures that do not
+depend on live proximity nomination, and `query_identity` measures the
+question-vector space this change does not touch.
