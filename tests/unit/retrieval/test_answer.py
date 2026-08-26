@@ -1205,6 +1205,83 @@ def test_multi_chunk_document_yields_exactly_one_citation(tmp_path: Path) -> Non
     assert result.dense_hit_count == 1
 
 
+def test_confidential_multi_chunk_document_never_reaches_the_llm(
+    tmp_path: Path,
+) -> None:
+    """query-answer spec: The Sensitivity Re-Check Still Runs Before Any
+    Chunk's Content Reaches The LLM -- a CONFIDENTIAL document stored as
+    SEVERAL chunk vectors is excluded from citations and its body never
+    enters the prompt, while a private document at a strictly worse
+    distance still surfaces.
+
+    The two features are orthogonal and were verified separately: existing
+    confidential-exclusion tests drive the FTS channel with fakes, and the
+    chunk-collapse tests use non-confidential documents. This is the
+    intersection, and `answer.py` carries ZERO production diff for this
+    change -- so without this test the combination rests on a construction
+    argument rather than on runtime evidence (verify-report WARNING).
+
+    Ordering is what makes it fail for the right reason. `secret` owns a
+    chunk IDENTICAL to the query vector, so its collapsed distance is 0 and
+    it is the TOP dense hit; `open` sits at 1.0. If the sensitivity
+    re-check in `_assemble_context` stopped excluding it, `secret` would be
+    cited FIRST and its body would appear in the prompt -- the assertions
+    below both flip. A fixture where the confidential document ranked last
+    could pass on a pool cut alone, proving nothing.
+    """
+    from openkos.state.vectorstore import open_vector_store
+
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "secret.md",
+        title="Secret",
+        body="chunkedzz confidential tail content",
+        sensitivity_value="confidential",
+    )
+    _write_doc(
+        bundle_dir / "concepts" / "open.md",
+        title="Open",
+        body="chunkedzz private note",
+        sensitivity_value="private",
+    )
+
+    query_vec = [1.0] + [0.0] * (EMBED_DIM - 1)
+    # `secret` is multi-chunk: a far head, then a tail identical to the query.
+    secret_chunks = [
+        [0.0, 1.0] + [0.0] * (EMBED_DIM - 2),
+        [1.0] + [0.0] * (EMBED_DIM - 1),
+    ]
+    # cos(theta) = 0.5 -> L2 distance to `query_vec` is exactly 1.0.
+    open_chunk = [0.5, 0.8660254] + [0.0] * (EMBED_DIM - 2)
+
+    with open_vector_store(tmp_path / ".openkos" / "vectors.db") as db:
+        db.upsert_many(
+            [
+                ("concepts/secret", secret_chunks, "hash-secret"),
+                ("concepts/open", [open_chunk], "hash-open"),
+            ]
+        )
+        db.commit()
+
+        llm = _FakeLLM(reply="private answer only")
+        embedder = _FixedVectorEmbedder(query_vec)
+
+        result = answer_mod.answer(
+            "q",
+            bundle_dir=bundle_dir,
+            llm=llm,
+            embedder=embedder,
+            vector_store=db,
+            fts_index=None,
+        )
+
+    cited_ids = {citation.concept_id for citation in result.citations}
+    assert "concepts/secret" not in cited_ids
+    assert "concepts/open" in cited_ids
+    for message in llm.calls[0]:
+        assert "confidential tail content" not in message["content"]
+
+
 def test_fts_query_terms_drop_function_words() -> None:
     """#648: ES/EN function words in the QUESTION match the wrong domain's
     documents in FTS (`¿qué es MCP y para qué sirve?` ranked the Spanish
