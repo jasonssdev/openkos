@@ -1,0 +1,23 @@
+{
+  "_comment": "Hand-labelled related/unrelated concept_id pairs from the 0.2.10 E2E 32-document bundle (design D9). IDs only, never source bodies. Related pairs lean on the bundle's own authored `relations:` frontmatter and shared provenance/topic; unrelated pairs cross clearly distinct topic domains (LLM tooling vs hardware purchase, privacy philosophy vs meeting-coordination logistics, etc.).",
+  "related": [
+    ["concepts/ami-meeting-corpus", "concepts/generación-aumentada-por-recuperación-rag-2"],
+    ["concepts/generación-aumentada-por-recuperación-rag-2", "concepts/verdad-contextual-en-sistemas-rag"],
+    ["concepts/motor-técnico-del-compilador", "projects/compilador-de-conocimiento"],
+    ["concepts/escalabilidad-y-arquitectura-del-motor", "concepts/open-cuse"],
+    ["concepts/metodología-experimental-cuantitativa", "projects/afg-decisión-evaluation"],
+    ["concepts/llm-arena", "concepts/motor-técnico-del-compilador"],
+    ["procedures/investigación-del-estado-del-arte", "procedures/revisión-de-la-bibliografía"],
+    ["decisions/necesidad-de-feedback-de-los-tutores", "procedures/procedimiento-para-contactar-tutores"]
+  ],
+  "unrelated": [
+    ["concepts/llm-arena", "procedures/compra-de-computadora"],
+    ["concepts/privacidad-y-control-de-datos", "events/afg-decisión-evaluation-coordinación"],
+    ["procedures/análisis-de-metodología", "concepts/orística"],
+    ["decisions/aprobación-de-apoyo-externo-para-diseño-narrativo", "concepts/motor-técnico-del-compilador"],
+    ["concepts/producto-mínimo-viable-mvp", "procedures/revisión-de-la-bibliografía"],
+    ["insights/qué-decisiones-se-tomaron-sobre-la-metodología-de-evaluación", "concepts/orística"],
+    ["projects/sistema-de-extracción-de-decisiones-organizacionales", "procedures/compra-de-computadora"],
+    ["concepts/privacidad-y-control-de-datos", "procedures/contacto-con-profesor"]
+  ]
+}

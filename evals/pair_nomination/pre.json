@@ -1,0 +1,63 @@
+{
+  "chunked": false,
+  "related_n": 8,
+  "related_total": 8,
+  "unrelated_n": 8,
+  "unrelated_total": 8,
+  "worst_related_distance": 0.9940256432153157,
+  "best_unrelated_distance": 0.9642664676288336,
+  "margin": -0.02975917558648211,
+  "falsifiable": true,
+  "witness_n": 0,
+  "max_witness": 1.0,
+  "nominated_pairs": [
+    [
+      "concepts/ami-meeting-corpus",
+      "concepts/generación-aumentada-por-recuperación-rag-2"
+    ],
+    [
+      "concepts/ami-meeting-corpus",
+      "projects/sistema-de-extracción-de-decisiones-organizacionales"
+    ],
+    [
+      "concepts/generación-aumentada-por-recuperación-rag-2",
+      "concepts/verdad-contextual-en-sistemas-rag"
+    ],
+    [
+      "concepts/metodología-experimental-cuantitativa",
+      "projects/afg-decisión-evaluation"
+    ],
+    [
+      "decisions/necesidad-de-feedback-de-los-tutores",
+      "procedures/procedimiento-para-contactar-tutores"
+    ],
+    [
+      "events/afg-decisión-evaluation-coordinación",
+      "events/afg-decisión-evaluation-coordinación-2"
+    ],
+    [
+      "events/afg-decisión-evaluation-coordinación",
+      "projects/afg-decisión-evaluation"
+    ],
+    [
+      "insights/qué-decisiones-se-tomaron-sobre-la-metodología-de-evaluación",
+      "projects/afg-decisión-evaluation"
+    ],
+    [
+      "procedures/contacto-con-profesor",
+      "procedures/procedimiento-para-contactar-tutores"
+    ],
+    [
+      "sources/transcription1",
+      "sources/transcription2"
+    ],
+    [
+      "sources/transcription1",
+      "sources/transcription3"
+    ],
+    [
+      "sources/transcription2",
+      "sources/transcription3"
+    ]
+  ]
+}
