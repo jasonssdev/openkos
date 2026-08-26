@@ -55,48 +55,48 @@ Every unit's checkpoint gate: `uv run pytest -q` + `uv run mypy .` + `uv run ruf
 
 ## Phase 2: Vectorstore Schema, Legacy Migration, Protocol Widen (PR 2)
 
-- [ ] 2.1 RED `tests/unit/state/test_vectorstore.py`: opening a legacy 3-column store drops+recreates `vectors`/`doc_vectors`, `vector_meta` ends at 0 rows (S1).
-- [ ] 2.2 GREEN `vectorstore.py`: `open_vector_store` probes `SELECT chunk_index FROM vectors LIMIT 0`; on `OperationalError`, drop+recreate and clear `vector_meta` inside the existing DDL commit.
-- [ ] 2.3 RED `test_vectorstore.py`: `vectors` gains `chunk_index INTEGER`; new `doc_vectors(embedding, concept_id)` vec0 table; `vector_meta` gains `chunk_count INTEGER`, reads back correctly.
-- [ ] 2.4 GREEN `vectorstore.py`: extend schema DDL for the three columns/tables.
-- [ ] 2.5 RED `test_vectorstore.py`: `upsert_many` re-embed at a different chunk count (12 → 5) leaves exactly 5 rows, zero orphans (S2); one DELETE by `concept_id` removes all N rows across `vectors`/`doc_vectors`/`vector_meta`.
-- [ ] 2.6 GREEN `vectorstore.py`: widen `upsert_many` to `Sequence[tuple[str, Sequence[Sequence[float]], str]]`; per item DELETE-then-INSERT N chunk rows, keep the no-commit-inside contract.
-- [ ] 2.7 Same commit as 2.6: adapt the two typed `VectorStore` fakes (`test_vectorstore.py:181`, `test_answer.py:178`) and the direct `db.upsert_many([...])` call sites (`test_vectorstore.py:970,985,1033`) to the new item shape — do not split this across work units or leave unrelated tests red.
-- [ ] 2.8 RED `test_vectorstore.py`: `prune_many` removes all N chunk rows + `doc_vectors` + `vector_meta` in one call, no commit inside (S3).
-- [ ] 2.9 GREEN `vectorstore.py`: `prune_many` deletes across all three tables per `concept_id`.
-- [ ] 2.10 RED `test_vectorstore.py`: `doc_vectors` row = `normalize(mean(normalize(vi)))`; N=1 chunk equals that chunk; result is unit-length (S5).
-- [ ] 2.11 GREEN `vectorstore.py`: derive and write the document vector inside `upsert_many`.
-- [ ] 2.12 RED `test_vectorstore.py`: multi-chunk document — `cos(doc_vector, chunk_0) < 1.0` (S13).
-- [ ] 2.13 RED `test_vectorstore.py`: `query()` collapse — over-fetch `k × max(chunk_count)`, keep min distance per `concept_id`, Python tie-break `(distance, concept_id)`, ≤ k documents (S6); reproduce the design's tie `[('a',0,0.0),('b',0,1.414),('a',1,1.414)]` and assert deterministic `concept_id` ordering, not vec0 insertion order.
-- [ ] 2.14 GREEN `vectorstore.py`: implement the collapse in `query()`.
-- [ ] 2.15 RED `tests/unit/retrieval/test_answer.py`: with FTS explicitly disabled (`fts_index=None`) and a real `VectorStoreDB` holding a document whose head chunk is far from the query embedding and tail chunk is close, `_dense_search`/`answer()` retrieves that document through the dense path alone.
-- [ ] 2.16 RED `test_answer.py`: `len(citations)` equals distinct document count even when the store's pre-collapse rows span multiple chunks of one document; `query --save` provenance stays `concept_id`-only (S12).
-- [ ] 2.17 RED `test_vectorstore.py`: `neighbors()` reads `doc_vectors`; a zero-chunk document (no `doc_vectors` row) returns `[]` via the existing `row is None` branch, no raise (S7).
-- [ ] 2.18 GREEN `vectorstore.py`: point `neighbors()` at `doc_vectors`.
-- [ ] 2.19 RED `tests/unit/graph/test_proximity.py`: `VectorProximitySource.pairs()` over a chunk-derived document vector still never raises; zero-chunk document yields no pairs.
-- [ ] 2.20 REFACTOR: `uv run mypy .` accepts the widened `upsert_many` Protocol against both adapted fakes; re-run the full `test_proximity.py` suite green.
+- [x] 2.1 RED `tests/unit/state/test_vectorstore.py`: opening a legacy 3-column store drops+recreates `vectors`/`doc_vectors`, `vector_meta` ends at 0 rows (S1).
+- [x] 2.2 GREEN `vectorstore.py`: `open_vector_store` probes `SELECT chunk_index FROM vectors LIMIT 0`; on `OperationalError`, drop+recreate and clear `vector_meta` inside the existing DDL commit.
+- [x] 2.3 RED `test_vectorstore.py`: `vectors` gains `chunk_index INTEGER`; new `doc_vectors(embedding, concept_id)` vec0 table; `vector_meta` gains `chunk_count INTEGER`, reads back correctly.
+- [x] 2.4 GREEN `vectorstore.py`: extend schema DDL for the three columns/tables.
+- [x] 2.5 RED `test_vectorstore.py`: `upsert_many` re-embed at a different chunk count (12 → 5) leaves exactly 5 rows, zero orphans (S2); one DELETE by `concept_id` removes all N rows across `vectors`/`doc_vectors`/`vector_meta`.
+- [x] 2.6 GREEN `vectorstore.py`: widen `upsert_many` to `Sequence[tuple[str, Sequence[Sequence[float]], str]]`; per item DELETE-then-INSERT N chunk rows, keep the no-commit-inside contract.
+- [x] 2.7 Same commit as 2.6: adapt the two typed `VectorStore` fakes (`test_vectorstore.py:181`, `test_answer.py:178`) and the direct `db.upsert_many([...])` call sites (`test_vectorstore.py:970,985,1033`) to the new item shape — do not split this across work units or leave unrelated tests red.
+- [x] 2.8 RED `test_vectorstore.py`: `prune_many` removes all N chunk rows + `doc_vectors` + `vector_meta` in one call, no commit inside (S3).
+- [x] 2.9 GREEN `vectorstore.py`: `prune_many` deletes across all three tables per `concept_id`.
+- [x] 2.10 RED `test_vectorstore.py`: `doc_vectors` row = `normalize(mean(normalize(vi)))`; N=1 chunk equals that chunk; result is unit-length (S5).
+- [x] 2.11 GREEN `vectorstore.py`: derive and write the document vector inside `upsert_many`.
+- [x] 2.12 RED `test_vectorstore.py`: multi-chunk document — `cos(doc_vector, chunk_0) < 1.0` (S13).
+- [x] 2.13 RED `test_vectorstore.py`: `query()` collapse — over-fetch `k × max(chunk_count)`, keep min distance per `concept_id`, Python tie-break `(distance, concept_id)`, ≤ k documents (S6); reproduce the design's tie `[('a',0,0.0),('b',0,1.414),('a',1,1.414)]` and assert deterministic `concept_id` ordering, not vec0 insertion order.
+- [x] 2.14 GREEN `vectorstore.py`: implement the collapse in `query()`.
+- [x] 2.15 RED `tests/unit/retrieval/test_answer.py`: with FTS explicitly disabled (`fts_index=None`) and a real `VectorStoreDB` holding a document whose head chunk is far from the query embedding and tail chunk is close, `_dense_search`/`answer()` retrieves that document through the dense path alone.
+- [x] 2.16 RED `test_answer.py`: `len(citations)` equals distinct document count even when the store's pre-collapse rows span multiple chunks of one document; `query --save` provenance stays `concept_id`-only (S12).
+- [x] 2.17 RED `test_vectorstore.py`: `neighbors()` reads `doc_vectors`; a zero-chunk document (no `doc_vectors` row) returns `[]` via the existing `row is None` branch, no raise (S7).
+- [x] 2.18 GREEN `vectorstore.py`: point `neighbors()` at `doc_vectors`.
+- [x] 2.19 RED `tests/unit/graph/test_proximity.py`: `VectorProximitySource.pairs()` over a chunk-derived document vector still never raises; zero-chunk document yields no pairs.
+- [x] 2.20 REFACTOR: `uv run mypy .` accepts the widened `upsert_many` Protocol against both adapted fakes; re-run the full `test_proximity.py` suite green.
 
 ## Phase 3: Reindex Chunking + Failure Grain (PR 3)
 
-- [ ] 3.1 RED `tests/unit/state/test_reindex.py`: body chunking via `_chunk_lines(body, target=12_000 - len(header))` — `"\n".join(body_chunks) == body` byte-for-byte; empty body → one header-only chunk (S4).
-- [ ] 3.2 GREEN `reindex.py`: split `_compose_embed_text` into `header` (title+description+tags) + `body`; chunk body; each chunk = `header + "\n\n" + body_chunk`.
-- [ ] 3.3 RED `test_reindex.py`: short doc → 1 chunk/1 embed call; long doc → N chunks/N calls, lossless.
-- [ ] 3.4 RED `test_reindex.py`: chunk 3-of-5 fails on a generic `OllamaError` → `embed_failed += 1`, zero rows written for that document, prior stored rows untouched, and no partial mean stored — assert the stored `vector_meta`/`content_hash` state directly, not just the counter (S8).
-- [ ] 3.5 GREEN `reindex.py`: per-document chunk loop, all-or-nothing on any chunk's generic `OllamaError`.
-- [ ] 3.6 RED `test_reindex.py`: the three FATAL subclasses (`OllamaUnavailable`, `OllamaModelNotFound`, `OllamaEmbeddingDimensionMismatch`) re-raise from the chunk loop before the generic handler (S9) — restore the Missing-model and Dimension-mismatch scenarios per the accepted spec's third-pass correction.
-- [ ] 3.7 GREEN `reindex.py`: preserve the existing ordered `except` ladder inside the chunk loop, order unchanged.
-- [ ] 3.8 RED `test_reindex.py`: the run still commits exactly once regardless of chunk count (S10).
-- [ ] 3.9 GREEN `reindex.py`: `ReindexReport` gains `embed_calls: int = 0` and `effective_model_tag: str | None = None` (defaulted); `embedded`/`embed_failed`/`skipped` keep counting documents.
-- [ ] 3.10 GREEN `reindex.py`: bump `EMBED_COMPOSITION_TAG` `"compose-v1"` → `"chunk-v1"`.
-- [ ] 3.11 RED `test_reindex.py`: `on_progress` still fires once per queued document, after its own chunk set resolves.
+- [x] 3.1 RED `tests/unit/state/test_reindex.py`: body chunking via `_chunk_lines(body, target=12_000 - len(header))` — `"\n".join(body_chunks) == body` byte-for-byte; empty body → one header-only chunk (S4).
+- [x] 3.2 GREEN `reindex.py`: split `_compose_embed_text` into `header` (title+description+tags) + `body`; chunk body; each chunk = `header + "\n\n" + body_chunk`.
+- [x] 3.3 RED `test_reindex.py`: short doc → 1 chunk/1 embed call; long doc → N chunks/N calls, lossless.
+- [x] 3.4 RED `test_reindex.py`: chunk 3-of-5 fails on a generic `OllamaError` → `embed_failed += 1`, zero rows written for that document, prior stored rows untouched, and no partial mean stored — assert the stored `vector_meta`/`content_hash` state directly, not just the counter (S8).
+- [x] 3.5 GREEN `reindex.py`: per-document chunk loop, all-or-nothing on any chunk's generic `OllamaError`.
+- [x] 3.6 RED `test_reindex.py`: the three FATAL subclasses (`OllamaUnavailable`, `OllamaModelNotFound`, `OllamaEmbeddingDimensionMismatch`) re-raise from the chunk loop before the generic handler (S9) — restore the Missing-model and Dimension-mismatch scenarios per the accepted spec's third-pass correction.
+- [x] 3.7 GREEN `reindex.py`: preserve the existing ordered `except` ladder inside the chunk loop, order unchanged.
+- [x] 3.8 RED `test_reindex.py`: the run still commits exactly once regardless of chunk count (S10).
+- [x] 3.9 GREEN `reindex.py`: `ReindexReport` gains `embed_calls: int = 0` and `effective_model_tag: str | None = None` (defaulted); `embedded`/`embed_failed`/`skipped` keep counting documents.
+- [x] 3.10 GREEN `reindex.py`: bump `EMBED_COMPOSITION_TAG` `"compose-v1"` → `"chunk-v1"`.
+- [x] 3.11 RED `test_reindex.py`: `on_progress` still fires once per queued document, after its own chunk set resolves.
 - [ ] 3.12 MEASURE (no number asserted in code): run `openkos reindex` against the 0.2.10 32-document bundle with real Ollama; record the actual total chunk count / `embed_calls`. Feed this measured figure into PR 4's disclosure wording and any user-facing note — never state a predicted multiplier before this run.
 
 ## Phase 4: Disclosure + Purge Realignment (PR 4)
 
-- [ ] 4.1 RED (CLI-level disclosure test): three branches — model parts differ → `embedding model changed (...)`; model parts equal, composition differs → `embed text composition changed (...); your embedding model is unchanged (...)`; previous tag absent → `no embedding-model tag stored (fresh or dropped store)` (S11).
-- [ ] 4.2 GREEN `cli/main.py`: split `previous_model_tag`/`effective_model_tag` at `#`, implement the three-branch comparison, report `embed_calls` over embedded documents in every branch.
-- [ ] 4.3 RED `tests/unit/cli/test_purge.py:801`: update the pre-emptive quoted wording to the corrected "no embedding-model tag stored (fresh or dropped store)" line.
-- [ ] 4.4 GREEN `cli/main.py:7630-7634`: realign purge's disclosure line to quote the corrected wording.
+- [x] 4.1 RED (CLI-level disclosure test): three branches — model parts differ → `embedding model changed (...)`; model parts equal, composition differs → `embed text composition changed (...); your embedding model is unchanged (...)`; previous tag absent → `no embedding-model tag stored (fresh or dropped store)` (S11).
+- [x] 4.2 GREEN `cli/main.py`: split `previous_model_tag`/`effective_model_tag` at `#`, implement the three-branch comparison, report `embed_calls` over embedded documents in every branch.
+- [x] 4.3 RED `tests/unit/cli/test_purge.py:801`: update the pre-emptive quoted wording to the corrected "no embedding-model tag stored (fresh or dropped store)" line.
+- [x] 4.4 GREEN `cli/main.py:7630-7634`: realign purge's disclosure line to quote the corrected wording.
 
 ## Phase 5: Cross-Cutting Verification (no new production code)
 

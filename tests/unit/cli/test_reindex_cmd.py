@@ -141,14 +141,21 @@ def test_reindex_summary_notes_when_model_tag_forced_the_reembed(
     summary, naming the OLD (previously stored) and NEW (configured) model
     tags -- distinguishing a heavy, embedding-model-driven full re-embed
     from an ordinary large content change (review correction, WARNING
-    finding: model-tag force observability)."""
+    finding: model-tag force observability). #888: the comparison is now
+    against `report.effective_model_tag` (the `{model}#{composition}` tag),
+    never the bare configured model name."""
     _init_workspace(tmp_path, monkeypatch)
     layout = config.WorkspaceLayout(tmp_path)
     with open_vector_store(layout.vectors_db_path) as db:
-        db.write_model_tag("old-model")
+        db.write_model_tag("old-model#chunk-v1")
         db.commit()
     fake_report = ReindexReport(
-        embedded=2, cache_hits=0, pruned=0, skipped=0, model_reembedded=True
+        embedded=2,
+        cache_hits=0,
+        pruned=0,
+        skipped=0,
+        model_reembedded=True,
+        effective_model_tag="bge-m3#chunk-v1",
     )
     monkeypatch.setattr(
         "openkos.cli.main.reindex_module.reindex", lambda *a, **k: fake_report
@@ -159,12 +166,13 @@ def test_reindex_summary_notes_when_model_tag_forced_the_reembed(
     assert result.exit_code == 0
     assert "embedding model" in result.stdout.lower()
     assert "old-model" in result.stdout
-    assert "bge-m3" in result.stdout  # DEFAULT_EMBEDDING_MODEL
+    assert "bge-m3" in result.stdout
     # skipped == 0: the summary must read as a COMPLETE re-embed and must NOT
     # borrow the skipped>0 branch's "incomplete" wording (symmetric guard to
     # the unhealed-case tests, so a branch mix-up on the complete path fails).
     assert "re-embedded all vectors" in result.stdout.lower()
     assert "incomplete" not in result.stdout.lower()
+    assert "embed_calls" in result.stdout.lower()
 
 
 def test_reindex_summary_notes_when_model_reembed_left_docs_unhealed(
@@ -1050,3 +1058,57 @@ def test_reindex_passes_no_progress_hook_when_stderr_is_not_a_tty(
 
     assert result.exit_code == 0
     assert captured["on_progress"] is None
+
+
+# --- Phase (#888): the corrected three-branch re-embed trigger wording -----
+
+
+def test_reembed_trigger_wording_names_a_genuine_model_change() -> None:
+    """S11: model parts differ -> `embedding model changed (<old> -> <new>)`
+    -- design's own worked example."""
+    from openkos.cli.main import _reembed_trigger_wording
+
+    wording = _reembed_trigger_wording(
+        "bge-m3#chunk-v1", "qwen3-embedding:0.6b#chunk-v1"
+    )
+
+    assert wording == "embedding model changed (bge-m3 -> qwen3-embedding:0.6b)"
+
+
+def test_reembed_trigger_wording_names_a_composition_only_change() -> None:
+    """S11: model parts equal, composition differs -> composition wording,
+    NEVER "embedding model changed" -- the exact defect this change fixes
+    (a composition-only bump, such as this change's own `compose-v1` ->
+    `chunk-v1`, previously reported a false model change)."""
+    from openkos.cli.main import _reembed_trigger_wording
+
+    wording = _reembed_trigger_wording("bge-m3#compose-v1", "bge-m3#chunk-v1")
+
+    assert wording == (
+        "embed text composition changed (compose-v1 -> chunk-v1); "
+        "your embedding model is unchanged (bge-m3)"
+    )
+    assert "embedding model changed" not in wording
+
+
+def test_reembed_trigger_wording_names_an_absent_previous_tag() -> None:
+    """S11: no previous tag stored (fresh store, or one `purge` dropped) ->
+    the fresh-or-dropped-store wording, naming neither a model nor a
+    composition change."""
+    from openkos.cli.main import _reembed_trigger_wording
+
+    wording = _reembed_trigger_wording(None, "bge-m3#chunk-v1")
+
+    assert wording == "no embedding-model tag stored (fresh or dropped store)"
+    assert "changed" not in wording
+
+
+def test_reembed_trigger_wording_handles_a_pre_composition_bare_tag() -> None:
+    """A previously stored tag with no `#` at all (a store predating the
+    composition-tag suffix entirely) is treated as `(model, "")` -- the
+    model part compares correctly against a genuine model bump."""
+    from openkos.cli.main import _reembed_trigger_wording
+
+    wording = _reembed_trigger_wording("bge-m3", "qwen3-embedding:0.6b#chunk-v1")
+
+    assert wording == "embedding model changed (bge-m3 -> qwen3-embedding:0.6b)"
