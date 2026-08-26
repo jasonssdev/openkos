@@ -308,46 +308,87 @@ def _self_test() -> int:
     )
     check("cosine guards a zero vector", _cosine([0.0, 0.0], [1.0, 0.0]) == 0.0)
 
+    def vec(seed: float) -> bytes:
+        values = [seed] + [0.0] * (EMBED_DIM - 1)
+        return bytes(sqlite_vec.serialize_float32(values))
+
     with tempfile.TemporaryDirectory() as tmp:
-        db_path = pathlib.Path(tmp) / ".openkos" / "vectors.db"
-        with open_vector_store(db_path) as db:
-            conn = db._conn
-            check(
-                "fresh legacy-shape store has no chunk_index", not has_chunk_index(conn)
-            )
-
-            def vec(seed: float) -> bytes:
-                values = [seed] + [0.0] * (EMBED_DIM - 1)
-                return bytes(sqlite_vec.serialize_float32(values))
-
-            conn.execute(
-                "INSERT INTO vectors (embedding, concept_id, content_hash) "
-                "VALUES (?, ?, ?)",
-                (vec(1.0), "a", "h"),
-            )
-            conn.execute(
-                "INSERT INTO vectors (embedding, concept_id, content_hash) "
-                "VALUES (?, ?, ?)",
-                (vec(2.0), "b", "h"),
-            )
-            conn.execute(
-                "INSERT OR REPLACE INTO vector_meta (concept_id, content_hash) "
-                "VALUES (?, ?), (?, ?)",
-                ("a", "h", "b", "h"),
-            )
-            conn.commit()
+        # `open_vector_store` now ALWAYS produces the chunk-aware schema
+        # (it migrates any legacy-shape store on open, #888) -- so a
+        # genuinely legacy (pre-chunking) store for THIS self-test is built
+        # directly, without going through it at all, mirroring the exact
+        # shape `open_vector_store` produced before this change.
+        legacy_db_path = pathlib.Path(tmp) / "legacy.db"
+        legacy_conn = sqlite3.connect(str(legacy_db_path))
+        legacy_conn.enable_load_extension(True)
+        sqlite_vec.load(legacy_conn)
+        legacy_conn.enable_load_extension(False)
+        legacy_conn.execute(
+            f"CREATE VIRTUAL TABLE vectors USING vec0("
+            f"embedding float[{EMBED_DIM}], concept_id TEXT, content_hash TEXT)"
+        )
+        legacy_conn.execute(
+            "CREATE TABLE vector_meta (concept_id TEXT PRIMARY KEY, "
+            "content_hash TEXT NOT NULL)"
+        )
+        check("legacy-shape store has no chunk_index", not has_chunk_index(legacy_conn))
+        legacy_conn.execute(
+            "INSERT INTO vectors (embedding, concept_id, content_hash) "
+            "VALUES (?, ?, ?)",
+            (vec(1.0), "a", "h"),
+        )
+        legacy_conn.execute(
+            "INSERT INTO vectors (embedding, concept_id, content_hash) "
+            "VALUES (?, ?, ?)",
+            (vec(2.0), "b", "h"),
+        )
+        legacy_conn.execute(
+            "INSERT OR REPLACE INTO vector_meta (concept_id, content_hash) "
+            "VALUES (?, ?), (?, ?)",
+            ("a", "h", "b", "h"),
+        )
+        legacy_conn.commit()
+        legacy_conn.close()
 
         related, unrelated = [["a", "b"]], [["a", "b"]]
-        m = measure(db_path, related, unrelated)
-        check("pre-change reads the vectors table", not m.chunked)
-        check("pre-change witness is empty (no chunk schema)", m.witness_n == 0)
-        check("pre-change witness defaults to 1.0", m.max_witness == 1.0)
+        # `measure()` itself opens via `open_vector_store`, which MIGRATES
+        # this on-disk legacy file the moment it is opened -- exactly the
+        # behavior `_migrate_legacy_vectors_shape_if_needed` documents, and
+        # exactly why a REAL pre-change capture must be read from a
+        # snapshot taken before this call, never re-derived by opening the
+        # live store again after the code has moved on.
+        m = measure(legacy_db_path, related, unrelated)
+        check("a migrated-on-open store reads doc_vectors, not vectors", m.chunked)
+        check(
+            "the migration clears vector_meta -- nothing left to score",
+            m.related_n == 0 and not m.falsifiable,
+        )
+
+        # A genuinely chunk-aware store, built the normal way, IS scored.
+        # `a`/`b` are both UNIT vectors 60 degrees apart, so their L2
+        # distance is exactly 1.0 (2 - 2*cos(60) = 1) -- normalizing by
+        # MAGNITUDE alone (e.g. [1,0,...] vs [2,0,...]) would collapse to
+        # the SAME direction and hide a real bug in the derivation.
+        db_path = pathlib.Path(tmp) / ".openkos" / "vectors.db"
+        with open_vector_store(db_path) as db:
+            db.upsert_many([("a", [[1.0, 0.0] + [0.0] * (EMBED_DIM - 2)], "h")])
+            db.upsert_many([("b", [[0.5, 0.8660254] + [0.0] * (EMBED_DIM - 2)], "h")])
+            db.commit()
+
+        m2 = measure(db_path, related, unrelated)
+        check("a chunk-aware store reads doc_vectors", m2.chunked)
+        check("a chunk-aware store's pairs are scored", m2.related_n == 1)
+        check("chunk-aware witness is empty for single-chunk docs", m2.witness_n == 0)
+        check(
+            "chunk-aware witness defaults to 1.0 with nothing to witness",
+            m2.max_witness == 1.0,
+        )
         check(
             "distance between seed 1.0 and 2.0 vectors is 1.0",
-            abs(m.worst_related_distance - 1.0) < 1e-6,
+            abs(m2.worst_related_distance - 1.0) < 1e-6,
         )
-        check("margin is worst_related - best_unrelated arithmetic", m.margin == 0.0)
-        check("falsifiable when the unrelated set is non-empty", m.falsifiable)
+        check("margin is worst_related - best_unrelated arithmetic", m2.margin == 0.0)
+        check("falsifiable when the unrelated set is non-empty", m2.falsifiable)
 
         m_empty = measure(db_path, related, [])
         check("an empty unrelated set is UNFALSIFIABLE", not m_empty.falsifiable)
@@ -391,7 +432,7 @@ def _self_test() -> int:
     )
     check("jaccard of disjoint sets is 0.0", jaccard == 0.0)
 
-    total = 13
+    total = 20
     for name in failures:
         print(f"FAIL: {name}")
     print(f"self-test: {total - len(failures)}/{total} passed")
