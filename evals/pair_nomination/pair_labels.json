@@ -8,7 +8,9 @@
     ["concepts/metodología-experimental-cuantitativa", "projects/afg-decisión-evaluation"],
     ["concepts/llm-arena", "concepts/motor-técnico-del-compilador"],
     ["procedures/investigación-del-estado-del-arte", "procedures/revisión-de-la-bibliografía"],
-    ["decisions/necesidad-de-feedback-de-los-tutores", "procedures/procedimiento-para-contactar-tutores"]
+    ["decisions/necesidad-de-feedback-de-los-tutores", "procedures/procedimiento-para-contactar-tutores"],
+    ["sources/transcription3", "concepts/ami-meeting-corpus"],
+    ["sources/transcription1", "concepts/motor-técnico-del-compilador"]
   ],
   "unrelated": [
     ["concepts/llm-arena", "procedures/compra-de-computadora"],
@@ -18,6 +20,8 @@
     ["concepts/producto-mínimo-viable-mvp", "procedures/revisión-de-la-bibliografía"],
     ["insights/qué-decisiones-se-tomaron-sobre-la-metodología-de-evaluación", "concepts/orística"],
     ["projects/sistema-de-extracción-de-decisiones-organizacionales", "procedures/compra-de-computadora"],
-    ["concepts/privacidad-y-control-de-datos", "procedures/contacto-con-profesor"]
+    ["concepts/privacidad-y-control-de-datos", "procedures/contacto-con-profesor"],
+    ["sources/transcription1", "decisions/necesidad-de-feedback-de-los-tutores"],
+    ["sources/transcription3", "concepts/motor-técnico-del-compilador"]
   ]
 }

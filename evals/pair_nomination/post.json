@@ -1,15 +1,15 @@
 {
-  "chunked": false,
+  "chunked": true,
   "related_n": 10,
   "related_total": 10,
   "unrelated_n": 10,
   "unrelated_total": 10,
-  "worst_related_distance": 0.9970361565891225,
-  "best_unrelated_distance": 0.9481117723664926,
-  "margin": -0.0489243842226299,
+  "worst_related_distance": 0.9940255679619929,
+  "best_unrelated_distance": 0.9119928321275949,
+  "margin": -0.08203273583439807,
   "falsifiable": true,
-  "witness_n": 0,
-  "max_witness": 1.0,
+  "witness_n": 2,
+  "max_witness": 0.9182519037336812,
   "nominated_pairs": [
     [
       "concepts/ami-meeting-corpus",

@@ -1,0 +1,13 @@
+# Pair-nomination gate: pre vs post (#888)
+
+pre  margin: -0.0489 (falsifiable=True)
+post margin: -0.0820 (falsifiable=True)
+verdict: FAIL -- post margin -0.0820 < pre margin -0.0489
+
+## Set delta (descriptive -- a changed set is the point of the fix)
+|pre ∩ post| = 12, lost = 0, gained = 0, jaccard = 1.0000
+
+## Truncation witness
+pre:  0 multi-chunk doc(s), max cos = 1.0000
+post: 2 multi-chunk doc(s), max cos = 0.9183
+
