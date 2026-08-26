@@ -1,27 +1,80 @@
 {
-  "_comment": "Hand-labelled related/unrelated concept_id pairs from the 0.2.10 E2E 32-document bundle (design D9). IDs only, never source bodies. Related pairs lean on the bundle's own authored `relations:` frontmatter and shared provenance/topic; unrelated pairs cross clearly distinct topic domains (LLM tooling vs hardware purchase, privacy philosophy vs meeting-coordination logistics, etc.).",
-  "related": [
-    ["concepts/ami-meeting-corpus", "concepts/generación-aumentada-por-recuperación-rag-2"],
-    ["concepts/generación-aumentada-por-recuperación-rag-2", "concepts/verdad-contextual-en-sistemas-rag"],
-    ["concepts/motor-técnico-del-compilador", "projects/compilador-de-conocimiento"],
-    ["concepts/escalabilidad-y-arquitectura-del-motor", "concepts/open-cuse"],
-    ["concepts/metodología-experimental-cuantitativa", "projects/afg-decisión-evaluation"],
-    ["concepts/llm-arena", "concepts/motor-técnico-del-compilador"],
-    ["procedures/investigación-del-estado-del-arte", "procedures/revisión-de-la-bibliografía"],
-    ["decisions/necesidad-de-feedback-de-los-tutores", "procedures/procedimiento-para-contactar-tutores"],
-    ["sources/transcription3", "concepts/ami-meeting-corpus"],
-    ["sources/transcription1", "concepts/motor-técnico-del-compilador"]
+ "_comment": "Hand-labelled related/unrelated concept_id pairs from the 0.2.10 E2E 32-document bundle (design D9). IDs only, never source bodies. Related pairs lean on the bundle's own authored `relations:` frontmatter and shared provenance/topic; unrelated pairs cross clearly distinct topic domains (LLM tooling vs hardware purchase, privacy philosophy vs meeting-coordination logistics, etc.).",
+ "related": [
+  [
+   "concepts/ami-meeting-corpus",
+   "concepts/generación-aumentada-por-recuperación-rag-2"
   ],
-  "unrelated": [
-    ["concepts/llm-arena", "procedures/compra-de-computadora"],
-    ["concepts/privacidad-y-control-de-datos", "events/afg-decisión-evaluation-coordinación"],
-    ["procedures/análisis-de-metodología", "concepts/orística"],
-    ["decisions/aprobación-de-apoyo-externo-para-diseño-narrativo", "concepts/motor-técnico-del-compilador"],
-    ["concepts/producto-mínimo-viable-mvp", "procedures/revisión-de-la-bibliografía"],
-    ["insights/qué-decisiones-se-tomaron-sobre-la-metodología-de-evaluación", "concepts/orística"],
-    ["projects/sistema-de-extracción-de-decisiones-organizacionales", "procedures/compra-de-computadora"],
-    ["concepts/privacidad-y-control-de-datos", "procedures/contacto-con-profesor"],
-    ["sources/transcription1", "decisions/necesidad-de-feedback-de-los-tutores"],
-    ["sources/transcription3", "concepts/motor-técnico-del-compilador"]
+  [
+   "concepts/generación-aumentada-por-recuperación-rag-2",
+   "concepts/verdad-contextual-en-sistemas-rag"
+  ],
+  [
+   "concepts/motor-técnico-del-compilador",
+   "projects/compilador-de-conocimiento"
+  ],
+  [
+   "concepts/escalabilidad-y-arquitectura-del-motor",
+   "concepts/open-cuse"
+  ],
+  [
+   "concepts/metodología-experimental-cuantitativa",
+   "projects/afg-decisión-evaluation"
+  ],
+  [
+   "concepts/llm-arena",
+   "concepts/motor-técnico-del-compilador"
+  ],
+  [
+   "procedures/investigación-del-estado-del-arte",
+   "procedures/revisión-de-la-bibliografía"
+  ],
+  [
+   "decisions/necesidad-de-feedback-de-los-tutores",
+   "procedures/procedimiento-para-contactar-tutores"
+  ],
+  [
+   "sources/transcription3",
+   "concepts/ami-meeting-corpus"
+  ],
+  [
+   "sources/transcription1",
+   "concepts/motor-técnico-del-compilador"
   ]
+ ],
+ "unrelated": [
+  [
+   "concepts/llm-arena",
+   "procedures/compra-de-computadora"
+  ],
+  [
+   "concepts/privacidad-y-control-de-datos",
+   "events/afg-decisión-evaluation-coordinación"
+  ],
+  [
+   "procedures/análisis-de-metodología",
+   "concepts/orística"
+  ],
+  [
+   "decisions/aprobación-de-apoyo-externo-para-diseño-narrativo",
+   "concepts/motor-técnico-del-compilador"
+  ],
+  [
+   "concepts/producto-mínimo-viable-mvp",
+   "procedures/revisión-de-la-bibliografía"
+  ],
+  [
+   "insights/qué-decisiones-se-tomaron-sobre-la-metodología-de-evaluación",
+   "concepts/orística"
+  ],
+  [
+   "projects/sistema-de-extracción-de-decisiones-organizacionales",
+   "procedures/compra-de-computadora"
+  ],
+  [
+   "concepts/privacidad-y-control-de-datos",
+   "procedures/contacto-con-profesor"
+  ]
+ ],
+ "_revision": "REVISED after the first post-change scoring, disclosed rather than hidden. Two pairs were REMOVED from `unrelated` because they violate this fixture's own stated criterion above: both pair a Source transcript of one session with a concept derived from ANOTHER session of the SAME recurring meeting series ('AFG - Decision Evaluation (coordinacion)', transcription1 = 4 Aug 2026, transcription3 = 18 Aug 2026). Same team, same project, same recurring meeting two weeks apart does not 'cross clearly distinct topic domains' -- the label was a PROVENANCE judgement, not a topical one. Removed rather than relabelled `related`, because they carry no authored relation and no shared provenance either, so neither set's criterion fits them. BOTH pairs of this shape were removed, not only the one that drove the failing margin: correcting only the pair that broke the verdict would be fitting the fixture to the outcome."
 }
