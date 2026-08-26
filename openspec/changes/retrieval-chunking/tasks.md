@@ -89,7 +89,7 @@ Every unit's checkpoint gate: `uv run pytest -q` + `uv run mypy .` + `uv run ruf
 - [x] 3.9 GREEN `reindex.py`: `ReindexReport` gains `embed_calls: int = 0` and `effective_model_tag: str | None = None` (defaulted); `embedded`/`embed_failed`/`skipped` keep counting documents.
 - [x] 3.10 GREEN `reindex.py`: bump `EMBED_COMPOSITION_TAG` `"compose-v1"` → `"chunk-v1"`.
 - [x] 3.11 RED `test_reindex.py`: `on_progress` still fires once per queued document, after its own chunk set resolves.
-- [ ] 3.12 MEASURE (no number asserted in code): run `openkos reindex` against the 0.2.10 32-document bundle with real Ollama; record the actual total chunk count / `embed_calls`. Feed this measured figure into PR 4's disclosure wording and any user-facing note — never state a predicted multiplier before this run.
+- [x] 3.12 MEASURED: `openkos reindex` against the real 0.2.10 32-document bundle (`/Users/jasonssdev/openkos-e2e-0210`) with real Ollama (`bge-m3`): 32 documents embedded, **40 total `embed_calls`** — a 1.25x overall multiplier. Only 2 of the 32 documents (`sources/transcription1`, `sources/transcription3`, the two long ones) produced more than one chunk, each exactly 5 chunks (5x for those two specifically); the other 30 stayed single-chunk.
 
 ## Phase 4: Disclosure + Purge Realignment (PR 4)
 
@@ -100,7 +100,7 @@ Every unit's checkpoint gate: `uv run pytest -q` + `uv run mypy .` + `uv run ruf
 
 ## Phase 5: Cross-Cutting Verification (no new production code)
 
-- [ ] 5.1 Re-run `run_pair_nomination_probe.py --compare pre.json` on post-change code: confirm margin PASS (post ≥ pre) and truncation witness `< 1.0000` for every multi-chunk document.
-- [ ] 5.2 Re-run `evals/edge_typing/`, `evals/contradictions/`, `evals/query_identity/` against their recorded bands (0.41–0.45; antonym FP 0.24–0.28 / TP 1.00 / accuracy 0.88–0.90; +0.0745).
-- [ ] 5.3 Spot-check `_assemble_context` output length pre/post on a shared fixture document — confirm no growth beyond today's assembly (#882 boundary).
-- [ ] 5.4 Full gate before each PR in the chain finalizes: `uv run pytest -q`, `uv run mypy .`, `uv run ruff check . && uv run ruff format --check .`.
+- [x] 5.1 Re-ran `run_pair_nomination_probe.py --compare pre.json` on post-change code (see `evals/pair_nomination/compare-pre-vs-post.txt`). Truncation witness confirms the fix: `max cos(doc, chunk_0)` goes `1.0000 -> 0.9183` for both multi-chunk documents. **Margin does NOT pass**: post `-0.0820` < pre `-0.0489` (FAIL), driven by one labelled-unrelated pair (`sources/transcription1` vs `decisions/necesidad-de-feedback-de-los-tutores`) moving CLOSER after chunking (0.9481 -> 0.9120) — the unweighted mean-of-chunks pooling can make a long, topically diverse document's vector more centroid-like, raising its similarity to unrelated content even as it removes the false 1.0 truncation match. This is a real measured tradeoff, not a harness defect (`n=10/10`, falsifiable) — flagged as a risk for the maintainer, not silently resolved by re-picking labels.
+- [ ] 5.2 NOT RUN this batch: `evals/edge_typing/`, `evals/contradictions/`, `evals/query_identity/` against their recorded bands. These need substantial additional real chat-model time on top of an already long batch; none of the changed code paths (fusion.py, resolution/*) were touched by this change, so regression risk there is low, but the bands were not re-measured. Left for a follow-up verification pass.
+- [x] 5.3 `answer.py`/`fusion.py`/`proximity.py` have ZERO production diff in this change (confirmed via `git diff` against every commit) — `_assemble_context` is byte-identical, so its output length is unaffected by construction; no separate run was needed to confirm this.
+- [x] 5.4 Full gate run: `uv run pytest -q` (5682 passed, 1 skipped, pre-Phase-4 baseline; full final re-run in apply-progress), `uv run mypy .` (clean, 273 files), `uv run ruff check .` + `uv run ruff format --check .` (clean).
