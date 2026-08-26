@@ -175,7 +175,9 @@ class _FakeVectorStore:
     ) -> None:
         raise NotImplementedError  # pragma: no cover -- unused by answer()
 
-    def upsert_many(self, items: Sequence[tuple[str, Sequence[float], str]]) -> None:
+    def upsert_many(
+        self, items: Sequence[tuple[str, Sequence[Sequence[float]], str]]
+    ) -> None:
         raise NotImplementedError  # pragma: no cover -- unused by answer()
 
     def query(self, embedding: Sequence[float], k: int) -> list[VecHit]:
@@ -1081,6 +1083,126 @@ def test_absent_fts_index_degrades_to_empty_not_raise(tmp_path: Path) -> None:
     assert result.fts_hit_count == 0
     assert result.llm_invoked is True
     assert result.answer == "dense only, no fts"
+
+
+# --- Phase 9 (#888): chunk-backed dense retrieval through a real store ------
+
+
+class _FixedVectorEmbedder:
+    """A structural `Embedder` returning the SAME caller-supplied vector for
+    every input, regardless of question text -- lets a test pin the query
+    embedding precisely, against a REAL `VectorStoreDB` rather than a fake,
+    so the chunk collapse inside `query()` is genuinely exercised."""
+
+    def __init__(self, vector: list[float]) -> None:
+        self._vector = vector
+        self.calls: list[list[str]] = []
+
+    def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        self.calls.append(list(texts))
+        return [list(self._vector) for _ in texts]
+
+
+def test_tail_only_content_is_retrieved_through_dense_path_with_fts_disabled(
+    tmp_path: Path,
+) -> None:
+    """query-answer spec: Chunk-Backed Dense Retrieval Reaches A Document's
+    Tail -- a document whose HEAD chunk is far from the query embedding and
+    TAIL chunk is close is still retrieved via `_dense_search`/`answer()`
+    alone, with FTS explicitly disabled (`fts_index=None`) so the lexical
+    channel cannot be what finds it (memory: must run with FTS disabled, or
+    the dense path is never actually exercised).
+
+    Five distractor documents sit at distance ~1.0 from the query -- strictly
+    BETWEEN `tail-only`'s correct collapsed distance (0, via its tail chunk)
+    and its head chunk's distance (sqrt(2)). With the correct MIN-distance
+    collapse, `tail-only` outranks every distractor and survives the
+    default `limit=5` cut; a collapse that picked the head chunk's distance
+    instead would rank it LAST and cut it -- this is what makes the test
+    fail for the right reason on that mutation, not just "present or not"
+    against a pool wide enough to admit everything regardless."""
+    from openkos.state.vectorstore import open_vector_store
+
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "tail-only.md",
+        title="Tail Only",
+        body="the answer lives at the end",
+    )
+    query_vec = [1.0] + [0.0] * (EMBED_DIM - 1)
+    head_chunk = [0.0, 1.0] + [0.0] * (EMBED_DIM - 2)  # far from query_vec
+    tail_chunk = [1.0] + [0.0] * (EMBED_DIM - 1)  # identical to query_vec
+    # cos(theta) = 0.5 -> L2 distance to query_vec is exactly 1.0.
+    mid_distance = [0.5, 0.8660254] + [0.0] * (EMBED_DIM - 2)
+
+    items = [("concepts/tail-only", [head_chunk, tail_chunk], "hash-tail")]
+    for i in range(5):
+        concept_id = f"concepts/distractor-{i}"
+        _write_doc(
+            bundle_dir / f"{concept_id}.md",
+            title=f"Distractor {i}",
+            body="an unrelated document",
+        )
+        items.append((concept_id, [mid_distance], f"hash-distractor-{i}"))
+
+    with open_vector_store(tmp_path / ".openkos" / "vectors.db") as db:
+        db.upsert_many(items)
+        db.commit()
+
+        llm = _FakeLLM(reply="found via the tail chunk")
+        embedder = _FixedVectorEmbedder(query_vec)
+
+        result = answer_mod.answer(
+            "q",
+            bundle_dir=bundle_dir,
+            llm=llm,
+            embedder=embedder,
+            vector_store=db,
+            fts_index=None,
+        )
+
+    assert "concepts/tail-only" in {c.concept_id for c in result.citations}
+
+
+def test_multi_chunk_document_yields_exactly_one_citation(tmp_path: Path) -> None:
+    """query-answer spec: Chunk Collapse Is Invisible To Citation,
+    Attribution, And Save Provenance -- a document whose best dense match
+    came from a non-first chunk still yields exactly ONE `Citation`, never
+    one per chunk, and `dense_hit_count` counts documents (S12)."""
+    from openkos.state.vectorstore import open_vector_store
+
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "multi-chunk.md",
+        title="Multi Chunk",
+        body="a document represented by several stored chunk vectors",
+    )
+    query_vec = [1.0] + [0.0] * (EMBED_DIM - 1)
+    chunks = [
+        [0.0, 1.0] + [0.0] * (EMBED_DIM - 2),
+        [0.9, 0.1] + [0.0] * (EMBED_DIM - 2),
+        [1.0] + [0.0] * (EMBED_DIM - 1),
+    ]
+
+    with open_vector_store(tmp_path / ".openkos" / "vectors.db") as db:
+        db.upsert_many([("concepts/multi-chunk", chunks, "hash-multi")])
+        db.commit()
+
+        llm = _FakeLLM(reply="one citation only")
+        embedder = _FixedVectorEmbedder(query_vec)
+
+        result = answer_mod.answer(
+            "q",
+            bundle_dir=bundle_dir,
+            llm=llm,
+            embedder=embedder,
+            vector_store=db,
+            fts_index=None,
+        )
+
+    matching = [c for c in result.citations if c.concept_id == "concepts/multi-chunk"]
+    assert len(matching) == 1
+    assert result.dense_hit_count == 1
 
 
 def test_fts_query_terms_drop_function_words() -> None:
