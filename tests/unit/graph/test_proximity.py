@@ -323,6 +323,29 @@ def test_open_proximity_source_yields_a_working_source_over_a_real_store(
     assert [(p.source_id, p.target_id) for p in pairs] == [("concepts/a", "concepts/b")]
 
 
+@pytest.mark.skipif(
+    not vectorstore.probe_vec_loadable(), reason="sqlite-vec extension not loadable"
+)
+def test_pairs_over_a_real_store_degrades_a_zero_chunk_concept_without_raising(
+    tmp_path: Path,
+) -> None:
+    """graph-projection spec: Embedding-Proximity Pairs Are Derived From
+    Chunk-Backed Document Vectors -- a concept id with zero stored chunks
+    (never embedded, no `doc_vectors` row) contributes no pairs and
+    `pairs()` does not raise, over a REAL chunk-aware store."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+    with vectorstore.open_vector_store(db_path) as db:
+        db.upsert("concepts/a", [1.0] + [0.0] * (EMBED_DIM - 1), "h-a")
+        db.upsert("concepts/b", [0.99, 0.01] + [0.0] * (EMBED_DIM - 2), "h-b")
+
+    source = proximity.open_proximity_source(db_path)
+    assert source is not None
+    with source:
+        pairs = source.pairs(["concepts/a", "concepts/b", "concepts/never-embedded"])
+
+    assert [(p.source_id, p.target_id) for p in pairs] == [("concepts/a", "concepts/b")]
+
+
 def test_open_proximity_source_returns_none_for_a_present_but_empty_store(
     tmp_path: Path,
 ) -> None:

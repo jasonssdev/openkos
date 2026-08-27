@@ -1,0 +1,24 @@
+# Pair-nomination gate: pre vs post (#888)
+
+pre  margin: -0.0328 (falsifiable=True)
+post margin: -0.0298 (falsifiable=True)
+verdict: PASS -- post margin -0.0298 >= pre margin -0.0328
+
+## Fixture revision, disclosed
+Scored against the REVISED label set (see `_revision` in pair_labels.json). Two pairs
+were removed from `unrelated` AFTER the first scoring, because both violate the
+fixture's own stated criterion: each pairs a Source transcript of one session with a
+concept derived from another session of the SAME recurring meeting series. Both pairs
+of that shape were removed, not only the one that drove the original failing margin.
+
+## What the verdict does and does not say
+Both margins remain NEGATIVE: this signal does not separate related from unrelated
+pairs, and did not before the change either. The gate asserts only that chunking did
+not make it worse. Making it separate is not this change's job.
+
+## Set delta (descriptive -- a changed set is the point of the fix)
+|pre n post| = 12, lost = 0, gained = 0, jaccard = 1.0000
+
+## Truncation witness
+pre:  0 multi-chunk doc(s), max cos = 1.0000
+post: 2 multi-chunk doc(s), max cos = 0.9183

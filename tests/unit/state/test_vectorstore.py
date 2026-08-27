@@ -10,6 +10,7 @@ its first consumer.
 """
 
 import hashlib
+import math
 import sqlite3
 from collections.abc import Sequence
 from pathlib import Path
@@ -46,24 +47,26 @@ def test_vec0_delete_by_concept_id_then_reinsert_survives_with_one_row(
     prior row for that `concept_id`, and a subsequent `INSERT` leaves exactly
     one row for it -- proves `upsert`'s planned
     delete-by-concept_id-then-insert sequence is valid against the real
-    extension (design Open Question: confirm DELETE-by-metadata works in
-    0.1.9, else fall back to DELETE-by-rowid)."""
+    extension. #888's own re-verification (design's "Orchestrator
+    verification") additionally confirmed `chunk_index INTEGER` is
+    declarable and that this SAME delete removes ALL of a document's chunk
+    rows in one statement (S0, retired as a separate spike)."""
     db_path = tmp_path / ".openkos" / "vectors.db"
 
     with vectorstore.open_vector_store(db_path) as db:
         conn = db._conn
         conn.execute(
-            "INSERT INTO vectors (embedding, concept_id, content_hash) "
-            "VALUES (?, ?, ?)",
-            (_serialize([1.0] * EMBED_DIM), "concepts/a", "hash-one"),
+            "INSERT INTO vectors (embedding, concept_id, chunk_index, content_hash) "
+            "VALUES (?, ?, ?, ?)",
+            (_serialize([1.0] * EMBED_DIM), "concepts/a", 0, "hash-one"),
         )
         conn.commit()
 
         conn.execute("DELETE FROM vectors WHERE concept_id = ?", ("concepts/a",))
         conn.execute(
-            "INSERT INTO vectors (embedding, concept_id, content_hash) "
-            "VALUES (?, ?, ?)",
-            (_serialize([2.0] * EMBED_DIM), "concepts/a", "hash-two"),
+            "INSERT INTO vectors (embedding, concept_id, chunk_index, content_hash) "
+            "VALUES (?, ?, ?, ?)",
+            (_serialize([2.0] * EMBED_DIM), "concepts/a", 0, "hash-two"),
         )
         conn.commit()
 
@@ -83,7 +86,9 @@ def test_vec0_metadata_filtered_knn_returns_expected_concept_id_ascending(
 ) -> None:
     """Real sqlite-vec 0.1.9 extension: `embedding MATCH ? AND k = ? ORDER BY
     distance` returns `(concept_id, distance)` rows, nearest first -- proves
-    `query`'s planned KNN statement is valid against the real extension."""
+    `query`'s planned KNN statement is valid against the real extension, and
+    (#888) still returns the `chunk_index` metadata column in the
+    projection."""
     db_path = tmp_path / ".openkos" / "vectors.db"
 
     with vectorstore.open_vector_store(db_path) as db:
@@ -91,25 +96,28 @@ def test_vec0_metadata_filtered_knn_returns_expected_concept_id_ascending(
         near = [1.0] + [0.0] * (EMBED_DIM - 1)
         far = [0.0, 1.0] + [0.0] * (EMBED_DIM - 2)
         conn.execute(
-            "INSERT INTO vectors (embedding, concept_id, content_hash) "
-            "VALUES (?, ?, ?)",
-            (_serialize(near), "concepts/near", "hash-near"),
+            "INSERT INTO vectors (embedding, concept_id, chunk_index, content_hash) "
+            "VALUES (?, ?, ?, ?)",
+            (_serialize(near), "concepts/near", 0, "hash-near"),
         )
         conn.execute(
-            "INSERT INTO vectors (embedding, concept_id, content_hash) "
-            "VALUES (?, ?, ?)",
-            (_serialize(far), "concepts/far", "hash-far"),
+            "INSERT INTO vectors (embedding, concept_id, chunk_index, content_hash) "
+            "VALUES (?, ?, ?, ?)",
+            (_serialize(far), "concepts/far", 0, "hash-far"),
         )
         conn.commit()
 
         rows = conn.execute(
-            "SELECT concept_id, distance FROM vectors "
+            "SELECT concept_id, chunk_index, distance FROM vectors "
             "WHERE embedding MATCH ? AND k = ? ORDER BY distance",
             (_serialize(near), 2),
         ).fetchall()
 
-    assert [row[0] for row in rows] == ["concepts/near", "concepts/far"]
-    assert rows[0][1] < rows[1][1]
+    assert [(row[0], row[1]) for row in rows] == [
+        ("concepts/near", 0),
+        ("concepts/far", 0),
+    ]
+    assert rows[0][2] < rows[1][2]
 
 
 # --- Phase 3: content_hash --------------------------------------------------
@@ -166,6 +174,7 @@ def test_extended_fake_satisfies_vector_store_protocol_structurally() -> None:
         def __init__(self) -> None:
             self.closed = False
             self.upserts: list[tuple[str, list[float], str]] = []
+            self.upserts_many: list[tuple[str, list[list[float]], str]] = []
             self.pruned: list[str] = []
             self.committed = False
             self.model_tag: str | None = None
@@ -179,10 +188,12 @@ def test_extended_fake_satisfies_vector_store_protocol_structurally() -> None:
             self.upserts.append((concept_id, list(embedding), content_hash))
 
         def upsert_many(
-            self, items: Sequence[tuple[str, Sequence[float], str]]
+            self, items: Sequence[tuple[str, Sequence[Sequence[float]], str]]
         ) -> None:
-            for concept_id, embedding, content_hash in items:
-                self.upserts.append((concept_id, list(embedding), content_hash))
+            for concept_id, chunk_vectors, content_hash in items:
+                self.upserts_many.append(
+                    (concept_id, [list(v) for v in chunk_vectors], content_hash)
+                )
 
         def query(self, embedding: Sequence[float], k: int) -> list[vectorstore.VecHit]:
             return []
@@ -962,8 +973,8 @@ def test_upsert_many_writes_all_items_in_one_batch(tmp_path: Path) -> None:
     many `concept_id`s in one call."""
     db_path = tmp_path / ".openkos" / "vectors.db"
     items = [
-        ("concepts/a", [0.1] * EMBED_DIM, "hash-a"),
-        ("concepts/b", [0.2] * EMBED_DIM, "hash-b"),
+        ("concepts/a", [[0.1] * EMBED_DIM], "hash-a"),
+        ("concepts/b", [[0.2] * EMBED_DIM], "hash-b"),
     ]
 
     with vectorstore.open_vector_store(db_path) as db:
@@ -982,7 +993,7 @@ def test_upsert_many_does_not_commit_until_commit_is_called(tmp_path: Path) -> N
     db_path = tmp_path / ".openkos" / "vectors.db"
 
     with vectorstore.open_vector_store(db_path) as db:
-        db.upsert_many([("concepts/a", [0.1] * EMBED_DIM, "hash-a")])
+        db.upsert_many([("concepts/a", [[0.1] * EMBED_DIM], "hash-a")])
 
         reader = sqlite3.connect(str(db_path))
         rows_before_commit = reader.execute(
@@ -1030,7 +1041,7 @@ def test_commit_persists_writes_to_a_separate_reader_connection(
     db_path = tmp_path / ".openkos" / "vectors.db"
 
     with vectorstore.open_vector_store(db_path) as db:
-        db.upsert_many([("concepts/a", [0.1] * EMBED_DIM, "hash-a")])
+        db.upsert_many([("concepts/a", [[0.1] * EMBED_DIM], "hash-a")])
         db.commit()
 
     reader = sqlite3.connect(str(db_path))
@@ -1310,3 +1321,418 @@ def test_neighbors_breaks_distance_ties_deterministically(
     assert hits[0].concept_id == "concepts/anchor"
     assert hits[1].distance == hits[2].distance, "fixture must produce a real tie"
     assert [h.concept_id for h in hits[1:]] == ["concepts/aaa", "concepts/zzz"]
+
+
+# --- Phase 9 (#888): chunk-backed schema, migration, and collapse ----------
+
+
+def _norm(v: list[float]) -> list[float]:
+    length = math.sqrt(sum(x * x for x in v))
+    return [x / length for x in v]
+
+
+def _make_legacy_store(db_path: Path) -> None:
+    """Build a pre-chunking `vectors.db` on disk directly (bypassing
+    `open_vector_store`, this change's own subject under test): the OLD
+    3-column `vectors` vec0 table, a populated `vector_meta` row, and the
+    generic `meta` table -- exactly what `open_vector_store` produced before
+    this change, without depending on a fixture file checked into the
+    repo."""
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.enable_load_extension(True)
+        sqlite_vec.load(conn)
+        conn.enable_load_extension(False)
+        conn.execute(
+            f"CREATE VIRTUAL TABLE vectors USING vec0("
+            f"embedding float[{EMBED_DIM}], concept_id TEXT, content_hash TEXT)"
+        )
+        conn.execute(
+            "CREATE TABLE vector_meta (concept_id TEXT PRIMARY KEY, "
+            "content_hash TEXT NOT NULL)"
+        )
+        conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        conn.execute(
+            "INSERT INTO vectors (embedding, concept_id, content_hash) "
+            "VALUES (?, ?, ?)",
+            (_serialize([0.1] * EMBED_DIM), "concepts/legacy", "hash-legacy"),
+        )
+        conn.execute(
+            "INSERT INTO vector_meta (concept_id, content_hash) VALUES (?, ?)",
+            ("concepts/legacy", "hash-legacy"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+@pytest.mark.skipif(
+    not vectorstore.probe_vec_loadable(), reason="sqlite-vec extension not loadable"
+)
+def test_legacy_shape_store_is_dropped_recreated_and_vector_meta_cleared(
+    tmp_path: Path,
+) -> None:
+    """S1: opening a pre-chunking (no `chunk_index`) `vectors.db` drops and
+    recreates `vectors` under the chunk-aware schema, and `vector_meta` ends
+    at ZERO rows -- clearing the hash cache is what stops a dropped store
+    from reading every document as a permanent cache-hit (vector-store spec:
+    Legacy-Shape Store Is Migrated, Not Silently Reused)."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+    _make_legacy_store(db_path)
+
+    with vectorstore.open_vector_store(db_path) as db:
+        conn = db._conn
+        # The migrated table now declares chunk_index -- this would raise
+        # OperationalError on the untouched legacy shape.
+        conn.execute("SELECT chunk_index FROM vectors LIMIT 0")
+        vector_rows = conn.execute("SELECT concept_id FROM vectors").fetchall()
+        meta_rows = conn.execute("SELECT concept_id FROM vector_meta").fetchall()
+
+    assert vector_rows == []
+    assert meta_rows == []
+
+
+@pytest.mark.skipif(
+    not vectorstore.probe_vec_loadable(), reason="sqlite-vec extension not loadable"
+)
+def test_reopening_an_already_migrated_store_is_a_no_op(tmp_path: Path) -> None:
+    """Re-opening a store already on the chunk-aware schema does not drop or
+    clear anything (spec: Re-opening an existing (post-migration) store is a
+    no-op migration)."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        db.upsert_many([("concepts/a", [[0.1] * EMBED_DIM], "hash-a")])
+        db.commit()
+
+    with vectorstore.open_vector_store(db_path) as db:
+        hashes = db.meta_hashes()
+
+    assert hashes == {"concepts/a": "hash-a"}
+
+
+@pytest.mark.skipif(
+    not vectorstore.probe_vec_loadable(), reason="sqlite-vec extension not loadable"
+)
+def test_schema_gains_chunk_index_doc_vectors_and_chunk_count(
+    tmp_path: Path,
+) -> None:
+    """A fresh store declares `vectors.chunk_index`, a `doc_vectors` vec0
+    table, and `vector_meta.chunk_count`, all readable back (vector-store
+    spec: Idempotent Vector Schema; vector_meta carries chunk_count per
+    document)."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        db.upsert_many([("concepts/a", [[0.1] * EMBED_DIM] * 5, "hash-a")])
+        db.commit()
+        conn = db._conn
+        chunk_count = conn.execute(
+            "SELECT chunk_count FROM vector_meta WHERE concept_id = ?",
+            ("concepts/a",),
+        ).fetchone()[0]
+        doc_vector_rows = conn.execute(
+            "SELECT concept_id FROM doc_vectors WHERE concept_id = ?", ("concepts/a",)
+        ).fetchall()
+        chunk_indices = sorted(
+            row[0]
+            for row in conn.execute(
+                "SELECT chunk_index FROM vectors WHERE concept_id = ?", ("concepts/a",)
+            ).fetchall()
+        )
+
+    assert chunk_count == 5
+    assert doc_vector_rows == [("concepts/a",)]
+    assert chunk_indices == [0, 1, 2, 3, 4]
+
+
+@pytest.mark.skipif(
+    not vectorstore.probe_vec_loadable(), reason="sqlite-vec extension not loadable"
+)
+def test_upsert_many_reembed_at_different_chunk_count_leaves_no_orphans(
+    tmp_path: Path,
+) -> None:
+    """S2: re-embedding a document at a different chunk count (12 -> 5)
+    leaves EXACTLY 5 `vectors` rows for it, zero of the original 12
+    surviving (vector-store spec: Multi-Chunk Upsert Is Atomic And
+    Orphan-Free -- Re-embedding at a different chunk count leaves no
+    orphans)."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        db.upsert_many([("concepts/a", [[0.1] * EMBED_DIM] * 12, "hash-old")])
+        db.commit()
+        db.upsert_many([("concepts/a", [[0.2] * EMBED_DIM] * 5, "hash-new")])
+        db.commit()
+        rows = db._conn.execute(
+            "SELECT chunk_index FROM vectors WHERE concept_id = ?", ("concepts/a",)
+        ).fetchall()
+
+    assert sorted(r[0] for r in rows) == [0, 1, 2, 3, 4]
+
+
+@pytest.mark.skipif(
+    not vectorstore.probe_vec_loadable(), reason="sqlite-vec extension not loadable"
+)
+def test_delete_by_concept_id_removes_all_n_chunk_rows_in_one_statement(
+    tmp_path: Path,
+) -> None:
+    """A single `DELETE FROM vectors WHERE concept_id = ?` removes every
+    chunk row for a document in one statement (vector-store spec: One
+    DELETE removes an entire document's chunk rows)."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        db.upsert_many([("concepts/a", [[0.1] * EMBED_DIM] * 7, "hash-a")])
+        db.commit()
+        db._conn.execute("DELETE FROM vectors WHERE concept_id = ?", ("concepts/a",))
+        remaining = db._conn.execute(
+            "SELECT COUNT(*) FROM vectors WHERE concept_id = ?", ("concepts/a",)
+        ).fetchone()[0]
+
+    assert remaining == 0
+
+
+@pytest.mark.skipif(
+    not vectorstore.probe_vec_loadable(), reason="sqlite-vec extension not loadable"
+)
+def test_prune_many_removes_all_chunk_rows_doc_vector_and_meta(
+    tmp_path: Path,
+) -> None:
+    """S3: `prune_many` removes all N chunk rows plus the `doc_vectors` row
+    plus the `vector_meta` row, in one call, without committing (vector-
+    store spec's own `prune_many` contract, now over a multi-chunk
+    document)."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        db.upsert_many([("concepts/a", [[0.1] * EMBED_DIM] * 4, "hash-a")])
+        db.commit()
+
+        db.prune_many(["concepts/a"])
+        db.commit()
+
+        conn = db._conn
+        vector_rows = conn.execute(
+            "SELECT COUNT(*) FROM vectors WHERE concept_id = ?", ("concepts/a",)
+        ).fetchone()[0]
+        doc_vector_rows = conn.execute(
+            "SELECT COUNT(*) FROM doc_vectors WHERE concept_id = ?", ("concepts/a",)
+        ).fetchone()[0]
+        meta_rows = conn.execute(
+            "SELECT COUNT(*) FROM vector_meta WHERE concept_id = ?", ("concepts/a",)
+        ).fetchone()[0]
+
+    assert (vector_rows, doc_vector_rows, meta_rows) == (0, 0, 0)
+
+
+@pytest.mark.skipif(
+    not vectorstore.probe_vec_loadable(), reason="sqlite-vec extension not loadable"
+)
+def test_document_vector_is_normalized_mean_of_normalized_chunks(
+    tmp_path: Path,
+) -> None:
+    """S5: the stored `doc_vectors` row equals
+    `normalize(mean(normalize(v_i) for v_i in chunks))`, and the result is
+    unit-length (embedding-chunking spec: Document Vector Is A Normalized
+    Mean Of Normalized Chunk Vectors)."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+    v1 = [3.0, 4.0] + [0.0] * (EMBED_DIM - 2)  # norm 5
+    v2 = [0.0, 0.0, 1.0] + [0.0] * (EMBED_DIM - 3)  # already unit
+
+    with vectorstore.open_vector_store(db_path) as db:
+        db.upsert_many([("concepts/a", [v1, v2], "hash-a")])
+        db.commit()
+        row = db._conn.execute(
+            "SELECT embedding FROM doc_vectors WHERE concept_id = ?", ("concepts/a",)
+        ).fetchone()
+
+    import struct
+
+    stored = list(struct.unpack(f"<{EMBED_DIM}f", row[0]))
+    expected_mean = [(a + b) / 2.0 for a, b in zip(_norm(v1), _norm(v2), strict=True)]
+    expected = _norm(expected_mean)
+
+    for actual, want in zip(stored, expected, strict=True):
+        assert actual == pytest.approx(want, abs=1e-5)
+    unit_length = math.sqrt(sum(x * x for x in stored))
+    assert unit_length == pytest.approx(1.0, abs=1e-5)
+
+
+@pytest.mark.skipif(
+    not vectorstore.probe_vec_loadable(), reason="sqlite-vec extension not loadable"
+)
+def test_single_chunk_document_vector_equals_that_chunk(tmp_path: Path) -> None:
+    """S5: a document with exactly one chunk has a derived vector equal to
+    that chunk's OWN normalized vector (embedding-chunking spec: A
+    single-chunk document's derived vector equals that chunk's vector)."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+    v = [2.0, 0.0] + [0.0] * (EMBED_DIM - 2)
+
+    with vectorstore.open_vector_store(db_path) as db:
+        db.upsert_many([("concepts/a", [v], "hash-a")])
+        db.commit()
+        row = db._conn.execute(
+            "SELECT embedding FROM doc_vectors WHERE concept_id = ?", ("concepts/a",)
+        ).fetchone()
+
+    import struct
+
+    stored = list(struct.unpack(f"<{EMBED_DIM}f", row[0]))
+    for actual, want in zip(stored, _norm(v), strict=True):
+        assert actual == pytest.approx(want, abs=1e-5)
+
+
+@pytest.mark.skipif(
+    not vectorstore.probe_vec_loadable(), reason="sqlite-vec extension not loadable"
+)
+def test_multi_chunk_document_vector_is_not_identical_to_first_chunk(
+    tmp_path: Path,
+) -> None:
+    """S13: for a multi-chunk document, `cos(doc_vector, chunk_0) < 1.0` --
+    the truncation property is gone (embedding-chunking spec: The
+    truncation property is gone for a multi-chunk document)."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+    v1 = [1.0, 0.0] + [0.0] * (EMBED_DIM - 2)
+    v2 = [0.0, 1.0] + [0.0] * (EMBED_DIM - 2)
+
+    with vectorstore.open_vector_store(db_path) as db:
+        db.upsert_many([("concepts/a", [v1, v2], "hash-a")])
+        db.commit()
+        conn = db._conn
+        doc_row = conn.execute(
+            "SELECT embedding FROM doc_vectors WHERE concept_id = ?", ("concepts/a",)
+        ).fetchone()
+        chunk0_row = conn.execute(
+            "SELECT embedding FROM vectors WHERE concept_id = ? AND chunk_index = 0",
+            ("concepts/a",),
+        ).fetchone()
+
+    import struct
+
+    doc_vec = struct.unpack(f"<{EMBED_DIM}f", doc_row[0])
+    chunk0_vec = struct.unpack(f"<{EMBED_DIM}f", chunk0_row[0])
+    dot = sum(a * b for a, b in zip(doc_vec, chunk0_vec, strict=True))
+    doc_norm = math.sqrt(sum(x * x for x in doc_vec))
+    chunk_norm = math.sqrt(sum(x * x for x in chunk0_vec))
+    cosine = dot / (doc_norm * chunk_norm)
+
+    assert cosine < 1.0 - 1e-6
+
+
+@pytest.mark.skipif(
+    not vectorstore.probe_vec_loadable(), reason="sqlite-vec extension not loadable"
+)
+def test_query_collapses_multiple_chunk_hits_to_one_per_document(
+    tmp_path: Path,
+) -> None:
+    """S6: reproduces the design's own spike tie
+    `[('a', 0, 0.0), ('b', 0, 1.414...), ('a', 1, 1.414...)]` through
+    `query()` -- collapse keeps the MINIMUM distance per `concept_id` and
+    returns at most one `VecHit` per document, deterministically ordered by
+    `(distance, concept_id)` (vector-store spec: k-NN Query Data Flow --
+    Query returns at most one hit per document)."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+    query_vec = [1.0] + [0.0] * (EMBED_DIM - 1)
+    a_chunk0 = [1.0] + [0.0] * (EMBED_DIM - 1)  # distance 0 from query
+    a_chunk1 = [0.0, 1.0] + [0.0] * (EMBED_DIM - 2)  # distance sqrt(2)
+    b_chunk0 = [0.0, 1.0] + [0.0] * (EMBED_DIM - 2)  # distance sqrt(2), tied
+
+    with vectorstore.open_vector_store(db_path) as db:
+        db.upsert_many(
+            [
+                ("concepts/a", [a_chunk0, a_chunk1], "hash-a"),
+                ("concepts/b", [b_chunk0], "hash-b"),
+            ]
+        )
+        db.commit()
+
+        hits = db.query(query_vec, k=2)
+
+    assert [h.concept_id for h in hits] == ["concepts/a", "concepts/b"]
+    assert hits[0].distance == pytest.approx(0.0, abs=1e-4)
+    assert hits[1].distance == pytest.approx(math.sqrt(2), abs=1e-3)
+
+
+@pytest.mark.skipif(
+    not vectorstore.probe_vec_loadable(), reason="sqlite-vec extension not loadable"
+)
+def test_query_never_returns_more_than_one_hit_per_document(
+    tmp_path: Path,
+) -> None:
+    """A document with 4 chunk rows inside the top-k window still yields at
+    most ONE `VecHit` for it (vector-store spec: Query returns at most one
+    hit per document)."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+    query_vec = [1.0] + [0.0] * (EMBED_DIM - 1)
+    chunks = [
+        [1.0] + [0.0] * (EMBED_DIM - 1),
+        [0.99, 0.01] + [0.0] * (EMBED_DIM - 2),
+        [0.98, 0.02] + [0.0] * (EMBED_DIM - 2),
+        [0.97, 0.03] + [0.0] * (EMBED_DIM - 2),
+    ]
+
+    with vectorstore.open_vector_store(db_path) as db:
+        db.upsert_many([("concepts/a", chunks, "hash-a")])
+        db.commit()
+
+        hits = db.query(query_vec, k=5)
+
+    assert len(hits) == 1
+    assert hits[0].concept_id == "concepts/a"
+
+
+@pytest.mark.skipif(
+    not vectorstore.probe_vec_loadable(), reason="sqlite-vec extension not loadable"
+)
+def test_query_boundary_tie_can_still_drop_a_whole_document(
+    tmp_path: Path,
+) -> None:
+    """Documented residue: when every document has `chunk_count == 1`, the
+    over-fetch factor is 1 and provides no headroom, so a tie AT vec0's own
+    internal k-th cut can drop a whole tied document before this store's
+    Python re-sort ever sees it (vector-store spec: A k-th-boundary tie can
+    still drop a whole document -- documented residue, not eliminated)."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+    query_vec = [1.0] + [0.0] * (EMBED_DIM - 1)
+    tied = [0.0, 1.0] + [0.0] * (EMBED_DIM - 2)
+
+    with vectorstore.open_vector_store(db_path) as db:
+        db.upsert_many(
+            [
+                ("concepts/a", [tied], "hash-a"),
+                ("concepts/b", [tied], "hash-b"),
+            ]
+        )
+        db.commit()
+
+        hits = db.query(query_vec, k=1)
+
+    # Both are single-chunk, so max(chunk_count) == 1 -> fetch_k == k == 1:
+    # vec0 itself only ever returns ONE row, before Python can re-sort.
+    assert len(hits) == 1
+
+
+@pytest.mark.skipif(
+    not vectorstore.probe_vec_loadable(), reason="sqlite-vec extension not loadable"
+)
+def test_neighbors_reads_doc_vectors_not_vectors(tmp_path: Path) -> None:
+    """D2: `neighbors()` reads from `doc_vectors`, not `vectors` -- deleting
+    ONLY the `doc_vectors` row (leaving the `vectors` chunk rows intact)
+    degrades `neighbors()` to `[]`, proving the read source moved (vector-
+    store spec: Neighbors Reads The Derived Document Vector -- A zero-chunk
+    document degrades to no neighbors)."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        db.upsert_many([("concepts/a", [[0.1] * EMBED_DIM], "hash-a")])
+        db.commit()
+        db._conn.execute(
+            "DELETE FROM doc_vectors WHERE concept_id = ?", ("concepts/a",)
+        )
+        db._conn.commit()
+
+        hits = db.neighbors("concepts/a", 3)
+
+    assert hits == []

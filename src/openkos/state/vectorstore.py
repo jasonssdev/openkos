@@ -36,7 +36,9 @@ in `vectors.db`. This new table NEVER pollutes `meta_hashes()`/the
 content_hash cache -- the two tables are, and must stay, fully separate.
 """
 
+import contextlib
 import hashlib
+import math
 import sqlite3
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -53,14 +55,34 @@ _CREATE_VECTORS_TABLE_SQL = f"""
 CREATE VIRTUAL TABLE IF NOT EXISTS vectors USING vec0(
     embedding float[{EMBED_DIM}],
     concept_id TEXT,
+    chunk_index INTEGER,
     content_hash TEXT
 )
 """
+"""#888: `chunk_index` is a metadata column, NOT part of a composite key --
+`concept_id` alone still names the document (design D1). Confirmed against
+the real 0.1.9 extension (design's "Orchestrator verification"): an INTEGER
+metadata column is declarable, KNN returns it in the projection, and
+`DELETE ... WHERE concept_id = ?` removes every one of a document's chunk
+rows in one statement."""
+
+_CREATE_DOC_VECTORS_TABLE_SQL = f"""
+CREATE VIRTUAL TABLE IF NOT EXISTS doc_vectors USING vec0(
+    embedding float[{EMBED_DIM}],
+    concept_id TEXT
+)
+"""
+"""#888 (D2): one derived row per document -- `normalize(mean(normalize(v_i)
+for v_i in chunks)))` -- kept in a SEPARATE vec0 table so the document mean
+never competes with its own chunks inside `query()`'s retrieval KNN (that
+competition is the truncation-era defect re-entering through the back
+door)."""
 
 _CREATE_VECTOR_META_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS vector_meta (
     concept_id TEXT PRIMARY KEY,
-    content_hash TEXT NOT NULL
+    content_hash TEXT NOT NULL,
+    chunk_count INTEGER NOT NULL DEFAULT 1
 )
 """
 
@@ -92,15 +114,23 @@ no cross-store key collision possible)."""
 # Confirmed against the real sqlite-vec 0.1.9 extension by the spike tests in
 # `tests/unit/state/test_vectorstore.py` (Phase 1): DELETE-by-`concept_id`
 # (a metadata column, not the vec0 `embedding` column) works directly, no
-# rowid lookup needed.
+# rowid lookup needed. #888: this now removes every one of a document's
+# chunk rows in the same one statement (re-confirmed by the design's
+# "Orchestrator verification" spike).
 _DELETE_VECTOR_BY_CONCEPT_ID_SQL = "DELETE FROM vectors WHERE concept_id = ?"
 
+_DELETE_DOC_VECTOR_BY_CONCEPT_ID_SQL = "DELETE FROM doc_vectors WHERE concept_id = ?"
+
 _INSERT_VECTOR_SQL = (
-    "INSERT INTO vectors (embedding, concept_id, content_hash) VALUES (?, ?, ?)"
+    "INSERT INTO vectors (embedding, concept_id, chunk_index, content_hash) "
+    "VALUES (?, ?, ?, ?)"
 )
 
+_INSERT_DOC_VECTOR_SQL = "INSERT INTO doc_vectors (embedding, concept_id) VALUES (?, ?)"
+
 _UPSERT_VECTOR_META_SQL = (
-    "INSERT OR REPLACE INTO vector_meta (concept_id, content_hash) VALUES (?, ?)"
+    "INSERT OR REPLACE INTO vector_meta (concept_id, content_hash, chunk_count) "
+    "VALUES (?, ?, ?)"
 )
 
 _DELETE_VECTOR_META_BY_CONCEPT_ID_SQL = "DELETE FROM vector_meta WHERE concept_id = ?"
@@ -115,13 +145,22 @@ rejects a secondary sort key outright (`OperationalError: Only a single
 rows come back in rowid -- i.e. insertion -- order. Measured against the
 real extension, inserting the same two tied rows in opposite orders returns
 them in opposite orders. Callers that need a reproducible order must break
-ties themselves; `neighbors` does."""
+ties themselves; `neighbors` and `query`'s collapse (#888) both do."""
+
+_QUERY_DOC_VECTORS_SQL = (
+    "SELECT concept_id, distance FROM doc_vectors "
+    "WHERE embedding MATCH ? AND k = ? ORDER BY distance"
+)
+
+_SELECT_MAX_CHUNK_COUNT_SQL = "SELECT MAX(chunk_count) FROM vector_meta"
 
 _SELECT_META_HASHES_SQL = "SELECT concept_id, content_hash FROM vector_meta"
 
-_SELECT_VECTOR_BLOB_SQL = "SELECT embedding FROM vectors WHERE concept_id = ?"
-"""Read back one concept's OWN stored embedding blob, so `neighbors` can run
-a k-NN from a `concept_id` alone without the caller holding the vector."""
+_SELECT_DOC_VECTOR_BLOB_SQL = "SELECT embedding FROM doc_vectors WHERE concept_id = ?"
+"""Read back one document's OWN derived vector blob (#888, D2), so
+`neighbors` can run a k-NN from a `concept_id` alone without the caller
+holding the vector -- `doc_vectors` replaces `vectors` as this lookup's
+source table; `vectors` now holds per-CHUNK rows, several per document."""
 
 _BUSY_TIMEOUT_MS = 5000
 """Busy-timeout (milliseconds) set on the `vectors.db` connection, matching
@@ -174,10 +213,23 @@ class VectorStore(Protocol):
         `content_hash`, committing once for this call."""
         ...  # pragma: no cover -- Protocol stub body, never executed
 
-    def upsert_many(self, items: Sequence[tuple[str, Sequence[float], str]]) -> None:
-        """Replace MANY `(concept_id, embedding, content_hash)` rows in one
-        call, WITHOUT committing -- the caller commits once via `commit()`
-        (Slice 5, follow-up #4: single commit per store per run)."""
+    def upsert_many(
+        self, items: Sequence[tuple[str, Sequence[Sequence[float]], str]]
+    ) -> None:
+        """Replace MANY documents' chunk vectors in one call: each item is
+        `(concept_id, chunk_vectors, content_hash)`, where `chunk_vectors`
+        is ONE document's ordered list of per-chunk embeddings (#888 --
+        widened from a single flat `Sequence[float]` per document to
+        `Sequence[Sequence[float]]`, a deliberate, audited break: the
+        alternative, a second `upsert_chunked` method, would leave the old
+        write path able to store a truncated single vector, which is the
+        defect this change closes). Every implementer deletes the
+        document's existing rows first (matched on `concept_id` alone,
+        never chunk count), inserts the new chunk rows, derives and stores
+        one document-level vector, and updates `vector_meta`'s
+        `chunk_count` -- WITHOUT committing; the caller commits once via
+        `commit()` (Slice 5, follow-up #4: single commit per store per
+        run)."""
         ...  # pragma: no cover -- Protocol stub body, never executed
 
     def query(self, embedding: Sequence[float], k: int) -> list[VecHit]:
@@ -230,6 +282,32 @@ def content_hash(data: bytes) -> str:
     sequences always hash identically and any byte-level change (including
     one invisible to a text diff, e.g. a stray CR) changes the digest."""
     return hashlib.sha256(data).hexdigest()
+
+
+def _normalize(vector: Sequence[float]) -> list[float]:
+    """L2-normalize `vector`. Returns `vector` unchanged (as a `list`) for a
+    zero vector -- a degenerate input an `Embedder` should never produce,
+    guarded here only to avoid a division by zero rather than to give it
+    meaning."""
+    values = list(vector)
+    norm = math.sqrt(sum(x * x for x in values))
+    if norm == 0.0:
+        return values
+    return [x / norm for x in values]
+
+
+def _derive_document_vector(chunk_vectors: Sequence[Sequence[float]]) -> list[float]:
+    """`normalize(mean(normalize(v_i) for v_i in chunk_vectors))` (embedding-
+    chunking spec: Document Vector Is A Normalized Mean Of Normalized Chunk
+    Vectors) -- unweighted by chunk length, so one disproportionately long
+    boilerplate chunk cannot dominate the derived document vector. A single
+    chunk's derived vector equals that chunk's own normalized vector
+    (`mean` of one value is that value, and `normalize` is idempotent on an
+    already-unit vector)."""
+    normalized = [_normalize(v) for v in chunk_vectors]
+    dim = len(normalized[0])
+    mean = [sum(v[i] for v in normalized) / len(normalized) for i in range(dim)]
+    return _normalize(mean)
 
 
 def _guarded_vec_load(conn: sqlite3.Connection) -> None:
@@ -322,6 +400,48 @@ def vector_store_is_empty(path: Path) -> bool:
     return bool(row is None or row[0] == 0)
 
 
+def _migrate_legacy_vectors_shape_if_needed(conn: sqlite3.Connection) -> None:
+    """Detect a pre-chunking `vectors` table (#888, design D1) by probing
+    for `chunk_index`, and on detection drop and recreate it under the
+    chunk-aware schema, clearing every `vector_meta` row.
+
+    `CREATE VIRTUAL TABLE IF NOT EXISTS` silently no-ops when a table named
+    `vectors` already exists under ANY shape -- including the legacy
+    3-column one -- so the caller's own `_CREATE_VECTORS_TABLE_SQL` call
+    just above this one is not enough by itself; this probe-and-migrate
+    step is what actually upgrades an existing legacy store.
+
+    Clearing `vector_meta` is mandatory, not tidiness (vector-store spec:
+    Clearing vector_meta prevents a permanently empty store): a dropped
+    `vectors` table with a SURVIVING content_hash cache would read every
+    document as a cache-hit forever, and the store would never recover.
+    Runs inside the caller's own schema-creation transaction -- no separate
+    commit here."""
+    try:
+        conn.execute("SELECT chunk_index FROM vectors LIMIT 0")
+        return
+    except sqlite3.OperationalError:
+        pass
+    conn.execute("DROP TABLE vectors")
+    conn.execute(_CREATE_VECTORS_TABLE_SQL)
+    conn.execute("DELETE FROM vector_meta")
+
+
+def _ensure_vector_meta_chunk_count_column(conn: sqlite3.Connection) -> None:
+    """Add `vector_meta.chunk_count` to a store whose `vector_meta` table
+    predates it (#888) -- `CREATE TABLE IF NOT EXISTS` no-ops against an
+    already-existing table, same reasoning as
+    `_migrate_legacy_vectors_shape_if_needed` above, so an explicit `ALTER
+    TABLE` is what actually widens a pre-existing table. A store created
+    fresh under the current `_CREATE_VECTOR_META_TABLE_SQL` already
+    declares the column, so this is a no-op for it (`OperationalError:
+    duplicate column name`, caught and ignored)."""
+    with contextlib.suppress(sqlite3.OperationalError):
+        conn.execute(
+            "ALTER TABLE vector_meta ADD COLUMN chunk_count INTEGER NOT NULL DEFAULT 1"
+        )
+
+
 def open_vector_store(
     path: Path,
     *,
@@ -366,7 +486,10 @@ def open_vector_store(
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
         conn.execute(_CREATE_VECTORS_TABLE_SQL)
+        _migrate_legacy_vectors_shape_if_needed(conn)
+        conn.execute(_CREATE_DOC_VECTORS_TABLE_SQL)
         conn.execute(_CREATE_VECTOR_META_TABLE_SQL)
+        _ensure_vector_meta_chunk_count_column(conn)
         conn.execute(_CREATE_META_TABLE_SQL)
         conn.commit()
     except BaseException:
@@ -396,43 +519,89 @@ class VectorStoreDB:
         """Replace `concept_id`'s stored vector and hash with `embedding`/
         `content_hash` (spec: Vector Upsert Data Flow).
 
-        Serializes `embedding` via `sqlite_vec.serialize_float32`, deletes
-        any existing `vectors` row for `concept_id` (confirmed safe against
-        the metadata column by the Phase 1 spike -- no rowid lookup needed),
-        inserts the new row, then `INSERT OR REPLACE`s the matching
-        `vector_meta` row, and commits once. A first upsert of a new
-        `concept_id` leaves exactly one row in each table; a re-upsert
-        leaves the SAME one row, now holding the new embedding/hash."""
-        blob = sqlite_vec.serialize_float32(list(embedding))
-        self._conn.execute(_DELETE_VECTOR_BY_CONCEPT_ID_SQL, (concept_id,))
-        self._conn.execute(_INSERT_VECTOR_SQL, (blob, concept_id, content_hash))
-        self._conn.execute(_UPSERT_VECTOR_META_SQL, (concept_id, content_hash))
+        #888: redefined as the ONE-chunk case of `upsert_many` (zero
+        production callers of `upsert` today) -- delegates to it with a
+        single-item, single-chunk batch, then commits once here, since
+        `upsert_many` itself never commits. A first upsert of a new
+        `concept_id` leaves exactly one `vectors` row (`chunk_index=0`), one
+        `doc_vectors` row, and one `vector_meta` row (`chunk_count=1`); a
+        re-upsert leaves the SAME rows, now holding the new embedding/hash."""
+        self.upsert_many([(concept_id, [embedding], content_hash)])
         self._conn.commit()
 
-    def upsert_many(self, items: Sequence[tuple[str, Sequence[float], str]]) -> None:
-        """Replace MANY `(concept_id, embedding, content_hash)` rows in one
-        call (spec: Slice 5, follow-up #4 -- single commit per store per
-        run), reusing `upsert`'s own per-item DELETE-then-INSERT sequence
-        for each item -- WITHOUT committing here; the caller commits once
-        via `commit()`, typically after also calling `prune_many` for the
-        same run."""
-        for concept_id, embedding, content_hash in items:
-            blob = sqlite_vec.serialize_float32(list(embedding))
+    def upsert_many(
+        self, items: Sequence[tuple[str, Sequence[Sequence[float]], str]]
+    ) -> None:
+        """Replace MANY documents' chunk vectors in one call (#888; spec:
+        Multi-Chunk Upsert Is Atomic And Orphan-Free), WITHOUT committing --
+        the caller commits once via `commit()`, typically after also calling
+        `prune_many` for the same run (Slice 5, follow-up #4).
+
+        Per item: delete every existing row for `concept_id` across
+        `vectors`, `doc_vectors`, and `vector_meta` (matched on `concept_id`
+        alone -- the delete is chunk-count-blind, so a document re-embedded
+        at a DIFFERENT chunk count never orphans old rows), insert one
+        `vectors` row per chunk (`chunk_index` 0..N-1), derive and insert one
+        `doc_vectors` row (`_derive_document_vector`), then upsert
+        `vector_meta` with the new `chunk_count`."""
+        for concept_id, chunk_vectors, content_hash in items:
             self._conn.execute(_DELETE_VECTOR_BY_CONCEPT_ID_SQL, (concept_id,))
-            self._conn.execute(_INSERT_VECTOR_SQL, (blob, concept_id, content_hash))
-            self._conn.execute(_UPSERT_VECTOR_META_SQL, (concept_id, content_hash))
+            self._conn.execute(_DELETE_DOC_VECTOR_BY_CONCEPT_ID_SQL, (concept_id,))
+            chunks = [list(v) for v in chunk_vectors]
+            for chunk_index, vector in enumerate(chunks):
+                blob = sqlite_vec.serialize_float32(vector)
+                self._conn.execute(
+                    _INSERT_VECTOR_SQL, (blob, concept_id, chunk_index, content_hash)
+                )
+            doc_vector = _derive_document_vector(chunks)
+            doc_blob = sqlite_vec.serialize_float32(doc_vector)
+            self._conn.execute(_INSERT_DOC_VECTOR_SQL, (doc_blob, concept_id))
+            self._conn.execute(
+                _UPSERT_VECTOR_META_SQL, (concept_id, content_hash, len(chunks))
+            )
 
     def query(self, embedding: Sequence[float], k: int) -> list[VecHit]:
-        """Return up to `k` `VecHit`s nearest to `embedding`, ascending
-        distance (spec: k-NN Query Data Flow).
+        """Return up to `k` `VecHit`s, AT MOST ONE per document, ascending
+        `(distance, concept_id)` (spec: k-NN Query Data Flow).
+
+        #888: `vectors` now holds several rows per document (one per
+        chunk), so this over-fetches `k * max(chunk_count)` rows (reading
+        `chunk_count` from `vector_meta` -- a small ordinary table, exactly
+        what the column is for), keeps each `concept_id`'s MINIMUM
+        distance, then re-sorts by `(distance, concept_id)` in Python (vec0
+        refuses a secondary sort key; see `_QUERY_VECTORS_SQL`) before
+        slicing to `k` documents.
 
         `embedding MATCH ? AND k = ? ORDER BY distance` against the empty
         `vectors` table returns zero rows -- `query` returns `[]` rather
         than raising (spec: Query against an empty store returns no
-        results)."""
+        results).
+
+        RESIDUAL LIMIT, deliberately not papered over (spec: A k-th-boundary
+        tie can still drop a whole document): the over-fetch factor comes
+        from `MAX(chunk_count)`, not from the actual row distribution near
+        the cut, so more rows can tie exactly at vec0's OWN internal k-th
+        boundary than the over-fetch admits -- when every document has
+        `chunk_count == 1` the factor is 1, giving zero headroom, and a tie
+        between two different documents' single chunk rows is then vec0's
+        own insertion-order choice, made before this method's Python
+        re-sort ever runs. This fixes the order of what collapse SEES, not
+        what vec0 hands it."""
+        max_chunk_count = (
+            self._conn.execute(_SELECT_MAX_CHUNK_COUNT_SQL).fetchone()[0] or 1
+        )
         blob = sqlite_vec.serialize_float32(list(embedding))
-        rows = self._conn.execute(_QUERY_VECTORS_SQL, (blob, k)).fetchall()
-        return [VecHit(concept_id=str(row[0]), distance=float(row[1])) for row in rows]
+        rows = self._conn.execute(
+            _QUERY_VECTORS_SQL, (blob, k * max_chunk_count)
+        ).fetchall()
+        best: dict[str, float] = {}
+        for row in rows:
+            concept_id = str(row[0])
+            distance = float(row[1])
+            if concept_id not in best or distance < best[concept_id]:
+                best[concept_id] = distance
+        ordered = sorted(best.items(), key=lambda pair: (pair[1], pair[0]))[:k]
+        return [VecHit(concept_id=cid, distance=dist) for cid, dist in ordered]
 
     def neighbors(self, concept_id: str, k: int) -> list[VecHit]:
         """Return up to `k` `VecHit`s nearest to `concept_id`'s OWN stored
@@ -454,7 +623,15 @@ class VectorStoreDB:
         A `concept_id` with no stored embedding -- never embedded, or
         pruned -- returns `[]` rather than raising: the two cases are
         indistinguishable from here and neither is an error. An empty
-        `vectors` table likewise returns `[]`, mirroring `query`.
+        `doc_vectors` table likewise returns `[]`, mirroring `query`.
+
+        #888 (D2): reads `doc_vectors` -- the derived one-row-per-document
+        vector -- instead of `vectors`, which now holds several per-chunk
+        rows per document. A document with zero stored chunks has no
+        `doc_vectors` row, so it degrades through this SAME `row is None`
+        branch -- no new failure path, and `graph/proximity.py`'s
+        never-raises degrade is preserved by not touching it (vector-store
+        spec: A zero-chunk document degrades to no neighbors).
 
         Results are re-sorted by `(distance, concept_id)` before returning.
         vec0 refuses a secondary sort key in SQL (see `_QUERY_VECTORS_SQL`),
@@ -470,10 +647,10 @@ class VectorStoreDB:
         Exact ties require byte-identical embeddings -- realistically,
         duplicate or template documents -- so the residue is narrow, but it
         is not zero."""
-        row = self._conn.execute(_SELECT_VECTOR_BLOB_SQL, (concept_id,)).fetchone()
+        row = self._conn.execute(_SELECT_DOC_VECTOR_BLOB_SQL, (concept_id,)).fetchone()
         if row is None:
             return []
-        rows = self._conn.execute(_QUERY_VECTORS_SQL, (row[0], k)).fetchall()
+        rows = self._conn.execute(_QUERY_DOC_VECTORS_SQL, (row[0], k)).fetchall()
         hits = [VecHit(concept_id=str(r[0]), distance=float(r[1])) for r in rows]
         hits.sort(key=lambda hit: (hit.distance, hit.concept_id))
         return hits
@@ -486,21 +663,24 @@ class VectorStoreDB:
         return {str(row[0]): str(row[1]) for row in rows}
 
     def prune(self, concept_id: str) -> None:
-        """Remove `concept_id`'s row from both `vectors` and `vector_meta`,
-        if present; a `concept_id` with no stored row is a no-op, not an
-        error."""
+        """Remove `concept_id`'s rows from `vectors` (every chunk, #888),
+        `doc_vectors`, and `vector_meta`, if present; a `concept_id` with no
+        stored row is a no-op, not an error."""
         self._conn.execute(_DELETE_VECTOR_BY_CONCEPT_ID_SQL, (concept_id,))
+        self._conn.execute(_DELETE_DOC_VECTOR_BY_CONCEPT_ID_SQL, (concept_id,))
         self._conn.execute(_DELETE_VECTOR_META_BY_CONCEPT_ID_SQL, (concept_id,))
         self._conn.commit()
 
     def prune_many(self, concept_ids: Sequence[str]) -> None:
-        """Remove MANY `concept_id`s' rows from both `vectors` and
-        `vector_meta` in one call (spec: Slice 5, follow-up #4 -- single
-        commit per store per run), reusing `prune`'s own per-item DELETE
+        """Remove MANY `concept_id`s' rows from `vectors` (every chunk),
+        `doc_vectors`, and `vector_meta` in one call (spec: Slice 5,
+        follow-up #4 -- single commit per store per run; #888: extended to
+        the `doc_vectors` table), reusing `prune`'s own per-item DELETE
         sequence for each id -- WITHOUT committing here; the caller commits
         once via `commit()`."""
         for concept_id in concept_ids:
             self._conn.execute(_DELETE_VECTOR_BY_CONCEPT_ID_SQL, (concept_id,))
+            self._conn.execute(_DELETE_DOC_VECTOR_BY_CONCEPT_ID_SQL, (concept_id,))
             self._conn.execute(_DELETE_VECTOR_META_BY_CONCEPT_ID_SQL, (concept_id,))
 
     def commit(self) -> None:

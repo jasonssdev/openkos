@@ -60,6 +60,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
+from openkos.extraction.concept import _chunk_lines
 from openkos.llm.base import Embedder
 from openkos.llm.ollama import (
     OllamaEmbeddingDimensionMismatch,
@@ -71,17 +72,32 @@ from openkos.model import okf
 from openkos.state import derived, fts
 from openkos.state.vectorstore import VectorStore, content_hash
 
-EMBED_COMPOSITION_TAG: Final = "compose-v1"
-"""Suffix identifying THIS embed-text composition scheme (#554): title,
+EMBED_COMPOSITION_TAG: Final = "chunk-v1"
+"""Suffix identifying THIS embed-text composition scheme: title,
 description, tags, and body, the same field set `fts.py`'s
 `_populate_docs_table` indexes (`fts.py:220-234`) -- rather than a
-document's raw frontmatter+body bytes verbatim. Composed into the caller's
-`model_tag` (`_effective_model_tag`) so a scheme change forces exactly one
-full re-embed of every already-stored vector through the SAME
+document's raw frontmatter+body bytes verbatim (#554), and now (#888) the
+body is split into one or more windowed CHUNKS instead of embedded whole,
+so a document exceeding the embedder's window is no longer represented
+solely by its first chunk. Composed into the caller's `model_tag`
+(`_effective_model_tag`) so a scheme change forces exactly one full
+re-embed of every already-stored vector through the SAME
 embedding-model-tag gate that already forces a re-embed on an actual model
 change, rather than a second, parallel version marker (design: "find it and
 use it; do not invent a parallel one"). Bump this token, not the gate's
 mechanics, on the next embed-text-shape change."""
+
+_EMBED_CHUNK_TARGET: Final = 12_000
+"""Window size (chars) the document BODY is packed toward, per chunk
+(design D3). Budget derivation: 12,000 chars / 3.55 chars-per-token ~= 3,380
+tokens = 41% of bge-m3's 8192-token window -- the 59% headroom pays for the
+repeated header, `_chunk_lines`' documented single-oversized-line escape,
+and a token-dense document (code, tables, CJK) whose ratio is worse than
+this repo's own measured worst case. Deliberately NOT extraction's
+`_CHUNK_TARGET` (4,000 chars) -- that value is tuned for LLM object
+recovery per window, a different objective; embedding wants the LARGEST
+window that never truncates, since a wider window keeps more intra-document
+context in one vector."""
 
 
 def _effective_model_tag(model_tag: str | None) -> str | None:
@@ -93,18 +109,46 @@ def _effective_model_tag(model_tag: str | None) -> str | None:
     return f"{model_tag}#{EMBED_COMPOSITION_TAG}"
 
 
-def _compose_embed_text(metadata: dict[str, object], body: str) -> str:
-    """Compose the text handed to the `Embedder` from a document's title,
-    description, tags, and body -- the SAME four fields `fts.py`'s
-    `_populate_docs_table` indexes (`fts.py:220-234`), rather than the
-    document's raw frontmatter+body bytes verbatim (closes #554: a
-    document whose earlier ledger-embedded history dominated its raw byte
-    count no longer truncates its own concept content out of the embed)."""
+def _compose_header(metadata: dict[str, object]) -> str:
+    """The part of the embed text repeated on EVERY chunk: title,
+    description, and tags (design D3) -- never the body, which is what gets
+    chunked. Paid N times (once per chunk) so a document is never reduced
+    to a topically anonymous body window with no title/description context
+    of its own."""
     title = str(metadata.get("title") or "")
     description = str(metadata.get("description") or "")
     tags = metadata.get("tags")
     tags_text = " ".join(str(tag) for tag in tags) if isinstance(tags, list) else ""
-    return "\n\n".join(part for part in (title, description, tags_text, body) if part)
+    return "\n\n".join(part for part in (title, description, tags_text) if part)
+
+
+def _chunk_body(body: str, header: str) -> list[str]:
+    """Pack `body` into windows sized to leave room for `header` on every
+    chunk, reusing `extraction.concept._chunk_lines` as the line-packing
+    primitive with an EXPLICIT `target=` (design D3) -- extraction's own
+    4,000-char default and meeting-shape branching are not imported, only
+    the packer. Lossless by construction, inherited from `_chunk_lines`
+    itself: `"\\n".join(_chunk_body(body, header)) == body`.
+
+    An empty `body` returns `[]` -- the header-alone case is handled by the
+    caller, `_chunk_embed_texts`, so a title-only concept still gets a
+    vector (one chunk, the header alone) rather than zero chunks."""
+    if not body:
+        return []
+    target = max(_EMBED_CHUNK_TARGET - len(header), 1)
+    return _chunk_lines(body, target=target)
+
+
+def _chunk_embed_texts(metadata: dict[str, object], body: str) -> list[str]:
+    """Compose one embed text per chunk (design D3): `header` (title +
+    description + tags) repeated on every chunk, followed by `"\\n\\n"` and
+    that chunk's body window. An empty body still yields exactly ONE
+    chunk -- the header alone."""
+    header = _compose_header(metadata)
+    body_chunks = _chunk_body(body, header)
+    if not body_chunks:
+        return [header]
+    return [f"{header}\n\n{chunk}" for chunk in body_chunks]
 
 
 @dataclass(frozen=True)
@@ -156,6 +200,19 @@ class ReindexReport:
     the NEXT run will force the same full re-embed again, until one run
     finally covers every doc (review correction, CRITICAL + WARNING
     findings)."""
+    embed_calls: int = 0
+    """Total `embedder.embed([text])` invocations issued this run (#888) --
+    one per CHUNK, not one per document. Defaulted so every pre-existing
+    construction site stays valid (the `Citation.confidential` precedent).
+    Without it, the summary's "N embedded" documents understates the run's
+    real work by the chunk multiplier -- a 40-chunk document counts as one
+    `embedded` document but forty `embed_calls`."""
+    effective_model_tag: str | None = None
+    """This run's `_effective_model_tag(model_tag)` (`None` when `model_tag`
+    itself was `None`) -- the CLI's corrected disclosure (reindex-command:
+    Reindex Discloses The Real Re-Embed Trigger) compares this against the
+    PREVIOUSLY stored tag by their `{model}#{composition}` parts, instead of
+    the old, misleading comparison against the bare configured model name."""
 
 
 def _reindex_fts(bundle_dir: Path, fts_db_path: Path, *, force: bool) -> None:
@@ -281,7 +338,9 @@ def reindex(
     seen: set[str] = set()
     cache_hits = 0
     skipped = 0
-    to_embed: list[tuple[str, str, str]] = []  # (concept_id, text, content_hash)
+    # (concept_id, chunk_texts, content_hash) -- chunk_texts is ONE
+    # document's ordered list of per-chunk embed texts (design D3).
+    to_embed: list[tuple[str, list[str], str]] = []
 
     for scan in okf._iter_docs(bundle_dir):
         concept_id = okf.concept_id_for(scan.path, bundle_dir)
@@ -317,48 +376,65 @@ def reindex(
             skipped += 1
             continue
 
-        embed_text = _compose_embed_text(metadata, body)
-        to_embed.append((concept_id, embed_text, digest))
+        chunk_texts = _chunk_embed_texts(metadata, body)
+        to_embed.append((concept_id, chunk_texts, digest))
 
     embedded = 0
     embed_failed = 0
+    embed_calls = 0
     if to_embed:
-        items: list[tuple[str, list[float], str]] = []
+        items: list[tuple[str, list[list[float]], str]] = []
         queue_total = len(to_embed)
-        for queue_index, (concept_id, text, digest) in enumerate(to_embed, start=1):
+        for queue_index, (concept_id, chunk_texts, digest) in enumerate(
+            to_embed, start=1
+        ):
             try:
-                vector = embedder.embed([text])[0]
+                chunk_vectors: list[list[float]] = []
+                for chunk_text in chunk_texts:
+                    # Per-CHUNK grain (design D6): one `embed()` call per
+                    # chunk, not one whole-document batch call -- a document
+                    # exceeding the embedder's window is represented by N
+                    # calls instead of silently truncating to the first.
+                    embed_calls += 1
+                    chunk_vectors.append(embedder.embed([chunk_text])[0])
             except (
                 OllamaUnavailable,
                 OllamaModelNotFound,
                 OllamaEmbeddingDimensionMismatch,
             ):
-                # FATAL, not a per-doc skip (design D2/D3, D7/D8): an
-                # unreachable server, a missing model, or a permanent
-                # wrong-dimension response cannot serve ANY embed, so this
-                # is not a transient per-input failure. Re-raise immediately
-                # -- no further queued docs are processed, and nothing from
-                # this interrupted run is committed (the loop never reaches
+                # FATAL, not a per-doc skip (design D6-D8): an unreachable
+                # server, a missing model, or a permanent wrong-dimension
+                # response cannot serve ANY embed, so this is not a
+                # transient per-input failure. Re-raise immediately -- no
+                # further queued docs are processed, and nothing from this
+                # interrupted run is committed (the loop never reaches
                 # `db.upsert_many`/`commit()` below). MUST be checked BEFORE
-                # the generic `OllamaError` catch: all three subclass it, and
-                # a bare `except OllamaError` here would silently swallow a
-                # fatal condition as "every doc skipped, exit 0" -- the exact
-                # misclassification this branch closes for a dimension
-                # mismatch (reindex-command: Per-Doc Embed Failure Is
-                # Isolated, Not Fatal).
+                # the generic `OllamaError` catch, inside the CHUNK loop:
+                # all three subclass it, and a bare `except OllamaError`
+                # here would silently swallow a fatal condition as "every
+                # doc skipped, exit 0" -- the exact misclassification this
+                # branch closes for a dimension mismatch raised on any
+                # chunk, not only a document's first (reindex-command:
+                # Per-Doc Embed Failure Is Isolated, Not Fatal).
                 raise
             except OllamaError:
                 # Generic transient failure (the HTTP-400 EOF class) with
                 # the client-layer retry budget (llm/ollama.py) already
-                # exhausted -- isolate THIS doc only and keep processing the
-                # rest (design D2: per-doc grain is the exact failure unit).
+                # exhausted, raised while embedding ANY of this document's
+                # chunks -- the WHOLE document is isolated as one unit
+                # (design D6: all-or-nothing per document). A mean over the
+                # chunks that DID succeed would be a silently wrong vector
+                # stored beside a `content_hash` that reads as current on
+                # the next run, making the wrongness permanent -- so NOTHING
+                # is upserted for this document; its prior stored rows (if
+                # any) are left untouched.
                 embed_failed += 1
                 if on_progress is not None:
                     # The transient-failure attempt still counts as resolved
                     # progress (issue #190, docstring above).
                     on_progress(queue_index, queue_total, concept_id)
                 continue
-            items.append((concept_id, vector, digest))
+            items.append((concept_id, chunk_vectors, digest))
             if on_progress is not None:
                 on_progress(queue_index, queue_total, concept_id)
         if items:
@@ -409,4 +485,6 @@ def reindex(
         embed_failed=embed_failed,
         prune_skipped=prune_skipped,
         model_reembedded=model_changed,
+        embed_calls=embed_calls,
+        effective_model_tag=effective_model_tag,
     )

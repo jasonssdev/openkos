@@ -1753,6 +1753,34 @@ def _plural(n: int) -> str:
     return "" if n == 1 else "s"
 
 
+def _reembed_trigger_wording(
+    previous_tag: str | None, effective_tag: str | None
+) -> str:
+    """Name the REAL trigger for a forced full re-embed (#888; reindex-
+    command: Reindex Discloses The Real Re-Embed Trigger, Not A False
+    Model-Change Claim). Compares `previous_tag` (the PREVIOUSLY stored
+    effective tag) against `effective_tag` (THIS run's `{model}#{composition}`
+    tag) by their two `#`-separated parts -- never against the bare
+    configured model name, which is the retired comparison that reported a
+    false "embedding model changed" on a composition-only bump (e.g. this
+    change's own `compose-v1` -> `chunk-v1`).
+
+    Three branches, in order: no previous tag at all (fresh store, or one
+    `purge` just dropped) is named explicitly rather than folded into
+    "model changed"; a genuine model-name difference; and a composition-only
+    difference with the SAME model."""
+    if previous_tag is None:
+        return "no embedding-model tag stored (fresh or dropped store)"
+    old_model, _, old_composition = previous_tag.partition("#")
+    new_model, _, new_composition = (effective_tag or "").partition("#")
+    if old_model != new_model:
+        return f"embedding model changed ({old_model} -> {new_model})"
+    return (
+        f"embed text composition changed ({old_composition} -> {new_composition}); "
+        f"your embedding model is unchanged ({old_model})"
+    )
+
+
 def _format_type_tally(counts: dict[str, int]) -> str:
     """Render a per-type derived-object tally line from a `type -> count`
     dict, decoupled from any `ingest`-specific internals so other commands
@@ -7613,13 +7641,19 @@ def purge(
     # is never left assuming dense retrieval is still intact.
     # #698: `vectors.db` holds BOTH the `vector_meta` content-hash cache and
     # the `meta` embedding-model tag, so dropping the file drops both. The
-    # restore is therefore a FULL re-embed -- one embedding call per
-    # surviving document, not an incremental top-up -- and `reindex` will
-    # report it as `embedding model changed (unset -> <model>)` because the
-    # tag went with the store. Disclose both here: the cost, because it is a
-    # long wait on a large corpus arriving straight after an irreversible
-    # operation; and the wording, so an operator does not read the store loss
-    # as a configuration change they did not make.
+    # restore is therefore a FULL re-embed -- one embedding call per CHUNK
+    # (#888; no longer one per surviving document -- a document exceeding
+    # the embedder's window now costs several calls), not an incremental
+    # top-up. Because the tag lived in the dropped store, the NEXT `reindex`
+    # run finds NO stored tag at all and takes the corrected disclosure's
+    # (reindex-command: Reindex Discloses The Real Re-Embed Trigger) "no
+    # embedding-model tag stored (fresh or dropped store)" branch -- NEVER
+    # the retired "embedding model changed (unset -> <model>)" wording,
+    # since there is no old tag left to compare against a new one. Disclose
+    # both here: the cost, because it is a long wait on a large corpus
+    # arriving straight after an irreversible operation; and the wording,
+    # so an operator does not mistake the absent-tag disclosure for a
+    # configuration change they did not make.
     #
     # Preserving the tag alone would NOT make the rebuild incremental -- the
     # vectors themselves are gone, so every document must be embedded again
@@ -7629,9 +7663,10 @@ def purge(
     typer.echo(
         "openkos purge: dense retrieval degraded (vectors.db dropped) — run "
         "`openkos reindex` to restore it. That restore is a full re-embed of "
-        "every surviving document (one embedding call each), and reindex will "
-        "report it as 'embedding model changed' because the model tag lived "
-        "in the dropped store."
+        "every surviving document (one embedding call per chunk), and the "
+        "next reindex run will report 'no embedding-model tag stored (fresh "
+        "or dropped store)' — not an embedding model change — because the "
+        "model tag lived in the dropped store."
     )
 
 
@@ -17043,16 +17078,20 @@ def reindex(
     # Model-tag force observability (review correction, WARNING finding):
     # a model-tag mismatch triggers an operationally heavy full re-embed
     # that is otherwise indistinguishable from an ordinary large content
-    # change -- name the old and new tag explicitly. The wording must stay
-    # ACCURATE to whether the re-embed actually covered every doc this run
-    # (round-2 review correction, WARNING finding): claiming "re-embedded
-    # all vectors" while ALSO reporting docs that could not be re-embedded
-    # is self-contradictory, so the complete (`skipped == 0 AND
-    # embed_failed == 0`) and incomplete (`skipped > 0 OR embed_failed >
-    # 0`) cases get distinct, non-overlapping wording instead of one
-    # unconditional line plus a caveat. The success branch's gate MUST
-    # mirror `state.reindex`'s tag-persist gate exactly (`skipped == 0 AND
-    # embed_failed == 0`) -- reindex-embedding-resilience widened the
+    # change -- name the REAL trigger explicitly (reindex-command: Reindex
+    # Discloses The Real Re-Embed Trigger, Not A False Model-Change Claim;
+    # #888 corrects the comparison from stored-effective-tag-vs-bare-model,
+    # which falsely reported "embedding model changed" on a composition-only
+    # bump such as this change's own `compose-v1` -> `chunk-v1`). The
+    # wording must stay ACCURATE to whether the re-embed actually covered
+    # every doc this run (round-2 review correction, WARNING finding):
+    # claiming "re-embedded all vectors" while ALSO reporting docs that
+    # could not be re-embedded is self-contradictory, so the complete
+    # (`skipped == 0 AND embed_failed == 0`) and incomplete (`skipped > 0 OR
+    # embed_failed > 0`) cases get distinct, non-overlapping wording instead
+    # of one unconditional line plus a caveat. The success branch's gate
+    # MUST mirror `state.reindex`'s tag-persist gate exactly (`skipped == 0
+    # AND embed_failed == 0`) -- reindex-embedding-resilience widened the
     # tag-persist gate to also withhold on `embed_failed > 0`, so a
     # `skipped == 0`-only success check here would print a false success
     # while the tag was actually withheld (review correction, CRITICAL
@@ -17060,16 +17099,17 @@ def reindex(
     incomplete_count = report.skipped + report.embed_failed
     if report.model_reembedded and incomplete_count == 0:
         typer.echo(
-            "openkos reindex: re-embedded all vectors -- embedding model "
-            f"changed ({previous_model_tag or 'unset'} -> "
-            f"{cfg.embedding_model})."
+            "openkos reindex: re-embedded all vectors -- "
+            f"{_reembed_trigger_wording(previous_model_tag, report.effective_model_tag)}; "
+            f"embed_calls={report.embed_calls}."
         )
     elif report.model_reembedded:
         typer.echo(
-            f"openkos reindex: embedding model changed ({previous_model_tag or 'unset'} "
-            f"-> {cfg.embedding_model}); re-embedding all vectors -- INCOMPLETE: "
+            f"openkos reindex: "
+            f"{_reembed_trigger_wording(previous_model_tag, report.effective_model_tag)}; "
+            "re-embedding all vectors -- INCOMPLETE: "
             f"{incomplete_count} doc{_plural(incomplete_count)} could not be "
-            "re-embedded, will retry next run."
+            f"re-embedded, will retry next run; embed_calls={report.embed_calls}."
         )
     # Actionable re-run notice (reindex-embedding-resilience): keys ONLY on
     # `embed_failed` -- transient embed-EOF skips (retry budget exhausted at

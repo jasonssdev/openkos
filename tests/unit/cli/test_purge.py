@@ -798,9 +798,14 @@ def test_purge_announces_the_restore_is_a_full_re_embed(
         "the closing line must name the full re-embed, not merely that a "
         "reindex is needed"
     )
-    assert "embedding model changed" in result.output, (
-        "and must pre-empt reindex's misleading model-change wording, so an "
+    assert "no embedding-model tag stored" in result.output, (
+        "and must pre-empt reindex's corrected absent-tag wording, so an "
         "operator does not read the store loss as a configuration change"
+    )
+    assert "embedding model changed" not in result.output, (
+        "must NOT quote the retired 'embedding model changed' wording -- "
+        "there is no old tag left to compare against a new one once "
+        "vectors.db (which held it) is dropped"
     )
 
 

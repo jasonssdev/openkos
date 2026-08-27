@@ -1595,3 +1595,299 @@ def test_reindex_embed_composition_change_forces_full_reembed_via_model_tag(
     assert steady_report.cache_hits == 1
     assert steady_report.model_reembedded is False
     assert steady_embedder.call_count == 0
+
+
+# --- Phase 11 (#888): body chunking, per-chunk failure isolation ------------
+
+
+class _CountingChunkEmbedder:
+    """Embeds one text per call (per-chunk grain, design D6); raises `exc`
+    on the `fail_on_call` -th call overall (1-based), succeeds on every
+    other call, returning a distinct vector per call so a stored row can be
+    traced back to which call produced it."""
+
+    def __init__(
+        self, *, fail_on_call: int | None = None, exc: Exception | None = None
+    ) -> None:
+        self.calls: list[list[str]] = []
+        self._fail_on_call = fail_on_call
+        self._exc = exc
+
+    def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        self.calls.append(list(texts))
+        assert len(texts) == 1, "reindex() must embed one chunk per call"
+        if self._fail_on_call == len(self.calls):
+            assert self._exc is not None
+            raise self._exc
+        return [[float(len(self.calls))] * EMBED_DIM]
+
+    @property
+    def call_count(self) -> int:
+        return len(self.calls)
+
+
+def _long_body(num_chunks_hint: int, *, line_length: int = 7_000) -> str:
+    """A body whose lines are each `line_length` chars -- with the
+    production `_EMBED_CHUNK_TARGET = 12_000` and a one-character header
+    (`title="T"`, empty description/tags), two `line_length`-char lines
+    exceed the ~11,999-char per-chunk budget, so `_chunk_lines` places
+    exactly ONE line per chunk: `num_chunks_hint` lines -> that many
+    chunks, deterministically."""
+    return "\n".join("X" * line_length for _ in range(num_chunks_hint))
+
+
+def test_chunk_body_is_lossless_and_empty_body_yields_no_body_chunks() -> None:
+    """S4: rejoining chunks with `"\\n"` reproduces the original body
+    byte-for-byte; an empty body yields ZERO body chunks (the header-alone
+    case is `_chunk_embed_texts`'s job) (embedding-chunking spec: Chunk
+    Coverage Is Lossless)."""
+    body = _long_body(5)
+
+    chunks = reindex._chunk_body(body, header="T")
+
+    assert len(chunks) == 5
+    assert "\n".join(chunks) == body
+    assert reindex._chunk_body("", header="T") == []
+
+
+def test_chunk_embed_texts_repeats_header_and_empty_body_yields_one_chunk() -> None:
+    """embedding-chunking spec: Body-Only Chunking With A Repeated Header --
+    every chunk's text starts with the identical header; an empty body
+    still yields exactly ONE chunk, containing the header alone."""
+    metadata: dict[str, object] = {"title": "T", "description": "", "tags": []}
+
+    texts = reindex._chunk_embed_texts(metadata, _long_body(3))
+    assert len(texts) == 3
+    assert all(text.startswith("T") for text in texts)
+
+    empty_body_texts = reindex._chunk_embed_texts(metadata, "")
+    assert empty_body_texts == ["T"]
+
+
+def test_reindex_short_document_issues_exactly_one_embed_call(
+    tmp_path: Path,
+) -> None:
+    """A document whose composed body fits within one chunking window
+    issues exactly one embed call (embedding-chunking spec: A short
+    document produces exactly one chunk)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "a.md", title="A", body="short body")
+    embedder = _FakeEmbedder()
+
+    with vectorstore.open_vector_store(tmp_path / ".openkos" / "vectors.db") as db:
+        report = reindex.reindex(bundle_dir, db, embedder)
+
+    assert report.embedded == 1
+    assert report.embed_calls == 1
+    assert embedder.call_count == 1
+
+
+def test_reindex_long_document_issues_multiple_lossless_embed_calls(
+    tmp_path: Path,
+) -> None:
+    """A document whose body exceeds the embedder's window is embedded via
+    multiple chunk calls, none of them truncating -- every embeddable byte
+    of the body reaches exactly one chunk's embed text (embedding-chunking
+    spec: A long document is embedded via multiple chunk calls, none of
+    them truncating)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "a.md", title="T", body=_long_body(5))
+    embedder = _FakeEmbedder()
+
+    with vectorstore.open_vector_store(tmp_path / ".openkos" / "vectors.db") as db:
+        report = reindex.reindex(bundle_dir, db, embedder)
+
+    assert report.embedded == 1
+    assert report.embed_calls == 5
+    assert embedder.call_count == 5
+    combined = "".join(embedder.embedded_texts)
+    assert combined.count("X" * 7_000) == 5
+
+
+def test_reindex_chunk_3_of_5_fails_stores_nothing_for_that_document(
+    tmp_path: Path,
+) -> None:
+    """S8: chunk 3 of 5 fails on the generic transient `OllamaError` ->
+    `embed_failed += 1`, ZERO rows written for that document (not a partial
+    mean over the 4 surviving chunks), and prior stored rows are untouched
+    -- asserted against the STORED state, not merely the counter
+    (reindex-command spec: A partially-failed document stores no partial
+    document vector)."""
+    bundle_dir = tmp_path / "bundle"
+    doc_path = bundle_dir / "concepts" / "a.md"
+    _write_doc(doc_path, title="T", body=_long_body(5))
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        embedder = _CountingChunkEmbedder(
+            fail_on_call=3, exc=OllamaError("EOF after retries")
+        )
+        report = reindex.reindex(bundle_dir, db, embedder)
+
+        vector_rows = db._conn.execute(
+            "SELECT COUNT(*) FROM vectors WHERE concept_id = ?", ("concepts/a",)
+        ).fetchone()[0]
+        doc_vector_rows = db._conn.execute(
+            "SELECT COUNT(*) FROM doc_vectors WHERE concept_id = ?", ("concepts/a",)
+        ).fetchone()[0]
+        meta_row = db._conn.execute(
+            "SELECT content_hash FROM vector_meta WHERE concept_id = ?",
+            ("concepts/a",),
+        ).fetchone()
+
+    assert report.embedded == 0
+    assert report.embed_failed == 1
+    assert report.skipped == 0
+    assert vector_rows == 0
+    assert doc_vector_rows == 0
+    assert meta_row is None
+
+
+def test_reindex_chunk_failure_leaves_prior_stored_rows_untouched(
+    tmp_path: Path,
+) -> None:
+    """A document already stored from a PRIOR run, then re-embedded with a
+    chunk failure on THIS run, keeps its prior rows exactly as they were --
+    the failed re-embed neither deletes nor overwrites them."""
+    bundle_dir = tmp_path / "bundle"
+    doc_path = bundle_dir / "concepts" / "a.md"
+    _write_doc(doc_path, title="T", body="short stable body")
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        reindex.reindex(bundle_dir, db, _FakeEmbedder())
+        prior_hash = db.meta_hashes()["concepts/a"]
+
+        # Force a re-embed attempt (content unchanged -> use force=True) that
+        # fails on this document's one and only chunk.
+        embedder = _CountingChunkEmbedder(
+            fail_on_call=1, exc=OllamaError("EOF after retries")
+        )
+        report = reindex.reindex(bundle_dir, db, embedder, force=True)
+        after_hash = db.meta_hashes()["concepts/a"]
+
+    assert report.embed_failed == 1
+    assert after_hash == prior_hash
+
+
+def test_reindex_dimension_mismatch_on_a_non_first_chunk_is_still_fatal(
+    tmp_path: Path,
+) -> None:
+    """S9: the FATAL ladder (`OllamaUnavailable`/`OllamaModelNotFound`/
+    `OllamaEmbeddingDimensionMismatch`) is checked BEFORE the generic
+    `OllamaError` handler INSIDE the chunk loop -- a mismatch raised on
+    chunk 2 of a multi-chunk document still propagates and aborts the run,
+    not merely one raised on a document's first chunk
+    (`reindex.py:340-349`'s safety-critical ordering, restored for the
+    chunk loop)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "a.md", title="T", body=_long_body(3))
+    embedder = _CountingChunkEmbedder(
+        fail_on_call=2,
+        exc=OllamaEmbeddingDimensionMismatch("expected 1024, got 768"),
+    )
+
+    with (
+        vectorstore.open_vector_store(tmp_path / ".openkos" / "vectors.db") as db,
+        pytest.raises(OllamaEmbeddingDimensionMismatch),
+    ):
+        reindex.reindex(bundle_dir, db, embedder)
+
+
+def test_reindex_still_commits_exactly_once_regardless_of_chunk_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """S10: a run embedding a multi-chunk document still commits `vectors.db`
+    exactly ONCE, not once per chunk."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "a.md", title="T", body=_long_body(5))
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        commit_calls = 0
+        original_commit = db.commit
+
+        def _counting_commit() -> None:
+            nonlocal commit_calls
+            commit_calls += 1
+            original_commit()
+
+        monkeypatch.setattr(db, "commit", _counting_commit)
+
+        report = reindex.reindex(bundle_dir, db, _FakeEmbedder())
+
+    assert commit_calls == 1
+    assert report.embedded == 1
+    assert report.embed_calls == 5
+
+
+def test_reindex_report_embed_calls_exceeds_embedded_for_a_chunked_document(
+    tmp_path: Path,
+) -> None:
+    """Cost honesty (design D6): `ReindexReport.embed_calls` exceeds
+    `embedded` whenever any document produced more than one chunk -- without
+    it, "N embedded" understates the run's real work by the chunk
+    multiplier."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "a.md", title="T", body=_long_body(4))
+
+    with vectorstore.open_vector_store(tmp_path / ".openkos" / "vectors.db") as db:
+        report = reindex.reindex(bundle_dir, db, _FakeEmbedder())
+
+    assert report.embedded == 1
+    assert report.embed_calls == 4
+    assert report.embed_calls > report.embedded
+
+
+def test_reindex_on_progress_fires_once_per_document_not_per_chunk(
+    tmp_path: Path,
+) -> None:
+    """`on_progress` keeps its `(index, total, concept_id)` contract, firing
+    once per QUEUED DOCUMENT after its own chunk set resolves -- a 5-chunk
+    document must not fire it 5 times (design D6: "a 40-chunk document now
+    looks stalled for 40 calls" -- the calls are silent, the callback is
+    not)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "a.md", title="T", body=_long_body(5))
+    _write_doc(bundle_dir / "concepts" / "b.md", title="B", body="short")
+    progress_calls: list[tuple[int, int, str]] = []
+
+    with vectorstore.open_vector_store(tmp_path / ".openkos" / "vectors.db") as db:
+        reindex.reindex(
+            bundle_dir,
+            db,
+            _FakeEmbedder(),
+            on_progress=lambda i, t, c: progress_calls.append((i, t, c)),
+        )
+
+    assert len(progress_calls) == 2
+    assert {c for _, _, c in progress_calls} == {"concepts/a", "concepts/b"}
+
+
+def test_reindex_effective_model_tag_is_reported_on_the_report(
+    tmp_path: Path,
+) -> None:
+    """`ReindexReport.effective_model_tag` carries `_effective_model_tag
+    (model_tag)` -- the CLI's corrected disclosure compares THIS against the
+    previously stored tag, never the bare configured model name."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "a.md", title="A")
+
+    with vectorstore.open_vector_store(tmp_path / ".openkos" / "vectors.db") as db:
+        report = reindex.reindex(bundle_dir, db, _FakeEmbedder(), model_tag="bge-m3")
+
+    assert report.effective_model_tag == "bge-m3#chunk-v1"
+
+
+def test_reindex_effective_model_tag_is_none_when_model_tag_is_none(
+    tmp_path: Path,
+) -> None:
+    """Omitting `model_tag` leaves `effective_model_tag` `None`, matching
+    the tag gate's own pure-no-op default."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "a.md", title="A")
+
+    with vectorstore.open_vector_store(tmp_path / ".openkos" / "vectors.db") as db:
+        report = reindex.reindex(bundle_dir, db, _FakeEmbedder())
+
+    assert report.effective_model_tag is None
