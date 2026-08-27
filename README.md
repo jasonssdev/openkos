@@ -44,6 +44,8 @@ openkos --version
 
 That command is also how you track unreleased `main` at any time.
 
+> **Upgrading an existing workspace to 0.2.11?** Run `openkos reindex` once afterwards. The embedding store changed shape in [#888](https://github.com/jasonssdev/openkos/issues/888) — a document's vector used to be the vector of its first chunk, so the rest of every long source was invisible to semantic search — and the old schema cannot be migrated in place. It is detected on open, dropped, and recreated, so that first `reindex` re-embeds the workspace and reports `no embedding-model tag stored (fresh or dropped store)` rather than a model change. Nothing in `bundle/` is touched: the derived indexes rebuild from it, which is the point of keeping them derived.
+
 **4 · Check the setup before anything can fail:**
 
 ```bash
