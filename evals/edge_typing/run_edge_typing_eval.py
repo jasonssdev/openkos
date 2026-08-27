@@ -82,6 +82,7 @@ from openkos.config import (  # noqa: E402
 )
 from openkos.graph.base import Edge  # noqa: E402
 from openkos.llm.ollama import OllamaClient  # noqa: E402
+from openkos.model import okf  # noqa: E402
 from openkos.resolution.edge_typing import suggest_edge_types  # noqa: E402
 
 DEFAULT_MODEL = "qwen3:8b"
@@ -89,15 +90,19 @@ DEFAULT_RUNS = 5
 
 
 def _materialize_bundle(bundle_dir: pathlib.Path) -> None:
-    """Write every fixture document as a minimal OKF concept file."""
+    """Materialize every fixture document as a real OKF bundle.
+
+    Frontmatter is rendered by the SHIPPED `okf.dump_frontmatter` rather than
+    by an f-string interpolating the title unquoted. No title here carries a
+    colon, so this corpus never lost a document -- but it sat one fixture
+    edit away from the silent drop #895 found in three sibling harnesses.
+    `--self-test` now asks the shipped reader whether every document parses,
+    so a fixture edit that reintroduces one cannot pass unnoticed."""
     for doc in DOCS:
         path = bundle_dir / f"{doc.concept_id}.md"
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            f"---\ntype: Concept\ntitle: {doc.title}\n---\n"
-            f"# {doc.title}\n\n{doc.body}\n",
-            encoding="utf-8",
-        )
+        frontmatter = okf.dump_frontmatter({"type": "Concept", "title": doc.title})
+        path.write_text(f"{frontmatter}# {doc.title}\n\n{doc.body}\n", encoding="utf-8")
 
 
 def _run_once(
@@ -150,6 +155,40 @@ def _run_once(
     return [by_pair.get((e.source_id, e.target_id), (None, 0.0, "")) for e in EDGES]
 
 
+def _self_test() -> int:
+    """Model-free: does the fixture corpus actually reach the index?
+
+    Materializing is not indexing, and only the second one is what a
+    measurement rests on. A document whose frontmatter does not parse is
+    counted `skipped` by `reindex` and nothing reads that number, which is
+    how three sibling harnesses each measured a corpus a whole document type
+    short of the one they documented (#895). Counting files on disk cannot
+    catch that. Ask the shipped READER."""
+    with tempfile.TemporaryDirectory() as tmp:
+        bundle = pathlib.Path(tmp) / "bundle"
+        _materialize_bundle(bundle)
+        materialized = len(list(bundle.rglob("*.md")))
+        unparseable = sorted(
+            okf.concept_id_for(scan.path, bundle)
+            for scan in okf._iter_docs(bundle)
+            if scan.read_error is not None or scan.parse_error is not None
+        )
+    failures: list[str] = []
+    if materialized != len(DOCS):
+        failures.append(
+            f"the bundle materializes {materialized} files for {len(DOCS)} documents"
+        )
+    if unparseable:
+        failures.append(
+            "these documents do not parse, so they never enter the index: "
+            f"{unparseable}"
+        )
+    for failure in failures:
+        print(f"FAIL: {failure}")
+    print(f"self-test: {2 - len(failures)}/2 passed")
+    return 1 if failures else 0
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--arm", default="baseline", help="label for this arm")
@@ -166,7 +205,15 @@ def main() -> None:
             "identical to the one that ships."
         ),
     )
+    parser.add_argument(
+        "--self-test",
+        action="store_true",
+        help="check the fixture corpus is fully indexable; no model, no network",
+    )
     args = parser.parse_args()
+
+    if args.self_test:
+        raise SystemExit(_self_test())
 
     # Production's own generation ceiling and context window, not the client's
     # opted-out defaults (#700) -- see the same note in

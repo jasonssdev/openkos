@@ -98,6 +98,7 @@ from openkos.config import (  # noqa: E402
     DEFAULT_MAX_GENERATION_TOKENS,
 )
 from openkos.llm.ollama import OllamaClient  # noqa: E402
+from openkos.model import okf  # noqa: E402
 from openkos.retrieval.answer import answer  # noqa: E402
 from openkos.state import reindex as reindex_module  # noqa: E402
 from openkos.state.fts import open_fts_index_readonly  # noqa: E402
@@ -639,16 +640,26 @@ def score(rows: list[dict[str, Any]], arm: str, labels: dict[str, str]) -> ArmSc
 
 
 def _write_corpus(root: pathlib.Path) -> pathlib.Path:
+    """Materialize `_CORPUS` as a real OKF bundle.
+
+    Frontmatter is rendered by the SHIPPED `okf.dump_frontmatter` rather than
+    by an f-string interpolating the title unquoted. No title here carries a
+    colon, so this corpus never lost a document -- but it sat one fixture
+    edit away from the silent drop #895 found in three sibling harnesses, and
+    one renderer beats several."""
     bundle = root / "bundle"
     for doc_id, (title, body) in _CORPUS.items():
         doc_type = "Source" if doc_id.startswith("sources/") else "Concept"
         path = bundle / f"{doc_id}.md"
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            f"---\ntype: {doc_type}\ntitle: {title}\nsensitivity: private\n---\n\n"
-            f"{body}\n",
-            encoding="utf-8",
+        frontmatter = okf.dump_frontmatter(
+            {
+                "type": doc_type,
+                "title": title,
+                "sensitivity": "private",
+            }
         )
+        path.write_text(f"{frontmatter}{body}\n", encoding="utf-8")
     return bundle
 
 
@@ -1046,6 +1057,26 @@ def _self_test() -> int:
             f"{blind.verdict!r}"
         )
         return 1
+
+    # Materializing is not indexing, and this probe's whole subject is what
+    # the index holds a title for. Counting files on disk cannot see a
+    # document whose frontmatter never parsed -- `reindex` counts it
+    # `skipped` and nothing reads that number -- which is how three sibling
+    # harnesses each lost a whole document type in silence (#895).
+    with tempfile.TemporaryDirectory() as tmp:
+        bundle = _write_corpus(pathlib.Path(tmp))
+        unparseable = sorted(
+            okf.concept_id_for(scan.path, bundle)
+            for scan in okf._iter_docs(bundle)
+            if scan.read_error is not None or scan.parse_error is not None
+        )
+        if unparseable or len(list(bundle.rglob("*.md"))) != len(_CORPUS):
+            print(
+                "SELF-TEST FAILED: the corpus is not fully indexable, so the "
+                f"probe would measure fewer documents than it claims: "
+                f"{unparseable or 'file count mismatch'}"
+            )
+            return 1
 
     print(
         f"self-test OK: `clause` titles the open question {invented!r}; "

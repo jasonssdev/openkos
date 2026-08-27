@@ -78,3 +78,33 @@ was any good.
 One chat model, one embedding model, one synthetic (though #753-shaped)
 corpus, 20 questions. Compliance and calibration are per-model properties; a
 different backend needs its own run.
+
+---
+
+## The stored numbers were measured on a smaller corpus than this document describes
+
+Every emission under `results/` predating 2026-08-27 was measured over
+**10 of the 14 documents** this probe documents. `_write_corpus`
+built its frontmatter with an f-string that interpolated the title unquoted,
+and the four `decisions/*` documents are titled `Decisión: ...`. A colon there
+is invalid YAML: `_iter_docs` recorded a `parse_error`, `reindex` counted the
+document `skipped`, and nothing read that number against an expected total.
+The missing four were not a random sample — they were the entire `Decision`
+document type.
+
+Affected emissions, kept as measured because stored emissions are never
+rewritten:
+
+- `runs-20260818T-suff-qwen3-8b.json`
+- `runs-20260818T-n10-qwen3-8b.json`
+  and the two reports rendered from them
+
+Production was never affected: `okf.dump_frontmatter` quotes correctly, and
+the harness had simply hand-rolled a second renderer beside the shipped one.
+`_write_corpus` now calls the shipped one, and `--self-test` asks the shipped
+READER whether every materialized document parses — counting files on disk
+cannot catch this and did not (#895, the same defect #887 fixed in
+`query_attribution`).
+
+Anything re-run from here indexes 14 documents, so a new figure is not
+comparable with the ones above.
