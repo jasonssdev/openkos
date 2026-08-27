@@ -14,6 +14,179 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+## [0.2.11] - 2026-08-27
+
+Nine commits since v0.2.10, and the shape of the release is one theme: a
+surface that reported less than it knew. Two were reading only part of what
+they were given — a document's embedding was the embedding of its first
+chunk, so the second half of every long Source was invisible to dense
+retrieval; and `query`'s prompt was unbounded, so Ollama discarded roughly
+90% of it in silence and `--save` filed as permanent provenance documents
+the model had never read. Three more knew the answer and did not say it:
+`purge` left three derived stores deleted and named one of them, the pre-judge ceiling
+reported a bare count where every sibling named names, and
+`extraction_notice` held a single token so a second condition overwrote the
+first at write time. One was a fallback that happened to equal its own pin,
+which hid a bug in both directions for as long as nobody moved the default.
+The remaining three are a shared renderer, a probe that finally entered the
+regime it documents, and a harness defect that had been measuring a corpus
+a whole document type short of the one it described.
+
+### Fixed
+
+- **A document's embedding is no longer its first chunk**
+  ([#888](https://github.com/jasonssdev/openkos/issues/888)). Vectors are
+  chunk-backed: one `vectors` row per chunk carrying a `chunk_index`, plus a
+  document-level `doc_vectors` row holding
+  `normalize(mean(normalize(chunk_i)))`. `VectorStore.query` collapses chunk
+  hits to at most one per `concept_id` (minimum distance, deterministic
+  `(distance, concept_id)` tie-break), so the retrieval unit downstream is
+  unchanged, while `neighbors()` reads `doc_vectors` and graph proximity now
+  ranks on whole-document content instead of a truncated opening.
+
+  **Upgrading re-embeds an existing workspace once.** A legacy three-column
+  store is detected on open, dropped and recreated, and `vector_meta` is
+  cleared — the schema cannot be migrated in place. So the next `reindex`
+  costs one embedding call per chunk of every surviving document, and it
+  reports `no embedding-model tag stored (fresh or dropped store)` rather
+  than an embedding-model change: the tag lived in the store that was
+  dropped.
+
+- **`query` bounds its prompt to the model's context window, and stops
+  citing what it never read**
+  ([#882](https://github.com/jasonssdev/openkos/issues/882)). The prompt was
+  built from the full body of every retrieved document with no size bound and
+  no disclosure. Ollama does not raise on an oversized prompt — it discards
+  the overflow and answers normally — so `--save` filed every retrieved
+  citation as provenance verbatim, a false claim on disk that no surface
+  could reveal. Measured live against `qwen3:8b` at `num_ctx` 12288 on one
+  corpus. The bounded arm sent 8,410 characters for a `prompt_eval_count`
+  of 2,449 — 3.434 characters per token, and the two agree, so the whole
+  prompt is read. The unbounded arm sent 208,222 characters and reported a
+  `prompt_eval_count` of only 6,146; at that same ratio those characters
+  should have evaluated ~60,634 tokens, so **54,488 of them — 89.9% — were
+  being discarded in silence**.
+
+  Context is now assembled to fit, and the two ways a document can lose out
+  are reported separately: an **excerpted** document is clipped with elision
+  markers, is still cited, and its citation line carries a trailing
+  `[partial]`; an **omitted** document did not fit at all and is **not
+  cited**, because a document the model never saw is not provenance. Each
+  emits one stderr warning naming the documents and pointing at
+  `context_window`.
+
+- **`purge` names every store it leaves deleted, with that store's own
+  restore cost** ([#886](https://github.com/jasonssdev/openkos/issues/886)).
+  It deletes five derived stores and rebuilds two, so three are left
+  deleted — and the warning named one. `findings.db` and
+  `insight_questions.db` were destroyed in silence; in the reported session
+  the `findings.db` half alone cost 11 persisted contradiction verdicts, 9
+  edge suggestions and 7 identity adjudications, minutes after
+  `contradictions` had reported `11 of 11 candidate(s) served from persisted
+  findings; 0 judged fresh`.
+
+  The three costs are genuinely different, so one shared "run
+  `openkos reindex`" line would misprice two of them: a reindex restores no
+  findings verdict at all, and the question cache needs nothing run. One
+  structure pairs each dropped store with its own cost, and the sidecar
+  sweep, the count and the notice all walk it, so a fourth store cannot
+  reach the delete set while missing from the disclosure. A store is
+  reported only when this purge actually **destroyed** it — it existed
+  before and is verifiably gone after — because absence alone is not loss.
+
+- **`extraction_notice` records every condition, not the strongest**
+  ([#884](https://github.com/jasonssdev/openkos/issues/884)). The key held
+  one value, so a run tripping several disclosure conditions had the
+  higher-precedence token overwrite the weaker at write time, and `lint`
+  rendered its sections as independent while one silently masked another.
+  `lint` could not compensate from its own side: the displaced token is
+  destroyed at ingest. On disk a single condition stays a bare scalar,
+  byte-identical to what earlier releases wrote; only a genuine
+  co-occurrence widens the value to a list. The masking was pervasive rather
+  than rare — making the field plural turned ten existing ingest tests red,
+  fixtures that had been tripping two conditions and losing one all along,
+  invisible because the tests asserted only the winner.
+
+- **The pre-judge ceiling names the candidates it cut**
+  ([#885](https://github.com/jasonssdev/openkos/issues/885)). It was the
+  only drop in the extraction pipeline reporting a bare count with no
+  titles, while every sibling named names. You cannot check against the
+  source what you cannot name. The titles ride in a separate field, so runs
+  stored before this still render the half they have.
+
+- **One shared renderer for both contradiction echo paths**
+  ([#883](https://github.com/jasonssdev/openkos/issues/883)). `curate`
+  rendered every verdict from `pair_ids`, so an intra-document verdict on a
+  merged body came out as the self-pair
+  `[CONTRADICTS] concepts/a <-> concepts/a`, losing both the absorbed id and
+  the `next: openkos unmerge ...` remedy the standalone verb already printed
+  for that same stored verdict. `openkos next` recommends `curate` and never
+  names `contradictions`, so the recommended path was the one showing a
+  0.95-confidence problem with no command to resolve it. Fixed by
+  extraction rather than by patching the second site — two blocks free to
+  diverge again is the defect itself, and a comment in `curate.py` asserted
+  the two "cannot drift apart on this rule" while they already had.
+
+- **`max_generation_tokens` reaches the prompt budget**
+  ([#896](https://github.com/jasonssdev/openkos/issues/896)).
+  `prompt_budget.reply_reserve` reads it to decide how much of
+  `context_window` to hold back for the reply, but `OllamaClient` never
+  exposed it, so the read always missed and the 8192 default came back
+  whatever the workspace pinned. With the shipped defaults this is
+  invisible, because the fallback happens to **equal** the pin — and it was
+  wrong in both directions: below the default the budget floored to zero and
+  `query` answered `NO_MATCH` on a fully populated bundle; above it the
+  reserve stayed 8192 and budgeted more prompt room than the window could
+  hold. A coincidence-shaped bug is not always the conservative one.
+
+- **Eval harnesses render frontmatter with the shipped writer**
+  ([#895](https://github.com/jasonssdev/openkos/issues/895)). Six harnesses
+  hand-rolled the frontmatter with an f-string that interpolated the title
+  unquoted, so a colon in a title produced invalid YAML: `_iter_docs`
+  recorded a `parse_error`, `reindex` counted the document `skipped`, and
+  nothing read that number against an expected total. `query_citation`,
+  `query_entailment` and `query_sufficiency` each measured a corpus missing
+  the entire `decisions/*` document type — 10 of 14, 15 of 19 and 10 of 14 —
+  and every stored emission under those `results/` directories was measured
+  that way, which each README now records. Production was never affected:
+  `okf.dump_frontmatter` quotes correctly, and the harnesses had grown a
+  second renderer beside the shipped one. Every harness now asks the shipped
+  READER whether each materialized document parses; `edge_typing` and
+  `retrieval_stability` had no `--self-test` at all and gain one, so the CI
+  sweep covers 38 harnesses rather than 36.
+
+### Measured
+
+- **The attribution probe entered the context-size regime it documents**
+  ([#887](https://github.com/jasonssdev/openkos/issues/887)), and the
+  hypothesis was **refuted**. At n=30 per cell the large-context rung scores
+  0.958 against the small rung's 0.883 — three times the prompt, most of the
+  retrieval set clipped, and no cell loses ground. Post-#882 context size is
+  not where the attribution defect lives. What the probe did reproduce is
+  the unbounded prompt, behind a new `--unbounded` flag: 26,671 characters
+  sent, `prompt_eval_count` pinned at 2,050, compliance 0.21, and the
+  fallback citing 4.68 of 5 blocks the model never read.
+
+### Documentation
+
+- The derived layer is **five** SQLite files, not four:
+  `insight_questions.db` had been missing from `docs/tech_stack.md` and
+  `docs/testing.md` since it shipped. Both now name it, and `docs/cli.md`'s
+  `purge` section carries the corrected delete/rebuild split with each
+  dropped store's own restore cost.
+- `docs/cli.md` catches up with six of the behavior changes above, none of
+  which had updated it from their own pull requests: the bounded query
+  context and its `[partial]` citations, chunk-backed vectors and the
+  one-time re-embed on upgrade, the plural `extraction_notice`, the named
+  pre-judge cuts, the shared contradiction renderer, and
+  `max_generation_tokens`' newly real effect on the prompt budget. The
+  seventh, `purge`'s corrected delete/rebuild split, is the bullet above;
+  the eighth is harness-only and documented in the eval READMEs.
+- `docs/tech_stack.md` no longer promises that deleting any derived store
+  "costs a rebuild, never data". That is true of the three indexes and false
+  of `findings.db`, where every verdict costs the model call that produced
+  it — the same asymmetry `purge`'s new disclosure exists to price.
+
 ## [0.2.10] - 2026-08-25
 
 Eight commits since v0.2.9, and every one of them answers something the
@@ -2074,7 +2247,8 @@ and Memory) work.
 - Default embedding model is `bge-m3` (ADR-0006), superseding the earlier
   `qwen3-embedding:0.6b` default.
 
-[Unreleased]: https://github.com/jasonssdev/openkos/compare/v0.2.10...HEAD
+[Unreleased]: https://github.com/jasonssdev/openkos/compare/v0.2.11...HEAD
+[0.2.11]: https://github.com/jasonssdev/openkos/compare/v0.2.10...v0.2.11
 [0.2.10]: https://github.com/jasonssdev/openkos/compare/v0.2.9...v0.2.10
 [0.2.9]: https://github.com/jasonssdev/openkos/compare/v0.2.8...v0.2.9
 [0.2.8]: https://github.com/jasonssdev/openkos/compare/v0.2.7...v0.2.8
