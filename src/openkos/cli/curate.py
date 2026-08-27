@@ -1798,11 +1798,12 @@ def _contradictions_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         )
     ]
     for verdict in displayed:
-        source_id, target_id = verdict.pair_ids
-        typer.echo(
-            f"[{verdict.verdict.value.upper()}] {source_id} <-> {target_id} "
-            f"(confidence: {verdict.confidence:.2f})"
-        )
+        # #883: shared with `contradictions` so the two echo paths cannot
+        # drift again. A merged-body verdict must render its absorbed id and
+        # its `unmerge` remedy here too -- `openkos next` recommends THIS
+        # command, never `contradictions`, so this was the path that lost
+        # both the diagnosis and the only verb that resolves the finding.
+        cli_main.render_contradiction_header(verdict)
         for claim in verdict.conflicting_claims:
             typer.echo(f"  - {claim}")
         typer.echo(f"  rationale: {verdict.rationale}")
