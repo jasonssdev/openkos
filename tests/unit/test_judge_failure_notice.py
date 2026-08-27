@@ -202,3 +202,74 @@ class TestTheCompoundState:
 
         assert _pre_judge_ceiling_notice(report) is not None
         assert _judge_failure_notice(report) is not None
+
+
+class TestThePreJudgeCeilingNamesWhatItCut:
+    """#885: the pre-judge ceiling was the ONLY drop in the extraction
+    pipeline that reported a bare count with no titles.
+
+    Its siblings all name names -- `discarded_titles` (the final backstop
+    cap), `judged_out_titles`, the wrong-language and recombined gates. In
+    the wild run that surfaced this, every other drop named names (4
+    wrong-language, 9 recombined, 10 judge, 1 staging) and this one said
+    "7". That contradicts the principle written for the sibling notice in
+    `_unevidenced_notice`: "The titles are load-bearing, not decoration. A
+    notice that only counted would leave the operator opening every derived
+    document to find the one." You cannot check against the source what you
+    cannot name.
+    """
+
+    def test_the_notice_names_the_titles_it_cut(self) -> None:
+        notice = _pre_judge_ceiling_notice(
+            ExtractionReport(
+                retained=24,
+                pre_judge_dropped=2,
+                pre_judge_dropped_titles=("Alpha", "Beta"),
+            )
+        )
+
+        assert notice is not None
+        assert "Alpha" in notice
+        assert "Beta" in notice
+
+    def test_the_count_and_ceiling_wording_survive(self) -> None:
+        """Naming what was cut ADDS to the existing line; it does not
+        replace the count or the ceiling explanation an operator already
+        reads to understand why extraction stopped short."""
+        notice = _pre_judge_ceiling_notice(
+            ExtractionReport(
+                retained=24,
+                pre_judge_dropped=2,
+                pre_judge_dropped_titles=("Alpha", "Beta"),
+            )
+        )
+
+        assert notice is not None
+        assert "24-candidate pre-judge ceiling" in notice
+        assert "2 merged candidate(s) never reached the judge" in notice
+
+    def test_a_long_casualty_list_is_capped_like_its_siblings(self) -> None:
+        """Same `_CAP_NOTICE_TITLE_LIMIT` + '(+N more)' shape the other
+        title-bearing notices use, so the extraction notices read alike."""
+        notice = _pre_judge_ceiling_notice(
+            ExtractionReport(
+                retained=24,
+                pre_judge_dropped=5,
+                pre_judge_dropped_titles=("A", "B", "C", "D", "E"),
+            )
+        )
+
+        assert notice is not None
+        assert "(+2 more)" in notice
+        assert "D" not in notice.split("(+2 more)")[0].split(":")[-1]
+
+    def test_a_count_with_no_titles_still_renders_the_count(self) -> None:
+        """A report carrying the count but no titles -- a stored run from
+        before this field existed -- must not crash or render an empty
+        casualty list; the count alone is still true."""
+        notice = _pre_judge_ceiling_notice(
+            ExtractionReport(retained=24, pre_judge_dropped=3)
+        )
+
+        assert notice is not None
+        assert "3 merged candidate(s) never reached the judge" in notice

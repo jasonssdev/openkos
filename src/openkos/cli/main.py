@@ -3519,11 +3519,24 @@ def _pre_judge_ceiling_notice(report: ExtractionReport) -> str | None:
     they simply never reached the judge."""
     if report.pre_judge_dropped <= 0:
         return None
-    return (
+    line = (
         "merged extraction union exceeded the 24-candidate pre-judge "
         f"ceiling; {report.pre_judge_dropped} merged candidate(s) never "
         "reached the judge"
     )
+    # #885: name what was cut, in the same shape every sibling notice uses.
+    # ADDITIVE -- the count and the ceiling explanation above are what an
+    # operator already reads to understand why extraction stopped short, and
+    # a stored run from before `pre_judge_dropped_titles` existed carries
+    # `()` here and still renders that half unchanged.
+    if not report.pre_judge_dropped_titles:
+        return line
+    shown = report.pre_judge_dropped_titles[:_CAP_NOTICE_TITLE_LIMIT]
+    remainder = len(report.pre_judge_dropped_titles) - len(shown)
+    listed = ", ".join(shown)
+    if remainder > 0:
+        listed = f"{listed} (+{remainder} more)"
+    return f"{line}: {listed}"
 
 
 def _wrong_language_notice(report: ExtractionReport) -> str | None:

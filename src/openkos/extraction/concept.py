@@ -2943,6 +2943,28 @@ class ExtractionReport:
     """Merged candidates cut by `_MAX_JUDGE_CANDIDATES` BEFORE the judge
     ever saw them -- distinct from `discarded_titles`, which is the FINAL
     backstop cap's casualty list. `0` on every non-union path."""
+    pre_judge_dropped_titles: tuple[str, ...] = ()
+    """Titles of the candidates `pre_judge_dropped` counts, in merged order
+    (#885).
+
+    Kept as a SEPARATE field rather than replacing the int: the count is
+    what `_pre_judge_ceiling_notice` has always reported and what stored
+    runs carry, and a stored run from before this field existed still
+    renders correctly with `()` here.
+
+    This field exists because the ceiling was the only drop in the pipeline
+    that reported a bare number. Every sibling names names --
+    `discarded_titles`, `judged_out_titles`, the wrong-language and
+    recombined gates -- and `cli/main._unevidenced_notice` states the reason
+    for the whole family: "The titles are load-bearing, not decoration. A
+    notice that only counted would leave the operator opening every derived
+    document to find the one." A cut the operator cannot name is a cut they
+    cannot check against the source.
+
+    Truncation is POSITIONAL (`merged[:_MAX_JUDGE_CANDIDATES]`) over a list
+    concatenated in window -- i.e. document -- order, so these titles are
+    the TAIL of the source. That is the substantive complaint in #885 and
+    naming them is what makes it observable; it is not a fix for it."""
     judge_failure_causes: tuple[str, ...] = ()
     """Why each FAILED judge attempt failed, in attempt order (#795).
 
@@ -3692,6 +3714,9 @@ def extract_concept_union(
     )
 
     pre_judge_dropped = max(0, len(merged) - _MAX_JUDGE_CANDIDATES)
+    pre_judge_dropped_titles = tuple(
+        result.title for result in merged[_MAX_JUDGE_CANDIDATES:]
+    )
     judge_input = merged[:_MAX_JUDGE_CANDIDATES]
 
     if not judge_input:
@@ -3893,6 +3918,7 @@ def extract_concept_union(
             judge_status=judge_status,
             judged_out_titles=judged_out_titles,
             pre_judge_dropped=pre_judge_dropped,
+            pre_judge_dropped_titles=pre_judge_dropped_titles,
             reask_runs=reask_runs,
             reask_added_titles=reask_added_titles,
             sole_object_restates_source=_sole_object_restates_source(
