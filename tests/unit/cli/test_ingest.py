@@ -2208,6 +2208,12 @@ def test_ingest_pre_judge_ceiling_drop_is_reported_on_stderr(
     assert len(ceiling_lines) == 1
     assert "24-candidate" in ceiling_lines[0]
     assert "1 merged candidate(s) never reached the judge" in ceiling_lines[0]
+    # #885: the notice NAMES what it cut, end to end -- not just a count.
+    # "Subject 25" is the 25th of 25 distinct candidates, so this also pins
+    # that the cut is POSITIONAL (`merged[:_MAX_JUDGE_CANDIDATES]` over a
+    # list concatenated in window order): the tail is what goes, and an
+    # implementation that dropped some other candidate would name it here.
+    assert "Subject 25" in ceiling_lines[0]
     for other_notice_marker in ("cap reached", "judge dropped", "judge selection"):
         assert other_notice_marker not in ceiling_lines[0]
 
