@@ -14,6 +14,29 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+### Documentation
+
+- The docs that 0.2.11's own release pass missed. `docs/architecture.md` still
+  said the derived layer is **four** SQLite files — the same
+  `insight_questions.db` omission the release fixed in `docs/tech_stack.md` and
+  `docs/testing.md` and did not carry across. It now names all five and states
+  each store's restore cost, which is the property `purge`'s disclosure exists
+  to price: three that a rebuild restores in full, one whose rows cost a model
+  call each and are never rebuilt, and one that is free to lose.
+- `docs/user-journey.md` catches up with the two 0.2.11 changes a reader meets
+  at the `query` step and nowhere else in that document: the prompt is now
+  bounded to the context window, with **excerpted** documents cited carrying a
+  trailing `[partial]` and **omitted** documents not cited at all
+  ([#882](https://github.com/jasonssdev/openkos/issues/882)); and the dense half
+  of hybrid retrieval reads whole documents rather than their first chunk
+  ([#888](https://github.com/jasonssdev/openkos/issues/888)).
+- The README tells an existing workspace what upgrading costs: one `openkos
+  reindex`, because #888's store cannot be migrated in place and is dropped and
+  recreated on open. Nothing under `bundle/` is touched.
+- `AGENTS.md` no longer opens its build guidance with "MVP 1 — start here", a
+  scaffolding instruction for a slice that shipped two arcs ago. It now points
+  new work at the shipped surface and at what MVP 3 still owes.
+
 ## [0.2.11] - 2026-08-27
 
 Nine commits since v0.2.10, and the shape of the release is one theme: a

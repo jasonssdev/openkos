@@ -61,9 +61,11 @@ Write it while the forces are still fresh — when the change's design settles t
 
 **Spec = what, ADR = why.** They are not duplicates but opposite mechanisms. A spec is a *living* document — archive merges each change's deltas (ADDED / MODIFIED / REMOVED / RENAMED) into `openspec/specs/{domain}/spec.md`, so it is rewritten over time and always describes the present. An ADR is *immutable* once accepted and project-wide, so the log preserves the past. "Ingest MUST copy the source into `raw/` preserving the original" is a spec; "we adopt SQLite + FTS5 over a vector store because local-first and reconstructible" is an ADR. A decision belonging to no single change — "the core does not use LangChain" — has no home in `openspec/` at all: it is an ADR, or a principle above.
 
-## MVP 1 — start here
+## Where the work is now
 
-Build the thinnest vertical slice first: `openkos init` → create the workspace (`raw/`, `bundle/`, `openkos.yaml`, `AGENTS.md`) → `openkos ingest <path>` → copy the source into `raw/` → compile it with the local model into one or more OKF concept documents (with provenance + freshness) → update `index.md` and `log.md`. Lexical retrieval (FTS5) and a cited `query` come next. No graph, no vectors, no reconcile yet. Aim for the shape in `examples/good-life-demo/`.
+MVP 1 and MVP 2 have shipped, so this is no longer a greenfield build order. The vertical slice MVP 1 was scoped as — `openkos init` → create the workspace (`raw/`, `bundle/`, `openkos.yaml`, `AGENTS.md`) → `openkos ingest <path>` → copy the source into `raw/` → compile it with the local model into one or more OKF concept documents (with provenance + freshness) → update `index.md` and `log.md` — exists, along with hybrid retrieval, the typed graph, entity resolution and merge, contradiction detection, and the forget/purge lifecycle. `examples/good-life-demo/` is still the reference shape for what `ingest` produces, and the conformance fixture.
+
+New work therefore starts from the shipped surface, not from a scaffold: read `docs/cli.md` for what each verb already does, `docs/roadmap.md` for what MVP 3 (`api`, `mcp`, `memory`, full OKF import/export) still owes, and the open issues for what is actually queued. A change that re-describes existing behavior as new is the failure mode to avoid.
 
 ## Do not
 
