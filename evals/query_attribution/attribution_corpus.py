@@ -16,6 +16,20 @@ decisions, same concept structure. Each bundle is queried only in its own
 language, so an attribution-rate difference between the `es` and `en` arms
 is attributable to the answer's language rather than to content.
 
+A third axis crosses both (#887): `context`, the SIZE of the retrieved
+`Source` documents. The `small` rung is the corpus above unchanged -- 14
+documents, median 170 chars, max 1,656 -- and the `large` rung replaces its
+three `sources/*` bodies, and only those, with the full-length transcripts of
+the SAME meetings in `attribution_large_sources`. The concepts and decisions
+are byte-identical across rungs, so every question stays grounded in both and
+a rate difference between rungs is attributable to document size.
+
+That axis exists because the wild #887 failure retrieved two 55,403- and
+57,116-char `Source` documents -- 33x this corpus's largest -- and the probe
+had never entered that regime. Post-#882 those documents are excerpted rather
+than overflowed, so the regime the large rung reproduces is a THIN, ELIDED
+excerpt of a big document, not a prompt over the window.
+
 Two question regimes per language, mirrored one-to-one:
 
 - `short` -- pointed factual questions, the regime the stored
@@ -34,6 +48,7 @@ from __future__ import annotations
 
 from typing import Final
 
+from attribution_large_sources import LARGE_SOURCES_BY_LANGUAGE
 from grounding_corpus import DOCS as ES_DOCS
 
 EN_DOCS: Final[dict[str, tuple[str, str]]] = {
@@ -173,6 +188,58 @@ DOCS_BY_LANGUAGE: Final[dict[str, dict[str, tuple[str, str]]]] = {
 
 LANGUAGES: Final[tuple[str, ...]] = ("es", "en")
 REGIMES: Final[tuple[str, ...]] = ("short", "long")
+CONTEXTS: Final[tuple[str, ...]] = ("small", "large")
+"""The #887 axis. `small` is the original corpus; `large` swaps in
+full-length `Source` transcripts of the same meetings."""
+
+
+def _with_large_sources(language: str) -> dict[str, tuple[str, str]]:
+    """`language`'s corpus with its `sources/*` bodies replaced by the
+    full-length transcripts, and everything else untouched.
+
+    Replaces by ID rather than rebuilding the dict from the large half, so a
+    large transcript filed under an id the small rung does not have -- a
+    typo, a renamed meeting -- raises here instead of quietly adding a
+    fourteenth document to one rung and shifting what retrieval competes
+    over."""
+    docs = dict(DOCS_BY_LANGUAGE[language])
+    for doc_id, (title, body) in LARGE_SOURCES_BY_LANGUAGE[language].items():
+        if doc_id not in docs:
+            raise KeyError(
+                f"large source {doc_id!r} has no small-rung counterpart in "
+                f"{language!r}: the two rungs would hold different documents"
+            )
+        docs[doc_id] = (title, body)
+    return docs
+
+
+DECISIVE_ANCHORS: Final[dict[str, dict[str, str]]] = {
+    "es": {
+        "sources/reunion-01-trazabilidad": (
+            "el bundle de archivos es la fuente canónica"
+        ),
+        "sources/reunion-02-ingesta": (
+            "Bruno queda como responsable de la migración del corpus antiguo"
+        ),
+        "sources/reunion-03-privacidad": (
+            "el borrado barre también los snapshots de fusión"
+        ),
+    },
+    "en": {
+        "sources/meeting-01-traceability": "the file bundle is the canonical source",
+        "sources/meeting-02-ingestion": (
+            "Bruno is assigned as the owner of the old corpus migration"
+        ),
+        "sources/meeting-03-privacy": "deletion also sweeps the merge snapshots",
+    },
+}
+"""One phrase per large transcript that the excerpt MUST still carry.
+
+The control described in `attribution_large_sources`, made checkable. Each
+phrase sits in that document's closing recap, which `bounded_text` keeps
+because it always picks the last window. If an edit pushes a recap out of
+the final window the anchor stops surviving, `--self-test` fails, and the
+paid sweep is not spent measuring refusals under the name of attribution."""
 
 _SHORT_ES: Final[tuple[str, ...]] = (
     "¿qué se decidió sobre el historial de decisiones?",
@@ -229,3 +296,13 @@ QUESTIONS: Final[dict[tuple[str, str], tuple[str, ...]]] = {
 """Keyed by `(language, regime)`. The four cells are the probe's arms; the
 runner's `--self-test` asserts the mirroring (same count per regime across
 languages) so a cell cannot silently shrink."""
+
+
+DOCS_BY_CONTEXT_LANGUAGE: Final[dict[str, dict[str, dict[str, tuple[str, str]]]]] = {
+    "small": {language: DOCS_BY_LANGUAGE[language] for language in LANGUAGES},
+    "large": {language: _with_large_sources(language) for language in LANGUAGES},
+}
+"""Keyed by `[context][language]`. The four bundles the runner materializes.
+
+`small` is the exact dict the pre-#887 probe measured, so the small cells of
+a new sweep are directly comparable with the stored 2026-08-25 runs."""
