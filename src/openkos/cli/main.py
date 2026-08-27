@@ -3995,7 +3995,7 @@ def _stage_derived_objects(
     include_confidential: bool = False,
     union_judge: bool = False,
 ) -> tuple[
-    list[_DerivedPlan], okf.ExtractionStatus | None, okf.ExtractionNotice | None
+    list[_DerivedPlan], okf.ExtractionStatus | None, tuple[okf.ExtractionNotice, ...]
 ]:
     """Attempt LLM extraction of zero or more distinct derived objects from
     the source's decoded text, and stage each validated candidate for Phase
@@ -4125,7 +4125,7 @@ def _stage_derived_objects(
             "openkos ingest: source has no extractable text; keeping the Source only.",
             err=True,
         )
-        return [], "no-extractable-text", None
+        return [], "no-extractable-text", ()
 
     if not include_confidential and blocks_llm_send(workspace_floor):
         typer.echo(
@@ -4136,7 +4136,7 @@ def _stage_derived_objects(
             "`llm.chat`, not embeddings.",
             err=True,
         )
-        return [], "blocked-by-sensitivity", None
+        return [], "blocked-by-sensitivity", ()
 
     extractor = extract_concept_union if union_judge else extract_concept
     try:
@@ -4196,7 +4196,7 @@ def _stage_derived_objects(
                 "concurrent_extraction: false in openkos.yaml.",
                 err=True,
             )
-        return [], "failed", None
+        return [], "failed", ()
 
     extractions = outcome.objects
     # #618 renders FIRST: the wrong-language gate runs on the merged
@@ -4323,25 +4323,32 @@ def _stage_derived_objects(
     # is; this one presupposes objects WERE written and discloses a quality
     # defect in some of them, which no re-run is promised to fix.
     #
-    # Stated honestly, because the key holds one value: a Source hitting
-    # more than one condition persists only the highest-precedence token,
-    # so its `objects-without-evidence` disclosure does not reach `lint`
-    # on that run. Nothing is silently dropped -- the stderr echoes above
-    # are unconditional and name every condition that fired -- but the
-    # persisted marker is a single slot, and this is which claim wins it.
-    # This resolution is PRE-staging; #843's staging-loss override runs
-    # after the loop below and re-ranks everything except the judge pair.
-    extraction_notice: okf.ExtractionNotice | None
+    # #884: EVERY condition that fired is recorded, not just the strongest.
+    # This block used to be an `elif` ladder resolving a single-slot key,
+    # and its own comment stated the cost honestly: "a Source hitting more
+    # than one condition persists only the highest-precedence token, so its
+    # `objects-without-evidence` disclosure does not reach `lint` on that
+    # run." The stderr echoes named every condition, but stderr is not the
+    # audit surface -- `lint` is, and it read the one surviving token.
+    #
+    # `lint` could not paper over that from its side either: the masked
+    # token is destroyed HERE, at write time, so by the time `lint` reads
+    # the document there is nothing left to disclose. Recording every
+    # condition is the only place the fix can live.
+    #
+    # The judge pair stays mutually exclusive -- `failed` and `empty` are
+    # two values of ONE field and cannot both be true. The rest are
+    # independent conditions and are appended independently. Order is
+    # detection order, kept stable so two runs over identical bytes agree.
+    notices: list[okf.ExtractionNotice] = []
     if outcome.report.judge_status == "failed":
-        extraction_notice = okf.EXTRACTION_NOTICE_JUDGE_UNAVAILABLE
+        notices.append(okf.EXTRACTION_NOTICE_JUDGE_UNAVAILABLE)
     elif outcome.report.judge_status == "empty":
-        extraction_notice = okf.EXTRACTION_NOTICE_JUDGE_EMPTY
-    elif outcome.report.sole_object_restates_source:
-        extraction_notice = okf.EXTRACTION_NOTICE_SOLE_OBJECT_RESTATES
-    elif outcome.report.unevidenced_titles:
-        extraction_notice = okf.EXTRACTION_NOTICE_OBJECTS_WITHOUT_EVIDENCE
-    else:
-        extraction_notice = None
+        notices.append(okf.EXTRACTION_NOTICE_JUDGE_EMPTY)
+    if outcome.report.sole_object_restates_source:
+        notices.append(okf.EXTRACTION_NOTICE_SOLE_OBJECT_RESTATES)
+    if outcome.report.unevidenced_titles:
+        notices.append(okf.EXTRACTION_NOTICE_OBJECTS_WITHOUT_EVIDENCE)
     sole_object_notice = _sole_object_notice(outcome.report)
     if sole_object_notice is not None:
         typer.echo(f"openkos ingest: {sole_object_notice}", err=True)
@@ -4352,15 +4359,31 @@ def _stage_derived_objects(
             "keeping the Source only.",
             err=True,
         )
-        return [], "no-concepts-found", None
+        return [], "no-concepts-found", ()
 
     plans: list[_DerivedPlan] = []
     seen_slugs: set[str] = set()
-    # #843: the three staging drops that LOSE content -- empty slug,
-    # in-batch collision, failed build. The create-only skip below is
-    # deliberately not counted: the slug this same source already owns is
-    # on disk, put there by an earlier run, so the bundle still represents
-    # the source and a marker would report a loss that never happened.
+    # #843: the staging drops that LOSE content -- empty slug, failed
+    # build. The create-only skip below is deliberately not counted: the
+    # slug this same source already owns is on disk, put there by an
+    # earlier run, so the bundle still represents the source and a marker
+    # would report a loss that never happened.
+    #
+    # #884 applies that same reasoning to the IN-BATCH collision, which
+    # used to be counted here. When two candidates of one run slugify
+    # alike, the FIRST was already staged -- the content is on disk and the
+    # bundle represents the source, exactly as in the create-only case. The
+    # per-candidate stderr echo still names the skip; what it no longer
+    # does is stamp a loss marker whose prescribed remedy (`--re-extract`)
+    # would deterministically reproduce the same collision, leaving debt no
+    # command can clear.
+    #
+    # Residual, stated rather than hidden: two GENUINELY different titles
+    # can slugify alike, and that case does lose content. It is not
+    # distinguishable from the benign one at this seam, and #884 chose the
+    # marker that is wrong less often -- a false loss report on every
+    # duplicate-title run, versus a missed one on the rarer collision of
+    # distinct titles.
     lost_in_staging = 0
     for extraction in extractions:
         derived_slug = _slugify(extraction.title)
@@ -4374,13 +4397,14 @@ def _stage_derived_objects(
             continue
 
         if derived_slug in seen_slugs:
+            # NOT counted as a staging loss (#884) -- see the comment on
+            # `lost_in_staging` above.
             typer.echo(
                 f"openkos ingest: duplicate slug '{derived_slug}' within "
                 "this extraction batch; keeping the first, skipping this "
                 "candidate.",
                 err=True,
             )
-            lost_in_staging += 1
             continue
 
         # An LLM-extracted title carrying a markdown link delimiter (`[`/`]`)
@@ -4489,11 +4513,14 @@ def _stage_derived_objects(
     # sole-object token would disclose a stored object that does not
     # exist.) The per-candidate stderr echoes above stay unconditional;
     # only the persisted slot collapses to one.
-    if lost_in_staging and extraction_notice not in (
-        okf.EXTRACTION_NOTICE_JUDGE_UNAVAILABLE,
-        okf.EXTRACTION_NOTICE_JUDGE_EMPTY,
-    ):
-        extraction_notice = okf.EXTRACTION_NOTICE_CANDIDATES_DROPPED
+    if lost_in_staging:
+        # #884: APPENDED, never substituted. The old form replaced whatever
+        # the pre-staging block had chosen -- unless a judge token held the
+        # slot -- so a run that both lost a candidate in staging AND stored
+        # objects with no quoted line reached `lint` claiming only the
+        # first. Both are true; both are now recorded, and the judge-pair
+        # exclusion is gone with the precedence it existed to express.
+        notices.append(okf.EXTRACTION_NOTICE_CANDIDATES_DROPPED)
         typer.echo(
             f"openkos ingest: {lost_in_staging} extracted candidate(s) "
             "could not be staged and were dropped; marking the Source "
@@ -4501,7 +4528,7 @@ def _stage_derived_objects(
             err=True,
         )
 
-    return plans, None, extraction_notice
+    return plans, None, tuple(notices)
 
 
 def _resolve_local_exemption(client: OllamaClient, cfg: config.Config) -> bool:
@@ -4793,8 +4820,8 @@ class _SingleIngestOutcome:
     `_echo_type_floor_summary`, mirroring the `alternative_pairs`/
     `_echo_type_alternative_summary` precedent exactly."""
 
-    extraction_notice: okf.ExtractionNotice | None = None
-    """The `extraction_notice` token the Source CARRIES now that this run
+    extraction_notice: tuple[okf.ExtractionNotice, ...] = ()
+    """Every `extraction_notice` token the Source CARRIES now that this run
     has finished, or `None` -- carried so `_ingest_batch`'s summary can
     tally it (issue #805, item 1).
 
@@ -5284,7 +5311,12 @@ def _ingest_batch(
         derived_total += outcome.derived_count
         alternative_pairs.extend(outcome.alternative_pairs)
         type_floor_pairs.extend(outcome.type_floor_pairs)
-        if outcome.extraction_notice is not None:
+        if outcome.extraction_notice:
+            # #884: ONE count per FILE, however many conditions it carries.
+            # The term measures files, which is what an operator reads it
+            # as, so a Source disclosing two conditions must not inflate it
+            # to two. `lint` is the surface that enumerates every condition.
+            #
             # Counts EVERY member of `okf.ExtractionNotice`, not just the
             # two judge tokens -- see the summary's own docstring block
             # below for why this is deliberately a WIDER set than `lint`'s
@@ -5517,15 +5549,24 @@ def _extraction_retry_due(metadata: Mapping[str, object]) -> bool:
     names `--re-extract` instead of a bare re-ingest."""
     if metadata.get(okf.EXTRACTION_STATUS_KEY) == okf.EXTRACTION_STATUS_FAILED:
         return True
-    return metadata.get(okf.EXTRACTION_NOTICE_KEY) in (
-        okf.EXTRACTION_NOTICE_JUDGE_UNAVAILABLE,
-        okf.EXTRACTION_NOTICE_JUDGE_EMPTY,
+    # #884: MEMBERSHIP over every recorded token, not equality against the
+    # whole value. The key can now hold several conditions, and a run whose
+    # judge failed AND that lost a candidate in staging is still
+    # retry-worthy for the judge half -- an equality test would have read
+    # the multi-token value as "no judge token" and silently stopped
+    # offering the retry.
+    return bool(
+        {
+            okf.EXTRACTION_NOTICE_JUDGE_UNAVAILABLE,
+            okf.EXTRACTION_NOTICE_JUDGE_EMPTY,
+        }
+        & set(okf.extraction_notices(metadata))
     )
 
 
 def _carried_extraction_notice(
     metadata: Mapping[str, object],
-) -> okf.ExtractionNotice | None:
+) -> tuple[okf.ExtractionNotice, ...]:
     """The `extraction_notice` a Source's frontmatter CARRIES, narrowed to
     the closed vocabulary (`okf.EXTRACTION_NOTICE_VALUES`) by matching a
     member rather than casting -- so the returned value is one this build
@@ -5542,11 +5583,7 @@ def _carried_extraction_notice(
     The one caller is #773's convergence short-circuit, which needs the
     PRIOR run's token because the summary term counts what a Source carries
     when the run ends, not what the run stamped (#805, item 1)."""
-    value = metadata.get(okf.EXTRACTION_NOTICE_KEY)
-    for token in okf.EXTRACTION_NOTICE_VALUES:
-        if value == token:
-            return token
-    return None
+    return okf.extraction_notices(metadata)
 
 
 def _ingest_single(
@@ -5931,7 +5968,7 @@ def _ingest_single(
 
         def _build_source_document(
             extraction_status: okf.ExtractionStatus | None,
-            extraction_notice: okf.ExtractionNotice | None = None,
+            extraction_notice: tuple[okf.ExtractionNotice, ...] = (),
         ) -> str:
             """Bound immediately before the first build (design: "The
             ordering conflict"). Builds the Source document from-scratch
@@ -5995,7 +6032,7 @@ def _ingest_single(
             include_confidential=include_confidential,
             union_judge=cfg.union_judge,
         )
-        if skip_reason is not None or extraction_notice is not None:
+        if skip_reason is not None or extraction_notice:
             # Re-render from scratch with whichever marker was discovered
             # stamped in (design: "The ordering conflict", conditional
             # re-render) -- never patch the already-built bytes, and never

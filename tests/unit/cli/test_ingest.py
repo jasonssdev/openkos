@@ -1628,7 +1628,7 @@ def test_ingest_judge_failure_quarantines_the_source_with_extraction_notice(
         encoding="utf-8"
     )
     metadata, _ = okf.load_frontmatter(source_text)
-    assert metadata["extraction_notice"] == "judge-selection-unavailable"
+    assert "judge-selection-unavailable" in okf.extraction_notices(metadata)
     assert "extraction_status" not in metadata
     assert "marking the Source (extraction_notice: " in result.stderr
 
@@ -1654,7 +1654,7 @@ def test_ingest_judge_empty_admission_quarantines_with_the_empty_token(
         encoding="utf-8"
     )
     metadata, _ = okf.load_frontmatter(source_text)
-    assert metadata["extraction_notice"] == "judge-selection-empty"
+    assert "judge-selection-empty" in okf.extraction_notices(metadata)
 
 
 _HELIOS_NOTES = (
@@ -1729,7 +1729,7 @@ def test_ingest_marks_a_source_whose_object_quotes_nothing(
     metadata, _ = okf.load_frontmatter(
         (tmp_path / "bundle" / "sources" / "notes.md").read_text(encoding="utf-8")
     )
-    assert metadata["extraction_notice"] == "objects-without-evidence"
+    assert "objects-without-evidence" in okf.extraction_notices(metadata)
     # The object is kept, not dropped -- that is the decision.
     assert (
         tmp_path / "bundle" / "decisions" / "schema-migration-ownership-decision.md"
@@ -1816,7 +1816,7 @@ def test_ingest_stamps_no_evidence_notice_when_every_object_quotes(
     assert "no line quoted from the source" not in result.stderr
 
 
-def test_a_judge_degrade_outranks_the_evidence_notice_on_the_source(
+def test_a_judge_degrade_is_recorded_beside_the_evidence_notice(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Precedence, #801: a run that BOTH lost its judge and stored an
@@ -1844,7 +1844,14 @@ def test_a_judge_degrade_outranks_the_evidence_notice_on_the_source(
     metadata, _ = okf.load_frontmatter(
         (tmp_path / "bundle" / "sources" / "notes.md").read_text(encoding="utf-8")
     )
-    assert metadata["extraction_notice"] == "judge-selection-unavailable"
+    # #884: BOTH conditions are recorded, not just the winner of a
+    # single slot. This test was named "outranks" and pinned the judge
+    # token displacing the evidence disclosure, which then never reached
+    # `lint` -- the audit surface, as opposed to stderr.
+    assert okf.extraction_notices(metadata) == (
+        "judge-selection-unavailable",
+        "objects-without-evidence",
+    )
     # Both conditions are still reported to the operator.
     assert "no line quoted from the source" in result.stderr
     assert "Schema Migration Ownership Decision" in result.stderr
@@ -2020,7 +2027,7 @@ def test_reingest_of_quarantined_source_retries_and_self_clears(
     assert result.exit_code == 0
     source_path = tmp_path / "bundle" / "sources" / "notes.md"
     metadata, _ = okf.load_frontmatter(source_path.read_text(encoding="utf-8"))
-    assert metadata["extraction_notice"] == "judge-selection-unavailable"
+    assert "judge-selection-unavailable" in okf.extraction_notices(metadata)
 
     fake = _patch_sequenced_llm(
         monkeypatch,
@@ -4187,7 +4194,7 @@ def test_sole_candidate_lost_in_staging_marks_the_source(
         encoding="utf-8"
     )
     metadata, _ = okf.load_frontmatter(source_text)
-    assert metadata["extraction_notice"] == "candidates-dropped-in-staging"
+    assert "candidates-dropped-in-staging" in okf.extraction_notices(metadata)
     assert "extraction_status" not in metadata
     assert (
         "marking the Source (extraction_notice: candidates-dropped-in-staging)"
@@ -4226,7 +4233,7 @@ def test_partial_staging_loss_marks_the_source_beside_written_objects(
         encoding="utf-8"
     )
     metadata, _ = okf.load_frontmatter(source_text)
-    assert metadata["extraction_notice"] == "candidates-dropped-in-staging"
+    assert "candidates-dropped-in-staging" in okf.extraction_notices(metadata)
     assert "could not be turned into a slug" in result.stderr
 
 
@@ -4256,7 +4263,7 @@ def test_create_only_reingest_drop_writes_no_staging_marker(
     assert "extraction_status" not in metadata
 
 
-def test_judge_degrade_outranks_the_staging_drop_marker(
+def test_judge_degrade_is_recorded_beside_the_staging_drop_marker(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """#843 precedence, upper bound: the key holds one value, and the two
@@ -4280,17 +4287,26 @@ def test_judge_degrade_outranks_the_staging_drop_marker(
         encoding="utf-8"
     )
     metadata, _ = okf.load_frontmatter(source_text)
-    assert metadata["extraction_notice"] == "judge-selection-unavailable"
+    assert "judge-selection-unavailable" in okf.extraction_notices(metadata)
 
 
-def test_staging_drop_outranks_the_unevidenced_marker(
+def test_staging_drop_is_recorded_beside_the_unevidenced_marker(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """#843 precedence, lower bound: a staging drop means the bundle LACKS
-    content the run extracted, while #801's token discloses a quality
-    defect in objects that were stored -- the absence outranks the defect
-    when both fire. The stderr echoes still name every condition; only the
-    persisted slot collapses to one."""
+    """#884: a staging drop and an evidence defect are BOTH recorded when
+    both fire.
+
+    #843 made this a precedence contest -- the absence of content outranked
+    the quality defect and the persisted slot collapsed to one. The stderr
+    echoes named every condition, but stderr is not the audit surface;
+    `lint` is, and it read the one surviving token, so
+    `Unevidenced objects:` silently omitted this Source. `lint` could not
+    disclose the masking from its side either, because the token was
+    destroyed at write time.
+
+    Precedence did not disappear -- it moved to where it belongs, as a
+    PRESENTATION rule in the batch summary, which still counts this file
+    once."""
     _init_workspace(tmp_path, monkeypatch)
     reply = _multi_object_reply(_concept_reply(), _person_reply(title="!!!"))
     _patch_sequenced_llm(
@@ -4308,7 +4324,10 @@ def test_staging_drop_outranks_the_unevidenced_marker(
         encoding="utf-8"
     )
     metadata, _ = okf.load_frontmatter(source_text)
-    assert metadata["extraction_notice"] == "candidates-dropped-in-staging"
+    assert okf.extraction_notices(metadata) == (
+        "objects-without-evidence",
+        "candidates-dropped-in-staging",
+    )
 
 
 def test_reingest_with_staging_marker_skips_extraction(
@@ -4339,17 +4358,25 @@ def test_reingest_with_staging_marker_skips_extraction(
     assert source_path.read_bytes() == before
 
 
-def test_stage_derived_objects_counts_collision_and_build_failure_drops(
+def test_stage_derived_objects_counts_the_build_failure_but_not_the_collision(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """#843: each of the three content-losing paths feeds the SAME counter
-    -- this pins the two the CLI-level tests above reach only under a
-    judge degrade (in-batch collision) or not at all (build failure), so
-    dropping either `lost_in_staging += 1` fails a test. The aggregate
-    marking line carries the real count, and the create-only exclusion is
-    proven by the sibling CLI test, not here."""
+    """#884: an in-batch slug collision is SKIPPED but NOT counted as a
+    staging loss; a failed build still is.
+
+    #843 originally fed all three content-losing paths into one counter.
+    The collision does not belong there, for the reason the create-only
+    skip was already excluded: when two candidates of one run slugify
+    alike, the FIRST was already staged, so the content is on disk and the
+    bundle represents the source -- a marker would report a loss that never
+    happened. It also left debt no command could clear, since the remedy
+    that marker prescribes (`--re-extract`) reproduces the same collision.
+
+    Both stderr echoes still fire: the operator is told about the skipped
+    duplicate, which is a fact, without the Source being stamped with a
+    loss claim that is not."""
     _init_workspace(tmp_path, monkeypatch)
     cfg = config.read_config(tmp_path)
     reply = _multi_object_reply(
@@ -4374,11 +4401,19 @@ def test_stage_derived_objects_counts_collision_and_build_failure_drops(
     assert len(plans) == 1
     assert plans[0].slug == "stoic-practice"
     assert skip_reason is None
-    assert notice == "candidates-dropped-in-staging"
+    # The build failure alone earns the STAGING marker -- one loss, not
+    # two. `objects-without-evidence` rides alongside it because these
+    # fixture objects quote nothing, and #884 is exactly why both survive:
+    # before it, the staging token overwrote the evidence one and `lint`
+    # never saw the second condition this run genuinely tripped.
+    assert notice == (
+        "objects-without-evidence",
+        "candidates-dropped-in-staging",
+    )
     err = capsys.readouterr().err
     assert "duplicate slug" in err
     assert "failed validation" in err
-    assert "2 extracted candidate(s) could not be staged" in err
+    assert "1 extracted candidate(s) could not be staged" in err
 
 
 def test_reingest_reconciles_per_slug_skips_existing_inserts_new(
@@ -6684,7 +6719,7 @@ def test_batch_summary_counts_files_that_finished_with_an_extraction_notice(
     b_metadata, _ = okf.load_frontmatter(
         (tmp_path / "bundle" / "sources" / "b.md").read_text(encoding="utf-8")
     )
-    assert a_metadata["extraction_notice"] == "judge-selection-unavailable"
+    assert "judge-selection-unavailable" in okf.extraction_notices(a_metadata)
     assert "extraction_notice" not in b_metadata
     assert (
         "2 file(s): 2 ingested, 0 re-ingested, 0 skipped, 0 extraction-degraded, "
@@ -6749,7 +6784,7 @@ def test_batch_summary_counts_a_converged_reingest_that_still_carries_a_notice(
     assert first.exit_code == 0
     source_path = tmp_path / "bundle" / "sources" / "replica-lag.md"
     first_metadata, _ = okf.load_frontmatter(source_path.read_text(encoding="utf-8"))
-    assert first_metadata["extraction_notice"] == "sole-object-restates-source"
+    assert "sole-object-restates-source" in okf.extraction_notices(first_metadata)
     before = source_path.read_bytes()
 
     result = runner.invoke(app, ["ingest", "notes", "--auto"])
@@ -6767,7 +6802,9 @@ def test_batch_summary_counts_a_converged_reingest_that_still_carries_a_notice(
 
 def test_carried_extraction_notice_returns_every_vocabulary_member() -> None:
     """Issue #814, item 1, positive control: a Source carrying a token this
-    build knows is reported as that exact token.
+    build knows is reported as that exact token, now as a one-token tuple
+    (#884 -- the key went plural, and a legacy scalar reads back as the
+    one-element tuple a list of one would).
 
     Asserted over the WHOLE of `okf.EXTRACTION_NOTICE_VALUES` rather than
     one sample, so a token added to the vocabulary without a matching
@@ -6777,7 +6814,7 @@ def test_carried_extraction_notice_returns_every_vocabulary_member() -> None:
     for token in okf.EXTRACTION_NOTICE_VALUES:
         metadata = {okf.EXTRACTION_NOTICE_KEY: token}
 
-        assert main._carried_extraction_notice(metadata) == token
+        assert main._carried_extraction_notice(metadata) == (token,)
 
 
 def test_carried_extraction_notice_fails_closed_outside_the_vocabulary() -> None:
@@ -6786,7 +6823,7 @@ def test_carried_extraction_notice_fails_closed_outside_the_vocabulary() -> None
 
     Every test added with the helper feeds a RECOGNISED token via a real
     prior run, so the contract it states in prose -- an absent key and an
-    unrecognised value both narrow to `None` -- was never executed. The
+    unrecognised value both narrow to `()` (#884) -- was never executed. The
     reasoning matters and is worth pinning: frontmatter is hand-editable,
     and a Source written by a LATER release may carry a token this build
     cannot spell. Neither may crash a run that is otherwise writing
@@ -6796,17 +6833,29 @@ def test_carried_extraction_notice_fails_closed_outside_the_vocabulary() -> None
     The unknown-token case uses a plausible future spelling rather than
     junk, because that is the case the contract was written for: a real
     token from a newer release, not a typo."""
-    assert main._carried_extraction_notice({}) is None
+    assert main._carried_extraction_notice({}) == ()
     assert (
         main._carried_extraction_notice(
             {okf.EXTRACTION_NOTICE_KEY: "judge-selection-postponed"}
         )
-        is None
+        == ()
     )
+    # #884: an unknown token is dropped INDIVIDUALLY -- one unspellable
+    # member from a later release never discards its recognised siblings,
+    # which a whole-value reject would have done the moment the key went
+    # plural.
+    assert main._carried_extraction_notice(
+        {
+            okf.EXTRACTION_NOTICE_KEY: [
+                "judge-selection-postponed",
+                okf.EXTRACTION_NOTICE_OBJECTS_WITHOUT_EVIDENCE,
+            ]
+        }
+    ) == (okf.EXTRACTION_NOTICE_OBJECTS_WITHOUT_EVIDENCE,)
     # A non-string value cannot match a token either -- frontmatter is
     # hand-editable, so `extraction_notice: true` is a YAML boolean.
-    assert main._carried_extraction_notice({okf.EXTRACTION_NOTICE_KEY: True}) is None
-    assert main._carried_extraction_notice({okf.EXTRACTION_NOTICE_KEY: None}) is None
+    assert main._carried_extraction_notice({okf.EXTRACTION_NOTICE_KEY: True}) == ()
+    assert main._carried_extraction_notice({okf.EXTRACTION_NOTICE_KEY: None}) == ()
 
 
 def test_batch_summary_never_counts_one_file_under_both_notice_and_degraded(
@@ -6867,7 +6916,7 @@ def test_batch_summary_never_counts_one_file_under_both_notice_and_degraded(
     # a notice. Without this the summary assertion could pass on a batch
     # where neither condition occurred.
     assert "extraction_notice" not in a_metadata
-    assert b_metadata["extraction_notice"] == "judge-selection-unavailable"
+    assert "judge-selection-unavailable" in okf.extraction_notices(b_metadata)
     assert (
         "2 file(s): 2 ingested, 0 re-ingested, 0 skipped, 1 extraction-degraded, "
         "1 with extraction notice(s)." in result.stdout
@@ -7598,11 +7647,11 @@ def test_sole_object_restating_the_source_stamps_the_extraction_notice(
     assert (tmp_path / "bundle" / "concepts" / "replica-lag.md").is_file()
     concept_path = tmp_path / "bundle" / "sources" / "replica-lag.md"
     metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
-    assert metadata["extraction_notice"] == "sole-object-restates-source"
+    assert "sole-object-restates-source" in okf.extraction_notices(metadata)
     assert "extraction_status" not in metadata
 
 
-def test_a_sole_object_restating_the_source_outranks_the_evidence_notice(
+def test_a_sole_object_restating_the_source_is_recorded_beside_the_evidence(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Precedence, the OTHER adjacent pair (#801): a run whose sole
@@ -7648,7 +7697,7 @@ def test_a_sole_object_restating_the_source_outranks_the_evidence_notice(
     metadata, _ = okf.load_frontmatter(
         (tmp_path / "bundle" / "sources" / "replica-lag.md").read_text(encoding="utf-8")
     )
-    assert metadata["extraction_notice"] == "sole-object-restates-source"
+    assert "sole-object-restates-source" in okf.extraction_notices(metadata)
 
 
 def test_sole_object_restating_the_source_is_reported_on_stderr(
@@ -7739,7 +7788,7 @@ def test_reingest_clears_a_previous_extraction_notice(
     assert runner.invoke(app, ["ingest", "replica-lag.txt", "--auto"]).exit_code == 0
     concept_path = tmp_path / "bundle" / "sources" / "replica-lag.md"
     metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
-    assert metadata["extraction_notice"] == "sole-object-restates-source"
+    assert "sole-object-restates-source" in okf.extraction_notices(metadata)
 
     second = _concept_reply(title="Read-Your-Writes Consistency")
     both = f"[{twin[1:-1]}, {second[1:-1]}]"
@@ -8874,7 +8923,7 @@ def test_stage_derived_objects_degrades_when_a_concurrent_window_fails(
 
     assert plans == []
     assert skip_reason == "failed"
-    assert notice is None
+    assert notice == ()
     assert "keeping the Source only" in capsys.readouterr().err
 
 
