@@ -479,3 +479,130 @@ automated undo.
 - GIVEN a purge that has passed all six rails and begun the rewrite
 - WHEN the rewrite is in progress
 - THEN `purge` performs no further refusal check and offers no abort path
+
+### Requirement: Every Store Left Deleted Is Named, With Its Own Restore Cost
+
+`purge` deletes five derived stores and rebuilds two, so `vectors.db`,
+`findings.db` and `insight_questions.db` are all left deleted. The success
+output MUST name EVERY store left deleted and state what restoring it
+costs. It MUST NOT name the stores it rebuilds in-line, which would send an
+operator to restore something already back.
+
+The disclosure MUST derive its list, and its count, from the same structure
+the delete path and the sidecar sweep use, with each store's cost carried
+BESIDE its path rather than in a separate table keyed on filename — so a
+store added to the delete set cannot be omitted from the disclosure, arrive
+with no cost, or disagree with the stated count.
+
+A store MUST be reported as dropped only when it is ACTUALLY gone. `unlink`
+failures are warned about rather than raised, so a notice built from the
+intended list would announce a store as dropped while it is still on disk,
+sending the operator to pay for a restore of something they still have. That drift is what produced the
+defect: the delete loop grew from two stores to five while the warning kept
+naming one, and two stores holding paid-for model work were destroyed in
+silence — in the reported session, 11 persisted contradiction verdicts, 9
+edge suggestions and 7 identity adjudications, minutes after
+`contradictions` reported `11 of 11 candidate(s) served from persisted
+findings; 0 judged fresh`.
+
+The costs MUST be stated per store, because one shared "run `openkos
+reindex`" line misprices two of the three:
+
+- `vectors.db` — a full re-embed, under the Deferred-Reembed requirement
+  above, which continues to govern its wording.
+- `findings.db` — persisted contradiction verdicts, identity adjudications
+  and edge-typing suggestions. Each is recomputable only by paying its model
+  call again on the next `contradictions`, `adjudicate` or
+  `suggest-relations` run. `openkos reindex` restores none of them.
+- `insight_questions.db` — cached question embeddings for `query --save`'s
+  near-duplicate scan. Free, and nothing needs to be run: a miss re-embeds
+  on the next save.
+
+The notice MUST also state what happens to the operator's own rulings, and
+the statement MUST be QUALIFIED. All three `findings.db` tenants hold
+MACHINE-computed verdicts, while a `--decline` or `--keep-distinct` ruling
+is written under the bundle's decision subtree and committed with the
+bundle, so a ruling on a concept OUTSIDE the purge set is untouched by the
+store drop. A ruling that named a purge-set member is expunged in the same
+rewrite pass, per the Whole-History Expunge requirement above, and the
+notice MUST say so: an unqualified promise that rulings survive would read
+as the erasure having missed something.
+
+An operator who read that `findings.db` was destroyed and inferred their
+rulings went with it would re-enter decisions that are still on disk.
+
+#### Scenario: The notice names all three dropped stores
+
+- GIVEN a successful purge
+- WHEN the command prints its success output
+- THEN the output names `vectors.db`, `findings.db` and
+  `insight_questions.db`
+
+#### Scenario: The notice does not name the rebuilt stores
+
+- GIVEN a successful purge that rebuilt the lexical and graph indexes
+- WHEN the command prints its success output
+- THEN the output names neither `fts.db` nor `graph.db`
+
+#### Scenario: Each dropped store carries its own cost
+
+- GIVEN a successful purge
+- WHEN the notice is inspected
+- THEN the vectors line instructs an `openkos reindex`, the findings line
+  names the verbs that must re-judge, and the question-cache line states
+  that restoring it is free
+
+#### Scenario: Operator rulings are reported as surviving, with the limit named
+
+- GIVEN a workspace holding a recorded `--keep-distinct` ruling on a concept
+  outside the purge set
+- WHEN a purge completes
+- THEN the ruling is still readable from the bundle, and the notice states
+  that a ruling outside the purge set survives while one naming a purged
+  concept was expunged with it
+
+#### Scenario: A store whose delete failed is not reported as dropped
+
+- GIVEN a purge in which one dropped store's `unlink` raises
+- WHEN the notice is printed
+- THEN that store is absent from the list, and the stated count matches the
+  stores actually gone
+
+### Requirement: Dropped Stores Leave No Orphan Sidecars
+
+For each store `purge` leaves deleted, it MUST also remove that store's
+`-wal` and `-shm` sidecars. It MUST NOT remove the sidecars of a store it
+rebuilds in-line, which belong to a live database.
+
+This is hygiene, not erasure, and MUST NOT be described as erasure: the WAL
+measured in the reported run was 0 bytes, so no data residue survived in it.
+What survived was a sidecar pair with no database, which makes the engine
+cache directory misreport what still exists.
+
+#### Scenario: A dropped store's sidecars go with it
+
+- GIVEN a workspace whose dropped stores each have `-wal`/`-shm` sidecars
+- WHEN a purge completes
+- THEN neither sidecar remains for any dropped store
+
+#### Scenario: The sweep is scoped to the dropped stores
+
+- GIVEN the same workspace
+- WHEN a purge completes
+- THEN the sidecar sweep ran for the dropped stores and for no other store
+
+A rebuilt store's `-wal`/`-shm` are NOT asserted to survive: the rebuild
+reopens each store in WAL mode and SQLite removes its own sidecars on a
+clean close, so their absence afterwards says nothing about `purge`. What
+must hold is that `purge`'s own sweep never reaches them.
+
+#### Scenario: A store whose delete failed keeps its sidecars
+
+- GIVEN a purge in which one dropped store's `unlink` raises
+- WHEN the purge completes
+- THEN that store's `-wal` and `-shm` are still present
+
+A sidecar sweep over a store that is still on disk is worse than leaving
+litter: a `-wal` holds committed pages not yet checkpointed back, so
+removing it out from under a live database can destroy data the purge was
+never asked to touch.
