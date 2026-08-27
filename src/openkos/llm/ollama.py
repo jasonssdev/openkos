@@ -522,6 +522,28 @@ class OllamaClient:
         no I/O, never raises."""
         return self._context_window
 
+    @property
+    def max_generation_tokens(self) -> int | None:
+        """The `num_predict` this client will ACTUALLY send with every chat
+        call, or `None` when the workspace left the ceiling unpinned (#896).
+
+        The sibling of `context_window` above, and it was missing for as long
+        as that one existed. `prompt_budget.reply_reserve` reads this
+        attribute to decide how much of the window to hold back for the
+        reply; with nothing to read it returned its own 8192 default, which
+        happens to EQUAL `config.DEFAULT_MAX_GENERATION_TOKENS`. So the
+        shipped configuration computed the right budget for the wrong reason
+        and every other configuration computed zero -- `budget_chars` floors
+        there, `fair_shares` then allows every block nothing, and `query`
+        answered NO_MATCH on a fully populated bundle.
+
+        `num_ctx` bounds prompt and completion together, which is why a seam
+        that plans a prompt needs BOTH numbers and why neither can be
+        re-derived from config at the call site: a client constructed with an
+        explicit override would answer a different question. Returns a value
+        stored at construction time -- no I/O, never raises."""
+        return self._max_generation_tokens
+
     def chat(self, messages: Sequence[Message]) -> str:
         """POST `messages` to `{host}/api/chat` and return `message.content`
         (D5, D6). Raises `OllamaGenerationCapped` if the response reports

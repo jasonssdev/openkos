@@ -21,6 +21,7 @@ from typing import Any, cast
 
 import pytest
 
+from openkos import prompt_budget
 from openkos.llm.base import EMBED_DIM, Embedder, Message
 from openkos.llm.ollama import (
     DEFAULT_TIMEOUT,
@@ -2730,3 +2731,49 @@ def test_context_window_property_exposes_the_configured_window() -> None:
     config -- the same read-the-real-send rationale as `resolved_host`."""
     assert OllamaClient(model="m", context_window=12288).context_window == 12288
     assert OllamaClient(model="m").context_window is None
+
+
+def test_max_generation_tokens_property_exposes_the_configured_ceiling() -> None:
+    """`max_generation_tokens` reads back exactly what was configured (#896).
+
+    The sibling of `context_window` above, and it was missing. `num_ctx`
+    bounds the prompt AND the completion together, so a seam planning a
+    prompt has to know how much of the window this client will hold back
+    for the reply -- and it can only learn that from the client, for the
+    same read-the-real-send reason the window itself is public."""
+    assert (
+        OllamaClient(model="m", max_generation_tokens=2048).max_generation_tokens
+        == 2048
+    )
+    assert OllamaClient(model="m").max_generation_tokens is None
+
+
+def test_prompt_budget_reads_BOTH_pins_off_a_configured_client() -> None:
+    """`prompt_budget` must see both numbers the client was built with.
+
+    THE DEFECT (#896). `reply_reserve` reads `llm.max_generation_tokens`,
+    the client never exposed it, so the read always missed and the 8192
+    default came back regardless of what the caller pinned. With the shipped
+    defaults that is invisible -- `DEFAULT_MAX_GENERATION_TOKENS` IS 8192, so
+    the wrong answer equals the right one. Lower the ceiling and
+    `budget_chars` floors to zero: every retrieved block is dropped and
+    `query` answers NO_MATCH on a fully populated bundle.
+
+    The pair is asserted together, and at a NON-default ceiling, because
+    `test_context_window_property_exposes_the_configured_window` above passed
+    for the whole time the sibling was broken."""
+    client = OllamaClient(model="m", context_window=8192, max_generation_tokens=4096)
+
+    assert prompt_budget.planning_window(client) == 8192
+    assert prompt_budget.reply_reserve(client) == 4096
+
+    budget = prompt_budget.budget_chars(
+        planning=prompt_budget.planning_window(client),
+        generation_reserve_tokens=prompt_budget.reply_reserve(client),
+        overhead_chars=1800,
+    )
+    assert budget > 0, (
+        "a legal workspace that lowers max_generation_tokens must still get "
+        "prompt room; a zero budget drops every retrieved block"
+    )
+    assert all(prompt_budget.fair_shares([9644, 7696, 213], budget=budget))
