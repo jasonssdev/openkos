@@ -453,9 +453,25 @@ class AnswerResult:
     purest form.
 
     Reachable when the planning window is smaller than the reply reserve, so
-    `budget_chars` floors to zero. `config.read_config` floors a
-    workspace-configured `context_window` above that, so the shipped CLI
-    path does not reach it; a directly constructed backend does."""
+    `budget_chars` floors to zero.
+
+    That took #896 to become true. The note here used to claim
+    `config.read_config`'s floor kept the shipped CLI path away from it, and
+    the floor is real -- `minimum_context_window` keeps a configured
+    `context_window` at `PROMPT_CONTEXT_ALLOWANCE` above
+    `max_generation_tokens`. But `prompt_budget.reply_reserve` reads the
+    ceiling OFF THE BACKEND, and `OllamaClient` did not expose it, so the
+    reserve was always the 8192 default no matter what the workspace pinned.
+    Every ceiling below the default therefore floored the budget to zero and
+    dropped every block: `query` answering NO_MATCH on a full bundle. The
+    guarantee held only for the default row, where the default happened to
+    equal the pin.
+
+    With both pins now read, the floor does what the note always claimed:
+    `planning - reserve` is at least `PROMPT_CONTEXT_ALLOWANCE`, so only an
+    overhead larger than that allowance converted to chars can reach zero.
+    A directly constructed backend that advertises neither value still
+    can."""
     dense_degraded: bool = False
     """`True` when dense retrieval could not proceed this call (absent
     `vector_store`, `VecUnavailable`, a read-path `sqlite3.Error`, or the
