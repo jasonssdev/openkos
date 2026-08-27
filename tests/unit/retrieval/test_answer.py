@@ -3242,3 +3242,329 @@ def test_a_disabled_check_is_not_reported_as_degraded(tmp_path: Path) -> None:
         )
 
     assert result.sufficiency_degraded is False
+
+
+# --- #882: the retrieval context is bounded and the clipping is disclosed --
+
+
+class _WindowedLLM(_FakeLLM):
+    """A structural `LLMBackend` that ADVERTISES its pinned window and reply
+    ceiling, the way `OllamaClient` does (#866/#882).
+
+    `_FakeLLM` deliberately advertises neither, so every pre-existing test in
+    this module keeps exercising the packaged-default planning path."""
+
+    def __init__(
+        self,
+        reply: str = "the reply",
+        *,
+        context_window: object = 12_288,
+        max_generation_tokens: object = 8_192,
+    ) -> None:
+        super().__init__(reply)
+        self.context_window = context_window
+        self.max_generation_tokens = max_generation_tokens
+
+
+def _sent_user_content(llm: _FakeLLM) -> str:
+    """The user half of the LAST prompt `llm` was sent -- what the model
+    actually read, which is the only thing #882 lets anything claim."""
+    return str(llm.calls[-1][1]["content"])
+
+
+def test_a_fitting_context_is_sent_byte_identical_and_unmarked(
+    tmp_path: Path,
+) -> None:
+    """The bound must not change model input on a prompt that already fits,
+    and must not mark a citation partial when nothing was clipped."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "stoicism.md",
+        title="Stoicism",
+        body="dichotomyzz of control",
+    )
+    llm = _WindowedLLM()
+
+    with fts.build_index(bundle_dir) as idx:
+        result = answer_mod.answer(
+            "dichotomyzz", bundle_dir=bundle_dir, llm=llm, fts_index=idx
+        )
+
+    assert "dichotomyzz of control" in _sent_user_content(llm)
+    assert answer_mod.CONTEXT_ELISION_MARKER not in _sent_user_content(llm)
+    assert result.excerpted_titles == []
+    assert [c.excerpted for c in result.citations] == [False]
+
+
+def test_an_oversized_document_is_excerpted_to_fit_the_window(
+    tmp_path: Path,
+) -> None:
+    """The #882 defect, at its origin: a whole `Source` body went into the
+    prompt with no bound, Ollama discarded ~88% of it without raising, and
+    nothing downstream knew."""
+    bundle_dir = tmp_path / "bundle"
+    body = "\n".join(f"dichotomyzz line {n:04d} " + "y" * 60 for n in range(1_500))
+    _write_doc(
+        bundle_dir / "sources" / "transcription1.md",
+        doc_type="Source",
+        title="Transcription 1",
+        body=body,
+    )
+    llm = _WindowedLLM()
+
+    with fts.build_index(bundle_dir) as idx:
+        result = answer_mod.answer(
+            "dichotomyzz", bundle_dir=bundle_dir, llm=llm, fts_index=idx
+        )
+
+    sent = _sent_user_content(llm)
+    assert len(body) > 90_000, "fixture must actually overflow the window"
+    assert len(sent) < len(body)
+    assert answer_mod.CONTEXT_ELISION_MARKER in sent
+    assert result.excerpted_titles == ["Transcription 1"]
+
+
+def test_an_excerpted_document_keeps_both_ends_not_just_the_head(
+    tmp_path: Path,
+) -> None:
+    """Even coverage. The server-side truncation this replaces is itself a
+    one-ended view, so a head cut would buy nothing."""
+    bundle_dir = tmp_path / "bundle"
+    body = "\n".join(f"dichotomyzz line {n:04d} " + "y" * 60 for n in range(1_500))
+    _write_doc(
+        bundle_dir / "sources" / "transcription1.md",
+        doc_type="Source",
+        title="Transcription 1",
+        body=body,
+    )
+    llm = _WindowedLLM()
+
+    with fts.build_index(bundle_dir) as idx:
+        answer_mod.answer("dichotomyzz", bundle_dir=bundle_dir, llm=llm, fts_index=idx)
+
+    sent = _sent_user_content(llm)
+    assert "line 0000" in sent
+    assert "line 1499" in sent
+
+
+def test_a_clipped_documents_citation_is_marked_partial(tmp_path: Path) -> None:
+    """The half that keeps false provenance off disk: `--save` files
+    citations verbatim, so a citation for a document the model read a
+    fraction of must SAY so."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "small.md",
+        title="Small",
+        body="dichotomyzz brief note",
+    )
+    _write_doc(
+        bundle_dir / "sources" / "huge.md",
+        doc_type="Source",
+        title="Huge",
+        body="\n".join(f"dichotomyzz line {n:04d} " + "y" * 60 for n in range(1_500)),
+    )
+    llm = _WindowedLLM()
+
+    with fts.build_index(bundle_dir) as idx:
+        result = answer_mod.answer(
+            "dichotomyzz", bundle_dir=bundle_dir, llm=llm, fts_index=idx
+        )
+
+    by_title = {c.title: c.excerpted for c in result.citations}
+    assert by_title == {"Small": False, "Huge": True}
+
+
+def test_the_shared_budget_gives_unused_room_to_the_documents_that_need_it(
+    tmp_path: Path,
+) -> None:
+    """Blocks compete for ONE window, so an EQUAL split is not good enough:
+    four tiny documents sitting on a fifth of the budget each would leave
+    the huge one cut to a fifth too, wasting most of the window on blocks
+    that never needed it.
+
+    The discriminating measurement is how much of the HUGE document
+    survives, not whether the tiny ones do -- tiny blocks survive either
+    way, which is exactly why an earlier version of this test passed against
+    a flat split. With a ~9,000-char budget over 5 blocks, an equal split
+    caps the huge block near 1,800 chars; releasing what the four tiny ones
+    do not need leaves it roughly 8,800."""
+    bundle_dir = tmp_path / "bundle"
+    for n in range(4):
+        _write_doc(
+            bundle_dir / "concepts" / f"tiny{n}.md",
+            title=f"Tiny {n}",
+            body="dichotomyzz brief note",
+        )
+    _write_doc(
+        bundle_dir / "sources" / "huge.md",
+        doc_type="Source",
+        title="Huge",
+        body="\n".join(f"dichotomyzz line {n:04d} " + "y" * 60 for n in range(1_500)),
+    )
+    llm = _WindowedLLM()
+
+    with fts.build_index(bundle_dir) as idx:
+        result = answer_mod.answer(
+            "dichotomyzz", bundle_dir=bundle_dir, llm=llm, fts_index=idx
+        )
+
+    assert len(result.citations) == 5, "fixture must retrieve all five blocks"
+    assert result.excerpted_titles == ["Huge"]
+    assert len(_sent_user_content(llm)) > 5_000
+
+
+def test_a_wider_advertised_window_sends_more_of_the_source(tmp_path: Path) -> None:
+    """The budget is planned against the window the backend will ACTUALLY
+    enforce, not a fixed literal -- raising it widens what the model sees."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "sources" / "huge.md",
+        doc_type="Source",
+        title="Huge",
+        body="\n".join(f"dichotomyzz line {n:04d} " + "y" * 60 for n in range(1_500)),
+    )
+
+    narrow = _WindowedLLM(context_window=12_288)
+    wide = _WindowedLLM(context_window=40_960)
+    with fts.build_index(bundle_dir) as idx:
+        answer_mod.answer(
+            "dichotomyzz", bundle_dir=bundle_dir, llm=narrow, fts_index=idx
+        )
+        answer_mod.answer("dichotomyzz", bundle_dir=bundle_dir, llm=wide, fts_index=idx)
+
+    assert len(_sent_user_content(wide)) > len(_sent_user_content(narrow))
+
+
+def test_the_sufficiency_check_reads_the_same_bounded_string_as_synthesis(
+    tmp_path: Path,
+) -> None:
+    """#760's no-drift rule survives the bound: a check that judged the
+    UNBOUNDED context would be answering a different question from the one
+    synthesis is sent."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "sources" / "huge.md",
+        doc_type="Source",
+        title="Huge",
+        body="\n".join(f"dichotomyzz line {n:04d} " + "y" * 60 for n in range(1_500)),
+    )
+    llm = _WindowedLLM(reply="a quoted sentence")
+
+    with fts.build_index(bundle_dir) as idx:
+        answer_mod.answer(
+            "dichotomyzz",
+            bundle_dir=bundle_dir,
+            llm=llm,
+            fts_index=idx,
+            sufficiency_check=True,
+        )
+
+    assert len(llm.calls) == 2
+    assert llm.calls[0][1]["content"] == llm.calls[1][1]["content"]
+
+
+def test_a_backend_advertising_no_window_is_still_bounded(tmp_path: Path) -> None:
+    """Every structural fake, and any third-party backend, advertises
+    nothing -- and an unplanned prompt is exactly what gets decapitated
+    server-side. Planning conservatively is strictly safer."""
+    bundle_dir = tmp_path / "bundle"
+    body = "\n".join(f"dichotomyzz line {n:04d} " + "y" * 60 for n in range(1_500))
+    _write_doc(
+        bundle_dir / "sources" / "huge.md",
+        doc_type="Source",
+        title="Huge",
+        body=body,
+    )
+    llm = _FakeLLM()
+
+    with fts.build_index(bundle_dir) as idx:
+        result = answer_mod.answer(
+            "dichotomyzz", bundle_dir=bundle_dir, llm=llm, fts_index=idx
+        )
+
+    assert len(_sent_user_content(llm)) < len(body)
+    assert result.excerpted_titles == ["Huge"]
+
+
+def test_excerpted_titles_reports_what_was_sent_not_what_the_model_cited(
+    tmp_path: Path,
+) -> None:
+    """#753 filters `citations` down to the blocks the model reported using.
+    The clipping notice is about the SEND, so it must survive a model that
+    cited nothing -- otherwise the operator loses the disclosure exactly
+    when the answer is least grounded."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "sources" / "huge.md",
+        doc_type="Source",
+        title="Huge",
+        body="\n".join(f"dichotomyzz line {n:04d} " + "y" * 60 for n in range(1_500)),
+    )
+    llm = _WindowedLLM(reply="an answer\n\nUSED: none")
+
+    with fts.build_index(bundle_dir) as idx:
+        result = answer_mod.answer(
+            "dichotomyzz", bundle_dir=bundle_dir, llm=llm, fts_index=idx
+        )
+
+    assert result.citations == []
+    assert result.excerpted_titles == ["Huge"]
+
+
+def test_several_excerpted_documents_are_all_reported_in_fused_rank_order(
+    tmp_path: Path,
+) -> None:
+    """`excerpted_titles` is documented as reporting EVERY excerpted block in
+    fused-rank order, and nothing pinned that: every other test in this
+    group clips exactly one document, so the multi-document ordering and the
+    comma-joined disclosure text were unproved."""
+    bundle_dir = tmp_path / "bundle"
+    for name, title in (("aaa", "Alpha Source"), ("bbb", "Bravo Source")):
+        _write_doc(
+            bundle_dir / "sources" / f"{name}.md",
+            doc_type="Source",
+            title=title,
+            body="\n".join(
+                f"dichotomyzz {name} line {n:04d} " + "y" * 60 for n in range(1_200)
+            ),
+        )
+    llm = _WindowedLLM()
+
+    with fts.build_index(bundle_dir) as idx:
+        result = answer_mod.answer(
+            "dichotomyzz", bundle_dir=bundle_dir, llm=llm, fts_index=idx
+        )
+
+    assert result.excerpted_titles == ["Alpha Source", "Bravo Source"]
+    assert [c.excerpted for c in result.citations] == [True, True]
+
+
+def test_a_document_the_model_was_shown_none_of_is_dropped_not_cited(
+    tmp_path: Path,
+) -> None:
+    """The purest form of this issue's defect: a block whose share is zero
+    contributes a bare `[concept_id: ...]` label the model can still cite by
+    number, producing provenance for text it was shown nothing of. Such a
+    block leaves the prompt AND the citation list, and is reported
+    separately from a partial read."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "sources" / "huge.md",
+        doc_type="Source",
+        title="Huge",
+        body="\n".join(f"dichotomyzz line {n:04d} " + "y" * 60 for n in range(1_500)),
+    )
+    # A window narrower than the default reply reserve floors the budget to
+    # zero. `config.read_config` floors a workspace value above this, so the
+    # shipped CLI cannot reach it -- a directly constructed backend can.
+    llm = _WindowedLLM(context_window=4_096, max_generation_tokens=None)
+
+    with fts.build_index(bundle_dir) as idx:
+        result = answer_mod.answer(
+            "dichotomyzz", bundle_dir=bundle_dir, llm=llm, fts_index=idx
+        )
+
+    assert result.omitted_titles == ["Huge"]
+    assert result.excerpted_titles == []
+    assert result.citations == []
+    assert not any("Huge" in str(m) for call in llm.calls for m in call)

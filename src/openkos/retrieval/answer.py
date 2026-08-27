@@ -69,11 +69,11 @@ restoring today's status-blind behavior byte-for-byte at zero added cost.
 
 import re
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Final, Literal
 
-from openkos import lifecycle, sensitivity
+from openkos import lifecycle, prompt_budget, sensitivity
 from openkos.extraction.concept import LANGUAGE_FUNCTION_WORDS
 from openkos.llm.base import Embedder, LLMBackend, Message
 from openkos.llm.ollama import (
@@ -333,6 +333,21 @@ class Citation:
     """The OKF concept ID (bundle-relative path, `.md` suffix removed)."""
     title: str
     """Frontmatter `title`; falls back to `concept_id` when missing/empty."""
+    excerpted: bool = False
+    """Whether the model was shown an EXCERPT of this concept rather than
+    its whole body, because the assembled context did not fit the backend's
+    context window (#882).
+
+    The half of that fix that keeps false provenance off disk. `query
+    --save` files citations as the filed insight's provenance, and before
+    this a 55 KB `Source` that Ollama had silently discarded ~88% of was
+    filed as though the model had read it -- a false claim on disk that no
+    surface, not `query`, not `lint`, not `status`, could surface. A
+    citation may now say the model read part of this document; it may never
+    imply it read all of it.
+
+    Defaults `False`, which is the honest value for every construction site
+    that assembles no context and for every block that fitted whole."""
     confidential: bool = False
     """Whether this concept's freshly re-read frontmatter EXPLICITLY carries
     `sensitivity: confidential` (issue #569). Transparency, not a gate --
@@ -411,6 +426,36 @@ class AnswerResult:
     run", so an operator notice built on it fires only when the guard they
     configured is actually missing. Mirrors `dense_degraded` below, which
     models the same shape for the retrieval half."""
+    excerpted_titles: list[str] = field(default_factory=list)
+    """Titles of the context blocks SENT as an excerpt this call, in
+    fused-rank order; `[]` when everything fitted whole (#882).
+
+    Reports the SEND, not the citations. #753 filters `citations` down to
+    the blocks the model reported drawing on, so deriving the notice from
+    them would lose the disclosure exactly when the answer is least
+    grounded -- a model that cited nothing would report no clipping either.
+
+    A `list`, not a count, because the operator's next move depends on WHICH
+    documents were clipped: the ingest advisory #866 shipped names its calls
+    for the same reason. Defaults empty via `default_factory`, so every
+    short-circuit return above stays valid and no two results share one
+    list."""
+    omitted_titles: list[str] = field(default_factory=list)
+    """Titles of retrieved documents the model was shown NONE of, because
+    the budget left their block no room at all (#882).
+
+    Distinct from `excerpted_titles`, and the distinction is the point: a
+    document the model read part of may honestly be cited as partial
+    provenance, while one it read nothing of may not be cited at all. These
+    blocks are therefore dropped from the prompt AND from `citations`
+    entirely rather than sent as a bare label the model could still cite by
+    number -- which would be this issue's false-provenance defect in its
+    purest form.
+
+    Reachable when the planning window is smaller than the reply reserve, so
+    `budget_chars` floors to zero. `config.read_config` floors a
+    workspace-configured `context_window` above that, so the shipped CLI
+    path does not reach it; a directly constructed backend does."""
     dense_degraded: bool = False
     """`True` when dense retrieval could not proceed this call (absent
     `vector_store`, `VecUnavailable`, a read-path `sqlite3.Error`, or the
@@ -422,6 +467,89 @@ class AnswerResult:
     `AnswerResult` is produced at all (issue #209)."""
 
 
+def _bound_bodies(
+    labels: list[str],
+    bodies: list[str],
+    *,
+    llm: LLMBackend | None,
+    question: str,
+) -> tuple[list[str], list[bool]]:
+    """`bodies`, each clipped to its share of the context window, and which
+    of them were clipped (#882).
+
+    THE DEFECT. `query` built its prompt from the full body of every
+    retrieved document with no bound and no disclosure. A `type: Source`
+    document embeds its raw source text, so retrieving two of them cost
+    ~110,000 chars -- 31,128 tokens measured on `qwen3:8b`, against a
+    configured `context_window` of 12,288. Ollama does not raise on that:
+    sending a 184,000-char prompt returned `prompt_eval_count: 6146` and a
+    normal reply, ~88% of the prompt discarded in silence.
+    `OllamaGenerationCapped` could not catch it either -- it fires when
+    GENERATION stops for length, and here generation finished normally.
+
+    `llm=None` means NO bound, and that is an opt-in seam, not an oversight:
+    the `query_sufficiency` and `query_entailment` harnesses call
+    `_assemble_context` positionally to reproduce a stored measurement, and
+    silently changing what they send would turn a shipped treatment into an
+    ablation of itself. Production passes the backend.
+
+    Blocks share ONE window, so the split is `prompt_budget.fair_shares`
+    rather than an equal cut: a 5-char block must not sit on an equal share
+    while a 55 KB source is cut to the same size.
+
+    The overhead is measured by CONSTRUCTION, not estimated -- the real
+    frame is built over empty bodies and its length taken -- so a change to
+    `_user_content`'s numbering or to either system prompt cannot silently
+    desynchronise the budget from the string actually sent. The larger of
+    the two system prompts is charged because both are sent the same
+    `user_content` and the budget has to hold for whichever runs."""
+    if llm is None or not bodies:
+        return list(bodies), [False] * len(bodies)
+
+    overhead = len(_user_content(list(labels), question)) + max(
+        len(_SYSTEM_PROMPT), len(_SUFFICIENCY_PROMPT)
+    )
+    budget = prompt_budget.budget_chars(
+        planning=prompt_budget.planning_window(llm),
+        generation_reserve_tokens=prompt_budget.reply_reserve(llm),
+        overhead_chars=overhead,
+    )
+    shares = prompt_budget.fair_shares([len(body) for body in bodies], budget=budget)
+
+    bounded: list[str] = []
+    flags: list[bool] = []
+    for body, share in zip(bodies, shares, strict=True):
+        text, was_bounded = prompt_budget.bounded_text(
+            body,
+            budget=share,
+            windows=prompt_budget.chunk_lines(body, _CONTEXT_CHUNK_TARGET),
+            marker=CONTEXT_ELISION_MARKER,
+        )
+        bounded.append(text)
+        flags.append(was_bounded)
+    return bounded, flags
+
+
+CONTEXT_ELISION_MARKER: Final = prompt_budget.ELISION_MARKER
+"""Rendered between non-adjacent windows of an excerpted context block, so
+the model is told text is missing rather than left to read two spliced
+passages as continuous prose (#882).
+
+Shared with the ingest bound rather than spelled again here: an operator who
+has learned to recognise the marker in one path should not meet a second
+wording in the other."""
+
+_CONTEXT_CHUNK_TARGET: Final = 800
+"""Window size (chars) an excerpted context block is assembled from (#882).
+
+Much smaller than ingest's chunk target, and deliberately: ingest excerpts
+ONE source against the whole window, while retrieval splits one window
+across several competing blocks, so a block's share is often a few thousand
+chars. Coarse windows would overshoot a small share and collapse the excerpt
+to its single-window fallback; 800 keeps even coverage available at the
+share sizes this path actually produces."""
+
+
 def _assemble_context(
     bundle_dir: Path,
     concept_ids: list[str],
@@ -429,6 +557,9 @@ def _assemble_context(
     *,
     include_confidential: bool = False,
     local_exemption: bool = False,
+    llm: LLMBackend | None = None,
+    question: str = "",
+    omitted_titles_out: list[str] | None = None,
 ) -> tuple[list[str], list[Citation]]:
     """Guarded per-hit re-read (D2): re-read + re-parse each fused
     `concept_id`'s doc, skipping anything unreadable or unparseable rather
@@ -483,7 +614,8 @@ def _assemble_context(
     not only there: this is the layer that actually assembles the prompt, so
     a re-check that ignored it would drop every concept the upstream filter
     had just admitted and make the exemption cosmetic."""
-    context_blocks: list[str] = []
+    labels: list[str] = []
+    bodies: list[str] = []
     citations: list[Citation] = []
     for concept_id in concept_ids:
         if concept_id in blocked:
@@ -518,9 +650,8 @@ def _assemble_context(
             if metadata.get("type") == _INSIGHT_TYPE
             else ""
         )
-        context_blocks.append(
-            f"[concept_id: {concept_id} — {title}{synthesis_note}]\n{body}"
-        )
+        labels.append(f"[concept_id: {concept_id} — {title}{synthesis_note}]\n")
+        bodies.append(body)
         citations.append(
             Citation(
                 concept_id=concept_id,
@@ -533,7 +664,27 @@ def _assemble_context(
                 ),
             )
         )
-    return context_blocks, citations
+
+    bounded_bodies, bounded_flags = _bound_bodies(
+        labels, bodies, llm=llm, question=question
+    )
+    context_blocks = []
+    kept: list[Citation] = []
+    for label, original, bounded, was_bounded, citation in zip(
+        labels, bodies, bounded_bodies, bounded_flags, citations, strict=True
+    ):
+        if was_bounded and not bounded and original:
+            # Shown NONE of it. Dropped from the prompt AND the citation
+            # list rather than sent as a bare label: a label with no body is
+            # still a numbered block the model can cite, which is this
+            # issue's false-provenance defect in its purest form. Recorded
+            # for the caller so the omission is disclosed, never silent.
+            if omitted_titles_out is not None:
+                omitted_titles_out.append(citation.title)
+            continue
+        context_blocks.append(label + bounded)
+        kept.append(replace(citation, excerpted=True) if was_bounded else citation)
+    return context_blocks, kept
 
 
 _SUFFICIENCY_NONE: Final = "NONE"
@@ -864,15 +1015,31 @@ def answer(
     # with a seeded-PageRank concept in a reserved tail slot; measurement
     # showed the slot cost a real hit and bought centrality, not relevance.
     fused_ids = fusion.fuse(hits, vec_hits)[: max(limit, 0)]
+    omitted_titles: list[str] = []
     context_blocks, citations = _assemble_context(
         bundle_dir,
         fused_ids,
         confidential,
         include_confidential=include_confidential,
         local_exemption=local_exemption,
+        llm=llm,
+        question=question,
+        omitted_titles_out=omitted_titles,
     )
+    # Captured BEFORE #753's attribution filter runs below: this reports
+    # what was SENT, and a model that cites nothing must not also erase the
+    # notice that it was shown a fraction of the corpus (#882).
+    excerpted_titles = [c.title for c in citations if c.excerpted]
 
     if not context_blocks:
+        # The disclosure travels on THIS return too (#882). When the budget
+        # left every block empty the context is gone and the answer is a
+        # no-match, which without these fields reads to the operator as "the
+        # bundle has nothing" -- the loudest possible version of the silent
+        # overflow this issue exists to end. `no_match_cause` cannot carry
+        # it: the fused hits were readable, so the cause is honestly
+        # `all_unreadable`, and widening that vocabulary would change a
+        # value other surfaces already branch on.
         return AnswerResult(
             answer=NO_MATCH,
             citations=[],
@@ -883,6 +1050,8 @@ def answer(
             dense_hit_count=len(vec_hits),
             fused_count=len(fused_ids),
             dense_degraded=dense_degraded,
+            excerpted_titles=excerpted_titles,
+            omitted_titles=omitted_titles,
         )
 
     user_content = _user_content(context_blocks, question)
@@ -915,6 +1084,8 @@ def answer(
             dense_degraded=dense_degraded,
             sufficiency_degraded=sufficiency_degraded,
             context_block_count=len(context_blocks),
+            excerpted_titles=excerpted_titles,
+            omitted_titles=omitted_titles,
         )
 
     reply = llm.chat(_build_messages(user_content))
@@ -959,4 +1130,6 @@ def answer(
         sufficiency_degraded=sufficiency_degraded,
         context_block_count=len(context_blocks),
         attribution=attribution,
+        excerpted_titles=excerpted_titles,
+        omitted_titles=omitted_titles,
     )

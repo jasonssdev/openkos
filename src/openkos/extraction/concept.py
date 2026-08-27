@@ -24,6 +24,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from typing import Any, Final
 
+from openkos import prompt_budget
 from openkos.extraction import evidence as evidence_mod
 from openkos.extraction import judge as judge_mod
 from openkos.llm import parsing
@@ -2059,7 +2060,9 @@ def _chunk_lines(text: str, target: int | None = None) -> list[str]:
     while labelling itself an 8 KB arm, and reported plausible numbers for a
     treatment that never ran. That is the inert-arm defect a reviewer caught
     in the #714 probe, closed here at its origin rather than worked around
-    in each harness.
+    in each harness. Resolving it before delegating is what keeps that
+    property: `prompt_budget.chunk_lines` takes `target` as a REQUIRED
+    argument precisely so no seam can reintroduce a definition-time default.
 
     Lines, not paragraphs: the material this exists for -- speaker-labelled
     transcripts -- has no blank lines at all, which is exactly how the first
@@ -2069,28 +2072,18 @@ def _chunk_lines(text: str, target: int | None = None) -> list[str]:
     Lossless by construction: `"\\n".join(_chunk_lines(text)) == text`."""
     if target is None:
         target = _CHUNK_TARGET
-    chunks: list[str] = []
-    current: list[str] = []
-    size = 0
-    for line in text.split("\n"):
-        if current and size + len(line) + 1 > target:
-            chunks.append("\n".join(current))
-            current, size = [], 0
-        current.append(line)
-        size += len(line) + 1
-    if current:
-        chunks.append("\n".join(current))
-    return chunks
+    return prompt_budget.chunk_lines(text, target)
 
 
-_PROMPT_PLANNING_CONTEXT_WINDOW: Final = 12_288
+_PROMPT_PLANNING_CONTEXT_WINDOW: Final = prompt_budget.PLANNING_CONTEXT_WINDOW
 """Planning window (tokens) for the whole-source prompt bound (#866) when
-the backend does not advertise one -- `config.DEFAULT_CONTEXT_WINDOW`
-mirrored as a literal, because this module is a config-free leaf exactly
-like the chunking constants above it. A backend that DOES advertise its
-pinned window (`OllamaClient.context_window`) overrides this."""
+the backend does not advertise one.
 
-_PROMPT_TOKENS_PER_CHAR: Final = 0.40
+Re-exported from `prompt_budget` rather than restated: #882 gave the
+retrieval path the same bound, and a second literal here would let the two
+paths plan against different windows after one of them was tuned."""
+
+_PROMPT_TOKENS_PER_CHAR: Final = prompt_budget.TOKENS_PER_CHAR
 """Conservative planning ratio for converting the window's token budget
 into a char budget. Every whole-prompt ratio this repo has measured sits
 well under it -- 0.277 on the 58K-char Spanish judge prompt that motivated
@@ -2115,7 +2108,7 @@ _OPTIONAL_CALL_RESERVE_TOKENS: Final = 2_048
 candidate ARRAYS with descriptions and bodies, not a list of echoed
 titles."""
 
-_SOURCE_ELISION_MARKER: Final = "\n[... source elided to fit the context window ...]\n"
+_SOURCE_ELISION_MARKER: Final = prompt_budget.ELISION_MARKER
 """Rendered between non-adjacent windows of an excerpted source, so the
 model is told text is missing rather than left to read two spliced
 passages as contiguous."""
@@ -2152,92 +2145,30 @@ def _bounded_prompt_source(
     judge retries failed `unparseable: no-json`, deterministically.
 
     The budget is planned in chars against the window the backend will
-    actually enforce: `llm.context_window` when the client advertises a
-    pinned one (duck-typed -- any backend without the attribute, and an
-    unpinned `None`, both plan at `_PROMPT_PLANNING_CONTEXT_WINDOW`, since a
-    conservative excerpt is strictly safer than a decapitated prompt), minus
-    `generation_reserve_tokens` for the reply, divided by
-    `_PROMPT_TOKENS_PER_CHAR`, minus the prompt's own `overhead_chars`
-    (system rules, candidate lines, labels -- they spend the same window).
+    actually enforce, minus `generation_reserve_tokens` for the reply, minus
+    the prompt's own `overhead_chars` (system rules, candidate lines, labels
+    -- they spend the same window). A fitting source is returned
+    BYTE-IDENTICAL with the flag down.
 
-    A fitting source is returned BYTE-IDENTICAL with the flag down: the
-    bound must not change model input on any prompt that already fits.
-
-    The excerpt maximizes window count: evenly spaced `_chunk_lines`
-    windows -- including the first and the last whenever at least two
-    windows fit -- joined with
-    `_SOURCE_ELISION_MARKER` across gaps and plain newlines when adjacent,
-    at the largest count that fits the budget. Even coverage rather than a
-    head or tail cut, because the candidates under judgment were extracted
-    from ALL the windows, and the server-side truncation this replaces is
-    precisely a tail-only view. When not even two windows fit, the first
-    window is hard-truncated to the budget as the last resort -- and a
-    budget the overhead has swallowed entirely (a small pinned window under
-    many long candidate lines) sends an EMPTY source portion: the call
-    keeps its instructions and candidate list, which is strictly safer than
-    the decapitated prompt an over-budget send would produce. There is
-    deliberately no floor ABOVE the budget: a floor that sends more than
-    fits re-creates the overflow this function exists to close.
-
-    Never raises, and never silently skips the bound either -- the two
-    halves of one rule. The body below is pure string/integer arithmetic
-    over its own arguments (`_chunk_lines` included), so the ONE seam that
-    can throw is reading the backend's `context_window` -- a property on a
-    custom backend can raise. That read alone is guarded, degrading to the
-    packaged-default planning window: the source still gets BOUNDED, so a
-    throwing backend can neither abort the union pipeline (this ran
-    unguarded once, a review CRITICAL) nor silently receive the full
-    oversized prompt (a whole-body guard did that, the next review's
-    CRITICAL). Both failure modes are closed by giving the guard exactly
-    the one frame that needs it."""
-    try:
-        window = getattr(llm, "context_window", None)
-    except Exception:
-        window = None
-    planning = (
-        window
-        if isinstance(window, int) and not isinstance(window, bool) and window > 0
-        else _PROMPT_PLANNING_CONTEXT_WINDOW
+    THE BODY LIVES IN `prompt_budget`, not here (#882). Retrieval hit the
+    identical defect on the `query` path, where it was worse -- `--save`
+    filed the retrieved citations as provenance for documents the model
+    never read -- so the planning arithmetic, the even-coverage excerpt and
+    the never-raises `context_window` read are shared rather than copied.
+    This function is now the ingest path's NAME for that bound: the
+    reserve-token policy per call site stays here, where it is decided, and
+    the mechanics stay in one place so the two paths cannot drift."""
+    budget = prompt_budget.budget_chars(
+        planning=prompt_budget.planning_window(llm),
+        generation_reserve_tokens=generation_reserve_tokens,
+        overhead_chars=overhead_chars,
     )
-    budget = (
-        int((planning - generation_reserve_tokens) / _PROMPT_TOKENS_PER_CHAR)
-        - overhead_chars
+    return prompt_budget.bounded_text(
+        source_text,
+        budget=budget,
+        windows=_chunk_lines(source_text),
+        marker=_SOURCE_ELISION_MARKER,
     )
-    budget = max(budget, 0)
-    if len(source_text) <= budget:
-        return source_text, False
-
-    windows = _chunk_lines(source_text)
-    marker = _SOURCE_ELISION_MARKER
-    total_windows = len(windows)
-    for count in range(total_windows - 1, 1, -1):
-        picked = sorted(
-            {round(i * (total_windows - 1) / (count - 1)) for i in range(count)}
-        )
-        # Sized arithmetically first; the excerpt string is built ONCE,
-        # for the single count that fits. The search over counts remains
-        # O(total_windows^2) -- integer additions, negligible at realistic
-        # window counts -- but building every candidate excerpt STRING made
-        # it quadratic in source CHARS, which is the cost this ordering
-        # removes from the synchronous ingest path.
-        size = sum(len(windows[index]) for index in picked)
-        for position, index in enumerate(picked[1:], start=1):
-            adjacent = index == picked[position - 1] + 1
-            size += 1 if adjacent else len(marker)
-        if size > budget:
-            continue
-        parts: list[str] = []
-        previous: int | None = None
-        for index in picked:
-            if previous is not None:
-                parts.append(marker if index > previous + 1 else "\n")
-            parts.append(windows[index])
-            previous = index
-        return "".join(parts), True
-    # Not even two windows fit: hard-truncate the first window to the
-    # budget -- empty when the overhead swallowed it -- rather than sending
-    # an oversized prompt to be decapitated server-side.
-    return windows[0][:budget], True
 
 
 def _extract_once(

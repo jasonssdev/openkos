@@ -647,3 +647,141 @@ never document text.
 - WHEN `answer(...)` is called
 - THEN it is excluded from context and citations exactly as it would be for
   a non-chunked document
+
+### Requirement: The Assembled Context Is Bounded By The Backend's Context Window
+
+`_assemble_context` MUST plan a character budget against the context window
+the backend will actually enforce, and MUST clip the assembled bodies to fit
+it before either the sufficiency check or synthesis is sent. A context that
+already fits MUST be sent byte-identical.
+
+Ollama does not raise on an oversized prompt: it discards the overflow and
+returns a normal reply, measured at `prompt_eval_count: 6146` for a
+184,000-char prompt against `num_ctx: 12288`. `OllamaGenerationCapped`
+cannot catch this — it fires when GENERATION stops for length, while here
+generation finishes normally — so an unbounded prompt is silently truncated
+with no error anywhere.
+
+The budget MUST be planned against the backend's advertised
+`context_window` when it exposes a usable one, and against a packaged
+default otherwise; a backend that advertises nothing, or whose property
+raises, MUST still be bounded rather than sent an unplanned prompt.
+
+The blocks share ONE window, so the budget MUST be distributed such that a
+block needing less than an equal share releases the remainder to the blocks
+that need more.
+
+#### Scenario: A fitting context is unchanged
+
+- GIVEN retrieved documents whose combined bodies fit the context window
+- WHEN `answer(...)` assembles the prompt
+- THEN the bodies are sent byte-identical, no elision marker appears, and
+  no citation is marked partial
+
+#### Scenario: An oversized document is excerpted rather than truncated
+
+- GIVEN a retrieved `Source` document whose body exceeds the window
+- WHEN `answer(...)` assembles the prompt
+- THEN the model receives an even-coverage excerpt that fits the budget,
+  retaining both the first and last windows, with each elision marked
+
+#### Scenario: Unused room goes to the documents that need it
+
+- GIVEN four small documents and one document far larger than the window
+- WHEN the shared budget is distributed
+- THEN the small documents are sent whole and the large one receives the
+  room they did not use, rather than an equal fifth of the budget
+
+#### Scenario: A backend advertising no window is still bounded
+
+- GIVEN a backend exposing no `context_window`, or one whose property raises
+- WHEN `answer(...)` assembles an oversized context
+- THEN the context is still bounded, planned against the packaged default
+
+### Requirement: A Partially Read Document Is Disclosed And Never Cited As Fully Read
+
+When a document was sent as an excerpt, its `Citation` MUST record that, and
+`AnswerResult` MUST carry the titles of every excerpted block in fused-rank
+order. `query` MUST disclose the clipping on stderr, naming the documents,
+and MUST mark those citations distinctly in the rendered citation list.
+`query --save` MUST disclose it in the plan before the confirmation gate.
+
+`--save` files citations as the filed insight's provenance, so a citation
+that did not record the clipping became a false provenance claim on disk
+that no surface — not `query`, not `lint`, not `status` — could reveal. The
+`--save` unverified-grounding gate does not cover this: that gate reports
+whether the attribution line was absent, which is a different failure, and a
+partially read document can be filed under a perfectly `reported`
+attribution.
+
+The disclosure MUST describe what was SENT, not what was cited: the
+attribution filter narrows `citations` to the blocks the model reported
+using, so a disclosure derived from them would vanish exactly when the
+answer cited nothing.
+
+#### Scenario: The clipping notice names the documents
+
+- GIVEN an answer assembled from a context that had to be clipped
+- WHEN `query` renders its retrieval summary
+- THEN stderr names each clipped document and points at `context_window`
+
+#### Scenario: The notice is silent when nothing was clipped
+
+- GIVEN an answer whose context fitted whole
+- WHEN `query` renders its retrieval summary
+- THEN no clipping notice appears
+
+#### Scenario: A partially read citation is marked in the list
+
+- GIVEN an answer citing one excerpted and one whole document
+- WHEN `query` renders the citation list
+- THEN only the excerpted document's line carries the partial marker
+
+#### Scenario: The save plan discloses partial reads before the gate
+
+- GIVEN `query --save` about to file an answer citing an excerpted document
+- WHEN the plan is rendered
+- THEN it names the partially read document before the confirmation gate
+
+#### Scenario: The disclosure survives an answer that cited nothing
+
+- GIVEN a clipped context and a model that reported using no block
+- WHEN `answer(...)` returns
+- THEN `citations` is empty and the excerpted titles are still reported
+
+### Requirement: A Document The Model Was Shown None Of Is Dropped, Not Cited
+
+When the shared budget leaves a retrieved document's block no room at all,
+that block MUST be dropped from the prompt AND from `citations` entirely,
+and its title MUST be reported separately from the partially read ones.
+`query` MUST disclose the omission on stderr, including when the resulting
+context is empty and the call returns a no-match.
+
+A zero-share block would otherwise still contribute its
+`[concept_id: … — Title]` label, and a label is a numbered block the model
+can cite — provenance for a document it was shown nothing of, which is this
+issue's defect in its purest form. Reporting it apart from a partial read
+matters because the two mean different things to a reader: a partially read
+document still contributed, an omitted one did not, and its absence may be
+why the answer is thin.
+
+Carrying the disclosure on the no-match return is part of the requirement,
+not an extra: without it, a context that was entirely dropped reads to the
+operator as "the bundle has nothing to say", which is the loudest possible
+form of the silent overflow this capability exists to end. The
+`no_match_cause` vocabulary MUST NOT be widened to express it — the fused
+hits were readable, so the honest cause is unchanged, and other surfaces
+already branch on those values.
+
+#### Scenario: A zero-share document leaves the prompt and the citations
+
+- GIVEN a retrieved document whose share of the budget is zero characters
+- WHEN `answer(...)` assembles the context
+- THEN neither its body nor its label reaches the prompt, it appears in no
+  citation, and its title is reported as omitted rather than excerpted
+
+#### Scenario: The omission is disclosed on an empty-context no-match
+
+- GIVEN every retrieved block was dropped for want of budget
+- WHEN `query` reports the no-match
+- THEN stderr names the omitted documents and points at `context_window`

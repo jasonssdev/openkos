@@ -1887,3 +1887,119 @@ def test_query_without_confidential_citations_emits_no_notice(
     assert result.exit_code == 0
     assert "[confidential]" not in result.stdout
     assert "NOTICE" not in result.stderr
+
+
+# --- #882: the context bound is disclosed, and partial citations say so ---
+
+
+def test_query_discloses_which_documents_were_clipped_to_fit_the_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`ingest` announces its bound (#866); `query` did not, and its silence
+    was worse -- `--save` filed the unread documents as provenance. The
+    notice NAMES them, because the operator's next move depends on which."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_result = AnswerResult(
+        answer="An answer.",
+        citations=[
+            Citation(concept_id="sources/t1", title="Transcription 1", excerpted=True),
+            Citation(concept_id="concepts/small", title="Small"),
+        ],
+        fts_hit_count=2,
+        llm_invoked=True,
+        no_match_cause="none",
+        skip_notices=[],
+        attribution="reported",
+        excerpted_titles=["Transcription 1"],
+    )
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+
+    result = runner.invoke(app, ["query", "what was decided?"])
+
+    assert result.exit_code == 0
+    assert "Transcription 1" in result.stderr
+    assert "context_window" in result.stderr
+
+
+def test_query_stays_silent_about_clipping_when_nothing_was_clipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The notice fires only when the bound actually bound. An advisory that
+    printed on every call would train the operator to ignore it."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_result = AnswerResult(
+        answer="An answer.",
+        citations=[Citation(concept_id="concepts/small", title="Small")],
+        fts_hit_count=1,
+        llm_invoked=True,
+        no_match_cause="none",
+        skip_notices=[],
+        attribution="reported",
+    )
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+
+    result = runner.invoke(app, ["query", "what was decided?"])
+
+    assert result.exit_code == 0
+    # Asserted against text the notice ACTUALLY contains. An earlier version
+    # of this test grepped for "excerpt", a word the shipped wording does
+    # not use, so it passed whether or not the notice fired -- it proved
+    # nothing about the silence it claims to test.
+    assert "read only part of" not in result.stderr
+    assert "did not fit the model's context window" not in result.stderr
+
+
+def test_query_marks_a_partially_read_citation_in_the_citation_list(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The citation list is what a reader trusts, and `--save` files it as
+    provenance. A document the model read a fraction of is rendered
+    distinctly, exactly as `[confidential]` and `[synthesis]` already are."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_result = AnswerResult(
+        answer="An answer.",
+        citations=[
+            Citation(concept_id="sources/t1", title="Transcription 1", excerpted=True),
+            Citation(concept_id="concepts/small", title="Small"),
+        ],
+        fts_hit_count=2,
+        llm_invoked=True,
+        no_match_cause="none",
+        skip_notices=[],
+        attribution="reported",
+        excerpted_titles=["Transcription 1"],
+    )
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+
+    result = runner.invoke(app, ["query", "what was decided?"])
+
+    assert result.exit_code == 0
+    lines = [line for line in result.stdout.splitlines() if line.startswith("  →")]
+    assert "[partial]" in lines[0]
+    assert "[partial]" not in lines[1]
+
+
+def test_query_discloses_omitted_documents_even_on_a_no_match(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the budget leaves every block empty the answer is a no-match.
+    Without the disclosure that reads to the operator as "the bundle has
+    nothing", which is the loudest possible version of the silent overflow
+    this issue exists to end."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_result = AnswerResult(
+        answer=NO_MATCH,
+        citations=[],
+        fts_hit_count=2,
+        llm_invoked=False,
+        no_match_cause="all_unreadable",
+        skip_notices=[],
+        omitted_titles=["Transcription 1", "Transcription 3"],
+    )
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+
+    result = runner.invoke(app, ["query", "what was decided?"])
+
+    assert result.exit_code == 0
+    assert "Transcription 1, Transcription 3" in result.stderr
+    assert "did not fit the model's context window at all" in result.stderr
