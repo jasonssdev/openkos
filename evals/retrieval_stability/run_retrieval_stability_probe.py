@@ -34,6 +34,7 @@ Requires a local Ollama serving `bge-m3`. Zero chat-model calls.
 
 from __future__ import annotations
 
+import argparse
 import itertools
 import json
 import pathlib
@@ -48,6 +49,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from openkos.extraction import concept as concept_mod  # noqa: E402
 from openkos.llm.ollama import OllamaClient  # noqa: E402
+from openkos.model import okf  # noqa: E402
 from openkos.retrieval import pool  # noqa: E402
 from openkos.retrieval.answer import answer  # noqa: E402
 from openkos.state import reindex as reindex_module  # noqa: E402
@@ -225,16 +227,27 @@ class _StubLLM:
 
 
 def _write_corpus(root: pathlib.Path) -> pathlib.Path:
+    """Materialize both domains as a real OKF bundle.
+
+    Frontmatter is rendered by the SHIPPED `okf.dump_frontmatter` rather than
+    by an f-string interpolating the title unquoted. No title here carries a
+    colon, so this corpus never lost a document -- but it sat one fixture
+    edit away from the silent drop #895 found in three sibling harnesses.
+    `--self-test` now asks the shipped reader whether every document parses,
+    so a fixture edit that reintroduces one cannot pass unnoticed."""
     bundle = root / "bundle"
     for doc_id, (title, body) in {**_DOMAIN_A, **_DOMAIN_B}.items():
         doc_type = "Source" if doc_id.startswith("sources/") else "Concept"
         path = bundle / f"{doc_id}.md"
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            f"---\ntype: {doc_type}\ntitle: {title}\nsensitivity: private\n---\n\n"
-            f"{body}\n",
-            encoding="utf-8",
+        frontmatter = okf.dump_frontmatter(
+            {
+                "type": doc_type,
+                "title": title,
+                "sensitivity": "private",
+            }
         )
+        path.write_text(f"{frontmatter}{body}\n", encoding="utf-8")
     return bundle
 
 
@@ -245,6 +258,41 @@ def _domain(concept_id: str) -> str:
 def _jaccard(a: list[str], b: list[str]) -> float:
     sa, sb = set(a), set(b)
     return len(sa & sb) / len(sa | sb) if (sa | sb) else 1.0
+
+
+def _self_test() -> int:
+    """Model-free: does the two-domain corpus actually reach the index?
+
+    Materializing is not indexing, and only the second one is what a
+    measurement rests on. A document whose frontmatter does not parse is
+    counted `skipped` by `reindex` and nothing reads that number, which is
+    how three sibling harnesses each measured a corpus a whole document type
+    short of the one they documented (#895). Counting files on disk cannot
+    catch that. Ask the shipped READER."""
+    documents = {**_DOMAIN_A, **_DOMAIN_B}
+    with tempfile.TemporaryDirectory() as tmp:
+        bundle = _write_corpus(pathlib.Path(tmp))
+        materialized = len(list(bundle.rglob("*.md")))
+        unparseable = sorted(
+            okf.concept_id_for(scan.path, bundle)
+            for scan in okf._iter_docs(bundle)
+            if scan.read_error is not None or scan.parse_error is not None
+        )
+    failures: list[str] = []
+    if materialized != len(documents):
+        failures.append(
+            f"the bundle materializes {materialized} files for "
+            f"{len(documents)} documents"
+        )
+    if unparseable:
+        failures.append(
+            "these documents do not parse, so they never enter the index: "
+            f"{unparseable}"
+        )
+    for failure in failures:
+        print(f"FAIL: {failure}")
+    print(f"self-test: {2 - len(failures)}/2 passed")
+    return 1 if failures else 0
 
 
 def main() -> None:
@@ -335,4 +383,12 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--self-test",
+        action="store_true",
+        help="check the fixture corpus is fully indexable; no model, no network",
+    )
+    if parser.parse_args().self_test:
+        raise SystemExit(_self_test())
     main()

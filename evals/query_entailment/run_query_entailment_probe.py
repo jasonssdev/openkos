@@ -110,6 +110,7 @@ from openkos.config import (  # noqa: E402
     DEFAULT_MAX_GENERATION_TOKENS,
 )
 from openkos.llm.ollama import OllamaClient  # noqa: E402
+from openkos.model import okf  # noqa: E402
 
 # Production's OWN retrieval seam, imported rather than re-implemented: the
 # stored blocks must be what the shipped pipeline places in context, or the
@@ -258,16 +259,33 @@ class Row:
 
 
 def _write_corpus(root: pathlib.Path) -> pathlib.Path:
+    """Materialize `ALL_DOCS` as a real OKF bundle.
+
+    Frontmatter is rendered by the SHIPPED `okf.dump_frontmatter`, not by an
+    f-string. The f-string it replaces interpolated the title unquoted, so
+    every title containing a colon produced invalid YAML -- and the four
+    `decisions/*` documents are titled `Decisión: ...`. They failed
+    `_iter_docs`'s parse, `reindex` counted them `skipped`, and this probe
+    measured a corpus a whole document type short of the one its own
+    docstring describes. The stored runs were measured that way too; see the
+    README's continuity note (#895).
+
+    Nothing was wrong with production: `dump_frontmatter` quotes correctly,
+    and the harness had hand-rolled a second renderer beside it."""
     bundle = root / "bundle"
     for doc_id, (title, body) in ALL_DOCS.items():
         path = bundle / f"{doc_id}.md"
         path.parent.mkdir(parents=True, exist_ok=True)
         doc_type = "Source" if doc_id.startswith("sources/") else "Concept"
-        path.write_text(
-            f"---\ntype: {doc_type}\ntitle: {title}\ndescription: \n"
-            f"sensitivity: private\n---\n{body}",
-            encoding="utf-8",
+        frontmatter = okf.dump_frontmatter(
+            {
+                "type": doc_type,
+                "title": title,
+                "description": "",
+                "sensitivity": "private",
+            }
         )
+        path.write_text(frontmatter + body, encoding="utf-8")
     return bundle
 
 
@@ -753,6 +771,28 @@ def self_test() -> int:
         < 0.3,
     )
     check("empty answer is vacuously covered", lexical_coverage("", ctx) == 1.0)
+
+    # Materializing is not indexing, and only the second one is what a
+    # measurement rests on. Counting files on disk passed for months over
+    # four documents whose frontmatter never parsed: `_iter_docs` recorded a
+    # `parse_error`, `reindex` counted them `skipped`, and the corpus lost a
+    # whole document type in silence (#895). Ask the shipped READER.
+    with tempfile.TemporaryDirectory() as tmp:
+        bundle = _write_corpus(pathlib.Path(tmp))
+        check(
+            "the bundle materializes one file per document",
+            len(list(bundle.rglob("*.md"))) == len(ALL_DOCS),
+        )
+        unparseable = sorted(
+            okf.concept_id_for(scan.path, bundle)
+            for scan in okf._iter_docs(bundle)
+            if scan.read_error is not None or scan.parse_error is not None
+        )
+        check(
+            "every document parses, so none is silently dropped from the "
+            f"index{f' -- unparseable: {unparseable}' if unparseable else ''}",
+            not unparseable,
+        )
 
     print(f"\nself-test: {'PASS' if not failures else f'{len(failures)} FAILURE(S)'}")
     return 1 if failures else 0
