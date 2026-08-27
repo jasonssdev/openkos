@@ -16528,6 +16528,47 @@ def query(
             "run `openkos reindex` to enable full retrieval.",
             err=True,
         )
+    if result.excerpted_titles:
+        # #882: the retrieval path had #866's defect and neither its bound
+        # nor its disclosure. Silent overflow is the worse half: Ollama
+        # discards the excess without raising (measured at
+        # `prompt_eval_count: 6146` on a 184,000-char prompt), so an
+        # operator had NO surface -- not `query`, not `lint`, not `status`
+        # -- on which to discover that the answer rests on a fraction of
+        # the documents it cites. Named, not counted, and worded to match
+        # the ingest advisory an operator has already met.
+        clipped = ", ".join(result.excerpted_titles)
+        # Worded to stay true in both directions. It does NOT promise a
+        # [partial] marker: #753 filters the citation list down to what the
+        # answer reported using, so a model that cited nothing renders no
+        # list at all and the promise would name a marker the reader cannot
+        # find. And it says "part of" rather than "an excerpt of": when the
+        # prompt overhead swallows a block's whole share, the part the model
+        # read is none of it -- claiming an excerpt there would be the same
+        # kind of overclaim this issue exists to remove.
+        typer.echo(
+            "openkos query: the retrieved context is larger than the "
+            f"model's context window, so the model read only part of "
+            f"{len(result.excerpted_titles)} document(s) ({clipped}); any "
+            "citation of these below is marked [partial]. Raise "
+            "context_window in openkos.yaml to widen what the model sees.",
+            err=True,
+        )
+    if result.omitted_titles:
+        # #882: shown NONE of these, so they are not in the prompt and not
+        # in the citation list either. Reported separately from the
+        # partial-read line above because the operator's reading of the
+        # answer differs: a partially read document still contributed, an
+        # omitted one did not contribute at all and its absence may be why
+        # the answer is thin.
+        dropped = ", ".join(result.omitted_titles)
+        typer.echo(
+            f"openkos query: {len(result.omitted_titles)} retrieved "
+            f"document(s) ({dropped}) did not fit the model's context window "
+            "at all and were left out of the prompt entirely; they are not "
+            "cited. Raise context_window in openkos.yaml.",
+            err=True,
+        )
     if result.sufficiency_degraded:
         # #764: the check failed OPEN, which is deliberate -- a backend error
         # is not evidence that the bundle cannot answer. But an operator whose
@@ -16585,6 +16626,11 @@ def query(
         typer.echo("Citations:")
         for citation in result.citations:
             marker = " [confidential]" if citation.confidential else ""
+            # #882: the model was shown an EXCERPT of this document, not all
+            # of it. Rendered here because this list is what a reader trusts
+            # and what `--save` files as provenance -- a citation that looked
+            # identical to a fully-read one IS the false provenance claim.
+            partial = " [partial]" if citation.excerpted else ""
             # Issue #570: a cited Insight is itself model output, not
             # source-backed knowledge -- rendered distinctly so the reader
             # can tell which legs of the answer stand on a Source and
@@ -16594,7 +16640,8 @@ def query(
                 " [synthesis]" if citation.concept_id.startswith(insight_prefix) else ""
             )
             typer.echo(
-                f"  → {citation.concept_id} ({citation.title}){synthesis}{marker}"
+                f"  → {citation.concept_id} ({citation.title})"
+                f"{synthesis}{partial}{marker}"
             )
     elif result.attribution == "reported":
         # #753: the answer itself reported drawing on none of the concepts
@@ -16757,6 +16804,20 @@ def query(
             f"citations (attribution: {result.attribution}), so the "
             f"{len(result.citations)} citation(s) above are the retrieval "
             "set and would be filed as provenance verbatim."
+        )
+    if result.excerpted_titles:
+        # #882: `--save` is the seam that makes the overflow permanent, so
+        # the plan the human approves has to carry it. #774's line above
+        # covers "the answer never accounted for these citations"; this one
+        # covers "the model never read all of what it is about to cite" --
+        # different failures, and a partially-read citation can be filed
+        # under a perfectly `reported` attribution.
+        clipped = ", ".join(result.excerpted_titles)
+        typer.echo(
+            f"  ! partially read: {len(result.excerpted_titles)} document(s) "
+            f"({clipped}) did not fit the model's context window, so the "
+            "model read only part of each; they would be filed as "
+            "provenance for text the model never saw."
         )
     typer.echo(f"  ~ {save_index_path.name} (new entry)")
     typer.echo(f"  ~ {save_log_path.name} (new dated entry)")

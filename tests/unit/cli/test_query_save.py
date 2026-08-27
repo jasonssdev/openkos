@@ -130,6 +130,7 @@ def _fake_matched_answer(
     *,
     answer: str = "Stoicism teaches the dichotomy of control.",
     citations: list[Citation] | None = None,
+    excerpted_titles: list[str] | None = None,
     # `reported` (compliant), not the dataclass's own `absent` default: these
     # tests model an ordinary matched answer, and `absent` would trip the
     # #774 unverified-grounding gate plus the #777 notice in every one of
@@ -144,6 +145,7 @@ def _fake_matched_answer(
         no_match_cause="none",
         skip_notices=[],
         attribution=attribution,
+        excerpted_titles=[] if excerpted_titles is None else excerpted_titles,
     )
 
 
@@ -3073,3 +3075,53 @@ def test_the_second_save_embeds_only_the_new_question(
     warm = [b for b in batches[warm_start:] if "stored question 0?" in b]
     assert cold, "the first save must embed the questions it has never seen"
     assert not warm, "the second save must not re-embed an already-cached question"
+
+
+# --- #882: --save discloses documents the model only partially read -------
+
+
+def test_save_plan_discloses_a_partially_read_document_before_the_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--save` is the seam that makes the overflow permanent: the citation
+    becomes provenance on disk for text the model never saw. The human
+    approving the plan has to be told, and told WHICH document, before
+    they answer the gate."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
+    citation = Citation(
+        concept_id="concepts/stoicism", title="Stoicism", excerpted=True
+    )
+    fake_result = _fake_matched_answer(
+        citations=[citation], excerpted_titles=["Stoicism"]
+    )
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["query", "what is stoicism?", "--save"], input="y\n")
+
+    assert result.exit_code == 0
+    assert "partially read" in result.output
+    assert "Stoicism" in result.output
+    # BEFORE the gate, not merely somewhere in the output: a disclosure the
+    # human meets only after they have already answered is not a disclosure.
+    # Asserting mere presence left the spec's ordering clause unproved.
+    assert result.output.index("partially read") < result.output.index("Proceed")
+
+
+def test_save_plan_stays_silent_when_every_document_fitted_whole(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A disclosure printed on every save would train the human to skip it,
+    which is how the #774 line beside it is worded too."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
+    citation = Citation(concept_id="concepts/stoicism", title="Stoicism")
+    fake_result = _fake_matched_answer(citations=[citation])
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["query", "what is stoicism?", "--save"], input="y\n")
+
+    assert result.exit_code == 0
+    assert "partially read" not in result.output
