@@ -765,13 +765,15 @@ openkos query "..."                 # confirm dense retrieval works again
 ```
 
 `purge` is the exception to Phase 4's rule, deliberately. It physically
-**deletes** all four derived stores — `.openkos/vectors.db`, `fts.db`,
-`graph.db` and `findings.db` — because row-level deletes would leave
-recoverable pages, which defeats an erasure. It then rebuilds **only** FTS and
-the graph: `vectors.db` is left for a later `openkos reindex` to re-embed
-(rebuilding it in-line would make `purge` depend on a running Ollama, which it
-must never do), and `findings.db` is left deleted and never rebuilt, because
-regenerating a contradiction finding costs LLM calls. So after a purge, expect
+**deletes** all five derived stores — `.openkos/vectors.db`, `fts.db`,
+`graph.db`, `findings.db` and `insight_questions.db` — because row-level
+deletes would leave recoverable pages, which defeats an erasure. It then
+rebuilds **only** FTS and the graph: `vectors.db` is left for a later
+`openkos reindex` to re-embed (rebuilding it in-line would make `purge` depend
+on a running Ollama, which it must never do), `findings.db` is left deleted and
+never rebuilt because regenerating a verdict costs LLM calls, and
+`insight_questions.db` refills itself one save at a time. Each of the three is
+disclosed with its own restore cost (#886). So after a purge, expect
 `.openkos/` to hold `fts.db` and `graph.db` only, and expect dense retrieval to
 stay dark until you reindex.
 
