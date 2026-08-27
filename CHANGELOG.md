@@ -14,6 +14,15 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+## [0.2.12] - 2026-08-27
+
+A documentation release, cut for a reason worth naming: **PyPI freezes a project's
+long description at publish time.** The README shipped with 0.2.11 is the README
+on the project page until a new version is uploaded, and a published version can
+never be replaced -- the number is burned on upload. So a README fix is not a fix
+until it rides a release. No engine code changed; every behavior in 0.2.11 is
+unchanged here.
+
 ### Documentation
 
 - The docs that 0.2.11's own release pass missed. `docs/architecture.md` still
@@ -36,6 +45,25 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 - `AGENTS.md` no longer opens its build guidance with "MVP 1 — start here", a
   scaffolding instruction for a slice that shipped two arcs ago. It now points
   new work at the shipped surface and at what MVP 3 still owes.
+- The rest of the documentation was then audited against the shipped code rather
+  than read for plausibility, and the sweep came back clean — which is the half
+  worth recording, because an audit that reports only its hits cannot be told
+  apart from one that was never run. Verified both directions: **27 of 27**
+  commands documented in `docs/cli.md`; **17 of 17** config keys; **76 of 76**
+  shipped command flags named there, and **zero** flags documented that no
+  command has (the ten that a naive diff flags are all prose stating a flag's
+  deliberate *absence*, a `git` flag, or an eval-harness flag). Every referenced
+  repository path resolves, every relative link between documents resolves, and
+  every `docs/*.md` is listed in the README.
+- Every enumerated count in the documentation was re-counted against the code,
+  since counts in prose are what rot: three sensitivity levels, six `purge`
+  rails, five `curate` stages (four kinds of judgment plus the Preconditions
+  gate), eleven registry types against nine extraction targets, five
+  `models:` task keys, five workspace artifacts from `init`, and the eval sweep's
+  **38 of 38** harness self-tests. `src/openkos/templates/openkos.yaml.template`
+  was audited as a document rather than as config: all fourteen defaults its
+  comments teach match `src/openkos/config.py`, and the task list it names
+  matches `TASK_MODEL_KEYS` exactly.
 
 ## [0.2.11] - 2026-08-27
 
@@ -2270,7 +2298,8 @@ and Memory) work.
 - Default embedding model is `bge-m3` (ADR-0006), superseding the earlier
   `qwen3-embedding:0.6b` default.
 
-[Unreleased]: https://github.com/jasonssdev/openkos/compare/v0.2.11...HEAD
+[Unreleased]: https://github.com/jasonssdev/openkos/compare/v0.2.12...HEAD
+[0.2.12]: https://github.com/jasonssdev/openkos/compare/v0.2.11...v0.2.12
 [0.2.11]: https://github.com/jasonssdev/openkos/compare/v0.2.10...v0.2.11
 [0.2.10]: https://github.com/jasonssdev/openkos/compare/v0.2.9...v0.2.10
 [0.2.9]: https://github.com/jasonssdev/openkos/compare/v0.2.8...v0.2.9
