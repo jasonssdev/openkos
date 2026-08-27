@@ -551,6 +551,60 @@ def test_lint_flags_a_staging_dropped_source(
     assert "  No unevidenced objects." in result.stdout
 
 
+def test_lint_names_one_source_under_every_condition_it_carries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#884: ONE Source carrying two conditions is reported under BOTH
+    sections.
+
+    This is the defect the 0.2.10 E2E surfaced. `extraction_notice` held a
+    single value, so a run that both lost a candidate in staging and stored
+    objects quoting no line persisted only the staging token -- and this
+    command, the audit surface, rendered `Unevidenced objects:` as if the
+    Source were clean. The sections read as independent while one masked the
+    other, and `lint` could not disclose that from here: the displaced token
+    was destroyed at write time, before it ever reached disk.
+
+    The legacy scalar case is covered by the sibling tests above, which
+    still write a bare string -- so this pins the plural shape without
+    claiming the old one stopped working."""
+    _init_workspace(tmp_path, monkeypatch)
+    sources_dir = tmp_path / "bundle" / "sources"
+    sources_dir.mkdir()
+    # TWO Sources with the tokens in OPPOSITE order. One alone would not
+    # discriminate: whichever token sits at index 0 is still found by a
+    # reader that only inspects the first element, so a `[:1]` regression
+    # in either check would pass. With both orders present, each check must
+    # look past position 0 for exactly one of them.
+    (sources_dir / "notes.md").write_text(
+        "---\ntype: Source\ntitle: Notes\nresource: raw/notes.txt\n"
+        "extraction_notice:\n"
+        "  - objects-without-evidence\n"
+        "  - candidates-dropped-in-staging\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    (sources_dir / "memo.md").write_text(
+        "---\ntype: Source\ntitle: Memo\nresource: raw/memo.txt\n"
+        "extraction_notice:\n"
+        "  - candidates-dropped-in-staging\n"
+        "  - objects-without-evidence\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["lint"])
+
+    assert result.exit_code == 0
+    unevidenced = result.stdout.split("Unevidenced objects:")[1].split("\n\n")[0]
+    staging = result.stdout.split("Staging-dropped candidates:")[1].split("\n\n")[0]
+    assert "sources/notes:" in unevidenced
+    assert "sources/memo:" in unevidenced
+    assert "sources/notes:" in staging
+    assert "sources/memo:" in staging
+    # Neither section may have swallowed the other's finding.
+    assert "cannot support a citation" in unevidenced
+    assert "under-represent" in staging
+
+
 def test_lint_keeps_the_two_extraction_notice_sections_apart(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

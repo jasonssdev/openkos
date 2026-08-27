@@ -3178,3 +3178,69 @@ def test_merged_content_heading_matches_build_merged_document_bytes() -> None:
     )
 
     assert f"{heading}\n\n" in body
+
+
+# --- #884: extraction_notice carries EVERY condition, not just the strongest --
+
+
+def test_build_source_concept_emits_several_notices_as_a_list() -> None:
+    """#884: a run can trip more than one disclosure condition at once, and
+    the frontmatter must record all of them.
+
+    Before this, `extraction_notice` was a single scalar and the stronger
+    token OVERWROTE the weaker one at write time. `lint` then rendered
+    `Unevidenced objects:` and `Staging-dropped candidates:` as independent
+    sections while the second silently masked the first -- and `lint` could
+    not disclose the masking either, because by the time it reads the file
+    the masked token is gone. Recording both is the only place the fix can
+    live."""
+    text = _build_call_source(
+        extraction_notice=(
+            okf.EXTRACTION_NOTICE_CANDIDATES_DROPPED,
+            okf.EXTRACTION_NOTICE_OBJECTS_WITHOUT_EVIDENCE,
+        )
+    )
+
+    metadata, _ = okf.load_frontmatter(text)
+    assert metadata[okf.EXTRACTION_NOTICE_KEY] == [
+        okf.EXTRACTION_NOTICE_CANDIDATES_DROPPED,
+        okf.EXTRACTION_NOTICE_OBJECTS_WITHOUT_EVIDENCE,
+    ]
+
+
+def test_extraction_notices_reads_a_legacy_scalar() -> None:
+    """Bundles written before #884 carry a bare string. Reading one must
+    yield the same one-token tuple a list of one would, so no consumer has
+    to branch on the on-disk shape -- and an existing Source keeps its
+    disclosure instead of silently losing it on the next lint."""
+    assert okf.extraction_notices(
+        {okf.EXTRACTION_NOTICE_KEY: okf.EXTRACTION_NOTICE_OBJECTS_WITHOUT_EVIDENCE}
+    ) == (okf.EXTRACTION_NOTICE_OBJECTS_WITHOUT_EVIDENCE,)
+
+
+def test_extraction_notices_reads_a_list() -> None:
+    assert okf.extraction_notices(
+        {
+            okf.EXTRACTION_NOTICE_KEY: [
+                okf.EXTRACTION_NOTICE_CANDIDATES_DROPPED,
+                okf.EXTRACTION_NOTICE_OBJECTS_WITHOUT_EVIDENCE,
+            ]
+        }
+    ) == (
+        okf.EXTRACTION_NOTICE_CANDIDATES_DROPPED,
+        okf.EXTRACTION_NOTICE_OBJECTS_WITHOUT_EVIDENCE,
+    )
+
+
+def test_extraction_notices_fails_closed_on_absent_and_unknown_values() -> None:
+    """Same fail-closed posture `_carried_extraction_notice` already
+    documented: an absent key, an unrecognised token, and a wrong-typed
+    value are all `()`. Frontmatter is hand-editable and a Source written by
+    a later release may spell a token this build does not know; none of
+    those is a reason to crash a run that is otherwise writing nothing."""
+    assert okf.extraction_notices({}) == ()
+    assert okf.extraction_notices({okf.EXTRACTION_NOTICE_KEY: "not-a-token"}) == ()
+    assert okf.extraction_notices({okf.EXTRACTION_NOTICE_KEY: 7}) == ()
+    assert okf.extraction_notices(
+        {okf.EXTRACTION_NOTICE_KEY: ["not-a-token", okf.EXTRACTION_NOTICE_JUDGE_EMPTY]}
+    ) == (okf.EXTRACTION_NOTICE_JUDGE_EMPTY,)

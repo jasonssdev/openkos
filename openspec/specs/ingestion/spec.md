@@ -2002,14 +2002,31 @@ mirroring the judge notices' `marking the Source (extraction_notice:
 The create-only skip (a slug this same source already owns is on disk) MUST
 NOT count toward the marker: the bundle still represents the source, so a
 marker would report a loss that never happened. The foreign-source
-disambiguation path drops nothing and is likewise out of scope.
+disambiguation path drops nothing and is likewise out of scope. The
+IN-BATCH slug collision MUST NOT count either, on the identical grounds:
+when two candidates of one run slugify alike, the first was already staged,
+so the content is on disk. Counting it also created debt no command could
+clear, since the redo this marker prescribes (`--re-extract`) reproduces the
+same collision deterministically. The per-candidate stderr echo still names
+the skipped duplicate, which is a fact; what it no longer does is stamp a
+loss claim that is not.
 
-Precedence, because the key holds one value: the two judge-degrade tokens
-outrank this marker (they are retryable debt whose re-ingest re-runs
-staging too); this marker outranks `sole-object-restates-source` and
-`objects-without-evidence` (a loss of content outranks a disclosure about
-content that was stored — and a sole restating object that then fails
-staging was never written, so the sole-object claim would be false).
+`extraction_notice` MUST record EVERY condition a run tripped, not the
+highest-precedence one. The key was single-valued and the strongest token
+overwrote the weaker at write time, so a Source that both lost a candidate
+in staging and stored objects quoting no line reached `lint` claiming only
+the first — and `lint` could not disclose the masking from its side either,
+because the displaced token was already destroyed. The two judge tokens stay
+mutually exclusive (they are two values of one field); every other condition
+is independent and MUST be appended independently, in detection order.
+
+On disk, a single condition MUST remain a bare scalar, byte-identical to
+what earlier releases wrote; only a genuine co-occurrence widens to a list.
+Readers MUST accept both shapes, so an existing Source keeps its disclosure.
+
+Precedence survives only as a PRESENTATION rule: the batch summary MUST
+count a file ONCE however many conditions it carries, because that term
+measures files. `lint` is the surface that enumerates every condition.
 
 The token MUST NOT be retryable debt (`cli/main._extraction_retry_due`
 excludes it, on #801's exact grounds): a plain re-ingest re-runs the same
@@ -2047,19 +2064,39 @@ no `extraction_status` key, and now carries this notice.
 - WHEN `openkos ingest <path> --re-extract` completes
 - THEN the rewritten Source's frontmatter has NO `extraction_notice` key
 
-#### Scenario: A judge degrade outranks the staging marker
+#### Scenario: A judge degrade is recorded beside the staging marker
 
 - GIVEN a union+judge run whose judge call is unusable on every attempt AND
   whose staging drops a candidate
 - WHEN `openkos ingest <path>` completes
-- THEN the Source's `extraction_notice` is `judge-selection-unavailable`
+- THEN the Source's `extraction_notice` carries BOTH
+  `judge-selection-unavailable` and `candidates-dropped-in-staging`
 
-#### Scenario: The staging marker outranks the evidence disclosure
+#### Scenario: The staging marker is recorded beside the evidence disclosure
 
 - GIVEN a run where at least one stored object quotes no line of the source
   AND staging drops another candidate on a content-losing path
 - WHEN `openkos ingest <path>` completes
-- THEN the Source's `extraction_notice` is `candidates-dropped-in-staging`
+- THEN the Source's `extraction_notice` carries BOTH
+  `objects-without-evidence` and `candidates-dropped-in-staging`
+- AND `openkos lint` names the Source under BOTH `Unevidenced objects:` and
+  `Staging-dropped candidates:`
+
+#### Scenario: An in-batch slug collision is skipped without a loss marker
+
+- GIVEN a run where two candidates slugify to the same value and nothing
+  else is lost in staging
+- WHEN `openkos ingest <path>` completes
+- THEN stderr names the skipped duplicate
+- AND the Source's `extraction_notice` does NOT carry
+  `candidates-dropped-in-staging`
+
+#### Scenario: A single condition stays a bare scalar on disk
+
+- GIVEN a run tripping exactly one disclosure condition
+- WHEN `openkos ingest <path>` completes
+- THEN the Source's `extraction_notice` value is that token as a string,
+  not a one-element list
 
 #### Scenario: The marker is not retryable debt
 

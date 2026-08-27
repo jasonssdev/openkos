@@ -14,7 +14,7 @@ import hashlib
 import os
 import re
 import unicodedata
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path, PurePosixPath
@@ -260,6 +260,53 @@ EXTRACTION_NOTICE_VALUES: Final[tuple[ExtractionNotice, ...]] = get_args(
 """For specs and tests, mirroring `EXTRACTION_STATUS_VALUES` -- not a
 runtime validation gate."""
 
+
+def extraction_notices(metadata: Mapping[str, object]) -> tuple[ExtractionNotice, ...]:
+    """Every `EXTRACTION_NOTICE_KEY` token a Source's frontmatter carries,
+    in document order, narrowed to the closed vocabulary (#884).
+
+    ONE reader for both on-disk shapes. Before #884 the key held a bare
+    scalar and the strongest condition OVERWROTE the weaker one at write
+    time, so `lint` rendered `Unevidenced objects:` and `Staging-dropped
+    candidates:` as independent sections while the second masked the first.
+    `lint` could not disclose that masking either: by the time it reads the
+    file the masked token is already gone. Recording every condition is the
+    only place the fix can live, and this is the seam that makes the change
+    invisible to consumers.
+
+    A legacy scalar yields the same one-token tuple a one-element list
+    would, so no consumer has to branch on the on-disk shape and an existing
+    Source keeps its disclosure instead of losing it on the next read.
+
+    FAILS CLOSED, matching `cli/main._carried_extraction_notice`'s posture:
+    an absent key, a wrong-typed value, and an unrecognised token are all
+    dropped rather than raised on. Frontmatter is hand-editable and a Source
+    written by a later release may spell a token this build does not know;
+    neither is a reason to crash a run that is otherwise writing nothing,
+    and neither may be counted under a summary term whose wording promises a
+    vocabulary member. Unknown tokens are dropped INDIVIDUALLY -- one
+    unspellable member never discards its recognised siblings.
+
+    Order is the document's, not the vocabulary's: the write side records
+    conditions in the order it detects them, and a reader that re-sorted
+    would make two runs over identical bytes disagree about which condition
+    came first."""
+    raw = metadata.get(EXTRACTION_NOTICE_KEY)
+    if raw is None:
+        return ()
+    candidates: list[object] = (
+        [raw]
+        if isinstance(raw, str)
+        else list(raw)
+        if isinstance(raw, list | tuple)
+        else []
+    )
+    known = set(EXTRACTION_NOTICE_VALUES)
+    return tuple(
+        value for value in candidates if isinstance(value, str) and value in known
+    )
+
+
 EXTRACTION_NOTICE_SOLE_OBJECT_RESTATES: Final[ExtractionNotice] = (
     "sole-object-restates-source"
 )
@@ -411,7 +458,7 @@ def build_source_concept(
     provenance: list[str],
     raw_content: str | None = None,
     extraction_status: ExtractionStatus | None = None,
-    extraction_notice: ExtractionNotice | None = None,
+    extraction_notice: ExtractionNotice | tuple[ExtractionNotice, ...] | None = None,
     origin_key: str | None = None,
 ) -> str:
     """Build a conformant OKF Source concept document (D4/ingest-source-body D1).
@@ -495,8 +542,21 @@ def build_source_concept(
     }
     if extraction_status is not None:
         metadata[EXTRACTION_STATUS_KEY] = extraction_status
-    if extraction_notice is not None:
-        metadata[EXTRACTION_NOTICE_KEY] = extraction_notice
+    if extraction_notice:
+        # #884: a tuple is emitted as a YAML list, a bare token as the
+        # legacy scalar. Both read back through `extraction_notices`, so no
+        # caller branches on the on-disk shape, and a single-condition run
+        # keeps writing exactly the bytes it always did.
+        tokens = (
+            list(extraction_notice)
+            if isinstance(extraction_notice, tuple)
+            else [extraction_notice]
+        )
+        # A single condition stays a bare scalar -- byte-identical to what
+        # every release before #884 wrote. Only a genuine co-occurrence
+        # widens to a list, so the new shape appears exactly where the old
+        # one could not tell the truth, and existing bundles do not churn.
+        metadata[EXTRACTION_NOTICE_KEY] = tokens[0] if len(tokens) == 1 else tokens
     if origin_key is not None:
         metadata[ORIGIN_KEY_KEY] = origin_key
     if raw_content is None:

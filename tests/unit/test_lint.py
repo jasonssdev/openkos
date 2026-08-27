@@ -301,9 +301,10 @@ def test_collect_docs_defaults_both_fields_when_absent(tmp_path: Path) -> None:
 
 
 def test_collect_docs_reads_extraction_notice(tmp_path: Path) -> None:
-    """`collect_docs` populates `LintDoc.extraction_notice` from the SAME
-    `metadata` dict (#772) -- absent decodes to `""`, present carries the
-    token verbatim."""
+    """`collect_docs` populates `LintDoc.extraction_notices` from the SAME
+    `metadata` dict (#772) -- absent decodes to `()`, and a LEGACY SCALAR on
+    disk decodes to the one-token tuple a list of one would (#884), so a
+    Source written before the field went plural keeps its disclosure."""
     bundle_dir = tmp_path / "bundle"
     _write_doc(
         bundle_dir / "sources" / "notes.md",
@@ -316,10 +317,10 @@ def test_collect_docs_reads_extraction_notice(tmp_path: Path) -> None:
     docs, skipped = lint.collect_docs(bundle_dir)
 
     by_identity = {doc.identity: doc for doc in docs}
-    assert (
-        by_identity["sources/notes"].extraction_notice == "judge-selection-unavailable"
+    assert by_identity["sources/notes"].extraction_notices == (
+        "judge-selection-unavailable",
     )
-    assert by_identity["concepts/stoicism"].extraction_notice == ""
+    assert by_identity["concepts/stoicism"].extraction_notices == ()
     assert skipped == []
 
 
@@ -418,8 +419,12 @@ def _doc(
     relations: tuple[str, ...] = (),
     extraction_status: str = "",
     extraction_notice: str = "",
+    extraction_notices: tuple[str, ...] = (),
     resource: str = "",
 ) -> lint.LintDoc:
+    """`extraction_notice` (singular) is kept as a convenience for the many
+    call sites that pin a doc carrying exactly ONE token; #884 made the
+    field plural, and passing several goes through `extraction_notices`."""
     rel_dir = str(PurePosixPath(identity).parent)
     if rel_dir == ".":
         rel_dir = ""
@@ -433,7 +438,9 @@ def _doc(
         volatility=volatility,
         relations=relations,
         extraction_status=extraction_status,
-        extraction_notice=extraction_notice,
+        extraction_notices=(
+            extraction_notices or ((extraction_notice,) if extraction_notice else ())
+        ),
         resource=resource,
     )
 

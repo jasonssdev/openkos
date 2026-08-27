@@ -561,8 +561,13 @@ def _populate_graph_tables(
             concept_id
             for concept_id, metadata in metadatas
             if metadata.get("type") == "Source"
-            and metadata.get("extraction_notice")
-            in ("judge-selection-unavailable", "judge-selection-empty")
+            and bool(
+                {
+                    okf.EXTRACTION_NOTICE_JUDGE_UNAVAILABLE,
+                    okf.EXTRACTION_NOTICE_JUDGE_EMPTY,
+                }
+                & set(okf.extraction_notices(metadata))
+            )
         }
         quarantine_dropped: dict[tuple[str, str], set[str]] = {}
         best: dict[tuple[str, str], float] = {}

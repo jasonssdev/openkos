@@ -96,7 +96,7 @@ class LintDoc:
     any other token, including an unrecognized one, is ignored fail-silent
     (design's write-side-typed/read-side-fail-silent policy)."""
 
-    extraction_notice: str = ""
+    extraction_notices: tuple[str, ...] = ()
     """The doc's frontmatter `extraction_notice` field, or `""` if absent
     (issue #772). Only a Source can carry this key
     (`okf.build_source_concept`); every other doc type defaults to `""`,
@@ -108,8 +108,16 @@ class LintDoc:
     `objects-without-evidence` and ignores the rest the same way -- and
     `check_staging_dropped` (#843), which matches ONLY
     `candidates-dropped-in-staging`, again the same way. One field, three
-    readers, disjoint by construction: a Source carries at most one token,
-    and the checks answer different questions about it."""
+    readers, each matching its OWN token by membership (#884).
+
+    The phrase this docstring used to carry -- "disjoint by construction: a
+    Source carries at most one token" -- was true of the TOKENS and false of
+    the CONDITIONS. They co-occur, and the field held one value, so the
+    stronger token overwrote the weaker at write time and this file's
+    sections rendered as independent while one masked another. `lint` could
+    not disclose that from here: the displaced token was already gone. The
+    field is now plural and a legacy scalar reads back as a one-token tuple,
+    so every check asks its own question of the whole set."""
 
     resource: str = ""
     """The doc's frontmatter `resource` field, or `""` if absent (issue
@@ -342,7 +350,7 @@ def collect_docs(bundle_dir: Path) -> tuple[list[LintDoc], list[str]]:
                 relations=relations,
                 engine_owned_relations=engine_owned_relations,
                 extraction_status=str(metadata.get("extraction_status", "")),
-                extraction_notice=str(metadata.get("extraction_notice", "")),
+                extraction_notices=okf.extraction_notices(metadata),
                 resource=str(metadata.get("resource", "")),
                 sensitivity=str(metadata.get("sensitivity", "")),
                 provenance=provenance,
@@ -1072,7 +1080,14 @@ def check_unjudged(docs: list[LintDoc]) -> list[LintFinding]:
     unfiltered set with a selected one."""
     findings: list[LintFinding] = []
     for doc in docs:
-        cause = _UNJUDGED_NOTICE_CAUSES.get(doc.extraction_notice)
+        cause = next(
+            (
+                _UNJUDGED_NOTICE_CAUSES[token]
+                for token in doc.extraction_notices
+                if token in _UNJUDGED_NOTICE_CAUSES
+            ),
+            None,
+        )
         if cause is None:
             continue
         findings.append(
@@ -1135,7 +1150,7 @@ def check_unevidenced(docs: list[LintDoc]) -> list[LintFinding]:
     """
     findings: list[LintFinding] = []
     for doc in docs:
-        if doc.extraction_notice != _UNEVIDENCED_NOTICE:
+        if _UNEVIDENCED_NOTICE not in doc.extraction_notices:
             continue
         findings.append(
             LintFinding(
@@ -1193,7 +1208,7 @@ def check_staging_dropped(docs: list[LintDoc]) -> list[LintFinding]:
     already locates the document)."""
     findings: list[LintFinding] = []
     for doc in docs:
-        if doc.extraction_notice != _STAGING_DROP_NOTICE:
+        if _STAGING_DROP_NOTICE not in doc.extraction_notices:
             continue
         findings.append(
             LintFinding(
