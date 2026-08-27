@@ -9,12 +9,13 @@ Most tests shell out to a REAL git repository via the `tmp_git_repo` fixture
 `git`/`git-filter-repo`, so its tests must prove that against the real
 binary, not a mock."""
 
+import shutil
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 import typer
-from typer.testing import CliRunner, _NamedTextIOWrapper
+from typer.testing import CliRunner, Result, _NamedTextIOWrapper
 
 from openkos.bundle import decisions as bundle_decisions
 from openkos.bundle import index as bundle_index
@@ -1904,3 +1905,404 @@ def test_purge_drops_the_filed_question_cache(tmp_git_repo: TmpGitRepo) -> None:
 
     assert result.exit_code == 0, result.output
     assert not cache_path.exists()
+
+
+# --- #886: every dropped store is named, with its own restore cost ---------
+
+
+def _seed_derived_stores(root: Path) -> dict[str, Path]:
+    """Create all five `.openkos` stores plus the `-wal`/`-shm` sidecars
+    SQLite leaves beside an open database, so a purge has something real to
+    drop and to tidy up after."""
+    openkos_dir = root / ".openkos"
+    openkos_dir.mkdir(exist_ok=True)
+    made: dict[str, Path] = {}
+    for name in (
+        "fts.db",
+        "vectors.db",
+        "graph.db",
+        "findings.db",
+        "insight_questions.db",
+    ):
+        path = openkos_dir / name
+        path.write_bytes(b"SQLite format 3\x00")
+        (openkos_dir / f"{name}-wal").write_bytes(b"")
+        (openkos_dir / f"{name}-shm").write_bytes(b"")
+        made[name] = path
+    return made
+
+
+def _purge_self(source_id: str) -> Result:
+    return runner.invoke(
+        app, ["purge", source_id, "--confirm-phrase", f"purge {source_id}"]
+    )
+
+
+def test_purge_names_every_store_it_leaves_deleted(
+    tmp_git_repo: TmpGitRepo,
+) -> None:
+    """`purge` drops five stores and rebuilds two; the warning named only
+    `vectors.db`, so `findings.db` and `insight_questions.db` were destroyed
+    in silence. #142's own justification for the vectors warning -- "warn
+    every time so an operator is never left assuming dense retrieval is
+    still intact" -- applies identically to the other two and was never
+    applied to them."""
+    _seed_derived_stores(tmp_git_repo.root)
+
+    result = _purge_self(tmp_git_repo.source_id)
+
+    assert result.exit_code == 0, result.output
+    assert "vectors.db" in result.output
+    assert "findings.db" in result.output
+    assert "insight_questions.db" in result.output
+
+
+def test_purge_names_the_distinct_restore_cost_of_each_dropped_store(
+    tmp_git_repo: TmpGitRepo,
+) -> None:
+    """The three costs are genuinely different and a single "run reindex"
+    line would misprice two of them: `vectors.db` costs a full re-embed,
+    `findings.db` costs an LLM call per verdict on the next
+    `contradictions`/`adjudicate`/`suggest-relations` run, and
+    `insight_questions.db` is free -- a cache miss the next save re-embeds."""
+    _seed_derived_stores(tmp_git_repo.root)
+
+    result = _purge_self(tmp_git_repo.source_id)
+    output = result.output.lower()
+
+    assert result.exit_code == 0, result.output
+    assert "openkos reindex" in result.output
+    assert "contradictions" in output
+    assert "adjudicate" in output
+    assert "suggest-relations" in output
+    assert "free" in output
+
+
+def test_purge_does_not_name_the_stores_it_rebuilds(
+    tmp_git_repo: TmpGitRepo,
+) -> None:
+    """`fts.db` and `graph.db` are rebuilt in-line, so naming them in a
+    "left deleted" notice would send the operator to restore something that
+    is already back."""
+    _seed_derived_stores(tmp_git_repo.root)
+
+    result = _purge_self(tmp_git_repo.source_id)
+
+    assert result.exit_code == 0, result.output
+    assert "fts.db" not in result.output
+    assert "graph.db" not in result.output
+
+
+def test_purge_removes_the_orphan_wal_and_shm_sidecars(
+    tmp_git_repo: TmpGitRepo,
+) -> None:
+    """Deleting `x.db` leaves `x.db-wal`/`x.db-shm` behind. They held no data
+    residue in the reported run (0-byte WAL), so this is hygiene rather than
+    erasure -- but a sidecar with no database is litter that makes the
+    directory misreport what exists."""
+    _seed_derived_stores(tmp_git_repo.root)
+
+    result = _purge_self(tmp_git_repo.source_id)
+
+    assert result.exit_code == 0, result.output
+    openkos_dir = tmp_git_repo.root / ".openkos"
+    for name in ("vectors.db", "findings.db", "insight_questions.db"):
+        assert not (openkos_dir / name).exists(), name
+        assert not (openkos_dir / f"{name}-wal").exists(), f"{name}-wal"
+        assert not (openkos_dir / f"{name}-shm").exists(), f"{name}-shm"
+
+
+def test_purge_keeps_the_sidecars_of_the_stores_it_rebuilt(
+    tmp_git_repo: TmpGitRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The sweep must not reach past the stores that were dropped: `fts.db`
+    and `graph.db` are rebuilt in-line and a live database's sidecars belong
+    to it.
+
+    An earlier version of this test asserted only that the two DATABASES
+    came back and never looked at a sidecar -- the one thing its name
+    promises. Asserting that the sidecar FILES survive was the next wrong
+    answer: the rebuild reopens each store in WAL mode and SQLite removes
+    its own `-wal`/`-shm` on a clean close, so those files are legitimately
+    absent afterwards and nothing about purge is proved by their state.
+
+    What must hold is that PURGE's sweep is scoped -- it is called for the
+    dropped stores and for nothing else. Whatever the rebuild then does with
+    its own sidecars is the rebuild's business."""
+    _seed_derived_stores(tmp_git_repo.root)
+    swept: list[str] = []
+    real_sweep = main._purge_sweep_store_sidecars
+
+    def recording_sweep(path: Path) -> None:
+        swept.append(path.name)
+        real_sweep(path)
+
+    monkeypatch.setattr(main, "_purge_sweep_store_sidecars", recording_sweep)
+
+    result = _purge_self(tmp_git_repo.source_id)
+
+    assert result.exit_code == 0, result.output
+    openkos_dir = tmp_git_repo.root / ".openkos"
+    assert (openkos_dir / "fts.db").exists()
+    assert (openkos_dir / "graph.db").exists()
+    assert sorted(swept) == [
+        "findings.db",
+        "insight_questions.db",
+        "vectors.db",
+    ]
+
+
+def test_purge_leaves_operator_identity_rulings_intact(
+    tmp_git_repo: TmpGitRepo,
+) -> None:
+    """#886 states that purge destroyed "the operator's own recorded rulings
+    (two declined identity merges)". It does not, and the distinction
+    matters for what the warning may claim: a `--keep-distinct` ruling is
+    written to `bundle/.state/decisions/` and committed, so it lives in the
+    BUNDLE, not in the dropped `findings.db`. The three findings.db tenants
+    are all MACHINE-computed verdicts.
+
+    An operator told their rulings were gone would go looking to re-enter
+    decisions that are still on disk, so the notice says so explicitly and
+    this test is what licenses that sentence."""
+    _seed_derived_stores(tmp_git_repo.root)
+    survivor = "concepts/keeps-its-ruling"
+    _write_plain_concept(tmp_git_repo.root, survivor, title="Keeps Its Ruling")
+    record = bundle_decisions.IdentityDecisionRecord(
+        decision_key=bundle_decisions.identity_decision_key_for(
+            [survivor, "concepts/other"]
+        ),
+        member_ids=(survivor, "concepts/other"),
+        state="declined",
+        decided_at="2026-08-26T00:00:00Z",
+    )
+    ruling_path = bundle_decisions.write_identity_decisions(
+        survivor, tmp_git_repo.root / "bundle", records=[record]
+    )
+    _git(["add", "-A"], cwd=tmp_git_repo.root)
+    _git(["commit", "-m", "Record a keep-distinct ruling"], cwd=tmp_git_repo.root)
+
+    result = _purge_self(tmp_git_repo.source_id)
+
+    assert result.exit_code == 0, result.output
+    # The purge really ran -- without this the survival assertion below
+    # would also hold for a purge that did nothing at all.
+    assert not (tmp_git_repo.root / "bundle" / f"{tmp_git_repo.source_id}.md").exists()
+    assert Path(ruling_path).is_file(), "the operator's ruling must survive"
+    survived = bundle_decisions.read_identity_decisions_at(Path(ruling_path))
+    assert [r.state for r in survived] == ["declined"]
+    assert survived[0].member_ids == (survivor, "concepts/other")
+
+
+def test_purge_notice_count_matches_the_stores_it_lists(
+    tmp_git_repo: TmpGitRepo,
+) -> None:
+    """The opening line's count must be DERIVED from the list it introduces.
+    A literal would drift from the list the moment a store is added or
+    removed -- which is the exact defect #886 reports, reproduced one line
+    higher up."""
+    _seed_derived_stores(tmp_git_repo.root)
+
+    result = _purge_self(tmp_git_repo.source_id)
+
+    assert result.exit_code == 0, result.output
+    header = next(
+        line for line in result.output.splitlines() if "derived store(s)" in line
+    )
+    listed = [
+        line
+        for line in result.output.splitlines()
+        if line.startswith("  - ") and ".db:" in line
+    ]
+    assert len(listed) == 3
+    assert f"{len(listed)} derived store(s)" in header
+
+
+def test_purge_does_not_claim_a_store_it_failed_to_delete_was_dropped(
+    tmp_git_repo: TmpGitRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The notice is the operator's account of what is gone. Announcing a
+    store as dropped when its `unlink` raised sends them to pay for a
+    restore of something still on disk -- and the warning about the failure
+    goes to stderr while the claim goes to stdout, so the two are easy to
+    read apart."""
+    _seed_derived_stores(tmp_git_repo.root)
+    real_unlink = Path.unlink
+
+    def refuse_findings(self: Path, missing_ok: bool = False) -> None:
+        if self.name == "findings.db":
+            raise OSError("device busy")
+        real_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", refuse_findings)
+
+    result = _purge_self(tmp_git_repo.source_id)
+
+    assert result.exit_code == 0, result.output
+    assert "vectors.db" in result.stdout
+    assert "insight_questions.db" in result.stdout
+    listed = [
+        line
+        for line in result.stdout.splitlines()
+        if line.startswith("  - ") and ".db:" in line
+    ]
+    assert not any("findings.db" in line for line in listed), result.stdout
+    # The header counts what is ACTUALLY gone. This is the case that
+    # discriminates a derived count from a hard-coded 3 -- the happy path
+    # cannot, because there the two agree.
+    assert len(listed) == 2
+    assert "2 derived store(s)" in result.stdout
+
+
+def test_purge_leaves_the_sidecars_of_a_store_it_failed_to_delete(
+    tmp_git_repo: TmpGitRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sweeping the sidecars of a database that is STILL THERE is worse than
+    leaving litter: a `-wal` holds committed pages not yet checkpointed
+    back, so deleting it out from under a live database can destroy data the
+    purge was never asked to touch."""
+    _seed_derived_stores(tmp_git_repo.root)
+    real_unlink = Path.unlink
+
+    def refuse_findings(self: Path, missing_ok: bool = False) -> None:
+        if self.name == "findings.db":
+            raise OSError("device busy")
+        real_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", refuse_findings)
+
+    result = _purge_self(tmp_git_repo.source_id)
+
+    assert result.exit_code == 0, result.output
+    openkos_dir = tmp_git_repo.root / ".openkos"
+    assert (openkos_dir / "findings.db").exists()
+    assert (openkos_dir / "findings.db-wal").exists()
+    assert (openkos_dir / "findings.db-shm").exists()
+
+
+def test_purge_notice_does_not_promise_that_a_purged_concepts_ruling_survives(
+    tmp_git_repo: TmpGitRepo,
+) -> None:
+    """The survival claim must be QUALIFIED. A decision path referencing a
+    purge-set member is expunged in the same rewrite pass, by design and by
+    requirement -- so an unqualified "your rulings survive" is false exactly
+    where the privacy guarantee is strongest, and would read as a promise
+    that the erasure had missed something."""
+    _seed_derived_stores(tmp_git_repo.root)
+
+    result = _purge_self(tmp_git_repo.source_id)
+
+    assert result.exit_code == 0, result.output
+    sentence = next(
+        line for line in result.output.splitlines() if "--keep-distinct" in line
+    )
+    # Read from the ruling sentence itself. An earlier version of this test
+    # searched the WHOLE output for "surviving", which the vectors cost line
+    # ("every surviving document") satisfies on its own -- it passed without
+    # the qualification ever being written.
+    assert "OUTSIDE the purge set" in sentence
+    assert "expunged with it" in result.output
+
+
+def test_purge_does_not_report_a_store_that_never_existed_as_dropped(
+    tmp_git_repo: TmpGitRepo,
+) -> None:
+    """ "Gone after the purge" and "destroyed by the purge" are different
+    facts, and only the second is worth telling an operator. A workspace
+    that never ran `curate` has no `findings.db` at all; reporting it as
+    dropped invents a loss and prices a restore for verdicts that were never
+    computed -- the same false claim as the omission this issue fixes, only
+    pointing the other way."""
+    openkos_dir = tmp_git_repo.root / ".openkos"
+    openkos_dir.mkdir(exist_ok=True)
+    # Only the vector store was ever built here.
+    (openkos_dir / "vectors.db").write_bytes(b"SQLite format 3\x00")
+
+    result = _purge_self(tmp_git_repo.source_id)
+
+    assert result.exit_code == 0, result.output
+    listed = [
+        line
+        for line in result.stdout.splitlines()
+        if line.startswith("  - ") and ".db:" in line
+    ]
+    assert len(listed) == 1
+    assert "vectors.db" in listed[0]
+    assert "1 derived store(s)" in result.stdout
+
+
+def test_purge_prints_no_dropped_store_notice_when_nothing_was_dropped(
+    tmp_git_repo: TmpGitRepo,
+) -> None:
+    """A workspace with no derived stores at all loses nothing, so there is
+    nothing to disclose. A notice that fired anyway would train the operator
+    to skip the one that matters.
+
+    The fixture's own `init`/ingest leaves a `vectors.db` behind, so the
+    directory is cleared first -- an earlier version of this test asserted
+    silence without doing that and was simply wrong about its own premise."""
+    shutil.rmtree(tmp_git_repo.root / ".openkos", ignore_errors=True)
+
+    result = _purge_self(tmp_git_repo.source_id)
+
+    assert result.exit_code == 0, result.output
+    assert "derived store(s) were dropped" not in result.stdout
+
+
+def test_purge_still_discloses_dropped_stores_when_the_autocommit_raises(
+    tmp_git_repo: TmpGitRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The stores are already gone by the time the post-erasure bookkeeping
+    runs, so a failure there must not swallow the only record that they
+    went. The `try/finally` exists for exactly this, and an untested
+    guarantee protecting an irreversible operation is not a guarantee."""
+    _seed_derived_stores(tmp_git_repo.root)
+
+    def explode(*args: object, **kwargs: object) -> bool:
+        raise RuntimeError("bookkeeping blew up")
+
+    # The `paths_dirty` probe, not `_autocommit`: on the common clean-purge
+    # path the probe short-circuits the commit, so patching `_autocommit`
+    # produces a test that never enters the branch it claims to cover.
+    monkeypatch.setattr(vcs_git, "paths_dirty", explode)
+
+    result = _purge_self(tmp_git_repo.source_id)
+
+    assert isinstance(result.exception, RuntimeError)
+    assert "derived store(s) were dropped" in result.output
+    assert "findings.db" in result.output
+    assert "insight_questions.db" in result.output
+
+
+def test_purge_does_not_crash_when_a_store_path_cannot_be_stat_ed(
+    tmp_git_repo: TmpGitRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`Path.exists()` is not total: it swallows a handful of errnos and
+    RE-RAISES the rest, `EACCES` among them. These probes run AFTER the
+    irreversible rewrite, so an unguarded one turns an unreadable
+    `.openkos` entry into a crash that takes the whole success report with
+    it -- the expunge summary and the dropped-store disclosure both.
+
+    Fail CLOSED: a store whose absence cannot be verified is not claimed as
+    destroyed."""
+    _seed_derived_stores(tmp_git_repo.root)
+    real_exists = Path.exists
+
+    def hostile_exists(self: Path, *, follow_symlinks: bool = True) -> bool:
+        if self.name == "findings.db":
+            raise PermissionError("EACCES")
+        return bool(real_exists(self))
+
+    monkeypatch.setattr(Path, "exists", hostile_exists)
+
+    result = _purge_self(tmp_git_repo.source_id)
+
+    assert result.exit_code == 0, result.output
+    assert result.exception is None
+    assert "permanently expunged" in result.output
+    listed = [
+        line
+        for line in result.stdout.splitlines()
+        if line.startswith("  - ") and ".db:" in line
+    ]
+    assert not any("findings.db" in line for line in listed), result.stdout

@@ -7035,7 +7035,160 @@ def _purge_clean_live_log(layout: config.WorkspaceLayout, purge_ids: list[str]) 
         )
 
 
-def _purge_rebuild_indexes(layout: config.WorkspaceLayout) -> None:
+def _purge_rebuilt_store_paths(
+    layout: config.WorkspaceLayout,
+) -> tuple[Path, ...]:
+    """The derived stores `purge` deletes and then rebuilds IN-LINE.
+
+    Both rebuilds are free -- neither needs a model -- which is the whole
+    reason these two are separated from the dropped set below."""
+    return (layout.fts_db_path, layout.graph_db_path)
+
+
+def _purge_dropped_stores(
+    layout: config.WorkspaceLayout,
+) -> tuple[tuple[Path, str], ...]:
+    """Every derived store `purge` deletes and LEAVES deleted, paired with
+    what restoring it costs (#886).
+
+    THE ONE STRUCTURE. The sidecar sweep and the operator-facing notice both
+    walk it, and the cost travels WITH the path rather than in a lookup
+    keyed on filename -- a separate table would let a store be added here
+    and silently arrive in the notice with no cost, or raise on a missing
+    key. Drift of exactly that shape produced this issue: the delete loop
+    grew from two stores to five while the warning kept naming one.
+
+    The three costs are genuinely different, which is why this returns them
+    per store instead of one shared "run `openkos reindex`" line -- a
+    reindex restores none of the findings verdicts, and the question cache
+    needs nothing run at all."""
+    return (
+        (
+            layout.vectors_db_path,
+            "dense retrieval degraded. Run `openkos reindex` to restore it: "
+            "a full re-embed of every surviving document (one embedding "
+            "call per chunk). That run will report 'no embedding-model tag "
+            "stored (fresh or dropped store)' — not an embedding model "
+            "change — because the model tag lived in the dropped store.",
+        ),
+        (
+            layout.findings_db_path,
+            "persisted contradiction verdicts, identity adjudications and "
+            "edge-typing suggestions are gone. Every one is recomputable, "
+            "but only by paying its model call again: the next "
+            "`openkos contradictions`, `openkos adjudicate` and "
+            "`openkos suggest-relations` run judges everything fresh. "
+            "`openkos reindex` restores none of them.",
+        ),
+        (
+            layout.insight_questions_db_path,
+            "cached question embeddings for `query --save`'s near-duplicate "
+            "scan. Free to restore and nothing to run: a miss re-embeds on "
+            "the next save.",
+        ),
+    )
+
+
+def _purge_store_is_gone(db_path: Path) -> bool:
+    """Whether `db_path` is verifiably absent -- never raising.
+
+    `Path.exists()` is NOT total: it swallows a short list of errnos and
+    RE-RAISES the rest, `EACCES` among them. Every probe here runs AFTER the
+    irreversible rewrite, so an unguarded one turns an unreadable
+    `.openkos` entry into a crash that takes the whole success report with
+    it -- the expunge summary and the dropped-store disclosure both.
+
+    Fails CLOSED, and that direction is the point: a store whose absence
+    cannot be verified is reported as still present, so the notice never
+    claims a destruction it could not confirm and the sidecar sweep never
+    runs against a database that may still be live."""
+    try:
+        return not db_path.exists()
+    except OSError:
+        return False
+
+
+def _purge_sweep_store_sidecars(db_path: Path) -> None:
+    """Remove the `-wal`/`-shm` sidecars SQLite leaves beside `db_path`.
+
+    Hygiene, NOT erasure, and the distinction is worth keeping straight:
+    the WAL measured in the reported run was 0 bytes, so no data residue
+    survived in it. What survived was litter -- a sidecar pair with no
+    database, which makes `.openkos/` misreport what still exists.
+
+    Swept only for the stores that stay deleted. A rebuilt store's sidecars
+    belong to a live database and removing them would be reaching past the
+    delete."""
+    for suffix in ("-wal", "-shm"):
+        sidecar = db_path.with_name(db_path.name + suffix)
+        try:
+            sidecar.unlink(missing_ok=True)
+        except OSError as exc:
+            typer.echo(
+                f"openkos purge: warning -- failed to delete '{sidecar.name}': {exc}.",
+                err=True,
+            )
+
+
+def _purge_dropped_store_notice(dropped: Sequence[tuple[Path, str]]) -> str | None:
+    """The operator-facing account of every store this purge actually
+    destroyed (#886), or `None` when it destroyed none.
+
+    `dropped` carries each store's cost beside its path, so this renders the
+    caller's finding rather than re-deriving it -- there is no lookup here
+    that a new store could miss.
+
+    `purge` deleted five stores, rebuilt two, and the notice named ONE. The
+    two undisclosed stores held work the operator had paid for: in the
+    session that filed the issue, 11 persisted contradiction verdicts, 9
+    edge suggestions and 7 identity adjudications went with them, minutes
+    after `contradictions` reported "11 of 11 candidate(s) served from
+    persisted findings; 0 judged fresh". #142's justification for the
+    vectors warning -- warn every time so an operator is never left assuming
+    dense retrieval is still intact -- was never applied to the other two.
+
+    DESTRUCTION is what makes a store reportable, and it takes both halves:
+    the store existed before this purge, and it is gone after. Membership in
+    the delete list proves neither. `unlink` can fail -- warned on stderr
+    rather than raised -- so a notice built from the intended list would
+    announce a store as dropped while it is still on disk, sending the
+    operator to pay for a restore of something they still have. And absence
+    alone is not loss: a workspace that never ran `curate` has no
+    `findings.db` to begin with, so reporting it would invent a loss and
+    price a restore for verdicts that were never computed. The count is
+    derived from the same list for the same reason a literal would be
+    wrong.
+
+    The closing sentence about rulings is load-bearing and was VERIFIED, not
+    assumed. #886 states purge destroyed "the operator's own recorded
+    rulings (two declined identity merges)". All three `findings.db` tenants
+    hold MACHINE-computed verdicts, while a `--decline` or `--keep-distinct`
+    ruling is written under the bundle's decision subtree and committed with
+    the bundle, so a ruling on a SURVIVING concept is untouched by the store
+    drop. It is deliberately qualified: a decision path referencing a
+    purge-set member IS expunged in the same rewrite pass (privacy-purge:
+    Whole-History Expunge Covers The Pending-Work Decision Subtree), so an
+    unqualified promise would read as the erasure having missed
+    something."""
+    if not dropped:
+        return None
+    lines = [
+        f"openkos purge: {len(dropped)} derived store(s) were dropped and "
+        "are NOT rebuilt."
+    ]
+    lines += [f"  - {path.name}: {cost}" for path, cost in dropped]
+    lines.append(
+        "Your own rulings are not in these stores: a `--decline` or "
+        "`--keep-distinct` ruling on a concept OUTSIDE the purge set is "
+        "recorded in the bundle and survives. A ruling that named a purged "
+        "concept was expunged with it, which is the erasure working."
+    )
+    return "\n".join(lines)
+
+
+def _purge_rebuild_indexes(
+    layout: config.WorkspaceLayout,
+) -> tuple[tuple[Path, str], ...]:
     """Phase B's index cleanup (spec: Index Cleanup Is Delete-And-Rebuild, No
     Tombstone): physically DELETE `.openkos/{fts,vectors,graph,findings}.db`
     -- row-level `DELETE` would leave SQLite freelist-recoverable pages,
@@ -7053,13 +7206,12 @@ def _purge_rebuild_indexes(layout: config.WorkspaceLayout) -> None:
     irreversible, already-succeeded) purge -- the DELETE above is the
     security-critical erasure; the rebuild is a best-effort convenience over
     the survivors (design: Index cleanup decision)."""
-    for db_path in (
-        layout.fts_db_path,
-        layout.vectors_db_path,
-        layout.graph_db_path,
-        layout.findings_db_path,
-        layout.insight_questions_db_path,
-    ):
+    droppable = _purge_dropped_stores(layout)
+    # Captured BEFORE the delete: a store that was never there was not
+    # destroyed by this purge, and only destruction is worth disclosing.
+    existed = {path for path, _ in droppable if not _purge_store_is_gone(path)}
+    dropped = [path for path, _ in droppable]
+    for db_path in (*_purge_rebuilt_store_paths(layout), *dropped):
         try:
             db_path.unlink(missing_ok=True)
         except OSError as exc:
@@ -7068,6 +7220,16 @@ def _purge_rebuild_indexes(layout: config.WorkspaceLayout) -> None:
                 f"{exc}. Run `openkos reindex` to rebuild derived indexes.",
                 err=True,
             )
+    # #886: sweep the sidecars of the dropped stores only, and only for the
+    # ones that ACTUALLY went. A rebuilt store's `-wal`/`-shm` belong to a
+    # database that is about to exist again -- and sweeping the sidecars of
+    # a store whose `unlink` FAILED is worse than litter: a `-wal` holds
+    # committed pages not yet checkpointed back, so removing it out from
+    # under a live database can destroy data the purge was never asked to
+    # touch.
+    for db_path in dropped:
+        if _purge_store_is_gone(db_path):
+            _purge_sweep_store_sidecars(db_path)
 
     try:
         reindex_module._reindex_fts(layout.bundle_dir, layout.fts_db_path, force=True)
@@ -7086,6 +7248,15 @@ def _purge_rebuild_indexes(layout: config.WorkspaceLayout) -> None:
             "Run `openkos reindex` to restore search.",
             err=True,
         )
+
+    # Returned LAST, after both rebuilds: the caller's disclosure describes
+    # what this purge destroyed, and a store is only that if it existed
+    # before the delete and is still absent once the rebuilds have run.
+    return tuple(
+        (path, cost)
+        for path, cost in droppable
+        if path in existed and _purge_store_is_gone(path)
+    )
 
 
 @app.command(
@@ -7645,79 +7816,78 @@ def purge(
     # surviving (unrelated) records, reusing the exact same primitive
     # `forget`'s Phase B calls, so the sweep is written exactly once.
     decisions_touched = _sweep_decisions_for_ids(layout.bundle_dir, purge_ids)
-    _purge_rebuild_indexes(layout)
-
-    # Post-rewrite live-tree auto-commit (design: "purge empty-diff guard",
-    # load-bearing): `_purge_clean_live_*` frequently leaves `index.md`/
-    # `log.md` byte-identical to filter-repo's own rewrite (a no-op), and
-    # `_autocommit` -> `commit_paths` runs `git commit` UNCONDITIONALLY,
-    # raising `GitError` on an empty diff -- so a scoped `paths_dirty` probe
-    # gates the call, avoiding a spurious WARNING on the common clean-purge
-    # path. If the probe itself raises `GitError` (e.g. a genuinely broken
-    # repo), fall through and attempt `_autocommit` anyway -- its own
-    # try/except keeps that non-fatal too, matching this whole step's
-    # never-fail-the-already-irreversible-purge contract.
-    commit_paths_rel = [
-        "bundle/index.md",
-        "bundle/log.md",
-        *(
-            f"bundle/{p.relative_to(layout.bundle_dir).as_posix()}"
-            for p in (*ledger_touched, *decisions_touched)
-        ),
-    ]
+    dropped_stores = _purge_rebuild_indexes(layout)
+    # #886: the disclosure is the operator's only account of what this
+    # irreversible operation destroyed, so it must not be lost to a
+    # failure in the steps that come after the delete. The stores are
+    # ALREADY gone by the line above; everything between here and the
+    # notice is post-erasure bookkeeping -- including the `paths_dirty`
+    # probe and auto-commit below, whose own comment records that the probe
+    # can raise `GitError` on a genuinely broken repository -- and losing
+    # the notice to it would leave
+    # an operator who paid for those verdicts with no record that they
+    # went. `finally`, not a reorder: the expunge summary below reads
+    # first for a reason, and moving the notice above it to make it
+    # safe would trade one defect for worse output.
     try:
-        should_commit = vcs_git.paths_dirty(root, commit_paths_rel)
-    except vcs_git.GitError:
-        should_commit = True
-    if should_commit:
-        commit_message = f"openkos: purge {canonical_id}"
-        if len(purge_ids) > 1:
-            commit_message += f" (+{len(purge_ids) - 1})"
-        _autocommit(root, commit_paths_rel, commit_message)
+        # Post-rewrite live-tree auto-commit (design: "purge empty-diff guard",
+        # load-bearing): `_purge_clean_live_*` frequently leaves `index.md`/
+        # `log.md` byte-identical to filter-repo's own rewrite (a no-op), and
+        # `_autocommit` -> `commit_paths` runs `git commit` UNCONDITIONALLY,
+        # raising `GitError` on an empty diff -- so a scoped `paths_dirty` probe
+        # gates the call, avoiding a spurious WARNING on the common clean-purge
+        # path. If the probe itself raises `GitError` (e.g. a genuinely broken
+        # repo), fall through and attempt `_autocommit` anyway -- its own
+        # try/except keeps that non-fatal too, matching this whole step's
+        # never-fail-the-already-irreversible-purge contract.
+        commit_paths_rel = [
+            "bundle/index.md",
+            "bundle/log.md",
+            *(
+                f"bundle/{p.relative_to(layout.bundle_dir).as_posix()}"
+                for p in (*ledger_touched, *decisions_touched)
+            ),
+        ]
+        try:
+            should_commit = vcs_git.paths_dirty(root, commit_paths_rel)
+        except vcs_git.GitError:
+            should_commit = True
+        if should_commit:
+            commit_message = f"openkos: purge {canonical_id}"
+            if len(purge_ids) > 1:
+                commit_message += f" (+{len(purge_ids) - 1})"
+            _autocommit(root, commit_paths_rel, commit_message)
 
-    if scope == "source":
-        typer.echo(
-            f"openkos purge: permanently expunged {len(purge_ids)} "
-            "concept(s) from ALL git history."
-        )
-    else:
-        typer.echo(
-            f"openkos purge: permanently expunged 'bundle/{canonical_id}.md' "
-            "from ALL git history."
-        )
-    # #142 (purge-transactional-cleanup): `_purge_rebuild_indexes` always
-    # deletes `.openkos/vectors.db` and deliberately does NOT rebuild it
-    # (design: "Index cleanup decision") -- warn every time so an operator
-    # is never left assuming dense retrieval is still intact.
-    # #698: `vectors.db` holds BOTH the `vector_meta` content-hash cache and
-    # the `meta` embedding-model tag, so dropping the file drops both. The
-    # restore is therefore a FULL re-embed -- one embedding call per CHUNK
-    # (#888; no longer one per surviving document -- a document exceeding
-    # the embedder's window now costs several calls), not an incremental
-    # top-up. Because the tag lived in the dropped store, the NEXT `reindex`
-    # run finds NO stored tag at all and takes the corrected disclosure's
-    # (reindex-command: Reindex Discloses The Real Re-Embed Trigger) "no
-    # embedding-model tag stored (fresh or dropped store)" branch -- NEVER
-    # the retired "embedding model changed (unset -> <model>)" wording,
-    # since there is no old tag left to compare against a new one. Disclose
-    # both here: the cost, because it is a long wait on a large corpus
-    # arriving straight after an irreversible operation; and the wording,
-    # so an operator does not mistake the absent-tag disclosure for a
-    # configuration change they did not make.
-    #
-    # Preserving the tag alone would NOT make the rebuild incremental -- the
-    # vectors themselves are gone, so every document must be embedded again
-    # regardless of what the tag says. Only carrying the SURVIVORS' vectors
-    # into a fresh database would deliver that, which changes #142's
-    # delete-and-rebuild erasure posture and belongs in its own design pass.
-    typer.echo(
-        "openkos purge: dense retrieval degraded (vectors.db dropped) — run "
-        "`openkos reindex` to restore it. That restore is a full re-embed of "
-        "every surviving document (one embedding call per chunk), and the "
-        "next reindex run will report 'no embedding-model tag stored (fresh "
-        "or dropped store)' — not an embedding model change — because the "
-        "model tag lived in the dropped store."
-    )
+        if scope == "source":
+            typer.echo(
+                f"openkos purge: permanently expunged {len(purge_ids)} "
+                "concept(s) from ALL git history."
+            )
+        else:
+            typer.echo(
+                f"openkos purge: permanently expunged 'bundle/{canonical_id}.md' "
+                "from ALL git history."
+            )
+        # #886: every store `purge` actually destroyed is named here, each with
+        # its own restore cost. This block used to name `vectors.db` alone while
+        # THREE stores were being dropped. The wording now lives in
+        # `_purge_dropped_store_notice`, rendering exactly what
+        # `_purge_rebuild_indexes` reports it destroyed, so the disclosure
+        # cannot fall behind the delete set the way it did between #142 and
+        # #886 -- nor run ahead of it by naming a store whose delete failed or
+        # one that was never there.
+        #
+        # The #698 substance the old block carried is carried by that helper's
+        # `vectors.db` cost line: the re-embed is full rather than incremental,
+        # and the next `reindex` reports "no embedding-model tag stored (fresh
+        # or dropped store)" rather than an embedding model change, because the
+        # tag lived in the dropped store. Same claims, re-worded to sit in a
+        # per-store list; the quoted reindex wording is the part that is
+        # verbatim, because pre-empting it is the point.
+    finally:
+        dropped_notice = _purge_dropped_store_notice(dropped_stores)
+        if dropped_notice is not None:
+            typer.echo(dropped_notice)
 
 
 @app.command(
