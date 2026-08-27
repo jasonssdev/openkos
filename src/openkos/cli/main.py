@@ -15055,6 +15055,62 @@ def _echo_declined_finding(
     typer.echo()
 
 
+def render_contradiction_header(result: ContradictionVerdict) -> None:
+    """Echo one contradiction verdict's HEADER, plus the `unmerge` remedy
+    when the verdict is an intra-document (merged-body) one (#409/#445).
+
+    Shared by `contradictions` and `curate`'s Contradictions stage because
+    they DRIFTED (#883): `curate` rendered every verdict from `pair_ids`,
+    so a merged-body verdict came out as the `A <-> A` self-pair, losing
+    both the absorbed id and the only command that resolves the finding --
+    on the path `openkos next` actually recommends. A comment claiming the
+    two echo paths "cannot drift apart" sat in `curate.py` while they had.
+    One function is the fix; two call sites reading the same field are not.
+
+    `merged_absorbed_id` is the SOLE discriminator between a typed-edge and
+    a merged-body verdict (`ContradictionVerdict.merged_absorbed_id`'s
+    docstring WARNING). NEVER branch on `pair_ids` equality: a `(x, x)`
+    typed self-loop is separately reachable (#411), so pair shape conflates
+    the two.
+
+    Claims and rationale stay with each caller: `contradictions` closes its
+    entry with a blank line and `curate` does not, and folding that
+    difference in here would change one command's output to share code with
+    the other."""
+    if result.merged_absorbed_id is not None:
+        survivor_id, _ = result.pair_ids
+        typer.echo(
+            f"[{result.verdict.value.upper()}] {survivor_id} "
+            f"(merged content, absorbed {result.merged_absorbed_id}) "
+            f"(confidence: {result.confidence:.2f})"
+        )
+        # Name the verb that resolves the condition (#445, same shape as
+        # #386's advisory ladder). A pair verdict needs no pointer: the
+        # operator can open both files. A merged-content verdict has ONE
+        # node, and the disagreeing second body lives in the ledger where
+        # no ordinary read will surface it -- `unmerge` is the only verb
+        # that separates them, and it takes exactly these two ids.
+        #
+        # The LIFO qualifier is not decoration (review finding on this
+        # change): `resolution.contradiction` raises ONE candidate PER
+        # `merged_from` entry, not just the newest, while
+        # `bundle.merge.plan_unmerge` refuses any `absorbed_id` that is
+        # not the ledger's tail. On a survivor with two unreversed
+        # merges, the older verdict's command therefore REFUSES -- so the
+        # line states the precondition instead of promising success.
+        typer.echo(
+            f"  next: openkos unmerge {survivor_id} {result.merged_absorbed_id}"
+            " (LIFO-enforced: refuses unless this is the survivor's "
+            "most recent unreversed merge)"
+        )
+    else:
+        source_id, target_id = result.pair_ids
+        typer.echo(
+            f"[{result.verdict.value.upper()}] {source_id} <-> {target_id} "
+            f"(confidence: {result.confidence:.2f})"
+        )
+
+
 def _contradictions_declined_view(root: Path, layout: config.WorkspaceLayout) -> None:
     """`contradictions --declined` (pending-work spec: "The declined-
     listing view surfaces it", design Decision 3's "explicit listing
@@ -15538,45 +15594,7 @@ def contradictions(
             typer.echo("No high-confidence contradictions found.")
 
     for result in displayed:
-        # surface-merged-body-contradictions (#409): `merged_absorbed_id` is
-        # the SOLE discriminator between a typed-edge verdict and an
-        # intra-document (merged-body) verdict -- NEVER `pair_ids` shape
-        # (`ContradictionVerdict.merged_absorbed_id`'s docstring warning). A
-        # `(x, x)` `pair_ids` is separately reachable today via an ordinary
-        # typed self-loop (#411), so branching on pair equality here would
-        # conflate the two.
-        if result.merged_absorbed_id is not None:
-            survivor_id, _ = result.pair_ids
-            typer.echo(
-                f"[{result.verdict.value.upper()}] {survivor_id} "
-                f"(merged content, absorbed {result.merged_absorbed_id}) "
-                f"(confidence: {result.confidence:.2f})"
-            )
-            # Name the verb that resolves the condition (#445, same shape as
-            # #386's advisory ladder). A pair verdict needs no pointer: the
-            # operator can open both files. A merged-content verdict has ONE
-            # node, and the disagreeing second body lives in the ledger where
-            # no ordinary read will surface it -- `unmerge` is the only verb
-            # that separates them, and it takes exactly these two ids.
-            #
-            # The LIFO qualifier is not decoration (review finding on this
-            # change): `resolution.contradiction` raises ONE candidate PER
-            # `merged_from` entry, not just the newest, while
-            # `bundle.merge.plan_unmerge` refuses any `absorbed_id` that is
-            # not the ledger's tail. On a survivor with two unreversed
-            # merges, the older verdict's command therefore REFUSES -- so the
-            # line states the precondition instead of promising success.
-            typer.echo(
-                f"  next: openkos unmerge {survivor_id} {result.merged_absorbed_id}"
-                " (LIFO-enforced: refuses unless this is the survivor's "
-                "most recent unreversed merge)"
-            )
-        else:
-            source_id, target_id = result.pair_ids
-            typer.echo(
-                f"[{result.verdict.value.upper()}] {source_id} <-> {target_id} "
-                f"(confidence: {result.confidence:.2f})"
-            )
+        render_contradiction_header(result)
         for claim in result.conflicting_claims:
             typer.echo(f"  - {claim}")
         typer.echo(f"  rationale: {result.rationale}")

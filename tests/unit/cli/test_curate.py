@@ -3245,6 +3245,68 @@ def test_contradictions_partial_batch_reports_completed_then_fails_with_counts(
     assert changed_paths(before, _snapshot(tmp_path / "bundle")) == set()
 
 
+def test_curate_renders_a_merged_body_contradiction_with_its_unmerge_remedy(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#883: an intra-document (merged-body) verdict renders with its
+    absorbed id and its `unmerge` remedy in `curate`, exactly as the
+    standalone `contradictions` command already renders it -- never as the
+    `A <-> A` self-pair the shared `pair_ids` shape would produce.
+
+    `merged_absorbed_id` is the SOLE discriminator between a typed-edge and
+    a merged-body verdict (`ContradictionVerdict.merged_absorbed_id`'s
+    docstring WARNING); `pair_ids` equality is explicitly NOT a safe
+    stand-in, since a `(x, x)` typed self-loop is separately reachable
+    (#411). `curate` had the field in hand -- it uses it one line earlier
+    for the declined filter -- and rendered from `pair_ids` regardless.
+
+    This matters more than cosmetics because `openkos next` names `curate`,
+    never `contradictions`, so the recommended path was the one that lost
+    both the diagnosis and the only command that resolves the finding.
+    """
+    from openkos.resolution.contradiction import (
+        ContradictionBatch,
+        ContradictionVerdict,
+    )
+    from openkos.resolution.contradiction import Verdict as CVerdict
+
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _reindexed_workspace(tmp_path, monkeypatch)
+
+    monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [])
+    monkeypatch.setattr("openkos.cli.curate._concept_type_names", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "openkos.cli.curate._contradiction_plan",
+        lambda *a, **k: _edge_plan(("concepts/a", "concepts/a")),
+    )
+    verdict = ContradictionVerdict(
+        pair_ids=("concepts/a", "concepts/a"),
+        verdict=CVerdict.CONTRADICTS,
+        confidence=0.95,
+        rationale="the two merged halves disagree",
+        conflicting_claims=("claim one", "claim two"),
+        merged_absorbed_id="concepts/b",
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_contradictions",
+        lambda *a, **k: (ContradictionBatch(results=[verdict]), 1),
+    )
+
+    result = runner.invoke(app, ["curate", "--auto"])
+
+    assert result.exit_code == 0
+    assert (
+        "[CONTRADICTS] concepts/a (merged content, absorbed concepts/b) "
+        "(confidence: 0.95)" in result.stdout
+    )
+    assert "next: openkos unmerge concepts/a concepts/b" in result.stdout
+    assert "concepts/a <-> concepts/a" not in result.stdout
+    assert "the two merged halves disagree" in result.stdout
+
+
 def test_contradictions_partial_batch_unavailable_still_reports_completed(
     tmp_path: Path,
     tmp_path_factory: pytest.TempPathFactory,
