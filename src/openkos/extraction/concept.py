@@ -503,6 +503,70 @@ def _is_meeting_shaped(source_title: str, source_text: str) -> bool:
     ) or _transcript_shaped_text(source_text)
 
 
+_ATX_HEADING_RE: Final = re.compile(r"^\s{0,3}#{1,6}\s+(?P<text>.*)$", re.MULTILINE)
+"""One ATX markdown heading's text. Up to three leading spaces is CommonMark's
+own tolerance; a fourth makes the line an indented code block, and a line that
+is not a heading is not this signal's business.
+
+Deliberately ATX only. A gathering word inside a bullet, a block quote or a
+sentence is the ordinary way any document MENTIONS a meeting -- the repo's own
+eval reports and specs are full of them -- while a heading is the document
+naming its own framing."""
+
+
+def _framing_shaped(source_title: str, source_text: str) -> bool:
+    """Whether framing-object enforcement applies to this source (#903's
+    remaining half): `_is_meeting_shaped` OR a gathering word in one of the
+    document's own ATX headings.
+
+    A SUMMARIZED meeting note defeats both of `_is_meeting_shaped`'s signals
+    at once, and neither is repairable. It has no speaker turns for
+    `_transcript_shaped_text` to see; its metadata block (`**Fecha:**`,
+    `**Invitados:**`) is the single-occurrence `key: value` class the
+    recurrence floors were written to REJECT, and relaxing them would
+    readmit every definition list. Its title is a `path.stem` carrying no
+    gathering word. What it does carry is a heading -- `## Informacion de la
+    reunion` -- and `reuni[oó]n` is already in the measured lexicon, so this
+    adds a SURFACE, never a word.
+
+    DELIBERATELY NARROWER THAN `_is_meeting_shaped`, and that is the whole
+    design decision here. `_is_meeting_shaped` gates three things behind one
+    definition (design D3): framing-object enforcement, the participant
+    machinery (#668), and stripping the title from the prompt channel. Only
+    the first is broken on a summarized note -- the E2E run that filed #903
+    stored three meeting containers as knowledge, one of them titled with a
+    literal `Reunion` token `_MEETING_SHAPED_TITLE_RE` already matches,
+    surviving only because the guard tested the SOURCE.
+
+    The other two are not free to widen:
+
+    - The prompt branch carries the only MEASURED cost in this area (#459:
+      `large-03-skills-vs-tools` 0.75 -> 0.57 post-cap recall), paid on every
+      false positive.
+    - `evals/decision_extraction/report.md` records the two AMI `.summary`
+      documents staying ungated for the participant machinery as CORRECT,
+      and this signal fires on both of them.
+
+    And the measurement #459 requires cannot currently be run: none of
+    `examples/extraction-corpus/`'s five fixtures has a gathering-word
+    heading whose outcome this would change, so `run_cap_eval.py` would
+    return a pass it never had the exposure to fail. Widening to the full
+    predicate needs a summarized-note fixture with hand-written ground
+    truth first.
+
+    The cost of the narrower scope is honest and stated: two predicates now
+    answer "is this a meeting?", against design D3's one-definition rule.
+    `_framing_shaped` is defined in terms of `_is_meeting_shaped` rather than
+    beside it, so the two can only ever differ by this one added surface --
+    a source the meeting predicate admits is always framing-shaped."""
+    if _is_meeting_shaped(source_title, source_text):
+        return True
+    return any(
+        _MEETING_SHAPED_TITLE_RE.search(match.group("text"))
+        for match in _ATX_HEADING_RE.finditer(source_text)
+    )
+
+
 _LANGUAGE_ANCHOR: Final = (
     'Write every "title", "description" and "body" in the same language as '
     "the SOURCE TEXT below."
@@ -1415,7 +1479,7 @@ def _unevidenced_titles(
 
 
 def _drop_framing_objects(
-    results: list[ExtractionResult], *, meeting_shaped: bool
+    results: list[ExtractionResult], *, framing_shaped: bool
 ) -> list[ExtractionResult]:
     """Deterministic framing-object enforcement (#522/#533): on a
     meeting-shaped source, an object whose OWN title is meeting-shaped names
@@ -1452,7 +1516,7 @@ def _drop_framing_objects(
     lexically, whatever got the source through the gate. A `Procedure` is
     never framing, whatever its title (#413's role exemption: an object
     carrying the steps is not a lazy restatement of the gathering)."""
-    if not meeting_shaped:
+    if not framing_shaped:
         return results
     return [
         result
@@ -3305,7 +3369,7 @@ def extract_concept(
             _drop_wrong_language_titles(results, source_text=source_text)
         )
     results = _drop_framing_objects(
-        results, meeting_shaped=_is_meeting_shaped(source_title, source_text)
+        results, framing_shaped=_framing_shaped(source_title, source_text)
     )
     results = _drop_source_title_twins(results, source_title=source_title)
     # #584: the list is final and filtered here, which is the only place the
@@ -3576,6 +3640,15 @@ def extract_concept_union(
     # is pure and `_build_messages` already recomputes it per chat call, so
     # this adds no new class of work.
     meeting_shaped = _is_meeting_shaped(source_title, source_text)
+    # #903, remaining half: framing-object enforcement takes the WIDER
+    # `_framing_shaped` verdict -- a summarized meeting note names the
+    # gathering in a heading and nowhere else. `meeting_shaped` above is
+    # deliberately left alone: it still gates the participant machinery and
+    # the prompt channel, which carry the measured #459 recall cost and the
+    # `evals/decision_extraction/report.md` finding that summary documents
+    # correctly stay ungated. See `_framing_shaped` for why the two are
+    # separate and what it would take to collapse them again.
+    framing_shaped = _framing_shaped(source_title, source_text)
 
     if not fans_out(source_text, source_title=source_title):
         # `pass i/2`, not `chunk 1/1`: below the threshold this branch runs
@@ -3587,7 +3660,7 @@ def extract_concept_union(
                 _extract_once(source_text, source_title, llm),
                 source_text=source_text,
             ),
-            meeting_shaped=meeting_shaped,
+            framing_shaped=framing_shaped,
         )
         _report(on_progress, "extracting pass 2/2")
         run2 = _drop_framing_objects(
@@ -3595,7 +3668,7 @@ def extract_concept_union(
                 _extract_once(source_text, source_title, llm),
                 source_text=source_text,
             ),
-            meeting_shaped=meeting_shaped,
+            framing_shaped=framing_shaped,
         )
         merged = _drop_source_title_twins(
             _merge_union(run1 + run2), source_title=source_title
@@ -3626,7 +3699,7 @@ def extract_concept_union(
             _drop_wrong_language_titles(deduped, source_text=source_text)
         )
         merged = _drop_source_title_twins(
-            _drop_framing_objects(deduped, meeting_shaped=meeting_shaped),
+            _drop_framing_objects(deduped, framing_shaped=framing_shaped),
             source_title=source_title,
         )
         run_count = 1

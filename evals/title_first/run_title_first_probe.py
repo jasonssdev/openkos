@@ -267,7 +267,7 @@ def title_first_extract_once(
     source_title: str,
     llm: LLMBackend,
     *,
-    meeting_shaped: bool,
+    framing_shaped: bool,
     ledger: LeverLedger,
 ) -> list[concept.ExtractionResult]:
     """`_extract_once`, with the framing gate moved BEFORE the body is written.
@@ -275,10 +275,17 @@ def title_first_extract_once(
     Survey the window for `type` + `title`, drop the framing objects with
     production's own predicate, then spend one call hydrating the survivors.
 
-    `meeting_shaped` is passed in rather than recomputed per window: the
+    `framing_shaped` is passed in rather than recomputed per window: the
     union computes it ONCE for the whole source (#673 design D3), and a
     per-window verdict would gate the treatment on a different predicate than
     the baseline runs under.
+
+    It is `_framing_shaped`, NOT `_is_meeting_shaped` (#903): production's
+    `_drop_framing_objects` call sites take the wider verdict, and this probe
+    exists to measure that exact call. Feeding it the narrower one would
+    leave the treatment arm blind to a heading-only gathering signal while
+    the baseline it is compared against sees it -- an arm that differs from
+    production in the one predicate the lever is built around.
     """
     ledger.survey_calls += 1
     reply = llm.chat(_survey_messages(source_text, source_title))
@@ -298,7 +305,7 @@ def title_first_extract_once(
         concept.ExtractionResult(type=t, title=title, description="-", body="")
         for t, title in surveyed
     ]
-    kept = concept._drop_framing_objects(placeholders, meeting_shaped=meeting_shaped)
+    kept = concept._drop_framing_objects(placeholders, framing_shaped=framing_shaped)
     ledger.framing_dropped += len(placeholders) - len(kept)
     if not kept:
         return []
@@ -323,7 +330,7 @@ def title_first_extract_once(
 
 
 @contextlib.contextmanager
-def applied_lever(*, meeting_shaped: bool, ledger: LeverLedger) -> Iterator[None]:
+def applied_lever(*, framing_shaped: bool, ledger: LeverLedger) -> Iterator[None]:
     """Swap `_extract_once` for the title-first phase, for one run.
 
     Patched on the MODULE, because `extract_concept_union` resolves it as a
@@ -340,7 +347,7 @@ def applied_lever(*, meeting_shaped: bool, ledger: LeverLedger) -> Iterator[None
             source_text,
             source_title,
             llm,
-            meeting_shaped=meeting_shaped,
+            framing_shaped=framing_shaped,
             ledger=ledger,
         )
 
@@ -423,12 +430,12 @@ def run_once(
     model: str,
 ) -> RunRecord:
     """Drive the REAL union pipeline once, under one arm. Never raises."""
-    meeting_shaped = concept._is_meeting_shaped(source_title, source_text)
+    framing_shaped = concept._framing_shaped(source_title, source_text)
     ledger = LeverLedger()
     started = time.perf_counter()
     try:
         if arm == TREATMENT:
-            with applied_lever(meeting_shaped=meeting_shaped, ledger=ledger):
+            with applied_lever(framing_shaped=framing_shaped, ledger=ledger):
                 outcome = concept.extract_concept_union(
                     source_text, source_title=source_title, llm=llm
                 )
@@ -753,7 +760,7 @@ def _self_test() -> int:
         "A: hola\nB: hola\n" * 20,
         "Reunión semanal",
         llm,
-        meeting_shaped=True,
+        framing_shaped=True,
         ledger=ledger,
     )
     check("surveyed everything phase 1 proposed", ledger.surveyed, 3)
@@ -786,7 +793,7 @@ def _self_test() -> int:
             "A: hola\nB: hola\n" * 20,
             "Reunión semanal",
             empty_llm,
-            meeting_shaped=True,
+            framing_shaped=True,
             ledger=empty_ledger,
         ),
         [],
@@ -795,7 +802,7 @@ def _self_test() -> int:
 
     # The patch must be installed on the module and removed again.
     original = concept._extract_once
-    with applied_lever(meeting_shaped=True, ledger=LeverLedger()):
+    with applied_lever(framing_shaped=True, ledger=LeverLedger()):
         check("the lever bites", concept._extract_once is original, False)
     check("the lever is removed", concept._extract_once is original, True)
 

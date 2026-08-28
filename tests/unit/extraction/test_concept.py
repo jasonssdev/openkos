@@ -1095,7 +1095,7 @@ def test_meeting_titled_person_still_dropped_by_framing_removal() -> None:
     )
 
     kept = concept_mod._drop_framing_objects(
-        [framing_person, concept], meeting_shaped=True
+        [framing_person, concept], framing_shaped=True
     )
 
     assert kept == [concept]
@@ -2917,7 +2917,7 @@ def test_procedure_behavior_unchanged_at_all_three_sites() -> None:
 
     # Framing-drop: `Procedure` stays exempt, survives.
     assert concept_mod._drop_framing_objects(
-        [procedure_twin, concept], meeting_shaped=True
+        [procedure_twin, concept], framing_shaped=True
     ) == [procedure_twin, concept]
 
     # Judge re-admission: `Procedure` is re-admitted even without an
@@ -7123,3 +7123,135 @@ def test_a_capture_that_both_fails_and_adds_still_reports_its_failure(
     assert capture_runs == 1
     assert added_titles == ("Epictetus",)
     assert [result.title for result in objects] == ["Ingestion pipeline", "Epictetus"]
+
+
+# --- issue #903, remaining half: the SUMMARIZED meeting note --------------
+
+_SUMMARIZED_MEETING_NOTE = (
+    "# AFG - Decision Evaluation (coordinacion)\n"
+    "\n"
+    "## Informacion de la reunion\n"
+    "\n"
+    "**Fecha:** ago 18, 2026\n"
+    "**Invitados:** tres personas del equipo\n"
+    "**Archivos adjuntos:** notas adjuntas\n"
+    "\n"
+    "## Resumen\n"
+    "\n"
+    "El equipo revisó el avance de la evaluación de decisiones y acordó\n"
+    "priorizar la ingesta antes que el panel de métricas.\n"
+    "\n"
+    "## Acuerdos\n"
+    "\n"
+    "- Priorizar la ingesta.\n"
+    "- Postergar el panel de métricas.\n"
+)
+"""The third E2E source #903 reports and PR #906 deliberately left unfixed:
+a meeting NOTE, not a transcript. No speaker turns anywhere, a `path.stem`
+title carrying no gathering word, and a metadata block whose keys appear
+exactly once each -- the single-occurrence class the recurrence floors were
+written to reject."""
+
+
+def test_summarized_meeting_note_is_framing_shaped() -> None:
+    """#903's remaining half. `_transcript_shaped_text` has nothing to see
+    (no turns) and the title gate has no gathering word, so the only signal
+    left is the document's own HEADING naming the gathering."""
+    assert concept_mod._framing_shaped("transcription3", _SUMMARIZED_MEETING_NOTE)
+
+
+def test_summarized_meeting_note_is_not_meeting_shaped() -> None:
+    """The scope decision, pinned so a later widening cannot happen by
+    accident: `_framing_shaped` feeds framing-object enforcement ALONE.
+    `_is_meeting_shaped` -- which also gates the participant machinery and
+    strips the title from the prompt -- is deliberately UNCHANGED here.
+
+    That branch carries the only MEASURED cost in this area (#459:
+    `large-03-skills-vs-tools` 0.75 -> 0.57 post-cap recall), and
+    `evals/decision_extraction/report.md` records summary documents staying
+    ungated for the participant machinery as correct. Widening it needs a
+    summarized-note fixture and a cap-eval run that can actually falsify
+    the change; today's corpus cannot (no fixture changes outcome)."""
+    assert not concept_mod._is_meeting_shaped(
+        "transcription3", _SUMMARIZED_MEETING_NOTE
+    )
+
+
+def test_framing_shaped_admits_everything_the_meeting_predicate_admits() -> None:
+    """Extends, never replaces: a title-gated source and a turn-shaped
+    source both stay framing-shaped, so no source that dropped framing
+    objects before stops doing so."""
+    assert concept_mod._framing_shaped("Weekly meeting notes", "Plain prose.\n")
+    turns = "\n".join(
+        f"**Jason Sepulveda:** un punto {i}\n**Gustavo Martinez:** una respuesta {i}"
+        for i in range(6)
+    )
+    assert concept_mod._framing_shaped("TS3005a transcript", turns)
+
+
+def test_framing_shaped_ignores_a_gathering_word_in_prose() -> None:
+    """The surface is HEADINGS, not the body. A gathering word in a
+    sentence is the ordinary way any document mentions a meeting, and
+    firing on it would make the signal fire on documents ABOUT meetings --
+    the class the repo's own eval reports and specs fall into."""
+    text = (
+        "# Designing the sync engine\n"
+        "\n"
+        "We agreed in a meeting last week that the sync engine reconciles\n"
+        "local and remote state. The retrospective raised no objections.\n"
+    )
+    assert not concept_mod._framing_shaped("designing the sync engine", text)
+
+
+def test_framing_shaped_ignores_a_gathering_word_in_a_bullet_or_quote() -> None:
+    """Only ATX headings count. A bullet or a block quote is body
+    structure, not the document naming its own framing."""
+    text = (
+        "# Release checklist\n"
+        "\n"
+        "- Meeting with the platform team\n"
+        "> The kickoff is scheduled for Monday.\n"
+        # FOUR leading spaces, and it carries a gathering word: this is the
+        # CommonMark boundary `_ATX_HEADING_RE`'s `\\s{0,3}` encodes. Three
+        # spaces would still be a heading; the fourth makes it an indented
+        # code block. A version of this line with fewer spaces, or with no
+        # gathering word, asserts nothing -- it passes for the wrong reason.
+        "    # Meeting notes appendix\n"
+    )
+    assert not concept_mod._framing_shaped("release checklist", text)
+    # And three spaces IS a heading, so the boundary is pinned from both
+    # sides rather than only from the safe one.
+    assert concept_mod._framing_shaped(
+        "release checklist", "   # Meeting notes appendix\n"
+    )
+
+
+def test_drop_framing_objects_removes_the_container_on_a_summarized_note() -> None:
+    """The damage #903 reports, end to end at this seam: three framing
+    Events survived the E2E run, one titled with a literal `Reunion` token
+    that `_MEETING_SHAPED_TITLE_RE` already matches. It survived only
+    because the guard tested the SOURCE, and the source was never
+    recognised."""
+    results = [
+        concept_mod.ExtractionResult(
+            type="Event",
+            title="Reunion de coordinacion",
+            description="The meeting itself.",
+            body="",
+        ),
+        concept_mod.ExtractionResult(
+            type="Decision",
+            title="Priorizar la ingesta",
+            description="A real subject discussed in it.",
+            body="",
+        ),
+    ]
+
+    kept = concept_mod._drop_framing_objects(
+        results,
+        framing_shaped=concept_mod._framing_shaped(
+            "transcription3", _SUMMARIZED_MEETING_NOTE
+        ),
+    )
+
+    assert [r.title for r in kept] == ["Priorizar la ingesta"]
