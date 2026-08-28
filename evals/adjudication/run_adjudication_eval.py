@@ -11,8 +11,8 @@ paid for (see `evals/edge_typing/README.md`).
 
 The measurement runs BOTH directions of the change, because a rule that
 makes identical Event titles read as a recurring series buys its precision
-somewhere. `adjudication_fixtures.py` carries the five probe classes; the
-three control classes exist so a rubric that answered `different` to
+somewhere. `adjudication_fixtures.py` carries the nine probe classes; the
+same-expected control classes exist so a rubric that answered `different` to
 every Event pair -- or to everything -- cannot score well.
 
 Numbers, per arm:
@@ -88,6 +88,7 @@ import tempfile
 import time
 from collections import Counter, defaultdict
 from datetime import UTC, datetime
+from itertools import combinations
 from typing import cast
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -99,7 +100,14 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 # obvious candidate).
 sys.path.append(str(REPO_ROOT / "evals"))
 
-from adjudication_fixtures import PAIRS, PROBES, LabelledPair, documents  # noqa: E402
+from adjudication_fixtures import (  # noqa: E402
+    PAIRS,
+    PROBES,
+    TRANSITIVITY_MEMBERS,
+    FixtureDoc,
+    LabelledPair,
+    documents,
+)
 from adjudication_prompts import (  # noqa: E402
     _ASYMMETRY_SENTENCE_SHIPPED,
     _ASYMMETRY_SENTENCE_TREATMENT,
@@ -148,6 +156,13 @@ def _materialize_bundle(bundle_dir: pathlib.Path) -> None:
             f"type: {doc.okf_type}",
             f"title: {doc.title}",
             "sensitivity: private",
+        ]
+        if doc.type_alternative is not None:
+            # #910: the recorded runner-up type is what lets the production
+            # cross-type bridge nominate the transitivity anchor-Event
+            # pairs -- see `FixtureDoc.type_alternative`.
+            lines.append(f"type_alternative: {doc.type_alternative}")
+        lines += [
             "---",
             f"# {doc.title}",
             "",
@@ -222,11 +237,51 @@ def _self_test() -> int:
             failures.append(f"{label}: got {got!r}, want {want!r}")
 
     docs = documents()
-    check("every pair contributes two documents", len(docs), len(PAIRS) * 2)
+    unique_ids = {doc.concept_id for pair in PAIRS for doc in (pair.left, pair.right)}
+    check(
+        "documents() yields every distinct id exactly once", len(docs), len(unique_ids)
+    )
     check(
         "every probe class in PROBES is populated",
         sorted({p.probe for p in PAIRS}),
         sorted(PROBES),
+    )
+    # #910: the collision raise in `documents` must actually fire on two
+    # DIFFERENT documents sharing one id -- the dedup that now tolerates a
+    # deliberately shared document would otherwise also tolerate a broken
+    # safety net, and the count check above cannot see the difference.
+    conflicting = (
+        LabelledPair(
+            left=FixtureDoc("probe/x", "Concept", "One", "Body one."),
+            right=FixtureDoc("probe/x", "Concept", "Two", "Body two."),
+            probe="self-test",
+            expected="different",
+            note="synthetic collision for the self-test",
+        ),
+    )
+    try:
+        documents(conflicting)
+    except ValueError:
+        pass
+    else:
+        failures.append(
+            "documents() accepted two different fixtures sharing a concept_id"
+        )
+
+    # #910: every leg of every transitivity triangle must be a labelled
+    # pair, or the violation rate would silently score partial triangles.
+    transitivity_keys = {
+        _pair_key(pair) for pair in PAIRS if pair.probe == "transitivity"
+    }
+    check(
+        "the transitivity members' full pair set is labelled",
+        sorted(
+            "+".join(sorted(key))
+            for key in (
+                frozenset((a, b)) for a, b in combinations(TRANSITIVITY_MEMBERS, 2)
+            )
+        ),
+        sorted("+".join(sorted(key)) for key in transitivity_keys),
     )
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -463,6 +518,39 @@ def main(argv: list[str] | None = None) -> int:
     person_same_retention = _share("person-same", "same")
     alias_same_retention = _share("alias-same", "same")
     part_whole_rate = _share("part-whole", "different")
+    aspect_of_rate = _share("aspect-of", "different")
+    transitivity_pair_rate = _share("transitivity", "different")
+
+    # #910: the wild inconsistency is not a per-pair error but a verdict SET
+    # that cannot all be true at once -- `same` twice and `different` once
+    # over three members. Scored over every C(4,3) triangle of the
+    # transitivity fixture's four documents, per run. A triangle with a
+    # missing or `uncertain` leg is SKIPPED and counted, never scored: an
+    # uncertain leg makes no consistency claim, and folding it in would
+    # manufacture a rate out of answers the model did not give.
+    triangle_possible = 0
+    triangle_scored = 0
+    triangle_violations = 0
+    runs_with_violation = 0
+    for run in observed:
+        run_violated = False
+        for trio in combinations(TRANSITIVITY_MEMBERS, 3):
+            triangle_possible += 1
+            legs = [
+                run.get(frozenset(pair), (_MISSING, 0.0, ""))[0]
+                for pair in combinations(trio, 2)
+            ]
+            if any(leg not in ("same", "different") for leg in legs):
+                continue
+            triangle_scored += 1
+            if legs.count("same") == 2:
+                triangle_violations += 1
+                run_violated = True
+        if run_violated:
+            runs_with_violation += 1
+    transitivity_violation_rate = (
+        triangle_violations / triangle_scored if triangle_scored else 0.0
+    )
 
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     results_dir = pathlib.Path(__file__).resolve().parent / "results"
@@ -496,6 +584,14 @@ def main(argv: list[str] | None = None) -> int:
                 # one measured under the old, unbounded conditions.
                 "max_generation_tokens": DEFAULT_MAX_GENERATION_TOKENS,
                 "context_window": DEFAULT_CONTEXT_WINDOW,
+                # #910: the triangle tally rides the stored run for the same
+                # reason the rationales do -- a later re-analysis must be
+                # able to recheck the violation count without re-spending.
+                "transitivity_triangles_possible": triangle_possible,
+                "transitivity_triangles_scored": triangle_scored,
+                "transitivity_triangle_violations": triangle_violations,
+                "transitivity_violation_rate": transitivity_violation_rate,
+                "runs_with_violation": runs_with_violation,
                 "outcomes": rows,
             },
             indent=2,
@@ -536,6 +632,13 @@ def main(argv: list[str] | None = None) -> int:
         f"| person-same retention (judged `same`) | {person_same_retention:.2f} |",
         f"| alias-same retention (judged `same`) | {alias_same_retention:.2f} |",
         f"| part-whole (judged `different`) | {part_whole_rate:.2f} |",
+        f"| **aspect-of (judged `different`)** | **{aspect_of_rate:.2f}** |",
+        f"| **transitivity pairs (judged `different`)** | "
+        f"**{transitivity_pair_rate:.2f}** |",
+        f"| **transitivity violation rate (2-SAME-1-DIFFERENT triangles)** | "
+        f"**{transitivity_violation_rate:.2f}** |",
+        f"| triangles scored | {triangle_scored} of {triangle_possible} |",
+        f"| runs with ≥1 triangle violation | {runs_with_violation} of {completed} |",
         f"| verdict accuracy vs label | {accuracy:.2f} |",
         f"| mean stability (modal share) | {mean_stability:.2f} |",
         f"| mean run latency | {statistics.fmean(latencies):.1f}s |",
