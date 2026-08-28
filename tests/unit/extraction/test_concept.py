@@ -2819,6 +2819,125 @@ def test_union_ceiling_caps_judge_input_at_24_candidates() -> None:
     assert outcome.report.pre_judge_dropped == 1
 
 
+def test_chunked_ceiling_interleaves_across_windows() -> None:
+    """#905: when the merged union exceeds `_MAX_JUDGE_CANDIDATES` on the
+    chunked path, the cut round-robins across windows instead of keeping
+    the first 24 in document order -- every window contributes before any
+    window contributes twice, so the judge sees candidates from the whole
+    document rather than only its head. Survivors keep MERGED (document)
+    order; only membership changes."""
+
+    def item(title: str) -> str:
+        return (
+            f'{{"type": "Concept", "title": "{title}", '
+            f'"description": "About {title}.", "body": ""}}'
+        )
+
+    text = _long_text()
+    windows = concept_mod._chunk_lines(text)
+    replies: list[str | Exception] = ["[]"] * len(windows)
+    replies[0] = _array(*(item(f"First {i:02d}") for i in range(1, 21)))
+    replies[1] = _array(*(item(f"Second {i:02d}") for i in range(1, 21)))
+    kept = [f"First {i:02d}" for i in range(1, 13)] + [
+        f"Second {i:02d}" for i in range(1, 13)
+    ]
+    replies.append(_keep_reply(*kept))
+    llm = _SequencedLLM(replies)
+
+    outcome = concept_mod.extract_concept_union(
+        text, source_title="Weekly Notes", llm=llm
+    )
+
+    judge_content = llm.calls[-1][1]["content"]
+    # 40 merged candidates, 20 per window: the interleaved ceiling admits 12
+    # from EACH window; the positional cut admitted 20 + 4.
+    assert "Second 12" in judge_content
+    assert "First 13" not in judge_content
+    # Survivors keep merged (document) order, not round-robin pick order.
+    assert judge_content.index("First 12") < judge_content.index("Second 01")
+    assert outcome.report.pre_judge_dropped == 16
+    assert outcome.report.pre_judge_dropped_titles == tuple(
+        [f"First {i:02d}" for i in range(13, 21)]
+        + [f"Second {i:02d}" for i in range(13, 21)]
+    )
+
+
+def test_ceiling_survives_a_cross_window_duplicate_title() -> None:
+    """#905: `_ceiling_round_robin` attributes candidates to windows by
+    object identity, which rests on every stage between the provenance map
+    and the ceiling -- `_dedup_merged` included -- returning the SAME
+    instances it was given. A title emitted by TWO windows is the case
+    that exercises it: dedup keeps window 1's instance, and the cut must
+    still complete and attribute that survivor to window 1."""
+
+    def item(title: str) -> str:
+        return (
+            f'{{"type": "Concept", "title": "{title}", '
+            f'"description": "About {title}.", "body": ""}}'
+        )
+
+    text = _long_text()
+    windows = concept_mod._chunk_lines(text)
+    replies: list[str | Exception] = ["[]"] * len(windows)
+    replies[0] = _array(*(item(f"Shared {i:02d}") for i in range(1, 14)))
+    # Window 2 repeats window 1's first title, then adds 13 of its own:
+    # 27 raw candidates, 26 after dedup keeps window 1's "Shared 01".
+    replies[1] = _array(
+        item("Shared 01"), *(item(f"Second {i:02d}") for i in range(1, 14))
+    )
+    replies.append(_keep_reply("Shared 01"))
+    llm = _SequencedLLM(replies)
+
+    outcome = concept_mod.extract_concept_union(
+        text, source_title="Weekly Notes", llm=llm
+    )
+
+    # 26 merged, 13 per window: each window contributes 12, each loses its
+    # own tail -- the deduped survivor counted toward window 1's quota.
+    assert outcome.report.pre_judge_dropped == 2
+    assert outcome.report.pre_judge_dropped_titles == ("Shared 13", "Second 13")
+    judge_content = llm.calls[-1][1]["content"]
+    assert "Second 12" in judge_content
+
+
+def test_participant_capture_survives_the_ceiling_as_its_own_group() -> None:
+    """#905: participant-capture additions join `merged` at the END, so the
+    positional cut discarded them in exactly the overflow case -- the paid
+    capture call could never matter once the ceiling bound. As their own
+    round-robin group they reach the judge."""
+
+    def item(title: str) -> str:
+        return (
+            f'{{"type": "Concept", "title": "{title}", '
+            f'"description": "About {title}.", "body": ""}}'
+        )
+
+    alice = (
+        '{"type": "Person", "title": "Alice Johnson", '
+        '"description": "Attended the meeting.", "body": ""}'
+    )
+    text = _long_text()
+    windows = concept_mod._chunk_lines(text)
+    replies: list[str | Exception] = ["[]"] * len(windows)
+    replies[0] = _array(*(item(f"Subject {i:02d}") for i in range(1, 27)))
+    replies.append(_array(alice))  # participant capture call
+    replies.append(_keep_reply("Subject 01"))
+    llm = _SequencedLLM(replies)
+
+    outcome = concept_mod.extract_concept_union(
+        text, source_title="Team Meeting", llm=llm
+    )
+
+    judge_content = llm.calls[-1][1]["content"]
+    assert "Alice Johnson" in judge_content
+    assert outcome.report.pre_judge_dropped == 3
+    assert outcome.report.pre_judge_dropped_titles == (
+        "Subject 24",
+        "Subject 25",
+        "Subject 26",
+    )
+
+
 def test_union_judge_success_reports_judged_out_titles() -> None:
     """A successful judge selection names the dropped titles in
     `judged_out_titles`, and `judge_status == "ok"`."""

@@ -2384,12 +2384,42 @@ def _fan_out_windows(
     builds its request locally and mutates no instance state, which is what
     makes that true today.
     """
+    return [
+        result
+        for window_results in _fan_out_window_lists(
+            windows,
+            source_title,
+            llm,
+            concurrent=concurrent,
+            on_progress=on_progress,
+        )
+        for result in window_results
+    ]
+
+
+def _fan_out_window_lists(
+    windows: Sequence[str],
+    source_title: str,
+    llm: LLMBackend,
+    *,
+    concurrent: bool,
+    on_progress: ProgressHook | None,
+) -> list[list[ExtractionResult]]:
+    """`_fan_out_windows` with the per-window grouping kept (#905): one
+    inner list per window, in WINDOW order, empty lists included.
+
+    The fan-out mechanics -- serial-vs-`map` choice, order, all-or-nothing
+    failure, progress reporting -- live here once; `_fan_out_windows` above
+    is its flatten and keeps the signature every pre-#905 caller relies on.
+    `extract_concept_union` calls THIS shape because its pre-judge ceiling
+    round-robins across windows, and a flat concatenation has already
+    forgotten which window contributed which candidate."""
     chunk_count = len(windows)
-    collected: list[ExtractionResult] = []
+    collected: list[list[ExtractionResult]] = []
     if not concurrent:
         for index, window in enumerate(windows, start=1):
             _report(on_progress, f"extracting chunk {index}/{chunk_count}")
-            collected.extend(_extract_once(window, source_title, llm))
+            collected.append(_extract_once(window, source_title, llm))
         return collected
 
     def _extract_window(window: str) -> list[ExtractionResult]:
@@ -2412,7 +2442,7 @@ def _fan_out_windows(
     try:
         for done, results in enumerate(pool.map(_extract_window, windows), start=1):
             _report(on_progress, f"extracted chunk {done}/{chunk_count}")
-            collected.extend(results)
+            collected.append(results)
     finally:
         pool.shutdown(wait=True, cancel_futures=True)
     return collected
@@ -3008,10 +3038,13 @@ class ExtractionReport:
     document to find the one." A cut the operator cannot name is a cut they
     cannot check against the source.
 
-    Truncation is POSITIONAL (`merged[:_MAX_JUDGE_CANDIDATES]`) over a list
-    concatenated in window -- i.e. document -- order, so these titles are
-    the TAIL of the source. That is the substantive complaint in #885 and
-    naming them is what makes it observable; it is not a fix for it."""
+    Until #905 the truncation was positional (`merged[:24]`) over a list
+    concatenated in window -- i.e. document -- order, so these titles were
+    always the TAIL of the source -- the substantive complaint in #885.
+    Since #905 the cut round-robins across windows
+    (`_ceiling_round_robin`), so the names here are each window's tail
+    rather than the document's; the field still reports them in merged
+    order."""
     judge_failure_causes: tuple[str, ...] = ()
     """Why each FAILED judge attempt failed, in attempt order (#795).
 
@@ -3474,10 +3507,74 @@ def _merge_union(results: list[ExtractionResult]) -> list[ExtractionResult]:
 _MAX_JUDGE_CANDIDATES = 24
 """Ceiling on merged candidates handed to `judge.select` (design D8),
 applied AFTER the union merge and BEFORE the judge call -- distinct from,
-and always at least as large as, `_UNION_BACKSTOP`. Reasoned rather than
-measured: 2x the backstop, bounding judge prompt growth on a many-chunk
-source without a corpus measurement showing it ever binds (open question,
-design). `report.pre_judge_dropped` names what this ceiling cut."""
+and always at least as large as, `_UNION_BACKSTOP`. The VALUE is still
+reasoned rather than tuned: 2x the backstop, bounding judge prompt growth
+on a many-chunk source. Whether it binds is no longer an open question --
+it does, measured twice on ordinary meeting material during manual E2E
+walkthroughs (#905): 7 merged candidates cut on 0.2.10 (#885) and 18 cut
+on 0.2.12, both on 50-60 KB meeting sources. `report.pre_judge_dropped`
+names what this ceiling cut, and `_ceiling_round_robin` below decides
+WHICH candidates it cuts."""
+
+
+def _ceiling_round_robin(
+    merged: list[ExtractionResult], provenance: dict[int, int]
+) -> tuple[list[ExtractionResult], tuple[str, ...]]:
+    """Cut `merged` to `_MAX_JUDGE_CANDIDATES` round-robin across
+    provenance groups (#905), returning `(judge_input, dropped_titles)`.
+
+    `provenance` maps `id(candidate)` to its group: one group per window on
+    the chunked path, a single group on the unchunked path, and one group
+    each for the two optional whole-source calls' additions. Selection
+    takes each group's next unconsumed candidate in group order until the
+    ceiling is reached, so every window contributes before any window
+    contributes twice. The pre-#905 cut was `merged[:24]` over a list in
+    window -- i.e. document -- order, which spent the whole budget on the
+    document's head: on the run that filed #905, nine one-line action items
+    from an early dense block filled the budget while 18 candidates from
+    the tail were never judged at all, the shape #533 already measured for
+    the blind cap ("reply order anti-correlates with decision quality")
+    arriving one stage earlier.
+
+    Round-robin rather than a richness heuristic deliberately: ranking by
+    body length would pre-judge quality with a proxy the judge exists to
+    replace, and would systematically cut short `Decision` candidates --
+    exactly the class #533 showed no positional or length rule recovers.
+    Coverage is this cut's only job; selection stays the judge's.
+
+    Both returned sequences preserve MERGED order -- the round-robin
+    decides membership only, so the judge still reads the document in
+    document order and `pre_judge_dropped_titles` stays "in merged order"
+    as its docstring promises. Keyed by `id()` because `ExtractionResult`
+    is a value-equal frozen dataclass and two windows can emit equal
+    candidates; every candidate in `merged` is alive in the caller's frame,
+    so ids are unique here. A candidate missing from `provenance` is a
+    caller bug and raises `KeyError` loudly rather than mis-grouping.
+
+    Below the ceiling this is the identity, and with a single group it
+    reproduces the positional cut byte for byte -- the unchunked path's
+    behaviour is unchanged by construction."""
+    if len(merged) <= _MAX_JUDGE_CANDIDATES:
+        return merged, ()
+    columns: dict[int, list[int]] = {}
+    for index, result in enumerate(merged):
+        columns.setdefault(provenance[id(result)], []).append(index)
+    ordered_columns = [columns[group] for group in sorted(columns)]
+    selected: set[int] = set()
+    depth = 0
+    while len(selected) < _MAX_JUDGE_CANDIDATES:
+        for column in ordered_columns:
+            if depth < len(column):
+                selected.add(column[depth])
+                if len(selected) == _MAX_JUDGE_CANDIDATES:
+                    break
+        depth += 1
+    kept = [result for index, result in enumerate(merged) if index in selected]
+    dropped = tuple(
+        result.title for index, result in enumerate(merged) if index not in selected
+    )
+    return kept, dropped
+
 
 _UNION_BACKSTOP = 20
 """Fixed cap applied EXACTLY ONCE, LAST -- after judge selection (or the
@@ -3581,7 +3678,10 @@ def extract_concept_union(
 
     The merged candidate list is then capped at `_MAX_JUDGE_CANDIDATES`
     (design D8) -- candidates beyond the ceiling never reach the judge at
-    all, and `report.pre_judge_dropped` names how many. An EMPTY merged
+    all, and `report.pre_judge_dropped` names how many. Since #905 the cut
+    round-robins across provenance groups (`_ceiling_round_robin`: one per
+    window, plus one per optional call's additions) instead of keeping the
+    first 24 in document order. An EMPTY merged
     list skips the judge entirely (`judge_status` stays `"skipped"` -- no
     LLM call is spent deciding among zero candidates), and so does a
     SINGLE-candidate one (#644: a kept title keeps it, `None`/failed keeps
@@ -3677,18 +3777,40 @@ def extract_concept_union(
         run_count = 2
         wrong_language_dropped: tuple[str, ...] = ()
         recombined_dropped: tuple[str, ...] = ()
+        # #905: both runs read the WHOLE source with identical prompts, so
+        # there is no coverage to arbitrate between them -- one group keeps
+        # the ceiling's behaviour on this path byte-identical to the
+        # positional cut it replaces.
+        provenance: dict[int, int] = {id(result): 0 for result in merged}
+        provenance_groups = 1
     else:
         windows = _chunk_lines(source_text)
         chunk_count = len(windows)
-        chunked = _fan_out_windows(
+        window_lists = _fan_out_window_lists(
             windows,
             source_title,
             llm,
             concurrent=concurrent,
             on_progress=on_progress,
         )
+        # #905: the expansion strip is an item-wise rewrite, so applying it
+        # per window is the identical filter -- the per-window shape is kept
+        # only so the ceiling can attribute each surviving candidate to the
+        # window that emitted it. The map is built AFTER the strip because
+        # a stripped title is a NEW frozen instance, and BEFORE the drops
+        # because every later stage only removes or appends, never rewrites.
+        stripped_windows = [
+            _strip_ungrounded_expansions(window_results, source_text=source_text)
+            for window_results in window_lists
+        ]
+        provenance = {
+            id(result): group
+            for group, window_results in enumerate(stripped_windows)
+            for result in window_results
+        }
+        provenance_groups = chunk_count
         deduped = _dedup_merged(
-            _strip_ungrounded_expansions(chunked, source_text=source_text)
+            [result for window_results in stripped_windows for result in window_results]
         )
         # #618, same placement as `extract_concept`'s chunked branch
         # (#581's symmetric-filters precedent): the gate runs on the merged
@@ -3720,6 +3842,12 @@ def extract_concept_union(
             on_progress=on_progress,
         )
     )
+    # #905: a re-ask addition is a whole-source finding with no window. It
+    # forms its own round-robin group, so the ceiling cannot silently
+    # discard the paid call's findings for arriving at the end of `merged`.
+    for result in merged:
+        provenance.setdefault(id(result), provenance_groups)
+    provenance_groups += 1
 
     # #668 design D6: a scoped second call, shaped like the #584 re-ask,
     # asking specifically for Person/Organization participants -- gated on
@@ -3743,6 +3871,10 @@ def extract_concept_union(
         llm=llm,
         on_progress=on_progress,
     )
+    # #905: same rule as the re-ask's group above, for the same reason.
+    for result in merged:
+        provenance.setdefault(id(result), provenance_groups)
+    provenance_groups += 1
 
     # #828: both optional calls have now been spent-or-skipped, so their
     # causes are complete here -- ahead of the judge, and ahead of BOTH
@@ -3769,11 +3901,8 @@ def extract_concept_union(
         if bounded
     )
 
-    pre_judge_dropped = max(0, len(merged) - _MAX_JUDGE_CANDIDATES)
-    pre_judge_dropped_titles = tuple(
-        result.title for result in merged[_MAX_JUDGE_CANDIDATES:]
-    )
-    judge_input = merged[:_MAX_JUDGE_CANDIDATES]
+    judge_input, pre_judge_dropped_titles = _ceiling_round_robin(merged, provenance)
+    pre_judge_dropped = len(merged) - len(judge_input)
 
     if not judge_input:
         # Nothing to judge: an empty merged union used to spend a real
