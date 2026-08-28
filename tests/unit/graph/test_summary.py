@@ -12,7 +12,7 @@ mutates the bundle and never leaves a connection open.
 from pathlib import Path
 
 from openkos.graph.sqlite_graph import build_graph
-from openkos.graph.summary import graph_edge_summary
+from openkos.graph.summary import asserted_relations_exist, graph_edge_summary
 
 
 def _write_doc(
@@ -159,3 +159,69 @@ def test_graph_edge_summary_does_not_close_supplied_store(tmp_path: Path) -> Non
         graph_edge_summary(bundle_dir, store=store)
         # A closed sqlite3 connection raises ProgrammingError on further use.
         store.edges()
+
+
+# --- #912: asserted_relations_exist -- source-level relations visibility ---
+
+
+def test_asserted_relations_exist_sees_a_source_to_source_relation(
+    tmp_path: Path,
+) -> None:
+    """A typed `relations:` edge between two SOURCE documents -- the
+    recurring-meeting series recipe (#912): each occurrence Source related
+    `member_of` to a series-anchor Source -- is a human-asserted
+    relationship, even though `graph_edge_summary` deliberately excludes
+    every source-endpoint edge from its concept-to-concept counts."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc_with_relations(
+        bundle_dir / "sources" / "review-2.md",
+        doc_type="Source",
+        title="Review 2",
+        relations="  - target: sources/review-series\n    type: member_of\n",
+    )
+    _write_doc(bundle_dir / "sources" / "review-series.md", doc_type="Source")
+
+    with build_graph(bundle_dir) as store:
+        assert graph_edge_summary(bundle_dir, store=store) == (0, 0)
+        assert asserted_relations_exist(store)
+
+
+def test_asserted_relations_exist_ignores_engine_owned_provenance_mirrors(
+    tmp_path: Path,
+) -> None:
+    """The `derived_from` Concept->Source mirror is SYNTHESIZED from
+    `provenance:` frontmatter (`ENGINE_OWNED_RELATION_TYPES`, #380) -- it is
+    recorded fact, not an asserted relationship, so a bundle holding only
+    mirrors still has no asserted relations."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "a.md",
+        title="A",
+        body="",
+    )
+    path = bundle_dir / "concepts" / "a.md"
+    path.write_text(
+        "---\ntype: Concept\ntitle: A\nprovenance:\n- sources/origin\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    _write_doc(bundle_dir / "sources" / "origin.md", doc_type="Source")
+
+    with build_graph(bundle_dir) as store:
+        assert not asserted_relations_exist(store)
+
+
+def test_asserted_relations_exist_ignores_untyped_body_link_edges(
+    tmp_path: Path,
+) -> None:
+    """An untyped edge extracted from a bundle-relative body link nominates
+    a relationship; it does not assert one."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "a.md",
+        title="A",
+        body="See also [B](/concepts/b.md).\n",
+    )
+    _write_doc(bundle_dir / "concepts" / "b.md", title="B")
+
+    with build_graph(bundle_dir) as store:
+        assert not asserted_relations_exist(store)

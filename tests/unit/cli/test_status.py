@@ -825,6 +825,42 @@ def test_status_fully_typed_edges_report_no_needs_attention_metric(
     assert "Nothing needs attention." in result.stdout
 
 
+def test_status_source_level_relations_suppress_the_empty_graph_line(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """A typed relation between two SOURCE documents -- the recurring-meeting
+    series recipe (#912): each occurrence Source related `member_of` to a
+    series-anchor Source -- is a relationship a human just asserted, so the
+    state-1 informational line must not claim there are none. The
+    concept-to-concept COUNTS deliberately keep excluding source-endpoint
+    edges (#387: curate types concept edges), so no needs-attention metric
+    appears either -- the workspace is simply healthy and quiet."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors_db(tmp_path)
+    sources_dir = tmp_path / "bundle" / "sources"
+    sources_dir.mkdir(parents=True, exist_ok=True)
+    (sources_dir / "review-2.md").write_text(
+        "---\ntype: Source\ntitle: Review 2\n"
+        "relations:\n"
+        "  - target: sources/review-series\n"
+        "    type: member_of\n"
+        "---\nBody.\n",
+        encoding="utf-8",
+    )
+    (sources_dir / "review-series.md").write_text(
+        "---\ntype: Source\ntitle: Review series\n---\nBody.\n", encoding="utf-8"
+    )
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    assert "No concept relationships yet." not in result.stdout
+    assert "concept-to-concept edge(s)" not in result.stdout
+    assert "Nothing needs attention." in result.stdout
+
+
 def test_status_builds_the_graph_once(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -14,6 +14,7 @@ from pathlib import Path
 
 from openkos.graph.base import Edge, GraphStore
 from openkos.graph.sqlite_graph import build_graph
+from openkos.model.relations import ENGINE_OWNED_RELATION_TYPES
 from openkos.model.types import CLASSIFIABLE_LINK_DIRS
 
 # `nodes`/`edges` (`graph/sqlite_graph.py`) store only `concept_id` -- no
@@ -41,6 +42,31 @@ def _is_concept_edge(edge: Edge) -> bool:
     Concept<->Source `derived_from` provenance mirror (`okf.build_concept`'s
     `## Related` backlink) has a Source endpoint and must NOT count."""
     return _is_concept_node(edge.source_id) and _is_concept_node(edge.target_id)
+
+
+def asserted_relations_exist(store: GraphStore) -> bool:
+    """Whether the projection holds ANY human-asserted typed relation,
+    regardless of endpoint family (#912).
+
+    `graph_edge_summary` deliberately counts only concept-to-concept edges,
+    so a workspace whose only typed relations sit on SOURCE documents -- the
+    recurring-meeting series recipe, where each occurrence Source is related
+    `member_of` to a series-anchor Source -- counted as having no
+    relationships at all, and `status` printed "No concept relationships
+    yet." over edges a human had just written. This predicate is what that
+    informational line now also consults.
+
+    "Asserted" excludes two edge classes on purpose: untyped rows (a body
+    link or proximity candidate NOMINATES a relationship, it does not assert
+    one) and `ENGINE_OWNED_RELATION_TYPES` (the `derived_from` mirror is
+    synthesized from `provenance:` frontmatter -- recorded fact, not an
+    asserted relationship, #380 -- and counting it would make this predicate
+    true for every bundle with one extracted concept)."""
+    return any(
+        edge.relation_type is not None
+        and edge.relation_type not in ENGINE_OWNED_RELATION_TYPES
+        for edge in store.edges()
+    )
 
 
 def _summarize(store: GraphStore) -> tuple[int, int]:
