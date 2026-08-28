@@ -62,16 +62,24 @@ def _heading_levels(lines: list[str]) -> list[tuple[int, int, str]]:
     for a `None` this function has already ruled out.
 
     Fences are tracked by their opening marker so a `~~~` block is not
-    closed by a stray ``` and vice versa, and a closing run must be at
+    closed by a stray ``` and vice versa; a closing run must be at
     least as long as the opening one -- CommonMark's rule, and the reason a
-    ```` ```` ```` block can quote a ``` fence without ending early."""
+    ```` ```` ```` block can quote a ``` fence without ending early; and a
+    closing fence carries nothing but whitespace after the run (#911's R3
+    review finding, fixed in lockstep with `extraction/concept.py::
+    _heading_texts`), so a ```python line inside an open block is the block
+    showing an opening fence, not closing itself."""
     out: list[tuple[int, int, str]] = []
     fence: str | None = None
     for index, line in enumerate(lines):
         marker = _FENCE_RE.match(line)
         if fence is not None:
-            closing = marker.group("fence") if marker is not None else ""
-            if closing[:1] == fence[:1] and len(closing) >= len(fence):
+            if (
+                marker is not None
+                and marker.group("fence")[:1] == fence[:1]
+                and len(marker.group("fence")) >= len(fence)
+                and not line[marker.end() :].strip()
+            ):
                 fence = None
             continue
         if marker is not None:

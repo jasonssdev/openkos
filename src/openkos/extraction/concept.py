@@ -503,15 +503,58 @@ def _is_meeting_shaped(source_title: str, source_text: str) -> bool:
     ) or _transcript_shaped_text(source_text)
 
 
-_ATX_HEADING_RE: Final = re.compile(r"^\s{0,3}#{1,6}\s+(?P<text>.*)$", re.MULTILINE)
-"""One ATX markdown heading's text. Up to three leading spaces is CommonMark's
-own tolerance; a fourth makes the line an indented code block, and a line that
-is not a heading is not this signal's business.
+_ATX_HEADING_RE: Final = re.compile(r"^\s{0,3}#{1,6}\s+(?P<text>.*)$")
+"""One ATX markdown heading's text, matched against a single line. Up to
+three leading spaces is CommonMark's own tolerance; a fourth makes the line
+an indented code block, and a line that is not a heading is not this
+signal's business.
 
 Deliberately ATX only. A gathering word inside a bullet, a block quote or a
 sentence is the ordinary way any document MENTIONS a meeting -- the repo's own
 eval reports and specs are full of them -- while a heading is the document
 naming its own framing."""
+
+
+_FENCE_RE: Final = re.compile(r"^\s{0,3}(?P<fence>`{3,}|~{3,})")
+"""A fenced code block's delimiter. A `#` line inside a fence is CONTENT the
+document is showing, not structure (#911) -- a document quoting `## Meeting
+notes` as sample markdown is a document about writing meeting notes, not a
+meeting."""
+
+
+def _heading_texts(source_text: str) -> list[str]:
+    """The text of every ATX heading line OUTSIDE a fenced code block, in
+    document order (#911).
+
+    The fence tracking mirrors `resolution/reconciliation.py::_heading_levels`
+    (shipped in #909), which is the reference implementation the two must not
+    drift from: a fence is remembered by its opening marker so a `~~~` block
+    is not closed by a stray ``` and vice versa; a closing run must be at
+    least as long as the opening one -- CommonMark's rule, and the reason a
+    ```` ```` ```` block can quote a ``` fence without ending early; and a
+    closing fence carries nothing but whitespace after the run, so a
+    ```python line inside an open block is the block showing an opening
+    fence, not closing itself."""
+    out: list[str] = []
+    fence: str | None = None
+    for line in source_text.splitlines():
+        marker = _FENCE_RE.match(line)
+        if fence is not None:
+            if (
+                marker is not None
+                and marker.group("fence")[:1] == fence[:1]
+                and len(marker.group("fence")) >= len(fence)
+                and not line[marker.end() :].strip()
+            ):
+                fence = None
+            continue
+        if marker is not None:
+            fence = marker.group("fence")
+            continue
+        heading = _ATX_HEADING_RE.match(line)
+        if heading is not None:
+            out.append(heading.group("text"))
+    return out
 
 
 def _framing_shaped(source_title: str, source_text: str) -> bool:
@@ -562,8 +605,7 @@ def _framing_shaped(source_title: str, source_text: str) -> bool:
     if _is_meeting_shaped(source_title, source_text):
         return True
     return any(
-        _MEETING_SHAPED_TITLE_RE.search(match.group("text"))
-        for match in _ATX_HEADING_RE.finditer(source_text)
+        _MEETING_SHAPED_TITLE_RE.search(text) for text in _heading_texts(source_text)
     )
 
 

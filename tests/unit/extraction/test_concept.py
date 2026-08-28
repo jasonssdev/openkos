@@ -7345,6 +7345,49 @@ def test_framing_shaped_ignores_a_gathering_word_in_a_bullet_or_quote() -> None:
     )
 
 
+def test_framing_shaped_ignores_a_heading_shown_inside_a_fence() -> None:
+    """#911: a document SHOWING `## Meeting notes` as sample markdown is a
+    document about writing meeting notes, not a meeting. A `#` line inside
+    a fenced block is content, not structure -- the same rule
+    `reconciliation._heading_levels` applies when it rewrites headings.
+
+    The title is a `path.stem` with NO gathering word, deliberately: the
+    issue's own example title ("How to write a meeting note") trips the
+    title gate on its own, and would make this test pass or fail for the
+    wrong reason."""
+    text = (
+        "# How to structure a note\n"
+        "\n"
+        "Start the body with a heading like this:\n"
+        "\n"
+        "```markdown\n"
+        "## Meeting notes\n"
+        "```\n"
+    )
+    assert not concept_mod._framing_shaped("authoring-guide", text)
+
+
+def test_framing_shaped_fence_tracking_follows_commonmark_closing_rules() -> None:
+    """The CommonMark closing rules `_heading_levels` also encodes, pinned
+    here so the copies cannot drift apart silently: a `~~~` block is not
+    closed by a stray ```, a closing run must be at least as long as
+    the opening one (so a ```` ```` ```` block can QUOTE a ``` fence
+    without ending early), and a closing fence carries nothing but
+    whitespace after the run -- a ```python line inside an open block is
+    the block SHOWING an opening fence, not closing itself (this lineage's
+    R3 review finding)."""
+    tilde_block = "# Formatting guide\n~~~\n```\n## Meeting notes\n~~~\n"
+    assert not concept_mod._framing_shaped("formatting guide", tilde_block)
+    quoted_fence = "# Formatting guide\n````\n```\n## Meeting notes\n```\n````\n"
+    assert not concept_mod._framing_shaped("formatting guide", quoted_fence)
+    info_string_line = "# Formatting guide\n```\n```python\n## Meeting notes\n```\n"
+    assert not concept_mod._framing_shaped("formatting guide", info_string_line)
+    # And a heading AFTER a properly closed fence still counts, so the
+    # tracker provably re-opens scanning instead of eating the tail.
+    closed_then_heading = "```\ncode\n```\n## Meeting notes\n"
+    assert concept_mod._framing_shaped("guide", closed_then_heading)
+
+
 def test_drop_framing_objects_removes_the_container_on_a_summarized_note() -> None:
     """The damage #903 reports, end to end at this seam: three framing
     Events survived the E2E run, one titled with a literal `Reunion` token

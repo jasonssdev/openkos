@@ -338,6 +338,32 @@ def test_a_short_closing_run_does_not_end_a_longer_fence() -> None:
     assert "\n## Related\n" in out
 
 
+def test_an_info_string_line_does_not_close_a_fence() -> None:
+    """CommonMark: a closing fence carries nothing but whitespace after the
+    run. A ```python line inside an open block is the block SHOWING an
+    opening fence -- treating it as the close would end the block early and
+    promote the `###` line after it, editing the sample (#911's R3 review
+    finding, fixed in lockstep with `extraction/concept.py`'s copy)."""
+    reply = (
+        "## Wrong Title\n\n"
+        "The Model Context Protocol connects language models to external "
+        "tools and data sources through servers.\n\n"
+        "```md\n"
+        "```python\n"
+        "### still inside the fence\n"
+        "```\n\n"
+        "### Related\n\n"
+        "- [Transport](transport.md)\n"
+    )
+
+    out = _reconcile(reply)
+
+    assert out is not None
+    assert out.startswith("# Model Context Protocol\n")
+    assert "### still inside the fence" in out
+    assert "\n## Related\n" in out
+
+
 def test_a_sibling_heading_at_the_leading_level_is_promoted_with_it() -> None:
     """A heading at the leading heading's OWN level is a sibling, not a
     descendant, and the delta reaches it too: the rule is one shift for the
