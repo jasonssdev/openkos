@@ -5565,6 +5565,78 @@ def test_identity_walk_states_the_survivor_criterion_and_cross_source_note(
     )
 
 
+def test_identity_walk_renders_the_cross_type_note(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#904 on the recommended path: curate's Identity walk renders the
+    cross-type warning `adjudicate --apply` renders, before its [y/N]
+    prompt. The two walks share one note constant by design -- a guard
+    landing in one and forgotten in the other is exactly #796's drift."""
+    _stub_later_stages_empty(monkeypatch)
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_bodied_doc(
+        tmp_path / "bundle" / "events" / "m1.md",
+        title="AFG Coordination",
+        body="Short.",
+    )
+    (tmp_path / "bundle" / "events" / "m1.md").write_text(
+        "---\ntype: Event\ntitle: AFG Coordination\nprovenance:\n"
+        "  - sources/transcription1\n---\n# AFG Coordination\nShort.\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "bundle" / "projects" / "evaluacion.md").parent.mkdir(
+        parents=True, exist_ok=True
+    )
+    (tmp_path / "bundle" / "projects" / "evaluacion.md").write_text(
+        "---\ntype: Project\ntitle: AFG Coordination\nprovenance:\n"
+        "  - sources/transcription1\n---\n# AFG Coordination\n"
+        "The ongoing research initiative, described at real length.\n",
+        encoding="utf-8",
+    )
+    _reindexed_workspace(tmp_path, monkeypatch)
+    group = CandidateGroup(
+        okf_type="Event+Project",
+        member_ids=("events/m1", "projects/evaluacion"),
+        tier=Tier.HIGH,
+        trigger="afg coordination",
+        member_types=("Event", "Project"),
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(groups=(group,), produced=1, retained=1),
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate.adjudicate_candidates",
+        lambda *a, **k: AdjudicationBatch(
+            results=[
+                AdjudicatedCandidate(
+                    candidate=group,
+                    verdict=Verdict.SAME,
+                    confidence=0.9,
+                    rationale="same",
+                )
+            ]
+        ),
+    )
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["curate"], input="y\nn\n")
+
+    assert result.exit_code == 0, result.output
+    assert "note: cross-type SAME" in result.stdout
+    out = result.stdout
+    # The PROJECT carries the richer body here, so it survives -- and the
+    # note must lead with its type, matching the survivor line and the
+    # merge prompt rather than raw `member_ids` order.
+    assert "survivor: projects/evaluacion" in out
+    assert "(Project / Event)" in out
+    assert out.index("note: cross-type SAME") < out.index(
+        "Merge events/m1 into projects/evaluacion? [y/N]"
+    )
+
+
 # --- issue #799: Structure serves what suggest-relations already paid for -
 
 

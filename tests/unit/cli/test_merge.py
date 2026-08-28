@@ -1930,6 +1930,62 @@ def test_merge_reconciliation_preview_lands_before_the_confirm_gate(
     assert _snapshot(tmp_path) == before
 
 
+# --- #904: the cross-type warning reaches plain `merge` too ----------------
+
+
+def test_cross_type_merge_warns_before_the_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#904 repeats #796's lesson: `merge` is the command the cross-type
+    skip message itself prints, so locking only the batch door would leave
+    the recommended one open. An `Event` absorbing a `Project` is named
+    before the gate."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept_with_provenance(
+        tmp_path,
+        "events/afg-coordination",
+        title="AFG Coordination",
+        concept_type="Event",
+        provenance=["sources/transcript-1"],
+    )
+    _write_concept_with_provenance(
+        tmp_path,
+        "projects/evaluacion",
+        title="AFG Coordination",
+        concept_type="Project",
+        provenance=["sources/transcript-1"],
+    )
+
+    result = runner.invoke(
+        app, ["merge", "events/afg-coordination", "projects/evaluacion", "--auto"]
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert "cross-type SAME" in result.stdout
+    assert "Event / Project" in result.stdout
+
+
+def test_a_same_type_merge_carries_no_cross_type_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The warning names one specific risky class. Two members declaring
+    the same type are the ordinary duplicate case."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept_with_provenance(
+        tmp_path, "events/afg-eval", title="AFG Eval", concept_type="Event"
+    )
+    _write_concept_with_provenance(
+        tmp_path, "events/afg-eval-2", title="AFG Eval", concept_type="Event"
+    )
+
+    result = runner.invoke(
+        app, ["merge", "events/afg-eval", "events/afg-eval-2", "--auto"]
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert "cross-type" not in result.stdout
+
+
 # --- #796: the cross-source warning reaches plain `merge` too --------------
 
 

@@ -1868,6 +1868,7 @@ def _adjudication_payload(
     total: int,
     partial: bool,
     cross_source_flags: Sequence[bool],
+    cross_type_flags: Sequence[bool],
 ) -> AdjudicationPayload:
     """Build the pure, I/O-free `adjudicate --json` payload from `results`,
     preserving `results` order and omitting `confidence` and any
@@ -1889,7 +1890,13 @@ def _adjudication_payload(
     by the caller for the same purity reason as `total`: whether a SAME
     pair's provenance sets are disjoint is a bundle read this I/O-free
     builder must not perform. The unattended pipelines `--json` serves are
-    exactly where the human-only note would otherwise be invisible."""
+    exactly where the human-only note would otherwise be invisible.
+
+    `cross_type_flags` (#904) is aligned the same way and supplied for the
+    same reason: which OKF type each member declares is a bundle read, and
+    the joined `okf_type` label already on the payload is display-only by
+    `candidates._type_label`'s own contract -- never to be parsed back
+    into member types."""
     return {
         "partial": partial,
         "adjudicated": len(results),
@@ -1902,8 +1909,11 @@ def _adjudication_payload(
                 "verdict": result.verdict.value.upper(),
                 "rationale": result.rationale,
                 "cross_source": cross_source,
+                "cross_type": cross_type,
             }
-            for result, cross_source in zip(results, cross_source_flags, strict=True)
+            for result, cross_source, cross_type in zip(
+                results, cross_source_flags, cross_type_flags, strict=True
+            )
             if not same_only or result.verdict is Verdict.SAME
         ],
     }
@@ -1969,6 +1979,18 @@ def _render_adjudicate_report(
             and _cross_source_same_pair(bundle_dir, group.member_ids)
         ):
             typer.echo(_CROSS_SOURCE_REPORT_NOTE)
+        # #904: the other risky class, named in the same read-only slot and
+        # independently of the one above -- a pair can be BOTH (different
+        # types AND disjoint provenance), and each note answers a different
+        # question, so neither suppresses the other. Not restricted to
+        # 2-member groups the way the cross-source note is: "share no
+        # source" is a claim about a global intersection that an N>2 group
+        # can make false, while "these members declare different types" is
+        # true of the members it names however many there are.
+        if result.verdict is Verdict.SAME:
+            cross_type_concern = _cross_type_concern(bundle_dir, group.member_ids)
+            if cross_type_concern is not None:
+                typer.echo(_cross_type_report_note(cross_type_concern))
         typer.echo()
     typer.echo("Next: openkos merge <survivor> <absorbed>")
 
@@ -2178,6 +2200,99 @@ _CROSS_SOURCE_WALK_NOTE = (
 """The per-item walks' #776 warning, rendered BEFORE the [y/N] prompt --
 ONE constant shared by `adjudicate --apply` and `curate`'s Identity stage
 so the two surfaces cannot drift apart."""
+
+
+def _cross_type_concern(bundle_dir: Path, member_ids: tuple[str, ...]) -> str | None:
+    """The reason a SAME verdict over `member_ids` must not be merged
+    unreviewed on TYPE grounds, or `None` when the members demonstrably
+    agree -- issue #904's risky class, the sibling of
+    `_cross_source_same_pair`'s.
+
+    A SAME verdict across types is a merge between different KINDS of
+    thing: the E2E run that filed #904 absorbed a `Project` (an ongoing
+    research initiative) into an `Event` (one meeting occurrence), and the
+    survivor was chosen by richer body, so the direction was decided by
+    length rather than by generality. Nothing in `--apply-same`'s
+    eligibility filter looked at type.
+
+    Returns the REASON PHRASE rather than a bool so every caller reads the
+    bundle exactly once and the warning it prints cannot disagree with the
+    predicate that fired it. The types are joined in `member_ids`' own
+    order -- on the `merge` path that is `(survivor, absorbed)`, so the
+    phrase states the direction as well as the disagreement -- never
+    sorted, unlike `candidates._type_label`'s ephemeral display join.
+
+    UNLIKE `_cross_source_same_pair`, one kind of missing evidence is a
+    CONCERN here rather than silence, and the asymmetry is deliberate.
+    Absent `provenance:` is ordinary -- every hand-authored concept lacks
+    it, so flagging on absence would mark them all forever. A document that
+    PARSES but declares no `type:` is not ordinary: every OKF document
+    declares one, and `candidates.py`'s eligibility filter drops a document
+    that does not. Treating that as "types agree" makes the guard fail OPEN
+    exactly where nothing else catches it.
+
+    That distinction is not theoretical, and it is the one case with no
+    other owner. `okf.load_frontmatter` does NOT raise on an unterminated
+    frontmatter block -- it returns `{}` and treats the whole file as body
+    -- so a truncated write produces a READABLE, type-less,
+    provenance-less document that silences both guards, passes
+    `_prepare_one_merge`, and merges with no warning at all. Pinned by
+    `tests/unit/cli/test_adjudicate.py`'s
+    `test_apply_same_skips_a_member_whose_type_cannot_be_read`.
+
+    A member that does not RESOLVE stays `None` -- silence, not a concern.
+    That case already has an owner: it is the already-merged/missing id
+    `_prepare_one_merge` returns `None` for, which the batch excludes from
+    the preview, the Total and Pass 2, and a second louder voice here would
+    report a stale id as a type problem.
+
+    A member that resolves but whose file cannot be READ or PARSED is a
+    concern, on the same fail-closed reasoning as the type-less case. It is
+    tempting to stay silent because `prepare_merge`'s own `_snapshot_read`
+    raises on an unreadable file and aborts the run -- and it does, pinned
+    by `test_apply_same_aborts_on_an_unreadable_member_without_writing`.
+    But the two reads happen at DIFFERENT times: this one in Pass 1's
+    eligibility loop, that one in Pass 2. A failure that clears in between
+    (a competing writer's brief lock, a re-mounted volume) leaves the pair
+    admitted to the batch with its types never compared and no warning
+    printed. Silence would be correct only if the two reads could not
+    disagree, and they can."""
+    types: list[str] = []
+    for member_id in member_ids:
+        try:
+            path, _canonical = _resolve_concept_path(bundle_dir, member_id)
+        except ValueError:
+            # Does not resolve at all: not this guard's case (see above).
+            return None
+        try:
+            metadata, _body = okf.load_frontmatter(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return f"{member_id} could not be read, so its OKF type is unknown"
+        raw = metadata.get("type")
+        if not isinstance(raw, str) or not raw:
+            return f"{member_id} declares no usable OKF type"
+        types.append(raw)
+    if len(set(types)) < 2:
+        return None
+    # `dict.fromkeys` dedupes while keeping first-seen order: a 3-member
+    # group spanning two types names each type once, in member order.
+    label = " / ".join(dict.fromkeys(types))
+    return f"members declare different OKF types ({label})"
+
+
+def _cross_type_report_note(reason: str) -> str:
+    """The listing's #904 marker, on SAME verdicts only -- the risky class
+    must catch the operator's eye BEFORE any apply mode is invoked."""
+    return f"  note: cross-type -- {reason}; review before merging"
+
+
+def _cross_type_walk_note(reason: str) -> str:
+    """The per-item walks' #904 warning, rendered BEFORE the [y/N] prompt
+    -- ONE helper shared by `adjudicate --apply`, `merge`, and `curate`'s
+    Identity stage, for the reason `_CROSS_SOURCE_WALK_NOTE` is one
+    constant: #796 showed a guard reaching the batch door while the door
+    the tool recommends stayed open."""
+    return f"  note: cross-type SAME -- {reason}; review this pair before consenting"
 
 
 def _prepare_one_merge(
@@ -2562,6 +2677,16 @@ def _run_adjudicate_apply(
             # consents per item -- but the risky class is named BEFORE the
             # prompt, not discovered in the wreckage afterwards.
             typer.echo(_CROSS_SOURCE_WALK_NOTE)
+        # #904: same slot, same reasoning, independent class. Ordered from
+        # `prepared`, not from raw `member_ids`: the survivor line printed
+        # directly above names one direction, and the note must not name
+        # the other one back.
+        cross_type_concern = _cross_type_concern(
+            layout.bundle_dir,
+            (prepared.survivor_canonical, prepared.absorbed_canonical),
+        )
+        if cross_type_concern is not None:
+            typer.echo(_cross_type_walk_note(cross_type_concern))
         # Issue #483: `curate._confirm` is the one validating per-item
         # write-consent prompt (#398 contract) -- private-helper reuse
         # across the boundary is deliberate, as with `_type_label` (#479).
@@ -2662,6 +2787,7 @@ def _run_adjudicate_apply_same(
     no_reconcile: bool = False,
     reconcile: bool = False,
     include_cross_source: bool = False,
+    include_cross_type: bool = False,
 ) -> None:
     """The guarded batch `adjudicate --apply-same` merge (issue #137
     closing slice): Pass 1 builds ONE aggregate preview over every eligible
@@ -2714,6 +2840,7 @@ def _run_adjudicate_apply_same(
     eligible_groups: list[CandidateGroup] = []
     skipped_n_gt2 = 0
     skipped_cross_source = 0
+    skipped_cross_type = 0
     for result in results:
         if result.verdict is not Verdict.SAME:
             continue
@@ -2739,6 +2866,35 @@ def _run_adjudicate_apply_same(
                     "--include-cross-source)"
                 )
                 skipped_cross_source += 1
+                continue
+            # #904: a SAME verdict over members declaring DIFFERENT OKF
+            # types is the second risky class the typed count must not
+            # consent to -- a `Project` was absorbed into an `Event` here,
+            # with the survivor decided by richer body rather than by
+            # generality. Routed to per-item review exactly like the
+            # cross-source class, with the same manual-command disclosure,
+            # unless `--include-cross-type` opts in. Checked AFTER the
+            # cross-source guard so a pair that is both is reported once,
+            # under the class the operator hits first.
+            survivor_id, absorbed_id, _criterion = _ordered_merge_pair(
+                layout.bundle_dir, group.member_ids
+            )
+            # Ordered survivor-first, NOT in raw `member_ids` order: this
+            # branch prints an `openkos merge <survivor> <absorbed>`
+            # command, and a type label running the other way would name
+            # the absorbed document's type first while the command names
+            # the survivor first. One direction per message.
+            cross_type_concern = _cross_type_concern(
+                layout.bundle_dir, (survivor_id, absorbed_id)
+            )
+            if not include_cross_type and cross_type_concern is not None:
+                typer.echo(
+                    f"{group.member_ids[0]} / {group.member_ids[1]}: skipped "
+                    f"(cross-type SAME -- {cross_type_concern}; review and "
+                    f"merge manually with `openkos merge {survivor_id} "
+                    f"{absorbed_id}`, or re-run with --include-cross-type)"
+                )
+                skipped_cross_type += 1
                 continue
             eligible_groups.append(group)
         elif len(group.member_ids) > 2:
@@ -2802,16 +2958,21 @@ def _run_adjudicate_apply_same(
     typer.echo(f"Total: {total}")
 
     if total == 0:
-        skipped_total = skipped_n_gt2 + refused_stacked + skipped_cross_source
+        skipped_total = (
+            skipped_n_gt2 + refused_stacked + skipped_cross_source + skipped_cross_type
+        )
         prefix = "nothing to apply -- " if skipped_total == 0 else ""
         stacked_note = f", stacked-body: {refused_stacked}" if refused_stacked else ""
         cross_note = (
             f", cross-source: {skipped_cross_source}" if skipped_cross_source else ""
         )
+        cross_type_note = (
+            f", cross-type: {skipped_cross_type}" if skipped_cross_type else ""
+        )
         typer.echo(
             f"openkos adjudicate --apply-same: {prefix}applied 0, skipped "
             f"{skipped_total} (N>2: {skipped_n_gt2}, already-merged: 0"
-            f"{stacked_note}{cross_note})"
+            f"{stacked_note}{cross_note}{cross_type_note})"
         )
         return
 
@@ -2946,16 +3107,24 @@ def _run_adjudicate_apply_same(
         applied += 1
 
     skipped_total = (
-        skipped_n_gt2 + skipped_already_merged + refused_stacked + skipped_cross_source
+        skipped_n_gt2
+        + skipped_already_merged
+        + refused_stacked
+        + skipped_cross_source
+        + skipped_cross_type
     )
     stacked_note = f", stacked-body: {refused_stacked}" if refused_stacked else ""
     cross_note = (
         f", cross-source: {skipped_cross_source}" if skipped_cross_source else ""
     )
+    cross_type_note = (
+        f", cross-type: {skipped_cross_type}" if skipped_cross_type else ""
+    )
     typer.echo(
         f"openkos adjudicate --apply-same: applied {applied} of {total} "
         f"previewed, skipped {skipped_total} (N>2: {skipped_n_gt2}, "
-        f"already-merged: {skipped_already_merged}{stacked_note}{cross_note})"
+        f"already-merged: {skipped_already_merged}{stacked_note}{cross_note}"
+        f"{cross_type_note})"
     )
 
     # #640: once per batch, after Pass 2 -- never per `_commit_one_merge`.
@@ -10518,6 +10687,16 @@ def merge(
         layout.bundle_dir, (survivor_canonical, absorbed_canonical)
     ):
         typer.echo(_CROSS_SOURCE_WALK_NOTE)
+    # #904 inherits #796's lesson verbatim: `merge` is the command the
+    # cross-type skip message itself prints, so guarding only the batch
+    # would send the operator through an unguarded door with the exact
+    # arguments the guard just refused. The label's `member_ids` order is
+    # `(survivor, absorbed)` here, so it also states the direction.
+    cross_type_concern = _cross_type_concern(
+        layout.bundle_dir, (survivor_canonical, absorbed_canonical)
+    )
+    if cross_type_concern is not None:
+        typer.echo(_cross_type_walk_note(cross_type_concern))
 
     if not auto and prepared.review:
         if sys.stdin.isatty():
@@ -13223,6 +13402,15 @@ def adjudicate(
             "that is the class that fuses distinct real-world items."
         ),
     ),
+    include_cross_type: bool = typer.Option(
+        False,
+        "--include-cross-type",
+        help=(
+            "Let --apply-same batch-merge SAME pairs whose members declare "
+            "different OKF types (#904) -- excluded by default because "
+            "that is the class that absorbs one kind of thing into another."
+        ),
+    ),
     fresh: bool = typer.Option(
         False,
         "--fresh",
@@ -13344,6 +13532,14 @@ def adjudicate(
         # consent flag is worse than a refusal.
         typer.echo(
             "openkos adjudicate: --include-cross-source requires --apply-same.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    if include_cross_type and not apply_same:
+        # #904: the same shape as its #776 sibling above -- a consent flag
+        # that consents to nothing is worse than a refusal.
+        typer.echo(
+            "openkos adjudicate: --include-cross-type requires --apply-same.",
             err=True,
         )
         raise typer.Exit(code=2)
@@ -13507,6 +13703,16 @@ def adjudicate(
             and _cross_source_same_pair(layout.bundle_dir, result.candidate.member_ids)
             for result in results
         )
+        # #904: same reasoning as #776's flag above. `okf_type` already
+        # renders the joined `"Event+Project"` label, but `_type_label`'s
+        # own contract forbids parsing that label back into member types,
+        # so a conforming pipeline has no other way to see the class.
+        cross_type_flags = tuple(
+            result.verdict is Verdict.SAME
+            and _cross_type_concern(layout.bundle_dir, result.candidate.member_ids)
+            is not None
+            for result in results
+        )
         typer.echo(
             json.dumps(
                 _adjudication_payload(
@@ -13515,6 +13721,7 @@ def adjudicate(
                     total=len(candidates),
                     partial=batch.failure is not None,
                     cross_source_flags=cross_source_flags,
+                    cross_type_flags=cross_type_flags,
                 ),
                 indent=2,
             )
@@ -13540,6 +13747,7 @@ def adjudicate(
             no_reconcile=no_reconcile,
             reconcile=reconcile,
             include_cross_source=include_cross_source,
+            include_cross_type=include_cross_type,
         )
     else:
         _render_adjudicate_report(root, results, same_only=same_only)

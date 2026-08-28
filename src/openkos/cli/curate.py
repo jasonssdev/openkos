@@ -959,6 +959,17 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         typer.echo(f"  survivor: {prepared.survivor_canonical} ({survivor_criterion})")
         if cli_main._cross_source_same_pair(layout.bundle_dir, group.member_ids):
             typer.echo(cli_main._CROSS_SOURCE_WALK_NOTE)
+        # #904: the second risky class, rendered in the same slot from the
+        # same shared helper -- one guard landing on `adjudicate --apply`
+        # and forgotten here is exactly the drift #796 reported.
+        # Ordered from `prepared` for the same reason `adjudicate --apply`
+        # orders it there: the survivor line above names one direction.
+        cross_type_concern = cli_main._cross_type_concern(
+            layout.bundle_dir,
+            (prepared.survivor_canonical, prepared.absorbed_canonical),
+        )
+        if cross_type_concern is not None:
+            typer.echo(cli_main._cross_type_walk_note(cross_type_concern))
         if not _confirm(
             f"Merge {prepared.absorbed_canonical} into "
             f"{prepared.survivor_canonical}? [y/N]"
