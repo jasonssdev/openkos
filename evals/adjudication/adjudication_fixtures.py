@@ -1,6 +1,6 @@
 """Labelled candidate pairs for the entity-resolution adjudicator (#796).
 
-Five probe classes, chosen so the harness can see BOTH directions of the
+Nine probe classes, chosen so the harness can see BOTH directions of the
 change under test. A rule that makes identical Event titles read as a
 recurring series buys its precision somewhere, and `event-same` is where it
 would be paid for.
@@ -41,6 +41,20 @@ would be paid for.
   perfectly on `asym-recurrence` while costing every sparse-but-genuine
   duplicate.
 
+- `aspect-of` (#910) -- `X` versus `«aspect» of X`: the part-whole
+  exclusion the rubric already states, carried in the exact TITLE shape
+  the wild run answered inconsistently (`same` to 'components of X',
+  `different` to 'storage in X', against one anchor). Expected
+  `different`. Three aspect nouns, three separate anchors, so the class
+  measures the shape rather than one noun.
+- `transitivity` (#910) -- one Project anchor against three Events that
+  are three dated occurrences of one series, all six pairs expected
+  `different`. The anchor is deliberately SHARED across its three pairs
+  (see `_TRANSITIVITY_ANCHOR`); the runner additionally scores every
+  C(4,3) verdict triangle for the 2-SAME-1-DIFFERENT pattern, which is
+  the wild inconsistency itself: `same` twice and `different` once over
+  three members cannot all be true at once.
+
 Labels are CONSTRUCTED, not adjudicated: each pair is written to be
 unambiguous under the rubric the prompt states, so a wrong verdict is a
 rubric-consistency failure rather than a disputed judgment call. Read the
@@ -67,6 +81,13 @@ class FixtureDoc:
     okf_type: str
     title: str
     body: str
+    type_alternative: str | None = None
+    """The runner-up type the extractor would have recorded (#804), or
+    `None` -- the common case. Set on the `transitivity` Events (#910) so
+    the production cross-type bridge (`candidates._bridged_cross_type_
+    pairs`) nominates each Event-anchor pair exactly as it did on the wild
+    run: the harness never hand-builds a `CandidateGroup`, so a cross-type
+    pair must earn its nomination the way a real bundle's would."""
 
 
 @dataclass(frozen=True)
@@ -495,8 +516,202 @@ _CONTROLS: Final[tuple[LabelledPair, ...]] = (
 )
 
 
+# --------------------------------------------------------------------------- #
+# aspect-of (#910) -- X vs "«aspect» of X", the failing part-whole title shape
+# --------------------------------------------------------------------------- #
+
+_ASPECT_OF: Final[tuple[LabelledPair, ...]] = (
+    LabelledPair(
+        left=FixtureDoc(
+            "concepts/atlas-data-platform",
+            "Concept",
+            "Atlas Data Platform",
+            "The internal platform that ingests, stores, and serves the "
+            "organization's datasets, spanning pipelines, storage tiers, "
+            "and access control.",
+        ),
+        right=FixtureDoc(
+            "concepts/components-of-the-atlas-data-platform",
+            "Concept",
+            "Components of the Atlas Data Platform",
+            "An inventory of the parts the Atlas Data Platform is built "
+            "from: the ingestion pipelines, the storage tiers, and the "
+            "access-control layer.",
+        ),
+        probe="aspect-of",
+        expected="different",
+        note=(
+            "The right body is an inventory OF the left's parts -- the "
+            "part-whole exclusion the rubric already states, in the exact "
+            "'components of X' title shape #910 reports the judge "
+            "answering `same` to while answering `different` to 'storage "
+            "in X' against the same anchor."
+        ),
+    ),
+    LabelledPair(
+        left=FixtureDoc(
+            "concepts/meridian-archive-service",
+            "Concept",
+            "Meridian Archive Service",
+            "The service that preserves published research bundles and "
+            "answers retrieval requests against them.",
+        ),
+        right=FixtureDoc(
+            "concepts/storage-in-the-meridian-archive-service",
+            "Concept",
+            "Storage in the Meridian Archive Service",
+            "How the Meridian Archive Service lays out preserved bundles "
+            "on disk: one content-addressed store per collection, with a "
+            "manifest per bundle.",
+        ),
+        probe="aspect-of",
+        expected="different",
+        note=(
+            "The right body describes one facet INSIDE the left -- the "
+            "'storage in X' variant of the shape, the one #910's wild run "
+            "got right; carried so the class measures the title SHAPE "
+            "rather than one aspect noun."
+        ),
+    ),
+    LabelledPair(
+        left=FixtureDoc(
+            "concepts/quorum-review-workflow",
+            "Concept",
+            "Quorum Review Workflow",
+            "The end-to-end workflow a submitted change goes through: "
+            "triage, reviewer assignment, verdict collection, and merge.",
+        ),
+        right=FixtureDoc(
+            "concepts/governance-of-the-quorum-review-workflow",
+            "Concept",
+            "Governance of the Quorum Review Workflow",
+            "Who may change the Quorum Review Workflow's rules, how rule "
+            "changes are ratified, and where the rulings are recorded.",
+        ),
+        probe="aspect-of",
+        expected="different",
+        note=(
+            "The right body is about the RULES OVER the left, not the "
+            "workflow itself -- a third aspect noun, so a verdict pattern "
+            "across the class separates the shape from any one noun."
+        ),
+    ),
+)
+
+
+# --------------------------------------------------------------------------- #
+# transitivity (#910) -- one Project anchor against three Events that are
+# themselves three occurrences of one standing meeting series
+# --------------------------------------------------------------------------- #
+
+_TRANSITIVITY_ANCHOR: Final[FixtureDoc] = FixtureDoc(
+    "projects/evaluacion-de-decisiones",
+    "Project",
+    "Evaluación de Decisiones",
+    "Iniciativa de investigación en curso sobre cómo el equipo registra y "
+    "revisa sus decisiones. Abarca la metodología, las herramientas y los "
+    "criterios de calidad; no es una reunión.",
+)
+"""The one document deliberately SHARED across the three cross-type pairs
+below (#910): the wild inconsistency is one Project judged `same` as two of
+three Events that were themselves judged mutually `different`, and three
+independent anchors could not reproduce that shape. `documents()` dedupes
+it; the ids stay unique per document, never per pair."""
+
+_TRANSITIVITY_EVENTS: Final[tuple[FixtureDoc, ...]] = (
+    FixtureDoc(
+        "events/reunion-de-evaluacion-de-decisiones-1",
+        "Event",
+        "Reunión de Evaluación de Decisiones 1",
+        "sep 2, 2026. Primera reunión del ciclo con Elena Varga y Rubén "
+        "Castaño. Se revisó el criterio de registro de decisiones y quedó "
+        "pendiente el formato de acta.",
+        type_alternative="Project",
+    ),
+    FixtureDoc(
+        "events/reunion-de-evaluacion-de-decisiones-2",
+        "Event",
+        "Reunión de Evaluación de Decisiones 2",
+        "sep 9, 2026. Segunda reunión del ciclo con Nadia Iqbal. Se "
+        "discutió la herramienta de seguimiento y los límites del tablero "
+        "actual. Próximo paso: migrar el tablero.",
+        type_alternative="Project",
+    ),
+    FixtureDoc(
+        "events/reunion-de-evaluacion-de-decisiones-3",
+        "Event",
+        "Reunión de Evaluación de Decisiones 3",
+        "sep 16, 2026. Tercera reunión del ciclo. Se ratificó el criterio "
+        "de calidad y se cerró el formato de acta propuesto en la primera "
+        "sesión.",
+        type_alternative="Project",
+    ),
+)
+
+TRANSITIVITY_MEMBERS: Final[tuple[str, ...]] = (
+    _TRANSITIVITY_ANCHOR.concept_id,
+    *(doc.concept_id for doc in _TRANSITIVITY_EVENTS),
+)
+"""The four ids whose C(4,3) verdict triangles the runner scores for
+transitivity violations -- exported so the runner derives the triangles
+from the fixtures rather than restating the ids."""
+
+
+def _transitivity_pairs() -> tuple[LabelledPair, ...]:
+    """All six pairs over the anchor and the three Events, every one
+    expected `different`: an Event is one occurrence, the Project is the
+    ongoing initiative (the distinction #910's own middle row states and
+    the row below it abandons), and the Events are three dated occurrences
+    of one series. The anchor-Event pairs are nominated by the production
+    cross-type bridge (each Event's own `type_alternative`); the
+    Event-Event pairs by the ordinary same-type LOW pass."""
+    pairs: list[LabelledPair] = []
+    for event in _TRANSITIVITY_EVENTS:
+        pairs.append(
+            LabelledPair(
+                left=_TRANSITIVITY_ANCHOR,
+                right=event,
+                probe="transitivity",
+                expected="different",
+                note=(
+                    "The Event body records one dated meeting; the Project "
+                    "body says it is the ongoing initiative and states it "
+                    "is not a meeting. #910's wild run answered `same` for "
+                    "two of the three shapes like this one."
+                ),
+            )
+        )
+    for index, left in enumerate(_TRANSITIVITY_EVENTS):
+        for right in _TRANSITIVITY_EVENTS[index + 1 :]:
+            pairs.append(
+                LabelledPair(
+                    left=left,
+                    right=right,
+                    probe="transitivity",
+                    expected="different",
+                    note=(
+                        "Two dated occurrences of one series -- distinct "
+                        "dates, attendees, and outcomes, the recurrence "
+                        "class's own shape. Carried inside this probe so "
+                        "every leg of each verdict triangle is scored by "
+                        "the same run."
+                    ),
+                )
+            )
+    return tuple(pairs)
+
+
+_TRANSITIVITY: Final[tuple[LabelledPair, ...]] = _transitivity_pairs()
+
+
 PAIRS: Final[tuple[LabelledPair, ...]] = (
-    _RECURRENCE + _EVENT_SAME + _ASYM_RECURRENCE + _ASYM_SAME + _CONTROLS
+    _RECURRENCE
+    + _EVENT_SAME
+    + _ASYM_RECURRENCE
+    + _ASYM_SAME
+    + _CONTROLS
+    + _ASPECT_OF
+    + _TRANSITIVITY
 )
 
 PROBES: Final[tuple[str, ...]] = (
@@ -507,20 +722,38 @@ PROBES: Final[tuple[str, ...]] = (
     "person-same",
     "alias-same",
     "part-whole",
+    "aspect-of",
+    "transitivity",
 )
 
 
-def documents() -> tuple[FixtureDoc, ...]:
-    """Every fixture document, in pair order. Ids are unique by
-    construction; a collision would silently merge two probes into one
-    candidate group and the harness would score a pair that does not
-    exist."""
-    seen: set[str] = set()
+def documents(
+    pairs: tuple[LabelledPair, ...] = PAIRS,
+) -> tuple[FixtureDoc, ...]:
+    """Every DISTINCT fixture document of `pairs`, in pair order.
+
+    `pairs` defaults to the full `PAIRS` set and exists for one caller:
+    the runner's self-test, which feeds a deliberately conflicting pair
+    set to prove the collision raise below actually fires -- an
+    unexercised safety net is indistinguishable from a deleted one.
+
+    A document deliberately shared between pairs (the `transitivity`
+    anchor and its Events, #910) appears once: the SAME `FixtureDoc`
+    object may recur across pairs, and recurrence of the identical
+    document is intentional sharing. What still raises is one
+    `concept_id` carried by two DIFFERENT documents -- that collision
+    would silently merge two probes into one candidate group, and the
+    harness would score a pair that does not exist."""
+    seen: dict[str, FixtureDoc] = {}
     docs: list[FixtureDoc] = []
-    for pair in PAIRS:
+    for pair in pairs:
         for doc in (pair.left, pair.right):
-            if doc.concept_id in seen:
-                raise ValueError(f"duplicate fixture concept_id: {doc.concept_id}")
-            seen.add(doc.concept_id)
-            docs.append(doc)
+            existing = seen.get(doc.concept_id)
+            if existing is None:
+                seen[doc.concept_id] = doc
+                docs.append(doc)
+            elif existing != doc:
+                raise ValueError(
+                    f"conflicting fixture documents share concept_id: {doc.concept_id}"
+                )
     return tuple(docs)
