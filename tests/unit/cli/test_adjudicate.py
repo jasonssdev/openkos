@@ -1028,6 +1028,7 @@ def test_adjudicate_json_partial_batch_emits_completed_verdicts_then_exits_one(
                 "verdict": "SAME",
                 "rationale": "kept work",
                 "cross_source": False,
+                "cross_type": False,
             }
         ],
     }
@@ -3934,6 +3935,7 @@ def test_adjudicate_json_flag_emits_clean_json_and_suppresses_human_output(
                 "verdict": "SAME",
                 "rationale": "same rationale",
                 "cross_source": False,
+                "cross_type": False,
             },
             {
                 "member_ids": ["c", "d"],
@@ -3942,6 +3944,7 @@ def test_adjudicate_json_flag_emits_clean_json_and_suppresses_human_output(
                 "verdict": "DIFFERENT",
                 "rationale": "diff rationale",
                 "cross_source": False,
+                "cross_type": False,
             },
         ],
     }
@@ -4138,7 +4141,12 @@ def test_adjudication_payload_empty_results_returns_empty_results_list() -> None
     rather than a bare `[]` (spec: Empty State Emits Valid Empty `results`
     Under `--json`)."""
     assert main._adjudication_payload(
-        [], same_only=False, total=0, partial=False, cross_source_flags=()
+        [],
+        same_only=False,
+        total=0,
+        partial=False,
+        cross_source_flags=(),
+        cross_type_flags=(),
     ) == {
         "partial": False,
         "adjudicated": 0,
@@ -4172,6 +4180,7 @@ def test_adjudication_payload_complete_run_marks_partial_false_with_equal_counts
         total=2,
         partial=False,
         cross_source_flags=(False,) * len(results),
+        cross_type_flags=(False,) * len(results),
     )
 
     assert payload["partial"] is False
@@ -4195,6 +4204,7 @@ def test_adjudication_payload_partial_run_marks_partial_true_with_short_count() 
         total=2,
         partial=True,
         cross_source_flags=(False,) * len(results),
+        cross_type_flags=(False,) * len(results),
     )
 
     assert payload["partial"] is True
@@ -4208,6 +4218,7 @@ def test_adjudication_payload_partial_run_marks_partial_true_with_short_count() 
             "verdict": "SAME",
             "rationale": "kept work",
             "cross_source": False,
+            "cross_type": False,
         }
     ]
 
@@ -4237,6 +4248,7 @@ def test_adjudication_payload_same_only_does_not_shrink_adjudicated_count() -> N
         total=2,
         partial=False,
         cross_source_flags=(False,) * len(results),
+        cross_type_flags=(False,) * len(results),
     )
 
     assert payload["adjudicated"] == 2
@@ -4268,6 +4280,7 @@ def test_adjudication_payload_single_same_result_exact_field_set() -> None:
         total=1,
         partial=False,
         cross_source_flags=(False,) * len([result]),
+        cross_type_flags=(False,) * len([result]),
     )
 
     assert payload["results"] == [
@@ -4278,6 +4291,7 @@ def test_adjudication_payload_single_same_result_exact_field_set() -> None:
             "verdict": "SAME",
             "rationale": "Same individual; identical canonical name and role.",
             "cross_source": False,
+            "cross_type": False,
         }
     ]
     assert "confidence" not in payload["results"][0]
@@ -4315,6 +4329,7 @@ def test_adjudication_payload_mixed_verdicts_preserves_order_and_renders_low_tie
         total=3,
         partial=False,
         cross_source_flags=(False,) * len(results),
+        cross_type_flags=(False,) * len(results),
     )
 
     assert payload["results"] == [
@@ -4325,6 +4340,7 @@ def test_adjudication_payload_mixed_verdicts_preserves_order_and_renders_low_tie
             "verdict": "SAME",
             "rationale": "same rationale",
             "cross_source": False,
+            "cross_type": False,
         },
         {
             "member_ids": ["c", "d"],
@@ -4333,6 +4349,7 @@ def test_adjudication_payload_mixed_verdicts_preserves_order_and_renders_low_tie
             "verdict": "DIFFERENT",
             "rationale": "diff rationale",
             "cross_source": False,
+            "cross_type": False,
         },
         {
             "member_ids": ["e", "f"],
@@ -4341,6 +4358,7 @@ def test_adjudication_payload_mixed_verdicts_preserves_order_and_renders_low_tie
             "verdict": "UNCERTAIN",
             "rationale": "unc rationale",
             "cross_source": False,
+            "cross_type": False,
         },
     ]
 
@@ -4368,6 +4386,7 @@ def test_adjudication_payload_cross_type_group_has_no_member_types_key() -> None
         total=1,
         partial=False,
         cross_source_flags=(False,) * len([result]),
+        cross_type_flags=(False,) * len([result]),
     )
 
     assert payload["results"] == [
@@ -4378,6 +4397,7 @@ def test_adjudication_payload_cross_type_group_has_no_member_types_key() -> None
             "verdict": "DIFFERENT",
             "rationale": "different entities",
             "cross_source": False,
+            "cross_type": False,
         }
     ]
     assert set(payload["results"][0].keys()) == {
@@ -4387,7 +4407,12 @@ def test_adjudication_payload_cross_type_group_has_no_member_types_key() -> None
         "verdict",
         "rationale",
         "cross_source",
+        # #904's flag joins #776's. The scenario this test pins is that no
+        # `member_types` key is ever added -- the per-member type breakdown
+        # stays off the payload -- not that the key set is frozen forever.
+        "cross_type",
     }
+    assert "member_types" not in payload["results"][0]
 
 
 def test_adjudication_payload_same_only_filters_to_same_verdicts() -> None:
@@ -4413,6 +4438,7 @@ def test_adjudication_payload_same_only_filters_to_same_verdicts() -> None:
         total=2,
         partial=False,
         cross_source_flags=(False,) * len(results),
+        cross_type_flags=(False,) * len(results),
     )
 
     assert len(payload["results"]) == 1
@@ -5047,6 +5073,521 @@ def test_adjudicate_json_carries_the_cross_source_flag(
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["results"][0]["cross_source"] is True
+
+
+# --- issue #904: the cross-type guard on SAME verdicts --------------------
+
+
+def _cross_type_pair(
+    tmp_path: Path, *, shared_source: str = "sources/transcription1"
+) -> CandidateGroup:
+    """One `Event` and one `Project` SHARING a source, so #776's
+    cross-source guard cannot fire and the cross-type guard is the only
+    thing standing between the batch and the merge that removed
+    `bundle/projects/evaluacion.md` in the 0.2.12 E2E run."""
+    _write_doc(
+        tmp_path / "bundle" / "events" / "coordination.md",
+        doc_type="Event",
+        title="AFG Coordination",
+        provenance=(shared_source,),
+        body="A much richer body carrying the whole meeting transcript.\n",
+    )
+    _write_doc(
+        tmp_path / "bundle" / "projects" / "evaluacion.md",
+        doc_type="Project",
+        title="AFG Coordination",
+        provenance=(shared_source,),
+    )
+    return CandidateGroup(
+        okf_type="Event+Project",
+        member_ids=("events/coordination", "projects/evaluacion"),
+        tier=Tier.HIGH,
+        trigger="afg coordination",
+        member_types=("Event", "Project"),
+    )
+
+
+def test_apply_same_skips_a_cross_type_same_pair_by_default(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#904: a SAME verdict over members of DIFFERENT OKF types is the
+    risky class the typed-count gate must not consent to -- a `Project`
+    was batch-merged into an `Event` this way. The pair is excluded from
+    the batch, routed to manual review with the exact command, and nothing
+    is written for it."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    group = _cross_type_pair(tmp_path)
+    _stub_candidates_and_verdict(monkeypatch, group, verdict=Verdict.SAME)
+
+    result = runner.invoke(app, ["adjudicate", "--apply-same", "--confirm-count", "0"])
+
+    assert result.exit_code == 0
+    assert "cross-type SAME" in result.stdout
+    assert "Event / Project" in result.stdout
+    assert "openkos merge" in result.stdout
+    assert "cross-type: 1" in result.stdout
+    assert (tmp_path / "bundle" / "events" / "coordination.md").is_file()
+    assert (tmp_path / "bundle" / "projects" / "evaluacion.md").is_file()
+
+
+def test_apply_same_skip_label_follows_the_command_it_recommends(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The skip line prints a type label AND an `openkos merge <survivor>
+    <absorbed>` command; both must run the same direction. Here the
+    PROJECT carries the richer body, so it is the survivor and the label
+    must lead with `Project` -- in raw `member_ids` order it would lead
+    with `Event` and contradict the command printed beside it.
+
+    `_cross_type_pair` cannot catch this: there the richer body and the
+    ascending id agree, so both orderings render the same string."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(
+        tmp_path / "bundle" / "events" / "coordination.md",
+        doc_type="Event",
+        title="AFG Coordination",
+        provenance=("sources/transcription1",),
+    )
+    _write_doc(
+        tmp_path / "bundle" / "projects" / "evaluacion.md",
+        doc_type="Project",
+        title="AFG Coordination",
+        provenance=("sources/transcription1",),
+        body="The ongoing research initiative, described at real length.\n",
+    )
+    group = CandidateGroup(
+        okf_type="Event+Project",
+        member_ids=("events/coordination", "projects/evaluacion"),
+        tier=Tier.HIGH,
+        trigger="afg coordination",
+        member_types=("Event", "Project"),
+    )
+    _stub_candidates_and_verdict(monkeypatch, group, verdict=Verdict.SAME)
+
+    result = runner.invoke(app, ["adjudicate", "--apply-same", "--confirm-count", "0"])
+
+    assert result.exit_code == 0
+    assert "(Project / Event)" in result.stdout
+    assert "openkos merge projects/evaluacion events/coordination" in result.stdout
+    assert "(Event / Project)" not in result.stdout
+
+
+def test_apply_same_include_cross_type_restores_the_merge(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`--include-cross-type` is the explicit opt-in, mirroring
+    `--include-cross-source`: the same pair is previewed, gated by the
+    typed count, and merged."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    group = _cross_type_pair(tmp_path)
+    _stub_candidates_and_verdict(monkeypatch, group, verdict=Verdict.SAME)
+
+    result = runner.invoke(
+        app,
+        [
+            "adjudicate",
+            "--apply-same",
+            "--include-cross-type",
+            "--confirm-count",
+            "1",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Total: 1" in result.stdout
+    assert not (tmp_path / "bundle" / "projects" / "evaluacion.md").exists()
+    assert (tmp_path / "bundle" / "events" / "coordination.md").is_file()
+
+
+def test_apply_same_same_type_pair_is_not_flagged(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two members declaring the SAME OKF type are the ordinary class and
+    stay in the batch untouched -- the guard must not tax every merge."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(
+        tmp_path / "bundle" / "concepts" / "a.md",
+        title="Concept A",
+        provenance=("sources/s1",),
+    )
+    _write_doc(
+        tmp_path / "bundle" / "concepts" / "b.md",
+        title="Concept B",
+        provenance=("sources/s1",),
+    )
+    group = _two_member_group(("concepts/a", "concepts/b"))
+    _stub_candidates_and_verdict(monkeypatch, group, verdict=Verdict.SAME)
+
+    result = runner.invoke(app, ["adjudicate", "--apply-same", "--confirm-count", "1"])
+
+    assert result.exit_code == 0
+    assert "cross-type" not in result.stdout
+    assert "Total: 1" in result.stdout
+
+
+def test_include_cross_type_requires_apply_same(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--include-cross-type` without `--apply-same` is refused up front
+    (exit 2) rather than silently consenting to nothing -- the same shape
+    `--include-cross-source` already has."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["adjudicate", "--include-cross-type"])
+
+    assert result.exit_code == 2
+    # The exact refusal, never Typer's unknown-option error: an assertion
+    # on the flag name alone passes just as well before the flag exists.
+    assert (
+        "openkos adjudicate: --include-cross-type requires --apply-same."
+        in result.stderr
+    )
+
+
+def test_adjudicate_report_notes_a_cross_type_same_verdict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The read-only listing names the cross-type SAME verdict, so the
+    operator's eye lands on it before any apply mode is invoked."""
+    _init_workspace(tmp_path, monkeypatch)
+    group = _cross_type_pair(tmp_path)
+    _stub_candidates_and_verdict(monkeypatch, group, verdict=Verdict.SAME)
+
+    result = runner.invoke(app, ["adjudicate"])
+
+    assert result.exit_code == 0
+    assert "note: cross-type" in result.stdout
+    assert "Event / Project" in result.stdout
+
+
+def test_adjudicate_report_no_cross_type_note_on_a_different_verdict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The note fires only on the risky class: a DIFFERENT verdict over a
+    cross-type pair is the model getting it right and needs no warning."""
+    _init_workspace(tmp_path, monkeypatch)
+    group = _cross_type_pair(tmp_path)
+    _stub_candidates_and_verdict(monkeypatch, group, verdict=Verdict.DIFFERENT)
+
+    result = runner.invoke(app, ["adjudicate"])
+
+    assert result.exit_code == 0
+    assert "note: cross-type" not in result.stdout
+
+
+def test_apply_interactive_warns_on_a_cross_type_pair(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The interactive `--apply` walk keeps the pair (the operator consents
+    per item) but the warning renders BEFORE the [y/N] prompt."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    group = _cross_type_pair(tmp_path)
+    _stub_candidates_and_verdict(monkeypatch, group, verdict=Verdict.SAME)
+
+    result = runner.invoke(app, ["adjudicate", "--apply"], input="n\n")
+
+    assert result.exit_code == 0
+    assert "note: cross-type SAME" in result.stdout
+    out = result.stdout
+    assert out.index("note: cross-type SAME") < out.index("[y/N]")
+    # The note follows the survivor line printed directly above it, never
+    # raw `member_ids` order -- here the Event carries the richer body, so
+    # it survives and must be named first.
+    assert "survivor: events/coordination" in out
+    assert "(Event / Project)" in out
+
+
+def test_apply_walk_note_follows_the_survivor_it_just_printed(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The `--apply` walk's note direction, on the fixture that can tell
+    the two apart. `_cross_type_pair` gives the Event the richer body, so
+    survivor-first and raw `member_ids` order render the SAME string there
+    and the assertion cannot fail -- here the Project survives, so raw
+    order would print `(Event / Project)` directly under a survivor line
+    naming the Project."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(
+        tmp_path / "bundle" / "events" / "coordination.md",
+        doc_type="Event",
+        title="AFG Coordination",
+        provenance=("sources/transcription1",),
+    )
+    _write_doc(
+        tmp_path / "bundle" / "projects" / "evaluacion.md",
+        doc_type="Project",
+        title="AFG Coordination",
+        provenance=("sources/transcription1",),
+        body="The ongoing research initiative, described at real length.\n",
+    )
+    group = CandidateGroup(
+        okf_type="Event+Project",
+        member_ids=("events/coordination", "projects/evaluacion"),
+        tier=Tier.HIGH,
+        trigger="afg coordination",
+        member_types=("Event", "Project"),
+    )
+    _stub_candidates_and_verdict(monkeypatch, group, verdict=Verdict.SAME)
+
+    result = runner.invoke(app, ["adjudicate", "--apply"], input="n\n")
+
+    assert result.exit_code == 0
+    out = result.stdout
+    assert "survivor: projects/evaluacion" in out
+    assert "(Project / Event)" in out
+    assert "(Event / Project)" not in out
+
+
+def test_adjudicate_json_carries_the_cross_type_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#904 on the machine surface: `--json` results carry `cross_type`.
+    `okf_type` renders the joined `"Event+Project"` label, but
+    `_type_label`'s contract forbids parsing it back into member types, so
+    a pipeline has no other way to see the risky class."""
+    _init_workspace(tmp_path, monkeypatch)
+    group = _cross_type_pair(tmp_path)
+    _stub_candidates_and_verdict(monkeypatch, group, verdict=Verdict.SAME)
+
+    result = runner.invoke(app, ["adjudicate", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["results"][0]["cross_type"] is True
+
+
+def _both_classes_pair(tmp_path: Path) -> CandidateGroup:
+    """A pair that is BOTH classes at once: different OKF types AND
+    disjoint provenance -- the combination neither guard's own tests
+    produce, and the one the `--apply-same` ordering claim turns on."""
+    _write_doc(
+        tmp_path / "bundle" / "events" / "coordination.md",
+        doc_type="Event",
+        title="AFG Coordination",
+        provenance=("sources/transcription1",),
+        body="A much richer body carrying the whole meeting transcript.\n",
+    )
+    _write_doc(
+        tmp_path / "bundle" / "projects" / "evaluacion.md",
+        doc_type="Project",
+        title="AFG Coordination",
+        provenance=("sources/transcription2",),
+    )
+    return CandidateGroup(
+        okf_type="Event+Project",
+        member_ids=("events/coordination", "projects/evaluacion"),
+        tier=Tier.HIGH,
+        trigger="afg coordination",
+        member_types=("Event", "Project"),
+    )
+
+
+def test_apply_same_reports_a_both_classes_pair_once_as_cross_source(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A pair that is cross-source AND cross-type is excluded ONCE, under
+    the class the batch loop hits first. The two counters must not both
+    increment: `skipped_total` sums them, and double-counting one pair
+    would make the summary claim more exclusions than there were groups."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    group = _both_classes_pair(tmp_path)
+    _stub_candidates_and_verdict(monkeypatch, group, verdict=Verdict.SAME)
+
+    result = runner.invoke(app, ["adjudicate", "--apply-same", "--confirm-count", "0"])
+
+    assert result.exit_code == 0
+    assert "cross-source: 1" in result.stdout
+    assert "cross-type:" not in result.stdout
+    assert "skipped 1 " in result.stdout
+    assert (tmp_path / "bundle" / "events" / "coordination.md").is_file()
+    assert (tmp_path / "bundle" / "projects" / "evaluacion.md").is_file()
+
+
+def test_apply_walk_renders_both_notes_for_a_both_classes_pair(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The per-item walk is the opposite rule from the batch: the two
+    notes answer different questions ("are these the same real-world
+    item?" and "are these the same KIND of thing?"), so neither suppresses
+    the other and BOTH render before the one prompt."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    group = _both_classes_pair(tmp_path)
+    _stub_candidates_and_verdict(monkeypatch, group, verdict=Verdict.SAME)
+
+    result = runner.invoke(app, ["adjudicate", "--apply"], input="n\n")
+
+    assert result.exit_code == 0
+    out = result.stdout
+    assert "note: cross-source SAME" in out
+    assert "note: cross-type SAME" in out
+    assert out.index("note: cross-source SAME") < out.index("[y/N]")
+    assert out.index("note: cross-type SAME") < out.index("[y/N]")
+
+
+def test_apply_same_skips_a_member_whose_type_cannot_be_read(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The guard fails CLOSED on unknown type, and this is the case that
+    forced the asymmetry with `_cross_source_same_pair`.
+
+    `okf.load_frontmatter` does NOT raise on an unterminated frontmatter
+    block -- it returns `{}` and treats the whole file as body -- so a
+    truncated write yields a READABLE document with no `type:` and no
+    `provenance:`. `_prepare_one_merge` accepts it, the cross-source guard
+    has no signal, and mirroring that silence for type would have merged
+    the pair with no warning of any kind. Instead the pair leaves the
+    batch, is counted, and nothing is written."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(
+        tmp_path / "bundle" / "concepts" / "a.md",
+        title="Concept A",
+        provenance=("sources/s1",),
+    )
+    _write_doc(
+        tmp_path / "bundle" / "concepts" / "b.md",
+        title="Concept B",
+        provenance=("sources/s1",),
+    )
+    group = _two_member_group(("concepts/a", "concepts/b"))
+    _stub_candidates_and_verdict(monkeypatch, group, verdict=Verdict.SAME)
+    (tmp_path / "bundle" / "concepts" / "b.md").write_text(
+        "---\ntype: Concept\ntitle: Concept B\n", encoding="utf-8"
+    )
+
+    result = runner.invoke(app, ["adjudicate", "--apply-same", "--confirm-count", "0"])
+
+    assert result.exit_code == 0
+    assert "declares no usable OKF type" in result.stdout
+    assert "cross-type: 1" in result.stdout
+    assert (tmp_path / "bundle" / "concepts" / "a.md").is_file()
+    assert (tmp_path / "bundle" / "concepts" / "b.md").is_file()
+
+
+def test_apply_same_skips_an_unreadable_member_before_it_reaches_the_merge(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A member that RESOLVES but cannot be READ leaves the batch here, in
+    Pass 1, rather than being left to `prepare_merge`'s `_snapshot_read` in
+    Pass 2.
+
+    Deferring to that later read would be correct only if the two reads
+    could not disagree, and they can: they happen at different times, so a
+    failure that clears in between (a competing writer's brief lock)
+    admits the pair with its types never compared and no warning printed.
+    The pair is excluded, counted, and nothing is written."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(
+        tmp_path / "bundle" / "concepts" / "a.md",
+        title="Concept A",
+        provenance=("sources/s1",),
+    )
+    _write_doc(
+        tmp_path / "bundle" / "concepts" / "b.md",
+        title="Concept B",
+        provenance=("sources/s1",),
+    )
+    group = _two_member_group(("concepts/a", "concepts/b"))
+    _stub_candidates_and_verdict(monkeypatch, group, verdict=Verdict.SAME)
+    unreadable = tmp_path / "bundle" / "concepts" / "b.md"
+    unreadable.chmod(0o000)
+    try:
+        result = runner.invoke(
+            app, ["adjudicate", "--apply-same", "--confirm-count", "0"]
+        )
+    finally:
+        # Restored before the assertions so a failure cannot leave the tmp
+        # tree undeletable for the fixture's own teardown.
+        unreadable.chmod(0o644)
+
+    assert result.exit_code == 0
+    assert "could not be read, so its OKF type is unknown" in result.stdout
+    assert "cross-type: 1" in result.stdout
+    assert (tmp_path / "bundle" / "concepts" / "a.md").is_file()
+    assert (tmp_path / "bundle" / "concepts" / "b.md").is_file()
+
+
+def test_cross_type_concern_distinguishes_agreement_from_unknown(
+    tmp_path: Path,
+) -> None:
+    """The three states the callers depend on: `None` ONLY when both
+    members demonstrably declare the same type; a reason phrase naming the
+    types when they disagree; and a reason phrase naming the MEMBER when
+    its type cannot be determined.
+
+    Collapsing the third into the first is the fail-open R4 caught -- and
+    it is why this guard does not mirror `_cross_source_same_pair`'s
+    "no signal on absence" posture."""
+    bundle_dir = tmp_path / "bundle"
+    (bundle_dir / "concepts").mkdir(parents=True)
+    (bundle_dir / "concepts" / "typed.md").write_text(
+        "---\ntype: Concept\ntitle: Typed\n---\n# Typed\n", encoding="utf-8"
+    )
+    (bundle_dir / "concepts" / "other.md").write_text(
+        "---\ntype: Entity\ntitle: Other\n---\n# Other\n", encoding="utf-8"
+    )
+    (bundle_dir / "concepts" / "untyped.md").write_text(
+        "---\ntitle: Untyped\n---\n# Untyped\n", encoding="utf-8"
+    )
+
+    # Agreement is the ONLY silence.
+    assert (
+        main._cross_type_concern(bundle_dir, ("concepts/typed", "concepts/typed"))
+        is None
+    )
+    # Disagreement names both types, in member order.
+    assert main._cross_type_concern(
+        bundle_dir, ("concepts/typed", "concepts/other")
+    ) == ("members declare different OKF types (Concept / Entity)")
+    assert main._cross_type_concern(
+        bundle_dir, ("concepts/other", "concepts/typed")
+    ) == ("members declare different OKF types (Entity / Concept)")
+    # A document that PARSES but declares no type names the member, and is
+    # NOT silence -- it is the case with no other owner.
+    assert (
+        main._cross_type_concern(bundle_dir, ("concepts/typed", "concepts/untyped"))
+        == "concepts/untyped declares no usable OKF type"
+    )
+    # An UNRESOLVABLE member stays silent: that is the already-merged /
+    # missing case the batch already excludes from the preview and the
+    # Total, and a louder second voice here would misreport it.
+    assert (
+        main._cross_type_concern(bundle_dir, ("concepts/typed", "concepts/absent"))
+        is None
+    )
+    # A member that RESOLVES but cannot be read is a concern, not silence:
+    # Pass 1 and Pass 2 read at different times and can disagree.
+    unreadable = bundle_dir / "concepts" / "locked.md"
+    unreadable.write_text(
+        "---\ntype: Entity\ntitle: Locked\n---\n# Locked\n", encoding="utf-8"
+    )
+    unreadable.chmod(0o000)
+    try:
+        concern = main._cross_type_concern(
+            bundle_dir, ("concepts/typed", "concepts/locked")
+        )
+    finally:
+        unreadable.chmod(0o644)
+    assert concern == "concepts/locked could not be read, so its OKF type is unknown"
 
 
 # --- issue #779: persisted verdicts and the early --confirm-count rail ------
