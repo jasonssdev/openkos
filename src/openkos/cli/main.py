@@ -50,7 +50,7 @@ from openkos.extraction.concept import (
 from openkos.graph import proximity, sqlite_graph
 from openkos.graph.base import Edge, GraphStore
 from openkos.graph.sqlite_graph import build_graph
-from openkos.graph.summary import graph_edge_summary
+from openkos.graph.summary import asserted_relations_exist, graph_edge_summary
 from openkos.llm.base import LLMBackend
 from openkos.llm.ollama import (
     BackendHostLocality,
@@ -12578,9 +12578,18 @@ def status() -> None:
     # `graph_edge_summary` is read-only over the graph projection, built
     # once (#195) and skipped when `vectors_missing`, exactly as before.
     edge_summary: tuple[int, int] | None = None
+    # #912: typed relations on SOURCE documents (the recurring-meeting
+    # series recipe) are excluded from the concept-to-concept counts by
+    # design, but the empty-graph notice below must not deny them.
+    asserted_relations = False
     if not vectors_missing:
         with build_graph(layout.bundle_dir) as store:
             edge_summary = graph_edge_summary(layout.bundle_dir, store=store)
+            # Consulted only by the zero-count notice below, so the second
+            # edges() pass is paid only when the concept-to-concept count
+            # is already zero -- the one case where the edge set is small.
+            if edge_summary[0] == 0:
+                asserted_relations = asserted_relations_exist(store)
         total, typed = edge_summary
         untyped = total - typed
         if untyped:
@@ -12597,7 +12606,7 @@ def status() -> None:
     # (spec: "or an adjacent informational line") -- never appended to
     # `needs_attention`, so a healthy workspace still prints "Nothing needs
     # attention." above.
-    if edge_summary is not None and edge_summary[0] == 0:
+    if edge_summary is not None and edge_summary[0] == 0 and not asserted_relations:
         typer.echo("  No concept relationships yet.")
     # #593: the duplicate check above counts identical-title groups ONLY.
     # Widening it to `duplicates`' full candidate set was measured and

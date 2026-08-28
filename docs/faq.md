@@ -78,6 +78,10 @@ Two things that are *not* wrong when you see them: a transcript is split earlier
 
 Progress is printed as it goes — the phase and the chunk being worked on — so a long run tells you it is moving. If it looks frozen, check that line before assuming it hung.
 
+## How do I record that recurring meetings belong to one series?
+
+Ingest each meeting note as usual — each becomes its own `Source` document, and adjudication correctly keeps the occurrences distinct. Then link them with the shipped relation verbs: ingest a short series note once (its `Source` document is the series anchor), and run `openkos relate sources/<occurrence> member_of sources/<series-anchor>` for each occurrence. The typed `member_of` edges land in each occurrence's `relations:` frontmatter and in the graph projection, so the series is a structural path — series anchor ← occurrences ← each meeting's extracted decisions and events (via their `derived_from` provenance) — not just a naming convention. Occurrences stay independent documents throughout: `merge`/`unmerge` never fuse them, and the relation is one `relate` away from being asserted or removed.
+
 ## What does "the human curates; the engine maintains" mean?
 
 You are in charge of sourcing, exploring, and asking good questions. The engine does the tedious bookkeeping that makes a knowledge base actually useful — summarizing, cross-referencing, filing, checking freshness — that humans reliably abandon. Consequential changes stay reviewable, not silently automatic.
