@@ -191,3 +191,175 @@ def test_a_title_that_cannot_be_spliced_safely_leaves_the_body_alone() -> None:
             llm=_FakeLLM(reply),
         )
         assert out == reply, bad_title
+
+
+# --- issue #904, secondary: the reconciled document came out demoted -------
+
+
+def test_a_demoted_leading_heading_is_promoted_and_pinned() -> None:
+    """#904's secondary finding. The reconciled document came out with
+    `## <Title>` and `### Related` while every other document in the bundle
+    uses `# <Title>` and `## Related`.
+
+    Worse than cosmetic: the #695 pin only fired on a body opening with
+    `# `, so a demoted reply kept the ABSORBED note's title as well as the
+    wrong level -- the exact disagreement #695 exists to remove, silently
+    reintroduced whenever the model shifted the tree down one.
+
+    Nothing catches it downstream: `sqlite_graph` resolves by markdown link
+    syntax rather than heading level, and `lint` has no heading-shape
+    category, so it passes every gate."""
+    reply = (
+        "## Reunión de Evaluación de Decisión AFG\n\n"
+        "The Model Context Protocol (MCP) is an open protocol that connects "
+        "language models to external tools and data sources through servers.\n\n"
+        "### Related\n\n"
+        "- [Transport](transport.md)\n"
+    )
+
+    out = _reconcile(reply)
+
+    assert out is not None
+    assert out.startswith("# Model Context Protocol\n"), out[:80]
+    assert "## Related" in out
+    assert "### Related" not in out
+    assert "Reunión de Evaluación de Decisión AFG" not in out
+
+
+def test_promotion_shifts_the_whole_tree_by_the_same_delta() -> None:
+    """The shift is one delta applied to every heading, not a per-heading
+    normalisation: a document demoted by two keeps `H1 > H2 > H3` intact,
+    just re-based at 1. Rewriting only the leading heading would leave
+    `# Title` above `### Related` -- a hierarchy worse than the demoted one
+    it replaced, because the gap is no longer explainable."""
+    reply = (
+        "### Wrong Title\n\n"
+        "The Model Context Protocol is an open protocol connecting language "
+        "models to external tools and data sources through servers.\n\n"
+        "#### Transport\n\n"
+        "Each server exposes tools over a standard transport.\n\n"
+        "##### Details\n\n"
+        "One client works with any conformant server.\n"
+    )
+
+    out = _reconcile(reply)
+
+    assert out is not None
+    assert out.startswith("# Model Context Protocol\n")
+    assert "\n## Transport\n" in out
+    assert "\n### Details\n" in out
+    assert "####" not in out
+
+
+def test_a_leading_heading_deeper_than_a_later_one_is_left_alone() -> None:
+    """Fails CLOSED when the leading heading is NOT the shallowest: shifting
+    a tree whose top is not at the top cannot be done without collapsing
+    two distinct levels into one, and a corrupted hierarchy is worse than a
+    demoted one. The frontmatter title still names the document."""
+    reply = (
+        "## Wrong Title\n\n"
+        "The Model Context Protocol is an open protocol connecting language "
+        "models to external tools and data sources through servers.\n\n"
+        "# Transport\n\n"
+        "Each server exposes tools over a standard transport.\n"
+    )
+
+    out = _reconcile(reply)
+
+    assert out == reply.strip()
+
+
+def test_an_already_top_level_heading_is_unchanged_by_promotion() -> None:
+    """Delta zero is a no-op: every reply that worked before #904 takes a
+    byte-identical path, so this widening cannot move a document that was
+    already shaped correctly."""
+    reply = (
+        "# Wrong Title\n\n"
+        "The Model Context Protocol is an open protocol connecting language "
+        "models to external tools and data sources through servers.\n\n"
+        "## Related\n\n"
+        "- [Transport](transport.md)\n"
+    )
+
+    out = _reconcile(reply)
+
+    assert out is not None
+    assert out.startswith("# Model Context Protocol\n")
+    assert "\n## Related\n" in out
+
+
+def test_a_hash_inside_a_fenced_block_is_not_promoted() -> None:
+    """A `#` line inside a fenced code block is content, not structure.
+    Shifting it would edit the sample the document is showing -- and the
+    fence's own opening line proves the block is deliberate."""
+    reply = (
+        "## Wrong Title\n\n"
+        "The Model Context Protocol connects language models to external "
+        "tools and data sources through servers.\n\n"
+        "```sh\n"
+        "### not a heading, a shell comment\n"
+        "```\n\n"
+        "### Related\n\n"
+        "- [Transport](transport.md)\n"
+    )
+
+    out = _reconcile(reply)
+
+    assert out is not None
+    assert out.startswith("# Model Context Protocol\n")
+    assert "### not a heading, a shell comment" in out
+    assert "\n## Related\n" in out
+
+
+def test_a_short_closing_run_does_not_end_a_longer_fence() -> None:
+    """CommonMark: a closing run must be at least as long as the opening
+    one, which is how a four-backtick block quotes a three-backtick fence
+    without ending early. Comparing only the marker CHARACTER would end the
+    block at the inner fence and promote the `###` line after it -- editing
+    the sample the document is showing."""
+    reply = (
+        "## Wrong Title\n\n"
+        "The Model Context Protocol connects language models to external "
+        "tools and data sources through servers.\n\n"
+        "````md\n"
+        "```sh\n"
+        "### still inside the outer fence\n"
+        "```\n"
+        "````\n\n"
+        "### Related\n\n"
+        "- [Transport](transport.md)\n"
+    )
+
+    out = _reconcile(reply)
+
+    assert out is not None
+    assert out.startswith("# Model Context Protocol\n")
+    assert "### still inside the outer fence" in out
+    assert "\n## Related\n" in out
+
+
+def test_a_sibling_heading_at_the_leading_level_is_promoted_with_it() -> None:
+    """A heading at the leading heading's OWN level is a sibling, not a
+    descendant, and the delta reaches it too: the rule is one shift for the
+    whole tree, so relative structure is preserved rather than flattened.
+
+    Two level-1 headings is not a new state this introduces -- at delta
+    zero `test_only_the_leading_heading_is_pinned` already pins a later
+    `# ` heading being kept untouched. Promotion cannot be the thing that
+    forbids what delta zero already allows."""
+    reply = (
+        "## Wrong Title\n\n"
+        "The Model Context Protocol connects language models to external "
+        "tools and data sources through servers.\n\n"
+        "## Transport\n\n"
+        "Each server exposes tools over a standard transport.\n\n"
+        "### Details\n\n"
+        "One client works with any conformant server.\n"
+    )
+
+    out = _reconcile(reply)
+
+    assert out is not None
+    assert out.startswith("# Model Context Protocol\n")
+    assert "\n# Transport\n" in out
+    assert "\n## Details\n" in out

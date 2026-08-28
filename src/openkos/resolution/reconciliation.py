@@ -16,6 +16,7 @@ prompt is assembled from exactly the caller-provided pieces."""
 
 from __future__ import annotations
 
+import re
 from typing import Final
 
 from openkos.llm.base import LLMBackend, Message
@@ -42,8 +43,51 @@ _SYSTEM_PROMPT: Final = (
 )
 
 
+_HEADING_RE: Final = re.compile(r"^(?P<hashes>#{1,6})(?P<rest>\s.*)?$")
+"""One ATX heading line, captured as its level and its remainder. No leading
+whitespace is tolerated: `_pin_leading_heading` rewrites structure, and an
+indented `#` is either a code block or continuation text."""
+
+_FENCE_RE: Final = re.compile(r"^\s{0,3}(?P<fence>`{3,}|~{3,})")
+"""A fenced code block's delimiter. A `#` line inside a fence is CONTENT the
+document is showing, not structure -- shifting it would edit the sample."""
+
+
+def _heading_levels(lines: list[str]) -> list[tuple[int, int, str]]:
+    """`(index, level, rest)` for every ATX heading line OUTSIDE a fenced
+    block, in document order, where `rest` is everything after the hashes.
+
+    `rest` is carried out of the ONE match rather than re-derived at the
+    rewrite site: re-matching there would need an impossible-branch guard
+    for a `None` this function has already ruled out.
+
+    Fences are tracked by their opening marker so a `~~~` block is not
+    closed by a stray ``` and vice versa, and a closing run must be at
+    least as long as the opening one -- CommonMark's rule, and the reason a
+    ```` ```` ```` block can quote a ``` fence without ending early."""
+    out: list[tuple[int, int, str]] = []
+    fence: str | None = None
+    for index, line in enumerate(lines):
+        marker = _FENCE_RE.match(line)
+        if fence is not None:
+            closing = marker.group("fence") if marker is not None else ""
+            if closing[:1] == fence[:1] and len(closing) >= len(fence):
+                fence = None
+            continue
+        if marker is not None:
+            fence = marker.group("fence")
+            continue
+        heading = _HEADING_RE.match(line)
+        if heading is not None:
+            out.append(
+                (index, len(heading.group("hashes")), heading.group("rest") or "")
+            )
+    return out
+
+
 def _pin_leading_heading(body: str, survivor_title: str) -> str:
-    """Rewrite `body`'s LEADING `# ` heading to `survivor_title` (issue #695).
+    """Rewrite `body`'s leading heading to `survivor_title` at level 1,
+    promoting the whole heading tree by the same delta (issues #695, #904).
 
     Both input notes carry their own `# ` heading, so the model is free to
     head the reconciled document with either -- in the reported case it took
@@ -54,33 +98,64 @@ def _pin_leading_heading(body: str, survivor_title: str) -> str:
     render, while the heading is what a human -- or an OKF consumer with no
     OpenKOS awareness -- reads as the document's name.
 
+    #904's secondary finding is that the pin used to require a LEADING `# `
+    exactly, so a reply that shifted the tree down one escaped it entirely:
+    the merged document came out with `## <Title>` and `### Related` where
+    every other document in the bundle uses `# <Title>` and `## Related`,
+    AND kept the absorbed note's title. Nothing downstream catches either --
+    `graph/sqlite_graph.py` resolves by markdown link syntax rather than
+    heading level, and `lint` has no heading-shape category -- so it passed
+    every gate silently.
+
+    The shift is ONE delta applied to every heading, never a per-heading
+    normalisation: a document demoted by two keeps `H1 > H2 > H3` intact,
+    just re-based at 1. Rewriting only the leading heading would leave
+    `# Title` directly above `### Related`, a hierarchy worse than the
+    demoted one it replaced because the gap is no longer explainable.
+
     Deterministic rather than prompt-asked, matching the discipline the
     language gates (#618/#630) settled on: the survivor's title is a fact
     already in hand here, so asking the model to echo it would trade that
     fact for a probability.
 
-    Fails CLOSED on a title it cannot splice safely -- blank, or carrying a
-    newline or carriage return -- returning the body untouched rather than
-    writing a heading that would break the document's structure. Such a
-    title cannot reach here through the ordinary write paths (`bundle.index`
-    rejects newlines in titles), so this is a guard, not a code path with a
-    known producer; keeping the model's own heading is strictly better than
-    corrupting the document with a multi-line one.
+    Fails CLOSED, returning the body untouched, on every shape it cannot
+    rewrite safely:
 
-    Scope is exactly the leading heading. A `# ` heading further down is the
-    model's own sectioning, not the document's name, and rewriting it would
-    corrupt real structure. A body that opens with prose is left untouched:
-    this pins a heading that exists, it never INVENTS one, so a legitimately
-    heading-less body keeps its shape and the frontmatter title still names
-    the document."""
+    - a title that is blank or carries a newline/carriage return, which
+      cannot be spliced as one heading line (such a title cannot reach here
+      through the ordinary write paths -- `bundle.index` rejects newlines --
+      so this is a guard, not a code path with a known producer);
+    - a body that opens with prose, since this pins a heading that exists
+      and never INVENTS one, so a legitimately heading-less body keeps its
+      shape and the frontmatter title still names the document;
+    - a leading heading that is not the SHALLOWEST in the document, because
+      shifting a tree whose top is not at the top would collapse two
+      distinct levels into one, and a corrupted hierarchy is worse than a
+      demoted one.
+
+    A `#` line inside a fenced code block is content the document is
+    showing, and is left exactly as written."""
     if not survivor_title.strip() or "\n" in survivor_title or "\r" in survivor_title:
         return body
     stripped = body.lstrip("\n")
-    if not stripped.startswith("# "):
+    if not stripped:
         return body
     leading_blanks = body[: len(body) - len(stripped)]
-    _old_heading, separator, rest = stripped.partition("\n")
-    return f"{leading_blanks}# {survivor_title}{separator}{rest}"
+    lines = stripped.split("\n")
+    headings = _heading_levels(lines)
+    if not headings or headings[0][0] != 0:
+        # The pin acts on a document that OPENS with its own name; a heading
+        # further down is sectioning inside a prose lead-in.
+        return body
+    leading_level = headings[0][1]
+    if any(level < leading_level for _index, level, _rest in headings):
+        return body
+    delta = leading_level - 1
+    lines[0] = f"# {survivor_title}"
+    if delta:
+        for index, level, rest in headings[1:]:
+            lines[index] = "#" * (level - delta) + rest
+    return leading_blanks + "\n".join(lines)
 
 
 def _unwrap_fence(reply: str) -> str:
