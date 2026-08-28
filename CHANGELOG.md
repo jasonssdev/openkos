@@ -14,6 +14,118 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+## [0.2.13] - 2026-08-28
+
+Eight commits, and all but one trace back to the same source: the 0.2.12
+end-to-end run. That run filed five issues about what it watched the engine
+do to a real meeting corpus — a transcript the meeting machinery never
+recognized, a meeting stored as knowledge, a `Project` batch-merged into an
+`Event`, a merged document that came out demoted, and a quality judge that
+never saw the tail of the document — and this release closes all of them,
+plus the two follow-ups their reviews raised.
+
+### Fixed
+
+- The meeting machinery went inert on exported transcripts
+  ([#903](https://github.com/jasonssdev/openkos/issues/903),
+  [#906](https://github.com/jasonssdev/openkos/pull/906)). `**Name:**
+  utterance` — the turn shape every meeting tool exports — failed the turn
+  regex twice over (the label class excluded `*` to keep bullets out, and the
+  colon check expected whitespace where bold puts its closing `**`), so a real
+  54 KB three-speaker transcript with 305 recurring turns matched **zero** of
+  them, and framing-object enforcement, the participant machinery, and the
+  no-title prompt branch all sat out. Emphasis markers must now be PAIRED on
+  the line before they are stripped, so an unclosed `**Nota:` still fails —
+  and across 197 corpus documents the widened matcher changes not one verdict
+  that was not a meeting.
+- A summarized meeting note stored the meeting itself as knowledge
+  ([#903](https://github.com/jasonssdev/openkos/issues/903),
+  [#908](https://github.com/jasonssdev/openkos/pull/908)). A meeting NOTE has
+  no turns and a `path.stem` title, defeating both existing signals at once —
+  but it carries its own heading (`## Información de la reunión`), and the
+  gathering lexicon already knows the word. A gathering word in one of the
+  document's own ATX headings now fires framing-object enforcement — and
+  deliberately ONLY that: the participant call and the prompt channel carry
+  the one measured recall cost in this area (#459) and stay title/turn-gated.
+- `adjudicate --apply-same` batch-merged a `Project` into an `Event`
+  ([#904](https://github.com/jasonssdev/openkos/issues/904),
+  [#907](https://github.com/jasonssdev/openkos/pull/907)). Eligibility looked
+  at member count and provenance, never at `type:`, and survivor-by-richer-body
+  meant the merge direction was decided by length. A cross-type `SAME` pair is
+  now excluded from the batch with the manual command disclosed,
+  `--include-cross-type` is the explicit opt-in, and the guard reaches every
+  door at once: the listing, `--apply`, `--apply-same`, plain `merge`, and
+  `curate`'s Identity walk. A document whose frontmatter cannot be read fails
+  closed — an unterminated frontmatter block used to silence BOTH structural
+  guards at once.
+- A reconciled merge could ship its whole heading tree demoted one level under
+  the absorbed note's title
+  ([#904](https://github.com/jasonssdev/openkos/issues/904),
+  [#909](https://github.com/jasonssdev/openkos/pull/909)). The #695 pin
+  required a LEADING `# ` exactly, so a reply opening with `## <Title>`
+  escaped it entirely — and nothing downstream looks at heading depth. The pin
+  now finds the shallowest leading heading and promotes the whole tree by one
+  shared delta, keeping `H1 > H2 > H3` intact; a tree whose top is not at the
+  top is left untouched, because a corrupted hierarchy is worse than a demoted
+  one.
+- The 24-candidate pre-judge ceiling cut the document's tail
+  ([#905](https://github.com/jasonssdev/openkos/issues/905),
+  [#913](https://github.com/jasonssdev/openkos/pull/913)). The cut was
+  `merged[:24]` in document order, so on the reported run nine one-line action
+  items from an early dense block filled the budget while 18 tail candidates
+  never reached the judge — including the re-ask and participant-capture
+  additions, which the positional cut discarded in exactly the overflow case.
+  Membership is now decided round-robin across windows (survivors keep
+  document order), chosen over a richness heuristic on purpose: ranking by
+  length would pre-judge quality with the proxy the judge exists to replace.
+- The meeting-heading signal counted a heading shown inside a fenced code
+  block ([#911](https://github.com/jasonssdev/openkos/issues/911),
+  [#915](https://github.com/jasonssdev/openkos/pull/915)), so a document
+  *about* writing meeting notes read as a meeting. The scan now tracks fences
+  the way `reconcile`'s heading promoter does — and its review caught a defect
+  in that reference implementation itself: a fence-marker line carrying an
+  info string (` ```python `) inside an open block closed it early, where
+  CommonMark permits only trailing whitespace on a closing fence. Both copies
+  are fixed in lockstep.
+- `status` printed "No concept relationships yet." over relations that exist
+  ([#912](https://github.com/jasonssdev/openkos/issues/912),
+  [#916](https://github.com/jasonssdev/openkos/pull/916)). The notice keyed on
+  the concept-to-concept edge count, which deliberately excludes every
+  source-endpoint edge — so the recurring-meeting series recipe (each
+  occurrence `Source` related `member_of` to a series-anchor `Source`) wrote
+  real typed edges and was then told it had none. The notice now also consults
+  a predicate that sees any human-asserted typed relation regardless of
+  endpoint family, still excluding the engine-synthesized `derived_from`
+  mirror.
+
+### Measured
+
+- The two adjudication inconsistency shapes the 0.2.12 run observed in the
+  wild are now permanent probe classes
+  ([#910](https://github.com/jasonssdev/openkos/issues/910),
+  [#914](https://github.com/jasonssdev/openkos/pull/914)): `X` vs
+  `«aspect» of X`, and verdict triangles over one anchor and three dated
+  occurrences of one series, with every C(4,3) triangle scored per run.
+  Baseline, n=15: aspect-of 45/45 `different`, transitivity 90/90, triangle
+  violation rate 0.00. **No rubric change was adopted, and that is the
+  finding**: the shipped rubric handles the rubric-unambiguous analogues
+  perfectly, so no candidate can show the improvement #910 requires — the
+  wild damage stays blocked by the layered defense (#907's deterministic
+  guard above all), and any future rubric candidate is now scored against
+  both shapes automatically.
+
+### Documentation
+
+- `docs/faq.md` answers "How do I record that recurring meetings belong to
+  one series?" with the shipped-verb recipe #912's investigation verified
+  end-to-end, and `docs/user-journey.md` no longer defers "typed
+  relationships between objects" wholesale — they shipped as human-asserted
+  edges long ago; what remains deferred is relationships created by
+  extraction itself.
+- `docs/cli.md`'s pre-judge ceiling paragraph now states how membership is
+  decided (round-robin across windows, #905) rather than only that the cut
+  names its casualties.
+
 ## [0.2.12] - 2026-08-27
 
 A documentation release, cut for a reason worth naming: **PyPI freezes a project's
@@ -2298,7 +2410,8 @@ and Memory) work.
 - Default embedding model is `bge-m3` (ADR-0006), superseding the earlier
   `qwen3-embedding:0.6b` default.
 
-[Unreleased]: https://github.com/jasonssdev/openkos/compare/v0.2.12...HEAD
+[Unreleased]: https://github.com/jasonssdev/openkos/compare/v0.2.13...HEAD
+[0.2.13]: https://github.com/jasonssdev/openkos/compare/v0.2.12...v0.2.13
 [0.2.12]: https://github.com/jasonssdev/openkos/compare/v0.2.11...v0.2.12
 [0.2.11]: https://github.com/jasonssdev/openkos/compare/v0.2.10...v0.2.11
 [0.2.10]: https://github.com/jasonssdev/openkos/compare/v0.2.9...v0.2.10
