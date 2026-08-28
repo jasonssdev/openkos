@@ -5226,6 +5226,100 @@ def test_transcript_shaped_text_accepts_timestamped_turns() -> None:
     assert concept_mod._transcript_shaped_text("\n".join(lines))
 
 
+def test_transcript_shaped_text_accepts_markdown_bold_turns() -> None:
+    """#903: `**Name:** utterance` is the shape every meeting tool exports,
+    and the regex saw none of it -- the label's first-character class
+    excludes `*`, and the colon is followed by `**` rather than whitespace.
+
+    Measured on the source that filed the issue: 3 recurring speakers, 305
+    recurring turns, 82% of the non-blank lines -- every floor cleared by a
+    wide margin, and 0 of 311 turn lines matched."""
+    lines = []
+    for index in range(6):
+        lines.append(f"**Jason Sepulveda:** un punto {index} sobre la metodología")
+        lines.append(f"**Gustavo Martínez:** una respuesta {index} a ese punto")
+    assert concept_mod._transcript_shaped_text("\n".join(lines))
+
+
+def test_transcript_shaped_text_accepts_underscore_emphasis_turns() -> None:
+    """`_PAIRED_EMPHASIS_RE` covers `__` beside `**` because both are the
+    PAIRED markdown emphasis forms; the single-marker forms stay untouched
+    so the bullet exclusion survives. The `__` branch gets its own test
+    rather than riding on the `**` one -- an alternation whose second arm
+    is never exercised is an untested branch however obvious it reads."""
+    lines = []
+    for index in range(6):
+        lines.append(f"__Jason Sepulveda:__ un punto {index} sobre la metodología")
+        lines.append(f"__Gustavo Martínez:__ una respuesta {index} a ese punto")
+    assert concept_mod._transcript_shaped_text("\n".join(lines))
+
+
+def test_transcript_shaped_text_rejects_unclosed_emphasis_openers() -> None:
+    """An UNCLOSED `**` opener must not become a speaker label. Stripping
+    it would yield `Nota: ...`, satisfying both constraints the plain regex
+    used to fail the line on -- a label may not open with `*`, and the
+    colon must be followed by whitespace rather than `**`.
+
+    The bullet exclusion does not cover this: it tests a single leading
+    marker plus a space, and `**Nota:` is neither. So the pairing check in
+    `_turn_match` is the only thing standing between an emphasis-heavy
+    document and #459's measured false-positive class."""
+    lines = []
+    for index in range(6):
+        lines.append(f"**Nota: el punto {index} quedó sin cerrar")
+        lines.append(f"**Riesgo: el riesgo {index} quedó sin cerrar")
+    assert not concept_mod._transcript_shaped_text("\n".join(lines))
+
+
+def test_names_absent_from_source_ignores_an_unclosed_emphasis_opener() -> None:
+    """The pairing guard matters MORE here than in the detector, which has
+    recurrence floors this function lacks: its exemption turns on
+    `short * 2 >= len(labels)`, so ONE contaminated short label silences the
+    participant advisory on an ordinary prose source."""
+    results = [
+        concept_mod.ExtractionResult(
+            type="Person", title="Marta Ruiz", description="Lead.", body=""
+        )
+    ]
+    source = "**A: la fuente jamás escribe ese nombre\nUn párrafo cualquiera."
+
+    assert concept_mod._names_absent_from_source(results, source_text=source) == (
+        "Marta Ruiz",
+    )
+
+
+def test_transcript_shaped_text_rejects_bold_definition_list() -> None:
+    """#903's widening must not admit a bold definition list: the emphasis
+    is the same, the RECURRENCE is not. Each term appears once, exactly the
+    `key: value` class `_transcript_shaped_text` already rejects -- which is
+    why the same meeting note's `**Fecha:**`/`**Invitados:**` block cannot
+    carry a document on its own."""
+    text = "\n".join(
+        [
+            "**Ingest workers:** pull source records and normalize them.",
+            "**Query API:** serves the analytics dashboards.",
+            "**Redis cache:** sits in front of the query API.",
+            "**Fecha:** ago 18, 2026",
+            "**Invitados:** tres personas del equipo",
+            "**Archivos adjuntos:** notas de la reunión",
+        ]
+    )
+    assert not concept_mod._transcript_shaped_text(text)
+
+
+def test_transcript_shaped_text_rejects_bold_bullets_however_often_they_recur() -> None:
+    """The `*`/`-` first-character exclusion must survive #903's widening:
+    only PAIRED emphasis markers are stripped, so a bullet keeps its single
+    leading marker and stays out even when its lead-in recurs past every
+    floor. This is #459's asymmetry -- a false positive reroutes the
+    document to the no-title branch, measured at 0.75 -> 0.57 recall."""
+    lines = []
+    for index in range(6):
+        lines.append(f"* **Paso:** el paso {index} del procedimiento")
+        lines.append(f"* **Nota:** la nota {index} sobre ese paso")
+    assert not concept_mod._transcript_shaped_text("\n".join(lines))
+
+
 def test_transcript_shaped_text_rejects_prose() -> None:
     """An ordinary markdown document must never fire -- the #459 asymmetry:
     a false positive silently reroutes the document to the meeting prompt
@@ -5713,6 +5807,37 @@ def test_names_absent_from_source_skips_a_label_only_transcript() -> None:
         line
         for _ in range(6)
         for line in ("A: Let us start.", "B: Agreed, next item.", "C: One moment.")
+    )
+
+    assert concept_mod._names_absent_from_source(results, source_text=source) == ()
+
+
+def test_names_absent_from_source_skips_a_bold_label_only_transcript() -> None:
+    """#903's second consumer. The label-only exemption reads the SAME turn
+    match the detector does, so a transcript whose speakers are written
+    `**A:**` must reach it too.
+
+    This is a behavior change, not a restatement: before `_turn_match`, a
+    bold transcript yielded NO labels at all, `labels` was falsy, the
+    exemption could not fire, and every proposed participant was reported
+    absent -- the flood of false alarms the plain-label sibling above exists
+    to prevent, arriving on the format meeting tools actually export."""
+    results = [
+        concept_mod.ExtractionResult(
+            type="Person",
+            title="User Interface Designer",
+            description="Presented the concept.",
+            body="",
+        )
+    ]
+    source = "\n".join(
+        line
+        for _ in range(6)
+        for line in (
+            "**A:** Let us start.",
+            "**B:** Agreed, next item.",
+            "**C:** One moment.",
+        )
     )
 
     assert concept_mod._names_absent_from_source(results, source_text=source) == ()

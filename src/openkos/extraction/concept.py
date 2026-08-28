@@ -368,6 +368,58 @@ _TRANSCRIPT_MIN_TURNS_PER_SPEAKER: Final = 3
 _TRANSCRIPT_MIN_RECURRING_TURNS: Final = 10
 
 
+_PAIRED_EMPHASIS_RE: Final = re.compile(r"\*\*|__")
+"""Markdown BOLD markers only -- the paired forms, never the single ones.
+
+`_TRANSCRIPT_TURN_RE` cannot match `**Name:** utterance` for two
+independent reasons: its label may not OPEN with `*`, and it requires
+whitespace after the colon where a bold label puts the closing `**`. That
+made the whole #673 detector inert on the format every meeting tool
+exports -- 0 of 311 turn lines on the transcript that filed #903, against
+floors it cleared three times over.
+
+PAIRED means CLOSED ON THE LINE, not merely "two characters wide", and
+`_turn_match` enforces that because this regex cannot: it matches each
+token independently, so an unclosed `**Nota: revisar esto` would lose its
+lone opener and become `Nota: revisar esto` -- satisfying both constraints
+the plain regex used to fail it on, and dissolving the bullet exclusion
+from the other side. `_names_absent_from_source` is the exposed consumer:
+it has no recurrence floor, so one contaminated short label there moves
+its exemption. Stripping only `**`/`__` still leaves a bullet's own single
+marker in place, so `* **Nota:** ...` stays excluded on the leading `*`.
+
+Nothing else about the predicate moves. A bold DEFINITION list still
+fails on recurrence -- each term appears once, the `key: value` class the
+floors already reject -- which is why a meeting note's `**Fecha:**` /
+`**Invitados:**` header block cannot carry a document on its own."""
+
+
+def _turn_match(line: str) -> re.Match[str] | None:
+    """`_TRANSCRIPT_TURN_RE` against `line`, retried once with paired
+    markdown emphasis stripped (#903).
+
+    THE single place the two shapes are reconciled, so the detector
+    (`_transcript_shaped_text`) and the participant grounding exemption
+    (`_names_absent_from_source`) cannot drift apart -- both were blind to
+    bold turns, and a fix in one consumer would have left the other
+    inert on the same document.
+
+    The plain form is tried FIRST and returned unchanged when it matches,
+    so every source that fired before #903 takes a byte-identical path:
+    the retry is reachable only for a line the shipped regex already
+    rejected, which bounds this change to text that produced no match at
+    all. The retry is skipped unless the SAME marker occurs at least twice,
+    so an emphasis-free document pays one scan and no substitution, and an
+    unclosed opener is never admitted as a label."""
+    match = _TRANSCRIPT_TURN_RE.match(line)
+    if match is not None:
+        return match
+    markers = _PAIRED_EMPHASIS_RE.findall(line)
+    if not any(markers.count(marker) >= 2 for marker in set(markers)):
+        return None
+    return _TRANSCRIPT_TURN_RE.match(_PAIRED_EMPHASIS_RE.sub("", line))
+
+
 def _transcript_shaped_text(source_text: str) -> bool:
     """Deterministic content-shape transcript detection (#673): does this
     text READ as speaker-labelled turns, whatever its title says?
@@ -406,7 +458,7 @@ def _transcript_shaped_text(source_text: str) -> bool:
         if not line.strip():
             continue
         non_blank += 1
-        match = _TRANSCRIPT_TURN_RE.match(line)
+        match = _turn_match(line)
         if match is None:
             continue
         label = match.group("label").strip()
@@ -1305,7 +1357,7 @@ def _names_absent_from_source(
     labels = {
         match.group("label").strip()
         for line in source_text.splitlines()
-        if (match := _TRANSCRIPT_TURN_RE.match(line)) is not None
+        if (match := _turn_match(line)) is not None
     }
     short = sum(1 for label in labels if len(label) <= _LABEL_ONLY_MAX_LEN)
     if labels and short * 2 >= len(labels):
