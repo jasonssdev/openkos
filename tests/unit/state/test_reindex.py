@@ -41,10 +41,24 @@ def _write_doc(
     doc_type: str = "Concept",
     title: str = "Stub",
     body: str = "",
+    sensitivity: str | None = "private",
 ) -> None:
+    """Write a bundle document.
+
+    `sensitivity` defaults to `private` because that is what a real ingested
+    document carries, and because #922 made the value load-bearing here: the
+    embed gate is fail-closed, so a fixture with no `sensitivity` key is
+    withheld from a non-local backend. Pass `sensitivity=None` to write the
+    key-less document deliberately and exercise that fail-closed path.
+
+    It never changes the embedded TEXT -- `_compose_header` reads title,
+    description and tags only -- so the composition assertions elsewhere in
+    this file are unaffected."""
     path.parent.mkdir(parents=True, exist_ok=True)
+    sensitivity_line = "" if sensitivity is None else f"sensitivity: {sensitivity}\n"
     path.write_text(
-        f"---\ntype: {doc_type}\ntitle: {title}\ndescription: ''\n---\n{body}",
+        f"---\ntype: {doc_type}\ntitle: {title}\ndescription: ''\n"
+        f"{sensitivity_line}---\n{body}",
         encoding="utf-8",
     )
 
@@ -1496,6 +1510,7 @@ def test_reindex_embed_text_composes_title_description_tags_body(
         "tags:\n"
         "  - philosophy\n"
         "  - ethics\n"
+        "sensitivity: private\n"
         "---\n"
         "Stoicism teaches virtue as the only true good.\n",
         encoding="utf-8",
@@ -1536,6 +1551,7 @@ def test_reindex_embed_text_drops_fields_outside_the_composed_set(
         "type: Concept\n"
         "title: A\n"
         "description: ''\n"
+        "sensitivity: private\n"
         "custom_marker_field: SHOULD_NOT_BE_EMBEDDED\n"
         "---\n"
         "Body text.\n",
@@ -1891,3 +1907,202 @@ def test_reindex_effective_model_tag_is_none_when_model_tag_is_none(
         report = reindex.reindex(bundle_dir, db, _FakeEmbedder())
 
     assert report.effective_model_tag is None
+
+
+# --- #922: the embed gate. `sensitivity` governs EGRESS, and a non-local
+# embedding backend IS egress ------------------------------------------------
+
+
+def test_reindex_withholds_a_confidential_doc_from_a_non_local_backend(
+    tmp_path: Path,
+) -> None:
+    """The embed path had NO sensitivity check at all. A remote `OLLAMA_HOST`
+    got a warning (#199) and the document text was sent anyway -- including
+    `confidential`, against the project's own "confidential never leaves the
+    device" guarantee.
+
+    `sensitivity.should_block` is the one shared authority the five `llm.chat`
+    seams already delegate to (#240); embedding is a sixth seam that was never
+    taught. `local_exemption=False` means the backend is not verifiably this
+    machine, so the send is egress and must not happen."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "open.md", title="Open", body="public body")
+    _write_doc(
+        bundle_dir / "concepts" / "secret.md",
+        title="Secret",
+        body="salary figures",
+        sensitivity="confidential",
+    )
+    embedder = _FakeEmbedder()
+
+    with vectorstore.open_vector_store(tmp_path / ".openkos" / "vectors.db") as db:
+        report = reindex.reindex(bundle_dir, db, embedder, local_exemption=False)
+
+    assert report.withheld_confidential == 1
+    assert report.embedded == 1
+    # The point of the whole change: the bytes never reached the embedder.
+    assert not any("salary figures" in text for text in embedder.embedded_texts)
+    assert any("public body" in text for text in embedder.embedded_texts)
+
+
+def test_reindex_embeds_a_confidential_doc_under_the_local_exemption(
+    tmp_path: Path,
+) -> None:
+    """A local backend is not egress, so nothing is withheld -- the default
+    local-first experience is unchanged, which is what keeps this a boundary
+    rather than a downgrade."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "secret.md",
+        title="Secret",
+        body="salary figures",
+        sensitivity="confidential",
+    )
+    embedder = _FakeEmbedder()
+
+    with vectorstore.open_vector_store(tmp_path / ".openkos" / "vectors.db") as db:
+        report = reindex.reindex(bundle_dir, db, embedder, local_exemption=True)
+
+    assert report.withheld_confidential == 0
+    assert report.embedded == 1
+    assert any("salary figures" in text for text in embedder.embedded_texts)
+
+
+@pytest.mark.parametrize(
+    ("sensitivity", "why"),
+    [
+        (None, "the key is absent"),
+        ("", "the value is blank"),
+        ("   ", "the value is whitespace"),
+    ],
+)
+def test_reindex_fails_closed_on_an_unusable_sensitivity(
+    tmp_path: Path, sensitivity: str | None, why: str
+) -> None:
+    """A security-relevant signal that is simply missing must fail CLOSED.
+    `okf._rank(None)` and `okf._rank("")` both resolve to `private`, which is
+    the right default for a merge floor and the wrong answer here --
+    `blocks_llm_send` exists precisely to not delegate the absent case."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "a.md",
+        title="A",
+        body="body text",
+        sensitivity=sensitivity,
+    )
+    embedder = _FakeEmbedder()
+
+    with vectorstore.open_vector_store(tmp_path / ".openkos" / "vectors.db") as db:
+        report = reindex.reindex(bundle_dir, db, embedder, local_exemption=False)
+
+    assert report.withheld_confidential == 1, why
+    assert report.embedded == 0
+    assert embedder.call_count == 0
+
+
+def test_reindex_does_not_over_block_ordinary_documents(
+    tmp_path: Path,
+) -> None:
+    """The gate must be a boundary, not a blanket. `public` and `private`
+    both rank below `confidential`, so a remote backend still embeds the
+    documents it was always allowed to -- otherwise the fix would read as
+    "reindex stopped working against a remote host"."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "p.md", title="P", sensitivity="public")
+    _write_doc(bundle_dir / "concepts" / "q.md", title="Q", sensitivity="private")
+    embedder = _FakeEmbedder()
+
+    with vectorstore.open_vector_store(tmp_path / ".openkos" / "vectors.db") as db:
+        report = reindex.reindex(bundle_dir, db, embedder, local_exemption=False)
+
+    assert report.withheld_confidential == 0
+    assert report.embedded == 2
+
+
+def test_reindex_leaves_a_withheld_docs_existing_vector_in_place(
+    tmp_path: Path,
+) -> None:
+    """A withheld document is still ON DISK, so it must not be pruned.
+
+    Its stored vector was computed locally and lives in a local store, so
+    keeping it leaks nothing -- while pruning it would silently destroy work
+    the moment an operator pointed `OLLAMA_HOST` at a colleague's machine,
+    and destroying data is not what a privacy boundary is for."""
+    bundle_dir = tmp_path / "bundle"
+    doc = bundle_dir / "concepts" / "secret.md"
+    _write_doc(doc, title="Secret", body="body", sensitivity="confidential")
+    store = tmp_path / ".openkos" / "vectors.db"
+
+    # First run: local backend, so the doc is embedded and stored.
+    with vectorstore.open_vector_store(store) as db:
+        reindex.reindex(bundle_dir, db, _FakeEmbedder(), local_exemption=True)
+
+    # Second run: remote backend, and `force=True` so the doc genuinely
+    # reaches the gate rather than short-circuiting as a cache hit. This is
+    # the sharper case: the operator explicitly asked for a re-embed, the
+    # gate must still hold, and the stored vector must survive being denied.
+    embedder = _FakeEmbedder()
+    with vectorstore.open_vector_store(store) as db:
+        report = reindex.reindex(
+            bundle_dir, db, embedder, force=True, local_exemption=False
+        )
+        assert "concepts/secret" in db.meta_hashes()
+
+    assert report.withheld_confidential == 1
+    assert report.pruned == 0
+    assert embedder.call_count == 0
+
+
+def test_reindex_does_not_report_a_cache_hit_as_withheld(
+    tmp_path: Path,
+) -> None:
+    """The gate sits AFTER the content-hash cache check, and the ordering is
+    a claim rather than an accident: a cache hit performs zero embed calls,
+    so there is no send for the gate to prevent. Counting it as withheld
+    would report a privacy action that never had egress to stop, and would
+    make the number climb on every routine run against a remote backend
+    until it meant nothing."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "secret.md",
+        title="Secret",
+        body="body",
+        sensitivity="confidential",
+    )
+    store = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(store) as db:
+        reindex.reindex(bundle_dir, db, _FakeEmbedder(), local_exemption=True)
+
+    with vectorstore.open_vector_store(store) as db:
+        report = reindex.reindex(bundle_dir, db, _FakeEmbedder(), local_exemption=False)
+
+    assert report.cache_hits == 1
+    assert report.withheld_confidential == 0
+
+
+def test_reindex_withholds_the_model_tag_when_a_doc_was_withheld(
+    tmp_path: Path,
+) -> None:
+    """The tag-persist gate is a self-healing mechanism, and a withheld doc
+    breaks it the same way a `skipped` or `embed_failed` doc does.
+
+    A withheld doc keeps its stale old-model vector. Persisting the new tag
+    anyway would make the NEXT run see a matching tag, fall through to the
+    content_hash comparison, find it unchanged, and treat it as a cache
+    hit -- stranding it on the old model permanently, even after the operator
+    points the backend back at this machine. Withholding the tag keeps
+    `model_changed` true until a run finally covers every document."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "a.md", title="A", sensitivity="private")
+    _write_doc(bundle_dir / "concepts" / "s.md", title="S", sensitivity="confidential")
+    store = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(store) as db:
+        report = reindex.reindex(
+            bundle_dir, db, _FakeEmbedder(), model_tag="bge-m3", local_exemption=False
+        )
+        assert db.read_model_tag() is None
+
+    assert report.withheld_confidential == 1
+    assert report.model_reembedded is True
