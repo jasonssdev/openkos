@@ -275,6 +275,35 @@ lazily re-embed. `purge` MUST NOT write any `log.md` tombstone entry.
 - WHEN `log.md` is inspected afterward
 - THEN it contains no new tombstone entry for the purged concept(s)
 
+### Requirement: A Failed Store Delete Is Reported As An Incomplete Erasure
+
+The delete IS the erasure — the reason above for unlinking rather than
+issuing a row-level `DELETE` is that freelist pages would otherwise remain
+recoverable. When a store's `unlink` fails, pre-purge content is therefore
+still on disk, and `purge` MUST NOT report a completed erasure: it MUST exit
+non-zero, MUST name the full path of every store it could not delete, and
+MUST state that removing those files is what finishes the erasure. It MUST
+NOT present `openkos reindex` as the remedy for the residue — a reindex
+rebuilds index content and removes no residual pages.
+
+This covers the rebuilt stores (`fts.db`, `graph.db`) as well as the dropped
+ones: rebuilding content over a file that was never unlinked leaves the
+pre-purge pages equally recoverable, even though nothing was lost. A REBUILD
+failure remains non-fatal (it is a convenience over the survivors) — only a
+failed DELETE is an erasure gap.
+
+#### Scenario: A store that could not be deleted fails the run
+- GIVEN a purge whose history rewrite succeeded
+- WHEN any derived store's `unlink` raises
+- THEN `purge` still prints its expunge summary, additionally prints an
+  incomplete-erasure report naming that store's full path and the removal
+  that finishes the erasure, and exits non-zero
+
+#### Scenario: A failed rebuild still succeeds
+- GIVEN a purge whose deletes all succeeded
+- WHEN the in-line `fts.db` or `graph.db` rebuild raises
+- THEN the failure is reported and `purge` exits zero
+
 ### Requirement: Whole-History Content-Scrub Of index.md And log.md
 
 After a successful rewrite, `purge` MUST content-scrub `bundle/index.md` and
