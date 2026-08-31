@@ -150,6 +150,31 @@ jobs:
       - name: Build sdist and wheel
         run: uv build
 
+      # A green build is not a legally complete distribution. Both artifacts
+      # carried `License-Expression: Apache-2.0` while containing no LICENSE
+      # file at all, which Apache-2.0 section 4 requires of every
+      # redistribution (#924). Metadata cannot prove this -- only the archive
+      # contents can -- so this step reads inside both artifacts rather than
+      # trusting the backend to have honoured `license-files`.
+      - name: License file ships in both artifacts
+        run: |
+          shopt -s nullglob
+          sdists=(dist/openkos-*.tar.gz)
+          wheels=(dist/openkos-*.whl)
+          test "${#sdists[@]}" -eq 1 && test "${#wheels[@]}" -eq 1 || {
+            echo "license check: expected exactly one sdist and one wheel" >&2
+            exit 1
+          }
+          tar -tzf "${sdists[0]}" | grep -qx 'openkos-[^/]*/LICENSE' || {
+            echo "::error::sdist ${sdists[0]} ships no LICENSE file" >&2
+            exit 1
+          }
+          unzip -l "${wheels[0]}" | grep -qE 'openkos-[^/]*\.dist-info/licenses/LICENSE$' || {
+            echo "::error::wheel ${wheels[0]} ships no LICENSE file" >&2
+            exit 1
+          }
+          echo "LICENSE present in both the sdist and the wheel."
+
       # `--isolated --no-project` installs only the built wheel, so invoking
       # the console script exercises the artifact's own entry-point metadata
       # rather than the checkout or the dev environment.

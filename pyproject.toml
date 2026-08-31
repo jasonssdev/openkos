@@ -4,6 +4,13 @@ version = "0.2.13"
 description = "Local-first engine that turns your scattered text into a living, portable knowledge base in the Open Knowledge Format (OKF)"
 readme = "README.md"
 license = "Apache-2.0"
+# Apache-2.0 section 4 requires every redistribution to carry a copy of the
+# license, and `license` above is only an SPDX *expression* -- metadata, not
+# the text. Without this, both artifacts shipped `License-Expression:
+# Apache-2.0` pointing at a file neither of them contained. The backend
+# resolves these paths against the project root and lands them in the sdist
+# and in the wheel's `.dist-info/licenses/`.
+license-files = ["LICENSE"]
 authors = [
     { name = "Jason", email = "jasonssdev@gmail.com" }
 ]
