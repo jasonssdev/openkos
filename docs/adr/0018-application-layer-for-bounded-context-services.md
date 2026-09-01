@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0018: An application layer for bounded-context services"
 description: Introduce src/openkos/application/ as the home for composition that is neither an adapter nor a domain package, starting with the query context.
-status: Proposed
+status: Accepted
 date: 2026-08-31
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0018: An application layer for bounded-context services
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-08-31
 
 ## Context
