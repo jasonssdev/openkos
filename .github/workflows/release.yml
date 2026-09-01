@@ -39,8 +39,15 @@ jobs:
       # replaces a long-lived API token.
       id-token: write
       contents: read
+      # `actions: read` is what the provenance gate below needs to ask whether
+      # CI actually passed for this commit. Read-only, and scoped to this job.
+      actions: read
     steps:
+      # `fetch-depth: 0`: the provenance gate below asks whether this tag's
+      # commit is contained in `main`, which a shallow checkout cannot answer.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
         with:
           python-version: "3.12"
@@ -57,6 +64,47 @@ jobs:
             echo "::error::tag v$tag does not match pyproject version $pkg" >&2
             exit 1
           fi
+
+      # The comment at the top of this file says to cut the tag from a green
+      # `main`, and until #921 that was the whole mechanism: a sentence. A tag
+      # can be cut from any commit on any branch, including one that never saw
+      # a pull request, and nothing here would notice -- the publish would
+      # succeed and the artifact would carry no evidence of where it came
+      # from. These two checks turn that instruction into a gate.
+      #
+      # They are deliberately BEFORE the build: a release that must not happen
+      # should fail before artifacts exist, not after.
+      - name: Verify the tag's commit is contained in main
+        run: |
+          tag_sha="$(git rev-parse HEAD^{commit})"
+          # `origin/main` as the remote sees it right now. Comparing against a
+          # local branch would let a stale or locally-edited `main` vouch for
+          # a commit the repository never accepted.
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$tag_sha" origin/main; then
+            echo "::error::tag ${GITHUB_REF_NAME} ($tag_sha) is not contained in origin/main -- releases are cut from main" >&2
+            exit 1
+          fi
+          echo "$tag_sha is contained in origin/main."
+
+      # Green CI for THAT COMMIT, not for the branch and not for a neighbour.
+      # `main`'s push trigger gives every commit on the default branch a run of
+      # its own (see ci.yml's `concurrency` block, which deliberately never
+      # cancels a run on main), so this lookup is answerable for any commit a
+      # release could legitimately be cut from.
+      - name: Verify CI passed for this exact commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag_sha="$(git rev-parse HEAD^{commit})"
+          conclusion="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${tag_sha}&status=completed" \
+            --jq '[.workflow_runs[] | .conclusion] | first // "none"')"
+          if [ "$conclusion" != "success" ]; then
+            echo "::error::CI for $tag_sha concluded '${conclusion}', not 'success' -- refusing to publish" >&2
+            exit 1
+          fi
+          echo "CI concluded success for $tag_sha."
 
       # `uv build` exercises the same uv_build backend CI validates on every
       # change; building here from the tagged tree is what actually ships.
