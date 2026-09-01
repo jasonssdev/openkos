@@ -2,10 +2,14 @@
 
 ## Purpose
 
-The `openkos query "<question>"` Typer command is the CLI entry point for the
-MVP-1 query chain: it gates on an initialized workspace, builds an
-`OllamaClient` from config, calls the `retrieval.answer()` library seam, and
-renders the answer plus citations as plain text to stdout.
+The `openkos query "<question>"` Typer command is the CLI entry point for
+the MVP-1 query chain: it gates the workspace, reads the configuration and
+builds the LLM/embedder seams, then delegates to the query application
+service, which opens the indexes with degrade handling, calls the
+`retrieval.answer()` library seam, and computes the `--save` filing plan.
+`query` itself owns only argument parsing, workspace and client setup,
+interactive confirmation, exit-code mapping, and rendering the answer plus
+citations as plain text to stdout.
 
 ## Non-Goals
 
