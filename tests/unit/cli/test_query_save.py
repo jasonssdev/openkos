@@ -1,10 +1,13 @@
 """Unit and integration tests for `query --save` (two-output-rule):
 files the just-printed cited answer back as a new derived OKF concept.
 
-Unit tests exercise `_stage_filed_answer` directly (Phase A staging, no
+Unit tests exercise `stage_filed_answer` directly (Phase A staging, no
 writes -- mirrors `_stage_derived_objects`'s test shape in
-`test_ingest.py`). Integration tests drive the full `query --save` CLI path
-through `CliRunner`, patching `openkos.application.query.answer` exactly like
+`test_ingest.py`). `_stage_filed_answer` moved to
+`openkos.application.query.stage_filed_answer` (issue #918 Slice 2, design
+task 7.3); the alias below keeps every existing call site in this file
+unchanged. Integration tests drive the full `query --save` CLI path through
+`CliRunner`, patching `openkos.application.query.answer` exactly like
 `test_query.py` does, so these tests are zero network, zero real Ollama
 process, zero real FTS5/vector/graph index.
 """
@@ -16,8 +19,10 @@ import pytest
 from typer.testing import CliRunner, Result, _NamedTextIOWrapper
 
 from openkos import config, fsio
+from openkos.application import query as application_query
+from openkos.application.query import stage_filed_answer as _stage_filed_answer
 from openkos.cli import main
-from openkos.cli.main import _stage_filed_answer, app
+from openkos.cli.main import app
 from openkos.graph import sqlite_graph
 from openkos.resolution import insight_identity
 from openkos.retrieval.answer import NO_MATCH, AnswerResult, Attribution, Citation
@@ -1880,7 +1885,7 @@ def test_query_save_success_message_silent_when_nothing_raised(
 
 def test_declarative_answer_title_promotes_a_usable_first_sentence() -> None:
     assert (
-        main._declarative_answer_title(
+        application_query._declarative_answer_title(
             "Symmetric cryptography relies on modular arithmetic. More detail."
         )
         == "Symmetric cryptography relies on modular arithmetic"
@@ -1890,11 +1895,18 @@ def test_declarative_answer_title_promotes_a_usable_first_sentence() -> None:
 def test_declarative_answer_title_refuses_fragments_questions_and_prose() -> None:
     """Too short, too long, or itself a question -> `None`, so the caller
     falls back to the question (the pre-#570 default)."""
-    assert main._declarative_answer_title("Yes.") is None
-    assert main._declarative_answer_title("It depends.") is None
-    assert main._declarative_answer_title("¿Qué es la criptografía simétrica?") is None
-    assert main._declarative_answer_title("Is it modular arithmetic?") is None
-    assert main._declarative_answer_title("word " * 40 + ".") is None
+    assert application_query._declarative_answer_title("Yes.") is None
+    assert application_query._declarative_answer_title("It depends.") is None
+    assert (
+        application_query._declarative_answer_title(
+            "¿Qué es la criptografía simétrica?"
+        )
+        is None
+    )
+    assert (
+        application_query._declarative_answer_title("Is it modular arithmetic?") is None
+    )
+    assert application_query._declarative_answer_title("word " * 40 + ".") is None
 
 
 def test_question_subject_strips_definitional_scaffolding() -> None:
@@ -1903,24 +1915,35 @@ def test_question_subject_strips_definitional_scaffolding() -> None:
     trailing chained interrogative clause strips, and the first letter is
     capitalized so the subject reads as a title."""
     assert (
-        main._question_subject("¿qué es el Model Context Protocol?")
+        application_query._question_subject("¿qué es el Model Context Protocol?")
         == "Model Context Protocol"
     )
-    assert main._question_subject("¿qué es MCP y para qué sirve?") == "MCP"
-    assert main._question_subject("what is the context window?") == "Context window"
-    assert main._question_subject("¿para qué sirve el índice FTS?") == "Índice FTS"
-    assert main._question_subject("¿cómo funciona la ingesta?") == "Ingesta"
-    assert main._question_subject("what are embeddings?") == "Embeddings"
+    assert application_query._question_subject("¿qué es MCP y para qué sirve?") == "MCP"
+    assert (
+        application_query._question_subject("what is the context window?")
+        == "Context window"
+    )
+    assert (
+        application_query._question_subject("¿para qué sirve el índice FTS?")
+        == "Índice FTS"
+    )
+    assert (
+        application_query._question_subject("¿cómo funciona la ingesta?") == "Ingesta"
+    )
+    assert application_query._question_subject("what are embeddings?") == "Embeddings"
 
 
 def test_question_subject_refuses_non_definitional_questions() -> None:
     """A question whose shape the rung does not recognize returns `None`
     so the ladder falls through to the question verbatim -- guessing a
     subject out of an open question would title the filing wrong."""
-    assert main._question_subject("¿qué decidimos sobre el almacenamiento?") is None
-    assert main._question_subject("summarize the meeting") is None
-    assert main._question_subject("¿qué es?") is None
-    assert main._question_subject("what is   ?") is None
+    assert (
+        application_query._question_subject("¿qué decidimos sobre el almacenamiento?")
+        is None
+    )
+    assert application_query._question_subject("summarize the meeting") is None
+    assert application_query._question_subject("¿qué es?") is None
+    assert application_query._question_subject("what is   ?") is None
 
 
 def test_clause_connectors_are_space_delimited() -> None:
@@ -1932,7 +1955,7 @@ def test_clause_connectors_are_space_delimited() -> None:
     rewrite the filter, pin the invariant it rests on -- an entry added
     without its spaces would go silently inert, never loudly wrong, and that
     is the failure mode a test earns its keep against."""
-    for connector in main._CLAUSE_CONNECTORS:
+    for connector in application_query._CLAUSE_CONNECTORS:
         assert connector.startswith(" "), connector
         assert connector.endswith(" "), connector
 
@@ -1943,7 +1966,7 @@ def test_clause_answer_title_promotes_the_first_clause_of_an_overlong_opening() 
     filing used to be named after the question. The clause rung cuts the
     same sentence at its first clause boundary and promotes that."""
     assert (
-        main._clause_answer_title(
+        application_query._clause_answer_title(
             "La relación entre la trazabilidad y la verdad contextual en "
             "sistemas RAG radica en que cada afirmación generada debe poder "
             "rastrearse hasta su fuente original."
@@ -1961,8 +1984,8 @@ def test_clause_answer_title_defers_to_the_declarative_rung_within_the_ceiling()
     rung 1 today must reach this helper and be refused, or the filings whose
     titles are already correct would start being cut short."""
     within = "Symmetric cryptography relies on modular arithmetic. More detail."
-    assert main._declarative_answer_title(within) is not None
-    assert main._clause_answer_title(within) is None
+    assert application_query._declarative_answer_title(within) is not None
+    assert application_query._clause_answer_title(within) is None
 
 
 def test_clause_answer_title_cuts_at_the_earliest_competing_boundary() -> None:
@@ -1977,7 +2000,7 @@ def test_clause_answer_title_cuts_at_the_earliest_competing_boundary() -> None:
     and every other test stays green."""
     # A comma at 44 and ` porque ` at 62: the comma wins.
     assert (
-        main._clause_answer_title(
+        application_query._clause_answer_title(
             "La trazabilidad de cada afirmación generada, que es la base del "
             "sistema, importa porque sin ella nada se verifica jamás."
         )
@@ -1987,7 +2010,7 @@ def test_clause_answer_title_cuts_at_the_earliest_competing_boundary() -> None:
     # sits later in `_CLAUSE_CONNECTORS` than ` porque `, so a tuple-order
     # scan would cut at the wrong one.
     assert (
-        main._clause_answer_title(
+        application_query._clause_answer_title(
             "La verdad contextual del sistema es la propiedad central porque "
             "sostiene cada afirmación que el modelo genera al responder."
         )
@@ -2000,14 +2023,14 @@ def test_clause_answer_title_refuses_questions_and_markdown() -> None:
     opening, both of which rung 1 refuses for a reason that has nothing to do
     with length."""
     assert (
-        main._clause_answer_title(
+        application_query._clause_answer_title(
             "¿Por qué la trazabilidad importa tanto en un repositorio de "
             "conocimiento local, y qué pasa si falta?"
         )
         is None
     )
     assert (
-        main._clause_answer_title(
+        application_query._clause_answer_title(
             "- La trazabilidad es la propiedad que permite rastrear cada "
             "afirmación hasta su fuente original de origen."
         )
@@ -2020,7 +2043,7 @@ def test_clause_answer_title_refuses_a_residue_outside_the_bounds() -> None:
     little as a fragment does, and a clause that is still a paragraph is
     still a paragraph."""
     assert (
-        main._clause_answer_title(
+        application_query._clause_answer_title(
             "El MVP, entendido como la versión más pequeña del producto que "
             "ya entrega valor real al usuario, sirve para aprender."
         )
@@ -2037,7 +2060,7 @@ def test_clause_answer_title_cut_index_survives_a_length_changing_lowercase() ->
     change. With three of them ahead of the connector the drift is three
     characters, which cuts inside the preceding word rather than at the
     clause boundary."""
-    cut = main._clause_answer_title(
+    cut = application_query._clause_answer_title(
         "İİİstanbul y su repositorio local de conocimiento compartido "
         "es la base sobre la que se apoya toda la trazabilidad declarada."
     )
@@ -2052,7 +2075,7 @@ def test_clause_answer_title_refuses_a_residue_over_the_ceiling() -> None:
     still prose. Dropping the upper bound would file a paragraph as the
     permanent Concept ID -- exactly what the ceiling exists to prevent, and
     the too-short test would stay green throughout."""
-    cut = main._clause_answer_title(
+    cut = application_query._clause_answer_title(
         "La trazabilidad de cada afirmación generada por el sistema hasta su "
         "fuente original inmutable y verificable es la propiedad central."
     )
@@ -2065,7 +2088,7 @@ def test_clause_answer_title_refuses_a_residue_with_no_letters() -> None:
     A residue of digits and punctuation names nothing, and would slug to
     something unusable. Reachable because the earliest cut can land after a
     purely numeric opening."""
-    cut = main._clause_answer_title(
+    cut = application_query._clause_answer_title(
         "2024 2025 2026 2027 2028 2029 2030 2031 2032, la trazabilidad "
         "quedó definida como la propiedad central del repositorio local."
     )
@@ -2076,7 +2099,7 @@ def test_clause_answer_title_refuses_a_sentence_with_no_clause_boundary() -> Non
     """No comma and no connector means no defensible cut, so the ladder
     falls through to the question verbatim exactly as it does today."""
     assert (
-        main._clause_answer_title(
+        application_query._clause_answer_title(
             "Rastrear afirmaciones generadas hasta fuentes originales "
             "inmutables mediante cadenas largas de procedencia declarada"
         )
@@ -2107,9 +2130,9 @@ def test_stage_filed_answer_still_falls_through_to_the_question_verbatim(
         "Rastrear afirmaciones generadas hasta fuentes originales inmutables "
         "mediante cadenas largas de procedencia declarada por cada objeto"
     )
-    assert main._declarative_answer_title(answer_text) is None
-    assert main._question_subject(question) is None
-    assert main._clause_answer_title(answer_text) is None
+    assert application_query._declarative_answer_title(answer_text) is None
+    assert application_query._question_subject(question) is None
+    assert application_query._clause_answer_title(answer_text) is None
 
     plan = _stage_filed_answer(
         question=question,
@@ -2573,7 +2596,7 @@ def test_the_save_preview_discloses_a_possible_duplicate(
         ),
     )
     monkeypatch.setattr(
-        "openkos.cli.main.insight_identity.near_duplicate_insights",
+        "openkos.application.query.insight_identity.near_duplicate_insights",
         lambda *a, **k: insight_identity.DuplicateScan(
             [
                 insight_identity.NearDuplicate(
@@ -2618,7 +2641,7 @@ def test_the_disclosure_is_advisory_and_the_save_still_writes(
         ),
     )
     monkeypatch.setattr(
-        "openkos.cli.main.insight_identity.near_duplicate_insights",
+        "openkos.application.query.insight_identity.near_duplicate_insights",
         lambda *a, **k: insight_identity.DuplicateScan(
             [
                 insight_identity.NearDuplicate(
@@ -2651,7 +2674,7 @@ def test_no_duplicate_means_no_disclosure_line(
         ),
     )
     monkeypatch.setattr(
-        "openkos.cli.main.insight_identity.near_duplicate_insights",
+        "openkos.application.query.insight_identity.near_duplicate_insights",
         lambda *a, **k: insight_identity.DuplicateScan([]),
     )
 
@@ -2687,7 +2710,7 @@ def test_the_disclosure_is_asked_about_the_question_being_filed(
         return insight_identity.DuplicateScan([])
 
     monkeypatch.setattr(
-        "openkos.cli.main.insight_identity.near_duplicate_insights", _spy
+        "openkos.application.query.insight_identity.near_duplicate_insights", _spy
     )
 
     result = runner.invoke(app, ["query", "what is stoicism?", "--save", "--auto"])
@@ -2915,7 +2938,7 @@ def test_an_unavailable_duplicate_scan_notifies_the_operator(
         ),
     )
     monkeypatch.setattr(
-        "openkos.cli.main.insight_identity.near_duplicate_insights",
+        "openkos.application.query.insight_identity.near_duplicate_insights",
         lambda *a, **k: insight_identity.DuplicateScan([], unavailable=True),
     )
 
@@ -2940,7 +2963,7 @@ def test_a_successful_empty_scan_prints_no_notice(
         ),
     )
     monkeypatch.setattr(
-        "openkos.cli.main.insight_identity.near_duplicate_insights",
+        "openkos.application.query.insight_identity.near_duplicate_insights",
         lambda *a, **k: insight_identity.DuplicateScan([]),
     )
 
@@ -2957,7 +2980,7 @@ def _stub_scan(
     monkeypatch: pytest.MonkeyPatch, scan: insight_identity.DuplicateScan
 ) -> None:
     monkeypatch.setattr(
-        "openkos.cli.main.insight_identity.near_duplicate_insights",
+        "openkos.application.query.insight_identity.near_duplicate_insights",
         lambda *a, **k: scan,
     )
 

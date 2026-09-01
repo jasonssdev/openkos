@@ -66,15 +66,10 @@ from openkos.llm.ollama import (
 )
 from openkos.model import okf, types
 from openkos.model.relations import ASYMMETRIC_RELATION_TYPES, validate_relation_type
-from openkos.model.types import BUILDABLE_TYPES as _BUILDABLE_TYPES
 from openkos.model.types import INSIGHT_TYPE as _INSIGHT_TYPE
 from openkos.model.types import TYPE_TO_LINK_DIR as _TYPE_TO_LINK_DIR
 from openkos.model.types import TYPE_TO_SECTION as _TYPE_TO_SECTION
-from openkos.resolution import (
-    find_candidates_report,
-    find_exact_title_groups,
-    insight_identity,
-)
+from openkos.resolution import find_candidates_report, find_exact_title_groups
 from openkos.resolution.adjudication import (
     AdjudicatedCandidate,
     AdjudicationBatch,
@@ -115,10 +110,10 @@ from openkos.resolution.volatility_typing import (
     TierSuggestionBatch,
     suggest_volatility,
 )
-from openkos.retrieval.answer import NO_MATCH, Citation, NoMatchCause
+from openkos.retrieval.answer import NO_MATCH, NoMatchCause
 from openkos.sensitivity import blocks_llm_send
 from openkos.state import adjudications as adjudications_store
-from openkos.state import derived, findings, question_vectors
+from openkos.state import derived, findings
 from openkos.state import edge_suggestions as edge_suggestions_store
 from openkos.state import reindex as reindex_module
 from openkos.state.derived import stale_derived_stores
@@ -3131,80 +3126,20 @@ def _run_adjudicate_apply_same(
         _refresh_derived_after_write(layout, None, verb="adjudicate")
 
 
-_SLUG_COLLAPSE_RE = re.compile(r"-+")
-
-
-def _is_slug_char(char: str) -> bool:
-    """Whether `_slugify` keeps `char` verbatim.
-
-    The whitelist is Unicode letters and digits (`str.isalnum()`, i.e.
-    categories `L*`/`N*`) plus combining marks (`M*`). Marks are included
-    because in Indic, Hebrew and Arabic scripts a vowel sign or virama is
-    part of its grapheme, not decoration: dropping `ि`/`्` from `हिन्दी`
-    would corrupt the word rather than merely spell it differently.
-    """
-    return char.isalnum() or unicodedata.category(char).startswith("M")
-
-
 def _slugify(stem: str) -> str:
-    """Sanitize a filename stem OR a title into a slug: NFC, lowercase,
-    Unicode letters/digits/marks kept, every other run -> `-`, trimmed.
+    """Sanitize a filename stem OR a title into a slug.
 
-    THE SLUG IS THE IDENTITY, not a filename detail: an object's Concept ID
-    is its path within the bundle with `.md` removed (OKF §2,
-    `docs/knowledge-object-model.md`), and there is no separate `id` field.
-    So what this function throws away decides which objects exist at all.
-
-    **Unicode-safe (issue #414).** The original `[^a-z0-9]+` sanitiser
-    collapsed every non-ASCII character to a hyphen, which mangled accented
-    Latin (`Diseño de Módulos` -> `dise-o-de-m-dulos`) and slugified a title
-    in any non-Latin script (`知识图谱`, `Общая теория`, `こんにちは`) to the
-    EMPTY string -- and an empty slug makes `_stage_derived_objects` skip
-    the candidate, so every correctly extracted object from such a source
-    was silently discarded. The whitelist is now Unicode-aware
-    (`_is_slug_char`), so those titles keep their own script.
-
-    **Transliteration was considered and rejected.** Romanising `知识图谱`
-    to `zhi-shi-tu-pu` is a *choice* (which romanisation? whose tone
-    marks?), not a fact about the title, and it would need a dependency to
-    make that choice for the user. OpenKOS preserves representations rather
-    than deciding them, so the slug carries the author's script.
-
-    **NFC is normalised explicitly, in and out.** macOS filesystems
-    normalise to NFD; without `unicodedata.normalize("NFC", ...)` the same
-    title would produce different bytes -- and therefore a different Concept
-    ID -- on different platforms. Identity has to be stable across
-    filesystems, so both the input and the lowercased result are folded to
-    NFC (lowercasing can itself denormalise, e.g. `İ` -> `i` + U+0307).
-
-    **Path containment holds by construction**, which matters more now that
-    the docstring's old guarantee ("callers always pass `Path(src).stem`")
-    no longer holds -- `_stage_derived_objects` (LLM-extracted titles) and
-    `_stage_filed_answer` (`query --save` titles) both pass unconstrained
-    text. Nothing but a Unicode letter, digit, mark or `-` can reach the
-    output, and no Unicode alphanumeric is a path separator on any supported
-    platform, so `/`, `\\`, `.`, `..`, `:`, a null byte, a control character
-    and the Windows-reserved set are all unreachable: `../../etc/passwd`
-    slugifies to `etc-passwd`.
-
-    **Backward compatible for ASCII, exactly.** For any pure-ASCII input the
-    result is byte-for-byte what the old `[^a-z0-9]+` regex returned
-    (`notes` -> `notes`, `My Notes` -> `my-notes`), because ASCII
-    `str.isalnum()` is precisely `[a-zA-Z0-9]`. Existing bundles never
-    silently rename.
-
-    May still return `""` -- a title of only punctuation or emoji has no
-    letters or digits to keep. That is a supported outcome, not an error:
-    every caller (`ingest`, `_stage_derived_objects`, `_stage_filed_answer`)
-    has its own empty-slug branch.
+    Delegates to `bundle.source_titles.slugify` (issue #918 Slice 2), which
+    `application.query`'s `--save` filing composition also calls -- promoted
+    there because the application layer may not import `openkos.cli` (the
+    layering invariant), so this stays the single implementation rather than
+    a duplicate that could silently drift (mirrors `_titleize`'s own
+    delegation to `source_titles.titleize`, design D1). See
+    `source_titles.slugify`'s docstring for the full Unicode-safety and
+    identity rationale; every caller here (`ingest`, `_stage_derived_objects`,
+    tarball extraction) keeps its own empty-slug branch.
     """
-    normalized = unicodedata.normalize("NFC", stem)
-    sanitized = "".join(
-        char.lower() if _is_slug_char(char) else "-" for char in normalized
-    )
-    return unicodedata.normalize(
-        "NFC", _SLUG_COLLAPSE_RE.sub("-", sanitized).strip("-")
-    )
+    return source_titles.slugify(stem)
 
 
 def _titleize(stem: str) -> str:
@@ -16256,433 +16191,6 @@ def _no_match_message(cause: NoMatchCause, fts_hit_count: int) -> str:
     raise ValueError(f"unexpected no_match_cause: {cause!r}")
 
 
-@dataclass(frozen=True)
-class _FiledAnswerPlan:
-    """One validated `query --save` filing staged for Phase B write --
-    mirrors `_DerivedPlan`'s shape (design: "`_stage_filed_answer` helper
-    (not inline)")."""
-
-    link_dir: str
-    section: str
-    slug: str
-    title: str
-    description: str
-    path: Path
-    content: str
-    sensitivity: str
-    type_floor_raised: bool = False
-    """`True` when this filing's resolved `sensitivity` is strictly above
-    the cited-concept high-water-mark because of the per-type offset
-    mapping (issue #669, design D3) -- `resolved != cited_high_water_mark`,
-    the `--save`-site mirror of `_DerivedPlan.type_floor_raised`. `False`
-    on the common path (no offset configured for this type, or the
-    citation high-water-mark already at or above the floor-plus-offset)."""
-
-
-_DECLARATIVE_TITLE_MAX_CHARS = 90
-"""Longest first sentence `_declarative_answer_title` will promote to a
-title (issue #570). Above this a sentence is prose, not a name, and the
-slug -- the permanent Concept ID -- would be a paragraph."""
-
-_DECLARATIVE_TITLE_MIN_CHARS = 15
-"""Shortest first sentence worth promoting: below this the sentence is
-usually a fragment ("Yes.", "It depends.") that names nothing."""
-
-_SYNTHESIS_SHARE_WARN_THRESHOLD = 0.5
-"""Share of an answer's citations that are filed syntheses (`insights/`)
-at which `query` warns (issue #649). The all-or-nothing predecessor fired
-only at 1.0, a threshold a drifting base approaches without crossing;
-half-or-more means the answer stands as much on model output as on
-sources. Below it the `[synthesis]` markers still disclose each leg."""
-
-
-def _declarative_answer_title(answer_text: str) -> str | None:
-    """Derive a DECLARATIVE title from `answer_text`'s first sentence, or
-    `None` when no usable one exists (issue #570).
-
-    `query --save` used to title the filed document with the QUESTION
-    verbatim, so the slug -- the permanent OKF Concept ID -- was an
-    interrogative sentence (`qué-relación-hay-entre-...`). The answer's
-    opening sentence is the declarative statement of the same content, so
-    it is the natural title; the question survives as the default
-    DESCRIPTION, where prose belongs.
-
-    Deterministic and conservative: take the text up to the first `.` that
-    ends a word (or the whole first line), collapse whitespace, and refuse
-    (`None`) when the result is shorter than `_DECLARATIVE_TITLE_MIN_CHARS`,
-    longer than `_DECLARATIVE_TITLE_MAX_CHARS`, or itself a question. The
-    caller falls back to the question, exactly the pre-#570 behavior --
-    this helper only ever improves the default, and `--title` still
-    overrides everything."""
-    first_line = answer_text.strip().split("\n", 1)[0]
-    sentence = first_line.split(". ", 1)[0].removesuffix(".")
-    candidate = " ".join(sentence.split())
-    if not (
-        _DECLARATIVE_TITLE_MIN_CHARS <= len(candidate) <= _DECLARATIVE_TITLE_MAX_CHARS
-    ):
-        return None
-    if candidate.endswith("?") or candidate.startswith(("¿", "#", "-", "*", ">")):
-        return None
-    return candidate
-
-
-_QUESTION_SUBJECT_PREFIXES: Final = (
-    "qué es ",
-    "qué son ",
-    "cuál es ",
-    "cuáles son ",
-    "qué significa ",
-    "para qué sirve ",
-    "para qué sirven ",
-    "cómo funciona ",
-    "cómo funcionan ",
-    "what is ",
-    "what are ",
-)
-"""Definitional interrogative scaffolds `_question_subject` strips (#646).
-Deliberately narrow: only shapes where the remainder IS the subject. An
-open question (`¿qué decidimos ...?`) has no extractable subject and must
-fall through to the question-verbatim safety net, never be guessed at."""
-
-_QUESTION_SUBJECT_TRAILING_RE: Final = re.compile(
-    r"\s+(?:y|e|and)\s+(?:para qué|cómo|cuál|qué|what|how|why)\b.*$",
-    re.IGNORECASE,
-)
-"""A chained second interrogative clause (`... y para qué sirve`) is
-scaffolding, not subject; a plain conjunction between nouns (`entrada y
-salida`) never matches because the next word is not an interrogative."""
-
-_QUESTION_SUBJECT_ARTICLES: Final = (
-    "el ",
-    "la ",
-    "los ",
-    "las ",
-    "un ",
-    "una ",
-    "the ",
-    "a ",
-    "an ",
-)
-
-
-def _question_subject(question: str) -> str | None:
-    """Extract the SUBJECT of a definitional question, or `None` (#646).
-
-    `¿qué es el Model Context Protocol?` names `Model Context Protocol`;
-    filing the question verbatim makes the slug -- the permanent Concept ID
-    -- an interrogative sentence, and makes two insights about the same
-    subject look unrelated whenever the questions were phrased differently.
-    This is the middle rung of the title ladder: it runs only when
-    `_declarative_answer_title` refused (the answer's first sentence was
-    unusable -- in production, long Spanish openings routinely exceed the
-    declarative ceiling), and falls through to the question verbatim when
-    the question's shape is not recognizably definitional.
-
-    Deterministic: normalize whitespace, strip interrogative punctuation,
-    match a known scaffold prefix case-insensitively, cut a chained
-    interrogative clause, strip one leading article, and capitalize the
-    first letter. Refuses a residue shorter than 2 characters, longer than
-    `_DECLARATIVE_TITLE_MAX_CHARS`, or with no letters at all."""
-    text = " ".join(question.split()).strip("¿?¡!. ")
-    lowered = text.lower()
-    for prefix in _QUESTION_SUBJECT_PREFIXES:
-        if lowered.startswith(prefix):
-            subject = text[len(prefix) :]
-            break
-    else:
-        return None
-    subject = _QUESTION_SUBJECT_TRAILING_RE.sub("", subject).strip()
-    lowered_subject = subject.lower()
-    for article in _QUESTION_SUBJECT_ARTICLES:
-        if lowered_subject.startswith(article):
-            subject = subject[len(article) :].strip()
-            break
-    if not (2 <= len(subject) <= _DECLARATIVE_TITLE_MAX_CHARS):
-        return None
-    if not any(char.isalpha() for char in subject):
-        return None
-    return subject[0].upper() + subject[1:]
-
-
-_CLAUSE_CONNECTORS: Final = (
-    " porque ",
-    " ya que ",
-    " puesto que ",
-    " debido a ",
-    " radica en ",
-    " consiste en ",
-    " se refiere a ",
-    " se basa en ",
-    " permite ",
-    " sirve para ",
-    " es que ",
-    " es la ",
-    " es el ",
-    " es una ",
-    " es un ",
-    " son las ",
-    " son los ",
-)
-"""Spanish clause boundaries `_clause_answer_title` may cut at, alongside a
-plain comma. Closed and deliberately small: a shape nobody listed simply
-does not cut, and an uncut sentence falls through to the question verbatim
--- the same safety net as today, never a wrong title.
-
-EVERY entry is space-delimited on both sides, and that is what makes each
-one match a clause boundary rather than a substring inside a word: without
-the trailing space ` es un ` would fire inside `es una`, and without the
-leading one ` permite ` would fire inside `impermite`-shaped tokens. The
-spaces are the word boundaries, spelled literally.
-
-`_clause_answer_title` searches these through `_CLAUSE_CONNECTOR_RE` and
-keeps `match.start() > 0`. A match AT index 0 is unreachable anyway -- the
-candidate has been through `" ".join(...split())`, so it never begins with
-a space -- and were one to occur it would cut an empty residue, which fails
-the minimum-length bound and falls through safely. An entry added without
-its spaces would therefore go silently inert rather than loudly wrong, so
-`test_clause_connectors_are_space_delimited` pins the invariant instead of
-leaving it to a reader to reconstruct."""
-
-_CLAUSE_CONNECTOR_RE: Final = re.compile(
-    "|".join(re.escape(connector) for connector in _CLAUSE_CONNECTORS),
-    re.IGNORECASE,
-)
-"""`_CLAUSE_CONNECTORS` as one leftmost-wins, case-insensitive alternation.
-
-Exists so the cut index is measured against the SAME string it slices.
-Matching case-insensitively here rather than searching a `candidate.lower()`
-copy is a correctness requirement, not a style choice: `str.lower()` is not
-length-preserving (`"İ"` becomes two codepoints), so indices taken from a
-lower-cased copy drift right against the original."""
-
-
-def _clause_answer_title(answer_text: str) -> str | None:
-    """Derive a title from the first CLAUSE of an over-long declarative
-    opening, or `None` (issue #696).
-
-    #696 reports that filed insights are still named after the question, and
-    proposes reordering the ladder so the subject rung runs first. Measured
-    (`evals/query_title/`), that proposal is a no-op on its own two evidence
-    questions: `_question_subject` returns `None` for both, so promoting it
-    promotes a refusal. What actually happens is that BOTH existing rungs
-    refuse -- `_declarative_answer_title` because a real Spanish opening runs
-    past `_DECLARATIVE_TITLE_MAX_CHARS` (the evidence sentence measures 158),
-    and `_question_subject` because `¿por qué es importante X?` is not one of
-    the eleven definitional scaffolds #646 narrowed itself to.
-
-    So this rung attacks the ceiling, which is the binding constraint
-    `_question_subject`'s own docstring already named in prose. It cuts the
-    first sentence at its earliest comma or clause connector and applies rung
-    1's own bounds to the residue.
-
-    TWO GUARDS, both load-bearing:
-
-    It refuses anything rung 1 could have promoted. The over-ceiling check is
-    what makes this additive: every answer resolving at rung 1 today reaches
-    here only to be refused, so the filings whose titles are already right
-    keep them byte for byte. Without it, a 50-character sentence would be cut
-    at its copula and the ~30 e2e filings pinned on
-    `stoicism-teaches-the-dichotomy-of-control` would silently change name.
-
-    It re-checks the question/markdown shapes rung 1 rejects. Length is not
-    why rung 1 refuses those, so a length-only gate would admit a long
-    question as a title -- exactly the interrogative Concept ID #696 exists
-    to remove.
-
-    Ordering is MEASURED, not assumed: this rung sits BELOW `_question_subject`
-    (see `_stage_filed_answer`). Placed above it, `¿qué es la trazabilidad?`
-    over a long opening cut to `La trazabilidad`, article and all, where the
-    subject rung gives the cleaner `Trazabilidad`. A clause cut is a degraded
-    declarative -- it is what you reach for when the sentence overran AND the
-    question named no subject."""
-    first_line = answer_text.strip().split("\n", 1)[0]
-    sentence = first_line.split(". ", 1)[0].removesuffix(".")
-    candidate = " ".join(sentence.split())
-    if len(candidate) <= _DECLARATIVE_TITLE_MAX_CHARS:
-        return None
-    if candidate.endswith("?") or candidate.startswith(("¿", "#", "-", "*", ">")):
-        return None
-    cuts = [candidate.index(",")] if "," in candidate else []
-    # Searched case-insensitively against `candidate` ITSELF, never against a
-    # lower-cased copy. `str.lower()` is not length-preserving -- `"İ"` lowers
-    # to two codepoints -- so an index taken from `candidate.lower()` and used
-    # to slice `candidate` drifts right by one per such character, cutting
-    # mid-word once more than one appears. Two review lenses found this
-    # independently. A regex alternation also returns the LEFTMOST match, so
-    # it replaces the previous per-connector `min` scan outright.
-    match = _CLAUSE_CONNECTOR_RE.search(candidate)
-    if match is not None and match.start() > 0:
-        cuts.append(match.start())
-    if not cuts:
-        return None
-    residue = candidate[: min(cuts)].strip().rstrip(",;:")
-    if not (
-        _DECLARATIVE_TITLE_MIN_CHARS <= len(residue) <= _DECLARATIVE_TITLE_MAX_CHARS
-    ):
-        return None
-    if not any(char.isalpha() for char in residue):
-        return None
-    return residue
-
-
-def _stage_filed_answer(
-    *,
-    question: str,
-    answer_text: str,
-    citations: list[Citation],
-    bundle_dir: Path,
-    default_sensitivity: str,
-    timestamp: str,
-    title: str | None = None,
-    description: str | None = None,
-    doc_type: str = _INSIGHT_TYPE,
-    cfg: config.Config,
-) -> _FiledAnswerPlan:
-    """Stage a `query --save` filing of `answer_text` as a new derived OKF
-    concept -- a pure, in-memory Phase A step mirroring
-    `_stage_derived_objects`'s staging shape: every refusal below raises
-    `ValueError`, caught once at the `query` call site; nothing is written
-    here -- Phase B (in `query`) does the actual `mkdir` + `write_exclusive`.
-
-    Refuses when `citations` is empty (design: "Refuse `--save` when zero
-    citations") -- `build_concept` requires non-empty provenance, and a
-    sourceless "derived" concept is not a real derived node. `title`/
-    `description` default to `question` when not overridden; `doc_type`
-    defaults to `"Concept"`. `doc_type` MUST be a member of the classifiable
-    vocabulary, else `ValueError` (same gate `build_concept` enforces,
-    checked here first so the bundle subdirectory can be resolved safely).
-    `slug = _slugify(title)`; an empty slug, or a slug that collides with an
-    existing file at the target path, both refuse (design: "Slug collision
-    handling (mirror ingest)").
-
-    Sensitivity is the high-water-mark (`okf.combine_sensitivity`) folded
-    over each cited concept's RE-READ frontmatter, seeded at
-    `default_sensitivity`; an unreadable OR unparseable cited concept folds
-    the running floor to `"confidential"` -- the most-restrictive level,
-    NOT skipped (fail-closed: "cannot verify sensitivity -> confidential",
-    the same stance as `okf._rank` / `sensitivity.blocks_llm_send`).
-    Skipping would under-classify: a cited concept surfaced under
-    `--include-confidential` that becomes unreadable at save time could
-    otherwise leave a filed answer -- which may have synthesized
-    confidential content -- classified below `confidential`, a future-leak
-    vector.
-
-    `cfg` is REQUIRED (#685 item 2; issue #669, design D3): the
-    cited-concept high-water-mark computed above is a FLOOR, not the final
-    value -- `config.type_birth_sensitivity(cfg, doc_type,
-    cited_high_water_mark)` may raise it further, never lower it, per
-    `doc_type`'s configured offset (`query-command` spec: "Sensitivity Is
-    The High-Water-Mark Of Cited Concepts"). The former `cfg=None` default
-    silently skipped that security raise for any caller that omitted the
-    parameter; an empty `type_sensitivity_defaults` mapping is the
-    supported opt-out and leaves the high-water-mark alone.
-    """
-    if not citations:
-        raise ValueError(
-            "nothing to file -- the answer cited no concepts; --save records "
-            "provenance from citations"
-        )
-    if doc_type not in _BUILDABLE_TYPES:
-        raise ValueError(
-            f"type must be one of {sorted(_BUILDABLE_TYPES)}, got {doc_type!r}"
-        )
-
-    # Issue #570: the default title is DECLARATIVE, derived from the
-    # answer's first sentence -- the slug is the permanent Concept ID, and
-    # an interrogative sentence is not an identity. The question keeps its
-    # place as the default description. #646 added the middle rung: when
-    # the first sentence is unusable (long Spanish openings routinely
-    # exceed the declarative ceiling in production), a definitional
-    # question's SUBJECT titles the filing; only an unrecognizable
-    # question still falls back to the question verbatim.
-    resolved_title = (
-        (
-            _declarative_answer_title(answer_text)
-            or _question_subject(question)
-            or _clause_answer_title(answer_text)
-            or question
-        )
-        if title is None
-        else title
-    )
-    # Neutralize markdown link LABEL delimiters before the title reaches the
-    # `index.md`/`log.md` bullets (the answer's first sentence or a `--title`
-    # can carry `[`/`]`); the slug is derived independently and is unaffected.
-    resolved_title = bundle_index.sanitize_link_label(resolved_title)
-    resolved_description = question if description is None else description
-
-    slug = _slugify(resolved_title)
-    if not slug:
-        raise ValueError(
-            f"cannot derive a filename from title {resolved_title!r}; pass --title"
-        )
-
-    link_dir = _TYPE_TO_LINK_DIR[doc_type]
-    section = _TYPE_TO_SECTION[doc_type]
-    path = bundle_dir / link_dir / f"{slug}.md"
-    if path.exists():
-        raise ValueError(
-            f"a concept already exists at bundle/{link_dir}/{slug}.md; use "
-            "--title to file under a different name, or forget the existing one"
-        )
-
-    cited_high_water_mark = default_sensitivity
-    for citation in citations:
-        try:
-            # `okf.concept_path_for`, not `bundle_dir / f"{id}.md"` (#473):
-            # citation ids come out of `okf.concept_id_for` and are NFC, while
-            # the name on disk may be decomposed on a byte-exact filesystem.
-            # A direct read of the NFC spelling misses a file that exists,
-            # falls into the fail-closed `except` below, and folds a READABLE
-            # citation's sensitivity to `confidential` -- fail-closed is for
-            # documents that cannot be verified, not for a spelling mismatch
-            # the rest of the pipeline already tolerates.
-            text = okf.concept_path_for(citation.concept_id, bundle_dir).read_text(
-                encoding="utf-8"
-            )
-            metadata, _ = okf.load_frontmatter(text)
-        except Exception:  # broad: any read/parse failure
-            # fails CLOSED to "confidential" (cannot verify -> most
-            # restrictive), mirroring `_assemble_context`'s broad
-            # `except Exception` in retrieval/answer.py.
-            cited_high_water_mark = okf.combine_sensitivity(
-                cited_high_water_mark, "confidential"
-            )
-            continue
-        cited_high_water_mark = okf.combine_sensitivity(
-            cited_high_water_mark, metadata.get("sensitivity")
-        )
-
-    # Per-type sensitivity default (issue #669, design D3): the offset
-    # applies to the CONFIG FLOOR, never to `cited_high_water_mark` itself,
-    # so a citation set already resolved above the floor-plus-offset still
-    # wins via the high-water-mark inside `type_birth_sensitivity`.
-    sensitivity = config.type_birth_sensitivity(cfg, doc_type, cited_high_water_mark)
-
-    content = okf.build_concept(
-        type=doc_type,
-        title=resolved_title,
-        description=resolved_description,
-        body=answer_text,
-        provenance=[citation.concept_id for citation in citations],
-        sensitivity=sensitivity,
-        timestamp=timestamp,
-        related_note="concept cited to produce this answer",
-    )
-
-    return _FiledAnswerPlan(
-        link_dir=link_dir,
-        section=section,
-        slug=slug,
-        title=resolved_title,
-        description=resolved_description,
-        path=path,
-        content=content,
-        sensitivity=sensitivity,
-        type_floor_raised=(sensitivity != cited_high_water_mark),
-    )
-
-
 @app.command(
     help=(
         "Answer a natural-language question from the bundle, with citations "
@@ -17154,19 +16662,17 @@ def query(
     # compounding on model output with no source underneath is how a
     # knowledge base rots. #649 made the signal PROPORTIONAL: the
     # all-or-nothing guard fired only when every citation was a synthesis,
-    # a threshold a drifting base approaches without ever crossing. Now
-    # the share warns at >= _SYNTHESIS_SHARE_WARN_THRESHOLD, with the
-    # all-synthesis case keeping its stronger wording -- stderr, like
-    # every advisory here.
+    # a threshold a drifting base approaches without ever crossing. Now the
+    # share warns at or above the service's threshold (Slice 2:
+    # `application_query.synthesis_share_warrants_warning`), with the
+    # all-synthesis case keeping its stronger wording -- stderr, like every
+    # advisory here.
     synthesis_count = sum(
         1
         for citation in result.citations
         if citation.concept_id.startswith(insight_prefix)
     )
-    if (
-        result.citations
-        and synthesis_count / len(result.citations) >= _SYNTHESIS_SHARE_WARN_THRESHOLD
-    ):
+    if application_query.synthesis_share_warrants_warning(result.citations):
         if synthesis_count == len(result.citations):
             typer.echo(
                 "openkos query: warning -- every citation is itself a filed "
@@ -17203,7 +16709,7 @@ def query(
         return
 
     try:
-        plan = _stage_filed_answer(
+        plan = application_query.stage_filed_answer(
             question=question,
             answer_text=result.answer,
             citations=result.citations,
@@ -17284,7 +16790,9 @@ def query(
     # that produced the issue: 30 of 30 fabricated answers were `absent`
     # while 63 of 63 grounded or compliant answers were `reported`
     # (evals/query_entailment/). Disclosed in the plan, then gated below.
-    unattributed = result.llm_invoked and result.attribution != "reported"
+    # The predicate is the service's policy (design D4, Slice 2), asserted
+    # once rather than re-derived at this call site.
+    unattributed = application_query.grounding_unverified(result)
     if unattributed:
         typer.echo(
             "  ! unverified grounding: the answer never accounted for its "
@@ -17331,35 +16839,19 @@ def query(
     # The question-vector cache is what lets this compare the WHOLE bundle
     # instead of the 100 most recently filed: a stored question's embedding
     # never changes, and reusing it is ~220x cheaper than recomputing it
-    # (`evals/insight_scan_bound/`). Opened here because the CLI owns the
-    # connection's lifetime; the scan takes a structural Protocol and never
-    # touches sqlite.
+    # (`evals/insight_scan_bound/`). `application_query.scan_for_duplicates`
+    # (Slice 2, design D3) owns opening and closing the cache connection --
+    # the scan itself takes a structural Protocol and never touches sqlite
+    # directly.
     #
     # A store that cannot open degrades to `cache=None`, which the scan
     # reports as "could not check" -- the same already-disclosed state a down
     # embedding backend produces. Deliberately NOT a fallback to embedding
     # every filed question: that is the linear cost this design removes, and
     # it would stall the confirmation gate with nothing on screen saying why.
-    question_cache_conn = None
-    try:
-        question_cache_conn = question_vectors.open_question_vectors(
-            layout.insight_questions_db_path
-        )
-        question_cache = question_vectors.QuestionVectorStore(
-            question_cache_conn, cfg.embedding_model
-        )
-    except Exception:  # advisory: a cache that will not open never blocks a save
-        question_cache = None
-    try:
-        duplicate_scan = insight_identity.near_duplicate_insights(
-            question,
-            bundle_dir=layout.bundle_dir,
-            embedder=embedder,
-            cache=question_cache,
-        )
-    finally:
-        if question_cache_conn is not None:
-            question_cache_conn.close()
+    duplicate_scan = application_query.scan_for_duplicates(
+        question, layout=layout, cfg=cfg, embedder=embedder
+    )
     for duplicate in duplicate_scan.candidates:
         typer.echo(
             f"  ? possible duplicate of bundle/{duplicate.concept_id}.md "

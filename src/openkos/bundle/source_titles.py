@@ -12,9 +12,18 @@ derived-layer import (`retrieval`, `graph`, `memory`), per AGENTS.md's
 `ingest` and this backfill share exactly ONE implementation -- a
 "narrower local twin" duplicate would silently misclassify a title the
 moment the two diverged (design D1).
+
+`slugify` is `cli/main.py`'s former `_slugify`, promoted here the same way
+(issue #918 Slice 2, ADR-0018): `openkos.application.query`'s `--save`
+filing composition needs it and may not import `openkos.cli` (the layering
+invariant), so this module -- already beneath `application` in the
+layering order -- is the shared home; `cli/main.py` keeps its 8 other call
+sites working by delegating instead of duplicating the Unicode-normalization
+logic that decides every OKF Concept ID.
 """
 
 import re
+import unicodedata
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
@@ -34,6 +43,83 @@ def titleize(stem: str) -> str:
     delegates to this function rather than duplicating it.
     """
     return _TITLE_SEPARATOR_RE.sub(" ", stem).strip()
+
+
+_SLUG_COLLAPSE_RE = re.compile(r"-+")
+
+
+def _is_slug_char(char: str) -> bool:
+    """Whether `slugify` keeps `char` verbatim.
+
+    The whitelist is Unicode letters and digits (`str.isalnum()`, i.e.
+    categories `L*`/`N*`) plus combining marks (`M*`). Marks are included
+    because in Indic, Hebrew and Arabic scripts a vowel sign or virama is
+    part of its grapheme, not decoration: dropping `ि`/`्` from `हिन्दी`
+    would corrupt the word rather than merely spell it differently.
+    """
+    return char.isalnum() or unicodedata.category(char).startswith("M")
+
+
+def slugify(stem: str) -> str:
+    """Sanitize a filename stem OR a title into a slug: NFC, lowercase,
+    Unicode letters/digits/marks kept, every other run -> `-`, trimmed.
+
+    THE SLUG IS THE IDENTITY, not a filename detail: an object's Concept ID
+    is its path within the bundle with `.md` removed (OKF §2,
+    `docs/knowledge-object-model.md`), and there is no separate `id` field.
+    So what this function throws away decides which objects exist at all.
+
+    **Unicode-safe (issue #414).** The original `[^a-z0-9]+` sanitiser
+    collapsed every non-ASCII character to a hyphen, which mangled accented
+    Latin (`Diseño de Módulos` -> `dise-o-de-m-dulos`) and slugified a title
+    in any non-Latin script (`知识图谱`, `Общая теория`, `こんにちは`) to the
+    EMPTY string -- and an empty slug makes a staging path skip the
+    candidate, so every correctly extracted object from such a source was
+    silently discarded. The whitelist is now Unicode-aware
+    (`_is_slug_char`), so those titles keep their own script.
+
+    **Transliteration was considered and rejected.** Romanising `知识图谱`
+    to `zhi-shi-tu-pu` is a *choice* (which romanisation? whose tone
+    marks?), not a fact about the title, and it would need a dependency to
+    make that choice for the user. OpenKOS preserves representations rather
+    than deciding them, so the slug carries the author's script.
+
+    **NFC is normalised explicitly, in and out.** macOS filesystems
+    normalise to NFD; without `unicodedata.normalize("NFC", ...)` the same
+    title would produce different bytes -- and therefore a different Concept
+    ID -- on different platforms. Identity has to be stable across
+    filesystems, so both the input and the lowercased result are folded to
+    NFC (lowercasing can itself denormalise, e.g. `İ` -> `i` + U+0307).
+
+    **Path containment holds by construction**, which matters because
+    callers pass unconstrained text (an LLM-extracted title, a `query
+    --save` title). Nothing but a Unicode letter, digit, mark or `-` can
+    reach the output, and no Unicode alphanumeric is a path separator on
+    any supported platform, so `/`, `\\`, `.`, `..`, `:`, a null byte, a
+    control character and the Windows-reserved set are all unreachable:
+    `../../etc/passwd` slugifies to `etc-passwd`.
+
+    **Backward compatible for ASCII, exactly.** For any pure-ASCII input the
+    result is byte-for-byte what the old `[^a-z0-9]+` regex returned
+    (`notes` -> `notes`, `My Notes` -> `my-notes`), because ASCII
+    `str.isalnum()` is precisely `[a-zA-Z0-9]`. Existing bundles never
+    silently rename.
+
+    May still return `""` -- a title of only punctuation or emoji has no
+    letters or digits to keep. That is a supported outcome, not an error:
+    every caller has its own empty-slug branch.
+
+    Moved verbatim from `cli/main.py`'s `_slugify`; `cli/main.py` now
+    delegates to this function rather than duplicating it (mirrors
+    `titleize`'s own promotion, design D1).
+    """
+    normalized = unicodedata.normalize("NFC", stem)
+    sanitized = "".join(
+        char.lower() if _is_slug_char(char) else "-" for char in normalized
+    )
+    return unicodedata.normalize(
+        "NFC", _SLUG_COLLAPSE_RE.sub("-", sanitized).strip("-")
+    )
 
 
 _FRONTMATTER_RE = re.compile(r"\A---\n.*?\n---\n", re.DOTALL)
