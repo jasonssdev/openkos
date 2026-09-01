@@ -39,3 +39,35 @@ def test_query_module_never_imports_cli() -> None:
     assert not offenders, (
         f"openkos.application.query must never import openkos.cli; found: {offenders}"
     )
+
+
+def test_query_module_binds_no_concrete_backend() -> None:
+    """The service takes its `LLMBackend`/`Embedder` as parameters (ADR-0018
+    D1) so every adapter supplies its own. Importing a CONCRETE backend here
+    would bind the application layer to Ollama and defeat that -- the spec
+    requirement "No concrete backend is bound inside the service" otherwise
+    rests on static reading alone, which nothing re-checks on a later edit."""
+    tree = ast.parse(_QUERY_MODULE.read_text(encoding="utf-8"))
+    offenders = [
+        name for name in _imported_module_names(tree) if name.startswith("openkos.llm.")
+    ]
+    assert offenders == ["openkos.llm.base"], (
+        "openkos.application.query may import only the Protocol seams in "
+        f"openkos.llm.base, never a concrete backend; found: {offenders}"
+    )
+
+
+def test_shared_write_helpers_are_never_forked() -> None:
+    """`_reject_drifted_targets`, `_autocommit` and `_refresh_derived_after_write`
+    are shared write infrastructure the query service calls THROUGH rather than
+    owns (ADR-0018 D3). A second definition anywhere under `src/` would mean one
+    write path silently diverged from the one every other command uses."""
+    shared = {"_reject_drifted_targets", "_autocommit", "_refresh_derived_after_write"}
+    counts = dict.fromkeys(shared, 0)
+    for path in (_REPO_ROOT / "src").rglob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.FunctionDef) and node.name in shared:
+                counts[node.name] += 1
+    assert counts == dict.fromkeys(shared, 1), (
+        f"each shared write helper must keep exactly one definition; found: {counts}"
+    )
