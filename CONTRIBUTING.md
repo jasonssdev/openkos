@@ -101,6 +101,16 @@ uv run pre-commit install
 
 **Stacking PRs.** When a change is large enough to split into a chain — one PR based on another so each stays reviewable — merge the stack **bottom-up**, and do **not** delete a base branch while PRs are still stacked on it. GitHub *closes* a pull request when its base branch is deleted rather than retargeting it, so merging the base with "delete branch" strands its dependents (they then have to be rebased onto `main` and reopened as new PRs). The safe order: merge the base **without** deleting its branch, let GitHub retarget the dependents to `main`, merge those, and only then delete the branches.
 
+### What is enforced, and by what
+
+The quality gates above are repository rules, not only a convention — a documented gate that nothing enforces is a habit, not a control:
+
+- **`main` accepts changes only through a pull request** with every CI check green, and cannot be force-pushed or deleted. A branch must also be up to date with `main` before it merges, so a set of independently-green pull requests cannot combine into a red `main`. Review approval is not required (this is a solo-maintained project), so a green pull request is mergeable by its author — CI is the gate, not a second pair of eyes.
+- **Publishing to PyPI goes through the protected `pypi` environment**, which only version tags may deploy to, and which pauses for a maintainer's approval before it uploads.
+- **A release tag must be provably cut from green `main`.** Before it builds anything, `release.yml` refuses unless the tag's commit is contained in `origin/main` *and* the CI run for that exact commit concluded `success`. A tag cut from a side branch, or from a commit whose CI failed, fails the release rather than publishing it.
+
+Releases are therefore cut as: merge to `main` → wait for `main`'s own CI run to go green → `uv version --bump <part>`, commit, tag `vX.Y.Z`, push the tag.
+
 ### Commit messages
 
 Please use [Conventional Commits](https://www.conventionalcommits.org/):
