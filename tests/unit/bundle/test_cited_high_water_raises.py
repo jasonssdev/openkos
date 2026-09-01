@@ -4,9 +4,9 @@ whose provenance spans MORE THAN ONE Source (issue #697).
 
 ADR-0012 deferred exactly this case: a concept in no single Source's closure
 was reported by `lint` and never repaired by the sweep. The mark is applied at
-birth (`cli/main.py::_stage_filed_answer` folds `combine_sensitivity` over each
-CITED concept) and was never maintained afterwards, so raising one cited Source
-left every multi-source insight below its own inputs.
+birth (`application/query.py::stage_filed_answer` folds `combine_sensitivity`
+over each CITED concept) and was never maintained afterwards, so raising one
+cited Source left every multi-source insight below its own inputs.
 
 These are pure `Mapping[str, str]` fixtures: no filesystem, no CLI. They MUST
 NOT call `okf._rank` (ADR-0003 keeps it private) -- fail-closed ranking is

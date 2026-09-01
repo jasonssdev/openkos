@@ -200,8 +200,8 @@ def test_every_slug_character_is_alphanumeric_a_mark_or_a_hyphen(title: str) -> 
 def test_titles_with_no_letters_or_digits_still_slugify_to_empty(title: str) -> None:
     """The empty-slug fallback path must keep working: a title made only of
     punctuation or emoji still yields `""`, which the callers
-    (`_stage_derived_objects`, `ingest`, `_stage_filed_answer`) handle
-    explicitly. `_slugify` must not start raising instead."""
+    (`_stage_derived_objects`, `ingest`, `application.query.stage_filed_answer`)
+    handle explicitly. `_slugify` must not start raising instead."""
     assert _slugify(title) == ""
 
 

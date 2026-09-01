@@ -9,7 +9,7 @@ unrelated objects.
 **The issue's own diagnosis is wrong, and this probe exists to replace it
 with a measured one.** #696 says "both answers opened with a perfectly
 usable declarative sentence, so the fallback never engaged". Running the
-shipped ladder (`cli/main.py`: `_declarative_answer_title(answer) or
+shipped ladder (`application/query.py`: `_declarative_answer_title(answer) or
 _question_subject(question) or question`) against its two evidence
 questions shows BOTH rungs refusing:
 
@@ -85,14 +85,14 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from harness_report import arm_identity_line  # noqa: E402
 
 from openkos import fsio  # noqa: E402
-from openkos.cli import main as cli_main  # noqa: E402
-from openkos.cli.main import (  # noqa: E402
+from openkos.application import query as application_query  # noqa: E402
+from openkos.application.query import (  # noqa: E402
     _QUESTION_SUBJECT_PREFIXES,
     _clause_answer_title,
     _declarative_answer_title,
     _question_subject,
-    _slugify,
 )
+from openkos.cli.main import _slugify  # noqa: E402
 from openkos.config import (  # noqa: E402
     DEFAULT_CONTEXT_WINDOW,
     DEFAULT_MAX_GENERATION_TOKENS,
@@ -433,12 +433,12 @@ def widened_question_subject(question: str) -> str | None:
     would quietly stop being reflected by the arm claiming to measure it.
     The swap is restored in a `finally`, so a raising call cannot leave the
     module's own rung widened."""
-    original = cli_main._QUESTION_SUBJECT_PREFIXES
-    cli_main._QUESTION_SUBJECT_PREFIXES = _WIDENED_PREFIXES  # type: ignore[assignment,misc]
+    original = application_query._QUESTION_SUBJECT_PREFIXES
+    application_query._QUESTION_SUBJECT_PREFIXES = _WIDENED_PREFIXES  # type: ignore[assignment,misc]
     try:
         return _question_subject(question)
     finally:
-        cli_main._QUESTION_SUBJECT_PREFIXES = original  # type: ignore[misc]
+        application_query._QUESTION_SUBJECT_PREFIXES = original  # type: ignore[misc]
 
 
 ARMS: Final = ("baseline", "clause", "scaffold", "clause+scaffold")

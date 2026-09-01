@@ -3,13 +3,14 @@
 ## Purpose
 
 The query bounded context's application service composes the orchestration
-around `retrieval.answer()` — config and workspace resolution, LLM and
-embedder construction, index opening with degrade handling — and the
-`--save` filing domain logic (title derivation, sensitivity high-water-mark,
-duplicate-question disclosure) into callables usable by any adapter without
-importing from `openkos.cli`. It is the first artifact in an `application/`
-layer for bounded-context composition sitting above both the canonical and
-derived layers.
+around `retrieval.answer()` — index opening with degrade handling and the
+`answer()` call — and the `--save` filing domain logic (title derivation,
+sensitivity high-water-mark, duplicate-question disclosure) into callables
+usable by any adapter without importing from `openkos.cli`. Workspace
+layout, configuration, LLM backend and embedder arrive as parameters, so
+the layer binds no concrete backend. It is the first artifact in an
+`application/` layer for bounded-context composition sitting above both the
+canonical and derived layers.
 
 ## Non-Goals
 
@@ -24,26 +25,30 @@ lifecycle composition.
 
 ### Requirement: Non-CLI Callable Answer Composition
 
-The service MUST expose a callable that composes workspace/config
-resolution, LLM/embedder construction, index opening with degrade handling,
-and the `answer()` call, importable and callable by code that imports
-nothing from `openkos.cli`. It MUST report a not-an-initialized-workspace
-condition through its return contract rather than by printing or exiting
-the process.
+The service MUST expose a synchronous callable that composes index opening
+with degrade handling and the `answer()` call, importable and callable by
+code that imports nothing from `openkos.cli`.
+
+It MUST receive its workspace layout, configuration, LLM backend and
+embedder as parameters rather than constructing them, so that no concrete
+backend is bound inside the application layer and every adapter supplies
+its own. Workspace gating stays the caller's step: `config.require_workspace`
+already returns a refusal reason rather than printing or exiting, so an
+adapter can refuse an uninitialized workspace in its own idiom.
 
 #### Scenario: A non-CLI caller answers a question
 
 - GIVEN a module that imports nothing from `openkos.cli`
-- WHEN it imports and calls the query application service with a question
-  and a workspace root
+- WHEN it imports and calls the query application service with a question,
+  a workspace layout, a configuration, an LLM backend and an embedder
 - THEN it receives a result and no import of `openkos.cli` is triggered
 
-#### Scenario: An uninitialized workspace is reported, not rendered
+#### Scenario: No concrete backend is bound inside the service
 
-- GIVEN a workspace root that is not initialized
-- WHEN the service is called
-- THEN it reports that condition through its return contract, without
-  writing to stdout/stderr or calling `sys.exit`
+- GIVEN the query application service module
+- WHEN its imports and call signature are inspected
+- THEN the LLM backend and embedder arrive as parameters, and the module
+  names no concrete backend implementation of its own
 
 ### Requirement: Filing Composition Is Independently Callable
 
