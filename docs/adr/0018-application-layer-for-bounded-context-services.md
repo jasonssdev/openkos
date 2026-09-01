@@ -34,9 +34,12 @@ and attribution parsing; `Citation` and `AnswerResult` are its typed contract,
 and it already has callers outside the CLI. The gap is narrower than it looks
 and has two parts:
 
-1. The **orchestration around** `answer()` — workspace gating, chat-client and
-   embedder construction, store opening with degrade-to-`None` handling, and the
-   exception ordering that maps to exit codes.
+1. The **orchestration around** `answer()` — store opening with
+   degrade-to-`None` handling, and the `answer()` call itself. Workspace
+   gating, chat-client and embedder construction, and the exception ordering
+   that maps to exit codes surround this orchestration; the decision below
+   deliberately leaves those with the adapter, since a service that bound a
+   concrete backend could not serve every adapter.
 2. The **entire `query --save` staging and filing flow**, which has no non-CLI
    home at all.
 
