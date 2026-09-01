@@ -60,6 +60,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
+from openkos import sensitivity as sensitivity_policy
 from openkos.extraction.concept import _chunk_lines
 from openkos.llm.base import Embedder
 from openkos.llm.ollama import (
@@ -213,6 +214,17 @@ class ReindexReport:
     Reindex Discloses The Real Re-Embed Trigger) compares this against the
     PREVIOUSLY stored tag by their `{model}#{composition}` parts, instead of
     the old, misleading comparison against the bare configured model name."""
+    withheld_confidential: int = 0
+    """Discovered, readable docs NOT embedded because `sensitivity` blocks
+    the send to this run's backend (#922) -- neither embedded, nor pruned,
+    nor a cache hit.
+
+    A FOURTH outcome, deliberately not folded into `skipped`: `skipped` is a
+    document this run could not READ, and a re-run will not help. A withheld
+    document was read perfectly well; it was withheld by policy, and pointing
+    the backend back at this machine embeds it on the next run. Reporting a
+    policy decision as a read failure would send an operator to debug their
+    filesystem."""
 
 
 def _reindex_fts(bundle_dir: Path, fts_db_path: Path, *, force: bool) -> None:
@@ -243,6 +255,7 @@ def reindex(
     fts_db_path: Path | None = None,
     model_tag: str | None = None,
     on_progress: Callable[[int, int, str], None] | None = None,
+    local_exemption: bool = False,
 ) -> ReindexReport:
     """Walk `bundle_dir`, embed changed/new/forced docs through `embedder`,
     upsert into `db`, then prune any `db` row whose source file vanished.
@@ -328,6 +341,37 @@ def reindex(
     hook never invents progress past an aborted run. It never affects the
     returned report; an exception it raises propagates to the caller (it
     is the caller's own callback).
+
+    `local_exemption` (#922) is the embed path's half of the confidential
+    gate #240 built for `llm.chat`. `sensitivity` governs EGRESS, and an
+    embed call against a backend that is not this machine IS egress -- the
+    document's text goes over the wire exactly as a chat payload's would.
+    This path had no sensitivity check at all: a non-local `OLLAMA_HOST`
+    produced a stderr advisory (#199) and every document was sent anyway, so
+    `confidential` material left the device against the project's own
+    guarantee.
+
+    The decision is NOT made here. The caller passes
+    `client.locality.is_local and cfg.confidential_local_exemption` -- the
+    same boolean `_resolve_local_exemption` already computes for the five
+    chat seams -- and `sensitivity.should_block` stays the one shared
+    authority for what it MEANS. This module re-derives neither half.
+
+    It defaults to `False` for the reason that default is load-bearing on
+    `should_block` itself: a `True` default would grant the exemption to
+    every caller not yet taught to compute locality, turning "forgot to
+    thread a parameter" into "sent a confidential document to a remote
+    host". Forgetting it costs a withheld document, never a leak.
+
+    A withheld document is a FOURTH outcome (`withheld_confidential`), never
+    conflated with `skipped`: it was read successfully and withheld by
+    policy. It stays in `seen`, so its existing locally-computed vector is
+    NOT pruned -- that vector never left this machine, and destroying it
+    would punish an operator for pointing at a remote host. And it joins the
+    `skipped`/`embed_failed` union gating the model-tag write, for that
+    gate's own stranding reason: a withheld doc keeps its stale old-model
+    vector, so persisting the new tag would make the next run read it as a
+    content-hash cache hit and strand it on the old model permanently.
     """
     cached_hashes = db.meta_hashes()
     stored_model_tag = db.read_model_tag()
@@ -338,6 +382,7 @@ def reindex(
     seen: set[str] = set()
     cache_hits = 0
     skipped = 0
+    withheld_confidential = 0
     # (concept_id, chunk_texts, content_hash) -- chunk_texts is ONE
     # document's ordered list of per-chunk embed texts (design D3).
     to_embed: list[tuple[str, list[str], str]] = []
@@ -374,6 +419,14 @@ def reindex(
             metadata, body = okf.load_frontmatter(text)
         except Exception:  # broad: a concurrent edit can corrupt frontmatter
             skipped += 1
+            continue
+
+        # #922: the LAST gate before the text is queued for the wire. Placed
+        # after the cache-hit check on purpose -- a doc whose vector is
+        # already stored costs no send at all, so withholding it would
+        # report a privacy action where no egress was ever going to happen.
+        if sensitivity_policy.should_block(metadata, local_exemption=local_exemption):
+            withheld_confidential += 1
             continue
 
         chunk_texts = _chunk_embed_texts(metadata, body)
@@ -461,11 +514,18 @@ def reindex(
     # runtime (see its definition above) -- it stays only because mypy
     # cannot narrow `model_tag` from a separate bool variable (round-2
     # review correction, SUGGESTION finding).
+    # `withheld_confidential` joins the union for the SAME stranding reason
+    # (#922): a withheld doc keeps its stale old-model vector, so persisting
+    # the new tag would let the next run see a matching tag, fall through to
+    # the content_hash comparison, find the doc unchanged, and treat it as a
+    # cache hit -- pinned to the old model forever, even once the operator
+    # points the backend back at this machine.
     tag_written = False
     if (
         model_changed
         and skipped == 0
         and embed_failed == 0
+        and withheld_confidential == 0
         and effective_model_tag is not None
     ):
         db.write_model_tag(effective_model_tag)
@@ -487,4 +547,5 @@ def reindex(
         model_reembedded=model_changed,
         embed_calls=embed_calls,
         effective_model_tag=effective_model_tag,
+        withheld_confidential=withheld_confidential,
     )

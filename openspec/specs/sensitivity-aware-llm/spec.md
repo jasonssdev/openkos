@@ -233,3 +233,58 @@ requires no behavior change.
 - WHEN this change ships
 - THEN `query`'s behavior is unchanged — it already independently re-checks
   each candidate at load, satisfying this requirement without modification
+
+### Requirement: Embedding Is Gated As Egress, Like `llm.chat`
+
+An embed call against a backend that is not verifiably this machine puts the
+document's text on the wire exactly as an `llm.chat` payload does, so the
+same rule MUST govern it. Every embed seam — the `reindex` command,
+`ingest`'s per-file embed, and the write-time derived-store refresh every
+mutating verb runs — MUST resolve the exemption from the client that will do
+the sending (`client.locality.is_local AND cfg.confidential_local_exemption`,
+the same `_resolve_local_exemption` the chat seams use) and MUST pass it to
+`state.reindex.reindex`, which delegates the meaning to
+`sensitivity.should_block`. `reindex` MUST NOT re-derive either term.
+
+The parameter MUST default to withholding, so a caller that fails to thread
+it withholds a document rather than sending one. Every embed seam MUST also
+emit the non-local embedding-host advisory.
+
+A withheld document MUST be reported as its own outcome, never conflated
+with `skipped` (a read failure). It MUST NOT change the exit code, MUST NOT
+be pruned from the vector store (a vector computed earlier against a local
+backend never left the machine), and MUST join the `skipped`/`embed_failed`
+union that withholds the embedding-model tag, for that gate's own stranding
+reason. A document served from the content-hash cache MUST NOT be reported
+as withheld: no send was going to occur.
+
+The lexical FTS index is NOT gated: it is built locally and no document text
+leaves the machine, so a withheld document stays lexically searchable.
+
+#### Scenario: A confidential document is not embedded against a remote backend
+- GIVEN a workspace whose embedding host is not verifiably this machine
+- WHEN any embed seam runs over a `confidential` document
+- THEN its text is never passed to the embedder, the run reports it as
+  withheld on stderr and in `reindex`'s summary, and the exit code is
+  unchanged
+
+#### Scenario: The same document is embedded against a local backend
+- GIVEN the same document and a verifiably local embedding host with the
+  workspace exemption enabled
+- WHEN the same seam runs
+- THEN the document is embedded and nothing is withheld
+
+#### Scenario: An absent or blank sensitivity fails closed
+- GIVEN a document whose `sensitivity` key is absent, blank, or whitespace
+- WHEN an embed seam runs against a non-local backend
+- THEN the document is withheld
+
+#### Scenario: A withheld document's existing vector survives
+- GIVEN a document embedded earlier against a local backend
+- WHEN a later run withholds it against a remote backend
+- THEN its stored vector is neither pruned nor overwritten
+
+#### Scenario: A withheld document withholds the model tag
+- GIVEN a run whose embedding-model tag changed
+- WHEN any document is withheld
+- THEN the new tag is NOT persisted, so the next run forces the re-embed again

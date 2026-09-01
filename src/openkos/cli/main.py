@@ -4803,12 +4803,39 @@ def _warn_if_nonlocal_embed_host(command: str, locality: BackendHostLocality) ->
     )
 
 
+def _warn_withheld_from_embedding(command: str, withheld: int) -> None:
+    """One stderr line naming the documents the embed gate held back (#922).
+
+    The counterpart to `_warn_if_nonlocal_embed_host`, and needed for the
+    same reason that advisory was: silence here is indistinguishable from
+    success. A withheld document has no vector, so it is invisible to dense
+    retrieval -- an operator who is not told will meet the loss later, as an
+    answer that inexplicably never cites the document they were asking
+    about.
+
+    It names the two levers rather than only the fact, because both are
+    legitimate: point the backend at this machine, or lower the document's
+    sensitivity if it was mis-classified. Silent on zero -- a local backend
+    withholds nothing and must stay quiet."""
+    if withheld <= 0:
+        return
+    typer.echo(
+        f"openkos {command}: {withheld} document{_plural(withheld)} withheld "
+        "from embedding -- their sensitivity blocks sending them to a backend "
+        "that is not this machine, so they have no vector and dense retrieval "
+        "will not surface them. Point OLLAMA_HOST at this machine and re-run, "
+        "or lower the sensitivity if it is wrong.",
+        err=True,
+    )
+
+
 def _embed_after_ingest(
     layout: config.WorkspaceLayout,
     embedder: OllamaClient,
     *,
     model_tag: str,
     warn_nonlocal_host: bool = True,
+    local_exemption: bool = False,
 ) -> None:
     """Embed the concepts `ingest` just wrote, so candidate edges are
     available in the SAME run (#183).
@@ -4847,7 +4874,13 @@ def _embed_after_ingest(
     advisory: `_ingest_batch` emits that advisory itself, once per batch
     invocation (the batch cost-gate precedent), so its per-file runs must
     not repeat it N times (issue #353, item 4). Everything else here --
-    the embed, its fail-open degrade notices -- is unchanged either way."""
+    the embed, its fail-open degrade notices -- is unchanged either way.
+
+    `local_exemption` is threaded straight through to `reindex` (#922) and
+    NOT re-derived here: it is resolved at the call site, from the very
+    client passed in as `embedder`. Its `False` default is fail-closed, so a
+    future caller that forgets it withholds a confidential document rather
+    than sending one."""
     # BEFORE the embed attempt, so the notice lands even when the embed
     # itself then degrades: the advisory is about where the data is headed,
     # not about whether it arrived (#199).
@@ -4856,7 +4889,11 @@ def _embed_after_ingest(
     try:
         with open_vector_store(layout.vectors_db_path) as db:
             report = reindex_module.reindex(
-                layout.bundle_dir, db, embedder, model_tag=model_tag
+                layout.bundle_dir,
+                db,
+                embedder,
+                model_tag=model_tag,
+                local_exemption=local_exemption,
             )
     except Exception as exc:
         typer.echo(
@@ -4880,6 +4917,7 @@ def _embed_after_ingest(
             "incomplete until `openkos reindex` succeeds.",
             err=True,
         )
+    _warn_withheld_from_embedding("ingest", report.withheld_confidential)
 
 
 def _refresh_derived_after_write(
@@ -4887,6 +4925,7 @@ def _refresh_derived_after_write(
     cfg: config.Config | None,
     *,
     verb: str,
+    warn_nonlocal_host: bool = True,
 ) -> bool:
     """Refresh the three derived stores as part of the write that just
     invalidated them (issue #640), returning True iff every store is fresh.
@@ -4962,6 +5001,18 @@ def _refresh_derived_after_write(
         if cfg is None:
             cfg = config.read_config(layout.root)
         embedder = OllamaClient(model=cfg.embedding_model)
+        # #922: this seam embedded every document and did not even emit the
+        # non-local host advisory the other two embed paths have carried
+        # since #199 -- a write-time refresh against a remote `OLLAMA_HOST`
+        # sent document text off the machine in complete silence. Both the
+        # advisory and the gate now match `ingest`'s and `reindex`'s.
+        #
+        # `warn_nonlocal_host=False` suppresses ONLY this line, for the verbs
+        # that already emitted it themselves before reaching here -- exactly
+        # the once-per-invocation contract #353 item 4 established for
+        # `_embed_after_ingest`. The gate below is never suppressed.
+        if warn_nonlocal_host:
+            _warn_if_nonlocal_embed_host(verb, embedder.locality)
         with open_vector_store(layout.vectors_db_path) as db:
             report = reindex_module.reindex(
                 layout.bundle_dir,
@@ -4969,7 +5020,9 @@ def _refresh_derived_after_write(
                 embedder,
                 model_tag=cfg.embedding_model,
                 on_progress=observability.progress_callback(verb, "embedding doc"),
+                local_exemption=_resolve_local_exemption(embedder, cfg),
             )
+        _warn_withheld_from_embedding(verb, report.withheld_confidential)
         # An exception is not the only way embedding degrades: `reindex`
         # folds a generic per-doc `OllamaError` into `embed_failed` instead
         # of raising (same trap `_embed_after_ingest` documents), so a run
@@ -5554,7 +5607,13 @@ def _ingest_batch(
     # Runs even when every file was skipped: the manifest gates make that a
     # hash check, and a workspace that never had an fts.db gets one built.
     # Fail-open (stderr only), so it can never change the exit ladder below.
-    _refresh_derived_after_write(config.WorkspaceLayout(root), cfg, verb="ingest")
+    _refresh_derived_after_write(
+        config.WorkspaceLayout(root),
+        cfg,
+        verb="ingest",
+        # The batch already emitted the advisory once, up front (#353 item 4).
+        warn_nonlocal_host=False,
+    )
 
     # ONE torn-classification aggregate for the WHOLE batch (#566), on
     # stderr before the stdout report so the stdout contract (#349) keeps
@@ -5722,7 +5781,11 @@ def ingest(
         # `_ingest_single`, not here, and the helper reads its own copy
         # fail-open.
         _refresh_derived_after_write(
-            config.WorkspaceLayout(Path.cwd()), None, verb="ingest"
+            config.WorkspaceLayout(Path.cwd()),
+            None,
+            verb="ingest",
+            # Already emitted by this run's own embed (#353 item 4).
+            warn_nonlocal_host=False,
         )
         return
     matches, skipped_non_text = expansion
@@ -6451,11 +6514,16 @@ def _ingest_single(
     # AFTER the commit, never before: the ingest is durable by this point,
     # so a failing embedder degrades to a notice instead of stranding
     # written-but-uncommitted files (#183).
+    embed_client = OllamaClient(model=cfg.embedding_model)
     _embed_after_ingest(
         layout,
-        OllamaClient(model=cfg.embedding_model),
+        embed_client,
         model_tag=cfg.embedding_model,
         warn_nonlocal_host=warn_nonlocal_embed_host,
+        # Resolved from the client that will do the sending, beside the cfg
+        # that carries the workspace's opt-out (#922) -- the same two terms
+        # `_resolve_local_exemption` ANDs for the five chat seams.
+        local_exemption=_resolve_local_exemption(embed_client, cfg),
     )
 
     return _SingleIngestOutcome(
@@ -17496,7 +17564,11 @@ def query(
     # on the success path, so searchability is claimed only when the refresh
     # actually completed; the degrade path's advisory (inside the helper)
     # carries the manual `openkos reindex` pointer instead.
-    if _refresh_derived_after_write(layout, cfg, verb="query"):
+    # `query` printed the advisory before it embedded the question (#199),
+    # so the refresh must not repeat it (#353 item 4).
+    if _refresh_derived_after_write(
+        layout, cfg, verb="query", warn_nonlocal_host=False
+    ):
         typer.echo("openkos query: the filed insight is indexed and searchable.")
 
 
@@ -17599,6 +17671,7 @@ def reindex(
                 # (silent) when output is piped (issue #190, mirrors
                 # `suggest-relations`' #134 per-edge line).
                 on_progress=observability.progress_callback("reindex", "embedding doc"),
+                local_exemption=_resolve_local_exemption(embedder, cfg),
             )
     except OllamaUnavailable as exc:
         typer.echo(
@@ -17678,8 +17751,10 @@ def reindex(
     typer.echo(
         f"openkos reindex: {report.embedded} embedded, {report.cache_hits} "
         f"cache-hit{_plural(report.cache_hits)}, {report.pruned} pruned, "
-        f"{report.skipped} skipped, {report.embed_failed} embed-failed."
+        f"{report.skipped} skipped, {report.embed_failed} embed-failed, "
+        f"{report.withheld_confidential} withheld."
     )
+    _warn_withheld_from_embedding("reindex", report.withheld_confidential)
     if report.prune_skipped:
         typer.echo(
             "openkos reindex: prune pass was skipped this run -- a "
@@ -17707,8 +17782,13 @@ def reindex(
     # tag-persist gate to also withhold on `embed_failed > 0`, so a
     # `skipped == 0`-only success check here would print a false success
     # while the tag was actually withheld (review correction, CRITICAL
-    # finding).
-    incomplete_count = report.skipped + report.embed_failed
+    # finding). #922 widened that tag-persist gate a third time, to include
+    # `withheld_confidential`, so this sum follows it for the same reason:
+    # a run that withheld a confidential document did NOT re-embed every
+    # vector, and saying it did is the same self-contradiction.
+    incomplete_count = (
+        report.skipped + report.embed_failed + report.withheld_confidential
+    )
     if report.model_reembedded and incomplete_count == 0:
         typer.echo(
             "openkos reindex: re-embedded all vectors -- "

@@ -42,6 +42,7 @@ from openkos.resolution.contradiction import ContradictionBatch
 from openkos.resolution.edge_typing import EdgeSuggestionBatch
 from openkos.resolution.volatility_typing import TierSuggestionBatch
 from openkos.retrieval.answer import AnswerResult
+from openkos.state import reindex as reindex_module
 
 runner = CliRunner()
 
@@ -518,3 +519,224 @@ def test_curate_context_local_exemption_defaults_to_false() -> None:
     (#240)."""
     field = curate_mod.CurateContext.__dataclass_fields__["local_exemption"]
     assert field.default is False
+
+
+# --- #922: the SIXTH seam. Embedding is egress too --------------------------
+#
+# `sensitivity` governs what leaves the machine, and an embed call against a
+# non-local backend sends the document's text over the wire exactly as a chat
+# payload does. The embed path had no sensitivity check at all: #199 gave it a
+# warning and sent the document anyway. These pin the wiring for all three
+# embed seams; what the boolean MEANS is `sensitivity.py`'s contract, and the
+# withholding behaviour itself is pinned in `tests/unit/state/test_reindex.py`.
+
+
+def _capture_reindex(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """Replace `state.reindex.reindex` with a recorder.
+
+    Captures the resolved `local_exemption` without a network call, which is
+    what makes these tests hermetic AND what makes them prove the threading
+    rather than the outcome -- a hardcoded `True` at any call site would show
+    up here as the wrong boolean under a remote host."""
+    seen: dict[str, Any] = {}
+
+    def _recorder(*args: Any, **kwargs: Any) -> Any:
+        seen["local_exemption"] = kwargs.get("local_exemption")
+        return reindex_module.ReindexReport(
+            embedded=0, cache_hits=0, pruned=0, skipped=0
+        )
+
+    monkeypatch.setattr(reindex_module, "reindex", _recorder)
+    return seen
+
+
+def _write_confidential_doc(tmp_path: Path) -> None:
+    path = tmp_path / "bundle" / "concepts" / "secret.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "---\ntype: Concept\ntitle: Secret\ndescription: ''\n"
+        "sensitivity: confidential\n---\nsalary figures\n",
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.parametrize(
+    ("host", "expected"),
+    [("http://127.0.0.1:11434", True), (_REMOTE_HOST, False)],
+)
+def test_reindex_threads_the_resolved_exemption(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, host: str, expected: bool
+) -> None:
+    """The `reindex` command resolves the exemption from the client it built
+    and hands it to `state.reindex.reindex`."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setenv("OLLAMA_HOST", host)
+    seen = _capture_reindex(monkeypatch)
+
+    runner.invoke(app, ["reindex"])
+
+    assert seen["local_exemption"] is expected
+
+
+@pytest.mark.parametrize(
+    ("host", "expected"),
+    [("http://127.0.0.1:11434", True), (_REMOTE_HOST, False)],
+)
+def test_write_time_refresh_threads_the_resolved_exemption(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, host: str, expected: bool
+) -> None:
+    """`_refresh_derived_after_write` is the seam #640 added to every mutating
+    verb, and it was the WORST of the three: it embedded every document and
+    did not even emit the non-local host advisory the other two have carried
+    since #199, so a write-time refresh against a remote backend sent
+    document text off the machine in complete silence."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setenv("OLLAMA_HOST", host)
+    seen = _capture_reindex(monkeypatch)
+    layout = config.WorkspaceLayout(tmp_path)
+
+    main_mod._refresh_derived_after_write(layout, None, verb="merge")
+
+    assert seen["local_exemption"] is expected
+
+
+def test_write_time_refresh_warns_about_a_non_local_embedding_host(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The advisory the other two embed paths have had since #199, missing
+    here until #922. Silence is what made this seam the dangerous one."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setenv("OLLAMA_HOST", _REMOTE_HOST)
+    _capture_reindex(monkeypatch)
+    capsys.readouterr()
+
+    main_mod._refresh_derived_after_write(
+        config.WorkspaceLayout(tmp_path), None, verb="merge"
+    )
+
+    err = capsys.readouterr().err
+    assert "is not this machine" in err
+    # The redaction pin: denying or warning must never print the password.
+    assert "s3cret" not in err
+
+
+def test_reindex_withholds_a_confidential_doc_and_says_so(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End to end through the REAL `state.reindex.reindex`, with a bundle
+    holding nothing but a confidential document.
+
+    Nothing is embedded, so nothing is sent -- and the suite's fail-closed
+    network guard is what proves that rather than an assertion about a stub:
+    had the gate not held, this test would have reached for a remote host and
+    failed loudly."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_confidential_doc(tmp_path)
+    monkeypatch.setenv("OLLAMA_HOST", _REMOTE_HOST)
+
+    result = runner.invoke(app, ["reindex"])
+
+    assert result.exit_code == 0, result.output
+    assert "0 embedded" in result.output
+    assert "1 withheld" in result.output
+    assert "withheld from embedding" in result.output
+    assert "s3cret" not in result.output
+
+
+def test_reindex_embeds_the_same_doc_when_the_backend_is_this_machine(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The negative control, and the reason this is a boundary rather than a
+    downgrade: on a local backend the very same document is embedded and
+    nothing is withheld. Without this, "0 embedded" above would be
+    indistinguishable from reindex simply being broken."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_confidential_doc(tmp_path)
+    monkeypatch.setenv("OLLAMA_HOST", "http://127.0.0.1:11434")
+    seen = _capture_reindex(monkeypatch)
+
+    runner.invoke(app, ["reindex"])
+
+    assert seen["local_exemption"] is True
+
+
+@pytest.mark.parametrize(
+    ("host", "expected"),
+    [("http://127.0.0.1:11434", True), (_REMOTE_HOST, False)],
+)
+def test_embed_after_ingest_threads_the_resolved_exemption(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, host: str, expected: bool
+) -> None:
+    """The third embed seam: `ingest`'s per-file embed (#183).
+
+    Resolved at the call site from the very client handed to
+    `_embed_after_ingest`, so the boolean describes the host that will
+    actually POST -- `_embed_after_ingest` re-derives nothing."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setenv("OLLAMA_HOST", host)
+    seen = _capture_reindex(monkeypatch)
+    cfg = config.read_config(tmp_path)
+    client = OllamaClient(model=cfg.embedding_model)
+
+    main_mod._embed_after_ingest(
+        config.WorkspaceLayout(tmp_path),
+        client,
+        model_tag=cfg.embedding_model,
+        local_exemption=main_mod._resolve_local_exemption(client, cfg),
+    )
+
+    assert seen["local_exemption"] is expected
+
+
+def test_embed_after_ingest_defaults_to_withholding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The fail-closed default, pinned as a claim rather than left implicit.
+
+    A future caller that forgets the parameter must withhold a confidential
+    document, never send one -- the same reasoning `sensitivity.should_block`
+    gives for its own `False` default."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setenv("OLLAMA_HOST", "http://127.0.0.1:11434")
+    seen = _capture_reindex(monkeypatch)
+    cfg = config.read_config(tmp_path)
+
+    # Deliberately omitting `local_exemption=` on a LOCAL host: the exemption
+    # would be granted if it were resolved, so a True here would mean the
+    # default is doing the granting.
+    main_mod._embed_after_ingest(
+        config.WorkspaceLayout(tmp_path),
+        OllamaClient(model=cfg.embedding_model),
+        model_tag=cfg.embedding_model,
+    )
+
+    assert seen["local_exemption"] is False
+
+
+def test_write_time_refresh_can_suppress_the_duplicate_advisory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`warn_nonlocal_host=False` suppresses ONLY the advisory line, never
+    the gate.
+
+    Teaching this seam to warn (#922) would otherwise make `ingest` and
+    `query --save` print the same line twice in one run -- they embed once
+    themselves and again through this refresh -- breaking the
+    once-per-invocation contract #353 item 4 established. `ingest`'s own
+    end-to-end tests in `test_embed_host_advisory.py` are what caught it;
+    this pins the suppression lever those call sites use, including for
+    `query --save`, whose end-to-end path cannot reach this seam without a
+    live backend."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setenv("OLLAMA_HOST", _REMOTE_HOST)
+    seen = _capture_reindex(monkeypatch)
+    capsys.readouterr()
+
+    main_mod._refresh_derived_after_write(
+        config.WorkspaceLayout(tmp_path), None, verb="query", warn_nonlocal_host=False
+    )
+
+    assert "is not this machine" not in capsys.readouterr().err
+    # The gate is NOT suppressed with it: silencing a line must never
+    # silence the boundary.
+    assert seen["local_exemption"] is False

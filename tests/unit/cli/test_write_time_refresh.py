@@ -95,7 +95,7 @@ def _patch_refresh_recorder(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     True (a complete refresh), collecting each call's `verb`."""
     calls: list[str] = []
 
-    def _recorder(layout: object, cfg: object, *, verb: str) -> bool:
+    def _recorder(layout: object, cfg: object, *, verb: str, **kwargs: object) -> bool:
         calls.append(verb)
         return True
 
