@@ -52,7 +52,9 @@ All 5 present in both source and `openspec/specs/query-application-service/spec.
 
 `docs/adr/0018-application-layer-for-bounded-context-services.md` flipped from `Proposed` to `Accepted` in both the YAML frontmatter (`status:`) and the body `- **Status:**` line. `docs/adr/README.md`'s index row updated to match. The document was re-read before flipping and confirmed to describe what actually shipped: `src/openkos/application/query.py` exists, exports `QueryOutcome`/`run_query`/`FiledAnswerPlan`/`stage_filed_answer` and related pure predicates, imports nothing from `openkos.cli`, and binds no concrete backend (`llm`/`embedder` arrive as `Protocol`-typed parameters, matching the Decision section's stated invariant).
 
-**One known minor discrepancy, left unedited (ADRs are immutable after acceptance):** the ADR's Accepted Risk table states the `answer` patch target has "123 ... one production call site." Implementation found a 124th site in the attribute-object form (`monkeypatch.setattr(main_mod, "answer", spy)` in `test_confidential_local_exemption.py:228`), invisible to the string-literal grep the ADR's inventory was built from. This does not contradict the ADR's Decision or invariants — it is a completeness gap in one count within the Consequences narrative, not in the ruling. Recorded here rather than silently edited into the ADR.
+**One count was corrected in the ADR before it left this branch.** Its Accepted Risk narrative and table originally said the `answer` patch target had "123 sites across five files". Implementation found a 124th, in the attribute-object form (`monkeypatch.setattr(main_mod, "answer", spy)` in `test_confidential_local_exemption.py:228`), invisible to the string-literal grep the inventory was built from. The ADR now reads 124 across six files and names that form explicitly, since a future survey of the same seam would miss it the same way.
+
+Immutability applies to an accepted decision, not to a factual error caught before the document is published. The Decision and its invariants are unchanged; only the count and its explanation were fixed.
 
 ## Implementation Deviations (both sound, both already reviewed)
 

@@ -112,12 +112,17 @@ because nothing else will catch a breach.
 
 **Accepted risk, and its cost.** Moving the `answer()` call site into a service
 module breaks the CLI test suite's injection seam. Test doubles are installed
-with `monkeypatch.setattr("openkos.cli.main.answer", ...)` at 123 sites across
-five files; that works only because `main.py` imports the name at module level
+with `monkeypatch.setattr("openkos.cli.main.answer", ...)` at 124 sites across
+six files; that works only because `main.py` imports the name at module level
 and calls it unqualified. Once the service imports and calls it in its own
 namespace, those patches become **silent no-ops** and the real networked
-`answer()` runs. All 123 targets are therefore repointed at
+`answer()` runs. All 124 targets are therefore repointed at
 `openkos.application.query.answer` in the same change that moves the call.
+
+Note the shape of the 124th, because a survey of this seam will miss it the
+same way: 123 sites pass the target as a string literal, but one passes the
+module object — `monkeypatch.setattr(module, "answer", spy)` — which no grep
+for `"openkos.cli.main.answer"` can find. Only running the suite surfaced it.
 
 The three patched names are not symmetric, and the resolution differs by name:
 
@@ -125,7 +130,7 @@ The three patched names are not symmetric, and the resolution differs by name:
 | --- | --- | --- |
 | `OllamaClient` | 118, of which 113 belong to `doctor`, `init`, `ingest`, `contradictions` and other verbs | Stays constructed by the CLI and is passed in as an `LLMBackend`; it cannot move, and a service should not bind a concrete backend anyway |
 | `stale_derived_stores` | 1, but read through `_stale_index_names`, which `status` and `next` also call | Stays in the CLI; the staleness warning is presentation and its ordering is load-bearing for stderr |
-| `answer` | 123, one production call site | Moves with the call; patch targets migrate |
+| `answer` | 124 across six files, one production call site | Moves with the call; patch targets migrate |
 
 Future contributors must keep in mind that **a default argument is not an
 injection seam**: `answer_fn: AnswerFn = answer` binds the default object at
