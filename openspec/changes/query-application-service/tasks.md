@@ -27,36 +27,36 @@ Chain strategy: stacked-to-main
 ## Slice 1 — PR 1 (~1,170 lines)
 
 ### Phase 0: Boundary Verification (blocking — before any file changes)
-- [ ] 0.1 Read `src/openkos/cli/main.py:16958-17601`. Confirm no statement after the `with (vector_store_cm, fts_index_cm)` block closes (~line 17050) references `vector_store`/`fts_index` directly — only via `result`'s fields. This validates the design's read-path/render-path split. If refuted, STOP and re-derive the slice boundary before Phase 1.
+- [x] 0.1 Read `src/openkos/cli/main.py:16958-17601`. Confirm no statement after the `with (vector_store_cm, fts_index_cm)` block closes (~line 17050) references `vector_store`/`fts_index` directly — only via `result`'s fields. This validates the design's read-path/render-path split. If refuted, STOP and re-derive the slice boundary before Phase 1.
 
 ### Phase 1: Foundation
-- [ ] 1.1 Create `src/openkos/application/__init__.py`: docstring only, no re-exports (mirrors `retrieval/__init__.py`, satisfies D5).
-- [ ] 1.2 RED: `tests/unit/application/test_layering.py::test_query_module_never_imports_cli` — AST-scan `application/query.py`'s imports and assert none reference `openkos.cli`. Must fail (module absent).
-- [ ] 1.3 GREEN: create `src/openkos/application/query.py` with module docstring and the `QueryOutcome` dataclass; no `openkos.cli` import. Layering test passes.
+- [x] 1.1 Create `src/openkos/application/__init__.py`: docstring only, no re-exports (mirrors `retrieval/__init__.py`, satisfies D5).
+- [x] 1.2 RED: `tests/unit/application/test_layering.py::test_query_module_never_imports_cli` — AST-scan `application/query.py`'s imports and assert none reference `openkos.cli`. Must fail (module absent).
+- [x] 1.3 GREEN: create `src/openkos/application/query.py` with module docstring and the `QueryOutcome` dataclass; no `openkos.cli` import. Layering test passes.
 
 ### Phase 2: Store composition + `answer()` call
-- [ ] 2.1 RED: `test_query_service.py::test_run_query_degrades_on_missing_vector_store` / `..._missing_fts` — assert `QueryOutcome.vector_store_unavailable`/`fts_unavailable` flip True, no exception.
-- [ ] 2.2 GREEN: move `_open_vector_store_or_degrade`, `_open_fts_or_degrade` (private, `main.py:16260-16354`) into `application/query.py`; implement `run_query(...)` per the design's signature.
-- [ ] 2.3 RED: `test_run_query_propagates_{ollama_unavailable,model_not_found,embedding_dimension_mismatch,generic_ollama_or_fts_error}` — assert `run_query` raises each type unwrapped (D2), no re-wrapping.
-- [ ] 2.4 GREEN: import `answer` from `retrieval.answer`, call it unqualified inside `run_query`; remove the try/except from `main.py`.
-- [ ] 2.5 REFACTOR: add `run_query`'s `Raises:` docstring stating the three specific `OllamaError` subclasses MUST be handled before the generic `(FtsUnavailable, OllamaError)` catch-all.
+- [x] 2.1 RED: `test_query_service.py::test_run_query_degrades_on_missing_vector_store` / `..._missing_fts` — assert `QueryOutcome.vector_store_unavailable`/`fts_unavailable` flip True, no exception.
+- [x] 2.2 GREEN: move `_open_vector_store_or_degrade`, `_open_fts_or_degrade` (private, `main.py:16260-16354`) into `application/query.py`; implement `run_query(...)` per the design's signature.
+- [x] 2.3 RED: `test_run_query_propagates_{ollama_unavailable,model_not_found,embedding_dimension_mismatch,generic_ollama_or_fts_error}` — assert `run_query` raises each type unwrapped (D2), no re-wrapping.
+- [x] 2.4 GREEN: import `answer` from `retrieval.answer`, call it unqualified inside `run_query`; `main.py`'s try/except moves off `answer()` onto `run_query()` in Phase 4 (deferred so the adapter never has a moment with no `answer()`-shaped call to guard).
+- [x] 2.5 REFACTOR: add `run_query`'s `Raises:` docstring stating the three specific `OllamaError` subclasses MUST be handled before the generic `(FtsUnavailable, OllamaError)` catch-all.
 
 ### Phase 3: Patch-target migration (rides with this slice per D1 — not its own slice)
-- [ ] 3.1 Migrate `monkeypatch.setattr("openkos.cli.main.answer", ...)` → `"openkos.application.query.answer"` in `tests/unit/cli/test_query.py` (57) and `test_query_save.py` (59).
-- [ ] 3.2 Migrate the remaining sites: `test_write_time_refresh.py` (4), `test_embed_host_advisory.py` (2), `test_adjudicate.py` (1).
-- [ ] 3.3 `grep -rn 'cli.main.answer' tests/` returns zero matches; run the five affected test files.
+- [x] 3.1 Migrate `monkeypatch.setattr("openkos.cli.main.answer", ...)` → `"openkos.application.query.answer"` in `tests/unit/cli/test_query.py` (57) and `test_query_save.py` (59).
+- [x] 3.2 Migrate the remaining sites: `test_write_time_refresh.py` (4), `test_embed_host_advisory.py` (2), `test_adjudicate.py` (1).
+- [x] 3.3 `grep -rn 'cli.main.answer' tests/` returns zero matches; run the five affected test files. **Deviation found**: a 124th site existed outside the design's D1 inventory — `tests/unit/cli/test_confidential_local_exemption.py:228` patches via `monkeypatch.setattr(main_mod, "answer", spy)` (attribute-object form, invisible to a string-literal grep). Migrated to `query_service_mod.answer`; all 45 tests in that file still pass.
 
 ### Phase 4: Adapter wiring
-- [ ] 4.1 Replace `main.py`'s inline store-open/try-except/`answer()` block (`16954-17048`) with a call to `application.query.run_query(...)`; re-add the four `except` handlers around the call site, unchanged in order and text.
-- [ ] 4.2 Keep `_stale_index_names` and its warning (`main.py:16971-16977`) in the CLI, called BEFORE `run_query` — this preserves stderr ordering byte-identically (D1).
-- [ ] 4.3 Forbid `answer_fn: AnswerFn = answer` or any default-argument seam in `application/query.py`/`main.py` (a default binds at `def` time and silently defeats `monkeypatch.setattr`). Verify: `grep -n 'AnswerFn = answer\|: .*= answer$' src/openkos/application/query.py src/openkos/cli/main.py` returns no matches.
-- [ ] 4.4 Update non-`--save` `typer.echo` rendering in `main.py` to read `QueryOutcome` fields instead of local variables.
+- [x] 4.1 Replace `main.py`'s inline store-open/try-except/`answer()` block (`16954-17048`) with a call to `application.query.run_query(...)`; re-add the four `except` handlers around the call site, unchanged in order and text.
+- [x] 4.2 Keep `_stale_index_names` and its warning (`main.py:16971-16977`) in the CLI, called BEFORE `run_query` — this preserves stderr ordering byte-identically (D1).
+- [x] 4.3 Forbid `answer_fn: AnswerFn = answer` or any default-argument seam in `application/query.py`/`main.py` (a default binds at `def` time and silently defeats `monkeypatch.setattr`). Verify: `grep -n 'AnswerFn = answer\|: .*= answer$' src/openkos/application/query.py src/openkos/cli/main.py` returns no matches.
+- [x] 4.4 Update non-`--save` `typer.echo` rendering in `main.py` to read `QueryOutcome` fields instead of local variables: the store-availability render at `main.py`'s `hint:` line now reads `outcome.vector_store_unavailable`/`outcome.fts_unavailable` directly (no `store_was_unavailable`/`fts_was_unavailable` locals); `result = outcome.result` feeds the rest of the unchanged render block. **Also found and fixed**: `tests/unit/cli/test_query.py:659` patched `"openkos.cli.main.open_vector_store"` directly (the vector-store open call itself, not `answer`) — not tracked by D1's table since it enumerates only the three CLI-visible *patched names*, not every callable that moved. Migrated to `"openkos.application.query.open_vector_store"`.
 
 ### Phase 5: Slice 1 gate
-- [ ] 5.1 `uv run pytest tests/unit/cli/test_query.py -q` (58 tests); byte-identical stdout/stderr/exit codes for a stale-index case, a store-degrade case, and each `OllamaError` subclass.
-- [ ] 5.2 `uv run pytest --cov=src/openkos/application tests/unit/application -q`; 90% branch coverage on degrade/exception branches.
-- [ ] 5.3 `uv run pytest && uv run ruff check . && uv run ruff format --check . && uv run mypy .` (whole repo — CI lints all of it).
-- [ ] 5.4 `uv run openkos query "<question>"` against a seeded workspace; output matches the pre-change baseline.
+- [x] 5.1 `uv run pytest tests/unit/cli/test_query.py -q` (58 tests); byte-identical stdout/stderr/exit codes for a stale-index case, a store-degrade case, and each `OllamaError` subclass. **58 passed.**
+- [x] 5.2 `uv run pytest --cov=src/openkos/application tests/unit/application -q`; 90% branch coverage on degrade/exception branches. **100% branch coverage, 13 passed.**
+- [x] 5.3 `uv run pytest && uv run ruff check . && uv run ruff format --check . && uv run mypy .` (whole repo — CI lints all of it). **5,848 passed, 1 skipped; ruff check/format clean on 281 files; mypy clean on 281 files.**
+- [x] 5.4 `uv run openkos query "<question>"` against a seeded workspace; output matches the pre-change baseline. **Verified end to end**: `openkos init` → `openkos ingest` → `openkos reindex` → `openkos query "what is stoicism?"` against a live local Ollama returned the expected `retrieval: 2 FTS + 2 dense → 2 fused → LLM invoked → 2 cited` summary, the answer, and both citations.
 
 ## Slice 2 — PR 2 (~1,195 lines)
 

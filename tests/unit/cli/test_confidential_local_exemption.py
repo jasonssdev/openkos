@@ -31,6 +31,7 @@ import pytest
 from typer.testing import CliRunner
 
 from openkos import config
+from openkos.application import query as query_service_mod
 from openkos.cli import curate as curate_mod
 from openkos.cli import main as main_mod
 from openkos.cli.main import app
@@ -225,7 +226,9 @@ def _answer_result() -> AnswerResult:
 
 def _spy_query(monkeypatch: pytest.MonkeyPatch) -> _KwargSpy:
     spy = _KwargSpy(_answer_result())
-    monkeypatch.setattr(main_mod, "answer", spy)
+    # Migrated off `main_mod.answer` -- the query application service
+    # (ADR-0018) now owns the `answer()` call site (D1).
+    monkeypatch.setattr(query_service_mod, "answer", spy)
     return spy
 
 

@@ -257,7 +257,7 @@ def test_query_warns_on_nonlocal_embed_host_and_still_answers(
     on stderr and answers unchanged (exit 0, answer on stdout)."""
     _init_workspace(tmp_path, monkeypatch)
     monkeypatch.setenv("OLLAMA_HOST", _REMOTE_HOST)
-    monkeypatch.setattr("openkos.cli.main.answer", _fake_answer)
+    monkeypatch.setattr("openkos.application.query.answer", _fake_answer)
 
     result = runner.invoke(app, ["query", "what is the dichotomy of control?"])
 
@@ -276,7 +276,7 @@ def test_query_stays_silent_on_local_embed_host(
     advisory from `query`."""
     _init_workspace(tmp_path, monkeypatch)
     monkeypatch.setenv("OLLAMA_HOST", "http://[::1]:11434")
-    monkeypatch.setattr("openkos.cli.main.answer", _fake_answer)
+    monkeypatch.setattr("openkos.application.query.answer", _fake_answer)
 
     result = runner.invoke(app, ["query", "what is the dichotomy of control?"])
 

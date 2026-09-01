@@ -12,7 +12,6 @@ import unicodedata
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
-from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError
@@ -25,6 +24,7 @@ from rich.console import Console
 
 from openkos import config, fsio, source_title
 from openkos import lint as lint_check
+from openkos.application import query as application_query
 from openkos.bundle import bundle, listing, source_titles
 from openkos.bundle import decisions as bundle_decisions
 from openkos.bundle import index as bundle_index
@@ -115,16 +115,15 @@ from openkos.resolution.volatility_typing import (
     TierSuggestionBatch,
     suggest_volatility,
 )
-from openkos.retrieval.answer import NO_MATCH, Citation, NoMatchCause, answer
+from openkos.retrieval.answer import NO_MATCH, Citation, NoMatchCause
 from openkos.sensitivity import blocks_llm_send
 from openkos.state import adjudications as adjudications_store
-from openkos.state import derived, findings, fts, question_vectors
+from openkos.state import derived, findings, question_vectors
 from openkos.state import edge_suggestions as edge_suggestions_store
 from openkos.state import reindex as reindex_module
 from openkos.state.derived import stale_derived_stores
 from openkos.state.fts import FtsUnavailable
 from openkos.state.vectorstore import (
-    VectorStoreDB,
     VecUnavailable,
     content_hash,
     open_vector_store,
@@ -16257,61 +16256,6 @@ def _no_match_message(cause: NoMatchCause, fts_hit_count: int) -> str:
     raise ValueError(f"unexpected no_match_cause: {cause!r}")
 
 
-def _open_vector_store_or_degrade(
-    path: Path,
-) -> tuple[AbstractContextManager["VectorStoreDB | None"], bool]:
-    """Existence-gated store open for `query`'s read-only dense seam.
-
-    `query` never CREATES `vectors.db` -- `open_vector_store` (which lazily
-    creates `.openkos/vectors.db` on a successful open) is only called when
-    `path` already exists on disk. Returns a context manager yielding either
-    an open `VectorStoreDB` or `None`, plus whether the CLI itself detected
-    the store as unavailable this call (absent, `VecUnavailable` at open,
-    or a raw `sqlite3.Error` -- e.g. a corrupt/locked EXISTING `vectors.db`
-    raising `DatabaseError`/`OperationalError` from `open_vector_store`'s
-    CREATE TABLE step, which is not mapped to `VecUnavailable`) -- distinct
-    from `AnswerResult.dense_degraded`, which is set INSIDE `answer()` for a
-    read-path failure at query time. The caller's reindex hint fires on
-    either signal."""
-    if not path.exists():
-        return nullcontext(None), True
-    try:
-        return open_vector_store(path), False
-    except (VecUnavailable, sqlite3.Error):
-        return nullcontext(None), True
-
-
-def _open_fts_or_degrade(
-    path: Path,
-) -> tuple[AbstractContextManager["fts.FtsIndex | None"], bool]:
-    """Existence-gated, read-only handle open for `query`'s persisted FTS
-    seam (Slice 5, PR3).
-
-    Same INTENT and RETURN SHAPE as `_open_vector_store_or_degrade` --
-    `(context_manager, bool)`, degrading to `(nullcontext(None), True)` on
-    absence or failure -- but NOT structurally identical (review finding
-    R2: the two are related, not "mirrored exactly"). Two deliberate
-    differences: (1) `_open_vector_store_or_degrade` checks `path.exists()`
-    explicitly, because `open_vector_store` does not existence-gate itself;
-    this function has NO explicit existence check of its own, because
-    `fts.open_fts_index_readonly` is ALREADY existence-gated internally and
-    returns `None` for an absent path on its own. (2) `_open_vector_store_or_degrade`
-    catches `(VecUnavailable, sqlite3.Error)`; this function catches ONLY
-    `sqlite3.Error`, since FTS has no typed "unavailable" exception analogous
-    to `VecUnavailable` (plain `CREATE`/`SELECT`, no extension-load step to
-    fail). The caller's reindex hint fires on either signal (absent or
-    caught error); `answer()` itself only ever sees "handle or `None`" (the
-    exception-vs-degrade boundary lives entirely at this call site, never
-    inside `answer()`)."""
-    try:
-        handle = fts.open_fts_index_readonly(path)
-    except sqlite3.Error:
-        return nullcontext(None), True
-    if handle is None:
-        return nullcontext(None), True
-    return handle, False
-
-
 @dataclass(frozen=True)
 class _FiledAnswerPlan:
     """One validated `query --save` filing staged for Phase B write --
@@ -16951,102 +16895,90 @@ def query(
         include_confidential=include_confidential,
         local_exemption=local_exemption,
     )
-    vector_store_cm, store_was_unavailable = _open_vector_store_or_degrade(
-        layout.vectors_db_path
-    )
-    fts_index_cm, fts_was_unavailable = _open_fts_or_degrade(layout.fts_db_path)
-    with (
-        vector_store_cm as vector_store,
-        fts_index_cm as fts_index,
-    ):
-        # #381: named BEFORE the LLM call, not after it -- the user is told
-        # their answer is suspect while they are still waiting for it,
-        # rather than after having read it and trusted it. This is the CLI
-        # seam that already owns the open-failure-to-`None` decision, so the
-        # D2 binding contract holds: `answer()` below still never computes
-        # or compares a manifest hash of its own. #436: `query` declares
-        # only `fts` -- it stopped reading `graph.db` in #434, so graph
-        # staleness cannot degrade THIS answer and must not be blamed here
-        # (`status`/`next` still report it as workspace state).
-        stale_stores = _stale_index_names(layout, reads=("fts",))
-        if stale_stores:
-            typer.echo(
-                f"warning: derived indexes are stale ({', '.join(stale_stores)}) "
-                "-- this answer may be degraded; run `openkos reindex`.",
-                err=True,
-            )
-        # ONE TTY-gated stage notice before the single long retrieval+answer
-        # call (issue #190) -- `query`'s `llm.chat` runs inside `answer()`,
-        # so this CLI seam is where the wait becomes visible; `stage_notice`
-        # is the single-call sibling of `progress_callback`.
-        observability.stage_notice("query", "answering (waiting on the LLM)...")
-        try:
-            result = answer(
-                question,
-                bundle_dir=layout.bundle_dir,
-                llm=llm,
-                embedder=embedder,
-                vector_store=vector_store,
-                fts_index=fts_index,
-                limit=limit,
-                include_deprecated=include_deprecated,
-                include_confidential=include_confidential,
-                local_exemption=local_exemption,
-                # The ONE place that injects `cfg.sufficiency_check`
-                # explicitly (#760), so the product-ON default lives in the
-                # config and `answer` itself stays OFF for library callers.
-                sufficiency_check=cfg.sufficiency_check,
-            )
-        except OllamaUnavailable as exc:
-            typer.echo(
-                f"openkos query: failed -- {exc}. Start it with `ollama serve`, "
-                f"then try again.{_DOCTOR_HINT}",
-                err=True,
-            )
-            raise typer.Exit(code=1) from exc
-        except OllamaModelNotFound as exc:
-            # Names the REAL failing model from the exception text -- `query`
-            # now builds TWO Ollama-backed seams (chat `llm` + `embedder`), so
-            # a hardcoded `cfg.model` would be wrong whenever the embedding
-            # model is the one that actually 404'd.
-            typer.echo(
-                f"openkos query: failed -- {exc}. Pull it with "
-                "`ollama pull <model>`, then try again.",
-                err=True,
-            )
-            raise typer.Exit(code=1) from exc
-        # `OllamaEmbeddingDimensionMismatch` is a PERMANENT, non-healing
-        # misconfiguration (issue #209): the configured `embedding_model`
-        # does not emit `EMBED_DIM`-dimensional vectors, so dense retrieval
-        # is structurally impossible, not merely unhelpful this run --
-        # `answer()` therefore propagates it instead of degrading to a
-        # silent FTS-only answer at exit 0. Like `reindex`'s own branch, it
-        # names a concrete remediation: restore the working
-        # `embedding_model` value in `openkos.yaml`. It deliberately does
-        # NOT point at `openkos reindex` -- reindex fails with this very
-        # same error until the config is fixed, so that hint would be
-        # actively misleading here. MUST NOT say "will retry next run"
-        # (phrasing reserved for a transient `embed_failed` skip). Placed
-        # BEFORE the generic tuple below for the same ordering reason as the
-        # two handlers above: `OllamaEmbeddingDimensionMismatch` subclasses
-        # `OllamaError`, so reordering would swallow it into the bare
-        # message and lose this remediation.
-        except OllamaEmbeddingDimensionMismatch as exc:
-            typer.echo(
-                f"openkos query: failed -- {exc} Restore the working "
-                "'embedding_model' value in openkos.yaml, then try again.",
-                err=True,
-            )
-            raise typer.Exit(code=1) from exc
-        # The three specific handlers above MUST precede this generic tuple:
-        # `OllamaUnavailable`, `OllamaModelNotFound`, and
-        # `OllamaEmbeddingDimensionMismatch` all subclass `OllamaError`, so
-        # reordering would silently funnel them into this fallback and lose
-        # their actionable remediation messages.
-        except (FtsUnavailable, OllamaError) as exc:
-            typer.echo(f"openkos query: failed -- {exc}.", err=True)
-            raise typer.Exit(code=1) from exc
+    # #381: named BEFORE the LLM call, not after it -- the user is told
+    # their answer is suspect while they are still waiting for it, rather
+    # than after having read it and trusted it. This is the CLI seam that
+    # already owns the open-failure-to-`None` decision, so the D2 binding
+    # contract holds: `run_query` below still never computes or compares a
+    # manifest hash of its own. #436: `query` declares only `fts` -- it
+    # stopped reading `graph.db` in #434, so graph staleness cannot degrade
+    # THIS answer and must not be blamed here (`status`/`next` still report
+    # it as workspace state). Kept in the CLI adapter rather than the
+    # service (design D1) so stderr ordering stays byte-identical.
+    stale_stores = _stale_index_names(layout, reads=("fts",))
+    if stale_stores:
+        typer.echo(
+            f"warning: derived indexes are stale ({', '.join(stale_stores)}) "
+            "-- this answer may be degraded; run `openkos reindex`.",
+            err=True,
+        )
+    # ONE TTY-gated stage notice before the single long retrieval+answer
+    # call (issue #190) -- `query`'s `llm.chat` runs inside `run_query`, so
+    # this CLI seam is where the wait becomes visible; `stage_notice` is the
+    # single-call sibling of `progress_callback`.
+    observability.stage_notice("query", "answering (waiting on the LLM)...")
+    try:
+        outcome = application_query.run_query(
+            question,
+            layout=layout,
+            cfg=cfg,
+            llm=llm,
+            embedder=embedder,
+            limit=limit,
+            include_deprecated=include_deprecated,
+            include_confidential=include_confidential,
+            local_exemption=local_exemption,
+        )
+    except OllamaUnavailable as exc:
+        typer.echo(
+            f"openkos query: failed -- {exc}. Start it with `ollama serve`, "
+            f"then try again.{_DOCTOR_HINT}",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+    except OllamaModelNotFound as exc:
+        # Names the REAL failing model from the exception text -- `query`
+        # now builds TWO Ollama-backed seams (chat `llm` + `embedder`), so
+        # a hardcoded `cfg.model` would be wrong whenever the embedding
+        # model is the one that actually 404'd.
+        typer.echo(
+            f"openkos query: failed -- {exc}. Pull it with "
+            "`ollama pull <model>`, then try again.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+    # `OllamaEmbeddingDimensionMismatch` is a PERMANENT, non-healing
+    # misconfiguration (issue #209): the configured `embedding_model` does
+    # not emit `EMBED_DIM`-dimensional vectors, so dense retrieval is
+    # structurally impossible, not merely unhelpful this run -- `run_query`
+    # therefore propagates it instead of degrading to a silent FTS-only
+    # answer at exit 0. Like `reindex`'s own branch, it names a concrete
+    # remediation: restore the working `embedding_model` value in
+    # `openkos.yaml`. It deliberately does NOT point at `openkos reindex` --
+    # reindex fails with this very same error until the config is fixed, so
+    # that hint would be actively misleading here. MUST NOT say "will retry
+    # next run" (phrasing reserved for a transient `embed_failed` skip).
+    # Placed BEFORE the generic tuple below for the same ordering reason as
+    # the two handlers above: `OllamaEmbeddingDimensionMismatch` subclasses
+    # `OllamaError`, so reordering would swallow it into the bare message
+    # and lose this remediation.
+    except OllamaEmbeddingDimensionMismatch as exc:
+        typer.echo(
+            f"openkos query: failed -- {exc} Restore the working "
+            "'embedding_model' value in openkos.yaml, then try again.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+    # The three specific handlers above MUST precede this generic tuple:
+    # `OllamaUnavailable`, `OllamaModelNotFound`, and
+    # `OllamaEmbeddingDimensionMismatch` all subclass `OllamaError`, so
+    # reordering would silently funnel them into this fallback and lose
+    # their actionable remediation messages.
+    except (FtsUnavailable, OllamaError) as exc:
+        typer.echo(f"openkos query: failed -- {exc}.", err=True)
+        raise typer.Exit(code=1) from exc
 
+    result = outcome.result
     cited_count = len(result.citations)
     # #760: a sufficiency refusal DID reach the model -- one cheap call was
     # made and its latency paid -- so reporting it as `skipped`, the same word
@@ -17073,7 +17005,11 @@ def query(
         f"{result.fused_count} fused → LLM {llm_status} → {cited_count} cited",
         err=True,
     )
-    if store_was_unavailable or fts_was_unavailable or result.dense_degraded:
+    if (
+        outcome.vector_store_unavailable
+        or outcome.fts_unavailable
+        or result.dense_degraded
+    ):
         typer.echo(
             "hint: one or more derived indexes are unavailable this run -- "
             "run `openkos reindex` to enable full retrieval.",
