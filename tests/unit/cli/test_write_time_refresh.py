@@ -198,7 +198,8 @@ def test_query_save_refreshes_derived_once(
     _init_workspace(tmp_path, monkeypatch)
     _write_doc(tmp_path / "bundle" / "concepts" / "stoicism.md", title="Stoicism")
     monkeypatch.setattr(
-        "openkos.cli.main.answer", lambda *args, **kwargs: _fake_matched_answer()
+        "openkos.application.query.answer",
+        lambda *args, **kwargs: _fake_matched_answer(),
     )
     calls = _patch_refresh_recorder(monkeypatch)
 
@@ -215,7 +216,8 @@ def test_query_without_save_never_refreshes(
     _init_workspace(tmp_path, monkeypatch)
     _write_doc(tmp_path / "bundle" / "concepts" / "stoicism.md", title="Stoicism")
     monkeypatch.setattr(
-        "openkos.cli.main.answer", lambda *args, **kwargs: _fake_matched_answer()
+        "openkos.application.query.answer",
+        lambda *args, **kwargs: _fake_matched_answer(),
     )
     calls = _patch_refresh_recorder(monkeypatch)
 
@@ -640,7 +642,8 @@ def test_query_save_success_message_no_longer_instructs_manual_reindex(
     _init_workspace(tmp_path, monkeypatch)
     _write_doc(tmp_path / "bundle" / "concepts" / "stoicism.md", title="Stoicism")
     monkeypatch.setattr(
-        "openkos.cli.main.answer", lambda *args, **kwargs: _fake_matched_answer()
+        "openkos.application.query.answer",
+        lambda *args, **kwargs: _fake_matched_answer(),
     )
 
     result = runner.invoke(app, ["query", "what is stoicism?", "--save", "--auto"])
@@ -656,7 +659,8 @@ def test_query_save_degrade_path_still_points_at_manual_reindex(
     _init_workspace(tmp_path, monkeypatch)
     _write_doc(tmp_path / "bundle" / "concepts" / "stoicism.md", title="Stoicism")
     monkeypatch.setattr(
-        "openkos.cli.main.answer", lambda *args, **kwargs: _fake_matched_answer()
+        "openkos.application.query.answer",
+        lambda *args, **kwargs: _fake_matched_answer(),
     )
 
     def _boom(*args: object, **kwargs: object) -> object:

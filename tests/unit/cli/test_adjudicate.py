@@ -12,7 +12,7 @@ regardless of the flag.
 
 Every test that needs a specific adjudication OUTCOME patches
 `openkos.cli.main.adjudicate_candidates` directly (mirrors how `test_query.py`
-patches `openkos.cli.main.answer`) -- zero network, zero real Ollama
+patches `openkos.application.query.answer`) -- zero network, zero real Ollama
 process. Only the good-life-demo integration proof patches
 `openkos.cli.main.OllamaClient` itself with a fake backend, so the test
 never depends on whether the real example bundle happens to contain

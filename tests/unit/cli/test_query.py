@@ -8,7 +8,7 @@ parity) and a Phase-B `answer()` call guarded by four ORDERED handlers --
 `OllamaEmbeddingDimensionMismatch` (issue #209), then the generic
 `(FtsUnavailable, OllamaError)` fallback -- the first three carry their own
 cause-specific actionable remediation, the fourth a deliberately generic,
-non-actionable-specific message. Most tests patch `openkos.cli.main.answer`
+non-actionable-specific message. Most tests patch `openkos.application.query.answer`
 (D4) -- zero network, zero real Ollama process; the few end-to-end pins
 substitute `openkos.cli.main.OllamaClient` and drive the REAL `answer()`.
 """
@@ -171,7 +171,8 @@ def test_query_refuses_when_not_a_workspace(
     monkeypatch.chdir(tmp_path)
     calls: list[object] = []
     monkeypatch.setattr(
-        "openkos.cli.main.answer", lambda *args, **kwargs: calls.append((args, kwargs))
+        "openkos.application.query.answer",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
     )
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
@@ -209,7 +210,9 @@ def test_query_matching_answer_renders_citations_in_fused_rank_order(
         dense_degraded=False,
         attribution="reported",
     )
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
 
@@ -241,7 +244,9 @@ def test_query_zero_hits_renders_zero_hits_message(
         no_match_cause="zero_hits",
         skip_notices=[],
     )
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
 
     result = runner.invoke(app, ["query", "what is nothing?"])
 
@@ -272,7 +277,9 @@ def test_query_all_unreadable_renders_corruption_message(
         no_match_cause="all_unreadable",
         skip_notices=[],
     )
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
 
     result = runner.invoke(app, ["query", "what is nothing?"])
 
@@ -302,7 +309,9 @@ def test_query_empty_question_renders_prompt_message(
         no_match_cause="empty_query",
         skip_notices=[],
     )
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
 
     result = runner.invoke(app, ["query", "   "])
 
@@ -337,7 +346,9 @@ def test_query_skip_notices_surfaced_on_stderr_alongside_successful_answer(
         dense_degraded=False,
         attribution="reported",
     )
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
 
@@ -374,7 +385,9 @@ def test_query_no_skip_notices_omits_skip_block(
         dense_degraded=False,
         attribution="reported",
     )
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
 
@@ -404,7 +417,7 @@ def test_query_limit_flag_is_forwarded_unchanged(
             skip_notices=[],
         )
 
-    monkeypatch.setattr("openkos.cli.main.answer", _recording_answer)
+    monkeypatch.setattr("openkos.application.query.answer", _recording_answer)
 
     result = runner.invoke(app, ["query", "what is stoicism?", "--limit", "3"])
 
@@ -437,7 +450,7 @@ def test_query_omitted_limit_defaults_to_five(
             skip_notices=[],
         )
 
-    monkeypatch.setattr("openkos.cli.main.answer", _recording_answer)
+    monkeypatch.setattr("openkos.application.query.answer", _recording_answer)
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
 
@@ -468,7 +481,7 @@ def test_query_builds_and_injects_embedder_and_vector_store(
             skip_notices=[],
         )
 
-    monkeypatch.setattr("openkos.cli.main.answer", _recording_answer)
+    monkeypatch.setattr("openkos.application.query.answer", _recording_answer)
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
 
@@ -511,7 +524,7 @@ def test_query_injects_the_fts_index_and_no_graph_index(
             skip_notices=[],
         )
 
-    monkeypatch.setattr("openkos.cli.main.answer", _recording_answer)
+    monkeypatch.setattr("openkos.application.query.answer", _recording_answer)
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
 
@@ -532,7 +545,7 @@ def test_query_never_creates_vectors_db(
     init_result = runner.invoke(app, ["init"])
     assert init_result.exit_code == 0
     monkeypatch.setattr(
-        "openkos.cli.main.answer",
+        "openkos.application.query.answer",
         lambda *args, **kwargs: AnswerResult(
             answer=NO_MATCH,
             citations=[],
@@ -560,7 +573,7 @@ def test_query_never_creates_fts_db_or_graph_db(
     init_result = runner.invoke(app, ["init"])
     assert init_result.exit_code == 0
     monkeypatch.setattr(
-        "openkos.cli.main.answer",
+        "openkos.application.query.answer",
         lambda *args, **kwargs: AnswerResult(
             answer=NO_MATCH,
             citations=[],
@@ -599,7 +612,7 @@ def test_query_performs_zero_writes_to_an_existing_fts_db_or_graph_db(
     fts_bytes_before = fts_db_path.read_bytes()
     graph_bytes_before = graph_db_path.read_bytes()
     monkeypatch.setattr(
-        "openkos.cli.main.answer",
+        "openkos.application.query.answer",
         lambda *args, **kwargs: AnswerResult(
             answer=NO_MATCH,
             citations=[],
@@ -639,7 +652,9 @@ def test_query_cold_store_hints_at_reindex(
         fused_count=1,
         dense_degraded=False,
     )
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
 
@@ -656,7 +671,7 @@ def test_query_vec_unavailable_at_open_degrades_with_hint(
     degrades with the same hint)."""
     _init_workspace(tmp_path, monkeypatch)
     monkeypatch.setattr(
-        "openkos.cli.main.open_vector_store",
+        "openkos.application.query.open_vector_store",
         lambda path: (_ for _ in ()).throw(VecUnavailable("boom")),
     )
     captured: dict[str, object] = {}
@@ -672,7 +687,7 @@ def test_query_vec_unavailable_at_open_degrades_with_hint(
             skip_notices=[],
         )
 
-    monkeypatch.setattr("openkos.cli.main.answer", _recording_answer)
+    monkeypatch.setattr("openkos.application.query.answer", _recording_answer)
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
 
@@ -710,7 +725,9 @@ def test_query_corrupt_vectors_db_degrades_with_hint(
         fused_count=1,
         dense_degraded=False,
     )
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
 
@@ -752,7 +769,7 @@ def test_query_cold_fts_store_hints_at_reindex(
         captured["kwargs"] = kwargs
         return fake_result
 
-    monkeypatch.setattr("openkos.cli.main.answer", _recording_answer)
+    monkeypatch.setattr("openkos.application.query.answer", _recording_answer)
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
 
@@ -793,7 +810,7 @@ def test_query_corrupt_fts_db_degrades_with_hint(
         captured["kwargs"] = kwargs
         return fake_result
 
-    monkeypatch.setattr("openkos.cli.main.answer", _recording_answer)
+    monkeypatch.setattr("openkos.application.query.answer", _recording_answer)
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
 
@@ -844,7 +861,7 @@ def test_query_ignores_a_corrupt_graph_db_entirely(
         captured["kwargs"] = kwargs
         return fake_result
 
-    monkeypatch.setattr("openkos.cli.main.answer", _recording_answer)
+    monkeypatch.setattr("openkos.application.query.answer", _recording_answer)
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
 
@@ -876,7 +893,9 @@ def test_query_dense_degraded_hints_at_reindex_even_with_store_present(
         fused_count=1,
         dense_degraded=True,
     )
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
 
@@ -901,7 +920,9 @@ def test_query_no_hint_when_dense_healthy_and_store_present(
         fused_count=1,
         dense_degraded=False,
     )
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
 
@@ -933,7 +954,9 @@ def test_query_retrieval_summary_has_no_graph_term(
         dense_degraded=False,
         attribution="reported",
     )
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
 
@@ -963,7 +986,9 @@ def test_query_never_prints_a_graph_degrade_note(
         fused_count=1,
         dense_degraded=False,
     )
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
 
@@ -997,7 +1022,7 @@ def test_query_builds_ollama_client_from_configured_model(
             skip_notices=[],
         )
 
-    monkeypatch.setattr("openkos.cli.main.answer", _recording_answer)
+    monkeypatch.setattr("openkos.application.query.answer", _recording_answer)
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
 
@@ -1021,7 +1046,7 @@ def test_query_ollama_unavailable_maps_to_exit_one(
     def _raise_unavailable(*args: object, **kwargs: object) -> AnswerResult:
         raise OllamaUnavailable("Ollama not reachable at http://localhost:11434")
 
-    monkeypatch.setattr("openkos.cli.main.answer", _raise_unavailable)
+    monkeypatch.setattr("openkos.application.query.answer", _raise_unavailable)
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
 
@@ -1059,7 +1084,7 @@ def test_query_model_not_found_maps_to_exit_one(
             "found, try pulling it first"
         )
 
-    monkeypatch.setattr("openkos.cli.main.answer", _raise_model_not_found)
+    monkeypatch.setattr("openkos.application.query.answer", _raise_model_not_found)
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
 
@@ -1110,7 +1135,7 @@ def test_query_dimension_mismatch_maps_to_exit_one_with_dedicated_message(
             "transient failure; it will not heal by retrying."
         )
 
-    monkeypatch.setattr("openkos.cli.main.answer", _raise_dimension_mismatch)
+    monkeypatch.setattr("openkos.application.query.answer", _raise_dimension_mismatch)
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
 
@@ -1189,7 +1214,7 @@ def test_query_generic_ollama_error_maps_to_exit_one(
     def _raise_generic(*args: object, **kwargs: object) -> AnswerResult:
         raise OllamaError("boom")
 
-    monkeypatch.setattr("openkos.cli.main.answer", _raise_generic)
+    monkeypatch.setattr("openkos.application.query.answer", _raise_generic)
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
 
@@ -1215,7 +1240,7 @@ def test_query_specific_ollama_subclasses_do_not_fall_through_to_generic(
     def _raise_unavailable(*args: object, **kwargs: object) -> AnswerResult:
         raise OllamaUnavailable(unavailable_message)
 
-    monkeypatch.setattr("openkos.cli.main.answer", _raise_unavailable)
+    monkeypatch.setattr("openkos.application.query.answer", _raise_unavailable)
     result = runner.invoke(app, ["query", "what is stoicism?"])
     # The generic tuple fallback would print exactly this bare shape with no
     # remediation -- proves `OllamaUnavailable` reached its OWN handler.
@@ -1225,7 +1250,7 @@ def test_query_specific_ollama_subclasses_do_not_fall_through_to_generic(
     def _raise_model_not_found(*args: object, **kwargs: object) -> AnswerResult:
         raise OllamaModelNotFound("Model not found (404): model not found")
 
-    monkeypatch.setattr("openkos.cli.main.answer", _raise_model_not_found)
+    monkeypatch.setattr("openkos.application.query.answer", _raise_model_not_found)
     result = runner.invoke(app, ["query", "what is stoicism?"])
     # The generic tuple fallback would print exactly the bare
     # "openkos query: failed -- {exc}.\n" shape with no remediation -- the
@@ -1238,7 +1263,7 @@ def test_query_specific_ollama_subclasses_do_not_fall_through_to_generic(
     def _raise_dimension_mismatch(*args: object, **kwargs: object) -> AnswerResult:
         raise OllamaEmbeddingDimensionMismatch(mismatch_message)
 
-    monkeypatch.setattr("openkos.cli.main.answer", _raise_dimension_mismatch)
+    monkeypatch.setattr("openkos.application.query.answer", _raise_dimension_mismatch)
     result = runner.invoke(app, ["query", "what is stoicism?"])
     # The generic fallback prints exactly this bare shape; the `openkos.yaml`
     # remediation proves the mismatch reached its OWN handler (issue #209).
@@ -1257,7 +1282,7 @@ def test_query_fts_unavailable_maps_to_exit_one(
     def _raise_fts_unavailable(*args: object, **kwargs: object) -> AnswerResult:
         raise FtsUnavailable("fts5 not compiled in")
 
-    monkeypatch.setattr("openkos.cli.main.answer", _raise_fts_unavailable)
+    monkeypatch.setattr("openkos.application.query.answer", _raise_fts_unavailable)
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
 
@@ -1279,7 +1304,8 @@ def test_query_malformed_config_maps_to_exit_one_before_calling_answer(
     config_path.write_text("model: [unclosed\n", encoding="utf-8")
     calls: list[object] = []
     monkeypatch.setattr(
-        "openkos.cli.main.answer", lambda *args, **kwargs: calls.append((args, kwargs))
+        "openkos.application.query.answer",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
     )
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
@@ -1318,7 +1344,7 @@ def test_query_include_deprecated_flag_forwarded_as_true(
             skip_notices=[],
         )
 
-    monkeypatch.setattr("openkos.cli.main.answer", _recording_answer)
+    monkeypatch.setattr("openkos.application.query.answer", _recording_answer)
 
     result = runner.invoke(app, ["query", "what is stoicism?", "--include-deprecated"])
 
@@ -1348,7 +1374,7 @@ def test_query_omitted_include_deprecated_defaults_to_false(
             skip_notices=[],
         )
 
-    monkeypatch.setattr("openkos.cli.main.answer", _recording_answer)
+    monkeypatch.setattr("openkos.application.query.answer", _recording_answer)
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
 
@@ -1437,7 +1463,7 @@ def test_query_include_confidential_flag_forwarded_as_true(
             skip_notices=[],
         )
 
-    monkeypatch.setattr("openkos.cli.main.answer", _recording_answer)
+    monkeypatch.setattr("openkos.application.query.answer", _recording_answer)
 
     result = runner.invoke(
         app, ["query", "what is stoicism?", "--include-confidential"]
@@ -1468,7 +1494,7 @@ def test_query_omitted_include_confidential_defaults_to_false(
             skip_notices=[],
         )
 
-    monkeypatch.setattr("openkos.cli.main.answer", _recording_answer)
+    monkeypatch.setattr("openkos.application.query.answer", _recording_answer)
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
 
@@ -1503,7 +1529,7 @@ def test_query_warns_stderr_on_incomplete_walk_and_exits_zero(
     apart."""
     _init_workspace(tmp_path, monkeypatch)
     disable_local_exemption(tmp_path)
-    monkeypatch.setattr("openkos.cli.main.answer", _fake_no_match_answer)
+    monkeypatch.setattr("openkos.application.query.answer", _fake_no_match_answer)
     _break_os_walk(monkeypatch)
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
@@ -1520,7 +1546,7 @@ def test_query_no_warning_on_clean_bundle(
     produces no warning) -- the walk coming back empty is the only thing
     that silences the #356 one, which no hatch suppresses."""
     _init_workspace(tmp_path, monkeypatch)
-    monkeypatch.setattr("openkos.cli.main.answer", _fake_no_match_answer)
+    monkeypatch.setattr("openkos.application.query.answer", _fake_no_match_answer)
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
 
@@ -1546,7 +1572,7 @@ def test_query_include_confidential_keeps_the_general_advisory(
     make the FLAG the thing that discriminates."""
     _init_workspace(tmp_path, monkeypatch)
     disable_local_exemption(tmp_path)
-    monkeypatch.setattr("openkos.cli.main.answer", _fake_no_match_answer)
+    monkeypatch.setattr("openkos.application.query.answer", _fake_no_match_answer)
     _break_os_walk(monkeypatch)
 
     result = runner.invoke(
@@ -1570,7 +1596,7 @@ def test_query_local_exemption_keeps_the_general_advisory(
     an unreadable subtree shrank the fused retrieval pool and the answer was
     computed from it, with no signal anywhere."""
     _init_workspace(tmp_path, monkeypatch)
-    monkeypatch.setattr("openkos.cli.main.answer", _fake_no_match_answer)
+    monkeypatch.setattr("openkos.application.query.answer", _fake_no_match_answer)
     _break_os_walk(monkeypatch)
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
@@ -1614,7 +1640,7 @@ def test_query_prints_tty_gated_stage_notice_before_the_answer_call(
     hooks (issue #190). STDOUT keeps the clean answer."""
     _init_workspace(tmp_path, monkeypatch)
     monkeypatch.setattr(_NamedTextIOWrapper, "isatty", lambda self: True)
-    monkeypatch.setattr("openkos.cli.main.answer", _fake_no_match_answer)
+    monkeypatch.setattr("openkos.application.query.answer", _fake_no_match_answer)
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
 
@@ -1649,7 +1675,9 @@ def test_query_transport_failure_never_prints_credentials(
         )
         return client.chat([{"role": "user", "content": "hi"}])  # type: ignore[return-value]
 
-    monkeypatch.setattr("openkos.cli.main.answer", _answer_through_a_real_client)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", _answer_through_a_real_client
+    )
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
 
@@ -1668,7 +1696,7 @@ def test_query_stage_notice_is_silent_without_a_tty(
     """Without a TTY (`CliRunner`'s default), the stage notice never
     appears -- piped output stays byte-clean (issue #190)."""
     _init_workspace(tmp_path, monkeypatch)
-    monkeypatch.setattr("openkos.cli.main.answer", _fake_no_match_answer)
+    monkeypatch.setattr("openkos.application.query.answer", _fake_no_match_answer)
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
 
@@ -1717,7 +1745,8 @@ def test_query_warns_when_the_derived_indexes_are_stale(
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        "openkos.cli.main.answer", lambda *args, **kwargs: _stale_answer_result()
+        "openkos.application.query.answer",
+        lambda *args, **kwargs: _stale_answer_result(),
     )
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
@@ -1747,7 +1776,8 @@ def test_query_says_nothing_when_only_the_graph_index_is_stale(
     # Refresh only the FTS store over the edited bundle: graph stays stale.
     fts.write_fts_index(tmp_path / ".openkos" / "fts.db", tmp_path / "bundle")
     monkeypatch.setattr(
-        "openkos.cli.main.answer", lambda *args, **kwargs: _stale_answer_result()
+        "openkos.application.query.answer",
+        lambda *args, **kwargs: _stale_answer_result(),
     )
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
@@ -1770,7 +1800,8 @@ def test_query_stale_warning_precedes_the_retrieval_line(
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        "openkos.cli.main.answer", lambda *args, **kwargs: _stale_answer_result()
+        "openkos.application.query.answer",
+        lambda *args, **kwargs: _stale_answer_result(),
     )
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
@@ -1787,7 +1818,8 @@ def test_query_says_nothing_when_the_indexes_are_fresh(
     fires on the healthy path is noise, and noise is what gets ignored."""
     _init_workspace(tmp_path, monkeypatch)
     monkeypatch.setattr(
-        "openkos.cli.main.answer", lambda *args, **kwargs: _stale_answer_result()
+        "openkos.application.query.answer",
+        lambda *args, **kwargs: _stale_answer_result(),
     )
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
@@ -1809,7 +1841,8 @@ def test_query_stale_check_never_breaks_the_query(
 
     monkeypatch.setattr("openkos.cli.main.stale_derived_stores", _boom)
     monkeypatch.setattr(
-        "openkos.cli.main.answer", lambda *args, **kwargs: _stale_answer_result()
+        "openkos.application.query.answer",
+        lambda *args, **kwargs: _stale_answer_result(),
     )
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
@@ -1847,7 +1880,9 @@ def test_query_marks_confidential_citations_and_emits_notice(
         fused_count=2,
         dense_degraded=False,
     )
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
 
     result = runner.invoke(app, ["query", "who participated?"])
 
@@ -1880,7 +1915,9 @@ def test_query_without_confidential_citations_emits_no_notice(
         fused_count=1,
         dense_degraded=False,
     )
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
 
     result = runner.invoke(app, ["query", "q?"])
 
@@ -1912,7 +1949,9 @@ def test_query_discloses_which_documents_were_clipped_to_fit_the_window(
         attribution="reported",
         excerpted_titles=["Transcription 1"],
     )
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
 
     result = runner.invoke(app, ["query", "what was decided?"])
 
@@ -1936,7 +1975,9 @@ def test_query_stays_silent_about_clipping_when_nothing_was_clipped(
         skip_notices=[],
         attribution="reported",
     )
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
 
     result = runner.invoke(app, ["query", "what was decided?"])
 
@@ -1969,7 +2010,9 @@ def test_query_marks_a_partially_read_citation_in_the_citation_list(
         attribution="reported",
         excerpted_titles=["Transcription 1"],
     )
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
 
     result = runner.invoke(app, ["query", "what was decided?"])
 
@@ -1996,7 +2039,9 @@ def test_query_discloses_omitted_documents_even_on_a_no_match(
         skip_notices=[],
         omitted_titles=["Transcription 1", "Transcription 3"],
     )
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
 
     result = runner.invoke(app, ["query", "what was decided?"])
 

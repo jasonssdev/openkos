@@ -4,7 +4,7 @@ files the just-printed cited answer back as a new derived OKF concept.
 Unit tests exercise `_stage_filed_answer` directly (Phase A staging, no
 writes -- mirrors `_stage_derived_objects`'s test shape in
 `test_ingest.py`). Integration tests drive the full `query --save` CLI path
-through `CliRunner`, patching `openkos.cli.main.answer` exactly like
+through `CliRunner`, patching `openkos.application.query.answer` exactly like
 `test_query.py` does, so these tests are zero network, zero real Ollama
 process, zero real FTS5/vector/graph index.
 """
@@ -607,7 +607,9 @@ def test_query_purity_without_save_is_byte_identical(
     _init_workspace(tmp_path, monkeypatch)
     citation = Citation(concept_id="concepts/stoicism", title="Stoicism")
     fake_result = _fake_matched_answer(citations=[citation], attribution="reported")
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
     index_before = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
     log_before = (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
 
@@ -646,7 +648,9 @@ def test_query_save_writes_concept_index_and_log(
     _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
     citation = Citation(concept_id="concepts/stoicism", title="Stoicism")
     fake_result = _fake_matched_answer(citations=[citation])
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
 
     result = runner.invoke(app, ["query", "what is stoicism?", "--save", "--auto"])
 
@@ -683,7 +687,9 @@ def test_query_save_overrides_apply(
     _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
     citation = Citation(concept_id="concepts/stoicism", title="Stoicism")
     fake_result = _fake_matched_answer(citations=[citation])
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
 
     result = runner.invoke(
         app,
@@ -717,7 +723,9 @@ def test_query_save_invalid_type_refuses_no_write(
     _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
     citation = Citation(concept_id="concepts/stoicism", title="Stoicism")
     fake_result = _fake_matched_answer(citations=[citation])
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
 
     result = runner.invoke(
         app,
@@ -740,7 +748,9 @@ def test_query_save_zero_citations_refuses_no_write(
     no write (spec: "Zero citations refuse to file")."""
     _init_workspace(tmp_path, monkeypatch)
     fake_result = _fake_matched_answer(citations=[])
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
     index_before = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
 
     result = runner.invoke(app, ["query", "what is stoicism?", "--save", "--auto"])
@@ -766,7 +776,9 @@ def test_query_save_no_match_never_reaches_save_block(
         no_match_cause="zero_hits",
         skip_notices=[],
     )
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
 
     result = runner.invoke(app, ["query", "what is nothing?", "--save", "--auto"])
 
@@ -783,7 +795,9 @@ def test_query_save_preview_and_confirm_on_tty(
     _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
     citation = Citation(concept_id="concepts/stoicism", title="Stoicism")
     fake_result = _fake_matched_answer(citations=[citation])
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
     _simulate_tty(monkeypatch)
 
     result = runner.invoke(app, ["query", "what is stoicism?", "--save"], input="y\n")
@@ -807,7 +821,9 @@ def test_query_save_auto_bypasses_prompt(
     _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
     citation = Citation(concept_id="concepts/stoicism", title="Stoicism")
     fake_result = _fake_matched_answer(citations=[citation])
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
     _simulate_tty(monkeypatch)
 
     result = runner.invoke(app, ["query", "what is stoicism?", "--save", "--auto"])
@@ -834,7 +850,9 @@ def test_save_unattributed_gate_confirms_on_tty(
     _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
     citation = Citation(concept_id="concepts/stoicism", title="Stoicism")
     fake_result = _fake_matched_answer(citations=[citation], attribution="absent")
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
     _simulate_tty(monkeypatch)
 
     result = runner.invoke(app, ["query", "what is stoicism?", "--save"], input="y\n")
@@ -858,7 +876,9 @@ def test_save_unattributed_gate_decline_writes_nothing(
     _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
     citation = Citation(concept_id="concepts/stoicism", title="Stoicism")
     fake_result = _fake_matched_answer(citations=[citation], attribution="absent")
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
     _simulate_tty(monkeypatch)
     index_before = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
 
@@ -890,7 +910,9 @@ def test_save_unattributed_refuses_non_tty_even_with_auto(
     _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
     citation = Citation(concept_id="concepts/stoicism", title="Stoicism")
     fake_result = _fake_matched_answer(citations=[citation], attribution="absent")
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
     index_before = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
 
     result = runner.invoke(app, ["query", "what is stoicism?", "--save", "--auto"])
@@ -918,7 +940,9 @@ def test_save_allow_unattributed_files_without_the_gate(
     _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
     citation = Citation(concept_id="concepts/stoicism", title="Stoicism")
     fake_result = _fake_matched_answer(citations=[citation], attribution="absent")
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
 
     result = runner.invoke(
         app,
@@ -944,7 +968,9 @@ def test_save_unparsed_attribution_fires_the_gate_too(
     _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
     citation = Citation(concept_id="concepts/stoicism", title="Stoicism")
     fake_result = _fake_matched_answer(citations=[citation], attribution="unparsed")
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
     index_before = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
 
     result = runner.invoke(app, ["query", "what is stoicism?", "--save", "--auto"])
@@ -965,7 +991,9 @@ def test_save_reported_attribution_never_sees_the_gate(
     _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
     citation = Citation(concept_id="concepts/stoicism", title="Stoicism")
     fake_result = _fake_matched_answer(citations=[citation], attribution="reported")
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
 
     result = runner.invoke(app, ["query", "what is stoicism?", "--save", "--auto"])
 
@@ -988,7 +1016,9 @@ def test_query_save_non_tty_without_auto_refuses(
     _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
     citation = Citation(concept_id="concepts/stoicism", title="Stoicism")
     fake_result = _fake_matched_answer(citations=[citation])
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
     index_before = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
 
     result = runner.invoke(app, ["query", "what is stoicism?", "--save"])
@@ -1021,7 +1051,9 @@ def test_query_save_slug_collision_refuses_no_write(
     )
     citation = Citation(concept_id="concepts/stoicism", title="Stoicism")
     fake_result = _fake_matched_answer(citations=[citation])
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
     before = (
         tmp_path
         / "bundle"
@@ -1058,7 +1090,9 @@ def test_query_save_malformed_citation_does_not_crash_and_files_confidential(
     )
     citation = Citation(concept_id="concepts/malformed", title="Malformed")
     fake_result = _fake_matched_answer(citations=[citation])
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
 
     result = runner.invoke(app, ["query", "what is stoicism?", "--save", "--auto"])
 
@@ -1083,7 +1117,9 @@ def test_query_save_review_false_skips_the_prompt_like_auto(
     _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
     citation = Citation(concept_id="concepts/stoicism", title="Stoicism")
     fake_result = _fake_matched_answer(citations=[citation])
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
     _simulate_tty(monkeypatch)
 
     result = runner.invoke(app, ["query", "what is stoicism?", "--save"])
@@ -1111,7 +1147,9 @@ def test_query_save_success_reports_searchable_not_a_manual_reindex(
     _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
     citation = Citation(concept_id="concepts/stoicism", title="Stoicism")
     fake_result = _fake_matched_answer(citations=[citation])
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
 
     result = runner.invoke(app, ["query", "what is stoicism?", "--save", "--auto"])
 
@@ -1166,7 +1204,9 @@ def _matched_answer_on_a_tty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
     citation = Citation(concept_id="concepts/stoicism", title="Stoicism")
     fake_result = _fake_matched_answer(citations=[citation])
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
     _simulate_tty(monkeypatch)
 
 
@@ -1295,7 +1335,9 @@ def test_drift_on_the_unprompted_path_is_refused(
     _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
     citation = Citation(concept_id="concepts/stoicism", title="Stoicism")
     fake_result = _fake_matched_answer(citations=[citation])
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
     target_path = tmp_path / target
     concurrent = "hand-edited while the preview printed\n"
     before = snapshot_with_mtime(tmp_path)
@@ -1336,7 +1378,9 @@ def test_an_edit_landing_after_the_snapshot_observation_is_refused(
     _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
     citation = Citation(concept_id="concepts/stoicism", title="Stoicism")
     fake_result = _fake_matched_answer(citations=[citation])
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
     target_path = tmp_path / "bundle" / "index.md"
     concurrent = "hand-edited the instant the snapshot returned\n"
     real_snapshot_read = main._snapshot_read
@@ -1576,7 +1620,9 @@ def test_query_save_success_autocommits_its_three_writes(
     _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
     citation = Citation(concept_id="concepts/stoicism", title="Stoicism")
     fake_result = _fake_matched_answer(citations=[citation])
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
     # The hand-planted cited concept is untracked; commit it so the ONLY
     # dirty paths after the save are the three the verb itself wrote.
     vcs_git.commit_paths(
@@ -1637,7 +1683,9 @@ def test_query_save_preview_discloses_a_raised_sensitivity(
     )
     citation = Citation(concept_id="concepts/secret", title="Secret", confidential=True)
     fake_result = _fake_matched_answer(citations=[citation])
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
 
     result = runner.invoke(app, ["query", "what is secret?", "--save", "--auto"])
 
@@ -1673,7 +1721,9 @@ def test_query_save_preview_stays_silent_at_the_default_sensitivity(
     _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
     citation = Citation(concept_id="concepts/stoicism", title="Stoicism")
     fake_result = _fake_matched_answer(citations=[citation])
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
 
     result = runner.invoke(app, ["query", "what is stoicism?", "--save", "--auto"])
 
@@ -1711,7 +1761,9 @@ def test_query_save_preview_names_the_type_default_when_raised(
     )
     citation = Citation(concept_id="concepts/stoicism", title="Stoicism")
     fake_result = _fake_matched_answer(citations=[citation])
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
 
     result = runner.invoke(
         app, ["query", "what is stoicism?", "--save", "--auto", "--type", "Person"]
@@ -1741,7 +1793,9 @@ def test_query_save_preview_confidential_consequence_via_type_default(
     )
     citation = Citation(concept_id="concepts/stoicism", title="Stoicism")
     fake_result = _fake_matched_answer(citations=[citation])
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
 
     result = runner.invoke(
         app, ["query", "what is stoicism?", "--save", "--auto", "--type", "Person"]
@@ -1778,7 +1832,9 @@ def test_query_save_success_message_names_the_type_default_raise(
     )
     citation = Citation(concept_id="concepts/stoicism", title="Stoicism")
     fake_result = _fake_matched_answer(citations=[citation])
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
 
     result = runner.invoke(
         app, ["query", "what is stoicism?", "--save", "--auto", "--type", "Person"]
@@ -1809,7 +1865,9 @@ def test_query_save_success_message_silent_when_nothing_raised(
     _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
     citation = Citation(concept_id="concepts/stoicism", title="Stoicism")
     fake_result = _fake_matched_answer(citations=[citation])
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
 
     result = runner.invoke(app, ["query", "what is stoicism?", "--save", "--auto"])
 
@@ -2230,7 +2288,9 @@ def test_query_marks_insight_citations_as_synthesis(
             Citation(concept_id="concepts/stoicism", title="Stoicism"),
         ]
     )
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
 
@@ -2254,7 +2314,9 @@ def test_query_warns_when_every_citation_is_a_synthesis(
             Citation(concept_id="insights/answer-two", title="Two"),
         ]
     )
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
 
@@ -2277,7 +2339,9 @@ def test_query_warns_proportionally_at_half_synthesis_share(
             Citation(concept_id="sources/notes", title="Notes"),
         ]
     )
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
 
@@ -2302,7 +2366,9 @@ def test_query_below_the_synthesis_share_threshold_stays_quiet(
             Citation(concept_id="sources/course", title="Course"),
         ]
     )
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
 
@@ -2352,7 +2418,8 @@ def test_query_warns_when_the_answer_reports_drawing_on_nothing(
     """
     _init_workspace(tmp_path, monkeypatch)
     monkeypatch.setattr(
-        "openkos.cli.main.answer", lambda *args, **kwargs: _fake_unsupported_answer()
+        "openkos.application.query.answer",
+        lambda *args, **kwargs: _fake_unsupported_answer(),
     )
 
     result = runner.invoke(app, ["query", "what is retrieval augmented generation?"])
@@ -2388,7 +2455,9 @@ def test_the_no_support_warning_is_silent_when_the_model_never_reported(
         fused_count=5,
         attribution="absent",
     )
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
 
@@ -2422,7 +2491,7 @@ def test_query_renders_the_insufficient_context_message(
         fused_count=4,
         context_block_count=4,
     )
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *a, **k: fake)
+    monkeypatch.setattr("openkos.application.query.answer", lambda *a, **k: fake)
 
     result = runner.invoke(app, ["query", "¿qué es la cuantización de pesos?"])
 
@@ -2451,7 +2520,7 @@ def test_query_passes_the_configured_sufficiency_check_to_answer(
         seen.update(kwargs)
         return _fake_matched_answer()
 
-    monkeypatch.setattr("openkos.cli.main.answer", _spy)
+    monkeypatch.setattr("openkos.application.query.answer", _spy)
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
 
@@ -2475,7 +2544,7 @@ def test_query_honours_sufficiency_check_false_from_the_workspace(
         seen.update(kwargs)
         return _fake_matched_answer()
 
-    monkeypatch.setattr("openkos.cli.main.answer", _spy)
+    monkeypatch.setattr("openkos.application.query.answer", _spy)
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
 
@@ -2498,7 +2567,7 @@ def test_the_save_preview_discloses_a_possible_duplicate(
     _init_workspace(tmp_path, monkeypatch)
     _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
     monkeypatch.setattr(
-        "openkos.cli.main.answer",
+        "openkos.application.query.answer",
         lambda *a, **k: _fake_matched_answer(
             citations=[Citation(concept_id="concepts/stoicism", title="Stoicism")]
         ),
@@ -2543,7 +2612,7 @@ def test_the_disclosure_is_advisory_and_the_save_still_writes(
     _init_workspace(tmp_path, monkeypatch)
     _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
     monkeypatch.setattr(
-        "openkos.cli.main.answer",
+        "openkos.application.query.answer",
         lambda *a, **k: _fake_matched_answer(
             citations=[Citation(concept_id="concepts/stoicism", title="Stoicism")]
         ),
@@ -2576,7 +2645,7 @@ def test_no_duplicate_means_no_disclosure_line(
     _init_workspace(tmp_path, monkeypatch)
     _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
     monkeypatch.setattr(
-        "openkos.cli.main.answer",
+        "openkos.application.query.answer",
         lambda *a, **k: _fake_matched_answer(
             citations=[Citation(concept_id="concepts/stoicism", title="Stoicism")]
         ),
@@ -2605,7 +2674,7 @@ def test_the_disclosure_is_asked_about_the_question_being_filed(
     _init_workspace(tmp_path, monkeypatch)
     _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
     monkeypatch.setattr(
-        "openkos.cli.main.answer",
+        "openkos.application.query.answer",
         lambda *a, **k: _fake_matched_answer(
             citations=[Citation(concept_id="concepts/stoicism", title="Stoicism")]
         ),
@@ -2649,7 +2718,7 @@ def test_a_sufficiency_refusal_reports_the_llm_as_refused_not_skipped(
         fused_count=4,
         context_block_count=4,
     )
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *a, **k: fake)
+    monkeypatch.setattr("openkos.application.query.answer", lambda *a, **k: fake)
 
     result = runner.invoke(app, ["query", "¿qué es la cuantización?"])
 
@@ -2671,7 +2740,7 @@ def test_a_zero_hit_short_circuit_still_reports_skipped(
         no_match_cause="zero_hits",
         skip_notices=[],
     )
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *a, **k: fake)
+    monkeypatch.setattr("openkos.application.query.answer", lambda *a, **k: fake)
 
     result = runner.invoke(app, ["query", "nothing matches this"])
 
@@ -2694,7 +2763,7 @@ def test_a_degraded_sufficiency_check_notifies_the_operator(
         skip_notices=[],
         sufficiency_degraded=True,
     )
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *a, **k: fake)
+    monkeypatch.setattr("openkos.application.query.answer", lambda *a, **k: fake)
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
 
@@ -2708,7 +2777,7 @@ def test_a_working_query_prints_no_sufficiency_notice(
     """No noise on the ordinary path — the notice has to stay rare to be read."""
     _init_workspace(tmp_path, monkeypatch)
     monkeypatch.setattr(
-        "openkos.cli.main.answer",
+        "openkos.application.query.answer",
         lambda *a, **k: _fake_matched_answer(
             citations=[Citation(concept_id="concepts/stoicism", title="Stoicism")]
         ),
@@ -2740,7 +2809,7 @@ def test_an_absent_attribution_line_notifies_the_operator(
         skip_notices=[],
         attribution="absent",
     )
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *a, **k: fake)
+    monkeypatch.setattr("openkos.application.query.answer", lambda *a, **k: fake)
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
 
@@ -2770,7 +2839,7 @@ def test_an_unparsed_attribution_line_notifies_the_operator(
         skip_notices=[],
         attribution="unparsed",
     )
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *a, **k: fake)
+    monkeypatch.setattr("openkos.application.query.answer", lambda *a, **k: fake)
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
 
@@ -2797,7 +2866,7 @@ def test_a_reported_attribution_prints_no_fallback_notice(
         skip_notices=[],
         attribution="reported",
     )
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *a, **k: fake)
+    monkeypatch.setattr("openkos.application.query.answer", lambda *a, **k: fake)
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
 
@@ -2820,7 +2889,7 @@ def test_a_short_circuit_prints_no_attribution_notice(
         no_match_cause="zero_hits",
         skip_notices=[],
     )
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *a, **k: fake)
+    monkeypatch.setattr("openkos.application.query.answer", lambda *a, **k: fake)
 
     result = runner.invoke(app, ["query", "nothing matches this"])
 
@@ -2840,7 +2909,7 @@ def test_an_unavailable_duplicate_scan_notifies_the_operator(
     _init_workspace(tmp_path, monkeypatch)
     _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
     monkeypatch.setattr(
-        "openkos.cli.main.answer",
+        "openkos.application.query.answer",
         lambda *a, **k: _fake_matched_answer(
             citations=[Citation(concept_id="concepts/stoicism", title="Stoicism")]
         ),
@@ -2865,7 +2934,7 @@ def test_a_successful_empty_scan_prints_no_notice(
     _init_workspace(tmp_path, monkeypatch)
     _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
     monkeypatch.setattr(
-        "openkos.cli.main.answer",
+        "openkos.application.query.answer",
         lambda *a, **k: _fake_matched_answer(
             citations=[Citation(concept_id="concepts/stoicism", title="Stoicism")]
         ),
@@ -2901,7 +2970,7 @@ def _save_with_scan(
     _init_workspace(tmp_path, monkeypatch)
     _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
     monkeypatch.setattr(
-        "openkos.cli.main.answer",
+        "openkos.application.query.answer",
         lambda *a, **k: _fake_matched_answer(
             citations=[Citation(concept_id="concepts/stoicism", title="Stoicism")]
         ),
@@ -2954,7 +3023,7 @@ def test_a_query_without_save_names_no_filed_questions(
     _init_workspace(tmp_path, monkeypatch)
     _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
     monkeypatch.setattr(
-        "openkos.cli.main.answer",
+        "openkos.application.query.answer",
         lambda *a, **k: _fake_matched_answer(
             citations=[Citation(concept_id="concepts/stoicism", title="Stoicism")]
         ),
@@ -2985,7 +3054,7 @@ def test_every_filed_insight_is_compared_end_to_end(
     _init_workspace(tmp_path, monkeypatch)
     _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
     monkeypatch.setattr(
-        "openkos.cli.main.answer",
+        "openkos.application.query.answer",
         lambda *a, **k: _fake_matched_answer(
             citations=[Citation(concept_id="concepts/stoicism", title="Stoicism")]
         ),
@@ -3034,7 +3103,7 @@ def test_the_second_save_embeds_only_the_new_question(
         )
     )
     monkeypatch.setattr(
-        "openkos.cli.main.answer",
+        "openkos.application.query.answer",
         lambda *a, **k: _fake_matched_answer(
             answer=next(answers),
             citations=[Citation(concept_id="concepts/stoicism", title="Stoicism")],
@@ -3095,7 +3164,9 @@ def test_save_plan_discloses_a_partially_read_document_before_the_gate(
     fake_result = _fake_matched_answer(
         citations=[citation], excerpted_titles=["Stoicism"]
     )
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
     _simulate_tty(monkeypatch)
 
     result = runner.invoke(app, ["query", "what is stoicism?", "--save"], input="y\n")
@@ -3118,7 +3189,9 @@ def test_save_plan_stays_silent_when_every_document_fitted_whole(
     _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
     citation = Citation(concept_id="concepts/stoicism", title="Stoicism")
     fake_result = _fake_matched_answer(citations=[citation])
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
     _simulate_tty(monkeypatch)
 
     result = runner.invoke(app, ["query", "what is stoicism?", "--save"], input="y\n")
