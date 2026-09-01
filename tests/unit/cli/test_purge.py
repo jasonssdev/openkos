@@ -2138,7 +2138,10 @@ def test_purge_does_not_claim_a_store_it_failed_to_delete_was_dropped(
 
     result = _purge_self(tmp_git_repo.source_id)
 
-    assert result.exit_code == 0, result.output
+    # Exit 1, not 0: a store whose delete failed still holds pre-purge
+    # content (#923). What this test pins is the DISCLOSURE -- that the
+    # notice does not claim the undeleted store was dropped.
+    assert result.exit_code == 1, result.output
     assert "vectors.db" in result.stdout
     assert "insight_questions.db" in result.stdout
     listed = [
@@ -2173,7 +2176,9 @@ def test_purge_leaves_the_sidecars_of_a_store_it_failed_to_delete(
 
     result = _purge_self(tmp_git_repo.source_id)
 
-    assert result.exit_code == 0, result.output
+    # Exit 1 (#923); what this test pins is that the sidecars of a store
+    # that is STILL THERE were left alone.
+    assert result.exit_code == 1, result.output
     openkos_dir = tmp_git_repo.root / ".openkos"
     assert (openkos_dir / "findings.db").exists()
     assert (openkos_dir / "findings.db-wal").exists()
@@ -2306,3 +2311,133 @@ def test_purge_does_not_crash_when_a_store_path_cannot_be_stat_ed(
         if line.startswith("  - ") and ".db:" in line
     ]
     assert not any("findings.db" in line for line in listed), result.stdout
+
+
+# --- #923: an incomplete erasure is not a success -------------------------
+
+
+def _refuse_unlink_of(monkeypatch: pytest.MonkeyPatch, name: str) -> None:
+    """Make `unlink` raise for one store and behave normally for the rest."""
+    real_unlink = Path.unlink
+
+    def refuse(self: Path, missing_ok: bool = False) -> None:
+        if self.name == name:
+            raise OSError("device busy")
+        real_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", refuse)
+
+
+def test_purge_exits_nonzero_when_an_erasure_critical_delete_failed(
+    tmp_git_repo: TmpGitRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The physical DELETE is the erasure. `_purge_rebuild_indexes`' own
+    docstring says so -- a row-level `DELETE` would leave freelist-
+    recoverable pages, which is why the store is unlinked instead. When that
+    unlink fails, pre-purge content is still on disk.
+
+    Exiting 0 there reports a completed erasure that did not complete. The
+    non-failure rationale in that docstring is argued for the REBUILD, a
+    best-effort convenience; it was applied to the delete as well, which is
+    the defect. A script that keys off the exit code -- the only thing an
+    unattended caller can key off -- was told the data was gone.
+
+    Exit 1 matches this same command's existing precedent for "the
+    irreversible part succeeded, a later step did not": the `GitFinalizeError`
+    path already exits 1 after reporting the rewrite itself succeeded."""
+    _seed_derived_stores(tmp_git_repo.root)
+    _refuse_unlink_of(monkeypatch, "findings.db")
+
+    result = _purge_self(tmp_git_repo.source_id)
+
+    assert result.exit_code == 1, result.output
+    # The history rewrite DID succeed, and the operator must still be told
+    # so: this is a partial-completion report, not a failed purge.
+    assert "permanently expunged" in result.output
+    assert (tmp_git_repo.root / ".openkos" / "findings.db").exists()
+
+
+def test_purge_names_the_residual_store_and_how_to_finish_the_erasure(
+    tmp_git_repo: TmpGitRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The old remediation said "Run `openkos reindex` to rebuild derived
+    indexes". A reindex rebuilds a store's CONTENT; it never removes the
+    pages the failed unlink left behind, so it restores search while the
+    residue the purge was asked to destroy stays exactly where it is. The
+    operator ran the recommended command and got a false sense of
+    completion.
+
+    What must be said instead: which file still holds pre-purge content, and
+    that removing it is what finishes the erasure."""
+    _seed_derived_stores(tmp_git_repo.root)
+    _refuse_unlink_of(monkeypatch, "findings.db")
+
+    result = _purge_self(tmp_git_repo.source_id)
+
+    assert result.exit_code == 1, result.output
+    # Read the residue block, not the whole output: `openkos reindex` appears
+    # legitimately elsewhere here (the dropped `vectors.db` prices a re-embed
+    # with it), so assertions against the full text would pass on the old
+    # wording too.
+    lines = result.output.splitlines()
+    start = next(i for i, line in enumerate(lines) if "INCOMPLETE ERASURE" in line)
+    residue = "\n".join(lines[start:])
+
+    # The exact path, so the operator can act on it without guessing which
+    # store the store NAME referred to.
+    assert str(tmp_git_repo.root / ".openkos" / "findings.db") in residue
+    # Removing the file is what finishes the erasure -- the instruction the
+    # old warning never gave.
+    assert "remove the file(s) above" in residue
+    # And the correction that makes the rest safe to read: the old warning
+    # presented `reindex` AS the remedy, so an operator ran it, got search
+    # back, and kept the residue. Naming reindex is fine -- claiming it
+    # completes the erasure is the defect -- so this pins the denial rather
+    # than the absence of the word.
+    assert "does NOT complete the erasure" in residue
+
+
+def test_purge_reports_a_failed_delete_of_a_rebuilt_store_as_residue(
+    tmp_git_repo: TmpGitRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`fts.db` and `graph.db` are deleted and then rebuilt, so a failed
+    delete there is invisible to the dropped-store notice -- that notice
+    only ever describes stores left deleted.
+
+    But the freelist argument does not care whether a store is rebuilt
+    afterwards: rebuilding CONTENT over a file that was never unlinked
+    leaves the pre-purge pages recoverable just the same. The erasure gap is
+    identical, so the residue report must cover this set too."""
+    _seed_derived_stores(tmp_git_repo.root)
+    _refuse_unlink_of(monkeypatch, "fts.db")
+
+    result = _purge_self(tmp_git_repo.source_id)
+
+    assert result.exit_code == 1, result.output
+    assert "fts.db" in result.output
+    assert str(tmp_git_repo.root / ".openkos" / "fts.db") in result.output
+
+
+def test_purge_residue_report_survives_a_raising_bookkeeping_step(
+    tmp_git_repo: TmpGitRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The residue report is the only account of an INCOMPLETE erasure, so
+    it must not be lost to a failure in the post-erasure bookkeeping the way
+    the dropped-store notice already is protected against.
+
+    A raising bookkeeping step wins the exit status -- the exception
+    propagates and its own failure is louder -- but the operator must still
+    learn that a store still holds pre-purge content."""
+    _seed_derived_stores(tmp_git_repo.root)
+    _refuse_unlink_of(monkeypatch, "findings.db")
+
+    def explode(*args: object, **kwargs: object) -> bool:
+        raise RuntimeError("bookkeeping blew up")
+
+    monkeypatch.setattr(vcs_git, "paths_dirty", explode)
+
+    result = _purge_self(tmp_git_repo.source_id)
+
+    assert isinstance(result.exception, RuntimeError)
+    assert "findings.db" in result.output
+    assert str(tmp_git_repo.root / ".openkos" / "findings.db") in result.output

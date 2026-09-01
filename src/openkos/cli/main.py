@@ -7355,9 +7355,61 @@ def _purge_dropped_store_notice(dropped: Sequence[tuple[Path, str]]) -> str | No
     return "\n".join(lines)
 
 
+@dataclass(frozen=True)
+class _PurgeIndexOutcome:
+    """What Phase B's index cleanup destroyed, and what it failed to destroy.
+
+    Two findings, deliberately not collapsed into one: `dropped` prices a
+    RESTORE the operator may choose to pay, while `undeleted` reports an
+    erasure that did not complete. They are opposite kinds of news and only
+    the second is a failure."""
+
+    dropped: tuple[tuple[Path, str], ...]
+    """Stores this purge actually destroyed and leaves deleted, each with
+    its own restore cost (#886)."""
+
+    undeleted: tuple[Path, ...]
+    """Stores whose `unlink` raised, so pre-purge content is still on disk
+    (#923). Non-empty means the erasure is incomplete."""
+
+
+def _purge_residual_store_notice(undeleted: Sequence[Path]) -> str | None:
+    """The operator-facing account of an INCOMPLETE erasure (#923), or
+    `None` when every delete succeeded.
+
+    This is not the dropped-store notice's counterpart -- that one prices a
+    restore, this one reports a failure -- and it must name the exact paths,
+    because acting on it means removing those files.
+
+    What it deliberately does NOT say is `openkos reindex`. The old warning
+    said exactly that, and a reindex rebuilds a store's CONTENT: it never
+    removes the pages a failed unlink left behind. An operator who ran the
+    recommended command got search back and kept the residue, which is the
+    worse of the two failure modes because it looks resolved. The delete is
+    the erasure -- `_purge_rebuild_indexes` unlinks rather than issuing a
+    row-level `DELETE` precisely so no freelist-recoverable pages survive --
+    so only removing the file finishes what the purge started."""
+    if not undeleted:
+        return None
+    lines = [
+        f"openkos purge: INCOMPLETE ERASURE -- {len(undeleted)} derived "
+        "store(s) could not be deleted and still hold pre-purge content:"
+    ]
+    lines += [f"  - {path}" for path in undeleted]
+    lines.append(
+        "The git history rewrite itself succeeded. To finish the erasure, "
+        "clear whatever blocked the delete (an open handle, a read-only "
+        "parent directory, file permissions) and remove the file(s) above; "
+        "then run `openkos reindex` to restore search. `openkos reindex` "
+        "alone does NOT complete the erasure: it rebuilds index content and "
+        "leaves the residual pages exactly where they are."
+    )
+    return "\n".join(lines)
+
+
 def _purge_rebuild_indexes(
     layout: config.WorkspaceLayout,
-) -> tuple[tuple[Path, str], ...]:
+) -> _PurgeIndexOutcome:
     """Phase B's index cleanup (spec: Index Cleanup Is Delete-And-Rebuild, No
     Tombstone): physically DELETE `.openkos/{fts,vectors,graph,findings}.db`
     -- row-level `DELETE` would leave SQLite freelist-recoverable pages,
@@ -7371,22 +7423,37 @@ def _purge_rebuild_indexes(
     posture table -- `findings.db` shares `vectors.db`'s posture, not
     `fts.db`'s).
 
-    A rebuild failure here is reported but MUST NOT fail the (already
-    irreversible, already-succeeded) purge -- the DELETE above is the
-    security-critical erasure; the rebuild is a best-effort convenience over
-    the survivors (design: Index cleanup decision)."""
+    A REBUILD failure here is reported but MUST NOT fail the (already
+    irreversible, already-succeeded) purge: the rebuild is a best-effort
+    convenience over the survivors (design: Index cleanup decision).
+
+    A failed DELETE is the opposite case and is reported as such (#923).
+    That same non-failure rationale used to cover both, but the delete IS
+    the security-critical erasure -- the one this function unlinks rather
+    than `DELETE`s so no recoverable pages survive. When it raises, the
+    store still holds pre-purge content, and the caller must not report a
+    completed erasure. The failed paths travel back in `undeleted` rather
+    than raising here, because everything after this point is
+    post-irreversible bookkeeping the operator still needs to see.
+
+    A rebuilt store counts too. `fts.db` and `graph.db` never appear in the
+    dropped-store notice -- they are rebuilt, so nothing is lost -- but
+    rebuilding content over a file that was never unlinked leaves the
+    pre-purge pages just as recoverable. The erasure gap does not care
+    whether the store comes back."""
     droppable = _purge_dropped_stores(layout)
     # Captured BEFORE the delete: a store that was never there was not
     # destroyed by this purge, and only destruction is worth disclosing.
     existed = {path for path, _ in droppable if not _purge_store_is_gone(path)}
     dropped = [path for path, _ in droppable]
+    undeleted: list[Path] = []
     for db_path in (*_purge_rebuilt_store_paths(layout), *dropped):
         try:
             db_path.unlink(missing_ok=True)
         except OSError as exc:
+            undeleted.append(db_path)
             typer.echo(
-                f"openkos purge: warning -- failed to delete '{db_path.name}': "
-                f"{exc}. Run `openkos reindex` to rebuild derived indexes.",
+                f"openkos purge: warning -- failed to delete '{db_path.name}': {exc}.",
                 err=True,
             )
     # #886: sweep the sidecars of the dropped stores only, and only for the
@@ -7421,10 +7488,13 @@ def _purge_rebuild_indexes(
     # Returned LAST, after both rebuilds: the caller's disclosure describes
     # what this purge destroyed, and a store is only that if it existed
     # before the delete and is still absent once the rebuilds have run.
-    return tuple(
-        (path, cost)
-        for path, cost in droppable
-        if path in existed and _purge_store_is_gone(path)
+    return _PurgeIndexOutcome(
+        dropped=tuple(
+            (path, cost)
+            for path, cost in droppable
+            if path in existed and _purge_store_is_gone(path)
+        ),
+        undeleted=tuple(undeleted),
     )
 
 
@@ -7957,7 +8027,15 @@ def purge(
         _purge_clean_live_log(layout, purge_ids)
         _sweep_ledger_sidecars_for_ids(layout.bundle_dir, purge_ids)
         _sweep_decisions_for_ids(layout.bundle_dir, purge_ids)
-        _purge_rebuild_indexes(layout)
+        # This path already exits 1, so the residue changes no status here --
+        # but an operator on a failing purge still needs to know a store was
+        # left holding pre-purge content, and this is the only place it is
+        # said (#923).
+        residual = _purge_residual_store_notice(
+            _purge_rebuild_indexes(layout).undeleted
+        )
+        if residual is not None:
+            typer.echo(residual, err=True)
         raise typer.Exit(code=1) from exc
     except vcs_git.GitError as exc:
         typer.echo(
@@ -7985,7 +8063,8 @@ def purge(
     # surviving (unrelated) records, reusing the exact same primitive
     # `forget`'s Phase B calls, so the sweep is written exactly once.
     decisions_touched = _sweep_decisions_for_ids(layout.bundle_dir, purge_ids)
-    dropped_stores = _purge_rebuild_indexes(layout)
+    index_outcome = _purge_rebuild_indexes(layout)
+    dropped_stores = index_outcome.dropped
     # #886: the disclosure is the operator's only account of what this
     # irreversible operation destroyed, so it must not be lost to a
     # failure in the steps that come after the delete. The stores are
@@ -8057,6 +8136,23 @@ def purge(
         dropped_notice = _purge_dropped_store_notice(dropped_stores)
         if dropped_notice is not None:
             typer.echo(dropped_notice)
+        # #923: the residue report shares the dropped notice's protection --
+        # it is the only account of an INCOMPLETE erasure, and losing it to
+        # a failure in the bookkeeping above would leave an operator
+        # believing the expunge summary they just read was the whole story.
+        residual_notice = _purge_residual_store_notice(index_outcome.undeleted)
+        if residual_notice is not None:
+            typer.echo(residual_notice, err=True)
+
+    # OUTSIDE the `finally`, deliberately: raising in there would swallow an
+    # in-flight exception from the bookkeeping, and that failure is the
+    # louder one. Reached only on the path where everything above succeeded
+    # except the erasure itself -- the history rewrite is done and reported,
+    # so this is a partial-completion status, not a failed purge. Exit 1
+    # matches the `GitFinalizeError` path above, which is the same shape:
+    # the irreversible part succeeded, a later step did not.
+    if index_outcome.undeleted:
+        raise typer.Exit(code=1)
 
 
 @app.command(
