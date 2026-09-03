@@ -7,6 +7,7 @@ verbatim -- only the write target (TWO existing concepts, a symmetric or
 `--winner`-directional edge, plus a `## Reconciliation` body note) differs.
 """
 
+import os
 from pathlib import Path
 
 import pytest
@@ -832,33 +833,62 @@ def _symlinks_are_creatable(probe_dir: Path) -> bool:
         probe_target.unlink()
 
 
-def test_symlinked_pair_resolving_to_one_file_refuses_no_write(
+def _hardlinks_are_creatable(probe_dir: Path) -> bool:
+    """Detect at runtime whether this process may create hard links in
+    `probe_dir` -- the same runtime-probe discipline as
+    `_symlinks_are_creatable` and `_filesystem_is_case_insensitive`, never a
+    platform check. `os.link` is unavailable or refused on some filesystems
+    (FAT/exFAT, certain network mounts) and a bare call would ERROR the test
+    rather than skip it."""
+    probe_target = probe_dir / "okos-hardlink-probe-target.tmp"
+    probe_target.write_text("probe", encoding="utf-8")
+    probe_link = probe_dir / "okos-hardlink-probe-link.tmp"
+    try:
+        os.link(probe_target, probe_link)
+    except (OSError, NotImplementedError, AttributeError):
+        return False
+    else:
+        probe_link.unlink()
+        return True
+    finally:
+        probe_target.unlink()
+
+
+def test_hardlinked_pair_resolving_to_one_file_refuses_no_write(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """#324: the distinctness gate is a STRING comparison, so two ids whose
-    paths alias the same file (case-insensitive filesystem, or a symlink)
-    pass it -- the drift guard then holds two identical-byte keys (no
-    drift), and Phase B's second `write_atomic` over the same inode
-    silently discards the first document's edge and note.
+    """Two distinct ids naming ONE file must be refused in Phase A, before any
+    write, by the `samefile` (device+inode) check.
 
-    A symlink reproduces the same-inode condition on EVERY filesystem that
-    lets this process create one, so this is the host-independent pin:
-    `samefile` (device+inode) must refuse the pair in Phase A, before any
-    write. Where symlink creation itself is unavailable (Windows without
-    the privilege), the aliasing this test pins cannot be constructed, so
-    it SKIPS rather than errors -- the case-insensitivity test below still
-    covers the aliasing report on those hosts.
+    Distinct STRINGS are not distinct FILES (#324). The drift guard cannot
+    catch this: both keys snapshot the same identical bytes (no drift), and
+    Phase B's second `write_atomic` over the same inode then silently discards
+    the first document's edge and note.
+
+    The aliasing is built with a HARD link, not a symlink (#926). This test
+    used to plant `bundle/sources/alias.md` as a symlink, but the workspace
+    symlink boundary now refuses any linked segment inside the bundle in
+    `_resolve_concept_path` -- strictly EARLIER than this guard -- so a symlink
+    fixture would exercise the boundary and leave `samefile` unreached. That
+    would have been a silent coverage loss precisely where it hurts most: this
+    is the HOST-INDEPENDENT pin, and its sibling
+    `test_case_differing_pair_refuses_on_a_case_insensitive_filesystem` SKIPS
+    on the case-sensitive filesystems CI runs on. A hard link reproduces the
+    same device+inode condition on every filesystem that allows one, and is
+    not a symlink, so it reaches `samefile` exactly as the symlink used to.
+    The symlink input is still covered -- as a boundary refusal -- by
+    `tests/unit/cli/test_symlink_boundary.py`.
     """
-    if not _symlinks_are_creatable(tmp_path):
+    if not _hardlinks_are_creatable(tmp_path):
         pytest.skip(
-            "symlink creation unavailable here (e.g. Windows without the "
-            "symlink privilege): the same-inode aliasing this test pins "
-            "cannot be constructed"
+            "hard-link creation unavailable here (e.g. FAT/exFAT or a network "
+            "mount): the same-inode aliasing this test pins cannot be "
+            "constructed"
         )
     _init_workspace(tmp_path, monkeypatch)
     a_id = _ingest_source(tmp_path, "a.txt")
     alias_path = tmp_path / "bundle" / "sources" / "alias.md"
-    alias_path.symlink_to("a.md")
+    os.link(tmp_path / "bundle" / "sources" / "a.md", alias_path)
     before = snapshot_with_mtime(tmp_path)
 
     result = runner.invoke(app, ["reconcile", a_id, "sources/alias", "--auto"])
@@ -873,6 +903,32 @@ def test_symlinked_pair_resolving_to_one_file_refuses_no_write(
     # pass with side A missing from the message entirely.
     assert "'sources/a'" in result.stderr
     assert "'sources/alias'" in result.stderr
+    assert snapshot_with_mtime(tmp_path) == before
+
+
+def test_symlinked_pair_refuses_at_the_workspace_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The symlink form of the aliasing above is still refused with no write --
+    now by the #926 workspace symlink boundary, which fires earlier than
+    `samefile`. Kept here, beside the hard-link test that replaced it, so the
+    reason this input changed owners is visible from the file that used to own
+    it."""
+    if not _symlinks_are_creatable(tmp_path):
+        pytest.skip(
+            "symlink creation unavailable here (e.g. Windows without the "
+            "symlink privilege)"
+        )
+    _init_workspace(tmp_path, monkeypatch)
+    a_id = _ingest_source(tmp_path, "a.txt")
+    (tmp_path / "bundle" / "sources" / "alias.md").symlink_to("a.md")
+    before = snapshot_with_mtime(tmp_path)
+
+    result = runner.invoke(app, ["reconcile", a_id, "sources/alias", "--auto"])
+
+    assert result.exit_code == 1
+    assert "refusing to reconcile --" in result.stderr
+    assert "symlink" in result.stderr
     assert snapshot_with_mtime(tmp_path) == before
 
 

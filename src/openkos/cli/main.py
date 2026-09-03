@@ -6535,6 +6535,19 @@ def _resolve_concept_path(bundle_dir: Path, concept_id: str) -> tuple[Path, str]
     # this only decides which SPELLING of an already-safe id is on disk, and
     # the `is_file` refusal below is still the one place absence is decided.
     concept_path = okf.concept_path_for(canonical_id, bundle_dir)
+    # Symlink boundary (#926), BEFORE the existence check: `is_file()` resolves
+    # links, so without this a concept-id naming a path through a linked
+    # segment reads as an ordinary present concept. It reproduced as real data
+    # loss -- with `bundle/area` linked outside, `forget area/secret` unlinked
+    # the EXTERNAL file, exited 0 and reported success; only git noticed, and
+    # only as a warning ("pathspec ... is beyond a symbolic link").
+    #
+    # The boundary is reported ahead of absence deliberately: a path that both
+    # escapes and does not exist is an escape first, and "does not exist" would
+    # send the operator looking for the wrong problem.
+    boundary_reason = config.symlink_boundary_reason(concept_path, bundle_dir)
+    if boundary_reason is not None:
+        raise ValueError(boundary_reason)
     if not concept_path.is_file():
         raise ValueError(f"concept '{concept_id}' does not exist")
     return concept_path, canonical_id
@@ -6780,6 +6793,16 @@ def forget(
         # `purge_ids` came out of `find_provenance_descendants`, itself
         # derived only from real `other_files` keys (disk-discovered, never
         # user input) -- so this dict lookup can never escape `bundle_dir`.
+        #
+        # The cascade's UNLINK targets (`bundle_dir / f"{member}.md"`, built
+        # below) carry no `symlink_boundary_reason` check of their own for the
+        # same reason, plus one more that is worth naming because it is a
+        # property of the stdlib rather than of this code: `rglob` does not
+        # descend into symlinked directories, so no member id can ever name a
+        # path behind a link. The ROOT id is different -- it comes straight
+        # from the user -- and that is why `_resolve_concept_path` checks the
+        # boundary (#926) while this loop does not. A walk that ever starts
+        # following links must add the check here too.
         member_texts: dict[str, str] = {canonical_id: concept_text}
         for member in purge_ids:
             if member != canonical_id:

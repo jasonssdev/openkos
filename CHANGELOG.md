@@ -14,6 +14,24 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+### Security
+
+- Destructive verbs could reach outside the workspace through a symlinked path
+  segment ([#926](https://github.com/jasonssdev/openkos/issues/926)).
+  `require_workspace` validated the bundle with `is_file()`, which RESOLVES
+  symlinks, so a workspace initialized cleanly could later have `bundle/`,
+  `raw/`, or an inner directory swapped for a link into an external tree and
+  every command would keep operating through it. Reproduced as real data loss:
+  with `bundle/area` linked outside, `openkos forget area/secret` unlinked the
+  **external** file, exited 0 and reported success — only git noticed, and only
+  as a warning (`pathspec ... is beyond a symbolic link`). `raw/`, `bundle/`,
+  the two bundle spine files, and every concept-path segment are now checked,
+  and a linked segment is refused with the segment named and a remediation.
+  A linked workspace ROOT stays supported: reaching a workspace through a link
+  (`~/ws` → `/Volumes/x/ws`) escapes nothing, since everything below it still
+  resolves within one tree.
+
+
 ## [0.2.13] - 2026-08-28
 
 Eight commits, and all but one trace back to the same source: the 0.2.12
