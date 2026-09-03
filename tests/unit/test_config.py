@@ -2860,3 +2860,216 @@ def test_the_template_rationale_language_key_round_trips_through_read_config(
     )
 
     assert config.read_config(tmp_path).rationale_language == "Spanish"
+
+
+# --- Symlink boundary (#926) -------------------------------------------------
+#
+# `require_workspace` gates every command AFTER init, and until #926 it checked
+# only `is_file()` -- which RESOLVES symlinks. `_refusal_conditions` already
+# refuses a symlinked `raw/`/`bundle/` at init time, so a workspace could be
+# initialized cleanly and then have its `bundle/` swapped for a link into an
+# external tree, with every later command operating through it. These tests pin
+# the runtime half of that guarantee to the same shape init already has.
+
+
+def _seed_workspace(root: Path) -> Path:
+    """Minimal workspace `require_workspace` accepts: the two bundle spine files."""
+    bundle_dir = root / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "index.md").write_text("stub", encoding="utf-8")
+    (bundle_dir / "log.md").write_text("stub", encoding="utf-8")
+    return bundle_dir
+
+
+@pytest.mark.parametrize("linked", ["bundle", "raw"])
+def test_require_workspace_refuses_symlinked_top_level_dir(
+    tmp_path: Path, linked: str
+) -> None:
+    """A symlinked `bundle/` or `raw/` is refused with a reason naming it.
+
+    The external tree is a REAL workspace-shaped directory, so the only thing
+    standing between the command and the outside world is this check: without
+    it `is_file()` resolves through the link and returns `None` (proceed).
+    """
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    root = tmp_path / "ws"
+    root.mkdir()
+    if linked == "bundle":
+        _seed_workspace(outside)
+        (root / "bundle").symlink_to(outside / "bundle")
+    else:
+        _seed_workspace(root)
+        (outside / "raw").mkdir()
+        (root / "raw").symlink_to(outside / "raw")
+
+    reason = config.require_workspace(root)
+
+    assert reason is not None
+    assert linked in reason
+    assert "symlink" in reason
+    assert reason != (
+        "no OpenKOS workspace found in this directory (run 'openkos init' first)"
+    )
+
+
+@pytest.mark.parametrize("linked", ["index.md", "log.md"])
+def test_require_workspace_refuses_symlinked_spine_file(
+    tmp_path: Path, linked: str
+) -> None:
+    """A symlinked `bundle/index.md` or `bundle/log.md` is refused.
+
+    `is_file()` is TRUE for a link to a real file, so this is precisely the
+    case the old check waved through.
+    """
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / linked).write_text("external", encoding="utf-8")
+    root = tmp_path / "ws"
+    root.mkdir()
+    bundle_dir = _seed_workspace(root)
+    (bundle_dir / linked).unlink()
+    (bundle_dir / linked).symlink_to(outside / linked)
+
+    reason = config.require_workspace(root)
+
+    assert reason is not None
+    assert linked in reason
+    assert "symlink" in reason
+
+
+def test_require_workspace_still_none_for_a_clean_workspace(tmp_path: Path) -> None:
+    """The boundary check must not refuse an ordinary workspace (no regression)."""
+    _seed_workspace(tmp_path)
+    (tmp_path / "raw").mkdir()
+
+    assert config.require_workspace(tmp_path) is None
+
+
+def test_require_workspace_none_when_raw_is_absent(tmp_path: Path) -> None:
+    """`raw/` is not required to exist -- only to not be a symlink when it does.
+
+    `require_workspace`'s contract is the two bundle spine files; widening it
+    to demand `raw/` would refuse workspaces that legitimately have none.
+    """
+    _seed_workspace(tmp_path)
+
+    assert config.require_workspace(tmp_path) is None
+
+
+def test_require_workspace_tolerates_a_symlinked_root(tmp_path: Path) -> None:
+    """A symlinked WORKSPACE ROOT is fine -- the boundary is what is INSIDE it.
+
+    Users legitimately reach a workspace through a linked path (`~/ws` ->
+    `/Volumes/x/ws`). Refusing that would break ordinary use while stopping no
+    escape: everything under the root still resolves within one tree.
+    """
+    real_root = tmp_path / "real"
+    real_root.mkdir()
+    _seed_workspace(real_root)
+    linked_root = tmp_path / "linked"
+    linked_root.symlink_to(real_root)
+
+    assert config.require_workspace(linked_root) is None
+
+
+# --- symlinked_segment: the shared containment primitive (#926) --------------
+
+
+def test_symlinked_segment_returns_none_for_a_contained_path(tmp_path: Path) -> None:
+    """An ordinary path with no linked segment is contained."""
+    bundle_dir = tmp_path / "bundle"
+    (bundle_dir / "area").mkdir(parents=True)
+    concept = bundle_dir / "area" / "thing.md"
+    concept.write_text("stub", encoding="utf-8")
+
+    assert config.symlinked_segment(concept, bundle_dir) is None
+
+
+def test_symlinked_segment_flags_a_linked_directory_segment(tmp_path: Path) -> None:
+    """A linked INNER directory is the vector that carries writes and deletes
+    outside: `bundle/area/thing.md` resolves through `area` into the external
+    tree, so `unlink` and `replace` both land there."""
+    outside = tmp_path / "outside"
+    (outside / "area").mkdir(parents=True)
+    (outside / "area" / "thing.md").write_text("external", encoding="utf-8")
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "area").symlink_to(outside / "area")
+
+    flagged = config.symlinked_segment(bundle_dir / "area" / "thing.md", bundle_dir)
+
+    assert flagged == bundle_dir / "area"
+
+
+def test_symlinked_segment_flags_a_linked_leaf(tmp_path: Path) -> None:
+    """A linked LEAF is a READ vector: `unlink` removes the link rather than the
+    target, but every reader resolves through it and pulls external bytes into
+    prompts and answers."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "thing.md").write_text("external", encoding="utf-8")
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "thing.md").symlink_to(outside / "thing.md")
+
+    flagged = config.symlinked_segment(bundle_dir / "thing.md", bundle_dir)
+
+    assert flagged == bundle_dir / "thing.md"
+
+
+def test_symlinked_segment_flags_the_first_link_not_the_deepest(
+    tmp_path: Path,
+) -> None:
+    """The reason must name the OUTERMOST link -- that is the one the operator
+    has to remove, and naming a deeper segment would describe a path that only
+    exists on the far side of the escape."""
+    outside = tmp_path / "outside"
+    (outside / "a" / "b").mkdir(parents=True)
+    (outside / "a" / "b" / "thing.md").write_text("external", encoding="utf-8")
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "a").symlink_to(outside / "a")
+
+    flagged = config.symlinked_segment(bundle_dir / "a" / "b" / "thing.md", bundle_dir)
+
+    assert flagged == bundle_dir / "a"
+
+
+def test_symlinked_segment_flags_a_path_outside_the_boundary(tmp_path: Path) -> None:
+    """A path that is not under `boundary` at all is flagged as itself: the
+    helper is a containment check, and `relative_to` failing is the strongest
+    possible escape, not a reason to return "contained"."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    stranger = tmp_path / "elsewhere" / "thing.md"
+
+    assert config.symlinked_segment(stranger, bundle_dir) == stranger
+
+
+def test_symlinked_segment_ignores_links_above_the_boundary(tmp_path: Path) -> None:
+    """Only segments AT OR BELOW `boundary` are inspected. A linked ancestor is
+    how users legitimately reach a workspace, and walking above the boundary
+    would refuse those while stopping no escape."""
+    real_root = tmp_path / "real"
+    bundle_dir_real = real_root / "bundle"
+    bundle_dir_real.mkdir(parents=True)
+    (bundle_dir_real / "thing.md").write_text("stub", encoding="utf-8")
+    linked_root = tmp_path / "linked"
+    linked_root.symlink_to(real_root)
+
+    bundle_dir = linked_root / "bundle"
+
+    assert config.symlinked_segment(bundle_dir / "thing.md", bundle_dir) is None
+
+
+def test_symlinked_segment_returns_none_for_the_boundary_itself(
+    tmp_path: Path,
+) -> None:
+    """`boundary` is the frame of reference, not a candidate: `require_workspace`
+    owns whether `bundle/` itself is a link, and double-reporting it here would
+    make every concept path blame the wrong segment."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+
+    assert config.symlinked_segment(bundle_dir, bundle_dir) is None

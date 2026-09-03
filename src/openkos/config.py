@@ -687,6 +687,74 @@ the two cases are NOT the same: this one means the workspace exists but
 could not be inspected, not that it is missing."""
 
 
+_SYMLINKED_SEGMENT_REASON_PREFIX = "OpenKOS workspace path"
+"""Prefix for the symlink-boundary refusal (#926). A THIRD distinct reason,
+kept apart from `_NO_WORKSPACE_REASON` and the unreadable-workspace prefix
+because it answers yet another question: the workspace is present and
+readable, but part of it leaves the workspace tree."""
+
+
+def symlinked_segment(path: Path, boundary: Path) -> Path | None:
+    """Return the outermost segment of `path` strictly below `boundary` that is
+    a symlink, `path` itself if it is not under `boundary` at all, or `None`
+    when `path` is contained (#926).
+
+    The shared containment primitive behind every symlink refusal. Two
+    genuinely different escapes fold into this one check, and BOTH matter:
+
+    * A linked **inner directory** carries writes and deletes outside the
+      workspace. `bundle/area/thing.md` with `area` linked resolves into the
+      external tree, so `fsio.remove_file`'s `unlink` deletes the external
+      file and `fsio.write_atomic`'s temp-then-`replace` writes there.
+    * A linked **leaf** does NOT carry writes or deletes -- `unlink` removes
+      the link, and `replace` overwrites the link -- but it is a READ vector:
+      every reader resolves through it, so external bytes reach prompts,
+      answers, and the git lifecycle. Refusing only the directory case would
+      leave that open.
+
+    Segments AT OR ABOVE `boundary` are deliberately NOT inspected. Reaching a
+    workspace through a linked ancestor (`~/ws` -> `/Volumes/x/ws`) is ordinary
+    use and escapes nothing: everything below still resolves within one tree.
+    `boundary` itself is excluded for the same reason plus a second one --
+    `require_workspace` already owns whether `bundle/` is a link, and reporting
+    it here too would make every concept path blame the wrong segment.
+
+    `is_symlink()` is `False` for a path that does not exist, so this admits an
+    absent path as contained; callers that need existence decide that
+    separately (`_resolve_concept_path` still owns its own `is_file` refusal).
+    """
+    try:
+        relative = path.relative_to(boundary)
+    except ValueError:
+        return path
+    current = boundary
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            return current
+    return None
+
+
+def symlink_boundary_reason(path: Path, boundary: Path) -> str | None:
+    """`symlinked_segment` rendered as the shared D1-shaped refusal string, or
+    `None` when `path` is contained.
+
+    One phrasing for every caller (`require_workspace`, `_resolve_concept_path`,
+    `forget`'s purge cascade) so the refusal reads the same wherever the
+    boundary is crossed, and names the segment the operator must actually
+    remove rather than the path they typed.
+    """
+    escaping = symlinked_segment(path, boundary)
+    if escaping is None:
+        return None
+    return (
+        f"{_SYMLINKED_SEGMENT_REASON_PREFIX} '{escaping}' is a symlink; "
+        "OpenKOS refuses to read or write through it because it can leave the "
+        "workspace tree -- replace the link with the real directory or file, "
+        "or move the target inside the workspace"
+    )
+
+
 def require_workspace(root: Path) -> str | None:
     """Return `None` if `root` already holds an initialized workspace, else
     the exact refusal reason string every read-only command shares (D1).
@@ -714,6 +782,24 @@ def require_workspace(root: Path) -> str | None:
         )
     if not both_files_present:
         return _NO_WORKSPACE_REASON
+    # Symlink boundary (#926), AFTER presence: a missing workspace and an
+    # escaping one are different answers, and the missing-workspace reason
+    # ("run 'openkos init' first") is the right one when there is nothing
+    # there at all. `raw/` is checked only when it exists -- this gate's
+    # contract is the two bundle spine files, and demanding `raw/` would
+    # refuse workspaces that legitimately have none.
+    #
+    # Each path is asked for its REASON and only a non-`None` one returns.
+    # The obvious shape -- `if path.is_symlink(): return
+    # symlink_boundary_reason(path, root)` -- is fail-OPEN: `symlinked_segment`
+    # excludes the boundary itself, so any path equal to `root` yields `None`
+    # and that `None` returns from the whole function as "workspace fine",
+    # skipping every remaining path. Never gate on one predicate and return
+    # another's answer.
+    for path in (layout.raw_dir, layout.bundle_dir, index_path, log_path):
+        reason = symlink_boundary_reason(path, root)
+        if reason is not None:
+            return reason
     return None
 
 
