@@ -1067,7 +1067,7 @@ class Config:
     pipeline (design D9, #456), defaulting to `DEFAULT_UNION_JUDGE` when the
     key is absent or explicitly null. `False` restores the single-run,
     single-cap `extract_concept` path byte-for-byte -- the CLI passes this
-    value explicitly to `_stage_derived_objects`'s `union_judge` kwarg
+    value explicitly to `application.ingest.stage_derived_objects`'s `union_judge` kwarg
     rather than defaulting it there, so the product-ON default lives in
     exactly ONE place."""
     sufficiency_check: bool
@@ -1638,7 +1638,7 @@ def type_birth_sensitivity(cfg: Config, doc_type: str, base: object) -> str:
     `combine_sensitivity(base, base)`, which is `_rank`'s own fail-closed
     canonicalization, not a verbatim passthrough of a possibly-dirty value).
 
-    Both `build_concept` birth seams (`_stage_derived_objects`,
+    Both `build_concept` birth seams (`application.ingest.stage_derived_objects`,
     `_stage_filed_answer`) call this with the base appropriate to their own
     seam, and MUST produce identical output for identical inputs -- the
     formula lives here exactly once so that identity holds by construction.

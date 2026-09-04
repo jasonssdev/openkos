@@ -278,7 +278,7 @@ def extraction_notices(metadata: Mapping[str, object]) -> tuple[ExtractionNotice
     would, so no consumer has to branch on the on-disk shape and an existing
     Source keeps its disclosure instead of losing it on the next read.
 
-    FAILS CLOSED, matching `cli/main._carried_extraction_notice`'s posture:
+    FAILS CLOSED, matching `application.ingest.carried_extraction_notice`'s posture:
     an absent key, a wrong-typed value, and an unrecognised token are all
     dropped rather than raised on. Frontmatter is hand-editable and a Source
     written by a later release may spell a token this build does not know;

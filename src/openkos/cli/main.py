@@ -3208,7 +3208,7 @@ def _slugify(stem: str) -> str:
     a duplicate that could silently drift (mirrors `_titleize`'s own
     delegation to `source_titles.titleize`, design D1). See
     `source_titles.slugify`'s docstring for the full Unicode-safety and
-    identity rationale; every caller here (`ingest`, `_stage_derived_objects`,
+    identity rationale; every caller here (`ingest`, `application_ingest.stage_derived_objects`,
     tarball extraction) keeps its own empty-slug branch.
     """
     return source_titles.slugify(stem)
@@ -3228,67 +3228,6 @@ def _titleize(stem: str) -> str:
 # `openkos.model.types.REGISTRY` -- see that module for the single source of
 # truth. `extraction.ExtractionResult.type` -> catalog section / bundle
 # subdirectory (design: Path/Catalog).
-
-
-def _read_source_sensitivity(concept_path: Path, text: str) -> object:
-    """Raw `sensitivity` from an EXISTING Source concept, unranked.
-
-    Returns the raw frontmatter value (possibly missing, blank, non-string)
-    for `okf.combine_sensitivity` to rank fail-closed per ADR-0003.
-    Raises `ValueError` when the frontmatter cannot be parsed -- a
-    re-ingest MUST NOT degrade an unreadable classification to the config
-    default (design: "Where the on-disk read happens, and how it fails").
-    This deliberately diverges from `_family_owns_source`'s
-    degrade-and-continue pattern (`:1130`), which is a best-effort scan;
-    this is a security field.
-
-    Takes the already-decoded `text` rather than reading `concept_path`
-    itself (#318): the caller snapshots the file exactly once via
-    `_snapshot_read`, and this helper parsing that same observation is
-    what keeps `_reject_drifted_targets`' baseline and the resolved
-    sensitivity describing one on-disk state. `concept_path` is retained
-    purely to name the file in the error. The read-failure translation
-    that used to live here moved to the call site, next to the one read
-    that can now fail."""
-    try:
-        metadata, _ = okf.load_frontmatter(text)
-    except Exception as exc:
-        # `frontmatter.loads` raises `yaml.YAMLError` on malformed YAML,
-        # which is neither `OSError` nor `ValueError` -- translate rather
-        # than degrade (design gotcha).
-        raise ValueError(
-            f"refusing to ingest -- '{concept_path}' frontmatter could not "
-            "be parsed to resolve the sensitivity from its snapshot -- the "
-            f"single read that also feeds the title parse and the drift "
-            f"baseline: {exc}"
-        ) from exc
-    return metadata.get("sensitivity")
-
-
-def _read_source_title(concept_path: Path, text: str) -> object:
-    """Raw `title` from an EXISTING Source concept, read so a re-ingest's
-    preview can name a title change instead of overwriting it silently
-    (review finding on issue #248's content-derived title: the regenerate
-    preview never mentioned that re-ingest recomputes and overwrites a
-    pre-existing Source's title). Mirrors `_read_source_sensitivity`'s
-    shape exactly -- same single-observation `text` parameter, same
-    `load_frontmatter` call, same fail-closed `ValueError` on an
-    unparseable file -- but for `title` rather than `sensitivity`. This
-    does NOT make `title` sticky: the caller uses the return value only to
-    decide what the preview SAYS, never to decide what gets WRITTEN --
-    re-ingest still rebuilds `title` from content every run, unaffected by
-    this read."""
-    try:
-        metadata, _ = okf.load_frontmatter(text)
-    except Exception as exc:
-        # `frontmatter.loads` raises `yaml.YAMLError` on malformed YAML,
-        # which is neither `OSError` nor `ValueError` -- translate rather
-        # than degrade (design gotcha), matching `_read_source_sensitivity`.
-        raise ValueError(
-            f"refusing to ingest -- '{concept_path}' frontmatter could not "
-            f"be parsed to resolve its existing title: {exc}"
-        ) from exc
-    return metadata.get("title")
 
 
 def _raw_collision_family(raw_dir: Path, name: str) -> list[Path]:
@@ -4512,7 +4451,7 @@ class _SingleIngestOutcome:
     outcome lines and aggregate tally (issue #267): `regenerated` is the
     run's own D1 flag (`True` on a byte-identical re-ingest, `False` on a
     fresh ingest), and `extraction_degraded` is `True` exactly when
-    `_stage_derived_objects` returned a non-`None` `skip_reason` -- the
+    `application_ingest.stage_derived_objects` returned a non-`None` `skip_reason` -- the
     same Source-only degrade taxonomy `docs/cli.md` documents
     (no-extractable-text / blocked-by-sensitivity / failed /
     no-concepts-found). A refusal never constructs this: `_ingest_single`
@@ -4549,7 +4488,7 @@ class _SingleIngestOutcome:
     has finished, or `None` -- carried so `_ingest_batch`'s summary can
     tally it (issue #805, item 1).
 
-    `_stage_derived_objects` already computed this to re-render the Source
+    `application_ingest.stage_derived_objects` already computed this to re-render the Source
     document, and it died there: the batch summary, deliberately the run's
     LAST word (#349), had no field for it while the per-file notices went
     to stderr partway through what can be a seventeen-minute run.
@@ -4559,7 +4498,7 @@ class _SingleIngestOutcome:
     which stamps nothing and leaves a document that may still carry the
     prior run's marker -- reachably #585's `sole-object-restates-source`.
     That path reads the carried token back out of `prior_metadata`
-    (`_carried_extraction_notice`), because a summary term reading "N with
+    (`application_ingest.carried_extraction_notice`), because a summary term reading "N with
     an extraction notice" answers what is on disk when the run ends, and
     "stamped this run" would silently under-count every converged
     re-ingest. `None` therefore means the Source carries no token this
@@ -4754,7 +4693,7 @@ def _reingest_will_skip(src: Path, layout: config.WorkspaceLayout) -> bool:
     fail-open (#775): `True` only when the SAME conditions `_ingest_single`
     checks all hold -- a byte-identical raw match resolving to an existing
     Source that records an `origin_key` and carries no retryable-debt
-    marker (`_extraction_retry_due`, the shared predicate). Any read or
+    marker (`application_ingest.extraction_retry_due`, the shared predicate). Any read or
     parse failure returns `False`, which merely over-states the estimate;
     the authoritative decision stays inside `_ingest_single`."""
     try:
@@ -4771,7 +4710,7 @@ def _reingest_will_skip(src: Path, layout: config.WorkspaceLayout) -> bool:
         return False
     if metadata.get(okf.ORIGIN_KEY_KEY) is None:
         return False
-    return not _extraction_retry_due(metadata)
+    return not application_ingest.extraction_retry_due(metadata)
 
 
 def _estimate_batch_calls(
@@ -5093,7 +5032,7 @@ def _ingest_batch(
     # section, but the margin narrowed with #801/#843 and the reason
     # changed with them. `lint` now reports four of the five across three
     # sections: the two judge tokens under "Unjudged extractions"
-    # (`lint._UNJUDGED_NOTICE_CAUSES`, which `_extraction_retry_due`
+    # (`lint._UNJUDGED_NOTICE_CAUSES`, which `application_ingest.extraction_retry_due`
     # matches exactly), `objects-without-evidence` under "Unevidenced
     # objects" (`lint._UNEVIDENCED_NOTICE`), and
     # `candidates-dropped-in-staging` under "Staging-dropped candidates"
@@ -5107,7 +5046,7 @@ def _ingest_batch(
     #
     # The term never double-counts `extraction-degraded`. That one counts a
     # `skip_reason` (Source-only, zero derived objects), and
-    # `_stage_derived_objects` returns the two on mutually exclusive
+    # `application_ingest.stage_derived_objects` returns the two on mutually exclusive
     # paths. Since #843 a notice no longer presupposes a written object --
     # a run whose every candidate was lost in staging carries the staging
     # marker with zero objects -- but that state returns `skip_reason is
@@ -5261,66 +5200,6 @@ def ingest(
     )
 
 
-def _extraction_retry_due(metadata: Mapping[str, object]) -> bool:
-    """Whether a byte-identical re-ingest should still re-run extraction
-    (#773): only when the previous run left RETRYABLE DEBT on the Source --
-    `extraction_status: failed` (#187, the one status `lint` flags) or a
-    judge-degrade `extraction_notice` token (#772's quarantine, whose
-    `lint` retry hint names exactly this re-ingest as the remedy).
-
-    Every other state -- markers absent, a deliberate-policy
-    `extraction_status` (`no-extractable-text`/`blocked-by-sensitivity`/
-    `no-concepts-found`), #585's sole-object disclosure, or #801's
-    `objects-without-evidence` -- means the previous extraction ran to its
-    intended conclusion, so an unchanged source has nothing to retry and
-    the re-ingest skips extraction unless `--re-extract` asks for a
-    deliberate redo.
-
-    #801's token is excluded on the same grounds as #585's, and the
-    exclusion is load-bearing rather than incidental: both are disclosures
-    about output the pipeline produced as designed, not failures of a step.
-    A plain re-ingest re-runs the SAME prompt over the SAME bytes, which is
-    promised to fix neither -- which is exactly why `lint.check_unevidenced`
-    names `--re-extract` instead of a bare re-ingest."""
-    if metadata.get(okf.EXTRACTION_STATUS_KEY) == okf.EXTRACTION_STATUS_FAILED:
-        return True
-    # #884: MEMBERSHIP over every recorded token, not equality against the
-    # whole value. The key can now hold several conditions, and a run whose
-    # judge failed AND that lost a candidate in staging is still
-    # retry-worthy for the judge half -- an equality test would have read
-    # the multi-token value as "no judge token" and silently stopped
-    # offering the retry.
-    return bool(
-        {
-            okf.EXTRACTION_NOTICE_JUDGE_UNAVAILABLE,
-            okf.EXTRACTION_NOTICE_JUDGE_EMPTY,
-        }
-        & set(okf.extraction_notices(metadata))
-    )
-
-
-def _carried_extraction_notice(
-    metadata: Mapping[str, object],
-) -> tuple[okf.ExtractionNotice, ...]:
-    """The `extraction_notice` a Source's frontmatter CARRIES, narrowed to
-    the closed vocabulary (`okf.EXTRACTION_NOTICE_VALUES`) by matching a
-    member rather than casting -- so the returned value is one this build
-    can actually spell.
-
-    It FAILS CLOSED: an absent key and an unrecognised value are both
-    `None`. Frontmatter is hand-editable, and a Source written by a later
-    release may carry a token this one does not know; neither is a reason to
-    crash a run that is otherwise writing nothing, and neither may be
-    counted under a summary term whose wording promises a vocabulary member.
-    Leaving it out is the honest answer -- the Source document itself stays
-    the record, and `okf` stays the one place the vocabulary is defined.
-
-    The one caller is #773's convergence short-circuit, which needs the
-    PRIOR run's token because the summary term counts what a Source carries
-    when the run ends, not what the run stamped (#805, item 1)."""
-    return okf.extraction_notices(metadata)
-
-
 def _ingest_single(
     src: Path,
     *,
@@ -5351,7 +5230,7 @@ def _ingest_single(
     `bundle/entities/`, `bundle/people/`, `bundle/organizations/`,
     `bundle/places/`, `bundle/events/`, `bundle/procedures/`,
     `bundle/decisions/`, or `bundle/projects/` -- alongside the Source,
-    never replacing it. See `_stage_derived_objects` for the full staging,
+    never replacing it. See `application_ingest.stage_derived_objects` for the full staging,
     degrade, and reconciliation matrix.
 
     Phase A (pure, no writes) validates and builds the entire result in
@@ -5373,7 +5252,7 @@ def _ingest_single(
     Otherwise `read_config` resolves `default_sensitivity`, the Source
     concept is computed in memory, extraction is attempted (always, even
     under `--auto` -- only the confirmation PROMPT is skipped), the derived
-    objects (zero or more -- `_stage_derived_objects`' already-reconciled,
+    objects (zero or more -- `application_ingest.stage_derived_objects`' already-reconciled,
     deduped result) are staged, the new `index.md`/`log.md` bytes are
     computed to cover the Source and every staged derived object, and a
     preview of the proposed changes -- listing the Source and every staged
@@ -5381,7 +5260,7 @@ def _ingest_single(
 
     Unless `--include-confidential` is passed, extraction gates on the
     WORKSPACE `default_sensitivity` floor (sensitivity-fail-closed-filter,
-    S3b): when the floor is `confidential`, `_stage_derived_objects` returns
+    S3b): when the floor is `confidential`, `application_ingest.stage_derived_objects` returns
     `[]` WITHOUT calling `extract_concept`/`llm.chat` at all, and this
     ingest degrades to a Source-only result -- a raw source has no per-doc
     `sensitivity` value of its own yet, so this is the one `llm.chat` seam
@@ -5420,7 +5299,7 @@ def _ingest_single(
     regenerate, whose concept was absent at Phase A, writes it create-only
     (`write_exclusive`) like a fresh ingest, since the guard has no bytes to
     defend it with (#322) -- then, for EACH staged derived object in staging
-    order (zero or more; `_stage_derived_objects` already computed and
+    order (zero or more; `application_ingest.stage_derived_objects` already computed and
     deduped the full write set in Phase A, so this loop does nothing but
     `mkdir` + `write_exclusive`, with no existence check or dedup left
     here, design D5), its own directory (`bundle/concepts/`,
@@ -5552,69 +5431,23 @@ def _ingest_single(
             # would otherwise swallow a binary/non-text source and fail the
             # whole ingest, instead of degrading to the binary-fallback body.
             raw_content = None
-        # `title` is derived from the decoded content (issue #248): a
-        # binary/undecodable source (`raw_content is None`) and a blank or
-        # whitespace-only decoded source (`not raw_content.strip()`) MUST
-        # NOT call the helper at all -- neither has any usable text to
-        # derive a title from, and the spec requires derivation to not run
-        # for either case, not merely to return `None` for them. Any other
-        # `None` result (no usable candidate found in real content) falls
-        # back to today's slug title, unchanged. This single assignment
-        # feeds every downstream consumer -- frontmatter `title`, the
-        # Source's own `# ` heading, `index.md`/`log.md`, and
-        # `_stage_derived_objects`'s LLM prompt (design: "Call-site wiring
-        # in `ingest`").
-        derived_title = (
-            None
-            if raw_content is None or not raw_content.strip()
-            else source_title.derive_source_title(raw_content)
-        )
-        title = derived_title if derived_title is not None else _titleize(src.stem)
-        # Neutralize markdown link LABEL delimiters (`[`/`]`) in the Source
-        # title before it feeds the frontmatter, the `# ` heading, and the
-        # `index.md`/`log.md` bullets: a content-derived heading like
-        # `# X](/sources/evil.md)` (injection) or a filename like
-        # `notes[1].txt` (benign) would otherwise forge/break the catalog
-        # link. Idempotent on re-ingest.
-        title = bundle_index.sanitize_link_label(title)
-        if raw_content is None:
-            description = (
-                f"Raw source imported from '{src}' as {resource}; "
-                "binary/non-text content could not be embedded, not yet "
-                "extracted into concepts."
-            )
-        else:
-            description = (
-                f"Raw source imported from '{src}' as {resource}; full text "
-                "embedded verbatim below, not yet extracted into concepts."
-            )
         cfg = config.read_config(root)
-        # Re-ingest must never lower a Source's sensitivity (issue #229):
-        # when an existing Source is being regenerated, resolve as the
-        # high-water mark of its on-disk value and the config default,
-        # BEFORE the document is built, so the single resolved value flows
-        # through both the bytes written to `concept_path` and the
-        # `stamp_sensitivity` read back below (design: "Resolve before
-        # build, not merge after build"). A concept-absent regenerate
-        # (post-`forget`) resolves directly to `cfg.default_sensitivity` --
-        # `None` must never reach `combine_sensitivity`, or a `public`
-        # workspace would be wrongly raised to `private` (`okf._rank(None)`
-        # floors at `private`).
         had_prior_source = regenerate and concept_path.exists()
         if had_prior_source:
             # ONE observation of the concept file, taken HERE and not with
             # `index.md`/`log.md` further down (#313 review, R4 CRITICAL;
             # single-read shape per #318). Between this point and there sits
-            # `_stage_derived_objects`' `llm.chat` round trip -- an
-            # unbounded network call. Snapshotting after it would make an
-            # edit landing during extraction the guard's OWN baseline: the
-            # comparison would find no drift and `write_atomic` would then
-            # write back the document built from this text, reverting it.
-            # That revert is a sensitivity DOWNGRADE, since
-            # `resolved_sensitivity` is the high-water mark computed from
-            # `on_disk_sensitivity`. Both parses below and the guard's
-            # bytes derive from this single read, so there is no second
-            # read for an edit to slip between.
+            # `application_ingest.stage_derived_objects`'s `llm.chat` round
+            # trip -- an unbounded network call. Snapshotting after it would
+            # make an edit landing during extraction the guard's OWN
+            # baseline: the comparison would find no drift and
+            # `write_atomic` would then write back the document built from
+            # this text, reverting it. That revert is a sensitivity
+            # DOWNGRADE, since `resolved_sensitivity` is the high-water mark
+            # computed from `on_disk_sensitivity`. Both parses inside
+            # `compose_source_document` below and the guard's bytes derive
+            # from this single read, so there is no second read for an edit
+            # to slip between.
             try:
                 concept_snapshot: bytes | None
                 concept_snapshot, concept_text = _snapshot_read(concept_path)
@@ -5624,23 +5457,40 @@ def _ingest_single(
                     "read to snapshot its current contents (sensitivity, "
                     f"title, and drift baseline): {exc}"
                 ) from exc
-            on_disk_sensitivity = _read_source_sensitivity(concept_path, concept_text)
-            resolved_sensitivity = okf.combine_sensitivity(
-                on_disk_sensitivity, cfg.default_sensitivity
-            )
-            # Parsed BEFORE `title` is (re)computed below, purely so the
-            # preview can NAME a retitle -- never to make `title` sticky
-            # (review finding: re-ingest silently overwrote a pre-existing
-            # Source's title with no mention in the preview). `title`
-            # itself is still rebuilt from content every run, exactly as
-            # before this read existed.
-            on_disk_title = _read_source_title(concept_path, concept_text)
         else:
-            on_disk_sensitivity = None
-            resolved_sensitivity = cfg.default_sensitivity
-            on_disk_title = None
             concept_snapshot = None
             concept_text = None
+
+        # `title`/`description` derivation (issue #248), the re-ingest
+        # sensitivity high-water mark (issue #229; design: "Resolve before
+        # build, not merge after build"), and the on-disk title read-back
+        # (review finding: name a retitle in the preview, never make it
+        # sticky) all move to `compose_source_document` (issue #918 Slice
+        # 3, design: Interfaces/Contracts) -- `concept_text is None` is
+        # exactly `had_prior_source` being `False`.
+        source_plan = application_ingest.compose_source_document(
+            raw_content=raw_content,
+            source_stem=src.stem,
+            source_display_path=str(src),
+            # A SECOND path, deliberately. `source_display_path` names the RAW
+            # source and feeds the Source document's description ("Raw source
+            # imported from '<src>'"); the refusal messages must instead name
+            # the SOURCE DOCUMENT, because that is the file whose frontmatter
+            # failed to parse and the one the operator has to open. The
+            # pre-move code used two different values here and collapsing them
+            # into one silently reworded the refusal (#918 Slice 3).
+            source_document_display_path=str(concept_path),
+            resource=resource,
+            origin_key=destination.origin_key,
+            concept_text=concept_text,
+            cfg=cfg,
+            timestamp=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        )
+        title = source_plan.title
+        resolved_sensitivity = source_plan.resolved_sensitivity
+        on_disk_sensitivity = source_plan.on_disk_sensitivity
+        on_disk_title = source_plan.on_disk_title
+        concept_content = source_plan.content
 
         # #773: the convergence short-circuit, decided BEFORE any model
         # contact and before any write. A byte-identical re-ingest of a
@@ -5654,103 +5504,55 @@ def _ingest_single(
         # sole-object disclosure, a deliberate-policy extraction_status)
         # alive on disk without violating the never-read-back rule: the
         # document that recorded them is simply left untouched.
-        # `--re-extract` is the deliberate redo; retryable debt
-        # (`_extraction_retry_due`) falls through to extraction, which is
-        # exactly the retry `lint`'s unextracted/unjudged hints name.
-        if had_prior_source and concept_text is not None and not re_extract:
-            try:
-                prior_metadata, _ = okf.load_frontmatter(concept_text)
-            except ValueError:
-                # An unparseable prior Source proves nothing about the
-                # previous extraction -- fall through to the full run,
-                # which is the pre-#773 behavior for every re-ingest.
-                prior_metadata = None
-            # A pre-#552 legacy Source records no `origin_key`; the full
-            # regenerate path is what backfills it (the no-verb
-            # self-migration), so such a Source takes that path ONCE and
-            # every later re-ingest of it skips like any other.
-            if (
-                prior_metadata is not None
-                and prior_metadata.get(okf.ORIGIN_KEY_KEY) is not None
-                and not _extraction_retry_due(prior_metadata)
-            ):
-                typer.echo(
-                    "openkos ingest: source unchanged and already "
-                    "extracted; skipping extraction -- existing derived "
-                    "objects preserved; pass --re-extract to run "
-                    "extraction again.",
-                    err=True,
-                )
-                return _SingleIngestOutcome(
-                    regenerated=True,
-                    extraction_degraded=False,
-                    extraction_skipped=True,
-                    # This run stamps nothing, but the Source it just left
-                    # untouched may STILL carry the prior run's disclosure
-                    # -- reachably #585's `sole-object-restates-source`,
-                    # since `_extraction_retry_due` above sends the two
-                    # judge tokens back through a full extraction. The
-                    # summary term counts what a Source CARRIES when the run
-                    # ends (#805, item 1), so reporting `None` here would
-                    # under-count it to zero. This is NOT a new frontmatter
-                    # read-back: `prior_metadata` is the mapping the guard
-                    # on the line above already reads
-                    # `okf.EXTRACTION_NOTICE_KEY` out of, and the
-                    # never-read-back rule (see the comment block above)
-                    # governs WRITES -- nothing here is merged onto disk.
-                    extraction_notice=_carried_extraction_notice(prior_metadata),
-                )
-
-        def _build_source_document(
-            extraction_status: okf.ExtractionStatus | None,
-            extraction_notice: tuple[okf.ExtractionNotice, ...] = (),
-        ) -> str:
-            """Bound immediately before the first build (design: "The
-            ordering conflict"). Builds the Source document from-scratch
-            from this run's local inputs -- called once with `None`
-            before staging (`:1717` today), and, ONLY when staging produces
-            a `skip_reason` or a `notice`, called a SECOND time with it so
-            the key is stamped onto freshly built content, never merged onto
-            on-disk frontmatter. The healthy path calls this exactly once,
-            so its output stays byte-identical to before these parameters
-            existed.
-
-            Both markers are rebuilt from scratch for THIS run alone, which
-            is what makes them self-clearing (#187's anti-merge rule,
-            inherited unchanged by #585): a re-ingest whose extraction now
-            finds a second subject rebuilds without the notice, so a stale
-            marker can never outlive the condition it described."""
-            return okf.build_source_concept(
-                title=title,
-                description=description,
-                resource=resource,
-                tags=[],
-                timestamp=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                sensitivity=resolved_sensitivity,
-                provenance=[resource],
-                raw_content=raw_content,
-                extraction_status=extraction_status,
-                extraction_notice=extraction_notice,
-                # Which key this is per branch: `_RawDestination.origin_key`
-                # (#865).
-                origin_key=destination.origin_key,
+        # `converged_reingest` (issue #918 Slice 3) owns the gate's three
+        # policy decisions -- unparseable frontmatter, a legacy Source with
+        # no `origin_key`, retryable debt (`application_ingest.
+        # extraction_retry_due`, the shared predicate
+        # `_reingest_will_skip` also calls) -- plus `--re-extract`'s
+        # deliberate-redo override.
+        converged = (
+            application_ingest.converged_reingest(concept_text, re_extract=re_extract)
+            if had_prior_source and concept_text is not None
+            else None
+        )
+        if converged is not None:
+            typer.echo(
+                "openkos ingest: source unchanged and already "
+                "extracted; skipping extraction -- existing derived "
+                "objects preserved; pass --re-extract to run "
+                "extraction again.",
+                err=True,
+            )
+            return _SingleIngestOutcome(
+                regenerated=True,
+                extraction_degraded=False,
+                extraction_skipped=True,
+                # This run stamps nothing, but the Source it just left
+                # untouched may STILL carry the prior run's disclosure --
+                # reachably #585's `sole-object-restates-source`, since
+                # `extraction_retry_due` sends the two judge tokens back
+                # through a full extraction. The summary term counts what a
+                # Source CARRIES when the run ends (#805, item 1), so
+                # reporting `None` here would under-count it to zero. This
+                # is NOT a new frontmatter read-back: `converged_reingest`
+                # already performed the one read this needs, and the
+                # never-read-back rule (see the comment block above) governs
+                # WRITES -- nothing here is merged onto disk.
+                extraction_notice=converged.carried_notices,
             )
 
-        concept_content = _build_source_document(None)
         # Extraction runs AFTER the Source concept is built, BEFORE the
         # preview (design: Technical Approach) -- always attempted, even
         # under `--auto`; only the confirm PROMPT is skipped by `--auto`.
         # `derived_plans` is the FULL, already-reconciled Phase A write set
         # (design D5 pinned ordering) -- zero or more entries, in reply
         # order. `skip_reason` (issue #187) is `None` on the healthy path.
-        source_metadata, _ = okf.load_frontmatter(concept_content)
-        source_sensitivity = str(source_metadata["sensitivity"])
         # ONE TTY-gated stage notice before the single long extraction call
         # (issue #190) -- `ingest` has no per-item loop to hook, so
         # `stage_notice` is the single-call sibling of `progress_callback`.
         # Printed even when the confidential-floor short-circuit inside
-        # `_stage_derived_objects` skips the LLM: harmless on a TTY, and the
-        # skip itself is reported right after.
+        # `application_ingest.stage_derived_objects` skips the LLM: harmless
+        # on a TTY, and the skip itself is reported right after.
         observability.stage_notice(
             "ingest", "extracting derived objects (waiting on the LLM)..."
         )
@@ -5768,7 +5570,7 @@ def _ingest_single(
                     source_title=title,
                     source_slug=slug,
                     workspace_floor=cfg.default_sensitivity,
-                    stamp_sensitivity=source_sensitivity,
+                    stamp_sensitivity=source_plan.source_sensitivity,
                     timestamp=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
                     bundle_dir=layout.bundle_dir,
                     llm=extraction_llm,
@@ -5833,21 +5635,8 @@ def _ingest_single(
         derived_plans = staged.plans
         skip_reason = staged.skip_reason
         extraction_notice = staged.notices
-        if skip_reason is not None or extraction_notice:
-            # Re-render from scratch with whichever marker was discovered
-            # stamped in (design: "The ordering conflict", conditional
-            # re-render) -- never patch the already-built bytes, and never
-            # read either key off disk (unlike `sensitivity` above): both
-            # are always recomputed fresh for THIS run alone.
-            #
-            # `skip_reason` and `extraction_notice` are mutually exclusive
-            # by construction (zero objects vs exactly one), so this passes
-            # both rather than branching: a hypothetical future pairing
-            # would then reach disk and be visible, instead of one marker
-            # silently winning here.
-            concept_content = _build_source_document(skip_reason, extraction_notice)
         # One `_snapshot_read` observation per target: the decoded text
-        # feeds the parsers below, the raw bytes feed
+        # feeds `compose_catalog_update` below, the raw bytes feed
         # `_reject_drifted_targets` (issues #306, #313, #318).
         index_bytes, index_text = _snapshot_read(index_path)
         log_bytes, log_text = _snapshot_read(log_path)
@@ -5857,59 +5646,26 @@ def _ingest_single(
         }
         if concept_snapshot is not None:
             guarded_targets[concept_path] = concept_snapshot
-        if regenerate:
-            # D3: dedup before insert -- a no-forget re-ingest already has
-            # the bullet, so a bare insert would duplicate it; a post-forget
-            # re-ingest has zero matches, leaving index_text unchanged.
-            index_text, _ = bundle_index.remove_index_entry(
-                index_text, f"sources/{slug}"
-            )
-            log_line = (
-                f"**Re-ingest**: Regenerated [{title}](/sources/{slug}.md) from "
-                f"existing `{resource}` (identical source, raw copy reused)."
-            )
-        else:
-            log_line = (
-                f"**Ingest**: Imported [{title}](/sources/{slug}.md) from `{resource}`."
-            )
-        new_index_text = bundle_index.insert_source_entry(
-            index_text, title=title, slug=slug, description=description
+        # `compose_catalog_update` (issue #918 Slice 3) owns the conditional
+        # Source re-render (design: "The ordering conflict" -- never patch
+        # the already-built bytes, never read either key off disk), the
+        # dedup-before-insert Source bullet (D3), and the derived-plans
+        # index/log loop (design: one confirm gate, one preview) including
+        # the durable disambiguation audit entry (#131).
+        catalog_update = application_ingest.compose_catalog_update(
+            source=source_plan,
+            staged=staged,
+            slug=slug,
+            resource=resource,
+            index_text=index_text,
+            log_text=log_text,
+            regenerate=regenerate,
+            timestamp=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            entry_date=now.astimezone().date(),
         )
-        new_log_text = bundle_log.insert_log_entry(
-            log_text, now.astimezone().date(), log_line
-        )
-        # Extends the SAME index/log diff (design: one confirm gate, one
-        # preview) rather than a second read-modify-write round trip per
-        # derived object; loops `derived_plans` in staging order (design:
-        # ingest() call-site loop reshape).
-        for plan in derived_plans:
-            new_index_text = bundle_index.insert_index_entry(
-                new_index_text,
-                section=plan.section,
-                link_dir=plan.link_dir,
-                title=plan.title,
-                slug=plan.slug,
-                description=plan.description,
-            )
-            new_log_text = bundle_log.insert_log_entry(
-                new_log_text,
-                now.astimezone().date(),
-                f"**Ingest**: Extracted [{plan.title}]"
-                f"(/{plan.link_dir}/{plan.slug}.md) ({plan.doc_type}) "
-                f"from [{title}](/sources/{slug}.md).",
-            )
-            if plan.disambiguated_from is not None:
-                # Durable disambiguation audit (spec: Durable Disambiguation
-                # Audit Log, #131) -- one extra `log.md` bullet via the SAME
-                # `insert_log_entry` primitive, no new persisted ledger file.
-                new_log_text = bundle_log.insert_log_entry(
-                    new_log_text,
-                    now.astimezone().date(),
-                    f"**Disambiguation**: [{plan.title}]"
-                    f"(/{plan.link_dir}/{plan.slug}.md) from source '{slug}' "
-                    f"collided with '{plan.disambiguated_from}'; wrote "
-                    f"distinct concept '{plan.slug}'.",
-                )
+        concept_content = catalog_update.concept_content
+        new_index_text = catalog_update.new_index_text
+        new_log_text = catalog_update.new_log_text
     except (OSError, ValueError) as exc:
         typer.echo(
             f"openkos ingest: failed while preparing the ingest -- {exc}.", err=True
@@ -6008,8 +5764,9 @@ def _ingest_single(
             fsio.copy_exclusive(src, raw_dest)
             fsio.write_exclusive(concept_path, concept_content)
         # Phase B write loop (design D5): `derived_plans` is the COMPLETE,
-        # already-deduped write set computed by `_stage_derived_objects` in
-        # Phase A -- no existence check, slug work, or dedup happens here,
+        # already-deduped write set computed by
+        # `application_ingest.stage_derived_objects` in Phase A -- no
+        # existence check, slug work, or dedup happens here,
         # only `mkdir` + create-only write, per plan, in staging order.
         for plan in derived_plans:
             plan.path.parent.mkdir(parents=True, exist_ok=True)

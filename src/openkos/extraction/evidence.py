@@ -172,7 +172,7 @@ def evidence_line(text: str, source_text: str) -> str | None:
     That is the false positive `_LINE_PREFIX_RE` above says this check
     cannot afford, and here it is unclearable rather than merely annoying:
     the notice's token is deliberately excluded from
-    `cli/main._extraction_retry_due`, so a plain re-ingest of an unchanged
+    `application.ingest.extraction_retry_due`, so a plain re-ingest of an unchanged
     source skips extraction entirely (#773's convergence short-circuit) and
     the marker never recomputes. The Source would sit under `openkos
     status`'s needs-attention permanently, with no command that clears it.

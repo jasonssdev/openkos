@@ -1,7 +1,22 @@
 {
+  "already_exists_create_only": {
+    "exit_code": 0,
+    "stderr": "openkos ingest: 'stoic-dichotomy-of-control' already exists; skipping this candidate (create-only).\nopenkos ingest: embeddings not updated -- '_FakeLLM' object has no attribute 'embed'; candidate relations unavailable until `openkos reindex` succeeds.\nopenkos ingest: derived-index refresh incomplete -- vectors: '_FakeLLM' object has no attribute 'embed'; run 'openkos reindex' to finish.\n",
+    "stdout": "openkos ingest: proposed changes (re-ingest -- identical source already present):\n  ~ raw/notes.txt (existing copy reused -- not rewritten)\n  ~ bundle/sources/notes.md (regenerated -- sensitivity private unchanged)\n  ~ index.md (Source entry refreshed)\n  ~ log.md (new dated entry)\nopenkos ingest: imported 'notes.txt' -> raw/notes.txt, bundle/sources/notes.md (index.md, log.md updated).\n"
+  },
   "blocked_by_sensitivity": {
     "exit_code": 0,
     "stderr": "openkos ingest: workspace default_sensitivity floor is confidential; skipping concept extraction, keeping the Source only. The Source is still added to the embedding index so search and candidate relations keep working -- the sensitivity floor governs `llm.chat`, not embeddings.\nopenkos: NOTICE -- this commit includes content marked 'sensitivity: confidential'. openkos commits to LOCAL git only and never pushes to a remote.\nopenkos ingest: embeddings not updated -- '_FakeLLM' object has no attribute 'embed'; candidate relations unavailable until `openkos reindex` succeeds.\nopenkos ingest: derived-index refresh incomplete -- vectors: '_FakeLLM' object has no attribute 'embed'; run 'openkos reindex' to finish.\n",
+    "stdout": "openkos ingest: proposed changes:\n  + raw/notes.txt\n  + bundle/sources/notes.md\n  ~ index.md (new Source entry)\n  ~ log.md (new dated entry)\nopenkos ingest: imported 'notes.txt' -> raw/notes.txt, bundle/sources/notes.md (index.md, log.md updated).\n"
+  },
+  "converged_reingest_773": {
+    "exit_code": 0,
+    "stderr": "openkos ingest: source unchanged and already extracted; skipping extraction -- existing derived objects preserved; pass --re-extract to run extraction again.\nopenkos ingest: derived-index refresh incomplete -- vectors: '_FakeLLM' object has no attribute 'embed'; run 'openkos reindex' to finish.\n",
+    "stdout": ""
+  },
+  "empty_slug_lost_in_staging": {
+    "exit_code": 0,
+    "stderr": "openkos ingest: extracted title could not be turned into a slug; skipping this candidate.\nopenkos ingest: 1 extracted candidate(s) could not be staged and were dropped; marking the Source (extraction_notice: candidates-dropped-in-staging).\nopenkos ingest: embeddings not updated -- '_FakeLLM' object has no attribute 'embed'; candidate relations unavailable until `openkos reindex` succeeds.\nopenkos ingest: derived-index refresh incomplete -- vectors: '_FakeLLM' object has no attribute 'embed'; run 'openkos reindex' to finish.\n",
     "stdout": "openkos ingest: proposed changes:\n  + raw/notes.txt\n  + bundle/sources/notes.md\n  ~ index.md (new Source entry)\n  ~ log.md (new dated entry)\nopenkos ingest: imported 'notes.txt' -> raw/notes.txt, bundle/sources/notes.md (index.md, log.md updated).\n"
   },
   "healthy_single_object": {
@@ -28,5 +43,10 @@
     "exit_code": 0,
     "stderr": "openkos ingest: concept extraction skipped -- Ollama not reachable at localhost; keeping the Source only.\nopenkos ingest: this run had concurrent_extraction on, and the request ran out of time rather than failing outright. Concurrent windows queue on a server started without OLLAMA_NUM_PARALLEL, and each one's chat_timeout keeps running while it waits -- so this may be the setting, not the backend. Either raise OLLAMA_NUM_PARALLEL to 2 on the Ollama server, or set concurrent_extraction: false in openkos.yaml.\n",
     "stdout": "openkos ingest: proposed changes:\n  + raw/notes.txt\n  + bundle/sources/notes.md\n  ~ index.md (new Source entry)\n  ~ log.md (new dated entry)\nopenkos ingest: imported 'notes.txt' -> raw/notes.txt, bundle/sources/notes.md (index.md, log.md updated).\n"
+  },
+  "raw_immutability_refusal": {
+    "exit_code": 1,
+    "stderr": "openkos ingest: refusing to ingest -- 'notes.txt' differs from the existing 'raw/notes.txt' copy; raw sources are immutable. Ingest under a different name, or inspect the existing copy.\n",
+    "stdout": ""
   }
 }

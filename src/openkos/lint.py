@@ -1139,7 +1139,7 @@ def check_unevidenced(docs: list[LintDoc]) -> list[LintFinding]:
     hint spells a plain `openkos ingest <resource>`, and on an unchanged
     source that command SKIPS extraction entirely (#773's convergence
     short-circuit) -- this token is excluded from
-    `cli/main._extraction_retry_due` on purpose, because it is a disclosure
+    `application.ingest.extraction_retry_due` on purpose, because it is a disclosure
     rather than retryable debt. Printing a command that provably does
     nothing is worse than printing none, so the detail names the defect,
     points at the source the reader can check it against, and names
@@ -1197,7 +1197,7 @@ def check_staging_dropped(docs: list[LintDoc]) -> list[LintFinding]:
 
     The detail follows `check_unevidenced`'s shape, not
     `_ingest_retry_hint`'s, and for its exact reason: the token is
-    excluded from `cli/main._extraction_retry_due` on purpose (a staging
+    excluded from `application.ingest.extraction_retry_due` on purpose (a staging
     drop is a property of the specific sample, and re-running the same
     prompt over the same bytes is promised to fix nothing), so a plain
     re-ingest of an unchanged source SKIPS extraction entirely (#773) and

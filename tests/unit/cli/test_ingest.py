@@ -6852,7 +6852,7 @@ def test_carried_extraction_notice_returns_every_vocabulary_member() -> None:
     for token in okf.EXTRACTION_NOTICE_VALUES:
         metadata = {okf.EXTRACTION_NOTICE_KEY: token}
 
-        assert main._carried_extraction_notice(metadata) == (token,)
+        assert application_ingest.carried_extraction_notice(metadata) == (token,)
 
 
 def test_carried_extraction_notice_fails_closed_outside_the_vocabulary() -> None:
@@ -6871,9 +6871,9 @@ def test_carried_extraction_notice_fails_closed_outside_the_vocabulary() -> None
     The unknown-token case uses a plausible future spelling rather than
     junk, because that is the case the contract was written for: a real
     token from a newer release, not a typo."""
-    assert main._carried_extraction_notice({}) == ()
+    assert application_ingest.carried_extraction_notice({}) == ()
     assert (
-        main._carried_extraction_notice(
+        application_ingest.carried_extraction_notice(
             {okf.EXTRACTION_NOTICE_KEY: "judge-selection-postponed"}
         )
         == ()
@@ -6882,7 +6882,7 @@ def test_carried_extraction_notice_fails_closed_outside_the_vocabulary() -> None
     # member from a later release never discards its recognised siblings,
     # which a whole-value reject would have done the moment the key went
     # plural.
-    assert main._carried_extraction_notice(
+    assert application_ingest.carried_extraction_notice(
         {
             okf.EXTRACTION_NOTICE_KEY: [
                 "judge-selection-postponed",
@@ -6892,8 +6892,14 @@ def test_carried_extraction_notice_fails_closed_outside_the_vocabulary() -> None
     ) == (okf.EXTRACTION_NOTICE_OBJECTS_WITHOUT_EVIDENCE,)
     # A non-string value cannot match a token either -- frontmatter is
     # hand-editable, so `extraction_notice: true` is a YAML boolean.
-    assert main._carried_extraction_notice({okf.EXTRACTION_NOTICE_KEY: True}) == ()
-    assert main._carried_extraction_notice({okf.EXTRACTION_NOTICE_KEY: None}) == ()
+    assert (
+        application_ingest.carried_extraction_notice({okf.EXTRACTION_NOTICE_KEY: True})
+        == ()
+    )
+    assert (
+        application_ingest.carried_extraction_notice({okf.EXTRACTION_NOTICE_KEY: None})
+        == ()
+    )
 
 
 def test_batch_summary_never_counts_one_file_under_both_notice_and_degraded(
