@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0013: Relocate the merge ledger to bundle/.state/ledger/"
 description: The merge-ledger sidecar store, its two-phase write, and crash recovery -- supersedes ADR-0002's storage clause only.
-status: Accepted
+status: Superseded in part by ADR-0017
 date: 2026-08-11
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0013: Relocate the merge ledger to `bundle/.state/ledger/`
 
-- **Status:** Accepted
+- **Status:** Superseded in part by ADR-0017 -- the catalog-snapshot clause only
 - **Date:** 2026-08-11
 
 ## Context

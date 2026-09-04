@@ -1,11 +1,90 @@
-model: qwen3:8b
-review: true
+model: qwen3:8b  # local model served via Ollama; see tech_stack.md
+embedding_model: bge-m3  # 1024-dim; changing it forces a full re-embed
+review: true              # show proposed changes and confirm before saving
 default_sensitivity: private
-freshness_window: 7d
+confidential_local_exemption: true  # send confidential concepts to a LOCAL LLM backend
+freshness_window: 7d      # age after which a stamp is flagged for re-observation
+chat_timeout: 600         # seconds an LLM chat call may take before giving up
+max_generation_tokens: 8192  # safety rail: hard ceiling on tokens a chat call may generate
+context_window: 12288     # tokens the model holds at once (prompt + reply); unpinned it
+                          # reserves its own 32K default and ~10 GB. Refused below the
+                          # derived floor; blank the value to leave it unpinned.
+# volatility_windows:     # per-tier stale-stamp windows (overrides freshness_window
+#   slow: 90d             # by knowledge-volatility tier; see docs/adr/0007)
+#   volatile: 7d
+# type_tiers:             # per-concept-type volatility tier overrides (overrides
+#   Person: volatile      # the built-in registry default; see docs/adr/0007)
+# type_sensitivity_defaults:  # per-type birth offset above `default_sensitivity`,
+#   Person: 1             # in levels, clamped at confidential. Ships EMPTY --
+                          # every type is born at the floor unless you say
+                          # otherwise. Uncommenting the two lines above is the
+                          # recommended setting if this workspace holds material
+                          # about other people: a Person is then born one level
+                          # above the floor. The high-water-mark over cited
+                          # sources still wins whenever it is higher.
+                          # See docs/adr/0015 and docs/adr/0017.
+# models:                 # per-task model overrides. Every task follows
+#   edge_typing: gemma2:27b  # `model:` by default, so nothing here needs a
+                          # second `ollama pull`. gemma2:27b is the one
+                          # measured upgrade: it names relations better
+                          # (0.81 vs qwen3:8b's 0.44 on evals/edge_typing/)
+                          # but costs `ollama pull gemma2:27b` -- 15.6 GB.
+                          # Uncomment BOTH lines above to opt in; uncommenting
+                          # only one is invalid YAML. Keep it scoped to
+                          # edge_typing -- it is the worst extractor measured,
+                          # so it must never become `model:`. `openkos doctor`
+                          # reports whether it is installed.
+                          # Only edge_typing has a harness; measure before
+                          # adding a key. Valid tasks: extraction,
+                          # adjudication, edge_typing, volatility_typing,
+                          # contradiction.
+# union_judge: true       # union-of-runs + selector-judge extraction (default
+                          # on); set false to restore the single-run, single-cap
+                          # extraction path byte-for-byte
+# sufficiency_check: true # before answering, ask one cheap model call whether
+                          # the retrieved context can answer the question at
+                          # all, and refuse instead of answering from the
+                          # model's own knowledge (default ON). Measured zero
+                          # false refusals over 100 grounded checks. Costs one
+                          # extra chat call per answered query (median ~1.1s
+                          # against a default Ollama, which serialises); set
+                          # false to remove it and restore the pre-#760 path
+# concurrent_extraction: true  # send chunk windows 2-at-a-time instead of one
+                          # by one (default OFF). Chunked sources only; below
+                          # the chunk threshold there are no windows to
+                          # overlap. Measured ~20% off a whole ingest -- BUT
+                          # only if the Ollama server was started with
+                          # OLLAMA_NUM_PARALLEL=2 or more, which openkos
+                          # cannot set for you. Against a default server the
+                          # requests just queue: same results, no speedup, and
+                          # each call's chat_timeout runs while it waits, so a
+                          # tight timeout can start firing. Leave it off unless
+                          # the server is configured.
+                          # An on/off switch, not a worker count: the count is
+                          # fixed at 2, where the measured speedup saturates.
+                          # See evals/ingest_concurrency/report.md.
+# rationale_language: Spanish  # language `curate` writes its Metadata and
+                          # Structure RATIONALES in. UNSET by default, and
+                          # unset does NOT mean English: it means each item's
+                          # rationale is written in whichever language that
+                          # concept type's (or that edge's) documents happen to
+                          # dominate, so one report can mix English and Spanish
+                          # rows. Set it to pin them to one language.
+                          # Free-form -- the name is passed to the model
+                          # verbatim, so a name it does not recognise is not an
+                          # error: you get whatever it makes of it, visible in
+                          # the very next curate table. Blank, multi-line and
+                          # non-string values are refused.
+                          # Setting it appends one sentence to both rationale
+                          # prompts; leaving it unset sends the prompt that
+                          # shipped, byte for byte, which is the configuration
+                          # every measurement in evals/ was taken under.
+                          # Affects those two rationales only -- extraction,
+                          # query and adjudication still follow the source
+                          # language, which is correct there.
 
-# Layout — where the engine keeps things, relative to this file.
-# raw/ sits outside the bundle on purpose: sources are input material, not
-# concepts, so bundle/ stays a pure OKF bundle — conformant by construction
-# and shareable on its own.
-raw: raw/
-bundle: bundle/
+# Layout is fixed: `raw/` (immutable sources) and `bundle/` (the OKF
+# bundle root) live next to this file. The engine does not read layout
+# keys from this config; making them configurable is future work.
+
+# type_registry is maintained by the engine (canonical + emergent types)

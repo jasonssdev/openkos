@@ -10,7 +10,7 @@ version: 1
 freshness: timeless
 sensitivity: private
 provenance:
-  - raw/notes-on-the-enchiridion-2026-07-05.txt
+  - sources/notes-on-the-enchiridion-2026-07-05
 ---
 
 # Epicureanism

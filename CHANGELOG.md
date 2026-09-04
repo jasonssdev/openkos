@@ -14,6 +14,39 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+### Documentation
+
+- Documentation truth sweep — docs, OpenSpec context, and the canonical example
+  now describe the product that ships
+  ([#920](https://github.com/jasonssdev/openkos/issues/920)).
+  `docs/architecture.md` showed one forward-looking module tree with its
+  corrections in footnotes: it documented `producers/`, `consumers/`,
+  `compiler/`, `engine.py`, `embeddings/`, `retrieval/vector/`, `api/`, `mcp/`
+  and `memory/`, none of which exist, while omitting `application/`,
+  `resolution/`, `extraction/`, `vcs/` and most of `state/`, which do. It now
+  carries the shipped tree, a clearly separated **Target architecture** section,
+  and a new **State taxonomy** that finally writes down what `#920` asked for:
+  which stores are canonical, which rebuild for free, and which cost model calls
+  to recreate. `engine.py` is recorded as **replaced** by
+  [ADR-0018](docs/adr/0018-application-layer-for-bounded-context-services.md),
+  not as pending work.
+- `openspec/config.yaml` — the context injected into every spec-driven change —
+  claimed Python 3.13+ (it is >=3.12), "no runtime deps yet" (there are six),
+  `pydantic`/`ruamel.yaml` as dependencies (neither is one), CI on 3.13 and 3.14
+  (it runs 3.12 too), and `engine.py` as an architectural rule.
+- Three ADRs disagreed with the index in `docs/adr/README.md`: 0012 was
+  `Accepted` in its file and `Proposed` in the index, and 0002 and 0013 carried
+  ADR-0017's partial supersession in the index but not in their own status. A
+  new test now pins all three copies (frontmatter, body, index) together.
+- The canonical example (`examples/good-life-demo/`) shipped an `openkos.yaml`
+  predating five config keys and declaring `raw:`/`bundle:` layout keys the
+  engine does not read, and four concepts whose `provenance:` named raw file
+  paths instead of Source concept ids — which the engine's own `lint` and
+  `status` reported as dangling. Config and `AGENTS.md` are regenerated, the
+  provenance is corrected, and new tests keep the example byte-identical to a
+  fresh `init`. Fixing the provenance also produced six typed `derived_from`
+  graph edges the demo bundle previously had none of.
+
 ### Fixed
 
 - Two concurrent OpenKOS processes could silently overwrite each other's work

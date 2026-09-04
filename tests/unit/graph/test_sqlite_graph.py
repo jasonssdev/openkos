@@ -346,7 +346,18 @@ def test_build_graph_closes_connection_on_mid_build_exception(
 def test_build_graph_over_good_life_demo_bundle_resolves_expected_edges() -> None:
     """Building over the demo bundle resolves the `## Related` backlinks
     into real edges between existing concept/person/decision/source nodes,
-    including a derived concept's provenance backlink to its Source doc."""
+    including a derived concept's provenance backlink to its Source doc.
+
+    The provenance edge is asserted as TYPED (`derived_from`), which is what a
+    correctly-authored bundle produces. It was asserted as untyped (`None`)
+    until #920: the demo's `provenance:` entries named raw file paths
+    (`raw/notes-....txt`) rather than Source concept ids, so they resolved to
+    nothing and the only edge for that pair came from a `## Related` markdown
+    link. Fixing the fixture to what the engine actually writes
+    (`provenance_key = f"sources/{source_slug}"`) is what types the edge -- so
+    this assertion changing is the evidence the fixture was wrong, not a
+    weakened expectation. The untyped concept-to-concept link is still asserted
+    below, so both edge kinds stay covered."""
     bundle_dir = _REPO_ROOT / "examples" / "good-life-demo" / "bundle"
 
     with sqlite_graph.build_graph(bundle_dir) as store:
@@ -363,8 +374,29 @@ def test_build_graph_over_good_life_demo_bundle_resolves_expected_edges() -> Non
     assert (
         "concepts/stoicism",
         "sources/notes-on-the-enchiridion-2026-07-05",
-        None,
+        "derived_from",
     ) in edges
+    # Every derived document reaches every Source its provenance names. With
+    # the pre-#920 raw-path provenance this set was EMPTY, and the test still
+    # passed on the untyped markdown link alone.
+    assert {
+        (source, target)
+        for source, target, relation in edges
+        if relation == "derived_from"
+    } == {
+        ("concepts/epicureanism", "sources/notes-on-the-enchiridion-2026-07-05"),
+        ("concepts/stoicism", "sources/call-with-maria-2026-07-14"),
+        ("concepts/stoicism", "sources/notes-on-the-enchiridion-2026-07-05"),
+        (
+            "decisions/frame-the-essay-on-the-dichotomy-of-control",
+            "sources/call-with-maria-2026-07-14",
+        ),
+        (
+            "decisions/frame-the-essay-on-the-dichotomy-of-control",
+            "sources/notes-on-the-enchiridion-2026-07-05",
+        ),
+        ("people/maria-salazar", "sources/call-with-maria-2026-07-14"),
+    }
     assert store.skipped == []
 
 

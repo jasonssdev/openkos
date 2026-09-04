@@ -2,9 +2,9 @@
 schema: spec-driven
 
 context: |
-  Tech stack: Python 3.13+ (requires-python >=3.13, .python-version 3.13), src/ layout, package `openkos` (ships py.typed), uv for env+deps (uv.lock present), no runtime deps yet — typer/pydantic/python-frontmatter/ruamel.yaml sit in dev deps and move to runtime when the code imports them
-  Architecture: local-first knowledge engine on the Open Knowledge Format (OKF); canonical layer (model, bundle, state) never depends on derived layer (retrieval, graph, memory); engine.py stays thin; extension points are typing.Protocol (Producer, Consumer, VectorStore, GraphStore, LLMBackend); core stays synchronous
-  Testing: pytest configured via [tool.pytest.ini_options] (testpaths=["tests"], --import-mode=importlib); tests/unit exists, integration/e2e arrive when code justifies them. Ruff and MyPy (strict) configured in pyproject. CI runs quality (ruff+mypy) once plus pytest on 3.13 and 3.14. Do NOT add pythonpath=["src"] — uv installs editable via .pth, and pythonpath would make tests pass on a broken install.
+  Tech stack: Python >=3.12 (requires-python ">=3.12"; .python-version pins 3.13 for local dev; CI runs 3.12, 3.13 and 3.14), src/ layout, package `openkos` (ships py.typed), uv for env+deps (uv.lock present). Runtime deps are declared and few: networkx, python-frontmatter, pyyaml, rich, sqlite-vec, typer. Deliberately NOT dependencies: pydantic (frontmatter is plain dicts) and ruamel.yaml.
+  Architecture: local-first knowledge engine on the Open Knowledge Format (OKF); canonical layer (model, bundle, vcs) never depends on derived layer (state, retrieval, graph); fsio and lock are leaf modules importing nothing from openkos. Use-case services live under application/ per ADR-0018 — there is NO engine.py, and proposing one re-opens a decided question. Internal seams are typing.Protocol (graph/base.py, llm/base.py); Producer/Consumer/VectorStore are NOT implemented and are roadmap items, not present interfaces. Core stays synchronous. See docs/architecture.md for the shipped tree and the state taxonomy.
+  Testing: pytest configured via [tool.pytest.ini_options] (testpaths=["tests"], --import-mode=importlib); tests/unit exists, integration/e2e arrive when code justifies them; measurement harnesses live in evals/ and are swept by evals/run_self_tests.py. Ruff and MyPy (strict) configured in pyproject. CI runs quality (ruff+mypy) once, plus pytest on 3.12, 3.13 and 3.14, plus a build job and the eval self-test sweep. Do NOT add pythonpath=["src"] — uv installs editable via .pth, and pythonpath would make tests pass on a broken install.
   Style: Ruff (lint+format) and MyPy (types) required by AGENTS.md policy; Conventional Commits with scopes okf, ingest, extract, graph, retrieval, memory, lint, cli, api, mcp, docs, ci
   Contract: openspec/ is tracked in git and is the product contract. Spec = what (living, per-domain, merged on archive); ADR under docs/adr/ = why (immutable, project-wide, append-only). Required for changes touching the knowledge model, OKF conformance, ingestion, or public interfaces (CLI/API/MCP).
 
@@ -45,8 +45,8 @@ rules:
   apply:
     guidelines:
       - Follow existing code patterns
-      - Keep engine.py thin; behavior lives in subpackages
-      - Extension interfaces are typing.Protocol; keep the canonical layer free of derived-layer dependencies
+      - There is no engine.py: a new use case becomes a narrow synchronous service under application/ (ADR-0018), and the CLI keeps only parsing, presentation, and exit codes
+      - Internal seams are typing.Protocol; keep the canonical layer free of derived-layer dependencies
       - Core stays synchronous
       - >
         ADR gate for emergent decisions. If implementation forces a significant,
