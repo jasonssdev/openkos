@@ -14,105 +14,87 @@ sensitivity: public
 
 # Architecture
 
-This document maps how OpenKOS is organized — both the engine's source code and the user's knowledge bundle — and how raw source material is stored and versioned. It describes the *mature* shape so the structure is a stable contract to fill in incrementally: MVP 1 modules now exist, while later layers do not yet. What each MVP actually needs is called out at the end. Note that MVP 1's actual module names (for example `extraction/concept.py`, `cli/main.py`, `retrieval/answer.py`, `state/fts.py`) differ from the forward-looking mature tree shown below, which is filled in incrementally.
+This document maps how OpenKOS is organized — both the engine's source code and the user's knowledge bundle — and how raw source material is stored and versioned.
+
+**What ships and what is planned are kept apart here.** Everything under "Repository structure" describes the code that exists today at v0.2.13; anything not yet built lives in [Target architecture](#target-architecture) or in [`roadmap.md`](roadmap.md), labelled as such. That separation is deliberate: this document previously showed one forward-looking tree with its corrections in footnotes, and a reader could not tell a module that exists from one that does not.
 
 Two ideas from elsewhere in the docs anchor everything here: the split between a **durable canonical layer** (files + SQLite + git) and a **rebuildable derived layer** (vectors, graph) from [`tech_stack.md`](tech_stack.md), and the Knowledge Object model from [`knowledge-object-model.md`](knowledge-object-model.md).
 
 ## Repository structure (the engine)
 
-A `src/` layout whose folders mirror the architecture: the knowledge model, the canonical layer, the swappable derived backends behind interfaces, the producer/consumer plugin surface, and thin entry layers over one engine.
+A `src/` layout whose packages mirror the architecture: the knowledge model, the canonical layer, the derived backends, the pipeline that turns text into objects, and the entry layer. This is the tree as it exists — generated from disk, not aspirational.
 
 ```
 openkos/
 ├── src/openkos/
-│   ├── model/                # the Knowledge Object + OKF conformance
-│   │   ├── knowledge_object.py
-│   │   ├── okf.py            # OKF field set + conformance checks
-│   │   ├── relations.py      # typed relationships
-│   │   ├── freshness.py      # timeless/snapshot/pointer + stamps
-│   │   ├── sensitivity.py
-│   │   └── types.py          # canonical vocabulary + type registry
-│   ├── bundle/               # CANONICAL layer (durable): files + git
-│   │   ├── bundle.py         # open/read/write a bundle
-│   │   ├── index.py          # index.md
-│   │   ├── log.py            # log.md
-│   │   ├── provenance.py
-│   │   └── git.py            # history, revert
-│   ├── state/                # SQLite operational store (rebuildable)
-│   │   ├── db.py
-│   │   ├── registry.py       # object + type registry
-│   │   └── fts.py            # FTS5 lexical index
-│   ├── llm/                  # model runtime abstraction
-│   │   ├── base.py           # LLMBackend interface
-│   │   ├── ollama.py
-│   │   └── openai_compat.py
-│   ├── embeddings/
-│   │   ├── base.py            # the Embedder Protocol
-│   │   └── ollama.py          # embeddings via the same Ollama runtime
-│   ├── producers/            # ingesters — the plugin surface
-│   │   ├── base.py           # Producer interface
-│   │   ├── text.py           # MVP 1
-│   │   ├── markdown.py
-│   │   ├── pdf.py            # MVP 2+
-│   │   └── web.py
-│   ├── consumers/            # viewers / exporters
-│   │   ├── base.py           # Consumer interface
-│   │   └── okf_export.py
-│   ├── compiler/             # the ingest pipeline
-│   │   ├── ingest.py         # source → Knowledge Objects
-│   │   ├── extract.py        # entity/relationship extraction (MVP 2)
-│   │   └── reconcile.py      # contradiction handling (MVP 2)
-│   ├── retrieval/            # DERIVED layer (swappable)
-│   │   ├── vector/
-│   │   │   ├── base.py       # VectorStore interface
-│   │   │   ├── sqlite_vec.py # default
-│   │   │   └── lancedb.py    # scale path
-│   │   ├── lexical.py        # FTS5
-│   │   ├── hybrid.py         # filter-first retrieval
-│   │   └── context.py        # context assembly + citations
-│   ├── graph/                # DERIVED layer (swappable)
-│   │   ├── base.py           # GraphStore interface
-│   │   ├── sqlite_graph.py   # node-edge + recursive SQL (default)
-│   │   └── analysis.py       # NetworkX over subgraphs
-│   ├── memory/               # memory projections (MVP 3)
-│   ├── lint/                 # freshness + health (orphans, contradictions)
-│   ├── lifecycle/            # undo / archive / merge / forget / purge
-│   ├── sensitivity/          # boundary enforcement
-│   ├── config.py             # openkos.yaml
-│   ├── engine.py             # thin orchestrator (wiring / composition only)
-│   ├── cli/                  # Typer (MVP 1): init, ingest, query, lint, status, forget, doctor
-│   ├── api/                  # FastAPI local API (MVP 3)
-│   └── mcp/                  # MCP server (MVP 3)
-├── tests/{unit,integration,e2e,fixtures,evals}/
-├── examples/                 # runnable example bundles
-├── docs/
-├── openspec/                 # the spec contract: specs/{domain}/ · changes/ · config.yaml
+│   ├── model/                    # the Knowledge Object + OKF conformance
+│   │   ├── okf.py                # OKF field set, framing, conformance checks
+│   │   ├── relations.py          # typed relationships
+│   │   └── types.py              # canonical vocabulary + type registry
+│   ├── bundle/                   # CANONICAL layer (durable): files + sidecars
+│   │   ├── bundle.py  index.py  log.py  listing.py
+│   │   ├── provenance.py  references.py  links.py  relations.py
+│   │   ├── merge.py  ledger.py  decisions.py
+│   │   └── source_titles.py
+│   ├── vcs/git.py                # history, revert, purge's history rewrite
+│   ├── state/                    # SQLite stores under .openkos/ (see State taxonomy)
+│   │   ├── derived.py            # the shared opener + manifest-hash gate
+│   │   ├── fts.py  vectorstore.py  reindex.py
+│   │   ├── findings.py  adjudications.py       # same file, two tenants
+│   │   ├── edge_suggestions.py  question_vectors.py
+│   ├── graph/                    # DERIVED layer
+│   │   ├── base.py  sqlite_graph.py  analysis.py
+│   │   └── proximity.py  summary.py
+│   ├── retrieval/                # DERIVED layer
+│   │   ├── pool.py  fusion.py    # candidate pool, RRF fusion
+│   │   └── answer.py             # context assembly, citations, generation
+│   ├── extraction/               # source text → Knowledge Objects
+│   │   ├── concept.py  evidence.py  judge.py
+│   ├── resolution/               # identity, contradiction, typing decisions
+│   │   ├── candidates.py  similarity.py  normalize.py
+│   │   ├── insight_identity.py  adjudication.py
+│   │   ├── contradiction.py  reconciliation.py
+│   │   └── edge_typing.py  volatility_typing.py
+│   ├── llm/                      # model runtime abstraction
+│   │   ├── base.py  ollama.py  prompting.py  parsing.py
+│   ├── application/              # synchronous use-case services (ADR-0018)
+│   │   └── query.py              # the first one; ingest and lifecycle to follow
+│   ├── cli/                      # Typer entry layer
+│   │   ├── main.py  curate.py  next_action.py  observability.py
+│   ├── config.py                 # openkos.yaml + WorkspaceLayout
+│   ├── lint.py  lifecycle.py  sensitivity.py
+│   ├── fsio.py  lock.py          # filesystem primitives; interprocess lock
+│   ├── prompt_budget.py  source_title.py
+│   └── py.typed
+├── tests/unit/ · evals/           # integration/e2e arrive when code justifies them
+├── examples/                     # runnable example bundles
+├── docs/                         # including adr/
+├── openspec/                     # the spec contract: specs/{domain}/ · changes/ · config.yaml
 ├── pyproject.toml · uv.lock
 └── README.md · LICENSE · NOTICE · CHANGELOG.md · .github/
 ```
 
 The principles that shape it:
 
-- **Each folder is a piece of the architecture.** `model` is the Knowledge Object; `bundle` + `state` are the durable canonical layer; `retrieval` + `graph` + `memory` are the rebuildable derived layer; `producers`/`consumers` are the plugin surface; `lint`/`lifecycle`/`sensitivity` are the disciplines.
-- **The `base.py` files are the extension points.** `VectorStore`, `GraphStore`, `Producer`, `Consumer`, and `LLMBackend` are interfaces; `sqlite_vec.py`/`lancedb.py`, `text.py`/`pdf.py`, and the rest are implementations. The community can ship a new producer or backend as a *separate package* (via entry points) without touching the core — this is the surface opened for contribution in MVP 2.
-- **One `engine.py` orchestrates; `cli`/`api`/`mcp` are thin adapters** over it, so no logic is duplicated across the command line, the local API, and the MCP server.
-- **Everything under `state/` and the derived layer is reconstructible** from the canonical layer. If it is lost or corrupted, it rebuilds — which is why backends are swappable without migration.
+- **Each package is a piece of the architecture.** `model` is the Knowledge Object; `bundle` + `vcs` are the durable canonical layer; `state` + `retrieval` + `graph` are the derived layer; `extraction` + `resolution` are the pipeline that turns text into objects and then decides what they mean; `lint`/`lifecycle`/`sensitivity` are the disciplines; `cli` is the entry layer.
+- **The `base.py` files are the seams that exist today.** `graph/base.py` and `llm/base.py` define the shapes their implementations satisfy (`sqlite_graph.py`, `ollama.py`). They are internal seams, not a published plugin API: OpenKOS ships no `Producer`/`Consumer` interface and no entry-point group. That extension surface is a roadmap item, not present code — see [`roadmap.md`](roadmap.md).
+- **Use-case services, not one orchestrator.** [ADR-0018](adr/0018-application-layer-for-bounded-context-services.md) chose narrow synchronous services under `application/` over a single `engine.py`, so each use case owns its own composition instead of one module owning all of them. `application/query.py` is the first; ingest and lifecycle follow. The CLI is being reduced to parsing, presentation, and exit codes as each one lands ([#918](https://github.com/jasonssdev/openkos/issues/918)).
+- **The derived layer is reconstructible — but not uniformly, and not for free.** The five SQLite stores under `.openkos/` sit at three different points on that scale. See [State taxonomy](#state-taxonomy) below, which is the one place that distinction is written down.
 
 ## Repository conventions
 
 A few conventions keep the repository clean as it grows:
 
-- **Start lean, grow by MVP.** The tree above is the mature target, not a scaffold to create empty. Begin with the MVP 1 subset — `model`, `bundle`, `state`, `llm`, `producers`, `compiler`, `retrieval` (lexical + context), `lint`, `lifecycle`, `config`, `cli` — then add `embeddings`, `retrieval/vector`, `graph`, and `consumers` in MVP 2, and `api`, `mcp`, and `memory` in MVP 3. A folder is created when its code arrives.
+- **A package is created when its code arrives.** The tree above holds no empty scaffolding, and this document does not list folders that do not exist. What is planned is named in [Target architecture](#target-architecture) and dated in [`roadmap.md`](roadmap.md).
 - **`pyproject.toml` is the single source of config** — dependencies, the console entry point (now `openkos = "openkos.cli.main:app"`, since the `cli` package has landed in MVP 1), and the Ruff / MyPy / Pytest settings all live there.
 - **Specs are the contract, and they live in `openspec/`.** Behavior is agreed before it is built: `openspec/specs/{domain}/spec.md` is the living per-domain contract, and `openspec/changes/{change-name}/` carries a change in flight — proposal, delta specs, design, tasks — until it lands and its deltas merge into the main spec. The directory is tracked and reviewed like any other file, so the contract is readable by contributors rather than private to whoever wrote the code. `openspec/config.yaml` configures that process only; it does not compete with `pyproject.toml`, which remains the single source of config for the toolchain.
 - **Ship types.** Include an empty `src/openkos/py.typed` marker so type information is published to tools and to packages that extend OpenKOS.
-- **Extension interfaces are `typing.Protocol`.** `Producer`, `Consumer`, `VectorStore`, `GraphStore`, and `LLMBackend` are Protocols (structural typing), so an external plugin implements the shape without importing or subclassing core classes. Plugins are discovered through entry points (for example the `openkos.producers` group), defined from MVP 1 even though the first producers are built in.
-- **`engine.py` stays thin** — composition and wiring only; behavior lives in the subpackages.
-- **The core is synchronous.** The engine, CLI, compiler, and stores are plain sync code. When the local API and MCP server arrive in MVP 3, they form an async edge that calls the sync engine through a thread pool; parallel work such as batch embedding also uses a thread pool from sync code. The core is not made async.
-- **Layering is a followed convention, not yet an automated guard.** The canonical layer (`model`, `bundle`, `state`) does not depend on the derived layer (`retrieval`, `graph`, `memory`); derived depends on canonical, never the reverse. A tool such as import-linter will guard these boundaries in CI once the derived layer lands; it is not wired yet.
+- **Internal seams are `typing.Protocol`.** Structural typing lets an implementation satisfy a seam without importing or subclassing it. Today this is used inside the engine (the graph and LLM backends); publishing any of it as a third-party extension point is a roadmap item and would need its own ADR.
+- **The core is synchronous.** The CLI, the application services, the extraction pipeline, and the stores are plain sync code. When the local API and MCP server arrive in MVP 3 they form an async edge that calls the sync core through a thread pool; parallel work such as batch embedding also uses a thread pool from sync code. The core is not made async — which is why ADR-0018's services are specified as synchronous.
+- **Layering is a followed convention, not yet an automated guard.** The canonical layer (`model`, `bundle`, `vcs`) does not depend on the derived layer (`state`, `retrieval`, `graph`); derived depends on canonical, never the reverse. `fsio` and `lock` are leaf modules that import nothing from `openkos`, so either layer may use them. A tool such as import-linter would guard these boundaries in CI; it is not wired yet.
 - **The OKF adapter is one seam.** Everything that knows the on-disk shape of the format — parsing and emitting frontmatter, the reserved-file structure, the conformance rules of §9 — lives in `model/okf.py` and nowhere else. The rest of the engine works with Knowledge Objects and never touches the format directly. This is deliberate risk containment: OKF is a **v0.1 draft**, and §11 permits a major version to rename required fields or change reserved filenames. Keeping the format behind one module makes a spec revision a contained change to one file instead of a search across the codebase, and it is the reason we can adopt a young standard without betting the engine on it.
 
-These are starting conventions; like everything pre-code, they can change as the implementation teaches us more.
+These conventions describe the code as it stands; they change when a decision changes, and a change worth keeping becomes an ADR.
 
 ## Workspace structure (the user's knowledge base)
 
@@ -133,13 +115,23 @@ The directory a user opens in Obsidian, VS Code, or GitHub. We call it a **works
 │   ├── concepts/  entities/  places/  people/  organizations/
 │   ├── projects/  decisions/  events/  procedures/  insights/
 │   └── .state/           # engine sidecars, never `*.md`: merge ledger, decisions
-└── .openkos/             # DERIVED + heavy: rebuildable, git-ignored by default
-    ├── openkos.db        # SQLite: operational state, FTS5, graph node-edge tables
-    ├── vectors/          # vector index (MVP 2+)
-    └── raw-store/        # content-addressed binary originals
+└── .openkos/             # DERIVED: rebuildable, git-ignored (see "State taxonomy")
+    ├── fts.db            # lexical index
+    ├── graph.db          # node-edge projection
+    ├── vectors.db        # dense index
+    ├── findings.db       # contradiction + adjudication verdicts (NOT an index)
+    └── insight_questions.db   # cached question embeddings for `query --save`
 ```
 
-*(As actually shipped, the SQLite state above lives in five SEPARATE files rather than one consolidated `openkos.db`, and they do not share a single lifecycle. Three are derived indexes, from performance-caching Slice 5: `.openkos/vectors.db` (the dense index), `.openkos/fts.db` (the lexical index), and `.openkos/graph.db` (the node-edge projection). Those three are written by `openkos reindex` and, since #640, refreshed at the end of every bundle-writing verb's own run (write-time refresh, fail-open), gated by a shared bundle-manifest-hash cache key that triggers a whole-index rebuild on any bundle change; `query`/`answer()` open them read-only and degrade to an empty list for whichever store is absent or unavailable/corrupt, never writing to any of them. The fourth, `.openkos/findings.db`, is not an index and is not on that path at all: it holds persisted contradiction verdicts, is written by `curate`'s Contradictions stage and by `contradictions`, and is never touched by `reindex` — a findings row is not derivable by a whole-store rebuild, so it carries per-row input digests and decides its own staleness instead of riding the manifest-hash gate. `purge` deletes it and, unlike `fts.db` and `graph.db`, never rebuilds it in line: regenerating a finding costs LLM calls, so it shares `vectors.db`'s posture of being re-derived lazily rather than eagerly. The fifth, `.openkos/insight_questions.db`, is a pure cache: it holds the embedding of the SOURCE QUESTION every filed insight was saved from, is written only by `query --save`'s near-duplicate scan, and is created lazily one save at a time. `purge` deletes it too and likewise does not rebuild it in line, but losing it costs nothing in correctness terms: a missing row is only a cache miss, which the next save re-embeds. That is what lets the scan treat the whole store as advisory — when it cannot read the store at all, `query --save` reports that it could not check for near-duplicates and files the insight anyway, rather than refusing to save. That is the whole spread the derived layer covers: three stores a rebuild restores in full, one whose rows cost a model call each and are never rebuilt, and one that is free to lose. This keeps each store's lifecycle, commit boundary, and rollback independent — see `design D1` in the `performance-caching` change record and [ADR-0014](adr/0014-durable-pending-work-stores.md) — but the mature-target consolidation shown above remains an open long-term option, not a decision either change reversed.)*
+*(A content-addressed `raw-store/` for binary originals is described under
+"Source material and versioning" below and is not yet built; today `raw/` holds
+text-shaped sources only.)*
+
+*(Those five stores do not share one lifecycle, and the differences are
+load-bearing — which rebuild for free, which cost model calls, and which is a
+verdict rather than a projection. [State taxonomy](#state-taxonomy) is the one
+place that is written down; see also `design D1` in the `performance-caching`
+change record and [ADR-0014](adr/0014-durable-pending-work-stores.md).)*
 
 *(`bundle/.state/` is the one directory inside the bundle that holds no concepts: the merge-ledger sidecars [ADR-0013](adr/0013-relocate-merge-ledger-to-bundle-state.md) relocated there out of survivors' frontmatter, and the operator-decision sidecars [ADR-0014](adr/0014-durable-pending-work-stores.md) placed beside them. Nothing under it is named `*.md`, which is what keeps it invisible to every `rglob("*.md")` walk in the engine and therefore outside OKF §9 rule 1 — a structural exclusion rather than one every walk must remember, and `lint` carries a dedicated check that flags any `.md` file appearing there as a regression against it. Unlike `.openkos/`, this state is durable and canonical: it is versioned with the bundle, not git-ignored.)*
 
@@ -197,16 +189,98 @@ Local-first constrains *where the data and compute live* — on the user's machi
 - **Chat / agent (MCP)** — the user "just talks to" OpenKOS from an AI client. For some non-technical users this is the lowest-friction interface of all.
 - **CLI** — for technical users and automation.
 
-The key architectural point: all of these are **thin consumers of the same local engine** through the `cli` / `api` / `mcp` adapters described above. Adding a front-end never touches the core; UIs stack on top of one engine. For non-technical users the likely order is desktop app first, then chat/MCP, then an editor plugin.
+The key architectural point: all of these are **thin adapters over the same local engine**. Today only `cli` exists; `api` and `mcp` are MVP 3 work, and the application services under `application/` are being extracted precisely so those adapters have a surface to call that is not Typer's internals. Adding a front-end never touches the core; UIs stack on top of one engine. For non-technical users the likely order is desktop app first, then chat/MCP, then an editor plugin.
 
 The one thing outside the local-first spirit is a **cloud-hosted, multi-tenant** service holding users' knowledge. A legitimate middle ground is **self-hosting** — the user runs the local web UI on their *own* server or VPS: still their data and their machine, just remote, rather than someone else's cloud.
 
-## How it fills in by MVP
+## Target architecture
 
-The structure above is the mature contract; it is populated incrementally.
+Nothing in this section exists yet. It is kept separate from everything above so
+a reader can never mistake a plan for a module, and it is deliberately short —
+dates and scope belong to [`roadmap.md`](roadmap.md), not here.
 
-- **MVP 1 (The Compiler)** needs `model`, `bundle`, `state` (with `fts`), `llm/ollama`, `producers/text` and `markdown`, `compiler/ingest`, `retrieval/lexical` and `context`, `lint/freshness`, a basic `lifecycle`, `config`, and `cli`. The workspace has `raw/` (text), `bundle/` with the concept folders plus `index.md` and `log.md`, `openkos.yaml`, and `AGENTS.md`.
-- **MVP 2 (The Graph and Memory)** — **delivered** — added `embeddings`, `retrieval/vector` and hybrid (lexical + dense, RRF-fused) retrieval, `graph`, extraction and entity resolution/merge, richer `lint` (volatility, contradictions), the reference-aware `lifecycle` (`forget`, plus the irreversible `purge` backed by a `vcs/` git-history layer), and sensitivity enforcement at the retrieval boundary (confidential concepts are filtered before any send to a backend that is not verifiably on this machine). Additional format producers such as PDF and web remain optional and ongoing.
-- **MVP 3 (The Runtime and Interoperability)** adds `api`, `mcp`, `memory`, full OKF import/export in `consumers`, and sensitivity enforcement at the remaining boundaries (export, cloud models, agents).
+- **`application/` completes.** ADR-0018's remaining services — `application/ingest.py`
+  and `application/lifecycle.py` — join `query.py`, at which point `cli/main.py`
+  is parsing, presentation, and exit codes ([#918](https://github.com/jasonssdev/openkos/issues/918)).
+  Lifecycle carries the unsolved piece: the confirmation contracts have to be
+  expressed as data before a non-TTY adapter can drive them.
+- **`api/` and `mcp/` (MVP 3).** Thin async adapters over the synchronous
+  application services — which is the reason those services are being extracted
+  first. An adapter built on Typer command internals would duplicate behaviour
+  and drift.
+- **A published extension surface.** `Producer`/`Consumer` interfaces and an
+  entry-point group for third-party ingesters and exporters are a roadmap item
+  (MVP 3 and Horizon). No interface, protocol, or entry point for them exists
+  today, and adopting one would need its own ADR.
+- **Format and store options.** A second vector backend, full OKF import/export,
+  and memory projections are all named in the roadmap and unbuilt.
 
-The folders exist from the start as a contract; the code arrives MVP by MVP. (As shipped, the actual module names differ from this forward-looking tree — for example the `retrieval`, `graph`, `extraction`, `resolution`, and `vcs` packages under `src/openkos/`.)
+Two long-standing entries in this document turned out to be decisions rather
+than pending work, and are recorded here so they are not re-proposed as gaps: a
+single `engine.py` orchestrator was **replaced** by ADR-0018's per-use-case
+services, and the consolidation of the five `.openkos/` SQLite files into one
+`openkos.db` remains an open option that no change has adopted.
+
+## State taxonomy
+
+A workspace holds three kinds of state, and the difference matters the moment
+something is lost: one kind is canonical, one rebuilds for free, and one costs
+model calls to recreate. They previously sat side by side undifferentiated.
+
+**Canonical, versioned, never reconstructible.** `bundle/` — `index.md`,
+`log.md`, and every concept document — plus the sidecars under `bundle/.state/`:
+the merge ledgers (`bundle/.state/ledger/<id>.ledger.okf`, [ADR-0013](adr/0013-relocate-merge-ledger-to-bundle-state.md))
+and the operator-decision records (`bundle/.state/decisions/<id>.decisions.okf`,
+[ADR-0014](adr/0014-durable-pending-work-stores.md)). These hold human judgments
+and the bytes needed to reverse a merge. They are committed with the bundle, and
+nothing regenerates them. Nothing under `bundle/.state/` is named `*.md`, which
+keeps it outside every `rglob("*.md")` walk and therefore outside OKF §9 by
+construction rather than by convention.
+
+**Derived, under `.openkos/`, git-ignored, deleted wholesale by `purge`.** All
+five are SQLite, all are reconstructible in principle, and they differ in what
+reconstruction costs:
+
+| Store | Written by | Rebuild cost | Posture |
+| --- | --- | --- | --- |
+| `fts.db` | `reindex`, and every bundle-writing verb | free, local | manifest-hash gated; `purge` rebuilds it in line |
+| `graph.db` | `reindex`, and every bundle-writing verb | free, local | manifest-hash gated; `purge` rebuilds it in line |
+| `vectors.db` | `reindex`, and every bundle-writing verb | embedding calls | `purge` deletes without rebuilding; re-derived lazily |
+| `findings.db` | `contradictions`, `curate`, `adjudicate` | **LLM calls** | per-row input digests, not manifest-gated; never rebuilt in line |
+| `insight_questions.db` | `query --save` | one embedding | pure cache; a miss is re-embedded, and the store is advisory |
+
+`findings.db` is the one that most repays understanding. It is not an index: a
+finding is a *verdict*, not a projection, so a whole-store rebuild cannot
+produce one. It carries per-row input digests and decides its own staleness
+instead of riding the shared manifest-hash gate, and it holds two tenants in one
+file — contradiction verdicts and adjudication verdicts — deliberately, so a
+second tenant inherits `purge`'s erasure and `forget`'s sweep instead of opening
+a new privacy surface.
+
+`insight_questions.db` sits at the other end: losing it costs nothing but time,
+which is exactly why `query --save` degrades to "could not check for
+near-duplicates" and files the insight anyway rather than refusing.
+
+**Ephemeral, outside the workspace entirely.** The interprocess mutation lock
+([#925](https://github.com/jasonssdev/openkos/issues/925)) lives in a per-user
+temp directory keyed by the workspace's real path, not under `.openkos/`. It
+holds no content and survives nothing; a refusing command must leave the
+workspace byte- and structure-identical, and a lock file created inside it would
+break that.
+
+## How the layers arrived
+
+- **MVP 1 (The Compiler)** — delivered: `model`, `bundle`, `state/fts`,
+  `llm/ollama`, `extraction`, `retrieval`, `lint`, `lifecycle`, `config`, `cli`.
+  The workspace gained `raw/` (text), `bundle/` with its concept folders plus
+  `index.md` and `log.md`, `openkos.yaml`, and `AGENTS.md`.
+- **MVP 2 (The Graph and Memory)** — delivered: dense retrieval
+  (`state/vectorstore.py`) and RRF-fused hybrid search (`retrieval/fusion.py`),
+  the graph projection (`graph/`), entity resolution and merge (`resolution/`,
+  `bundle/merge.py`, `bundle/ledger.py`), richer `lint` (volatility,
+  contradictions), the reference-aware `lifecycle` (`forget`, and the
+  irreversible `purge` backed by `vcs/git.py`), and sensitivity enforcement at
+  the retrieval boundary — confidential concepts are filtered before any send to
+  a backend not verifiably on this machine.
+- **MVP 3 (The Runtime and Interoperability)** — in progress. The orchestration
+  prerequisite is the application-service extraction above; the adapters follow.

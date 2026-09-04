@@ -10,7 +10,7 @@ version: 1
 freshness: pointer
 sensitivity: confidential
 provenance:
-  - raw/call-with-maria-2026-07-14.txt
+  - sources/call-with-maria-2026-07-14
 ---
 
 # Maria Salazar

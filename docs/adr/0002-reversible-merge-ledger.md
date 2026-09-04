@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0002: Reversible merge ledger with embedded verbatim snapshots"
 description: The on-disk format that makes object merges losslessly reversible.
-status: Superseded in part by ADR-0013
+status: Superseded in part by ADR-0013 and ADR-0017
 date: 2026-07-20
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0002: Reversible merge ledger with embedded verbatim snapshots
 
-- **Status:** Superseded in part by ADR-0013 -- the storage clause only
+- **Status:** Superseded in part by ADR-0013 and ADR-0017 -- the storage clause and the catalog-snapshot clause
   (ledger entries now live in a `bundle/.state/ledger/` sidecar, never the
   survivor's own frontmatter). The entry schema, LIFO-tail enforcement, and
   round-trip-parity contract below remain in effect, governed by this ADR.

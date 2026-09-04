@@ -10,8 +10,8 @@ version: 2
 freshness: timeless
 sensitivity: confidential
 provenance:
-  - raw/notes-on-the-enchiridion-2026-07-05.txt
-  - raw/call-with-maria-2026-07-14.txt
+  - sources/notes-on-the-enchiridion-2026-07-05
+  - sources/call-with-maria-2026-07-14
 ---
 
 # Stoicism
