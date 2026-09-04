@@ -1,6 +1,7 @@
 """Typer application object exposed as the `openkos` console script."""
 
 import dataclasses
+import functools
 import glob
 import json
 import os
@@ -17,12 +18,12 @@ from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 from pathlib import Path, PurePosixPath
-from typing import Final, Literal, NamedTuple, TypedDict
+from typing import Final, Literal, NamedTuple, TypedDict, TypeVar
 
 import typer
 from rich.console import Console
 
-from openkos import config, fsio, source_title
+from openkos import config, fsio, lock, source_title
 from openkos import lint as lint_check
 from openkos.application import query as application_query
 from openkos.bundle import bundle, listing, source_titles
@@ -126,6 +127,8 @@ from openkos.state.vectorstore import (
     vector_store_is_empty,
 )
 from openkos.vcs import git as vcs_git
+
+_T = TypeVar("_T")
 
 app = typer.Typer()
 
@@ -264,6 +267,77 @@ def callback(
     ),
 ) -> None:
     """openkos: local-first engine that compiles text into a portable knowledge base."""
+
+
+_READ_ONLY_COMMANDS = frozenset(
+    {
+        "status",
+        "next",
+        "list",
+        "lint",
+        "doctor",
+    }
+)
+"""The commands that never write to the workspace, and so take no lock (#925).
+
+This list is the OPT-OUT side of a fail-safe classification: every command not
+named here is locked. That direction is deliberate. A roster of things to
+protect rots open -- a new mutating verb that nobody remembers to add races
+silently, which is the same "green by absence" failure #928 describes for the
+eval sweep. A roster of things to EXEMPT rots closed: the worst a forgotten
+entry can do is make a read-only command wait.
+
+`test_every_command_is_classified` asserts the two sides cover every registered
+command, and that each name here is really a registered one, so neither side
+can drift without a red test.
+"""
+
+
+def _guard_workspace_lock(
+    command_name: str,
+) -> Callable[[Callable[..., _T]], Callable[..., _T]]:
+    """Hold the workspace's exclusive mutation lock for one command's body (#925).
+
+    Applied UNDER `@app.command(...)`, so Typer registers the wrapper and reads
+    its signature through `functools.wraps` -- options, arguments, and the
+    published help are unchanged. It wraps the BODY, which is exactly the scope
+    wanted: `openkos <verb> --help` never runs the body, so asking for help
+    never takes the lock and never fails against a busy workspace.
+
+    A run with no usable workspace is passed straight through, unlocked. The
+    body's own `config.require_workspace` refusal is then the one the operator
+    sees, so error precedence -- and the distinct wording #926 added for a
+    symlinked workspace -- is unchanged by this decorator. `init` rides the
+    same rule: there is no workspace to lock yet, and two concurrent inits are
+    already refused by `write_config`'s exclusive create.
+
+    Contention exits 3, not 1, because exit 3 is this CLI's documented
+    RETRY-SAFE refusal (`docs/cli.md`, Conventions): nothing was written, and a
+    plain re-run is exactly equivalent once the other process finishes. That is
+    precisely a busy workspace's contract, so it reuses the code scripts
+    already treat as retryable rather than inventing a second one.
+    """
+
+    def decorate(fn: Callable[..., _T]) -> Callable[..., _T]:
+        @functools.wraps(fn)
+        def wrapper(*args: object, **kwargs: object) -> _T:
+            root = Path.cwd()
+            if config.require_workspace(root) is not None:
+                return fn(*args, **kwargs)
+            try:
+                with lock.workspace_lock(root):
+                    return fn(*args, **kwargs)
+            except lock.WorkspaceBusyError as exc:
+                typer.echo(
+                    f"openkos {command_name}: refusing to run -- {exc}.",
+                    err=True,
+                )
+                raise typer.Exit(code=3) from exc
+
+        wrapper.__openkos_locked_command__ = command_name  # type: ignore[attr-defined]
+        return wrapper
+
+    return decorate
 
 
 def _probe_installed_models() -> list[InstalledModel]:
@@ -1467,6 +1541,7 @@ def _autocommit(root: Path, paths: Sequence[str], message: str) -> str | None:
     ),
     rich_help_panel="Get started",
 )
+@_guard_workspace_lock("init")
 def init(
     model: str | None = typer.Option(
         None,
@@ -5621,6 +5696,7 @@ def _ingest_batch(
     ),
     rich_help_panel="Get started",
 )
+@_guard_workspace_lock("ingest")
 def ingest(
     src: Path = typer.Argument(
         ...,
@@ -6563,6 +6639,7 @@ _ForgetScope = Literal["self", "source"]
     ),
     rich_help_panel="Remove",
 )
+@_guard_workspace_lock("forget")
 def forget(
     concept_id: str = typer.Argument(
         ..., help="Bundle-relative concept id (path minus '.md') to remove."
@@ -7544,6 +7621,7 @@ def _purge_rebuild_indexes(
     ),
     rich_help_panel="Remove",
 )
+@_guard_workspace_lock("purge")
 def purge(
     concept_id: str = typer.Argument(
         ..., help="Bundle-relative concept id (path minus '.md') to purge."
@@ -8187,6 +8265,7 @@ def purge(
     ),
     rich_help_panel="Curate",
 )
+@_guard_workspace_lock("relate")
 def relate(
     source_id: str = typer.Argument(
         ...,
@@ -8386,6 +8465,7 @@ def relate(
     ),
     rich_help_panel="Curate",
 )
+@_guard_workspace_lock("set-sensitivity")
 def set_sensitivity_cmd(
     concept_id: str = typer.Argument(
         ...,
@@ -8815,6 +8895,7 @@ def set_sensitivity_cmd(
     ),
     rich_help_panel="Maintain",
 )
+@_guard_workspace_lock("backfill-sensitivity")
 def backfill_sensitivity_cmd(
     auto: bool = typer.Option(
         False,
@@ -9037,6 +9118,7 @@ def backfill_sensitivity_cmd(
     ),
     rich_help_panel="Maintain",
 )
+@_guard_workspace_lock("normalize-names")
 def normalize_names_cmd(
     auto: bool = typer.Option(
         False,
@@ -9367,6 +9449,7 @@ def normalize_names_cmd(
     ),
     rich_help_panel="Maintain",
 )
+@_guard_workspace_lock("backfill-source-titles")
 def backfill_source_titles_cmd(
     auto: bool = typer.Option(
         False,
@@ -9627,6 +9710,7 @@ def backfill_source_titles_cmd(
     ),
     rich_help_panel="Curate",
 )
+@_guard_workspace_lock("set-volatility")
 def set_volatility_cmd(
     concept_type: str = typer.Argument(
         ..., help="Exact PascalCase REGISTRY type name, e.g. 'Person'."
@@ -10560,6 +10644,7 @@ def _reconcile_merged_survivor(
     ),
     rich_help_panel="Curate",
 )
+@_guard_workspace_lock("merge")
 def merge(
     survivor_id: str = typer.Argument(
         ...,
@@ -10923,6 +11008,7 @@ in those two places too."""
     ),
     rich_help_panel="Curate",
 )
+@_guard_workspace_lock("unmerge")
 def unmerge(
     survivor_id: str = typer.Argument(
         ...,
@@ -11822,6 +11908,7 @@ def _reconciliation_state_description(
     ),
     rich_help_panel="Curate",
 )
+@_guard_workspace_lock("reconcile")
 def reconcile(
     id_a: str | None = typer.Argument(
         None,
@@ -13288,6 +13375,7 @@ def lint() -> None:
     ),
     rich_help_panel="Explore",
 )
+@_guard_workspace_lock("duplicates")
 def duplicates(
     include_deprecated: bool = typer.Option(
         False,
@@ -13458,6 +13546,7 @@ def duplicates(
     ),
     rich_help_panel="Curate",
 )
+@_guard_workspace_lock("adjudicate")
 def adjudicate(
     same_only: bool = typer.Option(
         False,
@@ -14153,6 +14242,7 @@ def _run_suggest_relations_apply(
     ),
     rich_help_panel="Curate",
 )
+@_guard_workspace_lock("suggest-relations")
 def suggest_relations_cmd(
     auto: bool = typer.Option(
         False,
@@ -14581,6 +14671,7 @@ def suggest_relations_cmd(
     ),
     rich_help_panel="Curate",
 )
+@_guard_workspace_lock("suggest-volatility")
 def suggest_volatility_cmd(
     include_confidential: bool = typer.Option(
         False,
@@ -15708,6 +15799,7 @@ def _contradictions_declined_view(root: Path, layout: config.WorkspaceLayout) ->
     ),
     rich_help_panel="Explore",
 )
+@_guard_workspace_lock("contradictions")
 def contradictions(
     show_all: bool = typer.Option(
         False,
@@ -16221,6 +16313,7 @@ def _no_match_message(cause: NoMatchCause, fts_hit_count: int) -> str:
     ),
     rich_help_panel="Explore",
 )
+@_guard_workspace_lock("query")
 def query(
     question: str = typer.Argument(
         ..., help="Natural-language question to answer from the bundle."
@@ -17030,6 +17123,7 @@ def query(
     ),
     rich_help_panel="Maintain",
 )
+@_guard_workspace_lock("reindex")
 def reindex(
     force: bool = typer.Option(
         False,
@@ -17955,6 +18049,7 @@ def doctor() -> None:
     ),
     rich_help_panel="Maintain",
 )
+@_guard_workspace_lock("repair")
 def repair() -> None:
     """Read-write migration verb (durable-derived-state slice 1b): extracts
     every survivor's OWN frontmatter-embedded `merged_from` ledger (pre-
@@ -18078,6 +18173,7 @@ def repair() -> None:
     ),
     rich_help_panel="Curate",
 )
+@_guard_workspace_lock("curate")
 def curate(
     auto: bool = typer.Option(
         False,

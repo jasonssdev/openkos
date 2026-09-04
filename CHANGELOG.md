@@ -14,6 +14,23 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+### Fixed
+
+- Two concurrent OpenKOS processes could silently overwrite each other's work
+  ([#925](https://github.com/jasonssdev/openkos/issues/925)). There was no
+  interprocess lock anywhere in the codebase. The drift guards protect ONE
+  process's read → confirm → write window; they are blind to a second process,
+  so two mutators each read the same `bundle/index.md`, each passed their own
+  drift comparison against their own snapshot, and both wrote — last writer
+  won, and the first run's committed entries were gone with no warning from
+  either side. Mutating verbs now hold an advisory interprocess lock for the
+  whole command, and a second mutator refuses with **exit 3** — the documented
+  retry-safe code, since nothing was read or written. Read-only verbs
+  (`status`, `next`, `list`, `lint`, `doctor`) are never blocked, and
+  `openkos <verb> --help` never waits on a lock. The lock lives outside the
+  workspace, so a refusing run still writes nothing at all — not even a lock
+  file — and a read-only or network-mounted workspace can still be locked.
+
 ### Security
 
 - Destructive verbs could reach outside the workspace through a symlinked path
