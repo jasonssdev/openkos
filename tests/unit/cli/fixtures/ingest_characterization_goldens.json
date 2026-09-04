@@ -1,0 +1,32 @@
+{
+  "blocked_by_sensitivity": {
+    "exit_code": 0,
+    "stderr": "openkos ingest: workspace default_sensitivity floor is confidential; skipping concept extraction, keeping the Source only. The Source is still added to the embedding index so search and candidate relations keep working -- the sensitivity floor governs `llm.chat`, not embeddings.\nopenkos: NOTICE -- this commit includes content marked 'sensitivity: confidential'. openkos commits to LOCAL git only and never pushes to a remote.\nopenkos ingest: embeddings not updated -- '_FakeLLM' object has no attribute 'embed'; candidate relations unavailable until `openkos reindex` succeeds.\nopenkos ingest: derived-index refresh incomplete -- vectors: '_FakeLLM' object has no attribute 'embed'; run 'openkos reindex' to finish.\n",
+    "stdout": "openkos ingest: proposed changes:\n  + raw/notes.txt\n  + bundle/sources/notes.md\n  ~ index.md (new Source entry)\n  ~ log.md (new dated entry)\nopenkos ingest: imported 'notes.txt' -> raw/notes.txt, bundle/sources/notes.md (index.md, log.md updated).\n"
+  },
+  "healthy_single_object": {
+    "exit_code": 0,
+    "stderr": "openkos ingest: embeddings not updated -- '_FakeLLM' object has no attribute 'embed'; candidate relations unavailable until `openkos reindex` succeeds.\nopenkos ingest: derived-index refresh incomplete -- vectors: '_FakeLLM' object has no attribute 'embed'; run 'openkos reindex' to finish.\n",
+    "stdout": "openkos ingest: proposed changes:\n  + raw/notes.txt\n  + bundle/sources/notes.md\n  + bundle/concepts/stoic-dichotomy-of-control.md\n  ~ index.md (new Source entry)\n  ~ log.md (new dated entry)\nopenkos ingest: imported 'notes.txt' -> raw/notes.txt, bundle/sources/notes.md, bundle/concepts/stoic-dichotomy-of-control.md (index.md, log.md updated).\nextracted 1 object \u2014 1 Concept\n"
+  },
+  "no_concepts_found": {
+    "exit_code": 0,
+    "stderr": "openkos ingest: no concept extracted from this source; keeping the Source only.\nopenkos ingest: embeddings not updated -- '_FakeLLM' object has no attribute 'embed'; candidate relations unavailable until `openkos reindex` succeeds.\nopenkos ingest: derived-index refresh incomplete -- vectors: '_FakeLLM' object has no attribute 'embed'; run 'openkos reindex' to finish.\n",
+    "stdout": "openkos ingest: proposed changes:\n  + raw/notes.txt\n  + bundle/sources/notes.md\n  ~ index.md (new Source entry)\n  ~ log.md (new dated entry)\nopenkos ingest: imported 'notes.txt' -> raw/notes.txt, bundle/sources/notes.md (index.md, log.md updated).\n"
+  },
+  "no_extractable_text": {
+    "exit_code": 0,
+    "stderr": "openkos ingest: source has no extractable text; keeping the Source only.\nopenkos ingest: embeddings not updated -- '_FakeLLM' object has no attribute 'embed'; candidate relations unavailable until `openkos reindex` succeeds.\nopenkos ingest: derived-index refresh incomplete -- vectors: '_FakeLLM' object has no attribute 'embed'; run 'openkos reindex' to finish.\n",
+    "stdout": "openkos ingest: proposed changes:\n  + raw/notes.txt\n  + bundle/sources/notes.md\n  ~ index.md (new Source entry)\n  ~ log.md (new dated entry)\nopenkos ingest: imported 'notes.txt' -> raw/notes.txt, bundle/sources/notes.md (index.md, log.md updated).\n"
+  },
+  "ollama_error_no_advisory": {
+    "exit_code": 0,
+    "stderr": "openkos ingest: concept extraction skipped -- boom; keeping the Source only.\nopenkos ingest: embeddings not updated -- '_FakeLLM' object has no attribute 'embed'; candidate relations unavailable until `openkos reindex` succeeds.\nopenkos ingest: derived-index refresh incomplete -- vectors: '_FakeLLM' object has no attribute 'embed'; run 'openkos reindex' to finish.\n",
+    "stdout": "openkos ingest: proposed changes:\n  + raw/notes.txt\n  + bundle/sources/notes.md\n  ~ index.md (new Source entry)\n  ~ log.md (new dated entry)\nopenkos ingest: imported 'notes.txt' -> raw/notes.txt, bundle/sources/notes.md (index.md, log.md updated).\n"
+  },
+  "ollama_error_with_746_advisory": {
+    "exit_code": 0,
+    "stderr": "openkos ingest: concept extraction skipped -- Ollama not reachable at localhost; keeping the Source only.\nopenkos ingest: this run had concurrent_extraction on, and the request ran out of time rather than failing outright. Concurrent windows queue on a server started without OLLAMA_NUM_PARALLEL, and each one's chat_timeout keeps running while it waits -- so this may be the setting, not the backend. Either raise OLLAMA_NUM_PARALLEL to 2 on the Ollama server, or set concurrent_extraction: false in openkos.yaml.\n",
+    "stdout": "openkos ingest: proposed changes:\n  + raw/notes.txt\n  + bundle/sources/notes.md\n  ~ index.md (new Source entry)\n  ~ log.md (new dated entry)\nopenkos ingest: imported 'notes.txt' -> raw/notes.txt, bundle/sources/notes.md (index.md, log.md updated).\n"
+  }
+}

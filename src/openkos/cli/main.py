@@ -45,15 +45,12 @@ from openkos.extraction.concept import (
     FAN_OUT_CONCURRENCY,
     ExtractionReport,
     estimate_extraction_calls,
-    extract_concept,
-    extract_concept_union,
     fans_out,
 )
 from openkos.graph import proximity, sqlite_graph
 from openkos.graph.base import Edge, GraphStore
 from openkos.graph.sqlite_graph import build_graph
 from openkos.graph.summary import asserted_relations_exist, graph_edge_summary
-from openkos.llm.base import LLMBackend
 from openkos.llm.ollama import (
     BackendHostLocality,
     InstalledModel,
@@ -113,7 +110,6 @@ from openkos.resolution.volatility_typing import (
     suggest_volatility,
 )
 from openkos.retrieval.answer import NO_MATCH, NoMatchCause
-from openkos.sensitivity import blocks_llm_send
 from openkos.state import adjudications as adjudications_store
 from openkos.state import derived, findings
 from openkos.state import edge_suggestions as edge_suggestions_store
@@ -4077,562 +4073,133 @@ def _stale_index_names(
 # their original private names via plain assignment (not an `import ... as`
 # with a renamed target) so mypy's strict `no_implicit_reexport` does not
 # flag `main._collision_family` et al., which `tests/unit/cli/test_ingest.py`
-# still calls directly. `_stage_derived_objects` below is otherwise
-# unchanged.
+# still calls directly. `_stage_derived_objects` itself moved into
+# `application/ingest.py` in Slice 2, de-presented -- see
+# `application_ingest.stage_derived_objects` and this module's
+# `_render_staged_derived_objects` (the adapter half: renders exactly the
+# same wording the old function body used to echo, from the typed
+# `StagedDerivedObjects` the service now returns).
 _DerivedPlan = application_ingest.DerivedPlan
 _collision_family = application_ingest.collision_family
 _family_owns_source = application_ingest.family_owns_source
 _first_free_disambiguated_slug = application_ingest.first_free_disambiguated_slug
 
 
-def _stage_derived_objects(
-    *,
-    raw_content: str | None,
-    source_title: str,
-    source_slug: str,
-    workspace_floor: str,
-    stamp_sensitivity: str,
-    timestamp: str,
-    bundle_dir: Path,
-    llm: LLMBackend,
-    cfg: config.Config,
-    include_confidential: bool = False,
-    union_judge: bool = False,
-) -> tuple[
-    list[_DerivedPlan], okf.ExtractionStatus | None, tuple[okf.ExtractionNotice, ...]
-]:
-    """Attempt LLM extraction of zero or more distinct derived objects from
-    the source's decoded text, and stage each validated candidate for Phase
-    B (`ingest` owns slug/path derivation and per-candidate drop wording;
-    the extraction leaf stays config-free, per design's Technical Approach).
+def _render_staging_drop(drop: application_ingest.StagingDrop) -> None:
+    """Render one `StagingDrop`'s exact original wording (issue #918 Slice
+    2) -- the per-candidate `typer.echo` calls that used to live inline in
+    `_stage_derived_objects`'s staging loop, now driven by `drop.kind`
+    instead."""
+    if drop.kind == "empty-slug":
+        typer.echo(
+            "openkos ingest: extracted title could not be turned into a "
+            "slug; skipping this candidate.",
+            err=True,
+        )
+    elif drop.kind == "in-batch-collision":
+        typer.echo(
+            f"openkos ingest: duplicate slug '{drop.slug}' within "
+            "this extraction batch; keeping the first, skipping this "
+            "candidate.",
+            err=True,
+        )
+    elif drop.kind == "already-exists":
+        typer.echo(
+            f"openkos ingest: '{drop.slug}' already exists; "
+            "skipping this candidate (create-only).",
+            err=True,
+        )
+    elif drop.kind == "disambiguated":
+        typer.echo(
+            f"openkos ingest: '{drop.slug}' already exists for a "
+            f"different source; disambiguating this candidate to "
+            f"'{drop.disambiguated_to}'.",
+            err=True,
+        )
+    else:  # "build-failed"
+        typer.echo(
+            f"openkos ingest: extracted content failed validation -- "
+            f"{drop.error}; skipping this candidate.",
+            err=True,
+        )
 
-    This function IS Phase A in full: every check below runs strictly
-    BEFORE any write, and the returned list is the COMPLETE, already-deduped
-    write set -- Phase B (in `ingest`) does nothing but `mkdir` +
-    `write_exclusive` per plan, with no existence check, slug work, or
-    dedup left there (design D5 pinned ordering), so a failure partway
-    through Phase B never leaves a partially-reconciled state.
 
-    Returns a `(plans, skip_reason, notice)` triple (issue #187, design:
-    `_stage_derived_objects` return shape; extended by #585). `skip_reason`
-    carries WHY this batch produced zero derived objects, for the caller to
-    stamp onto the Source's `extraction_status` frontmatter key -- `None` on
-    the healthy path (`plans` non-empty).
+def _render_staged_derived_objects(
+    staged: application_ingest.StagedDerivedObjects,
+) -> None:
+    """Render every echo `stage_derived_objects` used to print itself
+    before issue #918 Slice 2 (design: "the service returns typed
+    disclosure data; the adapter owns every word") -- byte-identical
+    wording, in the SAME order, now driven by `StagedDerivedObjects`
+    instead of inline `typer.echo` calls inside the (former) function body.
 
-    `notice` (issue #585) is the mirror-image disclosure: `skip_reason`
-    fires when extraction produced NOTHING, `notice` when it produced
-    exactly one object that restates the source and so adds nothing the
-    Source did not already say. The two are mutually exclusive by
-    construction -- zero objects and exactly one object -- and travel as
-    separate values rather than one field precisely because they answer
-    different questions and are read by different consumers
-    (`lint.check_unextracted` reads only the first).
+    Called by `_ingest_single` AFTER the `Console(...).status(...)` spinner
+    context exits, on both the success and the `OllamaError` path (design:
+    "Ordering invariant that makes this byte-identical") -- exactly mirrors
+    the pre-move function, where every echo except the two pre-extraction
+    degrades already ran after that `with` block unwound.
 
-    `notice` is derived from `ExtractionReport.sole_object_restates_source`,
-    which describes what EXTRACTION produced, not what THIS run wrote. It is
-    therefore returned even when the sole object is then dropped below as
-    already-on-disk: on a re-ingest the object IS in the bundle, put there
-    by the earlier run, and the Source's disclosure must not blink off
-    merely because this run had nothing new to write. Returns `([], "no-extractable-text")` -- always
-    a Source-only degrade for this batch, never a raised error -- when
-    `raw_content` is `None` or blank (a binary/undecodable or empty source
-    has no text to extract from, so the LLM is never called); returns
-    `([], "blocked-by-sensitivity")` when the workspace floor blocks the LLM
-    send; returns `([], "failed")` when `llm.chat` raises any
-    `OllamaError`-family exception (caught HERE, per design's "Degrade seam"
-    -- `extraction/concept.py` lets it propagate unswallowed); returns
-    `([], "no-concepts-found")` when `extract_concept` itself returns `[]`
-    (`[]`, never `None`, is `extract_concept`'s contract -- design D4 --
-    meaning either nothing was worth extracting, or every candidate failed
-    ITS OWN fail-closed validation; this layer does not distinguish the
-    two). `plans == [] and skip_reason is None` is also possible (every
-    candidate dropped individually below) -- that state deliberately writes
-    no `extraction_status` key (design: Sequence, "a real, deliberate
-    state").
-
-    Each item in a non-empty `extract_concept` result is then staged
-    independently, in reply order, per design's pinned Phase A sequence:
-    (1) derive a slug from the title -- an empty slug (a title made only of
-    characters `_slugify` strips) skips just that candidate; (2) an
-    in-batch collision guard -- a slug already claimed by an EARLIER
-    candidate in this SAME reply keeps the first and drops the later one
-    (spec: In-Batch Slug-Collision Guard); (3) `derived_path.exists()` -- a
-    slug already on disk for ANY source (this source's own prior
-    extraction, a hand-authored file, or a genuine cross-source slug
-    collision) skips this candidate, leaving the existing file untouched.
-    This REPLACES the old provenance-keyed `_source_has_derived_object`
-    all-or-nothing gate with PER-SLUG reconciliation (design D5): a
-    re-ingest now calls the LLM again and can insert a genuinely NEW object
-    even when an older one for the same source already exists, at the
-    accepted cost that a nondeterministic LLM title can slugify differently
-    across re-ingests and produce a duplicate object. (4) `okf.build_concept`
-    -- untrusted LLM fields that slipped past `extract_concept`'s own
-    validation (e.g. an embedded newline) can still fail `build_concept`'s
-    stricter single-line gate (`ValueError`), which skips just that
-    candidate.
-
-    Every one of these four main.py-visible drops (empty slug, collision,
-    exists, build failure) is reported to stderr, per candidate (design D4
-    drop transparency); a candidate dropped inside `extract_concept`'s own
-    validation stays silent there, unchanged from today. Since #843 the
-    three CONTENT-LOSING drops (empty slug, collision, build failure) are
-    also durable: they resolve the returned `notice` to
-    `candidates-dropped-in-staging` unless a judge-degrade token outranks
-    it, so `lint`/`status` can keep reporting the loss after the terminal
-    has scrolled. The create-only skip stays out of that count -- the slug
-    this same source already owns is on disk, so nothing was lost -- and
-    the formerly silent `plans == [] and skip_reason is None` state (every
-    candidate dropped below) now carries the marker while still writing no
-    `extraction_status` key.
-
-    sensitivity-fail-closed-filter (S3b): unless `include_confidential` is
-    `True`, `extract` gates on the WORKSPACE floor (`workspace_floor`,
-    always `cfg.default_sensitivity`) rather than any per-doc value (a raw
-    source has no per-doc `sensitivity` yet, unlike the other five
-    `llm.chat` seams): when `sensitivity.blocks_llm_send(workspace_floor)`
-    -- i.e. the workspace's `default_sensitivity` floor is confidential (or
-    absent/blank, correction batch post-4R-review FIX 1) -- this returns `[]`
-    WITHOUT calling `extract_concept` at all, so `llm.chat` is never invoked,
-    and emits the same Source-only degrade message shape as the
-    blank-content case above. `include_confidential=True` bypasses this gate
-    entirely. This delegates to the SAME shared `blocks_llm_send` authority
-    `sensitivity.sensitive_concept_ids` uses per-doc, rather than calling
-    `okf._rank` directly on `workspace_floor` -- a bare `okf._rank` call would
-    wrongly resolve a blank/whitespace `default_sensitivity: ""` to
-    `"private"` (never tripping this gate), because `okf._rank(None)`/
-    `okf._rank("")` both fall back to `"private"` for the unrelated
-    `combine_sensitivity` merge-floor use case, not this fail-closed one.
-
-    `stamp_sensitivity` -- the built Source document's OWN resolved
-    `sensitivity` value, read back from its rendered frontmatter by the
-    caller -- is the value every validated derived object is stamped with
-    (`okf.build_concept` below), so a derived object provably inherits its
-    Source's actual value rather than merely sharing the same config
-    constant (design: "Read the Source document back, and split the two
-    `sensitivity` roles"). This is deliberately a SEPARATE parameter from
-    `workspace_floor`: the extraction gate above MUST keep reading the
-    workspace floor (`sensitivity-aware-llm` Requirement 4, unchanged by
-    this change), never the Source's own value, even when the two differ.
-
-    `union_judge` (design D9, #456) selects which extraction orchestrator
-    runs: `False` (this kwarg's own default -- a REQUIRED keyword, not
-    defaulted from `config`, so every existing direct call site keeps
-    exercising the untouched single-run path as a regression guard) calls
-    `extraction.concept.extract_concept` exactly once; `True` calls
-    `extract_concept_union`, which runs extraction twice (or once per chunk)
-    and adds a selector-judge pass. The CLI's own `ingest` call site is the
-    ONE place that injects `cfg.union_judge` explicitly, so the product-ON
-    default lives in `config.DEFAULT_UNION_JUDGE` alone.
+    The `"failed"` `skip_reason` (an `OllamaError` was caught) is
+    deliberately NOT handled here: that echo (plus the #746 concurrency
+    advisory) fires at the `except OllamaError` call site itself, because it
+    needs the caught exception, which `StagedDerivedObjects` never carries.
     """
-    if raw_content is None or not raw_content.strip():
-        typer.echo(
-            "openkos ingest: source has no extractable text; keeping the Source only.",
-            err=True,
-        )
-        return [], "no-extractable-text", ()
-
-    if not include_confidential and blocks_llm_send(workspace_floor):
-        typer.echo(
-            "openkos ingest: workspace default_sensitivity floor is confidential; "
-            "skipping concept extraction, keeping the Source only. The Source "
-            "is still added to the embedding index so search and candidate "
-            "relations keep working -- the sensitivity floor governs "
-            "`llm.chat`, not embeddings.",
-            err=True,
-        )
-        return [], "blocked-by-sensitivity", ()
-
-    extractor = extract_concept_union if union_judge else extract_concept
-    try:
-        with Console(stderr=True).status(
-            "openkos ingest: extracting concepts…"
-        ) as status:
-            # #701: the status line stopped being static. Underneath it the
-            # extractor runs a model call per ~4 KB window, then a re-ask,
-            # then a participant pass, then a judge -- roughly a dozen calls
-            # on the 4m 28s ingest that filed the issue, all behind one
-            # frozen line that reads as a hang. `phase_callback` returns
-            # `None` off a TTY, so a piped run passes no hook and the
-            # extractor's per-phase cost is one `is not None` comparison.
-            # #744: read off `cfg` rather than taken as its own kwarg, unlike
-            # `union_judge` above. That kwarg exists so the product-ON default
-            # lives in exactly one place; this key's default is False on BOTH
-            # sides, so there is no second default to keep honest. Passed to
-            # whichever extractor was selected -- a lever wired into one only
-            # would leave whether #744 is active depending on `union_judge`.
-            outcome = extractor(
-                raw_content,
-                source_title=source_title,
-                llm=llm,
-                on_progress=observability.phase_callback("ingest", status.update),
-                concurrent=cfg.concurrent_extraction,
-            )
-    except OllamaError as exc:
-        typer.echo(
-            f"openkos ingest: concept extraction skipped -- {exc}; "
-            "keeping the Source only.",
-            err=True,
-        )
-        # #746: the engine knows both halves of this and used to say neither.
-        # `concurrent_extraction` inflates PER-CALL wall time when the server
-        # is not running requests in parallel -- each request's own timeout
-        # keeps running while it queues -- so a deadline failure on that path
-        # may be an artifact of the setting rather than a backend problem.
-        #
-        # All three conditions are required, and the third is the one a naive
-        # check gets wrong: with the flag on but a source below the chunking
-        # threshold there are no windows to overlap, so concurrency was never
-        # involved. Naming a timeout that is really a refused connection would
-        # send the operator after a setting while their server is not running.
-        if (
-            cfg.concurrent_extraction
-            and is_timeout_failure(exc)
-            and fans_out(raw_content, source_title=source_title)
-        ):
+    if staged.report is None:
+        if staged.skip_reason == "no-extractable-text":
             typer.echo(
-                "openkos ingest: this run had concurrent_extraction on, and "
-                "the request ran out of time rather than failing outright. "
-                "Concurrent windows queue on a server started without "
-                "OLLAMA_NUM_PARALLEL, and each one's chat_timeout keeps "
-                "running while it waits -- so this may be the setting, not "
-                "the backend. Either raise OLLAMA_NUM_PARALLEL to "
-                f"{FAN_OUT_CONCURRENCY} on the Ollama server, or set "
-                "concurrent_extraction: false in openkos.yaml.",
+                "openkos ingest: source has no extractable text; keeping "
+                "the Source only.",
                 err=True,
             )
-        return [], "failed", ()
+        elif staged.skip_reason == "blocked-by-sensitivity":
+            typer.echo(
+                "openkos ingest: workspace default_sensitivity floor is "
+                "confidential; skipping concept extraction, keeping the "
+                "Source only. The Source is still added to the embedding "
+                "index so search and candidate relations keep working -- "
+                "the sensitivity floor governs `llm.chat`, not embeddings.",
+                err=True,
+            )
+        return
 
-    extractions = outcome.objects
-    # #618 renders FIRST: the wrong-language gate runs on the merged
-    # per-window candidates before the re-ask, the judge, and every cap --
-    # the notices read in the order the pipeline produced them.
-    wrong_language_notice = _wrong_language_notice(outcome.report)
-    if wrong_language_notice is not None:
-        typer.echo(f"openkos ingest: {wrong_language_notice}", err=True)
+    report = staged.report
+    for notice_text in (
+        _wrong_language_notice(report),
+        _recombined_title_notice(report),
+        _bounded_prompt_notice(report),
+        _reask_notice(report),
+        _optional_call_failure_notice(report),
+        _pre_judge_ceiling_notice(report),
+        (_judge_failure_notice(report) or _judge_selection_notice(report)),
+        _unfiltered_source_notice(report),
+        _participant_unreadmitted_notice(report),
+        _participant_ungrounded_notice(report),
+        _unevidenced_notice(report),
+        _extraction_cap_notice(report),
+        _sole_object_notice(report),
+    ):
+        if notice_text is not None:
+            typer.echo(f"openkos ingest: {notice_text}", err=True)
 
-    # #780: the same gate's other arm, rendered right after it -- the two
-    # run at the same pipeline point but diagnose opposite failures, so
-    # they never share one message.
-    recombined_notice = _recombined_title_notice(outcome.report)
-    if recombined_notice is not None:
-        typer.echo(f"openkos ingest: {recombined_notice}", err=True)
-
-    # #866: rendered ahead of the per-call notices below because it
-    # qualifies all of them at once -- any call the ladder goes on to
-    # describe may have read an excerpt, and that fact should be on screen
-    # before the calls it applies to are discussed.
-    bounded_notice = _bounded_prompt_notice(outcome.report)
-    if bounded_notice is not None:
-        typer.echo(f"openkos ingest: {bounded_notice}", err=True)
-
-    # #584: the re-ask fires before the judge ever runs (it feeds the merged
-    # candidate list), so its notice renders ahead of every other one below.
-    reask_notice = _reask_notice(outcome.report)
-    if reask_notice is not None:
-        typer.echo(f"openkos ingest: {reask_notice}", err=True)
-
-    # #828: right after the re-ask line and still ahead of the judge, which
-    # is where BOTH optional calls happen -- the re-ask feeds the merged
-    # candidate list, the participant capture joins it -- so the notices
-    # keep reading in the order the pipeline produced them. It qualifies
-    # the line above whenever the re-ask was the call that failed: that one
-    # says a call was spent and found nothing further, and this one says
-    # the call never got an answer at all.
-    optional_call_notice = _optional_call_failure_notice(outcome.report)
-    if optional_call_notice is not None:
-        typer.echo(f"openkos ingest: {optional_call_notice}", err=True)
-
-    # The pre-judge ceiling fires FIRST of all: it cut candidates before
-    # the judge ever saw them, so it renders ahead of what the judge did.
-    ceiling_notice = _pre_judge_ceiling_notice(outcome.report)
-    if ceiling_notice is not None:
-        typer.echo(f"openkos ingest: {ceiling_notice}", err=True)
-
-    # #456: a judge notice fires next, distinct from the #404 cap notice --
-    # `judge_status` is "skipped" on the single-run path, so both helpers
-    # are no-ops there without needing an `if union_judge` guard here.
-    judge_notice = _judge_failure_notice(outcome.report) or _judge_selection_notice(
-        outcome.report
-    )
-    if judge_notice is not None:
-        typer.echo(f"openkos ingest: {judge_notice}", err=True)
-
-    # #795 point 3: LAST of the three, because it is the only one that
-    # describes their conjunction. The ceiling line above says what never
-    # reached the judge and the judge line says the judge did not run; each
-    # is a partial degrade an operator might reasonably tolerate. Together
-    # they mean nothing filtered this source at all, and that reading is
-    # available only after both have been stated.
-    unfiltered_notice = _unfiltered_source_notice(outcome.report)
-    if unfiltered_notice is not None:
-        typer.echo(f"openkos ingest: {unfiltered_notice}", err=True)
-
-    # #690: renders immediately after the judge notice it qualifies. The
-    # judge line names WHAT was dropped; this one names WHY the re-admission
-    # declined to save it, which is a different decision with a different
-    # remedy.
-    unreadmitted_notice = _participant_unreadmitted_notice(outcome.report)
-    if unreadmitted_notice is not None:
-        typer.echo(f"openkos ingest: {unreadmitted_notice}", err=True)
-
-    # #712 D5: the other half of the participant story. The line above names
-    # people the pipeline did NOT store; this one names people it DID store
-    # whose name the source never writes. Both are advisory and both are
-    # about the same question -- did the model read the source or write from
-    # its own vocabulary.
-    ungrounded_notice = _participant_ungrounded_notice(outcome.report)
-    if ungrounded_notice is not None:
-        typer.echo(f"openkos ingest: {ungrounded_notice}", err=True)
-
-    # #801: the third advisory about objects the pipeline KEPT, rendered
-    # beside the two above it because it answers the same operator
-    # question from a different angle -- those two ask whether a stored
-    # participant is real, this one asks whether a stored object quotes the
-    # source at all. Echoed unconditionally on its own condition, never
-    # gated on the persisted token: the frontmatter key can hold one value,
-    # the terminal has room for every condition that fired.
-    unevidenced_notice = _unevidenced_notice(outcome.report)
-    if unevidenced_notice is not None:
-        typer.echo(f"openkos ingest: {unevidenced_notice}", err=True)
-
-    # #404: the cap was the ONE drop in this function that said nothing --
-    # empty slug, in-batch collision, existing file and failed build all
-    # report per candidate below. A source proposing 20 objects and one
-    # proposing 5 were indistinguishable in the output, since only the
-    # truncated list ever reached this layer.
-    cap_notice = _extraction_cap_notice(outcome.report)
-    if cap_notice is not None:
-        typer.echo(f"openkos ingest: {cap_notice}", err=True)
-
-    # #585 renders LAST of the extraction notices: every other one reports
-    # a step of the pipeline, and this one reports what the pipeline ended
-    # up with. Read off the report rather than re-derived from `extractions`
-    # here -- the predicate lives in `extraction/concept.py` beside the
-    # re-ask trigger it shares, and a second spelling in this layer is
-    # exactly the drift that helper exists to prevent.
-    # #772: a judge degrade quarantines the Source. The first three notice
-    # conditions are mutually exclusive by construction -- both degrade
-    # statuses imply a multi-candidate union (a single-candidate union
-    # skips the judge entirely, #644), while sole-object requires exactly
-    # one retained object -- but the precedence is still written out so a
-    # future overlap picks the judge marker, the one `lint.check_unjudged`
-    # reads as retryable debt, over #585's disclosure.
-    #
-    # #801's token goes LAST, and it is the one condition here that really
-    # does overlap the others rather than merely being ordered against
-    # them: any run that wrote objects can also have written one that
-    # quotes nothing. It ranks below all three deliberately. The two judge
-    # tokens are retryable debt `lint.check_unjudged` reads and a re-ingest
-    # clears, and #585's token is a statement about the only object there
-    # is; this one presupposes objects WERE written and discloses a quality
-    # defect in some of them, which no re-run is promised to fix.
-    #
-    # #884: EVERY condition that fired is recorded, not just the strongest.
-    # This block used to be an `elif` ladder resolving a single-slot key,
-    # and its own comment stated the cost honestly: "a Source hitting more
-    # than one condition persists only the highest-precedence token, so its
-    # `objects-without-evidence` disclosure does not reach `lint` on that
-    # run." The stderr echoes named every condition, but stderr is not the
-    # audit surface -- `lint` is, and it read the one surviving token.
-    #
-    # `lint` could not paper over that from its side either: the masked
-    # token is destroyed HERE, at write time, so by the time `lint` reads
-    # the document there is nothing left to disclose. Recording every
-    # condition is the only place the fix can live.
-    #
-    # The judge pair stays mutually exclusive -- `failed` and `empty` are
-    # two values of ONE field and cannot both be true. The rest are
-    # independent conditions and are appended independently. Order is
-    # detection order, kept stable so two runs over identical bytes agree.
-    notices: list[okf.ExtractionNotice] = []
-    if outcome.report.judge_status == "failed":
-        notices.append(okf.EXTRACTION_NOTICE_JUDGE_UNAVAILABLE)
-    elif outcome.report.judge_status == "empty":
-        notices.append(okf.EXTRACTION_NOTICE_JUDGE_EMPTY)
-    if outcome.report.sole_object_restates_source:
-        notices.append(okf.EXTRACTION_NOTICE_SOLE_OBJECT_RESTATES)
-    if outcome.report.unevidenced_titles:
-        notices.append(okf.EXTRACTION_NOTICE_OBJECTS_WITHOUT_EVIDENCE)
-    sole_object_notice = _sole_object_notice(outcome.report)
-    if sole_object_notice is not None:
-        typer.echo(f"openkos ingest: {sole_object_notice}", err=True)
-
-    if not extractions:
+    if staged.skip_reason == "no-concepts-found":
         typer.echo(
             "openkos ingest: no concept extracted from this source; "
             "keeping the Source only.",
             err=True,
         )
-        return [], "no-concepts-found", ()
+        return
 
-    plans: list[_DerivedPlan] = []
-    seen_slugs: set[str] = set()
-    # #843: the staging drops that LOSE content -- empty slug, failed
-    # build. The create-only skip below is deliberately not counted: the
-    # slug this same source already owns is on disk, put there by an
-    # earlier run, so the bundle still represents the source and a marker
-    # would report a loss that never happened.
-    #
-    # #884 applies that same reasoning to the IN-BATCH collision, which
-    # used to be counted here. When two candidates of one run slugify
-    # alike, the FIRST was already staged -- the content is on disk and the
-    # bundle represents the source, exactly as in the create-only case. The
-    # per-candidate stderr echo still names the skip; what it no longer
-    # does is stamp a loss marker whose prescribed remedy (`--re-extract`)
-    # would deterministically reproduce the same collision, leaving debt no
-    # command can clear.
-    #
-    # Residual, stated rather than hidden: two GENUINELY different titles
-    # can slugify alike, and that case does lose content. It is not
-    # distinguishable from the benign one at this seam, and #884 chose the
-    # marker that is wrong less often -- a false loss report on every
-    # duplicate-title run, versus a missed one on the rarer collision of
-    # distinct titles.
-    lost_in_staging = 0
-    for extraction in extractions:
-        derived_slug = _slugify(extraction.title)
-        if not derived_slug:
-            typer.echo(
-                "openkos ingest: extracted title could not be turned into a "
-                "slug; skipping this candidate.",
-                err=True,
-            )
-            lost_in_staging += 1
-            continue
+    for drop in staged.drops:
+        _render_staging_drop(drop)
 
-        if derived_slug in seen_slugs:
-            # NOT counted as a staging loss (#884) -- see the comment on
-            # `lost_in_staging` above.
-            typer.echo(
-                f"openkos ingest: duplicate slug '{derived_slug}' within "
-                "this extraction batch; keeping the first, skipping this "
-                "candidate.",
-                err=True,
-            )
-            continue
-
-        # An LLM-extracted title carrying a markdown link delimiter (`[`/`]`)
-        # would forge or break the catalog bullet's first link in `index.md`/
-        # `log.md` (making the real entry unremovable, or forging deletion of
-        # another). Neutralize the delimiters rather than drop the candidate,
-        # so a benign bracketed title (e.g. `Array[0]`) is preserved while the
-        # injection is defused. Used for BOTH the concept's own title and its
-        # catalog label so the two stay identical.
-        safe_title = bundle_index.sanitize_link_label(extraction.title)
-
-        link_dir = _TYPE_TO_LINK_DIR[extraction.type]
-        section = _TYPE_TO_SECTION[extraction.type]
-        link_dir_path = bundle_dir / link_dir
-        derived_path = link_dir_path / f"{derived_slug}.md"
-        original_slug: str | None = None
-        if derived_path.exists():
-            # A slug already on disk. Distinguish WHO owns it (design:
-            # Idempotency Predicate, #131): scan the whole `<slug>`/
-            # `<slug>-N` collision family for THIS ingest's own provenance
-            # key before deciding.
-            family = _collision_family(link_dir_path, derived_slug)
-            if _family_owns_source(family, source_slug):
-                # Same-source collision, anywhere in the family (including a
-                # `<slug>-N` this source previously won) -- create-only
-                # no-op (design D5): leave every existing file untouched.
-                typer.echo(
-                    f"openkos ingest: '{derived_slug}' already exists; "
-                    "skipping this candidate (create-only).",
-                    err=True,
-                )
-                continue
-            # Foreign-source collision -- disambiguate to the first free
-            # numeric suffix rather than dropping the candidate.
-            original_slug = derived_slug
-            derived_slug = _first_free_disambiguated_slug(
-                family, original_slug, seen_slugs
-            )
-            derived_path = link_dir_path / f"{derived_slug}.md"
-            typer.echo(
-                f"openkos ingest: '{original_slug}' already exists for a "
-                f"different source; disambiguating this candidate to "
-                f"'{derived_slug}'.",
-                err=True,
-            )
-
-        # Per-type sensitivity default (issue #669, design D3): the offset
-        # applies to the CONFIG FLOOR, never to `stamp_sensitivity` itself,
-        # so a Source already resolved above the floor-plus-offset still
-        # wins via the high-water-mark inside `type_birth_sensitivity`.
-        resolved_sensitivity = config.type_birth_sensitivity(
-            cfg, extraction.type, stamp_sensitivity
-        )
-        try:
-            content = okf.build_concept(
-                type=extraction.type,
-                title=safe_title,
-                description=extraction.description,
-                body=extraction.body,
-                provenance=[f"sources/{source_slug}"],
-                sensitivity=resolved_sensitivity,
-                timestamp=timestamp,
-                type_alternative=extraction.type_alternative,
-            )
-        except ValueError as exc:
-            typer.echo(
-                f"openkos ingest: extracted content failed validation -- {exc}; "
-                "skipping this candidate.",
-                err=True,
-            )
-            lost_in_staging += 1
-            continue
-
-        seen_slugs.add(derived_slug)
-        plans.append(
-            _DerivedPlan(
-                doc_type=extraction.type,
-                section=section,
-                link_dir=link_dir,
-                slug=derived_slug,
-                title=safe_title,
-                description=extraction.description,
-                path=derived_path,
-                content=content,
-                disambiguated_from=original_slug,
-                # #401 via #566: the torn classification is no longer echoed
-                # per candidate here (it fired on ~100% of objects, so it
-                # carried no signal); it rides the plan for the caller's
-                # one-line-per-run aggregate. The frontmatter record above
-                # (`build_concept`) is unchanged.
-                type_alternative=extraction.type_alternative,
-                sensitivity=resolved_sensitivity,
-                type_floor_raised=(resolved_sensitivity != stamp_sensitivity),
-            )
-        )
-
-    # #843: the drop is a deterministic fact this loop already formatted a
-    # sentence about; this is the durable half. It outranks everything but
-    # the judge pair: those two stay retryable debt a plain re-ingest
-    # clears, while a staging loss means the bundle LACKS content the run
-    # extracted -- a stronger claim than #585's statement about a stored
-    # object or #801's quality defect in one, and the only marker `lint`
-    # can turn into the `--re-extract` redo that actually revisits staging.
-    # (The overlap that decides the sole-object ordering: a sole restating
-    # object that then fails staging was never written, so persisting the
-    # sole-object token would disclose a stored object that does not
-    # exist.) The per-candidate stderr echoes above stay unconditional;
-    # only the persisted slot collapses to one.
-    if lost_in_staging:
-        # #884: APPENDED, never substituted. The old form replaced whatever
-        # the pre-staging block had chosen -- unless a judge token held the
-        # slot -- so a run that both lost a candidate in staging AND stored
-        # objects with no quoted line reached `lint` claiming only the
-        # first. Both are true; both are now recorded, and the judge-pair
-        # exclusion is gone with the precedence it existed to express.
-        notices.append(okf.EXTRACTION_NOTICE_CANDIDATES_DROPPED)
+    if staged.lost_in_staging:
         typer.echo(
-            f"openkos ingest: {lost_in_staging} extracted candidate(s) "
-            "could not be staged and were dropped; marking the Source "
-            f"(extraction_notice: {okf.EXTRACTION_NOTICE_CANDIDATES_DROPPED}).",
+            f"openkos ingest: {staged.lost_in_staging} extracted "
+            "candidate(s) could not be staged and were dropped; marking "
+            "the Source (extraction_notice: "
+            f"{okf.EXTRACTION_NOTICE_CANDIDATES_DROPPED}).",
             err=True,
         )
-
-    return plans, None, tuple(notices)
 
 
 def _resolve_local_exemption(client: OllamaClient, cfg: config.Config) -> bool:
@@ -6187,19 +5754,85 @@ def _ingest_single(
         observability.stage_notice(
             "ingest", "extracting derived objects (waiting on the LLM)..."
         )
-        derived_plans, skip_reason, extraction_notice = _stage_derived_objects(
-            raw_content=raw_content,
-            source_title=title,
-            source_slug=slug,
-            workspace_floor=cfg.default_sensitivity,
-            stamp_sensitivity=source_sensitivity,
-            timestamp=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            bundle_dir=layout.bundle_dir,
-            llm=_chat_client(cfg, task="extraction"),
-            cfg=cfg,
-            include_confidential=include_confidential,
-            union_judge=cfg.union_judge,
-        )
+        # `_chat_client` is constructed BEFORE the spinner opens (issue #918
+        # Slice 2) -- mirrors the pre-move evaluation order, where it was a
+        # plain call argument to `_stage_derived_objects` and so ran before
+        # that function's own internal `with Console(...).status(...)` did.
+        extraction_llm = _chat_client(cfg, task="extraction")
+        try:
+            with Console(stderr=True).status(
+                "openkos ingest: extracting concepts…"
+            ) as status:
+                staged = application_ingest.stage_derived_objects(
+                    raw_content=raw_content,
+                    source_title=title,
+                    source_slug=slug,
+                    workspace_floor=cfg.default_sensitivity,
+                    stamp_sensitivity=source_sensitivity,
+                    timestamp=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    bundle_dir=layout.bundle_dir,
+                    llm=extraction_llm,
+                    cfg=cfg,
+                    include_confidential=include_confidential,
+                    union_judge=cfg.union_judge,
+                    on_progress=observability.phase_callback("ingest", status.update),
+                )
+        except OllamaError as exc:
+            typer.echo(
+                f"openkos ingest: concept extraction skipped -- {exc}; "
+                "keeping the Source only.",
+                err=True,
+            )
+            # #746: the engine knows both halves of this and used to say
+            # neither. `concurrent_extraction` inflates PER-CALL wall time
+            # when the server is not running requests in parallel -- each
+            # request's own timeout keeps running while it queues -- so a
+            # deadline failure on that path may be an artifact of the
+            # setting rather than a backend problem.
+            #
+            # All three conditions are required, and the third is the one a
+            # naive check gets wrong: with the flag on but a source below
+            # the chunking threshold there are no windows to overlap, so
+            # concurrency was never involved. Naming a timeout that is
+            # really a refused connection would send the operator after a
+            # setting while their server is not running.
+            if (
+                cfg.concurrent_extraction
+                # `raw_content` is provably non-`None` here (an `OllamaError`
+                # can only be raised from inside the extractor call, which
+                # the service never reaches on `None`/blank content) -- the
+                # explicit check is for mypy: the pre-extraction narrowing
+                # that used to prove this now happens INSIDE
+                # `application_ingest.stage_derived_objects`, invisible from
+                # this call site (issue #918 Slice 2).
+                and raw_content is not None
+                and is_timeout_failure(exc)
+                and fans_out(raw_content, source_title=title)
+            ):
+                typer.echo(
+                    "openkos ingest: this run had concurrent_extraction on, "
+                    "and the request ran out of time rather than failing "
+                    "outright. Concurrent windows queue on a server started "
+                    "without OLLAMA_NUM_PARALLEL, and each one's "
+                    "chat_timeout keeps running while it waits -- so this "
+                    "may be the setting, not the backend. Either raise "
+                    "OLLAMA_NUM_PARALLEL to "
+                    f"{FAN_OUT_CONCURRENCY} on the Ollama server, or set "
+                    "concurrent_extraction: false in openkos.yaml.",
+                    err=True,
+                )
+            staged = application_ingest.StagedDerivedObjects(
+                plans=(),
+                skip_reason="failed",
+                notices=(),
+                report=None,
+                drops=(),
+                lost_in_staging=0,
+            )
+        _render_staged_derived_objects(staged)
+        derived_plans = staged.plans
+        skip_reason = staged.skip_reason
+        extraction_notice = staged.notices
         if skip_reason is not None or extraction_notice:
             # Re-render from scratch with whichever marker was discovered
             # stamped in (design: "The ordering conflict", conditional
