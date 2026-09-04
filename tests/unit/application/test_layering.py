@@ -1,17 +1,36 @@
 """Layering guard for `openkos.application` (D5/the layering invariant,
 ADR-0018): `docs/architecture.md:112` states this convention has NO
 automated CI guard, so this test is the only thing that catches
-`openkos.application` importing upward from `openkos.cli` -- an adapter
-importing another adapter, which would defeat the entire point of the
-application layer (MVP 3's `api`/`mcp` adapters must be able to import
-`openkos.application.query` without dragging in Typer or `openkos.cli`).
+`openkos.application` importing upward from `openkos.cli`, `typer`, or
+`rich` -- an adapter importing another adapter, or an application module
+rendering its own output, either of which would defeat the entire point of
+the application layer (MVP 3's `api`/`mcp` adapters must be able to import
+any `openkos.application.*` module without dragging in Typer, Rich, or
+`openkos.cli`).
+
+Generalized (issue #918, design "the layering guard is generalized, not
+copied") from a single hardcoded `_QUERY_MODULE` constant to an iteration
+over every module under `src/openkos/application/`, so a THIRD context
+(e.g. `application/ingest.py`, or a future `application/lifecycle.py`) is
+covered by construction the moment the file exists, rather than requiring
+a per-module copy of this guard.
 """
 
 import ast
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-_QUERY_MODULE = _REPO_ROOT / "src" / "openkos" / "application" / "query.py"
+_APPLICATION_DIR = _REPO_ROOT / "src" / "openkos" / "application"
+
+
+def _application_modules() -> list[Path]:
+    """Every `.py` file directly under `application/`, sorted for a stable
+    iteration order -- excludes `__init__.py`, which carries no imports of
+    its own worth scanning and would otherwise show up as a spurious
+    always-clean entry in a failure report."""
+    return sorted(
+        path for path in _APPLICATION_DIR.glob("*.py") if path.name != "__init__.py"
+    )
 
 
 def _imported_module_names(tree: ast.Module) -> list[str]:
@@ -24,36 +43,70 @@ def _imported_module_names(tree: ast.Module) -> list[str]:
     return names
 
 
-def test_query_module_never_imports_cli() -> None:
-    """AST-scan `application/query.py`'s imports; none may reference
-    `openkos.cli` or a submodule of it, in either `import` or `from ... import`
-    form -- a runtime AST scan rather than an actual import, so the assertion
-    holds even if the offending import would itself fail to resolve."""
-    tree = ast.parse(_QUERY_MODULE.read_text(encoding="utf-8"))
-    imported = _imported_module_names(tree)
-    offenders = [
-        name
-        for name in imported
-        if name == "openkos.cli" or name.startswith("openkos.cli.")
-    ]
-    assert not offenders, (
-        f"openkos.application.query must never import openkos.cli; found: {offenders}"
+def test_application_directory_is_scanned_completely() -> None:
+    """Sanity check that the directory scan itself is not accidentally empty
+    or stale. Pins that `ingest.py` -- this change's new application-layer
+    module (issue #918, Slice 1) -- is discovered by the scan the moment it
+    exists, so a future reader trusts the OTHER two tests in this file
+    actually looked at it rather than silently scanning zero files."""
+    modules = {path.name for path in _application_modules()}
+    assert modules >= {"query.py", "ingest.py"}, (
+        f"expected 'query.py' and 'ingest.py' among scanned application "
+        f"modules; found: {modules}"
     )
 
 
-def test_query_module_binds_no_concrete_backend() -> None:
-    """The service takes its `LLMBackend`/`Embedder` as parameters (ADR-0018
-    D1) so every adapter supplies its own. Importing a CONCRETE backend here
-    would bind the application layer to Ollama and defeat that -- the spec
-    requirement "No concrete backend is bound inside the service" otherwise
-    rests on static reading alone, which nothing re-checks on a later edit."""
-    tree = ast.parse(_QUERY_MODULE.read_text(encoding="utf-8"))
-    offenders = [
-        name for name in _imported_module_names(tree) if name.startswith("openkos.llm.")
-    ]
-    assert offenders == ["openkos.llm.base"], (
-        "openkos.application.query may import only the Protocol seams in "
-        f"openkos.llm.base, never a concrete backend; found: {offenders}"
+def test_application_modules_never_import_cli_typer_or_rich() -> None:
+    """AST-scan every `application/*.py` module's imports; none may
+    reference `openkos.cli` (or a submodule of it), `typer`, or `rich`, in
+    either `import` or `from ... import` form -- a runtime AST scan rather
+    than an actual import, so the assertion holds even if the offending
+    import would itself fail to resolve."""
+    offenders: dict[str, list[str]] = {}
+    for path in _application_modules():
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        imported = _imported_module_names(tree)
+        bad = [
+            name
+            for name in imported
+            if name == "openkos.cli"
+            or name.startswith("openkos.cli.")
+            or name == "typer"
+            or name.startswith("typer.")
+            or name == "rich"
+            or name.startswith("rich.")
+        ]
+        if bad:
+            offenders[path.name] = bad
+    assert not offenders, (
+        "openkos.application modules must never import openkos.cli, typer, "
+        f"or rich; found: {offenders}"
+    )
+
+
+def test_application_modules_bind_no_concrete_llm_backend() -> None:
+    """Every application module takes its `LLMBackend` as a parameter (ADR-
+    0018 D1) so every adapter supplies its own. Importing a CONCRETE backend
+    anywhere under `application/` would bind that module to Ollama and
+    defeat that -- the spec requirement "No concrete backend is bound
+    inside the service" otherwise rests on static reading alone, which
+    nothing re-checks on a later edit. Each module's `openkos.llm.*`
+    imports, if any, must be exactly `openkos.llm.base` -- the Protocol
+    seam -- never a concrete implementation module."""
+    offenders: dict[str, list[str]] = {}
+    for path in _application_modules():
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        llm_imports = [
+            name
+            for name in _imported_module_names(tree)
+            if name.startswith("openkos.llm.")
+        ]
+        bad = [name for name in llm_imports if name != "openkos.llm.base"]
+        if bad:
+            offenders[path.name] = bad
+    assert not offenders, (
+        "openkos.application modules may import only openkos.llm.base, "
+        f"never a concrete backend; found: {offenders}"
     )
 
 
