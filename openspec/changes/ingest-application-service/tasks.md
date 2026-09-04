@@ -28,19 +28,27 @@ Chain strategy: stacked-to-main
 ## Slice 1 — PR 1 (~250–350 lines)
 
 ### Phase 0: Boundary Verification (blocking — before any file changes)
-- [ ] 0.1 Re-read `src/openkos/cli/main.py`'s `_DerivedPlan`, `collision_family`, `family_owns_source`, `first_free_disambiguated_slug` definitions. Confirm none call `typer`, `rich`, or `observability`, and none are called from outside `_stage_derived_objects`'s plan-building loop. If refuted, STOP and re-derive the slice boundary.
+- [x] 0.1 Re-read `src/openkos/cli/main.py`'s `_DerivedPlan`, `collision_family`, `family_owns_source`, `first_free_disambiguated_slug` definitions. Confirm none call `typer`, `rich`, or `observability`, and none are called from outside `_stage_derived_objects`'s plan-building loop. If refuted, STOP and re-derive the slice boundary.
+  - Confirmed: read `_DerivedPlan` (main.py:4154-4200), `_collision_family` (3236-3269), `_family_owns_source` (3272-3292), `_first_free_disambiguated_slug` (3545-3562) in full. None reference `typer`, `rich`, or `observability`. `rg` confirmed the only production call sites are inside `_stage_derived_objects`'s plan-building loop (main.py:4648-4667); the only other references are `tests/unit/cli/test_ingest.py` calling `main._collision_family`/`main._family_owns_source`/`main._first_free_disambiguated_slug` directly (5 call sites) and a docstring cross-reference in `okf.py`. No refutation — slice boundary holds as planned.
 
 ### Phase 1: Foundation — module + layering guard
-- [ ] 1.1 RED: rewrite `tests/unit/application/test_layering.py` to iterate `src/openkos/application/*.py` (not a hardcoded `_QUERY_MODULE`), assert offender imports include `openkos.cli*`/`typer`/`rich`, and that any `openkos.llm.*` import is exactly `openkos.llm.base`. Must fail — `application/ingest.py` doesn't exist.
-- [ ] 1.2 GREEN: create `src/openkos/application/ingest.py` with a module docstring only. Layering test passes trivially (no imports yet).
-- [ ] 1.3 RED: `tests/unit/application/test_ingest.py::test_derived_plan_is_frozen_dataclass` and `::test_collision_helpers_resolve_disambiguated_slug` — module has no such symbols yet.
-- [ ] 1.4 GREEN: move `_DerivedPlan` → `DerivedPlan` (frozen dataclass, verbatim fields) and `collision_family`, `family_owns_source`, `first_free_disambiguated_slug` from `main.py` into `application/ingest.py`; `main.py` imports them. `_stage_derived_objects` unchanged behaviorally.
-- [ ] 1.5 REFACTOR: confirm `rg -n '_stage_derived_objects\(' tests/unit/cli/test_ingest.py` count is unchanged (zero new/removed call sites in this slice).
+- [x] 1.1 RED: rewrite `tests/unit/application/test_layering.py` to iterate `src/openkos/application/*.py` (not a hardcoded `_QUERY_MODULE`), assert offender imports include `openkos.cli*`/`typer`/`rich`, and that any `openkos.llm.*` import is exactly `openkos.llm.base`. Must fail — `application/ingest.py` doesn't exist.
+  - RED confirmed: `test_application_directory_is_scanned_completely` failed (`'ingest.py'` not in `{'query.py'}`) before the module existed.
+- [x] 1.2 GREEN: create `src/openkos/application/ingest.py` with a module docstring only. Layering test passes trivially (no imports yet).
+- [x] 1.3 RED: `tests/unit/application/test_ingest.py::test_derived_plan_is_frozen_dataclass` and `::test_collision_helpers_resolve_disambiguated_slug` — module has no such symbols yet.
+  - RED confirmed: collection failed with `AttributeError: module 'openkos.application.ingest' has no attribute 'DerivedPlan'`.
+- [x] 1.4 GREEN: move `_DerivedPlan` → `DerivedPlan` (frozen dataclass, verbatim fields) and `collision_family`, `family_owns_source`, `first_free_disambiguated_slug` from `main.py` into `application/ingest.py`; `main.py` imports them. `_stage_derived_objects` unchanged behaviorally.
+  - Implemented via `from openkos.application import ingest as application_ingest` plus plain module-level assignments (`_DerivedPlan = application_ingest.DerivedPlan`, etc.) rather than `from ... import X as _x`, because mypy strict's `no_implicit_reexport` flagged the renamed-import form as not re-exported when `tests/unit/cli/test_ingest.py` accessed `main._collision_family` directly. `_stage_derived_objects`'s body is byte-identical.
+- [x] 1.5 REFACTOR: confirm `rg -n '_stage_derived_objects\(' tests/unit/cli/test_ingest.py` count is unchanged (zero new/removed call sites in this slice).
+  - Confirmed: `tests/unit/cli/test_ingest.py` was not edited in this slice, so the count (20 call sites + 1 docstring mention = 21 matches) is unchanged by construction.
 
 ### Phase 2: Slice 1 gate
-- [ ] 2.1 `uv run pytest tests/unit/application tests/unit/cli/test_ingest.py -q` — all pass, wording unchanged.
-- [ ] 2.2 `uv run pytest && uv run ruff check . && uv run ruff format --check . && uv run mypy .` — whole-repo gate green.
-- [ ] 2.3 `uv run openkos ingest <file>` against a seeded workspace — smoke test matches pre-change output.
+- [x] 2.1 `uv run pytest tests/unit/application tests/unit/cli/test_ingest.py -q` — all pass, wording unchanged.
+  - 364 passed (43 application + 321 cli/test_ingest.py; +5 vs the 359 baseline from the 5 new tests added).
+- [x] 2.2 `uv run pytest && uv run ruff check . && uv run ruff format --check . && uv run mypy .` — whole-repo gate green.
+  - `uv run pytest`: 5973 passed, 1 skipped. `ruff check .`: All checks passed. `ruff format --check .`: 290 files already formatted. `mypy .`: Success, no issues in 290 source files.
+- [x] 2.3 `uv run openkos ingest <file>` against a seeded workspace — smoke test matches pre-change output.
+  - Live smoke test against a fresh `openkos init` workspace with Ollama (`qwen3:8b` chat, `bge-m3` embedding) running locally: first ingest extracted 2 objects (`photosynthesis.md` Concept, `cellular-respiration.md` Procedure) and wrote them; a second `--re-extract` ingest of the same source hit the moved `_family_owns_source`/`_collision_family` path and correctly reported `'photosynthesis' already exists; skipping this candidate (create-only)` and `'cellular-respiration' already exists; skipping this candidate (create-only)` — proving the relocated collision-detection code runs correctly end to end through the CLI.
 
 ## Slice 2 — PR 2 (~1,100–1,500 lines)
 
