@@ -45,6 +45,38 @@ _GOLDENS: dict[str, dict[str, Any]] = json.loads(
 )
 
 
+@pytest.fixture(autouse=True)
+def _deterministic_git_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin a git identity for every scenario in this module.
+
+    These goldens pin the COMPLETE stderr stream, which makes them the only
+    tests in the suite that can observe `openkos: WARNING -- git identity
+    unset; skipped auto-commit`. Whether that line appears depends on the
+    MACHINE: `vcs.git.has_git_identity` shells out to `git config user.name`
+    and `git config user.email`, so a workstation with a global identity takes
+    the commit path and a CI runner -- which configures none -- takes the
+    warning path. The goldens were generated on the former and passed locally;
+    all six went red on 3.12, 3.13 and 3.14 the moment CI ran them.
+
+    The other ~5,990 tests never noticed, because they assert on SUBSTRINGS and
+    one extra line is invisible to them. That is exactly why a full-stream
+    golden needs its environment pinned rather than assumed.
+
+    `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n` is what git
+    itself reads back through `git config`, so it satisfies `has_git_identity`.
+    `GIT_AUTHOR_*`/`GIT_COMMITTER_*` do NOT -- they are consumed at commit time
+    and are invisible to `git config`, which is why setting only those left the
+    warning in place. Pinning the identity (rather than filtering the warning
+    out at comparison time) keeps the goldens covering the complete stream and
+    fixes the SUCCESS path as the one under test on every machine.
+    """
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "2")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "user.name")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "openkos tests")
+    monkeypatch.setenv("GIT_CONFIG_KEY_1", "user.email")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_1", "tests@openkos.invalid")
+
+
 def _run(args: list[str]) -> dict[str, Any]:
     result = runner.invoke(app, args)
     return {
