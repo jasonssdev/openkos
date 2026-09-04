@@ -2,14 +2,18 @@
 
 ## Purpose
 
-`openkos ingest <path>` copies a raw source into the bundle, generates one
-conformant OKF Source concept, and attempts LLM-driven extraction of a
-bounded list of derived objects — zero up to a post-judge backstop cap of
-12 — each classified across the 9-type derived-object vocabulary (`Concept`, `Entity`,
-`Place`, `Event`, `Procedure`, `Decision`, `Project`, `Person`,
-`Organization`). Records provenance OKF-natively, updates the bundle catalog
-(`index.md`) and log (`log.md`), and degrades to Source-only behavior with
-zero crashes on any LLM failure.
+`openkos ingest <path>` is the CLI entry point for ingesting a raw source:
+it gates the workspace, reads the configuration, builds the LLM client,
+and performs every snapshot read, then delegates to the ingest
+application service, which stages a bounded list of derived objects —
+zero up to a post-judge backstop cap of 12, each classified across the
+9-type derived-object vocabulary (`Concept`, `Entity`, `Place`, `Event`,
+`Procedure`, `Decision`, `Project`, `Person`, `Organization`) — alongside
+the generated Source concept. `ingest` itself owns argument parsing,
+workspace and client setup, the confirmation gate, rendering the
+extraction notices and derived-object preview, catalog (`index.md`) and
+log (`log.md`) writes via the shared write helpers, and degrading to
+Source-only behavior with zero crashes on any LLM failure.
 
 ## Non-Goals
 
