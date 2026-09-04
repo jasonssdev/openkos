@@ -637,7 +637,10 @@ def _read_source_sensitivity(source_display_path: str, text: str) -> object:
     Takes the already-decoded `text` rather than reading a path itself
     (#318): the adapter snapshots the file exactly once via
     `_snapshot_read` and passes the decoded text down as `concept_text`.
-    `source_display_path` names the source (not the Source document itself
+    `source_display_path` names the SOURCE DOCUMENT whose frontmatter failed
+    to parse -- the file the operator has to open. Passing the raw source
+    instead keeps the sentence true but makes the reader derive the path, and
+    a refusal whose whole job is "go fix this file" should name it (issue #918
     -- `application/ingest.py` never holds a `Path` to the concept file,
     D2) purely for the error message. Ported from `cli/main.
     _read_source_sensitivity` (issue #918 Slice 3), adapted to a string
@@ -649,10 +652,10 @@ def _read_source_sensitivity(source_display_path: str, text: str) -> object:
         # which is neither `OSError` nor `ValueError` -- translate rather
         # than degrade.
         raise ValueError(
-            f"refusing to ingest -- the existing Source for "
-            f"'{source_display_path}' could not be parsed to resolve the "
-            "sensitivity from its snapshot -- the single read that also "
-            f"feeds the title parse and the drift baseline: {exc}"
+            f"refusing to ingest -- '{source_display_path}' frontmatter "
+            "could not be parsed to resolve the sensitivity from its "
+            "snapshot -- the single read that also feeds the title parse "
+            f"and the drift baseline: {exc}"
         ) from exc
     return metadata.get("sensitivity")
 
@@ -669,9 +672,8 @@ def _read_source_title(source_display_path: str, text: str) -> object:
         metadata, _ = okf.load_frontmatter(text)
     except Exception as exc:
         raise ValueError(
-            f"refusing to ingest -- the existing Source for "
-            f"'{source_display_path}' could not be parsed to resolve its "
-            f"existing title: {exc}"
+            f"refusing to ingest -- '{source_display_path}' frontmatter "
+            f"could not be parsed to resolve its existing title: {exc}"
         ) from exc
     return metadata.get("title")
 
@@ -711,6 +713,7 @@ def compose_source_document(
     raw_content: str | None,
     source_stem: str,
     source_display_path: str,
+    source_document_display_path: str,
     resource: str,
     origin_key: str | None,
     concept_text: str | None,
@@ -771,12 +774,12 @@ def compose_source_document(
 
     if concept_text is not None:
         on_disk_sensitivity = _read_source_sensitivity(
-            source_display_path, concept_text
+            source_document_display_path, concept_text
         )
         resolved_sensitivity = okf.combine_sensitivity(
             on_disk_sensitivity, cfg.default_sensitivity
         )
-        on_disk_title = _read_source_title(source_display_path, concept_text)
+        on_disk_title = _read_source_title(source_document_display_path, concept_text)
     else:
         on_disk_sensitivity = None
         resolved_sensitivity = cfg.default_sensitivity

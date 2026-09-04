@@ -5472,6 +5472,14 @@ def _ingest_single(
             raw_content=raw_content,
             source_stem=src.stem,
             source_display_path=str(src),
+            # A SECOND path, deliberately. `source_display_path` names the RAW
+            # source and feeds the Source document's description ("Raw source
+            # imported from '<src>'"); the refusal messages must instead name
+            # the SOURCE DOCUMENT, because that is the file whose frontmatter
+            # failed to parse and the one the operator has to open. The
+            # pre-move code used two different values here and collapsing them
+            # into one silently reworded the refusal (#918 Slice 3).
+            source_document_display_path=str(concept_path),
             resource=resource,
             origin_key=destination.origin_key,
             concept_text=concept_text,

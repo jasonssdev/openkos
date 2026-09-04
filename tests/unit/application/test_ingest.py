@@ -599,6 +599,7 @@ def test_compose_source_document_concept_text_none_means_no_prior_source() -> No
         raw_content="Some raw notes about self-control.",
         source_stem="notes",
         source_display_path="notes.txt",
+        source_document_display_path="bundle/sources/notes.md",
         resource="raw/notes.txt",
         origin_key="deadbeef",
         concept_text=None,
@@ -620,6 +621,7 @@ def test_compose_source_document_reads_back_on_disk_sensitivity() -> None:
         raw_content="Some raw notes about self-control.",
         source_stem="notes",
         source_display_path="notes.txt",
+        source_document_display_path="bundle/sources/notes.md",
         resource="raw/notes.txt",
         origin_key="deadbeef",
         concept_text=prior,
@@ -639,6 +641,7 @@ def test_compose_source_document_reads_back_on_disk_title() -> None:
         raw_content="Some raw notes about self-control.",
         source_stem="notes",
         source_display_path="notes.txt",
+        source_document_display_path="bundle/sources/notes.md",
         resource="raw/notes.txt",
         origin_key="deadbeef",
         concept_text=prior,
@@ -661,12 +664,50 @@ def test_compose_source_document_raises_on_malformed_prior_frontmatter() -> None
             raw_content="Some raw notes about self-control.",
             source_stem="notes",
             source_display_path="notes.txt",
+            source_document_display_path="bundle/sources/notes.md",
             resource="raw/notes.txt",
             origin_key="deadbeef",
             concept_text=malformed,
             cfg=_default_cfg(),
             timestamp="2026-07-14T18:30:00Z",
         )
+
+
+def test_frontmatter_refusal_names_the_source_document_not_the_raw_source() -> None:
+    """The refusal must name the file the operator has to open.
+
+    `compose_source_document` takes TWO display paths and it is easy to see
+    them as redundant: `source_display_path` (the raw source) feeds the Source
+    document's description, while `source_document_display_path` feeds these
+    frontmatter-parse refusals. Collapsing them into one value is exactly what
+    happened during the #918 Slice-3 extraction, and every test stayed green,
+    because the only assertion on this message matched `"could not be parsed"`
+    -- a substring both wordings satisfy.
+
+    So this asserts the SPECIFIC path and the word `frontmatter`. The two
+    fixture paths are deliberately different; if they were equal, this test
+    could not fail.
+    """
+    malformed = "---\ntitle: [unclosed\n---\nbody\n"
+
+    with pytest.raises(ValueError, match="refusing to ingest") as excinfo:
+        ingest_service.compose_source_document(
+            raw_content="Some raw notes about self-control.",
+            source_stem="notes",
+            source_display_path="notes.txt",
+            source_document_display_path="bundle/sources/notes.md",
+            resource="raw/notes.txt",
+            origin_key="deadbeef",
+            concept_text=malformed,
+            cfg=_default_cfg(),
+            timestamp="2026-07-14T18:30:00Z",
+        )
+
+    message = str(excinfo.value)
+    assert "'bundle/sources/notes.md' frontmatter" in message
+    assert "notes.txt" not in message, (
+        "the refusal named the raw source, which has no frontmatter at all"
+    )
 
 
 def test_compose_source_document_renders_nothing(
@@ -678,6 +719,7 @@ def test_compose_source_document_renders_nothing(
         raw_content="Some raw notes about self-control.",
         source_stem="notes",
         source_display_path="notes.txt",
+        source_document_display_path="bundle/sources/notes.md",
         resource="raw/notes.txt",
         origin_key="deadbeef",
         concept_text=None,
@@ -698,6 +740,7 @@ def test_compose_source_document_binary_source_description() -> None:
         raw_content=None,
         source_stem="notes",
         source_display_path="notes.bin",
+        source_document_display_path="bundle/sources/notes.md",
         resource="raw/notes.bin",
         origin_key="deadbeef",
         concept_text=None,
@@ -713,6 +756,11 @@ def _source_plan(**overrides: object) -> ingest_service.SourceDocumentPlan:
         "raw_content": "Some raw notes about self-control.",
         "source_stem": "notes",
         "source_display_path": "notes.txt",
+        # Deliberately DIFFERENT from `source_display_path`: the description
+        # names the raw source, the frontmatter-refusal messages name the
+        # Source document. A fixture that made them equal could not catch the
+        # two being collapsed into one value again.
+        "source_document_display_path": "bundle/sources/notes.md",
         "resource": "raw/notes.txt",
         "origin_key": "deadbeef",
         "concept_text": None,
