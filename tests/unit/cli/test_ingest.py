@@ -25,6 +25,7 @@ import pytest
 from typer.testing import CliRunner, _NamedTextIOWrapper
 
 from openkos import config, fsio
+from openkos.application import ingest as application_ingest
 from openkos.bundle import index as bundle_index
 from openkos.bundle import log as bundle_log
 from openkos.cli import main
@@ -1159,11 +1160,12 @@ def test_stage_derived_objects_returns_no_extractable_text_reason(
     `raw_content` is blank -- the tuple return shape carries the skip
     reason alongside the (empty) plan list (design: `_stage_derived_objects`
     return shape; spec: no-extractable-text is written)."""
-    plans, skip_reason, _notice = main._stage_derived_objects(
+    outcome = application_ingest.stage_derived_objects(
         **_stage_kwargs(tmp_path, raw_content="   ")  # type: ignore[arg-type]
     )
+    plans, skip_reason, _notice = outcome.plans, outcome.skip_reason, outcome.notices
 
-    assert plans == []
+    assert plans == ()
     assert skip_reason == "no-extractable-text"
 
 
@@ -1173,25 +1175,43 @@ def test_stage_derived_objects_returns_blocked_by_sensitivity_reason(
     """`_stage_derived_objects` returns `([], "blocked-by-sensitivity")` when
     the workspace floor blocks the LLM send (spec: blocked-by-sensitivity is
     written)."""
-    plans, skip_reason, _notice = main._stage_derived_objects(
+    outcome = application_ingest.stage_derived_objects(
         **_stage_kwargs(tmp_path, workspace_floor="confidential")  # type: ignore[arg-type]
     )
+    plans, skip_reason, _notice = outcome.plans, outcome.skip_reason, outcome.notices
 
-    assert plans == []
+    assert plans == ()
     assert skip_reason == "blocked-by-sensitivity"
 
 
-def test_stage_derived_objects_returns_failed_reason(tmp_path: Path) -> None:
-    """`_stage_derived_objects` returns `([], "failed")` when `llm.chat`
-    raises `OllamaError` (spec: failed is written)."""
-    plans, skip_reason, _notice = main._stage_derived_objects(
-        **_stage_kwargs(  # type: ignore[arg-type]
-            tmp_path, llm=_FakeLLM(raises=OllamaUnavailable("boom"))
-        )
-    )
+def test_ingest_stamps_failed_reason_when_llm_chat_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`openkos ingest` stamps `extraction_status: failed` and reports the
+    degrade to stderr when `llm.chat` raises `OllamaError` (spec: failed is
+    written).
 
-    assert plans == []
-    assert skip_reason == "failed"
+    Repointed off `_stage_derived_objects` (issue #918 Slice 2): the service
+    no longer catches `OllamaError` itself (design: "the backend exception
+    propagates; the adapter catches `OllamaError`") --
+    `tests/unit/application/test_ingest.py::test_stage_derived_objects_propagates_ollama_error`
+    now covers the PROPAGATION; this test covers the ADAPTER's catch, which
+    is CLI-observable behavior and belongs at this layer."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, raises=OllamaUnavailable("boom"))
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert (
+        "openkos ingest: concept extraction skipped -- boom; keeping the Source only."
+        in result.stderr
+    )
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["extraction_status"] == "failed"
 
 
 def test_stage_derived_objects_returns_no_concepts_found_reason(
@@ -1200,11 +1220,12 @@ def test_stage_derived_objects_returns_no_concepts_found_reason(
     """`_stage_derived_objects` returns `([], "no-concepts-found")` when
     extraction succeeds with zero candidates (spec: no-concepts-found is
     written)."""
-    plans, skip_reason, _notice = main._stage_derived_objects(
+    outcome = application_ingest.stage_derived_objects(
         **_stage_kwargs(tmp_path, llm=_FakeLLM('{"extract": false}'))  # type: ignore[arg-type]
     )
+    plans, skip_reason, _notice = outcome.plans, outcome.skip_reason, outcome.notices
 
-    assert plans == []
+    assert plans == ()
     assert skip_reason == "no-concepts-found"
 
 
@@ -1214,9 +1235,10 @@ def test_stage_derived_objects_returns_none_reason_on_success(
     """`_stage_derived_objects` returns `(plans, None)` when at least one
     candidate is staged -- `skip_reason` is `None` on the healthy path
     (design: sequence diagram, terminal `return plans, None`)."""
-    plans, skip_reason, _notice = main._stage_derived_objects(
+    outcome = application_ingest.stage_derived_objects(
         **_stage_kwargs(tmp_path, llm=_FakeLLM(_concept_reply()))  # type: ignore[arg-type]
     )
+    plans, skip_reason, _notice = outcome.plans, outcome.skip_reason, outcome.notices
 
     assert len(plans) == 1
     assert skip_reason is None
@@ -1238,7 +1260,7 @@ def test_stage_derived_objects_births_person_above_the_floor(
     -seam site tests -- it must fail if ONLY `_stage_derived_objects`'s
     call site is reverted to `sensitivity=stamp_sensitivity` (a `base`-only
     stamp), independent of the `query --save` seam's own site test (WU4)."""
-    plans, reason, _notice = main._stage_derived_objects(
+    outcome = application_ingest.stage_derived_objects(
         **_stage_kwargs(  # type: ignore[arg-type]
             tmp_path,
             llm=_FakeLLM(_person_reply()),
@@ -1246,6 +1268,7 @@ def test_stage_derived_objects_births_person_above_the_floor(
             cfg=_default_cfg(default_sensitivity="public"),
         )
     )
+    plans, reason, _notice = outcome.plans, outcome.skip_reason, outcome.notices
 
     assert reason is None
     assert len(plans) == 1
@@ -1260,7 +1283,7 @@ def test_stage_derived_objects_non_defaulted_type_is_untouched(
     """A type absent from the mapping (`Organization`) is born exactly at
     the Source's resolved level, with no per-type raise (spec: "A type
     absent from the mapping is unaffected")."""
-    plans, reason, _notice = main._stage_derived_objects(
+    outcome = application_ingest.stage_derived_objects(
         **_stage_kwargs(  # type: ignore[arg-type]
             tmp_path,
             llm=_FakeLLM(_organization_reply()),
@@ -1268,6 +1291,7 @@ def test_stage_derived_objects_non_defaulted_type_is_untouched(
             cfg=_default_cfg(default_sensitivity="public"),
         )
     )
+    plans, reason, _notice = outcome.plans, outcome.skip_reason, outcome.notices
 
     assert reason is None
     assert len(plans) == 1
@@ -1279,7 +1303,7 @@ def test_stage_derived_objects_non_defaulted_type_is_untouched(
 def test_stage_derived_objects_clamps_at_confidential(tmp_path: Path) -> None:
     """A `confidential` floor stays `confidential` -- clamped, never an
     out-of-range value (spec: "Confidential floor stays confidential")."""
-    plans, reason, _notice = main._stage_derived_objects(
+    outcome = application_ingest.stage_derived_objects(
         **_stage_kwargs(  # type: ignore[arg-type]
             tmp_path,
             llm=_FakeLLM(_person_reply()),
@@ -1289,6 +1313,7 @@ def test_stage_derived_objects_clamps_at_confidential(tmp_path: Path) -> None:
             cfg=_default_cfg(default_sensitivity="confidential"),
         )
     )
+    plans, reason, _notice = outcome.plans, outcome.skip_reason, outcome.notices
 
     assert reason is None
     assert len(plans) == 1
@@ -1507,9 +1532,10 @@ def test_stage_derived_objects_union_judge_false_calls_extract_concept_once(
     (design D9: 39 existing test call sites keep exercising this)."""
     llm = _FakeLLM(_concept_reply())
 
-    plans, skip_reason, _notice = main._stage_derived_objects(
+    outcome = application_ingest.stage_derived_objects(
         **_stage_kwargs(tmp_path, llm=llm, union_judge=False)  # type: ignore[arg-type]
     )
+    plans, skip_reason, _notice = outcome.plans, outcome.skip_reason, outcome.notices
 
     assert len(llm.calls) == 1
     assert len(plans) == 1
@@ -1530,9 +1556,10 @@ def test_stage_derived_objects_union_judge_true_calls_extract_concept_union(
         ]
     )
 
-    plans, skip_reason, _notice = main._stage_derived_objects(
+    outcome = application_ingest.stage_derived_objects(
         **_stage_kwargs(tmp_path, llm=llm, union_judge=True)  # type: ignore[arg-type]
     )
+    plans, skip_reason, _notice = outcome.plans, outcome.skip_reason, outcome.notices
 
     assert len(llm.calls) == 3
     assert len(plans) == 2
@@ -4367,7 +4394,6 @@ def test_reingest_with_staging_marker_skips_extraction(
 def test_stage_derived_objects_counts_the_build_failure_but_not_the_collision(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
 ) -> None:
     """#884: an in-batch slug collision is SKIPPED but NOT counted as a
     staging loss; a failed build still is.
@@ -4380,9 +4406,12 @@ def test_stage_derived_objects_counts_the_build_failure_but_not_the_collision(
     happened. It also left debt no command could clear, since the remedy
     that marker prescribes (`--re-extract`) reproduces the same collision.
 
-    Both stderr echoes still fire: the operator is told about the skipped
-    duplicate, which is a fact, without the Source being stamped with a
-    loss claim that is not."""
+    Both staging decisions are still DISCLOSED -- the operator is told
+    about the skipped duplicate, which is a fact, without the Source being
+    stamped with a loss claim that is not (issue #918 Slice 2: the disclosure
+    is now a `StagingDrop` the ADAPTER renders, not a direct stderr echo
+    from this call -- see `tests/unit/cli/test_ingest.py`'s CLI-level
+    `_render_staged_derived_objects` coverage for the rendered wording)."""
     _init_workspace(tmp_path, monkeypatch)
     cfg = config.read_config(tmp_path)
     reply = _multi_object_reply(
@@ -4391,7 +4420,7 @@ def test_stage_derived_objects_counts_the_build_failure_but_not_the_collision(
         _concept_reply(title="Stoic Framework\nExtra Line"),
     )
 
-    plans, skip_reason, notice = main._stage_derived_objects(
+    outcome = application_ingest.stage_derived_objects(
         raw_content="Notes about Stoic practice.",
         source_title="notes",
         source_slug="notes",
@@ -4403,6 +4432,7 @@ def test_stage_derived_objects_counts_the_build_failure_but_not_the_collision(
         cfg=cfg,
         union_judge=False,
     )
+    plans, skip_reason, notice = outcome.plans, outcome.skip_reason, outcome.notices
 
     assert len(plans) == 1
     assert plans[0].slug == "stoic-practice"
@@ -4416,10 +4446,12 @@ def test_stage_derived_objects_counts_the_build_failure_but_not_the_collision(
         "objects-without-evidence",
         "candidates-dropped-in-staging",
     )
-    err = capsys.readouterr().err
-    assert "duplicate slug" in err
-    assert "failed validation" in err
-    assert "1 extracted candidate(s) could not be staged" in err
+    assert outcome.lost_in_staging == 1
+    drop_kinds = [drop.kind for drop in outcome.drops]
+    assert "in-batch-collision" in drop_kinds
+    assert "build-failed" in drop_kinds
+    build_failed = next(drop for drop in outcome.drops if drop.kind == "build-failed")
+    assert build_failed.error  # non-empty `str(exc)` from `okf.build_concept`
 
 
 def test_reingest_reconciles_per_slug_skips_existing_inserts_new(
@@ -7381,9 +7413,10 @@ def test_stage_derived_objects_records_the_alternative_in_frontmatter(
     The stderr line scrolls away; the frontmatter is what a human reading
     the bundle later, or `lint`, can still act on.
     """
-    plans, reason, _notice = main._stage_derived_objects(
+    outcome = application_ingest.stage_derived_objects(
         **_stage_kwargs(tmp_path, llm=_FakeLLM(_NEAR_BOUNDARY_REPLY))  # type: ignore[arg-type]
     )
+    plans, reason, _notice = outcome.plans, outcome.skip_reason, outcome.notices
 
     assert reason is None
     assert len(plans) == 1
@@ -7405,7 +7438,7 @@ def test_stage_derived_objects_carries_the_alternative_on_the_plan_silently(
     it into one summary line per run; the frontmatter record (the durable
     signal) is untouched.
     """
-    plans, _, _notice = main._stage_derived_objects(
+    outcome = application_ingest.stage_derived_objects(
         **_stage_kwargs(  # type: ignore[arg-type]
             tmp_path,
             llm=_FakeLLM(_NEAR_BOUNDARY_REPLY),
@@ -7415,6 +7448,7 @@ def test_stage_derived_objects_carries_the_alternative_on_the_plan_silently(
             raw_content="Notes. A seminar taught this term. Mostly Hellenistic ethics.",
         )
     )
+    plans, _, _notice = outcome.plans, outcome.skip_reason, outcome.notices
 
     assert len(plans) == 1
     assert plans[0].type_alternative == "Project"
@@ -7506,9 +7540,10 @@ def test_stage_derived_objects_stays_silent_when_the_type_was_clear(
         '"description": "A Stoic concept.", "body": ""}]'
     )
 
-    plans, _, _notice = main._stage_derived_objects(
+    outcome = application_ingest.stage_derived_objects(
         **_stage_kwargs(tmp_path, llm=_FakeLLM(reply))  # type: ignore[arg-type]
     )
+    plans, _, _notice = outcome.plans, outcome.skip_reason, outcome.notices
 
     metadata, _ = okf.load_frontmatter(plans[0].content)
     assert okf.TYPE_ALTERNATIVE_KEY not in metadata
@@ -8816,6 +8851,21 @@ def test_participant_ungrounded_notice_is_silent_when_every_name_is_grounded() -
     assert main._participant_ungrounded_notice(report) is None
 
 
+def test_main_no_longer_exposes_the_extractor_names() -> None:
+    """`main` carries neither `extract_concept` nor `extract_concept_union`
+    (issue #918 Slice 2, design: "Test Migration Plan") -- the extractor-
+    selection line moved into `application/ingest.py::stage_derived_objects`
+    with the production use, so `ruff check .` (F401) forced both imports'
+    deletion, and `monkeypatch.setattr(main, "extract_concept", ...)` (the
+    computed-name form this repo actually used, `test_ingest.py:8862-8863`
+    pre-move) now raises `AttributeError` under pytest's default
+    `raising=True` instead of silently no-opping -- confirmed empirically
+    during Slice 2 apply. This test pins the absence so a future re-import
+    cannot re-open that failure mode."""
+    assert not hasattr(main, "extract_concept")
+    assert not hasattr(main, "extract_concept_union")
+
+
 # --- concurrent_extraction reaches BOTH extractors (#744) --------------------
 
 
@@ -8860,9 +8910,15 @@ def test_stage_derived_objects_forwards_concurrent_extraction_from_config(
     """
     seen: dict[str, object] = {}
     target = "extract_concept_union" if union_judge else "extract_concept"
-    monkeypatch.setattr(main, target, _capturing_extractor(seen))
+    # Repointed off `main` (issue #918 Slice 2) -- the extractor-selection
+    # line moved into `application/ingest.py` with `stage_derived_objects`
+    # itself; `main` no longer imports either extractor name at all (design:
+    # "Test Migration Plan" -- confirmed by `test_main_no_longer_exposes_the_extractor_names`
+    # below, and mechanically by `ruff check .` (F401) forcing their
+    # deletion the moment the production use moved).
+    monkeypatch.setattr(application_ingest, target, _capturing_extractor(seen))
 
-    main._stage_derived_objects(
+    application_ingest.stage_derived_objects(
         **_stage_kwargs(  # type: ignore[arg-type]
             tmp_path,
             cfg=_default_cfg(concurrent_extraction=enabled),
@@ -8873,11 +8929,24 @@ def test_stage_derived_objects_forwards_concurrent_extraction_from_config(
     assert seen["concurrent"] is enabled
 
 
-def test_stage_derived_objects_degrades_when_a_concurrent_window_fails(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+def _enable_concurrent_extraction_single_run(tmp_path: Path) -> None:
+    """Flip the workspace to `concurrent_extraction: true` and
+    `union_judge: false` -- the single-run extraction path every #746 test
+    below exercises, matching the pre-move direct-function tests' explicit
+    `union_judge=False` (issue #918 Slice 2: `DEFAULT_UNION_JUDGE` is
+    `True`, so the union path must be turned off explicitly or these tests
+    would silently start exercising a different extractor)."""
+    _set_config_field(
+        tmp_path, "# concurrent_extraction: true", "concurrent_extraction: true"
+    )
+    _set_config_field(tmp_path, "# union_judge: true", "union_judge: false")
+
+
+def test_ingest_degrades_when_a_concurrent_window_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The CLI's `OllamaError` degrade path must still hold through the REAL
-    concurrent fan-out, not just through a stubbed extractor.
+    """`openkos ingest`'s `OllamaError` degrade path must still hold through
+    the REAL concurrent fan-out, not just through a stubbed extractor.
 
     The wiring test above replaces the extractor entirely, so it proves the
     flag arrives and nothing about what happens when a window fails once the
@@ -8892,7 +8961,11 @@ def test_stage_derived_objects_degrades_when_a_concurrent_window_fails(
     supposed to be schedule-independent. The barrier test in
     `tests/unit/extraction/test_concept.py` is the one that can see whether
     concurrency happened at all.
-    """
+
+    Repointed off `_stage_derived_objects` (issue #918 Slice 2): the
+    `OllamaError` catch and the #746 concurrency advisory moved to
+    `cli/main.py::_ingest_single` (the adapter), so this is now a full CLI
+    invocation rather than a direct call into the (moved) service."""
 
     class _FailingWindowLLM:
         locality = LOCAL_BACKEND_LOCALITY
@@ -8917,20 +8990,20 @@ def test_stage_derived_objects_degrades_when_a_concurrent_window_fails(
     assert len(windows) > concept_mod.FAN_OUT_CONCURRENCY
     llm = _FailingWindowLLM(windows[1])
 
-    plans, skip_reason, notice = main._stage_derived_objects(
-        **_stage_kwargs(  # type: ignore[arg-type]
-            tmp_path,
-            raw_content=text,
-            llm=llm,
-            cfg=_default_cfg(concurrent_extraction=True),
-            union_judge=False,
-        )
-    )
+    _init_workspace(tmp_path, monkeypatch)
+    _enable_concurrent_extraction_single_run(tmp_path)
+    monkeypatch.setattr("openkos.cli.main.OllamaClient", lambda *a, **kw: llm)
+    source = tmp_path / "notes.txt"
+    source.write_text(text, encoding="utf-8")
 
-    assert plans == []
-    assert skip_reason == "failed"
-    assert notice == ()
-    assert "keeping the Source only" in capsys.readouterr().err
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert "keeping the Source only" in result.stderr
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["extraction_status"] == "failed"
+    assert "extraction_notice" not in metadata
 
 
 # --- a timeout on the concurrent path names the queuing risk (#746) ----------
@@ -8963,7 +9036,7 @@ def _chunked_text() -> str:
 
 
 def test_timeout_on_the_concurrent_path_names_queuing_and_both_exits(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A timeout during a concurrent chunked run must say WHY it might be one.
 
@@ -8972,27 +9045,28 @@ def test_timeout_on_the_concurrent_path_names_queuing_and_both_exits(
     operator to connect a timeout to a setting they had changed. The advisory
     names the interaction and BOTH exits, following the same
     name-the-resolving-verb convention `doctor` already uses.
-    """
-    plans, skip_reason, _notice = main._stage_derived_objects(
-        **_stage_kwargs(  # type: ignore[arg-type]
-            tmp_path,
-            raw_content=_chunked_text(),
-            llm=_TimingOutLLM(_timeout_exc()),
-            cfg=_default_cfg(concurrent_extraction=True),
-            union_judge=False,
-        )
-    )
 
-    err = capsys.readouterr().err
-    assert plans == []
-    assert skip_reason == "failed"
+    Repointed off `_stage_derived_objects` (issue #918 Slice 2) -- see
+    `test_ingest_degrades_when_a_concurrent_window_fails`'s docstring."""
+    _init_workspace(tmp_path, monkeypatch)
+    _enable_concurrent_extraction_single_run(tmp_path)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient", lambda *a, **kw: _TimingOutLLM(_timeout_exc())
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text(_chunked_text(), encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    err = result.stderr
     assert "keeping the Source only" in err
     assert "concurrent_extraction" in err
     assert "OLLAMA_NUM_PARALLEL" in err
 
 
 def test_no_queuing_advisory_when_the_failure_is_not_a_timeout(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A refused connection is not a deadline. Blaming queuing here would send
     the operator after a concurrency setting while their server is simply not
@@ -9005,54 +9079,57 @@ def test_no_queuing_advisory_when_the_failure_is_not_a_timeout(
     except OllamaUnavailable as exc:
         refused = exc
 
-    main._stage_derived_objects(
-        **_stage_kwargs(  # type: ignore[arg-type]
-            tmp_path,
-            raw_content=_chunked_text(),
-            llm=_TimingOutLLM(refused),
-            cfg=_default_cfg(concurrent_extraction=True),
-            union_judge=False,
-        )
+    _init_workspace(tmp_path, monkeypatch)
+    _enable_concurrent_extraction_single_run(tmp_path)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient", lambda *a, **kw: _TimingOutLLM(refused)
     )
+    source = tmp_path / "notes.txt"
+    source.write_text(_chunked_text(), encoding="utf-8")
 
-    assert "concurrent_extraction" not in capsys.readouterr().err
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert "concurrent_extraction" not in result.stderr
 
 
 def test_no_queuing_advisory_when_concurrency_was_never_enabled(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A serial run's timeout has nothing to do with #744, so the advisory
     must not fire on the DEFAULT path -- where most timeouts will happen."""
-    main._stage_derived_objects(
-        **_stage_kwargs(  # type: ignore[arg-type]
-            tmp_path,
-            raw_content=_chunked_text(),
-            llm=_TimingOutLLM(_timeout_exc()),
-            cfg=_default_cfg(concurrent_extraction=False),
-            union_judge=False,
-        )
+    _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(tmp_path, "# union_judge: true", "union_judge: false")
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient", lambda *a, **kw: _TimingOutLLM(_timeout_exc())
     )
+    source = tmp_path / "notes.txt"
+    source.write_text(_chunked_text(), encoding="utf-8")
 
-    assert "concurrent_extraction" not in capsys.readouterr().err
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert "concurrent_extraction" not in result.stderr
 
 
 def test_no_queuing_advisory_when_the_source_never_fanned_out(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A source below the chunking threshold has no windows to overlap, so
     concurrency was not involved even with the flag on. This is the arm a
     naive `if cfg.concurrent_extraction` check would get wrong."""
-    main._stage_derived_objects(
-        **_stage_kwargs(  # type: ignore[arg-type]
-            tmp_path,
-            raw_content="Short notes about self-control.",
-            llm=_TimingOutLLM(_timeout_exc()),
-            cfg=_default_cfg(concurrent_extraction=True),
-            union_judge=False,
-        )
+    _init_workspace(tmp_path, monkeypatch)
+    _enable_concurrent_extraction_single_run(tmp_path)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient", lambda *a, **kw: _TimingOutLLM(_timeout_exc())
     )
+    source = tmp_path / "notes.txt"
+    source.write_text("Short notes about self-control.", encoding="utf-8")
 
-    assert "concurrent_extraction" not in capsys.readouterr().err
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert "concurrent_extraction" not in result.stderr
 
 
 def test_ingest_judge_unavailable_notice_names_both_compounding_failures(
