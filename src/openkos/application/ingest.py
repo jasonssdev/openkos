@@ -601,7 +601,9 @@ def converged_reingest(
 
     1. `re_extract` -- the deliberate redo always runs extraction again.
     2. Unparseable frontmatter proves nothing about the previous
-       extraction (`okf.load_frontmatter` raises `ValueError`).
+       extraction (`okf.load_frontmatter` raises -- `yaml.YAMLError` for
+       malformed YAML, which is why the guard catches `Exception` rather
+       than `ValueError`, see #942).
     3. A pre-#552 legacy Source records no `origin_key` -- the full
        regenerate path is what backfills it (the no-verb self-migration),
        so such a Source takes that path ONCE and every later re-ingest of
@@ -618,10 +620,18 @@ def converged_reingest(
         return None
     try:
         prior_metadata, _ = okf.load_frontmatter(concept_text)
-    except ValueError:
+    except Exception:
         # An unparseable prior Source proves nothing about the previous
         # extraction -- fall through to the full run, which is the
         # pre-#773 behavior for every re-ingest.
+        #
+        # Bare `Exception`, matching `_read_source_sensitivity` and
+        # `_read_source_title` below (#942): `frontmatter.loads` raises
+        # `yaml.YAMLError` on malformed YAML, which is NOT a `ValueError`,
+        # so the narrower guard this replaced could never deliver the
+        # fall-through it documented. Falling through is the fail-safe
+        # direction -- the full run rewrites the Source either way, so no
+        # observation is lost by declining to trust an unreadable one.
         return None
     if prior_metadata.get(okf.ORIGIN_KEY_KEY) is None:
         return None
