@@ -25,6 +25,8 @@ from openkos.bundle import ledger as bundle_ledger
 from openkos.bundle import log as bundle_log
 from openkos.bundle import merge as bundle_merge
 from openkos.model import okf
+from openkos.resolution.adjudication import AdjudicatedCandidate, Verdict
+from openkos.resolution.candidates import CandidateGroup, Tier
 
 # ---------------------------------------------------------------------------
 # Phase 1: the `ConfirmationRequest` union (task 1.1)
@@ -1139,3 +1141,389 @@ def test_dropped_store_notice_and_residual_store_notice_move_unchanged(
     assert residual_text is not None
     assert "INCOMPLETE ERASURE -- 1 derived" in residual_text
     assert str(findings_db) in residual_text
+
+
+# ---------------------------------------------------------------------------
+# Phase 12: `adjudicate --apply-same`'s batch preview (task 12.1, Slice S5)
+# ---------------------------------------------------------------------------
+
+
+def _group(ids: tuple[str, ...], *, trigger: str = "stub") -> CandidateGroup:
+    return CandidateGroup(
+        okf_type="Concept", member_ids=ids, tier=Tier.HIGH, trigger=trigger
+    )
+
+
+def _same(group: CandidateGroup, *, rationale: str = "same") -> AdjudicatedCandidate:
+    return AdjudicatedCandidate(
+        candidate=group, verdict=Verdict.SAME, confidence=0.9, rationale=rationale
+    )
+
+
+def _different(group: CandidateGroup) -> AdjudicatedCandidate:
+    return AdjudicatedCandidate(
+        candidate=group, verdict=Verdict.DIFFERENT, confidence=0.9, rationale="diff"
+    )
+
+
+def test_ordered_merge_pair_picks_the_richer_body(tmp_path: Path) -> None:
+    """#776: the member with the richer body survives, and the criterion
+    names the rule (directly callable, no `openkos.cli` import)."""
+    layout = _workspace(tmp_path)
+    _write_concept(layout.bundle_dir, "concepts/short", title="Short", body="x")
+    _write_concept(
+        layout.bundle_dir, "concepts/long", title="Long", body="much longer body. " * 5
+    )
+
+    survivor, absorbed, criterion = lifecycle_service.ordered_merge_pair(
+        layout.bundle_dir, ("concepts/short", "concepts/long")
+    )
+
+    assert survivor == "concepts/long"
+    assert absorbed == "concepts/short"
+    assert criterion == "richer body"
+
+
+def test_ordered_merge_pair_ties_keep_ascending_id_order(tmp_path: Path) -> None:
+    """Equal body length (including two unreadable members) keeps today's
+    ascending-id convention, and the criterion says so."""
+    layout = _workspace(tmp_path)
+    _write_concept(layout.bundle_dir, "concepts/a", title="A", body="same length")
+    _write_concept(layout.bundle_dir, "concepts/b", title="B", body="same length")
+
+    survivor, absorbed, criterion = lifecycle_service.ordered_merge_pair(
+        layout.bundle_dir, ("concepts/a", "concepts/b")
+    )
+
+    assert (survivor, absorbed) == ("concepts/a", "concepts/b")
+    assert criterion == "id order -- equal body length"
+
+
+def test_prepare_one_merge_recomputes_direction_by_default(tmp_path: Path) -> None:
+    """Without a pinned `ordered_pair`, `prepare_one_merge` re-derives the
+    direction from `ordered_merge_pair` -- the richer body survives."""
+    layout = _workspace(tmp_path)
+    _write_concept(layout.bundle_dir, "concepts/a", title="A", body="x")
+    _write_concept(
+        layout.bundle_dir, "concepts/b", title="B", body="much longer body. " * 5
+    )
+    group = _group(("concepts/a", "concepts/b"))
+
+    prepared = lifecycle_service.prepare_one_merge(
+        tmp_path,
+        layout,
+        layout.bundle_dir / "index.md",
+        layout.bundle_dir / "log.md",
+        group,
+    )
+
+    assert prepared is not None
+    assert prepared.survivor_canonical == "concepts/b"
+    assert prepared.absorbed_canonical == "concepts/a"
+
+
+def test_prepare_one_merge_honors_a_pinned_ordered_pair(tmp_path: Path) -> None:
+    """#776 review CRITICAL: a pinned `ordered_pair` overrides live
+    recomputation -- Pass 2's stale-id guard depends on this."""
+    layout = _workspace(tmp_path)
+    _write_concept(layout.bundle_dir, "concepts/a", title="A", body="x")
+    _write_concept(
+        layout.bundle_dir, "concepts/b", title="B", body="much longer body. " * 5
+    )
+    group = _group(("concepts/a", "concepts/b"))
+
+    prepared = lifecycle_service.prepare_one_merge(
+        tmp_path,
+        layout,
+        layout.bundle_dir / "index.md",
+        layout.bundle_dir / "log.md",
+        group,
+        ordered_pair=("concepts/a", "concepts/b"),
+    )
+
+    assert prepared is not None
+    assert prepared.survivor_canonical == "concepts/a"
+    assert prepared.absorbed_canonical == "concepts/b"
+
+
+def test_prepare_one_merge_returns_none_for_an_unresolved_member(
+    tmp_path: Path,
+) -> None:
+    """A member already absorbed by an earlier merge (or simply missing)
+    resolves to `None`, never an exception."""
+    layout = _workspace(tmp_path)
+    _write_concept(layout.bundle_dir, "concepts/a", title="A")
+    group = _group(("concepts/a", "concepts/gone"))
+
+    prepared = lifecycle_service.prepare_one_merge(
+        tmp_path,
+        layout,
+        layout.bundle_dir / "index.md",
+        layout.bundle_dir / "log.md",
+        group,
+    )
+
+    assert prepared is None
+
+
+def _prepared_merge_fixture(tmp_path: Path) -> "lifecycle_service.PreparedMerge":
+    layout = _workspace(tmp_path)
+    _write_concept(layout.bundle_dir, "concepts/survivor", title="Survivor")
+    _write_concept(layout.bundle_dir, "concepts/absorbed", title="Absorbed")
+    index_path = layout.bundle_dir / "index.md"
+    log_path = layout.bundle_dir / "log.md"
+    survivor_path, survivor_canonical = lifecycle_service.resolve_concept_path(
+        layout.bundle_dir, "concepts/survivor"
+    )
+    absorbed_path, absorbed_canonical = lifecycle_service.resolve_concept_path(
+        layout.bundle_dir, "concepts/absorbed"
+    )
+    return lifecycle_service.prepare_merge(
+        layout.bundle_dir,
+        index_path,
+        log_path,
+        survivor_path,
+        absorbed_path,
+        survivor_canonical,
+        absorbed_canonical,
+        tmp_path,
+        now=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+
+
+def test_reconcile_planned_precedence(tmp_path: Path) -> None:
+    """Issue #803's precedence, at the relocated predicate: `no_reconcile`
+    wins over everything; no `stacked_body` is always `False`; `reconcile`
+    forces `True` when a `stacked_body` exists; otherwise the thresholds
+    decide."""
+    prepared = _prepared_merge_fixture(tmp_path)
+    strong = dataclasses.replace(
+        prepared,
+        stacked_body=lifecycle_service.StackedBodyReport(
+            absorbed_chars=950, merged_chars=1000
+        ),
+    )
+    weak = dataclasses.replace(
+        prepared,
+        stacked_body=lifecycle_service.StackedBodyReport(
+            absorbed_chars=5, merged_chars=1000
+        ),
+    )
+    unstacked = dataclasses.replace(prepared, stacked_body=None)
+
+    assert lifecycle_service.reconcile_planned(strong, no_reconcile=True) is False
+    assert (
+        lifecycle_service.reconcile_planned(
+            unstacked, no_reconcile=False, reconcile=True
+        )
+        is False
+    )
+    assert (
+        lifecycle_service.reconcile_planned(weak, no_reconcile=False, reconcile=True)
+        is True
+    )
+    assert lifecycle_service.reconcile_planned(strong, no_reconcile=False) is True
+    assert lifecycle_service.reconcile_planned(weak, no_reconcile=False) is False
+
+
+def test_preview_apply_same_confirmation_is_strip_then_exact_typed_count(
+    tmp_path: Path,
+) -> None:
+    """`BatchApplyPreview.confirmation.expected == str(len(previewed))` and
+    `match_mode == "strip-then-exact"` (`main.py:2979`'s policy) -- the
+    exact shape a `{granted: bool}` contract cannot represent."""
+    layout = _workspace(tmp_path)
+    _write_concept(layout.bundle_dir, "concepts/a", title="A")
+    _write_concept(layout.bundle_dir, "concepts/b", title="B")
+    group = _group(("concepts/a", "concepts/b"))
+
+    preview = lifecycle_service.preview_apply_same(
+        tmp_path,
+        layout,
+        layout.bundle_dir / "index.md",
+        layout.bundle_dir / "log.md",
+        [_same(group)],
+    )
+
+    assert len(preview.previewed) == 1
+    assert preview.confirmation.expected == "1"
+    assert preview.confirmation.match_mode == "strip-then-exact"
+    assert preview.confirmation.supplying_flag == "--confirm-count"
+    assert preview.confirmation.matches(" 1 ") is True
+    assert preview.confirmation.matches("2") is False
+
+
+def test_preview_apply_same_zero_eligible_short_circuit_is_decided_first(
+    tmp_path: Path,
+) -> None:
+    """A batch with zero eligible SAME 2-member groups returns an empty
+    `previewed` tuple and a `confirmation.expected == "0"` -- pure data,
+    computed with no prompt and no TTY check, so the adapter can decide the
+    "nothing to apply" short-circuit BEFORE ever touching the gate."""
+    layout = _workspace(tmp_path)
+    group = _group(("c", "d"))
+
+    preview = lifecycle_service.preview_apply_same(
+        tmp_path,
+        layout,
+        layout.bundle_dir / "index.md",
+        layout.bundle_dir / "log.md",
+        [_different(group)],
+    )
+
+    assert preview.previewed == ()
+    assert preview.skips == ()
+    assert preview.confirmation.expected == "0"
+
+
+def test_preview_apply_same_skips_n_gt2_and_records_the_group(tmp_path: Path) -> None:
+    """A SAME group with more than 2 members is excluded and recorded as an
+    `NGt2Skip`, carrying the group so the adapter can render `_echo_n_gt2_
+    skip`'s multi-line report unchanged."""
+    layout = _workspace(tmp_path)
+    group = _group(("x", "y", "z"))
+
+    preview = lifecycle_service.preview_apply_same(
+        tmp_path,
+        layout,
+        layout.bundle_dir / "index.md",
+        layout.bundle_dir / "log.md",
+        [_same(group)],
+    )
+
+    assert preview.previewed == ()
+    assert len(preview.skips) == 1
+    assert isinstance(preview.skips[0], lifecycle_service.NGt2Skip)
+    assert preview.skips[0].group == group
+
+
+def test_preview_apply_same_previewed_pair_ordered_pins_pass_two_direction(
+    tmp_path: Path,
+) -> None:
+    """#776 review CRITICAL: `PreviewedPair.ordered` carries Pass 1's
+    DISPLAYED direction, so Pass 2's `prepare_one_merge(ordered_pair=...)`
+    never re-derives it from live (possibly enriched) file contents."""
+    layout = _workspace(tmp_path)
+    _write_concept(layout.bundle_dir, "concepts/a", title="A", body="x")
+    _write_concept(
+        layout.bundle_dir, "concepts/b", title="B", body="much longer body. " * 5
+    )
+    group = _group(("concepts/a", "concepts/b"))
+
+    preview = lifecycle_service.preview_apply_same(
+        tmp_path,
+        layout,
+        layout.bundle_dir / "index.md",
+        layout.bundle_dir / "log.md",
+        [_same(group)],
+    )
+
+    assert len(preview.previewed) == 1
+    pair = preview.previewed[0]
+    # Pass 1 displayed b -> a (richer body). Pin the OPPOSITE direction to
+    # prove Pass 2 honors `ordered` rather than recomputing.
+    reprepared = lifecycle_service.prepare_one_merge(
+        tmp_path,
+        layout,
+        layout.bundle_dir / "index.md",
+        layout.bundle_dir / "log.md",
+        pair.group,
+        ordered_pair=pair.ordered,
+    )
+    assert reprepared is not None
+    assert (
+        reprepared.survivor_canonical,
+        reprepared.absorbed_canonical,
+    ) == pair.ordered
+
+
+def test_preview_apply_same_records_a_stacked_refusal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #559: a prepared pair whose stacked-body share crosses the
+    guardrail is excluded from `previewed` and recorded as a
+    `StackedRefusal` in `items` -- the typed-count gate consents to a
+    batch, not to this pair.
+
+    Exercised via a forced `PreparedMerge`: under `ordered_merge_pair`'s
+    richer-body-survives rule (#776) the absorbed side can never
+    legitimately dominate the merged body (absorbed is always the
+    NON-richer member, so its share is capped at 0.5), so this branch is
+    unreachable through realistic body lengths post-#776 and stays only
+    for a caller that could pin a non-richer-body direction --
+    `test_adjudicate.py`'s own
+    `test_adjudicate_apply_same_formerly_dominated_pair_rides_the_batch`
+    documents the identical post-#776 unreachability at the CLI layer
+    (`assert "refused (stacked-body" not in result.stdout`)."""
+    layout = _workspace(tmp_path)
+    _write_concept(layout.bundle_dir, "concepts/a", title="A")
+    _write_concept(
+        layout.bundle_dir, "concepts/b", title="B", body="much longer body. " * 5
+    )
+    group = _group(("concepts/a", "concepts/b"))
+    original_prepare_merge = lifecycle_service.prepare_merge
+
+    def _force_stacked(*args: object, **kwargs: object) -> object:
+        prepared = original_prepare_merge(*args, **kwargs)  # type: ignore[arg-type]
+        return dataclasses.replace(
+            prepared,
+            stacked_body=lifecycle_service.StackedBodyReport(
+                absorbed_chars=950, merged_chars=1000
+            ),
+        )
+
+    monkeypatch.setattr(lifecycle_service, "prepare_merge", _force_stacked)
+
+    preview = lifecycle_service.preview_apply_same(
+        tmp_path,
+        layout,
+        layout.bundle_dir / "index.md",
+        layout.bundle_dir / "log.md",
+        [_same(group)],
+    )
+
+    assert preview.previewed == ()
+    assert len(preview.items) == 1
+    assert isinstance(preview.items[0], lifecycle_service.StackedRefusal)
+    assert preview.items[0].report.exceeds_guardrail is True
+    assert preview.confirmation.expected == "0"
+
+
+def test_preview_apply_same_raises_preview_merge_failure_with_partial_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `prepare_merge` failure during Pass 1 raises `PreviewMergeFailure`
+    (mirroring `PartialForgetWrite`'s shape) carrying the failing pair's
+    identity AND everything classified before it, so the adapter can still
+    render every skip/preview line that would have printed before the
+    failure in the pre-move code."""
+    layout = _workspace(tmp_path)
+    _write_concept(layout.bundle_dir, "concepts/n1", title="N1")
+    _write_concept(layout.bundle_dir, "concepts/n2", title="N2")
+    _write_concept(layout.bundle_dir, "concepts/n3", title="N3")
+    n_gt2_group = _group(("concepts/n1", "concepts/n2", "concepts/n3"), trigger="a")
+    _write_concept(layout.bundle_dir, "concepts/a", title="A")
+    _write_concept(layout.bundle_dir, "concepts/b", title="B")
+    failing_group = _group(("concepts/a", "concepts/b"), trigger="b")
+
+    def _raise(*args: object, **kwargs: object) -> object:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(lifecycle_service, "prepare_merge", _raise)
+
+    with pytest.raises(lifecycle_service.PreviewMergeFailure) as excinfo:
+        lifecycle_service.preview_apply_same(
+            tmp_path,
+            layout,
+            layout.bundle_dir / "index.md",
+            layout.bundle_dir / "log.md",
+            [_same(n_gt2_group), _same(failing_group)],
+        )
+
+    failure = excinfo.value
+    assert isinstance(failure.survivor_id, str)
+    assert isinstance(failure.absorbed_id, str)
+    assert str(failure) == "disk full"
+    assert len(failure.partial.skips) == 1
+    assert isinstance(failure.partial.skips[0], lifecycle_service.NGt2Skip)
+    assert failure.partial.previewed == ()

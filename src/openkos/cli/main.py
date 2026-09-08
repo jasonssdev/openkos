@@ -2110,67 +2110,12 @@ def _echo_suggest_volatility_batch_failure(
         typer.echo(f"{context} -- {failure}.", err=True)
 
 
-def _member_body_length(bundle_dir: Path, member_id: str) -> int:
-    """Stripped body length of one member's document, or `-1` when it
-    cannot be read or parsed (#776) -- the one measurement
-    `_ordered_merge_pair` ranks on. `-1` rather than `0` so an unreadable
-    member can never beat a readable-but-empty one."""
-    try:
-        path, _canonical = _resolve_concept_path(bundle_dir, member_id)
-        _metadata, body = okf.load_frontmatter(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return -1
-    return len(body.strip())
-
-
-def _ordered_merge_pair(
-    bundle_dir: Path, member_ids: tuple[str, ...]
-) -> tuple[str, str, str]:
-    """`(survivor, absorbed, criterion)` for one 2-member SAME group
-    (#776): the member with the RICHER BODY survives, so a permanent
-    Concept ID is no longer decided by `f` sorting before `o` -- the E2E
-    run watched a bilingual pleonasm beat the clean id purely on string
-    order. Ties (including two unreadable members, which `-1 == -1` here
-    and `_prepare_one_merge` then reports as unresolved) keep today's
-    ascending-id order, and `criterion` names WHICH rule decided so every
-    preview can state it -- an unexplained arbitrary choice is what the
-    issue reports, not the choice itself.
-
-    Mirrors the union path's twin-drop precedent exactly: "the candidate
-    with the richer body is kept"."""
-    first, second = member_ids
-    first_length = _member_body_length(bundle_dir, first)
-    second_length = _member_body_length(bundle_dir, second)
-    if second_length > first_length:
-        return second, first, "richer body"
-    if first_length > second_length:
-        return first, second, "richer body"
-    return first, second, "id order -- equal body length"
-
-
-def _cross_source_same_pair(bundle_dir: Path, member_ids: tuple[str, ...]) -> bool:
-    """Whether a SAME verdict over `member_ids` is the RISKY class #776
-    reports: every member carries a non-empty `provenance:` and the sets
-    are DISJOINT -- extracted from different sources with no overlap, the
-    exact shape that fused two meetings held a week apart.
-
-    Deliberately `False` on missing evidence: a member with NO provenance
-    (hand-written) or an unreadable/unparseable one gives no signal, and
-    flagging on absence would mark every hand-authored concept forever.
-    The destructive paths stay guarded regardless -- an unreadable member
-    makes `_prepare_one_merge` return `None`."""
-    provenance_sets: list[set[str]] = []
-    for member_id in member_ids:
-        try:
-            path, _canonical = _resolve_concept_path(bundle_dir, member_id)
-            metadata, _body = okf.load_frontmatter(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return False
-        raw = metadata.get("provenance")
-        if not isinstance(raw, list) or not raw:
-            return False
-        provenance_sets.append({str(entry).removesuffix(".md") for entry in raw})
-    return not set.intersection(*provenance_sets)
+# `_member_body_length`/`_ordered_merge_pair`/`_cross_source_same_pair`/
+# `_cross_type_concern` moved verbatim into `application/lifecycle.py`
+# (issue #918 Slice 5) and are bound back here under their original private
+# names a few hundred lines below (design D5) -- none carries a dangerous
+# test patch site, so aliasing is safe, and `cli/curate.py` still calls
+# `cli_main._ordered_merge_pair`/`cli_main._prepare_one_merge` directly.
 
 
 _CROSS_SOURCE_REPORT_NOTE = (
@@ -2188,84 +2133,6 @@ ONE constant shared by `adjudicate --apply` and `curate`'s Identity stage
 so the two surfaces cannot drift apart."""
 
 
-def _cross_type_concern(bundle_dir: Path, member_ids: tuple[str, ...]) -> str | None:
-    """The reason a SAME verdict over `member_ids` must not be merged
-    unreviewed on TYPE grounds, or `None` when the members demonstrably
-    agree -- issue #904's risky class, the sibling of
-    `_cross_source_same_pair`'s.
-
-    A SAME verdict across types is a merge between different KINDS of
-    thing: the E2E run that filed #904 absorbed a `Project` (an ongoing
-    research initiative) into an `Event` (one meeting occurrence), and the
-    survivor was chosen by richer body, so the direction was decided by
-    length rather than by generality. Nothing in `--apply-same`'s
-    eligibility filter looked at type.
-
-    Returns the REASON PHRASE rather than a bool so every caller reads the
-    bundle exactly once and the warning it prints cannot disagree with the
-    predicate that fired it. The types are joined in `member_ids`' own
-    order -- on the `merge` path that is `(survivor, absorbed)`, so the
-    phrase states the direction as well as the disagreement -- never
-    sorted, unlike `candidates._type_label`'s ephemeral display join.
-
-    UNLIKE `_cross_source_same_pair`, one kind of missing evidence is a
-    CONCERN here rather than silence, and the asymmetry is deliberate.
-    Absent `provenance:` is ordinary -- every hand-authored concept lacks
-    it, so flagging on absence would mark them all forever. A document that
-    PARSES but declares no `type:` is not ordinary: every OKF document
-    declares one, and `candidates.py`'s eligibility filter drops a document
-    that does not. Treating that as "types agree" makes the guard fail OPEN
-    exactly where nothing else catches it.
-
-    That distinction is not theoretical, and it is the one case with no
-    other owner. `okf.load_frontmatter` does NOT raise on an unterminated
-    frontmatter block -- it returns `{}` and treats the whole file as body
-    -- so a truncated write produces a READABLE, type-less,
-    provenance-less document that silences both guards, passes
-    `_prepare_one_merge`, and merges with no warning at all. Pinned by
-    `tests/unit/cli/test_adjudicate.py`'s
-    `test_apply_same_skips_a_member_whose_type_cannot_be_read`.
-
-    A member that does not RESOLVE stays `None` -- silence, not a concern.
-    That case already has an owner: it is the already-merged/missing id
-    `_prepare_one_merge` returns `None` for, which the batch excludes from
-    the preview, the Total and Pass 2, and a second louder voice here would
-    report a stale id as a type problem.
-
-    A member that resolves but whose file cannot be READ or PARSED is a
-    concern, on the same fail-closed reasoning as the type-less case. It is
-    tempting to stay silent because `prepare_merge`'s own `_snapshot_read`
-    raises on an unreadable file and aborts the run -- and it does, pinned
-    by `test_apply_same_aborts_on_an_unreadable_member_without_writing`.
-    But the two reads happen at DIFFERENT times: this one in Pass 1's
-    eligibility loop, that one in Pass 2. A failure that clears in between
-    (a competing writer's brief lock, a re-mounted volume) leaves the pair
-    admitted to the batch with its types never compared and no warning
-    printed. Silence would be correct only if the two reads could not
-    disagree, and they can."""
-    types: list[str] = []
-    for member_id in member_ids:
-        try:
-            path, _canonical = _resolve_concept_path(bundle_dir, member_id)
-        except ValueError:
-            # Does not resolve at all: not this guard's case (see above).
-            return None
-        try:
-            metadata, _body = okf.load_frontmatter(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return f"{member_id} could not be read, so its OKF type is unknown"
-        raw = metadata.get("type")
-        if not isinstance(raw, str) or not raw:
-            return f"{member_id} declares no usable OKF type"
-        types.append(raw)
-    if len(set(types)) < 2:
-        return None
-    # `dict.fromkeys` dedupes while keeping first-seen order: a 3-member
-    # group spanning two types names each type once, in member order.
-    label = " / ".join(dict.fromkeys(types))
-    return f"members declare different OKF types ({label})"
-
-
 def _cross_type_report_note(reason: str) -> str:
     """The listing's #904 marker, on SAME verdicts only -- the risky class
     must catch the operator's eye BEFORE any apply mode is invoked."""
@@ -2281,115 +2148,12 @@ def _cross_type_walk_note(reason: str) -> str:
     return f"  note: cross-type SAME -- {reason}; review this pair before consenting"
 
 
-def _prepare_one_merge(
-    root: Path,
-    layout: config.WorkspaceLayout,
-    index_path: Path,
-    log_path: Path,
-    group: CandidateGroup,
-    *,
-    ordered_pair: tuple[str, str] | None = None,
-) -> "PreparedMerge | None":
-    """Resolve both member ids of one SAME 2-member `group` and build the
-    pure `PreparedMerge` preview, extracted verbatim from
-    `_run_adjudicate_apply`'s former per-pair body (issue #137 closing
-    slice, Phase 1 refactor) so the interactive `--apply` walk and the
-    `--apply-same` batch share exactly one apply-one-pair unit. Returns
-    `None` when either member id fails to resolve
-    (`_resolve_concept_path` raises `ValueError`) -- this covers BOTH a
-    member already absorbed by an earlier merge in this same run AND a
-    genuinely missing/invalid concept id; the two causes are
-    indistinguishable from here, so the caller must not assert either one
-    as the sole reason. Otherwise raises `OSError`/`ValueError` straight
-    from `prepare_merge`, unchanged.
-
-    Since #776 the pair is ordered by `_ordered_merge_pair` -- richer body
-    survives, ties keep ascending-id order -- so every walk that drives
-    this helper (both adjudicate apply modes and curate's Identity stage)
-    picks the same survivor by the same stated criterion.
-
-    `ordered_pair`, when given, PINS the direction instead of re-deriving
-    it from live file contents (#776 review, 3-lens CRITICAL): the
-    `--apply-same` typed count consents to Pass 1's PREVIEWED survivor,
-    and an earlier merge in the same batch can enrich a shared member
-    enough to flip a live recomputation -- the operator would then get a
-    direction they never saw. Every walk therefore computes the pair once,
-    displays it, and threads that exact pair here."""
-    if ordered_pair is None:
-        survivor_id, absorbed_id, _criterion = _ordered_merge_pair(
-            layout.bundle_dir, group.member_ids
-        )
-    else:
-        survivor_id, absorbed_id = ordered_pair
-    try:
-        survivor_path, survivor_canonical = _resolve_concept_path(
-            layout.bundle_dir, survivor_id
-        )
-        absorbed_path, absorbed_canonical = _resolve_concept_path(
-            layout.bundle_dir, absorbed_id
-        )
-    except ValueError:
-        return None
-
-    now = datetime.now(UTC)
-    return application_lifecycle.prepare_merge(
-        layout.bundle_dir,
-        index_path,
-        log_path,
-        survivor_path,
-        absorbed_path,
-        survivor_canonical,
-        absorbed_canonical,
-        root,
-        now=now,
-    )
-
-
-def _reconcile_planned(
-    prepared: "PreparedMerge", *, no_reconcile: bool, reconcile: bool = False
-) -> bool:
-    """Whether the #645 merged-body reconciliation pass runs for `prepared`.
-
-    THE single source of truth for that decision (issue #688). It previously
-    lived inline in the `merge` command body, so the three other consenting
-    callers -- `curate`'s Identity stage, `_run_adjudicate_apply` and
-    `_run_adjudicate_apply_same`, all of which drive
-    `_prepare_one_merge`/`_commit_one_merge` directly -- silently stacked
-    bodies the standalone verb would have reconciled. Since `curate` is the
-    path the product recommends and `next` points at, the recommended path
-    was the degraded one.
-
-    Both the plan DISCLOSURE and the APPLICATION read this one predicate, so
-    a caller can no longer promise a pass it does not run, or run one it did
-    not disclose.
-
-    Precedence, in the order the clauses read (issue #803):
-
-    1. `no_reconcile` wins over everything, `reconcile` included. The two
-       flags are refused TOGETHER at each command's front door, so a caller
-       reaching here with both set holds a bug rather than a request -- and
-       the safe reading of a contradiction is the one that makes no model
-       call.
-    2. A `prepared` with no `stacked_body` returns `False` even under
-       `reconcile`: an empty or whitespace-only absorbed body stacked
-       nothing, so there is nothing to reconcile and the pass would send
-       the survivor's own text to the model to be rewritten against
-       nothing.
-    3. `reconcile` then forces the pass, bypassing BOTH thresholds. They
-       are a heuristic tuned for the unattended default; a human who has
-       just read the preview's "bodies were appended, not reconciled" line
-       and typed the flag has better evidence than the heuristic does.
-    4. Otherwise the thresholds decide."""
-    if no_reconcile:
-        return False
-    if prepared.stacked_body is None:
-        return False
-    if reconcile:
-        return True
-    return (
-        prepared.stacked_body.share >= _RECONCILE_SHARE_THRESHOLD
-        and prepared.stacked_body.merged_chars >= _RECONCILE_MIN_MERGED_CHARS
-    )
+# `_prepare_one_merge`/`_reconcile_planned` moved verbatim into
+# `application/lifecycle.py` (issue #918 Slice 5) and are bound back here
+# under their original private names a few hundred lines below (design
+# D5) -- neither carries a dangerous test patch site (only direct
+# `main.X(...)` calls survive, plus `cli/curate.py`'s own direct calls),
+# so aliasing is safe.
 
 
 _RECONCILE_CONFLICT_MESSAGE: Final = (
@@ -2764,6 +2528,77 @@ def _refused_stacked_line(
     )
 
 
+def _echo_batch_pass1_skips(
+    bundle_dir: Path, preview: "application_lifecycle.BatchApplyPreview"
+) -> None:
+    """Render every Pass-1 classification exclusion from `preview.skips`
+    (issue #918 Slice 5), in the exact wording and relative order
+    `_run_adjudicate_apply_same`'s former single classification loop
+    produced -- N>2, cross-source (#776), and cross-type (#904) exclusions
+    interleave in `results`' own order, since one loop used to decide all
+    three together."""
+    for skip in preview.skips:
+        if isinstance(skip, application_lifecycle.NGt2Skip):
+            _echo_n_gt2_skip(bundle_dir, skip.group)
+        elif isinstance(skip, application_lifecycle.CrossSourceSkip):
+            # #776: a SAME verdict over members with DISJOINT provenance is
+            # the risky class -- the typed-count gate consents to a batch,
+            # not to fusing two real-world items, so the pair is routed to
+            # per-item review unless `--include-cross-source` opts in.
+            typer.echo(
+                f"{skip.member_ids[0]} / {skip.member_ids[1]}: skipped "
+                "(cross-source SAME -- members share no source; review "
+                "and merge manually with `openkos merge "
+                f"{skip.ordered[0]} {skip.ordered[1]}`, or re-run with "
+                "--include-cross-source)"
+            )
+        else:
+            # #904: a SAME verdict over members declaring DIFFERENT OKF
+            # types is the second risky class the typed count must not
+            # consent to, unless `--include-cross-type` opts in.
+            typer.echo(
+                f"{skip.member_ids[0]} / {skip.member_ids[1]}: skipped "
+                f"(cross-type SAME -- {skip.reason}; review and "
+                f"merge manually with `openkos merge {skip.ordered[0]} "
+                f"{skip.ordered[1]}`, or re-run with --include-cross-type)"
+            )
+
+
+def _echo_batch_pass1_items(
+    preview: "application_lifecycle.BatchApplyPreview",
+    *,
+    no_reconcile: bool,
+    reconcile: bool,
+) -> None:
+    """Render every Pass-1 preview-build outcome from `preview.items`
+    (issue #918 Slice 5): a stacked-body-guardrail refusal (#559) or a
+    clean previewed pair, in `eligible_groups` order -- the two interleave
+    in this same pass in the pre-move code, and this preserves that exact
+    order."""
+    for item in preview.items:
+        if isinstance(item, application_lifecycle.StackedRefusal):
+            # Issue #559: the typed-count gate consents to a batch, not to
+            # any single pair, so the guardrail is HARD here -- a dominated
+            # merge is excluded from the preview, the count, and Pass 2,
+            # and routed to the per-item-consent path instead.
+            typer.echo(
+                _refused_stacked_line(
+                    item.report, item.absorbed_canonical, item.survivor_canonical
+                )
+            )
+        else:
+            typer.echo(
+                _format_merge_preview_line(
+                    item.prepared, no_reconcile=no_reconcile, reconcile=reconcile
+                )
+            )
+            # #776: the batch survivor rule is deterministic and STATED.
+            typer.echo(
+                f"  survivor: {item.prepared.survivor_canonical} "
+                f"({item.survivor_criterion})"
+            )
+
+
 def _run_adjudicate_apply_same(
     root: Path,
     layout: config.WorkspaceLayout,
@@ -2778,36 +2613,39 @@ def _run_adjudicate_apply_same(
     include_cross_type: bool = False,
 ) -> None:
     """The guarded batch `adjudicate --apply-same` merge (issue #137
-    closing slice): Pass 1 builds ONE aggregate preview over every eligible
-    SAME 2-member group (spec: Aggregate Preview Before Any Write), reusing
-    the SAME `_prepare_one_merge`/`_format_merge_preview_line` building
-    blocks the interactive `--apply` walk uses. `total` -- the number
-    printed after the preview and required by the gate -- equals the
-    number of preview lines ACTUALLY DISPLAYED (i.e. the eligible groups
-    that still resolve right now), never the raw structural eligible-group
-    count; a group that is already unresolvable when the preview is built
-    (bogus/missing id, unrelated to this run) is silently excluded from
-    the preview, the total, and Pass 2 (4R fix: preview/Total
-    consistency). Zero eligible groups short-circuits with a "nothing to
-    apply" summary and exit 0 -- BEFORE the confirm gate -- mirroring
-    `_run_adjudicate_apply`'s own empty-state handling, so an empty batch
-    never triggers the non-TTY refusal or forces typing "0" on a TTY (4R
-    fix: zero-eligible spurious failure). The confirmation gate (spec:
-    Typed-Count Confirmation Gate) then requires the operator to type that
-    EXACT count, via `--confirm-count`, an interactive TTY prompt, or
-    refuses outright on a non-TTY without the flag -- any mismatch aborts
-    with ZERO writes. Pass 2 RE-RESOLVES and RE-PREPARES each previewed
-    pair immediately before applying it (spec: Stale-Id Guard Across
-    Batch), since an earlier merge in THIS SAME batch may already have
-    absorbed a later pair's member; that legitimate case is still skipped,
-    not crashed on, and still yields applied < previewed. Accepted merges
-    commit sequentially via `_commit_one_merge`; a mid-batch failure stops
-    the run but keeps every prior commit intact and reversible via
-    `unmerge` -- and, before raising, echoes a partial summary (applied so
-    far / previewed, and that the remainder was never attempted) so the
-    operator can drive that recovery without reconstructing the count
-    themselves (spec: Sequential Execution And Mid-Batch Failure
-    Semantics; 4R fix: mid-batch failure hides the applied count).
+    closing slice; de-presented onto `application.lifecycle.
+    preview_apply_same`, issue #918 Slice 5): Pass 1 builds ONE aggregate
+    preview over every eligible SAME 2-member group (spec: Aggregate
+    Preview Before Any Write). `total` -- the number printed after the
+    preview and required by the gate -- equals the number of preview lines
+    ACTUALLY DISPLAYED (i.e. the eligible groups that still resolve right
+    now), never the raw structural eligible-group count; a group that is
+    already unresolvable when the preview is built (bogus/missing id,
+    unrelated to this run) is silently excluded from the preview, the
+    total, and Pass 2 (4R fix: preview/Total consistency). Zero eligible
+    groups short-circuits with a "nothing to apply" summary and exit 0 --
+    BEFORE the confirm gate -- mirroring `_run_adjudicate_apply`'s own
+    empty-state handling, so an empty batch never triggers the non-TTY
+    refusal or forces typing "0" on a TTY (4R fix: zero-eligible spurious
+    failure). The confirmation gate (spec: Typed-Count Confirmation Gate)
+    then requires the operator to type that EXACT count, via
+    `--confirm-count`, an interactive TTY prompt, or refuses outright on a
+    non-TTY without the flag -- any mismatch aborts with ZERO writes.
+    Pass 2 RE-RESOLVES and RE-PREPARES each previewed pair immediately
+    before applying it (spec: Stale-Id Guard Across Batch, issue #776's
+    pinned direction -- `application_lifecycle.prepare_one_merge` is
+    called again with `ordered_pair=pair.ordered`, NEVER reusing Pass 1's
+    `PreparedMerge`), since an earlier merge in THIS SAME batch may already
+    have absorbed a later pair's member; that legitimate case is still
+    skipped, not crashed on, and still yields applied < previewed.
+    Accepted merges commit sequentially via `_commit_one_merge`; a
+    mid-batch failure stops the run but keeps every prior commit intact
+    and reversible via `unmerge` -- and, before raising, echoes a partial
+    summary (applied so far / previewed, and that the remainder was never
+    attempted) so the operator can drive that recovery without
+    reconstructing the count themselves (spec: Sequential Execution And
+    Mid-Batch Failure Semantics; 4R fix: mid-batch failure hides the
+    applied count).
 
     Pass 2's re-prepare narrows the batch's TOCTOU window but does not
     close it (the #306/#313/#319 arc): an edit landing during the confirm
@@ -2825,125 +2663,45 @@ def _run_adjudicate_apply_same(
     merges committed and reversible via `unmerge`) is echoed before the
     guard's exit 3 propagates, so the refusal keeps the same recovery
     affordance the failure path already has."""
-    eligible_groups: list[CandidateGroup] = []
-    skipped_n_gt2 = 0
-    skipped_cross_source = 0
-    skipped_cross_type = 0
-    for result in results:
-        if result.verdict is not Verdict.SAME:
-            continue
-        group = result.candidate
-        if len(group.member_ids) == 2:
-            # #776: a SAME verdict over members with DISJOINT provenance is
-            # the risky class -- the typed-count gate consents to a batch,
-            # not to fusing two real-world items, so the pair is routed to
-            # per-item review unless `--include-cross-source` opts in. The
-            # exclusion is disclosed with the exact manual command, in the
-            # survivor order `_ordered_merge_pair` would pick.
-            if not include_cross_source and _cross_source_same_pair(
-                layout.bundle_dir, group.member_ids
-            ):
-                survivor_id, absorbed_id, _criterion = _ordered_merge_pair(
-                    layout.bundle_dir, group.member_ids
-                )
-                typer.echo(
-                    f"{group.member_ids[0]} / {group.member_ids[1]}: skipped "
-                    "(cross-source SAME -- members share no source; review "
-                    "and merge manually with `openkos merge "
-                    f"{survivor_id} {absorbed_id}`, or re-run with "
-                    "--include-cross-source)"
-                )
-                skipped_cross_source += 1
-                continue
-            # #904: a SAME verdict over members declaring DIFFERENT OKF
-            # types is the second risky class the typed count must not
-            # consent to -- a `Project` was absorbed into an `Event` here,
-            # with the survivor decided by richer body rather than by
-            # generality. Routed to per-item review exactly like the
-            # cross-source class, with the same manual-command disclosure,
-            # unless `--include-cross-type` opts in. Checked AFTER the
-            # cross-source guard so a pair that is both is reported once,
-            # under the class the operator hits first.
-            survivor_id, absorbed_id, _criterion = _ordered_merge_pair(
-                layout.bundle_dir, group.member_ids
-            )
-            # Ordered survivor-first, NOT in raw `member_ids` order: this
-            # branch prints an `openkos merge <survivor> <absorbed>`
-            # command, and a type label running the other way would name
-            # the absorbed document's type first while the command names
-            # the survivor first. One direction per message.
-            cross_type_concern = _cross_type_concern(
-                layout.bundle_dir, (survivor_id, absorbed_id)
-            )
-            if not include_cross_type and cross_type_concern is not None:
-                typer.echo(
-                    f"{group.member_ids[0]} / {group.member_ids[1]}: skipped "
-                    f"(cross-type SAME -- {cross_type_concern}; review and "
-                    f"merge manually with `openkos merge {survivor_id} "
-                    f"{absorbed_id}`, or re-run with --include-cross-type)"
-                )
-                skipped_cross_type += 1
-                continue
-            eligible_groups.append(group)
-        elif len(group.member_ids) > 2:
-            _echo_n_gt2_skip(layout.bundle_dir, group)
-            skipped_n_gt2 += 1
-
-    # Each previewed entry pins the (survivor, absorbed) order Pass 1
-    # DISPLAYED (#776 review CRITICAL): the typed count consents to that
-    # exact direction, and Pass 2 must never re-derive it from live bodies
-    # an earlier merge in this same batch may have enriched.
-    previewed_groups: list[tuple[CandidateGroup, str, str]] = []
-    refused_stacked = 0
-    for group in eligible_groups:
-        survivor_id, absorbed_id, survivor_criterion = _ordered_merge_pair(
-            layout.bundle_dir, group.member_ids
+    try:
+        preview = application_lifecycle.preview_apply_same(
+            root,
+            layout,
+            index_path,
+            log_path,
+            results,
+            include_cross_source=include_cross_source,
+            include_cross_type=include_cross_type,
         )
-        try:
-            prepared = _prepare_one_merge(
-                root,
-                layout,
-                index_path,
-                log_path,
-                group,
-                ordered_pair=(survivor_id, absorbed_id),
-            )
-        except (OSError, ValueError) as exc:
-            typer.echo(
-                "openkos adjudicate --apply-same: failed while previewing "
-                f"{absorbed_id} into {survivor_id} -- {exc}.",
-                err=True,
-            )
-            raise typer.Exit(code=1) from exc
-        if prepared is None:
-            continue
-        # Issue #559: the typed-count gate consents to a batch, not to any
-        # single pair, so the guardrail is HARD here -- a dominated merge is
-        # excluded from the preview, the count, and Pass 2, and routed to
-        # the per-item-consent path instead.
-        if (
-            prepared.stacked_body is not None
-            and prepared.stacked_body.exceeds_guardrail
-        ):
-            typer.echo(
-                _refused_stacked_line(
-                    prepared.stacked_body,
-                    prepared.absorbed_canonical,
-                    prepared.survivor_canonical,
-                )
-            )
-            refused_stacked += 1
-            continue
-        previewed_groups.append((group, survivor_id, absorbed_id))
+    except application_lifecycle.PreviewMergeFailure as exc:
+        _echo_batch_pass1_skips(layout.bundle_dir, exc.partial)
+        _echo_batch_pass1_items(
+            exc.partial, no_reconcile=no_reconcile, reconcile=reconcile
+        )
         typer.echo(
-            _format_merge_preview_line(
-                prepared, no_reconcile=no_reconcile, reconcile=reconcile
-            )
+            "openkos adjudicate --apply-same: failed while previewing "
+            f"{exc.absorbed_id} into {exc.survivor_id} -- {exc}.",
+            err=True,
         )
-        # #776: the batch survivor rule is deterministic and STATED.
-        typer.echo(f"  survivor: {prepared.survivor_canonical} ({survivor_criterion})")
-    total = len(previewed_groups)
+        raise typer.Exit(code=1) from exc
+
+    _echo_batch_pass1_skips(layout.bundle_dir, preview)
+    _echo_batch_pass1_items(preview, no_reconcile=no_reconcile, reconcile=reconcile)
+    total = len(preview.previewed)
     typer.echo(f"Total: {total}")
+
+    skipped_n_gt2 = sum(
+        1 for s in preview.skips if isinstance(s, application_lifecycle.NGt2Skip)
+    )
+    skipped_cross_source = sum(
+        1 for s in preview.skips if isinstance(s, application_lifecycle.CrossSourceSkip)
+    )
+    skipped_cross_type = sum(
+        1 for s in preview.skips if isinstance(s, application_lifecycle.CrossTypeSkip)
+    )
+    refused_stacked = sum(
+        1 for i in preview.items if isinstance(i, application_lifecycle.StackedRefusal)
+    )
 
     if total == 0:
         skipped_total = (
@@ -2967,34 +2725,27 @@ def _run_adjudicate_apply_same(
     if confirm_count is not None:
         typed_count = confirm_count
     elif sys.stdin.isatty():
-        typed_count = typer.prompt(f"Type the eligible count ({total}) to proceed")
+        typed_count = typer.prompt(preview.confirmation.prompt)
     else:
-        typer.echo(
-            "openkos adjudicate --apply-same: refusing to apply -- stdin is "
-            "not a TTY; re-run with --confirm-count.",
-            err=True,
-        )
+        typer.echo(preview.confirmation.non_tty_refusal, err=True)
         raise typer.Exit(code=1)
 
-    if typed_count.strip() != str(total):
-        typer.echo(
-            "openkos adjudicate --apply-same: aborted -- confirmation count "
-            "did not match exactly; nothing was written.",
-            err=True,
-        )
+    if not preview.confirmation.matches(typed_count):
+        typer.echo(preview.confirmation.mismatch_abort, err=True)
         raise typer.Exit(code=1)
 
     applied = 0
     skipped_already_merged = 0
-    for group, survivor_id, absorbed_id in previewed_groups:
+    for pair in preview.previewed:
+        survivor_id, absorbed_id = pair.ordered
         try:
-            prepared = _prepare_one_merge(
+            prepared = application_lifecycle.prepare_one_merge(
                 root,
                 layout,
                 index_path,
                 log_path,
-                group,
-                ordered_pair=(survivor_id, absorbed_id),
+                pair.group,
+                ordered_pair=pair.ordered,
             )
         except (OSError, ValueError) as exc:
             typer.echo(
@@ -3951,27 +3702,42 @@ _first_free_disambiguated_slug = application_ingest.first_free_disambiguated_slu
 # 1). The three TYPES are bound back here under their original names, the
 # same "plain assignment, not a renamed import" shape as `_DerivedPlan`
 # above, so every quoted forward-ref annotation still elsewhere in this
-# module (`_prepare_one_merge`, `_reconcile_planned`, `_apply_reconciliation`,
-# `_commit_one_merge`, `_refused_stacked_line`) resolves unchanged.
+# module (`_apply_reconciliation`, `_commit_one_merge`,
+# `_refused_stacked_line`) resolves unchanged.
 # `_canonicalize_concept_id`/`_resolve_concept_path`/`_merge_drift_targets`
 # are likewise bound back under their original private names (design D5) --
 # none of the three carries a test patch site, so aliasing them is safe, and
 # `cli/curate.py` still calls `cli_main._merge_drift_targets` directly.
+#
+# `_member_body_length`/`_ordered_merge_pair`/`_cross_source_same_pair`/
+# `_cross_type_concern`/`_prepare_one_merge`/`_reconcile_planned` moved
+# verbatim into `application/lifecycle.py` (issue #918 Slice 5) on the same
+# reasoning: none carries a dangerous test patch site (only direct
+# `main.X(...)` calls, in this module's own listing/interactive walk and in
+# `test_adjudicate.py`, plus `cli/curate.py`'s own direct calls to
+# `_ordered_merge_pair`/`_prepare_one_merge`), so aliasing them back is
+# safe and every existing call site below resolves unchanged.
 #
 # `prepare_merge`/`merge_core` are DELIBERATELY NOT aliased (design: "the
 # one thing that would re-open the trap") -- both carry two dangerous
 # `test_adjudicate.py` patch sites apiece, where a stale
 # `monkeypatch.setattr("openkos.cli.main.prepare_merge"/"merge_core", ...)`
 # must raise `AttributeError` rather than silently no-op. Every call site in
-# this module -- `merge` itself, `_prepare_one_merge`, `_commit_one_merge` --
-# therefore calls `application_lifecycle.prepare_merge`/`merge_core` by
-# module attribute.
+# this module -- `merge` itself, `application.lifecycle.prepare_one_merge`,
+# `_commit_one_merge` -- therefore calls
+# `application_lifecycle.prepare_merge`/`merge_core` by module attribute.
 StackedBodyReport = application_lifecycle.StackedBodyReport
 PreparedMerge = application_lifecycle.PreparedMerge
 MergeResult = application_lifecycle.MergeResult
 _canonicalize_concept_id = application_lifecycle.canonicalize_concept_id
 _resolve_concept_path = application_lifecycle.resolve_concept_path
 _merge_drift_targets = application_lifecycle.merge_drift_targets
+_member_body_length = application_lifecycle._member_body_length
+_ordered_merge_pair = application_lifecycle.ordered_merge_pair
+_cross_source_same_pair = application_lifecycle.cross_source_same_pair
+_cross_type_concern = application_lifecycle.cross_type_concern
+_prepare_one_merge = application_lifecycle.prepare_one_merge
+_reconcile_planned = application_lifecycle.reconcile_planned
 
 
 def _render_staging_drop(drop: application_ingest.StagingDrop) -> None:
@@ -8612,41 +8378,6 @@ def set_volatility_cmd(
         ["openkos.yaml"],
         f"openkos: set-volatility {concept_type} -> {tier}",
     )
-
-
-_RECONCILE_SHARE_THRESHOLD = 0.2
-"""Stacked share at or above which `merge` plans the reconciliation pass
-(#645, opt-out by ruling). Below it the absorbed contribution is a stacked
-sentence or two -- an honest append, not worth a model call; the measured
-production shares (0.31-0.47, every merge of the 2026-08-13 e2e session)
-all land above it. Both levers overrule it: `--no-reconcile` skips the
-pass regardless, `--reconcile` forces it regardless."""
-
-_RECONCILE_MIN_MERGED_CHARS = 200
-"""Absolute floor under which the pass is never planned, whatever the
-share -- measured on the MERGED body, the quantity the floor was always
-describing.
-
-It preserves the old floor's stated intent exactly: two one-line bodies
-can stack at 50% share while carrying nothing worth a model call, and
-appending them is already readable. That counter-example still lands well
-below 200 MERGED chars and is still skipped.
-
-What it removes is the short-document blind spot (#803). The floor used to
-read `absorbed_chars`, which made it a stricter, unstated second rule for
-any merged document below `200 / _RECONCILE_SHARE_THRESHOLD` = 1000 chars:
-a short document is short in both halves, so it could never clear an
-absolute absorbed floor no matter how large its share. The reported case
-was two `Person` merges carrying 189 and 181 absorbed chars at 39% and 40%
-share -- nearly half the document each -- refused by 11 and 19 characters,
-and left on disk with two `# ` document roots.
-
-The change is MONOTONE: `merged_chars >= absorbed_chars` always (the
-merged body is the survivor's body plus the delimiter plus the absorbed
-body), so every merge the old gate planned the new gate still plans. The
-newly admitted set is exactly the short-but-substantially-absorbed case.
-The #645 evidence merges contributed 384-615 absorbed chars each and are
-unaffected."""
 
 
 @dataclass(frozen=True)

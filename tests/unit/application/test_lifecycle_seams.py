@@ -21,6 +21,8 @@ behavioral tests in `test_lifecycle.py`:
 """
 
 import dataclasses
+import re
+from pathlib import Path
 
 from openkos.application import consent as consent_service
 from openkos.application import lifecycle as application_lifecycle
@@ -111,3 +113,59 @@ def test_forget_plan_gate_one_counts_never_become_confirmation_request_fields() 
             "outside the ConfirmationRequest union (D2/R3)"
         )
     assert not hasattr(consent_service.BooleanConfirmation, "matches")
+
+
+def test_batch_apply_preview_confirmation_carries_no_grant_field() -> None:
+    """D2 (task 12.4, Slice S5): `BatchApplyPreview.confirmation` is a real
+    `TypedChallengeConfirmation` -- the SAME union member every other typed
+    gate uses, not a bespoke field of its own that could smuggle back a
+    `granted`/`force`/`override` shape."""
+    confirmation = consent_service.TypedChallengeConfirmation(
+        prompt="Type the eligible count (0) to proceed",
+        expected="0",
+        supplying_flag="--confirm-count",
+        non_tty_refusal="refusing to apply -- stdin is not a TTY.",
+        mismatch_abort="aborted -- confirmation count did not match exactly.",
+        match_mode="strip-then-exact",
+    )
+    preview = application_lifecycle.BatchApplyPreview(
+        skips=(), items=(), previewed=(), confirmation=confirmation
+    )
+
+    assert isinstance(preview.confirmation, consent_service.TypedChallengeConfirmation)
+    field_names = {f.name for f in dataclasses.fields(type(preview.confirmation))}
+    assert not field_names & _FORBIDDEN_FIELD_NAMES
+
+
+def test_adjudicate_apply_same_repoint_count_unchanged_beyond_s1() -> None:
+    """Task 12.4: `preview_apply_same`/`prepare_one_merge`/
+    `ordered_merge_pair`/`reconcile_planned` introduce NO new
+    `"openkos.cli.main.X"` patch target naming a RELOCATED symbol in
+    `test_adjudicate.py`.
+
+    Asserts the SET of patched names, not their count. A count is the wrong
+    predicate here: it moves whenever a legitimate new test patches one of
+    the untouched discovery-half collaborators, and it would equally stay
+    put if one relocated name were swapped for another. What the design's
+    "The injection seam" section actually promises is that only the four
+    S1 sites (`merge_core` x2, `prepare_merge` x2) ever left, and that the
+    surviving targets are exactly the names this change never moved
+    (design C3)."""
+    test_file = (
+        Path(__file__).resolve().parents[3]
+        / "tests"
+        / "unit"
+        / "cli"
+        / "test_adjudicate.py"
+    )
+    text = test_file.read_text(encoding="utf-8")
+    patched = set(re.findall(r'"openkos\.cli\.main\.([A-Za-z_]+)"', text))
+    assert patched == {
+        "adjudicate_candidates",
+        "find_candidates_report",
+        "_reconcile_merged_survivor",
+        "OllamaClient",
+    }
+    # And every symbol this change relocated is gone from that set.
+    for relocated in ("prepare_merge", "merge_core", "prepare_one_merge"):
+        assert relocated not in patched

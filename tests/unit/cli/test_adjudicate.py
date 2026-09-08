@@ -3052,6 +3052,58 @@ def test_adjudicate_apply_same_richer_body_survivor_defuses_domination(
     assert (tmp_path / "bundle" / "concepts" / "adk-callbacks.md").is_file()
 
 
+def test_adjudicate_apply_same_accepts_a_whitespace_padded_confirm_count(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#918 S5: the typed-count gate compares `typed_count.strip()`, so a
+    padded `--confirm-count` is ACCEPTED.
+
+    That `.strip()` is the single difference between this gate and
+    `purge`'s, which compares its confirmation phrase raw and would reject
+    the same padding. It is the whole reason
+    `TypedChallengeConfirmation` carries `match_mode` as data rather than
+    letting each call site re-derive the comparison -- and until this test,
+    every `--confirm-count` in this file passed a clean value, so the
+    policy had no end-to-end coverage at all. Removing `.strip()` failed
+    only unit tests before this."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_bodied_doc(
+        tmp_path / "bundle" / "concepts" / "adk.md", title="ADK", body="Stub."
+    )
+    _write_bodied_doc(
+        tmp_path / "bundle" / "concepts" / "adk-callbacks.md",
+        title="ADK Callbacks",
+        body="A long document about callbacks, guardrails and tuning. " * 40,
+    )
+    group = _two_member_group(("concepts/adk", "concepts/adk-callbacks"))
+
+    def _fake_find_candidates(
+        bundle_dir: object, **kwargs: object
+    ) -> CandidateGroupReport:
+        return CandidateGroupReport(groups=(group,), produced=1, retained=1)
+
+    def _fake_adjudicate(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> AdjudicationBatch:
+        return AdjudicationBatch(results=[_adjudicated(group, verdict=Verdict.SAME)])
+
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _fake_find_candidates
+    )
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
+
+    result = runner.invoke(
+        app, ["adjudicate", "--apply-same", "--confirm-count", " 1 "]
+    )
+
+    assert result.exit_code == 0
+    assert "aborted -- confirmation count" not in result.stderr
+    assert "applied 1 of 1 previewed" in result.stdout
+    assert not (tmp_path / "bundle" / "concepts" / "adk.md").exists()
+
+
 def test_adjudicate_apply_same_formerly_dominated_pair_rides_the_batch(
     tmp_path: Path,
     tmp_path_factory: pytest.TempPathFactory,
