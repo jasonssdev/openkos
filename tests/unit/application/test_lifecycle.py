@@ -20,6 +20,9 @@ from openkos import config
 from openkos.application import consent as consent_service
 from openkos.application import lifecycle as lifecycle_service
 from openkos.bundle import bundle
+from openkos.bundle import ledger as bundle_ledger
+from openkos.bundle import log as bundle_log
+from openkos.bundle import merge as bundle_merge
 from openkos.model import okf
 
 # ---------------------------------------------------------------------------
@@ -308,3 +311,108 @@ def test_merge_drift_targets_builds_the_guard_mapping(tmp_path: Path) -> None:
     assert targets[log_path] == prepared.log_bytes
     assert targets[survivor_path] == prepared.survivor_bytes
     assert targets[absorbed_path] == prepared.absorbed_bytes
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: unmerge's write-only core (task 4.1, Slice S2a)
+# ---------------------------------------------------------------------------
+
+
+def test_unmerge_core_is_directly_callable_and_restores_the_pre_merge_state(
+    tmp_path: Path,
+) -> None:
+    """`unmerge_core` is reachable without any `openkos.cli` import, and
+    restores the survivor/absorbed files, the catalog, and the ledger
+    sidecar to their pre-merge state -- built against a `PreparedUnmerge`-
+    shaped fixture assembled from the same write inputs
+    `_execute_single_unmerge`'s write-only body reads today (design
+    C2/Slice S2a; Phase A, the preview, the confirm gate, and the
+    post-confirm drift guard all stay adapter-side this slice, unlike
+    `merge`'s single-slice `prepare_merge`/`merge_core` pair)."""
+    layout = _workspace(tmp_path)
+    survivor_path = _write_concept(
+        layout.bundle_dir, "concepts/survivor", title="Survivor", sensitivity="private"
+    )
+    absorbed_path = _write_concept(
+        layout.bundle_dir,
+        "concepts/absorbed",
+        title="Absorbed",
+        sensitivity="confidential",
+    )
+    index_path = layout.bundle_dir / "index.md"
+    log_path = layout.bundle_dir / "log.md"
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+
+    merge_prepared = lifecycle_service.prepare_merge(
+        layout.bundle_dir,
+        index_path,
+        log_path,
+        survivor_path,
+        absorbed_path,
+        "concepts/survivor",
+        "concepts/absorbed",
+        tmp_path,
+        now=now,
+    )
+    lifecycle_service.merge_core(
+        layout.bundle_dir, index_path, log_path, merge_prepared
+    )
+    assert not absorbed_path.exists()
+
+    # Mirrors `_execute_single_unmerge`'s Phase A, unchanged this slice:
+    # read the ledger, plan the reversal, and compute the post-restore log
+    # entry -- exactly the inputs the write-only body reads today.
+    entries = bundle_ledger.read_entries("concepts/survivor", layout.bundle_dir)
+    current_index_text = index_path.read_text(encoding="utf-8")
+    current_log_text = log_path.read_text(encoding="utf-8")
+    plan = bundle_merge.plan_unmerge(
+        survivor_id="concepts/survivor",
+        absorbed_id="concepts/absorbed",
+        entries=entries,
+        current_index_text=current_index_text,
+        current_log_text=current_log_text,
+    )
+    new_log_text = bundle_log.insert_log_entry(
+        plan.restored_log,
+        now.astimezone().date(),
+        "**Unmerge**: Restored [concepts/absorbed](/concepts/absorbed.md) "
+        "from [concepts/survivor](/concepts/survivor.md).",
+    )
+    prepared = lifecycle_service.PreparedUnmerge(
+        plan=plan,
+        new_log_text=new_log_text,
+        link_reversed_texts={},
+        relation_reversed_texts={},
+        provenance_restored_texts={},
+        rewritten_files=[],
+        relation_rewrite_files=[],
+        provenance_rewrite_files=[],
+        survivor_path=survivor_path,
+        survivor_canonical="concepts/survivor",
+        absorbed_canonical="concepts/absorbed",
+    )
+
+    result = lifecycle_service.unmerge_core(layout, prepared)
+
+    assert isinstance(result, lifecycle_service.UnmergeResult)
+    assert result.survivor_canonical == "concepts/survivor"
+    assert result.absorbed_canonical == "concepts/absorbed"
+    assert absorbed_path.is_file()
+    survivor_text = survivor_path.read_text(encoding="utf-8")
+    assert "merged_from" not in survivor_text
+    assert bundle_ledger.read_entries("concepts/survivor", layout.bundle_dir) == []
+    assert "bundle/index.md" in result.committed_paths
+    assert "bundle/concepts/absorbed.md" in result.committed_paths
+    assert "bundle/concepts/survivor.md" in result.committed_paths
+
+
+def test_unmerge_core_performs_no_typer_or_stdin_access() -> None:
+    """`unmerge_core` never touches `sys.stdin` or `typer` -- the layering
+    invariant `test_layering.py` enforces at module scope (design D2/D3),
+    exercised directly against the relocated function itself (task 4.1)."""
+    import inspect
+
+    source = inspect.getsource(lifecycle_service.unmerge_core)
+
+    assert "typer" not in source
+    assert "sys.stdin" not in source
