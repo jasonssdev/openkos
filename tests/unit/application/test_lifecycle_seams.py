@@ -21,6 +21,7 @@ behavioral tests in `test_lifecycle.py`:
 import dataclasses
 
 from openkos.application import consent as consent_service
+from openkos.application import lifecycle as application_lifecycle
 from openkos.cli import main as cli_main
 
 _FORBIDDEN_FIELD_NAMES = {"granted", "force", "override"}
@@ -52,3 +53,32 @@ def test_prepare_merge_and_merge_core_no_longer_live_on_cli_main() -> None:
     `raising=True`, instead of silently patching a name nothing reads."""
     assert not hasattr(cli_main, "prepare_merge")
     assert not hasattr(cli_main, "merge_core")
+
+
+def test_forget_plan_gate_one_counts_never_become_confirmation_request_fields() -> None:
+    """D2/R3 (task 8.2): `ForgetPlan.surviving_refs`/`unverifiable_refs` are
+    Gate 1's hard-refusal inputs -- `forget`'s inbound-reference guard,
+    bypassed only by `--force`, never by any answer to a confirmation. They
+    must stay structurally unreachable from `ConfirmationRequest.matches()`:
+    neither `ConfirmationRequest` variant declares either name as a field
+    (so a renderer that matched on `kind` could never read them off a
+    `ConfirmationRequest`), and `forget`'s own `confirmation` is a
+    `BooleanConfirmation`, the variant with no `matches()` method at all --
+    Gate 1's counts have no method that could ever consult them in the
+    first place."""
+    forget_plan_fields = {
+        f.name for f in dataclasses.fields(application_lifecycle.ForgetPlan)
+    }
+    assert {"surviving_refs", "unverifiable_refs"} <= forget_plan_fields
+
+    for cls in (
+        consent_service.BooleanConfirmation,
+        consent_service.TypedChallengeConfirmation,
+    ):
+        confirmation_fields = {f.name for f in dataclasses.fields(cls)}
+        offending = confirmation_fields & {"surviving_refs", "unverifiable_refs"}
+        assert not offending, (
+            f"{cls.__name__} must not declare {offending} -- Gate 1 must stay "
+            "outside the ConfirmationRequest union (D2/R3)"
+        )
+    assert not hasattr(consent_service.BooleanConfirmation, "matches")

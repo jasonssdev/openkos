@@ -11,6 +11,7 @@ reachable without driving a CLI command. Mirrors `test_ingest.py`'s and
 `test_query_service.py`'s posture for the query/ingest slices.
 """
 
+import dataclasses
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -416,3 +417,194 @@ def test_unmerge_core_performs_no_typer_or_stdin_access() -> None:
 
     assert "typer" not in source
     assert "sys.stdin" not in source
+
+
+# Phase 8: `ForgetPlan`/`ReferenceDisclosure` (S3, task 8.1)
+# ---------------------------------------------------------------------------
+
+
+def test_prepare_forget_and_forget_core_are_directly_callable(tmp_path: Path) -> None:
+    """`prepare_forget`/`forget_core` are callable by a module that imports
+    nothing from `openkos.cli`, and reproduce `forget`'s own scope-`self`
+    shape: no inbound references, a single-member purge set, and the
+    verbatim S2a confirmation prompt (spec: Non-CLI Callable Lifecycle
+    Composition; design decision 6, byte-identity)."""
+    layout = _workspace(tmp_path)
+    _write_concept(layout.bundle_dir, "concepts/target", title="Target")
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    cfg = config.read_config(tmp_path)
+
+    plan = lifecycle_service.prepare_forget(
+        tmp_path, layout, "concepts/target", scope="self", now=now, cfg=cfg
+    )
+
+    assert isinstance(plan, lifecycle_service.ForgetPlan)
+    assert plan.purge_ids == ["concepts/target"]
+    assert plan.total_removed == 0  # never ingested via `index.md`, nothing to drop
+    assert plan.references == ()
+    assert plan.resurrection_pairs == ()
+    assert plan.surviving_refs == 0
+    assert plan.unverifiable_refs == 0
+    assert isinstance(plan.confirmation, consent_service.BooleanConfirmation)
+    assert plan.confirmation.prompt == "Proceed with these changes?"
+    assert plan.confirmation.bypass_flag == "--auto"
+    assert plan.confirmation.non_tty_refusal == (
+        "openkos forget: refusing to write without confirmation -- stdin "
+        "is not a TTY; re-run with --auto."
+    )
+    concept_path = layout.bundle_dir / "concepts" / "target.md"
+    assert concept_path.exists()  # Phase A writes nothing
+
+    result = lifecycle_service.forget_core(layout, plan)
+
+    assert isinstance(result, lifecycle_service.ForgetResult)
+    assert not concept_path.exists()
+    log_text = (layout.bundle_dir / "log.md").read_text(encoding="utf-8")
+    assert "Tombstone" in log_text
+    assert "concepts/target" in log_text
+
+
+def test_prepare_forget_scope_source_aggregates_references_in_insertion_order(
+    tmp_path: Path,
+) -> None:
+    """`--scope source`'s cascade aggregates inbound references per
+    `(member, referrer, kind, relation type)` (#567), preserving the
+    first-seen order across the purge set's own (sorted) member walk --
+    `ForgetPlan.references` is what `forget`'s adapter renders verbatim, one
+    line per tuple entry, a referrer linking twice becoming ONE line with
+    `count=2` rather than two identical lines."""
+    layout = _workspace(tmp_path)
+    _write_concept(layout.bundle_dir, "concepts/root", title="Root")
+    child_path = layout.bundle_dir / "concepts" / "child.md"
+    child_path.write_text(
+        okf.dump_frontmatter(
+            {
+                "type": "Concept",
+                "title": "Child",
+                "provenance": ["concepts/root"],
+            },
+            "Body.\n",
+        ),
+        encoding="utf-8",
+    )
+    referrer_a = layout.bundle_dir / "concepts" / "referrer-a.md"
+    referrer_a.write_text(
+        okf.dump_frontmatter(
+            {"type": "Concept", "title": "Referrer A"},
+            "See [root](/concepts/root.md) and again [root](/concepts/root.md).\n",
+        ),
+        encoding="utf-8",
+    )
+    referrer_b = layout.bundle_dir / "concepts" / "referrer-b.md"
+    referrer_b.write_text(
+        okf.dump_frontmatter(
+            {
+                "type": "Concept",
+                "title": "Referrer B",
+                "relations": [{"target": "concepts/child", "type": "mentions"}],
+            },
+            "Body.\n",
+        ),
+        encoding="utf-8",
+    )
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    cfg = config.read_config(tmp_path)
+
+    plan = lifecycle_service.prepare_forget(
+        tmp_path, layout, "concepts/root", scope="source", now=now, cfg=cfg
+    )
+
+    assert plan.purge_ids == ["concepts/child", "concepts/root"]  # sorted closure
+    assert plan.references == (
+        lifecycle_service.ReferenceDisclosure(
+            member="concepts/child",
+            referrer_id="concepts/referrer-b",
+            kind="relation",
+            relation_type="mentions",
+            count=1,
+        ),
+        lifecycle_service.ReferenceDisclosure(
+            member="concepts/root",
+            referrer_id="concepts/referrer-a",
+            kind="link",
+            relation_type=None,
+            count=2,
+        ),
+    )
+    # `surviving_refs` counts every individual occurrence (Gate 1's own
+    # input), not the aggregated line count above -- 2 link occurrences
+    # plus 1 relation, matching `all_refs`'s per-occurrence tally.
+    assert plan.surviving_refs == 3
+    assert plan.unverifiable_refs == 0
+    assert plan.confirmation.prompt == "Delete 2 concepts?"
+
+
+def test_prepare_forget_confirmation_prompt_differs_by_scope(tmp_path: Path) -> None:
+    """`forget`'s confirmation prompt is scope-conditional (design table):
+    `--scope source` names the delete COUNT; `--scope self` keeps S2a's
+    verbatim `"Proceed with these changes?"` text (design decision 6,
+    byte-identity)."""
+    layout = _workspace(tmp_path)
+    _write_concept(layout.bundle_dir, "concepts/self-target", title="Self target")
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    cfg = config.read_config(tmp_path)
+
+    self_plan = lifecycle_service.prepare_forget(
+        tmp_path, layout, "concepts/self-target", scope="self", now=now, cfg=cfg
+    )
+
+    assert self_plan.confirmation.prompt == "Proceed with these changes?"
+    assert isinstance(self_plan.confirmation, consent_service.BooleanConfirmation)
+
+
+def test_forget_core_carries_the_exact_unlink_count_without_probing_the_disk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A mid-cascade unlink failure raises `PartialForgetWrite` carrying the
+    number of members ALREADY unlinked, counted in the loop rather than
+    re-derived from the filesystem afterwards.
+
+    `fsio.remove_file` is replaced by a stub that deletes NOTHING and fails
+    on the second call. Every concept file therefore still exists when the
+    exception surfaces, so a filesystem-derived count would report 0 --
+    only a counter incremented after each successful unlink reports the
+    true 1. That gap is the whole point: probing `Path.exists()` in the
+    handler is both inexact and unsafe, because `Path.exists()` re-raises
+    `EACCES` (see `cli.main._purge_store_is_gone`) and would replace the
+    operator's K-of-N diagnosis with a traceback in exactly the permission
+    failure that opened the handler."""
+    layout = _workspace(tmp_path)
+    for slug in ("concepts/a", "concepts/b", "concepts/c"):
+        _write_concept(layout.bundle_dir, slug, title=slug.split("/")[1].upper())
+    cfg = config.read_config(tmp_path)
+    plan = lifecycle_service.prepare_forget(
+        tmp_path,
+        layout,
+        "concepts/a",
+        scope="self",
+        now=datetime(2026, 1, 1, tzinfo=UTC),
+        cfg=cfg,
+    )
+    plan = dataclasses.replace(
+        plan, purge_ids=["concepts/a", "concepts/b", "concepts/c"]
+    )
+
+    calls: list[Path] = []
+
+    def _never_deletes(path: Path) -> None:
+        calls.append(path)
+        if len(calls) == 2:
+            raise OSError("simulated delete failure on 2nd unlink")
+
+    monkeypatch.setattr("openkos.fsio.remove_file", _never_deletes)
+
+    with pytest.raises(lifecycle_service.PartialForgetWrite) as caught:
+        lifecycle_service.forget_core(layout, plan)
+
+    assert caught.value.unlinked_count == 1
+    # The stub deleted nothing, so the disk cannot tell you that.
+    for slug in ("a", "b", "c"):
+        assert (layout.bundle_dir / "concepts" / f"{slug}.md").exists()
+    # The error line stays byte-identical to the cause's own text, so the
+    # adapter's "failed while writing the forget -- {exc}." is unchanged.
+    assert str(caught.value) == "simulated delete failure on 2nd unlink"

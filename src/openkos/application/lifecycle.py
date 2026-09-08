@@ -44,14 +44,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path, PurePosixPath
+from typing import Literal
 
 from openkos import config, fsio
+from openkos.application.consent import BooleanConfirmation
 from openkos.bundle import index as bundle_index
 from openkos.bundle import ledger as bundle_ledger
 from openkos.bundle import links as bundle_links
 from openkos.bundle import log as bundle_log
 from openkos.bundle import merge as bundle_merge
 from openkos.bundle import provenance as bundle_provenance
+from openkos.bundle import references as bundle_references
 from openkos.bundle import relations as bundle_relations
 from openkos.model import okf
 
@@ -724,3 +727,386 @@ def merge_drift_targets(
         survivor_path: prepared.survivor_bytes,
         absorbed_path: prepared.absorbed_bytes,
     }
+
+
+# ---------------------------------------------------------------------------
+# S3 (issue #918) -- `forget`, de-presented from `cli/main.py`'s inline body
+# (design: Interfaces/Contracts "S3 -- forget"). Gate 1 (the surviving-
+# reference hard refusal, bypassed only by `--force`, never by a
+# confirmation) stays adapter-side by construction: `ForgetPlan` carries
+# `surviving_refs`/`unverifiable_refs` as plain counts, never wrapped in a
+# `ConfirmationRequest`, so it cannot be satisfied by answering anything
+# (design D2, `test_lifecycle_seams.py`'s D2/R3 guard). Gate 2, the ordinary
+# confirm gate, is the one seam this slice wires to
+# `application.consent.BooleanConfirmation`.
+# ---------------------------------------------------------------------------
+
+ReferenceKind = Literal["link", "relation", "unverifiable"]
+"""Mirrors `bundle_references.InboundReference.kind` -- restated here
+rather than imported because `ForgetPlan.references` is a DISCLOSURE
+shape (aggregated, service-owned), not the raw per-occurrence scan
+result `bundle_references` returns."""
+
+
+@dataclass(frozen=True)
+class ReferenceDisclosure:
+    """One AGGREGATED preview line's worth of inbound-reference data
+    (issue #567): `forget`'s former inline preview built one dict entry
+    per `(member, referrer, kind, relation type)` combination, keyed so a
+    referrer linking a target 24 times renders as ONE line with a count,
+    not 24 identical lines -- that aggregation is service-owned (design:
+    Interfaces/Contracts), and `ForgetPlan.references`' tuple order is the
+    exact order `forget`'s adapter renders, first-seen-first (Python
+    `dict` insertion order, preserved through `.items()`).
+
+    `member` is the purge-set member this disclosure was found FOR --
+    field 0, matching `resurrection_pairs`' own `(member, target)`
+    convention (`main.py`'s own comment: keep both tuple/record shapes
+    member-first so a future edit can never silently swap fields). `count`
+    is 1 for a single occurrence and >1 only when the SAME referrer
+    references the SAME member via the SAME kind/relation-type more than
+    once."""
+
+    member: str
+    referrer_id: str
+    kind: ReferenceKind
+    relation_type: str | None
+    count: int
+
+
+@dataclass(frozen=True)
+class ForgetPlan:
+    """Pure Phase-A result of `prepare_forget`: everything `forget`'s
+    preview, both gates, and `forget_core` need, built in memory without
+    writing or deleting anything (design: Interfaces/Contracts "S3 --
+    forget").
+
+    `surviving_refs`/`unverifiable_refs` are Gate 1's own inputs -- a hard
+    refusal independent of any human answer, bypassed only by `--force` --
+    and are deliberately plain `int`s, never threaded through
+    `confirmation` (design D2): `ConfirmationRequest` has no field named
+    either, so Gate 1 cannot be represented as "a request that was
+    granted" by construction (`test_lifecycle_seams.py`).
+
+    `index_bytes`/`log_bytes`/`concept_bytes`/`other_bytes` are the drift
+    guard's baselines (issues #306, #313, #318): the raw bytes each
+    read target held at the SAME `fsio.snapshot_read` observation whose
+    decoded text fed this plan. `_require_member_baseline` -- the
+    defensive fail-closed lookup over `other_bytes` -- stays adapter-side
+    (it calls `typer.echo`/raises `typer.Exit` on its own defensive
+    branch), so the command builds `_reject_drifted_targets`' mapping
+    itself from these raw bytes rather than this module returning an
+    already-built `dict[Path, bytes]` that would require importing that
+    helper here."""
+
+    purge_ids: list[str]
+    total_removed: int
+    new_index_text: str
+    new_log_text: str
+    references: tuple[ReferenceDisclosure, ...]
+    resurrection_pairs: tuple[tuple[str, str], ...]
+    surviving_refs: int
+    unverifiable_refs: int
+    confirmation: BooleanConfirmation
+    index_bytes: bytes
+    log_bytes: bytes
+    concept_bytes: bytes
+    other_bytes: dict[str, bytes]
+
+
+class PartialForgetWrite(OSError):
+    """`forget_core`'s write failed, carrying the EXACT number of purge-set
+    members already unlinked when it did.
+
+    The count has to travel with the exception because the adapter's K-of-N
+    recovery message ("removed K of N concept(s) before failing") is the
+    only thing telling an operator how much of the cascade landed, and it
+    cannot be re-derived afterwards. Probing the filesystem in the handler
+    was tried and is wrong twice over: `Path.exists()` is NOT total -- it
+    re-raises `EACCES` (see `cli.main._purge_store_is_gone`, which guards
+    exactly this) -- so a probe inside an `except OSError` arm can raise a
+    SECOND error out of the handler and replace the operator's diagnosis
+    with a traceback, and the failure that opened the handler is usually a
+    permission problem, which is precisely when the probe is most likely to
+    fail too. It is also inexact: a member that was already missing before
+    Phase B began reads as "unlinked".
+
+    Subclasses `OSError` so the adapter's existing `except (OSError,
+    ValueError)` arm catches it unchanged, and `str()` reproduces the
+    cause's text verbatim so the error line stays byte-identical."""
+
+    def __init__(self, cause: BaseException, unlinked_count: int) -> None:
+        super().__init__(str(cause))
+        self.unlinked_count = unlinked_count
+
+
+@dataclass(frozen=True)
+class ForgetResult:
+    """Pure Phase-B result of `forget_core`: the purge set actually
+    written/unlinked, for the command's success echo, `_autocommit` path
+    list, and the ledger/decision/findings sweeps that follow it (all
+    three stay adapter-side -- see `forget_core`'s own docstring for why).
+    `forget_core` performs NO VCS side effect, mirroring `MergeResult`/
+    `UnmergeResult`."""
+
+    purge_ids: list[str]
+
+
+def prepare_forget(
+    root: Path,
+    layout: config.WorkspaceLayout,
+    concept_id: str,
+    *,
+    scope: Literal["self", "source"],
+    now: datetime,
+    cfg: config.Config,
+) -> ForgetPlan:
+    """Phase A (pure, no writes): read the root's own text and one
+    whole-bundle snapshot, resolve the purge set (`--scope self` collapses
+    to `{concept_id}`; `--scope source` expands it via
+    `bundle_provenance.find_provenance_descendants`), collect resurrection
+    disclosures and inbound references, and rewrite `index.md`/`log.md` in
+    memory -- extracted verbatim from `forget`'s former inline body
+    (`cli/main.py`'s `forget` command, design: Interfaces/Contracts "S3 --
+    forget"). Non-interactive; raises `OSError`/`ValueError` on bad input.
+    Writes nothing to disk.
+
+    `concept_id` arrives ALREADY path-safety-checked and resolved to its
+    canonical form -- `forget`'s adapter runs `resolve_concept_path` on the
+    user's raw argument BEFORE calling this (threat matrix: path-traversal
+    deletion; spec: "Path safety runs before descendant resolution"), so
+    this recomputes the same concept file path from the validated id via
+    `okf.concept_path_for` rather than re-deriving it from unchecked input.
+
+    Every plan-feeding read goes through `fsio.snapshot_read`, capturing
+    the raw bytes BESIDE the decoded text -- one observation per target,
+    never a second read (issues #306, #313, #318) -- so the returned
+    `ForgetPlan` can carry the drift guard's baselines for the command to
+    check after its confirm gate.
+
+    `cfg` is accepted, not read internally, so the command's own single
+    `config.read_config` call (needed regardless for its post-write
+    `_refresh_derived_after_write` call) is the only one -- a second
+    independent read here would risk observing a config edited between the
+    two calls."""
+    index_path = layout.bundle_dir / "index.md"
+    log_path = layout.bundle_dir / "log.md"
+    concept_path = okf.concept_path_for(concept_id, layout.bundle_dir)
+
+    # One `fsio.snapshot_read` observation per target (issues #306, #313,
+    # #318): each path is read exactly once, at the moment its decoded
+    # text feeds the plan, and the guard's bytes come from that same read.
+    index_bytes, index_text = fsio.snapshot_read(index_path)
+    log_bytes, log_text = fsio.snapshot_read(log_path)
+    concept_bytes, concept_text = fsio.snapshot_read(concept_path)
+
+    # One whole-bundle snapshot, read ONCE, mirroring `merge`'s
+    # `other_files` construction: every other `*.md` file, reserved
+    # filenames and the ROOT's own file excluded. This single snapshot
+    # feeds descendant resolution, inbound detection, resurrection, and
+    # per-member titles/tombstones -- no extra bundle scan, for either
+    # scope.
+    #
+    # `other_bytes` shadows it for the guard -- and ONLY on `--scope
+    # source` (#326): on the default `self` scope the guard's member
+    # comprehension is empty by construction (`purge_ids` is statically
+    # `[concept_id]`), so retaining the whole bundle's raw bytes there
+    # would double Phase A's peak memory for nothing.
+    other_files: dict[str, str] = {}
+    other_bytes: dict[str, bytes] = {}
+    for path in sorted(layout.bundle_dir.rglob("*.md")):
+        if path.name in okf.RESERVED_FILENAMES:
+            continue
+        if path == concept_path:
+            continue
+        rel = path.relative_to(layout.bundle_dir).as_posix()
+        raw, other_files[rel] = fsio.snapshot_read(path)
+        if scope == "source":
+            other_bytes[rel] = raw
+
+    # Unified Phase-A data path (design decision 6): `--scope self`
+    # collapses to a single-member purge set, reproducing S2a byte-for-
+    # byte; `--scope source` expands it via the pure orphan-closure
+    # helper.
+    purge_ids: list[str] = (
+        bundle_provenance.find_provenance_descendants(
+            other_files, root_ids={concept_id}
+        )
+        if scope == "source"
+        else [concept_id]
+    )
+    purge_ids_set = set(purge_ids)
+
+    # Per-member text + parsed frontmatter. Every non-root member id in
+    # `purge_ids` came out of `find_provenance_descendants`, itself
+    # derived only from real `other_files` keys (disk-discovered, never
+    # user input) -- so this dict lookup can never escape `bundle_dir`.
+    member_texts: dict[str, str] = {concept_id: concept_text}
+    for member in purge_ids:
+        if member != concept_id:
+            member_texts[member] = other_files[f"{member}.md"]
+    member_metadata: dict[str, dict[str, object]] = {
+        member: okf.load_frontmatter(text)[0] for member, text in member_texts.items()
+    }
+
+    # Outbound `supersedes` disclosure, per PURGE-SET MEMBER: a target
+    # OUTSIDE the purge set re-enters retrieval once the whole set is
+    # gone. Tuple convention: the purge-set MEMBER is ALWAYS field 0,
+    # matching `all_refs` below.
+    resurrection_pairs = sorted(
+        {
+            (member, relation.target)
+            for member in purge_ids
+            for relation in okf.decode_relations(member_metadata[member])
+            if relation.type == "supersedes" and relation.target not in purge_ids_set
+        },
+        key=lambda pair: (pair[1], pair[0]),
+    )
+
+    # Set-difference inbound-reference detection (design decision 2):
+    # `find_inbound_references` is called once PER purge-set member over
+    # the SAME whole-bundle snapshot; any referrer whose id is ITSELF a
+    # purge-set member is dropped. `unverifiable` referrers are deduped by
+    # `referrer_id` across members.
+    all_refs: list[tuple[str, bundle_references.InboundReference]] = []
+    seen_unverifiable: set[str] = set()
+    for member in purge_ids:
+        for ref in bundle_references.find_inbound_references(
+            other_files, target_id=member
+        ):
+            if ref.referrer_id in purge_ids_set:
+                continue
+            if ref.kind == "unverifiable":
+                if ref.referrer_id in seen_unverifiable:
+                    continue
+                seen_unverifiable.add(ref.referrer_id)
+            all_refs.append((member, ref))
+    verified_refs = [ref for _, ref in all_refs if ref.kind != "unverifiable"]
+    unverifiable_refs = [ref for _, ref in all_refs if ref.kind == "unverifiable"]
+
+    # #567: aggregate per (member, referrer, kind, relation type) -- a
+    # referrer linking the target 24 times becomes ONE `ReferenceDisclosure`
+    # with a count, not 24 identical entries. Insertion order preserves the
+    # first-seen order the per-reference loop discovered in, and a count of
+    # 1 keeps the exact singular wording the adapter's preview always had.
+    aggregated_refs: dict[tuple[str, str, ReferenceKind, str | None], int] = {}
+    for member, ref in all_refs:
+        key = (
+            member,
+            ref.referrer_id,
+            ref.kind,
+            ref.relation_type if ref.kind == "relation" else None,
+        )
+        aggregated_refs[key] = aggregated_refs.get(key, 0) + 1
+    references = tuple(
+        ReferenceDisclosure(
+            member=member,
+            referrer_id=referrer_id,
+            kind=kind,
+            relation_type=relation_type,
+            count=count,
+        )
+        for (member, referrer_id, kind, relation_type), count in aggregated_refs.items()
+    )
+
+    # `index.md` bullet removal for every purge-set member (a pure text
+    # transform -- call order has no effect on the final result).
+    new_index_text = index_text
+    total_removed = 0
+    for member in purge_ids:
+        new_index_text, removed_i = bundle_index.remove_index_entry(
+            new_index_text, member
+        )
+        total_removed += removed_i
+
+    # `log.md` tombstones, one per member, all sharing `tombstone_time`.
+    # Built in REVERSED sorted order so the LAST prepend (the smallest id)
+    # ends up at the very top -- a deterministic ascending top-to-bottom
+    # order matching the sorted delete order in `forget_core`.
+    tombstone_time = now.strftime("%H:%M:%SZ")
+    new_log_text = log_text
+    for member in reversed(purge_ids):
+        raw_title = member_metadata[member].get("title")
+        title = (
+            raw_title if isinstance(raw_title, str) and raw_title.strip() else member
+        )
+        new_log_text = bundle_log.insert_log_entry(
+            new_log_text,
+            now.astimezone().date(),
+            f"**Tombstone** ({tombstone_time}): Removed [{title}]"
+            f"(/{member}.md) (id: {member}).",
+        )
+
+    # Gate 2's prompt is scope-conditional (design table); `--scope self`
+    # keeps S2a's verbatim text (byte-identity, design decision 6).
+    prompt = (
+        f"Delete {len(purge_ids)} concepts?"
+        if scope == "source"
+        else "Proceed with these changes?"
+    )
+    confirmation = BooleanConfirmation(
+        prompt=prompt,
+        bypass_flag="--auto",
+        non_tty_refusal=(
+            "openkos forget: refusing to write without confirmation -- "
+            "stdin is not a TTY; re-run with --auto."
+        ),
+    )
+
+    return ForgetPlan(
+        purge_ids=purge_ids,
+        total_removed=total_removed,
+        new_index_text=new_index_text,
+        new_log_text=new_log_text,
+        references=references,
+        resurrection_pairs=tuple(resurrection_pairs),
+        surviving_refs=len(verified_refs),
+        unverifiable_refs=len(unverifiable_refs),
+        confirmation=confirmation,
+        index_bytes=index_bytes,
+        log_bytes=log_bytes,
+        concept_bytes=concept_bytes,
+        other_bytes=other_bytes,
+    )
+
+
+def forget_core(layout: config.WorkspaceLayout, plan: ForgetPlan) -> ForgetResult:
+    """Phase B (after both gates): writes `index.md` then `log.md`
+    (`write_atomic`, catalog FIRST, covering every purge-set member) and
+    deletes each member's concept file (`fsio.remove_file`) LAST, in
+    deterministic `sorted(purge_ids)` order (design decision 5) -- so
+    `index.md`/`log.md` never reference a file that does not exist
+    (extracted verbatim from `forget`'s former inline body, design:
+    Interfaces/Contracts "S3 -- forget"). Non-interactive; raises
+    `OSError`/`ValueError`. Performs NO VCS side effect and no ledger/
+    decision/findings sweep -- `_sweep_ledger_sidecars_for_ids`,
+    `_sweep_decisions_for_ids`, and `_sweep_findings_for_ids` stay adapter-
+    side (they are shared with `purge`'s own Phase B, which calls the same
+    three helpers, and this module must stay siblings-only under ADR-0018
+    rather than import another verb's helpers), called by the command
+    immediately after this, inside the SAME try/except so a mid-sweep
+    failure reports the identical K-of-N recovery message a mid-unlink
+    failure would.
+
+    This is NOT transactional as a whole: a failure partway through the N
+    unlinks leaves a benign, git-recoverable partial result -- the catalog
+    already fully updated, one or more concept files possibly still
+    present as orphans -- never silent corruption."""
+    unlinked_count = 0
+    try:
+        fsio.write_atomic(layout.bundle_dir / "index.md", plan.new_index_text)
+        fsio.write_atomic(layout.bundle_dir / "log.md", plan.new_log_text)
+        # N-delete, LAST, in deterministic sorted order (design decision 5)
+        # -- the catalog already reflects every removal before any unlink,
+        # so a failure partway through leaves a benign, git-recoverable
+        # partial result, never a dangling catalog entry.
+        for member in sorted(plan.purge_ids):
+            fsio.remove_file(layout.bundle_dir / f"{member}.md")
+            unlinked_count += 1
+    except (OSError, ValueError) as exc:
+        # The counter is incremented only AFTER a successful unlink, so it
+        # is exactly what a live counter in the command's own former inline
+        # loop held -- see `PartialForgetWrite` for why this is carried out
+        # rather than re-derived from the filesystem.
+        raise PartialForgetWrite(exc, unlinked_count) from exc
+    return ForgetResult(purge_ids=plan.purge_ids)

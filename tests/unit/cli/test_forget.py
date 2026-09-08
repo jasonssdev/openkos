@@ -2212,7 +2212,7 @@ def test_an_edit_landing_after_the_snapshot_observation_is_refused(
     source_id, _, _ = _source_with_two_children(tmp_path, monkeypatch)
     target_path = tmp_path / "bundle" / "index.md"
     concurrent = "hand-edited the instant the snapshot returned\n"
-    real_snapshot_read = main._snapshot_read
+    real_snapshot_read = fsio.snapshot_read
     fired = False
 
     def racing_snapshot_read(path: Path) -> tuple[bytes, str]:
@@ -2224,7 +2224,13 @@ def test_an_edit_landing_after_the_snapshot_observation_is_refused(
         return snapshot
 
     before = snapshot_with_mtime(tmp_path)
-    monkeypatch.setattr(main, "_snapshot_read", racing_snapshot_read)
+    # (issue #918 Slice 3): `forget`'s Phase-A reads relocated into
+    # `application.lifecycle.prepare_forget`, which calls
+    # `fsio.snapshot_read` directly rather than `main._snapshot_read` (the
+    # one-line delegator ~10 OTHER verbs still use) -- patching the
+    # delegator here would silently stop intercepting anything (the exact
+    # "dangerous-class no-op" this change's own review flags).
+    monkeypatch.setattr(fsio, "snapshot_read", racing_snapshot_read)
 
     result = runner.invoke(app, ["forget", source_id, "--scope", "source", "--auto"])
 
