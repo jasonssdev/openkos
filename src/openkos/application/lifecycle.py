@@ -56,7 +56,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Literal
 
@@ -72,6 +72,8 @@ from openkos.bundle import provenance as bundle_provenance
 from openkos.bundle import references as bundle_references
 from openkos.bundle import relations as bundle_relations
 from openkos.model import okf
+from openkos.resolution.adjudication import AdjudicatedCandidate, Verdict
+from openkos.resolution.candidates import CandidateGroup
 
 STACKED_SHARE_GUARDRAIL = 0.8
 """Merged-body share at or above which a proposed merge is flagged as a
@@ -1941,3 +1943,423 @@ def residual_store_notice(undeleted: Sequence[Path]) -> str | None:
         "leaves the residual pages exactly where they are."
     )
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Slice 5 (S5, issue #918): de-presenting `adjudicate --apply`/`--apply-same`
+# ---------------------------------------------------------------------------
+#
+# `ordered_merge_pair`, `prepare_one_merge`, and `reconcile_planned` moved
+# verbatim from `cli/main.py`'s `_ordered_merge_pair`/`_prepare_one_merge`/
+# `_reconcile_planned` (design's S5 interface list). `cross_source_same_pair`/
+# `cross_type_concern` moved alongside them, undocumented in the design's
+# abbreviated S5 sketch but required by `preview_apply_same`'s own signature
+# (it takes `include_cross_source`/`include_cross_type` directly, so it must
+# perform that classification itself) -- both are pure bundle reads with no
+# `typer` dependency, exactly like every other Phase-A helper here. All five
+# are aliased back onto `cli.main` under their original names (design D5):
+# none carries a dangerous `test_adjudicate.py` patch site (only direct
+# `main.X(...)` calls and `cli/curate.py`'s own direct calls survive), so
+# aliasing is safe, unlike `prepare_merge`/`merge_core`.
+
+_RECONCILE_SHARE_THRESHOLD = 0.2
+"""Stacked share at or above which `merge` plans the reconciliation pass
+(#645, opt-out by ruling). Moved verbatim from `cli/main.py` alongside
+`reconcile_planned`, the only reader."""
+
+_RECONCILE_MIN_MERGED_CHARS = 200
+"""Absolute floor under which the pass is never planned, whatever the
+share -- measured on the MERGED body (#803). Moved verbatim from
+`cli/main.py` alongside `reconcile_planned`, the only reader."""
+
+
+def _member_body_length(bundle_dir: Path, member_id: str) -> int:
+    """Stripped body length of one member's document, or `-1` when it
+    cannot be read or parsed (#776) -- the one measurement
+    `ordered_merge_pair` ranks on. `-1` rather than `0` so an unreadable
+    member can never beat a readable-but-empty one. Moved verbatim from
+    `cli/main.py`'s `_member_body_length`."""
+    try:
+        path, _canonical = resolve_concept_path(bundle_dir, member_id)
+        _metadata, body = okf.load_frontmatter(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return -1
+    return len(body.strip())
+
+
+def ordered_merge_pair(
+    bundle_dir: Path, member_ids: tuple[str, ...]
+) -> tuple[str, str, str]:
+    """`(survivor, absorbed, criterion)` for one 2-member SAME group
+    (#776): the member with the RICHER BODY survives, so a permanent
+    Concept ID is no longer decided by `f` sorting before `o`. Ties
+    (including two unreadable members, which `-1 == -1` here and
+    `prepare_one_merge` then reports as unresolved) keep today's
+    ascending-id order, and `criterion` names WHICH rule decided so every
+    preview can state it. Moved verbatim from `cli/main.py`'s
+    `_ordered_merge_pair`."""
+    first, second = member_ids
+    first_length = _member_body_length(bundle_dir, first)
+    second_length = _member_body_length(bundle_dir, second)
+    if second_length > first_length:
+        return second, first, "richer body"
+    if first_length > second_length:
+        return first, second, "richer body"
+    return first, second, "id order -- equal body length"
+
+
+def cross_source_same_pair(bundle_dir: Path, member_ids: tuple[str, ...]) -> bool:
+    """Whether a SAME verdict over `member_ids` is the RISKY class #776
+    reports: every member carries a non-empty `provenance:` and the sets
+    are DISJOINT. Deliberately `False` on missing evidence. Moved verbatim
+    from `cli/main.py`'s `_cross_source_same_pair`."""
+    provenance_sets: list[set[str]] = []
+    for member_id in member_ids:
+        try:
+            path, _canonical = resolve_concept_path(bundle_dir, member_id)
+            metadata, _body = okf.load_frontmatter(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return False
+        raw = metadata.get("provenance")
+        if not isinstance(raw, list) or not raw:
+            return False
+        provenance_sets.append({str(entry).removesuffix(".md") for entry in raw})
+    return not set.intersection(*provenance_sets)
+
+
+def cross_type_concern(bundle_dir: Path, member_ids: tuple[str, ...]) -> str | None:
+    """The reason a SAME verdict over `member_ids` must not be merged
+    unreviewed on TYPE grounds, or `None` when the members demonstrably
+    agree (issue #904). Moved verbatim from `cli/main.py`'s
+    `_cross_type_concern`."""
+    types: list[str] = []
+    for member_id in member_ids:
+        try:
+            path, _canonical = resolve_concept_path(bundle_dir, member_id)
+        except ValueError:
+            return None
+        try:
+            metadata, _body = okf.load_frontmatter(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return f"{member_id} could not be read, so its OKF type is unknown"
+        raw = metadata.get("type")
+        if not isinstance(raw, str) or not raw:
+            return f"{member_id} declares no usable OKF type"
+        types.append(raw)
+    if len(set(types)) < 2:
+        return None
+    label = " / ".join(dict.fromkeys(types))
+    return f"members declare different OKF types ({label})"
+
+
+def prepare_one_merge(
+    root: Path,
+    layout: config.WorkspaceLayout,
+    index_path: Path,
+    log_path: Path,
+    group: CandidateGroup,
+    *,
+    ordered_pair: tuple[str, str] | None = None,
+) -> PreparedMerge | None:
+    """Resolve both member ids of one SAME 2-member `group` and build the
+    pure `PreparedMerge` preview -- the one apply-one-pair unit both
+    `adjudicate --apply`'s interactive walk and `preview_apply_same`'s
+    batch share. Returns `None` when either member id fails to resolve.
+    Otherwise raises `OSError`/`ValueError` straight from `prepare_merge`,
+    unchanged.
+
+    `ordered_pair`, when given, PINS the direction instead of re-deriving
+    it from live file contents (#776 review, 3-lens CRITICAL): the
+    `--apply-same` typed count consents to Pass 1's PREVIEWED survivor, and
+    an earlier merge in the same batch can enrich a shared member enough to
+    flip a live recomputation. Moved verbatim from `cli/main.py`'s
+    `_prepare_one_merge`."""
+    if ordered_pair is None:
+        survivor_id, absorbed_id, _criterion = ordered_merge_pair(
+            layout.bundle_dir, group.member_ids
+        )
+    else:
+        survivor_id, absorbed_id = ordered_pair
+    try:
+        survivor_path, survivor_canonical = resolve_concept_path(
+            layout.bundle_dir, survivor_id
+        )
+        absorbed_path, absorbed_canonical = resolve_concept_path(
+            layout.bundle_dir, absorbed_id
+        )
+    except ValueError:
+        return None
+
+    now = datetime.now(UTC)
+    return prepare_merge(
+        layout.bundle_dir,
+        index_path,
+        log_path,
+        survivor_path,
+        absorbed_path,
+        survivor_canonical,
+        absorbed_canonical,
+        root,
+        now=now,
+    )
+
+
+def reconcile_planned(
+    prepared: PreparedMerge, *, no_reconcile: bool, reconcile: bool = False
+) -> bool:
+    """Whether the #645 merged-body reconciliation pass runs for
+    `prepared` -- THE single source of truth for that decision (issue
+    #688). Precedence (issue #803): `no_reconcile` wins over everything;
+    a `prepared` with no `stacked_body` is always `False`; `reconcile`
+    then forces `True`; otherwise the thresholds decide. Moved verbatim
+    from `cli/main.py`'s `_reconcile_planned`."""
+    if no_reconcile:
+        return False
+    if prepared.stacked_body is None:
+        return False
+    if reconcile:
+        return True
+    return (
+        prepared.stacked_body.share >= _RECONCILE_SHARE_THRESHOLD
+        and prepared.stacked_body.merged_chars >= _RECONCILE_MIN_MERGED_CHARS
+    )
+
+
+@dataclass(frozen=True)
+class PreviewedPair:
+    """One SAME 2-member group Pass 1 accepted into the `--apply-same`
+    batch preview: the `ordered_merge_pair` direction and criterion, and
+    the Pass-1 `PreparedMerge` snapshot used ONLY to render the preview
+    line. Pass 2 re-resolves via `ordered` (issue #776's pinned direction)
+    rather than reusing `prepared`."""
+
+    group: CandidateGroup
+    ordered: tuple[str, str]
+    survivor_criterion: str
+    prepared: PreparedMerge
+
+
+@dataclass(frozen=True)
+class NGt2Skip:
+    """A SAME group with more than 2 members: `adjudicate --apply-same`
+    never merges these automatically (issue #191)."""
+
+    group: CandidateGroup
+
+
+@dataclass(frozen=True)
+class CrossSourceSkip:
+    """A SAME 2-member pair excluded for disjoint provenance (issue #776),
+    unless `include_cross_source` opted in."""
+
+    member_ids: tuple[str, ...]
+    ordered: tuple[str, str]
+
+
+@dataclass(frozen=True)
+class CrossTypeSkip:
+    """A SAME 2-member pair excluded for disagreeing OKF types (issue
+    #904), unless `include_cross_type` opted in."""
+
+    member_ids: tuple[str, ...]
+    ordered: tuple[str, str]
+    reason: str
+
+
+BatchSkip = NGt2Skip | CrossSourceSkip | CrossTypeSkip
+"""Pass-1 classification exclusions, tagged by type, in the SAME relative
+order the original single classification loop encountered them (issue
+#918 Slice 5) -- required so `--apply-same`'s adapter can render each
+exclusion's distinct message without re-deriving which one applies, and
+so the categories stay interleaved exactly as they were when one loop
+decided all of them together."""
+
+
+@dataclass(frozen=True)
+class StackedRefusal:
+    """A prepared pair excluded because its stacked-body share crosses the
+    guardrail (issue #559) -- the typed-count gate consents to a batch,
+    not to this pair."""
+
+    report: StackedBodyReport
+    survivor_canonical: str
+    absorbed_canonical: str
+
+
+BatchPreviewItem = PreviewedPair | StackedRefusal
+"""Pass-1 preview-build outcomes, tagged by type, in `eligible_groups`
+order -- a stacked-body-guardrail refusal and a clean previewed pair
+interleave in this same pass in the original code, and this preserves
+that exact order."""
+
+
+@dataclass(frozen=True)
+class BatchApplyPreview:
+    """`preview_apply_same`'s pure result (issue #918 Slice 5): the whole
+    of `adjudicate --apply-same`'s Pass 1, performing no echo, no prompt,
+    and no write (design D2: no `granted`/`force`/`override` field
+    anywhere on `confirmation`). `previewed` is the `PreviewedPair`
+    subsequence of `items`, kept as its own field because Pass 2 iterates
+    only the previewed pairs, never the stacked refusals."""
+
+    skips: tuple[BatchSkip, ...]
+    items: tuple[BatchPreviewItem, ...]
+    previewed: tuple[PreviewedPair, ...]
+    confirmation: TypedChallengeConfirmation
+
+
+class PreviewMergeFailure(OSError):
+    """`preview_apply_same`'s Pass-1 build failed to prepare one pair,
+    carrying the (survivor_id, absorbed_id) identity and everything
+    classified so far, so the adapter's "failed while previewing X into Y"
+    message -- and every skip/preview line that already printed before the
+    failure in the pre-move code -- stays reproducible without the service
+    ever importing `typer`. Mirrors `PartialForgetWrite`'s "carry the fact
+    out of the exception" shape (design D5's own precedent).
+
+    Subclasses `OSError` so the adapter's existing `except (OSError,
+    ValueError)` arm catches it unchanged, and `str()` reproduces the
+    cause's text verbatim."""
+
+    def __init__(
+        self,
+        cause: BaseException,
+        survivor_id: str,
+        absorbed_id: str,
+        partial: BatchApplyPreview,
+    ) -> None:
+        super().__init__(str(cause))
+        self.survivor_id = survivor_id
+        self.absorbed_id = absorbed_id
+        self.partial = partial
+
+
+def _apply_same_confirmation(total: int) -> TypedChallengeConfirmation:
+    """The `--apply-same` typed-count gate (`main.py:2967-2985`'s policy):
+    `match_mode="strip-then-exact"` because the comparison there is
+    `typed_count.strip() != str(total)` -- `purge`'s own gate compares the
+    RAW response instead, which is exactly why `match_mode` travels as
+    data on the request rather than being re-derived per call site."""
+    return TypedChallengeConfirmation(
+        prompt=f"Type the eligible count ({total}) to proceed",
+        expected=str(total),
+        supplying_flag="--confirm-count",
+        non_tty_refusal=(
+            "openkos adjudicate --apply-same: refusing to apply -- stdin is "
+            "not a TTY; re-run with --confirm-count."
+        ),
+        mismatch_abort=(
+            "openkos adjudicate --apply-same: aborted -- confirmation count "
+            "did not match exactly; nothing was written."
+        ),
+        match_mode="strip-then-exact",
+    )
+
+
+def preview_apply_same(
+    root: Path,
+    layout: config.WorkspaceLayout,
+    index_path: Path,
+    log_path: Path,
+    results: Sequence[AdjudicatedCandidate],
+    *,
+    include_cross_source: bool = False,
+    include_cross_type: bool = False,
+) -> BatchApplyPreview:
+    """`adjudicate --apply-same`'s entire Pass 1 (issue #918 Slice 5),
+    de-presented from `cli/main.py`'s former `_run_adjudicate_apply_same`
+    inline body: per SAME 2-member group, `ordered_merge_pair` then
+    `prepare_one_merge`, filtering N>2 groups, cross-source pairs (#776),
+    cross-type pairs (#904), and stacked-body-guardrail-crossing pairs
+    (#559) into `BatchApplyPreview.skips`/`items`, and returning the typed-
+    count `TypedChallengeConfirmation` whose `expected` is the eligible
+    count ACTUALLY PREVIEWED -- never the raw structural eligible-group
+    count, since a group that is already unresolvable when the preview is
+    built is silently excluded from `previewed` and never counted (matches
+    the pre-move behavior exactly).
+
+    Performs no echo, no prompt, and never calls `sys.stdin.isatty()` --
+    every rendering decision (which skip category prints which wording,
+    when the zero-eligible short-circuit fires before the gate is ever
+    used) stays with the adapter, which owns `typer`. Raises no
+    `typer.Exit`: a `prepare_one_merge` failure during Pass 1 raises
+    `PreviewMergeFailure`, carrying everything classified so far."""
+    skips: list[BatchSkip] = []
+    eligible_groups: list[CandidateGroup] = []
+    for result in results:
+        if result.verdict is not Verdict.SAME:
+            continue
+        group = result.candidate
+        if len(group.member_ids) == 2:
+            if not include_cross_source and cross_source_same_pair(
+                layout.bundle_dir, group.member_ids
+            ):
+                survivor_id, absorbed_id, _criterion = ordered_merge_pair(
+                    layout.bundle_dir, group.member_ids
+                )
+                skips.append(
+                    CrossSourceSkip(group.member_ids, (survivor_id, absorbed_id))
+                )
+                continue
+            survivor_id, absorbed_id, _criterion = ordered_merge_pair(
+                layout.bundle_dir, group.member_ids
+            )
+            reason = cross_type_concern(layout.bundle_dir, (survivor_id, absorbed_id))
+            if not include_cross_type and reason is not None:
+                skips.append(
+                    CrossTypeSkip(group.member_ids, (survivor_id, absorbed_id), reason)
+                )
+                continue
+            eligible_groups.append(group)
+        elif len(group.member_ids) > 2:
+            skips.append(NGt2Skip(group))
+
+    items: list[BatchPreviewItem] = []
+    previewed: list[PreviewedPair] = []
+    for group in eligible_groups:
+        survivor_id, absorbed_id, survivor_criterion = ordered_merge_pair(
+            layout.bundle_dir, group.member_ids
+        )
+        try:
+            prepared = prepare_one_merge(
+                root,
+                layout,
+                index_path,
+                log_path,
+                group,
+                ordered_pair=(survivor_id, absorbed_id),
+            )
+        except (OSError, ValueError) as exc:
+            partial = BatchApplyPreview(
+                skips=tuple(skips),
+                items=tuple(items),
+                previewed=tuple(previewed),
+                confirmation=_apply_same_confirmation(len(previewed)),
+            )
+            raise PreviewMergeFailure(exc, survivor_id, absorbed_id, partial) from exc
+        if prepared is None:
+            continue
+        if (
+            prepared.stacked_body is not None
+            and prepared.stacked_body.exceeds_guardrail
+        ):
+            items.append(
+                StackedRefusal(
+                    prepared.stacked_body,
+                    prepared.survivor_canonical,
+                    prepared.absorbed_canonical,
+                )
+            )
+            continue
+        pair = PreviewedPair(
+            group, (survivor_id, absorbed_id), survivor_criterion, prepared
+        )
+        items.append(pair)
+        previewed.append(pair)
+
+    return BatchApplyPreview(
+        skips=tuple(skips),
+        items=tuple(items),
+        previewed=tuple(previewed),
+        confirmation=_apply_same_confirmation(len(previewed)),
+    )
