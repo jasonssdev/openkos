@@ -30,6 +30,7 @@ import pytest
 from typer.testing import CliRunner, _NamedTextIOWrapper
 
 from openkos import config as okf_config
+from openkos.application import lifecycle as application_lifecycle
 from openkos.bundle import ledger as bundle_ledger
 from openkos.cli import main
 from openkos.cli.main import app
@@ -2520,7 +2521,7 @@ def test_adjudicate_apply_mid_run_merge_core_failure_stops_the_run(
         "openkos.cli.main.find_candidates_report", _fake_find_candidates
     )
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
-    monkeypatch.setattr("openkos.cli.main.merge_core", _raise_merge_core)
+    monkeypatch.setattr("openkos.application.lifecycle.merge_core", _raise_merge_core)
 
     result = runner.invoke(app, ["adjudicate", "--apply"], input="y\ny\n")
 
@@ -2574,7 +2575,9 @@ def test_adjudicate_apply_prepare_merge_failure_stops_the_run(
         "openkos.cli.main.find_candidates_report", _fake_find_candidates
     )
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
-    monkeypatch.setattr("openkos.cli.main.prepare_merge", _raise_prepare_merge)
+    monkeypatch.setattr(
+        "openkos.application.lifecycle.prepare_merge", _raise_prepare_merge
+    )
 
     result = runner.invoke(app, ["adjudicate", "--apply"], input="y\n")
 
@@ -3420,7 +3423,7 @@ def test_adjudicate_apply_same_mid_batch_merge_core_failure_keeps_prior_commit(
     )
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
 
-    original_merge_core = main.merge_core
+    original_merge_core = application_lifecycle.merge_core
     call_count = {"n": 0}
 
     def _flaky_merge_core(*args: object, **kwargs: object) -> object:
@@ -3429,7 +3432,7 @@ def test_adjudicate_apply_same_mid_batch_merge_core_failure_keeps_prior_commit(
             raise OSError("disk full")
         return original_merge_core(*args, **kwargs)  # type: ignore[arg-type]
 
-    monkeypatch.setattr("openkos.cli.main.merge_core", _flaky_merge_core)
+    monkeypatch.setattr("openkos.application.lifecycle.merge_core", _flaky_merge_core)
 
     result = runner.invoke(app, ["adjudicate", "--apply-same", "--confirm-count", "3"])
 
@@ -3475,7 +3478,7 @@ def test_adjudicate_apply_same_toctou_drift_exits_three_with_partial_summary(
     concurrent = "hand-edited between re-prepare and write\n"
     before = _snapshot(tmp_path)
 
-    original_prepare_merge = main.prepare_merge
+    original_prepare_merge = application_lifecycle.prepare_merge
     call_count = {"n": 0}
 
     def _prepare_then_concurrent_edit(*args: object, **kwargs: object) -> object:
@@ -3485,7 +3488,9 @@ def test_adjudicate_apply_same_toctou_drift_exits_three_with_partial_summary(
             survivor_path.write_text(concurrent, encoding="utf-8")
         return prepared
 
-    monkeypatch.setattr("openkos.cli.main.prepare_merge", _prepare_then_concurrent_edit)
+    monkeypatch.setattr(
+        "openkos.application.lifecycle.prepare_merge", _prepare_then_concurrent_edit
+    )
 
     result = runner.invoke(app, ["adjudicate", "--apply-same", "--confirm-count", "1"])
 

@@ -11,21 +11,13 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from openkos.application import lifecycle as application_lifecycle
 from openkos.bundle import index as bundle_index
 from openkos.bundle import ledger as bundle_ledger
 from openkos.bundle import links as bundle_links
 from openkos.bundle import provenance as bundle_provenance
 from openkos.bundle import relations as bundle_relations
-from openkos.cli.main import (
-    MergeResult,
-    PreparedMerge,
-    StackedBodyReport,
-    _format_merge_preview_line,
-    _resolve_concept_path,
-    app,
-    merge_core,
-    prepare_merge,
-)
+from openkos.cli.main import _format_merge_preview_line, _resolve_concept_path, app
 from openkos.model import okf
 from openkos.vcs import git as vcs_git
 from tests.unit.cli.conftest import commit_pending_fixture_docs
@@ -142,7 +134,7 @@ def test_prepare_merge_returns_prepared_merge_with_expected_plan_and_preview_dat
     )
     now = datetime(2026, 1, 1, tzinfo=UTC)
 
-    prepared = prepare_merge(
+    prepared = application_lifecycle.prepare_merge(
         bundle_dir,
         index_path,
         log_path,
@@ -154,7 +146,7 @@ def test_prepare_merge_returns_prepared_merge_with_expected_plan_and_preview_dat
         now=now,
     )
 
-    assert isinstance(prepared, PreparedMerge)
+    assert isinstance(prepared, application_lifecycle.PreparedMerge)
     assert prepared.plan.ledger_entry.absorbed_id == absorbed_canonical
     assert prepared.sensitivity_before == "private"
     assert prepared.sensitivity_after == "confidential"
@@ -185,7 +177,7 @@ def test_prepare_merge_raises_oserror_on_missing_absorbed_file(
     missing_absorbed_path = bundle_dir / "concepts" / "missing.md"
 
     with pytest.raises(OSError, match=r"missing\.md"):
-        prepare_merge(
+        application_lifecycle.prepare_merge(
             bundle_dir,
             bundle_dir / "index.md",
             bundle_dir / "log.md",
@@ -217,7 +209,7 @@ def test_prepare_merge_raises_value_error_when_already_merged(
     )
     now = datetime.now(UTC)
 
-    prepared = prepare_merge(
+    prepared = application_lifecycle.prepare_merge(
         bundle_dir,
         index_path,
         log_path,
@@ -228,7 +220,7 @@ def test_prepare_merge_raises_value_error_when_already_merged(
         tmp_path,
         now=now,
     )
-    merge_core(bundle_dir, index_path, log_path, prepared)
+    application_lifecycle.merge_core(bundle_dir, index_path, log_path, prepared)
 
     # `merge_core` removed the absorbed file (it's now merged); recreate it
     # (as a stale retry after an out-of-band restore might see) so the
@@ -237,7 +229,7 @@ def test_prepare_merge_raises_value_error_when_already_merged(
     _write_concept(tmp_path, "concepts/absorbed", title="Absorbed")
 
     with pytest.raises(ValueError, match="already merged"):
-        prepare_merge(
+        application_lifecycle.prepare_merge(
             bundle_dir,
             index_path,
             log_path,
@@ -280,7 +272,7 @@ def test_merge_core_writes_index_log_touched_files_survivor_last_and_ledger(
     )
     now = datetime(2026, 3, 15, 12, 30, tzinfo=UTC)
 
-    prepared = prepare_merge(
+    prepared = application_lifecycle.prepare_merge(
         bundle_dir,
         index_path,
         log_path,
@@ -292,9 +284,11 @@ def test_merge_core_writes_index_log_touched_files_survivor_last_and_ledger(
         now=now,
     )
 
-    result = merge_core(bundle_dir, index_path, log_path, prepared)
+    result = application_lifecycle.merge_core(
+        bundle_dir, index_path, log_path, prepared
+    )
 
-    assert isinstance(result, MergeResult)
+    assert isinstance(result, application_lifecycle.MergeResult)
     assert result.survivor_canonical == survivor_canonical
     assert result.absorbed_canonical == absorbed_canonical
     assert result.touched_files == ["concepts/other.md"]
@@ -346,7 +340,7 @@ def test_merge_core_committed_paths_include_the_ledger_sidecar(
     )
     now = datetime(2026, 3, 15, 12, 30, tzinfo=UTC)
 
-    prepared = prepare_merge(
+    prepared = application_lifecycle.prepare_merge(
         bundle_dir,
         index_path,
         log_path,
@@ -358,7 +352,9 @@ def test_merge_core_committed_paths_include_the_ledger_sidecar(
         now=now,
     )
 
-    result = merge_core(bundle_dir, index_path, log_path, prepared)
+    result = application_lifecycle.merge_core(
+        bundle_dir, index_path, log_path, prepared
+    )
 
     sidecar_paths = [
         path for path in result.committed_paths if "bundle/.state/ledger/" in path
@@ -396,7 +392,7 @@ def test_merge_core_makes_zero_vcs_side_effect_and_is_unmerge_reversible(
 
     head_before = (tmp_path / ".git" / "HEAD").read_text(encoding="utf-8")
 
-    prepared = prepare_merge(
+    prepared = application_lifecycle.prepare_merge(
         bundle_dir,
         index_path,
         log_path,
@@ -407,7 +403,7 @@ def test_merge_core_makes_zero_vcs_side_effect_and_is_unmerge_reversible(
         tmp_path,
         now=now,
     )
-    merge_core(bundle_dir, index_path, log_path, prepared)
+    application_lifecycle.merge_core(bundle_dir, index_path, log_path, prepared)
 
     assert not vcs_git.is_clean(tmp_path), (
         "merge_core must leave the working tree dirty -- it performs no commit"
@@ -459,7 +455,7 @@ def test_prepare_merge_returns_provenance_rewrites_for_third_party_file(
         encoding="utf-8"
     )
 
-    prepared = prepare_merge(
+    prepared = application_lifecycle.prepare_merge(
         bundle_dir,
         index_path,
         log_path,
@@ -518,7 +514,7 @@ def test_prepare_merge_touched_files_is_three_way_union(
         bundle_dir, "concepts/survivor", "concepts/absorbed"
     )
 
-    prepared = prepare_merge(
+    prepared = application_lifecycle.prepare_merge(
         bundle_dir,
         index_path,
         log_path,
@@ -566,7 +562,7 @@ def test_merge_core_chains_link_relation_provenance_transforms_in_order(
         encoding="utf-8"
     )
 
-    prepared = prepare_merge(
+    prepared = application_lifecycle.prepare_merge(
         bundle_dir,
         index_path,
         log_path,
@@ -577,7 +573,7 @@ def test_merge_core_chains_link_relation_provenance_transforms_in_order(
         tmp_path,
         now=datetime.now(UTC),
     )
-    merge_core(bundle_dir, index_path, log_path, prepared)
+    application_lifecycle.merge_core(bundle_dir, index_path, log_path, prepared)
 
     expected = bundle_links.apply_link_rewrites(
         pre_merge_text, file="concepts/all_three.md", rewrites=prepared.link_rewrites
@@ -632,7 +628,7 @@ def test_merge_core_provenance_and_relation_snapshots_byte_identical_to_pre_merg
         encoding="utf-8"
     )
 
-    prepared = prepare_merge(
+    prepared = application_lifecycle.prepare_merge(
         bundle_dir,
         index_path,
         log_path,
@@ -643,7 +639,7 @@ def test_merge_core_provenance_and_relation_snapshots_byte_identical_to_pre_merg
         tmp_path,
         now=datetime.now(UTC),
     )
-    merge_core(bundle_dir, index_path, log_path, prepared)
+    application_lifecycle.merge_core(bundle_dir, index_path, log_path, prepared)
 
     entry = bundle_ledger.read_entries(survivor_canonical, bundle_dir)[-1]
 
@@ -686,7 +682,7 @@ def test_prepare_merge_reports_stacked_body_when_absorbed_body_is_non_empty(
         bundle_dir, "concepts/apatheia", "concepts/apatheia-2"
     )
 
-    prepared = prepare_merge(
+    prepared = application_lifecycle.prepare_merge(
         bundle_dir,
         index_path,
         log_path,
@@ -739,7 +735,7 @@ def test_prepare_merge_stacked_body_is_none_when_absorbed_body_is_blank(
         bundle_dir, "concepts/survivor", "concepts/absorbed"
     )
 
-    prepared = prepare_merge(
+    prepared = application_lifecycle.prepare_merge(
         bundle_dir,
         index_path,
         log_path,
@@ -775,7 +771,7 @@ def test_format_merge_preview_line_includes_stacked_body_note_when_present(
         bundle_dir, "concepts/survivor", "concepts/absorbed"
     )
 
-    prepared = prepare_merge(
+    prepared = application_lifecycle.prepare_merge(
         bundle_dir,
         index_path,
         log_path,
@@ -819,7 +815,7 @@ def test_format_merge_preview_line_omits_stacked_body_note_when_absorbed_body_em
         bundle_dir, "concepts/survivor", "concepts/absorbed"
     )
 
-    prepared = prepare_merge(
+    prepared = application_lifecycle.prepare_merge(
         bundle_dir,
         index_path,
         log_path,
@@ -860,7 +856,7 @@ def test_format_merge_preview_line_warns_when_stacked_share_dominates(
         bundle_dir, "concepts/survivor", "concepts/absorbed"
     )
 
-    prepared = prepare_merge(
+    prepared = application_lifecycle.prepare_merge(
         bundle_dir,
         index_path,
         log_path,
@@ -905,7 +901,7 @@ def test_format_merge_preview_line_no_warning_below_the_guardrail(
         bundle_dir, "concepts/survivor", "concepts/absorbed"
     )
 
-    prepared = prepare_merge(
+    prepared = application_lifecycle.prepare_merge(
         bundle_dir,
         index_path,
         log_path,
@@ -949,7 +945,7 @@ def test_stacked_body_report_does_not_change_merged_document_bytes(
         bundle_dir, "concepts/survivor", "concepts/absorbed"
     )
 
-    prepared = prepare_merge(
+    prepared = application_lifecycle.prepare_merge(
         bundle_dir,
         index_path,
         log_path,
@@ -985,7 +981,7 @@ def test_stacked_body_report_does_not_change_merged_document_bytes(
     )
     _, actual_body = okf.load_frontmatter(prepared.plan.merged_survivor)
     assert actual_body == expected_body_roundtripped
-    assert isinstance(prepared.stacked_body, StackedBodyReport)
+    assert isinstance(prepared.stacked_body, application_lifecycle.StackedBodyReport)
 
 
 def test_build_merged_document_body_layout_is_pinned() -> None:

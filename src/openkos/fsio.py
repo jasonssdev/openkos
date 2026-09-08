@@ -17,6 +17,44 @@ self-flagged by `lint.scan_non_nfc_entries` -- and unique per call
 (`uuid4().hex` suffix), so concurrent runs never collide."""
 
 
+def snapshot_read(path: Path) -> tuple[bytes, str]:
+    """Read `path` exactly ONCE; return the raw bytes (for
+    `_reject_drifted_targets`) and the decoded text (for the parsers), both
+    derived from the SAME observation (issue #318).
+
+    Every drift-guarded verb needs both forms of every write target: the
+    parsers want decoded text to compute the plan from, and the guard wants
+    raw bytes to compare against at write time. Obtaining them as TWO reads
+    -- `read_text` for the plan, then `read_bytes` for the guard -- left a
+    window between them that defeated the guard entirely: a writer landing
+    in it became the guard's own baseline, so the comparison found no
+    drift and Phase B wrote the plan derived from the EARLIER text,
+    silently reverting the edit the guard exists to catch (and
+    `_autocommit` then committed the revert). One read, both forms derived
+    from it, is the only shape with no such window; callers must never
+    split this back into separate `read_text`/`read_bytes` calls.
+
+    The newline translation below reproduces `read_text`'s
+    universal-newline behavior EXACTLY -- `\\r\\n` first, then any lone
+    `\\r`, both to `\\n` -- because a bare `bytes.decode()` is not the text
+    the parsers were written against: a CRLF-at-rest file would hand them
+    `\\r`-bearing lines that `read_text` never produced, changing parser
+    behavior for a file nobody touched. The RAW bytes are returned
+    untranslated, which is what lets the guard still see a CRLF-only
+    rewrite as the drift it is.
+
+    Promoted from `cli/main._snapshot_read` (issue #918 Slice 1, design
+    D5): `application/lifecycle.py`'s `prepare_merge` needs this and
+    cannot import `openkos.cli` (the layering invariant), so this moved to
+    a leaf module `application/` may already import. `cli/main.
+    _snapshot_read` is now a one-line delegator, mirroring `_slugify`'s
+    own delegation to `bundle.source_titles.slugify` -- "rather than a
+    duplicate that could silently drift."""
+    data = path.read_bytes()
+    text = data.decode("utf-8")
+    return data, text.replace("\r\n", "\n").replace("\r", "\n")
+
+
 def write_exclusive(path: Path, content: str) -> None:
     """Write `content` to `path`, refusing to overwrite an existing file.
 

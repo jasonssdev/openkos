@@ -12,11 +12,12 @@ import pytest
 from typer.testing import CliRunner, _NamedTextIOWrapper
 
 from openkos import fsio
+from openkos.application.lifecycle import _apply_link_rewrite_idempotently
 from openkos.bundle import index as bundle_index
 from openkos.bundle import ledger as bundle_ledger
 from openkos.bundle import links as bundle_links
 from openkos.cli import main
-from openkos.cli.main import _apply_link_rewrite_idempotently, app
+from openkos.cli.main import app
 from openkos.model import okf
 from tests.unit.cli.conftest import (
     changed_paths,
@@ -1525,7 +1526,7 @@ def test_an_edit_landing_after_the_snapshot_observation_is_refused(
     _pair_with_all_three_rewrite_groups(tmp_path, monkeypatch)
     target_path = tmp_path / "bundle" / "concepts" / "survivor.md"
     concurrent = "hand-edited the instant the snapshot returned\n"
-    real_snapshot_read = main._snapshot_read
+    real_snapshot_read = fsio.snapshot_read
     fired = False
 
     def racing_snapshot_read(path: Path) -> tuple[bytes, str]:
@@ -1537,7 +1538,10 @@ def test_an_edit_landing_after_the_snapshot_observation_is_refused(
         return snapshot
 
     before = _snapshot(tmp_path)
-    monkeypatch.setattr(main, "_snapshot_read", racing_snapshot_read)
+    # Issue #918 Slice 1: `merge`'s Phase A moved into
+    # `application/lifecycle.py`, which calls `fsio.snapshot_read` directly
+    # (never `main._snapshot_read`) -- the patch target moves with it.
+    monkeypatch.setattr(fsio, "snapshot_read", racing_snapshot_read)
 
     result = runner.invoke(
         app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
