@@ -20,6 +20,7 @@ from datetime import date
 from pathlib import Path
 
 import pytest
+import yaml
 
 from openkos import config
 from openkos.application import ingest as ingest_service
@@ -530,13 +531,32 @@ def _prior_concept_text(**overrides: object) -> str:
     return okf.build_source_concept(**fields)  # type: ignore[arg-type]
 
 
-def test_converged_reingest_falls_through_on_unparseable_frontmatter() -> None:
+def test_converged_reingest_falls_through_on_absent_frontmatter() -> None:
     """Design: "unparseable frontmatter falls through" -- the FIRST of the
-    three policy decisions `converged_reingest` owns."""
+    three policy decisions `converged_reingest` owns, in the shape that does
+    NOT raise: `okf.load_frontmatter` returns `({}, text)` for a document
+    with no frontmatter block at all, so this falls through on the absent
+    `origin_key` rather than through the parse guard. Kept as its own case
+    precisely because it does not exercise that guard -- see
+    `test_converged_reingest_falls_through_on_malformed_frontmatter_yaml`."""
     assert (
         ingest_service.converged_reingest("not frontmatter at all", re_extract=False)
         is None
     )
+
+
+def test_converged_reingest_falls_through_on_malformed_frontmatter_yaml() -> None:
+    """#942: the parse guard has to catch what `frontmatter.loads` actually
+    raises. Malformed YAML surfaces as `yaml.parser.ParserError`, which is
+    NOT a `ValueError`, so an `except ValueError` guard here documents a
+    fall-through it cannot deliver and lets the error escape instead.
+
+    `title: [unclosed` is a genuinely malformed mapping value -- distinct
+    from a merely absent block, which `frontmatter.loads` tolerates."""
+    malformed = "---\ntitle: [unclosed\norigin_key: deadbeef\n---\n\nBody.\n"
+    with pytest.raises(yaml.YAMLError):
+        okf.load_frontmatter(malformed)
+    assert ingest_service.converged_reingest(malformed, re_extract=False) is None
 
 
 def test_converged_reingest_falls_through_on_legacy_source_no_origin_key() -> None:
