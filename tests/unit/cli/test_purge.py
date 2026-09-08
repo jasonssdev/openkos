@@ -17,6 +17,8 @@ import pytest
 import typer
 from typer.testing import CliRunner, Result, _NamedTextIOWrapper
 
+from openkos import fsio
+from openkos.application import lifecycle as application_lifecycle
 from openkos.bundle import decisions as bundle_decisions
 from openkos.bundle import index as bundle_index
 from openkos.bundle import ledger as bundle_ledger
@@ -127,6 +129,13 @@ def test_purge_self_scope_resolves_single_concept(tmp_git_repo: TmpGitRepo) -> N
     assert f"bundle/{tmp_git_repo.source_id}.md" in result.output
     assert "raw/notes.txt" in result.output
     assert "Total:" not in result.output
+    # #918 S4: pin the disclosure HEADER verbatim, not just the paths under
+    # it. The spec requires this sentence to survive the move to
+    # `application.lifecycle` byte-for-byte, and until now nothing in the
+    # repository asserted it -- `grep -rl IRREVERSIBLE tests/` was empty, so
+    # the requirement could not fail. It is the one line telling an operator
+    # that `purge` rewrites history unrecoverably.
+    assert "openkos purge: proposed IRREVERSIBLE history rewrite:" in result.output
 
 
 def test_purge_source_scope_cascades_descendants(tmp_git_repo: TmpGitRepo) -> None:
@@ -1562,12 +1571,14 @@ def test_drift_on_the_unprompted_path_is_refused(
     in, so the guard must run unconditionally.
 
     There is no prompt to hang the edit on here, so it lands inside rail 6
-    itself -- via a delegating wrap of `_purge_confirm_phrase`, the last
-    pre-guard step BOTH confirmation paths share, which runs strictly after
-    rail 4's clean-tree check. That placement is the point: an edit landing
-    there is invisible to every rail, and only the drift guard is left to
-    refuse it."""
-    real_phrase = main._purge_confirm_phrase
+    itself -- via a delegating wrap of `purge_confirm_phrase` (relocated
+    into `application.lifecycle`, issue #918 S4, but still called LIVE by
+    the adapter at this exact position -- see `PurgePlan.confirmation`'s
+    own docstring), the last pre-guard step BOTH confirmation paths share,
+    which runs strictly after rail 4's clean-tree check. That placement is
+    the point: an edit landing there is invisible to every rail, and only
+    the drift guard is left to refuse it."""
+    real_phrase = application_lifecycle.purge_confirm_phrase
     target = "bundle/index.md"
     target_path = tmp_git_repo.root / target
     concurrent = "hand-edited after the clean-tree rail\n"
@@ -1578,7 +1589,7 @@ def test_drift_on_the_unprompted_path_is_refused(
         target_path.write_text(concurrent, encoding="utf-8")
         return real_phrase(canonical_id, purge_ids, scope)
 
-    monkeypatch.setattr(main, "_purge_confirm_phrase", _phrase_and_edit)
+    monkeypatch.setattr(application_lifecycle, "purge_confirm_phrase", _phrase_and_edit)
     before = snapshot_with_mtime(tmp_git_repo.root)
     phrase = f"purge {tmp_git_repo.source_id}"
 
@@ -1621,7 +1632,7 @@ def test_an_edit_landing_after_the_snapshot_observation_is_refused_by_rail_4(
     target = "bundle/index.md"
     target_path = tmp_git_repo.root / target
     concurrent = "hand-edited the instant the snapshot returned\n"
-    real_snapshot_read = main._snapshot_read
+    real_snapshot_read = fsio.snapshot_read
     fired = False
 
     def racing_snapshot_read(path: Path) -> tuple[bytes, str]:
@@ -1633,7 +1644,13 @@ def test_an_edit_landing_after_the_snapshot_observation_is_refused_by_rail_4(
         return snapshot
 
     before = snapshot_with_mtime(tmp_git_repo.root)
-    monkeypatch.setattr(main, "_snapshot_read", racing_snapshot_read)
+    # (issue #918 S4): `purge`'s Phase-A reads relocated into
+    # `application.lifecycle.prepare_purge`, which calls
+    # `fsio.snapshot_read` directly rather than `main._snapshot_read` (the
+    # one-line delegator ~10 OTHER verbs still use) -- patching the
+    # delegator here would silently stop intercepting anything (the exact
+    # "dangerous-class no-op" this change's own review flags).
+    monkeypatch.setattr(fsio, "snapshot_read", racing_snapshot_read)
     phrase = f"purge {tmp_git_repo.source_id}"
 
     result = runner.invoke(

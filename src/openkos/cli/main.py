@@ -35,7 +35,6 @@ from openkos.bundle import ledger as bundle_ledger
 from openkos.bundle import log as bundle_log
 from openkos.bundle import merge as bundle_merge
 from openkos.bundle import provenance as bundle_provenance
-from openkos.bundle import references as bundle_references
 from openkos.cli import curate as curate_module
 from openkos.cli import next_action as next_action_module
 from openkos.cli import observability
@@ -995,65 +994,6 @@ def _sweep_findings_for_ids(
             "cost).",
             err=True,
         )
-
-
-def _decisions_history_targets(bundle_dir: Path, purge_ids: Iterable[str]) -> list[str]:
-    """Every `bundle/.state/decisions/**` path -- own OR foreign -- that
-    references a purge-set member, for inclusion in `purge`'s
-    `expunge_targets` list IN THE SAME `git filter-repo` pass as the
-    concept's own file expunge (privacy-purge spec: "Whole-History
-    Expunge Covers The Pending-Work Decision Subtree", pending-work design
-    Decision 5).
-
-    A record "references" `purge_ids` when its `pair_ids` (either
-    element) OR its `merged_absorbed_id` names a purge-set member.
-
-    Unlike the merge-ledger sidecar's history coverage (own sidecar ONLY,
-    the `bundle_ledger.ledger_path_for` loop above) -- which leaves a
-    FOREIGN sidecar's historical `absorbed_id` entries as a documented gap
-    -- this covers foreign decisions sidecars too. `expunge_paths`' own
-    `--file-info-callback` content-scrub is wired ONLY for
-    `bundle/index.md`/`bundle/log.md`, not for `bundle/.state/**`, so a
-    whole-file history removal is the only way to guarantee no historical
-    blob of ANY decisions path retains a purged id, which the spec
-    requires. `_sweep_decisions_for_ids` is the LIVE-tree counterpart that
-    reconstructs a foreign file's surviving (unrelated) records afterwards,
-    in the SAME Phase B pass.
-
-    Returned as bundle-relative POSIX strings (`bundle/.state/decisions/
-    **`), matching the shape every other `expunge_targets` entry already
-    uses -- callers append these directly, no further conversion needed."""
-    purge_ids_set = set(purge_ids)
-    targets: list[str] = []
-    for decisions_path in bundle_decisions.iter_decisions(bundle_dir):
-        metadata, _ = okf.load_frontmatter(decisions_path.read_text(encoding="utf-8"))
-        concept_id = metadata.get("concept_id")
-        if not isinstance(concept_id, str) or not concept_id:
-            continue
-        # Read the WALKED path, not a path rebuilt from the sidecar's own
-        # `concept_id` content, so a drifted or hostile id cannot redirect
-        # this read outside the bundle (F1b read-side traversal).
-        records = bundle_decisions.read_decisions_at(decisions_path)
-        # #797: the sidecar carries TWO kinds of human ruling and a purge
-        # must cover both. An identity decision names its members in
-        # `member_ids`, a field the contradiction records have no notion
-        # of -- reading only `pair_ids` would leave a purged id sitting in
-        # a keep-distinct record's history blob.
-        identity_records = bundle_decisions.read_identity_decisions_at(decisions_path)
-        references_purge_set = any(
-            record.pair_ids[0] in purge_ids_set
-            or record.pair_ids[1] in purge_ids_set
-            or record.merged_absorbed_id in purge_ids_set
-            for record in records
-        ) or any(
-            any(member in purge_ids_set for member in record.member_ids)
-            for record in identity_records
-        )
-        if references_purge_set:
-            targets.append(
-                f"bundle/{decisions_path.relative_to(bundle_dir).as_posix()}"
-            )
-    return targets
 
 
 def _sweep_decisions_for_ids(bundle_dir: Path, purge_ids: Iterable[str]) -> list[Path]:
@@ -6265,19 +6205,11 @@ def forget(
 
 
 _PurgeScope = Literal["self", "source"]
-
-
-def _purge_confirm_phrase(
-    canonical_id: str, purge_ids: list[str], scope: _PurgeScope
-) -> str:
-    """The exact typed confirmation phrase `purge` requires before Phase B:
-    `purge <canonical_id>` for `--scope self`, `purge <canonical_id> (<N>
-    concepts)` for `--scope source` -- names the delete COUNT so an operator
-    cannot type the self-scope phrase by habit and unknowingly confirm a
-    larger cascade (design: Typed Confirmation)."""
-    if scope == "source":
-        return f"purge {canonical_id} ({len(purge_ids)} concepts)"
-    return f"purge {canonical_id}"
+"""`purge_confirm_phrase`/`prepare_purge` moved into `application.lifecycle`
+(issue #918 S4) and take the same two-value `Literal["self", "source"]`
+directly rather than importing this CLI-local alias -- `application/*`
+modules must not import `openkos.cli`. This alias stays here only for
+`purge`'s own `--scope` option type."""
 
 
 def _purge_clean_live_index(
@@ -6446,62 +6378,6 @@ def _purge_sweep_store_sidecars(db_path: Path) -> None:
             )
 
 
-def _purge_dropped_store_notice(dropped: Sequence[tuple[Path, str]]) -> str | None:
-    """The operator-facing account of every store this purge actually
-    destroyed (#886), or `None` when it destroyed none.
-
-    `dropped` carries each store's cost beside its path, so this renders the
-    caller's finding rather than re-deriving it -- there is no lookup here
-    that a new store could miss.
-
-    `purge` deleted five stores, rebuilt two, and the notice named ONE. The
-    two undisclosed stores held work the operator had paid for: in the
-    session that filed the issue, 11 persisted contradiction verdicts, 9
-    edge suggestions and 7 identity adjudications went with them, minutes
-    after `contradictions` reported "11 of 11 candidate(s) served from
-    persisted findings; 0 judged fresh". #142's justification for the
-    vectors warning -- warn every time so an operator is never left assuming
-    dense retrieval is still intact -- was never applied to the other two.
-
-    DESTRUCTION is what makes a store reportable, and it takes both halves:
-    the store existed before this purge, and it is gone after. Membership in
-    the delete list proves neither. `unlink` can fail -- warned on stderr
-    rather than raised -- so a notice built from the intended list would
-    announce a store as dropped while it is still on disk, sending the
-    operator to pay for a restore of something they still have. And absence
-    alone is not loss: a workspace that never ran `curate` has no
-    `findings.db` to begin with, so reporting it would invent a loss and
-    price a restore for verdicts that were never computed. The count is
-    derived from the same list for the same reason a literal would be
-    wrong.
-
-    The closing sentence about rulings is load-bearing and was VERIFIED, not
-    assumed. #886 states purge destroyed "the operator's own recorded
-    rulings (two declined identity merges)". All three `findings.db` tenants
-    hold MACHINE-computed verdicts, while a `--decline` or `--keep-distinct`
-    ruling is written under the bundle's decision subtree and committed with
-    the bundle, so a ruling on a SURVIVING concept is untouched by the store
-    drop. It is deliberately qualified: a decision path referencing a
-    purge-set member IS expunged in the same rewrite pass (privacy-purge:
-    Whole-History Expunge Covers The Pending-Work Decision Subtree), so an
-    unqualified promise would read as the erasure having missed
-    something."""
-    if not dropped:
-        return None
-    lines = [
-        f"openkos purge: {len(dropped)} derived store(s) were dropped and "
-        "are NOT rebuilt."
-    ]
-    lines += [f"  - {path.name}: {cost}" for path, cost in dropped]
-    lines.append(
-        "Your own rulings are not in these stores: a `--decline` or "
-        "`--keep-distinct` ruling on a concept OUTSIDE the purge set is "
-        "recorded in the bundle and survives. A ruling that named a purged "
-        "concept was expunged with it, which is the erasure working."
-    )
-    return "\n".join(lines)
-
-
 @dataclass(frozen=True)
 class _PurgeIndexOutcome:
     """What Phase B's index cleanup destroyed, and what it failed to destroy.
@@ -6518,40 +6394,6 @@ class _PurgeIndexOutcome:
     undeleted: tuple[Path, ...]
     """Stores whose `unlink` raised, so pre-purge content is still on disk
     (#923). Non-empty means the erasure is incomplete."""
-
-
-def _purge_residual_store_notice(undeleted: Sequence[Path]) -> str | None:
-    """The operator-facing account of an INCOMPLETE erasure (#923), or
-    `None` when every delete succeeded.
-
-    This is not the dropped-store notice's counterpart -- that one prices a
-    restore, this one reports a failure -- and it must name the exact paths,
-    because acting on it means removing those files.
-
-    What it deliberately does NOT say is `openkos reindex`. The old warning
-    said exactly that, and a reindex rebuilds a store's CONTENT: it never
-    removes the pages a failed unlink left behind. An operator who ran the
-    recommended command got search back and kept the residue, which is the
-    worse of the two failure modes because it looks resolved. The delete is
-    the erasure -- `_purge_rebuild_indexes` unlinks rather than issuing a
-    row-level `DELETE` precisely so no freelist-recoverable pages survive --
-    so only removing the file finishes what the purge started."""
-    if not undeleted:
-        return None
-    lines = [
-        f"openkos purge: INCOMPLETE ERASURE -- {len(undeleted)} derived "
-        "store(s) could not be deleted and still hold pre-purge content:"
-    ]
-    lines += [f"  - {path}" for path in undeleted]
-    lines.append(
-        "The git history rewrite itself succeeded. To finish the erasure, "
-        "clear whatever blocked the delete (an open handle, a read-only "
-        "parent directory, file permissions) and remove the file(s) above; "
-        "then run `openkos reindex` to restore search. `openkos reindex` "
-        "alone does NOT complete the erasure: it rebuilds index content and "
-        "leaves the residual pages exactly where they are."
-    )
-    return "\n".join(lines)
 
 
 def _purge_rebuild_indexes(
@@ -6788,148 +6630,25 @@ def purge(
         typer.echo(f"openkos purge: refusing to purge -- {exc}.", err=True)
         raise typer.Exit(code=1) from exc
 
-    index_path = layout.bundle_dir / "index.md"
-    log_path = layout.bundle_dir / "log.md"
+    now = datetime.now(UTC)
 
     try:
-        # One `_snapshot_read` observation per target (issues #313, #318,
-        # #321): each path is read exactly once, at the moment its decoded
-        # text feeds the plan, and the guard's bytes come from that same
-        # read. `index.md`/`log.md` are not plan inputs here -- their
-        # post-rewrite cleanup re-reads them fresh -- but they ARE what
-        # `git filter-repo`'s checkout clobbers, so their baselines are
-        # captured with the same single-observation discipline.
-        index_bytes, _ = _snapshot_read(index_path)
-        log_bytes, _ = _snapshot_read(log_path)
-        concept_bytes, concept_text = _snapshot_read(concept_path)
-
-        # Same whole-bundle snapshot construction as `forget` (~L1006-1019).
-        # `other_bytes` shadows it for the guard: which of these files the
-        # run will EXPUNGE is not known until `purge_ids` resolves below, so
-        # the bytes come out of the same `_snapshot_read` observation as the
-        # text rather than re-read per member afterwards -- a second read
-        # would leave every file the #318 window. Only the purge-set
-        # entries are ever consulted; the rest are dropped.
-        other_files: dict[str, str] = {}
-        other_bytes: dict[str, bytes] = {}
-        for path in sorted(layout.bundle_dir.rglob("*.md")):
-            if path.name in okf.RESERVED_FILENAMES:
-                continue
-            if path == concept_path:
-                continue
-            rel = path.relative_to(layout.bundle_dir).as_posix()
-            other_bytes[rel], other_files[rel] = _snapshot_read(path)
-
-        purge_ids: list[str] = (
-            bundle_provenance.find_provenance_descendants(
-                other_files, root_ids={canonical_id}
-            )
-            if scope == "source"
-            else [canonical_id]
+        plan = application_lifecycle.prepare_purge(
+            root, layout, canonical_id, scope=scope, now=now
         )
-        purge_ids_set = set(purge_ids)
-
-        member_texts: dict[str, str] = {canonical_id: concept_text}
-        for member in purge_ids:
-            if member != canonical_id:
-                member_texts[member] = other_files[f"{member}.md"]
-        member_metadata: dict[str, dict[str, object]] = {
-            member: okf.load_frontmatter(text)[0]
-            for member, text in member_texts.items()
-        }
-
-        # Reference-aware detection (rail 1's data), identical set-difference
-        # gate to `forget`'s.
-        all_refs: list[tuple[str, bundle_references.InboundReference]] = []
-        seen_unverifiable: set[str] = set()
-        for member in purge_ids:
-            for ref in bundle_references.find_inbound_references(
-                other_files, target_id=member
-            ):
-                if ref.referrer_id in purge_ids_set:
-                    continue
-                if ref.kind == "unverifiable":
-                    if ref.referrer_id in seen_unverifiable:
-                        continue
-                    seen_unverifiable.add(ref.referrer_id)
-                all_refs.append((member, ref))
-        verified_refs = [ref for _, ref in all_refs if ref.kind != "unverifiable"]
-        unverifiable_refs = [ref for _, ref in all_refs if ref.kind == "unverifiable"]
-
-        # Raw-path resolution (design: "Raw-path resolution"): a Source's
-        # `resource` is validated (must start with `raw/`, no `..`, resolve
-        # under `layout.raw_dir`) -- an absent or malformed `resource` is
-        # WARNED about, never refused, and simply contributes no raw path
-        # (this Source's own `bundle/<id>.md` is still targeted).
-        expunge_targets: list[str] = []
-        # The raw paths are collected into their OWN list as they resolve,
-        # rather than sniffed back out of `expunge_targets` by prefix at
-        # preview time: that list is deliberately MIXED (raw paths, bundle
-        # files, ledger sidecars, decisions sidecars), so a `raw/` prefix
-        # test would be a silent liability the day another target kind
-        # gains a similar prefix. This list answers exactly one question --
-        # did anything in this purge set resolve source material? -- and
-        # cannot drift from the answer.
-        resolved_raw_paths: list[str] = []
-        resource_warnings: list[str] = []
-        raw_dir_resolved = layout.raw_dir.resolve()
-        for member in sorted(purge_ids):
-            resource = member_metadata[member].get("resource")
-            if isinstance(resource, str) and resource:
-                posix_resource = PurePosixPath(resource)
-                valid = (
-                    resource.startswith("raw/")
-                    and not resource.startswith("/")
-                    and ".." not in posix_resource.parts
-                )
-                if valid:
-                    try:
-                        (root / resource).resolve().relative_to(raw_dir_resolved)
-                    except ValueError:
-                        valid = False
-                if valid:
-                    resolved_raw_paths.append(resource)
-                    expunge_targets.append(resource)
-                else:
-                    resource_warnings.append(
-                        f"'{member}': resource frontmatter {resource!r} is "
-                        "absent/malformed -- skipping its raw-path expunge "
-                        "(its bundle file is still targeted)"
-                    )
-            expunge_targets.append(f"bundle/{member}.md")
-        # Whole-History Expunge Covers The Ledger Sidecar Store
-        # (privacy-purge spec, task 3.4): every purge-set member's OWN
-        # `bundle/.state/ledger/` sidecar (i.e. it is/was itself a merge
-        # survivor) is expunged in this SAME `git filter-repo` pass -- no
-        # second invocation. An absorbed-but-not-itself-a-survivor member
-        # has no sidecar of its own; its historical body may still live as
-        # an `absorbed_snapshot` fragment inside a DIFFERENT survivor's
-        # sidecar, which stays a documented gap (see design's threat
-        # matrix note) rather than a whole-file expunge target here.
-        for member in sorted(purge_ids):
-            member_sidecar = bundle_ledger.ledger_path_for(member, layout.bundle_dir)
-            if member_sidecar.is_file():
-                expunge_targets.append(
-                    f"bundle/{member_sidecar.relative_to(layout.bundle_dir).as_posix()}"
-                )
-        # Whole-History Expunge Covers The Pending-Work Decision Subtree
-        # (privacy-purge spec, B1.4): every `bundle/.state/decisions/**`
-        # sidecar -- own OR foreign -- that references a purge-set member
-        # is expunged in this SAME `git filter-repo` pass. Unlike the
-        # ledger sidecar loop above, this covers FOREIGN sidecars too
-        # (`_decisions_history_targets`'s own docstring explains why).
-        expunge_targets.extend(_decisions_history_targets(layout.bundle_dir, purge_ids))
         # Threat matrix ("Shell / subprocess"): concept ids are user-
         # controlled, and a decisions path derived from one could contain
         # `==>` (git-filter-repo's rename delimiter) or another rejected
-        # sequence -- validate the WHOLE `expunge_targets` list here, in
-        # Phase A, so a malformed path refuses cleanly (this except
-        # clause) rather than raising an uncaught `ValueError` from deep
-        # inside `vcs_git.expunge_paths` after the point of no return.
+        # sequence -- validate the WHOLE `expunge_targets` list here so a
+        # malformed path refuses cleanly (this except clause) rather than
+        # raising an uncaught `ValueError` from deep inside
+        # `vcs_git.expunge_paths` after the point of no return.
         # `vcs_git.expunge_paths` re-validates this same list itself
         # (defense in depth, never trusted to be skipped), so this call
-        # can never desync from what the real rewrite enforces.
-        vcs_git._validate_rel_paths(expunge_targets)
+        # can never desync from what the real rewrite enforces. Stays
+        # adapter-side: `application/lifecycle.py` must never import
+        # `openkos.vcs`.
+        vcs_git._validate_rel_paths(plan.disclosure.expunge_targets)
     except (OSError, ValueError) as exc:
         typer.echo(
             f"openkos purge: failed while preparing the purge -- {exc}.", err=True
@@ -6943,56 +6662,45 @@ def purge(
     # the history content-scrub below means no residual is left to warn
     # about.
     typer.echo("openkos purge: proposed IRREVERSIBLE history rewrite:")
-    for target in expunge_targets:
+    for target in plan.disclosure.expunge_targets:
         typer.echo(f"  - {target}")
-    for warning in resource_warnings:
+    for warning in plan.disclosure.resource_warnings:
         # Stream-consistent with the rest of the pre-confirmation preview
         # (stdout, not stderr) -- an operator capturing only stdout must
         # not silently lose a malformed-resource warning printed here.
         typer.echo(f"  ! {warning}")
-    if not resolved_raw_paths:
-        # State the ABSENCE, do not merely omit the line. The preview is the
-        # last thing read before the irreversible typed phrase, and a list
-        # that is simply shorter reads the same as a list that is complete:
-        # nothing in it reveals that the one distinction deciding whether
-        # the source material survives -- Source with a resolvable
-        # `resource`, or derived concept -- fell the quiet way.
-        #
-        # This corrects a real asymmetry in the disclosure. A member whose
-        # `resource` is MALFORMED already earns a `!` warning above, so the
-        # rare, broken case announced itself while the common, correct one
-        # (a derived concept, which has no `resource` at all) said nothing.
-        # The two now speak with the same marker and the same prominence.
-        #
-        # Worded to stay true in BOTH ways the set can resolve nothing: a
-        # set of derived concepts, and a Source whose `resource` failed
-        # validation (whose own `!` warning above supplies the specific
-        # reason). Hence the general rule in the parenthesis rather than a
-        # claim about this particular set's membership.
+    if plan.disclosure.raw_absence:
+        # State the ABSENCE, do not merely omit the line. See
+        # `PurgeDisclosure.raw_absence`'s own docstring (design:
+        # Interfaces/Contracts "S4 -- purge") for the full rationale.
         typer.echo(
             "  ! no raw source material is part of this purge -- no "
             "purge-set member contributes a raw source path (only a "
             "Source does)"
         )
-    if scope == "source":
-        typer.echo(f"  Total: {len(purge_ids)} concept(s) to purge.")
+    if plan.disclosure.cascade_total is not None:
+        typer.echo(f"  Total: {plan.disclosure.cascade_total} concept(s) to purge.")
     typer.echo()
 
     # Rail 1: reference-aware refusal, unless --force (spec req 2, rail 1).
-    if (verified_refs or unverifiable_refs) and not force:
+    # A hard refusal, never a `ConfirmationRequest` (design D2):
+    # `plan.verified_refs`/`unverifiable_refs` are plain counts, read
+    # directly here, never threaded through `plan.confirmation`.
+    if (plan.verified_refs or plan.unverifiable_refs) and not force:
         messages: list[str] = []
         target_desc = (
-            f"the {len(purge_ids)}-concept purge set rooted at '{canonical_id}'"
+            f"the {len(plan.purge_ids)}-concept purge set rooted at "
+            f"'{plan.canonical_id}'"
             if scope == "source"
-            else f"'{canonical_id}'"
+            else f"'{plan.canonical_id}'"
         )
-        if verified_refs:
+        if plan.verified_refs:
             messages.append(
-                f"{len(verified_refs)} inbound reference(s) to {target_desc} found"
+                f"{plan.verified_refs} inbound reference(s) to {target_desc} found"
             )
-        if unverifiable_refs:
+        if plan.unverifiable_refs:
             messages.append(
-                f"could not verify {len(unverifiable_refs)} referrer(s) "
+                f"could not verify {plan.unverifiable_refs} referrer(s) "
                 f"that may reference {target_desc}"
             )
         typer.echo(
@@ -7086,24 +6794,26 @@ def purge(
     # Rail 6: the typed confirmation phrase, EXACT match only -- no --auto
     # bypass (irreversible). `--confirm-phrase` serves both non-interactive
     # use and tests; on a TTY without it, `typer.prompt` asks interactively.
-    expected_phrase = _purge_confirm_phrase(canonical_id, purge_ids, scope)
+    #
+    # `expected_phrase` is deliberately recomputed HERE via a LIVE call to
+    # `application_lifecycle.purge_confirm_phrase`, not read off
+    # `plan.confirmation.expected` -- see `PurgePlan.confirmation`'s own
+    # docstring: this is the exact call-site position
+    # `test_drift_on_the_unprompted_path_is_refused` patches to prove the
+    # post-gate drift guard covers this window, and that proof depends on
+    # the call landing strictly AFTER rail 4, not during Phase A.
+    expected_phrase = application_lifecycle.purge_confirm_phrase(
+        plan.canonical_id, plan.purge_ids, scope
+    )
     if confirm_phrase is not None:
         typed_phrase = confirm_phrase
     elif sys.stdin.isatty():
         typed_phrase = typer.prompt(f"Type '{expected_phrase}' to proceed")
     else:
-        typer.echo(
-            "openkos purge: refusing to purge -- stdin is not a TTY; "
-            "re-run with --confirm-phrase.",
-            err=True,
-        )
+        typer.echo(plan.confirmation.non_tty_refusal, err=True)
         raise typer.Exit(code=1)
     if typed_phrase != expected_phrase:
-        typer.echo(
-            "openkos purge: aborted -- confirmation phrase did not match "
-            "exactly; nothing was written.",
-            err=True,
-        )
+        typer.echo(plan.confirmation.mismatch_abort, err=True)
         raise typer.Exit(code=1)
 
     # Issue #321: rail 4 pinned the tree clean BEFORE the typed-phrase
@@ -7117,27 +6827,13 @@ def purge(
     # The DELETE targets are in here alongside `index.md`/`log.md`: the
     # purge set is a claim about the Phase-A bundle, and a member edited
     # while the prompt waited is a state the operator was never shown.
-    # The `raw/<name>` expunge targets are NOT: Phase A never reads their
-    # content (they may legitimately be absent from the live tree), so
-    # there is no same-observation baseline to compare -- they stay under
-    # rail 4's clean-tree protection alone.
+    # The `raw/<name>` expunge targets are NOT in `plan.drift_targets`:
+    # Phase A never reads their content (they may legitimately be absent
+    # from the live tree), so there is no same-observation baseline to
+    # compare -- they stay under rail 4's clean-tree protection alone.
     _reject_drifted_targets(
         layout,
-        {
-            index_path: index_bytes,
-            log_path: log_bytes,
-            concept_path: concept_bytes,
-            **{
-                # Defensive fail-closed lookup (see `_require_member_baseline`):
-                # today the key exists by construction, but a missing baseline
-                # must refuse cleanly, never `KeyError` mid-gate.
-                layout.bundle_dir / f"{member}.md": _require_member_baseline(
-                    "purge", other_bytes, member
-                )
-                for member in purge_ids
-                if member != canonical_id
-            },
-        },
+        plan.drift_targets,
         "purge",
         # #319: the root concept and every cascade member are expunged --
         # DELETE targets, and the refusal must name them as such. Only
@@ -7146,8 +6842,8 @@ def purge(
             {concept_path}
             | {
                 layout.bundle_dir / f"{member}.md"
-                for member in purge_ids
-                if member != canonical_id
+                for member in plan.purge_ids
+                if member != plan.canonical_id
             }
         ),
     )
@@ -7164,22 +6860,24 @@ def purge(
         err=True,
     )
     try:
-        vcs_git.expunge_paths(root, expunge_targets, scrub_identities=purge_ids)
+        vcs_git.expunge_paths(
+            root, plan.disclosure.expunge_targets, scrub_identities=plan.purge_ids
+        )
     except vcs_git.GitFinalizeError as exc:
         typer.echo(
             f"openkos purge: the history rewrite SUCCEEDED, but finalize "
             f"failed -- {exc}",
             err=True,
         )
-        _purge_clean_live_index(layout, purge_ids)
-        _purge_clean_live_log(layout, purge_ids)
-        _sweep_ledger_sidecars_for_ids(layout.bundle_dir, purge_ids)
-        _sweep_decisions_for_ids(layout.bundle_dir, purge_ids)
+        _purge_clean_live_index(layout, plan.purge_ids)
+        _purge_clean_live_log(layout, plan.purge_ids)
+        _sweep_ledger_sidecars_for_ids(layout.bundle_dir, plan.purge_ids)
+        _sweep_decisions_for_ids(layout.bundle_dir, plan.purge_ids)
         # This path already exits 1, so the residue changes no status here --
         # but an operator on a failing purge still needs to know a store was
         # left holding pre-purge content, and this is the only place it is
         # said (#923).
-        residual = _purge_residual_store_notice(
+        residual = application_lifecycle.residual_store_notice(
             _purge_rebuild_indexes(layout).undeleted
         )
         if residual is not None:
@@ -7192,8 +6890,8 @@ def purge(
         )
         raise typer.Exit(code=1) from exc
 
-    _purge_clean_live_index(layout, purge_ids)
-    _purge_clean_live_log(layout, purge_ids)
+    _purge_clean_live_index(layout, plan.purge_ids)
+    _purge_clean_live_log(layout, plan.purge_ids)
     # Whole-History Expunge Covers The Ledger Sidecar Store
     # (privacy-purge spec): each purge-set member's OWN sidecar was already
     # removed from the working tree by `expunge_paths`' filter-repo checkout
@@ -7201,16 +6899,17 @@ def purge(
     # dropping any OTHER survivor's sidecar entry whose `absorbed_id` is a
     # purge-set member, reusing the exact same primitive `forget`'s Phase B
     # calls, so the sweep is written exactly once.
-    ledger_touched = _sweep_ledger_sidecars_for_ids(layout.bundle_dir, purge_ids)
+    ledger_touched = _sweep_ledger_sidecars_for_ids(layout.bundle_dir, plan.purge_ids)
     # Whole-History Expunge Covers The Pending-Work Decision Subtree
     # (privacy-purge spec): each purge-set member's OWN decisions sidecar,
     # and every FOREIGN sidecar referencing it, was already removed from
     # the working tree by `expunge_paths`' filter-repo checkout (both were
-    # in `expunge_targets` above, via `_decisions_history_targets`); this
-    # is the LIVE-tree half -- reconstructing any foreign sidecar's
-    # surviving (unrelated) records, reusing the exact same primitive
-    # `forget`'s Phase B calls, so the sweep is written exactly once.
-    decisions_touched = _sweep_decisions_for_ids(layout.bundle_dir, purge_ids)
+    # in `expunge_targets` above, via `application_lifecycle`'s own
+    # `_decisions_history_targets`); this is the LIVE-tree half --
+    # reconstructing any foreign sidecar's surviving (unrelated) records,
+    # reusing the exact same primitive `forget`'s Phase B calls, so the
+    # sweep is written exactly once.
+    decisions_touched = _sweep_decisions_for_ids(layout.bundle_dir, plan.purge_ids)
     index_outcome = _purge_rebuild_indexes(layout)
     dropped_stores = index_outcome.dropped
     # #886: the disclosure is the operator's only account of what this
@@ -7249,25 +6948,25 @@ def purge(
         except vcs_git.GitError:
             should_commit = True
         if should_commit:
-            commit_message = f"openkos: purge {canonical_id}"
-            if len(purge_ids) > 1:
-                commit_message += f" (+{len(purge_ids) - 1})"
+            commit_message = f"openkos: purge {plan.canonical_id}"
+            if len(plan.purge_ids) > 1:
+                commit_message += f" (+{len(plan.purge_ids) - 1})"
             _autocommit(root, commit_paths_rel, commit_message)
 
         if scope == "source":
             typer.echo(
-                f"openkos purge: permanently expunged {len(purge_ids)} "
+                f"openkos purge: permanently expunged {len(plan.purge_ids)} "
                 "concept(s) from ALL git history."
             )
         else:
             typer.echo(
-                f"openkos purge: permanently expunged 'bundle/{canonical_id}.md' "
-                "from ALL git history."
+                f"openkos purge: permanently expunged "
+                f"'bundle/{plan.canonical_id}.md' from ALL git history."
             )
         # #886: every store `purge` actually destroyed is named here, each with
         # its own restore cost. This block used to name `vectors.db` alone while
         # THREE stores were being dropped. The wording now lives in
-        # `_purge_dropped_store_notice`, rendering exactly what
+        # `application_lifecycle.dropped_store_notice`, rendering exactly what
         # `_purge_rebuild_indexes` reports it destroyed, so the disclosure
         # cannot fall behind the delete set the way it did between #142 and
         # #886 -- nor run ahead of it by naming a store whose delete failed or
@@ -7281,14 +6980,16 @@ def purge(
         # per-store list; the quoted reindex wording is the part that is
         # verbatim, because pre-empting it is the point.
     finally:
-        dropped_notice = _purge_dropped_store_notice(dropped_stores)
+        dropped_notice = application_lifecycle.dropped_store_notice(dropped_stores)
         if dropped_notice is not None:
             typer.echo(dropped_notice)
         # #923: the residue report shares the dropped notice's protection --
         # it is the only account of an INCOMPLETE erasure, and losing it to
         # a failure in the bookkeeping above would leave an operator
         # believing the expunge summary they just read was the whole story.
-        residual_notice = _purge_residual_store_notice(index_outcome.undeleted)
+        residual_notice = application_lifecycle.residual_store_notice(
+            index_outcome.undeleted
+        )
         if residual_notice is not None:
             typer.echo(residual_notice, err=True)
 

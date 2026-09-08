@@ -900,3 +900,242 @@ def test_forget_core_carries_the_exact_unlink_count_without_probing_the_disk(
     # The error line stays byte-identical to the cause's own text, so the
     # adapter's "failed while writing the forget -- {exc}." is unchanged.
     assert str(caught.value) == "simulated delete failure on 2nd unlink"
+
+
+# ---------------------------------------------------------------------------
+# Phase 10: `PurgePlan`/`PurgeDisclosure` (task 10.1)
+# ---------------------------------------------------------------------------
+
+
+def test_purge_confirm_phrase_self_scope_names_only_the_root() -> None:
+    """`--scope self` names only the root concept -- an operator typing it
+    can never mistake it for a wider cascade confirmation."""
+    phrase = lifecycle_service.purge_confirm_phrase(
+        "concepts/a", ["concepts/a"], "self"
+    )
+
+    assert phrase == "purge concepts/a"
+
+
+def test_purge_confirm_phrase_source_scope_names_the_cascade_count() -> None:
+    """`--scope source` names the delete COUNT so an operator cannot type
+    the self-scope phrase by habit and unknowingly confirm a larger
+    cascade (design: Typed Confirmation)."""
+    phrase = lifecycle_service.purge_confirm_phrase(
+        "concepts/a", ["concepts/a", "concepts/b", "concepts/c"], "source"
+    )
+
+    assert phrase == "purge concepts/a (3 concepts)"
+
+
+def test_prepare_purge_self_scope_is_directly_callable(tmp_path: Path) -> None:
+    """`prepare_purge` is callable by a module that imports nothing from
+    `openkos.cli`, and reproduces `purge`'s own scope-`self` shape: a
+    single-member purge set, no inbound references, a `raw_absence`
+    disclosure (a derived concept has no `resource`), and a
+    `TypedChallengeConfirmation` with no `--auto` bypass field anywhere on
+    it (design C1: purge's gate is a typed phrase, never a boolean)."""
+    layout = _workspace(tmp_path)
+    _write_concept(layout.bundle_dir, "concepts/target", title="Target")
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+
+    plan = lifecycle_service.prepare_purge(
+        tmp_path, layout, "concepts/target", scope="self", now=now
+    )
+
+    assert isinstance(plan, lifecycle_service.PurgePlan)
+    assert plan.canonical_id == "concepts/target"
+    assert plan.purge_ids == ["concepts/target"]
+    assert plan.verified_refs == 0
+    assert plan.unverifiable_refs == 0
+    assert isinstance(plan.disclosure, lifecycle_service.PurgeDisclosure)
+    assert plan.disclosure.expunge_targets == ("bundle/concepts/target.md",)
+    assert plan.disclosure.resource_warnings == ()
+    assert plan.disclosure.raw_absence is True
+    assert plan.disclosure.cascade_total is None  # never rendered for --scope self
+    assert isinstance(plan.confirmation, consent_service.TypedChallengeConfirmation)
+    assert plan.confirmation.supplying_flag == "--confirm-phrase"
+    assert plan.confirmation.match_mode == "exact"
+    assert not hasattr(plan.confirmation, "bypass_flag")
+    assert plan.confirmation.expected == lifecycle_service.purge_confirm_phrase(
+        "concepts/target", ["concepts/target"], "self"
+    )
+    assert plan.confirmation.prompt == "Type 'purge concepts/target' to proceed"
+    concept_path = layout.bundle_dir / "concepts" / "target.md"
+    assert concept_path.exists()  # Phase A writes nothing, deletes nothing
+
+
+def test_prepare_purge_scope_source_expands_the_cascade_and_reports_the_total(
+    tmp_path: Path,
+) -> None:
+    """`--scope source` expands the purge set via the SAME provenance
+    closure `forget --scope source` uses, and the disclosure's
+    `cascade_total` names the FULL set size (source scope only)."""
+    layout = _workspace(tmp_path)
+    _write_concept(layout.bundle_dir, "concepts/root", title="Root")
+    child_path = layout.bundle_dir / "concepts" / "child.md"
+    child_path.parent.mkdir(parents=True, exist_ok=True)
+    child_path.write_text(
+        okf.dump_frontmatter(
+            {
+                "type": "Concept",
+                "title": "Child",
+                "provenance": ["concepts/root"],
+            },
+            "Body.\n",
+        ),
+        encoding="utf-8",
+    )
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+
+    plan = lifecycle_service.prepare_purge(
+        tmp_path, layout, "concepts/root", scope="source", now=now
+    )
+
+    assert plan.purge_ids == ["concepts/child", "concepts/root"]  # sorted closure
+    assert plan.disclosure.cascade_total == 2
+    assert set(plan.disclosure.expunge_targets) == {
+        "bundle/concepts/child.md",
+        "bundle/concepts/root.md",
+    }
+    assert plan.confirmation.expected == "purge concepts/root (2 concepts)"
+    assert (
+        plan.confirmation.prompt == "Type 'purge concepts/root (2 concepts)' to proceed"
+    )
+
+
+def test_prepare_purge_resolves_a_sources_raw_material(tmp_path: Path) -> None:
+    """A Source with a valid `resource: raw/<name>` frontmatter contributes
+    its raw path to `expunge_targets`, and the disclosure reports
+    `raw_absence=False` -- the true-erasure counterpart to `forget`, which
+    never touches raw source material at all."""
+    layout = _workspace(tmp_path)
+    raw_path = layout.raw_dir / "notes.txt"
+    raw_path.parent.mkdir(parents=True, exist_ok=True)
+    raw_path.write_text("raw notes\n", encoding="utf-8")
+    source_path = layout.bundle_dir / "concepts" / "source.md"
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_text(
+        okf.dump_frontmatter(
+            {"type": "Source", "title": "Source", "resource": "raw/notes.txt"},
+            "Body.\n",
+        ),
+        encoding="utf-8",
+    )
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+
+    plan = lifecycle_service.prepare_purge(
+        tmp_path, layout, "concepts/source", scope="self", now=now
+    )
+
+    assert plan.disclosure.raw_absence is False
+    assert "raw/notes.txt" in plan.disclosure.expunge_targets
+    assert plan.disclosure.resource_warnings == ()
+
+
+def test_prepare_purge_warns_on_a_malformed_resource_but_still_targets_the_bundle_file(
+    tmp_path: Path,
+) -> None:
+    """An absent/malformed `resource` is WARNED about, never refused --
+    the Source's own bundle file is still targeted, and `raw_absence`
+    stays `True` because nothing valid resolved."""
+    layout = _workspace(tmp_path)
+    source_path = layout.bundle_dir / "concepts" / "source.md"
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_text(
+        okf.dump_frontmatter(
+            {"type": "Source", "title": "Source", "resource": "../escape.txt"},
+            "Body.\n",
+        ),
+        encoding="utf-8",
+    )
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+
+    plan = lifecycle_service.prepare_purge(
+        tmp_path, layout, "concepts/source", scope="self", now=now
+    )
+
+    assert plan.disclosure.raw_absence is True
+    assert len(plan.disclosure.resource_warnings) == 1
+    assert "concepts/source" in plan.disclosure.resource_warnings[0]
+    assert "bundle/concepts/source.md" in plan.disclosure.expunge_targets
+
+
+def test_prepare_purge_counts_inbound_references_for_rail_one(
+    tmp_path: Path,
+) -> None:
+    """`verified_refs`/`unverifiable_refs` are rail 1's own inputs -- a
+    hard refusal independent of any human answer -- and are plain `int`s,
+    never threaded through `confirmation` (design D2)."""
+    layout = _workspace(tmp_path)
+    _write_concept(layout.bundle_dir, "concepts/target", title="Target")
+    referrer_path = layout.bundle_dir / "concepts" / "referrer.md"
+    referrer_path.write_text(
+        okf.dump_frontmatter(
+            {"type": "Concept", "title": "Referrer"},
+            "See [target](/concepts/target.md).\n",
+        ),
+        encoding="utf-8",
+    )
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+
+    plan = lifecycle_service.prepare_purge(
+        tmp_path, layout, "concepts/target", scope="self", now=now
+    )
+
+    assert plan.verified_refs == 1
+    assert plan.unverifiable_refs == 0
+    for cls in (
+        consent_service.BooleanConfirmation,
+        consent_service.TypedChallengeConfirmation,
+    ):
+        field_names = {f.name for f in dataclasses.fields(cls)}
+        assert "verified_refs" not in field_names
+        assert "unverifiable_refs" not in field_names
+
+
+def test_prepare_purge_drift_targets_carries_the_same_observation_bytes(
+    tmp_path: Path,
+) -> None:
+    """`drift_targets` is the complete post-gate guard mapping, built from
+    the SAME `fsio.snapshot_read` observation that fed the plan (issues
+    #313, #318, #321) -- `index.md`, `log.md`, and the concept file, all
+    byte-for-byte what is currently on disk."""
+    layout = _workspace(tmp_path)
+    concept_path = _write_concept(layout.bundle_dir, "concepts/target", title="Target")
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+
+    plan = lifecycle_service.prepare_purge(
+        tmp_path, layout, "concepts/target", scope="self", now=now
+    )
+
+    index_path = layout.bundle_dir / "index.md"
+    log_path = layout.bundle_dir / "log.md"
+    assert plan.drift_targets[index_path] == index_path.read_bytes()
+    assert plan.drift_targets[log_path] == log_path.read_bytes()
+    assert plan.drift_targets[concept_path] == concept_path.read_bytes()
+
+
+def test_dropped_store_notice_and_residual_store_notice_move_unchanged(
+    tmp_path: Path,
+) -> None:
+    """Both notices already returned `str | None` before this move (design
+    D3's stated exception) and move verbatim -- `None` on an empty
+    sequence, and the exact wording their `cli/main.py` originals used."""
+    assert lifecycle_service.dropped_store_notice(()) is None
+    assert lifecycle_service.residual_store_notice(()) is None
+
+    vectors_db = tmp_path / "vectors.db"
+    findings_db = tmp_path / "findings.db"
+
+    dropped_text = lifecycle_service.dropped_store_notice(
+        ((vectors_db, "dense retrieval degraded."),)
+    )
+    assert dropped_text is not None
+    assert "1 derived store(s) were dropped" in dropped_text
+    assert "vectors.db: dense retrieval degraded." in dropped_text
+
+    residual_text = lifecycle_service.residual_store_notice((findings_db,))
+    assert residual_text is not None
+    assert "INCOMPLETE ERASURE -- 1 derived" in residual_text
+    assert str(findings_db) in residual_text

@@ -69,6 +69,21 @@ def test_execute_single_unmerge_no_longer_lives_on_cli_main() -> None:
     assert not hasattr(cli_main, "_execute_single_unmerge")
 
 
+def test_purge_confirm_phrase_and_decisions_history_targets_no_longer_live_on_cli_main() -> (
+    None
+):
+    """S4 (issue #918): `purge_confirm_phrase` (was `_purge_confirm_phrase`)
+    and `_decisions_history_targets` relocated into `application.lifecycle`
+    and are never aliased back, so `openkos.cli.main` must not carry either
+    as a module attribute -- a stale
+    `monkeypatch.setattr("openkos.cli.main._purge_confirm_phrase", ...)`
+    then raises `AttributeError` under pytest's default `raising=True`."""
+    assert not hasattr(cli_main, "_purge_confirm_phrase")
+    assert not hasattr(cli_main, "_decisions_history_targets")
+    assert not hasattr(cli_main, "_purge_dropped_store_notice")
+    assert not hasattr(cli_main, "_purge_residual_store_notice")
+
+
 def test_forget_plan_gate_one_counts_never_become_confirmation_request_fields() -> None:
     """D2/R3 (task 8.2): `ForgetPlan.surviving_refs`/`unverifiable_refs` are
     Gate 1's hard-refusal inputs -- `forget`'s inbound-reference guard,
