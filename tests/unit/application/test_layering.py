@@ -14,6 +14,17 @@ over every module under `src/openkos/application/`, so a THIRD context
 (e.g. `application/ingest.py`, or a future `application/lifecycle.py`) is
 covered by construction the moment the file exists, rather than requiring
 a per-module copy of this guard.
+
+The lifecycle slice (issue #918) adds `openkos.vcs` to the offender list
+-- `purge` runs `git filter-repo` and `merge`/`unmerge`/`forget` run
+`_autocommit`, both of which stay adapter-side by design, so
+`application/lifecycle.py` must never import the VCS layer directly
+(threat matrix: Git repository selection) -- and adds `snapshot_read` to
+`test_shared_write_helpers_are_never_forked`'s set (design D5): it is now
+the first READ helper shared ACROSS the layer boundary
+(`application/lifecycle.py` calls `fsio.snapshot_read`, promoted from
+`cli/main._snapshot_read`), and a fork of it would silently break the
+#318 one-observation invariant every drift guard rests on.
 """
 
 import ast
@@ -58,10 +69,15 @@ def test_application_directory_is_scanned_completely() -> None:
 
 def test_application_modules_never_import_cli_typer_or_rich() -> None:
     """AST-scan every `application/*.py` module's imports; none may
-    reference `openkos.cli` (or a submodule of it), `typer`, or `rich`, in
-    either `import` or `from ... import` form -- a runtime AST scan rather
-    than an actual import, so the assertion holds even if the offending
-    import would itself fail to resolve."""
+    reference `openkos.cli` (or a submodule of it), `typer`, `rich`, or
+    `openkos.vcs` (or a submodule of it), in either `import` or
+    `from ... import` form -- a runtime AST scan rather than an actual
+    import, so the assertion holds even if the offending import would
+    itself fail to resolve.
+
+    `openkos.vcs` joined the offender list for the lifecycle slice (issue
+    #918, threat matrix: Git repository selection) -- every `vcs_git.*`
+    call stays adapter-side, so the service must never import it."""
     offenders: dict[str, list[str]] = {}
     for path in _application_modules():
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -75,12 +91,14 @@ def test_application_modules_never_import_cli_typer_or_rich() -> None:
             or name.startswith("typer.")
             or name == "rich"
             or name.startswith("rich.")
+            or name == "openkos.vcs"
+            or name.startswith("openkos.vcs.")
         ]
         if bad:
             offenders[path.name] = bad
     assert not offenders, (
         "openkos.application modules must never import openkos.cli, typer, "
-        f"or rich; found: {offenders}"
+        f"rich, or openkos.vcs; found: {offenders}"
     )
 
 
@@ -114,8 +132,20 @@ def test_shared_write_helpers_are_never_forked() -> None:
     """`_reject_drifted_targets`, `_autocommit` and `_refresh_derived_after_write`
     are shared write infrastructure the query service calls THROUGH rather than
     owns (ADR-0018 D3). A second definition anywhere under `src/` would mean one
-    write path silently diverged from the one every other command uses."""
-    shared = {"_reject_drifted_targets", "_autocommit", "_refresh_derived_after_write"}
+    write path silently diverged from the one every other command uses.
+
+    `snapshot_read` joined this set for the lifecycle slice (issue #918,
+    design D5): promoted from `cli/main._snapshot_read` to `fsio.
+    snapshot_read`, it is now the first READ helper shared ACROSS the
+    layer boundary -- `application/lifecycle.py` calls it directly, and
+    `main._snapshot_read` is a one-line delegator, never a second
+    implementation."""
+    shared = {
+        "_reject_drifted_targets",
+        "_autocommit",
+        "_refresh_derived_after_write",
+        "snapshot_read",
+    }
     counts = dict.fromkeys(shared, 0)
     for path in (_REPO_ROOT / "src").rglob("*.py"):
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
