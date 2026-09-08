@@ -6022,170 +6022,9 @@ def forget(
 
     try:
         cfg = config.read_config(root)
-        # One `_snapshot_read` observation per target (issues #306, #313,
-        # #318): each path is read exactly once, at the moment its decoded
-        # text feeds the plan, and the guard's bytes come from that same
-        # read -- there is no second read for an edit to slip between,
-        # which is the window that let one land ahead of the guard's own
-        # baseline in `ingest` (#313 review, R4).
-        index_bytes, index_text = _snapshot_read(index_path)
-        log_bytes, log_text = _snapshot_read(log_path)
-        concept_bytes, concept_text = _snapshot_read(concept_path)
-
-        # One whole-bundle snapshot, read ONCE, mirroring `merge`'s
-        # `other_files` construction (~L1330-1337): every other `*.md`
-        # file, reserved filenames and the ROOT's own file excluded. This
-        # single snapshot feeds descendant resolution, inbound detection,
-        # resurrection, and per-member titles/tombstones -- no extra
-        # bundle scan, for either scope (design: Technical Approach).
-        #
-        # `other_bytes` shadows it for the guard -- and ONLY on `--scope
-        # source` (#326). Which of these files the run will DELETE is not
-        # known until `purge_ids` resolves below, so for that scope the
-        # bytes come out of the same `_snapshot_read` observation as the
-        # text, rather than re-read per member afterwards: a second read
-        # would leave every file the #318 window. On the default `self`
-        # scope the guard's member comprehension is empty by construction
-        # (`purge_ids` is statically `[canonical_id]`), so not one byte
-        # would ever be consulted -- retaining the whole bundle's raw bytes
-        # there doubled Phase A's peak memory for nothing. The scope is
-        # known before the scan starts, so gating retention on it opens no
-        # new drift window: every file is still a single-read observation.
-        other_files: dict[str, str] = {}
-        other_bytes: dict[str, bytes] = {}
-        for path in sorted(layout.bundle_dir.rglob("*.md")):
-            if path.name in okf.RESERVED_FILENAMES:
-                continue
-            if path == concept_path:
-                continue
-            rel = path.relative_to(layout.bundle_dir).as_posix()
-            raw, other_files[rel] = _snapshot_read(path)
-            if scope == "source":
-                other_bytes[rel] = raw
-
-        # Unified Phase-A data path (design decision 6): `--scope self`
-        # collapses to a single-member purge set and reproduces every
-        # downstream computation identically to S2a; `--scope source`
-        # expands it via the pure orphan-closure helper. Resolution runs
-        # strictly after path-safety/existence (above) and before
-        # detection/preview (spec: "Provenance Descendant Resolution").
-        purge_ids: list[str] = (
-            bundle_provenance.find_provenance_descendants(
-                other_files, root_ids={canonical_id}
-            )
-            if scope == "source"
-            else [canonical_id]
+        plan = application_lifecycle.prepare_forget(
+            root, layout, canonical_id, scope=scope, now=now, cfg=cfg
         )
-        purge_ids_set = set(purge_ids)
-
-        # Per-member text + parsed frontmatter. Every non-root member id in
-        # `purge_ids` came out of `find_provenance_descendants`, itself
-        # derived only from real `other_files` keys (disk-discovered, never
-        # user input) -- so this dict lookup can never escape `bundle_dir`.
-        #
-        # The cascade's UNLINK targets (`bundle_dir / f"{member}.md"`, built
-        # below) carry no `symlink_boundary_reason` check of their own for the
-        # same reason, plus one more that is worth naming because it is a
-        # property of the stdlib rather than of this code: `rglob` does not
-        # descend into symlinked directories, so no member id can ever name a
-        # path behind a link. The ROOT id is different -- it comes straight
-        # from the user -- and that is why `_resolve_concept_path` checks the
-        # boundary (#926) while this loop does not. A walk that ever starts
-        # following links must add the check here too.
-        member_texts: dict[str, str] = {canonical_id: concept_text}
-        for member in purge_ids:
-            if member != canonical_id:
-                member_texts[member] = other_files[f"{member}.md"]
-        member_metadata: dict[str, dict[str, object]] = {
-            member: okf.load_frontmatter(text)[0]
-            for member, text in member_texts.items()
-        }
-
-        # Outbound `supersedes` disclosure (spec: "Resurrection Interaction
-        # Disclosure"), per PURGE-SET MEMBER: a target OUTSIDE the purge
-        # set re-enters retrieval once the whole set is gone. The
-        # `target not in purge_ids_set` guard also covers S2a's defensive
-        # self-`supersedes` exclusion for the `self` scope (no known CLI
-        # path can construct one).
-        #
-        # Tuple convention: the purge-set MEMBER (the "tag" identifying
-        # which purge-set concept caused the disclosure) is ALWAYS field 0,
-        # matching `all_refs` below (`(member, ref)`) -- a future edit
-        # copying one unpacking idiom onto the other stays safe. Sort order
-        # is preserved as "primarily by target" (the original tuple order)
-        # via an explicit key, so output is unchanged.
-        resurrection_pairs = sorted(
-            {
-                (member, relation.target)
-                for member in purge_ids
-                for relation in okf.decode_relations(member_metadata[member])
-                if relation.type == "supersedes"
-                and relation.target not in purge_ids_set
-            },
-            key=lambda pair: (pair[1], pair[0]),
-        )
-
-        # Set-difference inbound-reference detection (design decision 2):
-        # `find_inbound_references` -- S2a's own scanner, unmodified -- is
-        # called once PER purge-set member over the SAME whole-bundle
-        # snapshot; any referrer whose id is ITSELF a purge-set member is
-        # dropped (an intra-set backlink, e.g. a cascade child's
-        # `## Related` link back to its Source, is expected and must never
-        # block). `unverifiable` referrers are deduped by `referrer_id`
-        # across members -- a single malformed file mentioning several
-        # member ids must surface once, not once per member.
-        #
-        # Tuple convention: the purge-set MEMBER is field 0, `ref` is
-        # field 1, matching `resurrection_pairs` above (member also field
-        # 0) -- keep both tuple shapes member-first so a future edit can
-        # never silently swap fields by copying one unpacking idiom onto
-        # the other.
-        all_refs: list[tuple[str, bundle_references.InboundReference]] = []
-        seen_unverifiable: set[str] = set()
-        for member in purge_ids:
-            for ref in bundle_references.find_inbound_references(
-                other_files, target_id=member
-            ):
-                if ref.referrer_id in purge_ids_set:
-                    continue
-                if ref.kind == "unverifiable":
-                    if ref.referrer_id in seen_unverifiable:
-                        continue
-                    seen_unverifiable.add(ref.referrer_id)
-                all_refs.append((member, ref))
-        verified_refs = [ref for _, ref in all_refs if ref.kind != "unverifiable"]
-        unverifiable_refs = [ref for _, ref in all_refs if ref.kind == "unverifiable"]
-
-        # `index.md` bullet removal for every purge-set member (a pure
-        # text transform -- call order has no effect on the final result).
-        new_index_text = index_text
-        total_removed = 0
-        for member in purge_ids:
-            new_index_text, removed_i = bundle_index.remove_index_entry(
-                new_index_text, member
-            )
-            total_removed += removed_i
-
-        # `log.md` tombstones, one per member, all sharing `tombstone_time`
-        # (a single `now`). Built in REVERSED sorted order so the LAST
-        # prepend (the smallest id) ends up at the very top -- a
-        # deterministic ascending top-to-bottom order matching the sorted
-        # delete order below.
-        tombstone_time = now.strftime("%H:%M:%SZ")
-        new_log_text = log_text
-        for member in reversed(purge_ids):
-            raw_title = member_metadata[member].get("title")
-            title = (
-                raw_title
-                if isinstance(raw_title, str) and raw_title.strip()
-                else member
-            )
-            new_log_text = bundle_log.insert_log_entry(
-                new_log_text,
-                now.astimezone().date(),
-                f"**Tombstone** ({tombstone_time}): Removed [{title}]"
-                f"(/{member}.md) (id: {member}).",
-            )
     except (OSError, ValueError) as exc:
         typer.echo(
             f"openkos forget: failed while preparing the forget -- {exc}.", err=True
@@ -6193,76 +6032,73 @@ def forget(
         raise typer.Exit(code=1) from exc
 
     typer.echo("openkos forget: proposed changes:")
-    if total_removed >= 1:
+    if plan.total_removed >= 1:
         typer.echo(f"  ~ {index_path.name} (remove entry)")
     typer.echo(f"  ~ {log_path.name} (new dated entry)")
-    for member in purge_ids:
+    for member in plan.purge_ids:
         typer.echo(f"  - bundle/{member}.md")
-    # #567: aggregate per (member, referrer, kind, relation type) -- a
-    # referrer linking the target 24 times is ONE line with a count, not 24
-    # identical lines. Insertion order preserves the first-seen order the
-    # per-reference loop printed in, and a count of 1 keeps the exact
-    # singular wording this preview always had.
-    aggregated_refs: dict[tuple[str, str, str, str | None], int] = {}
-    for member, ref in all_refs:
-        key = (
-            member,
-            ref.referrer_id,
-            ref.kind,
-            ref.relation_type if ref.kind == "relation" else None,
-        )
-        aggregated_refs[key] = aggregated_refs.get(key, 0) + 1
-    for (member, referrer_id, kind, relation_type), count in aggregated_refs.items():
-        if kind == "link":
-            detail = "inbound link" if count == 1 else f"{count} inbound links"
-            line = f"  ! bundle/{referrer_id}.md ({detail})"
-        elif kind == "relation":
+    # #567: `plan.references` is already aggregated per (member, referrer,
+    # kind, relation type) -- a referrer linking the target 24 times is ONE
+    # `ReferenceDisclosure` with a count, not 24 identical lines. Tuple
+    # order is the first-seen order the service's per-reference loop
+    # discovered in, and a count of 1 keeps the exact singular wording this
+    # preview always had.
+    for ref in plan.references:
+        if ref.kind == "link":
+            detail = "inbound link" if ref.count == 1 else f"{ref.count} inbound links"
+            line = f"  ! bundle/{ref.referrer_id}.md ({detail})"
+        elif ref.kind == "relation":
             detail = (
-                f"inbound relation: {relation_type}"
-                if count == 1
-                else f"{count} inbound relations: {relation_type}"
+                f"inbound relation: {ref.relation_type}"
+                if ref.count == 1
+                else f"{ref.count} inbound relations: {ref.relation_type}"
             )
-            line = f"  ! bundle/{referrer_id}.md ({detail})"
+            line = f"  ! bundle/{ref.referrer_id}.md ({detail})"
         else:
             detail = (
-                "unverifiable" if count == 1 else f"{count} unverifiable references"
+                "unverifiable"
+                if ref.count == 1
+                else f"{ref.count} unverifiable references"
             )
             line = (
-                f"  ? bundle/{referrer_id}.md "
-                f"({detail}: could not parse; may reference {member})"
+                f"  ? bundle/{ref.referrer_id}.md "
+                f"({detail}: could not parse; may reference {ref.member})"
             )
-        if scope == "source" and kind != "unverifiable":
-            line += f" -> {member}"
+        if scope == "source" and ref.kind != "unverifiable":
+            line += f" -> {ref.member}"
         typer.echo(line)
-    for member, target in resurrection_pairs:
+    for member, target in plan.resurrection_pairs:
         typer.echo(
             f"  ~ bundle/{target}.md (re-enters retrieval: no longer "
             f"superseded by {member})"
         )
     if scope == "source":
-        typer.echo(f"  Total: {len(purge_ids)} concept(s) to delete.")
+        typer.echo(f"  Total: {len(plan.purge_ids)} concept(s) to delete.")
 
     # Gate 1 (spec: "Refuse Forget When Inbound References Exist, Unless
     # --force"): refuses iff a surviving (external, set-difference-
     # filtered) verified reference OR unverifiable referrer was detected
     # AND --force was not passed -- fully independent of gate 2 below
-    # (spec: "--force Is Orthogonal to the Confirm Gate"). `target_desc`
-    # is scope-conditional ONLY in wording; for `self` it reproduces S2a's
-    # exact `'<canonical_id>'` phrasing byte-for-byte.
-    if (verified_refs or unverifiable_refs) and not force:
+    # (spec: "--force Is Orthogonal to the Confirm Gate"). A hard refusal,
+    # never a `ConfirmationRequest` (design D2): `plan.surviving_refs`/
+    # `unverifiable_refs` are plain counts, read directly here, never
+    # threaded through `plan.confirmation`. `target_desc` is scope-
+    # conditional ONLY in wording; for `self` it reproduces S2a's exact
+    # `'<canonical_id>'` phrasing byte-for-byte.
+    if (plan.surviving_refs or plan.unverifiable_refs) and not force:
         messages: list[str] = []
         target_desc = (
-            f"the {len(purge_ids)}-concept purge set rooted at '{canonical_id}'"
+            f"the {len(plan.purge_ids)}-concept purge set rooted at '{canonical_id}'"
             if scope == "source"
             else f"'{canonical_id}'"
         )
-        if verified_refs:
+        if plan.surviving_refs:
             messages.append(
-                f"{len(verified_refs)} inbound reference(s) to {target_desc} found"
+                f"{plan.surviving_refs} inbound reference(s) to {target_desc} found"
             )
-        if unverifiable_refs:
+        if plan.unverifiable_refs:
             messages.append(
-                f"could not verify {len(unverifiable_refs)} referrer(s) "
+                f"could not verify {plan.unverifiable_refs} referrer(s) "
                 f"that may reference {target_desc}"
             )
         typer.echo(
@@ -6274,22 +6110,18 @@ def forget(
         )
         raise typer.Exit(code=1)
 
-    # Gate 2: the confirm gate, untouched by --force. `--scope source`
-    # names the delete COUNT in its own prompt text (spec: "`--force`
-    # does not auto-confirm the count"); `--scope self` keeps S2a's
-    # verbatim prompt (byte-identity, design decision 6).
+    # Gate 2: the confirm gate, untouched by --force. `plan.confirmation`
+    # is a `BooleanConfirmation` (design D1) whose `prompt` is already
+    # scope-conditional (`--scope source` names the delete COUNT, `self`
+    # keeps S2a's verbatim prompt, byte-identity design decision 6) -- the
+    # adapter still decides WHETHER to ask (`cfg.review`) and HOW to ask
+    # (TTY confirm vs. non-TTY refusal); the service only supplied WHAT is
+    # asked.
     if not auto and cfg.review:
         if sys.stdin.isatty():
-            if scope == "source":
-                typer.confirm(f"Delete {len(purge_ids)} concepts?", abort=True)
-            else:
-                typer.confirm("Proceed with these changes?", abort=True)
+            typer.confirm(plan.confirmation.prompt, abort=True)
         else:
-            typer.echo(
-                "openkos forget: refusing to write without confirmation -- "
-                "stdin is not a TTY; re-run with --auto.",
-                err=True,
-            )
+            typer.echo(plan.confirmation.non_tty_refusal, err=True)
             raise typer.Exit(code=1)
 
     # Issue #313: every byte below was computed from a pre-prompt read, so
@@ -6312,17 +6144,17 @@ def forget(
     _reject_drifted_targets(
         layout,
         {
-            index_path: index_bytes,
-            log_path: log_bytes,
-            concept_path: concept_bytes,
+            index_path: plan.index_bytes,
+            log_path: plan.log_bytes,
+            concept_path: plan.concept_bytes,
             **{
                 # Defensive fail-closed lookup (see `_require_member_baseline`):
                 # today the key exists by construction, but a missing baseline
                 # must refuse cleanly, never `KeyError` mid-gate.
                 layout.bundle_dir / f"{member}.md": _require_member_baseline(
-                    "forget", other_bytes, member
+                    "forget", plan.other_bytes, member
                 )
-                for member in purge_ids
+                for member in plan.purge_ids
                 if member != canonical_id
             },
         },
@@ -6336,31 +6168,26 @@ def forget(
             {concept_path}
             | {
                 layout.bundle_dir / f"{member}.md"
-                for member in purge_ids
+                for member in plan.purge_ids
                 if member != canonical_id
             }
         ),
     )
 
-    unlinked_count = 0
     ledger_touched: list[Path] = []
     decisions_touched: list[Path] = []
     try:
-        fsio.write_atomic(index_path, new_index_text)
-        fsio.write_atomic(log_path, new_log_text)
-        # N-delete, LAST, in deterministic sorted order (design decision 5)
-        # -- the catalog already reflects every removal before any unlink,
-        # so a failure partway through leaves a benign, git-recoverable
-        # partial result, never a dangling catalog entry.
-        for member in sorted(purge_ids):
-            fsio.remove_file(layout.bundle_dir / f"{member}.md")
-            unlinked_count += 1
+        application_lifecycle.forget_core(layout, plan)
         # Merge-ledger sidecar privacy sweep (forget-command spec:
         # "Deletion Sweep Includes Ledger Storage"), same Phase B write:
         # a purge-set member's content must not survive `forget` merely
         # because it was previously absorbed into (or is the survivor of)
-        # a merge.
-        ledger_touched = _sweep_ledger_sidecars_for_ids(layout.bundle_dir, purge_ids)
+        # a merge. Stays adapter-side (shared with `purge`'s own Phase B),
+        # so it runs immediately after `forget_core`'s write, inside the
+        # SAME try/except.
+        ledger_touched = _sweep_ledger_sidecars_for_ids(
+            layout.bundle_dir, plan.purge_ids
+        )
         # Pending-work decision sweep (forget-command spec: "Forget Sweeps
         # Live Decision Entries Referencing The Purge Set"), same Phase B
         # write: a purge-set member's contradiction decision must not
@@ -6368,23 +6195,31 @@ def forget(
         # different (live) concept's sidecar. `forget` performs no history
         # rewrite, so this call IS the entire sweep for it (unlike
         # `purge`, which also puts these paths into `expunge_targets`).
-        decisions_touched = _sweep_decisions_for_ids(layout.bundle_dir, purge_ids)
+        decisions_touched = _sweep_decisions_for_ids(layout.bundle_dir, plan.purge_ids)
         # Persisted-findings privacy sweep (#685 item 1), same Phase B:
         # a derived cache only (never autocommitted), and it degrades to a
         # loud warning internally rather than raising into this block --
         # the bundle deletes above must not be reported as failed over a
         # recomputable cache.
-        _sweep_findings_for_ids(layout, purge_ids)
+        _sweep_findings_for_ids(layout, plan.purge_ids)
     except (OSError, ValueError) as exc:
         message = f"openkos forget: failed while writing the forget -- {exc}."
         # K-of-N observability on a mid-cascade unlink failure (`--scope
         # source`): only enrich when there is more than one purge-set
         # member to report on, so the `self`/single-member message stays
-        # byte-identical to S2a.
-        if len(purge_ids) > 1:
-            remaining = len(purge_ids) - unlinked_count
+        # byte-identical. `forget_core` carries the exact count out on
+        # `PartialForgetWrite`; anything else reaching this arm came from
+        # the three sweeps BELOW `forget_core`, by which point every unlink
+        # had already succeeded -- hence the full-count default. Do not
+        # re-derive this by probing the filesystem here: `Path.exists()`
+        # re-raises `EACCES` (see `_purge_store_is_gone`), and a probe
+        # inside this handler would replace the operator's diagnosis with a
+        # traceback in exactly the permission failure that opened it.
+        if len(plan.purge_ids) > 1:
+            unlinked_count = getattr(exc, "unlinked_count", len(plan.purge_ids))
+            remaining = len(plan.purge_ids) - unlinked_count
             message += (
-                f" removed {unlinked_count} of {len(purge_ids)} concept(s) "
+                f" removed {unlinked_count} of {len(plan.purge_ids)} concept(s) "
                 f"before failing; {remaining} remain (recover with git or "
                 "'openkos lint')."
             )
@@ -6392,9 +6227,9 @@ def forget(
         raise typer.Exit(code=1) from exc
 
     if scope == "source":
-        deleted_paths = ", ".join(f"bundle/{member}.md" for member in purge_ids)
+        deleted_paths = ", ".join(f"bundle/{member}.md" for member in plan.purge_ids)
         typer.echo(
-            f"openkos forget: removed {len(purge_ids)} concept(s) "
+            f"openkos forget: removed {len(plan.purge_ids)} concept(s) "
             f"({deleted_paths}) ({index_path.name}, {log_path.name} updated)."
         )
     else:
@@ -6404,14 +6239,14 @@ def forget(
         )
 
     forget_message = f"openkos: forget {canonical_id}"
-    if len(purge_ids) > 1:
-        forget_message += f" (+{len(purge_ids) - 1} descendants)"
+    if len(plan.purge_ids) > 1:
+        forget_message += f" (+{len(plan.purge_ids) - 1} descendants)"
     forget_sha = _autocommit(
         root,
         [
             "bundle/index.md",
             "bundle/log.md",
-            *(f"bundle/{member}.md" for member in purge_ids),
+            *(f"bundle/{member}.md" for member in plan.purge_ids),
             *(
                 f"bundle/{p.relative_to(layout.bundle_dir).as_posix()}"
                 for p in (*ledger_touched, *decisions_touched)
