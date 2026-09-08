@@ -10185,7 +10185,9 @@ def _execute_single_unmerge(
     instead of being clobbered, making the Phase-A promise hold at write
     time.
 
-    Phase B (after confirm) writes, in this order: `index.md` then
+    Phase B (after confirm; issue #918 Slice S2a: delegated to
+    `application.lifecycle.unmerge_core`, called by module attribute)
+    writes, in this order: `index.md` then
     `log.md` restored to their EXACT pre-merge bytes (`index_before`/
     `log_before`) first; then every reversed inbound-link file; then the
     recreated absorbed file (`absorbed_snapshot`); then the restored
@@ -10434,57 +10436,29 @@ def _execute_single_unmerge(
         ),
     )
 
+    # Phase B (issue #918 Slice S2a): the write-only tail moved to
+    # `application.lifecycle.unmerge_core`, called by module attribute
+    # (never an aliased import, so a stale monkeypatch target raises
+    # loudly instead of silently missing) -- see its docstring for the
+    # exact write order and recoverability reasoning. `PreparedUnmerge` is
+    # assembled here from Phase A's still-inline results; `absorbed_path`
+    # is recomputed inside `unmerge_core` from `absorbed_canonical`, so it
+    # is not carried on the dataclass.
+    prepared = application_lifecycle.PreparedUnmerge(
+        plan=plan,
+        new_log_text=new_log_text,
+        link_reversed_texts=reversed_texts,
+        relation_reversed_texts=relation_reversed_texts,
+        provenance_restored_texts=provenance_reversed_texts,
+        rewritten_files=rewritten_files,
+        relation_rewrite_files=relation_rewrite_files,
+        provenance_rewrite_files=provenance_rewrite_files,
+        survivor_path=survivor_path,
+        survivor_canonical=survivor_canonical,
+        absorbed_canonical=absorbed_canonical,
+    )
     try:
-        # `index.md`/`log.md` are restored to their EXACT pre-merge bytes
-        # FIRST -- if anything below fails, a retry (or manual inspection)
-        # finds the catalog/log already back to a consistent pre-merge
-        # state, which is idempotent to re-write on a retry.
-        fsio.write_atomic(index_path, plan.restored_index)
-        fsio.write_atomic(log_path, plan.restored_log)
-
-        for rel in rewritten_files:
-            fsio.write_atomic(layout.bundle_dir / rel, reversed_texts[rel])
-        for rel in relation_rewrite_files:
-            fsio.write_atomic(layout.bundle_dir / rel, relation_reversed_texts[rel])
-        for rel in provenance_rewrite_files:
-            fsio.write_atomic(layout.bundle_dir / rel, provenance_reversed_texts[rel])
-
-        # The absorbed file is recreated BEFORE the survivor is restored:
-        # the ledger sidecar entry (the only record of `absorbed_snapshot`,
-        # durable-derived-state slice 1a) is deliberately kept intact on
-        # disk until the absorbed file it describes has actually landed, so
-        # a failure between these two steps never loses the absorbed
-        # content -- it is still recoverable from the sidecar.
-        #
-        # Create-only (#323): Phase A promised that "a file already exists
-        # at that path" refuses the unmerge, but that existence check
-        # cannot see a file created during the prompt window, and the drift
-        # guard cannot either (no Phase-A bytes to compare). `write_exclusive`
-        # makes the promise hold at write time: a concurrent create raises
-        # `FileExistsError` here -- caught by this try's `except OSError`
-        # arm and reported like any other Phase-B write failure, never a
-        # traceback -- leaving the git-recoverable partial state documented
-        # above instead of silently discarding the created file.
-        fsio.write_exclusive(absorbed_path, plan.restored_absorbed)
-        fsio.write_atomic(survivor_path, plan.restored_survivor)
-
-        # Only once every restore above has succeeded is `log.md` written a
-        # SECOND time, with the `**Unmerge**` audit line appended on top of
-        # the just-restored `log_before` -- the append-only trail net-grows
-        # by exactly this one line.
-        fsio.write_atomic(log_path, new_log_text)
-
-        # The ledger sidecar's tail entry is popped LAST of all (task 2.7):
-        # every restore above is idempotent to re-write on a retry, so
-        # popping the tail only after they have all landed makes a partial
-        # failure here safely re-runnable -- a re-run recomputes the exact
-        # same restores and pops the exact same (still-present) tail entry.
-        bundle_ledger.write_entries(
-            survivor_canonical,
-            layout.bundle_dir,
-            survivor_id=survivor_canonical,
-            entries=plan.remaining_entries,
-        )
+        result = application_lifecycle.unmerge_core(layout, prepared)
     except (OSError, ValueError) as exc:
         typer.echo(
             f"openkos unmerge: failed while writing the unmerge -- {exc}.", err=True
@@ -10497,23 +10471,9 @@ def _execute_single_unmerge(
         f"({index_path.name}, {log_path.name} updated)."
     )
 
-    ledger_sidecar_rel = (
-        bundle_ledger.ledger_path_for(survivor_canonical, layout.bundle_dir)
-        .relative_to(layout.bundle_dir)
-        .as_posix()
-    )
     _autocommit(
         root,
-        [
-            "bundle/index.md",
-            "bundle/log.md",
-            *(f"bundle/{rel}" for rel in rewritten_files),
-            *(f"bundle/{rel}" for rel in relation_rewrite_files),
-            *(f"bundle/{rel}" for rel in provenance_rewrite_files),
-            f"bundle/{absorbed_canonical}.md",
-            f"bundle/{survivor_canonical}.md",
-            f"bundle/{ledger_sidecar_rel}",
-        ],
+        result.committed_paths,
         f"openkos: unmerge {absorbed_canonical}",
     )
 

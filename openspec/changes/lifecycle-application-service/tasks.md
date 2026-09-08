@@ -9,6 +9,13 @@ change — the `ingest` cycle used its domain name (`ingest`) as the scope for
 all three of its PRs, including the ones that only touched `cli/main.py`, so
 this change follows the same per-domain precedent rather than `cli`.
 
+> **Line numbers in this file are pre-S1 and drift with every slice.** S1 removed
+> 618 lines from `cli/main.py` at a position ahead of most later targets, so
+> everything below the merge core shifted up by ~525 (`_execute_single_unmerge`:
+> `10606` -> `10080`). Locate every target by CONTENT and re-derive its range
+> against the working tree before editing. Do not trust a coordinate written
+> here or in `design.md`.
+
 ## Review Workload Forecast
 
 | Field | Value |
@@ -84,14 +91,14 @@ Chain strategy: stacked-to-main
 
 ### Phase 4: Relocate the write-only core (RED first)
 
-- [ ] 4.1 RED: extend `tests/unit/application/test_lifecycle.py` with tests calling `application.lifecycle.unmerge_core(layout, prepared)` directly against a `PreparedUnmerge`-shaped fixture built from `_execute_single_unmerge`'s existing write inputs, asserting it returns `UnmergeResult` and performs no `typer`/`sys.stdin` access. Must fail: symbols absent.
-- [ ] 4.2 GREEN: add `UnmergeResult` and `unmerge_core(layout, prepared)` to `application/lifecycle.py`, relocating `_execute_single_unmerge`'s write-only body (`main.py:10938–11013`) verbatim. `main.py`'s `_execute_single_unmerge` calls `application_lifecycle.unmerge_core` for the write step; preview, gate, guard, and `_autocommit` stay inline for this slice.
-- [ ] 4.3 REFACTOR: confirm `rg -n '_execute_single_unmerge\(' tests/unit/cli/test_unmerge.py tests/unit/cli/test_unmerge_surgical_catalog.py` count is unchanged — no call-site repoints in this slice (that is S2b).
+- [x] 4.1 RED: extend `tests/unit/application/test_lifecycle.py` with tests calling `application.lifecycle.unmerge_core(layout, prepared)` directly against a `PreparedUnmerge`-shaped fixture built from `_execute_single_unmerge`'s existing write inputs, asserting it returns `UnmergeResult` and performs no `typer`/`sys.stdin` access. Must fail: symbols absent.
+- [x] 4.2 GREEN: add `UnmergeResult` and `unmerge_core(layout, prepared)` to `application/lifecycle.py`, relocating `_execute_single_unmerge`'s write-only body (`main.py:10437–10492`, re-derived against the current tree) verbatim. `main.py`'s `_execute_single_unmerge` calls `application_lifecycle.unmerge_core` for the write step; preview, gate, guard, and `_autocommit` stay inline for this slice.
+- [x] 4.3 REFACTOR: confirm `rg -n '_execute_single_unmerge\(' tests/unit/cli/test_unmerge.py tests/unit/cli/test_unmerge_surgical_catalog.py` count is unchanged (0 direct call-sites in both files before and after — both drive it only through the CLI runner) — no call-site repoints in this slice (that is S2b).
 
 ### Phase 5: Slice 2a gate
 
-- [ ] 5.1 Gate: `uv run ruff check .`; `uv run ruff format --check .`; `uv run mypy .`; `uv run pytest tests/unit/application tests/unit/cli/test_unmerge.py tests/unit/cli/test_unmerge_surgical_catalog.py -q`; full `uv run pytest --cov=src/openkos` ≥ 90%.
-- [ ] 5.2 Output-text-assertions-unmodified check: zero assertion changes in `test_unmerge.py`/`test_unmerge_surgical_catalog.py`. Falsify: mutate one character in a value `unmerge_core` now produces (e.g. a reversed relation text), purge `__pycache__`, confirm the CLI-level assertion goes RED, revert, confirm GREEN.
+- [x] 5.1 Gate: `uv run ruff check .`; `uv run ruff format --check .`; `uv run mypy .`; `uv run pytest tests/unit/application tests/unit/cli/test_unmerge.py tests/unit/cli/test_unmerge_surgical_catalog.py -q`; full `uv run pytest --cov=src/openkos` ≥ 90%. All green — see apply-progress memory for exact output (6033 passed, 3 skipped, 96.95% total coverage, `application/lifecycle.py` at 99%).
+- [x] 5.2 Output-text-assertions-unmodified check: zero assertion changes in `test_unmerge.py`/`test_unmerge_surgical_catalog.py` (only the new S2a test block was added to `test_lifecycle.py`; no existing assertion text touched). Falsify: mutated the one-character absorbed-path literal `unmerge_core` builds (`f"{prepared.absorbed_canonical}.md"` -> `...x.md"`), purged `__pycache__`, confirmed `test_unmerge_restores_survivor_absorbed_index_log_and_reverses_links` went RED (exit code 1, autocommit-tracking assertion failure), reverted with the inverse replace, purged `__pycache__` again, confirmed GREEN.
 - [ ] 5.3 Commit: `refactor(lifecycle): extract unmerge's write-only core into the application service`.
 
 ## Slice S2b — PR 3: `prepare_unmerge` (~350–400 lines)

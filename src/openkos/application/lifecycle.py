@@ -22,6 +22,16 @@ slice -- see design's Interfaces/Contracts note ("unchanged fields") --
 later slices (S3/S4/S5) are what wire a verb's `Prepared*.confirmation`
 field to `application.consent.ConfirmationRequest`.
 
+Slice 2a (S2a, issue #918) adds `unmerge`'s write-only Phase B --
+`PreparedUnmerge`, `UnmergeResult`, `unmerge_core` -- relocated verbatim
+from `_execute_single_unmerge`'s former inline tail (design C2: that
+439-line function is Phase A, preview, confirm gate, drift guard, AND
+Phase B in one body, too large for one slice, so only the write-only tail
+moves here). `PreparedUnmerge` is deliberately PARTIAL this slice -- it
+carries only the write inputs `unmerge_core` needs, not yet a full Phase-A
+result; `unmerge`'s preview, confirm gate, and post-confirm drift guard
+all stay adapter-side until S2b's `prepare_unmerge` completes the split.
+
 Renders nothing, prompts nothing, never calls `sys.stdin.isatty()`, and
 never imports `openkos.cli`, `typer`, `rich`, or `openkos.vcs` (the
 layering invariant, `tests/unit/application/test_layering.py`) -- every
@@ -556,6 +566,131 @@ def merge_core(
             ledger_sidecar_path,
         ],
         ledger_sidecar_path=ledger_sidecar_path,
+    )
+
+
+@dataclass(frozen=True)
+class PreparedUnmerge:
+    """Slice S2a's PARTIAL Phase-A result: only the write inputs
+    `unmerge_core` needs, assembled by `main.py`'s `_execute_single_unmerge`
+    from its own still-inline preview computation (design C2/Slice S2a).
+    Unlike `PreparedMerge`, this is not yet the full Phase A -- the reads,
+    the preview text, the confirm gate, and the post-confirm drift guard
+    all stay adapter-side this slice; S2b's `prepare_unmerge` is what makes
+    this dataclass's construction itself non-interactive and moves the
+    remaining fields (`catalog_log_drifted`, `review`, the drift-guard
+    baselines) onto it, matching `unmerge` up to `merge`'s full
+    Phase-A/Phase-B pair (design's Slice Plan).
+
+    `survivor_path` is carried explicitly, not derived from
+    `survivor_canonical` inside `unmerge_core`, for the same NFC/NFD
+    reason `resolve_concept_path` reads `okf.concept_path_for` rather than
+    building `bundle_dir / f"{canonical_id}.md"` itself (#430) -- the
+    caller already resolved it once and `unmerge_core` must write the same
+    path, not a re-derived one that could disagree on a filesystem whose
+    on-disk spelling differs from the canonical id's NFC form."""
+
+    plan: bundle_merge.UnmergePlan
+    new_log_text: str
+    link_reversed_texts: dict[str, str]
+    relation_reversed_texts: dict[str, str]
+    provenance_restored_texts: dict[str, str]
+    rewritten_files: list[str]
+    relation_rewrite_files: list[str]
+    provenance_rewrite_files: list[str]
+    survivor_path: Path
+    survivor_canonical: str
+    absorbed_canonical: str
+
+
+@dataclass(frozen=True)
+class UnmergeResult:
+    """Pure Phase-B result of `unmerge_core`: what got written, for the
+    command's success echo and `_autocommit` path list (mirrors
+    `MergeResult`). `unmerge_core` performs NO VCS side effect --
+    `_autocommit` stays the command's responsibility."""
+
+    survivor_canonical: str
+    absorbed_canonical: str
+    committed_paths: list[str]
+
+
+def unmerge_core(
+    layout: config.WorkspaceLayout,
+    prepared: PreparedUnmerge,
+) -> UnmergeResult:
+    """Phase B (after confirm): write-only body relocated verbatim from
+    `_execute_single_unmerge`'s former inline tail (issue #918 Slice S2a;
+    design C2, which found `_execute_single_unmerge` a 439-line function
+    spanning Phase A, preview, confirm gate, drift guard, AND Phase B --
+    only this write-only tail moves this slice, everything before it stays
+    adapter-side). Non-interactive; raises `OSError`/`ValueError` on a
+    write failure, always caught by the caller's own try/except and never
+    let out as a raw traceback.
+
+    Writes, in this order: `index.md` then `log.md` restored to their
+    exact pre-merge bytes; every reversed inbound-link file; every
+    restored relation snapshot; every restored provenance snapshot; then
+    the recreated absorbed file (create-only, `fsio.write_exclusive`,
+    #323) BEFORE the survivor is restored -- the survivor's `merged_from`
+    ledger tail entry is the only record of the absorbed snapshot, kept
+    intact on disk until the file it describes has actually landed, so a
+    failure between these two writes never loses either copy; then
+    `log.md` a SECOND time with the `**Unmerge**` audit line appended on
+    top of the just-restored contents; and finally the ledger sidecar's
+    tail entry is popped LAST of all, since every restore above is
+    idempotent to re-write on a retry and popping the tail only once they
+    have all landed makes a partial failure here safely re-runnable."""
+    index_path = layout.bundle_dir / "index.md"
+    log_path = layout.bundle_dir / "log.md"
+    absorbed_path = layout.bundle_dir / f"{prepared.absorbed_canonical}.md"
+    plan = prepared.plan
+
+    fsio.write_atomic(index_path, plan.restored_index)
+    fsio.write_atomic(log_path, plan.restored_log)
+
+    for rel in prepared.rewritten_files:
+        fsio.write_atomic(layout.bundle_dir / rel, prepared.link_reversed_texts[rel])
+    for rel in prepared.relation_rewrite_files:
+        fsio.write_atomic(
+            layout.bundle_dir / rel, prepared.relation_reversed_texts[rel]
+        )
+    for rel in prepared.provenance_rewrite_files:
+        fsio.write_atomic(
+            layout.bundle_dir / rel, prepared.provenance_restored_texts[rel]
+        )
+
+    fsio.write_exclusive(absorbed_path, plan.restored_absorbed)
+    fsio.write_atomic(prepared.survivor_path, plan.restored_survivor)
+
+    fsio.write_atomic(log_path, prepared.new_log_text)
+
+    bundle_ledger.write_entries(
+        prepared.survivor_canonical,
+        layout.bundle_dir,
+        survivor_id=prepared.survivor_canonical,
+        entries=plan.remaining_entries,
+    )
+
+    ledger_sidecar_rel = (
+        bundle_ledger.ledger_path_for(prepared.survivor_canonical, layout.bundle_dir)
+        .relative_to(layout.bundle_dir)
+        .as_posix()
+    )
+
+    return UnmergeResult(
+        survivor_canonical=prepared.survivor_canonical,
+        absorbed_canonical=prepared.absorbed_canonical,
+        committed_paths=[
+            "bundle/index.md",
+            "bundle/log.md",
+            *(f"bundle/{rel}" for rel in prepared.rewritten_files),
+            *(f"bundle/{rel}" for rel in prepared.relation_rewrite_files),
+            *(f"bundle/{rel}" for rel in prepared.provenance_rewrite_files),
+            f"bundle/{prepared.absorbed_canonical}.md",
+            f"bundle/{prepared.survivor_canonical}.md",
+            f"bundle/{ledger_sidecar_rel}",
+        ],
     )
 
 
