@@ -20,6 +20,7 @@ import typer
 from typer.testing import CliRunner, _NamedTextIOWrapper
 
 from openkos import fsio
+from openkos.application import lifecycle as application_lifecycle
 from openkos.bundle import decisions as bundle_decisions
 from openkos.bundle import index as bundle_index
 from openkos.bundle import ledger as bundle_ledger
@@ -2847,7 +2848,11 @@ def test_history_targets_include_a_sidecar_referenced_only_by_identity(
 ) -> None:
     """`purge`'s whole-history expunge must reach a sidecar whose ONLY link
     to the purge set is an identity ruling -- otherwise the purged id
-    survives in a historical blob."""
+    survives in a historical blob.
+
+    `_decisions_history_targets` relocated into `application.lifecycle`
+    alongside `prepare_purge`, its only caller (issue #918 S4) -- repointed
+    here rather than left aliased on `main` (design: "The injection seam")."""
     _init_workspace(tmp_path, monkeypatch)
     bundle_dir = tmp_path / "bundle"
     bundle_decisions.write_identity_decisions(
@@ -2856,6 +2861,8 @@ def test_history_targets_include_a_sidecar_referenced_only_by_identity(
         records=[_identity_record(("concepts/host", "concepts/purge-target"))],
     )
 
-    targets = main._decisions_history_targets(bundle_dir, ["concepts/purge-target"])
+    targets = application_lifecycle._decisions_history_targets(
+        bundle_dir, ["concepts/purge-target"]
+    )
 
     assert targets == ["bundle/.state/decisions/concepts/host.decisions.okf"]
