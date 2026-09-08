@@ -15,7 +15,9 @@ behavioral tests in `test_lifecycle.py`:
   `openkos.cli.main` must no longer carry them as module attributes at
   all -- a stale `monkeypatch.setattr("openkos.cli.main.prepare_merge",
   ...)` must raise `AttributeError` under pytest's default `raising=True`,
-  not silently no-op.
+  not silently no-op. Task 6.2 (Slice S2b) extends this to
+  `_execute_single_unmerge`: S2a left it as a thin wrapper, so its
+  deletion is what completes unmerge's Phase A/B split.
 """
 
 import dataclasses
@@ -53,6 +55,18 @@ def test_prepare_merge_and_merge_core_no_longer_live_on_cli_main() -> None:
     `raising=True`, instead of silently patching a name nothing reads."""
     assert not hasattr(cli_main, "prepare_merge")
     assert not hasattr(cli_main, "merge_core")
+
+
+def test_execute_single_unmerge_no_longer_lives_on_cli_main() -> None:
+    """Task 6.2 (Slice S2b): S2a left `_execute_single_unmerge` as a thin
+    wrapper around Phase A/preview/gate/guard, still calling out to
+    `application.lifecycle.unmerge_core` for the write only. S2b's
+    `prepare_unmerge` completes the split, so this name must be deleted
+    from `cli/main.py` entirely -- `unmerge` calls
+    `application_lifecycle.prepare_unmerge`/`unmerge_core` directly,
+    exactly as `merge` calls `prepare_merge`/`merge_core` (design's Slice
+    Plan, "unmerge matches merge's public prepare/core pair")."""
+    assert not hasattr(cli_main, "_execute_single_unmerge")
 
 
 def test_forget_plan_gate_one_counts_never_become_confirmation_request_fields() -> None:

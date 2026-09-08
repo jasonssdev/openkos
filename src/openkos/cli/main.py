@@ -32,12 +32,10 @@ from openkos.bundle import bundle, listing, source_titles
 from openkos.bundle import decisions as bundle_decisions
 from openkos.bundle import index as bundle_index
 from openkos.bundle import ledger as bundle_ledger
-from openkos.bundle import links as bundle_links
 from openkos.bundle import log as bundle_log
 from openkos.bundle import merge as bundle_merge
 from openkos.bundle import provenance as bundle_provenance
 from openkos.bundle import references as bundle_references
-from openkos.bundle import relations as bundle_relations
 from openkos.cli import curate as curate_module
 from openkos.cli import next_action as next_action_module
 from openkos.cli import observability
@@ -8915,67 +8913,6 @@ def set_volatility_cmd(
     )
 
 
-def _reverse_link_rewrite_idempotently(
-    text: str, *, file: str, rewrites: list[okf.LinkRewrite]
-) -> str:
-    """Reverse `file`'s recorded inbound-link rewrites in `text`, but treat
-    a file that ALREADY shows every rewrite's `old_link` at its recorded
-    `offset` as a clean no-op -- returns `text` unchanged instead of
-    raising. This is the reverse analog of `_apply_link_rewrite_idempotently`,
-    closing the same half-completed-write retry trap for `unmerge`'s Phase
-    B: each rewritten file is written atomically in one call covering ALL
-    of that file's recorded rewrites at once, so on a retry a file is
-    either fully reversed already (this short-circuit) or not reversed at
-    all (delegates to the real primitive below, unchanged).
-
-    Delegates to `bundle_links.reverse_link_rewrites` (the SAME bounded,
-    offset-exact primitive U3 defined) for the normal not-yet-reversed
-    case, so the fail-closed drift contract is never weakened: a file that
-    matches NEITHER the fully-reversed nor the not-yet-reversed state still
-    raises `ValueError` via that primitive (spec: Unmerge Achieves
-    Round-Trip Parity's idempotence/safety contract)."""
-    file_rewrites = [rw for rw in rewrites if rw.file == file]
-    if file_rewrites and all(
-        text[rw.offset : rw.offset + len(rw.old_link)] == rw.old_link
-        for rw in file_rewrites
-    ):
-        return text
-    return bundle_links.reverse_link_rewrites(text, file=file, rewrites=rewrites)
-
-
-def _expected_post_merge_index_and_log(
-    entry: okf.MergeLedgerEntry, *, survivor_id: str, absorbed_id: str
-) -> tuple[str, str] | None:
-    """Reconstruct what `index.md`/`log.md` looked like immediately AFTER
-    the merge `entry` records, by replaying the SAME deterministic
-    transforms `merge` itself applied to `entry.index_before`/
-    `entry.log_before` -- `bundle_index.remove_index_entry` and the exact
-    `**Merge**` log line, dated from `entry.merged_at`.
-
-    This lets `unmerge`'s Phase A tell the difference between "index.md/
-    log.md look exactly like the merge left them" and "something ELSE
-    (another `ingest`/`forget`/unrelated `merge`) touched them since" --
-    `unmerge` unconditionally overwrites both with the PRE-merge snapshot
-    regardless, but the caller uses this to decide whether to surface a
-    warning about that discard (principle #3: reviewable, not silent).
-
-    Returns `None` for a V5 entry (#758), which has no snapshots to
-    reconstruct from and needs none: its reversal is surgical, so
-    intervening catalog/log work is PRESERVED rather than discarded and
-    there is no discard left to warn about. Callers must treat `None` as
-    "nothing to compare, nothing to warn" -- not as "no drift"."""
-    if entry.schema == okf.MERGE_LEDGER_SCHEMA_V5:
-        return None
-    expected_index, _ = bundle_index.remove_index_entry(entry.index_before, absorbed_id)
-    merge_date = datetime.fromisoformat(entry.merged_at).astimezone().date()
-    expected_log = bundle_log.insert_log_entry(
-        entry.log_before,
-        merge_date,
-        bundle_merge.merge_log_entry(survivor_id=survivor_id, absorbed_id=absorbed_id),
-    )
-    return expected_index, expected_log
-
-
 _RECONCILE_SHARE_THRESHOLD = 0.2
 """Stacked share at or above which `merge` plans the reconciliation pass
 (#645, opt-out by ruling). Below it the absorbed contribution is a stacked
@@ -9664,7 +9601,7 @@ def unmerge(
     otherwise a TTY prompts ONCE for the whole plan via `typer.confirm`
     and aborts (exit 1) on decline; otherwise (non-TTY, no `--auto`) this
     refuses to write. Execution is a sequential loop over
-    `_execute_single_unmerge`: each step re-runs the COMPLETE single-step
+    `_run_single_unmerge`: each step re-runs the COMPLETE single-step
     machinery -- Phase A recomputed from CURRENT disk state, every
     fail-closed drift/collision check included, then Phase B's writes in
     their documented order, the per-step `**Unmerge**` audit line and the
@@ -9694,7 +9631,7 @@ def unmerge(
     The single-step machinery itself -- Phase A's gates and fail-closed
     checks, the preview, the confirm gate, the post-confirm drift guard,
     and Phase B's write order -- is documented on
-    `_execute_single_unmerge`, which both forms share.
+    `_run_single_unmerge`, which both forms share.
     """
     root = Path.cwd()
     layout = config.WorkspaceLayout(root)
@@ -9764,7 +9701,7 @@ def unmerge(
         # Classic two-arg path: one single-step unmerge, its own preview
         # and confirm gate included -- byte-identical behavior to the
         # pre-#562 command.
-        _execute_single_unmerge(
+        _run_single_unmerge(
             root,
             layout,
             survivor_path,
@@ -9776,7 +9713,7 @@ def unmerge(
             confirmed=False,
         )
         # #640: after the single-step write committed. NOT inside
-        # `_execute_single_unmerge`, which the `--to` chain below invokes
+        # `_run_single_unmerge`, which the `--to` chain below invokes
         # once per entry -- the refresh is once per invocation.
         _refresh_derived_after_write(layout, cfg, verb="unmerge")
         return
@@ -9801,7 +9738,9 @@ def unmerge(
     )
     for step_number, entry in enumerate(sequence, start=1):
         typer.echo(f"step {step_number}: restore '{entry.absorbed_id}'")
-        for line in _unwind_step_preview_lines(entry, survivor_canonical):
+        for line in application_lifecycle.unwind_step_preview_lines(
+            entry, survivor_canonical
+        ):
             typer.echo(line)
 
     if not auto and cfg.review:
@@ -9821,7 +9760,7 @@ def unmerge(
             f"'{entry.absorbed_id}'"
         )
         try:
-            _execute_single_unmerge(
+            _run_single_unmerge(
                 root,
                 layout,
                 survivor_path,
@@ -9864,55 +9803,7 @@ def unmerge(
     _refresh_derived_after_write(layout, cfg, verb="unmerge")
 
 
-def _unwind_step_preview_lines(
-    entry: okf.MergeLedgerEntry, survivor_canonical: str
-) -> list[str]:
-    """One `--to` plan step's preview block body (issue #562): every file
-    that step will touch, derived from the ledger entry ALONE (no disk
-    reads) -- the same three-way partition `_execute_single_unmerge`'s own
-    pre-gate preview uses (provenance > relations > links, design D5
-    generalized) and the same `  ~ `/`  + ` line style, so the whole-plan
-    preview and the per-step execution preview name the same files the
-    same way. The DEFINITIVE per-step preview is still re-printed by each
-    step's own Phase A recompute at execution time."""
-    provenance_files = sorted({rewrite.file for rewrite in entry.provenance_rewrites})
-    relation_files = sorted(
-        {rewrite.file for rewrite in entry.relation_rewrites} - set(provenance_files)
-    )
-    link_files = sorted(
-        {rewrite.file for rewrite in entry.link_rewrites}
-        - set(provenance_files)
-        - set(relation_files)
-    )
-    return [
-        *(f"  ~ bundle/{rel} (reverse inbound link rewrite)" for rel in link_files),
-        *(
-            f"  ~ bundle/{rel} (restore pre-merge relations snapshot)"
-            for rel in relation_files
-        ),
-        *(
-            f"  ~ bundle/{rel} (restore pre-merge provenance snapshot)"
-            for rel in provenance_files
-        ),
-        # #758: same two shapes as the single-step preview -- a V5 entry
-        # reverses only this merge's own catalog/log edit.
-        *(
-            [
-                "  ~ index.md (restore this merge's catalog entry)",
-                "  ~ log.md (remove this merge's entry, append unmerge)",
-            ]
-            if entry.schema == okf.MERGE_LEDGER_SCHEMA_V5
-            else [
-                "  ~ index.md (restore pre-merge contents)",
-                "  ~ log.md (restore pre-merge contents, append unmerge entry)",
-            ]
-        ),
-        f"  ~ bundle/{survivor_canonical}.md (restore pre-merge contents)",
-        f"  + bundle/{entry.absorbed_id}.md (restore)",
-    ]
-
-
-def _execute_single_unmerge(
+def _run_single_unmerge(
     root: Path,
     layout: config.WorkspaceLayout,
     survivor_path: Path,
@@ -9924,9 +9815,11 @@ def _execute_single_unmerge(
     auto: bool,
     confirmed: bool,
 ) -> None:
-    """ONE complete single-step unmerge -- the full Phase A / preview /
-    confirm-gate / drift-guard / Phase B machinery both `unmerge` forms
-    share (issue #562). The classic two-arg path calls this once with
+    """ONE complete single-step unmerge -- the preview / confirm-gate /
+    drift-guard machinery both `unmerge` forms share (issue #562), Phase A
+    and Phase B delegated to `application.lifecycle.prepare_unmerge`/
+    `unmerge_core` (issue #918 Slice S2b, completing the Phase A/B split
+    S2a left partial). The classic two-arg path calls this once with
     `confirmed=False`; the `--to` unwind loop calls it once per ledger
     entry with `confirmed=True`, because the WHOLE plan was already
     confirmed at its single gate -- `confirmed` short-circuits the prompt
@@ -9935,17 +9828,19 @@ def _execute_single_unmerge(
     Any failure is reported on stderr and raised as `typer.Exit`, never a
     raw traceback; the caller owns any chain-level accounting on top.
 
-    Phase A (pure, no writes) mirrors `merge`'s gate shape: the caller has
-    already resolved `survivor_path`/`survivor_canonical` via the
-    path-safety gates (`_canonicalize_concept_id` plus the existence
-    check) and canonicalized `absorbed_canonical` via
-    `_canonicalize_concept_id` ONLY -- the SAME path-safety checks minus
-    the existence check, since the absorbed file is EXPECTED to be absent
-    (removed by the merge being reversed) until Phase B recreates it.
-    `bundle.merge.plan_unmerge` (U2) then reads the survivor's
-    `merged_from` ledger and computes the entire restoration in memory:
-    the restored survivor (`survivor_before`, stripping this entry while
-    retaining any earlier ones), the restored absorbed document
+    Phase A (pure, no writes; `application_lifecycle.prepare_unmerge`,
+    called by module attribute, never an aliased import, so a stale
+    monkeypatch target raises loudly instead of silently missing) mirrors
+    `merge`'s gate shape: the caller has already resolved
+    `survivor_path`/`survivor_canonical` via the path-safety gates
+    (`_canonicalize_concept_id` plus the existence check) and canonicalized
+    `absorbed_canonical` via `_canonicalize_concept_id` ONLY -- the SAME
+    path-safety checks minus the existence check, since the absorbed file
+    is EXPECTED to be absent (removed by the merge being reversed) until
+    Phase B recreates it. `bundle.merge.plan_unmerge` (U2) then reads the
+    survivor's `merged_from` ledger and computes the entire restoration in
+    memory: the restored survivor (`survivor_before`, stripping this entry
+    while retaining any earlier ones), the restored absorbed document
     (`absorbed_snapshot`), and the restored `index.md`/`log.md`
     (`index_before`/`log_before`). If a file already exists at the
     absorbed concept's path (drift since the merge), this refuses before
@@ -9974,19 +9869,20 @@ def _execute_single_unmerge(
     `reverse_link_rewrites` on it would either corrupt the already-restored
     text or fail closed on a now-nonexistent `new_link` occurrence.
 
-    The preview printed before the confirm gate surfaces every file this
-    DESTRUCTIVE-in-reverse write will touch: each reversed inbound link,
-    each restored relation snapshot, the catalog/log restoration, the
-    restored survivor, and the recreated absorbed file.
+    The preview printed before the confirm gate, rendered here from
+    `PreparedUnmerge`'s fields, surfaces every file this DESTRUCTIVE-in-
+    reverse write will touch: each reversed inbound link, each restored
+    relation snapshot, the catalog/log restoration, the restored survivor,
+    and the recreated absorbed file.
 
     Confirm gate, identical precedence and mechanism to `merge`/`forget`
     (plus the `confirmed` short-circuit above): `--auto` skips the prompt
-    outright; otherwise config `review: false` skips it the same way;
-    otherwise, on a TTY, `typer.confirm` asks and aborts (exit 1) on
-    decline; otherwise (non-TTY, no `--auto`) this refuses to write (exit
-    1), telling the user to re-run with `--auto`. Declining or refusing
-    leaves the bundle completely untouched -- Phase A never writes
-    anything.
+    outright; otherwise config `review: false` (`prepared.review`) skips it
+    the same way; otherwise, on a TTY, `typer.confirm` asks and aborts
+    (exit 1) on decline; otherwise (non-TTY, no `--auto`) this refuses to
+    write (exit 1), telling the user to re-run with `--auto`. Declining or
+    refusing leaves the bundle completely untouched -- Phase A never
+    writes anything.
 
     Past that gate -- and on the runs that skip it, since `--auto`,
     `review: false`, and `confirmed` skip the prompt but not the window it
@@ -10020,17 +9916,16 @@ def _execute_single_unmerge(
     instead of being clobbered, making the Phase-A promise hold at write
     time.
 
-    Phase B (after confirm; issue #918 Slice S2a: delegated to
-    `application.lifecycle.unmerge_core`, called by module attribute)
-    writes, in this order: `index.md` then
-    `log.md` restored to their EXACT pre-merge bytes (`index_before`/
-    `log_before`) first; then every reversed inbound-link file; then the
-    recreated absorbed file (`absorbed_snapshot`); then the restored
-    survivor (`survivor_before`, which drops this ledger entry while
-    keeping any earlier ones intact) -- mirroring `merge`'s own ordering
-    reasoning (the least-recoverable-if-lost artifacts land first, most
-    easily git-recoverable last); and FINALLY, only once every restore
-    above has landed, `log.md` is written a SECOND time with one
+    Phase B (after confirm; delegated to `application.lifecycle.
+    unmerge_core`, called by module attribute) writes, in this order:
+    `index.md` then `log.md` restored to their EXACT pre-merge bytes
+    (`index_before`/`log_before`) first; then every reversed inbound-link
+    file; then the recreated absorbed file (`absorbed_snapshot`); then the
+    restored survivor (`survivor_before`, which drops this ledger entry
+    while keeping any earlier ones intact) -- mirroring `merge`'s own
+    ordering reasoning (the least-recoverable-if-lost artifacts land
+    first, most easily git-recoverable last); and FINALLY, only once every
+    restore above has landed, `log.md` is written a SECOND time with one
     `**Unmerge**` audit line appended on top of the just-restored
     `log_before` -- so the append-only audit trail net-grows by exactly
     one line documenting the round trip, even though every other file
@@ -10063,137 +9958,14 @@ def _execute_single_unmerge(
     log_path = layout.bundle_dir / "log.md"
 
     try:
-        # One `_snapshot_read` observation (issues #306, #313, #318): the
-        # raw bytes are the drift guard's baseline for the survivor.
-        # Durable-derived-state slice 1a: `plan_unmerge` no longer needs the
-        # DECODED text at all -- the ledger entries live in a sidecar
-        # (`bundle/ledger.py`), never the survivor's own frontmatter, and
-        # `restored_survivor` comes straight from the tail entry's
-        # `survivor_before`, not from parsing this file.
-        survivor_bytes, _survivor_text = _snapshot_read(survivor_path)
-        existing_entries = bundle_ledger.read_entries(
-            survivor_canonical, layout.bundle_dir
-        )
-        # Read BEFORE planning (#758): a V5 entry records the merge's
-        # catalog delta, so the reversal is computed against these current
-        # texts rather than replayed from a snapshot. Still ONE observation
-        # each, feeding both the plan and the drift guard's baseline -- the
-        # invariant #318 closed is unchanged, only its position moved.
-        index_bytes, current_index_text = _snapshot_read(index_path)
-        log_bytes, current_log_text = _snapshot_read(log_path)
-        plan = bundle_merge.plan_unmerge(
-            survivor_id=survivor_canonical,
-            absorbed_id=absorbed_canonical,
-            entries=existing_entries,
-            current_index_text=current_index_text,
-            current_log_text=current_log_text,
-        )
-
-        absorbed_path = layout.bundle_dir / f"{absorbed_canonical}.md"
-        if absorbed_path.exists():
-            raise ValueError(
-                f"cannot restore 'bundle/{absorbed_canonical}.md' -- a file "
-                "already exists at that path"
-            )
-
-        expected_catalog_and_log = _expected_post_merge_index_and_log(
-            plan.entry,
-            survivor_id=survivor_canonical,
-            absorbed_id=absorbed_canonical,
-        )
-        # `None` is a V5 (delta) entry: nothing is discarded, so nothing is
-        # warned about (#758). Only the snapshot shapes can silently drop
-        # intervening catalog/log work, and only they warn.
-        catalog_log_drifted = expected_catalog_and_log is not None and (
-            current_index_text != expected_catalog_and_log[0]
-            or current_log_text != expected_catalog_and_log[1]
-        )
-
-        # Precedence, generalized to three rewrite kinds (provenance >
-        # relations > links): a file present in `provenance_rewrites` is
-        # reversed EXCLUSIVELY via its provenance whole-file snapshot below
-        # -- excluded from BOTH the relation and link partitions. D5's
-        # original two-way rule still holds for the remaining files: a file
-        # present in BOTH `link_rewrites` and `relation_rewrites` (and NOT
-        # in `provenance_rewrites`) is reversed EXCLUSIVELY via its
-        # `relation_rewrites` whole-file snapshot -- excluded here so
-        # `reverse_link_rewrites` is never attempted on it (see this
-        # command's docstring).
-        provenance_rewrite_files = sorted(
-            {rewrite.file for rewrite in plan.provenance_rewrites}
-        )
-        relation_rewrite_files = sorted(
-            {rewrite.file for rewrite in plan.relation_rewrites}
-            - set(provenance_rewrite_files)
-        )
-        rewritten_files = sorted(
-            {rewrite.file for rewrite in plan.link_rewrites}
-            - set(provenance_rewrite_files)
-            - set(relation_rewrite_files)
-        )
-        # Accumulated across all three partitions below, each file's bytes
-        # coming out of the same `_snapshot_read` observation as the text
-        # its reversal is computed from (issues #306, #313, #318).
-        rewrite_bytes: dict[str, bytes] = {}
-        provenance_texts: dict[str, str] = {}
-        for rel in provenance_rewrite_files:
-            rewrite_bytes[rel], provenance_texts[rel] = _snapshot_read(
-                layout.bundle_dir / rel
-            )
-        provenance_reversed_texts = {
-            rel: bundle_provenance.reverse_provenance_rewrites(
-                provenance_texts[rel],
-                file=rel,
-                survivor_id=survivor_canonical,
-                absorbed_id=absorbed_canonical,
-                rewrites=plan.provenance_rewrites,
-                link_rewrites=plan.link_rewrites,
-                relation_rewrites=plan.relation_rewrites,
-            )
-            for rel in provenance_rewrite_files
-        }
-        other_texts: dict[str, str] = {}
-        for rel in rewritten_files:
-            rewrite_bytes[rel], other_texts[rel] = _snapshot_read(
-                layout.bundle_dir / rel
-            )
-        reversed_texts = {
-            rel: _reverse_link_rewrite_idempotently(
-                other_texts[rel], file=rel, rewrites=plan.link_rewrites
-            )
-            for rel in rewritten_files
-        }
-        # Whole-file absolute restore, never offset math (design D1/D3/D4) --
-        # but DRIFT-AWARE and FAIL-CLOSED (CRITICAL fix, review correction
-        # batch), symmetric with the link path above: each file's CURRENT
-        # on-disk text is read and compared against what this merge
-        # deterministically wrote there. A mismatch (a legitimate edit
-        # landed on that file after the merge) raises `ValueError` here,
-        # caught by this same try/except -- refusing the whole unmerge
-        # before any write, rather than clobbering the edit with the stale
-        # snapshot.
-        relation_texts: dict[str, str] = {}
-        for rel in relation_rewrite_files:
-            rewrite_bytes[rel], relation_texts[rel] = _snapshot_read(
-                layout.bundle_dir / rel
-            )
-        relation_reversed_texts = {
-            rel: bundle_relations.reverse_relation_rewrites(
-                relation_texts[rel],
-                file=rel,
-                survivor_id=survivor_canonical,
-                absorbed_id=absorbed_canonical,
-                rewrites=plan.relation_rewrites,
-                link_rewrites=plan.link_rewrites,
-            )
-            for rel in relation_rewrite_files
-        }
-
-        new_log_text = bundle_log.insert_log_entry(
-            plan.restored_log,
-            now.astimezone().date(),
-            f"**Unmerge**: Restored [{absorbed_canonical}](/{absorbed_canonical}.md) "
-            f"from [{survivor_canonical}](/{survivor_canonical}.md).",
+        prepared = application_lifecycle.prepare_unmerge(
+            root,
+            layout,
+            survivor_path,
+            survivor_canonical,
+            absorbed_canonical,
+            now=now,
+            cfg=cfg,
         )
     except (OSError, ValueError) as exc:
         typer.echo(
@@ -10201,12 +9973,14 @@ def _execute_single_unmerge(
         )
         raise typer.Exit(code=1) from exc
 
+    plan = prepared.plan
+
     typer.echo("openkos unmerge: proposed changes:")
-    for rel in rewritten_files:
+    for rel in prepared.rewritten_files:
         typer.echo(f"  ~ bundle/{rel} (reverse inbound link rewrite)")
-    for rel in relation_rewrite_files:
+    for rel in prepared.relation_rewrite_files:
         typer.echo(f"  ~ bundle/{rel} (restore pre-merge relations snapshot)")
-    for rel in provenance_rewrite_files:
+    for rel in prepared.provenance_rewrite_files:
         typer.echo(f"  ~ bundle/{rel} (restore pre-merge provenance snapshot)")
     # #758: a V5 entry reverses the merge's own catalog/log edit and leaves
     # everything else standing, so the preview must not keep promising a
@@ -10222,13 +9996,13 @@ def _execute_single_unmerge(
         )
     typer.echo(f"  ~ bundle/{survivor_canonical}.md (restore pre-merge contents)")
     typer.echo(f"  + bundle/{absorbed_canonical}.md (restore)")
-    if catalog_log_drifted:
+    if prepared.catalog_log_drifted:
         typer.echo(
             "Warning: index.md/log.md changed since the merge; unmerge "
             "restores the pre-merge snapshot and will discard those changes."
         )
 
-    if not confirmed and not auto and cfg.review:
+    if not confirmed and not auto and prepared.review:
         if sys.stdin.isatty():
             typer.confirm("Proceed with these changes?", abort=True)
         else:
@@ -10249,10 +10023,13 @@ def _execute_single_unmerge(
     _reject_drifted_targets(
         layout,
         {
-            index_path: index_bytes,
-            log_path: log_bytes,
-            survivor_path: survivor_bytes,
-            **{layout.bundle_dir / rel: data for rel, data in rewrite_bytes.items()},
+            index_path: prepared.index_bytes,
+            log_path: prepared.log_bytes,
+            survivor_path: prepared.survivor_bytes,
+            **{
+                layout.bundle_dir / rel: data
+                for rel, data in prepared.rewrite_bytes.items()
+            },
         },
         "unmerge",
         # #328: the guard's default advice -- "re-run to recompute" -- is
@@ -10271,27 +10048,11 @@ def _execute_single_unmerge(
         ),
     )
 
-    # Phase B (issue #918 Slice S2a): the write-only tail moved to
-    # `application.lifecycle.unmerge_core`, called by module attribute
-    # (never an aliased import, so a stale monkeypatch target raises
-    # loudly instead of silently missing) -- see its docstring for the
-    # exact write order and recoverability reasoning. `PreparedUnmerge` is
-    # assembled here from Phase A's still-inline results; `absorbed_path`
-    # is recomputed inside `unmerge_core` from `absorbed_canonical`, so it
-    # is not carried on the dataclass.
-    prepared = application_lifecycle.PreparedUnmerge(
-        plan=plan,
-        new_log_text=new_log_text,
-        link_reversed_texts=reversed_texts,
-        relation_reversed_texts=relation_reversed_texts,
-        provenance_restored_texts=provenance_reversed_texts,
-        rewritten_files=rewritten_files,
-        relation_rewrite_files=relation_rewrite_files,
-        provenance_rewrite_files=provenance_rewrite_files,
-        survivor_path=survivor_path,
-        survivor_canonical=survivor_canonical,
-        absorbed_canonical=absorbed_canonical,
-    )
+    # Phase B (issue #918 Slice S2b): both Phase A and Phase B now go
+    # through the module attribute (never an aliased import, so a stale
+    # monkeypatch target raises loudly instead of silently missing) -- see
+    # `unmerge_core`'s own docstring for the exact write order and
+    # recoverability reasoning.
     try:
         result = application_lifecycle.unmerge_core(layout, prepared)
     except (OSError, ValueError) as exc:

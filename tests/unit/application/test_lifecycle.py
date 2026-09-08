@@ -391,6 +391,16 @@ def test_unmerge_core_is_directly_callable_and_restores_the_pre_merge_state(
         survivor_path=survivor_path,
         survivor_canonical="concepts/survivor",
         absorbed_canonical="concepts/absorbed",
+        # Slice S2b's fields: `unmerge_core` never reads any of these (they
+        # feed only the adapter's preview/drift-guard, assembled by S2b's
+        # `prepare_unmerge`) -- placeholder values are enough to satisfy the
+        # dataclass shape for this Phase-B-only fixture.
+        catalog_log_drifted=False,
+        review=True,
+        index_bytes=b"",
+        log_bytes=b"",
+        survivor_bytes=b"",
+        rewrite_bytes={},
     )
 
     result = lifecycle_service.unmerge_core(layout, prepared)
@@ -417,6 +427,288 @@ def test_unmerge_core_performs_no_typer_or_stdin_access() -> None:
 
     assert "typer" not in source
     assert "sys.stdin" not in source
+
+
+# ---------------------------------------------------------------------------
+# Phase 6: the missing Phase A -- `prepare_unmerge` (task 6.1, Slice S2b)
+# ---------------------------------------------------------------------------
+
+
+def test_prepare_unmerge_is_directly_callable_and_feeds_unmerge_core(
+    tmp_path: Path,
+) -> None:
+    """`prepare_unmerge` completes the Phase A/B split S2a left partial
+    (design C2/Slice S2b): reachable without any `openkos.cli` import,
+    writes nothing, and its `PreparedUnmerge` feeds `unmerge_core` directly
+    -- the same full `prepare_X`/`X_core` pair `merge` already has (design's
+    Slice Plan, "unmerge matches merge's public prepare/core pair")."""
+    layout = _workspace(tmp_path)
+    survivor_path = _write_concept(
+        layout.bundle_dir, "concepts/survivor", title="Survivor", sensitivity="private"
+    )
+    absorbed_path = _write_concept(
+        layout.bundle_dir,
+        "concepts/absorbed",
+        title="Absorbed",
+        sensitivity="confidential",
+    )
+    index_path = layout.bundle_dir / "index.md"
+    log_path = layout.bundle_dir / "log.md"
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    cfg = config.read_config(tmp_path)
+
+    merge_prepared = lifecycle_service.prepare_merge(
+        layout.bundle_dir,
+        index_path,
+        log_path,
+        survivor_path,
+        absorbed_path,
+        "concepts/survivor",
+        "concepts/absorbed",
+        tmp_path,
+        now=now,
+    )
+    lifecycle_service.merge_core(
+        layout.bundle_dir, index_path, log_path, merge_prepared
+    )
+    assert not absorbed_path.exists()
+
+    prepared = lifecycle_service.prepare_unmerge(
+        tmp_path,
+        layout,
+        survivor_path,
+        "concepts/survivor",
+        "concepts/absorbed",
+        now=now,
+        cfg=cfg,
+    )
+
+    assert isinstance(prepared, lifecycle_service.PreparedUnmerge)
+    assert prepared.survivor_path == survivor_path
+    assert prepared.survivor_canonical == "concepts/survivor"
+    assert prepared.absorbed_canonical == "concepts/absorbed"
+    assert prepared.catalog_log_drifted is False
+    assert prepared.review is cfg.review
+    assert prepared.rewritten_files == []
+    assert prepared.relation_rewrite_files == []
+    assert prepared.provenance_rewrite_files == []
+    # Phase A writes nothing.
+    assert not absorbed_path.exists()
+
+    result = lifecycle_service.unmerge_core(layout, prepared)
+
+    assert isinstance(result, lifecycle_service.UnmergeResult)
+    assert absorbed_path.is_file()
+    survivor_text = survivor_path.read_text(encoding="utf-8")
+    assert "merged_from" not in survivor_text
+
+
+def test_prepare_unmerge_flags_catalog_log_drift_since_the_merge(
+    tmp_path: Path,
+) -> None:
+    """`catalog_log_drifted` is `True` (triangulation) when `index.md` no
+    longer matches what THIS merge deterministically left there -- e.g. an
+    unrelated `ingest`/`forget`/`merge` touched the catalog afterwards
+    (design: Interfaces/Contracts, `catalog_log_drifted`; mirrors
+    `_execute_single_unmerge`'s own warn-and-continue notice, #758).
+
+    `plan_merge` always writes a `MERGE_LEDGER_SCHEMA_V5` (delta) entry
+    today, and `_expected_post_merge_index_and_log` returns `None`
+    unconditionally for one -- the drift notice can only ever fire for a
+    pre-#758 snapshot-shaped entry (`test_unmerge.py`'s own
+    `test_unmerge_snapshot_entry_still_warns_on_interleaved_drift` pins
+    the identical CLI-level scenario), so this downgrades the just-written
+    V5 entry to V4 the same way, directly through `bundle_ledger`."""
+    layout = _workspace(tmp_path)
+    survivor_path = _write_concept(
+        layout.bundle_dir, "concepts/survivor", title="Survivor"
+    )
+    absorbed_path = _write_concept(
+        layout.bundle_dir, "concepts/absorbed", title="Absorbed"
+    )
+    index_path = layout.bundle_dir / "index.md"
+    log_path = layout.bundle_dir / "log.md"
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    cfg = config.read_config(tmp_path)
+    pre_merge_index = index_path.read_text(encoding="utf-8")
+    pre_merge_log = log_path.read_text(encoding="utf-8")
+
+    merge_prepared = lifecycle_service.prepare_merge(
+        layout.bundle_dir,
+        index_path,
+        log_path,
+        survivor_path,
+        absorbed_path,
+        "concepts/survivor",
+        "concepts/absorbed",
+        tmp_path,
+        now=now,
+    )
+    lifecycle_service.merge_core(
+        layout.bundle_dir, index_path, log_path, merge_prepared
+    )
+
+    entries = bundle_ledger.read_entries("concepts/survivor", layout.bundle_dir)
+    assert entries[-1].schema == okf.MERGE_LEDGER_SCHEMA_V5
+    downgraded = dataclasses.replace(
+        entries[-1],
+        schema=okf.MERGE_LEDGER_SCHEMA_V4,
+        index_before=pre_merge_index,
+        log_before=pre_merge_log,
+        index_restores=[],
+    )
+    bundle_ledger.write_entries(
+        "concepts/survivor",
+        layout.bundle_dir,
+        survivor_id="concepts/survivor",
+        entries=[*entries[:-1], downgraded],
+    )
+
+    # An unrelated catalog edit landing after the merge -- an `ingest`'s
+    # fresh bullet is the design's own example scenario.
+    index_path.write_text(
+        index_path.read_text(encoding="utf-8") + "- [Extra](/extra.md)\n",
+        encoding="utf-8",
+    )
+
+    prepared = lifecycle_service.prepare_unmerge(
+        tmp_path,
+        layout,
+        survivor_path,
+        "concepts/survivor",
+        "concepts/absorbed",
+        now=now,
+        cfg=cfg,
+    )
+
+    assert prepared.catalog_log_drifted is True
+
+
+def test_prepare_unmerge_refuses_when_a_file_already_sits_at_the_absorbed_path(
+    tmp_path: Path,
+) -> None:
+    """Threat matrix: Unmerge restore collision -- Phase A refuses
+    (`ValueError`) before any write when a file already exists at the
+    absorbed concept's path, since the recreate write below is create-only
+    and cannot silently overwrite it."""
+    layout = _workspace(tmp_path)
+    survivor_path = _write_concept(
+        layout.bundle_dir, "concepts/survivor", title="Survivor"
+    )
+    absorbed_path = _write_concept(
+        layout.bundle_dir, "concepts/absorbed", title="Absorbed"
+    )
+    index_path = layout.bundle_dir / "index.md"
+    log_path = layout.bundle_dir / "log.md"
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    cfg = config.read_config(tmp_path)
+
+    merge_prepared = lifecycle_service.prepare_merge(
+        layout.bundle_dir,
+        index_path,
+        log_path,
+        survivor_path,
+        absorbed_path,
+        "concepts/survivor",
+        "concepts/absorbed",
+        tmp_path,
+        now=now,
+    )
+    lifecycle_service.merge_core(
+        layout.bundle_dir, index_path, log_path, merge_prepared
+    )
+    # A file lands back at the absorbed path before `unmerge` ever runs.
+    absorbed_path.write_text("collision", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="already exists"):
+        lifecycle_service.prepare_unmerge(
+            tmp_path,
+            layout,
+            survivor_path,
+            "concepts/survivor",
+            "concepts/absorbed",
+            now=now,
+            cfg=cfg,
+        )
+
+
+def test_prepare_unmerge_performs_no_typer_or_stdin_access() -> None:
+    """`prepare_unmerge` never touches `sys.stdin` or `typer` -- the
+    layering invariant `test_layering.py` enforces at module scope (design
+    D2/D3), exercised directly against the relocated function itself
+    (task 6.1)."""
+    import inspect
+
+    source = inspect.getsource(lifecycle_service.prepare_unmerge)
+
+    assert "typer" not in source
+    assert "sys.stdin" not in source
+
+
+def test_unwind_step_preview_lines_mirrors_the_per_step_preview_for_a_v4_entry() -> (
+    None
+):
+    """`unwind_step_preview_lines` (task 6.1) reproduces the exact
+    `  ~ `/`  + ` preview block `_execute_single_unmerge`'s own per-step
+    preview builds from the SAME three-way partitioned rewrite-file sets
+    (provenance > relations > links, design D5 generalized) -- the
+    whole-plan `--to` preview and the per-step execution preview must name
+    the same files the same way, for a pre-#758 (V4) snapshot-shaped
+    entry."""
+    entry = okf.MergeLedgerEntry(
+        schema=okf.MERGE_LEDGER_SCHEMA_V4,
+        merged_at=datetime(2026, 1, 1, tzinfo=UTC).isoformat(),
+        absorbed_id="concepts/absorbed",
+        absorbed_snapshot="absorbed snapshot",
+        survivor_before="survivor before",
+        index_before="index before",
+        log_before="log before",
+        link_rewrites=[
+            okf.LinkRewrite(file="a.md", old_link="x", new_link="y", offset=0)
+        ],
+        sensitivity_before="private",
+        sensitivity_after="private",
+        relation_rewrites=[okf.RelationRewrite(file="b.md", snapshot="b snapshot")],
+    )
+
+    lines = lifecycle_service.unwind_step_preview_lines(entry, "concepts/survivor")
+
+    assert lines == [
+        "  ~ bundle/a.md (reverse inbound link rewrite)",
+        "  ~ bundle/b.md (restore pre-merge relations snapshot)",
+        "  ~ index.md (restore pre-merge contents)",
+        "  ~ log.md (restore pre-merge contents, append unmerge entry)",
+        "  ~ bundle/concepts/survivor.md (restore pre-merge contents)",
+        "  + bundle/concepts/absorbed.md (restore)",
+    ]
+
+
+def test_unwind_step_preview_lines_names_the_catalog_delta_for_a_v5_entry() -> None:
+    """Triangulation: a `MERGE_LEDGER_SCHEMA_V5` entry (#758) reverses only
+    THIS merge's own catalog/log edit, so the index/log lines read
+    differently -- `unwind_step_preview_lines` must pick the branch from
+    `entry.schema`, not always the pre-#758 wording."""
+    entry = okf.MergeLedgerEntry(
+        schema=okf.MERGE_LEDGER_SCHEMA_V5,
+        merged_at=datetime(2026, 1, 1, tzinfo=UTC).isoformat(),
+        absorbed_id="concepts/absorbed",
+        absorbed_snapshot="absorbed snapshot",
+        survivor_before="survivor before",
+        index_before="",
+        log_before="",
+        link_rewrites=[],
+        sensitivity_before="private",
+        sensitivity_after="private",
+    )
+
+    lines = lifecycle_service.unwind_step_preview_lines(entry, "concepts/survivor")
+
+    assert lines == [
+        "  ~ index.md (restore this merge's catalog entry)",
+        "  ~ log.md (remove this merge's entry, append unmerge)",
+        "  ~ bundle/concepts/survivor.md (restore pre-merge contents)",
+        "  + bundle/concepts/absorbed.md (restore)",
+    ]
 
 
 # Phase 8: `ForgetPlan`/`ReferenceDisclosure` (S3, task 8.1)

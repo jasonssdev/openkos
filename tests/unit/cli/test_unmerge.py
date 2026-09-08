@@ -685,7 +685,14 @@ def test_unmerge_non_tty_without_auto_refuses(
 
     assert result.exit_code == 1
     assert isinstance(result.exception, SystemExit)
-    assert "--auto" in result.stderr
+    # Pin the WHOLE sentence, not just the flag name (#918 S2b): `unmerge`'s
+    # refusal wording is now composed in the adapter from data the service
+    # returns, and a substring check on "--auto" cannot tell a reworded
+    # refusal from the shipped one.
+    assert result.stderr.strip().endswith(
+        "openkos unmerge: refusing to write without confirmation -- "
+        "stdin is not a TTY; re-run with --auto."
+    )
     assert _snapshot(tmp_path) == before
 
 
@@ -1479,7 +1486,7 @@ def test_an_edit_landing_after_the_snapshot_observation_is_refused(
     _merged_pair_with_all_three_rewrite_groups(tmp_path, monkeypatch)
     target_path = tmp_path / "bundle" / "concepts" / "survivor.md"
     concurrent = "hand-edited the instant the snapshot returned\n"
-    real_snapshot_read = main._snapshot_read
+    real_snapshot_read = fsio.snapshot_read
     fired = False
 
     def racing_snapshot_read(path: Path) -> tuple[bytes, str]:
@@ -1491,7 +1498,11 @@ def test_an_edit_landing_after_the_snapshot_observation_is_refused(
         return snapshot
 
     before = _snapshot(tmp_path)
-    monkeypatch.setattr(main, "_snapshot_read", racing_snapshot_read)
+    # Issue #918 Slice S2b: `unmerge`'s Phase A moved into
+    # `application/lifecycle.py`'s `prepare_unmerge`, which calls
+    # `fsio.snapshot_read` directly (never `main._snapshot_read`) -- the
+    # patch target moves with it (merge/forget's own S1/S3 precedent).
+    monkeypatch.setattr(fsio, "snapshot_read", racing_snapshot_read)
 
     result = runner.invoke(
         app, ["unmerge", "concepts/survivor", "concepts/absorbed", "--auto"]
@@ -2016,7 +2027,14 @@ def test_unmerge_to_non_tty_without_auto_refuses(
 
     assert result.exit_code == 1
     assert isinstance(result.exception, SystemExit)
-    assert "--auto" in result.stderr
+    # Pin the WHOLE sentence, not just the flag name (#918 S2b): `unmerge`'s
+    # refusal wording is now composed in the adapter from data the service
+    # returns, and a substring check on "--auto" cannot tell a reworded
+    # refusal from the shipped one.
+    assert result.stderr.strip().endswith(
+        "openkos unmerge: refusing to write without confirmation -- "
+        "stdin is not a TTY; re-run with --auto."
+    )
     assert _snapshot(tmp_path) == before
 
 
