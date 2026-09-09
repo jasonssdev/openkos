@@ -35,6 +35,7 @@ mechanism-consistency, not field rates).
 Usage:
 
     python evals/language_leak/run_language_leak_probe.py --arm baseline --runs 5
+    python evals/language_leak/run_language_leak_probe.py --self-test
 
 Writes `results/language-leak-<arm>-<stamp>.md` + a sibling `runs-*.json`.
 Never compare arms measured on different fixture text.
@@ -495,7 +496,108 @@ def analyze_stored(paths: list[str]) -> None:
         print(f"    FP [{classify_title(title)}]: {title}")
 
 
-def main() -> None:
+def _self_test() -> int:
+    """Prove the classifier, the two adjacency exemptions, the #622
+    extension and the #618 gate replica against synthetic titles -- no
+    Ollama, no stored runs."""
+    failures: list[str] = []
+
+    def check(label: str, actual: object, expected: object) -> None:
+        if actual != expected:
+            failures.append(f"{label}: expected {expected!r}, got {actual!r}")
+
+    # classify_title: the four classes the leak rate is built from.
+    check("spanish", classify_title("Reunión de coordinación"), "es")
+    check("english leak", classify_title("Knowledge Recovery System"), "en")
+    check("mixed", classify_title("Sistema de Knowledge"), "mixed")
+    check("neutral acronym", classify_title("MCP"), "neutral")
+
+    source = (
+        "Reunión sobre el sistema de conocimiento. El equipo revisó el "
+        "knowledge recovery system y su fase de mantenimiento.\n"
+    )
+
+    # bigram_adjacent: a verbatim quote passes; a recombination of
+    # non-adjacent fragments does not -- #622's whole distinction.
+    check(
+        "verbatim quote is adjacent",
+        bigram_adjacent("knowledge recovery system", source),
+        True,
+    )
+    check(
+        "recombination is not adjacent",
+        bigram_adjacent("system recovery knowledge", source),
+        False,
+    )
+    check("single word always passes", bigram_adjacent("MCP", source), True)
+
+    # spanish_orthography: an accent or a Spanish derivational suffix
+    # exempts a title from the adjacency check BEFORE it runs (#630).
+    check("accent exempts", spanish_orthography("Configuración"), True)
+    check("suffix exempts", spanish_orthography("Snapshot Derivado"), True)
+    check(
+        "plain english does not exempt",
+        spanish_orthography("System Maintenance"),
+        False,
+    )
+
+    # gate_neutral: whether the PRODUCTION voter sees no function words at
+    # all -- distinct from a MIXED title, which must also never reach the
+    # adjacency check even though it too casts no bare-majority vote.
+    check("no function words is gate-neutral", gate_neutral("Knowledge Recovery"), True)
+    check(
+        "a function word is not gate-neutral",
+        gate_neutral("The Knowledge Recovery"),
+        False,
+    )
+
+    # quoted_verbatim: an exact (casefolded, whitespace-collapsed) source
+    # substring is the proper-name exemption; a parenthetical suffix is
+    # stripped from the TITLE first, same as #592's precedent.
+    check("verbatim match", quoted_verbatim("knowledge recovery system", source), True)
+    check("not present", quoted_verbatim("Knowledge Engine Setup", source), False)
+    check(
+        "parenthetical suffix stripped before matching",
+        quoted_verbatim("Knowledge Recovery System (KRS)", source),
+        True,
+    )
+
+    # score_extension: the harness's headline math. A dropped title is a
+    # TRUE positive only when the probe's OWN ground truth calls it `en`;
+    # every other class -- including `neutral` -- counts as a false
+    # positive, because the shipping bar is zero false positives and
+    # uncertainty counts against it.
+    kept = ["Knowledge Engine Setup", "Reunión de coordinación", "MCP"]
+    scored = score_extension(kept, source)
+    check("english residual drops", scored["drops"], ["Knowledge Engine Setup"])
+    check(
+        "english residual is a true positive",
+        scored["true_positives"],
+        ["Knowledge Engine Setup"],
+    )
+    check("gate-guarded es title does not drop", scored["false_positives"], [])
+
+    # apply_gate_to_titles: replicates the PRODUCTION gate (#618) over bare
+    # title strings. A title in the source's dominant language is kept
+    # unconditionally; a wrong-language title with no verbatim support is
+    # dropped.
+    dominant_source = (
+        "Reunión sobre el sistema. El equipo revisó el proyecto y la "
+        "propuesta. Esta es la reunión del equipo.\n"
+    )
+    kept2, dropped2 = apply_gate_to_titles(
+        ["Reunión de proyecto", "The Project Team"], dominant_source
+    )
+    check("dominant-language title kept", "Reunión de proyecto" in kept2, True)
+    check("wrong-language title dropped", "The Project Team" in dropped2, True)
+
+    for line in failures:
+        print(f"FAIL {line}")
+    print(f"\nself-test: {'FAILED' if failures else 'passed'}")
+    return 1 if failures else 0
+
+
+def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--arm", choices=["baseline", "treatment"])
     parser.add_argument("--runs", type=int, default=DEFAULT_RUNS)
@@ -509,13 +611,20 @@ def main() -> None:
             "(no model calls); --arm is not required."
         ),
     )
+    parser.add_argument(
+        "--self-test",
+        action="store_true",
+        help="Run the synthetic self-test and exit (no Ollama needed).",
+    )
     args = parser.parse_args()
 
+    if args.self_test:
+        return _self_test()
     if args.analyze:
         analyze_stored(args.analyze)
-        return
+        return 0
     if args.arm is None:
-        parser.error("--arm is required unless --analyze is given")
+        parser.error("--arm is required unless --analyze or --self-test is given")
 
     if args.arm == "treatment":
         # The REJECTED #563 candidate, kept reproducible as a monkeypatch:
@@ -750,7 +859,8 @@ def main() -> None:
     report = "\n".join(lines) + "\n"
     (results_dir / f"language-leak-{slug}.md").write_text(report, encoding="utf-8")
     print(report)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

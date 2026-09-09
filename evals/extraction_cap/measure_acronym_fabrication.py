@@ -15,6 +15,7 @@ until the queue was worked.
 Run from the repository root:
 
     python evals/extraction_cap/measure_acronym_fabrication.py
+    python evals/extraction_cap/measure_acronym_fabrication.py --self-test
 """
 
 from __future__ import annotations
@@ -22,7 +23,9 @@ from __future__ import annotations
 import json
 import pathlib
 import re
+import sys
 from collections import defaultdict
+from collections.abc import Iterable
 
 ACRONYM_FIRST = re.compile(r"\b([A-Z][A-Z0-9]{1,5})\s*\(([^)]+)\)")
 """`MCP (Model Context Protocol)` -- acronym first, expansion parenthesized."""
@@ -40,7 +43,109 @@ SPANISH_FIXTURES = frozenset({"small-04-pre-build-skills"})
 makes the EN/ES comparison meaningful at all."""
 
 
-def main() -> None:
+def pairs_in(title: str) -> list[tuple[str, str]]:
+    """Every `(acronym, expansion)` this title claims, in either written
+    order. Identical extraction to `measure_expansion_grounding.py`'s
+    `pairs_in` -- the two probes must see the same emissions or their
+    numbers cannot be compared."""
+    out = [(m.group(1), m.group(2)) for m in ACRONYM_FIRST.finditer(title)]
+    out += [(m.group(2), m.group(1)) for m in EXPANSION_FIRST.finditer(title)]
+    return out
+
+
+def tally_from_outcomes(
+    outcomes: Iterable[dict[str, object]],
+) -> dict[str, dict[str, dict[str, int]]]:
+    """`acronym -> fixture -> expansion -> count`, over `ok` outcomes only.
+
+    Pure function, extracted from `main` so a self-test can prove the
+    self-contradiction tally -- the parsing, the status filter and the
+    aggregation -- without reading a single stored `runs-*.json` file or
+    making a model call.
+    """
+    seen: dict[str, dict[str, dict[str, int]]] = defaultdict(
+        lambda: defaultdict(lambda: defaultdict(int))
+    )
+    for outcome in outcomes:
+        if outcome.get("status") != "ok":
+            continue
+        fixture = str(outcome["fixture"])
+        titles = outcome.get("titles", [])
+        if not isinstance(titles, list):
+            continue
+        for title in titles:
+            for acronym, expansion in pairs_in(str(title)):
+                seen[acronym][fixture][expansion.strip()] += 1
+    return seen
+
+
+def _self_test() -> int:
+    """Prove the self-contradiction tally with synthetic outcomes -- no
+    stored runs, no model."""
+    failures: list[str] = []
+
+    def check(label: str, actual: object, expected: object) -> None:
+        if actual != expected:
+            failures.append(f"{label}: expected {expected!r}, got {actual!r}")
+
+    # Extraction: both written orders resolve to the same (acronym, expansion).
+    check(
+        "acronym-first",
+        pairs_in("MCP (Machine Control Protocol)"),
+        [("MCP", "Machine Control Protocol")],
+    )
+    check(
+        "expansion-first",
+        pairs_in("Model Context Protocol (MCP)"),
+        [("MCP", "Model Context Protocol")],
+    )
+    check("no pair", pairs_in("Pre-built Skills"), [])
+
+    outcomes: list[dict[str, object]] = [
+        {"status": "ok", "fixture": "f1", "titles": ["MCP (Model Context Protocol)"]},
+        {"status": "ok", "fixture": "f1", "titles": ["MCP (Machine Control Protocol)"]},
+        {"status": "ok", "fixture": "f2", "titles": ["MCP (Model Context Protocol)"]},
+        # An `error` run must contribute NOTHING -- counting a failed
+        # extraction's titles would tally emissions that were never
+        # actually retained.
+        {"status": "error", "fixture": "f1", "titles": ["MCP (Ghost Expansion)"]},
+    ]
+    tally = tally_from_outcomes(outcomes)
+
+    # THE case this harness exists for: two DISTINCT expansions of the same
+    # acronym within one fixture prove at least one emission is fabricated.
+    check(
+        "self-contradictory fixture has two distinct expansions",
+        dict(tally["MCP"]["f1"]),
+        {"Model Context Protocol": 1, "Machine Control Protocol": 1},
+    )
+    check("self-contradiction detected", len(tally["MCP"]["f1"]) > 1, True)
+
+    # A CONSISTENTLY fabricated expansion is this harness's documented blind
+    # spot (see `measure_expansion_grounding.py`'s docstring): one expansion
+    # repeated produces no contradiction, so it tallies as a single,
+    # unflagged variant.
+    check(
+        "consistent fixture has one variant",
+        dict(tally["MCP"]["f2"]),
+        {"Model Context Protocol": 1},
+    )
+    check("consistent fixture not flagged", len(tally["MCP"]["f2"]) > 1, False)
+
+    # The error-status outcome must not have leaked a third expansion in.
+    check("error status excluded", len(tally["MCP"]["f1"]), 2)
+
+    for line in failures:
+        print(f"FAIL {line}")
+    print(f"\nself-test: {'FAILED' if failures else 'passed'}")
+    return 1 if failures else 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = sys.argv[1:] if argv is None else argv
+    if "--self-test" in args:
+        return _self_test()
+
     root = pathlib.Path(__file__).resolve().parents[2]
     run_files = sorted((root / "evals").rglob("runs-*.json"))
 
@@ -52,16 +157,15 @@ def main() -> None:
 
     for path in run_files:
         payload = json.loads(path.read_text(encoding="utf-8"))
-        for outcome in payload.get("outcomes", []):
+        outcomes = payload.get("outcomes", [])
+        for outcome in outcomes:
             if outcome.get("status") != "ok":
                 continue
-            fixture = str(outcome["fixture"])
-            runs_by_fixture[fixture] += 1
-            for title in outcome.get("titles", []):
-                for acronym, expansion in ACRONYM_FIRST.findall(title):
-                    seen[acronym][fixture][expansion.strip()] += 1
-                for expansion, acronym in EXPANSION_FIRST.findall(title):
-                    seen[acronym][fixture][expansion.strip()] += 1
+            runs_by_fixture[str(outcome["fixture"])] += 1
+        for acronym, by_fixture in tally_from_outcomes(outcomes).items():
+            for fixture, expansions in by_fixture.items():
+                for expansion, count in expansions.items():
+                    seen[acronym][fixture][expansion] += count
 
     print(f"run files read: {len(run_files)} (no model calls)")
     print("\nsuccessful runs per fixture:")
@@ -85,7 +189,8 @@ def main() -> None:
                 variants.items(), key=lambda item: (-item[1], item[0])
             ):
                 print(f"         x{count}  {expansion}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
