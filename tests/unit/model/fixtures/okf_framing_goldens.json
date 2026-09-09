@@ -1,0 +1,37 @@
+{
+  "crlf_body": {
+    "block": "---\nokf_version: 0.1\n---\n",
+    "body": "Line one\r\nLine two\r\n",
+    "text": "---\nokf_version: 0.1\n---\nLine one\r\nLine two\r\n"
+  },
+  "empty_body": {
+    "block": "---\nokf_version: 0.1\n---\n",
+    "body": "",
+    "text": "---\nokf_version: 0.1\n---\n"
+  },
+  "multiline_frontmatter": {
+    "block": "---\nokf_version: 0.1\nauthor: Jane\ntags: [a, b]\n---\n",
+    "body": "Body.\n",
+    "text": "---\nokf_version: 0.1\nauthor: Jane\ntags: [a, b]\n---\nBody.\n"
+  },
+  "no_trailing_newline": {
+    "block": "---\nokf_version: 0.1\n---\n",
+    "body": "Body without trailing newline",
+    "text": "---\nokf_version: 0.1\n---\nBody without trailing newline"
+  },
+  "non_ascii": {
+    "block": "---\nokf_version: 0.1\n---\n",
+    "body": "Àlgo en español: café, 中文, emoji 🎉\n",
+    "text": "---\nokf_version: 0.1\n---\nÀlgo en español: café, 中文, emoji 🎉\n"
+  },
+  "quoted_okf_version": {
+    "block": "---\nokf_version: '0.1'\n---\n",
+    "body": "Body.\n",
+    "text": "---\nokf_version: '0.1'\n---\nBody.\n"
+  },
+  "triple_dash_in_body": {
+    "block": "---\nokf_version: 0.1\n---\n",
+    "body": "Before\n---\nAfter\n",
+    "text": "---\nokf_version: 0.1\n---\nBefore\n---\nAfter\n"
+  }
+}
