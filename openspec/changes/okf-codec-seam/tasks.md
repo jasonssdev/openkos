@@ -38,13 +38,13 @@ two commits, WU1 first per the ordering constraint below.
 
 ## Phase 2: WU2 — Move and delegate (only after WU1 is committed)
 
-- [ ] 2.1 In `src/openkos/model/okf.py`, add `_FRONTMATTER_RE: Final` and public `split_frontmatter_verbatim(text: str, *, label: str) -> tuple[str, str]` immediately after `load_frontmatter` (currently `:444-447`); `re` is already imported (`okf.py:15`). Raises `ValueError(f"{label}: missing or malformed frontmatter block")`.
-- [ ] 2.2 In `src/openkos/bundle/index.py`, delete the local `_FRONTMATTER_RE` and the body of `_split_frontmatter_verbatim`; replace with `_FRONTMATTER_LABEL = "index.md"` plus a one-line delegation to `okf.split_frontmatter_verbatim(text, label=_FRONTMATTER_LABEL)`. Five call sites (`index.py:168,284,327,396,488`) stay unchanged.
-- [ ] 2.3 In `src/openkos/bundle/source_titles.py`, delete the local `_FRONTMATTER_RE` and the body of `_split_frontmatter_verbatim`; replace with `_FRONTMATTER_LABEL = "Source document"` plus a one-line delegation. The one call site (`source_titles.py:234`) stays unchanged; `_patch_title_line` and its regexes/width constant are untouched.
-- [ ] 2.4 Delete the now-stale docstring paragraph at `source_titles.py:149-153` ("A deliberate separate copy... to avoid cross-module private coupling") — the move makes it false.
-- [ ] 2.5 Add a direct test in `tests/unit/model/test_okf.py`: `label` is required and keyword-only (positional/omitted call is a static `mypy` error; assert the dynamic `TypeError`), and the raised message carries the passed label verbatim.
-- [ ] 2.6 Rerun 1.5's full pin command plus 2.5's new test; confirm all GREEN. Note in the PR: parity now proves label-only equivalence, not implementation — its divergence-detection power was only on the pre-move tree (design D4).
-- [ ] 2.7 Run WU2 verification: `uv run pytest`, `uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy .`, `uv run python evals/run_self_tests.py`. Confirm `grep -rn _FRONTMATTER_RE src/` returns exactly one match. Commit WU2.
+- [x] 2.1 In `src/openkos/model/okf.py`, add `_FRONTMATTER_RE: Final` and public `split_frontmatter_verbatim(text: str, *, label: str) -> tuple[str, str]` immediately after `load_frontmatter` (currently `:444-447`); `re` is already imported (`okf.py:15`). Raises `ValueError(f"{label}: missing or malformed frontmatter block")`.
+- [x] 2.2 In `src/openkos/bundle/index.py`, delete the local `_FRONTMATTER_RE` and the body of `_split_frontmatter_verbatim`; replace with `_FRONTMATTER_LABEL = "index.md"` plus a one-line delegation to `okf.split_frontmatter_verbatim(text, label=_FRONTMATTER_LABEL)`. Five call sites (`index.py:168,284,327,396,488`) stay unchanged.
+- [x] 2.3 In `src/openkos/bundle/source_titles.py`, delete the local `_FRONTMATTER_RE` and the body of `_split_frontmatter_verbatim`; replace with `_FRONTMATTER_LABEL = "Source document"` plus a one-line delegation. The one call site (`source_titles.py:234`) stays unchanged; `_patch_title_line` and its regexes/width constant are untouched.
+- [x] 2.4 Delete the now-stale docstring paragraph at `source_titles.py:149-153` ("A deliberate separate copy... to avoid cross-module private coupling") — the move makes it false.
+- [x] 2.5 Add a direct test in `tests/unit/model/test_okf.py`: `label` is required and keyword-only (positional/omitted call is a static `mypy` error; assert the dynamic `TypeError`), and the raised message carries the passed label verbatim.
+- [x] 2.6 Rerun 1.5's full pin command plus 2.5's new test; confirm all GREEN. Note in the PR: parity now proves label-only equivalence, not implementation — its divergence-detection power was only on the pre-move tree (design D4).
+- [x] 2.7 Run WU2 verification: `uv run pytest`, `uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy .`, `uv run python evals/run_self_tests.py`. Confirm `grep -rn _FRONTMATTER_RE src/` returns exactly one match. Commit WU2.
 
 ## Notes for apply
 

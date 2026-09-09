@@ -447,6 +447,30 @@ def load_frontmatter(text: str) -> tuple[dict[str, object], str]:
     return post.metadata, post.content
 
 
+_FRONTMATTER_RE: Final = re.compile(r"\A---\n.*?\n---\n", re.DOTALL)
+
+
+def split_frontmatter_verbatim(text: str, *, label: str) -> tuple[str, str]:
+    """Split `text` into its frontmatter block (kept byte-for-byte) and
+    body. Never re-parses and re-dumps the block through
+    `dump_frontmatter`/`frontmatter.Post` -- doing so risks reformatting a
+    quoting choice like `okf_version: '0.1'`.
+
+    `label` names the caller for the operator and becomes the refusal's
+    prefix. It is required and keyword-only precisely so a caller cannot
+    slide `text` into its slot, and cannot silently inherit another
+    caller's name for its own failure (okf-codec-seam design D1) -- there
+    is deliberately no default.
+
+    Raises `ValueError(f"{label}: missing or malformed frontmatter block")`
+    if `text` does not start with a `---`-delimited block.
+    """
+    match = _FRONTMATTER_RE.match(text)
+    if match is None:
+        raise ValueError(f"{label}: missing or malformed frontmatter block")
+    return match.group(0), text[match.end() :]
+
+
 def build_source_concept(
     *,
     title: str,

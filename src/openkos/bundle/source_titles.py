@@ -122,8 +122,8 @@ def slugify(stem: str) -> str:
     )
 
 
-_FRONTMATTER_RE = re.compile(r"\A---\n.*?\n---\n", re.DOTALL)
 _TOP_LEVEL_TITLE_RE = re.compile(r"^title:([ \t]*.*)$", re.MULTILINE)
+_FRONTMATTER_LABEL = "Source document"
 
 # #310: `derive_source_title` accepts titles up to `_TITLE_MAX_CHARS` (120),
 # but the emitter's default fold width (~80 columns) would wrap such a value
@@ -145,17 +145,15 @@ class HeadingMismatchError(ValueError):
 
 
 def _split_frontmatter_verbatim(text: str) -> tuple[str, str]:
-    """Split off the frontmatter block byte-for-byte, mirroring
-    `bundle/index.py:_split_frontmatter_verbatim` (`index.py:20-31`,
-    design D2 there): never re-dump it, since that risks reformatting a
-    quoting choice. A deliberate separate copy, not an import, to avoid
-    cross-module private coupling. Raises `ValueError` if `text` lacks a
+    """Split off the frontmatter block byte-for-byte.
+
+    Delegates to `model.okf.split_frontmatter_verbatim` (okf-codec-seam
+    design D2): this wrapper exists to bind this module's own
+    operator-facing label exactly once, keeping it a stable test seam
+    across the move. Raises `ValueError` if `text` lacks a
     `---`-delimited block.
     """
-    match = _FRONTMATTER_RE.match(text)
-    if match is None:
-        raise ValueError("Source document: missing or malformed frontmatter block")
-    return match.group(0), text[match.end() :]
+    return okf.split_frontmatter_verbatim(text, label=_FRONTMATTER_LABEL)
 
 
 def _patch_title_line(block: str, *, current_title: str, new_title: str) -> str:
