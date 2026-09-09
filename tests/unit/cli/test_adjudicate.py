@@ -60,6 +60,20 @@ from tests.unit.vcs.conftest import isolate_git_identity
 
 runner = CliRunner()
 
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _strip_ansi(text: str) -> str:
+    """Drop SGR style codes so an assertion sees the words a user reads.
+
+    Mirrors `tests/unit/test_main.py`'s helper of the same name (kept
+    file-local rather than shared, matching this module's existing
+    convention of standalone helpers). Needed here because click's own
+    `Abort()` message is styled, and raw output is not stable across a
+    local run and a CI run -- the rendered TEXT is.
+    """
+    return _ANSI_RE.sub("", text)
+
 
 def _break_os_walk(monkeypatch: pytest.MonkeyPatch) -> None:
     """Force `okf._walk_errors` to report exactly one directory-scan error,
@@ -3355,6 +3369,13 @@ def test_adjudicate_apply_same_confirm_count_mismatch_aborts_with_zero_writes(
     )
 
     assert result.exit_code == 1
+    # #957: pin the WHOLE abort sentence -- only exit_code and a filesystem
+    # snapshot were checked before, so a reworded abort shipped green
+    # (mirrors `merge`'s `test_non_tty_without_auto_refuses`, #918).
+    assert result.stderr.strip().endswith(
+        "openkos adjudicate --apply-same: aborted -- confirmation count "
+        "did not match exactly; nothing was written."
+    )
     assert _snapshot(tmp_path / "bundle") == before
 
 
@@ -3376,15 +3397,46 @@ def test_adjudicate_apply_same_tty_prompt_exact_count_applies(
     result = runner.invoke(app, ["adjudicate", "--apply-same"], input="1\n")
 
     assert result.exit_code == 0
+    # #957: pin the prompt SENTENCE itself -- nothing in this file asserted
+    # it positively before, so a reworded prompt (still functionally
+    # correct: still reads a line, still gated the same way) shipped
+    # green. Deliberately `in`, not `.strip().endswith(...)` like the
+    # other four pins in this module: `CliRunner`'s `visible_input` echoes
+    # the typed value straight onto stdout right after the prompt, so the
+    # captured line reads "...to proceed: 1" -- `endswith("to proceed")`
+    # cannot match that. Containment is the correct check here, not a
+    # weaker stand-in for it.
+    assert "Type the eligible count (1) to proceed" in result.stdout
     assert not (tmp_path / "bundle" / "concepts" / "b.md").exists()
 
 
-@pytest.mark.parametrize("wrong_input", ["\n", "0\n", "2\n", "yes\n"])
+_APPLY_SAME_ABORT_SENTENCE = (
+    "openkos adjudicate --apply-same: aborted -- confirmation count "
+    "did not match exactly; nothing was written."
+)
+
+
+@pytest.mark.parametrize(
+    ("wrong_input", "expected_trailer"),
+    [
+        # An empty response never reaches `TypedChallengeConfirmation.matches()`:
+        # `click.prompt` treats a falsy value with no `default` as
+        # re-promptable, loops back to read another line, hits EOF against
+        # the single-line `input` fixture, and raises click's OWN `Abort()`
+        # -- so stderr carries click's "Aborted." (ANSI-colored), not our
+        # sentence.
+        ("\n", "Aborted."),
+        ("0\n", _APPLY_SAME_ABORT_SENTENCE),
+        ("2\n", _APPLY_SAME_ABORT_SENTENCE),
+        ("yes\n", _APPLY_SAME_ABORT_SENTENCE),
+    ],
+)
 def test_adjudicate_apply_same_tty_prompt_wrong_input_aborts_with_zero_writes(
     tmp_path: Path,
     tmp_path_factory: pytest.TempPathFactory,
     monkeypatch: pytest.MonkeyPatch,
     wrong_input: str,
+    expected_trailer: str,
 ) -> None:
     """On a TTY, empty/wrong/non-numeric typed input aborts the run with
     ZERO writes and a byte-identical workspace (spec: TTY prompt with empty
@@ -3403,6 +3455,12 @@ def test_adjudicate_apply_same_tty_prompt_wrong_input_aborts_with_zero_writes(
     result = runner.invoke(app, ["adjudicate", "--apply-same"], input=wrong_input)
 
     assert result.exit_code == 1
+    # #957: pin the WHOLE abort trailer for every parametrized input, empty
+    # included -- `expected_trailer` carries which sentence applies (ours,
+    # or click's own "Aborted." for the empty case), so no case is left
+    # unasserted. ANSI is stripped first so this stays stable across color
+    # settings.
+    assert _strip_ansi(result.stderr).strip().endswith(expected_trailer)
     assert _snapshot(tmp_path / "bundle") == before
 
 
@@ -3426,7 +3484,13 @@ def test_adjudicate_apply_same_non_tty_without_confirm_count_refuses(
     result = runner.invoke(app, ["adjudicate", "--apply-same"])
 
     assert result.exit_code == 1
-    assert "TTY" in result.stderr
+    # #957: pin the WHOLE sentence, not just the substring "TTY" -- a
+    # reworded refusal that still mentions "TTY" would pass a loose check
+    # (mirrors `merge`'s `test_non_tty_without_auto_refuses`, #918).
+    assert result.stderr.strip().endswith(
+        "openkos adjudicate --apply-same: refusing to apply -- stdin is "
+        "not a TTY; re-run with --confirm-count."
+    )
     assert _snapshot(tmp_path / "bundle") == before
 
 
