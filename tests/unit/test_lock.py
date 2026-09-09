@@ -22,6 +22,17 @@ import pytest
 
 from openkos import lock
 
+pytestmark = pytest.mark.cross_platform_smoke
+"""Selects this whole module into the reduced macOS/Windows CI job (#929).
+
+Module-level because EVERY test here is exactly the property that job
+exists for: `lock.py` branches on `sys.platform` (`fcntl.flock` vs
+`msvcrt.locking`), and `_release`'s own comment names this repo's Windows
+gap directly -- "this repo has no Windows CI to settle it (#929)". Linux CI
+has run only the `fcntl` branch since #925 landed; the `msvcrt` branch has
+never executed anywhere but a contributor's own machine.
+"""
+
 # A child that acquires the lock, announces it, and then holds it until its
 # stdin closes -- so the parent controls the window with no sleeps and no
 # timing assumptions.
@@ -140,9 +151,38 @@ def test_the_lock_file_stays_empty(tmp_path: Path) -> None:
     refuse a free workspace, and a too-eager cleanup makes it grant a busy one.
     With no content, a `workspace.lock` left behind by a crash is inert, and
     deleting it by hand is never part of recovery.
+
+    `Path.stat().st_size` checks emptiness WHILE the lock is held, rather
+    than `Path.read_bytes()` (#929). What was OBSERVED, in the first Windows
+    CI run this repository ever had, is the traceback below -- note which
+    line raised:
+
+        with self.open(mode='rb') as f:
+    >       return f.read()
+        E   PermissionError: [Errno 13] Permission denied
+
+    The `open()` SUCCEEDED; the read of the locked bytes is what failed.
+    That is consistent with `lock.py`'s Windows branch taking
+    `msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)` -- a one-byte mandatory range
+    lock at offset 0, which Windows honours even against the holding
+    process, and which applies past EOF on an empty file. POSIX's
+    `fcntl.flock` is advisory by contrast, so the owner reads freely and
+    `read_bytes()` here was never testing anything platform-specific.
+
+    Stated as observation plus its most likely cause, deliberately: the
+    traceback is evidence, the `msvcrt` range-lock explanation is inference,
+    and `lock.py`'s locking backend is not part of this candidate. If that
+    inference is ever falsified the choice below still stands on the
+    traceback alone.
+
+    `stat()` reads directory metadata and never reads file content, so it
+    observes size on both platforms without touching the locked range,
+    while still proving what this test is about: nothing is ever written to
+    the file. The stronger byte-exact `read_bytes() == b""` check runs AFTER
+    release below, where reading is unlocked everywhere.
     """
     with lock.workspace_lock(tmp_path) as path:
-        assert path.read_bytes() == b""
+        assert path.stat().st_size == 0
 
     assert lock.lock_path_for(tmp_path).read_bytes() == b""
 

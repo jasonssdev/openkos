@@ -83,12 +83,21 @@ def test_manifest_hash_of_empty_bundle_is_deterministic(tmp_path: Path) -> None:
 # --- open_derived_connection ---------------------------------------------
 
 
+@pytest.mark.cross_platform_smoke
 def test_open_derived_connection_sets_wal_and_busy_timeout_and_creates_meta_table(
     tmp_path: Path,
 ) -> None:
     """The opened connection has `journal_mode=WAL`, a non-zero
     `busy_timeout`, and an idempotent `meta(key, value)` table (reindex-command:
-    WAL mode is active on every derived connection)."""
+    WAL mode is active on every derived connection).
+
+    Marked into the reduced macOS/Windows CI job (#929): WAL relies on
+    shared memory-mapped `-wal`/`-shm` sidecar files, which SQLite's
+    documentation calls out as unreliable over a network filesystem -- a
+    real-world shape for both an SMB-mounted macOS home directory and a
+    Windows network drive. This pins that every derived store still opens
+    in WAL mode on the LOCAL disk both runners actually use; it is not a
+    claim about network-mounted behavior, which stays unverified below."""
     db_path = tmp_path / ".openkos" / "fts.db"
 
     conn = derived.open_derived_connection(db_path)
