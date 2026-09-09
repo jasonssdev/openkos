@@ -61,7 +61,11 @@ from pathlib import Path, PurePosixPath
 from typing import Literal
 
 from openkos import config, fsio
-from openkos.application.consent import BooleanConfirmation, TypedChallengeConfirmation
+from openkos.application.consent import (
+    BooleanConfirmation,
+    TypedChallengeConfirmation,
+    boolean_confirmation,
+)
 from openkos.bundle import decisions as bundle_decisions
 from openkos.bundle import index as bundle_index
 from openkos.bundle import ledger as bundle_ledger
@@ -285,6 +289,13 @@ class PreparedMerge:
     survivor_bytes: bytes
     absorbed_bytes: bytes
     touched_bytes: dict[str, bytes]
+    confirmation: BooleanConfirmation
+    """The `--auto`-bypassable gate `merge`'s adapter drives (#918). Staged
+    here rather than spelled in `cli/main.py` so a non-CLI caller can learn
+    what the gate asks and which flag bypasses it -- the "confirmation
+    contracts expressed as data" #918 names `merge` for by name. The
+    adapter still decides WHETHER to ask (`review`, `--auto`, TTY); this
+    only says what is asked."""
 
 
 @dataclass(frozen=True)
@@ -459,6 +470,7 @@ def prepare_merge(
     sensitivity_after = plan.ledger_entry.sensitivity_after
 
     return PreparedMerge(
+        confirmation=boolean_confirmation("merge"),
         survivor_canonical=survivor_canonical,
         absorbed_canonical=absorbed_canonical,
         plan=plan,
@@ -647,6 +659,10 @@ class PreparedUnmerge:
     log_bytes: bytes
     survivor_bytes: bytes
     rewrite_bytes: dict[str, bytes]
+    confirmation: BooleanConfirmation
+    """`unmerge`'s gate, same shape and same reason as `PreparedMerge`'s
+    (#918). Both unmerge forms -- classic and `--to` -- drive this one
+    request."""
 
 
 @dataclass(frozen=True)
@@ -887,6 +903,7 @@ def prepare_unmerge(
     )
 
     return PreparedUnmerge(
+        confirmation=boolean_confirmation("unmerge"),
         plan=plan,
         new_log_text=new_log_text,
         link_reversed_texts=reversed_texts,
