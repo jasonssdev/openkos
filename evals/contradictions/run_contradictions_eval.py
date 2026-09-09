@@ -30,6 +30,7 @@ Usage:
 
     python evals/contradictions/run_contradictions_eval.py --arm baseline --runs 3
     python evals/contradictions/run_contradictions_eval.py --arm treatment --runs 3
+    python evals/contradictions/run_contradictions_eval.py --self-test
 
 `--arm treatment` swaps `contradiction._SYSTEM_PROMPT` for
 `contradiction_prompts.TREATMENT_SYSTEM_PROMPT` before judging; `baseline` runs the live
@@ -60,7 +61,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 # obvious candidate).
 sys.path.append(str(REPO_ROOT / "evals"))
 
-from contradiction_fixtures import DOCS, PAIRS  # noqa: E402
+from contradiction_fixtures import DOCS, PAIRS, LabelledPair  # noqa: E402
 from contradiction_prompts import TREATMENT_SYSTEM_PROMPT  # noqa: E402
 from harness_report import arm_identity_line  # noqa: E402
 
@@ -105,6 +106,111 @@ def _pair_key(a: str, b: str) -> tuple[str, str]:
     return (a, b) if a <= b else (b, a)
 
 
+def score_pair(
+    labelled: LabelledPair, outcomes: list[tuple[str, float]]
+) -> tuple[dict[str, object], int, list[float], list[float]]:
+    """Score one labelled pair's observed `(verdict, confidence)` outcomes
+    into a report row, plus the correct-count and confidence lists the
+    aggregate metrics need. Pure function -- no client, no I/O -- extracted
+    from `main` so a self-test can prove the accuracy/stability/confidence
+    math without spending an Ollama call.
+
+    Returns `(row, correct, right_confidences, wrong_confidences)` rather
+    than folding the lists into `row`: the row is written verbatim into the
+    stored `runs-*.json`, and adding fields to it would change that file's
+    schema for every stored run.
+    """
+    verdicts = [v for v, _confidence in outcomes]
+    counts = Counter(verdicts)
+    modal, modal_count = counts.most_common(1)[0]
+    stability = modal_count / len(verdicts)
+    correct = sum(1 for v, _confidence in outcomes if v == labelled.expected)
+    right = [c for v, c in outcomes if v == labelled.expected]
+    wrong = [c for v, c in outcomes if v != labelled.expected]
+    row: dict[str, object] = {
+        "source_id": labelled.source_id,
+        "target_id": labelled.target_id,
+        "probe": labelled.probe,
+        "expected": labelled.expected,
+        "modal": modal,
+        "stability": stability,
+        "accuracy": correct / len(verdicts),
+        "outcomes": [[v, c] for v, c in outcomes],
+    }
+    return row, correct, right, wrong
+
+
+def _rate(
+    counter: Counter[str], probes: tuple[str, ...], totals: Counter[str]
+) -> float:
+    """Share of `probes`' pairs that landed in `counter`, against `totals`'
+    denominator for the same classes. `0.0`, never a `ZeroDivisionError`,
+    when no pair of that class was measured -- a report over a partial
+    fixture set must read as "no data" rather than crash."""
+    hits = sum(counter[p] for p in probes)
+    denom = sum(totals[p] for p in probes)
+    return hits / denom if denom else 0.0
+
+
+def _self_test() -> int:
+    """Prove the scoring math with synthetic outcomes -- no Ollama needed."""
+    failures: list[str] = []
+
+    def check(label: str, actual: object, expected: object) -> None:
+        if actual != expected:
+            failures.append(f"{label}: expected {expected!r}, got {actual!r}")
+
+    # `_pair_key` is symmetric no matter which id is passed first -- the
+    # stored per-pair outcomes must land under the same key either way.
+    check("pair_key order a,b", _pair_key("a", "b"), ("a", "b"))
+    check("pair_key order b,a", _pair_key("b", "a"), ("a", "b"))
+
+    pair = LabelledPair(
+        source_id="s", target_id="t", expected="consistent", probe="antonym"
+    )
+    outcomes = [("consistent", 0.9), ("contradicts", 0.4), ("consistent", 0.8)]
+    row, correct, right, wrong = score_pair(pair, outcomes)
+    check("modal verdict", row["modal"], "consistent")
+    check("stability (2 of 3 modal)", row["stability"], 2 / 3)
+    check("accuracy (2 of 3 correct)", row["accuracy"], 2 / 3)
+    check("correct count", correct, 2)
+    check("right confidences", right, [0.9, 0.8])
+    check("wrong confidences", wrong, [0.4])
+    check(
+        "row carries no scoring-internal fields",
+        sorted(row),
+        [
+            "accuracy",
+            "expected",
+            "modal",
+            "outcomes",
+            "probe",
+            "source_id",
+            "stability",
+            "target_id",
+        ],
+    )
+
+    # `_rate`: hits/denom over the SELECTED probe classes only, and 0.0 on
+    # an empty denominator -- the case a silent NaN or ZeroDivisionError
+    # would otherwise crash the report over, instead of reading as "no
+    # antonym pairs were measured."
+    raw = Counter({"antonym": 2, "factual-contradiction": 1})
+    totals = Counter({"antonym": 4, "factual-contradiction": 2})
+    check("antonym FP rate", _rate(raw, ("antonym",), totals), 0.5)
+    check("unmeasured class rate", _rate(raw, ("benefit-limitation",), totals), 0.0)
+    check(
+        "rate sums across multiple probe classes",
+        _rate(raw, ("antonym", "factual-contradiction"), totals),
+        3 / 6,
+    )
+
+    for line in failures:
+        print(f"FAIL {line}")
+    print(f"\nself-test: {'FAILED' if failures else 'passed'}")
+    return 1 if failures else 0
+
+
 def _run_once(
     bundle_dir: pathlib.Path, client: OllamaClient
 ) -> dict[tuple[str, str], tuple[str, float]]:
@@ -120,12 +226,22 @@ def _run_once(
     }
 
 
-def main() -> None:
+def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--arm", choices=["baseline", "treatment"], required=True)
+    parser.add_argument("--arm", choices=["baseline", "treatment"])
     parser.add_argument("--runs", type=int, default=DEFAULT_RUNS)
     parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument(
+        "--self-test",
+        action="store_true",
+        help="Run the synthetic self-test and exit (no Ollama needed).",
+    )
     args = parser.parse_args()
+
+    if args.self_test:
+        return _self_test()
+    if args.arm is None:
+        parser.error("--arm is required unless --self-test is given")
 
     if args.arm == "treatment":
         contradiction_mod._SYSTEM_PROMPT = TREATMENT_SYSTEM_PROMPT
@@ -175,59 +291,37 @@ def main() -> None:
     for labelled in PAIRS:
         key = _pair_key(labelled.source_id, labelled.target_id)
         outcomes = per_pair[key]
-        verdicts = [v for v, _ in outcomes]
         for verdict, confidence in outcomes:
             class_totals[labelled.probe] += 1
             if verdict == "contradicts":
                 class_raw_contradicts[labelled.probe] += 1
                 if confidence >= HIGH_CONFIDENCE:
                     class_hc_contradicts[labelled.probe] += 1
-            if verdict == labelled.expected:
-                correct += 1
-                right_confidences.append(confidence)
-            else:
-                wrong_confidences.append(confidence)
-        counts = Counter(verdicts)
-        modal, modal_count = counts.most_common(1)[0]
-        stability = modal_count / len(verdicts)
-        stabilities.append(stability)
-        rows.append(
-            {
-                "source_id": labelled.source_id,
-                "target_id": labelled.target_id,
-                "probe": labelled.probe,
-                "expected": labelled.expected,
-                "modal": modal,
-                "stability": stability,
-                "accuracy": sum(1 for v in verdicts if v == labelled.expected)
-                / len(verdicts),
-                "outcomes": [[v, c] for v, c in outcomes],
-            }
-        )
+        row, pair_correct, right, wrong = score_pair(labelled, outcomes)
+        correct += pair_correct
+        right_confidences.extend(right)
+        wrong_confidences.extend(wrong)
+        stabilities.append(row["stability"])  # type: ignore[arg-type]
+        rows.append(row)
 
     total = len(PAIRS) * args.runs
     accuracy = correct / total if total else 0.0
     mean_stability = statistics.fmean(stabilities) if stabilities else 0.0
 
-    def _rate(counter: Counter[str], probes: tuple[str, ...]) -> float:
-        hits = sum(counter[p] for p in probes)
-        denom = sum(class_totals[p] for p in probes)
-        return hits / denom if denom else 0.0
-
     tp_probes = ("factual-contradiction", "definitional-contradiction")
-    tp_raw = _rate(class_raw_contradicts, tp_probes)
-    tp_hc = _rate(class_hc_contradicts, tp_probes)
-    fp_raw = _rate(class_raw_contradicts, ("antonym",))
-    fp_hc = _rate(class_hc_contradicts, ("antonym",))
+    tp_raw = _rate(class_raw_contradicts, tp_probes, class_totals)
+    tp_hc = _rate(class_hc_contradicts, tp_probes, class_totals)
+    fp_raw = _rate(class_raw_contradicts, ("antonym",), class_totals)
+    fp_hc = _rate(class_hc_contradicts, ("antonym",), class_totals)
     # #870's classes are reported as their OWN metrics rather than folded
     # into the two above: every stored arm's "TP retention" and "antonym FP
     # rate" keep meaning exactly what they measured, and the new headline
     # number (benefit-limitation FP) stays readable next to its guard
     # (evaluative-contradiction retention) instead of diluting either.
-    bl_fp_raw = _rate(class_raw_contradicts, ("benefit-limitation",))
-    bl_fp_hc = _rate(class_hc_contradicts, ("benefit-limitation",))
-    ec_raw = _rate(class_raw_contradicts, ("evaluative-contradiction",))
-    ec_hc = _rate(class_hc_contradicts, ("evaluative-contradiction",))
+    bl_fp_raw = _rate(class_raw_contradicts, ("benefit-limitation",), class_totals)
+    bl_fp_hc = _rate(class_hc_contradicts, ("benefit-limitation",), class_totals)
+    ec_raw = _rate(class_raw_contradicts, ("evaluative-contradiction",), class_totals)
+    ec_hc = _rate(class_hc_contradicts, ("evaluative-contradiction",), class_totals)
 
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     results_dir = pathlib.Path(__file__).resolve().parent / "results"
@@ -307,7 +401,8 @@ def main() -> None:
     report = "\n".join(lines) + "\n"
     (results_dir / f"contradictions-{slug}.md").write_text(report, encoding="utf-8")
     print(report)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

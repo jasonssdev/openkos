@@ -49,6 +49,14 @@ from pathlib import Path
 EVALS_ROOT = Path(__file__).resolve().parent
 REPO_ROOT = EVALS_ROOT.parent
 
+_EXEMPTIONS_ROOT = Path(__file__).resolve().parent
+"""Where `EXEMPTIONS` paths resolve, frozen at import time -- deliberately
+NOT the module-level `EVALS_ROOT` above. The test suite monkeypatches
+`EVALS_ROOT` to a throwaway sandbox tree per test (see
+`tests/unit/test_eval_self_test_runner.py`), and `EXEMPTIONS` names real
+production files that must resolve correctly regardless of what `EVALS_ROOT`
+currently points at."""
+
 SELF_TEST_FLAG = "--self-test"
 _DECLARATION = re.compile(r"""['"]--self-test['"]""")
 """Discovery marker: the flag as a QUOTED literal, the way an
@@ -56,6 +64,41 @@ _DECLARATION = re.compile(r"""['"]--self-test['"]""")
 prose -- a docstring that merely mentions the flag must not be run as a
 harness -- and either quote character counts, so discovery does not quietly
 depend on the formatter's string-style preference holding forever."""
+
+_ENTRY_POINT = re.compile(r"""if\s+__name__\s*==\s*['"]__main__['"]\s*:""")
+"""Marks a file as a runnable entry point -- the `if __name__ ==
+"__main__":` guard every script under `evals/` writes for itself. This
+accepts either quote character for exactly the reason `_DECLARATION` above
+does: a census of the tree today (`grep -rhn 'if __name__'`) is a fact about
+today, not a guarantee about tomorrow, and this is the OTHER regex
+`check_coverage` holds files accountable against -- applying a stricter
+standard to it than to `_DECLARATION` would reopen the same "green by
+absence" gap #928 was filed to close, just one layer down: a single-quoted
+guard would be silently invisible to the population this scans for, so a
+file spelling it that way could never be flagged as missing a self-test in
+the first place. Whitespace around `==` and before the trailing `:` is
+tolerated too, on the same reasoning: `ruff format` enforces the canonical
+spacing today, and this check must not quietly depend on that holding
+forever any more than it depends on the quote style holding. This is the
+population `check_coverage` below holds accountable -- a `--self-test`
+declaration alone only says which of them opted in."""
+
+EXEMPTIONS: dict[str, str] = {
+    "decision_extraction/scripts/build_sources.py": (
+        "fixture/corpus builder, not a measurement harness -- its own module "
+        "docstring states it plainly: 'it never runs the model and never "
+        "scores anything.' It turns AMI's manual annotations into ingest "
+        "sources and ground-truth files; the harness that scores them "
+        "against production is a separate step (#928)."
+    ),
+}
+"""Every `evals/` `__main__` entry point that declares no `--self-test` MUST
+be named here, with a reason a reader can check. This is the opposite of
+the harness-discovery rule just above -- discovery finds what opted IN,
+this is a closed roster of what deliberately opted OUT -- and the two
+together are what makes "no `--self-test`" a recorded decision rather than
+an accident (#928). An exemption naming a file that no longer exists is
+the same rot in reverse: `check_coverage` fails on that too."""
 
 UNREACHABLE_OLLAMA = "http://127.0.0.1:1"
 """Port 1 is privileged and unbound, so a connection attempt is refused at
@@ -117,6 +160,56 @@ def discover(root: Path) -> list[Path]:
         and _DECLARATION.search(path.read_text(encoding="utf-8", errors="ignore"))
     ]
     return sorted(found)
+
+
+def discover_entry_points(root: Path) -> list[Path]:
+    """Every file under `root` that IS a runnable `__main__` entry point,
+    this module's own source excluded (it is one itself, and it is the
+    thing doing the discovering, not a subject of it)."""
+    me = Path(__file__).resolve()
+    return sorted(
+        path
+        for path in root.rglob("*.py")
+        if path.resolve() != me
+        and _ENTRY_POINT.search(path.read_text(encoding="utf-8", errors="ignore"))
+    )
+
+
+def check_coverage(root: Path) -> list[str]:
+    """Every `__main__` entry point under `root` must be accounted for:
+    swept (declares `--self-test`) or exempted (named in `EXEMPTIONS` with
+    a reason). Returns a problem per file that is neither, plus a problem
+    per exemption naming a file that does not exist.
+
+    This is the guard #928 was filed over: `discover` above finds what
+    opted in, but a harness that opts into NEITHER path was simply
+    invisible to it -- the sweep read 38/38 while five measurement entry
+    points sat outside the count entirely. Without this function, the
+    next unguarded harness is that same invisible again.
+    """
+    problems: list[str] = []
+
+    for relative in EXEMPTIONS:
+        if not (_EXEMPTIONS_ROOT / relative).is_file():
+            problems.append(
+                f"EXEMPTIONS names {relative!r}, which does not exist -- a "
+                "stale exemption is the same rot in reverse: remove the "
+                "entry or restore the file."
+            )
+
+    exempted = {(_EXEMPTIONS_ROOT / relative).resolve() for relative in EXEMPTIONS}
+    swept = {path.resolve() for path in discover(root)}
+    for path in discover_entry_points(root):
+        resolved = path.resolve()
+        if resolved in swept or resolved in exempted:
+            continue
+        problems.append(
+            f"{path.relative_to(root.parent)} is a `__main__` entry point "
+            f"under {root.name}/ but declares no quoted {SELF_TEST_FLAG!r} "
+            "and is not listed in EXEMPTIONS -- give it a self-test, or "
+            "exempt it with a reason."
+        )
+    return problems
 
 
 def _spawn(path: Path, env: dict[str, str]) -> subprocess.Popen[str]:
@@ -231,6 +324,17 @@ def main() -> int:
             "this job is now guarding nothing.",
             file=sys.stderr,
         )
+        return 1
+
+    coverage_problems = check_coverage(EVALS_ROOT)
+    if coverage_problems:
+        print(
+            "FAIL: every __main__ entry point under evals/ must declare "
+            f"{SELF_TEST_FLAG!r} or be named in EXEMPTIONS with a reason:",
+            file=sys.stderr,
+        )
+        for problem in coverage_problems:
+            print(f"  - {problem}", file=sys.stderr)
         return 1
 
     failures: list[tuple[Path, int, str]] = []
