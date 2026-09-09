@@ -680,7 +680,19 @@ def test_purge_non_tty_without_confirm_phrase_refuses(
     result = runner.invoke(app, ["purge", tmp_git_repo.source_id])
 
     assert result.exit_code == 1
-    assert "confirm-phrase" in result.output.lower()
+    # #957: pin the WHOLE sentence, not just the flag token -- a loose
+    # `"confirm-phrase" in ...` cannot tell a reworded refusal from the
+    # shipped one (mirrors `merge`'s `test_non_tty_without_auto_refuses`,
+    # #918). Also deliberately asserted against `result.stderr`, not
+    # `result.output`: `purge` writes this refusal via `typer.echo(...,
+    # err=True)`, so stderr is where a caller actually reads it, and it is
+    # part of the pinned contract just as much as the wording -- a refusal
+    # that silently migrated to stdout would still pass a `result.output`
+    # check but would be a real regression for any script piping stdout.
+    assert result.stderr.strip().endswith(
+        "openkos purge: refusing to purge -- stdin is not a TTY; "
+        "re-run with --confirm-phrase."
+    )
     # No-mutation: refusal at the final rail must leave every file and blob
     # untouched, and never delete/rebuild the derived indexes.
     assert _blob_history_contains(
@@ -1337,24 +1349,46 @@ def test_purge_malformed_resource_warns_not_refuses(
 
 def _prompt_after(
     monkeypatch: pytest.MonkeyPatch, edit: Callable[[], object], *, answer: str
-) -> None:
+) -> Callable[[], None]:
     """`confirm_after`'s analog for `purge`'s rail-6 typed-phrase prompt:
     `purge` confirms via `typer.prompt`, never `typer.confirm`, so the
-    conftest helper cannot reach its window. The stub runs `edit` and then
-    types `answer` (the exact expected phrase) back, so a refusal after it
-    ran is the guard's own, never a mistyped phrase.
+    conftest helper cannot reach its window. The stub runs `edit`
+    unconditionally and then types `answer` (the exact expected phrase)
+    back, so a refusal after it ran is the guard's own, never a mistyped
+    phrase.
 
     The typed phrase makes this window WIDER than any yes/no prompt in
     wall-clock terms -- the operator re-reads the preview and types a whole
     sentence -- which is what makes `purge` the verb where prompt-window
     drift is likeliest, not least (#321).
+
+    #957: every caller passes the EXACT expected phrase as `answer` (that
+    is how the gate is cleared before the injected edit is exercised).
+    Returns a callable the caller invokes AFTER `runner.invoke` returns, to
+    assert the received prompt text against the whole rendered sentence --
+    `Type '<phrase>' to proceed`. Asserting *inside* the stub instead would
+    run under `CliRunner`'s `catch_exceptions=True`, which turns an
+    `AssertionError` into `result.exception` plus a bare `exit_code == 1`
+    -- indistinguishable from the guard's own refusal, and unreadable as a
+    failure message. `edit` firing before `answer` is even inspected means
+    a reworded prompt can never silently skip the injected drift; the
+    wording check only asserts on the way OUT, once the drift scenario has
+    already run.
     """
+    received: list[str] = []
 
     def _prompt(*args: object, **kwargs: object) -> str:
+        text = kwargs["text"] if "text" in kwargs else args[0]
+        received.append(str(text))
         edit()
         return answer
 
     monkeypatch.setattr(typer, "prompt", _prompt)
+
+    def _assert_prompt_text() -> None:
+        assert received == [f"Type '{answer}' to proceed"], received
+
+    return _assert_prompt_text
 
 
 def _cascade_child(tmp_git_repo: TmpGitRepo) -> str:
@@ -1383,7 +1417,7 @@ def test_a_write_target_edited_during_the_prompt_is_refused(
     target_path = tmp_git_repo.root / target
     concurrent = "hand-edited while the phrase was typed\n"
     before = snapshot_with_mtime(tmp_git_repo.root)
-    _prompt_after(
+    assert_prompt = _prompt_after(
         monkeypatch,
         lambda: target_path.write_text(concurrent, encoding="utf-8"),
         answer=f"purge {tmp_git_repo.source_id}",
@@ -1391,6 +1425,7 @@ def test_a_write_target_edited_during_the_prompt_is_refused(
 
     result = runner.invoke(app, ["purge", tmp_git_repo.source_id])
 
+    assert_prompt()
     assert result.exit_code == 3
     assert isinstance(result.exception, SystemExit)
     assert "refusing to write --" in result.stderr
@@ -1415,7 +1450,7 @@ def test_the_root_delete_target_edited_during_the_prompt_is_refused(
     target_path = tmp_git_repo.root / target
     concurrent = "hand-edited while the phrase was typed\n"
     before = snapshot_with_mtime(tmp_git_repo.root)
-    _prompt_after(
+    assert_prompt = _prompt_after(
         monkeypatch,
         lambda: target_path.write_text(concurrent, encoding="utf-8"),
         answer=f"purge {tmp_git_repo.source_id}",
@@ -1423,6 +1458,7 @@ def test_the_root_delete_target_edited_during_the_prompt_is_refused(
 
     result = runner.invoke(app, ["purge", tmp_git_repo.source_id])
 
+    assert_prompt()
     assert result.exit_code == 3
     assert "refusing to write --" in result.stderr
     assert target in result.stderr
@@ -1451,7 +1487,7 @@ def test_a_cascade_delete_target_edited_during_the_prompt_is_refused(
     target_path = tmp_git_repo.root / target
     concurrent = "hand-edited while the phrase was typed\n"
     before = snapshot_with_mtime(tmp_git_repo.root)
-    _prompt_after(
+    assert_prompt = _prompt_after(
         monkeypatch,
         lambda: target_path.write_text(concurrent, encoding="utf-8"),
         answer=f"purge {tmp_git_repo.source_id} (2 concepts)",
@@ -1459,6 +1495,7 @@ def test_a_cascade_delete_target_edited_during_the_prompt_is_refused(
 
     result = runner.invoke(app, ["purge", tmp_git_repo.source_id, "--scope", "source"])
 
+    assert_prompt()
     assert result.exit_code == 3
     assert "refusing to write --" in result.stderr
     assert target in result.stderr
@@ -1479,7 +1516,7 @@ def test_a_delete_target_deleted_during_the_prompt_is_refused(
     _simulate_tty(monkeypatch)
     deleted_path = tmp_git_repo.root / "bundle" / f"{child_id}.md"
     before = snapshot_with_mtime(tmp_git_repo.root)
-    _prompt_after(
+    assert_prompt = _prompt_after(
         monkeypatch,
         deleted_path.unlink,
         answer=f"purge {tmp_git_repo.source_id} (2 concepts)",
@@ -1487,6 +1524,7 @@ def test_a_delete_target_deleted_during_the_prompt_is_refused(
 
     result = runner.invoke(app, ["purge", tmp_git_repo.source_id, "--scope", "source"])
 
+    assert_prompt()
     assert result.exit_code == 3
     assert "refusing to write --" in result.stderr
     assert f"bundle/{child_id}.md" in result.stderr
@@ -1515,7 +1553,7 @@ def test_a_crlf_rewrite_of_a_delete_target_during_the_prompt_is_refused(
     concurrent = target_path.read_bytes().replace(b"\n", b"\r\n")
     assert concurrent != target_path.read_bytes()
     before = snapshot_with_mtime(tmp_git_repo.root)
-    _prompt_after(
+    assert_prompt = _prompt_after(
         monkeypatch,
         lambda: target_path.write_bytes(concurrent),
         answer=f"purge {tmp_git_repo.source_id}",
@@ -1523,6 +1561,7 @@ def test_a_crlf_rewrite_of_a_delete_target_during_the_prompt_is_refused(
 
     result = runner.invoke(app, ["purge", tmp_git_repo.source_id])
 
+    assert_prompt()
     assert result.exit_code == 3
     assert "refusing to write --" in result.stderr
     assert target in result.stderr
