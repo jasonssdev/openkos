@@ -34,13 +34,16 @@ the defect being caught.
 Run from the repository root:
 
     uv run python evals/extraction_collapse/measure_single_object_rate.py
+    uv run python evals/extraction_collapse/measure_single_object_rate.py --self-test
 """
 
 from __future__ import annotations
 
 import json
 import pathlib
+import sys
 from collections import defaultdict
+from collections.abc import Iterable
 
 COLLAPSING = ("TS3005a.transcript", "TS3005b.transcript", "TS3005b.summary")
 """Fixtures #522 records as collapsing. A single object here is the DEFECT,
@@ -64,7 +67,71 @@ read, and it has to be RUN -- the rate here stays blind to the case until
 somebody spends the calls."""
 
 
-def main() -> None:
+def tally_outcomes(
+    cells: dict[tuple[str, str, str], list[int]],
+    harness: str,
+    model: str,
+    outcomes: Iterable[dict[str, object]],
+) -> None:
+    """Accumulate `[ok runs, runs returning exactly one]` per
+    `(harness, model, fixture)`, mutating `cells` in place.
+
+    Pure aside from that mutation -- no file I/O -- so a self-test can
+    prove the `retained == 1` trigger and its two documented no-ops (a
+    non-`ok` status, a `None` retained count) without a single stored run.
+    """
+    for outcome in outcomes:
+        if outcome.get("status") != "ok":
+            continue
+        retained = outcome.get("retained")
+        if retained is None:
+            continue
+        key = (harness, model, str(outcome.get("fixture", "?")))
+        cells[key][0] += 1
+        if retained == 1:
+            cells[key][1] += 1
+
+
+def _self_test() -> int:
+    """Prove the `retained == 1` trigger with synthetic outcomes -- no
+    stored runs, no model."""
+    failures: list[str] = []
+
+    def check(label: str, actual: object, expected: object) -> None:
+        if actual != expected:
+            failures.append(f"{label}: expected {expected!r}, got {actual!r}")
+
+    cells: dict[tuple[str, str, str], list[int]] = defaultdict(lambda: [0, 0])
+    outcomes: list[dict[str, object]] = [
+        {"status": "ok", "retained": 1, "fixture": "a"},
+        {"status": "ok", "retained": 2, "fixture": "a"},
+        {"status": "ok", "retained": 1, "fixture": "b"},
+        # A non-`ok` run must not count toward either the denominator or
+        # the trigger, even when it carries a `retained` count.
+        {"status": "error", "retained": 1, "fixture": "a"},
+        # `retained is None` is a distinct no-op from `retained == 0` -- it
+        # means the harness never reported a count, not that it reported
+        # zero objects, and the docstring's negative-control gap depends on
+        # that distinction staying intact.
+        {"status": "ok", "retained": None, "fixture": "a"},
+    ]
+    tally_outcomes(cells, "h", "m", outcomes)
+
+    check("fixture a: 2 ok runs, 1 single", cells[("h", "m", "a")], [2, 1])
+    check("fixture b: 1 ok run, 1 single", cells[("h", "m", "b")], [1, 1])
+    check("no stray key for an untallied fixture", ("h", "m", "c") in cells, False)
+
+    for line in failures:
+        print(f"FAIL {line}")
+    print(f"\nself-test: {'FAILED' if failures else 'passed'}")
+    return 1 if failures else 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = sys.argv[1:] if argv is None else argv
+    if "--self-test" in args:
+        return _self_test()
+
     root = pathlib.Path(__file__).resolve().parents[2]
     files = sorted((root / "evals").rglob("runs-*.json"))
 
@@ -75,16 +142,7 @@ def main() -> None:
         payload = json.loads(path.read_text(encoding="utf-8"))
         model = str(payload.get("model", "?"))
         harness = path.relative_to(root / "evals").parts[0]
-        for outcome in payload.get("outcomes", []):
-            if outcome.get("status") != "ok":
-                continue
-            retained = outcome.get("retained")
-            if retained is None:
-                continue
-            key = (harness, model, str(outcome.get("fixture", "?")))
-            cells[key][0] += 1
-            if retained == 1:
-                cells[key][1] += 1
+        tally_outcomes(cells, harness, model, payload.get("outcomes", []))
 
     print(f"run files read: {len(files)} (no model calls)\n")
 
@@ -132,7 +190,8 @@ def main() -> None:
     print("THE GAP")
     print("=" * 72)
     print(SINGLE_SUBJECT_UNMEASURED)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

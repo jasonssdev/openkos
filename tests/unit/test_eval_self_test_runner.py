@@ -127,6 +127,51 @@ def test_discovery_finds_the_real_harnesses() -> None:
     assert len(found) >= 25, f"only {len(found)} harness(es) discovered"
 
 
+def test_entry_point_discovery_accepts_either_quote_character(sandbox: Path) -> None:
+    """The regression pin for #928's second corroborated finding: `discover`
+    above tolerates either quote character on `--self-test`, but
+    `_ENTRY_POINT` was holding files to the OTHER standard -- double quotes
+    only, justified by a census of the tree that will not stay true forever.
+    A file spelling its guard with single quotes was silently invisible to
+    `discover_entry_points`, which means `check_coverage` could never flag
+    it as missing a self-test: the exact "unguarded and nobody notices"
+    failure #928 exists to close, one layer down from where #928 found it."""
+    path = sandbox / "p" / "run_p.py"
+    path.parent.mkdir(parents=True)
+    path.write_text("if __name__ == '__main__':\n    pass\n", encoding="utf-8")
+
+    assert [p.name for p in runner.discover_entry_points(sandbox)] == ["run_p.py"]
+
+
+def test_entry_point_discovery_tolerates_whitespace_variation(sandbox: Path) -> None:
+    """Same reasoning as the quote tolerance above, extended to spacing:
+    `ruff format` enforces `if __name__ == "__main__":` today, but this
+    check must not quietly depend on that holding forever any more than it
+    depends on the quote style holding."""
+    path = sandbox / "p" / "run_p.py"
+    path.parent.mkdir(parents=True)
+    path.write_text('if __name__=="__main__":\n    pass\n', encoding="utf-8")
+
+    assert [p.name for p in runner.discover_entry_points(sandbox)] == ["run_p.py"]
+
+
+def test_entry_point_discovery_finds_the_real_population() -> None:
+    """Against the REAL tree, mirroring `test_discovery_finds_the_real_
+    harnesses`'s reasoning: a synthetic-only test proves the runner handles
+    files IT wrote, never that the marker matches how the shipped entry
+    points actually spell their guard. Takes no `sandbox` for the same
+    reason that test does.
+    """
+    found = {
+        path.relative_to(runner.REPO_ROOT).as_posix()
+        for path in runner.discover_entry_points(runner.EVALS_ROOT)
+    }
+
+    assert "evals/generation_ceiling/run_generation_ceiling_probe.py" in found
+    assert "evals/decision_extraction/scripts/run_type_coverage.py" in found
+    assert len(found) >= 25, f"only {len(found)} entry point(s) discovered"
+
+
 def test_discovery_is_sorted(sandbox: Path) -> None:
     """So a failure list reads the same way twice."""
     for name in ("zulu", "alpha", "mike"):
@@ -137,6 +182,73 @@ def test_discovery_is_sorted(sandbox: Path) -> None:
         "mike",
         "zulu",
     ]
+
+
+# --- the coverage guard ------------------------------------------------------
+
+
+def test_coverage_fails_for_an_unexempted_entry_point(
+    sandbox: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The guard #928 was filed over: a `__main__` entry point that declares
+    no `--self-test` and is not named in `EXEMPTIONS` was simply invisible to
+    `discover` -- the sweep read every declared harness as green while this
+    file sat outside the count entirely. `check_coverage` must name it, not
+    just notice something is short.
+
+    `EXEMPTIONS` is cleared first: the real roster is a module-level global
+    unrelated to the sandbox, and leaving it in place would only ever add
+    false accounting for production files that do not exist under `sandbox`
+    -- it would not hide THIS finding, but a cleared roster keeps the
+    assertion about exactly what it claims.
+    """
+    monkeypatch.setattr(runner, "EXEMPTIONS", {})
+    path = sandbox / "orphan" / "run_orphan.py"
+    path.parent.mkdir(parents=True)
+    path.write_text('if __name__ == "__main__":\n    pass\n', encoding="utf-8")
+
+    problems = runner.check_coverage(sandbox)
+
+    assert any("run_orphan.py" in problem for problem in problems)
+
+
+def test_coverage_fails_for_a_stale_exemption(
+    sandbox: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An exemption naming a file that no longer exists is the same rot in
+    reverse: a roster nobody prunes reads as accounted-for while proving
+    nothing about the code that actually ships. `_EXEMPTIONS_ROOT` is frozen
+    at import time to the real `evals/` root, not the sandbox `EVALS_ROOT`
+    the `sandbox` fixture repoints -- see its module docstring -- so it has
+    to be monkeypatched here too, or every relative name would resolve
+    against the real tree instead of this test's throwaway one.
+    """
+    monkeypatch.setattr(runner, "_EXEMPTIONS_ROOT", sandbox)
+    monkeypatch.setattr(runner, "EXEMPTIONS", {"gone/run_gone.py": "no longer exists"})
+
+    problems = runner.check_coverage(sandbox)
+
+    assert any("gone/run_gone.py" in problem for problem in problems)
+
+
+def test_coverage_passes_a_properly_exempted_file(
+    sandbox: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other half of the roster: a file that IS named, WITH a reason,
+    and DOES exist must not be reported. Without this, a fix that made
+    `check_coverage` fail on every exemption -- accidentally exempting
+    nothing -- would pass the two tests above and still be wrong."""
+    monkeypatch.setattr(runner, "_EXEMPTIONS_ROOT", sandbox)
+    path = sandbox / "builder" / "build_sources.py"
+    path.parent.mkdir(parents=True)
+    path.write_text('if __name__ == "__main__":\n    pass\n', encoding="utf-8")
+    monkeypatch.setattr(
+        runner,
+        "EXEMPTIONS",
+        {"builder/build_sources.py": "fixture builder, not a measurement harness"},
+    )
+
+    assert runner.check_coverage(sandbox) == []
 
 
 # --- the verdict ------------------------------------------------------------
