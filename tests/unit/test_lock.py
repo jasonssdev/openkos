@@ -22,6 +22,17 @@ import pytest
 
 from openkos import lock
 
+pytestmark = pytest.mark.cross_platform_smoke
+"""Selects this whole module into the reduced macOS/Windows CI job (#929).
+
+Module-level because EVERY test here is exactly the property that job
+exists for: `lock.py` branches on `sys.platform` (`fcntl.flock` vs
+`msvcrt.locking`), and `_release`'s own comment names this repo's Windows
+gap directly -- "this repo has no Windows CI to settle it (#929)". Linux CI
+has run only the `fcntl` branch since #925 landed; the `msvcrt` branch has
+never executed anywhere but a contributor's own machine.
+"""
+
 # A child that acquires the lock, announces it, and then holds it until its
 # stdin closes -- so the parent controls the window with no sleeps and no
 # timing assumptions.

@@ -522,6 +522,7 @@ def test_autocommit_scope_names_old_and_new_path_and_log(
     }
 
 
+@pytest.mark.cross_platform_smoke
 def test_autocommit_stages_final_paths_for_directory_with_descendant(
     tmp_path: Path,
     tmp_path_factory: pytest.TempPathFactory,
@@ -533,7 +534,11 @@ def test_autocommit_stages_final_paths_for_directory_with_descendant(
     was still decomposed (review R3-001). Deepest-first renames the child
     first; the later ancestor rename carries the child along, so the
     rename-time spelling names a path that no longer exists by the time
-    `_autocommit` stages it."""
+    `_autocommit` stages it.
+
+    Marked into the reduced macOS/Windows CI job (#929): real
+    `os.rename`/`os.listdir` on a nested, non-ASCII rename, unlike this
+    module's darwin-excluded git-porcelain test below."""
     _init_workspace(tmp_path, monkeypatch)
     nfd_menu = unicodedata.normalize("NFD", "menú")
     nfc_menu = unicodedata.normalize("NFC", "menú")
@@ -566,6 +571,7 @@ def test_autocommit_stages_final_paths_for_directory_with_descendant(
     )
 
 
+@pytest.mark.cross_platform_smoke
 @pytest.mark.skipif(sys.platform == "darwin", reason="core.precomposeunicode masks D/A")
 def test_byte_exact_fs_commit_shows_delete_and_add_per_rename(
     tmp_path: Path,
@@ -577,6 +583,12 @@ def test_byte_exact_fs_commit_shows_delete_and_add_per_rename(
     filesystem, the commit records a delete and an add per rename").
     macOS is excluded: `core.precomposeunicode=true` makes git record NFC
     from the start, so there is no D/A to observe (design.md S1 Q7/Q8).
+
+    Marked into the reduced macOS/Windows CI job (#929) precisely BECAUSE
+    it self-excludes on macOS via `skipif`: today it runs only on Linux, so
+    it has never exercised Windows git porcelain. On this job's macOS leg
+    it collects and reports `[SKIP]`, same as it always has; on the
+    Windows leg it runs for the first time anywhere.
 
     The decomposed file is COMMITTED before the run: a D/A pair
     presupposes git tracked the old spelling, which is the realistic

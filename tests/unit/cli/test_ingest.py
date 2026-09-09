@@ -791,6 +791,7 @@ def test_missing_config_refuses_via_ingest(
     assert _snapshot(tmp_path) == before
 
 
+@pytest.mark.cross_platform_smoke
 @pytest.mark.skipif(
     os.name != "posix" or (hasattr(os, "geteuid") and os.geteuid() == 0),
     reason="permission-based write failures require a POSIX non-root user",
@@ -804,6 +805,11 @@ def test_phase_b_write_failure_surfaces_cleanly(
     Stripping write permission from `raw/` (created by `init`, so Phase A's
     checks all pass) forces the very first Phase-B write --
     `copy_exclusive(src, raw/<name>)` -- to raise `PermissionError`.
+
+    Marked into the reduced macOS/Windows CI job (#929): its own `skipif`
+    already confines it to POSIX, so on that job it runs for real only on
+    the macOS leg (`os.name` is `"nt"` on Windows) -- proving the chmod-based
+    refusal on APFS specifically, which Linux CI has never exercised.
     """
     _init_workspace(tmp_path, monkeypatch)
     source = tmp_path / "notes.txt"
