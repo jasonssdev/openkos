@@ -12,23 +12,21 @@ def render_index() -> str:
     return okf.dump_frontmatter({"okf_version": okf.OKF_VERSION})
 
 
-_FRONTMATTER_RE = re.compile(r"\A---\n.*?\n---\n", re.DOTALL)
 _SECTION_SPLIT_RE = re.compile(r"\n(?=# )")
 _SECTION_HEADER_RE = re.compile(r"\A# (.+)\n")
+
+_FRONTMATTER_LABEL = "index.md"
 
 
 def _split_frontmatter_verbatim(text: str) -> tuple[str, str]:
     """Split `text` into its frontmatter block (kept byte-for-byte) and body.
 
-    Never re-parses and re-dumps the frontmatter block through
-    `dump_frontmatter`/`frontmatter.Post` -- doing so risks reformatting a
-    quoting choice like `okf_version: '0.1'` (D2). Raises `ValueError` if
-    `text` does not start with a `---`-delimited block.
+    Delegates to `model.okf.split_frontmatter_verbatim` (okf-codec-seam
+    design D2): this wrapper exists to bind `index.py`'s own operator-facing
+    label exactly once, keeping it a stable test seam and its 5 call sites
+    unchanged across the move.
     """
-    match = _FRONTMATTER_RE.match(text)
-    if match is None:
-        raise ValueError("index.md: missing or malformed frontmatter block")
-    return match.group(0), text[match.end() :]
+    return okf.split_frontmatter_verbatim(text, label=_FRONTMATTER_LABEL)
 
 
 def _section_header(chunk: str) -> str:

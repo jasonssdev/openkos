@@ -3,6 +3,8 @@
 `resolve_source_title_backfill`.
 """
 
+import re
+
 import pytest
 
 from openkos import source_title
@@ -188,10 +190,22 @@ def test_retitle_document_refuses_a_crlf_framed_document() -> None:
     """A CRLF-framed document is REFUSED, not silently normalised. The
     pre-surgery implementation rewrote it by round-tripping every line
     ending to LF; that was a whole-file mutation, so refusing is the
-    fail-closed reading of "exactly two byte-level edits"."""
+    fail-closed reading of "exactly two byte-level edits".
+
+    Widened to the FULL refusal string, prefix included (okf-codec-seam
+    design D4.3): the shared half alone does not distinguish this module's
+    `"Source document:"` prefix from `index.py`'s `"index.md:"` one, and
+    `_split_frontmatter_verbatim`'s wrapper move (WU2) is exactly the kind
+    of edit that could silently reword or swap a prefix while the shared
+    substring still matches. This call goes through `retitle_document`
+    directly, not through `_stage_retitles`'s `except ValueError:`
+    swallowing wrapper, so the raw message is genuinely observed here."""
     text = "---\r\ntitle: Notes\r\n---\r\n\r\n# Notes\r\n\r\nBody.\r\n"
 
-    with pytest.raises(ValueError, match="missing or malformed frontmatter"):
+    with pytest.raises(
+        ValueError,
+        match=re.escape("Source document: missing or malformed frontmatter block"),
+    ):
         source_titles.retitle_document(
             text, current_title="Notes", new_title="New Title"
         )

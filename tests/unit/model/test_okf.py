@@ -6,6 +6,7 @@ else in the engine parses or emits frontmatter.
 """
 
 import os
+import re
 import stat
 import unicodedata
 from collections.abc import Callable, Iterator
@@ -36,6 +37,42 @@ def test_frontmatter_round_trip() -> None:
 
     assert metadata == {"okf_version": "0.1"}
     assert body == ""
+
+
+def test_split_frontmatter_verbatim_splits_a_well_formed_block() -> None:
+    """`split_frontmatter_verbatim` splits `text` into its byte-for-byte
+    frontmatter block and body, mirroring the pre-move private copies'
+    behavior (okf-codec-seam WU2, design D1/D2)."""
+    text = "---\nokf_version: 0.1\n---\nBody.\n"
+
+    block, body = okf.split_frontmatter_verbatim(text, label="test-caller")
+
+    assert block == "---\nokf_version: 0.1\n---\n"
+    assert body == "Body.\n"
+
+
+def test_split_frontmatter_verbatim_requires_label_as_keyword_only() -> None:
+    """`label` is required and keyword-only (design D1): a positional call
+    slides `text` into `label`'s slot instead of silently defaulting, so it
+    is refused by a dynamic `TypeError` at the call site -- `mypy .`
+    (strict, CI-gated) catches the same mistake statically, before any
+    test runs."""
+    with pytest.raises(TypeError):
+        okf.split_frontmatter_verbatim(
+            "---\nokf_version: 0.1\n---\nBody.\n",
+            "bad-call",  # type: ignore[call-arg]
+        )
+
+
+def test_split_frontmatter_verbatim_message_carries_the_passed_label_verbatim() -> None:
+    """The raised `ValueError` carries the CALLER's own `label`, not a
+    hardcoded or another caller's prefix (design D1's "Caller passes a
+    wrong label" row, guarded here rather than by requiredness alone)."""
+    with pytest.raises(
+        ValueError,
+        match=re.escape("My Custom Caller: missing or malformed frontmatter block"),
+    ):
+        okf.split_frontmatter_verbatim("no frontmatter here", label="My Custom Caller")
 
 
 def test_check_conformance_passes_on_valid_frontmatter(tmp_path: Path) -> None:
