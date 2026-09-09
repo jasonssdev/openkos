@@ -3,6 +3,7 @@
 own tables, per-row digest staleness at read time."""
 
 import sqlite3
+from collections.abc import Iterator
 
 import pytest
 
@@ -10,8 +11,24 @@ from openkos.state import adjudications
 
 
 @pytest.fixture
-def conn() -> sqlite3.Connection:
-    return sqlite3.connect(":memory:")
+def conn() -> Iterator[sqlite3.Connection]:
+    """A fresh `:memory:` connection, closed on teardown.
+
+    A bare `return sqlite3.connect(":memory:")` (no `yield`/close) left this
+    fixture's connection to whatever moment SQLite's C-level `tp_dealloc`
+    happened to run -- often much later, once garbage collection reclaimed a
+    reference cycle, which meant the resulting `ResourceWarning: unclosed
+    database` (#927) landed on some LATER, unrelated test rather than the
+    one that actually leaked the connection. Every test in this file gets
+    exactly one connection through this fixture, so closing it here once is
+    what keeps the whole file honest under the sqlite3-scoped
+    `filterwarnings` gate in `pyproject.toml` (#927). That gate is
+    deliberately NOT a blanket `error::ResourceWarning`: see the
+    comment there for why a blanket filter would fail the wrong test.
+    """
+    connection = sqlite3.connect(":memory:")
+    yield connection
+    connection.close()
 
 
 def _adjudication(
