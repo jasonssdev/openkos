@@ -205,31 +205,42 @@ over.
 
 ## WARNING Findings
 
-**WARNING 1 — Confirmation gate is staged as typed data for only 3 of 6 real gates; `merge`/`unmerge`/`adjudicate --apply` keep a hardcoded literal.**
-Neither `PreparedMerge` nor `PreparedUnmerge` carries a `confirmation:
-ConfirmationRequest` field — only a `review: bool` telling the adapter
-*whether* to ask, never *what* to ask. `PreparedUnmerge`'s own docstring
-(application/lifecycle.py:625-630) explicitly says why: "unmerge's gate is
-the SAME hardcoded boolean merge's own gate is... stays inline in the CLI
-adapter exactly as merge's does." `cli/main.py:8856-8864` (merge) and the
-equivalent unmerge/`adjudicate --apply` per-item sites hardcode `"Proceed
-with these changes?"` and the non-TTY refusal text directly, unchanged
-from before this extraction. Design.md's own S1 interface sketch proposed
-`def boolean_confirmation(verb: str, *, prompt: str) -> BooleanConfirmation`
-specifically to give these three gates typed data too; that helper was
-never implemented (confirmed: zero occurrences in `src/`). Only `forget`
-(`BooleanConfirmation`), `purge`, and `adjudicate --apply-same`
-(`TypedChallengeConfirmation`) actually construct a real
-`ConfirmationRequest` instance. This is not a literal violation of
-Requirement 1 or 2's text (which describe the union's shape and existence,
-not universal per-verb adoption), but it is narrower than the Purpose
-paragraph ("Each verb's Phase A... confirmation gate... Phase B... is
-staged as typed data") and the proposal's own framing ("this is where the
-headless-consent debt... lands... the confirmation gate becomes typed data
-a non-TTY adapter can answer") promise. A future `api`/`mcp` adapter
-building a headless `merge`/`unmerge` flow gets no reusable prompt/refusal
-data from the service for those two verbs and must re-invent the literal
-wording itself.
+**WARNING 1 — RESOLVED after this report, by PR #952.**
+
+*As reported:* neither `PreparedMerge` nor `PreparedUnmerge` carried a
+`confirmation` field — only `review: bool`, telling the adapter *whether* to
+ask, never *what* to ask. `design.md`'s own `boolean_confirmation(verb)`
+helper was never implemented (zero occurrences in `src/`). Only `forget`,
+`purge` and `adjudicate --apply-same` constructed a real
+`ConfirmationRequest`. That was not a literal violation of Requirements 1 or
+2 — which describe the union's shape, not universal per-verb adoption — but
+it was narrower than the Purpose paragraph and than issue #918's own
+sentence, which names `merge` explicitly: "forget/purge/**merge** flows,
+including their confirmation contracts expressed as data (so a non-TTY
+adapter can drive them)".
+
+*Resolution:* PR #952 implemented `consent.boolean_confirmation(verb)` and
+added `confirmation` to both `PreparedMerge` and `PreparedUnmerge`. Three
+CLI gates now read it — `merge`'s, `unmerge`'s per-step, and the `--to`
+chain's, the last calling the helper directly because it consents to the
+whole unwind sequence before any step's `prepare_unmerge` runs. All five
+`Prepared*`/`*Plan` types report `confirmation` present. Falsified: mutating
+the refusal sentence once in `consent.py` turns all three CLI gates RED
+together, which is what proves they read one definition rather than
+duplicated literals. `merge`'s non-TTY test, which asserted only
+`"--auto" in result.stderr`, now pins the whole sentence.
+
+*Still open, and deliberately so:* `adjudicate --apply`'s per-item walk
+routes through `curate_module._confirm`'s validating `[y/N]` loop, a
+different mechanism with no bypass flag and no non-TTY refusal arm of its
+own. `consent.py`'s `BooleanConfirmation` docstring already describes the
+`bypass_flag=None, non_tty_refusal=None` shape that gate would take; wiring
+it is follow-on work, not a gap in this change.
+
+*Lesson recorded:* this report returned PASS on 8/8 requirements and was
+correct to. No requirement demanded per-verb adoption. A spec that passes is
+not the same as a goal that is met, and the Purpose paragraph and the issue
+text are part of the contract a verification should read.
 
 **WARNING 2 — Design.md's "forbids aliasing any relocated callable" is broader than what shipped; 9 aliases exist, unguarded.**
 `cli/main.py:3732-3740` binds 9 relocated callables back onto `main` under
@@ -313,7 +324,7 @@ corresponding commits exist and are merged, verified via `git log
 - [x] `ConfirmationRequest` is a tagged union with boolean + typed-challenge variants; no hard refusal representable — confirmed.
 - [x] ~443 existing tests pass; output-text assertions unmodified — confirmed (6070 passed overall; spot-checked diffs on touched test files).
 - [x] Byte-identical stdout/stderr/exit codes for equivalent inputs, incl. non-TTY refusal — confirmed for behavior; wording-exactness for 6 specific strings is untested both before and after (see disclosure above).
-- [x] A caller outside `openkos.cli` can run each of the five flows without importing `openkos.cli` — confirmed for Phase A/B calls; for merge/unmerge/adjudicate --apply, the caller must supply its own confirmation wording (WARNING 1).
+- [x] A caller outside `openkos.cli` can run each of the five flows without importing `openkos.cli` — confirmed for Phase A/B calls, and (after PR #952) for every verb's confirmation wording too; `adjudicate --apply`'s per-item `[y/N]` walk remains follow-on work (WARNING 1).
 - [x] `_reject_drifted_targets`/`_autocommit`/`_refresh_derived_after_write`/`_echo_commit_disclosure` each retain exactly one definition, adapter-side — confirmed by direct grep (WARNING 3: only 3 of 4 are guarded by an automated test).
 - [x] `relate`, `set_volatility_cmd`, `reconcile` bodies unchanged — confirmed via `git diff` (no `-`/`+` lines inside their bodies).
 - [x] `ruff check .`, `ruff format --check .`, `mypy .`, `pytest` green; coverage ≥90% — confirmed, all green, 96.99% total.
@@ -323,7 +334,25 @@ corresponding commits exist and are merged, verified via `git log
 
 **PASS WITH WARNINGS** — 8/8 requirements verified against shipped code and
 passing tests; 0 CRITICAL; 4 WARNING; 6 pre-existing test-assertion gaps
-disclosed (SUGGESTION-level, not blocking). Recommend fixing WARNING 4
-(tick the checkboxes) before archive as a trivial cleanup, and considering
-WARNING 1/2/3 as fast-follow hardening (not blocking archive, since none
-represents a functional regression or a requirement-text violation).
+disclosed (SUGGESTION-level, not blocking).
+
+**Post-report status, recorded before archive:**
+
+- **WARNING 1 — RESOLVED** by PR #952 (`b88bbb9`). It was the one finding
+  that touched #918's own stated goal rather than a spec requirement, so it
+  was closed before archiving rather than deferred. `adjudicate --apply`'s
+  per-item `[y/N]` walk stays follow-on.
+- **WARNING 4 — RESOLVED**: `tasks.md`'s commit checkboxes and
+  `proposal.md`'s Success Criteria are ticked.
+- **WARNING 2 and 3 remain open** and are filed as follow-up issues: 9
+  relocated callables aliased back onto `cli.main` with no absence guard,
+  and `_echo_commit_disclosure` missing from the single-definition fork
+  guard. Neither is a functional regression; both are guards that would not
+  catch a future regression they are meant to.
+- The 6 test-assertion gaps also remain, filed together: they make specific
+  TTY/typed-gate wording for `purge` and `adjudicate --apply-same`
+  unverifiable by any test in the repository, before or after this change.
+
+Archiving with WARNING 2/3 and the assertion gaps open is deliberate: none
+is caused by this change, and each is a hardening task with its own issue
+rather than something this change left half-done.

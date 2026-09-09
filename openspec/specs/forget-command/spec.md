@@ -4,8 +4,12 @@
 
 `openkos forget <concept-id>` is the missing removal counterpart to
 `ingest`: it deletes a concept file and removes that concept's reference
-from `index.md`, across any section, using the same Phase A (validate +
-preview) / confirm-gate / Phase B (write) shape as `ingest`.
+from `index.md`, across any section. `forget` itself owns argument parsing,
+workspace and configuration setup, the confirmation gate (TTY detection and
+the non-TTY refusal), rendering the preview and refusal messages, and the
+catalog (`index.md`) write via the shared write helpers; the Phase A
+(validate + preview) / confirm-gate / Phase B (write) composition itself is
+delegated to the lifecycle application service, mirroring `ingest`'s shape.
 
 ## Non-Goals
 

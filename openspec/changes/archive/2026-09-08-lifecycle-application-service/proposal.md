@@ -157,21 +157,21 @@ relocated verbs and `cli/main.py` holding the rest, both functional.
 
 ## Success criteria
 
-- [ ] `src/openkos/application/lifecycle.py` references zero of `typer`, `rich`,
+- [x] `src/openkos/application/lifecycle.py` references zero of `typer`, `rich`,
       `openkos.cli`, and never calls `sys.stdin.isatty()`; guarded by
       `tests/unit/application/test_layering.py`.
-- [ ] `ConfirmationRequest` is a tagged union with both a boolean and a
+- [x] `ConfirmationRequest` is a tagged union with both a boolean and a
       typed-count variant; no hard refusal gate is representable as a confirmation.
-- [ ] All ~443 existing CLI/unit tests across the five verbs pass; output-text
+- [x] All ~443 existing CLI/unit tests across the five verbs pass; output-text
       assertions are unmodified (slice 6 changes patch targets only).
-- [ ] `merge`, `unmerge`, `forget`, `purge`, `adjudicate --apply/--apply-same`
+- [x] `merge`, `unmerge`, `forget`, `purge`, `adjudicate --apply/--apply-same`
       produce byte-identical stdout, stderr and exit codes for equivalent inputs,
       including the non-TTY refusal path.
-- [ ] A caller outside `openkos.cli` can run each of the five flows without
+- [x] A caller outside `openkos.cli` can run each of the five flows without
       importing anything from `openkos.cli`.
-- [ ] `_reject_drifted_targets`, `_autocommit`, `_refresh_derived_after_write`,
+- [x] `_reject_drifted_targets`, `_autocommit`, `_refresh_derived_after_write`,
       `_echo_commit_disclosure` each retain exactly one definition, all adapter-side.
-- [ ] `relate`, `set_volatility_cmd` and `reconcile` bodies are unchanged.
-- [ ] `uv run pytest`, `ruff check .`, `ruff format --check .`, `mypy .` green;
+- [x] `relate`, `set_volatility_cmd` and `reconcile` bodies are unchanged.
+- [x] `uv run pytest`, `ruff check .`, `ruff format --check .`, `mypy .` green;
       branch coverage stays above the 90% gate.
-- [ ] Every commit uses `Refs #918`.
+- [x] Every commit uses `Refs #918`.
