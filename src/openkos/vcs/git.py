@@ -347,6 +347,19 @@ def _run(
             env=dict(env) if env is not None else None,
             capture_output=True,
             text=True,
+            # `encoding="utf-8"` MUST be explicit (#929). `text=True` alone
+            # decodes with `locale.getpreferredencoding(False)`, which is
+            # UTF-8 on Linux/macOS CI but NOT guaranteed on Windows -- a
+            # default Windows runner decodes as cp1252 instead. cp1252 maps
+            # almost every byte value to *some* character, so the common
+            # case is not the `UnicodeDecodeError` this function's `except`
+            # clause below exists to catch -- it is SILENT MOJIBAKE: a
+            # UTF-8-encoded filename in git's output comes back as the
+            # wrong string with no error at all. For a module whose entire
+            # subject is byte-exact NFC/NFD filename handling, that is a
+            # correctness bug, not a cosmetic one. Pinning the encoding
+            # here also makes the error message below actually true.
+            encoding="utf-8",
             check=False,
         )
     except FileNotFoundError as exc:
@@ -357,12 +370,13 @@ def _run(
         # error -- never let a raw OSError escape the adapter's contract.
         raise GitError(f"failed to invoke {argv[0]}: {exc}") from exc
     except UnicodeDecodeError as exc:
-        # `text=True` decodes stdout/stderr as UTF-8 -- non-UTF-8 bytes in
-        # git's output raise `UnicodeDecodeError`, a `ValueError` subclass,
-        # NOT an `OSError`. Left unmapped, it would escape every caller's
-        # `except (GitError, OSError)` handling (e.g. `init`'s git-setup
-        # block) and crash as an uncaught traceback. Map it the same way as
-        # every other `_run` failure mode: a typed `GitError`.
+        # `encoding="utf-8"` above decodes stdout/stderr as UTF-8 -- non-
+        # UTF-8 bytes in git's output raise `UnicodeDecodeError`, a
+        # `ValueError` subclass, NOT an `OSError`. Left unmapped, it would
+        # escape every caller's `except (GitError, OSError)` handling (e.g.
+        # `init`'s git-setup block) and crash as an uncaught traceback. Map
+        # it the same way as every other `_run` failure mode: a typed
+        # `GitError`.
         raise GitError(
             f"{argv[0]} produced output that could not be decoded as UTF-8: {exc}"
         ) from exc

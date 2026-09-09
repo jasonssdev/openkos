@@ -1179,6 +1179,7 @@ def test_log_dated_section_uses_local_date_not_utc(
     assert f"## {expected_local_date.isoformat()}" in log_text
 
 
+@pytest.mark.cross_platform_smoke
 @pytest.mark.skipif(
     os.name != "posix" or (hasattr(os, "geteuid") and os.geteuid() == 0),
     reason="permission-based read failures require a POSIX non-root user",
@@ -1187,6 +1188,10 @@ def test_phase_a_read_failure_surfaces_cleanly(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """An unreadable pre-existing `raw/` exits cleanly instead of a raw traceback.
+
+    Marked into the reduced macOS/Windows CI job (#929), same reasoning as
+    `test_write_failure_surfaces_cleanly` below: its own `skipif` confines
+    it to the macOS leg, proving a chmod-000 refusal on APFS.
 
     `config.refusal_reason` (Phase A) calls `_non_empty_dir`, which calls
     `Path.iterdir()` -- an `OSError` (e.g. `PermissionError` on a mode-000
@@ -1235,6 +1240,7 @@ def test_corrupt_template_surfaces_cleanly(
     assert not (tmp_path / "openkos.yaml").exists()
 
 
+@pytest.mark.cross_platform_smoke
 @pytest.mark.skipif(
     os.name != "posix" or (hasattr(os, "geteuid") and os.geteuid() == 0),
     reason="permission-based write failures require a POSIX non-root user",
@@ -1243,6 +1249,10 @@ def test_write_failure_surfaces_cleanly(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A Phase-B write failure exits non-zero with a clear message, no traceback (requirement 4).
+
+    Marked into the reduced macOS/Windows CI job (#929): its `skipif`
+    already confines it to POSIX, so this runs for real only on the macOS
+    leg, proving the chmod-based refusal on APFS -- untested by Linux CI.
 
     Pre-flight (Phase A) only reads, so it passes on an empty, writable
     directory. Stripping write permission from `tmp_path` itself, after

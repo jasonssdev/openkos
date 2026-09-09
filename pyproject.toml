@@ -103,6 +103,17 @@ markers = [
     # gate themselves on a reachability probe -- not an escape hatch for a
     # unit test that is merely inconvenient to stub.
     "live_backend: test deliberately reaches a live Ollama backend",
+    # Selects the REDUCED subset CI runs on macos-latest/windows-latest
+    # (#929): CI's `test` job runs the full suite on Linux only, so this
+    # marks the small, deliberately-cross-platform slice -- filesystem
+    # normalization, symlink/permission refusals, the workspace lock's
+    # `fcntl`/`msvcrt` branches, SQLite WAL PRAGMAs, and init/ingest/doctor
+    # against the packaged wheel -- that exercises what Linux alone cannot.
+    # Not an escape hatch for slow or flaky tests: platform-gated tests that
+    # first ran on Linux cost two fix cycles on PR #492, and HFS+/SMB
+    # normalization differences produced real graph-edge bugs (#430); this
+    # marker exists to stop paying that bill twice, not to grow unbounded.
+    "cross_platform_smoke: reduced macOS/Windows CI subset (#929)",
 ]
 # Promotes an unclosed `sqlite3.Connection`'s `ResourceWarning` to an error
 # (#927: a 2026-08-31 audit found 25, all left by test code that opened a

@@ -97,7 +97,14 @@ jobs:
       # ([tool.coverage.report] fail_under). The flag stays out of pytest's
       # addopts so plain local runs stay fast, and a local `uv run pytest --cov`
       # gates identically to this step.
+      # This job collects `tests/smoke/` too, as part of the full suite, and
+      # runs it against the EDITABLE install -- so it declares that, the
+      # same way the cross-platform smoke job declares the wheel. Both
+      # directions are asserted, which is what stops the provenance check
+      # from being satisfiable by doing nothing.
       - name: Run tests with coverage
+        env:
+          OPENKOS_SMOKE_EXPECT_WHEEL: "0"
         run: uv run pytest --cov
 
   # The eval harnesses carry their own `--self-test` entry points, and until
@@ -221,3 +228,109 @@ jobs:
           test -f bundle/log.md
           test -f openkos.yaml
           test -f AGENTS.md
+
+  # Every job above runs on `ubuntu-latest` only. macOS and Windows behavior
+  # is otherwise UNVERIFIED until a user hits it, and this repo has already
+  # paid for that twice: platform-gated tests that first ran on Linux cost
+  # two fix cycles on PR #492, and HFS+/SMB normalization differences
+  # produced real graph-edge bugs (#430). A full suite times three
+  # platforms on every PR is not warranted -- most of the suite exercises
+  # platform-independent logic Linux already covers -- but zero
+  # cross-platform signal is not acceptable either. This runs a REDUCED,
+  # explicitly marked subset instead (`-m cross_platform_smoke`, defined in
+  # `pyproject.toml`) that targets what Linux structurally cannot:
+  # filesystem normalization, symlink/permission privilege boundaries, the
+  # workspace lock's `fcntl`/`msvcrt` branches, SQLite WAL behavior, and
+  # `init`/`ingest`/`doctor` against the packaged wheel.
+  #
+  # No path filter here either, for the same reason the top of this file
+  # gives for the whole workflow: a job skipped by a path filter reports no
+  # status at all, and a required check that never reports blocks a pull
+  # request indefinitely. The subset is deliberately kept small (currently
+  # ~30 tests, single-digit seconds) specifically so that running it on
+  # EVERY pull request, unconditionally, stays cheap -- the same tradeoff
+  # the top-of-file comment makes, applied at job scope instead of workflow
+  # scope. Growing this marker into a second full suite would break that
+  # tradeoff; see the marker's own registration comment in pyproject.toml.
+  cross-platform-smoke:
+    name: cross-platform smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      # Report both platforms even when one fails -- same reasoning as the
+      # `test` job's own matrix: a Windows-only red must never hide behind
+      # a cancelled macOS run, or vice versa.
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      # Dev dependencies (pytest, typer's test client, ...) plus an
+      # EDITABLE `openkos` -- overwritten by the packaged wheel below.
+      # Installing them first, separately, is what lets the wheel step
+      # stay a plain single-package `uv pip install` rather than having to
+      # reassemble the whole test-dependency set around an isolated wheel
+      # install.
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Build the wheel
+        run: uv build
+
+      # Overwrites the editable `openkos` with the WHEEL `uv build` just
+      # produced, in the SAME environment pytest runs in below --
+      # `--reinstall-package` touches only that one package, leaving
+      # pytest/typer/etc. from the `uv sync` above untouched. This is the
+      # "install the built wheel" this job exists to prove: every test
+      # below now imports the packaged distribution, not the checkout --
+      # the same concern the Linux `build` job's own wheel/init smoke
+      # steps exist for, extended here to macOS/Windows packaging.
+      #
+      # `shell: bash` is explicit (Windows runners default to PowerShell,
+      # which does not understand this syntax) -- the nullglob/array guard
+      # mirrors the `build` job's own wheel-smoke-test step above, for the
+      # same reason: an unquoted glob against a stale second wheel would
+      # expand to two arguments and fail with an unrelated-looking error.
+      - name: Install the built wheel over the editable dev install
+        shell: bash
+        run: |
+          shopt -s nullglob
+          wheels=(dist/openkos-*.whl)
+          test "${#wheels[@]}" -eq 1 || {
+            echo "cross-platform smoke: expected exactly one wheel, found ${wheels[*]}" >&2
+            exit 1
+          }
+          uv pip install --reinstall-package openkos "${wheels[0]}"
+
+      # `uv run` resyncs the project environment against `pyproject.toml`
+      # before every invocation by default -- which would silently
+      # reinstall the EDITABLE `openkos` over the wheel the previous step
+      # just installed, undoing it without printing an error. `--no-sync`
+      # is what makes the wheel install actually stick for this run
+      # (confirmed empirically while writing this job: omitting the flag
+      # reverts to the editable install before pytest even starts
+      # collecting, silently).
+      #
+      # `-m cross_platform_smoke` selects the marked subset; pytest itself
+      # is the guard against a false green here -- deselecting every test
+      # (a typo'd marker name, or a future change that strips the last
+      # marked test) makes pytest report "no tests collected" and exit 5,
+      # not 0, so an empty subset FAILS this step rather than passing
+      # having run nothing.
+      # `OPENKOS_SMOKE_EXPECT_WHEEL=1` is what makes the wheel install above
+      # self-verifying instead of load-bearing-but-unasserted: without it
+      # every test in `tests/smoke/` would still pass against the editable
+      # checkout if `--no-sync`, the reinstall, or the build regressed, and
+      # this job would report green having proved nothing about packaging.
+      # An unset declaration is a hard FAILURE under CI, never a skip --
+      # see `test_the_openkos_under_test_is_the_declared_install`.
+      - name: Cross-platform smoke subset
+        shell: bash
+        env:
+          OPENKOS_SMOKE_EXPECT_WHEEL: "1"
+        run: uv run --no-sync pytest -m cross_platform_smoke -v

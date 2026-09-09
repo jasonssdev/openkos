@@ -31,11 +31,19 @@ NFD_CAFE = unicodedata.normalize("NFD", "café")
 NFC_CAFE = unicodedata.normalize("NFC", "café")
 
 
+@pytest.mark.cross_platform_smoke
 def test_happy_path_reaches_byte_exact_nfc_listing(tmp_path: Path) -> None:
     """A successful two-step rename leaves the parent directory listing
     containing the NFC target name byte-exactly, and neither the raw nor
     any temporary name (spec: "A successful rename passes through a
-    temporary sibling")."""
+    temporary sibling").
+
+    Marked into the reduced macOS/Windows CI job (#929): this is the
+    general, REAL filesystem exercise of the primitive (no injected
+    failure), so it is the one test in this module worth paying for on
+    every platform -- its darwin-only sibling below covers the platform
+    APFS pin specifically, and the remaining tests here are all injected
+    failure-path logic that does not vary by platform."""
     src = tmp_path / f"{NFD_CAFE}.md"
     src.write_text("body\n", encoding="utf-8")
 
@@ -49,6 +57,7 @@ def test_happy_path_reaches_byte_exact_nfc_listing(tmp_path: Path) -> None:
     assert result.read_text(encoding="utf-8") == "body\n"
 
 
+@pytest.mark.cross_platform_smoke
 @pytest.mark.skipif(sys.platform != "darwin", reason="real APFS byte-exact behavior")
 def test_real_apfs_listing_holds_the_byte_exact_nfc_name(tmp_path: Path) -> None:
     """On a REAL APFS volume (unpatched `os.rename`/`os.listdir`), the

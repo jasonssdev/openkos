@@ -1010,11 +1010,12 @@ def test_run_maps_permission_error_to_git_error(
 def test_run_maps_unicode_decode_error_to_git_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`subprocess.run(..., text=True)` decodes stdout/stderr and raises
-    `UnicodeDecodeError` when git emits non-UTF-8 bytes -- a `ValueError`,
-    NOT an `OSError`, so it escapes `_run`'s existing `FileNotFoundError`/
-    `OSError` mapping and propagates as a raw, uncaught exception. Must map
-    to `GitError`, consistent with every other `_run` failure mode."""
+    """`subprocess.run(..., text=True, encoding="utf-8")` decodes stdout/
+    stderr and raises `UnicodeDecodeError` when git emits non-UTF-8 bytes --
+    a `ValueError`, NOT an `OSError`, so it escapes `_run`'s existing
+    `FileNotFoundError`/`OSError` mapping and propagates as a raw, uncaught
+    exception. Must map to `GitError`, consistent with every other `_run`
+    failure mode."""
 
     def _raise_decode_error(*_args: object, **_kwargs: object) -> None:
         raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
@@ -1024,6 +1025,47 @@ def test_run_maps_unicode_decode_error_to_git_error(
     with pytest.raises(git.GitError) as exc_info:
         git._run(["git", "status"], cwd=tmp_path)
     assert not isinstance(exc_info.value, UnicodeDecodeError)
+
+
+# --- #929 (Windows CI, BLOCKER): decoding must not depend on the runner's --
+# --- locale -------------------------------------------------------------
+
+
+def test_run_passes_explicit_utf8_encoding_to_subprocess_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pins the actual fix for #929's Windows CI failure.
+
+    Without an explicit `encoding=`, `text=True` decodes stdout/stderr with
+    `locale.getpreferredencoding(False)` -- UTF-8 on Linux/macOS CI, but
+    cp1252 on a default Windows runner. The FIRST Windows CI run raised
+    `UnicodeDecodeError` on a lucky byte, but cp1252 maps almost every byte
+    to SOME character, so the general case is not an exception at all --
+    it is silent mojibake: a UTF-8-encoded filename in git's output comes
+    back as the wrong string with no error. This repo's whole subject is
+    byte-exact NFC/NFD filename handling, so that would be silently wrong
+    on every platform whose locale is not already UTF-8.
+
+    This test asserts the passed `encoding=` kwarg directly, rather than
+    depending on an actual non-UTF-8-locale process, so it catches a
+    regression on Linux and macOS CI too -- the only two legs this repo
+    runs on most of the time. A test that could only fail on Windows would
+    leave this unguarded everywhere else.
+    """
+    captured_kwargs: dict[str, object] = {}
+
+    def _capture_and_return(
+        *_args: object, **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        captured_kwargs.update(kwargs)
+        return subprocess.CompletedProcess(["git", "status"], 0, "", "")
+
+    monkeypatch.setattr(subprocess, "run", _capture_and_return)
+
+    git._run(["git", "status"], cwd=tmp_path)
+
+    assert captured_kwargs["text"] is True
+    assert captured_kwargs["encoding"] == "utf-8"
 
 
 # --- FIX 5 (WARNING): repo_root must not swallow non-"not a repo" errors --

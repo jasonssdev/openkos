@@ -29,6 +29,36 @@ from tests.unit.cli.conftest import commit_pending_fixture_docs
 
 runner = CliRunner()
 
+pytestmark = pytest.mark.cross_platform_smoke
+"""Selects this whole module into the reduced macOS/Windows CI job (#929):
+symlink escape is exactly the class of bug HFS+/SMB normalization
+differences already produced once for real (#430), and Windows resolves
+symlinks through an entirely different mechanism (reparse points) that
+Linux CI has never exercised against this boundary.
+"""
+
+
+@pytest.fixture(autouse=True)
+def _skip_if_symlinks_unsupported(tmp_path: Path) -> None:
+    """Creating a symlink on Windows needs `SeCreateSymbolicLinkPrivilege`
+    -- granted by Developer Mode or an elevated process, neither guaranteed
+    on a given `windows-latest` runner image. Probe the REAL capability
+    here rather than gating on `sys.platform`: a blanket per-OS skip would
+    hide a genuine regression the day a runner image DOES grant the
+    privilege, and an unguarded `symlink_to` failing partway through a
+    test's setup would surface as an opaque `PermissionError` indistinguishable
+    from the refusal these tests exist to prove. Skip loudly, with the
+    reason, instead of either extreme (#929)."""
+    probe = tmp_path / ".cross-platform-smoke-symlink-probe"
+    probe_target = tmp_path / ".cross-platform-smoke-symlink-probe-target"
+    probe_target.write_text("x", encoding="utf-8")
+    try:
+        probe.symlink_to(probe_target)
+    except OSError as exc:
+        pytest.skip(f"symlink privilege unavailable on this runner: {exc}")
+    else:
+        probe.unlink()
+
 
 def _init_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
