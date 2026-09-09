@@ -65,11 +65,51 @@ tests pin empirical properties of the real embedding backend and already
 gate themselves on a reachability probe. They are assumption pins, not unit
 tests, and blanket-banning sockets would break them for a reason unrelated
 to what they measure.
+
+## Unclosed `sqlite3.Connection` gate (#927)
+
+A 2026-08-31 full-suite audit found 25 unclosed `sqlite3.Connection`
+objects, all left behind by test code (never production code) that opened
+a connection or an `FtsIndex`/`VectorStoreDB` handle and never closed it.
+`pyproject.toml`'s `filterwarnings` promotes the resulting `ResourceWarning:
+unclosed database in <sqlite3.Connection ...>` to an error, scoped to that
+exact message so it does not also gate the unrelated file-descriptor
+`ResourceWarning`s `test_lock.py`/`test_main.py` already carry (out of
+scope here; #938 covers those separately).
+
+That alone is not enough. SQLite's C-level `tp_dealloc` -- which is what
+actually emits the warning -- runs whenever the connection's refcount hits
+zero: immediately, for a connection with no other referrers, but only at
+CPython's NEXT cyclic-garbage-collection pass for one caught in a
+reference cycle (an exception traceback, a bound method, a closure --
+anything that references back to the connection). Left to Python's own
+generational thresholds, that pass can land arbitrarily many tests later,
+so a plain `filterwarnings = ["error::ResourceWarning"]` would fail
+whatever test happened to be running when the threshold tripped, not the
+test that actually leaked the connection -- confirmed empirically while
+measuring #927's original 25 leaks, several of which attributed to
+entirely unrelated tests under `-W always::ResourceWarning` alone.
+
+`_reclaim_cyclic_garbage_for_deterministic_leak_attribution` below narrows
+that gap -- it does not close it. Forcing a generation-0 collection in every
+test's OWN teardown reclaims a cycle created and dropped within that test
+before its phase ends, so the resulting `ResourceWarning`-turned-error
+surfaces (via `PytestUnraisableExceptionWarning` and
+`_pytest.unraisableexception`'s per-item `collect_unraisable`, which drains
+at `pytest_runtest_setup`/`call`/`teardown` for every item) against the test
+that actually leaked. One shape stays misattributed even so -- a connection
+returned rather than yielded from a `@pytest.fixture` -- and a full
+`gc.collect()` does not recover it either. That fixture's docstring carries
+the measurement and what to look for when the blame lands somewhere odd.
+
+Either way the SUITE goes red, which is the guarantee this gate exists for;
+attribution is how quickly you find the culprit, not whether you are told.
 """
 
+import gc
 import socket
 import sqlite3
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from typing import Any
 
 import pytest
@@ -253,6 +293,65 @@ def _no_network_by_default(
         )
     for function in BLOCKED_SOCKET_FUNCTIONS:
         monkeypatch.setattr(socket, function, _refusal(request, function, bound=False))
+
+
+@pytest.fixture(autouse=True)
+def _reclaim_cyclic_garbage_for_deterministic_leak_attribution() -> Iterator[None]:
+    """Collect generation 0 after every test -- see the module docstring's
+    "Unclosed `sqlite3.Connection` gate (#927)" section for why this is
+    what makes `filterwarnings`'s promoted `ResourceWarning` attribute to
+    the RIGHT test instead of an arbitrary later one.
+
+    Generation 0, not a full `gc.collect()`, and the difference is not a
+    micro-optimisation: a full pass costs this suite 210 seconds, measured
+    A/B on one machine (535.8s with, 325.9s with the call removed
+    entirely), and CI pays that on three interpreters. `gc.collect(0)`
+    costs nothing measurable -- 325.3s, inside the run-to-run noise of the
+    no-collect baseline -- because a connection created and dropped inside
+    a single test has not survived a collection yet and so is still in the
+    youngest generation. The older generations hold long-lived objects a
+    per-test sweep has no reason to walk.
+
+    What this fixture does and does not buy, measured against the FULL
+    suite rather than a subset:
+
+    - The GATE is unconditional. Any new unclosed connection turns the
+      suite RED. That is the guarantee #927 was filed for, and it does
+      not depend on attribution being right.
+    - Attribution IS reliable for a plain unclosed connection, and for
+      one caught in a cycle created and dropped inside a single test:
+      each failed its own test by name among 6073 others.
+    - Attribution is NOT reliable for a connection RETURNED (rather than
+      yielded) from a `@pytest.fixture`. Pytest caches that value in its
+      own long-lived fixture machinery, which has already been promoted
+      past generation 0, so this sweep cannot reclaim it. Reverting the
+      two `conn` fixtures this change fixed put all 17 of their leaks on
+      one unrelated test as a single `ExceptionGroup`.
+
+    A full `gc.collect()` does NOT buy that last case back -- measured,
+    it attributed 23 of 25, not 25 of 25. So the misattribution is an
+    interaction with pytest's fixture cache, not a generation choice, and
+    paying 210 seconds a run for it would buy two tests' worth of blame
+    accuracy and no additional gate coverage.
+
+    Practical consequence, and the reason this paragraph is here: when
+    this gate fires on a test that touches no database, do not start by
+    debugging that test. Look for a fixture that `return`s a connection
+    where it should `yield` one and close it.
+
+    An autouse, no-dependency fixture is set up BEFORE the test's own
+    explicitly-requested fixtures (e.g. a `conn` fixture that closes its
+    connection on teardown) and therefore torn down AFTER them -- so this
+    `gc.collect(0)` runs once every explicit fixture in the test has already
+    closed its own connections. It also runs BEFORE
+    `_pytest.unraisableexception`'s `pytest_runtest_teardown` hookimpl,
+    which is `trylast=True` and so always fires after fixture teardown
+    within the same hook call -- together, that ordering is what keeps a
+    freshly-reclaimed leak's error inside THIS test's own teardown window
+    rather than surfacing during the next item's setup.
+    """
+    yield
+    gc.collect(0)
 
 
 LOCAL_BACKEND_LOCALITY = BackendHostLocality(

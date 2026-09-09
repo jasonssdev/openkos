@@ -8295,8 +8295,15 @@ def test_single_ingest_builds_the_fts_index(
     assert fts_db.is_file()
     index = state_fts.open_fts_index_readonly(fts_db)
     assert index is not None
-    hits = index.search("Zorbification")
-    assert any(hit.concept_id == "sources/notes" for hit in hits)
+    # `with`, not a bare `close()` between the search and the assertion:
+    # `FtsIndex` is a context manager, and this way the connection is
+    # released even when the assertion below fails -- a bare close on the
+    # happy path alone would leak on exactly the runs where the leak gate
+    # is loudest, and would mask the real failure behind an unraisable
+    # ResourceWarning (#927).
+    with index:
+        hits = index.search("Zorbification")
+        assert any(hit.concept_id == "sources/notes" for hit in hits)
 
 
 def test_batch_ingest_builds_the_fts_index_once_at_the_end(

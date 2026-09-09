@@ -12,6 +12,7 @@ all one row at a time.
 """
 
 import sqlite3
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -19,11 +20,31 @@ import pytest
 from openkos.state import question_vectors
 
 
-def _open(tmp_path: Path) -> sqlite3.Connection:
-    return question_vectors.open_question_vectors(tmp_path / ".openkos" / "q.db")
+@pytest.fixture
+def conn(tmp_path: Path) -> Iterator[sqlite3.Connection]:
+    """Open the question-vector cache under `tmp_path`, closing it on teardown.
+
+    The retired `_open(tmp_path)` helper handed back a bare, unmanaged
+    connection that no test in this file ever closed -- every one of them
+    leaked (#927). SQLite's `ResourceWarning: unclosed database` fires from
+    the connection's C-level `tp_dealloc`, whenever that happens to run, so
+    an unclosed connection here does not necessarily warn on ITS OWN test:
+    measured attribution showed leaks from this exact pattern surfacing
+    several tests later, once garbage collection finally reclaimed a
+    reference cycle holding it. Centralizing the close in this fixture is
+    what makes every test in the file honest under the sqlite3-scoped
+    `filterwarnings` gate in `pyproject.toml` (#927). That gate is
+    deliberately NOT a blanket `error::ResourceWarning`: see the
+    comment there for why a blanket filter would fail the wrong test.
+    """
+    connection = question_vectors.open_question_vectors(tmp_path / ".openkos" / "q.db")
+    yield connection
+    connection.close()
 
 
-def test_a_stored_vector_comes_back_unchanged_enough(tmp_path: Path) -> None:
+def test_a_stored_vector_comes_back_unchanged_enough(
+    conn: sqlite3.Connection,
+) -> None:
     """Round-tripping preserves the vector to float32 precision.
 
     Stored as float32 rather than float64: the threshold this feeds is 0.93
@@ -31,7 +52,6 @@ def test_a_stored_vector_comes_back_unchanged_enough(tmp_path: Path) -> None:
     pins APPROXIMATE equality on purpose -- asserting exact equality would
     be asserting the storage format is lossless, which it is not.
     """
-    conn = _open(tmp_path)
     vector = [0.1, -0.25, 0.5, 1.0]
     question_vectors.store(
         conn, "bge-m3", [("insights/a", question_vectors.question_hash("q?"), vector)]
@@ -46,7 +66,7 @@ def test_a_stored_vector_comes_back_unchanged_enough(tmp_path: Path) -> None:
     assert stored == pytest.approx(vector, abs=1e-6)
 
 
-def test_a_different_model_tag_yields_no_rows(tmp_path: Path) -> None:
+def test_a_different_model_tag_yields_no_rows(conn: sqlite3.Connection) -> None:
     """Vectors from another embedding model are NOT cache hits.
 
     Two models put the same question in different spaces, so a cosine
@@ -54,7 +74,6 @@ def test_a_different_model_tag_yields_no_rows(tmp_path: Path) -> None:
     part of the key, and a changed `embedding_model` must read as a total
     cache miss instead of silently comparing across spaces.
     """
-    conn = _open(tmp_path)
     question_vectors.store(
         conn, "bge-m3", [("insights/a", question_vectors.question_hash("q?"), [1.0])]
     )
@@ -63,14 +82,13 @@ def test_a_different_model_tag_yields_no_rows(tmp_path: Path) -> None:
 
 
 def test_restoring_the_same_id_replaces_rather_than_duplicates(
-    tmp_path: Path,
+    conn: sqlite3.Connection,
 ) -> None:
     """One row per insight per model -- an edited question replaces its vector.
 
     Without this the cache would grow a row per edit and the scan would
     compare one insight several times, disclosing it more than once.
     """
-    conn = _open(tmp_path)
     first = question_vectors.question_hash("old?")
     second = question_vectors.question_hash("new?")
     question_vectors.store(conn, "bge-m3", [("insights/a", first, [1.0, 0.0])])
@@ -92,14 +110,13 @@ def test_the_hash_tracks_the_question_text(tmp_path: Path) -> None:
     assert question_vectors.question_hash("a?") != question_vectors.question_hash("b?")
 
 
-def test_pruning_drops_only_the_ids_not_kept(tmp_path: Path) -> None:
+def test_pruning_drops_only_the_ids_not_kept(conn: sqlite3.Connection) -> None:
     """Insights deleted from the bundle leave the cache.
 
     A filed insight can be removed or renamed; its vector would otherwise
     be compared forever against questions whose document no longer exists,
     and the scan would disclose a duplicate the operator cannot open.
     """
-    conn = _open(tmp_path)
     digest = question_vectors.question_hash("q?")
     question_vectors.store(
         conn,
@@ -114,14 +131,13 @@ def test_pruning_drops_only_the_ids_not_kept(tmp_path: Path) -> None:
     ]
 
 
-def test_pruning_everything_empties_the_cache(tmp_path: Path) -> None:
+def test_pruning_everything_empties_the_cache(conn: sqlite3.Connection) -> None:
     """An empty keep-set is a real instruction, never a no-op guard.
 
     A `prune_missing(conn, set())` that quietly kept every row would leave a
     cache for a bundle with no insights at all -- and it is the shape a
     caller reaches by passing an empty scan result.
     """
-    conn = _open(tmp_path)
     question_vectors.store(
         conn, "bge-m3", [("insights/a", question_vectors.question_hash("q?"), [1.0])]
     )
@@ -131,7 +147,9 @@ def test_pruning_everything_empties_the_cache(tmp_path: Path) -> None:
     assert list(question_vectors.iter_vectors(conn, "bge-m3")) == []
 
 
-def test_pruning_survives_more_keys_than_sqlite_binds(tmp_path: Path) -> None:
+def test_pruning_survives_more_keys_than_sqlite_binds(
+    conn: sqlite3.Connection,
+) -> None:
     """A keep-set larger than `SQLITE_LIMIT_VARIABLE_NUMBER` must not raise.
 
     The retired implementation deleted with `WHERE concept_id NOT IN
@@ -146,7 +164,6 @@ def test_pruning_survives_more_keys_than_sqlite_binds(tmp_path: Path) -> None:
     `keep`, so this reproduces it in milliseconds. `_DELETE_BATCH` bounds the
     variables per statement, so no bundle size can reach the limit.
     """
-    conn = _open(tmp_path)
     question_vectors.store(
         conn, "bge-m3", [("insights/a", question_vectors.question_hash("q?"), [1.0])]
     )
@@ -160,14 +177,15 @@ def test_pruning_survives_more_keys_than_sqlite_binds(tmp_path: Path) -> None:
     ]
 
 
-def test_pruning_deletes_more_rows_than_sqlite_binds(tmp_path: Path) -> None:
+def test_pruning_deletes_more_rows_than_sqlite_binds(
+    conn: sqlite3.Connection,
+) -> None:
     """The DELETE side is batched too, not just the keep side.
 
     Fixing only the keep side would move the same failure onto a bundle whose
     insights were deleted en masse -- a `purge`, a reorganisation -- where the
     doomed set is what exceeds the limit.
     """
-    conn = _open(tmp_path)
     digest = question_vectors.question_hash("q?")
     limit = conn.getlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER)
     doomed = min(limit + 10, 3000)

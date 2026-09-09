@@ -104,6 +104,58 @@ markers = [
     # unit test that is merely inconvenient to stub.
     "live_backend: test deliberately reaches a live Ollama backend",
 ]
+# Promotes an unclosed `sqlite3.Connection`'s `ResourceWarning` to an error
+# (#927: a 2026-08-31 audit found 25, all left by test code that opened a
+# connection/handle and never closed it). Both entries below are required,
+# and BOTH are scoped to sqlite3 specifically -- not a blanket
+# `error::ResourceWarning` -- so this does NOT also gate
+# `test_lock.py`/`test_main.py`'s unrelated unclosed-FILE `ResourceWarning`s
+# (a distinct, already-tracked concern; #938 covers those via subprocess
+# isolation):
+#
+# 1. `error:unclosed database in <sqlite3\.Connection:ResourceWarning` makes
+#    SQLite's C-level `tp_dealloc` RAISE (instead of merely warn) the moment
+#    a connection's refcount hits zero without `close()` having run. Raising
+#    inside a destructor is exactly what CPython calls an "unraisable
+#    exception" -- it cannot propagate normally, so it routes through
+#    `sys.unraisablehook` instead.
+# 2. `error:Exception ignored in.*<sqlite3\.Connection:pytest.
+#    PytestUnraisableExceptionWarning` is what turns THAT into an actual
+#    test failure. Note the `.*`: it stands in for the literal ": " that
+#    pytest itself prints, and it is NOT a stylistic choice -- a literal
+#    colon there is the misparse this file documents below, so quoting the
+#    filter with one would teach a maintainer to re-derive an entry that
+#    silently disables the gate. What follows describes the mechanism:
+#    `_pytest.unraisableexception` installs its own
+#    `sys.unraisablehook`, and re-raises what it caught as a
+#    `PytestUnraisableExceptionWarning` (a SEPARATE `warnings.warn` call,
+#    a different category, message-prefixed "Exception ignored in: " --
+#    entry 1's filter does not cover it) via `collect_unraisable`, drained
+#    at `pytest_runtest_setup`/`call`/`teardown` for every item. Without
+#    this second entry the leak still surfaces, but only as a warnings-
+#    summary line ("N warnings"), and the suite exits 0 -- confirmed
+#    empirically while building this gate.
+#
+# These two lines make the suite go RED on any new unclosed connection, which
+# is the whole guarantee. WHICH test they blame is a separate, weaker
+# property, and it depends on `tests/unit/conftest.py`'s
+# `_reclaim_cyclic_garbage_for_deterministic_leak_attribution` autouse
+# fixture forcing a generation-0 collection in every test's own teardown.
+# That fixture's docstring records what attribution does and does not
+# cover -- a connection RETURNED from a `@pytest.fixture` is still blamed on
+# a bystander, and a full `gc.collect()` does not fix it while costing this
+# suite 210 seconds a run on each of three interpreters.
+filterwarnings = [
+    "error:unclosed database in <sqlite3\\.Connection:ResourceWarning",
+    # No literal ':' inside the message field below (`.*` stands in for the
+    # "ignored in: <sqlite3" colon-space) -- pytest's ini `filterwarnings`
+    # splits each entry on ':' into action/message/category/module/lineno,
+    # so a literal colon inside the message text misparses the rest of the
+    # line (confirmed empirically: it read "<sqlite3" as a category to
+    # import and failed with a `PytestConfigWarning`, silently leaving the
+    # gate NOT installed).
+    "error:Exception ignored in.*<sqlite3\\.Connection:pytest.PytestUnraisableExceptionWarning",
+]
 
 # Coverage is opt-in: `--cov` is deliberately not in pytest's addopts, so plain
 # `uv run pytest` stays fast for the local loop. CI passes `--cov`, and because
