@@ -5,7 +5,13 @@
 `entity-resolution-merge` is the first DESTRUCTIVE entity-resolution
 capability: a confirm-gated, fully REVERSIBLE 2-way `merge` of two
 concept-ids a human has confirmed are the same entity, plus a first-class
-`unmerge` with round-trip parity.
+`unmerge` with round-trip parity. `merge` and `unmerge` each own argument
+parsing, workspace setup, the confirmation gate, rendering the preview and
+result, and the catalog/log write via the shared write helpers; the Phase A
+(prepare) / confirm-gate / Phase B (write) composition for both commands —
+including `unmerge`'s newly public `prepare_unmerge`/`unmerge_core` pair,
+matching `merge`'s existing shape — is delegated to the lifecycle
+application service.
 
 ## Non-Goals
 

@@ -6,8 +6,14 @@
 slice 1's `find_candidates` output: it prompts an injected `LLMBackend` to
 adjudicate each `CandidateGroup` — using member title + full body — into a
 `SAME` / `DIFFERENT` / `UNCERTAIN` verdict with confidence and rationale,
-surfaced through a read-only `adjudicate` CLI verb. It never merges, writes,
-or decides; verdicts are ephemeral, for human review only.
+surfaced through the read-only `adjudicate` CLI verb; `adjudicate_candidates`
+itself never merges, writes, or decides. The same `adjudicate` verb's
+`--apply` and `--apply-same` modes act on those verdicts: each owns argument
+parsing, workspace setup, the confirmation gate — including
+`--apply-same`'s typed-count challenge-response — and rendering the preview
+and summary; the Phase A (prepare) / confirm-gate / Phase B (write)
+composition for both modes, including driving `merge_core` per accepted
+pair, is delegated to the lifecycle application service.
 
 ## Non-Goals
 

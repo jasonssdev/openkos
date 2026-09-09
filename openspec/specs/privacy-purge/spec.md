@@ -6,7 +6,12 @@
 `forget`: it whole-file-expunges a concept's source `raw/<name>` and bundle
 file from ALL git history (not just the working tree) via `git-filter-repo`.
 Slice 1 is honest whole-file erasure with a named residual; it does not claim
-complete right-to-be-forgotten.
+complete right-to-be-forgotten. `purge` itself owns argument parsing,
+workspace and configuration setup, the confirmation gate, rendering the
+"IRREVERSIBLE history rewrite" disclosure from the templates the lifecycle
+application service returns, byte-for-byte, and invoking `git-filter-repo`;
+purge-set resolution, the fail-closed safety rails, and the disclosure
+content itself are composed by the lifecycle application service.
 
 ## Non-Goals
 

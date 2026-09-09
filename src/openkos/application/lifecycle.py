@@ -17,10 +17,11 @@ gate as the one new seam"): `StackedBodyReport`, `PreparedMerge`,
 `MergeResult`, `prepare_merge`, `merge_core`, `merge_drift_targets`, plus
 the shared id-resolution helpers `canonicalize_concept_id`/
 `resolve_concept_path` every later slice's Phase A also needs. `merge`'s
-own confirmation gate stays inline in the CLI adapter, unchanged, for this
-slice -- see design's Interfaces/Contracts note ("unchanged fields") --
-later slices (S3/S4/S5) are what wire a verb's `Prepared*.confirmation`
-field to `application.consent.ConfirmationRequest`.
+own confirmation gate stayed inline in the CLI adapter for this slice;
+S3/S4/S5 wired `forget`/`purge`/`adjudicate --apply-same`, and the
+follow-on that closed #918's "expressed as data" goal for the two verbs it
+names wired `merge` and `unmerge` too -- every `Prepared*`/`*Plan` in this
+module now carries a `confirmation`.
 
 Slice 2a (S2a, issue #918) added `unmerge`'s write-only Phase B --
 `PreparedUnmerge`, `UnmergeResult`, `unmerge_core` -- relocated verbatim
@@ -39,11 +40,11 @@ fields (`catalog_log_drifted`, `review`, the drift-guard baselines) --
 `_execute_single_unmerge` itself is deleted from `cli/main.py`, since
 `unmerge`'s command now calls `prepare_unmerge`/`unmerge_core` directly,
 the same full `prepare_X`/`X_core` pair `merge` already has (design's
-Slice Plan). `unmerge`'s confirm gate stays inline in the CLI adapter,
-unchanged, exactly like `merge`'s own gate (S1's own docstring note) --
-neither verb's `Prepared*` carries a `ConfirmationRequest` field; only
-`forget`/`purge`/`adjudicate` (S3-S5) wire one, because only those three
-gates' WORDING varies with verb-specific data.
+Slice Plan). `unmerge`'s confirm gate stayed inline in the CLI adapter for
+this slice, exactly like `merge`'s; both now carry a
+`BooleanConfirmation` built by `consent.boolean_confirmation`, so an
+adapter outside `openkos.cli` can read what each gate asks and which flag
+bypasses it.
 
 Renders nothing, prompts nothing, never calls `sys.stdin.isatty()`, and
 never imports `openkos.cli`, `typer`, `rich`, or `openkos.vcs` (the
@@ -635,12 +636,13 @@ class PreparedUnmerge:
     `rewrite_bytes` dict keyed by relative path -- the guard only needs the
     union of all three, never partitioned by kind.
 
-    No `confirmation: ConfirmationRequest` field, unlike `ForgetPlan`/
-    `PurgePlan` (S3/S4): `unmerge`'s gate is the SAME hardcoded boolean
-    `merge`'s own gate is (`Proceed with these changes?`, `--auto`), never
-    verb-data-conditional the way `forget`'s scope-dependent prompt or
-    `purge`'s typed phrase is, so it stays inline in the CLI adapter
-    exactly as `merge`'s does (this module's own top docstring)."""
+    `confirmation` is the plain `--auto`-bypassable gate `merge` also
+    uses -- not verb-data-conditional the way `forget`'s scope-dependent
+    prompt or `purge`'s typed phrase is, which is why both come from the
+    shared `consent.boolean_confirmation` helper rather than being built
+    field by field here. The `--to` chain's own gate consents to the whole
+    unwind sequence before any step's `prepare_unmerge` runs, so the
+    adapter calls that same helper directly for it; the two cannot drift."""
 
     plan: bundle_merge.UnmergePlan
     new_log_text: str
