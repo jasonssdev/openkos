@@ -25,6 +25,7 @@ from rich.console import Console
 
 from openkos import config, fsio, lock, source_title
 from openkos import lint as lint_check
+from openkos.application import consent as application_consent
 from openkos.application import ingest as application_ingest
 from openkos.application import lifecycle as application_lifecycle
 from openkos.application import query as application_query
@@ -8857,13 +8858,12 @@ def merge(
 
     if not auto and prepared.review:
         if sys.stdin.isatty():
-            typer.confirm("Proceed with these changes?", abort=True)
+            typer.confirm(prepared.confirmation.prompt, abort=True)
         else:
-            typer.echo(
-                "openkos merge: refusing to write without confirmation -- "
-                "stdin is not a TTY; re-run with --auto.",
-                err=True,
-            )
+            # #918: the wording comes from the staged request, not a literal
+            # here, so an api/mcp adapter driving this gate headlessly reads
+            # the same sentence the CLI prints.
+            typer.echo(prepared.confirmation.non_tty_refusal, err=True)
             raise typer.Exit(code=1)
 
     # #645: the reconciliation call runs AFTER consent (the plan disclosed
@@ -9176,14 +9176,16 @@ def unmerge(
             typer.echo(line)
 
     if not auto and cfg.review:
+        # The `--to` chain consents to the WHOLE unwind sequence up front,
+        # before any step's `prepare_unmerge` runs, so there is no plan to
+        # read the request from -- build it from the same service helper
+        # the per-step gate's `PreparedUnmerge` carries (#918), so both
+        # gates cannot drift apart.
+        chain_confirmation = application_consent.boolean_confirmation("unmerge")
         if sys.stdin.isatty():
-            typer.confirm("Proceed with these changes?", abort=True)
+            typer.confirm(chain_confirmation.prompt, abort=True)
         else:
-            typer.echo(
-                "openkos unmerge: refusing to write without confirmation -- "
-                "stdin is not a TTY; re-run with --auto.",
-                err=True,
-            )
+            typer.echo(chain_confirmation.non_tty_refusal, err=True)
             raise typer.Exit(code=1)
 
     for step_number, entry in enumerate(sequence, start=1):
@@ -9436,13 +9438,11 @@ def _run_single_unmerge(
 
     if not confirmed and not auto and prepared.review:
         if sys.stdin.isatty():
-            typer.confirm("Proceed with these changes?", abort=True)
+            typer.confirm(prepared.confirmation.prompt, abort=True)
         else:
-            typer.echo(
-                "openkos unmerge: refusing to write without confirmation -- "
-                "stdin is not a TTY; re-run with --auto.",
-                err=True,
-            )
+            # #918: wording from the staged request, not a literal -- see
+            # the same change at `merge`'s gate.
+            typer.echo(prepared.confirmation.non_tty_refusal, err=True)
             raise typer.Exit(code=1)
 
     # Issue #313: every byte below was computed from a pre-prompt read, so

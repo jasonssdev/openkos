@@ -382,6 +382,7 @@ def test_unmerge_core_is_directly_callable_and_restores_the_pre_merge_state(
         "from [concepts/survivor](/concepts/survivor.md).",
     )
     prepared = lifecycle_service.PreparedUnmerge(
+        confirmation=consent_service.boolean_confirmation("unmerge"),
         plan=plan,
         new_log_text=new_log_text,
         link_reversed_texts={},
@@ -1527,3 +1528,63 @@ def test_preview_apply_same_raises_preview_merge_failure_with_partial_state(
     assert len(failure.partial.skips) == 1
     assert isinstance(failure.partial.skips[0], lifecycle_service.NGt2Skip)
     assert failure.partial.previewed == ()
+
+
+def test_boolean_confirmation_helper_builds_the_shared_auto_gate_shape() -> None:
+    """#918: the five lifecycle verbs' boolean gates differ only in the verb
+    name inside the refusal, so `consent.boolean_confirmation` owns that one
+    sentence rather than letting each `prepare_*` re-spell it. A refusal
+    re-spelled per call site is a refusal that drifts -- this repository has
+    already shipped a silently reworded one when two display paths were
+    folded together during an extraction."""
+    request = consent_service.boolean_confirmation("merge")
+
+    assert isinstance(request, consent_service.BooleanConfirmation)
+    assert request.prompt == "Proceed with these changes?"
+    assert request.bypass_flag == "--auto"
+    assert request.non_tty_refusal == (
+        "openkos merge: refusing to write without confirmation -- "
+        "stdin is not a TTY; re-run with --auto."
+    )
+
+
+def test_prepare_merge_stages_its_gate_as_data(tmp_path: Path) -> None:
+    """#918's lifecycle goal names `merge` explicitly: "confirmation
+    contracts expressed as data (so a non-TTY adapter can drive them)".
+
+    `forget`, `purge` and `adjudicate --apply-same` staged theirs in slices
+    3-5; `merge` and `unmerge` kept a hardcoded literal in the adapter, so
+    an `api`/`mcp` caller could not learn what those gates ask or which flag
+    bypasses them without reading `cli/main.py`. Both now carry it."""
+    layout = _workspace(tmp_path)
+    _write_concept(layout.bundle_dir, "concepts/survivor", title="Survivor")
+    _write_concept(layout.bundle_dir, "concepts/absorbed", title="Absorbed")
+    survivor_path, survivor_canonical = lifecycle_service.resolve_concept_path(
+        layout.bundle_dir, "concepts/survivor"
+    )
+    absorbed_path, absorbed_canonical = lifecycle_service.resolve_concept_path(
+        layout.bundle_dir, "concepts/absorbed"
+    )
+
+    prepared = lifecycle_service.prepare_merge(
+        layout.bundle_dir,
+        layout.bundle_dir / "index.md",
+        layout.bundle_dir / "log.md",
+        survivor_path,
+        absorbed_path,
+        survivor_canonical,
+        absorbed_canonical,
+        tmp_path,
+        now=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+
+    assert isinstance(prepared.confirmation, consent_service.BooleanConfirmation)
+    assert prepared.confirmation.prompt == "Proceed with these changes?"
+    assert prepared.confirmation.bypass_flag == "--auto"
+    assert prepared.confirmation.non_tty_refusal == (
+        "openkos merge: refusing to write without confirmation -- "
+        "stdin is not a TTY; re-run with --auto."
+    )
+    # D2: a gate is a question, never an answer -- no field an adapter
+    # could set to "already granted".
+    assert not hasattr(prepared.confirmation, "granted")

@@ -85,6 +85,34 @@ class TypedChallengeConfirmation:
         return candidate == self.expected
 
 
+def boolean_confirmation(
+    verb: str, prompt: str = "Proceed with these changes?"
+) -> BooleanConfirmation:
+    """The shared `--auto`-bypassable gate every boolean lifecycle verb
+    uses, differing only in the verb name inside its refusal.
+
+    That sentence is the one an operator sees when a non-TTY caller reaches
+    a write it may not perform, and it is identical across `merge`,
+    `unmerge`, `forget` and `relate` apart from the verb. Spelling it at
+    each `prepare_*` call site is how it drifts: this repository has
+    already shipped a silently reworded refusal once, when two display
+    paths were folded into one during an extraction, and until #918 no test
+    anywhere pinned the sentence for any verb.
+
+    `prompt` is overridable because `forget --scope source` asks
+    "Delete {N} concepts?" instead, naming what the cascade will remove.
+    Typed-challenge gates (`purge`, `adjudicate --apply-same`) are NOT
+    built here -- they carry no bypass flag at all, deliberately."""
+    return BooleanConfirmation(
+        prompt=prompt,
+        bypass_flag="--auto",
+        non_tty_refusal=(
+            f"openkos {verb}: refusing to write without confirmation -- "
+            "stdin is not a TTY; re-run with --auto."
+        ),
+    )
+
+
 ConfirmationRequest = BooleanConfirmation | TypedChallengeConfirmation
 """The tagged union every confirm gate's adapter code matches on `kind`
 (design D1) -- pairing this with `assert_never` in the default `match` arm

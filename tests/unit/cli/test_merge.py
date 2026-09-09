@@ -352,7 +352,13 @@ def test_non_tty_without_auto_refuses(
 
     assert result.exit_code == 1
     assert isinstance(result.exception, SystemExit)
-    assert "--auto" in result.stderr
+    # Pin the WHOLE sentence, not just the flag name (#918): the refusal is
+    # now rendered from `PreparedMerge.confirmation`, and a substring check
+    # on "--auto" cannot tell a reworded refusal from the shipped one.
+    assert result.stderr.strip().endswith(
+        "openkos merge: refusing to write without confirmation -- "
+        "stdin is not a TTY; re-run with --auto."
+    )
     assert _snapshot(tmp_path) == before
 
 
