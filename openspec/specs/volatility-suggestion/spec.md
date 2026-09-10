@@ -5,13 +5,14 @@
 `volatility-suggestion` is slice 2 of the freshness work: a read-only CLI
 verb, `suggest-volatility`, that asks the LLM to propose a volatility tier
 (`static`/`slow`/`volatile`) plus a rationale for each concept type present
-in the workspace, and points the human at the `type_tiers:` config layer to
-apply an accepted suggestion by hand-edit. Zero writes.
+in the workspace, and points the human at `set-volatility` to apply an
+accepted suggestion. The verb itself performs zero writes.
 
 ## Non-Goals
 
-This spec does NOT define: config writes or auto-accept of a suggestion (no
-safe partial-YAML writer exists — hand-edit only); duration/window value
+This spec does NOT define: config writes or auto-accept of a suggestion
+(`set-volatility` owns the write — `volatility-config` — and a human still
+runs it; this verb applies nothing on their behalf); duration/window value
 suggestions; contradiction or staleness detection (S3); a guided reconcile
 write-verb (S4). This extends ADR-0007; no new ADR.
 

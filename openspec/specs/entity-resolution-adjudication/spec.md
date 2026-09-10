@@ -29,9 +29,13 @@ confirm / Phase B composition that gets it there belongs to
   This spec requires that an applied merge lands a `merged_from` entry and is
   unmerge-reversible; it does not say what those two words mean.
 - **`forget`'s tombstones and `purge`'s deletion machinery**
-  (`forget-command`, `privacy-purge`). The verdict store is a tenant of the
-  findings store those two already sweep; this spec adds no privacy surface
-  and defines no sweep of its own.
+  (`forget-command`, `privacy-purge`). This spec adds no privacy surface and
+  defines no sweep of its own. The verdict store is nonetheless erased,
+  because `forget-command`'s `### Requirement: Deletion Sweep Includes
+  Persisted Findings` states the obligation as a MUST naming adjudications
+  explicitly, discharged by a dedicated per-tenant deletion call. Co-tenancy
+  in the same database file discharges nothing on its own, so a new tenant
+  of that file inherits no erasure until that requirement names it too.
 - **Embeddings or vector-based candidate generation.**
 - **Any change to slice-1 `find_candidates` or its thresholds**
   (`entity-resolution`). This spec is a precision layer over that output.
