@@ -622,8 +622,15 @@ param, never through the embed-only seam.
 
 ### Requirement: No Retrieval Consumer Introduced
 
-`reindex` MUST NOT alter `query` command or `retrieval/answer.py` behavior;
-it only populates `vectors.db`.
+`reindex` MUST NOT alter `query` command or `retrieval/answer.py` behavior,
+and MUST introduce no read-path consumer of the state it writes. That state
+is derived state only -- `vectors.db` plus the on-disk FTS and graph indexes
+under `.openkos/`, per `### Requirement: Reindex Becomes Sole Writer Of FTS
+And Graph Derived Indexes` above -- never bundle bytes.
+(Previously: "it only populates `vectors.db`" -- true while `reindex` wrote
+that store alone, and contradicted by the sole-writer requirement above once
+FTS and graph persistence landed. The no-retrieval-consumer obligation is
+unchanged; only the write set it names is corrected.)
 
 ### Requirement: Reindex Discloses The Real Re-Embed Trigger, Not A False Model-Change Claim
 
