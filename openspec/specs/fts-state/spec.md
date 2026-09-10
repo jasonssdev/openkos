@@ -3,7 +3,7 @@
 ## Note
 
 The existing Non-Goals section defers "persistence of the index
-(`.openkos/openkos.db`, `.gitignore` entries, locks)" to MVP-2. This slice IS
+(`.openkos/fts.db`, `.gitignore` entries, locks)" to MVP-2. This slice IS
 that MVP-2 work: persistence is now in scope via the ADDED requirement below,
 written only by `reindex`. The in-memory `build_index(bundle_dir)` contract
 itself is unchanged for any caller that does not go through `reindex`.
@@ -20,7 +20,7 @@ below).
 
 ## Non-Goals
 
-This spec does not define: persistence of the index (`.openkos/openkos.db`,
+This spec does not define: persistence of the index (`.openkos/fts.db`,
 `.gitignore` entries, locks — deferred to MVP-2); incremental indexing or
 change-detection tied to `ingest`/`forget` (full rebuild each run only);
 chunking into passages (document-granularity only); vector, graph, or
@@ -72,7 +72,7 @@ exactly one FTS5 row per document indexing that document's frontmatter
 ### Requirement: Index Never Touches Disk
 
 Calling `build_index(bundle_dir)` directly (the in-memory library entry
-point) MUST NOT touch disk — no `.openkos/` directory, `openkos.db` file, or
+point) MUST NOT touch disk — no `.openkos/` directory, `fts.db` file, or
 `.gitignore` entry is created by that call alone, and the index exists only
 in memory for the caller's session. Disk persistence exists ONLY via the
 dedicated on-disk writer path invoked by `reindex` (see the new persisted-index
@@ -80,14 +80,17 @@ requirement above); ad-hoc, non-`reindex` callers of `build_index` observe no
 change from this slice.
 (Previously: `build_index` had no on-disk persistence concept at all; this
 clarifies the in-memory call and the new `reindex`-only persistence path
-remain distinct.)
+remain distinct. The file this spec named was also `openkos.db` throughout --
+the single-store consolidation `docs/architecture.md` records as an open
+option no change has adopted. The file `reindex` actually writes is
+`config.py`'s `fts_db_path`, `.openkos/fts.db`; the obligation is unchanged.)
 
 #### Scenario: Index never touches disk
 
 - GIVEN any bundle, of any size
 - WHEN `build_index(bundle_dir)` runs directly (not via `reindex`'s
   persistence path)
-- THEN no `.openkos/` directory, `openkos.db` file, or `.gitignore` entry is
+- THEN no `.openkos/` directory, `fts.db` file, or `.gitignore` entry is
   created, and the index exists only in memory for the caller's session
 
 ### Requirement: Row Identity Is The OKF Concept ID

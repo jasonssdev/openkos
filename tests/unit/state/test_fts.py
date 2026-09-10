@@ -603,7 +603,7 @@ def test_build_index_closes_connection_on_mid_build_exception(
 
 
 def test_build_index_and_search_never_write_to_disk(tmp_path: Path) -> None:
-    """No `.openkos/`, `openkos.db`, or `.gitignore` entry appears anywhere."""
+    """No `.openkos/`, `fts.db`, or `.gitignore` entry appears anywhere."""
     bundle_dir = tmp_path / "bundle"
     _write_doc(bundle_dir / "concepts" / "stoicism.md", title="Stoicism")
     before = set(tmp_path.rglob("*"))
@@ -614,7 +614,7 @@ def test_build_index_and_search_never_write_to_disk(tmp_path: Path) -> None:
     after = set(tmp_path.rglob("*"))
     assert after == before
     assert not (bundle_dir / ".openkos").exists()
-    assert not (tmp_path / "openkos.db").exists()
+    assert not (tmp_path / "fts.db").exists()
     assert not (bundle_dir / ".gitignore").exists()
 
 
