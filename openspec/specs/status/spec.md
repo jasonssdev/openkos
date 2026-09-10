@@ -5,13 +5,18 @@
 `openkos status` is the first read-only command: it reports what a bundle
 currently contains — source/concept counts, recent activity, and anything
 needing attention — without mutating any bundle file. It establishes the
-bundle-reader precedent that `query`/`lint` will follow.
+bundle-reader precedent `query` and `lint` went on to follow.
 
 ## Non-Goals
 
-This spec does not define: lint checks (stale-stamp, orphan-page detection —
-future `lint` command); `--json` or any structured output; non-zero exit on
-findings or CI-gate behavior (findings are informational only).
+This spec does not define: `lint`'s two freshness checks, stale-stamp and
+orphan-page detection, which `lint` owns and `status` never reports (the
+`lint` findings `status` does fold in are the ones its own `MUST fold`
+requirements below name — dangling-reference, `unextracted`, `unjudged`,
+`below-source-sensitivity`, `multi-source-uncovered` and
+`unbacked-provenance` — and those requirements, not this list, are
+authoritative); `--json` or any structured output; non-zero exit on findings
+or CI-gate behavior (findings are informational only).
 
 ## Requirements
 
