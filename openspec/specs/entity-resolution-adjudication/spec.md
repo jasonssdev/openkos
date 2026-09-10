@@ -17,12 +17,31 @@ pair, is delegated to the lifecycle application service.
 
 ## Non-Goals
 
-This spec does not define: destructive `merge`/`resolve`, tombstones, merge
-records, sensitivity recompute, or un-merge (slice 3); embeddings or
-vector-based candidate generation; any change to slice-1 `find_candidates`
-or its thresholds; any bundle/state write or persisted OKF type for the
-adjudication result; batching of multiple groups into one LLM call; or
-content truncation/summarization of member bodies.
+This spec DOES define the destructive `--apply` and `--apply-same` modes --
+their eligibility filters, previews, confirmation gates, summaries, and the
+requirement that each accepted pair reaches `merge_core` (the Phase A /
+confirm / Phase B composition that gets it there belongs to
+`lifecycle-application-service`). What this spec does not define is:
+
+- **The merge and unmerge primitives themselves** (`entity-resolution-merge`):
+  what `merge_core`/`unmerge_core` do to the filesystem, the `merged_from`
+  ledger's format and content, and sensitivity high-water-mark recomputation.
+  This spec requires that an applied merge lands a `merged_from` entry and is
+  unmerge-reversible; it does not say what those two words mean.
+- **`forget`'s tombstones and `purge`'s deletion machinery**
+  (`forget-command`, `privacy-purge`). The verdict store is a tenant of the
+  findings store those two already sweep; this spec adds no privacy surface
+  and defines no sweep of its own.
+- **Embeddings or vector-based candidate generation.**
+- **Any change to slice-1 `find_candidates` or its thresholds**
+  (`entity-resolution`). This spec is a precision layer over that output.
+- **Batching multiple groups into one LLM call.** Adjudication is one call
+  per group, in candidate order.
+- **Truncation or summarization of member bodies.** A member loads full-body
+  or is skipped.
+- **Any OKF or bundle write for the adjudication RESULT.** Verdicts persist
+  only to derived state under `.openkos/`; the only bundle writes this spec
+  requires are the merges `--apply`/`--apply-same` drive.
 
 ## Requirements
 
