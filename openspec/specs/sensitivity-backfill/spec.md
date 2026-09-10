@@ -11,19 +11,24 @@ entry, and one commit.
 
 ## Non-Goals
 
-This spec does not define: any downgrade path (no `--allow-downgrade`
-equivalent — the verb is raise-only by construction); combining sensitivity
-across multiple Sources for a multi-source descendant (deferred to
-MVP-2/3 per ADR-0009); re-triggering extraction or modifying
-`extraction_status`; a per-Source scoping argument (bundle-wide only in
-MVP 1 — `set-sensitivity` already covers the single-Source case); a
-`--dry-run` flag (the preview shown before confirmation, or declining the
-prompt, already serves as the dry run); emitting the
-unresolvable-provenance WARNING. `backfill-sensitivity` MUST NOT run
-`find_unresolvable_provenance`; every Source cites its raw `resource`, so a
-bundle-wide run would emit one WARNING per Source on every invocation,
-including the no-op path. That signal is delivered by `lint`'s existing
-`dangling` finding.
+This spec DOES define combining sensitivity across multiple Sources for a
+multi-source descendant: a descendant outside every Source's provenance
+closure is raised to the high-water mark folded over its own cited concepts
+— the case ADR-0012 deferred and ADR-0016 closes. What this spec does not
+define is:
+
+- **Any downgrade path.** There is no `--allow-downgrade` equivalent — the
+  verb is raise-only by construction.
+- **Re-triggering extraction or modifying `extraction_status`.**
+- **A per-Source scoping argument.** Bundle-wide only in MVP 1 —
+  `set-sensitivity` already covers the single-Source case.
+- **A `--dry-run` flag.** The preview shown before confirmation, or
+  declining the prompt, already serves as the dry run.
+- **Emitting the unresolvable-provenance WARNING.**
+  `backfill-sensitivity` MUST NOT run `find_unresolvable_provenance`; every
+  Source cites its raw `resource`, so a bundle-wide run would emit one
+  WARNING per Source on every invocation, including the no-op path. That
+  signal is delivered by `lint`'s existing `dangling` finding.
 
 ## Requirements
 

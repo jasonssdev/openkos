@@ -4,15 +4,29 @@
 
 `state/vectorstore.py` is the on-disk scaffolding for dense retrieval: a
 guarded SQLite `sqlite-vec` extension loader, an injectable `VectorStore`
-seam, and an idempotent `vectors.db` schema. It has no CLI command and
-performs no embedding storage or query in this slice.
+seam, and an idempotent `vectors.db` schema. It has no CLI command, but it
+does perform embedding storage and query through `upsert`/`query` on the
+store itself.
 
 ## Non-Goals
 
-This spec does not define: vec0 upsert/query data flow; a `reindex`/backfill
-verb; `content_hash` invalidation; RRF fusion; any change to
-`retrieval/answer.py`; `numpy`; or `.openkos/` creation during `init` (the
-directory is opened/created lazily by this module, not by `init`).
+This spec DOES define the vec0 upsert/query data flow: `upsert` writing the
+`vectors`/`vector_meta` rows, and `query`'s chunk-collapse and deterministic
+tie-break down to one hit per document. What this spec does not define is:
+
+- **A `reindex`/backfill verb** (`reindex-command`). This spec provides the
+  store that verb writes through and reads from, not the command itself.
+- **`content_hash` invalidation** (`reindex-command`, `derived-index-cache`).
+  This spec's `content_hash` helper returns a stable key for later use as an
+  invalidation key; deciding when a hash is stale and re-embedding belong to
+  those specs.
+- **RRF fusion** (`retrieval-fusion`).
+- **Any change to `retrieval/answer.py`** (`query-answer`).
+- **`numpy`.** Embeddings are serialized via `sqlite-vec`'s own
+  `serialize_float32`, not numpy.
+- **`.openkos/` creation during `init`.** The directory is opened/created
+  lazily by this module, not by `init` (see "No CLI Surface, No Init-Time
+  Side Effect" below).
 
 ## Requirements
 

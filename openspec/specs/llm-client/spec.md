@@ -10,12 +10,17 @@ is the future `query` command.
 
 ## Non-Goals
 
-This spec does not define: streaming (`stream:true`/NDJSON); tool/function
-calling; retries or backoff; `/api/generate` or any non-Ollama provider;
-any CLI command; changes to `ingest`, `forget`, or `config`'s schema
-beyond an optional host key, `model`, and `embedding_model`. Persistence,
-vector storage, and retrieval fusion remain explicitly out of scope for
-this client.
+This spec DOES define retry-with-backoff for the embedding path:
+`OllamaClient.embed(texts)` retries a bounded number of times on a
+transient, retryable failure before propagating. What this spec does not
+define is: streaming (`stream:true`/NDJSON); tool/function calling; retries
+or backoff for the CHAT path (`OllamaClient.chat` raises on first failure —
+see "Ollama Unavailable Raises A Typed Error" and "Other Failures Raise A
+Generic Typed Error", neither of which retries; retry there is deferred, not
+shipped); `/api/generate` or any non-Ollama provider; any CLI command;
+changes to `ingest`, `forget`, or `config`'s schema beyond an optional host
+key, `model`, and `embedding_model`. Persistence, vector storage, and
+retrieval fusion remain explicitly out of scope for this client.
 
 ## Requirements
 
