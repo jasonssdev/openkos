@@ -18,7 +18,10 @@ Source-only behavior with zero crashes on any LLM failure.
 ## Non-Goals
 
 Extraction of a bounded list of derived objects across the 9-type
-classifiable vocabulary HAS shipped and is specified below. This spec does
+classifiable vocabulary HAS shipped and is specified below. This spec DOES
+define lexical retrieval readiness: `ingest` builds the on-disk FTS index
+(`.openkos/fts.db`) once per run, so the quickstart gets FTS-backed lexical
+retrieval on its first query without a manual `reindex`. This spec does
 NOT define: entity resolution, merge, or cross-source dedup of derived
 objects (MVP-2); reclassification, re-typing, or merge of an existing
 derived object on re-ingest — re-ingest reconciles per slug (create-only
@@ -26,8 +29,10 @@ insert of slug-missing objects, existing files left byte-untouched), but
 never re-types or merges what already exists; a typed relationship graph or
 inter-object relations (MVP-2); sensitivity high-water-mark across multiple
 sources (MVP-2/3); a configurable (per-workspace) cap or cross-document
-synthesis; or MVP-2 hybrid retrieval — all deferred to future MVPs per
-`knowledge-object-model.md`.
+synthesis; or MVP-2 dense/vector retrieval (`reindex-command`,
+`vector-store`) — `ingest` never writes `vectors.db`, so a query still runs
+FTS-only until `openkos reindex` populates the vector store — all deferred
+to future MVPs per `knowledge-object-model.md`.
 
 ## Requirements
 

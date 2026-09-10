@@ -24,12 +24,22 @@ consumer is the `query` command.
 
 ## Non-Goals
 
-CLI command; reading/constructing `openkos.config`; context truncation or
-token budget beyond `limit`; weighted/normalized score fusion; distance-to-similarity
-conversion; graph/link ranking in any position — as a third RRF input or as
-an additive reserved-slot channel (see "Answering Reads No Graph"); filing
-the answer back as a concept; citation metadata beyond `concept_id`,
-`title`, and the #569 `confidential` disclosure flag.
+This spec DOES define a character budget and context truncation: `limit`
+bounds how many documents are retrieved, but `_assemble_context` separately
+plans a character budget against the backend's context window and clips
+assembled bodies to fit it, and a `Citation` DOES carry metadata beyond
+`concept_id`/`title`/`confidential` — whether the document was sent as a
+partial excerpt. What this spec does not define is:
+
+- **A CLI command** (`query-command`).
+- **Reading/constructing `openkos.config`.** `retrieval/answer.py` MUST NOT
+  import `openkos.config`; `LLMBackend` and friends are injected.
+- **Weighted/normalized score fusion.**
+- **Distance-to-similarity conversion.**
+- **Graph/link ranking in any position** — as a third RRF input or as an
+  additive reserved-slot channel (see "Answering Reads No Graph").
+- **Filing the answer back as a concept** (`query-command`'s `--save`
+  composes that; this module only produces the `AnswerResult`).
 
 ## Requirements
 

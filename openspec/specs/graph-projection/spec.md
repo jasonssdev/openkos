@@ -19,11 +19,24 @@ It has no CLI command; its only consumers are future retrieval/lint slices.
 
 ## Non-Goals
 
-This spec does not define: cross-source entity resolution or reversible
-merge; hybrid vector retrieval; relation-type extraction/NLP (the projection
-reads typed edges from `relations:` frontmatter but does not itself infer or
-author relations); a CLI `graph` verb; persistence to `.openkos/openkos.db`; or
-CI/import-linter layering enforcement (layering stays a followed convention).
+This spec DOES define one narrow, projection-only relation-type synthesis:
+absent a matching `relations:` frontmatter entry, `build_graph` synthesizes
+`relation_type = "derived_from"` when the edge's target is a member of the
+source document's `provenance:` list — membership only, never NLP or
+inference over link text. This synthesis writes nothing to bundle bytes.
+What this spec does not define is:
+
+- **Cross-source entity resolution or reversible merge**
+  (`entity-resolution`, `entity-resolution-merge`).
+- **Hybrid vector retrieval** (`retrieval-fusion`).
+- **Relation-type extraction/NLP beyond the provenance-mirror synthesis
+  above.** The projection reads typed edges from `relations:` frontmatter
+  and mirrors `provenance:` membership; it does not infer or author a
+  relation from prose, link text, or any other signal.
+- **A CLI `graph` verb.**
+- **Persistence to `.openkos/openkos.db`** (see the Note above).
+- **CI/import-linter layering enforcement.** Layering stays a followed
+  convention.
 
 ## Requirements
 

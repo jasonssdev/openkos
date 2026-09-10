@@ -5,19 +5,28 @@
 `openkos purge <concept-id>` is the irreversible, true-erasure counterpart to
 `forget`: it whole-file-expunges a concept's source `raw/<name>` and bundle
 file from ALL git history (not just the working tree) via `git-filter-repo`.
-Slice 1 is honest whole-file erasure with a named residual; it does not claim
-complete right-to-be-forgotten. `purge` itself owns argument parsing,
-workspace and configuration setup, the confirmation gate, rendering the
-"IRREVERSIBLE history rewrite" disclosure from the templates the lifecycle
-application service returns, byte-for-byte, and invoking `git-filter-repo`;
-purge-set resolution, the fail-closed safety rails, and the disclosure
-content itself are composed by the lifecycle application service.
+Slice 1 is honest whole-file erasure, including whole-history content-scrub
+of `index.md` and `log.md`, with one named residual left for Slice 2: the
+committed-`.openkos` (`fts.db`) leak vector. It does not claim complete
+right-to-be-forgotten. `purge` itself owns argument parsing, workspace and
+configuration setup, the confirmation gate, rendering the "IRREVERSIBLE
+history rewrite" disclosure from the templates the lifecycle application
+service returns, byte-for-byte, and invoking `git-filter-repo`; purge-set
+resolution, the fail-closed safety rails, and the disclosure content itself
+are composed by the lifecycle application service.
 
 ## Non-Goals
 
-Content-scrub of `index.md`/`log.md` HISTORY blobs (Slice 2); scrub of any
-prior `forget` tombstone text (Slice 2); the committed-`.openkos` (`fts.db`)
-leak vector (Slice 2); a `forget --hard` alias.
+This spec DOES define whole-history content-scrub: `purge` removes a
+purge-set member's catalog bullet, log entries, and any `forget` tombstone
+text from every historical commit's `bundle/index.md` and `bundle/log.md`
+blobs, and removes any live `forget` tombstone from `log.md`. What this spec
+does not define is:
+
+- **The committed-`.openkos` (`fts.db`) leak vector (Slice 2).** A prior
+  commit of `.openkos/fts.db` into git history is not detected or scrubbed
+  by this slice.
+- **A `forget --hard` alias.**
 
 ## Requirements
 

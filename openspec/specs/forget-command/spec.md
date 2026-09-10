@@ -13,13 +13,18 @@ delegated to the lifecycle application service, mirroring `ingest`'s shape.
 
 ## Non-Goals
 
-This spec does not define: tombstones or purge machinery (MVP-2, per
-decision #717); updating any SQLite operational state (no such store
-exists in `src/` yet — a no-op for MVP-1); rewriting or retargeting dangling
-inbound links from OTHER concepts that still link to the forgotten one (detection
-is in scope; silent rewriting is not); correcting the two known `docs/cli.md`
-inaccuracies (SQLite claim, lint dangling-link claim) — filed as a separate
-follow-up.
+This spec DOES define tombstones and a live SQLite update: `forget` appends
+ONE `**Tombstone**`-marked `log.md` entry per removed concept, and deletes
+matching rows from the live `.openkos/findings.db` store when that store
+exists. What this spec does not define is:
+
+- **Purge machinery** (`privacy-purge`). Tombstones mark a concept as
+  forgotten; true irreversible erasure across git history is `purge`'s job.
+- **Rewriting or retargeting dangling inbound links** from OTHER concepts
+  that still link to the forgotten one. Detection is in scope; silent
+  rewriting is not.
+- **Correcting the two known `docs/cli.md` inaccuracies** (SQLite claim,
+  lint dangling-link claim) — filed as a separate follow-up.
 
 ## Requirements
 

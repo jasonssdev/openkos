@@ -13,8 +13,10 @@ itself is unchanged for any caller that does not go through `reindex`.
 `state/fts.py` is the canonical-layer foundation for lexical retrieval: a
 pure library module that builds an in-memory SQLite FTS5 index over the
 compiled bundle and exposes a `search()` surface returning OKF concept IDs.
-It has no CLI command and no user-visible workspace effect; its only
-consumer is the future `query` command.
+It has no CLI command of its own; direct calls to `build_index(bundle_dir)`
+still have no on-disk effect, but `reindex` now persists this index to
+the workspace state directory with a `.gitignore` entry (see the Note
+below).
 
 ## Non-Goals
 

@@ -9,10 +9,19 @@ incremental backfill gated by `content_hash` so unchanged docs never re-embed.
 
 ## Non-Goals
 
-This spec does not define: RRF/hybrid fusion; any change to
-`retrieval/answer.py` or the `query` command; graph traversal; chunk-level
-embedding; embedding-text composition beyond raw doc text; a `doctor`
-subcommand wiring (doctor remains read-only and never calls `reindex`).
+This spec DOES define chunk-level embedding and embedding-text composition:
+each document's title/description/tags/body are composed into one or more
+chunks per the `embedding-chunking` capability's windowing contract, with the
+header repeated on every chunk, and embedded as per-chunk calls. What this
+spec does not define is:
+
+- **RRF/hybrid fusion** (`retrieval-fusion`).
+- **Any change to `retrieval/answer.py` or the `query` command**
+  (`query-answer`). `reindex` writes derived state only -- `vectors.db`
+  and the on-disk FTS and graph indexes -- never bundle bytes.
+- **Graph traversal** (`graph-projection`).
+- **A `doctor` subcommand wiring.** `doctor` remains read-only and never
+  calls `reindex`.
 
 ## Requirements
 
