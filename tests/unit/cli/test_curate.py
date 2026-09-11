@@ -2442,7 +2442,7 @@ def test_prepare_relate_returns_snapshot_baseline_and_writes_nothing(
     _write_doc(tmp_path / "bundle" / "b.md", title="B")
     before = _snapshot(tmp_path)
 
-    from openkos.cli.main import PreparedRelate, prepare_relate
+    from openkos.application.lifecycle import PreparedRelate, prepare_relate
 
     prepared = prepare_relate(
         tmp_path / "bundle" / "a.md",
@@ -2466,11 +2466,9 @@ def test_relate_core_performs_only_write_atomic_twice_and_propagates_errors(
     _init_workspace(tmp_path, monkeypatch)
     _write_doc(tmp_path / "bundle" / "a.md", title="A")
 
-    from openkos.cli import main as cli_main
-
     source_path = tmp_path / "bundle" / "a.md"
     log_path = tmp_path / "bundle" / "log.md"
-    prepared = cli_main.prepare_relate(
+    prepared = application_lifecycle.prepare_relate(
         source_path, log_path, "a", "b", "references", tmp_path, now=datetime.now(UTC)
     )
 
@@ -2484,7 +2482,7 @@ def test_relate_core_performs_only_write_atomic_twice_and_propagates_errors(
         real_write_atomic(path, text)
 
     monkeypatch.setattr(fsio_module, "write_atomic", _spy)
-    cli_main.relate_core(source_path, log_path, prepared)
+    application_lifecycle.relate_core(source_path, log_path, prepared)
     assert calls == [source_path, log_path]
 
     def _raise(path: Path, text: str) -> None:
@@ -2492,7 +2490,7 @@ def test_relate_core_performs_only_write_atomic_twice_and_propagates_errors(
 
     monkeypatch.setattr(fsio_module, "write_atomic", _raise)
     with pytest.raises(OSError, match="disk full"):
-        cli_main.relate_core(source_path, log_path, prepared)
+        application_lifecycle.relate_core(source_path, log_path, prepared)
 
 
 def test_relate_test_suite_regression_unedited() -> None:
@@ -2516,7 +2514,10 @@ def test_prepare_set_volatility_returns_snapshot_baseline_and_writes_nothing(
     _init_workspace(tmp_path, monkeypatch)
     before = _snapshot(tmp_path)
 
-    from openkos.cli.main import PreparedSetVolatility, prepare_set_volatility
+    from openkos.application.lifecycle import (
+        PreparedSetVolatility,
+        prepare_set_volatility,
+    )
 
     layout = config.WorkspaceLayout(tmp_path)
     prepared = prepare_set_volatility(layout.config_path, "Person", "volatile")
@@ -2530,10 +2531,11 @@ def test_set_volatility_core_performs_only_one_write_atomic_and_propagates_error
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _init_workspace(tmp_path, monkeypatch)
-    from openkos.cli import main as cli_main
 
     layout = config.WorkspaceLayout(tmp_path)
-    prepared = cli_main.prepare_set_volatility(layout.config_path, "Person", "volatile")
+    prepared = application_lifecycle.prepare_set_volatility(
+        layout.config_path, "Person", "volatile"
+    )
 
     calls: list[Path] = []
     from openkos import fsio as fsio_module
@@ -2545,7 +2547,7 @@ def test_set_volatility_core_performs_only_one_write_atomic_and_propagates_error
         real_write_atomic(path, text)
 
     monkeypatch.setattr(fsio_module, "write_atomic", _spy)
-    cli_main.set_volatility_core(layout.config_path, prepared)
+    application_lifecycle.set_volatility_core(layout.config_path, prepared)
     assert calls == [layout.config_path]
 
     def _raise(path: Path, text: str) -> None:
@@ -2553,7 +2555,7 @@ def test_set_volatility_core_performs_only_one_write_atomic_and_propagates_error
 
     monkeypatch.setattr(fsio_module, "write_atomic", _raise)
     with pytest.raises(ValueError, match="bad shape"):
-        cli_main.set_volatility_core(layout.config_path, prepared)
+        application_lifecycle.set_volatility_core(layout.config_path, prepared)
 
 
 def test_set_volatility_test_suite_regression_unedited() -> None:
