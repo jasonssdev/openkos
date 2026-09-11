@@ -99,8 +99,8 @@ def test_918_slice5_helpers_no_longer_live_on_cli_main() -> None:
     The hazard here was measured, not hypothetical:
     `application.lifecycle.preview_apply_same` calls `ordered_merge_pair`,
     `cross_source_same_pair`, `cross_type_concern`, `prepare_one_merge`,
-    and `resolve_concept_path` by module-local name, and its own sort key
-    calls `_member_body_length` the same way. A
+    and `resolve_concept_path` by module-local name, and
+    `ordered_merge_pair` calls `member_body_length` the same way. A
     `monkeypatch.setattr("openkos.cli.main._prepare_one_merge", ...)`
     patches only `cli.main`'s call sites -- it is a silent no-op for that
     service-internal walk, so the patched test and the real code path
