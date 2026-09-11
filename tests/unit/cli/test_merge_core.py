@@ -17,7 +17,7 @@ from openkos.bundle import ledger as bundle_ledger
 from openkos.bundle import links as bundle_links
 from openkos.bundle import provenance as bundle_provenance
 from openkos.bundle import relations as bundle_relations
-from openkos.cli.main import _format_merge_preview_line, _resolve_concept_path, app
+from openkos.cli.main import _format_merge_preview_line, app
 from openkos.model import okf
 from openkos.vcs import git as vcs_git
 from tests.unit.cli.conftest import commit_pending_fixture_docs
@@ -101,8 +101,12 @@ def _write_concept_with_provenance(
 def _resolve(
     bundle_dir: Path, survivor_id: str, absorbed_id: str
 ) -> tuple[Path, str, Path, str]:
-    survivor_path, survivor_canonical = _resolve_concept_path(bundle_dir, survivor_id)
-    absorbed_path, absorbed_canonical = _resolve_concept_path(bundle_dir, absorbed_id)
+    survivor_path, survivor_canonical = application_lifecycle.resolve_concept_path(
+        bundle_dir, survivor_id
+    )
+    absorbed_path, absorbed_canonical = application_lifecycle.resolve_concept_path(
+        bundle_dir, absorbed_id
+    )
     return survivor_path, survivor_canonical, absorbed_path, absorbed_canonical
 
 
@@ -171,7 +175,7 @@ def test_prepare_merge_raises_oserror_on_missing_absorbed_file(
     _write_concept(tmp_path, "concepts/survivor", title="Survivor")
 
     bundle_dir = tmp_path / "bundle"
-    survivor_path, survivor_canonical = _resolve_concept_path(
+    survivor_path, survivor_canonical = application_lifecycle.resolve_concept_path(
         bundle_dir, "concepts/survivor"
     )
     missing_absorbed_path = bundle_dir / "concepts" / "missing.md"
@@ -1019,7 +1023,7 @@ def test_build_merged_document_body_layout_is_pinned() -> None:
 def test_resolve_concept_path_finds_a_decomposed_filename_from_an_nfc_id(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`_resolve_concept_path` is the shared id-to-path resolver every write
+    """`resolve_concept_path` is the shared id-to-path resolver every write
     verb goes through, and #430 made every id derived from a walked path NFC.
 
     A bundle authored on HFS+ and cloned onto a byte-exact filesystem carries
@@ -1031,7 +1035,6 @@ def test_resolve_concept_path_finds_a_decomposed_filename_from_an_nfc_id(
     `Path.exists` is forced False so the fallback scan is what answers;
     macOS resolves both spellings insensitively and would otherwise satisfy
     the direct probe without exercising the branch ext4 depends on."""
-    from openkos.cli.main import _resolve_concept_path
 
     nfc_stem = "café"
     nfd_stem = "café"
@@ -1052,7 +1055,9 @@ def test_resolve_concept_path_finds_a_decomposed_filename_from_an_nfc_id(
         lambda self: False if self.suffix == ".md" else real_exists(self),
     )
 
-    resolved, canonical = _resolve_concept_path(bundle_dir, f"concepts/{nfc_stem}")
+    resolved, canonical = application_lifecycle.resolve_concept_path(
+        bundle_dir, f"concepts/{nfc_stem}"
+    )
 
     assert resolved.name == f"{nfd_stem}.md"
     assert canonical == f"concepts/{nfc_stem}"

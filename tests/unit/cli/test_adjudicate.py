@@ -5123,7 +5123,7 @@ def test_ordered_merge_pair_never_keeps_an_unreadable_member(
     bundle_dir = tmp_path / "bundle"
     _write_doc(bundle_dir / "concepts" / "good.md", title="Good")
 
-    survivor, absorbed, criterion = main._ordered_merge_pair(
+    survivor, absorbed, criterion = application_lifecycle.ordered_merge_pair(
         bundle_dir, ("concepts/absent", "concepts/good")
     )
 
@@ -5148,7 +5148,7 @@ def test_prepare_one_merge_honors_a_pinned_ordered_pair(
     _write_doc(layout.bundle_dir / "concepts" / "b.md", title="B")
     group = _two_member_group(("concepts/a", "concepts/b"))
 
-    prepared = main._prepare_one_merge(
+    prepared = application_lifecycle.prepare_one_merge(
         tmp_path,
         layout,
         layout.bundle_dir / "index.md",
@@ -5672,27 +5672,33 @@ def test_cross_type_concern_distinguishes_agreement_from_unknown(
 
     # Agreement is the ONLY silence.
     assert (
-        main._cross_type_concern(bundle_dir, ("concepts/typed", "concepts/typed"))
+        application_lifecycle.cross_type_concern(
+            bundle_dir, ("concepts/typed", "concepts/typed")
+        )
         is None
     )
     # Disagreement names both types, in member order.
-    assert main._cross_type_concern(
+    assert application_lifecycle.cross_type_concern(
         bundle_dir, ("concepts/typed", "concepts/other")
     ) == ("members declare different OKF types (Concept / Entity)")
-    assert main._cross_type_concern(
+    assert application_lifecycle.cross_type_concern(
         bundle_dir, ("concepts/other", "concepts/typed")
     ) == ("members declare different OKF types (Entity / Concept)")
     # A document that PARSES but declares no type names the member, and is
     # NOT silence -- it is the case with no other owner.
     assert (
-        main._cross_type_concern(bundle_dir, ("concepts/typed", "concepts/untyped"))
+        application_lifecycle.cross_type_concern(
+            bundle_dir, ("concepts/typed", "concepts/untyped")
+        )
         == "concepts/untyped declares no usable OKF type"
     )
     # An UNRESOLVABLE member stays silent: that is the already-merged /
     # missing case the batch already excludes from the preview and the
     # Total, and a louder second voice here would misreport it.
     assert (
-        main._cross_type_concern(bundle_dir, ("concepts/typed", "concepts/absent"))
+        application_lifecycle.cross_type_concern(
+            bundle_dir, ("concepts/typed", "concepts/absent")
+        )
         is None
     )
     # A member that RESOLVES but cannot be read is a concern, not silence:
@@ -5703,7 +5709,7 @@ def test_cross_type_concern_distinguishes_agreement_from_unknown(
     )
     unreadable.chmod(0o000)
     try:
-        concern = main._cross_type_concern(
+        concern = application_lifecycle.cross_type_concern(
             bundle_dir, ("concepts/typed", "concepts/locked")
         )
     finally:

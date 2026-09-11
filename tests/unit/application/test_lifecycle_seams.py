@@ -86,6 +86,48 @@ def test_purge_confirm_phrase_and_decisions_history_targets_no_longer_live_on_cl
     assert not hasattr(cli_main, "_purge_residual_store_notice")
 
 
+def test_918_slice5_helpers_no_longer_live_on_cli_main() -> None:
+    """Issue #955: `_canonicalize_concept_id`/`_resolve_concept_path`/
+    `_merge_drift_targets`/`_member_body_length`/`_ordered_merge_pair`/
+    `_cross_source_same_pair`/`_cross_type_concern`/`_prepare_one_merge`/
+    `_reconcile_planned` relocated into `application.lifecycle` by issue
+    #918 Slice 5, but were briefly aliased back onto `openkos.cli.main`
+    under their original private names -- exactly the "injection seam"
+    hazard `test_prepare_merge_and_merge_core_no_longer_live_on_cli_main`
+    above already guards against for `prepare_merge`/`merge_core`.
+
+    The hazard here was measured, not hypothetical:
+    `application.lifecycle.preview_apply_same` calls `ordered_merge_pair`,
+    `cross_source_same_pair`, `cross_type_concern`, `prepare_one_merge`,
+    and `resolve_concept_path` by module-local name, and its own sort key
+    calls `_member_body_length` the same way. A
+    `monkeypatch.setattr("openkos.cli.main._prepare_one_merge", ...)`
+    patches only `cli.main`'s call sites -- it is a silent no-op for that
+    service-internal walk, so the patched test and the real code path
+    diverge while the test still reports green. Deleting the aliases
+    turns that same stale patch into an `AttributeError` under pytest's
+    default `raising=True`, instead of a silent divergence.
+
+    What this guard does NOT observe: whether every former in-module call
+    site was rewritten. A surviving reference to a deleted alias in a
+    rarely executed branch of `cli/main.py` raises `NameError` only when
+    that branch runs -- it is not a failure here. The call-site sweep is
+    proved by the suite that exercises those branches, not by this
+    assertion."""
+    for name in (
+        "_canonicalize_concept_id",
+        "_resolve_concept_path",
+        "_merge_drift_targets",
+        "_member_body_length",
+        "_ordered_merge_pair",
+        "_cross_source_same_pair",
+        "_cross_type_concern",
+        "_prepare_one_merge",
+        "_reconcile_planned",
+    ):
+        assert not hasattr(cli_main, name)
+
+
 def test_forget_plan_gate_one_counts_never_become_confirmation_request_fields() -> None:
     """D2/R3 (task 8.2): `ForgetPlan.surviving_refs`/`unverifiable_refs` are
     Gate 1's hard-refusal inputs -- `forget`'s inbound-reference guard,
