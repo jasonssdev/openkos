@@ -34,13 +34,13 @@ Every change must respect these. A technically good change that violates one is 
 - **Python 3.12+**, `src/` layout, package `openkos`, `uv` for envs/deps.
 - **`pyproject.toml` is the single config source** — deps, the console entry point (`openkos = "openkos.cli.main:app"`), and Ruff / MyPy / Pytest settings.
 - **Ship types:** keep `src/openkos/py.typed`.
-- **Start lean, grow by MVP.** Create a package when its code arrives — do not scaffold empty folders. MVP 1 needs: `model`, `bundle`, `state`, `llm`, `producers`, `compiler`, `retrieval` (lexical + context), `lint`, `lifecycle`, `config`, `cli`.
-- **Extension interfaces are `typing.Protocol`** (`Producer`, `Consumer`, `VectorStore`, `GraphStore`, `LLMBackend`); plugins via entry points.
-- **`engine.py` stays thin** (wiring / composition only); behavior lives in subpackages.
+- **Start lean, grow by MVP.** Create a package when its code arrives — do not scaffold empty folders. What ships today: `model`, `bundle`, `vcs`, `state`, `graph`, `retrieval`, `extraction`, `resolution`, `llm`, `application`, `cli`, plus `config.py`, `lint.py`, `lifecycle.py`, `sensitivity.py`, `fsio.py`, `lock.py`. `docs/architecture.md` is the authority on the shipped tree; do not restate it here.
+- **Extension interfaces are `typing.Protocol`.** The seams that exist today are `GraphStore` (`graph/base.py`) and `LLMBackend` (`llm/base.py`), and they are internal — OpenKOS publishes no plugin API and no entry-point group. A `Producer`/`Consumer` extension surface is a roadmap item, not present code; do not write as though it exists.
+- **There is NO `engine.py`.** [ADR-0018](docs/adr/0018-application-layer-for-bounded-context-services.md) chose narrow synchronous use-case services under `application/` instead of one orchestrator. Proposing an `engine.py` re-opens a decided question.
 - **The core is synchronous.** Async only at the MVP 3 API/MCP edge (which calls the sync engine via a thread pool). Do not make the core async.
 - **Layering:** the canonical layer (`model`, `bundle`, `state`) never depends on the derived layer (`retrieval`, `graph`, `memory`).
 - **The OKF adapter is one seam.** All knowledge of the format's on-disk shape — frontmatter parsing/emission, reserved files, §9 conformance — lives in `model/okf.py` and nowhere else; the rest of the engine handles Knowledge Objects. OKF is a v0.1 **draft** whose §11 permits breaking major bumps, so this containment is what lets us adopt it safely. Do not spread format knowledge across the codebase.
-- **LLM calls** go behind `LLMBackend` and talk to Ollama's OpenAI-compatible endpoint; use Pydantic-validated structured output (e.g. `instructor`) with retry. The compiler is a **deterministic pipeline with LLM steps** — no agent framework in the core.
+- **LLM calls** go behind `LLMBackend` (`llm/base.py`) and talk to Ollama's OpenAI-compatible endpoint. `chat` returns `str`; structured replies are recovered by the **fail-closed JSON extraction** in `llm/parsing.py` (`extract_json_object`/`extract_json_items`), not by a validation library — `pydantic` and `instructor` are deliberately not dependencies. The extraction pipeline is **deterministic with LLM steps** — no agent framework in the core.
 
 ## Quality gates
 

@@ -14,6 +14,182 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+## [0.2.14] - 2026-09-11
+
+Thirty-seven commits closing twenty-two issues, and the release has two
+separable halves. The first is a run of correctness work against guarantees
+the project had written down but never enforced: `confidential` text was
+reaching a remote embedding backend, two concurrent processes could silently
+overwrite each other, a symlinked path segment let destructive verbs operate
+outside the workspace, `purge` reported success after failing to erase, and
+every published artifact shipped without the LICENSE text its own metadata
+pointed at. The second is the ADR-0018 application layer: `ingest`, `query`
+and the eight lifecycle verbs now have presentation-free cores an `api` or
+`mcp` adapter can drive without importing `openkos.cli`. That half changes no
+observable behaviour, and is deliberately guarded by pins landed before each
+move rather than by inspection after it.
+
+### Security
+
+- Embedding was not gated on sensitivity, so `confidential` text reached a
+  remote backend ([#922](https://github.com/jasonssdev/openkos/issues/922)).
+  `sensitivity` governs egress, and an embed call against a backend that is
+  not this machine puts a document's text on the wire exactly as an `llm.chat`
+  payload does — but the embed path had no sensitivity check at all. A
+  non-local `OLLAMA_HOST` earned a stderr advisory and every document was sent
+  regardless, `confidential` included, against the project's own "confidential
+  never leaves the device" guarantee. All three embed seams — `reindex`,
+  `ingest`'s per-file embed, and the write-time `_refresh_derived_after_write`
+  — now resolve locality from the client that will do the sending and delegate
+  the decision to `sensitivity.should_block`, the one shared predicate the
+  `llm.chat` seams already delegate to, with a fail-closed default. The refresh
+  seam was the worst of the three: it embedded every document without even the
+  advisory, so a write against a remote host sent text off the machine in
+  complete silence. A withheld document is reported as its own fourth outcome
+  rather than folded into `skipped`; it does not change the exit code, is not
+  pruned, and stays lexically searchable, since a local FTS index is not
+  egress.
+- Destructive verbs could reach outside the workspace through a symlinked path
+  segment ([#926](https://github.com/jasonssdev/openkos/issues/926)).
+  `require_workspace` validated the bundle with `is_file()`, which RESOLVES
+  symlinks, so a workspace initialized cleanly could later have `bundle/`,
+  `raw/`, or an inner directory swapped for a link into an external tree and
+  every command would keep operating through it. Reproduced as real data loss:
+  with `bundle/area` linked outside, `openkos forget area/secret` unlinked the
+  **external** file, exited 0 and reported success — only git noticed, and only
+  as a warning (`pathspec ... is beyond a symbolic link`). `raw/`, `bundle/`,
+  the two bundle spine files, and every concept-path segment are now checked,
+  and a linked segment is refused with the segment named and a remediation.
+  A linked workspace ROOT stays supported: reaching a workspace through a link
+  (`~/ws` → `/Volumes/x/ws`) escapes nothing, since everything below it still
+  resolves within one tree.
+
+### Fixed
+
+- Two concurrent OpenKOS processes could silently overwrite each other's work
+  ([#925](https://github.com/jasonssdev/openkos/issues/925)). There was no
+  interprocess lock anywhere in the codebase. The drift guards protect ONE
+  process's read → confirm → write window; they are blind to a second process,
+  so two mutators each read the same `bundle/index.md`, each passed their own
+  drift comparison against their own snapshot, and both wrote — last writer
+  won, and the first run's committed entries were gone with no warning from
+  either side. Mutating verbs now hold an advisory interprocess lock for the
+  whole command, and a second mutator refuses with **exit 3** — the documented
+  retry-safe code, since nothing was read or written. Read-only verbs
+  (`status`, `next`, `list`, `lint`, `doctor`) are never blocked, and
+  `openkos <verb> --help` never waits on a lock. The lock lives outside the
+  workspace, so a refusing run still writes nothing at all — not even a lock
+  file — and a read-only or network-mounted workspace can still be locked.
+- `purge` exited 0 after failing to delete a store, reporting an erasure that
+  had not happened ([#923](https://github.com/jasonssdev/openkos/issues/923)).
+  The physical unlink IS the erasure — the store is deleted rather than
+  row-level DELETEd precisely so no freelist-recoverable pages survive — but
+  the never-fail rationale written for the index REBUILD had been applied to
+  the delete as well, so an unattended caller was told the data was gone while
+  the store still held pre-purge content. The run now exits **1** after
+  printing its expunge summary, matching this command's existing
+  `GitFinalizeError` path, and the remediation no longer says to run
+  `openkos reindex`: a reindex rebuilds index CONTENT and removes no residual
+  pages, so an operator who followed it got search back and kept the residue.
+  The INCOMPLETE ERASURE block now names each store's full path, says removing
+  the file is what finishes the erasure, and states outright that `reindex`
+  does not. Rebuilt stores are covered too — `fts.db` and `graph.db` never
+  appear in the dropped-store notice, but rebuilding over a file that was never
+  unlinked leaves the pre-purge pages just as recoverable.
+- A malformed-frontmatter parse escaped `converged_reingest`'s guard instead of
+  falling through ([#942](https://github.com/jasonssdev/openkos/issues/942)).
+  The guard around the prior-Source read caught `ValueError`, but
+  `frontmatter.loads` raises `yaml.parser.ParserError` — a `yaml.YAMLError`,
+  which is not a `ValueError` — so the documented fall-through to the full run
+  was unreachable. Widened to match `_read_source_sensitivity` and
+  `_read_source_title` in the same module. Falling through is the fail-safe
+  direction: the full run rewrites the Source either way, so declining to trust
+  an unreadable one loses no observation. The existing "unparseable
+  frontmatter" test passed a document with NO frontmatter block, which
+  `okf.load_frontmatter` tolerates, so it could never have caught this; it is
+  renamed to say what it covers and joined by a case with genuinely malformed
+  YAML.
+- Both published artifacts declared `License-Expression: Apache-2.0` while
+  containing no LICENSE file
+  ([#924](https://github.com/jasonssdev/openkos/issues/924)), so every
+  distribution omitted the text Apache-2.0 section 4 requires of a
+  redistribution. `license` is an SPDX expression, not the file;
+  `license-files` is what puts the text in the archives. The CI guard reads
+  INSIDE both artifacts rather than trusting the backend or the metadata — a
+  green build had already proven it cannot see this class of gap — and was
+  verified against deliberately stripped copies of each.
+
+### Changed
+
+- The ADR-0018 application layer is complete: `application/query.py`,
+  `application/ingest.py` and `application/lifecycle.py`
+  ([#918](https://github.com/jasonssdev/openkos/issues/918)). Five mutating
+  verbs — `merge`, `unmerge`, `forget`, `purge`, and `adjudicate
+  --apply`/`--apply-same` — had their orchestration and their presentation
+  braided together inside `cli/main.py`; the orchestration is now composed
+  into callables any adapter can drive without importing `openkos.cli`, with
+  each verb's Phase A (validate/preview), confirmation gate and Phase B
+  (write) staged as typed data. `relate` and `set-volatility` contribute their
+  pure `prepare_*`/`*_core` pairs to the same module without being composed
+  that way: each adapter still drives their confirm gate and commit sequencing
+  itself. Every confirmation is now a `ConfirmationRequest` rather than an
+  adapter literal, so a non-TTY caller can answer without re-deriving the
+  prompt — `adjudicate --apply`'s per-item merge gate was the last one, and
+  `cli/main.py` and `cli/curate.py` had been spelling its question
+  independently at two call sites. No observable behaviour changes: every
+  prompt and refusal sentence is byte-identical, pinned as whole-stream
+  equalities BEFORE each move so the guards falsify rather than tautologise.
+  The same split landed earlier in the cycle for `ingest`'s plan composition
+  and `query`'s read and `--save` filing paths.
+- The nine `cli.main` aliases left behind by that relocation are deleted and
+  their call sites repointed
+  ([#955](https://github.com/jasonssdev/openkos/issues/955)). The hazard was
+  measurable, not hypothetical: the relocated service calls its neighbours by
+  module-local name, so a `monkeypatch.setattr("openkos.cli.main._prepare_one_merge", ...)`
+  patched only the adapter's call sites and was a silent no-op for the
+  service-internal walk — the two paths disagreed on which function ran while
+  the test stayed green. `_member_body_length` was promoted to
+  `member_body_length` for the same reason
+  ([#974](https://github.com/jasonssdev/openkos/issues/974)), and both are now
+  held by layering guards that were mutation-checked in BOTH directions.
+- `_split_frontmatter_verbatim` is consolidated into `model/okf.py` as a
+  public, label-parameterized `split_frontmatter_verbatim`
+  ([#919](https://github.com/jasonssdev/openkos/issues/919)), beside its
+  siblings `load_frontmatter`/`dump_frontmatter`. `bundle/index.py` and
+  `bundle/source_titles.py` keep a one-line wrapper binding their own
+  operator-facing label, and exactly one `_FRONTMATTER_RE` now exists
+  repo-wide.
+
+### Measured
+
+- CI gained a reduced macOS and Windows smoke job
+  ([#929](https://github.com/jasonssdev/openkos/issues/929)). The full suite
+  still runs on Linux only; the new `cross_platform_smoke` subset covers what
+  Linux alone cannot — filesystem normalization, symlink and permission
+  refusals, the workspace lock's `fcntl`/`msvcrt` branches, SQLite WAL
+  PRAGMAs, and `init`/`ingest`/`doctor` against the packaged wheel.
+  Platform-gated tests that first ran on Linux cost two fix cycles on an
+  earlier pull request, and HFS+/SMB normalization differences had already
+  produced real graph-edge bugs; this exists to stop paying that bill twice.
+- The suite's 25 unclosed SQLite connections are closed, and a regression gate
+  makes a new one fail the run
+  ([#927](https://github.com/jasonssdev/openkos/issues/927)). Two
+  `filterwarnings` entries are required and both are documented in
+  `pyproject.toml`, because the obvious single-entry version surfaces the leak
+  only as a warnings-summary line while the suite still exits 0.
+- An unswept eval entry point is now a failure rather than an absence
+  ([#928](https://github.com/jasonssdev/openkos/issues/928)). The sweep
+  DISCOVERS harnesses by flag, so a harness without a `--self-test` reported
+  green by never being looked at.
+- Releases are now provably cut from a green `main`
+  ([#921](https://github.com/jasonssdev/openkos/issues/921)). The header
+  comment said to do it; that sentence was the entire mechanism, and a tag cut
+  from any commit on any branch would have published with the artifact
+  carrying no evidence of its origin. Two checks now run BEFORE the build, so
+  a release that must not happen fails before artifacts exist: the tag's commit
+  must be contained in `origin/main` as the remote sees it, and the CI run for
+  that EXACT commit must have concluded `success`.
+
 ### Documentation
 
 - Documentation truth sweep — docs, OpenSpec context, and the canonical example
@@ -46,40 +222,29 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   provenance is corrected, and new tests keep the example byte-identical to a
   fresh `init`. Fixing the provenance also produced six typed `derived_from`
   graph edges the demo bundle previously had none of.
-
-### Fixed
-
-- Two concurrent OpenKOS processes could silently overwrite each other's work
-  ([#925](https://github.com/jasonssdev/openkos/issues/925)). There was no
-  interprocess lock anywhere in the codebase. The drift guards protect ONE
-  process's read → confirm → write window; they are blind to a second process,
-  so two mutators each read the same `bundle/index.md`, each passed their own
-  drift comparison against their own snapshot, and both wrote — last writer
-  won, and the first run's committed entries were gone with no warning from
-  either side. Mutating verbs now hold an advisory interprocess lock for the
-  whole command, and a second mutator refuses with **exit 3** — the documented
-  retry-safe code, since nothing was read or written. Read-only verbs
-  (`status`, `next`, `list`, `lint`, `doctor`) are never blocked, and
-  `openkos <verb> --help` never waits on a lock. The lock lives outside the
-  workspace, so a refusing run still writes nothing at all — not even a lock
-  file — and a read-only or network-mounted workspace can still be locked.
-
-### Security
-
-- Destructive verbs could reach outside the workspace through a symlinked path
-  segment ([#926](https://github.com/jasonssdev/openkos/issues/926)).
-  `require_workspace` validated the bundle with `is_file()`, which RESOLVES
-  symlinks, so a workspace initialized cleanly could later have `bundle/`,
-  `raw/`, or an inner directory swapped for a link into an external tree and
-  every command would keep operating through it. Reproduced as real data loss:
-  with `bundle/area` linked outside, `openkos forget area/secret` unlinked the
-  **external** file, exited 0 and reported success — only git noticed, and only
-  as a warning (`pathspec ... is beyond a symbolic link`). `raw/`, `bundle/`,
-  the two bundle spine files, and every concept-path segment are now checked,
-  and a linked segment is refused with the segment named and a remediation.
-  A linked workspace ROOT stays supported: reaching a workspace through a link
-  (`~/ws` → `/Volumes/x/ws`) escapes nothing, since everything below it still
-  resolves within one tree.
+- Eleven capability specs had `## Non-Goals` sections that deny what the same
+  file's `## Requirements` define
+  ([#954](https://github.com/jasonssdev/openkos/issues/954),
+  [#965](https://github.com/jasonssdev/openkos/issues/965),
+  [#967](https://github.com/jasonssdev/openkos/issues/967),
+  [#969](https://github.com/jasonssdev/openkos/issues/969)). They were written
+  for a planned slice and never revisited once that slice landed, so a reader
+  trusting Non-Goals concluded the capability lived elsewhere; it does not.
+  Each section now opens by naming what the spec DOES define, then lists the
+  genuine exclusions with the spec that owns each. A separate class — where the
+  denial is TRUE and its justification has expired — is corrected in three more
+  specs. No `### Requirement:` heading or body was edited in any of them;
+  requirement counts are byte-identical.
+- `reindex-command` held two requirements that contradict each other, and
+  `fts-state` named the FTS artifact `.openkos/openkos.db` in four places while
+  `config.py` declares it as `.openkos/fts.db`
+  ([#970](https://github.com/jasonssdev/openkos/issues/970)). Measured against
+  the code, `reindex` upserts `vectors.db` AND rebuilds FTS AND `graph.db`; the
+  "only populates `vectors.db`" claim is corrected. The `openkos.db` name
+  appears zero times in `src/` — it came from an architecture note recording
+  consolidation as an unadopted option, and the spec was written against that
+  shape. A test asserting `openkos.db` does not exist was asserting the absence
+  of a file no code path can write.
 
 
 ## [0.2.13] - 2026-08-28
@@ -2478,7 +2643,8 @@ and Memory) work.
 - Default embedding model is `bge-m3` (ADR-0006), superseding the earlier
   `qwen3-embedding:0.6b` default.
 
-[Unreleased]: https://github.com/jasonssdev/openkos/compare/v0.2.13...HEAD
+[Unreleased]: https://github.com/jasonssdev/openkos/compare/v0.2.14...HEAD
+[0.2.14]: https://github.com/jasonssdev/openkos/compare/v0.2.13...v0.2.14
 [0.2.13]: https://github.com/jasonssdev/openkos/compare/v0.2.12...v0.2.13
 [0.2.12]: https://github.com/jasonssdev/openkos/compare/v0.2.11...v0.2.12
 [0.2.11]: https://github.com/jasonssdev/openkos/compare/v0.2.10...v0.2.11

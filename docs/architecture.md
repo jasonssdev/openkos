@@ -16,7 +16,7 @@ sensitivity: public
 
 This document maps how OpenKOS is organized — both the engine's source code and the user's knowledge bundle — and how raw source material is stored and versioned.
 
-**What ships and what is planned are kept apart here.** Everything under "Repository structure" describes the code that exists today at v0.2.13; anything not yet built lives in [Target architecture](#target-architecture) or in [`roadmap.md`](roadmap.md), labelled as such. That separation is deliberate: this document previously showed one forward-looking tree with its corrections in footnotes, and a reader could not tell a module that exists from one that does not.
+**What ships and what is planned are kept apart here.** Everything under "Repository structure" describes the code that exists today at v0.2.14; anything not yet built lives in [Target architecture](#target-architecture) or in [`roadmap.md`](roadmap.md), labelled as such. That separation is deliberate: this document previously showed one forward-looking tree with its corrections in footnotes, and a reader could not tell a module that exists from one that does not.
 
 Two ideas from elsewhere in the docs anchor everything here: the split between a **durable canonical layer** (files + SQLite + git) and a **rebuildable derived layer** (vectors, graph) from [`tech_stack.md`](tech_stack.md), and the Knowledge Object model from [`knowledge-object-model.md`](knowledge-object-model.md).
 
@@ -58,7 +58,8 @@ openkos/
 │   ├── llm/                      # model runtime abstraction
 │   │   ├── base.py  ollama.py  prompting.py  parsing.py
 │   ├── application/              # synchronous use-case services (ADR-0018)
-│   │   └── query.py              # the first one; ingest and lifecycle to follow
+│   │   ├── query.py  ingest.py  lifecycle.py
+│   │   └── consent.py            # confirmation gates staged as typed data
 │   ├── cli/                      # Typer entry layer
 │   │   ├── main.py  curate.py  next_action.py  observability.py
 │   ├── config.py                 # openkos.yaml + WorkspaceLayout
@@ -78,7 +79,7 @@ The principles that shape it:
 
 - **Each package is a piece of the architecture.** `model` is the Knowledge Object; `bundle` + `vcs` are the durable canonical layer; `state` + `retrieval` + `graph` are the derived layer; `extraction` + `resolution` are the pipeline that turns text into objects and then decides what they mean; `lint`/`lifecycle`/`sensitivity` are the disciplines; `cli` is the entry layer.
 - **The `base.py` files are the seams that exist today.** `graph/base.py` and `llm/base.py` define the shapes their implementations satisfy (`sqlite_graph.py`, `ollama.py`). They are internal seams, not a published plugin API: OpenKOS ships no `Producer`/`Consumer` interface and no entry-point group. That extension surface is a roadmap item, not present code — see [`roadmap.md`](roadmap.md).
-- **Use-case services, not one orchestrator.** [ADR-0018](adr/0018-application-layer-for-bounded-context-services.md) chose narrow synchronous services under `application/` over a single `engine.py`, so each use case owns its own composition instead of one module owning all of them. `application/query.py` is the first; ingest and lifecycle follow. The CLI is being reduced to parsing, presentation, and exit codes as each one lands ([#918](https://github.com/jasonssdev/openkos/issues/918)).
+- **Use-case services, not one orchestrator.** [ADR-0018](adr/0018-application-layer-for-bounded-context-services.md) chose narrow synchronous services under `application/` over a single `engine.py`, so each use case owns its own composition instead of one module owning all of them. All three have landed — `query.py`, `ingest.py`, `lifecycle.py` — with `consent.py` holding the confirmation contracts as typed data so a non-TTY adapter can answer a gate without re-deriving its prompt ([#918](https://github.com/jasonssdev/openkos/issues/918)). `cli/` keeps parsing, presentation, exit codes, and the shared write mechanics the services call through rather than own.
 - **The derived layer is reconstructible — but not uniformly, and not for free.** The five SQLite stores under `.openkos/` sit at three different points on that scale. See [State taxonomy](#state-taxonomy) below, which is the one place that distinction is written down.
 
 ## Repository conventions
@@ -199,11 +200,6 @@ Nothing in this section exists yet. It is kept separate from everything above so
 a reader can never mistake a plan for a module, and it is deliberately short —
 dates and scope belong to [`roadmap.md`](roadmap.md), not here.
 
-- **`application/` completes.** ADR-0018's remaining services — `application/ingest.py`
-  and `application/lifecycle.py` — join `query.py`, at which point `cli/main.py`
-  is parsing, presentation, and exit codes ([#918](https://github.com/jasonssdev/openkos/issues/918)).
-  Lifecycle carries the unsolved piece: the confirmation contracts have to be
-  expressed as data before a non-TTY adapter can drive them.
 - **`api/` and `mcp/` (MVP 3).** Thin async adapters over the synchronous
   application services — which is the reason those services are being extracted
   first. An adapter built on Typer command internals would duplicate behaviour
