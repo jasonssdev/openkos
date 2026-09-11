@@ -31,6 +31,7 @@ from typer.testing import CliRunner, _NamedTextIOWrapper
 
 from openkos import config as okf_config
 from openkos.application import lifecycle as application_lifecycle
+from openkos.application.consent import BooleanConfirmation
 from openkos.bundle import ledger as bundle_ledger
 from openkos.cli import main
 from openkos.cli.main import app
@@ -1818,6 +1819,39 @@ def test_adjudicate_apply_preview_precedes_the_exact_prompt_text(
     preview_text = "\n".join(lines[:prompt_idx])
     assert "concepts/b" in preview_text
     assert "concepts/a" in preview_text
+
+
+def test_adjudicate_apply_renders_the_shared_factorys_prompt_verbatim(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #958 correction round: the prior guard for "this call site
+    never reconstructs the prompt" matched one f-string spelling only and
+    failed open on `.format()`, `%`-formatting, concatenation, and
+    `"".join` (three lenses flagged it). This is the behavioral
+    replacement: monkeypatch the shared factory itself,
+    `application_lifecycle.merge_walk_confirmation`, to return a
+    distinctive sentinel prompt, drive the walk, and assert the operator
+    was actually asked THAT sentinel. A call site that rebuilt the
+    question in any spelling instead of calling the factory fails this,
+    because the sentinel text never appears."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _, fake_find, fake_adjudicate = _seed_one_same_group(tmp_path)
+    monkeypatch.setattr("openkos.cli.main.find_candidates_report", fake_find)
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", fake_adjudicate)
+    sentinel_prompt = "SENTINEL-958 merge walk prompt? [y/N]"
+    monkeypatch.setattr(
+        application_lifecycle,
+        "merge_walk_confirmation",
+        lambda **kwargs: BooleanConfirmation(
+            prompt=sentinel_prompt, bypass_flag=None, non_tty_refusal=None
+        ),
+    )
+
+    result = runner.invoke(app, ["adjudicate", "--apply"], input="n\n")
+
+    assert sentinel_prompt in result.stdout
 
 
 def test_adjudicate_apply_accepts_merge_updates_filesystem_and_ledger(

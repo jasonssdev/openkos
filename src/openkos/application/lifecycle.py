@@ -2275,6 +2275,51 @@ def _apply_same_confirmation(total: int) -> TypedChallengeConfirmation:
     )
 
 
+def merge_walk_confirmation(
+    *, survivor_canonical: str, absorbed_canonical: str
+) -> BooleanConfirmation:
+    """The merge-walk gate shared by `adjudicate --apply`'s per-item walk
+    and curate's Identity stage (issue #958, closing the one gate #918
+    named but left un-staged pending a protocol decision, design:
+    `openspec/changes/lifecycle-application-service/design.md` D1).
+    Public, unlike `_apply_same_confirmation` above, because BOTH
+    interactive walks that ask this exact question -- `_run_adjudicate_
+    apply` in `cli/main.py` and `_identity_run` in `cli/curate.py` -- need
+    to render it, and a private helper importable only within
+    `lifecycle.py` cannot serve two call sites in `openkos.cli`.
+
+    Keyword-only parameters (issue #958 correction round): both are
+    plain, same-typed `str`s, and this factory renders them in the
+    OPPOSITE of parameter order -- `f"Merge {absorbed} into {survivor}"`
+    reads naturally, but a positional call that mirrors the sentence it is
+    reading (absorbed, then survivor) would still type-check and silently
+    prompt the operator to approve destroying the wrong side of a merge.
+    Keyword-only makes that transposition a `TypeError`, not a silent bug.
+
+    `bypass_flag=None` and `non_tty_refusal=None` are the DECIDED contract
+    for this gate, not a gap: the shipped transport is stdin, one answer
+    per item, consumed in the walk's own visiting order by `curate.
+    _confirm`'s validating `[y/N]` loop -- with no TTY check and no bypass
+    flag anywhere in that path. Staging a `non_tty_refusal` here would
+    describe a refusal this gate has never performed and, if ever wired
+    up, would break that already-shipped piped usage (`tests/unit/cli/
+    test_adjudicate.py` drives the walk piped today). There is likewise no
+    `bypass_flag`: nothing here shortcuts an individual item's answer.
+
+    Renders through `curate._confirm`'s validating `[y/N]` loop (module
+    docstring's D2/D3), not the shared TTY-detection shape
+    `boolean_confirmation` builds -- this factory only says WHAT is asked,
+    matching the pre-#958 f-string byte-for-byte, so both walks share one
+    source instead of re-deriving the same question (a policy re-derived
+    at a call site is a policy that drifts, `TypedChallengeConfirmation`'s
+    own words above)."""
+    return BooleanConfirmation(
+        prompt=f"Merge {absorbed_canonical} into {survivor_canonical}? [y/N]",
+        bypass_flag=None,
+        non_tty_refusal=None,
+    )
+
+
 def preview_apply_same(
     root: Path,
     layout: config.WorkspaceLayout,

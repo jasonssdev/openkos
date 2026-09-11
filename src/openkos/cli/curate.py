@@ -979,10 +979,13 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         )
         if cross_type_concern is not None:
             typer.echo(cli_main._cross_type_walk_note(cross_type_concern))
-        if not _confirm(
-            f"Merge {prepared.absorbed_canonical} into "
-            f"{prepared.survivor_canonical}? [y/N]"
-        ):
+        # Issue #958: the prompt comes from `application_lifecycle.
+        # merge_walk_confirmation`, shared with `adjudicate --apply`'s walk.
+        confirmation = application_lifecycle.merge_walk_confirmation(
+            survivor_canonical=prepared.survivor_canonical,
+            absorbed_canonical=prepared.absorbed_canonical,
+        )
+        if not _confirm(confirmation.prompt):
             skipped += 1
             declined.append(
                 f"{prepared.absorbed_canonical} -> {prepared.survivor_canonical}"
