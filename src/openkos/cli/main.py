@@ -1963,7 +1963,9 @@ def _render_adjudicate_report(
         if (
             result.verdict is Verdict.SAME
             and len(group.member_ids) == 2
-            and _cross_source_same_pair(bundle_dir, group.member_ids)
+            and application_lifecycle.cross_source_same_pair(
+                bundle_dir, group.member_ids
+            )
         ):
             typer.echo(_CROSS_SOURCE_REPORT_NOTE)
         # #904: the other risky class, named in the same read-only slot and
@@ -1975,7 +1977,9 @@ def _render_adjudicate_report(
         # can make false, while "these members declare different types" is
         # true of the members it names however many there are.
         if result.verdict is Verdict.SAME:
-            cross_type_concern = _cross_type_concern(bundle_dir, group.member_ids)
+            cross_type_concern = application_lifecycle.cross_type_concern(
+                bundle_dir, group.member_ids
+            )
             if cross_type_concern is not None:
                 typer.echo(_cross_type_report_note(cross_type_concern))
         typer.echo()
@@ -2113,10 +2117,10 @@ def _echo_suggest_volatility_batch_failure(
 
 # `_member_body_length`/`_ordered_merge_pair`/`_cross_source_same_pair`/
 # `_cross_type_concern` moved verbatim into `application/lifecycle.py`
-# (issue #918 Slice 5) and are bound back here under their original private
-# names a few hundred lines below (design D5) -- none carries a dangerous
-# test patch site, so aliasing is safe, and `cli/curate.py` still calls
-# `cli_main._ordered_merge_pair`/`cli_main._prepare_one_merge` directly.
+# (issue #918 Slice 5) and are not aliased back onto this module -- every
+# call site below reaches them through `application_lifecycle.<name>`. The
+# reason that alias was removed is stated once, at the relocation block
+# further down this module (issue #955); it is not restated here.
 
 
 _CROSS_SOURCE_REPORT_NOTE = (
@@ -2150,11 +2154,9 @@ def _cross_type_walk_note(reason: str) -> str:
 
 
 # `_prepare_one_merge`/`_reconcile_planned` moved verbatim into
-# `application/lifecycle.py` (issue #918 Slice 5) and are bound back here
-# under their original private names a few hundred lines below (design
-# D5) -- neither carries a dangerous test patch site (only direct
-# `main.X(...)` calls survive, plus `cli/curate.py`'s own direct calls),
-# so aliasing is safe.
+# `application/lifecycle.py` (issue #918 Slice 5) and, like the four names
+# above, are reached through `application_lifecycle.<name>` rather than an
+# alias on this module.
 
 
 _RECONCILE_CONFLICT_MESSAGE: Final = (
@@ -2197,7 +2199,9 @@ def _apply_reconciliation(
     `reconcile` (issue #803) is threaded through to the same predicate the
     disclosure read, never re-tested here: a second inline condition is
     exactly how the #688 defect got in."""
-    if not _reconcile_planned(prepared, no_reconcile=no_reconcile, reconcile=reconcile):
+    if not application_lifecycle.reconcile_planned(
+        prepared, no_reconcile=no_reconcile, reconcile=reconcile
+    ):
         return prepared
     prepared, failure = _reconcile_merged_survivor(root, prepared)
     if failure is not None:
@@ -2248,7 +2252,9 @@ def _format_merge_preview_line(
                 "object. Verify before accepting."
             )
     reconcile_note = ""
-    if _reconcile_planned(prepared, no_reconcile=no_reconcile, reconcile=reconcile):
+    if application_lifecycle.reconcile_planned(
+        prepared, no_reconcile=no_reconcile, reconcile=reconcile
+    ):
         reconcile_note = f"\n  ~ {_RECONCILE_PLAN_NOTE}"
     return (
         f"  merge {prepared.absorbed_canonical} into {prepared.survivor_canonical} "
@@ -2281,7 +2287,8 @@ def _echo_n_gt2_skip(bundle_dir: Path, group: "CandidateGroup") -> None:
     # max() keeps the FIRST of equally-long members, so an all-tie group
     # (including all-unresolvable) preserves the ascending-id convention.
     survivor_id = max(
-        group.member_ids, key=lambda mid: _member_body_length(bundle_dir, mid)
+        group.member_ids,
+        key=lambda mid: application_lifecycle._member_body_length(bundle_dir, mid),
     )
     typer.echo("  run in order (each reversible via unmerge):")
     for absorbed_id in group.member_ids:
@@ -2389,12 +2396,14 @@ def _run_adjudicate_apply(
                 skipped_n_gt2 += 1
             continue
 
-        survivor_id, absorbed_id, survivor_criterion = _ordered_merge_pair(
-            layout.bundle_dir, group.member_ids
+        survivor_id, absorbed_id, survivor_criterion = (
+            application_lifecycle.ordered_merge_pair(
+                layout.bundle_dir, group.member_ids
+            )
         )
 
         try:
-            prepared = _prepare_one_merge(
+            prepared = application_lifecycle.prepare_one_merge(
                 root,
                 layout,
                 index_path,
@@ -2425,7 +2434,9 @@ def _run_adjudicate_apply(
         # #776: the choice is deterministic and STATED -- an unexplained
         # arbitrary survivor is what the issue reports.
         typer.echo(f"  survivor: {prepared.survivor_canonical} ({survivor_criterion})")
-        if _cross_source_same_pair(layout.bundle_dir, group.member_ids):
+        if application_lifecycle.cross_source_same_pair(
+            layout.bundle_dir, group.member_ids
+        ):
             # #776: the interactive walk keeps the pair -- the operator
             # consents per item -- but the risky class is named BEFORE the
             # prompt, not discovered in the wreckage afterwards.
@@ -2434,7 +2445,7 @@ def _run_adjudicate_apply(
         # `prepared`, not from raw `member_ids`: the survivor line printed
         # directly above names one direction, and the note must not name
         # the other one back.
-        cross_type_concern = _cross_type_concern(
+        cross_type_concern = application_lifecycle.cross_type_concern(
             layout.bundle_dir,
             (prepared.survivor_canonical, prepared.absorbed_canonical),
         )
@@ -2480,7 +2491,7 @@ def _run_adjudicate_apply(
         absorbed_path = layout.bundle_dir / f"{prepared.absorbed_canonical}.md"
         _reject_drifted_targets(
             layout,
-            _merge_drift_targets(layout, prepared),
+            application_lifecycle.merge_drift_targets(layout, prepared),
             "adjudicate --apply",
             deletes=frozenset({absorbed_path}),
         )
@@ -2812,7 +2823,7 @@ def _run_adjudicate_apply_same(
         try:
             _reject_drifted_targets(
                 layout,
-                _merge_drift_targets(layout, prepared),
+                application_lifecycle.merge_drift_targets(layout, prepared),
                 "adjudicate --apply-same",
                 deletes=frozenset({absorbed_path}),
             )
@@ -3706,22 +3717,25 @@ _first_free_disambiguated_slug = application_ingest.first_free_disambiguated_slu
 # module (`_apply_reconciliation`, `_commit_one_merge`,
 # `_refused_stacked_line`) resolves unchanged.
 # `_canonicalize_concept_id`/`_resolve_concept_path`/`_merge_drift_targets`
-# are likewise bound back under their original private names (design D5) --
-# none of the three carries a test patch site, so aliasing them is safe, and
-# `cli/curate.py` still calls `cli_main._merge_drift_targets` directly.
+# and `_member_body_length`/`_ordered_merge_pair`/`_cross_source_same_pair`/
+# `_cross_type_concern`/`_prepare_one_merge`/`_reconcile_planned` are NOT
+# aliased back onto this module (issue #955; they briefly were after issue
+# #918 Slice 5). `application/lifecycle.py`'s own internal calls to these
+# names (e.g. `preview_apply_same` calling `ordered_merge_pair`,
+# `cross_source_same_pair`, `cross_type_concern`, `prepare_one_merge`, and
+# `resolve_concept_path`, or the `_member_body_length` call inside
+# `preview_apply_same`'s own sort key) resolve by module-local name inside
+# `application/lifecycle.py`, so a
+# `monkeypatch.setattr("openkos.cli.main._X", ...)` patch only ever reached
+# this module's call sites and silently diverged from the service-internal
+# walk -- the two paths disagreed on which function ran while the patched
+# test stayed green. Every call site -- in this module and in
+# `cli/curate.py` -- goes through `application_lifecycle.<name>` by module
+# attribute instead.
 #
-# `_member_body_length`/`_ordered_merge_pair`/`_cross_source_same_pair`/
-# `_cross_type_concern`/`_prepare_one_merge`/`_reconcile_planned` moved
-# verbatim into `application/lifecycle.py` (issue #918 Slice 5) on the same
-# reasoning: none carries a dangerous test patch site (only direct
-# `main.X(...)` calls, in this module's own listing/interactive walk and in
-# `test_adjudicate.py`, plus `cli/curate.py`'s own direct calls to
-# `_ordered_merge_pair`/`_prepare_one_merge`), so aliasing them back is
-# safe and every existing call site below resolves unchanged.
-#
-# `prepare_merge`/`merge_core` are DELIBERATELY NOT aliased (design: "the
-# one thing that would re-open the trap") -- both carry two dangerous
-# `test_adjudicate.py` patch sites apiece, where a stale
+# `prepare_merge`/`merge_core` are, and remain, DELIBERATELY NOT aliased
+# (design: "the one thing that would re-open the trap") -- both carry two
+# dangerous `test_adjudicate.py` patch sites apiece, where a stale
 # `monkeypatch.setattr("openkos.cli.main.prepare_merge"/"merge_core", ...)`
 # must raise `AttributeError` rather than silently no-op. Every call site in
 # this module -- `merge` itself, `application.lifecycle.prepare_one_merge`,
@@ -3730,15 +3744,6 @@ _first_free_disambiguated_slug = application_ingest.first_free_disambiguated_slu
 StackedBodyReport = application_lifecycle.StackedBodyReport
 PreparedMerge = application_lifecycle.PreparedMerge
 MergeResult = application_lifecycle.MergeResult
-_canonicalize_concept_id = application_lifecycle.canonicalize_concept_id
-_resolve_concept_path = application_lifecycle.resolve_concept_path
-_merge_drift_targets = application_lifecycle.merge_drift_targets
-_member_body_length = application_lifecycle._member_body_length
-_ordered_merge_pair = application_lifecycle.ordered_merge_pair
-_cross_source_same_pair = application_lifecycle.cross_source_same_pair
-_cross_type_concern = application_lifecycle.cross_type_concern
-_prepare_one_merge = application_lifecycle.prepare_one_merge
-_reconcile_planned = application_lifecycle.reconcile_planned
 
 
 def _render_staging_drop(drop: application_ingest.StagingDrop) -> None:
@@ -5716,7 +5721,7 @@ def forget(
         # resolution (spec: "Path safety runs before descendant
         # resolution") -- descendant ids are disk-discovered later, never
         # user input.
-        concept_path, canonical_id = _resolve_concept_path(
+        concept_path, canonical_id = application_lifecycle.resolve_concept_path(
             layout.bundle_dir, concept_id
         )
     except (OSError, ValueError) as exc:
@@ -6390,7 +6395,7 @@ def purge(
         # Path-safety on the ROOT id runs FIRST, before any descendant
         # resolution -- identical to `forget` (threat matrix: path-traversal
         # deletion).
-        concept_path, canonical_id = _resolve_concept_path(
+        concept_path, canonical_id = application_lifecycle.resolve_concept_path(
             layout.bundle_dir, concept_id
         )
     except (OSError, ValueError) as exc:
@@ -6870,10 +6875,12 @@ def relate(
             )
             raise typer.Exit(code=1)
 
-        source_path, source_canonical = _resolve_concept_path(
+        source_path, source_canonical = application_lifecycle.resolve_concept_path(
             layout.bundle_dir, source_id
         )
-        _, target_canonical = _resolve_concept_path(layout.bundle_dir, target_id)
+        _, target_canonical = application_lifecycle.resolve_concept_path(
+            layout.bundle_dir, target_id
+        )
         if source_canonical == target_canonical:
             raise ValueError(
                 "source and target concept-ids must be distinct, both "
@@ -7112,7 +7119,7 @@ def set_sensitivity_cmd(
             raise ValueError(workspace_reason)
         cfg = config.read_config(root)
 
-        concept_path, canonical_id = _resolve_concept_path(
+        concept_path, canonical_id = application_lifecycle.resolve_concept_path(
             layout.bundle_dir, concept_id
         )
         # One `_snapshot_read` observation: the decoded text feeds the
@@ -8763,10 +8770,10 @@ def merge(
             )
             raise typer.Exit(code=1)
 
-        survivor_path, survivor_canonical = _resolve_concept_path(
+        survivor_path, survivor_canonical = application_lifecycle.resolve_concept_path(
             layout.bundle_dir, survivor_id
         )
-        absorbed_path, absorbed_canonical = _resolve_concept_path(
+        absorbed_path, absorbed_canonical = application_lifecycle.resolve_concept_path(
             layout.bundle_dir, absorbed_id
         )
         if survivor_canonical == absorbed_canonical:
@@ -8814,7 +8821,7 @@ def merge(
     # the consent gate -- so the model call is part of what the human
     # approves. `--no-reconcile` is the opt-out; failure falls back to the
     # stacked body after the gate.
-    reconcile_planned = _reconcile_planned(
+    reconcile_planned = application_lifecycle.reconcile_planned(
         prepared, no_reconcile=no_reconcile, reconcile=reconcile
     )
     if prepared.stacked_body is not None:
@@ -8841,7 +8848,7 @@ def merge(
     # guardrail never reached -- the batch door was locked while the door
     # the tool recommends stayed open. Printed after the plan and before
     # the gate, so it is the last thing read before consenting.
-    if _cross_source_same_pair(
+    if application_lifecycle.cross_source_same_pair(
         layout.bundle_dir, (survivor_canonical, absorbed_canonical)
     ):
         typer.echo(_CROSS_SOURCE_WALK_NOTE)
@@ -8850,7 +8857,7 @@ def merge(
     # would send the operator through an unguarded door with the exact
     # arguments the guard just refused. The label's `member_ids` order is
     # `(survivor, absorbed)` here, so it also states the direction.
-    cross_type_concern = _cross_type_concern(
+    cross_type_concern = application_lifecycle.cross_type_concern(
         layout.bundle_dir, (survivor_canonical, absorbed_canonical)
     )
     if cross_type_concern is not None:
@@ -8889,7 +8896,7 @@ def merge(
     # removes.
     _reject_drifted_targets(
         layout,
-        _merge_drift_targets(layout, prepared),
+        application_lifecycle.merge_drift_targets(layout, prepared),
         "merge",
         # #319: the absorbed file is the one path `merge_core` UNLINKS;
         # everything else in the mapping is overwritten.
@@ -9098,7 +9105,7 @@ def unmerge(
         # decided here so the "does not exist" refusal -- and ONLY that
         # refusal, never a path-safety rejection -- can be extended with
         # `find_absorber`'s reverse lookup across the ledger sidecars.
-        survivor_canonical = _canonicalize_concept_id(survivor_id)
+        survivor_canonical = application_lifecycle.canonicalize_concept_id(survivor_id)
         survivor_path = okf.concept_path_for(survivor_canonical, layout.bundle_dir)
         if not survivor_path.is_file():
             message = f"concept '{survivor_id}' does not exist"
@@ -9112,7 +9119,7 @@ def unmerge(
                     "to restore it"
                 )
             raise ValueError(message)
-        target_canonical = _canonicalize_concept_id(target_input)
+        target_canonical = application_lifecycle.canonicalize_concept_id(target_input)
     except (OSError, ValueError) as exc:
         typer.echo(f"openkos unmerge: refusing to unmerge -- {exc}.", err=True)
         raise typer.Exit(code=1) from exc
@@ -9818,8 +9825,12 @@ def reconcile(
         raise typer.Exit(code=1)
 
     try:
-        path_a, canonical_a = _resolve_concept_path(layout.bundle_dir, id_a)
-        path_b, canonical_b = _resolve_concept_path(layout.bundle_dir, id_b)
+        path_a, canonical_a = application_lifecycle.resolve_concept_path(
+            layout.bundle_dir, id_a
+        )
+        path_b, canonical_b = application_lifecycle.resolve_concept_path(
+            layout.bundle_dir, id_b
+        )
         if canonical_a == canonical_b:
             raise ValueError(
                 f"id_a and id_b must be distinct, both resolved to {canonical_a!r}"
@@ -9845,7 +9856,9 @@ def reconcile(
         winner_canonical: str | None = None
         loser_canonical: str | None = None
         if winner is not None:
-            _, winner_resolved = _resolve_concept_path(layout.bundle_dir, winner)
+            _, winner_resolved = application_lifecycle.resolve_concept_path(
+                layout.bundle_dir, winner
+            )
             if winner_resolved == canonical_a:
                 winner_canonical, loser_canonical = canonical_a, canonical_b
             elif winner_resolved == canonical_b:
@@ -10203,8 +10216,12 @@ def _run_reconcile_from_findings(
     for finding in actionable:
         finding_a, finding_b = finding.pair_ids
         try:
-            path_a, canonical_a = _resolve_concept_path(layout.bundle_dir, finding_a)
-            path_b, canonical_b = _resolve_concept_path(layout.bundle_dir, finding_b)
+            path_a, canonical_a = application_lifecycle.resolve_concept_path(
+                layout.bundle_dir, finding_a
+            )
+            path_b, canonical_b = application_lifecycle.resolve_concept_path(
+                layout.bundle_dir, finding_b
+            )
         except (OSError, ValueError) as exc:
             typer.echo(f"  skipping {finding_a} <-> {finding_b} -- {exc}.")
             skipped += 1
@@ -10623,7 +10640,9 @@ def _run_list_sources(layout: config.WorkspaceLayout, object_id: str) -> None:
     provenance entry with no file behind it renders as `(not in bundle)`
     rather than vanishing. Read-only, exactly like the ordinary listing."""
     try:
-        _, canonical_id = _resolve_concept_path(layout.bundle_dir, object_id)
+        _, canonical_id = application_lifecycle.resolve_concept_path(
+            layout.bundle_dir, object_id
+        )
     except (OSError, ValueError) as exc:
         typer.echo(f"openkos list: refusing to list -- {exc}.", err=True)
         raise typer.Exit(code=1) from exc
@@ -11656,7 +11675,9 @@ def adjudicate(
         cross_source_flags = tuple(
             result.verdict is Verdict.SAME
             and len(result.candidate.member_ids) == 2
-            and _cross_source_same_pair(layout.bundle_dir, result.candidate.member_ids)
+            and application_lifecycle.cross_source_same_pair(
+                layout.bundle_dir, result.candidate.member_ids
+            )
             for result in results
         )
         # #904: same reasoning as #776's flag above. `okf_type` already
@@ -11665,7 +11686,9 @@ def adjudicate(
         # so a conforming pipeline has no other way to see the class.
         cross_type_flags = tuple(
             result.verdict is Verdict.SAME
-            and _cross_type_concern(layout.bundle_dir, result.candidate.member_ids)
+            and application_lifecycle.cross_type_concern(
+                layout.bundle_dir, result.candidate.member_ids
+            )
             is not None
             for result in results
         )
@@ -12664,7 +12687,7 @@ def _validated_identity_members(
         if not stripped:
             continue
         try:
-            canonical.add(_canonicalize_concept_id(stripped))
+            canonical.add(application_lifecycle.canonicalize_concept_id(stripped))
         except ValueError as exc:
             typer.echo(
                 f"openkos duplicates: refusing to run -- {flag} {exc}.", err=True

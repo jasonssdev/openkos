@@ -36,11 +36,15 @@ does. The one thing this module never imports at module scope is
 `cli.main` itself -- `main.py` imports THIS module to register the `curate`
 command, so importing `main` back at module scope here would be circular.
 Identity's `run` needs a handful of `main.py`-private helpers
-(`_prepare_one_merge`, `_commit_one_merge`, `_echo_n_gt2_skip`,
-`_reject_drifted_targets`, `_merge_drift_targets`) that already exist there
-for `merge`/`adjudicate --apply`; those are imported LAZILY, inside the
-function bodies that need them, which is safe because by the time any
-`curate` invocation actually runs, both modules have finished loading.
+(`_commit_one_merge`, `_echo_n_gt2_skip`, `_reject_drifted_targets`) that
+already exist there for `merge`/`adjudicate --apply`; those are imported
+LAZILY, inside the function bodies that need them, which is safe because
+by the time any `curate` invocation actually runs, both modules have
+finished loading. `prepare_one_merge`/`merge_drift_targets` (plus
+`ordered_merge_pair`/`cross_source_same_pair`/`cross_type_concern`) are
+NOT `main.py`-private helpers: they live in `application/lifecycle.py`
+and are reached here by module attribute (issue #955; `cli/main.py`'s
+relocation block states why the aliases were removed).
 """
 
 import sys
@@ -53,6 +57,7 @@ from typing import Literal
 import typer
 
 from openkos import config, lint, sensitivity
+from openkos.application import lifecycle as application_lifecycle
 from openkos.cli import next_action as next_action_module
 from openkos.cli import observability
 from openkos.graph.base import Edge
@@ -923,11 +928,13 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         # #776: the pair is ordered ONCE (richer body survives), displayed,
         # and pinned through the prepare -- never re-derived from live
         # bodies between the preview and the write.
-        survivor_id, absorbed_id, survivor_criterion = cli_main._ordered_merge_pair(
-            layout.bundle_dir, group.member_ids
+        survivor_id, absorbed_id, survivor_criterion = (
+            application_lifecycle.ordered_merge_pair(
+                layout.bundle_dir, group.member_ids
+            )
         )
         try:
-            prepared = cli_main._prepare_one_merge(
+            prepared = application_lifecycle.prepare_one_merge(
                 ctx.root,
                 layout,
                 index_path,
@@ -957,14 +964,16 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         # helpers and the same shared note constant, so the recommended
         # path is never the less-informed one.
         typer.echo(f"  survivor: {prepared.survivor_canonical} ({survivor_criterion})")
-        if cli_main._cross_source_same_pair(layout.bundle_dir, group.member_ids):
+        if application_lifecycle.cross_source_same_pair(
+            layout.bundle_dir, group.member_ids
+        ):
             typer.echo(cli_main._CROSS_SOURCE_WALK_NOTE)
         # #904: the second risky class, rendered in the same slot from the
         # same shared helper -- one guard landing on `adjudicate --apply`
         # and forgotten here is exactly the drift #796 reported.
         # Ordered from `prepared` for the same reason `adjudicate --apply`
         # orders it there: the survivor line above names one direction.
-        cross_type_concern = cli_main._cross_type_concern(
+        cross_type_concern = application_lifecycle.cross_type_concern(
             layout.bundle_dir,
             (prepared.survivor_canonical, prepared.absorbed_canonical),
         )
@@ -1004,7 +1013,7 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         absorbed_path = layout.bundle_dir / f"{prepared.absorbed_canonical}.md"
         cli_main._reject_drifted_targets(
             layout,
-            cli_main._merge_drift_targets(layout, prepared),
+            application_lifecycle.merge_drift_targets(layout, prepared),
             "curate",
             deletes=frozenset({absorbed_path}),
         )
