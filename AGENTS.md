@@ -34,7 +34,7 @@ Every change must respect these. A technically good change that violates one is 
 - **Python 3.12+**, `src/` layout, package `openkos`, `uv` for envs/deps.
 - **`pyproject.toml` is the single config source** — deps, the console entry point (`openkos = "openkos.cli.main:app"`), and Ruff / MyPy / Pytest settings.
 - **Ship types:** keep `src/openkos/py.typed`.
-- **Start lean, grow by MVP.** Create a package when its code arrives — do not scaffold empty folders. What ships today: `model`, `bundle`, `vcs`, `state`, `graph`, `retrieval`, `extraction`, `resolution`, `llm`, `application`, `cli`, plus `config.py`, `lint.py`, `lifecycle.py`, `sensitivity.py`, `fsio.py`, `lock.py`. `docs/architecture.md` is the authority on the shipped tree; do not restate it here.
+- **Start lean, grow by MVP.** Create a package when its code arrives — do not scaffold empty folders. [`docs/architecture.md`](docs/architecture.md) is the authority on which packages ship; read it there rather than restating the tree here, where a copy would drift.
 - **Extension interfaces are `typing.Protocol`.** The seams that exist today are `GraphStore` (`graph/base.py`) and `LLMBackend` (`llm/base.py`), and they are internal — OpenKOS publishes no plugin API and no entry-point group. A `Producer`/`Consumer` extension surface is a roadmap item, not present code; do not write as though it exists.
 - **There is NO `engine.py`.** [ADR-0018](docs/adr/0018-application-layer-for-bounded-context-services.md) chose narrow synchronous use-case services under `application/` instead of one orchestrator. Proposing an `engine.py` re-opens a decided question.
 - **The core is synchronous.** Async only at the MVP 3 API/MCP edge (which calls the sync engine via a thread pool). Do not make the core async.
