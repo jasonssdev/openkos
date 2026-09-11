@@ -1992,12 +1992,22 @@ share -- measured on the MERGED body (#803). Moved verbatim from
 `cli/main.py` alongside `reconcile_planned`, the only reader."""
 
 
-def _member_body_length(bundle_dir: Path, member_id: str) -> int:
+def member_body_length(bundle_dir: Path, member_id: str) -> int:
     """Stripped body length of one member's document, or `-1` when it
     cannot be read or parsed (#776) -- the one measurement
     `ordered_merge_pair` ranks on. `-1` rather than `0` so an unreadable
     member can never beat a readable-but-empty one. Moved verbatim from
-    `cli/main.py`'s `_member_body_length`."""
+    `cli/main.py`'s `_member_body_length`.
+
+    PUBLIC, unlike the private name it moved under (issue #974). It has a
+    cross-module consumer -- `cli/main._echo_n_gt2_skip` ranks an N>2
+    group's members on it to name the survivor its manual-merge script
+    should keep -- and the other eight helpers issue #918 Slice 5
+    relocated alongside it are all reached publicly. While this one kept a
+    leading underscore, the definition site advertised a module-private
+    helper that a maintainer could rename or inline, and the reference
+    that would have stopped working sat in a `lambda` body in another
+    file."""
     try:
         path, _canonical = resolve_concept_path(bundle_dir, member_id)
         _metadata, body = okf.load_frontmatter(path.read_text(encoding="utf-8"))
@@ -2018,8 +2028,8 @@ def ordered_merge_pair(
     preview can state it. Moved verbatim from `cli/main.py`'s
     `_ordered_merge_pair`."""
     first, second = member_ids
-    first_length = _member_body_length(bundle_dir, first)
-    second_length = _member_body_length(bundle_dir, second)
+    first_length = member_body_length(bundle_dir, first)
+    second_length = member_body_length(bundle_dir, second)
     if second_length > first_length:
         return second, first, "richer body"
     if first_length > second_length:

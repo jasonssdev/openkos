@@ -2118,7 +2118,10 @@ def _echo_suggest_volatility_batch_failure(
 # `_member_body_length`/`_ordered_merge_pair`/`_cross_source_same_pair`/
 # `_cross_type_concern` moved verbatim into `application/lifecycle.py`
 # (issue #918 Slice 5) and are not aliased back onto this module -- every
-# call site below reaches them through `application_lifecycle.<name>`. The
+# call site below reaches them through `application_lifecycle.<name>`, and
+# all four of those names are PUBLIC there, the underscores above being
+# the spelling they carried on THIS module before the move
+# (`_member_body_length` was the last to be promoted, issue #974). The
 # reason that alias was removed is stated once, at the relocation block
 # further down this module (issue #955); it is not restated here.
 
@@ -2288,7 +2291,7 @@ def _echo_n_gt2_skip(bundle_dir: Path, group: "CandidateGroup") -> None:
     # (including all-unresolvable) preserves the ascending-id convention.
     survivor_id = max(
         group.member_ids,
-        key=lambda mid: application_lifecycle._member_body_length(bundle_dir, mid),
+        key=lambda mid: application_lifecycle.member_body_length(bundle_dir, mid),
     )
     typer.echo("  run in order (each reversible via unmerge):")
     for absorbed_id in group.member_ids:
@@ -3726,8 +3729,8 @@ _first_free_disambiguated_slug = application_ingest.first_free_disambiguated_slu
 # #918 Slice 5). `application/lifecycle.py`'s own internal calls to these
 # names (e.g. `preview_apply_same` calling `ordered_merge_pair`,
 # `cross_source_same_pair`, `cross_type_concern`, `prepare_one_merge`, and
-# `resolve_concept_path`, or the `_member_body_length` call inside
-# `preview_apply_same`'s own sort key) resolve by module-local name inside
+# `resolve_concept_path`, or `ordered_merge_pair`'s own two calls to
+# `member_body_length`) resolve by module-local name inside
 # `application/lifecycle.py`, so a
 # `monkeypatch.setattr("openkos.cli.main._X", ...)` patch only ever reached
 # this module's call sites and silently diverged from the service-internal
