@@ -139,18 +139,66 @@ def test_shared_write_helpers_are_never_forked() -> None:
     snapshot_read`, it is now the first READ helper shared ACROSS the
     layer boundary -- `application/lifecycle.py` calls it directly, and
     `main._snapshot_read` is a one-line delegator, never a second
-    implementation."""
+    implementation.
+
+    `_echo_commit_disclosure` joined for issue #956. The
+    `lifecycle-application-service` spec's "Shared Write Mechanics Stay
+    Adapter-Side, Each With One Definition" requirement already named it
+    alongside the other three, but it was absent from this set, so that
+    clause held by inspection only. It renders the `committed as <sha> --
+    undo with 'git revert <sha>'` notice for `forget`, `merge` and
+    `curate`; a forked copy that drifted would hand some users the wrong
+    recovery command, and only on the paths that took the fork.
+
+    The scan counts `async def` as a definition too. Measured while adding
+    `_echo_commit_disclosure` (issue #956): a second definition spelled
+    `async def` passed this guard for every name in the set, because
+    `ast.FunctionDef` does not match `ast.AsyncFunctionDef`. The assertion
+    claims "exactly one definition", so a shape it cannot see is a
+    fail-open, not a narrower claim.
+
+    The requirement this guard stands for has TWO halves -- "each retain
+    exactly one definition, all adapter-side" -- and counting only covers
+    the first. Measured on the same candidate (issue #956): MOVING
+    `_echo_commit_disclosure`'s one definition out of `cli/main.py` and
+    into `application/lifecycle.py` kept the count at 1 and passed every
+    guard in this file, even though a shared write helper living inside
+    the service is precisely what the requirement forbids. The import
+    guards above do not catch it either, because a pasted body needs no
+    new import to be defined. So the locations are asserted, not just the
+    counts.
+
+    The location assertion is written as "never under `application/`"
+    rather than as a per-helper home path. "Adapter-side" is the
+    invariant; which adapter module holds a helper is not, so a
+    legitimate move from `cli/main.py` to another `cli/` module must not
+    redden this test."""
     shared = {
         "_reject_drifted_targets",
         "_autocommit",
         "_refresh_derived_after_write",
+        "_echo_commit_disclosure",
         "snapshot_read",
     }
-    counts = dict.fromkeys(shared, 0)
+    homes: dict[str, list[str]] = {name: [] for name in shared}
     for path in (_REPO_ROOT / "src").rglob("*.py"):
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
-            if isinstance(node, ast.FunctionDef) and node.name in shared:
-                counts[node.name] += 1
+            if (
+                isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+                and node.name in shared
+            ):
+                homes[node.name].append(path.relative_to(_REPO_ROOT).as_posix())
+    counts = {name: len(paths) for name, paths in homes.items()}
     assert counts == dict.fromkeys(shared, 1), (
-        f"each shared write helper must keep exactly one definition; found: {counts}"
+        f"each shared write helper must keep exactly one definition; found: {homes}"
+    )
+    inside_service = {
+        name: paths
+        for name, paths in homes.items()
+        if any(path.startswith("src/openkos/application/") for path in paths)
+    }
+    assert not inside_service, (
+        "no shared write helper may be DEFINED inside the application "
+        "service; the service calls them through the adapter "
+        f"(ADR-0018 D3). Found: {inside_service}"
     )
