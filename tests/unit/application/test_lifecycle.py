@@ -1548,6 +1548,50 @@ def test_boolean_confirmation_helper_builds_the_shared_auto_gate_shape() -> None
     )
 
 
+def test_merge_walk_confirmation_pins_the_null_transport_contract() -> None:
+    """Issue #958: the merge walk's per-item gate is the sixth lifecycle
+    gate #918 named but left un-staged pending a protocol decision. The
+    decision is BOTH `None`s -- see `merge_walk_confirmation`'s own
+    docstring for why, kept in one place rather than restated here.
+
+    This pins the exact prompt wording both `_run_adjudicate_apply`
+    (`cli/main.py`) and curate's Identity stage (`_identity_run`,
+    `cli/curate.py`) must now render byte-for-byte -- the same string the
+    pre-#958 code independently spelled at each call site -- plus the two
+    `None`s that say this gate has neither an unattended bypass nor a
+    non-TTY refusal of its own."""
+    request = lifecycle_service.merge_walk_confirmation(
+        survivor_canonical="concepts/survivor",
+        absorbed_canonical="concepts/absorbed",
+    )
+
+    assert isinstance(request, consent_service.BooleanConfirmation)
+    assert request.prompt == "Merge concepts/absorbed into concepts/survivor? [y/N]"
+    assert request.bypass_flag is None
+    assert request.non_tty_refusal is None
+
+
+def test_merge_walk_confirmation_orders_absorbed_before_survivor() -> None:
+    """Issue #958 correction round: `merge_walk_confirmation` takes
+    `survivor_canonical`/`absorbed_canonical` but renders the ABSORBED one
+    FIRST -- the opposite of parameter order, by design (the sentence
+    reads naturally as "merge X into Y"). Keyword-only parameters make a
+    positional call a `TypeError` instead of a silent transposition, but
+    that alone does not prove the RENDERED order is still correct -- this
+    pins the actual rendered order using two ids distinct enough that a
+    swap cannot hide, and it must fail if the two names were ever swapped
+    inside the f-string."""
+    request = lifecycle_service.merge_walk_confirmation(
+        survivor_canonical="concepts/keep-me",
+        absorbed_canonical="concepts/drop-me",
+    )
+
+    assert request.prompt == "Merge concepts/drop-me into concepts/keep-me? [y/N]"
+    assert request.prompt.index("concepts/drop-me") < request.prompt.index(
+        "concepts/keep-me"
+    )
+
+
 def test_prepare_merge_stages_its_gate_as_data(tmp_path: Path) -> None:
     """#918's lifecycle goal names `merge` explicitly: "confirmation
     contracts expressed as data (so a non-TTY adapter can drive them)".

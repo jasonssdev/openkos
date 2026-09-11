@@ -20,6 +20,8 @@ import pytest
 from typer.testing import CliRunner, _NamedTextIOWrapper
 
 from openkos import config
+from openkos.application import lifecycle as application_lifecycle
+from openkos.application.consent import BooleanConfirmation
 from openkos.bundle import decisions as bundle_decisions
 from openkos.cli import curate, observability
 from openkos.cli.main import app
@@ -4331,6 +4333,43 @@ def test_identity_declined_pair_identity_listed_in_summary(
     assert "[y/N/skip]" not in result.stdout
     assert "Identity: applied 0, skipped 1." in _lines(result.stdout)
     assert "  declined: concepts/b -> concepts/a" in result.stdout
+
+
+def test_identity_renders_the_shared_factorys_prompt_verbatim(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #958 correction round: the prior guard for "this call site
+    never reconstructs the prompt" matched one f-string spelling only and
+    failed open on `.format()`, `%`-formatting, concatenation, and
+    `"".join`. This is the behavioral replacement for curate's Identity
+    stage, mirroring `test_adjudicate.py`'s own replacement for
+    `adjudicate --apply`: monkeypatch the shared factory,
+    `application_lifecycle.merge_walk_confirmation`, to return a
+    distinctive sentinel prompt, drive the walk, and assert the operator
+    was actually asked THAT sentinel. A call site that rebuilt the
+    question in any spelling instead of calling the factory fails this,
+    because the sentinel text never appears."""
+    _stub_later_stages_empty(monkeypatch)
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _reindexed_workspace(tmp_path, monkeypatch)
+    _seed_identity_pair(tmp_path, monkeypatch)
+    _simulate_tty(monkeypatch)
+    sentinel_prompt = "SENTINEL-958 merge walk prompt? [y/N]"
+    monkeypatch.setattr(
+        application_lifecycle,
+        "merge_walk_confirmation",
+        lambda **kwargs: BooleanConfirmation(
+            prompt=sentinel_prompt, bypass_flag=None, non_tty_refusal=None
+        ),
+    )
+
+    result = runner.invoke(app, ["curate"], input="y\nn\n")
+
+    assert sentinel_prompt in result.stdout
 
 
 def test_identity_applied_only_run_prints_no_declined_lines(

@@ -35,11 +35,11 @@ class BooleanConfirmation:
 
     `bypass_flag`/`non_tty_refusal` are both nullable independently:
     `bypass_flag=None` says this gate has no unattended shortcut;
-    `non_tty_refusal=None` says it has no refusal arm of its own.
-    `adjudicate --apply`'s per-item prompt needs BOTH `None`s at once -- it
-    has no bypass flag and no non-TTY refusal, because it routes through
-    `curate._confirm`'s validating `[y/N]` loop instead of the shared
-    TTY-detection shape every other boolean gate uses."""
+    `non_tty_refusal=None` says it has no refusal arm of its own. The
+    merge walk's per-item prompt (staged as data by issue #958, via
+    `application.lifecycle.merge_walk_confirmation`) needs BOTH `None`s at
+    once -- see that factory's docstring for the decided rationale, kept
+    in one place rather than restated here."""
 
     prompt: str
     bypass_flag: str | None

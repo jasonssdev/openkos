@@ -2454,10 +2454,13 @@ def _run_adjudicate_apply(
         # Issue #483: `curate._confirm` is the one validating per-item
         # write-consent prompt (#398 contract) -- private-helper reuse
         # across the boundary is deliberate, as with `_type_label` (#479).
-        if not curate_module._confirm(
-            f"Merge {prepared.absorbed_canonical} into "
-            f"{prepared.survivor_canonical}? [y/N]"
-        ):
+        # Issue #958: the prompt comes from `application_lifecycle.
+        # merge_walk_confirmation`, shared with curate's Identity stage.
+        confirmation = application_lifecycle.merge_walk_confirmation(
+            survivor_canonical=prepared.survivor_canonical,
+            absorbed_canonical=prepared.absorbed_canonical,
+        )
+        if not curate_module._confirm(confirmation.prompt):
             declined.append(
                 f"{prepared.absorbed_canonical} -> {prepared.survivor_canonical}"
             )
