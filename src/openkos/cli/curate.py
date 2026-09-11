@@ -1313,7 +1313,7 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
 
         source_path = okf.concept_path_for(edge.source_id, layout.bundle_dir)
         try:
-            prepared = cli_main.prepare_relate(
+            prepared = application_lifecycle.prepare_relate(
                 source_path,
                 log_path,
                 edge.source_id,
@@ -1337,7 +1337,7 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         )
 
         try:
-            cli_main.relate_core(source_path, log_path, prepared)
+            application_lifecycle.relate_core(source_path, log_path, prepared)
         except (OSError, ValueError) as exc:
             typer.echo(
                 "openkos curate: Structure: failed while relating "
@@ -1530,7 +1530,7 @@ def _metadata_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
             continue
 
         try:
-            prepared = cli_main.prepare_set_volatility(
+            prepared = application_lifecycle.prepare_set_volatility(
                 ctx.layout.config_path, result.type_name, result.suggested_tier
             )
         except (OSError, ValueError) as exc:
@@ -1546,7 +1546,7 @@ def _metadata_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         )
 
         try:
-            cli_main.set_volatility_core(ctx.layout.config_path, prepared)
+            application_lifecycle.set_volatility_core(ctx.layout.config_path, prepared)
         except (OSError, ValueError) as exc:
             typer.echo(
                 "openkos curate: Metadata: failed while setting volatility "

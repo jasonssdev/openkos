@@ -128,6 +128,37 @@ def test_918_slice5_helpers_no_longer_live_on_cli_main() -> None:
         assert not hasattr(cli_main, name)
 
 
+def test_959_relate_and_set_volatility_functions_no_longer_live_on_cli_main() -> None:
+    """Issue #959: `prepare_relate`/`relate_core` and
+    `prepare_set_volatility`/`set_volatility_core` relocated into
+    `application.lifecycle`, following the #918 pattern
+    `prepare_merge`/`merge_core` set (see
+    `test_prepare_merge_and_merge_core_no_longer_live_on_cli_main` above):
+    the four FUNCTIONS are deliberately never aliased back, so a stale
+    `monkeypatch.setattr("openkos.cli.main.prepare_relate"/"relate_core"/
+    "prepare_set_volatility"/"set_volatility_core", ...)` must raise
+    `AttributeError` under pytest's default `raising=True` rather than
+    silently patching a name nothing reads anymore.
+
+    The two DATACLASSES are asserted absent too, which is where this
+    differs from `PreparedMerge`'s block. `PreparedMerge` and its siblings
+    are bound back onto `cli.main` because quoted forward-ref annotations
+    in that module still name them; `PreparedRelate` and
+    `PreparedSetVolatility` have no such reader, so an alias for them would
+    be one nothing reads -- the injection seam issue #955 deleted nine of.
+    Every consumer, `cli/curate.py` and these tests included, reaches them
+    through `application_lifecycle.<name>`."""
+    for name in (
+        "PreparedRelate",
+        "prepare_relate",
+        "relate_core",
+        "PreparedSetVolatility",
+        "prepare_set_volatility",
+        "set_volatility_core",
+    ):
+        assert not hasattr(cli_main, name)
+
+
 def test_forget_plan_gate_one_counts_never_become_confirmation_request_fields() -> None:
     """D2/R3 (task 8.2): `ForgetPlan.surviving_refs`/`unverifiable_refs` are
     Gate 1's hard-refusal inputs -- `forget`'s inbound-reference guard,

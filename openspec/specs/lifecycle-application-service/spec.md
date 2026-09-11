@@ -14,17 +14,32 @@ and performs no interactive I/O. It is the third and final artifact in the
 and `application/ingest.py`, and it is where the headless-consent protocol's
 typed data contract lands.
 
+The module also carries `relate`'s and `set_volatility_cmd`'s pure
+`prepare_*`/`*_core` pairs (issue #959, following the shape `prepare_merge`/
+`merge_core` set), each staging its confirm-gate wording as a
+`BooleanConfirmation` the same way `PreparedMerge` does. Their presence here
+does not widen "five" above: neither `relate` nor `set_volatility_cmd`
+itself is composed into a service-owned workflow the way `merge`'s
+reconciliation pass or `adjudicate --apply-same`'s batch preview are — each
+adapter still drives its own confirm gate, preview echo, and `_autocommit`
+sequencing directly against the relocated pair, just as it did before the
+move.
+
 ## Non-Goals
 
 Interactive confirmation, TTY detection, `sys.stdin.isatty()`; stdout/stderr
 rendering; process exit-code selection; the shared write mechanics
 (`_reject_drifted_targets`, `_autocommit`, `_refresh_derived_after_write`,
 `_echo_commit_disclosure`), which the service calls through rather than owns;
-LLM/`git-filter-repo` backend construction; `relate`, `set_volatility_cmd`,
-and their pure pairs (D5 — a fast follow-on); `reconcile`; `curate`; the
-`api`/`mcp` adapters themselves; the headless-consent protocol's wire/transport
-shape (how a non-TTY caller supplies a pre-recorded answer); any change to
-on-disk formats, ledger semantics, or observable CLI wording.
+LLM/`git-filter-repo` backend construction; `relate`'s and
+`set_volatility_cmd`'s own CLI-level orchestration (their confirm-gate
+driving, preview echoing, and `_autocommit` sequencing stay in
+`cli/main.py`/`cli/curate.py` — only their pure `prepare_*`/`*_core` pairs
+moved here, issue #959, not composition into a bigger verb the way the five
+in Purpose are); `reconcile`; `curate`; the `api`/`mcp` adapters themselves;
+the headless-consent protocol's wire/transport shape (how a non-TTY caller
+supplies a pre-recorded answer); any change to on-disk formats, ledger
+semantics, or observable CLI wording.
 
 ## Requirements
 
@@ -147,8 +162,9 @@ unchanged.
 
 #### Scenario: Committing a staged plan uses the existing shared helpers
 
-- GIVEN a staged plan produced by the lifecycle service for any of its five
-  verbs
+- GIVEN a staged plan produced by the lifecycle service — for any of the
+  five verbs it composes, or for either pure pair it merely holds (issue
+  #959)
 - WHEN a caller commits it
 - THEN the same shared write helpers used by every other write-capable
   command run, with no duplicate implementation inside the service
@@ -156,8 +172,15 @@ unchanged.
 ### Requirement: Adapter Owns Interaction, Presentation, And Exit Codes
 
 The service MUST NOT perform interactive confirmation, TTY detection,
-stdout/stderr rendering, or process exit-code selection for any of its five
-verbs; those stay with the calling adapter.
+stdout/stderr rendering, or process exit-code selection for ANY code it
+holds — the five verbs it composes and `relate`'s and `set_volatility_cmd`'s
+relocated pure pairs alike (issue #959); those stay with the calling
+adapter.
+
+This is the invariant the relocation exists for, so it is scoped to what
+the module HOLDS rather than to what it composes: an `api`/`mcp` adapter
+must be able to drive any pair in here without importing `openkos.cli`,
+`typer`, or `rich`.
 
 #### Scenario: The CLI still owns the non-TTY refusal
 
@@ -170,13 +193,14 @@ verbs; those stay with the calling adapter.
 ### Requirement: The Extraction Preserves Observable CLI Behavior
 
 For every input covered by the existing CLI/unit test suites for `merge`,
-`unmerge`, `forget`, `purge`, and `adjudicate --apply`/`--apply-same`, each
+`unmerge`, `forget`, `purge`, `adjudicate --apply`/`--apply-same`, and —
+since issue #959 relocated their pairs — `relate` and `set-volatility`, each
 command MUST produce the same exit code, stdout, and stderr — including the
-non-TTY refusal path — after this extraction as before it.
+non-TTY refusal path — after the extraction as before it.
 
 #### Scenario: A previously-passing CLI scenario is unchanged
 
 - GIVEN any scenario the existing test suites covered before this change,
-  across all five verbs
+  across every verb named above
 - WHEN the same CLI invocation runs after the extraction
 - THEN its exit code, stdout, and stderr are unchanged

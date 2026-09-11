@@ -93,11 +93,21 @@ def boolean_confirmation(
 
     That sentence is the one an operator sees when a non-TTY caller reaches
     a write it may not perform, and it is identical across `merge`,
-    `unmerge`, `forget` and `relate` apart from the verb. Spelling it at
-    each `prepare_*` call site is how it drifts: this repository has
-    already shipped a silently reworded refusal once, when two display
-    paths were folded into one during an extraction, and until #918 no test
-    anywhere pinned the sentence for any verb.
+    `unmerge`, `forget`, `relate` and `set-volatility` apart from the verb.
+    Spelling it at each `prepare_*` call site is how it drifts: this
+    repository has already shipped a silently reworded refusal once, when
+    two display paths were folded into one during an extraction, and until
+    #918 no test anywhere pinned the sentence for any verb.
+
+    `relate` and `set-volatility` were the last two to spell it by hand.
+    This docstring named `relate` among the identical sentences while
+    `relate`'s adapter still built its own literal -- the drift hazard
+    described one paragraph up, sitting in the code the paragraph is
+    about. Issue #959 moved both verbs' pairs into
+    `application/lifecycle.py` and had them build their gate here, and the
+    byte-exact refusal pins in `tests/unit/cli/test_relate.py` and
+    `tests/unit/cli/test_set_volatility.py` are what proves the
+    substitution changed no operator-visible text.
 
     `prompt` is overridable because `forget --scope source` asks
     "Delete {N} concepts?" instead, naming what the cascade will remove.

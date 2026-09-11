@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner, _NamedTextIOWrapper
 
-from openkos.cli import main
+from openkos import fsio
 from openkos.cli.main import app
 from openkos.model import okf
 from tests.unit.cli.conftest import (
@@ -134,7 +134,14 @@ def test_non_tty_without_auto_refuses(
 
     assert result.exit_code == 1
     assert isinstance(result.exception, SystemExit)
-    assert "--auto" in result.stderr
+    # Pinned byte-exact (issue #959): the sentence `boolean_confirmation`
+    # generates for this verb, guarding the relocation into
+    # `application/lifecycle.py` in this same change against a silently
+    # reworded refusal.
+    assert result.stderr == (
+        "openkos relate: refusing to write without confirmation -- "
+        "stdin is not a TTY; re-run with --auto.\n"
+    )
     assert _snapshot(tmp_path) == before
 
 
@@ -412,6 +419,14 @@ def test_tty_confirm_prompts_then_writes(
     )
 
     assert result.exit_code == 0
+    # The confirm prompt's SENTENCE is pinned verbatim (issue #959), and
+    # pinned to appear exactly ONCE: staging the gate as data on the
+    # `Prepared*` could plausibly prompt twice, and a bare substring check
+    # would not notice. Deliberately not an equality check on the whole of
+    # `result.output` -- the preview lines around it belong to other tests.
+    # The non-TTY refusal pin is a whole-stream equality, because stderr
+    # carries nothing else.
+    assert result.output.count("Proceed with these changes?") == 1
     assert _relations_of(tmp_path, source_id) == [
         okf.Relation(target=target_id, type="references")
     ]
@@ -551,21 +566,28 @@ def test_an_edit_landing_after_the_snapshot_observation_is_refused(
     target_id = _ingest_source(tmp_path, "b.txt")
     target_path = tmp_path / "bundle" / "sources" / "a.md"
     concurrent = "hand-edited the instant the snapshot returned\n"
-    real_snapshot_read = main._snapshot_read
+    real_snapshot_read = fsio.snapshot_read
+    fired = False
 
     def racing_snapshot_read(path: Path) -> tuple[bytes, str]:
+        nonlocal fired
         snapshot = real_snapshot_read(path)
         if path == target_path:
+            fired = True
             target_path.write_text(concurrent, encoding="utf-8")
         return snapshot
 
     before = snapshot_with_mtime(tmp_path)
-    monkeypatch.setattr(main, "_snapshot_read", racing_snapshot_read)
+    # Issue #959: `relate`'s Phase A moved into `application/lifecycle.py`,
+    # which calls `fsio.snapshot_read` directly (never `main._snapshot_read`)
+    # -- the patch target moves with it.
+    monkeypatch.setattr(fsio, "snapshot_read", racing_snapshot_read)
 
     result = runner.invoke(
         app, ["relate", source_id, "references", target_id, "--auto"]
     )
 
+    assert fired, "the racing wrapper never saw the target snapshot"
     assert result.exit_code == 3
     assert isinstance(result.exception, SystemExit)
     assert "refusing to write --" in result.stderr
