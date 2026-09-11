@@ -37,7 +37,7 @@ Tone: be specific, explain the *why* behind each requested change, and praise go
 
 Anchor decisions in **documented principles and recorded decisions, not personal taste**. "This conflicts with our local-first principle" or "this is outside the current MVP's contribution surface (see the roadmap)" is objective and impersonal. Once the ADR log begins (with the first code-time decision), cite the relevant ADR the same way.
 
-**The safe zone:** most contributions should target the plugin surface — producers and consumers behind interfaces — which is isolated from the core and low-risk to accept or decline. Prepare `good first issue`s and example plugins there.
+**The safe zone:** OpenKOS ships no plugin surface yet — there is no `Producer`/`Consumer` interface and no entry-point group, and that extension surface is a roadmap item (see [`docs/roadmap.md`](docs/roadmap.md)). Until it exists, the low-risk contributions to prepare `good first issue`s for are documentation, test coverage, and additions behind the seams that do exist (`graph/base.py`, `llm/base.py`), which are internal and isolated from the canonical layer.
 
 ## Saying no well
 

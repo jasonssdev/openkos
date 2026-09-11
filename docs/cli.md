@@ -135,6 +135,7 @@ Writes are **not transactional**: each individual write is create-only or atomic
 | --- | --- |
 | `--auto` | Skip the confirmation prompt and write immediately (unattended). Config `review: false` skips the prompt the same way. Extraction still runs either way — only the prompt is skipped. |
 | `--include-confidential` | Bypass the workspace `default_sensitivity` floor gate on concept extraction. By default, when the floor is `confidential` (or absent/blank), `ingest` skips extraction entirely — `llm.chat` is never called — and keeps the Source only. |
+| `--re-extract` | Run extraction again on an unchanged, already-extracted source. A byte-identical re-ingest skips extraction by default ([#773](https://github.com/jasonssdev/openkos/issues/773)); this forces it. |
 
 `review: true` in config plus a non-TTY stdin (and no `--auto`) refuses to write rather than defaulting silently — re-run with `--auto` for unattended use.
 
@@ -791,9 +792,9 @@ context_window: 12288     # tokens the model holds at once (prompt + reply); unp
                           # rationales in; unset means each row follows its own
                           # documents, which is why one report can mix languages
 
-# Layout — where the engine keeps things, relative to this file.
-raw: raw/                 # immutable sources; any extension, never rewritten
-bundle: bundle/           # the OKF bundle root
+# Layout is fixed: `raw/` (immutable sources) and `bundle/` (the OKF
+# bundle root) live next to this file. The engine does not read layout
+# keys from this config; making them configurable is future work.
 
 # type_registry is maintained by the engine (canonical + emergent types)
 ```

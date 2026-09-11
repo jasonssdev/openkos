@@ -4,7 +4,7 @@ OpenKOS is a **local-first** project: it runs on your machine and, by design, do
 
 ## Project status
 
-OpenKOS is **alpha**. There is no published release yet, so there is no supported-version matrix to publish. Security fixes are applied to the `main` branch. This document will be updated with a supported-versions table once the first release ships.
+OpenKOS is **alpha** and published on [PyPI](https://pypi.org/project/openkos/). Only the **latest released version** is supported: security fixes land on `main` and ship in the next release, and there is no backporting to earlier versions. If you are reporting a vulnerability, please say which version you observed it on (`openkos --version`), and upgrade to the latest release before reporting — the issue may already be fixed.
 
 ## Reporting a vulnerability
 
