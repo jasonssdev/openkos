@@ -1629,7 +1629,7 @@ which is the only judgement the finding asks a human to make; the exact
 list is on disk, and `lint` never gates on it."""
 
 
-def scan_dot_dir_markdown(bundle_dir: Path) -> list[Path]:
+def scan_dot_dir_markdown(bundle_dir: Path) -> list[tuple[Path, Path]]:
     """Names-only walk for every `*.md` file that `okf.iter_bundle_markdown`
     now structurally drops from every walk in this codebase (issue #984,
     ADR-0019): every file `okf.excluded_from_bundle_walk` answers for --
@@ -1643,6 +1643,12 @@ def scan_dot_dir_markdown(bundle_dir: Path) -> list[Path]:
     put a real concept under a dot-directory (by hand, or via a tool that
     writes one) loses it from every count -- document totals,
     `bundle_manifest_hash`, the FTS/graph indexes -- with no signal at all.
+    Each entry is the offending file PAIRED with the dot-directory that
+    excluded it -- both facts from the one place that decided the
+    exclusion, so `check_dot_dir_markdown` never has to re-derive the
+    second and never holds an `Optional` it could only answer with a crash
+    or a silent skip.
+
     This scan is what removes the "silently". It does not re-derive the
     walk: it consumes `okf.iter_excluded_bundle_markdown`, the exact
     complement of the walk itself, so the check's universe AND its rule
@@ -1653,8 +1659,8 @@ def scan_dot_dir_markdown(bundle_dir: Path) -> list[Path]:
     `scan_markdown_under_state_dir` needs its own walk)."""
     state_dir = bundle_dir / okf.STATE_DIRNAME
     return [
-        path
-        for path in okf.iter_excluded_bundle_markdown(bundle_dir)
+        (path, dot_dir)
+        for path, dot_dir in okf.iter_excluded_bundle_markdown(bundle_dir)
         if state_dir not in path.parents
     ]
 
@@ -1690,20 +1696,24 @@ def check_dot_dir_markdown(bundle_dir: Path) -> list[LintFinding]:
     to remove, one level down, and the direction that hurts is a rendered
     report silently omitting a dropped file."""
     by_dir: dict[str, list[str]] = {}
-    for path in scan_dot_dir_markdown(bundle_dir):
-        rel = path.relative_to(bundle_dir)
-        # Keyed on the bundle-relative PATH up to and including the first
-        # dot component, never on that component's bare name: `.obsidian`
-        # and `concepts/.obsidian` are two directories, and merging them
-        # under one key would report a `path` that names no real location
-        # and hide, behind the example cap, that two are involved. Every
-        # other finding kind spells `path` as a bundle-relative path; this
-        # one now does too.
-        depth = next(
-            index for index, part in enumerate(rel.parts[:-1]) if part.startswith(".")
+    for path, excluding_dir in scan_dot_dir_markdown(bundle_dir):
+        # The grouping key ARRIVES with the file, from the one place that
+        # decided the exclusion, so this cannot name a directory the walk
+        # did not actually exclude and there is no second reading of the
+        # path's parts to drift from the first. It is a bundle-relative
+        # PATH, not a bare component name, because `.obsidian` and
+        # `concepts/.obsidian` are two directories and a bare name
+        # identifies neither.
+        #
+        # Taking it as a pair is also what leaves no impossible state to
+        # handle. Asking for it separately hands this loop an `Optional`
+        # whose `None` branch has only bad answers -- raising
+        # `StopIteration` out of a helper, or skipping the file, which
+        # would drop it from every finding and reopen the "excluded by the
+        # walk, reported by nothing" hole this check exists to close.
+        by_dir.setdefault(excluding_dir.as_posix(), []).append(
+            path.relative_to(bundle_dir).as_posix()
         )
-        dot_dir = Path(*rel.parts[: depth + 1]).as_posix()
-        by_dir.setdefault(dot_dir, []).append(rel.as_posix())
 
     findings: list[LintFinding] = []
     for dot_dir, paths in sorted(by_dir.items()):
