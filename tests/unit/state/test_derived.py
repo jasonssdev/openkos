@@ -80,6 +80,31 @@ def test_manifest_hash_of_empty_bundle_is_deterministic(tmp_path: Path) -> None:
     )
 
 
+def test_manifest_hash_is_unaffected_by_a_markdown_file_under_a_dot_directory(
+    tmp_path: Path,
+) -> None:
+    """#984: `bundle_manifest_hash` walks `okf._iter_docs`, which now
+    excludes any `.md` file under a dot-directory (an editor's `.obsidian/`
+    folder, say) -- this is the manifest-staleness half of the issue:
+    dropping such a file into the bundle must NOT perturb the cache key
+    `reindex` compares against, since the file was never a Knowledge
+    Object the cache should have accounted for."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "stoicism.md", title="Stoicism", body="a")
+
+    before = derived.bundle_manifest_hash(bundle_dir)
+    # Deliberately a WELL-FORMED, parseable concept-shaped file (not a
+    # frontmatter-less scrap): before this fix, `_iter_docs` would have
+    # admitted it as a real doc and contributed a `(concept_id,
+    # content_hash)` pair, changing the digest below -- the dot-directory
+    # structural exclusion is what must keep this digest unchanged, not an
+    # unrelated parse-error skip that would mask the very thing under test.
+    _write_doc(bundle_dir / ".obsidian" / "workspace.md", title="Workspace", body="w")
+    after = derived.bundle_manifest_hash(bundle_dir)
+
+    assert after == before
+
+
 # --- open_derived_connection ---------------------------------------------
 
 

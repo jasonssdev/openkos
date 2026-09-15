@@ -1047,3 +1047,64 @@ def test_lint_ledger_sidecar_alone_does_not_trigger_state_dir_markdown(
     assert result.exit_code == 0
     assert "State-dir markdown:" in result.stdout
     assert "  No `.md` files under bundle/.state/." in result.stdout
+
+
+def test_lint_flags_markdown_under_a_dot_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#984: a `.md` file placed under a dot-directory other than
+    `.state/` (an editor's `.obsidian/` folder, say) is reported under
+    `Dot-directory markdown:`, read-only, and `lint` still exits 0
+    (non-gating, matching every other finding kind)."""
+    _init_workspace(tmp_path, monkeypatch)
+    dot_dir = tmp_path / "bundle" / ".obsidian"
+    dot_dir.mkdir(parents=True)
+    (dot_dir / "workspace.md").write_text("Not a concept.\n", encoding="utf-8")
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["lint"])
+
+    assert result.exit_code == 0
+    assert "Dot-directory markdown:" in result.stdout
+    section = result.stdout.split("Dot-directory markdown:", 1)[1]
+    assert "  .obsidian: " in section
+    assert ".obsidian/workspace.md" in section
+    assert _snapshot(tmp_path) == before
+
+
+def test_lint_clean_bundle_reports_zero_dot_dir_markdown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fresh, empty bundle renders the dot-dir-markdown empty state;
+    `lint` still exits 0 and creates no file."""
+    _init_workspace(tmp_path, monkeypatch)
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["lint"])
+
+    assert result.exit_code == 0
+    assert "Dot-directory markdown:" in result.stdout
+    assert "  No `.md` files under a dot-directory." in result.stdout
+    assert _snapshot(tmp_path) == before
+
+
+def test_lint_state_dir_markdown_is_not_double_reported_under_dot_dir_markdown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stray `.md` file under `bundle/.state/` is `.state/`'s own, more
+    specific finding -- it must appear exactly once total, under
+    `State-dir markdown:`, and never a second time under
+    `Dot-directory markdown:`."""
+    _init_workspace(tmp_path, monkeypatch)
+    state_dir = tmp_path / "bundle" / ".state"
+    state_dir.mkdir(parents=True)
+    (state_dir / "stray.md").write_text("Body.\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["lint"])
+
+    assert result.exit_code == 0
+    dot_dir_section = result.stdout.split("Dot-directory markdown:", 1)[1]
+    assert "  No `.md` files under a dot-directory." in dot_dir_section
+    assert "State-dir markdown:" in result.stdout
+    state_section = result.stdout.split("State-dir markdown:", 1)[1]
+    assert ".state/stray.md" in state_section

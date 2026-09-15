@@ -322,6 +322,118 @@ def test_check_conformance_passes_on_reference_bundle() -> None:
     assert okf.check_conformance(bundle_dir) == []
 
 
+def _write_plain_md(path: Path, *, body: str = "Body.\n") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body, encoding="utf-8")
+
+
+# --- iter_bundle_markdown (#984) ----------------------------------------
+
+
+def test_iter_bundle_markdown_excludes_dot_directory_at_root(tmp_path: Path) -> None:
+    """A `.md` file directly under a root-level dot-directory (an editor's
+    `.obsidian/` folder is the motivating case, but the rule is general --
+    see #984's "what about `.vscode/`" question) is dropped from the walk,
+    whether it sits directly inside it or nested further down."""
+    bundle_dir = tmp_path / "bundle"
+    _write_plain_md(bundle_dir / ".obsidian" / "template.md")
+    _write_plain_md(bundle_dir / ".obsidian" / "nested" / "deep.md")
+
+    assert list(okf.iter_bundle_markdown(bundle_dir)) == []
+
+
+def test_iter_bundle_markdown_excludes_dot_directory_at_depth(tmp_path: Path) -> None:
+    """A dot-directory nested UNDER an ordinary directory is excluded too --
+    the rule is about any directory component, not just the bundle-root
+    entries a first glance might assume."""
+    bundle_dir = tmp_path / "bundle"
+    _write_plain_md(bundle_dir / "concepts" / ".private" / "x.md")
+    _write_plain_md(bundle_dir / "concepts" / "stoicism.md")
+
+    assert list(okf.iter_bundle_markdown(bundle_dir)) == [
+        bundle_dir / "concepts" / "stoicism.md"
+    ]
+
+
+def test_iter_bundle_markdown_excludes_state_dirname(tmp_path: Path) -> None:
+    """`.state/` (`okf.STATE_DIRNAME`) is just one more dot-directory to this
+    walk -- it needs no special-casing, and this pins that its exclusion now
+    rests on the general structural rule rather than the old "never carries
+    a `.md` suffix" convention alone."""
+    bundle_dir = tmp_path / "bundle"
+    _write_plain_md(bundle_dir / okf.STATE_DIRNAME / "anything.md")
+
+    assert list(okf.iter_bundle_markdown(bundle_dir)) == []
+
+
+def test_iter_bundle_markdown_still_yields_dot_file_at_bundle_root(
+    tmp_path: Path,
+) -> None:
+    """`bundle/.hidden.md` is a dot-FILE, not a dot-directory -- only
+    directory components are excluded, so this file is deliberately STILL
+    yielded. This pins the boundary explicitly so nobody "fixes" it later
+    as an oversight."""
+    bundle_dir = tmp_path / "bundle"
+    _write_plain_md(bundle_dir / ".hidden.md")
+
+    assert list(okf.iter_bundle_markdown(bundle_dir)) == [bundle_dir / ".hidden.md"]
+
+
+def test_iter_bundle_markdown_yields_ordinary_concept_when_bundle_dir_itself_has_a_dot_component(
+    tmp_path: Path,
+) -> None:
+    """The exclusion test runs against the path RELATIVE to `bundle_dir`,
+    never the absolute path -- a workspace living under a dot-directory on
+    the user's own machine (e.g. `~/.local/share/kb/bundle/...`) must not
+    blank the whole bundle."""
+    bundle_dir = tmp_path / ".local" / "share" / "kb" / "bundle"
+    _write_plain_md(bundle_dir / "concepts" / "stoicism.md")
+
+    assert list(okf.iter_bundle_markdown(bundle_dir)) == [
+        bundle_dir / "concepts" / "stoicism.md"
+    ]
+
+
+def test_iter_bundle_markdown_does_not_filter_reserved_filenames(
+    tmp_path: Path,
+) -> None:
+    """`RESERVED_FILENAMES` filtering stays each CALLER's own concern (per
+    the docstring) -- this helper's contract is the dot-directory rule
+    alone, so a root `index.md` is yielded here even though `_iter_docs`
+    (a caller) would skip it."""
+    bundle_dir = tmp_path / "bundle"
+    _write_plain_md(bundle_dir / "index.md")
+
+    assert list(okf.iter_bundle_markdown(bundle_dir)) == [bundle_dir / "index.md"]
+
+
+def test_iter_docs_excludes_dot_directory_markdown(tmp_path: Path) -> None:
+    """#984: a `.md` file under a dot-directory (e.g. `.obsidian/`) never
+    reaches `_iter_docs` at all -- it is not merely skipped as a violation,
+    it is absent from the walk entirely, so it contributes no `DocScan`."""
+    bundle_dir = tmp_path / "bundle"
+    _write_plain_md(bundle_dir / ".obsidian" / "template.md")
+    _write_plain_md(
+        bundle_dir / "concepts" / "stoicism.md",
+        body="---\ntype: Concept\ntitle: Stoicism\n---\nBody.\n",
+    )
+
+    scans = list(okf._iter_docs(bundle_dir))
+
+    assert [scan.path for scan in scans] == [bundle_dir / "concepts" / "stoicism.md"]
+
+
+def test_iter_reserved_excludes_dot_directory_reserved_name(tmp_path: Path) -> None:
+    """The reserved-name walk must not admit a reserved filename sitting
+    under a dot-directory either -- `bundle/.obsidian/index.md` is not a
+    nested `index.md` this engine should ever check §6's structure
+    against."""
+    bundle_dir = tmp_path / "bundle"
+    _write_plain_md(bundle_dir / ".obsidian" / "index.md")
+
+    assert list(okf._iter_reserved(bundle_dir)) == []
+
+
 def test_survey_bundle_fresh_empty_bundle(tmp_path: Path) -> None:
     """A fresh, empty bundle surveys to `BundleSurvey(0, 0, [])` (scenario:
     freshly initialized empty bundle)."""
@@ -3281,3 +3393,28 @@ def test_extraction_notices_fails_closed_on_absent_and_unknown_values() -> None:
     assert okf.extraction_notices(
         {okf.EXTRACTION_NOTICE_KEY: ["not-a-token", okf.EXTRACTION_NOTICE_JUDGE_EMPTY]}
     ) == (okf.EXTRACTION_NOTICE_JUDGE_EMPTY,)
+
+
+def test_excluded_from_bundle_walk_rejects_a_path_outside_the_bundle(
+    tmp_path: Path,
+) -> None:
+    """The predicate's precondition is machine-checked, not prose (#984).
+
+    `excluded_from_bundle_walk` is public and consumed from another
+    module, and it raises `ValueError` from `relative_to` rather than
+    answering `False` for a path outside `bundle_dir`. That is the
+    deliberate choice and this pins it: answering "not excluded" would
+    quietly admit a file from another tree into a bundle's own counts,
+    which is worse than a caller bug that fails loudly. Every in-tree
+    caller feeds it paths harvested from a walk rooted at the same
+    directory, so the raise is unreachable today -- which is exactly why
+    the contract needs a test rather than a comment."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    outside = tmp_path / "elsewhere" / "note.md"
+
+    # Matched on the offending path, which is this test's own input --
+    # never on CPython's wording for the message, which is an
+    # implementation detail of `relative_to` and not a contract of ours.
+    with pytest.raises(ValueError, match=r"note\.md"):
+        okf.excluded_from_bundle_walk(outside, bundle_dir)

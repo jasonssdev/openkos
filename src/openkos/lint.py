@@ -268,6 +268,12 @@ class LintReport:
     Decision 3's EXCLUDE/INCLUDE separation): a `.md` file found under
     `bundle/.state/`, where only non-`.md` derived-state sidecars (the
     merge ledger) belong -- see `check_state_dir_contains_no_markdown`."""
+    dot_dir_markdown: list[LintFinding] = field(default_factory=list)
+    """`"dot-dir-markdown"` findings (issue #984, ADR-0019, safety net for
+    `okf.iter_bundle_markdown`'s dot-directory exclusion): a `.md` file
+    found under any dot-directory OTHER than `bundle/.state/` -- which
+    keeps its own, more specific `state_dir_markdown` finding instead --
+    see `check_dot_dir_markdown`."""
     notices: list[str] = field(default_factory=list)
 
 
@@ -1613,6 +1619,116 @@ def check_state_dir_contains_no_markdown(bundle_dir: Path) -> list[LintFinding]:
         )
         for path in scan_markdown_under_state_dir(bundle_dir)
     ]
+
+
+_DOT_DIR_EXAMPLES: Final = 3
+"""How many offending paths a `dot-dir-markdown` finding names before it
+falls back to a count (issue #984). Three is enough to recognise WHAT kind
+of files a dot-directory holds -- templates, a trash folder, real notes --
+which is the only judgement the finding asks a human to make; the exact
+list is on disk, and `lint` never gates on it."""
+
+
+def scan_dot_dir_markdown(bundle_dir: Path) -> list[Path]:
+    """Names-only walk for every `*.md` file that `okf.iter_bundle_markdown`
+    now structurally drops from every walk in this codebase (issue #984,
+    ADR-0019): every file `okf.excluded_from_bundle_walk` answers for --
+    asked, never re-derived, so this check cannot report something other
+    than what the walk drops -- EXCEPT under `okf.STATE_DIRNAME`, which keeps
+    its own, more specific `scan_markdown_under_state_dir`/
+    `state-dir-markdown` finding -- a file there must be reported once,
+    not twice.
+
+    The safety net for that exclusion's own silence: a bundle author who
+    put a real concept under a dot-directory (by hand, or via a tool that
+    writes one) loses it from every count -- document totals,
+    `bundle_manifest_hash`, the FTS/graph indexes -- with no signal at all.
+    This scan is what removes the "silently". It does not re-derive the
+    walk: it consumes `okf.iter_excluded_bundle_markdown`, the exact
+    complement of the walk itself, so the check's universe AND its rule
+    both come from one place and cannot drift apart. Reusing
+    `collect_docs`/`_iter_docs` instead is not an option and never was --
+    those never descend into a dot-directory at all, by the very exclusion
+    this scan exists to police (the same reason
+    `scan_markdown_under_state_dir` needs its own walk)."""
+    state_dir = bundle_dir / okf.STATE_DIRNAME
+    return [
+        path
+        for path in okf.iter_excluded_bundle_markdown(bundle_dir)
+        if state_dir not in path.parents
+    ]
+
+
+def check_dot_dir_markdown(bundle_dir: Path) -> list[LintFinding]:
+    """Report every dot-directory under `bundle_dir` (other than
+    `.state/`, which keeps its own more specific finding) that holds
+    `*.md` files `okf.iter_bundle_markdown` now excludes from every
+    downstream count (issue #984, ADR-0019). Read-only and NON-GATING,
+    matching every other `lint` finding.
+
+    ONE finding per top-level dot-directory, with a count and up to
+    `_DOT_DIR_EXAMPLES` example paths -- NOT one per file, which is where
+    this started and what the adversarial review of that first shape
+    rejected. The whole point of this change is that opening `bundle/` in
+    an editor is now a documented, recommended path, and an editor pointed
+    at a directory grows dot-directories of its own that fill with
+    markdown: Obsidian's `.obsidian/.trash/` holds every note the user
+    ever deleted. One line per file turns a health report into a wall on
+    every run, and it repeats one fact -- "this directory is not
+    knowledge" -- once per file that happens to sit in it.
+
+    The detail is phrased about the DIRECTORY for the same reason. "Move
+    this file out" is the wrong instruction for a file the editor wrote
+    and owns; the decision a human actually makes here is about the
+    directory as a whole, once.
+
+    It GROUPS `scan_dot_dir_markdown` and decides nothing about which
+    files belong: the "everything the walk drops, except `.state/`" rule
+    is stated once, there, so the drift guard pinning that rule against
+    `okf.iter_bundle_markdown` covers what `lint` actually renders.
+    Re-deriving the set here is the exact duplication this change exists
+    to remove, one level down, and the direction that hurts is a rendered
+    report silently omitting a dropped file."""
+    by_dir: dict[str, list[str]] = {}
+    for path in scan_dot_dir_markdown(bundle_dir):
+        rel = path.relative_to(bundle_dir)
+        # Keyed on the bundle-relative PATH up to and including the first
+        # dot component, never on that component's bare name: `.obsidian`
+        # and `concepts/.obsidian` are two directories, and merging them
+        # under one key would report a `path` that names no real location
+        # and hide, behind the example cap, that two are involved. Every
+        # other finding kind spells `path` as a bundle-relative path; this
+        # one now does too.
+        depth = next(
+            index for index, part in enumerate(rel.parts[:-1]) if part.startswith(".")
+        )
+        dot_dir = Path(*rel.parts[: depth + 1]).as_posix()
+        by_dir.setdefault(dot_dir, []).append(rel.as_posix())
+
+    findings: list[LintFinding] = []
+    for dot_dir, paths in sorted(by_dir.items()):
+        shown = paths[:_DOT_DIR_EXAMPLES]
+        examples = ", ".join(shown)
+        if len(paths) > len(shown):
+            examples += f", and {len(paths) - len(shown)} more"
+        noun, verb = ("file", "is") if len(paths) == 1 else ("files", "are")
+        findings.append(
+            LintFinding(
+                kind="dot-dir-markdown",
+                path=dot_dir,
+                detail=(
+                    f"'{dot_dir}/' holds {len(paths)} `.md` {noun} "
+                    f"({examples}) that {verb} NOT treated as Knowledge "
+                    "Objects: they do not appear in `lint`'s document "
+                    "counts, do not contribute to `bundle_manifest_hash`, "
+                    "and are not indexed or embedded. If this directory is "
+                    "editor or tooling configuration, that is correct and "
+                    "there is nothing to do; if it holds real knowledge, "
+                    "move those files out of the dot-directory"
+                ),
+            )
+        )
+    return findings
 
 
 def check_non_nfc_names(bundle_dir: Path) -> list[LintFinding]:

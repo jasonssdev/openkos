@@ -360,7 +360,7 @@ def prepare_merge(
     # not guard targets (mirrors `unmerge`'s scoping).
     other_files: dict[str, str] = {}
     other_bytes: dict[str, bytes] = {}
-    for path in sorted(bundle_dir.rglob("*.md")):
+    for path in okf.iter_bundle_markdown(bundle_dir):
         if path.name in okf.RESERVED_FILENAMES:
             continue
         if path in (survivor_path, absorbed_path):
@@ -1271,7 +1271,7 @@ def prepare_forget(
     # would double Phase A's peak memory for nothing.
     other_files: dict[str, str] = {}
     other_bytes: dict[str, bytes] = {}
-    for path in sorted(layout.bundle_dir.rglob("*.md")):
+    for path in okf.iter_bundle_markdown(layout.bundle_dir):
         if path.name in okf.RESERVED_FILENAMES:
             continue
         if path == concept_path:
@@ -1696,7 +1696,7 @@ def prepare_purge(
     # observation as the text rather than re-read per member afterwards.
     other_files: dict[str, str] = {}
     other_bytes: dict[str, bytes] = {}
-    for path in sorted(layout.bundle_dir.rglob("*.md")):
+    for path in okf.iter_bundle_markdown(layout.bundle_dir):
         if path.name in okf.RESERVED_FILENAMES:
             continue
         if path == concept_path:

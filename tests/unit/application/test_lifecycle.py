@@ -834,6 +834,125 @@ def test_prepare_forget_scope_source_aggregates_references_in_insertion_order(
     assert plan.confirmation.prompt == "Delete 2 concepts?"
 
 
+def _write_dot_directory_markdown(bundle_dir: Path) -> None:
+    """An editor's own `.obsidian/workspace.md` inside a bundle -- the file
+    every whole-bundle snapshot below must NOT pick up (#984)."""
+    path = bundle_dir / ".obsidian" / "workspace.md"
+    path.parent.mkdir(parents=True)
+    path.write_text("Not a concept.\n", encoding="utf-8")
+
+
+def test_prepare_forget_scope_source_excludes_dot_directory_markdown(
+    tmp_path: Path,
+) -> None:
+    """#984: `prepare_forget`'s whole-bundle `other_files`/`other_bytes`
+    snapshot walks via `okf.iter_bundle_markdown`, which excludes any `.md`
+    file under a dot-directory. A regression to the raw `rglob("*.md")`
+    idiom at this call site would put an editor's own file into the
+    drift-guard baseline.
+
+    The ordinary concept is asserted PRESENT, not just the offending one
+    absent. An absence-only assertion passes vacuously under several
+    unrelated failures -- a differently spelled snapshot key, an absolute
+    path, an empty `other_bytes` for this fixture -- while proving nothing
+    about the exclusion. The positive control is what separates "the
+    exclusion worked" from "the snapshot was empty"."""
+    layout = _workspace(tmp_path)
+    _write_concept(layout.bundle_dir, "concepts/root", title="Root")
+    _write_concept(layout.bundle_dir, "concepts/neighbour", title="Neighbour")
+    _write_dot_directory_markdown(layout.bundle_dir)
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    cfg = config.read_config(tmp_path)
+
+    plan = lifecycle_service.prepare_forget(
+        tmp_path, layout, "concepts/root", scope="source", now=now, cfg=cfg
+    )
+
+    assert "concepts/neighbour.md" in plan.other_bytes
+    assert ".obsidian/workspace.md" not in plan.other_bytes
+
+
+def test_prepare_purge_excludes_dot_directory_markdown_from_the_cascade(
+    tmp_path: Path,
+) -> None:
+    """The same guard at `prepare_purge`'s own whole-bundle snapshot
+    (#984). Each of the three lifecycle call sites rewired by this change
+    carries its own copy of the walk idiom, so each needs its own pin --
+    proving one proves nothing about the other two.
+
+    Asserted through `purge_ids` rather than the snapshot dict, because
+    that is where the consequence actually lands: `--scope source` feeds
+    the snapshot to `find_provenance_descendants`, so a `.md` file under
+    `.obsidian/` that happens to carry a `provenance:` naming the target
+    used to join the cascade -- and `purge` erases what it names,
+    irreversibly. The derived neighbour, identical but for its location,
+    is the positive control: it MUST be in the cascade, which is what
+    separates "the dot-directory file was excluded" from "the cascade was
+    empty"."""
+    layout = _workspace(tmp_path)
+    _write_concept(layout.bundle_dir, "sources/target", title="Target")
+    derived: dict[str, object] = {
+        "type": "Concept",
+        "title": "Derived",
+        "provenance": ["sources/target"],
+    }
+    (layout.bundle_dir / "concepts").mkdir(parents=True, exist_ok=True)
+    (layout.bundle_dir / "concepts" / "derived.md").write_text(
+        okf.dump_frontmatter(derived, "# Derived\n\nBody.\n"), encoding="utf-8"
+    )
+    stray = layout.bundle_dir / ".obsidian" / "stray.md"
+    stray.parent.mkdir(parents=True)
+    stray.write_text(
+        okf.dump_frontmatter(
+            {"type": "Concept", "title": "Stray", "provenance": ["sources/target"]},
+            "# Stray\n\nBody.\n",
+        ),
+        encoding="utf-8",
+    )
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+
+    plan = lifecycle_service.prepare_purge(
+        tmp_path, layout, "sources/target", scope="source", now=now
+    )
+
+    assert "concepts/derived" in plan.purge_ids
+    assert ".obsidian/stray" not in plan.purge_ids
+
+
+def test_prepare_merge_excludes_dot_directory_markdown(tmp_path: Path) -> None:
+    """The same guard at `prepare_merge`'s own whole-bundle snapshot
+    (#984). `other_files` is what the inbound link, relation and
+    provenance rewrite scans all read, so an editor's file reaching it
+    would be searched for links to the absorbed concept and, on a match,
+    rewritten in place."""
+    layout = _workspace(tmp_path)
+    _write_concept(layout.bundle_dir, "concepts/survivor", title="Survivor")
+    _write_concept(layout.bundle_dir, "concepts/absorbed", title="Absorbed")
+    _write_concept(layout.bundle_dir, "concepts/neighbour", title="Neighbour")
+    _write_dot_directory_markdown(layout.bundle_dir)
+    survivor_path, survivor_canonical = lifecycle_service.resolve_concept_path(
+        layout.bundle_dir, "concepts/survivor"
+    )
+    absorbed_path, absorbed_canonical = lifecycle_service.resolve_concept_path(
+        layout.bundle_dir, "concepts/absorbed"
+    )
+
+    prepared = lifecycle_service.prepare_merge(
+        layout.bundle_dir,
+        layout.bundle_dir / "index.md",
+        layout.bundle_dir / "log.md",
+        survivor_path,
+        absorbed_path,
+        survivor_canonical,
+        absorbed_canonical,
+        tmp_path,
+        now=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+
+    assert "concepts/neighbour.md" in prepared.other_files
+    assert ".obsidian/workspace.md" not in prepared.other_files
+
+
 def test_prepare_forget_confirmation_prompt_differs_by_scope(tmp_path: Path) -> None:
     """`forget`'s confirmation prompt is scope-conditional (design table):
     `--scope source` names the delete COUNT; `--scope self` keeps S2a's

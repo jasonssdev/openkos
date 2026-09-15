@@ -759,3 +759,59 @@ def test_list_sources_refuses_a_type_filter_and_a_bad_id(
     assert "--sources" in with_type.stderr
     assert missing.exit_code == 1
     assert "concepts/ghost" in missing.stderr
+
+
+def test_list_sources_does_not_walk_through_a_dot_directory_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#984: `list --sources` builds its provenance edges from the shared
+    bundle walk, which excludes any `.md` file under a dot-directory.
+
+    The exposure is narrow and had to be found rather than assumed. A
+    Source under `bundle/.obsidian/` cannot change this output at all,
+    because `provenance_source_ancestors` keeps only `sources/`-prefixed
+    ids -- a test written there would pass no matter what the walk did. The
+    id space where the two rules overlap is a dot-directory INSIDE
+    `sources/`, and there the difference is real: the stray file supplies
+    no provenance edges any more, so a Source reachable only THROUGH it
+    stops being reported, and the stray itself renders `(not in bundle)`
+    -- which is the honest answer, since it is no longer a Knowledge
+    Object. The parallel real chain is the positive control."""
+    _init_workspace(tmp_path, monkeypatch)
+    bundle = tmp_path / "bundle"
+    _write_provenance_doc(
+        bundle / "people" / "jane.md",
+        type_="Person",
+        title="Jane",
+        provenance=["sources/.drafts/stray", "sources/real"],
+    )
+    _write_provenance_doc(
+        bundle / "sources" / ".drafts" / "stray.md",
+        type_="Source",
+        title="Stray Source",
+        provenance=["sources/behind-the-stray"],
+    )
+    _write_provenance_doc(
+        bundle / "sources" / "behind-the-stray.md",
+        type_="Source",
+        title="Behind The Stray",
+        provenance=["raw1.txt"],
+    )
+    _write_provenance_doc(
+        bundle / "sources" / "real.md",
+        type_="Source",
+        title="Real Source",
+        provenance=["raw2.txt"],
+    )
+
+    result = runner.invoke(app, ["list", "--sources", "people/jane"])
+
+    assert result.exit_code == 0
+    # Positive control: the ordinary chain is reported in full.
+    assert "sources/real" in result.stdout
+    assert "Real Source" in result.stdout
+    # The stray supplies no edges, so what sits behind it is unreachable.
+    assert "sources/behind-the-stray" not in result.stdout
+    # And the stray itself is not a bundle object any more.
+    assert "(not in bundle)" in result.stdout
+    assert "Stray Source" not in result.stdout

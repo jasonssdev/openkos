@@ -133,6 +133,26 @@ def test_build_index_reserved_filenames_never_indexed(tmp_path: Path) -> None:
         assert idx.search("zzyzxlog") == []
 
 
+def test_build_index_never_indexes_markdown_under_a_dot_directory(
+    tmp_path: Path,
+) -> None:
+    """#984: a `.md` file under a dot-directory (an editor's `.obsidian/`
+    folder, say) is not a Knowledge Object and must never become a `docs`
+    row -- picked over the graph projection as the cheaper of the two
+    downstream consumers to exercise directly, since `build_index` needs
+    only an in-memory `sqlite3` connection and no `state/derived.py`
+    fixture."""
+    bundle_dir = tmp_path / "bundle"
+    (bundle_dir / ".obsidian").mkdir(parents=True)
+    (bundle_dir / ".obsidian" / "workspace.md").write_text(
+        "zzyzxobsidian\n", encoding="utf-8"
+    )
+
+    with fts.build_index(bundle_dir) as idx:
+        assert idx.search("zzyzxobsidian") == []
+        assert idx.skipped == []
+
+
 def test_build_index_empty_bundle_produces_empty_index(tmp_path: Path) -> None:
     """An empty bundle builds successfully with zero rows; `search` never raises."""
     bundle_dir = tmp_path / "bundle"

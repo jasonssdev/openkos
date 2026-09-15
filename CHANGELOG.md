@@ -14,6 +14,27 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+### Changed
+
+- A `.md` file placed under a dot-directory inside `bundle/` (an editor's
+  `.obsidian/` folder, say — the rule applies to any dot-directory, not just
+  that one) is no longer part of the bundle
+  ([#984](https://github.com/jasonssdev/openkos/issues/984)). Every `*.md`
+  walk now excludes it structurally: it stops appearing in `lint`'s document
+  counts, stops perturbing `bundle_manifest_hash` (so editing it no longer
+  triggers a reindex), and is no longer indexed or embedded. A new `lint`
+  finding, `dot-dir-markdown`, reports each such directory — with a count
+  and a few example paths, one line per directory rather than per file — so
+  the exclusion is never silent and an editor's own trash folder cannot
+  become the whole report; a stray `.md` under `bundle/.state/` keeps its
+  existing, more specific `state-dir-markdown` finding instead of a second
+  one. `init`
+  also ships no `.obsidian/` scaffolding of its own, and never will, for any
+  third-party application — see [ADR-0019](docs/adr/0019-dot-directories-are-not-knowledge.md)
+  for the full reasoning and the documented manual path
+  (`docs/user-journey.md#reading-the-bundle-in-an-editor`) for users who want
+  one.
+
 ## [0.2.14] - 2026-09-11
 
 Thirty-seven commits closing twenty-two issues, and the release has two
