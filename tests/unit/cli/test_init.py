@@ -1936,3 +1936,93 @@ def test_non_interactive_run_still_gets_the_full_stickiness_explanation(
     assert result.exit_code == 0
     assert result.output.lower().count("forces a full corpus re-embed") == 1
     assert "is sticky" in result.output
+
+
+def test_init_names_the_bundle_as_the_vault_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`init` names the directory that opens in an editor, verbatim (#982).
+
+    The bundle already works as an Obsidian vault with no code and no
+    plugin, and `init` is the one moment the user is looking at a freshly
+    made workspace asking what they now have. Before this, the only pointer
+    it printed was `openkos ingest` -- the right one for a curator, and the
+    wrong one for the reader who will never run a second command. That
+    reader's whole path is: open the bundle, read the knowledge."""
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 0
+    assert (
+        "To read your knowledge in an editor, open `bundle/` (not the "
+        "workspace root) as an Obsidian vault or a VS Code folder."
+    ) in result.output
+
+
+def test_vault_pointer_names_the_bundle_and_rules_out_the_workspace_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The load-bearing half is WHICH directory, not that one exists (#982).
+
+    Bundle documents link with bundle-root-absolute paths
+    (`/concepts/some-concept.md`), so they resolve only when the vault root
+    is the bundle. A reader who opens the workspace root gets a vault where
+    nothing links to anything, concludes the output is a pile of
+    disconnected files, and does not come back. A line that said only "open
+    your workspace in an editor" would satisfy the test above and still
+    produce exactly that failure, so the negative is asserted separately:
+    the pointer must name `bundle/` AND rule the workspace root out."""
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 0
+    pointer = next(
+        line for line in result.output.splitlines() if "in an editor" in line
+    )
+    assert "`bundle/`" in pointer
+    assert "not the workspace root" in pointer
+
+
+def test_vault_pointer_is_a_relative_path_not_an_absolute_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The pointer names `bundle/` relative to the workspace, never an
+    absolute path (#982).
+
+    `init` runs in the directory it is initializing, so `bundle/` is
+    unambiguous there, and every other path this command prints is
+    workspace-relative (`raw/`, `bundle/index.md`, `openkos.yaml`).
+    Interpolating `layout.bundle_dir` instead would print a machine-
+    specific absolute path into output that tests and users compare
+    verbatim."""
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 0
+    pointer = next(
+        line for line in result.output.splitlines() if "in an editor" in line
+    )
+    assert str(tmp_path) not in pointer
+
+
+def test_vault_pointer_follows_the_ingest_call_to_action(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The two pointers are siblings, and `Next: run` comes first (#982).
+
+    #389 and #800 established that a DISCLOSURE landing under "here is what
+    to do next" has already lost its reader, which is why the git and
+    stickiness notes are printed above it. This line is not a disclosure --
+    it is a second call to action for a second audience -- so it sits
+    immediately after the first rather than displacing it, and the two
+    arrive together at the end of the run."""
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 0
+    combined = result.output
+    assert combined.index("Next: run") < combined.index("in an editor"), combined
