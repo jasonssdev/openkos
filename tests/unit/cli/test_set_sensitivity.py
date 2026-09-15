@@ -1401,3 +1401,53 @@ def test_raising_a_derived_object_points_at_the_reverse_provenance_lookup(
 
     assert result.exit_code == 0
     assert f"openkos list --sources {derived_id}" in result.output
+
+
+def test_raise_does_not_propagate_into_a_dot_directory(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#984: the raise-propagation scan walks `okf.iter_bundle_markdown`,
+    so a `.md` file under a dot-directory is not a provenance descendant
+    and is never rewritten.
+
+    This is the one rewired call site that WRITES -- the other three
+    snapshot or list -- and it is the one place the exclusion could have
+    produced a silent edit to a file the engine does not manage. It cuts
+    both ways and both are correct under ADR-0019: the engine does not
+    raise the sensitivity of an editor's own file, and it does not claim
+    to have protected it either. The ordinary derived concept is the
+    positive control: it MUST still be raised, which is what separates
+    "the dot-directory file was excluded" from "propagation did not run
+    at all"."""
+    _init_workspace_git(tmp_path, tmp_path_factory, monkeypatch)
+    source_id = _ingest_source(tmp_path, "a.txt")
+    derived_id = _write_derived_concept(
+        tmp_path, slug="derived", provenance=[source_id], sensitivity="public"
+    )
+    stray_path = tmp_path / "bundle" / ".obsidian" / "stray.md"
+    stray_path.parent.mkdir(parents=True)
+    stray_path.write_text(
+        okf.build_concept(
+            type="Concept",
+            title="Stray",
+            description="Lives in an editor's own directory.",
+            body="",
+            provenance=[source_id],
+            sensitivity="public",
+            timestamp="2024-01-01T00:00:00Z",
+        ),
+        encoding="utf-8",
+    )
+    stray_before = stray_path.read_bytes()
+
+    result = runner.invoke(
+        app, ["set-sensitivity", source_id, "confidential", "--auto"]
+    )
+
+    assert result.exit_code == 0
+    assert _sensitivity_of(tmp_path, source_id) == "confidential"
+    assert _sensitivity_of(tmp_path, derived_id) == "confidential"
+    assert stray_path.read_bytes() == stray_before
+    assert ".obsidian" not in result.stdout

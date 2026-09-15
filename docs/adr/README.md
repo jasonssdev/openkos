@@ -54,3 +54,4 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 | [0016](0016-maintain-the-cited-high-water-mark.md) | Maintain the cited high-water mark, not only apply it at birth | Accepted | 2026-08-16 |
 | [0017](0017-merge-ledger-stores-the-catalog-delta.md) | The merge ledger stores the catalog delta, not a catalog snapshot | Accepted | 2026-08-17 |
 | [0018](0018-application-layer-for-bounded-context-services.md) | An application layer for bounded-context services | Accepted | 2026-08-31 |
+| [0019](0019-dot-directories-are-not-knowledge.md) | Dot-directories are not knowledge | Accepted | 2026-09-14 |

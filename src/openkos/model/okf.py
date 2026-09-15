@@ -33,10 +33,13 @@ RESERVED_FILENAMES: Final[frozenset[str]] = frozenset({"index.md", "log.md"})
 STATE_DIRNAME: Final = ".state"
 """The bundle-relative directory holding derived, non-`.md` runtime state --
 today `bundle/.state/ledger/` (durable-derived-state slice 1a; ADR-0013).
-Never walked by `_iter_docs`/`rglob("*.md")` (this name carries no `.md`
-suffix of its own), so nothing under it is a concept document by
-construction; `lint` separately flags any `.md` file that turns up here as a
-structural-exclusion regression."""
+Never walked by `_iter_docs`/`iter_bundle_markdown` -- doubly so, since
+ADR-0019 (#984): it carries no `.md` suffix of its own by convention
+(the original rationale), AND it is a dot-directory, which
+`iter_bundle_markdown` now excludes structurally regardless of any file's
+suffix. So nothing under it is a concept document by construction, on
+either ground; `lint` separately flags any `.md` file that turns up here as
+a structural-exclusion regression."""
 
 _LOG_HEADING_RE: Final = re.compile(r"^## (.+)$", re.MULTILINE)
 """Every level-2 heading in a `log.md`, per §7. `### ` cannot false-match:
@@ -1933,6 +1936,97 @@ def concept_path_for(concept_id: str, bundle_dir: Path, *, suffix: str = ".md") 
     return current
 
 
+def excluded_from_bundle_walk(path: Path, bundle_dir: Path) -> bool:
+    """The ONE rule `iter_bundle_markdown` drops a file on (#984, ADR-0019),
+    stated once so that the walk and `lint.scan_dot_dir_markdown` -- the
+    check whose whole job is to NAME what the walk drops -- cannot answer
+    differently.
+
+    Stating it twice is the failure this exists to prevent. Two copies agree
+    on the day they are written and drift the moment either side is widened,
+    and one direction of that drift is silent data loss: a walk that excludes
+    more than the check reports drops a bundle author's file with no signal
+    at all, which is the exact silence `check_dot_dir_markdown` was added to
+    remove. Cf. the additive-consumer rule -- consumers of one exclusion
+    share one predicate.
+
+    `path` MUST be inside `bundle_dir`; a path outside it raises
+    `ValueError` from `relative_to` rather than answering `False`. That is
+    deliberate and is pinned by a test: every caller feeds this paths
+    harvested from a walk rooted at the same `bundle_dir`, so an outside
+    path is a caller bug, and answering "not excluded" would quietly admit
+    a file from another tree into a bundle's own counts.
+
+    True when any DIRECTORY component of `path` relative to `bundle_dir`
+    begins with a dot. Relative, never absolute: the workspace itself may
+    live under a dot-directory on the user's own machine (e.g.
+    `~/.local/share/kb/bundle/...`), and that must never blank an entire
+    bundle. `parts[:-1]` drops the filename, so a dot-FILE at any level
+    (`bundle/.hidden.md`) is deliberately NOT excluded -- only directory
+    components are in scope."""
+    return any(part.startswith(".") for part in path.relative_to(bundle_dir).parts[:-1])
+
+
+def iter_bundle_markdown(bundle_dir: Path) -> Iterator[Path]:
+    """Yield every `.md` file under `bundle_dir`, in the SAME
+    `sorted(rglob("*.md"))` order every walk in this codebase has always
+    used, MINUS any file with a dot-directory component between
+    `bundle_dir` and itself (issue #984, ADR-0019).
+
+    "One markdown file = one OKF concept"
+    (docs/knowledge-object-model.md) is the invariant this walk protects.
+    Before this helper existed, ANY `*.md` file under ANY dot-directory --
+    `.obsidian/`, `.vscode/`, `STATE_DIRNAME` itself -- was silently
+    admitted as a Knowledge Object by every one of the nine call sites that
+    built this walk inline. A dot-directory is, by the same convention
+    every tool on this stack already honors (`.git/`, `.obsidian/`,
+    `.vscode/`, ...), application or tooling configuration -- never a
+    concept a bundle author wrote -- so this walk drops it structurally,
+    by directory-name shape, rather than by a named list. That answers
+    #984's own open question about `.vscode/` for free: the rule is
+    general, not tied to any one third-party application.
+
+    The rule itself lives in `excluded_from_bundle_walk`, stated once:
+    `lint.scan_dot_dir_markdown` reports what this walk drops, so the two
+    must not carry separate copies of it. A dot-FILE sitting directly at
+    the bundle root (`bundle/.hidden.md`) is deliberately STILL yielded --
+    only directory components are in scope, so do not "fix" that later as
+    an oversight.
+
+    Does NOT filter `RESERVED_FILENAMES` -- that stays each CALLER's own
+    concern, exactly as before this walk was extracted into its own
+    helper; skipping/keeping `index.md`/`log.md` is a decision only
+    `_iter_docs`/`_iter_reserved` (and the callers that mirror their idiom)
+    make.
+    """
+    for path in sorted(bundle_dir.rglob("*.md")):
+        if excluded_from_bundle_walk(path, bundle_dir):
+            continue
+        yield path
+
+
+def iter_excluded_bundle_markdown(bundle_dir: Path) -> Iterator[Path]:
+    """The exact complement of `iter_bundle_markdown`: every `.md` file
+    under `bundle_dir` that walk drops (#984, ADR-0019).
+
+    It exists so `lint.scan_dot_dir_markdown` -- whose whole job is to NAME
+    what the walk drops -- shares the walk's ENUMERATION as well as its
+    predicate. Sharing only the predicate left half the rule duplicated:
+    the check kept its own `sorted(rglob("*.md"))`, so widening the walk's
+    candidate set (a second suffix, a different glob) would have moved the
+    walk without moving the check, and a file newly dropped would go
+    unreported -- the exact silence that check was added to remove. Both
+    halves now live here, next to each other, and diverging requires
+    editing one function.
+
+    `RESERVED_FILENAMES` is not applied, symmetrically with
+    `iter_bundle_markdown`: `bundle/.obsidian/index.md` is dropped by the
+    walk and must therefore be reported here."""
+    for path in sorted(bundle_dir.rglob("*.md")):
+        if excluded_from_bundle_walk(path, bundle_dir):
+            yield path
+
+
 def _iter_docs(bundle_dir: Path) -> Iterator[DocScan]:
     """Walk every non-reserved `.md` file under `bundle_dir` exactly once (D2).
 
@@ -1946,7 +2040,7 @@ def _iter_docs(bundle_dir: Path) -> Iterator[DocScan]:
     yields `parse_error` set to the SAME message text `check_conformance`
     has always produced for that case.
     """
-    for path in sorted(bundle_dir.rglob("*.md")):
+    for path in iter_bundle_markdown(bundle_dir):
         if path.name in RESERVED_FILENAMES:
             continue
         try:
@@ -2071,10 +2165,13 @@ def _has_frontmatter_fence(text: str) -> bool:
 
 def _iter_reserved(bundle_dir: Path) -> Iterator[Path]:
     """Walk every reserved `.md` file (`index.md`/`log.md`) under
-    `bundle_dir` exactly once, in the SAME `sorted(rglob("*.md"))` order
-    `_iter_docs` uses -- but filtering IN `RESERVED_FILENAMES` instead of
-    excluding them."""
-    for path in sorted(bundle_dir.rglob("*.md")):
+    `bundle_dir` exactly once, in the SAME order `_iter_docs` uses -- but
+    filtering IN `RESERVED_FILENAMES` instead of excluding them. Shares
+    `_iter_docs`'s dot-directory exclusion via `iter_bundle_markdown`
+    (#984): a reserved-named file sitting under a dot-directory (e.g.
+    `bundle/.obsidian/index.md`) is not a nested `index.md` §6 should ever
+    check."""
+    for path in iter_bundle_markdown(bundle_dir):
         if path.name in RESERVED_FILENAMES:
             yield path
 

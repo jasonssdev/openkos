@@ -7234,7 +7234,7 @@ def set_sensitivity_cmd(
     bundle_bytes: dict[str, bytes] = {}
     if metadata.get("type") == "Source" and direction == "raise":
         try:
-            for path in sorted(layout.bundle_dir.rglob("*.md")):
+            for path in okf.iter_bundle_markdown(layout.bundle_dir):
                 if path.name in okf.RESERVED_FILENAMES:
                     continue
                 if path == concept_path:
@@ -7557,7 +7557,7 @@ def backfill_sensitivity_cmd(
 
         bundle_snapshot: dict[str, str] = {}
         bundle_bytes: dict[str, bytes] = {}
-        for path in sorted(layout.bundle_dir.rglob("*.md")):
+        for path in okf.iter_bundle_markdown(layout.bundle_dir):
             if path.name in okf.RESERVED_FILENAMES:
                 continue
             rel = path.relative_to(layout.bundle_dir).as_posix()
@@ -8077,7 +8077,7 @@ def backfill_source_titles_cmd(
 
         bundle_snapshot: dict[str, str] = {}
         bundle_bytes: dict[str, bytes] = {}
-        for path in sorted(layout.bundle_dir.rglob("*.md")):
+        for path in okf.iter_bundle_markdown(layout.bundle_dir):
             if path.name in okf.RESERVED_FILENAMES:
                 continue
             rel = path.relative_to(layout.bundle_dir).as_posix()
@@ -10550,7 +10550,7 @@ def _run_list_sources(layout: config.WorkspaceLayout, object_id: str) -> None:
         raise typer.Exit(code=1) from exc
 
     files: dict[str, str] = {}
-    for path in sorted(layout.bundle_dir.rglob("*.md")):
+    for path in okf.iter_bundle_markdown(layout.bundle_dir):
         if path.name in okf.RESERVED_FILENAMES:
             continue
         rel = path.relative_to(layout.bundle_dir).as_posix()
@@ -10899,6 +10899,11 @@ def lint() -> None:
     state_dir_markdown = lint_check.check_state_dir_contains_no_markdown(
         layout.bundle_dir
     )
+    # issue #984: another names-only walk over the bundle, never the `docs`
+    # list -- `collect_docs`/`_iter_docs` never descends into a
+    # dot-directory at all (the same structural exclusion this check is the
+    # safety net for). `.state/` keeps its own, more specific finding above.
+    dot_dir_markdown = lint_check.check_dot_dir_markdown(layout.bundle_dir)
     notices = window_notices + skip_notices
     report = lint_check.LintReport(
         stale=stale,
@@ -10914,6 +10919,7 @@ def lint() -> None:
         unbacked_provenance=unbacked_provenance,
         non_nfc=non_nfc,
         state_dir_markdown=state_dir_markdown,
+        dot_dir_markdown=dot_dir_markdown,
         notices=notices,
     )
 
@@ -11023,6 +11029,13 @@ def lint() -> None:
         typer.echo("  No `.md` files under bundle/.state/.")
     else:
         for finding in report.state_dir_markdown:
+            typer.echo(f"  {finding.path}: {finding.detail}")
+    typer.echo()
+    typer.echo("Dot-directory markdown:")
+    if not report.dot_dir_markdown:
+        typer.echo("  No `.md` files under a dot-directory.")
+    else:
+        for finding in report.dot_dir_markdown:
             typer.echo(f"  {finding.path}: {finding.detail}")
 
 

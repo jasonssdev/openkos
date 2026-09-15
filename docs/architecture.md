@@ -136,7 +136,7 @@ verdict rather than a projection. [State taxonomy](#state-taxonomy) is the one
 place that is written down; see also `design D1` in the `performance-caching`
 change record and [ADR-0014](adr/0014-durable-pending-work-stores.md).)*
 
-*(`bundle/.state/` is the one directory inside the bundle that holds no concepts: the merge-ledger sidecars [ADR-0013](adr/0013-relocate-merge-ledger-to-bundle-state.md) relocated there out of survivors' frontmatter, and the operator-decision sidecars [ADR-0014](adr/0014-durable-pending-work-stores.md) placed beside them. Nothing under it is named `*.md`, which is what keeps it invisible to every `rglob("*.md")` walk in the engine and therefore outside OKF §9 rule 1 — a structural exclusion rather than one every walk must remember, and `lint` carries a dedicated check that flags any `.md` file appearing there as a regression against it. Unlike `.openkos/`, this state is durable and canonical: it is versioned with the bundle, not git-ignored.)*
+*(`bundle/.state/` is the one directory inside the bundle that holds no concepts: the merge-ledger sidecars [ADR-0013](adr/0013-relocate-merge-ledger-to-bundle-state.md) relocated there out of survivors' frontmatter, and the operator-decision sidecars [ADR-0014](adr/0014-durable-pending-work-stores.md) placed beside them. Nothing under it is named `*.md`, and — since [ADR-0019](adr/0019-dot-directories-are-not-knowledge.md) — it is also a dot-directory, which every `*.md` walk in the engine (`okf.iter_bundle_markdown`) now excludes structurally regardless of a file's suffix; either reason alone keeps it invisible to those walks and therefore outside OKF §9 rule 1 — a structural exclusion rather than one every walk must remember, and `lint` carries a dedicated check that flags any `.md` file appearing there as a regression against it. Unlike `.openkos/`, this state is durable and canonical: it is versioned with the bundle, not git-ignored.)*
 
 ### Why `raw/` is outside the bundle
 
@@ -231,9 +231,10 @@ the merge ledgers (`bundle/.state/ledger/<id>.ledger.okf`, [ADR-0013](adr/0013-r
 and the operator-decision records (`bundle/.state/decisions/<id>.decisions.okf`,
 [ADR-0014](adr/0014-durable-pending-work-stores.md)). These hold human judgments
 and the bytes needed to reverse a merge. They are committed with the bundle, and
-nothing regenerates them. Nothing under `bundle/.state/` is named `*.md`, which
-keeps it outside every `rglob("*.md")` walk and therefore outside OKF §9 by
-construction rather than by convention.
+nothing regenerates them. Nothing under `bundle/.state/` is named `*.md`, and it
+is also a dot-directory ([ADR-0019](adr/0019-dot-directories-are-not-knowledge.md)),
+which keeps it outside every bundle `*.md` walk on either ground and therefore
+outside OKF §9 by construction rather than by convention.
 
 **Derived, under `.openkos/`, git-ignored, deleted wholesale by `purge`.** All
 five are SQLite, all are reconstructible in principle, and they differ in what

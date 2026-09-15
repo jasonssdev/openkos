@@ -112,6 +112,27 @@ def test_collect_docs_skips_files_with_no_parseable_frontmatter(
     assert skipped == ["concepts/no-frontmatter.md: skipped (unparseable frontmatter)"]
 
 
+def test_collect_docs_ignores_markdown_under_a_dot_directory(tmp_path: Path) -> None:
+    """#984: an editor's own file under `.obsidian/` (an ordinary text file,
+    with no OKF frontmatter) used to reach `collect_docs` via `_iter_docs`
+    and get skipped as "unparseable frontmatter" -- exactly the false
+    positive the issue reproduced. Now it never reaches the walk at all: no
+    doc, and no skip notice either."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "readable.md")
+    (bundle_dir / ".obsidian" / "workspace.md").parent.mkdir(
+        parents=True, exist_ok=True
+    )
+    (bundle_dir / ".obsidian" / "workspace.md").write_text(
+        "Just an editor's own file, no frontmatter at all.\n", encoding="utf-8"
+    )
+
+    docs, skipped = lint.collect_docs(bundle_dir)
+
+    assert [doc.identity for doc in docs] == ["concepts/readable"]
+    assert skipped == []
+
+
 def test_collect_docs_skips_files_that_fail_the_body_reread(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
