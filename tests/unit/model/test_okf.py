@@ -3418,3 +3418,167 @@ def test_excluded_from_bundle_walk_rejects_a_path_outside_the_bundle(
     # implementation detail of `relative_to` and not a contract of ours.
     with pytest.raises(ValueError, match=r"note\.md"):
         okf.excluded_from_bundle_walk(outside, bundle_dir)
+
+
+def test_the_two_walks_partition_the_candidate_set(tmp_path: Path) -> None:
+    """`iter_bundle_markdown` and `iter_excluded_bundle_markdown` are two
+    halves of ONE partition of the same candidate set (#984).
+
+    This is the guard for the enumeration, not the rule. Both walks used to
+    spell `sorted(rglob("*.md"))` themselves, and `lint` reports the second
+    half as an account of what the first one dropped -- so widening the
+    glob in one and not the other would leave the halves covering
+    different sets, and files in the gap would be dropped with nothing
+    reporting them. Asserted as a partition (union is everything, halves
+    are disjoint) rather than as two expected lists, so it keeps holding
+    whatever the candidate set is widened to."""
+    bundle_dir = tmp_path / "bundle"
+    (bundle_dir / "concepts" / ".private").mkdir(parents=True)
+    (bundle_dir / ".obsidian" / "nested").mkdir(parents=True)
+    # Two dot components in ONE chain, deliberately: without it, "first
+    # dot component" and "deepest dot component" give the same answer for
+    # every path here and the pairing assertion below cannot tell the two
+    # rules apart.
+    (bundle_dir / ".obsidian" / ".trash").mkdir()
+    for rel in (
+        "index.md",
+        "concepts/stoicism.md",
+        ".hidden.md",
+        ".obsidian/workspace.md",
+        ".obsidian/nested/deep.md",
+        ".obsidian/.trash/old.md",
+        "concepts/.private/draft.md",
+    ):
+        (bundle_dir / rel).write_text("body\n", encoding="utf-8")
+
+    candidates = set(okf._bundle_markdown_candidates(bundle_dir))
+    walked = set(okf.iter_bundle_markdown(bundle_dir))
+    excluded = list(okf.iter_excluded_bundle_markdown(bundle_dir))
+    dropped = {path for path, _ in excluded}
+
+    # The partition is asserted against the candidate FUNCTION, not against
+    # a second spelling of its glob: re-deriving the right-hand side with a
+    # literal `rglob("*.md")` would make this test fail on the very
+    # widening it claims to tolerate, while pinning nothing the two halves
+    # do not already pin between them.
+    assert walked | dropped == candidates
+    # Disjointness is the other half of "partition", and it is NOT implied
+    # by the union: the two walks now reach the rule through DIFFERENT
+    # calls (`excluded_from_bundle_walk` and `bundle_dot_directory`), so
+    # one of them yielding a file the other also yields keeps the union
+    # equal and both halves non-empty while the halves stop partitioning
+    # anything -- and `lint` would then report a file the walk kept.
+    assert not walked & dropped
+
+    # Non-vacuous: both halves are actually populated here.
+    assert walked
+    assert dropped
+
+    # Each dropped file is paired with the directory that excluded THAT
+    # file. This is the contract the whole pairing exists for and both
+    # consumers discard it with `_`, so a generator handing back a stale
+    # or wrong directory would otherwise go unnoticed here.
+    # One literal expected pair, so this loop is load-bearing on its own:
+    # comparing against `bundle_dot_directory` alone re-derives the answer
+    # with the very call the generator makes, and `is_dir()` /
+    # `is_relative_to` hold for the DEEPEST dot-directory just as well as
+    # for the first. The pair named is the one path with two dot
+    # components, which is what makes first-vs-deepest observable at all.
+    assert (
+        bundle_dir / ".obsidian" / ".trash" / "old.md",
+        Path(".obsidian"),
+    ) in excluded
+
+    for path, dot_dir in excluded:
+        assert dot_dir == okf.bundle_dot_directory(path, bundle_dir), path
+        assert (bundle_dir / dot_dir).is_dir(), path
+        assert path.is_relative_to(bundle_dir / dot_dir), path
+
+    # What TODAY's candidate set is, stated separately and deliberately as
+    # a literal, because this is the assertion that SHOULD fail and be
+    # updated when the set is widened.
+    assert candidates == set(bundle_dir.rglob("*.md"))
+
+    # ORDER, asserted as a list: every assertion above collapses to a set,
+    # so dropping `sorted(` from the candidate helper would pass all of
+    # them while leaving both walks on raw, filesystem-dependent `rglob`
+    # order -- which `lint`'s capped example lists and every `_iter_docs`
+    # consumer that documents "the same walk order" depend on.
+    assert list(okf._bundle_markdown_candidates(bundle_dir)) == sorted(candidates)
+    assert list(okf.iter_bundle_markdown(bundle_dir)) == sorted(walked)
+    assert [path for path, _ in excluded] == sorted(dropped)
+
+
+def test_bundle_dot_directory_answers_with_a_relative_path(tmp_path: Path) -> None:
+    """The excluding directory is a bundle-relative PATH, and it is the
+    FIRST dot component (#984).
+
+    `lint` groups its findings by this value, so a bare component name
+    would merge `.obsidian` with `concepts/.obsidian` and report a `path`
+    that names neither. Returning the first dot component -- not the
+    deepest -- is what makes `.obsidian/nested/deep.md` and
+    `.obsidian/workspace.md` one finding about one directory."""
+    bundle_dir = tmp_path / "bundle"
+
+    assert okf.bundle_dot_directory(
+        bundle_dir / "concepts" / ".private" / "x.md", bundle_dir
+    ) == Path("concepts/.private")
+    assert okf.bundle_dot_directory(
+        bundle_dir / ".obsidian" / "nested" / "deep.md", bundle_dir
+    ) == Path(".obsidian")
+    assert (
+        okf.bundle_dot_directory(bundle_dir / "concepts" / "ordinary.md", bundle_dir)
+        is None
+    )
+    # A dot-FILE is not a dot-directory.
+    assert okf.bundle_dot_directory(bundle_dir / ".hidden.md", bundle_dir) is None
+
+
+def test_excluded_predicate_and_dot_directory_are_one_rule(tmp_path: Path) -> None:
+    """`excluded_from_bundle_walk` is `bundle_dot_directory` asked as a
+    yes/no, never a second statement of the rule (#984).
+
+    The same question has two shapes -- "is this excluded" and "which
+    directory excluded it" -- and `lint` needs the second to group its
+    findings. Two spellings would drift; this pins that they answer
+    together over a mixed set."""
+    bundle_dir = tmp_path / "bundle"
+    # The expected answer is written out per candidate, never derived from
+    # the implementation: `excluded_from_bundle_walk` IS
+    # `bundle_dot_directory(...) is not None`, so comparing the two would
+    # be the same computation on both sides of the assertion and could not
+    # fail. Cf. the `.state/` entry, which has a stated answer here and
+    # nowhere else.
+    expected = {
+        "concepts/ordinary.md": False,
+        ".hidden.md": False,
+        ".obsidian/workspace.md": True,
+        "concepts/.private/draft.md": True,
+        f"{okf.STATE_DIRNAME}/stray.md": True,
+    }
+
+    for rel, is_excluded in expected.items():
+        candidate = bundle_dir / rel
+        assert okf.excluded_from_bundle_walk(candidate, bundle_dir) is is_excluded, rel
+        assert (okf.bundle_dot_directory(candidate, bundle_dir) is not None) is (
+            is_excluded
+        ), rel
+
+
+def test_bundle_dot_directory_rejects_a_path_outside_the_bundle(
+    tmp_path: Path,
+) -> None:
+    """The raise contract belongs to the function that implements it
+    (#984).
+
+    `relative_to` is now reached through `bundle_dot_directory` from both
+    the predicate and `lint.check_dot_dir_markdown`, so this is the single
+    place the outside-the-bundle answer is decided. Testing it only
+    through the delegating predicate would leave the entry point's own
+    documented contract unproved."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    outside = tmp_path / "elsewhere" / "note.md"
+
+    with pytest.raises(ValueError, match=r"note\.md"):
+        okf.bundle_dot_directory(outside, bundle_dir)

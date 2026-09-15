@@ -1957,14 +1957,59 @@ def excluded_from_bundle_walk(path: Path, bundle_dir: Path) -> bool:
     path is a caller bug, and answering "not excluded" would quietly admit
     a file from another tree into a bundle's own counts.
 
-    True when any DIRECTORY component of `path` relative to `bundle_dir`
-    begins with a dot. Relative, never absolute: the workspace itself may
-    live under a dot-directory on the user's own machine (e.g.
+    True when `bundle_dot_directory` finds one. The rule itself lives
+    there, because the same question has two shapes -- "is this excluded"
+    and "which directory excluded it" -- and `lint` asks the second one to
+    group its findings. Two spellings of one rule is the failure above,
+    restated in the small."""
+    return bundle_dot_directory(path, bundle_dir) is not None
+
+
+def bundle_dot_directory(path: Path, bundle_dir: Path) -> Path | None:
+    """The bundle-relative dot-directory that excludes `path` from the
+    bundle walk, or `None` when nothing does (#984, ADR-0019).
+
+    The single statement of the exclusion rule. `excluded_from_bundle_walk`
+    is this asked as a yes/no, and `lint.check_dot_dir_markdown` groups its
+    findings by exactly this value -- so the check cannot name a directory
+    the walk did not actually exclude, and it needs no second scan of the
+    path's parts to work out which one that was.
+
+    Returns the path up to and INCLUDING the first dot component, relative
+    to `bundle_dir`: `concepts/.private` for
+    `<bundle>/concepts/.private/x.md`. The full relative path, never the
+    bare component name -- `.obsidian` and `concepts/.obsidian` are two
+    directories, and a bare name identifies neither.
+
+    Relative, never absolute: the workspace itself may live under a
+    dot-directory on the user's own machine (e.g.
     `~/.local/share/kb/bundle/...`), and that must never blank an entire
-    bundle. `parts[:-1]` drops the filename, so a dot-FILE at any level
-    (`bundle/.hidden.md`) is deliberately NOT excluded -- only directory
-    components are in scope."""
-    return any(part.startswith(".") for part in path.relative_to(bundle_dir).parts[:-1])
+    bundle. The filename is dropped before the search, so a dot-FILE at any
+    level (`bundle/.hidden.md`) is deliberately NOT excluded -- only
+    directory components are in scope.
+
+    `path` MUST be inside `bundle_dir`; see `excluded_from_bundle_walk` for
+    why a path outside it raises rather than answering."""
+    directories = path.relative_to(bundle_dir).parts[:-1]
+    for depth, part in enumerate(directories):
+        if part.startswith("."):
+            return Path(*directories[: depth + 1])
+    return None
+
+
+def _bundle_markdown_candidates(bundle_dir: Path) -> Iterator[Path]:
+    """Every `.md` file under `bundle_dir`, in the `sorted(rglob("*.md"))`
+    order every walk in this codebase has always used -- before any
+    exclusion is applied (#984).
+
+    The candidate SET, stated once, for the same reason the exclusion RULE
+    is: `iter_bundle_markdown` and `iter_excluded_bundle_markdown` are two
+    halves of one partition, and `lint` reports the second half as an
+    account of what the first one dropped. A copy of this glob in each
+    would let the halves stop partitioning the same set -- widen it here
+    (a second suffix, a different pattern) and both move together or
+    neither does."""
+    yield from sorted(bundle_dir.rglob("*.md"))
 
 
 def iter_bundle_markdown(bundle_dir: Path) -> Iterator[Path]:
@@ -1999,15 +2044,24 @@ def iter_bundle_markdown(bundle_dir: Path) -> Iterator[Path]:
     `_iter_docs`/`_iter_reserved` (and the callers that mirror their idiom)
     make.
     """
-    for path in sorted(bundle_dir.rglob("*.md")):
+    for path in _bundle_markdown_candidates(bundle_dir):
         if excluded_from_bundle_walk(path, bundle_dir):
             continue
         yield path
 
 
-def iter_excluded_bundle_markdown(bundle_dir: Path) -> Iterator[Path]:
+def iter_excluded_bundle_markdown(bundle_dir: Path) -> Iterator[tuple[Path, Path]]:
     """The exact complement of `iter_bundle_markdown`: every `.md` file
-    under `bundle_dir` that walk drops (#984, ADR-0019).
+    under `bundle_dir` that walk drops, each PAIRED with the dot-directory
+    that dropped it (#984, ADR-0019).
+
+    The pair is what makes the "reported by nothing" hole unrepresentable
+    for the consumer. `lint` needs both facts -- which file, and which
+    directory to file it under -- and asking for the second separately
+    leaves it holding an `Optional` it can only answer with a crash or a
+    silent skip, in a report whose entire purpose is that nothing gets
+    dropped quietly. Computed here, where the exclusion is decided, the
+    question never arises.
 
     It exists so `lint.scan_dot_dir_markdown` -- whose whole job is to NAME
     what the walk drops -- shares the walk's ENUMERATION as well as its
@@ -2022,9 +2076,10 @@ def iter_excluded_bundle_markdown(bundle_dir: Path) -> Iterator[Path]:
     `RESERVED_FILENAMES` is not applied, symmetrically with
     `iter_bundle_markdown`: `bundle/.obsidian/index.md` is dropped by the
     walk and must therefore be reported here."""
-    for path in sorted(bundle_dir.rglob("*.md")):
-        if excluded_from_bundle_walk(path, bundle_dir):
-            yield path
+    for path in _bundle_markdown_candidates(bundle_dir):
+        dot_dir = bundle_dot_directory(path, bundle_dir)
+        if dot_dir is not None:
+            yield path, dot_dir
 
 
 def _iter_docs(bundle_dir: Path) -> Iterator[DocScan]:

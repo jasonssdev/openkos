@@ -228,7 +228,8 @@ def test_scan_reports_exactly_what_the_walk_drops(tmp_path: Path) -> None:
         path for path in on_disk - walked if state_dir not in path.parents
     }
 
-    assert set(lint.scan_dot_dir_markdown(bundle_dir)) == dropped_outside_state
+    scanned = {path for path, _ in lint.scan_dot_dir_markdown(bundle_dir)}
+    assert scanned == dropped_outside_state
 
     # And the identity has to hold for what `lint` RENDERS, not only for
     # the helper: `cli.main`'s `lint()` calls `check_dot_dir_markdown`, so
