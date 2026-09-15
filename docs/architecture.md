@@ -99,7 +99,9 @@ These conventions describe the code as it stands; they change when a decision ch
 
 ## Workspace structure (the user's knowledge base)
 
-The directory a user opens in Obsidian, VS Code, or GitHub. We call it a **workspace**, and it holds three things that are deliberately kept apart: the immutable sources, the compiled bundle, and the engine's own files. By convention it lives at the root of the user's home directory and is named `knowledge` (`~/knowledge`) — one machine can hold several workspaces, but that is the default a user should meet first.
+The directory a user works in — the git repository `openkos init` creates. We call it a **workspace**, and it holds three things that are deliberately kept apart: the immutable sources, the compiled bundle, and the engine's own files. By convention it lives at the root of the user's home directory and is named `knowledge` (`~/knowledge`) — one machine can hold several workspaces, but that is the default a user should meet first.
+
+To *read* the knowledge in an editor it is **`bundle/`** that opens, not the workspace: as an Obsidian vault (Open folder as vault) or as a VS Code folder. Bundle documents link with bundle-root-absolute paths (`[Stoicism](/concepts/stoicism.md)`), which resolve only when the vault root *is* the bundle — open the workspace root instead and no inter-document link resolves.
 
 ```
 ~/knowledge/              # the WORKSPACE (the git repository, created by `openkos init`)
