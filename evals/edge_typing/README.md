@@ -24,6 +24,37 @@ organic bundle carries ambiguity these pairs deliberately do not.
 so it is the number to trust when a label is arguable. Same
 self-contradiction logic as `extraction_cap/measure_acronym_fabrication.py`.
 
+**The type regime** (#990). Every edge is scored twice: once in the overall
+figures, and once in a split by whether its two ends carry the same OKF
+`type` or different ones.
+
+Until #990 every document here was a `Concept` — `_materialize_bundle`
+hardcoded the type regardless of the folder the fixture's id named. That
+made this harness unable to see the direction errors it exists for: the
+inversions reported against real bundles all join two *different* types,
+
+```
+[member_of]    organizations/universidad-catolica-de-chile -> people/denis-parra
+[produced_by]  concepts/arquitectura-de-...                -> projects/sistema-de-extraccion-de-decisiones
+```
+
+and neither pair was representable. A rule that reads the two ends' types
+therefore had zero exposure here and would have measured as a green it could
+never fail.
+
+The corpus now carries three type pairs — `Person`/`Organization`,
+`Concept`/`Project`, `Concept`/`Person` — each in both orientations, so each
+has a forward probe and a `trap_type` probe. They stay a small share of the
+corpus on purpose, which is also why the report splits them out: folded into
+one average they would be invisible.
+
+`--self-test` refuses a corpus that has lost this. It checks that the types
+a document *declares* are the types it was *materialized* with (read back
+with the shipped reader, not compared against `DOCS`), that a fixture's
+folder prefix and frontmatter type agree, that more than one type is
+present, and that at least one labelled edge is cross-type. The first of
+those is the one that would have caught #990 on the day it was introduced.
+
 **Type distribution**. `related_to` is 67% of accepted edges on a real
 bundle (`edge_typing.py:146`), and the rubric's stated aim is *not* to drive
 that share down, so a sharp move in either direction is a finding to explain

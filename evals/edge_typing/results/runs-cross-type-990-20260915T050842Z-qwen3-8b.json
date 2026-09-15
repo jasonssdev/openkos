@@ -1,0 +1,955 @@
+{
+  "arm": "cross-type-990",
+  "model": "qwen3:8b",
+  "runs": 5,
+  "generated_at": "20260915T050842Z",
+  "max_generation_tokens": 8192,
+  "context_window": 12288,
+  "rationale_language": null,
+  "regimes": {
+    "same-type": {
+      "edges": 23,
+      "correct": 46,
+      "total": 115,
+      "trap_hits": 5,
+      "trap_total": 30
+    },
+    "cross-type": {
+      "edges": 6,
+      "correct": 5,
+      "total": 30,
+      "trap_hits": 0,
+      "trap_total": 15
+    }
+  },
+  "outcomes": [
+    {
+      "source_id": "concepts/retry-budget",
+      "target_id": "concepts/request-scheduler",
+      "source_type": "Concept",
+      "target_type": "Concept",
+      "expected": "part_of",
+      "confusion": "part_of vs member_of",
+      "modal": "related_to",
+      "stability": 1.0,
+      "accuracy": 0.0,
+      "answers": [
+        "related_to",
+        "related_to",
+        "related_to",
+        "related_to",
+        "related_to"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rationales": [
+        "The documents do not explicitly state a specific relationship between retry-budget and request-scheduler, and no clear containment, origin, or dependency can be inferred.",
+        "The documents do not explicitly state a specific relationship between retry-budget and request-scheduler, and no stronger type like part_of, caused_by, or produced_by is supported.",
+        "The documents do not explicitly state a specific relationship between retry-budget and request-scheduler, and no stronger type can be inferred based on the provided information.",
+        "The documents do not explicitly state a specific relationship between retry-budget and request-scheduler. They are connected in a system context but lack direct references, causation, or containment that would justify a more specific type.",
+        "The documents do not explicitly state a specific relationship between retry-budget and request-scheduler, and no clear containment, origin, or dependency is indicated."
+      ]
+    },
+    {
+      "source_id": "concepts/nightly-backup-job",
+      "target_id": "concepts/scheduled-maintenance-jobs",
+      "source_type": "Concept",
+      "target_type": "Concept",
+      "expected": "member_of",
+      "confusion": "part_of vs member_of",
+      "modal": "part_of",
+      "stability": 0.8,
+      "accuracy": 0.2,
+      "answers": [
+        "member_of",
+        "part_of",
+        "part_of",
+        "part_of",
+        "part_of"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rationales": [
+        "The nightly-backup-job is a specific type of scheduled-maintenance-job, fitting the definition of a member of a collection of similar jobs.",
+        "The nightly backup job is a structural component of the scheduled maintenance jobs, as it is a specific type of job that contributes to the overall maintenance process.",
+        "The nightly backup job is a structural component of the scheduled maintenance jobs, as it is a specific type of job that contributes to the overall maintenance process.",
+        "The nightly backup job is a structural component of the scheduled maintenance jobs, as it is a specific task that contributes to the overall maintenance process.",
+        "The nightly backup job is a structural component of the scheduled maintenance jobs, as it is a specific type of job that contributes to the overall maintenance process."
+      ]
+    },
+    {
+      "source_id": "concepts/report-renderer",
+      "target_id": "concepts/template-cache",
+      "source_type": "Concept",
+      "target_type": "Concept",
+      "expected": "depends_on",
+      "confusion": "depends_on vs part_of",
+      "modal": "references",
+      "stability": 1.0,
+      "accuracy": 0.0,
+      "answers": [
+        "references",
+        "references",
+        "references",
+        "references",
+        "references"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rationales": [
+        "The report-renderer likely references the template-cache to access or utilize cached templates, but there is no indication of containment, dependency, or origin relationship.",
+        "The report-renderer explicitly uses or refers to the template-cache, but the report-renderer is not caused by, produced by, a part of, or a member of the template-cache.",
+        "The report-renderer likely references the template-cache to access or utilize cached templates during rendering, without being caused by, produced by, or structurally dependent on it.",
+        "The report-renderer likely references the template-cache to access or utilize cached templates, but there is no indication of containment, dependency, or causation.",
+        "The report-renderer likely references the template-cache to access or utilize cached templates during rendering, without being caused by, produced by, or contained within it."
+      ]
+    },
+    {
+      "source_id": "concepts/checkout-outage",
+      "target_id": "concepts/payment-gateway-migration",
+      "source_type": "Concept",
+      "target_type": "Concept",
+      "expected": "caused_by",
+      "confusion": "caused_by vs produced_by",
+      "modal": "related_to",
+      "stability": 1.0,
+      "accuracy": 0.0,
+      "answers": [
+        "related_to",
+        "related_to",
+        "related_to",
+        "related_to",
+        "related_to"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rationales": [
+        "The documents do not explicitly state a direct relationship between checkout-outage and payment-gateway-migration, and no stronger type like caused_by, depends_on, part_of, or member_of is supported.",
+        "The documents do not explicitly state a specific relationship between checkout-outage and payment-gateway-migration, and no stronger type can be inferred based on the given information.",
+        "The documents do not explicitly state a specific relationship between checkout-outage and payment-gateway-migration. They are connected in context but lack a direct causal, dependency, or structural link that would justify a more specific type.",
+        "The documents do not explicitly state a specific relationship between checkout-outage and payment-gateway-migration. They are connected in context but lack direct causation, dependency, or structural links.",
+        "The documents do not explicitly state a specific relationship between checkout-outage and payment-gateway-migration. They are connected in context but no direct causal, compositional, or referential link is established."
+      ]
+    },
+    {
+      "source_id": "concepts/quarterly-risk-report",
+      "target_id": "concepts/risk-committee",
+      "source_type": "Concept",
+      "target_type": "Concept",
+      "expected": "produced_by",
+      "confusion": "caused_by vs produced_by",
+      "modal": "produced_by",
+      "stability": 1.0,
+      "accuracy": 1.0,
+      "answers": [
+        "produced_by",
+        "produced_by",
+        "produced_by",
+        "produced_by",
+        "produced_by"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rationales": [
+        "The quarterly-risk-report is generated by the risk-committee, indicating the committee is the agent that produces the report.",
+        "The quarterly-risk-report is generated by the risk-committee, indicating the risk-committee is the agent that produces the report.",
+        "The quarterly-risk-report is generated by the risk-committee, indicating the committee is the agent that produces the report.",
+        "The quarterly-risk-report is generated by the risk-committee, indicating the committee is the agent responsible for producing the report.",
+        "The quarterly-risk-report is generated by the risk-committee, indicating the committee is the agent that produces the report."
+      ]
+    },
+    {
+      "source_id": "concepts/migration-runbook",
+      "target_id": "concepts/rollback-policy",
+      "source_type": "Concept",
+      "target_type": "Concept",
+      "expected": "references",
+      "confusion": "references vs related_to",
+      "modal": "related_to",
+      "stability": 1.0,
+      "accuracy": 0.0,
+      "answers": [
+        "related_to",
+        "related_to",
+        "related_to",
+        "related_to",
+        "related_to"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rationales": [
+        "The documents do not explicitly state a direct relationship between migration-runbook and rollback-policy, and no stronger type like part_of, caused_by, or produced_by is supported.",
+        "The documents do not explicitly state a specific relationship between migration-runbook and rollback-policy, and no stronger type can be inferred based on the provided information.",
+        "The documents do not explicitly state a specific relationship between migration-runbook and rollback-policy, and no stronger type can be inferred from the given information.",
+        "The documents do not explicitly state a specific relationship between migration-runbook and rollback-policy, and they are not directly connected through containment, origin, or dependency.",
+        "The documents do not explicitly state a specific relationship between migration-runbook and rollback-policy. They are connected but the nature of the relationship is not strong enough to assign a specific type."
+      ]
+    },
+    {
+      "source_id": "concepts/onboarding-checklist",
+      "target_id": "concepts/incident-review-culture",
+      "source_type": "Concept",
+      "target_type": "Concept",
+      "expected": "related_to",
+      "confusion": "the honest abstention",
+      "modal": "related_to",
+      "stability": 1.0,
+      "accuracy": 1.0,
+      "answers": [
+        "related_to",
+        "related_to",
+        "related_to",
+        "related_to",
+        "related_to"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rationales": [
+        "The documents do not explicitly state a specific relationship between onboarding-checklist and incident-review-culture. They are connected but the nature of the relationship is not defined by any of the stronger types.",
+        "The documents do not explicitly state a specific relationship between onboarding-checklist and incident-review-culture. They are connected but the nature of the relationship is not defined by any of the stronger types.",
+        "The documents do not explicitly state a direct relationship between onboarding-checklist and incident-review-culture, and no specific type applies based on the provided information.",
+        "The two concepts are connected but the relationship is not explicitly described by any of the stronger relation types. They are both part of a knowledge graph but do not directly reference, depend on, or form part of each other.",
+        "The documents do not explicitly state a specific relationship between onboarding-checklist and incident-review-culture, and no stronger type can be inferred based on the given information."
+      ]
+    },
+    {
+      "source_id": "concepts/aortic-valve",
+      "target_id": "concepts/human-heart",
+      "source_type": "Concept",
+      "target_type": "Concept",
+      "expected": "part_of",
+      "confusion": "part_of vs member_of (held out from the examples)",
+      "modal": "part_of",
+      "stability": 1.0,
+      "accuracy": 1.0,
+      "answers": [
+        "part_of",
+        "part_of",
+        "part_of",
+        "part_of",
+        "part_of"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rationales": [
+        "The aortic valve is a structural component of the human heart, forming part of its anatomy and essential for its function.",
+        "The aortic valve is a structural component of the human heart, forming part of its anatomy and functioning as a critical part of its structure.",
+        "The aortic valve is a structural component of the human heart, forming part of its anatomy and essential for its function.",
+        "The aortic valve is a structural component of the human heart, forming part of its anatomy and essential for its function.",
+        "The aortic valve is a structural component of the human heart, forming part of its anatomy and functioning as a critical element in its operation."
+      ]
+    },
+    {
+      "source_id": "concepts/soprano-line",
+      "target_id": "concepts/voice-parts",
+      "source_type": "Concept",
+      "target_type": "Concept",
+      "expected": "member_of",
+      "confusion": "part_of vs member_of (held out from the examples)",
+      "modal": "member_of",
+      "stability": 1.0,
+      "accuracy": 1.0,
+      "answers": [
+        "member_of",
+        "member_of",
+        "member_of",
+        "member_of",
+        "member_of"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rationales": [
+        "A soprano line is a specific type of voice part, and the soprano line is one of the members in the collection of voice parts.",
+        "A soprano line is a specific type of voice part, and the soprano line is one of the members in the collection of voice parts.",
+        "A soprano line is a member of the voice parts category, as it represents one specific type of vocal part within the broader collection of voice parts.",
+        "A soprano line is a member of the collection of voice parts, as voice parts include soprano, alto, tenor, etc., and the soprano line is one of these categories.",
+        "A soprano line is one of the voice parts, and voice parts are a collection of like things."
+      ]
+    },
+    {
+      "source_id": "concepts/wal-segment",
+      "target_id": "concepts/write-ahead-log",
+      "source_type": "Concept",
+      "target_type": "Concept",
+      "expected": "part_of",
+      "confusion": "part_of vs member_of",
+      "modal": "part_of",
+      "stability": 1.0,
+      "accuracy": 1.0,
+      "answers": [
+        "part_of",
+        "part_of",
+        "part_of",
+        "part_of",
+        "part_of"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rationales": [
+        "A WAL segment is a structural component of a write-ahead log, as it is a part of the log's structure and essential for its function.",
+        "A WAL segment is a structural component of a write-ahead log, as it is a part of the log's structure and essential for its function.",
+        "A wal-segment is a structural component of a write-ahead-log, as it is a discrete part of the log's structure.",
+        "A wal-segment is a structural component of a write-ahead-log, as it is a part of the log's structure and essential for its function.",
+        "A WAL segment is a structural component of a write-ahead log, as the log is composed of multiple segments."
+      ]
+    },
+    {
+      "source_id": "concepts/eu-west-replica",
+      "target_id": "concepts/read-replicas",
+      "source_type": "Concept",
+      "target_type": "Concept",
+      "expected": "member_of",
+      "confusion": "part_of vs member_of",
+      "modal": "part_of",
+      "stability": 1.0,
+      "accuracy": 0.0,
+      "answers": [
+        "part_of",
+        "part_of",
+        "part_of",
+        "part_of",
+        "part_of"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rationales": [
+        "The eu-west-replica is a structural component of the read-replicas system, representing a specific instance within the collection of replicas.",
+        "The eu-west-replica is a structural component of the read-replicas system, representing a specific instance within the collection of read replicas.",
+        "The eu-west-replica is a structural component of the read-replicas system, indicating it is part of a whole.",
+        "The eu-west-replica is a structural component of the read-replicas, indicating it is part of a whole system of replicas.",
+        "The eu-west-replica is a structural component of the read-replicas concept, indicating it is a specific instance or part of a larger whole."
+      ]
+    },
+    {
+      "source_id": "concepts/search-api",
+      "target_id": "concepts/ranking-service",
+      "source_type": "Concept",
+      "target_type": "Concept",
+      "expected": "depends_on",
+      "confusion": "depends_on vs part_of",
+      "modal": "related_to",
+      "stability": 1.0,
+      "accuracy": 0.0,
+      "answers": [
+        "related_to",
+        "related_to",
+        "related_to",
+        "related_to",
+        "related_to"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rationales": [
+        "The documents do not explicitly state a specific relationship between the search-api and ranking-service, and no clear containment, origin, or dependency is evident.",
+        "The documents do not explicitly state a specific relationship between the search-api and ranking-service concepts, and no stronger type can be inferred based on the given information.",
+        "The documents do not explicitly state a specific relationship between the search-api and ranking-service, and no clear containment, dependency, or origin relationship can be inferred.",
+        "The documents do not explicitly state a specific relationship between the search-api and ranking-service concepts, and no stronger type can be inferred from the given information.",
+        "The documents do not explicitly state a specific relationship between the search-api and ranking-service, and no clear containment, origin, or dependency can be inferred."
+      ]
+    },
+    {
+      "source_id": "concepts/data-loss-incident",
+      "target_id": "concepts/storage-upgrade",
+      "source_type": "Concept",
+      "target_type": "Concept",
+      "expected": "caused_by",
+      "confusion": "caused_by vs produced_by",
+      "modal": "related_to",
+      "stability": 1.0,
+      "accuracy": 0.0,
+      "answers": [
+        "related_to",
+        "related_to",
+        "related_to",
+        "related_to",
+        "related_to"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rationales": [
+        "The documents do not explicitly state a direct relationship between data-loss-incident and storage-upgrade, nor do they support a specific type like part_of, caused_by, or produced_by.",
+        "The documents do not explicitly state a specific relationship between data-loss-incident and storage-upgrade. They are connected but the nature of the connection is not strong enough to assign a specific type.",
+        "The documents do not explicitly state a direct relationship between data-loss-incident and storage-upgrade. They may be connected in context, but the nature of the relationship is not clearly defined by the provided information.",
+        "The documents do not explicitly state a direct relationship between data-loss-incident and storage-upgrade, nor do they support a specific type like part_of, caused_by, or produced_by. The connection is indirect and not clearly defined by the provided concepts.",
+        "The documents do not explicitly state a specific relationship between data-loss-incident and storage-upgrade, and no clear causal, dependency, or structural connection can be inferred."
+      ]
+    },
+    {
+      "source_id": "concepts/architecture-decision-record",
+      "target_id": "concepts/platform-team",
+      "source_type": "Concept",
+      "target_type": "Concept",
+      "expected": "produced_by",
+      "confusion": "caused_by vs produced_by",
+      "modal": "related_to",
+      "stability": 1.0,
+      "accuracy": 0.0,
+      "answers": [
+        "related_to",
+        "related_to",
+        "related_to",
+        "related_to",
+        "related_to"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rationales": [
+        "The Architecture Decision Record (ADR) and the Platform Team are connected through their involvement in the development process, but the documents do not specify a direct causal, dependency, or structural relationship between them.",
+        "The Architecture Decision Record (ADR) and the Platform Team are connected in a broader context of software development, but there is no direct indication of a specific relationship such as dependency, containment, or causation. They are related through their involvement in the development process, but the exact nature of their connection is not explicitly defined in the provided concepts.",
+        "The Architecture Decision Record (ADR) and the platform team are connected through their collaborative relationship, but the documents do not specify a direct causal, dependency, or structural relationship between them.",
+        "The Architecture Decision Record (ADR) and the Platform Team are connected through their involvement in the development process, but the documents do not specify a direct relationship such as dependency, containment, or causation.",
+        "The documents do not explicitly state a specific relationship between architecture-decision-record and platform-team, and no stronger type can be inferred from the given information."
+      ]
+    },
+    {
+      "source_id": "concepts/deploy-guide",
+      "target_id": "concepts/incident-severity-matrix",
+      "source_type": "Concept",
+      "target_type": "Concept",
+      "expected": "references",
+      "confusion": "references vs related_to",
+      "modal": "related_to",
+      "stability": 1.0,
+      "accuracy": 0.0,
+      "answers": [
+        "related_to",
+        "related_to",
+        "related_to",
+        "related_to",
+        "related_to"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rationales": [
+        "The documents do not explicitly state a direct relationship between the deploy guide and the incident severity matrix, and no stronger relation can be inferred from the provided information.",
+        "The documents do not explicitly state a direct relationship between the deploy guide and the incident severity matrix, and no stronger type like part_of, caused_by, or produced_by is supported.",
+        "The documents do not explicitly state a direct relationship between the deploy guide and the incident severity matrix, and they are not part of a collection or whole-component relationship.",
+        "The documents do not explicitly state a direct relationship between the deploy guide and the incident severity matrix, and no stronger type can be inferred based on the given information.",
+        "The documents do not explicitly state a direct relationship between the deploy guide and the incident severity matrix. They are related topics but the connection is not strong enough to assign a specific type."
+      ]
+    },
+    {
+      "source_id": "concepts/hiring-loop",
+      "target_id": "concepts/documentation-style",
+      "source_type": "Concept",
+      "target_type": "Concept",
+      "expected": "related_to",
+      "confusion": "the honest abstention",
+      "modal": "related_to",
+      "stability": 1.0,
+      "accuracy": 1.0,
+      "answers": [
+        "related_to",
+        "related_to",
+        "related_to",
+        "related_to",
+        "related_to"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rationales": [
+        "The documents do not explicitly state a direct relationship between the hiring loop and the documentation style, and no stronger type like part_of, caused_by, or produced_by is supported.",
+        "The documents do not explicitly state a direct relationship between the hiring loop and documentation style, and no stronger type like part_of, caused_by, or produced_by is supported.",
+        "The documents do not explicitly state a specific relationship between the hiring loop and documentation style, and no stronger type can be inferred based on the given information.",
+        "The documents do not explicitly state a specific relationship between the hiring loop and the documentation style, and no stronger type can be inferred from the provided information.",
+        "The documents do not explicitly state a specific relationship between the hiring loop and documentation style, and no stronger type can be inferred based on the provided information."
+      ]
+    },
+    {
+      "source_id": "concepts/cost-dashboard",
+      "target_id": "concepts/oncall-rotation",
+      "source_type": "Concept",
+      "target_type": "Concept",
+      "expected": "related_to",
+      "confusion": "the honest abstention",
+      "modal": "related_to",
+      "stability": 1.0,
+      "accuracy": 1.0,
+      "answers": [
+        "related_to",
+        "related_to",
+        "related_to",
+        "related_to",
+        "related_to"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rationales": [
+        "The documents do not explicitly state a specific relationship between the cost-dashboard and oncall-rotation concepts, and no stronger type can be inferred based on the provided information.",
+        "The documents do not explicitly state a specific relationship between the cost dashboard and oncall rotation, and no clear causal, structural, or functional connection can be inferred.",
+        "The documents do not explicitly state a specific relationship between the cost dashboard and oncall rotation, and no clear containment, origin, or dependency can be inferred.",
+        "The documents do not explicitly state a specific relationship between the cost dashboard and oncall rotation. They are connected but the nature of the relationship is not detailed enough to assign a more specific type.",
+        "The documents do not explicitly state a specific relationship between the cost dashboard and oncall rotation, and no clear causal, compositional, or functional link can be inferred."
+      ]
+    },
+    {
+      "source_id": "concepts/scheduled-maintenance-jobs",
+      "target_id": "concepts/nightly-backup-job",
+      "source_type": "Concept",
+      "target_type": "Concept",
+      "expected": "related_to",
+      "confusion": "direction: collection -> member",
+      "modal": "related_to",
+      "stability": 1.0,
+      "accuracy": 1.0,
+      "answers": [
+        "related_to",
+        "related_to",
+        "related_to",
+        "related_to",
+        "related_to"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rationales": [
+        "Both concepts are related to maintenance tasks but do not explicitly indicate a specific relationship such as dependency, containment, or causation.",
+        "Both concepts are related to maintenance tasks but do not directly indicate a specific type of relationship such as containment, origin, or dependency.",
+        "Both concepts are related to scheduled maintenance tasks but do not directly reference, depend on, or form part of each other.",
+        "Both concepts are related to maintenance tasks but are distinct and not explicitly connected by a stronger relation type.",
+        "Both concepts are related to maintenance tasks but do not directly reference, depend on, or form part of each other."
+      ]
+    },
+    {
+      "source_id": "concepts/read-replicas",
+      "target_id": "concepts/eu-west-replica",
+      "source_type": "Concept",
+      "target_type": "Concept",
+      "expected": "related_to",
+      "confusion": "direction: collection -> member",
+      "modal": "part_of",
+      "stability": 1.0,
+      "accuracy": 0.0,
+      "answers": [
+        "part_of",
+        "part_of",
+        "part_of",
+        "part_of",
+        "part_of"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rationales": [
+        "The eu-west-replica is a specific instance of a read-replica, functioning as a structural component within the broader concept of read-replicas.",
+        "The eu-west-replica is a specific instance of a read-replica, forming a structural component of the broader concept of read-replicas.",
+        "The eu-west-replica is a specific instance of a read-replica, serving as a structural component within the broader category of read-replicas.",
+        "The eu-west-replica is a specific instance of a read-replica, serving as a structural component within the broader concept of read-replicas.",
+        "The eu-west-replica is a specific instance of a read-replica, serving as a structural component within the broader concept of read-replicas."
+      ]
+    },
+    {
+      "source_id": "concepts/voice-parts",
+      "target_id": "concepts/soprano-line",
+      "source_type": "Concept",
+      "target_type": "Concept",
+      "expected": "related_to",
+      "confusion": "direction: collection -> member (held out from the examples)",
+      "modal": "related_to",
+      "stability": 1.0,
+      "accuracy": 1.0,
+      "answers": [
+        "related_to",
+        "related_to",
+        "related_to",
+        "related_to",
+        "related_to"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rationales": [
+        "A soprano line is a structural component of a voice part, as it constitutes a specific melodic line within the soprano voice part. [openkos: the specific type was withdrawn -- this rationale argues for the reverse direction (issue #807)]",
+        "A soprano line is a structural component of a voice part, as it constitutes a specific melodic line within the soprano voice part. [openkos: the specific type was withdrawn -- this rationale argues for the reverse direction (issue #807)]",
+        "The soprano line is a structural component of the voice parts, representing a specific range and role within the overall vocal structure. [openkos: the specific type was withdrawn -- this rationale argues for the reverse direction (issue #807)]",
+        "A soprano line is a structural component of a voice part, specifically a part of a vocal arrangement or composition that is sung by a soprano. [openkos: the specific type was withdrawn -- this rationale argues for the reverse direction (issue #807)]",
+        "The soprano line is a structural component of the voice parts, forming part of the overall vocal structure in music. [openkos: the specific type was withdrawn -- this rationale argues for the reverse direction (issue #807)]"
+      ]
+    },
+    {
+      "source_id": "concepts/risk-committee",
+      "target_id": "concepts/quarterly-risk-report",
+      "source_type": "Concept",
+      "target_type": "Concept",
+      "expected": "references",
+      "confusion": "direction: author -> artifact",
+      "modal": "produced_by",
+      "stability": 1.0,
+      "accuracy": 0.0,
+      "answers": [
+        "produced_by",
+        "produced_by",
+        "produced_by",
+        "produced_by",
+        "produced_by"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rationales": [
+        "The quarterly-risk-report is generated by the risk-committee, making the risk-committee the producer of the report.",
+        "The quarterly-risk-report is generated by the risk-committee, making the risk-committee the producer of the report.",
+        "The quarterly-risk-report is generated by the risk-committee, indicating the committee is the agent or process that created the report.",
+        "The quarterly-risk-report is generated by the risk-committee, indicating the committee is the producer of the report.",
+        "The quarterly-risk-report is generated by the risk-committee, making the risk-committee the producer of the report."
+      ]
+    },
+    {
+      "source_id": "concepts/platform-team",
+      "target_id": "concepts/architecture-decision-record",
+      "source_type": "Concept",
+      "target_type": "Concept",
+      "expected": "references",
+      "confusion": "direction: author -> artifact",
+      "modal": "related_to",
+      "stability": 1.0,
+      "accuracy": 0.0,
+      "answers": [
+        "related_to",
+        "related_to",
+        "related_to",
+        "related_to",
+        "related_to"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rationales": [
+        "The platform team and architecture decision record are connected but the documents do not specify a direct relation that fits any of the other types.",
+        "The platform team and architecture decision records are connected but the documents do not specify a direct relationship that fits any of the other types.",
+        "The platform team and architecture decision record are connected concepts, but there is no explicit indication of a specific relationship such as dependency, part-whole, or causation. The connection is not strong enough to assign a more specific type.",
+        "The platform team and architecture decision record are connected concepts, but there is no explicit indication of a specific relationship such as dependency, composition, or causation. They are related in a general sense without a stronger type being supported by the provided information.",
+        "The platform team and architecture decision records are connected through the development process, but there is no explicit indication of a specific relationship type such as dependency, causation, or containment."
+      ]
+    },
+    {
+      "source_id": "concepts/payment-gateway-migration",
+      "target_id": "concepts/checkout-outage",
+      "source_type": "Concept",
+      "target_type": "Concept",
+      "expected": "references",
+      "confusion": "direction: cause -> outcome",
+      "modal": "related_to",
+      "stability": 1.0,
+      "accuracy": 0.0,
+      "answers": [
+        "related_to",
+        "related_to",
+        "related_to",
+        "related_to",
+        "related_to"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rationales": [
+        "The documents do not explicitly state a specific relationship between payment-gateway-migration and checkout-outage. They are connected in context but do not meet the criteria for any of the other relation types.",
+        "The documents do not explicitly state a direct relationship between payment-gateway-migration and checkout-outage, nor do they support a specific type like part_of, caused_by, or produced_by. The connection is implied but not clearly defined by the provided concepts.",
+        "The documents do not explicitly state a direct causal, dependency, or structural relationship between payment-gateway-migration and checkout-outage. They are connected but the nature of the relationship is not sufficiently defined to apply a more specific type.",
+        "The documents do not explicitly state a specific relationship between payment-gateway-migration and checkout-outage. They are connected in context but not through a defined type such as caused_by, depends_on, member_of, part_of, produced_by, or references.",
+        "The documents do not explicitly state a specific relationship between payment-gateway-migration and checkout-outage. They are connected in context but lack a clear causal, structural, or referential link that would justify a more specific type."
+      ]
+    },
+    {
+      "source_id": "people/dana-reyes",
+      "target_id": "organizations/platform-guild",
+      "source_type": "Person",
+      "target_type": "Organization",
+      "expected": "member_of",
+      "confusion": "cross-type: member -> collection (Person -> Organization)",
+      "modal": "related_to",
+      "stability": 1.0,
+      "accuracy": 0.0,
+      "answers": [
+        "related_to",
+        "related_to",
+        "related_to",
+        "related_to",
+        "related_to"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rationales": [
+        "The documents do not explicitly state a specific relationship between dana-reyes and platform-guild, and no clear connection or containment/origin relationship is supported.",
+        "The documents do not explicitly state a specific relationship between Dana Reyes and the Platform Guild, and no stronger type like part_of, caused_by, or produced_by is supported.",
+        "The documents do not explicitly state a specific relationship between Dana Reyes and the Platform Guild, and no clear containment, origin, or functional dependency is indicated.",
+        "The documents do not explicitly state a specific relationship between Dana Reyes and the Platform Guild, and no stronger type like part_of, caused_by, or produced_by is supported.",
+        "The documents do not explicitly state a specific relationship between Dana Reyes and the Platform Guild, and no clear connection or containment/origin relationship is supported."
+      ]
+    },
+    {
+      "source_id": "organizations/platform-guild",
+      "target_id": "people/dana-reyes",
+      "source_type": "Organization",
+      "target_type": "Person",
+      "expected": "related_to",
+      "confusion": "cross-type direction: collection -> member (Organization -> Person)",
+      "modal": "related_to",
+      "stability": 1.0,
+      "accuracy": 1.0,
+      "answers": [
+        "related_to",
+        "related_to",
+        "related_to",
+        "related_to",
+        "related_to"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rationales": [
+        "The documents do not explicitly state a direct relationship between the organization 'platform-guild' and the person 'dana-reyes', nor do they indicate causation, dependency, or membership.",
+        "The documents do not explicitly state a direct relationship between the organization 'platform-guild' and the person 'dana-reyes', nor do they indicate causation, dependency, or membership.",
+        "The documents do not explicitly state a direct relationship between the organization 'platform-guild' and the person 'dana-reyes', nor do they indicate causation, dependency, membership, or production.",
+        "The documents do not explicitly state a direct relationship between the organization 'platform-guild' and the person 'dana-reyes', nor do they indicate containment, dependency, causation, or production.",
+        "The documents do not explicitly state a direct relationship between the organization 'platform-guild' and the person 'dana-reyes', nor do they indicate causation, dependency, or membership."
+      ]
+    },
+    {
+      "source_id": "concepts/sampling-policy",
+      "target_id": "projects/telemetry-rewrite",
+      "source_type": "Concept",
+      "target_type": "Project",
+      "expected": "produced_by",
+      "confusion": "cross-type: artifact -> producer (Concept -> Project)",
+      "modal": "related_to",
+      "stability": 1.0,
+      "accuracy": 0.0,
+      "answers": [
+        "related_to",
+        "related_to",
+        "related_to",
+        "related_to",
+        "related_to"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rationales": [
+        "The documents do not explicitly state a specific relationship between the sampling policy and the telemetry rewrite project, and no stronger type can be inferred based on the given information.",
+        "The documents do not explicitly state a specific relationship between the sampling policy and the telemetry rewrite project, and no stronger type can be inferred from the given information.",
+        "The documents do not explicitly state a specific relationship between the sampling policy and the telemetry rewrite project, and no stronger type can be inferred from the given information.",
+        "The documents do not explicitly state a specific relationship between the sampling policy and the telemetry rewrite project, and no stronger type can be inferred from the given information.",
+        "The documents do not explicitly state a specific relationship between the sampling policy and the telemetry rewrite project, and no stronger type can be inferred from the given information."
+      ]
+    },
+    {
+      "source_id": "projects/telemetry-rewrite",
+      "target_id": "concepts/sampling-policy",
+      "source_type": "Project",
+      "target_type": "Concept",
+      "expected": "references",
+      "confusion": "cross-type direction: producer -> artifact (Project -> Concept)",
+      "modal": "related_to",
+      "stability": 1.0,
+      "accuracy": 0.0,
+      "answers": [
+        "related_to",
+        "related_to",
+        "related_to",
+        "related_to",
+        "related_to"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rationales": [
+        "The documents do not explicitly state a specific relationship between the telemetry-rewrite project and the sampling-policy concept, and no stronger type can be inferred based on the provided information.",
+        "The documents do not explicitly state a specific relationship between the telemetry-rewrite project and the sampling-policy concept, and no stronger type can be inferred from the given information.",
+        "The documents do not explicitly state a specific relationship between the telemetry-rewrite project and the sampling-policy concept, and no stronger type can be inferred based on the given information.",
+        "The documents do not explicitly state a specific relationship between the telemetry-rewrite project and the sampling-policy concept, and no stronger type can be inferred based on the provided information.",
+        "The documents do not explicitly state a specific relationship between the telemetry-rewrite project and the sampling-policy concept, and no stronger type can be inferred based on the given information."
+      ]
+    },
+    {
+      "source_id": "concepts/escalation-ladder",
+      "target_id": "people/marcus-oyelaran",
+      "source_type": "Concept",
+      "target_type": "Person",
+      "expected": "produced_by",
+      "confusion": "cross-type: artifact -> author (Concept -> Person)",
+      "modal": "related_to",
+      "stability": 1.0,
+      "accuracy": 0.0,
+      "answers": [
+        "related_to",
+        "related_to",
+        "related_to",
+        "related_to",
+        "related_to"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rationales": [
+        "The documents do not explicitly state a direct relationship between the escalation ladder concept and Marcus Oyelaran, nor do they support a specific type such as part_of, caused_by, or produced_by.",
+        "The documents do not explicitly state a direct relationship between the escalation ladder and Marcus Oyelaran, nor do they indicate containment, dependency, causation, or production.",
+        "The documents do not provide explicit information about how the escalation ladder relates to Marcus Oyelaran, nor do they support a specific type such as part_of, caused_by, or produced_by.",
+        "The documents do not explicitly state a direct relationship between the escalation ladder concept and Marcus Oyelaran, nor do they support a specific type such as part_of, caused_by, or produced_by.",
+        "The documents do not explicitly state a direct relationship between the escalation ladder and Marcus Oyelaran, nor do they support a specific type like part_of, caused_by, or produced_by."
+      ]
+    },
+    {
+      "source_id": "people/marcus-oyelaran",
+      "target_id": "concepts/escalation-ladder",
+      "source_type": "Person",
+      "target_type": "Concept",
+      "expected": "references",
+      "confusion": "cross-type direction: author -> artifact (Person -> Concept)",
+      "modal": "related_to",
+      "stability": 1.0,
+      "accuracy": 0.0,
+      "answers": [
+        "related_to",
+        "related_to",
+        "related_to",
+        "related_to",
+        "related_to"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rationales": [
+        "The documents do not explicitly state a specific relationship between Marcus Oyelaran and the escalation ladder concept, and no stronger type can be inferred from the provided information.",
+        "The documents do not explicitly state a direct relationship between Marcus Oyelaran and the escalation ladder concept, nor do they indicate causation, dependency, or composition.",
+        "The documents do not explicitly state a direct relationship between Marcus Oyelaran and the escalation ladder concept, nor do they support a specific type like part_of, caused_by, or produced_by.",
+        "The documents do not explicitly state a specific relationship between Marcus Oyelaran and the escalation ladder concept, and no stronger type can be inferred from the provided information.",
+        "The documents do not explicitly state a specific relationship between Marcus Oyelaran and the escalation ladder concept, and no stronger type can be inferred from the provided information."
+      ]
+    }
+  ]
+}

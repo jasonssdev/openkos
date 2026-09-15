@@ -82,11 +82,39 @@ from openkos.config import (  # noqa: E402
 )
 from openkos.graph.base import Edge  # noqa: E402
 from openkos.llm.ollama import OllamaClient  # noqa: E402
-from openkos.model import okf  # noqa: E402
+from openkos.model import okf, types  # noqa: E402
 from openkos.resolution.edge_typing import suggest_edge_types  # noqa: E402
 
 DEFAULT_MODEL = "qwen3:8b"
 DEFAULT_RUNS = 5
+
+TYPES_BY_ID: dict[str, str] = {doc.concept_id: doc.okf_type for doc in DOCS}
+"""`concept_id` -> the OKF type its document declares (#990).
+
+One map, built once: the payload, the regime split and the self-test all
+read it, and three hand-built copies of the same lookup would be three
+chances for the report to bucket an edge differently from the JSON beside
+it."""
+
+
+def _unknown_endpoints() -> list[str]:
+    """Every `EDGES` endpoint id with no document behind it in `DOCS`.
+
+    A renamed or mistyped endpoint is exactly the fixture-authoring error
+    this harness's self-test exists to catch, and an unguarded
+    `TYPES_BY_ID[...]` turns it into a `KeyError` traceback -- which aborts
+    before the collected failures are printed, so the run reports none of
+    what it had already found. Worse in `main()`, where the same lookup sits
+    after the model calls have been spent."""
+    known = set(TYPES_BY_ID)
+    return sorted(
+        {
+            endpoint
+            for edge in EDGES
+            for endpoint in (edge.source_id, edge.target_id)
+            if endpoint not in known
+        }
+    )
 
 
 def _materialize_bundle(bundle_dir: pathlib.Path) -> None:
@@ -101,7 +129,12 @@ def _materialize_bundle(bundle_dir: pathlib.Path) -> None:
     for doc in DOCS:
         path = bundle_dir / f"{doc.concept_id}.md"
         path.parent.mkdir(parents=True, exist_ok=True)
-        frontmatter = okf.dump_frontmatter({"type": "Concept", "title": doc.title})
+        # `doc.okf_type`, not a hardcoded "Concept" (issue #990). Every
+        # document used to be materialized as a Concept regardless of the
+        # folder its id named, so a rule reading the two ends' types had
+        # nothing to read and the cross-type inversions this harness exists
+        # to catch were not representable.
+        frontmatter = okf.dump_frontmatter({"type": doc.okf_type, "title": doc.title})
         path.write_text(f"{frontmatter}# {doc.title}\n\n{doc.body}\n", encoding="utf-8")
 
 
@@ -168,11 +201,22 @@ def _self_test() -> int:
         bundle = pathlib.Path(tmp) / "bundle"
         _materialize_bundle(bundle)
         materialized = len(list(bundle.rglob("*.md")))
+        scans = list(okf._iter_docs(bundle))
         unparseable = sorted(
             okf.concept_id_for(scan.path, bundle)
-            for scan in okf._iter_docs(bundle)
+            for scan in scans
             if scan.read_error is not None or scan.parse_error is not None
         )
+        # What was actually WRITTEN, read back with the shipped reader --
+        # not what `DOCS` says should have been. The distinction is the
+        # whole of #990: `_materialize_bundle` hardcoded `"Concept"` for
+        # every document while the fixtures named four folders, and no
+        # check compared the two.
+        written_types = {
+            okf.concept_id_for(scan.path, bundle): (scan.metadata or {}).get("type")
+            for scan in scans
+            if scan.metadata is not None
+        }
     failures: list[str] = []
     if materialized != len(DOCS):
         failures.append(
@@ -183,9 +227,74 @@ def _self_test() -> int:
             "these documents do not parse, so they never enter the index: "
             f"{unparseable}"
         )
+
+    # Issue #990. The two checks above passed for the whole life of the
+    # all-`Concept` corpus, which is exactly the point: a harness discovers
+    # its own corpus from `DOCS`, so a corpus that has lost the regime it
+    # is supposed to measure still reads as healthy. These three ask
+    # whether the corpus can still answer the question.
+    mismatched = sorted(
+        f"{doc.concept_id} (type {doc.okf_type} wants "
+        f"{types.TYPE_TO_LINK_DIR.get(doc.okf_type, '?')}/)"
+        for doc in DOCS
+        if doc.concept_id.split("/", 1)[0] != types.TYPE_TO_LINK_DIR.get(doc.okf_type)
+    )
+    if mismatched:
+        failures.append(
+            "these documents' folder prefix and frontmatter type disagree, so "
+            "they would be scored under the wrong one: " + ", ".join(mismatched)
+        )
+    miswritten = sorted(
+        f"{doc.concept_id} (declares {doc.okf_type}, "
+        f"materialized as {written_types.get(doc.concept_id)!r})"
+        for doc in DOCS
+        if written_types.get(doc.concept_id) != doc.okf_type
+    )
+    if miswritten:
+        failures.append(
+            "these documents reached the index carrying a type they do not "
+            "declare: " + ", ".join(miswritten)
+        )
+    distinct_types = {doc.okf_type for doc in DOCS}
+    if len(distinct_types) < 2:
+        failures.append(
+            "every document carries the same type "
+            f"({sorted(distinct_types)}), so a rule that reads the two ends' "
+            "types has nothing to read and cannot be measured here"
+        )
+    unknown = _unknown_endpoints()
+    if unknown:
+        failures.append(
+            "these labelled-edge endpoints have no document in `DOCS`, so they "
+            f"can be neither materialized nor typed: {unknown}"
+        )
+    # Guarded on `unknown`: with a dangling endpoint the type lookup below
+    # would raise instead of reporting, and a self-test that crashes tells
+    # the author less than one that lists what is wrong.
+    cross_type = (
+        []
+        if unknown
+        else [
+            edge
+            for edge in EDGES
+            if TYPES_BY_ID[edge.source_id] != TYPES_BY_ID[edge.target_id]
+        ]
+    )
+    if not cross_type and not unknown:
+        failures.append(
+            "no labelled edge joins two documents of different types, so every "
+            "reported inversion's own regime is absent from this corpus"
+        )
+
     for failure in failures:
         print(f"FAIL: {failure}")
-    print(f"self-test: {2 - len(failures)}/2 passed")
+    total = 7
+    print(f"self-test: {total - len(failures)}/{total} passed")
+    if not failures:
+        print(
+            f"corpus: {len(DOCS)} documents across {len(distinct_types)} types, "
+            f"{len(EDGES)} labelled edges, {len(cross_type)} of them cross-type"
+        )
     return 1 if failures else 0
 
 
@@ -214,6 +323,21 @@ def main() -> None:
 
     if args.self_test:
         raise SystemExit(_self_test())
+
+    # The same guard `_self_test` reports, enforced HERE too and before any
+    # model call. `_unknown_endpoints`' own docstring names this site as the
+    # worse of the two -- a dangling endpoint raises `KeyError` inside the
+    # scoring loop, after every call for the run has been spent and before
+    # any JSON or report is written -- and the first version of this change
+    # then left exactly this site unguarded. A run that cannot be scored
+    # should refuse before it is paid for, not after.
+    unknown = _unknown_endpoints()
+    if unknown:
+        print(
+            "FAIL: these labelled-edge endpoints have no document in `DOCS`, "
+            f"so no run over them can be scored: {unknown}"
+        )
+        raise SystemExit(1)
 
     # Production's own generation ceiling and context window, not the client's
     # opted-out defaults (#700) -- see the same note in
@@ -248,6 +372,19 @@ def main() -> None:
     correct = 0
     stabilities: list[float] = []
     distribution: Counter[str] = Counter()
+    # Issue #990: the same numbers again, split by whether an edge's two
+    # ends carry the SAME OKF type or different ones. Reported apart rather
+    # than folded in, because the cross-type edges are a small share of the
+    # corpus and an average over both would hide them -- every inversion
+    # reported against a real bundle is cross-type, and a rule reading the
+    # two ends' types can only move that half.
+    regimes: dict[str, dict[str, int]] = {
+        "same-type": {"edges": 0, "correct": 0, "total": 0},
+        "cross-type": {"edges": 0, "correct": 0, "total": 0},
+    }
+    for bucket in regimes.values():
+        bucket["trap_hits"] = 0
+        bucket["trap_total"] = 0
     rows: list[dict[str, object]] = []
 
     for position, labelled in enumerate(EDGES):
@@ -260,10 +397,31 @@ def main() -> None:
         stabilities.append(stability)
         hits = sum(1 for a in answers if a == labelled.expected_type)
         correct += hits
+        # Accumulated HERE, in the pass that already computes `hits`, and
+        # not in a second pass of its own (#990). The regime rows are the
+        # headline new signal of this change, and a separate re-derivation
+        # of `correct`/`total` could drift from these without any number
+        # looking wrong -- the same duplication this repository has paid for
+        # elsewhere, at the scale of a report cell.
+        bucket = regimes[
+            "same-type"
+            if TYPES_BY_ID[labelled.source_id] == TYPES_BY_ID[labelled.target_id]
+            else "cross-type"
+        ]
+        bucket["edges"] += 1
+        bucket["correct"] += hits
+        bucket["total"] += len(answers)
         rows.append(
             {
                 "source_id": labelled.source_id,
                 "target_id": labelled.target_id,
+                # Stored, not re-derived at read time (#990): a run's regime
+                # split has to survive a later fixture edit, and the types
+                # this run actually saw are not recoverable from `DOCS`
+                # afterwards. Same reason the rationales are kept -- a
+                # stored run stays re-analyzable without re-spending it.
+                "source_type": TYPES_BY_ID[labelled.source_id],
+                "target_type": TYPES_BY_ID[labelled.target_id],
                 "expected": labelled.expected_type,
                 "confusion": labelled.confusion,
                 "modal": modal,
@@ -292,10 +450,17 @@ def main() -> None:
     for position, labelled in enumerate(EDGES):
         if labelled.trap_type is None:
             continue
+        bucket = regimes[
+            "same-type"
+            if TYPES_BY_ID[labelled.source_id] == TYPES_BY_ID[labelled.target_id]
+            else "cross-type"
+        ]
         for answer, _, _ in per_edge[position]:
             trap_total += 1
+            bucket["trap_total"] += 1
             if answer == labelled.trap_type:
                 trap_hits += 1
+                bucket["trap_hits"] += 1
 
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     results_dir = pathlib.Path(__file__).resolve().parent / "results"
@@ -319,6 +484,7 @@ def main() -> None:
                 # baseline run afterwards. `null` IS the answer for every
                 # arm measured before #812.
                 "rationale_language": args.rationale_language,
+                "regimes": regimes,
                 "outcomes": rows,
             },
             indent=2,
@@ -384,6 +550,36 @@ def main() -> None:
         " `runs-*.json` as the seam for an arm that re-adds the field; the"
         " sibling `evals/contradictions/` column, which does measure a real"
         " reply field, is unaffected.",
+        "",
+        "## By type regime (#990)",
+        "",
+        "Every inversion reported against a real bundle joins two objects of"
+        " DIFFERENT types (`organizations/... -> people/...`,"
+        " `concepts/... -> projects/...`). Before #990 this corpus was"
+        " entirely `Concept`, so that regime was absent and a rule reading"
+        " the two ends' types had nothing here to move. These rows are split"
+        " so it cannot move without the report saying so.",
+        "",
+        "| regime | edges | accuracy | trap hits |",
+        "| --- | --- | --- | --- |",
+        *(
+            f"| {name} | {bucket['edges']} | "
+            + (
+                f"{bucket['correct'] / bucket['total']:.2f} "
+                f"({bucket['correct']} of {bucket['total']})"
+                if bucket["total"]
+                else "n/a"
+            )
+            + " | "
+            + (
+                f"{bucket['trap_hits']} of {bucket['trap_total']} "
+                f"({bucket['trap_hits'] / bucket['trap_total']:.2f})"
+                if bucket["trap_total"]
+                else "no reversed probes"
+            )
+            + " |"
+            for name, bucket in regimes.items()
+        ),
         "",
         "## Type distribution",
         "",

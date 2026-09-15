@@ -31,6 +31,19 @@ class ConceptDoc:
     concept_id: str
     title: str
     body: str
+    okf_type: str = "Concept"
+    """The `type` this document carries in frontmatter (issue #990).
+
+    Defaults to `Concept`, which is what every document written before #990
+    was materialized as -- so every arm already stored in `results/` remains
+    a valid baseline and nothing here re-bases it.
+
+    It is spelled here and NOT derived from `concept_id`'s folder prefix,
+    even though the two must agree, because `suggest_edge_types` reads
+    frontmatter while the prefix only decides where the file lands: a
+    fixture whose prefix and frontmatter disagreed would be scored under
+    the wrong one in silence. `--self-test` asserts they agree, which is
+    the only way two hand-kept spellings stay in step."""
 
 
 @dataclass(frozen=True)
@@ -80,6 +93,63 @@ DOCS: tuple[ConceptDoc, ...] = (
         "Scheduled maintenance jobs is the collection of recurring jobs the "
         "operator can enable. Its members are alike in kind: each is a "
         "periodic task with a cron expression and a retention policy.",
+    ),
+    # -- #990: cross-type documents ------------------------------------
+    #
+    # Every document above is a `Concept`, so a rule that reads the OBJECTS'
+    # types had zero exposure here and any measurement of one came back
+    # green without being able to come back red. The inversions reported on
+    # real bundles are cross-type -- `organizations/... -> people/...`,
+    # `concepts/... -> projects/...` -- and were not representable at all.
+    #
+    # These six carry three type pairs in both orientations. The bodies
+    # follow the same constraint as every pair above: the rubric in
+    # `edge_typing._RELATION_RUBRIC` has exactly one defensible answer.
+    ConceptDoc(
+        "people/dana-reyes",
+        "Dana Reyes",
+        "Dana Reyes is one of the platform guild's members. She joined it "
+        "the same way the other members did, and the guild lists her "
+        "alongside them; nothing about her membership differs in kind from "
+        "theirs.",
+        okf_type="Person",
+    ),
+    ConceptDoc(
+        "organizations/platform-guild",
+        "Platform Guild",
+        "The platform guild is a standing group of engineers. Its members "
+        "are alike in kind -- each joins by the same route, holds the same "
+        "standing, and can leave without the guild ceasing to be itself.",
+        okf_type="Organization",
+    ),
+    ConceptDoc(
+        "concepts/sampling-policy",
+        "Sampling Policy",
+        "The sampling policy is a document that the telemetry rewrite "
+        "produced. It did not exist before that work began; the rewrite "
+        "drafted it, and it records what the rewrite decided.",
+    ),
+    ConceptDoc(
+        "projects/telemetry-rewrite",
+        "Telemetry Rewrite",
+        "The telemetry rewrite is a project that ran for two quarters. Among "
+        "the things it produced is the sampling policy, which it wrote to "
+        "record its own decisions.",
+        okf_type="Project",
+    ),
+    ConceptDoc(
+        "concepts/escalation-ladder",
+        "Escalation Ladder",
+        "The escalation ladder is a document Marcus Oyelaran wrote. He "
+        "authored it on his own and it carries his name; it is the artifact, "
+        "not the author.",
+    ),
+    ConceptDoc(
+        "people/marcus-oyelaran",
+        "Marcus Oyelaran",
+        "Marcus Oyelaran is an on-call engineer. He wrote the escalation "
+        "ladder, and is the author of it rather than anything it contains.",
+        okf_type="Person",
     ),
     ConceptDoc(
         "concepts/report-renderer",
@@ -434,5 +504,56 @@ EDGES: tuple[LabelledEdge, ...] = (
         "references",
         "direction: cause -> outcome",
         trap_type="caused_by",
+    ),
+    # -- #990: the same confusions, across OBJECT TYPES -----------------
+    #
+    # Three type pairs, each in both orientations. The forward edge is the
+    # one the rubric types; the reversed one is the trap, and both are
+    # needed: a corpus that only ever presents the member/artifact as
+    # SOURCE lets a model that ignores direction entirely score perfectly
+    # (the reason #561 added the same-type traps).
+    #
+    # What these add over those is that the two ends no longer share a
+    # type, which is the regime every reported inversion actually lives in
+    # and the only one where a rule reading the objects' types can be
+    # measured at all.
+    LabelledEdge(
+        "people/dana-reyes",
+        "organizations/platform-guild",
+        "member_of",
+        "cross-type: member -> collection (Person -> Organization)",
+    ),
+    LabelledEdge(
+        "organizations/platform-guild",
+        "people/dana-reyes",
+        "related_to",
+        "cross-type direction: collection -> member (Organization -> Person)",
+        trap_type="member_of",
+    ),
+    LabelledEdge(
+        "concepts/sampling-policy",
+        "projects/telemetry-rewrite",
+        "produced_by",
+        "cross-type: artifact -> producer (Concept -> Project)",
+    ),
+    LabelledEdge(
+        "projects/telemetry-rewrite",
+        "concepts/sampling-policy",
+        "references",
+        "cross-type direction: producer -> artifact (Project -> Concept)",
+        trap_type="produced_by",
+    ),
+    LabelledEdge(
+        "concepts/escalation-ladder",
+        "people/marcus-oyelaran",
+        "produced_by",
+        "cross-type: artifact -> author (Concept -> Person)",
+    ),
+    LabelledEdge(
+        "people/marcus-oyelaran",
+        "concepts/escalation-ladder",
+        "references",
+        "cross-type direction: author -> artifact (Person -> Concept)",
+        trap_type="produced_by",
     ),
 )
