@@ -1699,6 +1699,36 @@ def init(
     # instead of orphaning them under it.
     typer.echo("Next: run `openkos ingest <path>` to import your first source.")
 
+    # A second call to action, for the audience the first one misses
+    # (issue #982). `openkos ingest` is the right pointer for someone who
+    # intends to keep working in a terminal, and the wrong one for the
+    # reader who will never run a second command: their whole path is to
+    # open the bundle and read it, and the bundle already works as an
+    # Obsidian vault with no code, no plugin and no configuration.
+    #
+    # It names `bundle/` and rules the workspace root OUT, because that is
+    # the half that decides whether the vault works at all: bundle
+    # documents link with bundle-root-absolute paths
+    # (`/concepts/some-concept.md`), which resolve only when the vault root
+    # IS the bundle. Opened at the workspace root, `/concepts/...` points
+    # at a directory that does not exist and nothing links to anything --
+    # the reader concludes the output is a pile of disconnected files.
+    #
+    # Placed AFTER `Next:` rather than above it, unlike the git (#800) and
+    # stickiness (#389) notes: those are disclosures that inform a choice
+    # presented above them, and this is a sibling call to action. The two
+    # arrive together at the end of the run, each audience served by one.
+    #
+    # Relative, like every other path this command prints (`raw/`,
+    # `bundle/index.md`, `openkos.yaml`): `init` runs in the directory it
+    # is initializing, so `bundle/` is unambiguous, and interpolating
+    # `layout.bundle_dir` would put a machine-specific absolute path into
+    # output that users and tests compare verbatim.
+    typer.echo(
+        "To read your knowledge in an editor, open `bundle/` (not the "
+        "workspace root) as an Obsidian vault or a VS Code folder."
+    )
+
     # Non-fatal Ollama preflight (D2): purely observational, runs strictly
     # after the workspace already exists. `except Exception` (not
     # `BaseException`) deliberately catches OllamaUnavailable/
