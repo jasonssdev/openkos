@@ -161,7 +161,21 @@ A good answer can be filed back as a new concept, so exploration compounds — f
 - **Keep it honest:** `openkos lint` — flags stale `as of` stamps (older than the configured freshness window) and orphan pages (concepts no markdown link reaches from `index.md` or another concept); volatility-aware windows and contradiction detection shipped in MVP 2 (`openkos contradictions`, `openkos suggest-volatility`). The lint is OpenKOS's opinion about knowledge health, not a verdict on OKF validity — a bundle it complains about is still a perfectly conformant bundle.
 - **Orient:** `openkos status` — what the base contains, recent activity, anything needing attention.
 - **Check the setup:** `openkos doctor` — an environment health preflight that reports whether the workspace is initialized, `openkos.yaml` is valid, the local Ollama server is reachable, and the configured model is installed, each as a `[PASS]`/`[FAIL]`/`[SKIP]` line with a fix command. It also runs outside a workspace as a pure Ollama preflight.
-- **Browse:** open the folder in any editor — the bundle is just markdown.
+- **Browse:** open `bundle/` in any editor — the bundle is just markdown. See [Reading the bundle in an editor](#reading-the-bundle-in-an-editor) for the two-minute procedure.
+
+## Reading the bundle in an editor
+
+You do not need a second command to look at your knowledge. The bundle is plain markdown, so an editor you already run is a working graphical view of it — no plugin and no configuration.
+
+**Open `<workspace>/bundle`, not the workspace root.** In Obsidian that is *Open folder as vault*; in VS Code it is *Open Folder*. The distinction is load-bearing: bundle documents link with bundle-root-absolute paths (`[Stoicism](/concepts/stoicism.md)`), so they resolve only when the vault root *is* the bundle. Point it at the workspace root and `/concepts/…` resolves to `<workspace>/concepts/`, which does not exist — nothing links to anything, and the output reads as a pile of disconnected files.
+
+What you get with nothing configured:
+
+- **Links resolve.** You can walk from `index.md` into any concept and back out through its relations, and from a derived object to the Source it was extracted from.
+- **The graph renders.** Obsidian's graph view draws the knowledge graph from those same links, with Source concepts as the hubs — every derived object cites the source it came from, and each source names what was compiled out of it.
+- **Frontmatter renders as Properties.** `type`, `status`, `freshness`, `sensitivity`, `provenance` and the rest show up as fields rather than as raw YAML at the top of the body.
+
+**Edits there are ordinary edits.** Anything you change in the editor is a change to the file on disk; `openkos lint` and `openkos status` read the bundle fresh on every run, so they see it immediately. What the engine does and does not reconcile afterwards is [Editing by hand](#editing-by-hand), below.
 
 ## Editing by hand
 
