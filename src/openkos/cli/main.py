@@ -28,6 +28,7 @@ from openkos import lint as lint_check
 from openkos.application import consent as application_consent
 from openkos.application import ingest as application_ingest
 from openkos.application import lifecycle as application_lifecycle
+from openkos.application import pending as application_pending
 from openkos.application import query as application_query
 from openkos.bundle import bundle, listing, source_titles
 from openkos.bundle import decisions as bundle_decisions
@@ -118,7 +119,6 @@ from openkos.state.derived import stale_derived_stores
 from openkos.state.fts import FtsUnavailable
 from openkos.state.vectorstore import (
     VecUnavailable,
-    content_hash,
     open_vector_store,
     probe_vec_loadable,
     vector_store_is_empty,
@@ -10082,12 +10082,12 @@ def _run_reconcile_from_findings(
 
     seen_keys: set[str] = set()
     actionable: list[findings.PersistedFinding] = []
-    for finding in _persisted_findings(layout):
+    for finding in application_pending.persisted_findings(layout):
         if (
             finding.stale
             or finding.merged_absorbed_id is not None
             or not is_high_confidence_finding(finding.verdict, finding.confidence)
-            or _is_contradiction_declined(
+            or application_pending.is_contradiction_declined(
                 layout, finding.pair_ids, finding.merged_absorbed_id
             )
         ):
@@ -10375,7 +10375,7 @@ def status() -> None:
     exact_title_groups = sum(
         1
         for group in find_exact_title_groups(layout.bundle_dir)
-        if not _is_group_kept_distinct(layout, group.member_ids)
+        if not application_pending.is_group_kept_distinct(layout, group.member_ids)
     )
     if exact_title_groups:
         needs_attention.append(
@@ -11172,7 +11172,7 @@ def duplicates(
     groups = [
         group
         for group in report.groups
-        if not _is_group_kept_distinct(layout, group.member_ids)
+        if not application_pending.is_group_kept_distinct(layout, group.member_ids)
     ]
     suppressed = len(report.groups) - len(groups)
     notice = candidate_group_truncation_notice(report)
@@ -12699,45 +12699,6 @@ def _apply_identity_decision(
     return f"bundle/{path.relative_to(layout.bundle_dir).as_posix()}"
 
 
-def _is_group_kept_distinct(
-    layout: config.WorkspaceLayout, member_ids: Sequence[str]
-) -> bool:
-    """`True` iff a human has ruled this exact member set distinct and has
-    not reopened it (#797) -- the identity twin of
-    `_is_contradiction_declined`.
-
-    `CandidateGroup.member_ids` arrives sorted, but this is also reachable
-    from operator-supplied ids, so it sorts defensively rather than
-    trusting the caller."""
-    members = tuple(sorted(member_ids))
-    key = bundle_decisions.identity_decision_key_for(members)
-    for record in bundle_decisions.read_identity_decisions(
-        members[0], layout.bundle_dir
-    ):
-        if record.decision_key == key:
-            return record.state == "declined"
-    return False
-
-
-def _is_contradiction_declined(
-    layout: config.WorkspaceLayout,
-    pair_ids: tuple[str, str],
-    merged_absorbed_id: str | None,
-) -> bool:
-    """`True` iff a decision record for `pair_ids`/`merged_absorbed_id`
-    exists and its `state` is `declined` (pending-work spec: "Declined
-    Findings Are Hidden By Default"). `pair_ids` here comes from a live
-    `ContradictionVerdict`, already sorted by `find_contradictions`'s own
-    contract (`resolution.contradiction._candidate_pairs`'s
-    `tuple(sorted(pair))` dedup key) -- unlike the operator-supplied
-    `--decline`/`--reopen` pair, it needs no re-sorting."""
-    key = bundle_decisions.decision_key_for(pair_ids, merged_absorbed_id)
-    for record in bundle_decisions.read_decisions(pair_ids[0], layout.bundle_dir):
-        if record.decision_key == key:
-            return record.state == "declined"
-    return False
-
-
 class AdjudicationServes(NamedTuple):
     """What `_partition_adjudication_serves` answers (#779, widened by
     #838). A NamedTuple for `EdgeSuggestionServes`' exact reason: a widening
@@ -12853,7 +12814,7 @@ def _partition_adjudication_serves(
     for row in persisted:
         latest[adjudications_store.group_key_for(row.member_ids)] = row
 
-    current_digest = _current_finding_digest(layout.bundle_dir)
+    current_digest = application_pending.current_finding_digest(layout.bundle_dir)
     current_rubric = rubric_digest()
     served: dict[str, AdjudicatedCandidate] = {}
     to_judge: list[CandidateGroup] = []
@@ -13027,7 +12988,7 @@ def _partition_edge_suggestion_serves(
     for row in persisted:
         latest[edge_suggestions_store.pair_key_for(row.source_id, row.target_id)] = row
 
-    current_digest = _current_finding_digest(layout.bundle_dir)
+    current_digest = application_pending.current_finding_digest(layout.bundle_dir)
     served: dict[str, EdgeSuggestion] = {}
     to_type: list[Edge] = []
     for edge in edges:
@@ -13079,7 +13040,7 @@ def _persist_edge_suggestions(
     checked would serve forever."""
     if not results:
         return
-    current_digest = _current_finding_digest(layout.bundle_dir)
+    current_digest = application_pending.current_finding_digest(layout.bundle_dir)
     batch: list[edge_suggestions_store.PersistedEdgeSuggestion] = []
     for result in results:
         if result.suggested_type is None:
@@ -13143,7 +13104,7 @@ def _persist_adjudications(
     staleness can never be checked would serve forever."""
     if not results:
         return
-    current_digest = _current_finding_digest(layout.bundle_dir)
+    current_digest = application_pending.current_finding_digest(layout.bundle_dir)
     # #838: every fresh verdict records the rubric it was computed under,
     # so the serve gate can refuse it after a judgment fix ships. Computed
     # once -- it is constant within a build.
@@ -13186,53 +13147,6 @@ def _persist_adjudications(
             f"verdicts ({exc}); the next run will re-judge them.",
             err=True,
         )
-
-
-def _current_finding_digest(bundle_dir: Path) -> Callable[[str], str | None]:
-    """A `state.findings.open_findings`-compatible `current_digest`
-    callback: reads `input_ref` as a concept id and content-hashes its
-    CURRENT bytes (design Decision 2), mirroring `cli.curate.
-    _finding_input_digests`'s own read. An unreadable or non-file
-    `input_ref` (a merged-body candidate's synthetic ledger-snapshot
-    label, or a concept removed since the finding was recorded) answers
-    `None` -- "cannot currently determine", never evidence of drift
-    (`state.findings._is_stale`'s own contract)."""
-
-    def _digest(input_ref: str) -> str | None:
-        try:
-            raw = okf.concept_path_for(input_ref, bundle_dir).read_bytes()
-        except OSError:
-            return None
-        return content_hash(raw)
-
-    return _digest
-
-
-def _persisted_findings(
-    layout: config.WorkspaceLayout,
-) -> tuple[findings.PersistedFinding, ...]:
-    """Every persisted finding, with `stale` resolved against current
-    bundle bytes -- the single read of `.openkos/findings.db` this module
-    owns, shared by the `--declined` view and `status` (#598) so the
-    open/stale/declined predicate is never reimplemented per caller.
-
-    `path.exists()` is checked BEFORE `derived.open_derived_connection`,
-    which would otherwise lazily create an empty file and break
-    `config.WorkspaceLayout.findings_db_path`'s own pure-derivation
-    contract ("this property never creates anything on disk by itself") --
-    the same guard `vector_store_is_empty` uses for `vectors_db_path`, and
-    the one `next_action.open_contradictions` already applies. A workspace
-    where the Contradictions stage has never persisted anything answers
-    `()` rather than raising, and stays free of a stray `findings.db`."""
-    if not layout.findings_db_path.exists():
-        return ()
-    conn = derived.open_derived_connection(layout.findings_db_path)
-    try:
-        return findings.open_findings(
-            conn, current_digest=_current_finding_digest(layout.bundle_dir)
-        )
-    finally:
-        conn.close()
 
 
 def _contradiction_spec_key(spec: object) -> tuple[tuple[str, str], str | None]:
@@ -13341,7 +13255,7 @@ def _open_findings_by_decision_key(
     join) -- used ONLY by the `--declined` view's stale-label lookup."""
     return {
         bundle_decisions.decision_key_for(pf.pair_ids, pf.merged_absorbed_id): pf
-        for pf in _persisted_findings(layout)
+        for pf in application_pending.persisted_findings(layout)
     }
 
 
@@ -13367,10 +13281,10 @@ def _contradiction_finding_counts(layout: config.WorkspaceLayout) -> tuple[int, 
     finding remains visible as stale")."""
     open_count = 0
     stale_count = 0
-    for finding in _persisted_findings(layout):
+    for finding in application_pending.persisted_findings(layout):
         if not is_high_confidence_finding(finding.verdict, finding.confidence):
             continue
-        if _is_contradiction_declined(
+        if application_pending.is_contradiction_declined(
             layout, finding.pair_ids, finding.merged_absorbed_id
         ):
             continue
@@ -13933,7 +13847,9 @@ def contradictions(
     displayed = [
         v
         for v in displayed
-        if not _is_contradiction_declined(layout, v.pair_ids, v.merged_absorbed_id)
+        if not application_pending.is_contradiction_declined(
+            layout, v.pair_ids, v.merged_absorbed_id
+        )
     ]
     if not displayed:
         # No early return (#441): the partial-batch failure epilogue below

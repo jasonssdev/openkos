@@ -58,6 +58,7 @@ import typer
 
 from openkos import config, lint, sensitivity
 from openkos.application import lifecycle as application_lifecycle
+from openkos.application import pending as application_pending
 from openkos.cli import next_action as next_action_module
 from openkos.cli import observability
 from openkos.graph.base import Edge
@@ -772,7 +773,7 @@ def _identity_probe(ctx: CurateContext) -> StageProbe:
     groups = tuple(
         group
         for group in report.groups
-        if not cli_main._is_group_kept_distinct(ctx.layout, group.member_ids)
+        if not application_pending.is_group_kept_distinct(ctx.layout, group.member_ids)
     )
     # #867: price what a run would actually pay. The partition is rebuilt
     # in `run` rather than carried from here -- design D4's no-memoization
@@ -1817,12 +1818,13 @@ def _contradictions_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
     # verdict whose decision_key already carries a `declined` decision is
     # dropped from the DISPLAY list only -- it is still judged and still
     # persisted below, mirroring `main._run_contradictions`'s own `displayed`
-    # filter over `_is_contradiction_declined`, so the two `curate`/
-    # `contradictions` echo paths cannot drift apart on this rule.
+    # filter over `application_pending.is_contradiction_declined`, so the
+    # two `curate`/`contradictions` echo paths cannot drift apart on this
+    # rule.
     displayed = [
         v
         for v in high_confidence
-        if not cli_main._is_contradiction_declined(
+        if not application_pending.is_contradiction_declined(
             ctx.layout, v.pair_ids, v.merged_absorbed_id
         )
     ]
