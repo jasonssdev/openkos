@@ -1108,3 +1108,45 @@ def test_lint_state_dir_markdown_is_not_double_reported_under_dot_dir_markdown(
     assert "State-dir markdown:" in result.stdout
     state_section = result.stdout.split("State-dir markdown:", 1)[1]
     assert ".state/stray.md" in state_section
+
+
+def test_lint_lets_a_late_name_walk_failure_propagate_uncaught(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An `OSError` from a check that runs AFTER the three workspace input
+    reads propagates uncaught, exactly as it did before issue #995 PR 4.
+
+    `lint.scan_non_nfc_entries` (behind `check_non_nfc_names`) walks
+    `bundle_dir.rglob("*")` on its own -- deliberately NOT the
+    `collect_docs` walk, because it reads NAMES, including directory names
+    `collect_docs` never surfaces -- so an unreadable subdirectory raises
+    straight out of the command. Two more checks
+    (`check_state_dir_contains_no_markdown`, `check_dot_dir_markdown`) walk
+    the tree the same way.
+
+    The extraction briefly guarded the WHOLE service call, which looked
+    like a free improvement and was not: a malformed `(as of YYYY-MM-DD)`
+    body stamp reaching `date.fromisoformat` inside `check_stale_stamps`
+    raises `ValueError` from in-memory logic, and reporting that as
+    "failed while reading the workspace" names the wrong cause. The guard
+    is scoped to the three input reads again, through
+    `application.lint.LintInputUnavailable`, so this test pins the
+    UNGUARDED half: changing which errors become messages is a separate
+    decision, not something a refactor should smuggle in."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    real_rglob = Path.rglob
+
+    def _rglob(self: Path, pattern: str):  # type: ignore[no-untyped-def]
+        if pattern == "*":
+            raise OSError("simulated unreadable subdirectory")
+        return real_rglob(self, pattern)
+
+    monkeypatch.setattr(Path, "rglob", _rglob)
+
+    result = runner.invoke(app, ["lint"])
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, OSError)
+    assert "simulated unreadable subdirectory" in str(result.exception)
+    assert "failed while reading the workspace" not in result.stderr

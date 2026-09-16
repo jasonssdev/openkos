@@ -28,6 +28,7 @@ from openkos import lint as lint_check
 from openkos.application import consent as application_consent
 from openkos.application import ingest as application_ingest
 from openkos.application import lifecycle as application_lifecycle
+from openkos.application import lint as application_lint
 from openkos.application import pending as application_pending
 from openkos.application import query as application_query
 from openkos.application import status as application_status
@@ -10187,23 +10188,18 @@ def status() -> None:
     This is the ONLY non-zero exit path.
 
     On a workspace, every read is gathered by two `application.status`
-    calls, in a deliberate order (issue #995 PR 3, corrected after review
-    findings R3-partial-output-on-read-failure /
-    R4-status-no-partial-output): `read_status_overview` runs FIRST and
+    calls, in a deliberate order: `read_status_overview` runs FIRST and
     covers only the cheap, already-guarded reads (`okf.survey_bundle`, the
     lenient-degrading `log.md` read); this command renders the workspace
     header, `Bundle contents:`, and `Recent activity:` from that result
     BEFORE calling `build_status_report`, which performs every remaining
-    (unguarded) read. That ordering is not decomposition for its own sake
-    -- before the #995 extraction, this command's body was interleaved
-    compute-then-print, so those three sections reached the operator even
-    when a later read raised on a damaged workspace (a corrupt bundle doc,
-    an unreadable `graph.db`); hoisting every read ahead of the first
-    `typer.echo` silently lost that partial output, which this split
-    restores. This command's own job is rendering the two results as plain
-    text via `typer.echo` and exit codes -- it takes no flags. Note that
-    the reads across both calls perform FIVE independent `bundle/**/*.md`
-    walks, not one:
+    (unguarded) read. See `application.status`'s module docstring for why
+    that ordering is load-bearing, not incidental (issue #995 PR 3, review
+    findings R3-partial-output-on-read-failure / R4-status-no-partial-output).
+    This command's own job is rendering the two results as plain text via
+    `typer.echo` and exit codes -- it takes no flags. Note that the reads
+    across both calls perform FIVE independent `bundle/**/*.md` walks, not
+    one:
     `okf.survey_bundle` (source/concept counts and §9 findings, D2) --
     counts always reflect the disk scan, never `index.md` alone, so catalog
     drift after an interrupted `ingest` is still visible;
@@ -10244,15 +10240,10 @@ def status() -> None:
         raise typer.Exit(code=1)
 
     layout = config.WorkspaceLayout(root)
-    # `read_status_overview` covers only the cheap, already-guarded reads
-    # (the survey, the lenient-degrading `log.md` read) and is called
-    # FIRST, deliberately, so the header/`Bundle contents:`/
-    # `Recent activity:` sections below reach stdout even if a LATER,
-    # unguarded read raises on a damaged workspace -- see the docstring
-    # above and `application.status.read_status_overview`'s own docstring
-    # for why this ordering is load-bearing, not incidental. `overview`
-    # carries RAW facts; every string below (labels, `_plural`, the
-    # command names) is presentation, computed here, never in the service.
+    # Called FIRST, deliberately -- see the docstring above for why.
+    # `overview` carries RAW facts; every string below (labels, `_plural`,
+    # the command names) is presentation, computed here, never in the
+    # service.
     overview = application_status.read_status_overview(layout)
 
     typer.echo(f"openkos status: workspace at {root}")
@@ -10272,21 +10263,11 @@ def status() -> None:
         for entry in overview.recent_entries:
             typer.echo(f"  {entry.date}  {entry.text}")
     typer.echo()
-    # Every REMAINING read `status` performs -- the eight lint checks over
-    # one shared `docs` list, the exact-title/contradiction counts, the
-    # vector-index/derived-index staleness checks, and the graph
-    # projection -- lives in `application.status.build_status_report`
-    # (issue #995, PR 3), called only now, AFTER the two sections above
-    # have already been rendered (the partial-output ordering the
-    # docstring above explains).
-    # The header goes out BEFORE that call, not after. The pre-extraction
-    # body echoed this literal line and only then ran the unguarded reads,
-    # so an operator on a damaged workspace saw the section announce itself
-    # even when building its contents raised (review finding
-    # R3-needs-attention-header-lost-on-failure). Rendering it after the
-    # call would emit strictly less on the failure path than the base did
-    # -- the same regression the ordering above exists to prevent, one line
-    # short.
+    # This header goes out BEFORE `build_status_report` (called below),
+    # not after -- rendering it after would emit strictly less on the
+    # failure path than the pre-extraction body did, one line short of the
+    # partial-output regression the docstring above explains (review
+    # finding R3-needs-attention-header-lost-on-failure).
     typer.echo("Needs attention:")
     report = application_status.build_status_report(layout)
 
@@ -10724,18 +10705,34 @@ def lint() -> None:
     fails to `read_text()` is the only OTHER non-zero path: caught here and
     reported the same way, never left to raise a raw traceback.
 
-    On a workspace, the flow is: `read_config(root)`'s `freshness_window`
-    and `volatility_windows` are resolved together via
-    `lint.resolve_windows` (freshness-lint-v1, Q4) into one
-    `lint.VolatilityWindows` -- an invalid/zero/negative/non-mapping value,
-    for any tier, never raises; it falls back to the packaged default and
-    prints a fallback-notice line instead. `today` is computed ONCE via
-    `datetime.now(UTC).date()` and injected into `lint.check_stale_stamps`
-    (the clock is never read inside `lint.py` itself, keeping every scan
-    deterministic and testable). `lint.collect_docs` reuses `okf._iter_docs`
-    for the single walk, returning `(docs, skip_notices)` so a skipped
-    file never silently shrinks the scan; `lint.check_stale_stamps` scans
-    inline `(as of YYYY-MM-DD)` body stamps (never the `freshness` field),
+    On a workspace, every read and check is gathered by ONE
+    `application.lint.build_lint_report` call (issue #995, PR 4): unlike
+    `status`, `lint`'s pre-extraction body computed everything before its
+    first `typer.echo`, so there is no partial-output property to preserve
+    here and no need to split the service into two calls -- see that
+    module's docstring for the evidence. The service raises
+    `LintInputUnavailable` for its three INPUT reads (`read_config`, the
+    `bundle/index.md` read, `collect_docs`) and lets every later check
+    propagate uncaught; this command catches that ONE type, which is its
+    ONE additional non-zero exit path (the "failed while reading the
+    workspace" message below). An `OSError` from a later check -- the
+    name-only walks behind `check_non_nfc_names`,
+    `check_state_dir_contains_no_markdown` and `check_dot_dir_markdown`
+    each walk the tree themselves -- is NOT caught here, exactly as it was
+    not caught before the extraction.
+
+    Inside that call: `read_config(root)`'s `freshness_window` and
+    `volatility_windows` are resolved together via `lint.resolve_windows`
+    (freshness-lint-v1, Q4) into one `lint.VolatilityWindows` -- an
+    invalid/zero/negative/non-mapping value, for any tier, never raises; it
+    falls back to the packaged default and prints a fallback-notice line
+    instead. `today` is computed ONCE via `datetime.now(UTC).date()` and
+    injected into `lint.check_stale_stamps` (the clock is never read inside
+    `lint.py` itself, keeping every scan deterministic and testable).
+    `lint.collect_docs` reuses `okf._iter_docs` for the single walk,
+    returning `(docs, skip_notices)` so a skipped file never silently
+    shrinks the scan; `lint.check_stale_stamps` scans inline
+    `(as of YYYY-MM-DD)` body stamps (never the `freshness` field),
     resolving each doc's own stale window via `lint.window_for_doc`'s
     per-concept-override -> per-type-default -> global-fallback precedence
     (a `static`-tier doc, by override or type default, is never flagged);
@@ -10779,77 +10776,23 @@ def lint() -> None:
         raise typer.Exit(code=1)
 
     layout = config.WorkspaceLayout(root)
+    # Catches `LintInputUnavailable` and NOTHING else: the service raises
+    # it for its three input reads (`read_config`, `index.md`,
+    # `collect_docs`) and lets every later check propagate uncaught, which
+    # is what the pre-extraction body did. Do NOT widen this to
+    # `except (OSError, ValueError)` -- see the `except` block below.
     try:
-        cfg = config.read_config(root)
-        index_text = (layout.bundle_dir / "index.md").read_text(encoding="utf-8")
-        docs, skip_notices = lint_check.collect_docs(layout.bundle_dir)
-    except (OSError, ValueError) as exc:
+        report = application_lint.build_lint_report(layout)
+    except application_lint.LintInputUnavailable as exc:
+        # Exactly the three workspace reads the pre-extraction body guarded,
+        # and nothing else. A failure from any later check propagates
+        # uncaught, as it did before -- see `application.lint`'s module
+        # docstring for why widening this to the whole call was tried and
+        # reverted (it named an in-memory `ValueError` a read failure).
         typer.echo(
             f"openkos lint: failed while reading the workspace -- {exc}.", err=True
         )
         raise typer.Exit(code=1) from exc
-
-    windows, window_notices = lint_check.resolve_windows(cfg)
-    today = datetime.now(UTC).date()
-    stale = lint_check.check_stale_stamps(docs, today=today, windows=windows)
-    orphans = lint_check.check_orphans(docs, index_text=index_text)
-    dangling = lint_check.check_dangling_targets(docs)
-    unextracted = lint_check.check_unextracted(docs)
-    # #772: reuses this SAME `docs` list -- the quarantine's read half.
-    unjudged = lint_check.check_unjudged(docs)
-    # #801: and again -- the read half of the quoted-evidence disclosure.
-    unevidenced = lint_check.check_unevidenced(docs)
-    # #843: and again -- the read half of the staging-loss disclosure.
-    staging_dropped = lint_check.check_staging_dropped(docs)
-    # #231 (PR2): reuses this SAME `docs` list -- no new bundle walk
-    # (design D3's no-fifth-walk guard).
-    sensitivity_findings = lint_check.check_below_source_sensitivity(docs)
-    below_source = [
-        finding
-        for finding in sensitivity_findings
-        if finding.kind == "below-source-sensitivity"
-    ]
-    multi_source_uncovered = [
-        finding
-        for finding in sensitivity_findings
-        if finding.kind == "multi-source-uncovered"
-    ]
-    # issue #257: reuses this SAME `docs` list again -- no new bundle walk
-    # (the structural no-fifth-walk guard holds).
-    dangling_provenance = lint_check.check_dangling_provenance(docs)
-    # issue #421: and again -- pure, deterministic, no LLM, no clock.
-    unbacked_provenance = lint_check.check_unbacked_provenance(docs)
-    # issue #474: a names-only walk, never the docs list -- collect_docs
-    # cannot see a decomposed directory, non-`.md` file, or unreadable doc.
-    non_nfc = lint_check.check_non_nfc_names(layout.bundle_dir)
-    # task 3.6: a names-only walk over `bundle/.state/` alone, never the
-    # `docs` list -- `collect_docs`/`_iter_docs` never descends there.
-    state_dir_markdown = lint_check.check_state_dir_contains_no_markdown(
-        layout.bundle_dir
-    )
-    # issue #984: another names-only walk over the bundle, never the `docs`
-    # list -- `collect_docs`/`_iter_docs` never descends into a
-    # dot-directory at all (the same structural exclusion this check is the
-    # safety net for). `.state/` keeps its own, more specific finding above.
-    dot_dir_markdown = lint_check.check_dot_dir_markdown(layout.bundle_dir)
-    notices = window_notices + skip_notices
-    report = lint_check.LintReport(
-        stale=stale,
-        orphans=orphans,
-        dangling=dangling,
-        unextracted=unextracted,
-        unjudged=unjudged,
-        unevidenced=unevidenced,
-        staging_dropped=staging_dropped,
-        below_source=below_source,
-        multi_source_uncovered=multi_source_uncovered,
-        dangling_provenance=dangling_provenance,
-        unbacked_provenance=unbacked_provenance,
-        non_nfc=non_nfc,
-        state_dir_markdown=state_dir_markdown,
-        dot_dir_markdown=dot_dir_markdown,
-        notices=notices,
-    )
 
     typer.echo(f"openkos lint: workspace at {root}")
     for notice_line in report.notices:

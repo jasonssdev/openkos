@@ -193,6 +193,32 @@ def test_build_status_report_creates_no_files(tmp_path: Path) -> None:
     assert not layout.vectors_db_path.exists()
 
 
+def test_build_status_report_creates_no_files_when_vectors_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The guard above runs on a fresh workspace, where `vectors_missing` is
+    `True` -- exactly the branch that never enters `with build_graph(...)`
+    (see `build_status_report`'s `if not vectors_missing:` gate). That left
+    the one path that DOES open a store unchecked for side-effect file
+    creation (review finding R3-readonly-guard-skips-the-graph-branch).
+    Forcing `vectors_missing` to `False`, the same way
+    `test_edge_summary_is_computed_when_vectors_present` does, exercises the
+    `build_graph` branch under the same zero-files guard: `build_graph`
+    opens `sqlite3(":memory:")` and never touches disk (its own docstring),
+    so this must hold exactly as cleanly as the fresh-workspace case above."""
+    layout = _workspace(tmp_path)
+    monkeypatch.setattr(status_service, "vector_store_is_empty", lambda path: False)
+    before = {p for p in tmp_path.rglob("*") if p.is_file()}
+
+    report = status_service.build_status_report(layout)
+
+    after = {p for p in tmp_path.rglob("*") if p.is_file()}
+    assert report.vectors_missing is False
+    assert after == before
+    assert not layout.findings_db_path.exists()
+    assert not layout.vectors_db_path.exists()
+
+
 # --- promoted read predicates: contradiction_finding_counts ---
 
 
