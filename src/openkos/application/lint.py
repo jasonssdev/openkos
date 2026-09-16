@@ -67,10 +67,20 @@ in-memory logic, which "failed while reading the workspace" would name
 wrongly. A refactor is the wrong place to change which errors become
 messages; that is a separate decision with its own evidence.
 
-So the input-read phase raises `LintInputUnavailable` and the adapter
-catches exactly that. The typed error is what a headless adapter needs
-anyway: the distinction that used to live in the CLI's `try` SCOPE is
-data now, not a line of text to parse."""
+A GAP THIS CONTRACT MAKES VISIBLE, deliberately left open (review finding
+R4-lint-report-is-all-or-nothing-on-a-late-walk-failure): the report is
+all-or-nothing on a late failure. The three tree-walking checks run LAST
+and have no containment, so one unreadable directory under the bundle
+discards the twelve check results already computed in the same call and
+the operator gets a raw traceback with no diagnostic line.
+
+That is PRE-EXISTING -- verified against `git show
+main:src/openkos/cli/main.py` before this extraction, where the same three
+checks ran last and unguarded in the command body. The extraction neither
+introduced nor fixed it. Closing it means deciding what a partial
+`LintReport` should mean and how the CLI should render one, which is a
+product decision with its own evidence, not something a refactor gets to
+make silently."""
 
 from __future__ import annotations
 
