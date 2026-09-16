@@ -94,7 +94,29 @@ class ListUsageError(Exception):
 
 class SourcesModeTakesTypeFilter(ListUsageError):
     """`--sources` was combined with a TYPE filter (#628): `--sources` is a
-    whole mode with nothing for a TYPE filter to narrow."""
+    whole mode with nothing for a TYPE filter to narrow.
+
+    Carries the two conflicting values and a formatted message (R2-usage-
+    error-family-is-not-uniform, issue #995 PR 6 review): this was
+    previously the only one of the three `ListUsageError` members raised
+    with no arguments, so `str(exc)` was empty while its siblings
+    (`UnknownTypeFilter`, `NonPositiveLimit`) both carry a formatted
+    message and structured fields. The CLI adapter's own `except` clause
+    for this member does not read either -- it prints its own hardcoded
+    text -- so this is a data-uniformity fix for any OTHER caller (a
+    future MCP adapter, a test) that catches this family generically and
+    logs `str(exc)`, not a CLI-visible behaviour change."""
+
+    def __init__(self, concept_type: str, sources_of: str) -> None:
+        self.concept_type = concept_type
+        """The TYPE filter value that was combined with `--sources`."""
+        self.sources_of = sources_of
+        """The `--sources` target id it was combined with."""
+        super().__init__(
+            f"--sources {sources_of!r} cannot be combined with a TYPE filter "
+            f"({concept_type!r}) -- --sources is a whole mode with nothing "
+            "for a TYPE filter to narrow"
+        )
 
 
 class UnknownTypeFilter(ListUsageError):
@@ -135,7 +157,7 @@ def validate_list_arguments(
     access of its own (`listing.resolve_link_dir` is an in-memory
     vocabulary lookup)."""
     if sources_of is not None and concept_type is not None:
-        raise SourcesModeTakesTypeFilter()
+        raise SourcesModeTakesTypeFilter(concept_type, sources_of)
 
     resolved_type: str | None = None
     if concept_type is not None:

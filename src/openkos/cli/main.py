@@ -6,7 +6,6 @@ import glob
 import json
 import os
 import re
-import shutil
 import sqlite3
 import sys
 import unicodedata
@@ -26,6 +25,7 @@ from rich.console import Console
 from openkos import config, fsio, lock, source_title
 from openkos import lint as lint_check
 from openkos.application import consent as application_consent
+from openkos.application import doctor as application_doctor
 from openkos.application import ingest as application_ingest
 from openkos.application import lifecycle as application_lifecycle
 from openkos.application import lint as application_lint
@@ -119,11 +119,7 @@ from openkos.state import derived, findings
 from openkos.state import edge_suggestions as edge_suggestions_store
 from openkos.state import reindex as reindex_module
 from openkos.state.fts import FtsUnavailable
-from openkos.state.vectorstore import (
-    VecUnavailable,
-    open_vector_store,
-    probe_vec_loadable,
-)
+from openkos.state.vectorstore import VecUnavailable, open_vector_store
 from openkos.vcs import git as vcs_git
 
 _T = TypeVar("_T")
@@ -10622,16 +10618,21 @@ def list_objects_cmd(
         resolved_type = application_list.validate_list_arguments(
             concept_type=concept_type, sources_of=sources_of, limit=limit
         )
-    except application_list.SourcesModeTakesTypeFilter:
+    except application_list.SourcesModeTakesTypeFilter as exc:
         # #628: `--sources` is a whole mode -- a TYPE filter alongside it
         # has nothing to filter, so it refuses in the same usage-first
-        # ladder slot the unknown-type refusal occupies.
+        # ladder slot the unknown-type refusal occupies. This adapter keeps
+        # its own hardcoded wording rather than `str(exc)` (unchanged
+        # behaviour); `exc` is now chained (issue #995 PR 6 review:
+        # R2-usage-error-family-is-not-uniform) so the exception carries a
+        # real message for any caller/traceback that inspects it, matching
+        # its two siblings below.
         typer.echo(
             "openkos list: refusing to list -- --sources takes no TYPE "
             "filter; it lists the Sources reaching one object.",
             err=True,
         )
-        raise typer.Exit(code=1) from None
+        raise typer.Exit(code=1) from exc
     except application_list.UnknownTypeFilter as exc:
         typer.echo(
             f"openkos list: refusing to list -- {exc.concept_type!r} is not a "
@@ -14888,22 +14889,14 @@ def reindex(
         raise typer.Exit(code=1) from exc
 
 
-@dataclass(frozen=True)
-class CheckResult:
-    """One `doctor` check's outcome (D5): accumulated, never raised, so a
-    failure never short-circuits the checks that follow it."""
-
-    label: str
-    status: Literal["pass", "fail", "skip"]
-    critical: bool
-    remediation: str | None = None
-    detail: str | None = None
-
-
-def _render_check(r: CheckResult) -> None:
+def _render_check(r: application_doctor.CheckResult) -> None:
     """Print one `CheckResult` as `[PASS]`/`[FAIL]`/`[SKIP] <label>`, with an
     optional ` — <detail>` suffix and, only under a `[FAIL]`, an indented
-    `  -> <remediation>` line naming the user's own next command."""
+    `  -> <remediation>` line naming the user's own next command.
+
+    `CheckResult` moved into `application/doctor.py` (issue #995, PR 6) --
+    this function stays adapter-side, unchanged, since it is a render loop,
+    not a read."""
     tag = {"pass": "[PASS]", "fail": "[FAIL]", "skip": "[SKIP]"}[r.status]
     line = f"{tag} {r.label}"
     if r.detail:
@@ -14926,11 +14919,21 @@ def doctor() -> None:
     with actionable remediation, usable even before `openkos init`.
 
     Deliberately NEW control-flow shape versus `status`/`lint`/`query`:
-    instead of exiting on the first failure, this runs ALL twelve checks,
-    appends each to a `list[CheckResult]`, renders every line
-    unconditionally, then exits ONCE (`code=1`) if any CRITICAL check
-    failed (spec: Doctor Runs And Prints All Applicable Checks). Remediation
-    TEXT lives only here; `llm/` stays config-free (D1).
+    instead of exiting on the first failure, this runs ALL fifteen checks
+    (thirteen numbered plus two lettered sub-checks, 5b and 7b -- the
+    docstring here previously said "twelve", stale even before the checks
+    themselves moved; `tests/unit/cli/test_doctor.py` already asserted 15
+    `[PASS]` lines on a healthy workspace, issue #995 PR 6), appends each
+    to a `list[CheckResult]`, renders every line unconditionally, then
+    exits ONCE (`code=1`) if any CRITICAL check failed (spec: Doctor Runs
+    And Prints All Applicable Checks). Remediation TEXT lives only here --
+    in `application/doctor.py`, not this adapter -- because that is where
+    every check's own pass/fail/skip branching now lives (issue #995,
+    PR 6): this command body only resolves the model tag, builds the one
+    concrete `OllamaClient`, computes the three `openkos.vcs` booleans
+    `run_diagnostics` needs injected (WALL 2, `application/doctor.py`'s own
+    module docstring), calls `application_doctor.run_diagnostics` once, and
+    renders. `llm/` stays config-free (D1).
 
     Output leads with an `openkos {version}` banner -- the same line
     `--version` prints (cli-version-flag, #181). It is informational only,
@@ -14986,522 +14989,61 @@ def doctor() -> None:
     remediation command itself (spec: Doctor Is Read-Only).
     """
     root = Path.cwd()
-    results: list[CheckResult] = []
 
-    # 1. workspace-initialized (informational)
-    workspace_reason = config.require_workspace(root)
-    in_workspace = workspace_reason is None
-    results.append(
-        CheckResult(
-            "Workspace initialized",
-            "pass" if in_workspace else "fail",
-            critical=False,
-            remediation=None if in_workspace else "openkos init",
-            detail=None if in_workspace else workspace_reason,
-        )
-    )
+    # WALL 2 (`application/doctor.py`'s own module docstring): the
+    # `openkos.vcs` answers checks 9/10/13 need, produced here because
+    # `application/doctor.py` must never import `openkos.vcs`
+    # (`tests/unit/application/test_layering.py`).
+    #
+    # Two shapes, and the split is by COST, not by taste. `git_available`
+    # and `filter_repo_available` are `shutil.which` probes that cost
+    # nothing, so they are computed now and injected as plain booleans. The
+    # reset-point probe shells out to `git` twice (`repo_root` +
+    # `has_reset_point`), and the pre-extraction body paid that ONLY inside
+    # check 13's `if violations:` branch, so it is injected as a thunk the
+    # service calls in that same branch and nowhere else. Its own docstring
+    # below carries the reasoning; `tests/unit/application/
+    # test_doctor_service.py` pins the call count at zero on the common
+    # path, so collapsing it back into an eager `bool` reddens a test.
+    git_available_ok = vcs_git.git_available()
+    filter_repo_ok = vcs_git.filter_repo_available()
 
-    # 2. config-valid (critical, workspace-only; SKIP outside)
-    cfg: config.Config | None = None
-    if in_workspace:
-        try:
-            cfg = config.read_config(root)
-            results.append(
-                CheckResult(
-                    "Config valid", "pass", critical=True, detail=f"model {cfg.model}"
-                )
-            )
-        except (OSError, ValueError) as exc:
-            results.append(
-                CheckResult(
-                    "Config valid",
-                    "fail",
-                    critical=True,
-                    remediation="fix openkos.yaml",
-                    detail=str(exc),
-                )
-            )
-    else:
-        results.append(CheckResult("Config valid", "skip", critical=True))
+    def _reset_point_available() -> bool:
+        """Whether a git reset point exists, probed ON DEMAND.
 
-    model = cfg.model if cfg is not None else config.DEFAULT_MODEL
-    embedding_model = (
-        cfg.embedding_model if cfg is not None else config.DEFAULT_EMBEDDING_MODEL
-    )
+        A thunk rather than a value because these two `git` subprocess
+        calls are not free, and the pre-extraction body paid them ONLY
+        inside check 13's `if violations:` branch. Passing an
+        already-computed `bool` would move them onto every in-workspace
+        `doctor` invocation -- a cost added to the command people run
+        precisely when their workspace is already misbehaving.
 
-    # 3. Ollama-reachable (critical, always)
-    reachable = False
-    installed: list[InstalledModel] = []
-    installed_tags: list[str] = []
+        `GitError` is NOT caught here, and that is deliberate. The
+        pre-extraction body left these two calls unguarded inside the same
+        violation branch, so a broken git config propagated. Catching it
+        would be a behaviour change, and a refactor is the wrong place to
+        decide which errors become messages -- the same rule that sent the
+        `lint` slice's widened `try` back. An earlier draft of this thunk
+        did catch it, justified by an eager call position that no longer
+        exists once the value became lazy. The gap is real and worth its
+        own issue; it is not this commit's to close."""
+        return vcs_git.repo_root(root) is not None and vcs_git.has_reset_point(root)
+
+    # WALL 1 (`application/doctor.py`'s own module docstring): the CLI
+    # adapter builds the one concrete `OllamaClient` and passes it in as a
+    # `BackendDiagnostics` -- `resolve_diagnostic_model` mirrors check 2's
+    # own `openkos.yaml` fallback so the client and the service's own
+    # config-valid check always agree on what model was probed.
+    model = application_doctor.resolve_diagnostic_model(root)
     client = OllamaClient(model=model, timeout=_PREFLIGHT_TIMEOUT)
-    try:
-        installed = client.list_models()
-        installed_tags = [m.tag for m in installed]
-        reachable = True
-        results.append(
-            CheckResult(
-                "Ollama reachable",
-                "pass",
-                critical=True,
-                detail=f"{len(installed)} models",
-            )
-        )
-    except OllamaUnavailable as exc:
-        if shutil.which("ollama") is None:
-            remediation = (
-                "no `ollama` binary found on PATH -- install from "
-                "https://ollama.com, or if Ollama is already installed "
-                "(e.g. the macOS app) start it with `ollama serve`"
-            )
-        else:
-            remediation = "ollama serve"
-        results.append(
-            CheckResult(
-                "Ollama reachable",
-                "fail",
-                critical=True,
-                remediation=remediation,
-                detail=str(exc),
-            )
-        )
-    except OllamaError as exc:  # non-transport server error
-        results.append(
-            CheckResult("Ollama reachable", "fail", critical=True, detail=str(exc))
-        )
 
-    # 4. model-installed (critical, always; SKIP-blocked if unreachable, D6)
-    label = f"Model '{model}' installed"
-    if not reachable:
-        results.append(
-            CheckResult(
-                label, "skip", critical=True, detail="blocked: Ollama unreachable"
-            )
-        )
-    elif model_tag_matches(model, installed_tags):
-        results.append(CheckResult(label, "pass", critical=True))
-    else:
-        results.append(
-            CheckResult(
-                label, "fail", critical=True, remediation=f"ollama pull {model}"
-            )
-        )
-
-    # 5. embedding-model-installed (informational, always; SKIP-blocked if
-    # unreachable, same D6 rationale as model-installed -- one root cause,
-    # never double-reported). Reuses the already-fetched `installed` list,
-    # constructs no additional `OllamaClient`.
-    embedding_label = f"Embedding model '{embedding_model}' installed"
-    if not reachable:
-        results.append(
-            CheckResult(
-                embedding_label,
-                "skip",
-                critical=False,
-                detail="blocked: Ollama unreachable",
-            )
-        )
-    elif model_tag_matches(embedding_model, installed_tags):
-        results.append(CheckResult(embedding_label, "pass", critical=False))
-    else:
-        results.append(
-            CheckResult(
-                embedding_label,
-                "fail",
-                critical=False,
-                remediation=f"ollama pull {embedding_model}",
-            )
-        )
-
-    # 5b. task-models-installed (informational, always; SKIP-blocked if
-    # unreachable, same D6 one-root-cause rationale as checks 4 and 5).
-    #
-    # ONE check covering every per-task model rather than one check per task
-    # (issue #513): the check COUNT stays fixed regardless of how many tasks
-    # a workspace keys, which is what lets the doctor spec keep pinning a
-    # total. Only models DIFFERING from the global tag are examined -- a task
-    # resolving `cfg.model` is already covered by check 4, and reporting it
-    # twice would double-count one root cause.
-    #
-    # Informational, never critical: a missing per-task model fails only the
-    # stage that named it (#515 decision 2), so `ingest`, `query`, and
-    # `adjudicate` all still work. Exiting 1 on a workspace that is fine for
-    # every other verb would be a false alarm rather than a diagnosis.
-    task_models = {
-        task: config.resolve_task_model(cfg, task)
-        for task in sorted(config.TASK_MODEL_KEYS)
-        if cfg is not None
-    }
-    if cfg is None:
-        task_models = {
-            task: tag
-            for task, tag in config.DEFAULT_TASK_MODELS.items()
-            if isinstance(tag, str)
-        }
-    extra_models = {task: tag for task, tag in task_models.items() if tag != model}
-    task_label = "Task models installed"
-    if not extra_models:
-        # #650: nothing is packaged anymore, so a stock workspace lands
-        # here -- the pass detail is where the recommendation stays
-        # discoverable, naming the un-adopted measured upgrade(s) for any
-        # task the workspace never keyed in `models:`.
-        recommendations = {
-            task: tag
-            for task, tag in sorted(config.RECOMMENDED_TASK_MODELS.items())
-            if cfg is not None
-            and task not in cfg.models
-            and config.resolve_task_model(cfg, task) != tag
-        }
-        detail = "none configured beyond the global model"
-        if recommendations:
-            named = ", ".join(
-                f"{task} -> {tag}" for task, tag in recommendations.items()
-            )
-            detail += f"; optional measured upgrade: {named} (see docs/cli.md)"
-        results.append(
-            CheckResult(
-                task_label,
-                "pass",
-                critical=False,
-                detail=detail,
-            )
-        )
-    elif not reachable:
-        results.append(
-            CheckResult(
-                task_label,
-                "skip",
-                critical=False,
-                detail="blocked: Ollama unreachable",
-            )
-        )
-    else:
-        missing = {
-            task: tag
-            for task, tag in extra_models.items()
-            if not model_tag_matches(tag, installed_tags)
-        }
-        if missing:
-            named = ", ".join(f"{task} -> {tag}" for task, tag in missing.items())
-            results.append(
-                CheckResult(
-                    task_label,
-                    "fail",
-                    critical=False,
-                    detail=f"missing: {named}",
-                    remediation=" && ".join(
-                        f"ollama pull {tag}" for tag in dict.fromkeys(missing.values())
-                    ),
-                )
-            )
-        else:
-            named = ", ".join(f"{task} -> {tag}" for task, tag in extra_models.items())
-            results.append(
-                CheckResult(task_label, "pass", critical=False, detail=named)
-            )
-
-    # 6. bundle-readable (informational, workspace-only; SKIP outside)
-    bundle_empty = False
-    if in_workspace:
-        survey = okf.survey_bundle(config.WorkspaceLayout(root).bundle_dir)
-        # #568: a clean survey counting nothing means a freshly-`init`ed
-        # bundle -- checks 7/7b below use this to skip instead of failing
-        # with a `reindex` that would build nothing.
-        bundle_empty = (
-            not survey.findings and survey.sources == 0 and survey.concepts == 0
-        )
-        if not survey.findings:
-            results.append(
-                CheckResult(
-                    "Bundle readable",
-                    "pass",
-                    critical=False,
-                    detail=f"{survey.sources} sources, {survey.concepts} concepts",
-                )
-            )
-        else:
-            results.append(
-                CheckResult(
-                    "Bundle readable",
-                    "fail",
-                    critical=False,
-                    detail=f"{len(survey.findings)} issue(s)",
-                )
-            )
-    else:
-        results.append(CheckResult("Bundle readable", "skip", critical=False))
-
-    _EMPTY_BUNDLE_DETAIL = "empty bundle -- ingest a source first (openkos ingest)"
-
-    # 7. workspace-vectors-present (informational, workspace-only; SKIP
-    # outside -- mirrors check 6's workspace-only shape). Distinct from
-    # vector-extension-loadable's throwaway `:memory:` probe
-    # (`probe_vec_loadable()`, which
-    # says nothing about a specific workspace's own index file): this
-    # checks whether THIS workspace's `.openkos/vectors.db` exists on disk
-    # (purge-transactional-cleanup #142). Staleness (mtime) is deliberately
-    # out of scope -- absent-only.
-    if in_workspace:
-        if config.WorkspaceLayout(root).vectors_db_path.exists():
-            results.append(
-                CheckResult("Workspace vector index present", "pass", critical=False)
-            )
-        elif bundle_empty:
-            # #568: right after `init` there is nothing to index -- a
-            # `[FAIL] -> openkos reindex` at step 5 of the README quickstart
-            # reads as a broken install, and `reindex` would build nothing.
-            results.append(
-                CheckResult(
-                    "Workspace vector index present",
-                    "skip",
-                    critical=False,
-                    detail=_EMPTY_BUNDLE_DETAIL,
-                )
-            )
-        else:
-            results.append(
-                CheckResult(
-                    "Workspace vector index present",
-                    "fail",
-                    critical=False,
-                    remediation="openkos reindex",
-                )
-            )
-    else:
-        results.append(
-            CheckResult("Workspace vector index present", "skip", critical=False)
-        )
-
-    # 7b. workspace-fts-present (informational, workspace-only; SKIP
-    # outside -- mirrors check 7's shape exactly, for the OTHER derived
-    # retrieval store). Issue #553's evidence: `doctor` passed every check
-    # while the workspace's first query was about to run dense-only,
-    # because nothing here ever looked at `.openkos/fts.db`. Absent-only,
-    # like check 7: staleness is `reindex`'s manifest gate's job, and
-    # `next` reports it separately (#381).
-    if in_workspace:
-        if config.WorkspaceLayout(root).fts_db_path.exists():
-            results.append(
-                CheckResult("Workspace FTS index present", "pass", critical=False)
-            )
-        elif bundle_empty:
-            results.append(
-                CheckResult(
-                    "Workspace FTS index present",
-                    "skip",
-                    critical=False,
-                    detail=_EMPTY_BUNDLE_DETAIL,
-                )
-            )
-        else:
-            results.append(
-                CheckResult(
-                    "Workspace FTS index present",
-                    "fail",
-                    critical=False,
-                    remediation="openkos reindex",
-                )
-            )
-    else:
-        results.append(
-            CheckResult("Workspace FTS index present", "skip", critical=False)
-        )
-
-    # 8. vector-extension-loadable (informational, always; NO SKIP branch --
-    # unlike embedding-model-installed, this shares no root cause with any
-    # other check: it depends only on the local Python/SQLite build, never
-    # on workspace state or Ollama reachability). Probes a throwaway
-    # `:memory:` connection -- creates no files (D: Doctor Is Read-Only).
-    if probe_vec_loadable():
-        results.append(CheckResult("Vector extension loadable", "pass", critical=False))
-    else:
-        results.append(
-            CheckResult(
-                "Vector extension loadable",
-                "fail",
-                critical=False,
-                remediation=(
-                    "run openkos with an extension-capable Python interpreter "
-                    "(e.g. a uv-managed interpreter) that supports SQLite "
-                    "extension loading"
-                ),
-            )
-        )
-
-    # 9. git-available (informational, always; NO SKIP branch -- shares no
-    # root cause with any other check; exists for the not-yet-wired `purge`
-    # verb, privacy-purge Slice 1 PR2)
-    if vcs_git.git_available():
-        results.append(CheckResult("git available", "pass", critical=False))
-    else:
-        results.append(
-            CheckResult(
-                "git available",
-                "fail",
-                critical=False,
-                remediation=(
-                    "install git (e.g. https://git-scm.com/downloads, or "
-                    "`brew install git`)"
-                ),
-            )
-        )
-
-    # 10. git-filter-repo-available (informational, always; NO SKIP branch)
-    if vcs_git.filter_repo_available():
-        results.append(CheckResult("git-filter-repo available", "pass", critical=False))
-    else:
-        results.append(
-            CheckResult(
-                "git-filter-repo available",
-                "fail",
-                critical=False,
-                remediation=(
-                    "install git-filter-repo (e.g. `pip install git-filter-repo`, "
-                    "or `brew install git-filter-repo`)"
-                ),
-            )
-        )
-
-    # 11. backend-host-locality (informational, always; ALWAYS EMITTED).
-    # Reuses the SAME `client` check 3 built, so what is reported is the
-    # host `doctor` itself would have sent to, never a re-derivation. It
-    # skips when Ollama is unreachable despite being ABLE to answer without
-    # the server: locality is a literal-form check over the host the client
-    # already resolved, so the skip is about how the line READS beside a
-    # failure, not about an inability to answer.
-    #
-    # NEVER `fail` (issue #240): `[FAIL]` on a non-local backend would call a
-    # legitimate configuration broken, and a failing status invites a future
-    # reader to make this check critical, which would let an informational
-    # report flip an exit code that scripts gate on.
-    #
-    # Both terms are named separately because they are distinct facts and a
-    # user debugging "why is my confidential concept in the prompt" needs to
-    # know WHICH one decided it. Outside a workspace the packaged
-    # `confidential_local_exemption` default applies, mirroring how checks
-    # 3-5 fall back to the packaged model tags.
-    locality = client.locality
-    exemption_enabled = (
-        cfg.confidential_local_exemption
-        if cfg is not None
-        else config.DEFAULT_CONFIDENTIAL_LOCAL_EXEMPTION
+    results = application_doctor.run_diagnostics(
+        root,
+        client=client,
+        git_available=git_available_ok,
+        filter_repo_available=filter_repo_ok,
+        reset_point_available=_reset_point_available,
     )
-    where = "this machine" if locality.is_local else "not this machine"
-    exemption_state = (
-        "active" if (locality.is_local and exemption_enabled) else "inactive"
-    )
-    # The detail differs per branch so the configured host survives the skip:
-    # only the claim that anything was VERIFIED goes away (#389).
-    results.append(
-        CheckResult(
-            "Backend host locality",
-            "pass" if reachable else "skip",
-            critical=False,
-            detail=(
-                f"{where} ({locality.display_host}); confidential local "
-                f"exemption {exemption_state}"
-                if reachable
-                else (
-                    f"configured for {where} ({locality.display_host}); not "
-                    "verified while Ollama is unreachable; confidential local "
-                    f"exemption {exemption_state}"
-                )
-            ),
-        )
-    )
-
-    # 12. merge-ledger-torn-writes (informational, workspace-only; SKIP
-    # outside -- Check A, design Decision 5: mechanically exact, zero false
-    # positives/negatives). A `.pending` marker means a two-phase write was
-    # interrupted mid-flight; `doctor` PREVIEWS what `recover` would decide
-    # (`bundle_ledger.scan_torn_writes`, read-only) but never repairs. The
-    # remediation names `merge`/`unmerge` -- whose `bundle_ledger.recover`
-    # pass is what actually resolves a pending marker -- NOT `openkos
-    # repair`, whose Gate 1 refuses outright while any marker is pending
-    # (#603: the old text sent the operator in a circle).
-    if in_workspace:
-        torn = bundle_ledger.scan_torn_writes(config.WorkspaceLayout(root).bundle_dir)
-        if torn:
-            results.append(
-                CheckResult(
-                    "Merge ledger torn writes",
-                    "fail",
-                    critical=False,
-                    detail=f"{len(torn)} pending marker(s)",
-                    remediation=(
-                        "run `openkos merge` or `openkos unmerge` on the "
-                        "affected survivor -- its recovery pass resolves "
-                        "the pending marker; the repair verb refuses while "
-                        "one is pending"
-                    ),
-                )
-            )
-        else:
-            results.append(
-                CheckResult("Merge ledger torn writes", "pass", critical=False)
-            )
-    else:
-        results.append(CheckResult("Merge ledger torn writes", "skip", critical=False))
-
-    # 13. merge-ledger-entries-free-of-post-merge-mutation (informational,
-    # workspace-only; SKIP outside -- Check B, design Decision 5: doctor-
-    # command spec "Merge-Ledger Integrity Check"). Nested-prefix equality
-    # over every committed sidecar (`bundle_ledger.scan_nesting_violations`,
-    # read-only); a `[FAIL]` names BOTH remedies -- the repair verb (a
-    # ledger merely unmigrated, not corrupted) and `git reset --hard
-    # <first-merge>~1` + `openkos reindex` (a ledger the check judges
-    # corrupted) -- and states pre-fix reversibility is not guaranteed.
-    # The git-reset half is gated on `vcs_git.has_reset_point` (gap fix,
-    # task 2.4/2.5): `_autocommit` is best-effort and silently no-ops with
-    # no repo, no configured git identity, or any `GitError`/`OSError`, so
-    # a workspace that never actually committed has no reset point at all
-    # -- printing that remedy unconditionally would name a command that
-    # cannot work.
-    if in_workspace:
-        bundle_dir = config.WorkspaceLayout(root).bundle_dir
-        violations = bundle_ledger.scan_nesting_violations(bundle_dir)
-        if violations:
-            if vcs_git.repo_root(root) is not None and vcs_git.has_reset_point(root):
-                reset_remedy = (
-                    "run `git reset --hard <first-merge>~1` then `openkos reindex`"
-                )
-            else:
-                reset_remedy = (
-                    "no git reset point is available in this workspace (no "
-                    "repository, no configured git identity, or no commit "
-                    "history) -- there is no remedy that restores "
-                    "reversibility for the affected merge(s)"
-                )
-            results.append(
-                CheckResult(
-                    "Merge ledger entries free of post-merge mutation",
-                    "fail",
-                    critical=False,
-                    detail=f"{len(violations)} entr{'y' if len(violations) == 1 else 'ies'}",
-                    remediation=(
-                        "if a ledger is merely unmigrated (still embedded in "
-                        "the survivor's own frontmatter, not corrupted), run "
-                        f"`openkos repair`; if corrupted, {reset_remedy} -- "
-                        "reversibility of merges made before this fix is not "
-                        "guaranteed"
-                    ),
-                )
-            )
-        else:
-            results.append(
-                CheckResult(
-                    "Merge ledger entries free of post-merge mutation",
-                    "pass",
-                    critical=False,
-                )
-            )
-    else:
-        results.append(
-            CheckResult(
-                "Merge ledger entries free of post-merge mutation",
-                "skip",
-                critical=False,
-            )
-        )
 
     # Leading version banner (cli-version-flag, #181): informational only, NOT
     # a CheckResult -- it is deliberately outside `results` so it can never

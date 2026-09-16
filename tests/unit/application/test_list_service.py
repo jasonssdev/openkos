@@ -72,11 +72,23 @@ def test_validate_list_arguments_rejects_sources_with_a_type_filter() -> None:
     """`--sources` together with a TYPE filter raises
     `SourcesModeTakesTypeFilter` -- a whole mode, not filterable (#628).
     Pure argument validation: no workspace or `layout` argument needed,
-    which is itself part of the proof this check needs no disk access."""
-    with pytest.raises(list_service.SourcesModeTakesTypeFilter):
+    which is itself part of the proof this check needs no disk access.
+
+    Also pins R2-usage-error-family-is-not-uniform (issue #995 PR 6
+    review): this was the only one of the three `ListUsageError` members
+    raised with no arguments, so `str(exc)` was empty while its two
+    siblings both carry a formatted message and structured fields -- it
+    now carries both, matching them."""
+    with pytest.raises(list_service.SourcesModeTakesTypeFilter) as excinfo:
         list_service.validate_list_arguments(
             concept_type="people", sources_of="concepts/a", limit=50
         )
+
+    assert excinfo.value.concept_type == "people"
+    assert excinfo.value.sources_of == "concepts/a"
+    assert str(excinfo.value) != ""
+    assert "people" in str(excinfo.value)
+    assert "concepts/a" in str(excinfo.value)
 
 
 def test_validate_list_arguments_rejects_an_unresolvable_type() -> None:
@@ -199,6 +211,12 @@ def test_list_bundle_objects_filters_by_resolved_link_dir(tmp_path: Path) -> Non
 def test_list_bundle_objects_truncates_to_limit_and_reports_total(
     tmp_path: Path,
 ) -> None:
+    """R3-shown-slice-identity-unproved (issue #995 PR 6 review): asserting
+    only `len(result.shown) == 3` lets a slice returning the WRONG three
+    rows (the last three, a shuffled three, three duplicates of the first)
+    pass just as easily as the correct one. `listing.list_objects` documents
+    its rows sorted by `concept_id` (#389), so the first three of ten
+    `c000..c009` rows are deterministic -- assert identity AND order."""
     layout = _workspace(tmp_path)
     for i in range(10):
         _write_doc(layout.bundle_dir / "concepts" / f"c{i:03d}.md", title=f"C{i}")
@@ -207,7 +225,11 @@ def test_list_bundle_objects_truncates_to_limit_and_reports_total(
         layout, resolved_type=None, limit=3, all_objects=False
     )
 
-    assert len(result.shown) == 3
+    assert [row.concept_id for row in result.shown] == [
+        "concepts/c000",
+        "concepts/c001",
+        "concepts/c002",
+    ]
     assert result.total == 10
     assert len(result.rows) == 10
 
@@ -367,6 +389,69 @@ def test_list_provenance_sources_names_every_reaching_source(
     assert result.ancestors == ("sources/deep", "sources/transcription1")
     rows_by_id = {row.concept_id: row for row in result.rows}
     assert rows_by_id["sources/transcription1"].sensitivity == "private"
+
+
+def test_list_provenance_sources_skips_reserved_filenames(tmp_path: Path) -> None:
+    """`index.md`/`log.md` (`okf.RESERVED_FILENAMES`) must never be read
+    into `files`, even when one carries its own `provenance:` entry
+    (R3-provenance-skip-paths-untested, issue #995 PR 6 review).
+
+    `concepts/solo.md` names "index" (the reserved file's own bare id) as
+    its provenance parent -- an odd entry no real workspace would write,
+    chosen deliberately so the exploit is unambiguous: if `index.md` were
+    read despite the skip, walking `concepts/solo` -> "index" would reach
+    `index.md`'s own declared `sources/hidden` parent and report it as an
+    ancestor. Skipped correctly, "index" is never a key in the parsed
+    provenance map, so the walk dead-ends there and `ancestors` stays
+    empty."""
+    layout = _workspace(tmp_path)
+    _write_doc(
+        layout.bundle_dir / "concepts" / "solo.md",
+        provenance=["index"],
+    )
+    _write_doc(
+        layout.bundle_dir / "sources" / "hidden.md",
+        type_="Source",
+        title="Hidden",
+    )
+    (layout.bundle_dir / "index.md").write_text(
+        "---\ntype: Concept\nprovenance:\n  - sources/hidden\n---\n# Index\n",
+        encoding="utf-8",
+    )
+
+    result = list_service.list_provenance_sources(layout, "concepts/solo")
+
+    assert result.ancestors == ()
+
+
+def test_list_provenance_sources_skips_unreadable_files_without_crashing(
+    tmp_path: Path,
+) -> None:
+    """Pre-existing behaviour (`except (OSError, UnicodeDecodeError):
+    continue`), pinned rather than changed
+    (R3-provenance-skip-paths-untested, issue #995 PR 6 review): a file
+    that fails to decode as UTF-8 contributes no provenance edges instead
+    of raising, while a sibling READABLE file's edges still resolve
+    normally."""
+    layout = _workspace(tmp_path)
+    _write_doc(
+        layout.bundle_dir / "concepts" / "solo.md",
+        provenance=["sources/good"],
+    )
+    _write_doc(
+        layout.bundle_dir / "sources" / "good.md",
+        type_="Source",
+        title="Good",
+    )
+    bad_path = layout.bundle_dir / "concepts" / "bad.md"
+    bad_path.parent.mkdir(parents=True, exist_ok=True)
+    # 0xFF is not a valid UTF-8 lead byte -- `read_text(encoding="utf-8")`
+    # raises `UnicodeDecodeError`.
+    bad_path.write_bytes(b"\xff\xfe---\ntype: Concept\n---\n")
+
+    result = list_service.list_provenance_sources(layout, "concepts/solo")
+
+    assert result.ancestors == ("sources/good",)
 
 
 def test_list_provenance_sources_reports_no_ancestors_as_empty(
