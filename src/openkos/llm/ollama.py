@@ -12,10 +12,23 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
 from typing import Any
 
-from openkos.llm.base import EMBED_DIM, Message
+from openkos.llm.base import (
+    EMBED_DIM,
+    BackendError,
+    BackendUnavailable,
+    Message,
+)
+from openkos.llm.base import (
+    BackendHostLocality as BackendHostLocality,
+)
+from openkos.llm.base import (
+    InstalledModel as InstalledModel,
+)
+from openkos.llm.base import (
+    model_tag_matches as model_tag_matches,
+)
 
 DEFAULT_HOST = "http://localhost:11434"
 """Ollama's own local default, used when no override is given (D2)."""
@@ -40,15 +53,29 @@ attempts: sleep duration is `base * 2 ** (attempt - 1)` for the failed
 1-indexed `attempt` (D3)."""
 
 
-class OllamaError(Exception):
+class OllamaError(BackendError):
     """Base error for any Ollama chat failure (D4); also raised directly for
-    non-404 HTTP errors and malformed/unexpected response bodies."""
+    non-404 HTTP errors and malformed/unexpected response bodies.
+
+    Subclasses the backend-agnostic `BackendError` (issue #995, PR 6) so a
+    caller scoped to `openkos.llm.base` -- never importing this concrete
+    module -- can still catch the generic Ollama-reachable-but-erroring
+    family by its shared base; every existing `except OllamaError` handler
+    is unaffected, since `OllamaError` itself is unchanged in every other
+    respect."""
 
 
-class OllamaUnavailable(OllamaError):
+class OllamaUnavailable(OllamaError, BackendUnavailable):
     """Raised on any transport failure: connection refused or timeout while
     connecting, or a reset/timeout/incomplete read while streaming the
-    response body after a successful connect (D4)."""
+    response body after a successful connect (D4).
+
+    Also subclasses `BackendUnavailable` (issue #995, PR 6), alongside its
+    existing `OllamaError` base, so `application/doctor.py`'s
+    Ollama-reachable check can distinguish "nothing is listening" from a
+    generic `OllamaError` without importing `openkos.llm.ollama` -- every
+    existing `except OllamaError`/`except OllamaUnavailable` handler still
+    catches it unchanged."""
 
 
 class OllamaModelNotFound(OllamaError):
@@ -89,17 +116,6 @@ class OllamaEmbeddingDimensionMismatch(OllamaError):
     retry-with-backoff loop (D8): a wrong dimension cannot heal by retry."""
 
 
-@dataclass(frozen=True, slots=True)
-class InstalledModel:
-    """One entry from `/api/tags`: its tag plus optional model family (D1).
-
-    `family` is `None` when the server omits `details` or `details.family`
-    entirely -- always still returned, never dropped."""
-
-    tag: str
-    family: str | None
-
-
 _EMBEDDING_FAMILIES = frozenset({"bert", "nomic-bert"})
 """Known embedding-model families (D2), matched case-insensitively."""
 
@@ -129,22 +145,6 @@ def _normalize_host(host: str) -> str:
     if host.startswith(("http://", "https://")):
         return host
     return f"http://{host}"
-
-
-@dataclass(frozen=True, slots=True)
-class BackendHostLocality:
-    """`classify_backend_host`'s verdict: whether a configured Ollama
-    BACKEND host is literally local, plus the userinfo-REDACTED host string
-    that is the ONLY value a caller may print (issue #199).
-
-    Named for the BACKEND, not the embedder (issue #240): the same verdict
-    now also decides whether a `confidential` concept may be included in an
-    `llm.chat` payload, so a name that said "embed" would misdescribe half
-    its consumers. Only the name changed -- the classification logic
-    hardened by #199 and #353 is frozen behavior."""
-
-    is_local: bool
-    display_host: str
 
 
 _LOCAL_HOST_LITERALS = frozenset({"localhost", "::1"})
@@ -907,21 +907,6 @@ class OllamaClient:
         return OllamaUnavailable(
             f"Ollama not reachable at {self.locality.display_host}: {exc}"
         )
-
-
-def model_tag_matches(configured: str, installed: list[str]) -> bool:
-    """True if `configured` matches any installed tag (D3, D4).
-
-    A bare name (no `:`) normalizes to `<name>:latest` per Ollama
-    convention, applied symmetrically to both `configured` and each
-    installed tag; comparison after normalization is case-sensitive.
-    """
-    wanted = configured if ":" in configured else f"{configured}:latest"
-    for tag in installed:
-        normalized = tag if ":" in tag else f"{tag}:latest"
-        if normalized == wanted:
-            return True
-    return False
 
 
 def _validate_embedding_row(row: object) -> list[float]:

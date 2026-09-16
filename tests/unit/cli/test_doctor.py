@@ -1,11 +1,14 @@
 """Unit tests for the `doctor` CLI command: read-only environment health scan.
 
-`doctor` runs ALL twelve checks (workspace-initialized, config-valid,
+`doctor` runs ALL fifteen checks (workspace-initialized, config-valid,
 Ollama-reachable, model-installed, embedding-model-installed,
-task-models-installed,
-bundle-readable, workspace-vector-index-present, vector-extension-loadable,
-git-available, git-filter-repo-available, backend-host-locality), renders
-every result
+task-models-installed, bundle-readable, workspace-vector-index-present,
+workspace-fts-index-present, vector-extension-loadable, git-available,
+git-filter-repo-available, backend-host-locality, merge-ledger-torn-writes,
+merge-ledger-entries-free-of-post-merge-mutation -- corrected from a stale
+"twelve" here, issue #995 PR 6: this docstring predated the FTS and
+merge-ledger checks, though `test_doctor_all_healthy_exits_zero` below
+already asserted the correct 15), renders every result
 unconditionally (accumulate-then-exit-once, D5), and exits 1 iff any CRITICAL
 check failed. `embedding-model-installed`, `workspace-vector-index-present`,
 `vector-extension-loadable`, the two git
@@ -14,7 +17,11 @@ the git checks exist for the (not-yet-wired, PR2) `purge` verb, so a failing
 check must not flip the exit code, and the locality check (issue #240)
 reports rather than judges -- it is `[PASS]` while Ollama is reachable and
 `[SKIP]` when it is not (#389), never `[FAIL]`, and carries its finding in
-the detail on both branches. Every test patches `openkos.cli.main.OllamaClient` with a fake
+the detail on both branches.
+
+The checks themselves now live in `openkos.application.doctor.
+run_diagnostics` (issue #995, PR 6); this file stays the black-box,
+rendered-output contract, exercised only through `runner.invoke`. Every test patches `openkos.cli.main.OllamaClient` with a fake
 stub (D-seam) -- zero network, zero real Ollama process.
 """
 
@@ -121,7 +128,7 @@ def test_doctor_all_healthy_exits_zero(
             installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL, "gemma2:27b"]
         ),
     )
-    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
+    monkeypatch.setattr("openkos.application.doctor.probe_vec_loadable", lambda: True)
     monkeypatch.setattr("openkos.vcs.git.git_available", lambda: True)
     monkeypatch.setattr("openkos.vcs.git.filter_repo_available", lambda: True)
 
@@ -230,7 +237,7 @@ def test_doctor_non_str_model_fails_and_exits_one_without_traceback(
     # Stubbed so the fourth check the spec scenario names is asserted against a
     # controlled value rather than whatever the host's SQLite build happens to
     # support -- otherwise this assertion would be environment-dependent.
-    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
+    monkeypatch.setattr("openkos.application.doctor.probe_vec_loadable", lambda: True)
 
     result = runner.invoke(app, ["doctor"])
 
@@ -639,7 +646,7 @@ def test_doctor_vector_extension_loadable_shows_pass(
         "openkos.cli.main.OllamaClient",
         _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
     )
-    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
+    monkeypatch.setattr("openkos.application.doctor.probe_vec_loadable", lambda: True)
     monkeypatch.setattr("openkos.vcs.git.git_available", lambda: True)
     monkeypatch.setattr("openkos.vcs.git.filter_repo_available", lambda: True)
 
@@ -664,7 +671,7 @@ def test_doctor_vector_extension_not_loadable_fails_but_exit_stays_zero(
         "openkos.cli.main.OllamaClient",
         _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
     )
-    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: False)
+    monkeypatch.setattr("openkos.application.doctor.probe_vec_loadable", lambda: False)
 
     result = runner.invoke(app, ["doctor"])
 
@@ -686,7 +693,7 @@ def test_doctor_vector_extension_check_runs_even_when_ollama_unreachable(
         "openkos.cli.main.OllamaClient",
         _fake_ollama_client(error=OllamaUnavailable("Ollama not reachable")),
     )
-    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
+    monkeypatch.setattr("openkos.application.doctor.probe_vec_loadable", lambda: True)
 
     result = runner.invoke(app, ["doctor"])
 
@@ -705,7 +712,7 @@ def test_doctor_vector_extension_check_runs_outside_workspace(
         "openkos.cli.main.OllamaClient",
         _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
     )
-    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
+    monkeypatch.setattr("openkos.application.doctor.probe_vec_loadable", lambda: True)
 
     result = runner.invoke(app, ["doctor"])
 
@@ -745,7 +752,7 @@ def test_doctor_workspace_vectors_absent_shows_fail_with_reindex_remediation(
         "openkos.cli.main.OllamaClient",
         _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
     )
-    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
+    monkeypatch.setattr("openkos.application.doctor.probe_vec_loadable", lambda: True)
     monkeypatch.setattr("openkos.vcs.git.git_available", lambda: True)
     monkeypatch.setattr("openkos.vcs.git.filter_repo_available", lambda: True)
 
@@ -767,7 +774,7 @@ def test_doctor_workspace_vectors_check_skipped_outside_workspace(
         "openkos.cli.main.OllamaClient",
         _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
     )
-    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
+    monkeypatch.setattr("openkos.application.doctor.probe_vec_loadable", lambda: True)
 
     result = runner.invoke(app, ["doctor"])
 
@@ -786,7 +793,7 @@ def test_doctor_workspace_vectors_check_distinct_from_extension_loadable_check(
         "openkos.cli.main.OllamaClient",
         _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
     )
-    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
+    monkeypatch.setattr("openkos.application.doctor.probe_vec_loadable", lambda: True)
 
     result = runner.invoke(app, ["doctor"])
 
@@ -809,7 +816,7 @@ def test_doctor_git_and_filter_repo_pass(
         "openkos.cli.main.OllamaClient",
         _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
     )
-    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
+    monkeypatch.setattr("openkos.application.doctor.probe_vec_loadable", lambda: True)
     monkeypatch.setattr("openkos.vcs.git.git_available", lambda: True)
     monkeypatch.setattr("openkos.vcs.git.filter_repo_available", lambda: True)
 
@@ -831,7 +838,7 @@ def test_doctor_git_filter_repo_missing(
         "openkos.cli.main.OllamaClient",
         _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
     )
-    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
+    monkeypatch.setattr("openkos.application.doctor.probe_vec_loadable", lambda: True)
     monkeypatch.setattr("openkos.vcs.git.git_available", lambda: True)
     monkeypatch.setattr("openkos.vcs.git.filter_repo_available", lambda: False)
 
@@ -853,7 +860,7 @@ def test_doctor_git_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
         "openkos.cli.main.OllamaClient",
         _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
     )
-    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
+    monkeypatch.setattr("openkos.application.doctor.probe_vec_loadable", lambda: True)
     monkeypatch.setattr("openkos.vcs.git.git_available", lambda: False)
     monkeypatch.setattr("openkos.vcs.git.filter_repo_available", lambda: False)
 
@@ -904,7 +911,7 @@ def test_doctor_prints_version_banner_first(
             installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL, "gemma2:27b"]
         ),
     )
-    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
+    monkeypatch.setattr("openkos.application.doctor.probe_vec_loadable", lambda: True)
     monkeypatch.setattr("openkos.vcs.git.git_available", lambda: True)
     monkeypatch.setattr("openkos.vcs.git.filter_repo_available", lambda: True)
 
@@ -930,7 +937,7 @@ def _healthy_doctor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         "openkos.cli.main.OllamaClient",
         _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
     )
-    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
+    monkeypatch.setattr("openkos.application.doctor.probe_vec_loadable", lambda: True)
     monkeypatch.setattr("openkos.vcs.git.git_available", lambda: True)
     monkeypatch.setattr("openkos.vcs.git.filter_repo_available", lambda: True)
 
@@ -1028,7 +1035,7 @@ def test_doctor_reports_locality_outside_a_workspace(
         "openkos.cli.main.OllamaClient",
         _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
     )
-    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
+    monkeypatch.setattr("openkos.application.doctor.probe_vec_loadable", lambda: True)
     monkeypatch.setattr("openkos.vcs.git.git_available", lambda: True)
     monkeypatch.setattr("openkos.vcs.git.filter_repo_available", lambda: True)
 
@@ -1116,7 +1123,7 @@ def test_doctor_reports_a_missing_task_model(
         "openkos.cli.main.OllamaClient",
         _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
     )
-    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
+    monkeypatch.setattr("openkos.application.doctor.probe_vec_loadable", lambda: True)
     monkeypatch.setattr("openkos.vcs.git.git_available", lambda: True)
     monkeypatch.setattr("openkos.vcs.git.filter_repo_available", lambda: True)
 
@@ -1149,7 +1156,7 @@ def test_a_missing_task_model_does_not_change_the_exit_code(
         "openkos.cli.main.OllamaClient",
         _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
     )
-    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
+    monkeypatch.setattr("openkos.application.doctor.probe_vec_loadable", lambda: True)
     monkeypatch.setattr("openkos.vcs.git.git_available", lambda: True)
     monkeypatch.setattr("openkos.vcs.git.filter_repo_available", lambda: True)
 
@@ -1179,7 +1186,7 @@ def test_doctor_passes_when_every_task_model_is_installed(
             installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL, "gemma2:27b"]
         ),
     )
-    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
+    monkeypatch.setattr("openkos.application.doctor.probe_vec_loadable", lambda: True)
     monkeypatch.setattr("openkos.vcs.git.git_available", lambda: True)
     monkeypatch.setattr("openkos.vcs.git.filter_repo_available", lambda: True)
 
@@ -1208,7 +1215,7 @@ def test_a_stock_workspace_passes_and_names_the_optional_upgrade(
         "openkos.cli.main.OllamaClient",
         _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
     )
-    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
+    monkeypatch.setattr("openkos.application.doctor.probe_vec_loadable", lambda: True)
     monkeypatch.setattr("openkos.vcs.git.git_available", lambda: True)
     monkeypatch.setattr("openkos.vcs.git.filter_repo_available", lambda: True)
 
@@ -1239,7 +1246,7 @@ def test_task_model_check_skips_when_ollama_is_unreachable(
         "openkos.cli.main.OllamaClient",
         _fake_ollama_client(error=OllamaUnavailable("connection refused")),
     )
-    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
+    monkeypatch.setattr("openkos.application.doctor.probe_vec_loadable", lambda: True)
     monkeypatch.setattr("openkos.vcs.git.git_available", lambda: True)
     monkeypatch.setattr("openkos.vcs.git.filter_repo_available", lambda: True)
 
@@ -1275,7 +1282,7 @@ def _fake_client_and_git(monkeypatch: pytest.MonkeyPatch) -> None:
         "openkos.cli.main.OllamaClient",
         _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
     )
-    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
+    monkeypatch.setattr("openkos.application.doctor.probe_vec_loadable", lambda: True)
     monkeypatch.setattr("openkos.vcs.git.git_available", lambda: True)
     monkeypatch.setattr("openkos.vcs.git.filter_repo_available", lambda: True)
 
@@ -1519,7 +1526,7 @@ def test_doctor_workspace_fts_absent_shows_fail_with_reindex_remediation(
         "openkos.cli.main.OllamaClient",
         _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
     )
-    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
+    monkeypatch.setattr("openkos.application.doctor.probe_vec_loadable", lambda: True)
     monkeypatch.setattr("openkos.vcs.git.git_available", lambda: True)
     monkeypatch.setattr("openkos.vcs.git.filter_repo_available", lambda: True)
 
@@ -1543,7 +1550,7 @@ def test_doctor_index_checks_skip_on_an_empty_bundle_recommending_ingest(
         "openkos.cli.main.OllamaClient",
         _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
     )
-    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
+    monkeypatch.setattr("openkos.application.doctor.probe_vec_loadable", lambda: True)
     monkeypatch.setattr("openkos.vcs.git.git_available", lambda: True)
     monkeypatch.setattr("openkos.vcs.git.filter_repo_available", lambda: True)
 
@@ -1568,7 +1575,7 @@ def test_doctor_workspace_fts_check_skipped_outside_workspace(
         "openkos.cli.main.OllamaClient",
         _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
     )
-    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
+    monkeypatch.setattr("openkos.application.doctor.probe_vec_loadable", lambda: True)
 
     result = runner.invoke(app, ["doctor"])
 
