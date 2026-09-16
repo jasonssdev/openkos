@@ -42,7 +42,34 @@ more general one -- it is the only shape that can also serve the
 operator-supplied `--decline`/`--reopen` pair, which is not a
 `PersistedFinding`. `cli/next_action.py`'s call site now unpacks
 `finding.pair_ids, finding.merged_absorbed_id` itself, exactly as
-`cli/main.py`'s own call sites already did."""
+`cli/main.py`'s own call sites already did.
+
+Twin-sorting contract (R2/R3, PR #996 review, non-blocking), stated ONCE
+here rather than split across the two functions it governs:
+`is_group_kept_distinct` sorts its `member_ids` defensively
+(`tuple(sorted(member_ids))`); `is_contradiction_declined` does NOT sort
+`pair_ids`. Before this promotion the two lived in different modules and
+each carried its own account of why, which is exactly how the asymmetry
+came to read as an oversight once they became twins in ONE module. It is
+not one: the two predicates are reachable from different sources.
+`is_group_kept_distinct` is reachable ONLY from an operator-supplied
+`--keep-distinct`/`--reopen` id list (`cli.main`'s duplicate-review
+verbs), which carries no ordering guarantee, so it must sort defensively.
+`is_contradiction_declined`'s `pair_ids` is reachable from a live
+`ContradictionVerdict` (already sorted, by `resolution.contradiction.
+_candidate_pairs`'s `tuple(sorted(pair))` dedup key) AND from the
+operator-supplied `--decline`/`--reopen` pair -- but for that second
+source, every call site (`cli.main._apply_contradiction_decision`, via
+`_sorted_decision_pair`) sorts the pair itself before calling in, so
+`is_contradiction_declined` never receives an unsorted one and never
+needs to sort defensively. Sorting again here would not be wrong, only
+redundant -- and the point of documenting it is that a reader must not
+"fix" the redundancy by deleting the caller-side sort, which would break
+the actual contract. `test_is_contradiction_declined_relies_on_pre_sorted_pair_ids`
+(`tests/unit/application/test_pending.py`) pins that this dependency is
+real, not latent: reversing `pair_ids` there makes a recorded decision
+invisible, because both the digest AND the owning sidecar file are keyed
+off `pair_ids[0]` exactly as given, unsorted."""
 
 from __future__ import annotations
 
@@ -114,14 +141,9 @@ def is_contradiction_declined(
     exists and its `state` is `declined` (pending-work spec: "Declined
     Findings Are Hidden By Default").
 
-    `pair_ids` is NOT re-sorted here: a live `ContradictionVerdict`'s own
-    `pair_ids` already arrives sorted, by `find_contradictions`'s own
-    contract (`resolution.contradiction._candidate_pairs`'s
-    `tuple(sorted(pair))` dedup key). This is also the shape the
-    operator-supplied `--decline`/`--reopen` pair needs, which is NOT
-    guaranteed sorted -- callers serving that pair must sort it themselves
-    before calling in, the same way `cli.main`'s own `--decline`/`--reopen`
-    call site already does."""
+    `pair_ids` is NOT re-sorted here -- see this module's docstring
+    ("Twin-sorting contract") for why that is deliberate and why its twin
+    `is_group_kept_distinct` sorts defensively while this one does not."""
     key = bundle_decisions.decision_key_for(pair_ids, merged_absorbed_id)
     for record in bundle_decisions.read_decisions(pair_ids[0], layout.bundle_dir):
         if record.decision_key == key:
@@ -138,7 +160,8 @@ def is_group_kept_distinct(
 
     `CandidateGroup.member_ids` arrives sorted, but this is also reachable
     from operator-supplied ids, so it sorts defensively rather than
-    trusting the caller."""
+    trusting the caller -- see this module's docstring ("Twin-sorting
+    contract") for why its twin `is_contradiction_declined` does not."""
     members = tuple(sorted(member_ids))
     key = bundle_decisions.identity_decision_key_for(members)
     for record in bundle_decisions.read_identity_decisions(
