@@ -342,8 +342,10 @@ class _BundleSignals:
         without it this property ranked pairs already judged consistent as
         "open contradictions" and nothing could clear them (#639). It is
         the same predicate `contradictions`, `reconcile --from-findings`,
-        and `cli.main._contradiction_finding_counts` apply, so `next` and
-        `status` can never disagree about what is outstanding.
+        and `application.status.contradiction_finding_counts` apply (moved
+        there from `cli.main._contradiction_finding_counts` in issue #995,
+        PR 3), so `next` and `status` can never disagree about what is
+        outstanding.
 
         The `.openkos/findings.db` read itself is NOT performed here: it
         is `application.pending.persisted_findings`, which every adapter

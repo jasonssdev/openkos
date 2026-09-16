@@ -30,6 +30,7 @@ from openkos.application import ingest as application_ingest
 from openkos.application import lifecycle as application_lifecycle
 from openkos.application import pending as application_pending
 from openkos.application import query as application_query
+from openkos.application import status as application_status
 from openkos.bundle import bundle, listing, source_titles
 from openkos.bundle import decisions as bundle_decisions
 from openkos.bundle import index as bundle_index
@@ -50,7 +51,7 @@ from openkos.extraction.concept import (
 from openkos.graph import proximity, sqlite_graph
 from openkos.graph.base import Edge, GraphStore
 from openkos.graph.sqlite_graph import build_graph
-from openkos.graph.summary import asserted_relations_exist, graph_edge_summary
+from openkos.graph.summary import graph_edge_summary
 from openkos.llm.ollama import (
     BackendHostLocality,
     InstalledModel,
@@ -68,7 +69,7 @@ from openkos.model.relations import ASYMMETRIC_RELATION_TYPES, validate_relation
 from openkos.model.types import INSIGHT_TYPE as _INSIGHT_TYPE
 from openkos.model.types import TYPE_TO_LINK_DIR as _TYPE_TO_LINK_DIR
 from openkos.model.types import TYPE_TO_SECTION as _TYPE_TO_SECTION
-from openkos.resolution import find_candidates_report, find_exact_title_groups
+from openkos.resolution import find_candidates_report
 from openkos.resolution.adjudication import (
     AdjudicatedCandidate,
     AdjudicationBatch,
@@ -115,13 +116,11 @@ from openkos.state import adjudications as adjudications_store
 from openkos.state import derived, findings
 from openkos.state import edge_suggestions as edge_suggestions_store
 from openkos.state import reindex as reindex_module
-from openkos.state.derived import stale_derived_stores
 from openkos.state.fts import FtsUnavailable
 from openkos.state.vectorstore import (
     VecUnavailable,
     open_vector_store,
     probe_vec_loadable,
-    vector_store_is_empty,
 )
 from openkos.vcs import git as vcs_git
 
@@ -3686,48 +3685,13 @@ def _extraction_cap_notice(report: ExtractionReport) -> str | None:
     )
 
 
-def _stale_index_names(
-    layout: config.WorkspaceLayout, *, reads: tuple[str, ...]
-) -> tuple[str, ...]:
-    """The manifest-gated derived stores whose contents predate the bundle,
-    named for a user-facing advisory (#381) -- shared by `query` and
-    `status` (and mirrored by `next`'s `_BundleSignals.stale_indexes`) so
-    all three agree on what "stale" means and on the wording of the names
-    they print.
-
-    `reads` (#436) declares which of the checked stores THIS caller's
-    answer actually depends on, and the advisory names only that
-    intersection. `query` stopped reading `graph.db` in #434, so graph
-    staleness cannot degrade its answer and warning about it there was a
-    true statement about the workspace attached to the wrong claim
-    ("this answer may be degraded"). `status` and `next` describe the
-    workspace itself, so they keep declaring both stores. Keeping the one
-    shared helper -- with the caller's declaration as a parameter rather
-    than a fork -- is the point: what "stale" means still lives in exactly
-    one place. A name in `reads` outside the checked set is ignored.
-
-    Only `fts.db` and `graph.db` are checkable, because only those two are
-    gated by a whole-bundle `manifest_hash`. `vectors.db` is maintained
-    per-document (`reindex` compares each doc's own `content_hash`), so an
-    edited bundle leaves it PARTIALLY current rather than wholesale stale --
-    which is exactly the asymmetry #381's evidence recorded, where dense
-    retrieval still returned 9 hits while FTS and graph returned 0.
-
-    Never raises: a failing advisory must not be what breaks the command it
-    advises, so any error degrades to "nothing to report" rather than
-    propagating. The cost is one bundle walk (~4ms over 29 docs), and
-    `stale_derived_stores` skips even that when no declared store is on
-    disk.
-    """
-    known = (("fts", layout.fts_db_path), ("graph", layout.graph_db_path))
-    stores = tuple((name, path) for name, path in known if name in reads)
-    if not stores:
-        return ()
-    try:
-        return stale_derived_stores(layout.bundle_dir, stores)
-    except Exception:  # broad: an advisory never breaks its own command
-        return ()
-
+# `_stale_index_names` moved verbatim into `application/status.py` as the
+# public `stale_index_names` (issue #995, PR 3) -- shared by `status`'s own
+# service and this module's `query` command (below), which imports it as
+# `application_status.stale_index_names` rather than forking a local copy
+# (`tests/unit/application/test_layering.py::
+# test_shared_read_predicates_are_never_forked` is what makes that
+# checkable).
 
 # `DerivedPlan` and the three collision helpers moved verbatim into
 # `application/ingest.py` (issue #918, Slice 1) -- bound back here under
@@ -10183,13 +10147,6 @@ def _run_reconcile_from_findings(
         _refresh_derived_after_write(layout, cfg, verb="reconcile")
 
 
-RECENT_ACTIVITY_LIMIT = 5
-"""How many `log.md` bullets `status` shows under "Recent activity" (D4).
-
-Display policy, not parsing policy -- `bundle/log.py::read_recent_entries`
-stays free of this constant and takes it as a parameter instead."""
-
-
 def _bundle_content_lines(survey: okf.BundleSurvey) -> list[tuple[str, int]]:
     """Build `status`'s per-type "Bundle contents" rows from a survey (#133).
 
@@ -10229,9 +10186,24 @@ def status() -> None:
     `ingest` uses -- printing the reason to stderr with no raw traceback.
     This is the ONLY non-zero exit path.
 
-    On a workspace, sequences several reads and renders their result as
-    plain text via `typer.echo`, always exiting 0. Note that these reads
-    perform FIVE independent `bundle/**/*.md` walks, not one:
+    On a workspace, every read is gathered by two `application.status`
+    calls, in a deliberate order (issue #995 PR 3, corrected after review
+    findings R3-partial-output-on-read-failure /
+    R4-status-no-partial-output): `read_status_overview` runs FIRST and
+    covers only the cheap, already-guarded reads (`okf.survey_bundle`, the
+    lenient-degrading `log.md` read); this command renders the workspace
+    header, `Bundle contents:`, and `Recent activity:` from that result
+    BEFORE calling `build_status_report`, which performs every remaining
+    (unguarded) read. That ordering is not decomposition for its own sake
+    -- before the #995 extraction, this command's body was interleaved
+    compute-then-print, so those three sections reached the operator even
+    when a later read raised on a damaged workspace (a corrupt bundle doc,
+    an unreadable `graph.db`); hoisting every read ahead of the first
+    `typer.echo` silently lost that partial output, which this split
+    restores. This command's own job is rendering the two results as plain
+    text via `typer.echo` and exit codes -- it takes no flags. Note that
+    the reads across both calls perform FIVE independent `bundle/**/*.md`
+    walks, not one:
     `okf.survey_bundle` (source/concept counts and §9 findings, D2) --
     counts always reflect the disk scan, never `index.md` alone, so catalog
     drift after an interrupted `ingest` is still visible;
@@ -10251,8 +10223,9 @@ def status() -> None:
     pairwise `near_match_score` pass this line paid for and discarded -- NOT
     either of the two walks above, which are unchanged.
     `log.md` is read and passed through `bundle_log.read_recent_entries` for
-    the most recent `RECENT_ACTIVITY_LIMIT` entries, newest-first -- an
-    unreadable or malformed `log.md` degrades to a notice (`except (OSError,
+    the most recent `application_status.RECENT_ACTIVITY_LIMIT` entries,
+    newest-first -- an unreadable or malformed `log.md` degrades to a
+    notice (`except (OSError,
     ValueError)`) rather than failing the whole command (D5), because recent
     activity is the one nice-to-have `status` exists to show, not the
     counts or the conformance findings. `survey_bundle`'s findings
@@ -10271,149 +10244,117 @@ def status() -> None:
         raise typer.Exit(code=1)
 
     layout = config.WorkspaceLayout(root)
-    survey = okf.survey_bundle(layout.bundle_dir)
-
-    try:
-        log_text = (layout.bundle_dir / "log.md").read_text(encoding="utf-8")
-        recent_entries = bundle_log.read_recent_entries(log_text, RECENT_ACTIVITY_LIMIT)
-    except (OSError, ValueError):
-        recent_entries = None
+    # `read_status_overview` covers only the cheap, already-guarded reads
+    # (the survey, the lenient-degrading `log.md` read) and is called
+    # FIRST, deliberately, so the header/`Bundle contents:`/
+    # `Recent activity:` sections below reach stdout even if a LATER,
+    # unguarded read raises on a damaged workspace -- see the docstring
+    # above and `application.status.read_status_overview`'s own docstring
+    # for why this ordering is load-bearing, not incidental. `overview`
+    # carries RAW facts; every string below (labels, `_plural`, the
+    # command names) is presentation, computed here, never in the service.
+    overview = application_status.read_status_overview(layout)
 
     typer.echo(f"openkos status: workspace at {root}")
     typer.echo()
     typer.echo("Bundle contents:")
-    content_lines = _bundle_content_lines(survey)
+    content_lines = _bundle_content_lines(overview.survey)
     label_width = max(len(f"{label}:") for label, _ in content_lines)
     for label, count in content_lines:
         typer.echo(f"  {(label + ':').ljust(label_width)} {count}")
     typer.echo()
     typer.echo("Recent activity:")
-    if recent_entries is None:
+    if overview.recent_entries is None:
         typer.echo("  Recent activity unavailable — log.md could not be read/parsed.")
-    elif not recent_entries:
+    elif not overview.recent_entries:
         typer.echo("  No activity recorded yet.")
     else:
-        for entry in recent_entries:
+        for entry in overview.recent_entries:
             typer.echo(f"  {entry.date}  {entry.text}")
     typer.echo()
+    # Every REMAINING read `status` performs -- the eight lint checks over
+    # one shared `docs` list, the exact-title/contradiction counts, the
+    # vector-index/derived-index staleness checks, and the graph
+    # projection -- lives in `application.status.build_status_report`
+    # (issue #995, PR 3), called only now, AFTER the two sections above
+    # have already been rendered (the partial-output ordering the
+    # docstring above explains).
+    # The header goes out BEFORE that call, not after. The pre-extraction
+    # body echoed this literal line and only then ran the unguarded reads,
+    # so an operator on a damaged workspace saw the section announce itself
+    # even when building its contents raised (review finding
+    # R3-needs-attention-header-lost-on-failure). Rendering it after the
+    # call would emit strictly less on the failure path than the base did
+    # -- the same regression the ordering above exists to prevent, one line
+    # short.
     typer.echo("Needs attention:")
-    # #141: dangling-reference findings are knowledge-health (lint)
-    # vocabulary, not OKF conformance -- `survey_bundle` never computes
-    # them, so `status` calls `lint`'s own `collect_docs` +
-    # `check_dangling_targets` directly and folds the rendered lines in
-    # here, alongside §9 conformance findings and the #142 vector-index
-    # check below. Still read-only, still exits 0.
-    docs, _skip_notices = lint_check.collect_docs(layout.bundle_dir)
-    dangling = lint_check.check_dangling_targets(docs)
-    # issue #187: `unextracted` reuses this SAME in-memory `docs` list --
-    # no second `collect_docs()` call, no new walk (status spec: "No new
-    # bundle walk is introduced").
-    unextracted = lint_check.check_unextracted(docs)
-    # issue #772: reuses this SAME in-memory `docs` list -- the unjudged-
-    # extraction check is the quarantine's read half, and it must cost no
-    # new walk for the same reason every sibling check does not.
-    unjudged = lint_check.check_unjudged(docs)
-    # issue #801: and again -- the quoted-evidence disclosure. `status` is
-    # the surface an operator checks without being told to, so a check
-    # `lint` renders and this one does not is only half-wired (#690).
-    unevidenced = lint_check.check_unevidenced(docs)
-    # issue #843: and again -- the staging-loss disclosure. Same
-    # half-wired reasoning as #801's line above: `status` is the surface
-    # an operator checks without being told to.
-    staging_dropped = lint_check.check_staging_dropped(docs)
-    # issue #231 (PR2): reuses this SAME in-memory `docs` list too -- no
-    # third `collect_docs()` call (design D3's no-fifth-walk guard).
-    sensitivity_findings = lint_check.check_below_source_sensitivity(docs)
-    # issue #257: reuses this SAME in-memory `docs` list again -- no
-    # fourth `collect_docs()` call (the structural no-fifth-walk guard).
-    dangling_provenance = lint_check.check_dangling_provenance(docs)
-    # issue #421: and again -- an engine-owned `derived_from` no
-    # `provenance:` entry backs. Pure and deterministic: `status` calls no
-    # model for it, and the SAME `docs` list still serves every check.
-    unbacked_provenance = lint_check.check_unbacked_provenance(docs)
-    needs_attention: list[str] = [*survey.findings]
+    report = application_status.build_status_report(layout)
+
+    needs_attention: list[str] = [*overview.survey.findings]
     needs_attention.extend(
-        f"{finding.concept_id}: {finding.detail}" for finding in dangling
+        f"{finding.concept_id}: {finding.detail}" for finding in report.dangling
     )
     needs_attention.extend(
-        f"{finding.concept_id}: {finding.detail}" for finding in unextracted
+        f"{finding.concept_id}: {finding.detail}" for finding in report.unextracted
     )
     needs_attention.extend(
-        f"{finding.concept_id}: {finding.detail}" for finding in unjudged
+        f"{finding.concept_id}: {finding.detail}" for finding in report.unjudged
     )
     needs_attention.extend(
-        f"{finding.concept_id}: {finding.detail}" for finding in unevidenced
+        f"{finding.concept_id}: {finding.detail}" for finding in report.unevidenced
     )
     needs_attention.extend(
-        f"{finding.concept_id}: {finding.detail}" for finding in staging_dropped
+        f"{finding.concept_id}: {finding.detail}" for finding in report.staging_dropped
     )
     needs_attention.extend(
         f"{finding.concept_id}: [{finding.kind}] {finding.detail}"
-        for finding in sensitivity_findings
+        for finding in report.sensitivity_findings
     )
     needs_attention.extend(
         f"{finding.concept_id}: [{finding.kind}] {finding.detail}"
-        for finding in dangling_provenance
+        for finding in report.dangling_provenance
     )
     needs_attention.extend(
         f"{finding.concept_id}: [{finding.kind}] {finding.detail}"
-        for finding in unbacked_provenance
+        for finding in report.unbacked_provenance
     )
     # #186: pending duplicate groups are ACTIONABLE -- name `duplicates` as
     # the next step. Exact-title matches only; near-match (LOW) is a
     # deliberate high-recall review queue, not an alert (similarity.py).
-    # #216: hence `find_exact_title_groups`, not `find_candidates` -- it
-    # returns the identical HIGH groups in the identical order, but skips the
-    # O(n^2) pairwise `near_match_score` pass whose LOW groups this line
-    # discarded. `duplicates`/`adjudicate` still call `find_candidates_report`
-    # (curate-call-budget): they use both tiers.
-    # #797: a group the human ruled distinct is no longer "needs attention"
-    # -- that is the whole point of recording the ruling. Filtered here
-    # rather than inside `find_exact_title_groups`, which is deliberately
-    # uncapped and shared, so the suppression stays a presentation choice
-    # each consumer makes for itself.
-    exact_title_groups = sum(
-        1
-        for group in find_exact_title_groups(layout.bundle_dir)
-        if not application_pending.is_group_kept_distinct(layout, group.member_ids)
-    )
-    if exact_title_groups:
+    # #797: a group the human ruled distinct is already excluded from
+    # `report.exact_title_group_count` -- the service computes the
+    # suppression, this line only renders the count.
+    if report.exact_title_group_count:
         needs_attention.append(
-            f"{exact_title_groups} candidate group{_plural(exact_title_groups)} with "
+            f"{report.exact_title_group_count} candidate group"
+            f"{_plural(report.exact_title_group_count)} with "
             "identical titles — run `openkos duplicates` to review."
         )
-    # #598: the persisted contradiction verdicts `curate` already paid an
-    # LLM to compute. A SQLite read of `.openkos/findings.db`, NOT a sixth
-    # bundle walk -- the `docs` list above is untouched, and a workspace
-    # that never ran `curate` has no database to open (`_persisted_
-    # findings`' own `path.exists()` guard keeps this read from creating
-    # one). Aggregated the way the duplicate-groups line above is: one
-    # counted line naming the verb, never one line per pair. Open and
-    # stale are separate lines because they need different verbs --
-    # `contradictions` reviews an open one, only a recompute clears a
-    # stale one -- and because `next` ranks the open ones and excludes the
-    # stale ones, which would leave stale work reported by nothing at all.
-    open_contradictions, stale_contradictions = _contradiction_finding_counts(layout)
-    if open_contradictions:
+    # #598: open and stale are separate lines because they need different
+    # verbs -- `contradictions` reviews an open one, only a recompute
+    # clears a stale one -- and because `next` ranks the open ones and
+    # excludes the stale ones, which would leave stale work reported by
+    # nothing at all.
+    if report.open_contradictions:
         needs_attention.append(
-            f"{open_contradictions} open contradiction{_plural(open_contradictions)} "
+            f"{report.open_contradictions} open contradiction"
+            f"{_plural(report.open_contradictions)} "
             "— run `openkos contradictions` to review."
         )
-    if stale_contradictions:
+    if report.stale_contradictions:
         needs_attention.append(
-            f"{stale_contradictions} stale contradiction"
-            f"{_plural(stale_contradictions)} — run `openkos curate` to recompute."
+            f"{report.stale_contradictions} stale contradiction"
+            f"{_plural(report.stale_contradictions)} — run `openkos curate` "
+            "to recompute."
         )
     # issue #183 (Slice 0): a missing/empty `vectors.db` is genuinely
     # ACTIONABLE (spec: "Needs-Attention Surfaces Missing Vector Index"), so
     # it belongs in `needs_attention` itself -- unlike the empty-graph line
-    # below, which stays purely INFORMATIONAL. #386: gated on the bundle
-    # holding at least one eligible document (the SAME `docs` list every
-    # check above reuses -- no new walk): reindexing a bundle with nothing
-    # to index is meaningless, and `next` owns naming the real first step
+    # below, which stays purely INFORMATIONAL. #386: gated on
+    # `has_eligible_docs`: reindexing a bundle with nothing to index is
+    # meaningless, and `next` owns naming the real first step
     # (`openkos ingest`) in that state.
-    vectors_missing = vector_store_is_empty(layout.vectors_db_path)
-    if vectors_missing and docs:
+    if report.vectors_missing and report.has_eligible_docs:
         needs_attention.append(
             "Dense retrieval and candidate edges unavailable — run "
             "`openkos reindex` (vectors.db missing)."
@@ -10421,16 +10362,10 @@ def status() -> None:
     # #381: an index older than the bundle is ACTIONABLE in exactly the way
     # the missing-`vectors.db` line above is -- it names the command that
     # fixes it -- so it belongs here rather than among the informational
-    # lines. Absence is deliberately NOT reported as staleness (see
-    # `_stale_index_names`): a freshly `init`ed workspace has no derived
-    # store at all, and recommending a refresh of indexes that were never
-    # built is the same defect #386 reports against `next`. `status`
-    # describes the workspace, not one answer, so it declares BOTH
-    # manifest-gated stores (#436) -- unlike `query`, which reads only fts.
-    stale_indexes = _stale_index_names(layout, reads=("fts", "graph"))
-    if stale_indexes:
+    # lines.
+    if report.stale_indexes:
         needs_attention.append(
-            f"Derived indexes are stale ({', '.join(stale_indexes)}) — run "
+            f"Derived indexes are stale ({', '.join(report.stale_indexes)}) — run "
             "`openkos reindex` to refresh retrieval."
         )
     # #387: an UNTYPED concept-to-concept edge is pending curation work, so
@@ -10440,22 +10375,10 @@ def status() -> None:
     # section must not carry -- and `status` has no informational section
     # for derived-graph metrics ("Bundle contents" is pinned to the disk
     # scan), so the fully-typed count is dropped rather than moved.
-    # `graph_edge_summary` is read-only over the graph projection, built
-    # once (#195) and skipped when `vectors_missing`, exactly as before.
-    edge_summary: tuple[int, int] | None = None
-    # #912: typed relations on SOURCE documents (the recurring-meeting
-    # series recipe) are excluded from the concept-to-concept counts by
-    # design, but the empty-graph notice below must not deny them.
-    asserted_relations = False
-    if not vectors_missing:
-        with build_graph(layout.bundle_dir) as store:
-            edge_summary = graph_edge_summary(layout.bundle_dir, store=store)
-            # Consulted only by the zero-count notice below, so the second
-            # edges() pass is paid only when the concept-to-concept count
-            # is already zero -- the one case where the edge set is small.
-            if edge_summary[0] == 0:
-                asserted_relations = asserted_relations_exist(store)
-        total, typed = edge_summary
+    # `report.edge_summary` is `None` exactly when `vectors_missing`,
+    # mirroring the pre-extraction `if not vectors_missing:` gate.
+    if report.edge_summary is not None:
+        total, typed = report.edge_summary
         untyped = total - typed
         if untyped:
             needs_attention.append(
@@ -10471,7 +10394,11 @@ def status() -> None:
     # (spec: "or an adjacent informational line") -- never appended to
     # `needs_attention`, so a healthy workspace still prints "Nothing needs
     # attention." above.
-    if edge_summary is not None and edge_summary[0] == 0 and not asserted_relations:
+    if (
+        report.edge_summary is not None
+        and report.edge_summary[0] == 0
+        and not report.asserted_relations
+    ):
         typer.echo("  No concept relationships yet.")
     # #593: the duplicate check above counts identical-title groups ONLY.
     # Widening it to `duplicates`' full candidate set was measured and
@@ -10482,7 +10409,7 @@ def status() -> None:
     # `needs_attention`, so a healthy workspace keeps its "Nothing needs
     # attention."), and only when the identical-titles line did NOT fire,
     # which already names the same verb.
-    if not exact_title_groups:
+    if not report.exact_title_group_count:
         typer.echo(
             "  Similar-title candidates are not counted here — run "
             "`openkos duplicates` for the full scan."
@@ -11680,10 +11607,11 @@ def _open_proximity_or_degrade(
 
     Returns the source rather than a `(source, unavailable)` pair on
     purpose: `unavailable` IS `source is None`, and a tuple carrying the
-    same fact twice invites the two halves to drift. `status`, which needs
-    the state but never the source, keeps calling `vector_store_is_empty` --
-    consistent by construction, because `open_proximity_source` is defined
-    against that exact predicate.
+    same fact twice invites the two halves to drift. `status` (via
+    `application.status.build_status_report`, issue #995 PR 3), which needs
+    the state but never the source, calls `vector_store_is_empty` directly
+    -- consistent by construction, because `open_proximity_source` is
+    defined against that exact predicate.
 
     Never raises: `open_proximity_source` already absorbs an absent, empty,
     unreadable or extension-less store."""
@@ -13259,40 +13187,9 @@ def _open_findings_by_decision_key(
     }
 
 
-def _contradiction_finding_counts(layout: config.WorkspaceLayout) -> tuple[int, int]:
-    """`(open, stale)` counts over the persisted, NON-declined findings --
-    the two numbers `status` reports (#598).
-
-    Declined findings are dropped outright, not counted into either total
-    (pending-work spec: "Declined Findings Are Hidden By Default", which
-    names `status`); `contradictions --declined` is the one view that shows
-    them. The open count uses the SAME high-confidence-CONTRADICTS ∧ open ∧
-    not stale ∧ not declined predicate `next_action.open_contradictions`
-    ranks on, so the two commands can never disagree about what is
-    outstanding. The verdict filter (#639) runs BEFORE the stale/open
-    split: curate persists EVERY judged verdict, `consistent` included, and
-    a consistent finding is neither open work nor stale work -- counting it
-    told operators they had contradictions nothing could clear. It is the
-    shared `is_high_confidence_finding` predicate, never a local threshold,
-    so this count can never drift from what `contradictions` shows and
-    `reconcile --from-findings` offers. Stale is split off rather than
-    folded in or dropped: `next` excludes it by design, so `status` staying
-    silent would erase it from the operator's view entirely ("A stale
-    finding remains visible as stale")."""
-    open_count = 0
-    stale_count = 0
-    for finding in application_pending.persisted_findings(layout):
-        if not is_high_confidence_finding(finding.verdict, finding.confidence):
-            continue
-        if application_pending.is_contradiction_declined(
-            layout, finding.pair_ids, finding.merged_absorbed_id
-        ):
-            continue
-        if finding.stale:
-            stale_count += 1
-        else:
-            open_count += 1
-    return open_count, stale_count
+# `_contradiction_finding_counts` moved verbatim into `application/status.py`
+# as the public `contradiction_finding_counts` (issue #995, PR 3); `status`
+# is its only caller, via `application_status.contradiction_finding_counts`.
 
 
 def _echo_declined_finding(
@@ -14153,7 +14050,7 @@ def query(
     # THIS answer and must not be blamed here (`status`/`next` still report
     # it as workspace state). Kept in the CLI adapter rather than the
     # service (design D1) so stderr ordering stays byte-identical.
-    stale_stores = _stale_index_names(layout, reads=("fts",))
+    stale_stores = application_status.stale_index_names(layout, reads=("fts",))
     if stale_stores:
         typer.echo(
             f"warning: derived indexes are stale ({', '.join(stale_stores)}) "
