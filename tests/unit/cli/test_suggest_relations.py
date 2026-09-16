@@ -25,6 +25,7 @@ from typer.testing import CliRunner
 
 from openkos.cli import main
 from openkos.cli.main import app
+from openkos.config import WorkspaceLayout
 from openkos.graph import sqlite_graph
 from openkos.graph.base import Edge
 from openkos.graph.proximity import ProximityPair
@@ -34,12 +35,15 @@ from openkos.llm.ollama import (
     OllamaModelNotFound,
     OllamaUnavailable,
 )
+from openkos.model import okf
 from openkos.model.relations import ASYMMETRIC_RELATION_TYPES
+from openkos.resolution import edge_typing as edge_typing_mod
 from openkos.resolution.edge_typing import (
     LEAST_SPECIFIC_RELATION_TYPE,
     EdgeSuggestion,
     EdgeSuggestionBatch,
 )
+from openkos.state import edge_suggestions as edge_suggestions_store
 from tests.unit.cli.conftest import commit_pending_fixture_docs, disable_local_exemption
 from tests.unit.cli.conftest import snapshot_with_mtime as _snapshot
 
@@ -101,11 +105,13 @@ def _suggestion(
     target: str = "concepts/b",
     suggested_type: str | None = "references",
     rationale: str = "stub rationale",
+    corrected_edge: Edge | None = None,
 ) -> EdgeSuggestion:
     return EdgeSuggestion(
         edge=Edge(source_id=source, target_id=target),
         suggested_type=suggested_type,
         rationale=rationale,
+        corrected_edge=corrected_edge,
     )
 
 
@@ -2435,3 +2441,296 @@ def test_suggest_relations_withholds_and_discloses_unjudged_source_pairs(
     # The withheld pair is absent from the queue; the healthy cross pair
     # is the one edge the run reports.
     assert "concepts/a -> concepts/b" not in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# issue #991 second review round: a direction-corrected suggestion's
+# CANDIDATE identity (`edge`) must survive persistence and reassembly
+# unmutated, while the render/write surfaces honor the CORRECTION
+# (`effective_edge`) -- `state.edge_suggestions`'s "Direction is identity"
+# invariant, crossed by an earlier version of the #991 fix that swapped
+# `EdgeSuggestion.edge` itself.
+# ---------------------------------------------------------------------------
+
+
+def test_reassemble_edge_suggestions_keeps_a_corrected_suggestion_in_candidate_order() -> (
+    None
+):
+    """Direct reproduction of the defect: a fresh, direction-corrected
+    suggestion must still be found by `_reassemble_edge_suggestions` and
+    appear in CANDIDATE order, even when the store served an unrelated
+    edge in the same run (the served map is never empty here -- an empty
+    one cannot exercise the bug at all)."""
+    candidate_corrected = Edge(source_id="organizations/guild", target_id="people/dana")
+    candidate_served = Edge(source_id="concepts/a", target_id="concepts/b")
+    corrected = Edge(source_id="people/dana", target_id="organizations/guild")
+
+    fresh = [
+        _suggestion(
+            source=candidate_corrected.source_id,
+            target=candidate_corrected.target_id,
+            suggested_type="member_of",
+            corrected_edge=corrected,
+        )
+    ]
+    served = {
+        edge_suggestions_store.pair_key_for(
+            candidate_served.source_id, candidate_served.target_id
+        ): _suggestion(
+            source=candidate_served.source_id,
+            target=candidate_served.target_id,
+            suggested_type="references",
+        )
+    }
+
+    rebuilt = main._reassemble_edge_suggestions(
+        [candidate_corrected, candidate_served], served, fresh
+    )
+
+    assert len(rebuilt) == 2, "the corrected suggestion must not be dropped"
+    assert [result.edge for result in rebuilt] == [
+        candidate_corrected,
+        candidate_served,
+    ]
+    assert rebuilt[0].corrected_edge == corrected
+    assert rebuilt[0].effective_edge == corrected
+
+
+def test_persisted_row_is_keyed_on_the_candidate_pair_not_the_corrected_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A direction-corrected suggestion must be recorded under the pair the
+    model was actually asked about -- never the swapped one, or a later run
+    asking the SAME candidate question would miss its own stored answer
+    (`state.edge_suggestions`'s "Direction is identity" invariant)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "organizations" / "guild.md", title="Guild")
+    _write_doc(tmp_path / "bundle" / "people" / "dana.md", title="Dana")
+    candidate = Edge(source_id="organizations/guild", target_id="people/dana")
+    corrected = Edge(source_id="people/dana", target_id="organizations/guild")
+    _patch_candidate_edges(monkeypatch, [candidate])
+    monkeypatch.setattr(
+        "openkos.cli.main.suggest_edge_types",
+        lambda edges, **kwargs: EdgeSuggestionBatch(
+            results=[
+                _suggestion(
+                    source=candidate.source_id,
+                    target=candidate.target_id,
+                    suggested_type="member_of",
+                    rationale="corrected rationale",
+                    corrected_edge=corrected,
+                )
+            ]
+        ),
+    )
+
+    result = runner.invoke(app, ["suggest-relations", "--auto"])
+    assert result.exit_code == 0, result.stderr
+
+    store = sqlite3.connect(tmp_path / ".openkos" / "findings.db")
+    try:
+        rows = store.execute("SELECT pair_key FROM edge_suggestions").fetchall()
+    finally:
+        store.close()
+    assert rows == [
+        (edge_suggestions_store.pair_key_for(candidate.source_id, candidate.target_id),)
+    ]
+
+
+def test_a_served_edge_and_a_freshly_corrected_edge_both_survive_the_same_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The regime that hid the defect: one edge is served from a PRIOR
+    run's persisted suggestion while another is typed fresh and corrected
+    IN THIS run. A test with an empty `served` map has zero exposure to
+    this -- the earlier, broken version of the fix passed every
+    empty-served test and dropped the corrected suggestion only once
+    something else was being served alongside it."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="B")
+    _write_doc(tmp_path / "bundle" / "organizations" / "guild.md", title="Guild")
+    _write_doc(tmp_path / "bundle" / "people" / "dana.md", title="Dana")
+    served_candidate = Edge(source_id="concepts/a", target_id="concepts/b")
+    corrected_candidate = Edge(source_id="organizations/guild", target_id="people/dana")
+    corrected = Edge(source_id="people/dana", target_id="organizations/guild")
+
+    # Prime the store: a first run persists the served edge's suggestion.
+    _patch_candidate_edges(monkeypatch, [served_candidate])
+    monkeypatch.setattr(
+        "openkos.cli.main.suggest_edge_types",
+        lambda edges, **kwargs: EdgeSuggestionBatch(
+            results=[_suggestion(suggested_type="references")]
+        ),
+    )
+    priming = runner.invoke(app, ["suggest-relations", "--auto"])
+    assert priming.exit_code == 0, priming.stderr
+
+    # Second run: the primed edge now serves from the store; the new
+    # cross-type edge is typed fresh and corrected.
+    _patch_candidate_edges(monkeypatch, [served_candidate, corrected_candidate])
+    handed_to_model: list[Edge] = []
+
+    def _fake_suggest(edges: object, **kwargs: object) -> EdgeSuggestionBatch:
+        handed = list(edges)  # type: ignore[call-overload]
+        handed_to_model.extend(handed)
+        return EdgeSuggestionBatch(
+            results=[
+                _suggestion(
+                    source=corrected_candidate.source_id,
+                    target=corrected_candidate.target_id,
+                    suggested_type="member_of",
+                    rationale="Dana Reyes es miembro del Platform Guild.",
+                    corrected_edge=corrected,
+                )
+                for _ in handed
+            ]
+        )
+
+    monkeypatch.setattr("openkos.cli.main.suggest_edge_types", _fake_suggest)
+
+    result = runner.invoke(app, ["suggest-relations", "--auto"])
+
+    assert result.exit_code == 0, result.stderr
+    # Only the un-served edge was handed to the model.
+    assert handed_to_model == [corrected_candidate]
+    assert (
+        "1 of 2 candidate edge(s) served from persisted suggestions; "
+        "1 typed fresh." in result.stderr
+    )
+    # The served suggestion is present...
+    assert "[references] concepts/a -> concepts/b" in result.stdout
+    # ...and the corrected one is NOT silently dropped, and renders in the
+    # CORRECTED direction.
+    assert "[member_of] people/dana -> organizations/guild" in result.stdout
+    assert "people/dana es miembro" not in result.stdout  # sanity: not garbled
+    assert "organizations/guild -> people/dana" not in result.stdout
+
+
+def _write_guild_and_dana_docs(tmp_path: Path) -> None:
+    _write_doc(
+        tmp_path / "bundle" / "organizations" / "guild.md",
+        doc_type="Organization",
+        title="Guild",
+    )
+    _write_doc(
+        tmp_path / "bundle" / "people" / "dana.md", doc_type="Person", title="Dana"
+    )
+
+
+def _fresh_correction(
+    layout: WorkspaceLayout, candidate: Edge, rationale: str
+) -> EdgeSuggestion:
+    corrected_edge, suggested_type, rationale = (
+        edge_typing_mod._correct_object_type_direction(
+            candidate, "member_of", rationale, layout.bundle_dir
+        )
+    )
+    return EdgeSuggestion(
+        edge=candidate,
+        suggested_type=suggested_type,
+        rationale=rationale,
+        corrected_edge=corrected_edge,
+    )
+
+
+def _served_suggestion(layout: WorkspaceLayout, candidate: Edge) -> EdgeSuggestion:
+    served, _to_type, store_read = main._partition_edge_suggestion_serves(
+        layout, [candidate], include_confidential=False
+    )
+    assert store_read
+    key = edge_suggestions_store.pair_key_for(candidate.source_id, candidate.target_id)
+    return served[key]
+
+
+def test_served_direction_and_rationale_come_from_the_frozen_rationale_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two regimes, one invariant: the served direction and its disclosure
+    always come from the frozen rationale, never from a second bundle read
+    that can disagree with what was actually stored."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_guild_and_dana_docs(tmp_path)
+    layout = WorkspaceLayout(tmp_path)
+    candidate = Edge(source_id="organizations/guild", target_id="people/dana")
+    rationale = "Dana Reyes es miembro del Platform Guild."
+
+    # Regime 1: a transient fresh-time failure -> no note -> stays uncorrected.
+    with monkeypatch.context() as patched:
+        patched.setattr(edge_typing_mod, "_object_type", lambda *a, **k: None)
+        fresh = _fresh_correction(layout, candidate, rationale)
+    assert fresh.corrected_edge is None
+    main._persist_edge_suggestions(layout, [fresh], include_confidential=False)
+    served = _served_suggestion(layout, candidate)
+    assert served.effective_edge == candidate
+    assert edge_typing_mod.DIRECTION_CORRECTED_NOTE not in served.rationale
+
+    # Regime 2: note stored -> stays corrected under a failing serve read.
+    fresh = _fresh_correction(layout, candidate, rationale)
+    assert fresh.corrected_edge is not None
+    main._persist_edge_suggestions(layout, [fresh], include_confidential=False)
+
+    def _boom(bundle_dir: Path, concept_id: str) -> str | None:
+        raise AssertionError("serve path must not read the bundle")
+
+    monkeypatch.setattr(edge_typing_mod, "_object_type", _boom)
+    served = _served_suggestion(layout, candidate)
+    assert served.effective_edge == Edge(
+        source_id="people/dana", target_id="organizations/guild"
+    )
+    assert edge_typing_mod.DIRECTION_CORRECTED_NOTE in served.rationale
+
+
+def test_apply_writes_a_corrected_edge_in_the_corrected_direction(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End to end on the write path: `--apply` writes the relation to the
+    CORRECTED source's document, in the corrected direction, with no extra
+    frontmatter field -- byte-identical in shape to any other `relate`
+    write (the user's disclosure-at-suggestion-time-only decision)."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "organizations" / "guild.md", title="Guild")
+    _write_doc(tmp_path / "bundle" / "people" / "dana.md", title="Dana")
+    candidate = Edge(source_id="organizations/guild", target_id="people/dana")
+    corrected = Edge(source_id="people/dana", target_id="organizations/guild")
+    _patch_candidate_edges(monkeypatch, [candidate])
+    monkeypatch.setattr(
+        "openkos.cli.main.suggest_edge_types",
+        lambda edges, **kwargs: EdgeSuggestionBatch(
+            results=[
+                _suggestion(
+                    source=candidate.source_id,
+                    target=candidate.target_id,
+                    suggested_type="member_of",
+                    rationale="Dana Reyes es miembro del Platform Guild.",
+                    corrected_edge=corrected,
+                )
+            ]
+        ),
+    )
+
+    result = runner.invoke(app, ["suggest-relations", "--auto", "--apply"], input="y\n")
+
+    assert result.exit_code == 0, result.stderr
+    assert "applied 1" in result.stdout
+
+    dana_text = (tmp_path / "bundle" / "people" / "dana.md").read_text(encoding="utf-8")
+    guild_text = (tmp_path / "bundle" / "organizations" / "guild.md").read_text(
+        encoding="utf-8"
+    )
+    assert "relations:" in dana_text
+    assert "target: organizations/guild" in dana_text
+    assert "type: member_of" in dana_text
+    # The un-corrected candidate source (`organizations/guild`) must never
+    # receive the write -- the correction changes WHICH document gets it.
+    assert "relations:" not in guild_text
+    # No new frontmatter field: the relation entry has exactly the two
+    # keys any ordinary `relate` write produces.
+    metadata, _ = okf.load_frontmatter(dana_text)
+    relations = metadata["relations"]
+    assert isinstance(relations, list)
+    (entry,) = relations
+    assert isinstance(entry, dict)
+    assert set(entry) == {"target", "type"}

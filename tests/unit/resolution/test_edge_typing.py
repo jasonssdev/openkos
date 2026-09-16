@@ -1815,6 +1815,419 @@ def test_a_marker_is_not_found_inside_a_longer_word() -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# issue #991: object-type direction-signature check (language-independent)
+# ---------------------------------------------------------------------------
+
+
+def test_direction_type_signatures_declares_only_grounded_pairs() -> None:
+    """Pins exactly the declared table (module docstring): `member_of` gets
+    (Person, Organization), `produced_by` gets (Concept, Project) and
+    (Concept, Person), and no other relation type is declared at all --
+    `part_of`, `depends_on`, and `caused_by` have no cross-type fixture or
+    rubric example, so a pair for them must not be invented."""
+    expected = {
+        "member_of": frozenset({("Person", "Organization")}),
+        "produced_by": frozenset({("Concept", "Project"), ("Concept", "Person")}),
+    }
+    assert expected == edge_typing_mod._DIRECTION_TYPE_SIGNATURES
+
+
+def test_contradicts_object_type_direction_false_for_the_declared_forward_pair() -> (
+    None
+):
+    assert not edge_typing_mod._contradicts_object_type_direction(
+        "member_of", "Person", "Organization"
+    )
+
+
+def test_contradicts_object_type_direction_true_for_the_reversed_pair() -> None:
+    assert edge_typing_mod._contradicts_object_type_direction(
+        "member_of", "Organization", "Person"
+    )
+
+
+def test_contradicts_object_type_direction_false_when_type_undeclared() -> None:
+    """`part_of` has no entry in the table at all -- undeclared relation
+    types pass through unchecked, the same `.get`-style tolerance
+    `_SUBORDINATE_ROLE_MARKERS` already has."""
+    assert not edge_typing_mod._contradicts_object_type_direction(
+        "part_of", "Organization", "Person"
+    )
+
+
+def test_contradicts_object_type_direction_false_when_suggested_type_is_none() -> None:
+    assert not edge_typing_mod._contradicts_object_type_direction(
+        None, "Organization", "Person"
+    )
+
+
+def test_contradicts_object_type_direction_false_when_an_endpoint_type_is_unknown() -> (
+    None
+):
+    """`None` for either endpoint means "cannot check", not "assume the
+    worst" -- a doc this module could not read must never be treated as
+    evidence of an inversion."""
+    assert not edge_typing_mod._contradicts_object_type_direction(
+        "member_of", None, "Organization"
+    )
+    assert not edge_typing_mod._contradicts_object_type_direction(
+        "member_of", "Person", None
+    )
+
+
+def test_contradicts_object_type_direction_false_for_an_undeclared_pair() -> None:
+    """`produced_by` declares (Concept, Project) and (Concept, Person), but
+    NOT (Person, Project) in either order -- a pair absent from the table in
+    BOTH directions must pass through unchecked, not be treated as reversed
+    by elimination."""
+    assert not edge_typing_mod._contradicts_object_type_direction(
+        "produced_by", "Person", "Project"
+    )
+    assert not edge_typing_mod._contradicts_object_type_direction(
+        "produced_by", "Project", "Person"
+    )
+
+
+def test_contradicts_object_type_direction_false_for_same_type_endpoints() -> None:
+    """The load-bearing case (#991): `concepts/nightly-backup-job
+    --[member_of]--> concepts/scheduled-maintenance-jobs` is Concept ->
+    Concept, and this project BLESSES that edge. Because the check only
+    fires on a REVERSED declared pair, same-type endpoints are exempt by
+    construction -- there is no special case to bypass and none should ever
+    be added."""
+    assert not edge_typing_mod._contradicts_object_type_direction(
+        "member_of", "Concept", "Concept"
+    )
+    assert not edge_typing_mod._contradicts_object_type_direction(
+        "produced_by", "Concept", "Concept"
+    )
+
+
+def test_object_type_reads_the_frontmatter_type_field(tmp_path: Path) -> None:
+    (tmp_path / "concepts").mkdir(parents=True)
+    (tmp_path / "concepts" / "a.md").write_text(
+        "---\ntype: Person\ntitle: A\n---\nBody.\n", encoding="utf-8"
+    )
+
+    assert edge_typing_mod._object_type(tmp_path, "concepts/a") == "Person"
+
+
+def test_object_type_is_none_for_a_missing_document(tmp_path: Path) -> None:
+    assert edge_typing_mod._object_type(tmp_path, "concepts/missing") is None
+
+
+def test_object_type_is_none_for_unparseable_frontmatter(tmp_path: Path) -> None:
+    (tmp_path / "concepts").mkdir(parents=True)
+    (tmp_path / "concepts" / "a.md").write_text(
+        "---\ntitle: [unclosed\n---\nbroken\n", encoding="utf-8"
+    )
+
+    assert edge_typing_mod._object_type(tmp_path, "concepts/a") is None
+
+
+def test_object_type_is_none_when_the_field_is_missing_or_not_a_string(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "concepts").mkdir(parents=True)
+    (tmp_path / "concepts" / "no-type.md").write_text(
+        "---\ntitle: A\n---\nBody.\n", encoding="utf-8"
+    )
+    (tmp_path / "concepts" / "numeric-type.md").write_text(
+        "---\ntype: 42\ntitle: A\n---\nBody.\n", encoding="utf-8"
+    )
+
+    assert edge_typing_mod._object_type(tmp_path, "concepts/no-type") is None
+    assert edge_typing_mod._object_type(tmp_path, "concepts/numeric-type") is None
+
+
+def _write_typed_doc(path: Path, *, okf_type: str, title: str = "Stub") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"---\ntype: {okf_type}\ntitle: {title}\n---\nBody.\n", encoding="utf-8"
+    )
+
+
+def test_direction_corrected_edge_swaps_a_reversed_cross_type_pair(
+    tmp_path: Path,
+) -> None:
+    _write_typed_doc(tmp_path / "organizations" / "guild.md", okf_type="Organization")
+    _write_typed_doc(tmp_path / "people" / "dana.md", okf_type="Person")
+    edge = Edge(source_id="organizations/guild", target_id="people/dana")
+
+    corrected = edge_typing_mod._direction_corrected_edge(edge, "member_of", tmp_path)
+
+    assert corrected == Edge(source_id="people/dana", target_id="organizations/guild")
+
+
+def test_direction_corrected_edge_none_for_the_forward_pair(tmp_path: Path) -> None:
+    _write_typed_doc(tmp_path / "people" / "dana.md", okf_type="Person")
+    _write_typed_doc(tmp_path / "organizations" / "guild.md", okf_type="Organization")
+    edge = Edge(source_id="people/dana", target_id="organizations/guild")
+
+    assert (
+        edge_typing_mod._direction_corrected_edge(edge, "member_of", tmp_path) is None
+    )
+
+
+def test_direction_corrected_edge_none_for_same_type_endpoints(tmp_path: Path) -> None:
+    _write_typed_doc(tmp_path / "concepts" / "a.md", okf_type="Concept")
+    _write_typed_doc(tmp_path / "concepts" / "b.md", okf_type="Concept")
+    edge = Edge(source_id="concepts/a", target_id="concepts/b")
+
+    assert (
+        edge_typing_mod._direction_corrected_edge(edge, "member_of", tmp_path) is None
+    )
+
+
+def test_corrected_edge_from_rationale_reads_the_note_as_an_exact_suffix() -> None:
+    """No note -> `None`; note at the end -> swapped; note mid-sentence
+    (substring, not suffix) -> `None` too -- never a substring heuristic."""
+    edge = Edge(source_id="organizations/guild", target_id="people/dana")
+    assert edge_typing_mod.corrected_edge_from_rationale(edge, "plain") is None
+    mid_sentence = "before " + edge_typing_mod.DIRECTION_CORRECTED_NOTE + " after"
+    assert edge_typing_mod.corrected_edge_from_rationale(edge, mid_sentence) is None
+    corrected = edge_typing_mod.corrected_edge_from_rationale(
+        edge, "plain" + edge_typing_mod.DIRECTION_CORRECTED_NOTE
+    )
+    assert corrected == Edge(source_id="people/dana", target_id="organizations/guild")
+
+
+def test_correct_object_type_direction_returns_the_candidate_edge_and_a_correction(
+    tmp_path: Path,
+) -> None:
+    """`_correct_object_type_direction` must NEVER mutate `edge` itself --
+    only the internal wiring's `corrected_edge, suggested_type, rationale`
+    tuple carries the correction (issue #991 second review round:
+    `EdgeSuggestion.edge` is identity, so a function that swapped it would
+    poison every caller keying on it)."""
+    _write_typed_doc(tmp_path / "organizations" / "guild.md", okf_type="Organization")
+    _write_typed_doc(tmp_path / "people" / "dana.md", okf_type="Person")
+    edge = Edge(source_id="organizations/guild", target_id="people/dana")
+
+    corrected_edge, suggested_type, rationale = (
+        edge_typing_mod._correct_object_type_direction(
+            edge, "member_of", "rationale text", tmp_path
+        )
+    )
+
+    assert corrected_edge == Edge(
+        source_id="people/dana", target_id="organizations/guild"
+    )
+    assert suggested_type == "member_of"
+    assert rationale == "rationale text" + edge_typing_mod.DIRECTION_CORRECTED_NOTE
+
+
+def test_correct_object_type_direction_returns_none_correction_for_the_forward_pair(
+    tmp_path: Path,
+) -> None:
+    _write_typed_doc(tmp_path / "people" / "dana.md", okf_type="Person")
+    _write_typed_doc(tmp_path / "organizations" / "guild.md", okf_type="Organization")
+    edge = Edge(source_id="people/dana", target_id="organizations/guild")
+
+    corrected_edge, suggested_type, rationale = (
+        edge_typing_mod._correct_object_type_direction(
+            edge, "member_of", "rationale text", tmp_path
+        )
+    )
+
+    assert corrected_edge is None
+    assert suggested_type == "member_of"
+    assert rationale == "rationale text"
+
+
+def test_correct_object_type_direction_returns_none_correction_for_same_type(
+    tmp_path: Path,
+) -> None:
+    _write_typed_doc(tmp_path / "concepts" / "a.md", okf_type="Concept")
+    _write_typed_doc(tmp_path / "concepts" / "b.md", okf_type="Concept")
+    edge = Edge(source_id="concepts/a", target_id="concepts/b")
+
+    corrected_edge, _suggested_type, rationale = (
+        edge_typing_mod._correct_object_type_direction(
+            edge, "member_of", "rationale text", tmp_path
+        )
+    )
+
+    assert corrected_edge is None
+    assert rationale == "rationale text"
+
+
+def test_edge_suggestion_effective_edge_defaults_to_the_candidate_edge() -> None:
+    edge = Edge(source_id="a", target_id="b")
+
+    suggestion = edge_typing_mod.EdgeSuggestion(
+        edge=edge, suggested_type="references", rationale="mentions it"
+    )
+
+    assert suggestion.corrected_edge is None
+    assert suggestion.effective_edge == edge
+
+
+def test_edge_suggestion_effective_edge_prefers_the_correction() -> None:
+    candidate = Edge(source_id="organizations/guild", target_id="people/dana")
+    corrected = Edge(source_id="people/dana", target_id="organizations/guild")
+
+    suggestion = edge_typing_mod.EdgeSuggestion(
+        edge=candidate,
+        suggested_type="member_of",
+        rationale="mentions it" + edge_typing_mod.DIRECTION_CORRECTED_NOTE,
+        corrected_edge=corrected,
+    )
+
+    assert suggestion.edge == candidate
+    assert suggestion.effective_edge == corrected
+
+
+def test_suggest_edge_types_corrects_a_cross_type_direction_inversion_without_moving_identity(
+    tmp_path: Path,
+) -> None:
+    """Wired end-to-end through the public seam (mirrors #807's own wiring
+    test): a Spanish rationale never trips `_withdraw_contradicted_direction`
+    (English-only, fails closed), but the object-type check still catches
+    the inversion -- this is the whole point of #991.
+
+    `edge` (the CANDIDATE identity `suggest_edge_types` was asked about)
+    must stay `organizations/guild -> people/dana`; only `corrected_edge`
+    (and therefore `effective_edge`) holds the corrected direction (issue
+    #991 second review round: `edge` is what persistence and reassembly
+    key on, and must never be the swapped pair)."""
+    _write_typed_doc(
+        tmp_path / "organizations" / "guild.md",
+        okf_type="Organization",
+        title="Platform Guild",
+    )
+    _write_typed_doc(
+        tmp_path / "people" / "dana.md", okf_type="Person", title="Dana Reyes"
+    )
+    candidate = Edge(source_id="organizations/guild", target_id="people/dana")
+    llm = _FakeLLM(
+        replies=[
+            _valid_reply(
+                "member_of",
+                "Dana Reyes es miembro del Platform Guild.",
+            )
+        ]
+    )
+
+    results = edge_typing_mod.suggest_edge_types(
+        [candidate], bundle_dir=tmp_path, llm=llm
+    ).results
+
+    assert len(results) == 1
+    suggestion = results[0]
+    assert suggestion.suggested_type == "member_of"
+    assert suggestion.edge == candidate
+    assert suggestion.corrected_edge == Edge(
+        source_id="people/dana", target_id="organizations/guild"
+    )
+    assert suggestion.effective_edge == suggestion.corrected_edge
+    assert edge_typing_mod.DIRECTION_CORRECTED_NOTE in suggestion.rationale
+
+
+def test_suggest_edge_types_leaves_a_correct_cross_type_direction_uncorrected(
+    tmp_path: Path,
+) -> None:
+    _write_typed_doc(
+        tmp_path / "people" / "dana.md", okf_type="Person", title="Dana Reyes"
+    )
+    _write_typed_doc(
+        tmp_path / "organizations" / "guild.md",
+        okf_type="Organization",
+        title="Platform Guild",
+    )
+    candidate = Edge(source_id="people/dana", target_id="organizations/guild")
+    llm = _FakeLLM(
+        replies=[_valid_reply("member_of", "Dana Reyes is a member of the guild.")]
+    )
+
+    results = edge_typing_mod.suggest_edge_types(
+        [candidate], bundle_dir=tmp_path, llm=llm
+    ).results
+
+    assert results[0].suggested_type == "member_of"
+    assert results[0].edge == candidate
+    assert results[0].corrected_edge is None
+    assert results[0].effective_edge == candidate
+    assert edge_typing_mod.DIRECTION_CORRECTED_NOTE not in results[0].rationale
+
+
+def test_suggest_edge_types_leaves_a_same_type_member_of_edge_uncorrected(
+    tmp_path: Path,
+) -> None:
+    """The blessed real-bundle case (module docstring): a Concept ->
+    Concept `member_of` edge must never be corrected, no matter how the
+    rationale reads."""
+    _write_typed_doc(
+        tmp_path / "concepts" / "nightly-backup-job.md",
+        okf_type="Concept",
+        title="Nightly Backup Job",
+    )
+    _write_typed_doc(
+        tmp_path / "concepts" / "scheduled-maintenance-jobs.md",
+        okf_type="Concept",
+        title="Scheduled Maintenance Jobs",
+    )
+    candidate = Edge(
+        source_id="concepts/nightly-backup-job",
+        target_id="concepts/scheduled-maintenance-jobs",
+    )
+    llm = _FakeLLM(
+        replies=[
+            _valid_reply(
+                "member_of",
+                "The Scheduled Maintenance Jobs is a member of the Nightly Backup Job.",
+            )
+        ]
+    )
+
+    results = edge_typing_mod.suggest_edge_types(
+        [candidate], bundle_dir=tmp_path, llm=llm
+    ).results
+
+    assert results[0].edge == candidate
+    assert results[0].corrected_edge is None
+    assert results[0].effective_edge == candidate
+
+
+def test_english_prose_withdrawal_runs_before_and_preempts_the_type_check(
+    tmp_path: Path,
+) -> None:
+    """Ordering: `_withdraw_contradicted_direction` runs FIRST. When it
+    degrades a self-contradicting reply to `related_to`, the object-type
+    check never gets a chance to fire -- `related_to` is not a key in
+    `_DIRECTION_TYPE_SIGNATURES`, so this is actually automatic, but the
+    wiring test pins the observable behavior: the note is #807's WITHDRAWN
+    note, never #991's CORRECTED one, and `corrected_edge` stays `None`."""
+    _write_typed_doc(
+        tmp_path / "organizations" / "guild.md",
+        okf_type="Organization",
+        title="Platform Guild",
+    )
+    _write_typed_doc(
+        tmp_path / "people" / "dana.md", okf_type="Person", title="Dana Reyes"
+    )
+    candidate = Edge(source_id="organizations/guild", target_id="people/dana")
+    llm = _FakeLLM(
+        replies=[
+            _valid_reply(
+                "member_of",
+                "Dana Reyes is a member of the Platform Guild.",
+            )
+        ]
+    )
+
+    results = edge_typing_mod.suggest_edge_types(
+        [candidate], bundle_dir=tmp_path, llm=llm
+    ).results
+
+    assert results[0].suggested_type == "related_to"
+    assert edge_typing_mod.DIRECTION_WITHDRAWN_NOTE in results[0].rationale
+    assert edge_typing_mod.DIRECTION_CORRECTED_NOTE not in results[0].rationale
+    assert results[0].edge == candidate
+    assert results[0].corrected_edge is None
+
+
 # --- issue #841: quarantined_candidate_notice ------------------------------
 
 
