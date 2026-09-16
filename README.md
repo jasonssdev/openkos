@@ -114,13 +114,15 @@ The wedge, in one line: **the local-first, personal producer-consumer-runtime fo
 
 ## Roadmap at a glance
 
-OpenKOS ships in three MVP arcs, each usable on its own. Full detail in [`docs/roadmap.md`](https://github.com/jasonssdev/openkos/blob/main/docs/roadmap.md).
+OpenKOS ships in five MVP arcs, each usable on its own. Full detail in [`docs/roadmap.md`](https://github.com/jasonssdev/openkos/blob/main/docs/roadmap.md).
 
 - **MVP 1 — The Compiler. (Complete.)** The Karpathy loop, locally, over text: ingest → OKF concepts with provenance → cited query → freshness lint. Useful in an afternoon.
 - **MVP 2 — The Graph and Memory. (Complete.)** Entity/relationship extraction and reversible merge, a typed knowledge graph (an OpenKOS layer over OKF's untyped links — other tools still read the bundle fine), hybrid retrieval (lexical and semantic, rank-fused), contradiction detection with durable verdicts (findings persist, so a repeat check costs no model calls, and `reconcile` records how you settled each one), a fail-closed sensitivity filter (confidential concepts never leave the machine — held back from any backend that is not verifiably local), a guided curation loop, reference-aware `forget` plus an irreversible `purge` (right-to-be-forgotten), and answers that file back into the base (the two-output rule).
-- **MVP 3 — The Runtime and Interoperability.** An MCP server and APIs so agents use OpenKOS as durable memory; full OKF import/export with the wider ecosystem.
+- **MVP 3 — The Ask Surface. (In progress.)** Reading the bundle already needs no terminal — it opens as an Obsidian vault as-is. This arc adds asking: application services for the read verbs, a stable Python API, and an MCP server (`query`, `get`, `navigate`, what is pending) gated on sensitivity, so a chat client you already have becomes the interface.
+- **MVP 4 — The Unattended Engine.** A background runtime, folder watch, and scheduled maintenance: the engine runs the non-consequential work and queues the consequential decisions instead of asking you to remember them.
+- **MVP 5 — Interoperability.** Full OKF export, then import, so knowledge moves in and out of the wider ecosystem without losing its structure.
 
-Beyond that: a desktop app, graph visualization, richer memory, and federation — explored only after the MVPs prove out with real users.
+Beyond that: a local REST API, memory projections, a desktop app, graph visualization, and federation — explored only after the MVPs prove out with real users.
 
 ## Documentation
 

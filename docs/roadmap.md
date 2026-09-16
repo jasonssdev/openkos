@@ -1,7 +1,7 @@
 ---
 type: Roadmap
 title: OpenKOS Roadmap
-description: A ship-first roadmap organized as three MVP arcs plus an explicit, non-committed horizon.
+description: A ship-first roadmap organized as five MVP arcs plus an explicit, non-committed horizon.
 tags:
   - roadmap
   - mvp
@@ -80,11 +80,13 @@ Where the community can contribute: extraction strategies, relation vocabularies
 
 ---
 
-## MVP 3 — The Runtime and Interoperability
+## MVP 3 — The Ask Surface
 
-*Goal: make OpenKOS a first-class knowledge substrate for AI agents, and a good citizen of the OKF ecosystem.*
+*Goal: a user who never opens a terminal can ask the base a question and see what it is waiting on.*
 
-MVP 3 exposes the knowledge base to agents and to the wider world of OKF-speaking tools.
+**Status: in progress — both prerequisites below have shipped.**
+
+MVP 3 gives the bundle a second surface. Reading it without a terminal is already solved: `bundle/` opens directly as an Obsidian vault, with links that resolve, a graph view over the typed edges, and OKF frontmatter rendered as properties — no plugin, and no configuration shipped by us ([ADR-0019](adr/0019-dot-directories-are-not-knowledge.md), [#981](https://github.com/jasonssdev/openkos/issues/981)–[#984](https://github.com/jasonssdev/openkos/issues/984), closed). What remains terminal-only is *asking* and *deciding*. MCP closes that gap without a frontend: an MCP-speaking chat client becomes the interface, so humans and agents address one surface instead of two that have to be kept in agreement.
 
 **Onboarding hardening — shipped ([#128](https://github.com/jasonssdev/openkos/issues/128), closed).** The free-text model prompt in `openkos init` was replaced with a selection list over the chat models actually installed on the local Ollama server, with the recommended default marked, plus type-checking `model` on config read, rejecting YAML-reserved words in `validate_model`, and having `doctor` report a failed check instead of raising. `openkos --version` ([#181](https://github.com/jasonssdev/openkos/issues/181), closed) then closed the last gap in that area, so a user can tell which build they are running.
 
@@ -113,19 +115,69 @@ It now is, in two stores with deliberately opposite policies ([ADR-0014](adr/001
 
 The principle is the one above taken a step further: work the engine has already done on the user's behalf should not have to be done twice because nobody wrote it down.
 
+### Why this arc was split
+
+MVP 3 was originally scoped as *The Runtime and Interoperability*: one arc holding an MCP server, a stable API, a local REST API, scheduled maintenance loops, full OKF import/export, sensitivity enforcement, memory projections, and third-party extension points. That is three audiences and three unrelated risks in a single arc, which makes it impossible to say what "done" means or who it is done for. It is now three arcs, each with one audience and one risk.
+
+Two measurements set the boundaries, rather than taste:
+
+- **Reading without a terminal was already solved, and cost nothing.** The capability had been claimed in the docs for months and never tested; verifying it took two minutes. That narrows this arc rather than filling it — a "nicer interface" is not a frontend project, because the remaining gap is asking and deciding, not reading.
+- **No thin adapter is possible today.** `openkos.cli.main` is roughly 16,000 lines across 27 commands, against roughly 4,400 lines in `application/`, which covers ingest, query, and lifecycle only. The read verbs — `status`, `list`, navigation — have no application service behind them. An MCP server written against the code as it stands would either reimplement them or import Typer. Extracting them is prerequisite zero, not a cleanup.
+
+Two edges of the original arc move out on the same reasoning. A local **REST API** goes to the horizon, because MCP already answers the question REST was there to answer, and a second network surface doubles the trust boundary for no user we can name. **Memory projections** go with it: they are a research direction, not a deliverable with someone waiting on it.
+
 Deliverables:
 
-- An MCP server exposing the bundle as tools (query, get, navigate) any compatible agent can call
-- A stable Python API, CLI, and a local REST API
-- Agent-assisted maintenance loops — scheduled lint, reconcile, and synthesis passes, kept human-in-the-loop
-- Full OKF import/export: consume bundles produced by other tools (including Google's reference producers) and export yours for others to consume
-- Sensitivity enforcement at trust boundaries — confidential objects are never sent to cloud models and are excluded from exports and sharing
-- Opt-in memory projections over the graph (episodic, semantic, procedural)
+- **Application services for the read verbs** — `status`, `list`, and navigation lifted out of the CLI, so that a second adapter is a thin layer over shared cores rather than a second implementation of them
+- **A stable Python API**, which falls out of the above as the surface those services present
+- **An MCP server** exposing the bundle as tools any compatible agent can call: `query`, `get`, `navigate`, and *what is pending* — the last of which is answerable only because durable pending work shipped first
+- **Sensitivity enforcement at the MCP boundary.** The egress gate already covering embeddings ([#922](https://github.com/jasonssdev/openkos/issues/922), closed) extends to every tool response, so confidential objects do not leave through the new surface
+- **Two ADRs before code**: the sync/async boundary, and concurrency across a human in an editor, an agent over MCP, and (from MVP 4) a daemon. The interprocess lock shipped for concurrent `openkos` processes ([#925](https://github.com/jasonssdev/openkos/issues/925), closed) makes those processes safe with respect to each other; it says nothing about those three writers
+
+What a user can do after MVP 3: ask their knowledge base questions from a chat client they already have, see what the base is waiting on, and read and edit the answer in Obsidian — without a terminal.
+
+Where the community can contribute: MCP integrations, client configurations, and read-side tools.
+
+---
+
+## MVP 4 — The Unattended Engine
+
+*Goal: the engine carries the work it can carry, and queues only the work a human should decide.*
+
+**Status: not started.**
+
+MVP 3 gives the base a second surface; it does not reduce what the base asks of its user. Every maintenance pass is still an invocation someone has to remember, and the output of that pass is a list of tasks. The philosophy commits to the engine reducing *cognitive maintenance* while leaving *cognitive responsibility* with the human. This arc enforces that line in the engine's own operation.
+
+Deliverables:
+
+- A job substrate and a background runtime
+- Folder watch — a source dropped in is ingested without an invocation
+- Scheduled maintenance: lint, reconcile, and findings passes on a timer, kept human-in-the-loop
+- **An explicit rule for what runs unattended and what queues.** The engine performs the non-consequential (`ingest`, `reindex`, `lint`, computing findings) and *enqueues* the consequential (merges, forgets, relation confirmations) as durable pending work — which `.openkos/findings.db` and `bundle/.state/decisions/` already exist to hold
+- **A measurement of how much of the curation queue is mechanical.** A four-source ingest produced nine unresolved duplicate groups, a good share of them entities the engine had itself disambiguated. If the engine can disambiguate, the fraction it could also reconcile is a number worth having before automating anything on top of the queue
+
+What a user can do after MVP 4: leave OpenKOS running, drop sources into a folder, and find the base current — with a short queue holding only the decisions that were genuinely theirs.
+
+Where the community can contribute: schedulers, watch backends, and reconciliation heuristics.
+
+---
+
+## MVP 5 — Interoperability
+
+*Goal: exchange knowledge with any OKF-speaking tool.*
+
+**Status: not started.**
+
+Deliverables:
+
+- **OKF export first.** The bundle is already OKF-conformant, so export is the cheap half — and it is what first makes our conformance claim testable by somebody else
+- **OKF import second.** Consuming bundles produced by other tools, including Google's reference producers, is cross-bundle entity resolution. It is an arc of work in its own right, not the mirror image of export
+- Sensitivity enforcement at the export boundary — confidential objects excluded from exports and sharing
 - Extension points for third-party producers and consumers
 
-What a user can do after MVP 3: wire OpenKOS into their AI agents as durable memory, exchange knowledge with any OKF tool, and let the base maintain itself on a schedule with review.
+What a user can do after MVP 5: move knowledge in and out of OpenKOS without losing its structure, and extend it with their own producers and consumers.
 
-Where the community can contribute: MCP integrations, interop adapters, memory strategies, and agent workflows.
+Where the community can contribute: interop adapters, producers, and consumers.
 
 ---
 
@@ -133,6 +185,8 @@ Where the community can contribute: MCP integrations, interop adapters, memory s
 
 These are promising directions we intend to explore *after* the MVPs prove out with real users. They are listed for transparency and to invite discussion, not as promises:
 
+- A local REST API, if a consumer appears that MCP cannot serve
+- Opt-in memory projections over the graph (episodic, semantic, procedural)
 - A desktop application and graphical knowledge explorer
 - Interactive graph visualization and memory browsing
 - A richer, configurable memory engine
