@@ -94,12 +94,11 @@ extraction, which moves that concern here alongside the read it gates)."""
 @dataclass(frozen=True)
 class StatusOverview:
     """The cheap, already-guarded reads `status` needs before it prints its
-    first line -- deliberately kept separate from `StatusReport` (see
-    module docstring) so the CLI adapter can render the workspace header,
-    `Bundle contents:`, and `Recent activity:` from THIS result before
-    calling `build_status_report`, whose reads are unguarded and may raise
-    on a damaged workspace. Frozen for the same reason as `StatusReport`:
-    a `list` field on a frozen dataclass is still mutable in place."""
+    first line -- deliberately kept separate from `StatusReport`; see the
+    module docstring for why that split and its calling order are
+    load-bearing, not incidental. Frozen for the same reason as
+    `StatusReport`: a `list` field on a frozen dataclass is still mutable
+    in place."""
 
     survey: okf.BundleSurvey
     """Source/concept counts and §9 conformance findings from ONE
@@ -123,13 +122,12 @@ class StatusOverview:
 @dataclass(frozen=True)
 class StatusReport:
     """Every OTHER raw fact `status` reads -- everything `read_status_overview`
-    does not already cover -- gathered by `build_status_report`, which the
-    CLI adapter calls only AFTER rendering `StatusOverview` (see module
-    docstring for why that ordering is the whole point: these reads are
-    unguarded and must never be allowed to swallow the sections above).
-    Every collection field is a `tuple`, never a `list`: the dataclass is
-    frozen, and a `list` field on a frozen dataclass is still mutable in
-    place, which would defeat the point of freezing it."""
+    does not already cover -- gathered by `build_status_report`, called only
+    AFTER `StatusOverview` is rendered; see the module docstring for why
+    that calling order is the whole point. Every collection field is a
+    `tuple`, never a `list`: the dataclass is frozen, and a `list` field on
+    a frozen dataclass is still mutable in place, which would defeat the
+    point of freezing it."""
 
     dangling: tuple[lint_check.LintFinding, ...]
     """Dangling-reference findings (#141)."""
@@ -295,25 +293,25 @@ def contradiction_finding_counts(layout: config.WorkspaceLayout) -> tuple[int, i
 
 def read_status_overview(layout: config.WorkspaceLayout) -> StatusOverview:
     """Gather ONLY the cheap, already-guarded reads `status` needs before it
-    can render anything, WITHOUT rendering a single line itself (see module
-    docstring for why this is split from `build_status_report` rather than
-    folded into it).
+    can render anything, WITHOUT rendering a single line itself. This is
+    deliberately the FIRST call the CLI adapter makes, ahead of
+    `build_status_report`; see the module docstring for why that split and
+    calling order are load-bearing, not incidental (review findings
+    R3-partial-output-on-read-failure / R4-status-no-partial-output).
 
-    This is deliberately the FIRST call the CLI adapter makes: `status` is
-    the diagnostic verb people reach for on a broken workspace, so the
-    workspace header, `Bundle contents:`, and `Recent activity:` sections
-    it renders from this result must survive a later, unguarded read
-    raising (a corrupt bundle doc, an unreadable `graph.db`) -- exactly the
-    partial-output behaviour the pre-#995 interleaved command body had, and
-    which hoisting every read into one function silently erased (review
-    findings R3-partial-output-on-read-failure /
-    R4-status-no-partial-output).
-
-    Never raises: `okf.survey_bundle` degrades a malformed/unreadable
-    document into a finding on the returned survey rather than propagating,
-    and the ONE other read here, `log.md`, is explicitly guarded
-    (`except (OSError, ValueError)` -> `recent_entries = None`, D5's
-    lenient degrade)."""
+    This function's own guarantee is narrower than "never raises": the
+    `log.md` read is the ONE read explicitly guarded here (`except (OSError,
+    ValueError)` -> `recent_entries = None`, D5's lenient degrade). The
+    `okf.survey_bundle` call above it is NOT guarded by this function --
+    there is no `try` around it. What makes that call safe in practice is
+    `survey_bundle`'s OWN contract (a malformed or unreadable document
+    degrades to a finding on the returned survey rather than raising; see
+    its docstring), not anything this function does. If that contract were
+    ever violated, the exception would propagate straight out of this FIRST
+    call, uncaught here and uncaught by `status()`'s own body -- before the
+    workspace header, `Bundle contents:`, or `Recent activity:` reach
+    stdout. An operator would see a raw traceback and no output at all: the
+    one partial-output failure mode this split does not protect against."""
     survey = okf.survey_bundle(layout.bundle_dir)
 
     try:
@@ -331,19 +329,15 @@ def build_status_report(layout: config.WorkspaceLayout) -> StatusReport:
     """Gather every OTHER fact `status` reports -- everything
     `read_status_overview` does not already cover -- performing each read
     the pre-extraction command body performed, in the same order, with the
-    same degrade behaviour, but WITHOUT rendering a single line (see module
-    docstring).
+    same degrade behaviour, but WITHOUT rendering a single line. Deliberately
+    the SECOND call the CLI adapter makes; see the module docstring for why.
 
-    This is deliberately the SECOND call the CLI adapter makes, only after
-    it has already rendered `read_status_overview`'s result: every read
-    below is UNGUARDED (`lint.collect_docs` and its eight checks, the
-    exact-title/contradiction counts, `vector_store_is_empty`,
-    `build_graph`), so a damaged workspace can raise here -- which is
-    exactly why the cheap, already-safe reads live in a separate function
-    the CLI calls and renders first, rather than here. Never raises beyond
-    what these reads themselves would raise uncaught in the original body:
-    every read here is exactly as fallible, and exactly as unguarded, as it
-    was inline in `cli.main.status` before this extraction."""
+    Every read below is UNGUARDED (`lint.collect_docs` and its eight
+    checks, the exact-title/contradiction counts, `vector_store_is_empty`,
+    `build_graph`): this function never raises beyond what these reads
+    themselves would raise uncaught in the pre-extraction body -- exactly
+    as fallible, and exactly as unguarded, as they were inline in
+    `cli.main.status` before this extraction."""
     # #141: dangling-reference findings are knowledge-health (lint)
     # vocabulary, not OKF conformance -- `survey_bundle` never computes
     # them, so this reads `lint`'s own `collect_docs` + the checks below
