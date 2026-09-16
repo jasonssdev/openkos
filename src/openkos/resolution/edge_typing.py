@@ -252,7 +252,16 @@ class EdgeSuggestion:
     Ephemeral -- never a persisted OKF type or `bundle`/`state` file."""
 
     edge: Edge
-    """The untyped edge this suggestion corresponds to."""
+    """The CANDIDATE edge this suggestion answers for -- the untyped pair
+    `suggest_edge_types` was actually asked about, in the direction the
+    graph projection presented it. This is the suggestion's IDENTITY:
+    `state.edge_suggestions.pair_key_for` and `cli.main.
+    _reassemble_edge_suggestions` key on it, so it is NEVER mutated to hold
+    a corrected/swapped pair -- doing so would silently record or serve a
+    verdict for "b -> a" under "a -> b"'s key, exactly what
+    `state.edge_suggestions`'s "Direction is identity" invariant forbids
+    (issue #991, second review round). A correction is carried separately,
+    in `corrected_edge`."""
     suggested_type: str | None
     """A value accepted by `validate_relation_type`, or `None` on a
     fail-closed degrade (malformed reply, unparseable type, or a type that
@@ -260,6 +269,24 @@ class EdgeSuggestion:
     rationale: str
     """Free-text explanation; may be blank on a well-formed reply that
     omitted one, but is never blank on the fail-closed degrade paths."""
+    corrected_edge: Edge | None = None
+    """`None` unless the object-type direction-signature check (#991)
+    found `suggested_type`'s direction reversed against `edge`'s
+    endpoints, in which case this holds the swapped `(source_id,
+    target_id)` pair the type actually holds in -- the disclosure
+    `DIRECTION_CORRECTED_NOTE` already appended to `rationale`, made
+    structured instead of prose-only.
+
+    Any surface that RENDERS or WRITES this suggestion's direction must
+    read `effective_edge`, never `edge` alone -- `edge` stays the
+    candidate identity even when corrected."""
+
+    @property
+    def effective_edge(self) -> Edge:
+        """The edge to RENDER or WRITE: `corrected_edge` when the
+        direction was corrected, `edge` (the candidate) otherwise. Never
+        use this for identity or keying -- see `edge`'s own docstring."""
+        return self.corrected_edge if self.corrected_edge is not None else self.edge
 
 
 @dataclass(frozen=True)
@@ -631,6 +658,199 @@ def _withdraw_contradicted_direction(
     return LEAST_SPECIFIC_RELATION_TYPE, rationale + DIRECTION_WITHDRAWN_NOTE
 
 
+_DIRECTION_TYPE_SIGNATURES: Final[dict[str, frozenset[tuple[str, str]]]] = {
+    "member_of": frozenset({("Person", "Organization")}),
+    "produced_by": frozenset({("Concept", "Project"), ("Concept", "Person")}),
+}
+"""A second, deterministic direction check for asymmetric relation types,
+keyed on the ENDPOINTS' OBJECT TYPES (`model.types.REGISTRY`) rather than
+on the model's rationale prose (issue #991).
+
+`_withdraw_contradicted_direction` (#807) already catches an inversion by
+reading the rationale for an English subordinate-role marker, and that rule
+is measured to fail closed on anything else -- a Spanish corpus produces
+zero detections from it. Object types are read straight from each
+endpoint's own frontmatter `type:` field (`_object_type`), so this check is
+language-independent by construction: it has nothing to parse.
+
+Each value is the set of ORDERED legal `(subordinate_type,
+superordinate_type)` pairs for that relation type -- SOURCE must be the
+first element, matching `_SUBORDINATE_ROLE_MARKERS`'s own docstring ("All
+five put the subordinate role on SOURCE"). `_contradicts_object_type_
+direction` fires ONLY when the pair in hand is the REVERSE of a declared
+pair, never when it merely fails to match one -- a pair this table has no
+opinion about (including two endpoints of the SAME type) passes through
+completely unchecked, by construction, not by an added same-type guard.
+
+That is load-bearing: the project ships `concepts/nightly-backup-job
+--[member_of]--> concepts/scheduled-maintenance-jobs`, a Concept -> Concept
+edge a domain/range REJECTION rule keyed on Person -> Organization would
+have to either reject or special-case. Because this is a REVERSED-pair
+check rather than a membership check, `(Concept, Concept)` is in neither
+direction of any declared set, so the edge is exempt with no special case
+required -- and none should ever be added: doing so would reintroduce the
+domain/range hazard #991 explicitly asks NOT to build.
+
+Declared pairs are hand-picked and deliberately MINIMAL -- grounded in what
+the fixture corpus and the rubric's own confusions actually exercise
+(`evals/edge_typing/fixtures.py`'s #990 cross-type additions), not every
+combination the vocabulary could theoretically support:
+
+- `member_of`: (Person, Organization) -- a person is one of an
+  organization's members (`people/dana-reyes` -> `organizations/platform-
+  guild`). No other cross-type `member_of` pairing is exercised anywhere in
+  this codebase's fixtures or rubric, so none else is declared.
+- `produced_by`: (Concept, Project) -- a document-shaped Concept is an
+  artifact a Project produced (`concepts/sampling-policy` ->
+  `projects/telemetry-rewrite`); (Concept, Person) -- a document-shaped
+  Concept authored by a Person (`concepts/escalation-ladder` ->
+  `people/marcus-oyelaran`).
+
+`part_of`, `depends_on`, and `caused_by` have no cross-type fixture or
+rubric example -- every occurrence pairs two `Concept`s -- so none is
+declared for them either: an undeclared relation type passes through
+unchecked, the same `.get`-style tolerance `_SUBORDINATE_ROLE_MARKERS`
+already has. A type or pair belongs here only once a real cross-type case
+grounds it; adding one preemptively is how a rejection rule sneaks back in
+through the door #991 closed."""
+
+
+def _object_type(bundle_dir: Path, concept_id: str) -> str | None:
+    """Read `concept_id`'s OKF `type:` frontmatter field under `bundle_dir`,
+    or `None` on any unreadable/unparseable/missing/non-string case (mirrors
+    `_load_doc`'s fail-closed-to-nothing shape, narrowed to one field).
+
+    `None` is a deliberate "unknown", not a guess: `_contradicts_object_
+    type_direction` treats it as "cannot check", which passes the edge
+    through unchecked rather than raising or defaulting to a type that
+    would silently mis-classify it."""
+    try:
+        text = okf.concept_path_for(concept_id, bundle_dir).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    try:
+        metadata, _ = okf.load_frontmatter(text)
+    except Exception:  # broad: any parse failure -> unknown type, never raises
+        return None
+    type_value = metadata.get("type")
+    return type_value if isinstance(type_value, str) and type_value else None
+
+
+def _contradicts_object_type_direction(
+    suggested_type: str | None,
+    source_type: str | None,
+    target_type: str | None,
+) -> bool:
+    """Whether `(source_type, target_type)` is the REVERSE of a declared
+    legal pair for `suggested_type` (issue #991).
+
+    Three-way fail-closed: `None` for `suggested_type` (nothing suggested),
+    an undeclared `suggested_type` (`_DIRECTION_TYPE_SIGNATURES.get`), or an
+    unknown endpoint type (`_object_type` degraded to `None`) all return
+    `False` -- "cannot check" is not evidence of an inversion. A pair that
+    is simply ABSENT from the declared set in EITHER direction also returns
+    `False`: this is a reversed-pair check, not a membership check, so a
+    pair this table has no opinion about (same-type endpoints included) is
+    exempt by construction rather than by an added guard (see the table's
+    own docstring)."""
+    if suggested_type is None or source_type is None or target_type is None:
+        return False
+    legal_pairs = _DIRECTION_TYPE_SIGNATURES.get(suggested_type)
+    if not legal_pairs or (source_type, target_type) in legal_pairs:
+        return False
+    return (target_type, source_type) in legal_pairs
+
+
+DIRECTION_CORRECTED_NOTE: Final = (
+    " [openkos: source and target were swapped -- the endpoints' object "
+    "types name the reverse of this relation type's direction (issue #991)]"
+)
+"""Appended to a rationale whose direction this module corrected (mirrors
+`DIRECTION_WITHDRAWN_NOTE`'s shape and purpose), so the operator reviewing
+the suggestion sees why `EdgeSuggestion.effective_edge` is not
+`EdgeSuggestion.edge`.
+
+Unlike `DIRECTION_WITHDRAWN_NOTE`, nothing is downgraded here: the relation
+TYPE is kept, because the object types positively confirm which direction
+it holds in -- this check has evidence the #807 prose check does not."""
+
+
+def _direction_corrected_edge(
+    edge: Edge, suggested_type: str | None, bundle_dir: Path
+) -> Edge | None:
+    """The swapped `Edge` if the object-type direction-signature check
+    (#991) finds `suggested_type`'s direction reversed against `edge`'s
+    CURRENT endpoints, `None` otherwise. FRESH-computation only: `_object_
+    type` degrades on any read failure, so this answer is a function of
+    the ENVIRONMENT, not just file content, and must never be re-run later
+    to "confirm" itself (R4 review round) -- see `corrected_edge_from_
+    rationale`, the frozen record a served replay reads instead."""
+    source_type = _object_type(bundle_dir, edge.source_id)
+    target_type = _object_type(bundle_dir, edge.target_id)
+    if not _contradicts_object_type_direction(suggested_type, source_type, target_type):
+        return None
+    return Edge(
+        source_id=edge.target_id,
+        target_id=edge.source_id,
+        relation_type=edge.relation_type,
+    )
+
+
+def corrected_edge_from_rationale(edge: Edge, rationale: str) -> Edge | None:
+    """The swapped `Edge` if `rationale` ends with `DIRECTION_CORRECTED_
+    NOTE`, `None` otherwise -- reconstructs a SERVED suggestion's
+    correction from the PERSISTED rationale, never by re-reading the
+    bundle (#991 R4 review round). The note IS the stored decision; reading
+    it back keeps direction and disclosure as one frozen answer instead of
+    two reads that can disagree. Exact suffix match, never a substring
+    heuristic: the note is always appended, never authored by the model."""
+    if not rationale.endswith(DIRECTION_CORRECTED_NOTE):
+        return None
+    return Edge(
+        source_id=edge.target_id,
+        target_id=edge.source_id,
+        relation_type=edge.relation_type,
+    )
+
+
+def _correct_object_type_direction(
+    edge: Edge,
+    suggested_type: str | None,
+    rationale: str,
+    bundle_dir: Path,
+) -> tuple[Edge | None, str | None, str]:
+    """Compute the object-type direction-signature correction (issue #991)
+    for one freshly-typed edge: `(corrected_edge, suggested_type,
+    rationale)`, where `corrected_edge` is `_direction_corrected_edge`'s
+    result and `rationale` gains `DIRECTION_CORRECTED_NOTE` when that
+    result is not `None`. The ONE call that reads the bundle for this.
+
+    Returns `corrected_edge`, NEVER a mutated `edge` -- `EdgeSuggestion.
+    edge` is the CANDIDATE identity (the question that was asked) and must
+    stay exactly that no matter what this function finds, because the
+    persistence and reassembly seams key on it (`state.edge_suggestions`'s
+    "Direction is identity" invariant). `EdgeSuggestion.corrected_edge`
+    carries the correction as separate, explicit state instead.
+
+    Ordering (`suggest_edge_types`): this runs AFTER
+    `_withdraw_contradicted_direction`. The English-prose check (#807)
+    already degrades a self-contradicting reply to `related_to` before this
+    one ever runs, and `related_to` has no entry in
+    `_DIRECTION_TYPE_SIGNATURES`, so a reply the prose check withdrew is
+    automatically a no-op here. A reply this check DOES act on is therefore
+    necessarily one the prose check either could not read (non-English, its
+    documented blind spot) or found internally consistent (a fluent but
+    factually reversed argument) -- this is the second, language-
+    independent net under that first one, not a competitor to it: running
+    it first would risk correcting an edge whose rationale is about to be
+    withdrawn to `related_to` anyway, leaving a correction attached to an
+    abstention that names neither."""
+    corrected_edge = _direction_corrected_edge(edge, suggested_type, bundle_dir)
+    if corrected_edge is None:
+        return None, suggested_type, rationale
+    return corrected_edge, suggested_type, rationale + DIRECTION_CORRECTED_NOTE
+
+
 def suggest_edge_types(
     edges: Sequence[Edge],
     *,
@@ -647,6 +867,12 @@ def suggest_edge_types(
     Returns an `EdgeSuggestionBatch` whose `results` hold exactly one
     `EdgeSuggestion` per COMPLETED edge, in input order -- one `llm.chat`
     call per edge (module docstring); this function never filters EDGES.
+
+    Every completed reply is run through TWO direction checks, in order:
+    `_withdraw_contradicted_direction` (#807, reads the rationale prose,
+    English-only) then `_correct_object_type_direction` (#991, reads the
+    endpoints' OKF object types, language-independent) -- see the latter's
+    docstring for why that order and not the reverse.
 
     An `OllamaError`-family exception raised by `llm.chat` stops the loop
     and comes back IN the batch (`failure` set, `failed_index` naming the
@@ -720,8 +946,14 @@ def suggest_edge_types(
         suggested_type, rationale = _withdraw_contradicted_direction(
             suggested_type, rationale, src_doc, tgt_doc
         )
+        corrected_edge, suggested_type, rationale = _correct_object_type_direction(
+            edge, suggested_type, rationale, bundle_dir
+        )
         suggestion = EdgeSuggestion(
-            edge=edge, suggested_type=suggested_type, rationale=rationale
+            edge=edge,
+            suggested_type=suggested_type,
+            rationale=rationale,
+            corrected_edge=corrected_edge,
         )
         results.append(suggestion)
         if on_progress is not None:

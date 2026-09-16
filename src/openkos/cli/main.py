@@ -99,6 +99,7 @@ from openkos.resolution.edge_typing import (
     EdgeSuggestionBatch,
     candidate_edges,
     candidate_truncation_notice,
+    corrected_edge_from_rationale,
     next_candidate_offset,
     quarantined_candidate_notice,
     suggest_edge_types,
@@ -11820,7 +11821,13 @@ def _run_suggest_relations_apply(
     declined: list[str] = []
 
     for result in results:
-        edge = result.edge
+        # `effective_edge`, not `edge` (#991 second review round): this is
+        # the WRITE path, so the direction that reaches `prepare_relate`
+        # (and therefore the bundle) must be the corrected one when the
+        # object-type direction-signature check found one -- `edge` itself
+        # stays the candidate identity, unswapped, for persistence and
+        # reassembly.
+        edge = result.effective_edge
         if result.suggested_type is None:
             typer.echo(f"[?] {edge.source_id} -> {edge.target_id}")
             typer.echo("  note: no valid type suggested")
@@ -12219,8 +12226,12 @@ def suggest_relations_cmd(
             return
 
     def _on_progress(index: int, count: int, suggestion: EdgeSuggestion) -> None:
-        """Per-edge progress line to stderr (keeps stdout the clean report)."""
-        edge = suggestion.edge
+        """Per-edge progress line to stderr (keeps stdout the clean report).
+
+        `effective_edge`, not `edge` (#991 second review round): this
+        renders the direction the type actually holds in, honoring a
+        correction the same way every other rendering surface does."""
+        edge = suggestion.effective_edge
         label = suggestion.suggested_type or "?"
         typer.echo(
             f"  [{index}/{count}] {edge.source_id} -> {edge.target_id}  [{label}]",
@@ -12290,7 +12301,11 @@ def suggest_relations_cmd(
         _run_suggest_relations_apply(root, layout, results)
     else:
         for result in results:
-            edge = result.edge
+            # `effective_edge`, not `edge` (#991 second review round): the
+            # candidate identity `edge` stays fixed for persistence/
+            # reassembly, but this listing must show the direction the
+            # type actually holds in.
+            edge = result.effective_edge
             if result.suggested_type is None:
                 typer.echo(f"[?] {edge.source_id} -> {edge.target_id}")
                 typer.echo("  note: no valid type suggested")
@@ -12931,7 +12946,15 @@ def _reassemble_edge_suggestions(
     it AND the model typed it anyway, which the caller's own flow makes
     impossible, so the precedence is a tiebreak that should never fire
     rather than a policy. Ordering follows `edges` so a served suggestion
-    and a fresh one are indistinguishable downstream."""
+    and a fresh one are indistinguishable downstream.
+
+    Keyed on `result.edge`, deliberately NOT `effective_edge` (#991 second
+    review round): `edges` (this function's other argument, the candidate
+    set) is always in CANDIDATE direction, and a direction-corrected fresh
+    result's `edge` stays the candidate too -- only `corrected_edge`
+    differs -- so this lookup matches. Keying on `effective_edge` instead
+    would silently drop every corrected suggestion: its swapped pair would
+    never match a candidate key in `edges`."""
     fresh_by_key = {
         edge_suggestions_store.pair_key_for(
             result.edge.source_id, result.edge.target_id
@@ -13025,10 +13048,14 @@ def _partition_edge_suggestion_serves(
         except ValueError:
             to_type.append(edge)
             continue
+        # #991 R4: reconstructed from the PERSISTED rationale, never by
+        # re-reading the bundle -- a re-read can fail transiently and
+        # disagree with the disclosure already frozen at fresh time.
         served[key] = EdgeSuggestion(
             edge=edge,
             suggested_type=stored.suggested_type,
             rationale=stored.rationale,
+            corrected_edge=corrected_edge_from_rationale(edge, stored.rationale),
         )
     return EdgeSuggestionServes(served, to_type, store_read=True)
 
@@ -13057,6 +13084,12 @@ def _persist_edge_suggestions(
     for result in results:
         if result.suggested_type is None:
             continue
+        # `result.edge`, deliberately NOT `effective_edge` (#991 second
+        # review round): the row is keyed on the CANDIDATE pair -- the
+        # question that was asked -- never on a direction-corrected one, or
+        # a verdict for "b -> a" would be persisted and later served under
+        # "a -> b"'s key (`state.edge_suggestions`'s "Direction is
+        # identity" invariant).
         edge = result.edge
         digests: list[edge_suggestions_store.InputDigest] = []
         for endpoint_id in (edge.source_id, edge.target_id):

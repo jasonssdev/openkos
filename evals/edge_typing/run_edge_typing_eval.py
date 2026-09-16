@@ -83,7 +83,11 @@ from openkos.config import (  # noqa: E402
 from openkos.graph.base import Edge  # noqa: E402
 from openkos.llm.ollama import OllamaClient  # noqa: E402
 from openkos.model import okf, types  # noqa: E402
-from openkos.resolution.edge_typing import suggest_edge_types  # noqa: E402
+from openkos.resolution.edge_typing import (  # noqa: E402
+    _DIRECTION_TYPE_SIGNATURES,
+    _contradicts_object_type_direction,
+    suggest_edge_types,
+)
 
 DEFAULT_MODEL = "qwen3:8b"
 DEFAULT_RUNS = 5
@@ -286,14 +290,89 @@ def _self_test() -> int:
             "reported inversion's own regime is absent from this corpus"
         )
 
+    # Issue #991: does the object-type direction-signature check actually do
+    # what it exists to do? Model-free by construction (the check reads only
+    # the two endpoints' OKF types, never an LLM reply), so it belongs in
+    # THIS self-test rather than behind a second flag the harness sweep
+    # would never discover (`evals/run_self_tests.py` only ever looks for
+    # `--self-test`).
+    #
+    # Only a CROSS-type edge can exercise this rule at all -- same-type
+    # pairs pass through unchecked by construction (`_DIRECTION_TYPE_
+    # SIGNATURES`'s own docstring) -- so both counts below walk `cross_type`
+    # alone. Diluting them with the 23 same-type edges this rule was never
+    # asked to move would be exactly the "green by absence" this project has
+    # already paid for once (#895): the exposure has to be named, not just
+    # a pass/fail.
+    legitimate = (
+        []
+        if unknown
+        else [
+            edge
+            for edge in cross_type
+            if edge.expected_type in _DIRECTION_TYPE_SIGNATURES
+        ]
+    )
+    harmed = [
+        edge
+        for edge in legitimate
+        if _contradicts_object_type_direction(
+            edge.expected_type, TYPES_BY_ID[edge.source_id], TYPES_BY_ID[edge.target_id]
+        )
+    ]
+    if harmed:
+        failures.append(
+            "the direction-signature check would swap a LEGITIMATE edge: "
+            + ", ".join(
+                f"{e.source_id} -> {e.target_id} ({e.expected_type})" for e in harmed
+            )
+        )
+    inversions = (
+        []
+        if unknown
+        else [
+            edge for edge in cross_type if edge.trap_type in _DIRECTION_TYPE_SIGNATURES
+        ]
+    )
+    prevented = [
+        edge
+        for edge in inversions
+        if _contradicts_object_type_direction(
+            edge.trap_type, TYPES_BY_ID[edge.source_id], TYPES_BY_ID[edge.target_id]
+        )
+    ]
+    if not unknown and not inversions:
+        failures.append(
+            "no reversed-orientation probe uses a relation type this check "
+            "declares a signature for, so a regression in it cannot be caught here"
+        )
+    elif len(prevented) != len(inversions):
+        missed = [edge for edge in inversions if edge not in prevented]
+        failures.append(
+            "the direction-signature check misses an inversion it should catch: "
+            + ", ".join(
+                f"{e.source_id} -> {e.target_id} (trap {e.trap_type})" for e in missed
+            )
+        )
+
     for failure in failures:
         print(f"FAIL: {failure}")
-    total = 7
+    total = 9
     print(f"self-test: {total - len(failures)}/{total} passed")
     if not failures:
         print(
             f"corpus: {len(DOCS)} documents across {len(distinct_types)} types, "
             f"{len(EDGES)} labelled edges, {len(cross_type)} of them cross-type"
+        )
+        # Named explicitly, not folded into the pass count above: a green
+        # self-test here means "0 of 0 harmed" is just as reachable as "0 of
+        # 6 harmed", and only the corpus size beside it tells them apart
+        # (the honest-measurement requirement issue #991 asks for).
+        print(
+            f"direction-signature check (#991): {len(prevented)} of "
+            f"{len(inversions)} inversions prevented, {len(harmed)} of "
+            f"{len(legitimate)} legitimate edges harmed, exposure "
+            f"{len(cross_type)} of {len(EDGES)} edges (cross-type only)"
         )
     return 1 if failures else 0
 

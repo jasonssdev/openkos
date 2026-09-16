@@ -1268,7 +1268,13 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
     declined: list[str] = []
 
     for suggestion in suggestions:
-        edge = suggestion.edge
+        # `effective_edge`, not `edge` (#991 second review round): this is
+        # the WRITE path (mirrors `_run_suggest_relations_apply`), so the
+        # direction that reaches `prepare_relate` must be the corrected
+        # one when the object-type direction-signature check found one --
+        # `edge` itself stays the candidate identity, unswapped, for
+        # persistence and reassembly.
+        edge = suggestion.effective_edge
         if suggestion.suggested_type is None:
             typer.echo(f"[?] {edge.source_id} -> {edge.target_id}")
             typer.echo("  note: no valid type suggested")
