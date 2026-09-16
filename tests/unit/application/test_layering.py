@@ -248,7 +248,43 @@ def test_shared_read_predicates_are_never_forked() -> None:
     `test_shared_write_helpers_are_never_forked` does: a second definition
     spelled `async def` would pass an `ast.FunctionDef`-only scan for every
     name in this set, and the assertion claims "exactly one definition" --
-    a shape the scan cannot see is a fail-open, not a narrower claim."""
+    a shape the scan cannot see is a fail-open, not a narrower claim.
+
+    What this guard cannot see (R2, PR #996 review, non-blocking): it
+    collects definitions by BARE function name, so it detects a forked
+    DEFINITION -- a second `def is_group_kept_distinct(...)` anywhere under
+    `src/` -- never a duplicated inline BODY that was never given a function
+    of its own. That is exactly the shape the #996 predecessor's CRITICAL
+    took: the fork this test was written to catch lived in
+    `cli/next_action.py` as three functions with the SAME bare names as
+    their `cli/main.py` originals (`_current_finding_digest`,
+    `_is_group_kept_distinct`, `_is_contradiction_declined`, all reddening
+    this guard before the promotion) -- but `persisted_findings` had no
+    such fork to catch, because nothing in `cli/next_action.py` ever
+    DEFINED a same-named function for it. Instead, `_BundleSignals.
+    open_contradictions` carried `persisted_findings`'s own body --
+    the `findings_db_path.exists()` guard, `derived.
+    open_derived_connection`, and the `findings.open_findings` call --
+    pasted inline into its own `if self._open_contradictions is None:`
+    branch, never factored into a function at all. A name-only scan has
+    nothing to match an inline body against, so it stayed invisible until
+    a human read both call sites side by side (`_BundleSignals.
+    open_contradictions`'s own docstring, `cli/next_action.py`, names it
+    plainly: "a duplicate inline body is invisible to the anti-fork guard,
+    which matches on function name"). The converse also
+    holds: an unrelated `def persisted_findings(...)` anywhere else in the
+    tree (a same-named helper with no relationship to this store) would
+    redden this guard for a reason that has nothing to do with forking.
+    Qualifying the match further (e.g. requiring the single home to be
+    exactly `src/openkos/application/pending.py`) was considered and
+    rejected: the `outside_service` assertion below already requires the
+    lone definition to live under `application/`, which is the invariant
+    that matters (`test_shared_write_helpers_are_never_forked`'s own
+    docstring makes the identical call for its adapter-side helpers --
+    "which adapter module holds a helper is not" the invariant); pinning the
+    exact filename would make a legitimate future split of `pending.py`
+    fail this guard for a reason unrelated to forking, the same false-
+    positive-for-the-wrong-reason failure mode this paragraph opens with."""
     shared = {
         "current_finding_digest",
         "persisted_findings",
