@@ -290,6 +290,8 @@ def test_shared_read_predicates_are_never_forked() -> None:
         "persisted_findings",
         "is_contradiction_declined",
         "is_group_kept_distinct",
+        "stale_index_names",
+        "contradiction_finding_counts",
     }
     homes: dict[str, list[str]] = {name: [] for name in shared}
     for path in (_REPO_ROOT / "src").rglob("*.py"):

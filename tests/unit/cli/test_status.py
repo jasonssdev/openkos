@@ -890,7 +890,12 @@ def test_status_builds_the_graph_once(
         calls.append(bundle_dir)
         return real(bundle_dir, candidates=candidates)
 
-    monkeypatch.setattr("openkos.cli.main.build_graph", _counting_build_graph)
+    # `status`'s graph build moved into `application.status.
+    # build_status_report` (issue #995, PR 3). Patched at its new home:
+    # `cli.main` no longer performs this build, so patching there would
+    # intercept nothing, this counter would observe zero, and the assertion
+    # below would be unfalsifiable rather than merely wrong.
+    monkeypatch.setattr("openkos.application.status.build_graph", _counting_build_graph)
     monkeypatch.setattr("openkos.graph.summary.build_graph", _counting_build_graph)
 
     result = runner.invoke(app, ["status"])
@@ -1769,3 +1774,68 @@ def test_a_group_ruled_distinct_leaves_needs_attention(
 
     assert after.exit_code == 0, after.stderr
     assert "candidate group" not in after.stdout
+
+
+# --- regression: partial output on a late, unguarded read failure ---------
+
+
+def test_status_prints_partial_output_when_a_late_read_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression guard for review findings
+    R3-partial-output-on-read-failure / R4-status-no-partial-output.
+
+    Before issue #995's extraction, `status`'s body was interleaved
+    compute-and-print: the workspace header, `Bundle contents:`, and
+    `Recent activity:` sections printed BEFORE the later, unguarded reads
+    ran (`lint.collect_docs` and everything downstream of it), so a damaged
+    workspace -- a corrupt bundle doc, an unreadable `graph.db` -- still
+    left the operator with three useful sections ahead of a traceback. The
+    first version of the extraction hoisted every read into one function
+    ahead of the CLI's first `typer.echo`, which silently lost that partial
+    output -- exactly backwards for the one command whose job is
+    describing a broken workspace.
+
+    `application.status.read_status_overview` (the cheap, already-guarded
+    reads) is now called and rendered BEFORE `application.status.
+    build_status_report` (the unguarded reads) runs at all. Making
+    `lint.collect_docs` -- one of `build_status_report`'s unguarded reads --
+    raise must not swallow output already written to stdout.
+
+    The `Needs attention:` HEADER belongs on that partial output too
+    (review finding R3-needs-attention-header-lost-on-failure): the
+    pre-extraction body echoed that literal line and only then ran the
+    unguarded reads, so the section announced itself even when building
+    its contents raised. An earlier version of this guard asserted the
+    header was ABSENT, which pinned an incomplete fix as the contract and
+    would have emitted strictly less than the base on this path. What must
+    be absent is the section's CONTENTS, not its header."""
+    _init_workspace(tmp_path, monkeypatch)
+    concepts_dir = tmp_path / "bundle" / "concepts"
+    concepts_dir.mkdir(parents=True, exist_ok=True)
+    (concepts_dir / "a.md").write_text(
+        "---\ntype: Concept\ntitle: A\n---\nBody.\n", encoding="utf-8"
+    )
+    (tmp_path / "bundle" / "log.md").write_text(
+        "# Directory Update Log\n\n## 2026-07-16\n\n* Did a thing.\n",
+        encoding="utf-8",
+    )
+
+    def _boom(bundle_dir: Path) -> tuple[list[lint_check.LintDoc], list[str]]:
+        raise RuntimeError("simulated damaged-workspace read failure")
+
+    monkeypatch.setattr("openkos.lint.collect_docs", _boom)
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, RuntimeError)
+    assert "openkos status: workspace at" in result.stdout
+    assert "Bundle contents:" in result.stdout
+    assert "Sources:" in result.stdout
+    assert "Recent activity:" in result.stdout
+    assert "Did a thing." in result.stdout
+    assert "Needs attention:" in result.stdout
+    # The header reaches the operator; the contents it would have listed do
+    # not, because the read that computes them is the one that raised.
+    assert "Nothing needs attention." not in result.stdout

@@ -1839,7 +1839,12 @@ def test_query_stale_check_never_breaks_the_query(
     def _boom(*args: object, **kwargs: object) -> tuple[str, ...]:
         raise RuntimeError("manifest walk exploded")
 
-    monkeypatch.setattr("openkos.cli.main.stale_derived_stores", _boom)
+    # `stale_derived_stores` is called through `application.status.
+    # stale_index_names` since issue #995 PR 3 (the shared `_stale_index_
+    # names` promotion) -- patched at its new home, `openkos.application.
+    # status.stale_derived_stores`, not `openkos.cli.main` (which no longer
+    # imports it directly).
+    monkeypatch.setattr("openkos.application.status.stale_derived_stores", _boom)
     monkeypatch.setattr(
         "openkos.application.query.answer",
         lambda *args, **kwargs: _stale_answer_result(),

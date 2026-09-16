@@ -44,6 +44,7 @@ from openkos.resolution.edge_typing import (
     EdgeSuggestionBatch,
 )
 from openkos.state import edge_suggestions as edge_suggestions_store
+from openkos.state.vectorstore import vector_store_is_empty
 from tests.unit.cli.conftest import commit_pending_fixture_docs, disable_local_exemption
 from tests.unit.cli.conftest import snapshot_with_mtime as _snapshot
 
@@ -1035,26 +1036,62 @@ def test_suggest_relations_state_three_comes_from_the_seam_not_a_second_probe(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """When the seam reports no source, the embeddings-missing message is
-    printed WITHOUT re-reading `vectors.db`.
+    printed WITHOUT the rest of the command RE-reading `vectors.db` a
+    second time.
 
     PR1 shipped that message keyed on its own `vector_store_is_empty` call
     inside `_zero_edge_state_message`; once the seam already knows, that
-    second read is redundant work on a path taken every run."""
+    second read is redundant work on a path taken every run.
+
+    No stub of `_open_proximity_or_degrade` here (unlike a previous version
+    of this test): a fresh workspace has no `vectors.db` on disk yet, so
+    the REAL seam (`_open_proximity_or_degrade` -> `proximity.
+    open_proximity_source`) reports state 3 on its own -- and that one
+    probe, made by the seam itself, is the LEGITIMATE read this test must
+    NOT flag; only a SECOND one would be the regression.
+
+    Patched at `openkos.graph.proximity`, the module that actually calls
+    `vector_store_is_empty` on this path (`graph/proximity.py`'s own
+    `from openkos.state.vectorstore import (..., vector_store_is_empty,
+    ...)`) -- never at `openkos.state.vectorstore`, the defining module. A
+    `from X import Y` binds the function object into the CONSUMER's
+    namespace at import time, so patching the defining module's attribute
+    afterwards does not intercept a from-import consumer, which made the
+    previous version of this negative assertion pass vacuously: it patched
+    `openkos.state.vectorstore.vector_store_is_empty` while ALSO stubbing
+    out `_open_proximity_or_degrade` entirely, so nothing on the exercised
+    path could ever have called the patched name either way (review
+    findings R2-patch-target-inconsistent /
+    R3-weakened-negative-probe-guard / R4-probe-patch-target-weakened).
+    `application/status.py` is another from-import consumer the same
+    defining-module patch would equally fail to intercept."""
     _init_workspace(tmp_path, monkeypatch)
     probes: list[Path] = []
-    monkeypatch.setattr(main, "_open_proximity_or_degrade", lambda path: None)
+    # The real predicate, fetched from ITS defining module -- `proximity`'s
+    # own `from ... import vector_store_is_empty` is a private consumer
+    # binding mypy's `no_implicit_reexport` correctly refuses to let this
+    # test read as a public attribute of `proximity`. The `monkeypatch.
+    # setattr` call below still reaches into that private binding (a
+    # string target, invisible to static typing) to intercept it.
+    real_is_empty = vector_store_is_empty
 
     def _probing_is_empty(path: Path) -> bool:
         probes.append(path)
-        return True
+        return real_is_empty(path)
 
-    monkeypatch.setattr(main, "vector_store_is_empty", _probing_is_empty)
+    monkeypatch.setattr(
+        "openkos.graph.proximity.vector_store_is_empty", _probing_is_empty
+    )
 
     result = runner.invoke(app, ["suggest-relations"])
 
     assert result.exit_code == 0
     assert "Candidate relations unavailable" in result.stdout
-    assert probes == [], "the zero-edge message re-probed vectors.db"
+    assert probes == [tmp_path / ".openkos" / "vectors.db"], (
+        "expected exactly the seam's own legitimate probe -- zero means "
+        "the patch target isn't intercepting the real call, more than one "
+        "means the zero-edge message re-probed vectors.db"
+    )
 
 
 def test_suggest_relations_closes_the_proximity_source(
