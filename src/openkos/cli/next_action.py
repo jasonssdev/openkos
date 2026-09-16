@@ -58,19 +58,19 @@ exactly once.
 """
 
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 from openkos import config
 from openkos import lint as lint_check
-from openkos.bundle import decisions as bundle_decisions
+from openkos.application import pending
 from openkos.model import okf
 from openkos.resolution import CandidateGroup, find_exact_title_groups
 from openkos.resolution.contradiction import is_high_confidence_finding
-from openkos.state import derived, findings
+from openkos.state import findings
 from openkos.state.derived import stale_derived_stores
-from openkos.state.vectorstore import content_hash, vector_store_is_empty
+from openkos.state.vectorstore import vector_store_is_empty
 
 _STATUS_POINTER = "For everything else, run `openkos status`."
 """The honesty guard (D4): appended after every branch of `render_lines`,
@@ -294,7 +294,7 @@ class _BundleSignals:
             self._exact_title_groups = [
                 group
                 for group in find_exact_title_groups(self._layout.bundle_dir)
-                if not _is_group_kept_distinct(self._layout, group.member_ids)
+                if not pending.is_group_kept_distinct(self._layout, group.member_ids)
             ]
         return self._exact_title_groups
 
@@ -345,98 +345,33 @@ class _BundleSignals:
         and `cli.main._contradiction_finding_counts` apply, so `next` and
         `status` can never disagree about what is outstanding.
 
+        The `.openkos/findings.db` read itself is NOT performed here: it
+        is `application.pending.persisted_findings`, which every adapter
+        needing the open/stale/declined predicate calls. That is where
         `.openkos/findings.db`'s pure-derivation contract (`config.
         WorkspaceLayout.findings_db_path`'s own docstring: "this property
-        never creates anything on disk by itself") is honoured here by
-        checking `path.exists()` BEFORE `derived.open_derived_connection`,
-        which would otherwise lazily create an empty file on a workspace
-        that has never run `curate`'s Contradictions stage -- the same
-        guard `vector_store_is_empty` uses for `vectors_db_path`.
+        never creates anything on disk by itself") is honoured, by
+        checking `path.exists()` before opening a derived connection. This
+        property held a second, near-identical copy of that read until
+        issue #995; a duplicate inline body is invisible to the anti-fork
+        guard, which matches on function name.
 
         The `declined` join happens per finding, by recomputing
         `bundle_decisions.decision_key_for` from the finding's own
         `pair_ids`/`merged_absorbed_id` (design Decision 7's read-time
         join -- no stored cross-pointer either store owns)."""
         if self._open_contradictions is None:
-            findings_db_path = self._layout.findings_db_path
-            if not findings_db_path.exists():
-                self._open_contradictions = ()
-                return self._open_contradictions
-            conn = derived.open_derived_connection(findings_db_path)
-            try:
-                persisted = findings.open_findings(
-                    conn,
-                    current_digest=_current_finding_digest(self._layout.bundle_dir),
-                )
-            finally:
-                conn.close()
+            persisted = pending.persisted_findings(self._layout)
             self._open_contradictions = tuple(
                 finding
                 for finding in persisted
                 if is_high_confidence_finding(finding.verdict, finding.confidence)
                 and not finding.stale
-                and not _is_contradiction_declined(self._layout, finding)
+                and not pending.is_contradiction_declined(
+                    self._layout, finding.pair_ids, finding.merged_absorbed_id
+                )
             )
         return self._open_contradictions
-
-
-def _current_finding_digest(bundle_dir: Path) -> Callable[[str], str | None]:
-    """A `state.findings.open_findings`-compatible `current_digest`
-    callback: reads `input_ref` as a concept id and content-hashes its
-    CURRENT bytes (design Decision 2). Local to this module rather than
-    imported from `cli.main`'s own `_current_finding_digest`: `cli.main`
-    imports `next_action` (it calls `next_action.next_action`), so the
-    reverse import would be circular. An unreadable or non-file
-    `input_ref` -- a merged-body candidate's synthetic ledger-snapshot
-    label, or a concept removed since the finding was recorded -- answers
-    `None`, "cannot currently determine", never evidence of drift
-    (`state.findings._is_stale`'s own contract)."""
-
-    def _digest(input_ref: str) -> str | None:
-        try:
-            raw = okf.concept_path_for(input_ref, bundle_dir).read_bytes()
-        except OSError:
-            return None
-        return content_hash(raw)
-
-    return _digest
-
-
-def _is_group_kept_distinct(
-    layout: config.WorkspaceLayout, member_ids: Sequence[str]
-) -> bool:
-    """`True` iff a human has ruled this exact member set distinct and has
-    not reopened it (#797). Local to this module for the same
-    circular-import reason as `_is_contradiction_declined` -- `cli.main`
-    imports this module, so the reverse would be circular, and the two
-    copies must stay behaviourally identical."""
-    members = tuple(sorted(member_ids))
-    key = bundle_decisions.identity_decision_key_for(members)
-    for record in bundle_decisions.read_identity_decisions(
-        members[0], layout.bundle_dir
-    ):
-        if record.decision_key == key:
-            return record.state == "declined"
-    return False
-
-
-def _is_contradiction_declined(
-    layout: config.WorkspaceLayout, finding: "findings.PersistedFinding"
-) -> bool:
-    """`True` iff a decision record for `finding`'s own
-    `pair_ids`/`merged_absorbed_id` exists and its `state` is `declined`
-    (pending-work spec: "Declined Findings Are Hidden By Default"). Local
-    to this module for the same circular-import reason as
-    `_current_finding_digest`."""
-    key = bundle_decisions.decision_key_for(
-        finding.pair_ids, finding.merged_absorbed_id
-    )
-    for record in bundle_decisions.read_decisions(
-        finding.pair_ids[0], layout.bundle_dir
-    ):
-        if record.decision_key == key:
-            return record.state == "declined"
-    return False
 
 
 _SAFE_ARGUMENT = re.compile(r"\A(?!-)[\w./-]+\Z")

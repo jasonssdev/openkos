@@ -206,6 +206,79 @@ def test_shared_write_helpers_are_never_forked() -> None:
     )
 
 
+def test_shared_read_predicates_are_never_forked() -> None:
+    """`current_finding_digest`, `persisted_findings`,
+    `is_contradiction_declined` and `is_group_kept_distinct` are shared
+    READ predicates over `.openkos/findings.db` and `bundle/decisions/`
+    (issue #995, PR 1 of MVP 3's "prerequisite zero"). This is the inverse
+    of `test_shared_write_helpers_are_never_forked` above: that guard
+    asserts a shared helper's one definition stays OUTSIDE
+    `application/`; this one asserts these four stay INSIDE it, because
+    the direction that went wrong here was the opposite one.
+
+    Before this change, `cli/next_action.py` carried its own copies of
+    three of these four (`_current_finding_digest`, `_is_group_kept_distinct`,
+    `_is_contradiction_declined`), forked from `cli/main.py` for a
+    circular-import reason the module's own docstrings named explicitly:
+    `cli/main.py` imports `cli/next_action.py` to call `next_action()`, so
+    the reverse import would have been circular. Each forked docstring
+    made the same promise -- "the two copies must stay behaviourally
+    identical" -- and nothing checked it. This test is what makes that
+    promise checkable: it is the guard that MUST fail, reporting 2
+    definitions apiece for the three forked names, on the code as it
+    stood immediately before this change.
+
+    `persisted_findings` had no fork (`cli/main.py` held its only
+    definition), but it belongs in the same shared set for the same
+    reason: it is `_current_finding_digest`'s own caller, over the same
+    store, and a second copy of it would recreate exactly the hazard this
+    guard exists to catch.
+
+    Promoting all four into `application/pending.py` (rather than merely
+    de-duplicating two copies into one, still adapter-side) is what
+    resolves the circular import for good: `application/` may not import
+    `openkos.cli` (enforced above by
+    `test_application_modules_never_import_cli_typer_or_rich`), so
+    `cli/next_action.py -> application/pending.py` and
+    `cli/main.py -> application/pending.py` are both legal, acyclic
+    directions -- unlike the `cli/next_action.py -> cli/main.py` direction
+    the fork was invented to avoid.
+
+    Counts `async def` too, for the same reason
+    `test_shared_write_helpers_are_never_forked` does: a second definition
+    spelled `async def` would pass an `ast.FunctionDef`-only scan for every
+    name in this set, and the assertion claims "exactly one definition" --
+    a shape the scan cannot see is a fail-open, not a narrower claim."""
+    shared = {
+        "current_finding_digest",
+        "persisted_findings",
+        "is_contradiction_declined",
+        "is_group_kept_distinct",
+    }
+    homes: dict[str, list[str]] = {name: [] for name in shared}
+    for path in (_REPO_ROOT / "src").rglob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if (
+                isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+                and node.name in shared
+            ):
+                homes[node.name].append(path.relative_to(_REPO_ROOT).as_posix())
+    counts = {name: len(paths) for name, paths in homes.items()}
+    assert counts == dict.fromkeys(shared, 1), (
+        f"each shared read predicate must keep exactly one definition; found: {homes}"
+    )
+    outside_service = {
+        name: paths
+        for name, paths in homes.items()
+        if not any(path.startswith("src/openkos/application/") for path in paths)
+    }
+    assert not outside_service, (
+        "every shared read predicate must be DEFINED inside "
+        "openkos.application (issue #995) -- an adapter-side copy is "
+        f"exactly the fork this guard exists to catch. Found: {outside_service}"
+    )
+
+
 def _is_private(name: str) -> bool:
     """Whether `name` is a name someone chose to hide. Dunders are not:
     `module.__name__` and friends are interpreter surface."""
