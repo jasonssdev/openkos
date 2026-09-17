@@ -56,3 +56,4 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 | [0018](0018-application-layer-for-bounded-context-services.md) | An application layer for bounded-context services | Accepted | 2026-08-31 |
 | [0019](0019-dot-directories-are-not-knowledge.md) | Dot-directories are not knowledge | Accepted | 2026-09-14 |
 | [0020](0020-concurrency-across-three-writers.md) | Concurrency across three writers -- per-operation locking, detection for the rest | Proposed | 2026-09-16 |
+| [0021](0021-sync-async-boundary.md) | The sync/async boundary -- a worker thread per operation, and no cancellation below it | Proposed | 2026-09-17 |
