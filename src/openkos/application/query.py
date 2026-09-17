@@ -25,11 +25,13 @@ import re
 import sqlite3
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
-from typing import Final
+from typing import Final, Literal
 
 from openkos import config
 from openkos.bundle import index as bundle_index
+from openkos.bundle import log as bundle_log
 from openkos.bundle import source_titles
 from openkos.llm.base import Embedder, LLMBackend
 from openkos.model import okf
@@ -598,6 +600,58 @@ def stage_filed_answer(
     )
 
 
+@dataclass(frozen=True)
+class FiledAnswerCatalogUpdate:
+    """The two new catalog texts a `query --save` filing produces --
+    returned by `compose_filed_answer_catalog_update` WITHOUT writing,
+    mirroring `FiledAnswerPlan`'s own staging shape and
+    `application.ingest.CatalogUpdate`'s field names (issue #1003 Slice
+    B)."""
+
+    new_index_text: str
+    """`index.md`'s full text with the new entry inserted."""
+    new_log_text: str
+    """`log.md`'s full text with the new dated entry inserted."""
+
+
+def compose_filed_answer_catalog_update(
+    index_text: str,
+    log_text: str,
+    plan: FiledAnswerPlan,
+    today: date,
+) -> FiledAnswerCatalogUpdate:
+    """Compose the `index.md`/`log.md` deltas a `plan` filing produces
+    (issue #1003 Slice B) -- pure text composition, mirroring
+    `stage_filed_answer` itself: nothing is written here, and the calling
+    adapter commits both texts through the shared write mechanics
+    (`_reject_drifted_targets`, `fsio.write_atomic`), which this module
+    never owns or duplicates.
+
+    Composing this canonical text is STAGING (ADR-0018: "Services stage;
+    adapters write"), not rendering -- `index.md`/`log.md` are persisted
+    bundle state, not a terminal message, so the CLI adapter no longer
+    needs to know `bundle_index.insert_index_entry` and
+    `bundle_log.insert_log_entry`'s call shapes or the log bullet's exact
+    wording to file an answer."""
+    new_index_text = bundle_index.insert_index_entry(
+        index_text,
+        section=plan.section,
+        link_dir=plan.link_dir,
+        title=plan.title,
+        slug=plan.slug,
+        description=plan.description,
+    )
+    new_log_text = bundle_log.insert_log_entry(
+        log_text,
+        today,
+        f"**Filed answer**: [{plan.title}](/{plan.link_dir}/{plan.slug}.md) "
+        "from query.",
+    )
+    return FiledAnswerCatalogUpdate(
+        new_index_text=new_index_text, new_log_text=new_log_text
+    )
+
+
 def grounding_unverified(result: AnswerResult) -> bool:
     """Whether `result`'s citations are UNVERIFIED provenance rather than
     something the model itself accounted for (issue #774, design D4).
@@ -617,6 +671,47 @@ def grounding_unverified(result: AnswerResult) -> bool:
     return result.llm_invoked and result.attribution != "reported"
 
 
+def resolve_llm_status(
+    result: AnswerResult,
+) -> Literal["refused", "invoked", "skipped"]:
+    """Map `result` to `query`'s `"refused"` / `"invoked"` / `"skipped"`
+    retrieval-summary term (issue #1003 Slice B).
+
+    A sufficiency refusal (`no_match_cause == "insufficient_context"`) DID
+    reach the model -- one cheap call was made and its latency paid -- so it
+    is reported as `"refused"` rather than `"skipped"`, the word a zero-hit
+    short-circuit gets: `refused` names what actually happened (the model
+    was asked, and said the context cannot answer), distinct from a
+    short-circuit that never called it at all. Checked BEFORE `llm_invoked`
+    because a refused sufficiency check leaves `llm_invoked=False` -- the
+    expensive synthesis call never ran -- which would otherwise collapse it
+    into `"skipped"` and hide a call the operator is paying for."""
+    if result.no_match_cause == "insufficient_context":
+        return "refused"
+    return "invoked" if result.llm_invoked else "skipped"
+
+
+def is_synthesis_citation(citation: Citation) -> bool:
+    """Whether `citation` is itself a filed synthesis (an `insights/`
+    concept) rather than a Source (issue #1003 Slice B).
+
+    The SOLE derivation of the `insights/` prefix rule: identity by link
+    dir, since the folder IS the type's identity in an OKF bundle. Both
+    `synthesis_share_warrants_warning` below and the CLI's per-citation
+    `[synthesis]` marker defer to this predicate instead of each computing
+    `TYPE_TO_LINK_DIR[INSIGHT_TYPE]` independently."""
+    insight_prefix = f"{TYPE_TO_LINK_DIR[INSIGHT_TYPE]}/"
+    return citation.concept_id.startswith(insight_prefix)
+
+
+def synthesis_citation_count(citations: list[Citation]) -> int:
+    """Count of `citations` for which `is_synthesis_citation` is `True`
+    (issue #1003 Slice B) -- the shared count both
+    `synthesis_share_warrants_warning` and the CLI's `N of M citations are
+    themselves filed syntheses` advisory need, asserted once."""
+    return sum(1 for citation in citations if is_synthesis_citation(citation))
+
+
 def synthesis_share_warrants_warning(citations: list[Citation]) -> bool:
     """Whether the SHARE of `citations` that are themselves filed syntheses
     (`insights/`) meets `_SYNTHESIS_SHARE_WARN_THRESHOLD` (issue #649).
@@ -630,11 +725,10 @@ def synthesis_share_warrants_warning(citations: list[Citation]) -> bool:
     on, and division by zero besides)."""
     if not citations:
         return False
-    insight_prefix = f"{TYPE_TO_LINK_DIR[INSIGHT_TYPE]}/"
-    synthesis_count = sum(
-        1 for citation in citations if citation.concept_id.startswith(insight_prefix)
+    return (
+        synthesis_citation_count(citations) / len(citations)
+        >= _SYNTHESIS_SHARE_WARN_THRESHOLD
     )
-    return synthesis_count / len(citations) >= _SYNTHESIS_SHARE_WARN_THRESHOLD
 
 
 def scan_for_duplicates(

@@ -187,6 +187,46 @@ def test_run_query_propagates_fts_unavailable(
         _run(tmp_path, monkeypatch)
 
 
+def test_resolve_llm_status_refused_on_insufficient_context() -> None:
+    """A sufficiency refusal DID reach the model -- one cheap call was made
+    and paid for -- so `resolve_llm_status` reports `"refused"` rather than
+    `"skipped"`, even though `llm_invoked` is `False` for that call (issue
+    #1003 Slice B: this decision used to be re-derived in the CLI)."""
+    result = AnswerResult(
+        answer="x",
+        citations=[],
+        fts_hit_count=1,
+        llm_invoked=False,
+        no_match_cause="insufficient_context",
+        skip_notices=[],
+    )
+    assert query_service.resolve_llm_status(result) == "refused"
+
+
+def test_resolve_llm_status_invoked() -> None:
+    result = AnswerResult(
+        answer="x",
+        citations=[],
+        fts_hit_count=1,
+        llm_invoked=True,
+        no_match_cause="none",
+        skip_notices=[],
+    )
+    assert query_service.resolve_llm_status(result) == "invoked"
+
+
+def test_resolve_llm_status_skipped() -> None:
+    result = AnswerResult(
+        answer="x",
+        citations=[],
+        fts_hit_count=0,
+        llm_invoked=False,
+        no_match_cause="empty_query",
+        skip_notices=[],
+    )
+    assert query_service.resolve_llm_status(result) == "skipped"
+
+
 def test_embed_dim_constant_is_importable() -> None:
     """Sanity check that the fixture module's `EMBED_DIM` import resolves --
     guards against a silent fixture typo breaking every test above at
