@@ -69,7 +69,6 @@ from openkos.llm.ollama import (
 from openkos.model import okf, types
 from openkos.model.relations import ASYMMETRIC_RELATION_TYPES, validate_relation_type
 from openkos.model.types import INSIGHT_TYPE as _INSIGHT_TYPE
-from openkos.model.types import TYPE_TO_LINK_DIR as _TYPE_TO_LINK_DIR
 from openkos.model.types import TYPE_TO_SECTION as _TYPE_TO_SECTION
 from openkos.resolution import find_candidates_report
 from openkos.resolution.adjudication import (
@@ -14080,16 +14079,9 @@ def query(
 
     result = outcome.result
     cited_count = len(result.citations)
-    # #760: a sufficiency refusal DID reach the model -- one cheap call was
-    # made and its latency paid -- so reporting it as `skipped`, the same word
-    # a zero-hit short-circuit gets, would hide a call the operator is paying
-    # for and make the two look like the same event. `refused` names what
-    # actually happened: the model was asked, and said the context cannot
-    # answer.
-    if result.no_match_cause == "insufficient_context":
-        llm_status = "refused"
-    else:
-        llm_status = "invoked" if result.llm_invoked else "skipped"
+    # #760, issue #1003 Slice B: see `application_query.resolve_llm_status`'s
+    # docstring for the refused/invoked/skipped rationale.
+    llm_status = application_query.resolve_llm_status(result)
     # Two retrieval terms, because there are two retrieval channels. The
     # summary used to carry a third, `<n> graph-added` from
     # `graph_contributed_count` -- how many reserved tail slots the seeded
@@ -14207,7 +14199,6 @@ def query(
         return
 
     typer.echo(result.answer)
-    insight_prefix = f"{_TYPE_TO_LINK_DIR[_INSIGHT_TYPE]}/"
     if result.citations:
         typer.echo()
         typer.echo("Citations:")
@@ -14218,13 +14209,13 @@ def query(
             # and what `--save` files as provenance -- a citation that looked
             # identical to a fully-read one IS the false provenance claim.
             partial = " [partial]" if citation.excerpted else ""
-            # Issue #570: a cited Insight is itself model output, not
-            # source-backed knowledge -- rendered distinctly so the reader
-            # can tell which legs of the answer stand on a Source and
-            # which stand on an earlier synthesis. Identity by link dir:
-            # the folder IS the type's identity in an OKF bundle.
+            # Issue #570, issue #1003 Slice B: see
+            # `application_query.is_synthesis_citation`'s docstring for the
+            # `insights/` identity-by-link-dir rationale.
             synthesis = (
-                " [synthesis]" if citation.concept_id.startswith(insight_prefix) else ""
+                " [synthesis]"
+                if application_query.is_synthesis_citation(citation)
+                else ""
             )
             typer.echo(
                 f"  → {citation.concept_id} ({citation.title})"
@@ -14258,12 +14249,11 @@ def query(
     # share warns at or above the service's threshold (Slice 2:
     # `application_query.synthesis_share_warrants_warning`), with the
     # all-synthesis case keeping its stronger wording -- stderr, like every
-    # advisory here.
-    synthesis_count = sum(
-        1
-        for citation in result.citations
-        if citation.concept_id.startswith(insight_prefix)
-    )
+    # advisory here. The count itself is
+    # `application_query.synthesis_citation_count` (issue #1003 Slice B):
+    # the same derivation the threshold check uses internally, asserted
+    # once rather than re-derived at this call site.
+    synthesis_count = application_query.synthesis_citation_count(result.citations)
     if application_query.synthesis_share_warrants_warning(result.citations):
         if synthesis_count == len(result.citations):
             typer.echo(
@@ -14322,24 +14312,18 @@ def query(
     now = datetime.now(UTC)
     try:
         # One `_snapshot_read` observation per target: the decoded text
-        # feeds the parsers below, the raw bytes feed
-        # `_reject_drifted_targets` (issues #306, #313, #318).
+        # feeds `compose_filed_answer_catalog_update` below, the raw bytes
+        # feed `_reject_drifted_targets` (issues #306, #313, #318).
         index_bytes, index_text = _snapshot_read(save_index_path)
         log_bytes, log_text = _snapshot_read(save_log_path)
-        new_index_text = bundle_index.insert_index_entry(
-            index_text,
-            section=plan.section,
-            link_dir=plan.link_dir,
-            title=plan.title,
-            slug=plan.slug,
-            description=plan.description,
+        # Issue #1003 Slice B: see
+        # `application_query.compose_filed_answer_catalog_update`'s
+        # docstring for the staging rationale.
+        catalog_update = application_query.compose_filed_answer_catalog_update(
+            index_text, log_text, plan, now.astimezone().date()
         )
-        new_log_text = bundle_log.insert_log_entry(
-            log_text,
-            now.astimezone().date(),
-            f"**Filed answer**: [{plan.title}](/{plan.link_dir}/{plan.slug}.md) "
-            "from query.",
-        )
+        new_index_text = catalog_update.new_index_text
+        new_log_text = catalog_update.new_log_text
     except (OSError, ValueError) as exc:
         typer.echo(
             f"openkos query: failed while preparing the save -- {exc}.", err=True

@@ -17,12 +17,16 @@ and `stage_filed_answer` itself at THIS layer's own coverage gate (task
 already pinned rather than re-deriving them."""
 
 from collections.abc import Sequence
+from datetime import date
 from pathlib import Path
 
 import pytest
 
 from openkos import config
 from openkos.application import query as query_service
+from openkos.bundle import index as bundle_index
+from openkos.bundle.index import render_index
+from openkos.bundle.log import render_log
 from openkos.retrieval.answer import AnswerResult, Citation
 
 
@@ -357,6 +361,30 @@ def test_synthesis_share_warrants_warning_empty_citations() -> None:
     assert query_service.synthesis_share_warrants_warning([]) is False
 
 
+def test_is_synthesis_citation_true_for_an_insight() -> None:
+    """`is_synthesis_citation` is the single derivation of the `insights/`
+    prefix rule (issue #1003 Slice B) -- both `synthesis_share_warrants_warning`
+    and the CLI's per-citation `[synthesis]` marker defer to it."""
+    assert query_service.is_synthesis_citation(_citation("insights/a")) is True
+
+
+def test_is_synthesis_citation_false_for_a_non_insight() -> None:
+    assert query_service.is_synthesis_citation(_citation("concepts/b")) is False
+
+
+def test_synthesis_citation_count_counts_only_insights() -> None:
+    citations = [
+        _citation("insights/a"),
+        _citation("concepts/b"),
+        _citation("insights/c"),
+    ]
+    assert query_service.synthesis_citation_count(citations) == 2
+
+
+def test_synthesis_citation_count_empty_citations() -> None:
+    assert query_service.synthesis_citation_count([]) == 0
+
+
 class _FakeEmbedder:
     """Returns a queued vector per input text (mirrors
     `test_insight_identity._FakeEmbedder`)."""
@@ -419,3 +447,76 @@ def test_scan_for_duplicates_finds_a_positive_match(tmp_path: Path) -> None:
 
     assert scan.unavailable is False
     assert [c.concept_id for c in scan.candidates] == ["insights/why-stoicism"]
+
+
+def _plan() -> query_service.FiledAnswerPlan:
+    return query_service.FiledAnswerPlan(
+        link_dir="insights",
+        section="Decisions",
+        slug="a-filed-answer",
+        title="A Filed Answer",
+        description="What is the filed answer?",
+        path=Path("bundle/insights/a-filed-answer.md"),
+        content="---\ntype: Insight\n---\nbody\n",
+        sensitivity="private",
+    )
+
+
+def test_compose_filed_answer_catalog_update_composes_index_and_log_text() -> None:
+    """`compose_filed_answer_catalog_update` is the ONE place that composes the
+    canonical `index.md`/`log.md` deltas for a `query --save` filing (issue
+    #1003 Slice B) -- staging, per ADR-0018, moved out of the CLI adapter."""
+    plan = _plan()
+    today = date(2020, 1, 2)
+
+    update = query_service.compose_filed_answer_catalog_update(
+        render_index(), render_log(today), plan, today
+    )
+
+    assert (
+        "* [A Filed Answer](/insights/a-filed-answer.md) - "
+        "What is the filed answer?\n" in update.new_index_text
+    )
+    # Pinned under `today`'s own `## {isoformat}` section header, not merely
+    # present anywhere in the text -- a composer that ignored `today` (e.g.
+    # read the process clock instead) would file this bullet under a
+    # DIFFERENT, freshly created date section, leaving `today`'s existing
+    # section (rendered by `render_log(today)` above) with only its
+    # original Initialization entry. A bare substring check would still
+    # pass in that case since the bullet is present somewhere in the text.
+    assert (
+        f"## {today.isoformat()}\n\n"
+        "* **Filed answer**: [A Filed Answer](/insights/a-filed-answer.md) "
+        "from query.\n" in update.new_log_text
+    )
+
+
+def test_compose_filed_answer_catalog_update_matches_the_bundle_helpers_directly() -> (
+    None
+):
+    """The composed index text must equal calling
+    `bundle_index.insert_index_entry` directly with the plan's fields --
+    `compose_filed_answer_catalog_update` composes, it does not reimplement.
+    Scoped to `section` (the one field the preceding test's literal
+    substring assertions never exercise, since a fresh `render_index()` body
+    does not surface which `# {section}` heading the bullet landed under);
+    the log bullet's exact wording is pinned once, by the preceding test --
+    restating it here would be a second, tautological place a wrong
+    template could hand-sync into and still pass."""
+    plan = _plan()
+    today = date(2020, 1, 2)
+    index_text = render_index()
+    log_text = render_log(today)
+
+    update = query_service.compose_filed_answer_catalog_update(
+        index_text, log_text, plan, today
+    )
+
+    assert update.new_index_text == bundle_index.insert_index_entry(
+        index_text,
+        section=plan.section,
+        link_dir=plan.link_dir,
+        title=plan.title,
+        slug=plan.slug,
+        description=plan.description,
+    )
