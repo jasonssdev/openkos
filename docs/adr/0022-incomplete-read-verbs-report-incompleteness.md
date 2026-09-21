@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0022: An incomplete read verb reports incompleteness as data and as exit code 2"
 description: A read verb that could not finish reports which checks did not run, and exits 2 rather than 0 or 1.
-status: Proposed
+status: Accepted
 date: 2026-09-21
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0022: An incomplete read verb reports incompleteness as data and as exit code 2
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-09-21
 
 ## Context

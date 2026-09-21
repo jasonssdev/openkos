@@ -163,6 +163,118 @@ ever chosen.)
 - WHEN `openkos doctor` runs
 - THEN the process exits with code `0`
 
+### Requirement: Workspace Vector Index Presence Check
+
+`doctor` MUST report whether the WORKSPACE `.openkos/vectors.db`
+(`layout.vectors_db_path`) exists on disk, as a check distinct from the
+existing Vector-Extension-Loadable Check (which probes a throwaway
+`:memory:` connection and says nothing about the workspace's own index
+file). A `fail` on this check MUST stay informational (an absent index
+alone MUST NOT affect the exit code), it MUST run only when a workspace is
+initialized (skipped outside a workspace, mirroring the
+config-valid/bundle-readable checks), and a `[FAIL]` line MUST be followed
+by an indented fix line naming `openkos reindex`.
+
+This check decides between `skip` and `fail` using the bundle-readable
+check's own reading of the bundle. When that reading did not happen, this
+check MUST report `not-run` rather than either, and MUST NOT print a
+`openkos reindex` remediation about a bundle nobody could read. Unlike a
+`fail` on this check, a `not-run` DOES contribute to the incomplete exit
+code `2`, because the report could not be completed.
+(Previously: this requirement described only `pass`/`fail`/`skip`, and an
+unread bundle left this check reporting `fail` with a `reindex`
+remediation derived from a value that was never measured.)
+
+#### Scenario: Present workspace vectors.db passes
+
+- GIVEN an initialized workspace whose `.openkos/vectors.db` file exists
+- WHEN `openkos doctor` runs
+- THEN the workspace-vectors check prints `[PASS]`
+
+#### Scenario: Absent workspace vectors.db fails with a reindex remediation
+
+- GIVEN an initialized workspace whose `.openkos/vectors.db` file is
+  absent (e.g. after `openkos purge`)
+- WHEN `openkos doctor` runs
+- THEN the workspace-vectors check prints `[FAIL]` followed by an indented
+  fix line naming `openkos reindex`, and the process still exits 0 if
+  every critical check otherwise passes
+
+#### Scenario: An unread bundle makes this check not-run, not fail
+
+- GIVEN an initialized workspace whose `.openkos/vectors.db` file is
+  absent AND whose bundle-readable check reported `not-run`
+- WHEN `openkos doctor` runs
+- THEN the workspace-vectors check prints `[NOT RUN]` naming the
+  bundle-readable check as the unmet dependency, prints no `openkos
+  reindex` remediation, and the process exits `2`
+
+#### Scenario: A present index still passes when the bundle was unread
+
+- GIVEN an initialized workspace whose `.openkos/vectors.db` file EXISTS
+  AND whose bundle-readable check reported `not-run`
+- WHEN `openkos doctor` runs
+- THEN the workspace-vectors check prints `[PASS]`, because the file's
+  presence on disk does not depend on the bundle-readable check
+
+#### Scenario: Check is skipped outside a workspace
+
+- GIVEN no initialized workspace
+- WHEN `openkos doctor` runs
+- THEN the workspace-vectors check prints `[SKIP]` (not applicable), and
+  does not affect the exit code
+
+### Requirement: Workspace FTS Index Presence Check
+
+`doctor` MUST report whether the WORKSPACE `.openkos/fts.db`
+(`layout.fts_db_path`) exists on disk, mirroring the Workspace Vector Index
+Presence Check's exact shape (issue #553: `doctor` passed every check while
+the workspace's first query was about to answer without lexical retrieval,
+because nothing ever looked at `fts.db`). A `fail` on this check MUST stay
+informational (an absent index alone MUST NOT affect the exit code), it
+MUST run only when a workspace is initialized (skipped outside a
+workspace), MUST be absent-only (staleness stays `reindex`'s manifest
+gate's job and `next`'s stale tier's report), and a `[FAIL]` line MUST be
+followed by an indented fix line naming `openkos reindex`.
+
+Mirroring the Workspace Vector Index Presence Check exactly, this check
+MUST report `not-run` when the bundle-readable check reported `not-run`,
+MUST NOT print a `openkos reindex` remediation in that case, and its
+`not-run` DOES contribute to the incomplete exit code `2`.
+(Previously: this requirement described only `pass`/`fail`/`skip`, and an
+unread bundle left this check reporting `fail` with a `reindex`
+remediation derived from a value that was never measured.)
+
+#### Scenario: Present workspace fts.db passes
+
+- GIVEN an initialized workspace whose `.openkos/fts.db` file exists
+- WHEN `openkos doctor` runs
+- THEN the workspace-FTS check prints `[PASS]`
+
+#### Scenario: Absent workspace fts.db fails with a reindex remediation
+
+- GIVEN an initialized workspace whose `.openkos/fts.db` file is absent
+- WHEN `openkos doctor` runs
+- THEN the workspace-FTS check prints `[FAIL]` followed by an indented fix
+  line naming `openkos reindex`, and the process still exits 0 if every
+  critical check otherwise passes
+
+#### Scenario: An unread bundle makes the FTS check not-run, not fail
+
+- GIVEN an initialized workspace whose `.openkos/fts.db` file is absent
+  AND whose bundle-readable check reported `not-run`
+- WHEN `openkos doctor` runs
+- THEN the workspace-FTS check prints `[NOT RUN]` naming the
+  bundle-readable check as the unmet dependency, prints no `openkos
+  reindex` remediation, and the process exits `2`
+
+#### Scenario: FTS presence check is skipped outside a workspace
+
+- GIVEN no initialized workspace
+- WHEN `openkos doctor` runs
+- THEN the workspace-FTS check prints `[SKIP]` (not applicable), and does
+  not affect the exit code
+
 ## ADDED Requirements
 
 ### Requirement: Not-Run Is Structured Data On The Returned CheckResult
