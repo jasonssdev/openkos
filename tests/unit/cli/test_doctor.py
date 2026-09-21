@@ -25,8 +25,11 @@ rendered-output contract, exercised only through `runner.invoke`. Every test pat
 stub (D-seam) -- zero network, zero real Ollama process.
 """
 
+import ast
+import inspect
 import re
 import shutil
+import typing
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -34,7 +37,10 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
+from openkos import read_outcome
+from openkos.application import doctor as application_doctor
 from openkos.bundle import ledger as bundle_ledger
+from openkos.cli import main
 from openkos.cli.main import app
 from openkos.config import DEFAULT_EMBEDDING_MODEL, DEFAULT_MODEL, WorkspaceLayout
 from openkos.llm.ollama import (
@@ -1580,3 +1586,117 @@ def test_doctor_workspace_fts_check_skipped_outside_workspace(
     result = runner.invoke(app, ["doctor"])
 
     assert "[SKIP] Workspace FTS index present" in result.stdout
+
+
+# --- not-run render and counts (ADR-0022, design.md Decision 5) ---
+
+
+def test_doctor_renders_not_run_and_counts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`okf.survey_bundle` patched to raise, in a workspace with NEITHER
+    `.openkos/vectors.db` nor `.openkos/fts.db` present -- the same fixture
+    shape as `test_run_diagnostics_reports_the_index_checks_as_not_run_when_bundle_readable_did_not_run`
+    (T1.6a), deliberately exercising Decision 7's cascade at the CLI layer,
+    not just check 6 alone (design.md "Testing Strategy" row 4: the count
+    is 12/3, revised from an earlier 14/1 draft that predated Decision 7's
+    propagation into checks 7/7b)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _fake_client_and_git(monkeypatch)
+
+    def _raise(*args: object, **kwargs: object) -> object:
+        raise OSError("simulated bundle read failure")
+
+    monkeypatch.setattr("openkos.model.okf.survey_bundle", _raise)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert "[NOT RUN] Bundle readable — simulated bundle read failure" in (
+        result.stdout
+    )
+    assert (
+        "[NOT RUN] Workspace vector index present — depends on check 6 "
+        "(Bundle readable)"
+    ) in result.stdout
+    assert (
+        "[NOT RUN] Workspace FTS index present — depends on check 6 (Bundle readable)"
+    ) in result.stdout
+    assert "12 check(s) completed, 3 did not run." in result.stdout
+
+
+def test_render_check_has_a_tag_for_every_status_literal() -> None:
+    """Drift guard (design.md Decision 5): `_render_check`'s tag dict must
+    carry one entry per member of `CheckResult.status`'s widened `Literal`
+    -- a missing tag is a silent `KeyError` at render time, exactly what
+    `test_doctor_renders_not_run_and_counts` above hit before this guard
+    landed. Resolves the `Literal` via `typing.get_type_hints` rather than
+    reading `CheckResult.__annotations__` directly, because
+    `application/doctor.py` uses `from __future__ import annotations`,
+    which stores the field's annotation as an unevaluated string --
+    `get_type_hints` is what resolves it back to the real `Literal`/`Union`
+    objects `typing.get_args` can walk."""
+    status_type = typing.get_type_hints(application_doctor.CheckResult)["status"]
+    status_values: set[str] = set()
+    for member in typing.get_args(status_type):
+        member_args = typing.get_args(member)
+        status_values.update(member_args if member_args else (member,))
+    assert status_values == {"pass", "fail", "skip", read_outcome.NOT_RUN}
+
+    source = inspect.getsource(main._render_check)
+    tree = ast.parse(source)
+    dict_node = next(node for node in ast.walk(tree) if isinstance(node, ast.Dict))
+    tag_keys = {key.value for key in dict_node.keys if isinstance(key, ast.Constant)}
+
+    assert status_values <= tag_keys
+
+
+# --- exit rule (ADR-0022, design.md Decision 4): not-run vs critical failure ---
+
+
+def test_doctor_exits_two_when_a_check_did_not_run_and_every_critical_passes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The headline scenario (doctor-command spec: "Not-run present and
+    every critical check passes exits two, not zero"; proposal's stated top
+    mitigation for the false-healthy regression ADR-0022 exists to close).
+    A raising `okf.survey_bundle` reports `not-run` (T1.6's containment)
+    while every critical check (config-valid, Ollama-reachable,
+    model-installed) still passes -- the process must exit `2`, never `0`."""
+    _init_workspace(tmp_path, monkeypatch)
+    _fake_client_and_git(monkeypatch)
+
+    def _raise(*args: object, **kwargs: object) -> object:
+        raise OSError("simulated bundle read failure")
+
+    monkeypatch.setattr("openkos.model.okf.survey_bundle", _raise)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 2
+
+
+def test_doctor_exits_one_when_not_run_coexists_with_a_critical_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Scenario: "Not-run present alongside a critical failure still exits
+    one" -- a critical failure dominates the incomplete-report signal
+    (design.md Decision 4). This passes immediately under the new rule
+    (critical checked first); its falsifiability is proven separately by
+    T1.18 (tasks.md), which swaps the predicate order and confirms this
+    exact test goes RED."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr("openkos.vcs.git.git_available", lambda: True)
+    monkeypatch.setattr("openkos.vcs.git.filter_repo_available", lambda: True)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(error=OllamaUnavailable("connection refused")),
+    )
+
+    def _raise(*args: object, **kwargs: object) -> object:
+        raise OSError("simulated bundle read failure")
+
+    monkeypatch.setattr("openkos.model.okf.survey_bundle", _raise)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 1

@@ -121,9 +121,11 @@ import shutil
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Final, Literal
 
-from openkos import config
+import yaml
+
+from openkos import config, read_outcome
 from openkos.bundle import ledger as bundle_ledger
 from openkos.llm.base import (
     BackendDiagnostics,
@@ -146,10 +148,30 @@ class CheckResult:
     thing that turns this into output."""
 
     label: str
-    status: Literal["pass", "fail", "skip"]
+    status: Literal["pass", "fail", "skip"] | read_outcome.NotRunStatus
     critical: bool
     remediation: str | None = None
     detail: str | None = None
+
+
+class ProbeUnavailable(Exception):
+    """The injected `reset_point_available()` callback could not answer
+    (D4, design.md Decision 2). Mirrors `application/lint.py::LintInputUnavailable`'s
+    shape one module over: `application/*` may not import `openkos.vcs`
+    (AST-enforced, `tests/unit/application/test_layering.py`), so the CLI
+    adapter's `_reset_point_available` thunk translates `vcs_git.GitError`
+    into this application-owned type at the boundary, and this module
+    catches it by name -- never the git-specific class."""
+
+
+_LEDGER_SIDECAR_READ_ERRORS: Final = (OSError, ValueError, yaml.YAMLError)
+"""D2/D3 (design.md Decision 3): the classes that mean "corrupt sidecar" at
+`scan_torn_writes`'s and `scan_nesting_violations`'s own unguarded rglob/
+read/parse sites -- the exact same list `bundle.ledger`'s own private
+`_SIDECAR_SKIP_ERRORS` already uses, duplicated locally here rather than
+importing a private name across the layer boundary (T1.5, declined for this
+change: no test currently references the private name, and the rename is
+unforecast scope left to a reviewer)."""
 
 
 def resolve_diagnostic_model(root: Path) -> str:
@@ -447,34 +469,67 @@ def run_diagnostics(
                 CheckResult(task_label, "pass", critical=False, detail=named)
             )
 
-    # 6. bundle-readable (informational, workspace-only; SKIP outside)
-    bundle_empty = False
+    # 6. bundle-readable (informational, workspace-only; SKIP outside).
+    # D1 (design.md Decision 3): `okf.survey_bundle`'s own internal reads
+    # can raise `OSError` (`rglob`/`is_dir` -- per-file reads and
+    # `frontmatter.loads` are already guarded inside `survey_bundle`
+    # itself); a raise here is reported `not-run` rather than propagated,
+    # so it never discards the other fourteen checks. `bundle_dot_directory`'s
+    # `ValueError` is a documented caller bug and is deliberately NOT caught
+    # here -- it still propagates uncaught.
+    #
+    # `bundle_emptiness` (design.md Decision 7) is a THIRD-valued read, not a
+    # `bool`: checks 7/7b below consult it to decide `skip` (empty bundle)
+    # versus `fail` (non-empty, no index yet), and it must be unrepresentable
+    # to read as "nonempty" when check 6 never ran -- `read_outcome.NOT_RUN`
+    # is its own initializer, so a check 6 not-run leaves it exactly that,
+    # never silently defaulting.
+    bundle_emptiness: Literal["empty", "nonempty"] | read_outcome.NotRunStatus = (
+        read_outcome.NOT_RUN
+    )
     if in_workspace:
-        survey = okf.survey_bundle(config.WorkspaceLayout(root).bundle_dir)
-        # #568: a clean survey counting nothing means a freshly-`init`ed
-        # bundle -- checks 7/7b below use this to skip instead of failing
-        # with a `reindex` that would build nothing.
-        bundle_empty = (
-            not survey.findings and survey.sources == 0 and survey.concepts == 0
-        )
-        if not survey.findings:
+        try:
+            survey = okf.survey_bundle(config.WorkspaceLayout(root).bundle_dir)
+        except OSError as exc:
             results.append(
                 CheckResult(
                     "Bundle readable",
-                    "pass",
+                    read_outcome.NOT_RUN,
                     critical=False,
-                    detail=f"{survey.sources} sources, {survey.concepts} concepts",
+                    detail=str(exc),
                 )
             )
+            # `bundle_emptiness` stays `read_outcome.NOT_RUN` -- nothing to
+            # set here; checks 7/7b below report `not-run` too.
         else:
-            results.append(
-                CheckResult(
-                    "Bundle readable",
-                    "fail",
-                    critical=False,
-                    detail=f"{len(survey.findings)} issue(s)",
+            # #568: a clean survey counting nothing means a freshly-`init`ed
+            # bundle -- checks 7/7b below use this to skip instead of failing
+            # with a `reindex` that would build nothing.
+            bundle_emptiness = (
+                "empty"
+                if (
+                    not survey.findings and survey.sources == 0 and survey.concepts == 0
                 )
+                else "nonempty"
             )
+            if not survey.findings:
+                results.append(
+                    CheckResult(
+                        "Bundle readable",
+                        "pass",
+                        critical=False,
+                        detail=f"{survey.sources} sources, {survey.concepts} concepts",
+                    )
+                )
+            else:
+                results.append(
+                    CheckResult(
+                        "Bundle readable",
+                        "fail",
+                        critical=False,
+                        detail=f"{len(survey.findings)} issue(s)",
+                    )
+                )
     else:
         results.append(CheckResult("Bundle readable", "skip", critical=False))
 
@@ -492,7 +547,19 @@ def run_diagnostics(
             results.append(
                 CheckResult("Workspace vector index present", "pass", critical=False)
             )
-        elif bundle_empty:
+        elif bundle_emptiness == read_outcome.NOT_RUN:
+            # Decision 7: check 6 never ran, so this check cannot decide
+            # between `skip` (empty bundle) and `fail` (non-empty, no index
+            # yet) without guessing -- report `not-run` instead of either.
+            results.append(
+                CheckResult(
+                    "Workspace vector index present",
+                    read_outcome.NOT_RUN,
+                    critical=False,
+                    detail="depends on check 6 (Bundle readable)",
+                )
+            )
+        elif bundle_emptiness == "empty":
             # #568: right after `init` there is nothing to index -- a
             # `[FAIL] -> openkos reindex` at step 5 of the README quickstart
             # reads as a broken install, and `reindex` would build nothing.
@@ -504,7 +571,7 @@ def run_diagnostics(
                     detail=_EMPTY_BUNDLE_DETAIL,
                 )
             )
-        else:
+        else:  # "nonempty"
             results.append(
                 CheckResult(
                     "Workspace vector index present",
@@ -530,7 +597,16 @@ def run_diagnostics(
             results.append(
                 CheckResult("Workspace FTS index present", "pass", critical=False)
             )
-        elif bundle_empty:
+        elif bundle_emptiness == read_outcome.NOT_RUN:
+            results.append(
+                CheckResult(
+                    "Workspace FTS index present",
+                    read_outcome.NOT_RUN,
+                    critical=False,
+                    detail="depends on check 6 (Bundle readable)",
+                )
+            )
+        elif bundle_emptiness == "empty":
             results.append(
                 CheckResult(
                     "Workspace FTS index present",
@@ -539,7 +615,7 @@ def run_diagnostics(
                     detail=_EMPTY_BUNDLE_DETAIL,
                 )
             )
-        else:
+        else:  # "nonempty"
             results.append(
                 CheckResult(
                     "Workspace FTS index present",
@@ -662,26 +738,39 @@ def run_diagnostics(
     # repair`, whose Gate 1 refuses outright while any marker is pending
     # (#603: the old text sent the operator in a circle).
     if in_workspace:
-        torn = bundle_ledger.scan_torn_writes(config.WorkspaceLayout(root).bundle_dir)
-        if torn:
+        try:
+            torn = bundle_ledger.scan_torn_writes(
+                config.WorkspaceLayout(root).bundle_dir
+            )
+        except _LEDGER_SIDECAR_READ_ERRORS as exc:
             results.append(
                 CheckResult(
                     "Merge ledger torn writes",
-                    "fail",
+                    read_outcome.NOT_RUN,
                     critical=False,
-                    detail=f"{len(torn)} pending marker(s)",
-                    remediation=(
-                        "run `openkos merge` or `openkos unmerge` on the "
-                        "affected survivor -- its recovery pass resolves "
-                        "the pending marker; the repair verb refuses while "
-                        "one is pending"
-                    ),
+                    detail=str(exc),
                 )
             )
         else:
-            results.append(
-                CheckResult("Merge ledger torn writes", "pass", critical=False)
-            )
+            if torn:
+                results.append(
+                    CheckResult(
+                        "Merge ledger torn writes",
+                        "fail",
+                        critical=False,
+                        detail=f"{len(torn)} pending marker(s)",
+                        remediation=(
+                            "run `openkos merge` or `openkos unmerge` on the "
+                            "affected survivor -- its recovery pass resolves "
+                            "the pending marker; the repair verb refuses while "
+                            "one is pending"
+                        ),
+                    )
+                )
+            else:
+                results.append(
+                    CheckResult("Merge ledger torn writes", "pass", critical=False)
+                )
     else:
         results.append(CheckResult("Merge ledger torn writes", "skip", critical=False))
 
@@ -706,42 +795,69 @@ def run_diagnostics(
     # that remedy unconditionally would name a command that cannot work.
     if in_workspace:
         bundle_dir = config.WorkspaceLayout(root).bundle_dir
-        violations = bundle_ledger.scan_nesting_violations(bundle_dir)
-        if violations:
-            if reset_point_available():
-                reset_remedy = (
-                    "run `git reset --hard <first-merge>~1` then `openkos reindex`"
-                )
-            else:
-                reset_remedy = (
-                    "no git reset point is available in this workspace (no "
-                    "repository, no configured git identity, or no commit "
-                    "history) -- there is no remedy that restores "
-                    "reversibility for the affected merge(s)"
-                )
+        try:
+            violations = bundle_ledger.scan_nesting_violations(bundle_dir)
+        except _LEDGER_SIDECAR_READ_ERRORS as exc:
             results.append(
                 CheckResult(
                     "Merge ledger entries free of post-merge mutation",
-                    "fail",
+                    read_outcome.NOT_RUN,
                     critical=False,
-                    detail=f"{len(violations)} entr{'y' if len(violations) == 1 else 'ies'}",
-                    remediation=(
-                        "if a ledger is merely unmigrated (still embedded in "
-                        "the survivor's own frontmatter, not corrupted), run "
-                        f"`openkos repair`; if corrupted, {reset_remedy} -- "
-                        "reversibility of merges made before this fix is not "
-                        "guaranteed"
-                    ),
+                    detail=str(exc),
                 )
             )
         else:
-            results.append(
-                CheckResult(
-                    "Merge ledger entries free of post-merge mutation",
-                    "pass",
-                    critical=False,
+            if violations:
+                try:
+                    has_reset_point = reset_point_available()
+                except ProbeUnavailable as exc:
+                    results.append(
+                        CheckResult(
+                            "Merge ledger entries free of post-merge mutation",
+                            read_outcome.NOT_RUN,
+                            critical=False,
+                            detail=str(exc),
+                        )
+                    )
+                else:
+                    if has_reset_point:
+                        reset_remedy = (
+                            "run `git reset --hard <first-merge>~1` then "
+                            "`openkos reindex`"
+                        )
+                    else:
+                        reset_remedy = (
+                            "no git reset point is available in this workspace (no "
+                            "repository, no configured git identity, or no commit "
+                            "history) -- there is no remedy that restores "
+                            "reversibility for the affected merge(s)"
+                        )
+                    results.append(
+                        CheckResult(
+                            "Merge ledger entries free of post-merge mutation",
+                            "fail",
+                            critical=False,
+                            detail=(
+                                f"{len(violations)} "
+                                f"entr{'y' if len(violations) == 1 else 'ies'}"
+                            ),
+                            remediation=(
+                                "if a ledger is merely unmigrated (still embedded "
+                                "in the survivor's own frontmatter, not "
+                                "corrupted), run `openkos repair`; if corrupted, "
+                                f"{reset_remedy} -- reversibility of merges made "
+                                "before this fix is not guaranteed"
+                            ),
+                        )
+                    )
+            else:
+                results.append(
+                    CheckResult(
+                        "Merge ledger entries free of post-merge mutation",
+                        "pass",
+                        critical=False,
+                    )
                 )
-            )
     else:
         results.append(
             CheckResult(

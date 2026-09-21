@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from openkos import config
+from openkos import config, read_outcome
 from openkos.application import doctor as doctor_service
 from openkos.bundle import ledger as bundle_ledger
 from openkos.llm.base import (
@@ -129,6 +129,207 @@ def test_run_diagnostics_never_raises_for_any_injected_failure_mode(
         reset_point_available=lambda: False,
     )
     assert len(results) == 15
+
+
+# --- not-run (ADR-0022, D1/D2/D3): a raising in-workspace read degrades ---
+# --- only the check it belongs to, without discarding the other fourteen ---
+
+
+def test_run_diagnostics_lets_a_bundle_dot_directory_value_error_propagate_uncaught(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D1's `except OSError` guard around `okf.survey_bundle` (T1.6) is
+    deliberately narrow: a `ValueError` from `bundle_dot_directory`'s own
+    `relative_to` call is a documented CALLER bug (a path outside the
+    bundle), never the environment's fault, and must keep propagating
+    uncaught -- containing it would convert a programming error into a
+    permanently green `not-run` (design.md Decision 3, ADR-0022
+    Consequences). This is the mutation-discipline broad-direction tripwire
+    for D1 (tasks.md T1.9): it must go RED if D1's guard is ever widened to
+    bare `Exception`."""
+    layout = _workspace(tmp_path)
+
+    def _raise(*args: object, **kwargs: object) -> object:
+        raise ValueError("path outside the bundle")
+
+    monkeypatch.setattr("openkos.model.okf.survey_bundle", _raise)
+
+    with pytest.raises(ValueError, match="path outside the bundle"):
+        doctor_service.run_diagnostics(
+            layout.root,
+            client=_FakeBackend(
+                tags=[config.DEFAULT_MODEL, config.DEFAULT_EMBEDDING_MODEL]
+            ),
+            git_available=True,
+            filter_repo_available=True,
+            reset_point_available=lambda: True,
+        )
+
+
+@pytest.mark.parametrize(
+    ("patch_target", "label"),
+    [
+        ("openkos.model.okf.survey_bundle", "Bundle readable"),
+        ("openkos.bundle.ledger.scan_torn_writes", "Merge ledger torn writes"),
+        (
+            "openkos.bundle.ledger.scan_nesting_violations",
+            "Merge ledger entries free of post-merge mutation",
+        ),
+    ],
+)
+def test_run_diagnostics_reports_not_run_when_survey_bundle_scan_torn_writes_or_scan_nesting_violations_raises(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    patch_target: str,
+    label: str,
+) -> None:
+    """D1/D2/D3 (design.md Decision 3): each of the three raising in-
+    workspace reads must degrade only its own `CheckResult` to `not-run`,
+    never discard the other fourteen. This is the genuine in-workspace
+    counterpart `test_run_diagnostics_never_raises_for_any_injected_failure_mode`
+    above cannot be: that test runs OUTSIDE a workspace, where checks 6/12/13
+    never reach `okf.survey_bundle`/`scan_torn_writes`/`scan_nesting_violations`
+    at all -- they take their `skip` branch instead.
+
+    `.openkos/vectors.db` and `.openkos/fts.db` are pre-created so Decision
+    7's downstream propagation (checks 7/7b consulting check 6's own not-run
+    outcome) never engages here -- that cascade is Decision 7's OWN scenario,
+    covered separately by
+    `test_run_diagnostics_reports_the_index_checks_as_not_run_when_bundle_readable_did_not_run`
+    below, which uses the opposite fixture (no pre-created index files)."""
+    layout = _workspace(tmp_path)
+    layout.openkos_dir.mkdir(parents=True, exist_ok=True)
+    layout.vectors_db_path.write_bytes(b"")
+    layout.fts_db_path.write_bytes(b"")
+
+    def _raise(*args: object, **kwargs: object) -> object:
+        raise OSError("simulated read failure")
+
+    monkeypatch.setattr(patch_target, _raise)
+
+    results = doctor_service.run_diagnostics(
+        layout.root,
+        client=_FakeBackend(
+            tags=[config.DEFAULT_MODEL, config.DEFAULT_EMBEDDING_MODEL]
+        ),
+        git_available=True,
+        filter_repo_available=True,
+        reset_point_available=lambda: True,
+    )
+
+    assert len(results) == 15
+    not_run = [r for r in results if r.status == read_outcome.NOT_RUN]
+    assert len(not_run) == 1
+    assert not_run[0].label == label
+    assert not_run[0].detail is not None
+    assert "simulated read failure" in not_run[0].detail
+    other_statuses = {r.status for r in results if r.label != label}
+    assert read_outcome.NOT_RUN not in other_statuses
+
+
+def test_run_diagnostics_reports_the_integrity_check_as_not_run_when_reset_point_available_raises(
+    tmp_path: Path,
+) -> None:
+    """D4 (design.md Decision 2/3): the injected `reset_point_available`
+    thunk raising `ProbeUnavailable` degrades only the merge-ledger-
+    integrity check, inside its `if violations:` branch -- the git-specific
+    exception is translated to this application-owned type at the CLI
+    boundary (`application/*` may not import `openkos.vcs`,
+    `test_layering.py`), so this test injects the translated type directly,
+    exactly as the CLI adapter's `_reset_point_available` thunk would."""
+    layout = _workspace(tmp_path)
+    layout.openkos_dir.mkdir(parents=True, exist_ok=True)
+    layout.vectors_db_path.write_bytes(b"")
+    layout.fts_db_path.write_bytes(b"")
+    _write_nesting_violation(layout.bundle_dir)
+
+    def _raise() -> bool:
+        raise doctor_service.ProbeUnavailable("git broke")
+
+    results = doctor_service.run_diagnostics(
+        layout.root,
+        client=_FakeBackend(
+            tags=[config.DEFAULT_MODEL, config.DEFAULT_EMBEDDING_MODEL]
+        ),
+        git_available=True,
+        filter_repo_available=True,
+        reset_point_available=_raise,
+    )
+
+    assert len(results) == 15
+    check = _by_label(results, "Merge ledger entries free of post-merge mutation")
+    assert check.status == read_outcome.NOT_RUN
+    assert check.detail is not None
+    assert "git broke" in check.detail
+
+
+def test_run_diagnostics_lets_an_unrelated_reset_point_available_exception_propagate_uncaught(
+    tmp_path: Path,
+) -> None:
+    """D4's `except ProbeUnavailable` guard (T1.8) is deliberately narrow: a
+    thunk that raises something OTHER than `ProbeUnavailable` (e.g. a bug in
+    the thunk itself, not a git failure) must keep propagating uncaught --
+    catching everything here would silently convert a caller bug into a
+    permanently green `not-run`. This is the mutation-discipline
+    broad-direction tripwire for D4 (tasks.md T1.11): it must go RED if D4's
+    guard is ever widened to bare `Exception`."""
+    layout = _workspace(tmp_path)
+    layout.openkos_dir.mkdir(parents=True, exist_ok=True)
+    layout.vectors_db_path.write_bytes(b"")
+    layout.fts_db_path.write_bytes(b"")
+    _write_nesting_violation(layout.bundle_dir)
+
+    def _raise() -> bool:
+        raise RuntimeError("bug in the thunk itself")
+
+    with pytest.raises(RuntimeError, match="bug in the thunk itself"):
+        doctor_service.run_diagnostics(
+            layout.root,
+            client=_FakeBackend(
+                tags=[config.DEFAULT_MODEL, config.DEFAULT_EMBEDDING_MODEL]
+            ),
+            git_available=True,
+            filter_repo_available=True,
+            reset_point_available=_raise,
+        )
+
+
+def test_run_diagnostics_reports_the_index_checks_as_not_run_when_bundle_readable_did_not_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Decision 7: checks 7/7b (workspace-vector-index-present,
+    workspace-fts-present) must not guess `bundle_emptiness` when check 6
+    (bundle-readable) never got to set it. Opposite fixture from the
+    parametrized test above -- `.openkos/vectors.db`/`fts.db` do NOT exist
+    -- so checks 7/7b would otherwise reach their `bundle_empty`-reading
+    branch instead of the `index_path.exists()` short-circuit."""
+    layout = _workspace(tmp_path)
+
+    def _raise(*args: object, **kwargs: object) -> object:
+        raise OSError("simulated read failure")
+
+    monkeypatch.setattr("openkos.model.okf.survey_bundle", _raise)
+
+    results = doctor_service.run_diagnostics(
+        layout.root,
+        client=_FakeBackend(
+            tags=[config.DEFAULT_MODEL, config.DEFAULT_EMBEDDING_MODEL]
+        ),
+        git_available=True,
+        filter_repo_available=True,
+        reset_point_available=lambda: True,
+    )
+
+    bundle_readable = _by_label(results, "Bundle readable")
+    vector_index = _by_label(results, "Workspace vector index present")
+    fts_index = _by_label(results, "Workspace FTS index present")
+    assert bundle_readable.status == read_outcome.NOT_RUN
+    assert vector_index.status == read_outcome.NOT_RUN
+    assert fts_index.status == read_outcome.NOT_RUN
+    assert vector_index.detail is not None
+    assert "Bundle readable" in vector_index.detail
+    assert fts_index.detail is not None
+    assert "Bundle readable" in fts_index.detail
 
 
 # --- outside a workspace: checks 1/2/6/7/7b/12/13 skip or fail; 3-5b/8-11 still run ---

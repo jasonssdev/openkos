@@ -57,3 +57,4 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 | [0019](0019-dot-directories-are-not-knowledge.md) | Dot-directories are not knowledge | Accepted | 2026-09-14 |
 | [0020](0020-concurrency-across-three-writers.md) | Concurrency across three writers -- per-operation locking, detection for the rest | Proposed | 2026-09-16 |
 | [0021](0021-sync-async-boundary.md) | The sync/async boundary -- a worker thread per operation, and no cancellation below it | Proposed | 2026-09-17 |
+| [0022](0022-incomplete-read-verbs-report-incompleteness.md) | An incomplete read verb reports incompleteness as data and as exit code 2 | Proposed | 2026-09-21 |
