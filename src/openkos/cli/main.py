@@ -22,7 +22,7 @@ from typing import Final, Literal, NamedTuple, TypedDict, TypeVar
 import typer
 from rich.console import Console
 
-from openkos import config, fsio, lock, source_title
+from openkos import config, fsio, lock, read_outcome, source_title
 from openkos import lint as lint_check
 from openkos.application import consent as application_consent
 from openkos.application import doctor as application_doctor
@@ -14880,8 +14880,15 @@ def _render_check(r: application_doctor.CheckResult) -> None:
 
     `CheckResult` moved into `application/doctor.py` (issue #995, PR 6) --
     this function stays adapter-side, unchanged, since it is a render loop,
-    not a read."""
-    tag = {"pass": "[PASS]", "fail": "[FAIL]", "skip": "[SKIP]"}[r.status]
+    not a read. `"not-run"` (ADR-0022) gains its own tag, `[NOT RUN]`; the
+    reason rides in `detail` like every other status, so it needs no second
+    branch here -- the `-> remediation` line below stays `fail`-only."""
+    tag = {
+        "pass": "[PASS]",
+        "fail": "[FAIL]",
+        "skip": "[SKIP]",
+        "not-run": "[NOT RUN]",
+    }[r.status]
     line = f"{tag} {r.label}"
     if r.detail:
         line += f" — {r.detail}"
@@ -15002,16 +15009,20 @@ def doctor() -> None:
         `doctor` invocation -- a cost added to the command people run
         precisely when their workspace is already misbehaving.
 
-        `GitError` is NOT caught here, and that is deliberate. The
-        pre-extraction body left these two calls unguarded inside the same
-        violation branch, so a broken git config propagated. Catching it
-        would be a behaviour change, and a refactor is the wrong place to
-        decide which errors become messages -- the same rule that sent the
-        `lint` slice's widened `try` back. An earlier draft of this thunk
-        did catch it, justified by an eager call position that no longer
-        exists once the value became lazy. The gap is real and worth its
-        own issue; it is not this commit's to close."""
-        return vcs_git.repo_root(root) is not None and vcs_git.has_reset_point(root)
+        `GitError` IS caught here (ADR-0022, design.md Decision 2), and
+        re-raised as `application_doctor.ProbeUnavailable` -- an
+        application-owned type, since `application/*` may not import
+        `openkos.vcs` (AST-enforced, `tests/unit/application/
+        test_layering.py`). Check 13's own `try/except ProbeUnavailable`
+        degrades the merge-ledger-integrity check to `not-run` instead of
+        losing every other accumulated `CheckResult`. This translation sits
+        at the CLI boundary rather than the pre-extraction call site
+        precisely because the layering ban forces it here -- see D2 in
+        design.md for the full reasoning."""
+        try:
+            return vcs_git.repo_root(root) is not None and vcs_git.has_reset_point(root)
+        except vcs_git.GitError as exc:
+            raise application_doctor.ProbeUnavailable(str(exc)) from exc
 
     # WALL 1 (`application/doctor.py`'s own module docstring): the CLI
     # adapter builds the one concrete `OllamaClient` and passes it in as a
@@ -15038,8 +15049,23 @@ def doctor() -> None:
     for r in results:
         _render_check(r)
 
-    if any(r.status == "fail" and r.critical for r in results):
+    # Completed/not-run counts (design.md Decision 5, ADR-0022): `skip`
+    # counts as completed, matching the exit rule below so the printed line
+    # and the exit code always agree about what "completed" means.
+    n = sum(1 for r in results if r.status == read_outcome.NOT_RUN)
+    typer.echo(f"{len(results) - n} check(s) completed, {n} did not run.")
+
+    # Exit rule (ADR-0022, design.md Decision 4): precedence is the whole
+    # decision. A critical failure is a known, actionable diagnosis and
+    # DOMINATES an incomplete report -- not-run alongside a critical fail
+    # still exits `1`, never `2`, because "we could not tell you" is a
+    # weaker claim than a known failure the operator can already act on.
+    critical_failed = any(r.status == "fail" and r.critical for r in results)
+    incomplete = any(r.status == read_outcome.NOT_RUN for r in results)
+    if critical_failed:
         raise typer.Exit(code=1)
+    if incomplete:
+        raise typer.Exit(code=2)
 
 
 @app.command(
