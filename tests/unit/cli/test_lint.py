@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from openkos import lint as lint_check
 from openkos.cli.main import app
 from tests.unit.cli.conftest import snapshot_bytes as _snapshot
 
@@ -1110,29 +1111,23 @@ def test_lint_state_dir_markdown_is_not_double_reported_under_dot_dir_markdown(
     assert ".state/stray.md" in state_section
 
 
-def test_lint_lets_a_late_name_walk_failure_propagate_uncaught(
+def test_lint_reports_a_late_name_walk_failure_as_not_run_without_losing_findings(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """An `OSError` from a check that runs AFTER the three workspace input
-    reads propagates uncaught, exactly as it did before issue #995 PR 4.
+    reads no longer propagates uncaught (ADR-0022): it degrades to a
+    `not-run` entry the report carries as data, the eleven surviving
+    already-computed finding sections still render, and the run exits `2`
+    -- the opposite verdict from this test's predecessor
+    (`test_lint_lets_a_late_name_walk_failure_propagate_uncaught`), which
+    pinned the crash this change exists to close.
 
-    `lint.scan_non_nfc_entries` (behind `check_non_nfc_names`) walks
+    `lint.scan_non_nfc_entries` (behind `check_non_nfc_names`, L1) walks
     `bundle_dir.rglob("*")` on its own -- deliberately NOT the
     `collect_docs` walk, because it reads NAMES, including directory names
-    `collect_docs` never surfaces -- so an unreadable subdirectory raises
-    straight out of the command. Two more checks
-    (`check_state_dir_contains_no_markdown`, `check_dot_dir_markdown`) walk
-    the tree the same way.
-
-    The extraction briefly guarded the WHOLE service call, which looked
-    like a free improvement and was not: a malformed `(as of YYYY-MM-DD)`
-    body stamp reaching `date.fromisoformat` inside `check_stale_stamps`
-    raises `ValueError` from in-memory logic, and reporting that as
-    "failed while reading the workspace" names the wrong cause. The guard
-    is scoped to the three input reads again, through
-    `application.lint.LintInputUnavailable`, so this test pins the
-    UNGUARDED half: changing which errors become messages is a separate
-    decision, not something a refactor should smuggle in."""
+    `collect_docs` never surfaces -- so an unreadable subdirectory used to
+    raise straight out of the command. It is now contained at its own call
+    site in `application/lint.py`."""
     _init_workspace(tmp_path, monkeypatch)
 
     real_rglob = Path.rglob
@@ -1146,7 +1141,61 @@ def test_lint_lets_a_late_name_walk_failure_propagate_uncaught(
 
     result = runner.invoke(app, ["lint"])
 
-    assert result.exit_code != 0
-    assert isinstance(result.exception, OSError)
-    assert "simulated unreadable subdirectory" in str(result.exception)
+    assert result.exit_code == 2
+    assert not isinstance(result.exception, OSError)
+    assert "simulated unreadable subdirectory" in result.stdout
+    assert "Stale stamps:" in result.stdout
+    assert "12 check(s) completed, 1 did not run." in result.stdout
+    assert "failed while reading the workspace" not in result.stderr
+
+
+def test_lint_reports_a_state_dir_walk_failure_as_not_run_without_losing_findings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`check_state_dir_contains_no_markdown` (L2) is patched directly,
+    NOT via `Path.rglob` -- L1's `pattern == "*"` trigger also breaks
+    `collect_docs` (`okf._iter_docs`'s own `rglob("*.md")` walk shares the
+    pattern `scan_markdown_under_state_dir` uses), which would raise
+    `LintInputUnavailable` instead: the wrong exit path entirely. Patching
+    the check function is valid because `application/lint.py` resolves it
+    as a module attribute at call time (same technique as
+    `test_build_lint_report_calls_collect_docs_exactly_once`)."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    def _raise(bundle_dir: Path) -> list[object]:
+        raise OSError("simulated unreadable state dir")
+
+    monkeypatch.setattr(lint_check, "check_state_dir_contains_no_markdown", _raise)
+
+    result = runner.invoke(app, ["lint"])
+
+    assert result.exit_code == 2
+    assert not isinstance(result.exception, OSError)
+    assert "simulated unreadable state dir" in result.stdout
+    assert "Stale stamps:" in result.stdout
+    assert "12 check(s) completed, 1 did not run." in result.stdout
+    assert "failed while reading the workspace" not in result.stderr
+
+
+def test_lint_reports_a_dot_dir_walk_failure_as_not_run_without_losing_findings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`check_dot_dir_markdown` (L3) is patched directly, same shape as the
+    L2 test above and for the same reason -- its own walk
+    (`okf.iter_bundle_markdown`'s `rglob("*.md")`) shares `collect_docs`'
+    pattern too."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    def _raise(bundle_dir: Path) -> list[object]:
+        raise OSError("simulated unreadable dot directory")
+
+    monkeypatch.setattr(lint_check, "check_dot_dir_markdown", _raise)
+
+    result = runner.invoke(app, ["lint"])
+
+    assert result.exit_code == 2
+    assert not isinstance(result.exception, OSError)
+    assert "simulated unreadable dot directory" in result.stdout
+    assert "Stale stamps:" in result.stdout
+    assert "12 check(s) completed, 1 did not run." in result.stdout
     assert "failed while reading the workspace" not in result.stderr

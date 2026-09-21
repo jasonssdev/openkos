@@ -10809,6 +10809,18 @@ def lint() -> None:
     for notice_line in report.notices:
         typer.echo(notice_line)
     typer.echo()
+    # Checks that did not run (design.md Decision 5, ADR-0022): rendered
+    # FIRST -- after notices, before the findings sections below -- so a
+    # partial report announces itself before its content, not after. Only
+    # the three late name walks (L1/L2/L3) can land here; the eleven other
+    # already-computed finding sections below always render regardless.
+    typer.echo("Checks that did not run:")
+    if not report.not_run:
+        typer.echo("  No checks failed to run.")
+    else:
+        for not_run_check in report.not_run:
+            typer.echo(f"  {not_run_check.label}: {not_run_check.reason}")
+    typer.echo()
     typer.echo("Stale stamps:")
     if not report.stale:
         typer.echo("  No stale stamps.")
@@ -10919,6 +10931,24 @@ def lint() -> None:
     else:
         for finding in report.dot_dir_markdown:
             typer.echo(f"  {finding.path}: {finding.detail}")
+
+    # Completed/not-run counts (design.md Decision 5, ADR-0022): against
+    # `application_lint.TOTAL_CHECKS` (13 calls), NOT the 14 `LintReport`
+    # finding-list fields -- `check_below_source_sensitivity` is one call
+    # feeding two fields, so counting fields would overstate how many
+    # checks ran.
+    typer.echo(
+        f"{application_lint.TOTAL_CHECKS - len(report.not_run)} check(s) "
+        f"completed, {len(report.not_run)} did not run."
+    )
+
+    # Exit rule (design.md Decision 4, ADR-0022, Non-Gating Exit Contract):
+    # findings alone NEVER gate -- only an incomplete run does. A `not_run`
+    # entry means at least one late walk (L1/L2/L3) could not run, so the
+    # report the operator is reading may be missing signal `lint` would
+    # otherwise have surfaced.
+    if report.not_run:
+        raise typer.Exit(code=2)
 
 
 @app.command(

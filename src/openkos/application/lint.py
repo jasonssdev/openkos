@@ -85,9 +85,21 @@ make silently."""
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Final
 
-from openkos import config
+from openkos import config, read_outcome
 from openkos import lint as lint_check
+
+TOTAL_CHECKS: Final = 13
+"""How many `check_*`/`scan_*` calls `build_lint_report` makes (ADR-0022,
+design.md Decision 5) -- NOT the same number as `LintReport`'s fourteen
+finding-list fields: `check_below_source_sensitivity` is ONE call that
+feeds two fields (`below_source` and `multi_source_uncovered`). The render
+counts line (`cli/main.py`'s `lint()`) reports completed/not-run against
+THIS count, not the field count, because a `not-run` outcome is per CALL,
+not per field. Pinned against drift by
+`tests/unit/application/test_lint_service.py::
+test_total_checks_matches_the_number_of_check_calls_in_build_lint_report`."""
 
 
 class LintInputUnavailable(Exception):
@@ -163,19 +175,49 @@ def build_lint_report(layout: config.WorkspaceLayout) -> lint_check.LintReport:
     dangling_provenance = lint_check.check_dangling_provenance(docs)
     # issue #421: and again -- pure, deterministic, no LLM, no clock.
     unbacked_provenance = lint_check.check_unbacked_provenance(docs)
+    # ADR-0022 (design.md Decision 3, L1/L2/L3): each of the three
+    # names-only late walks below is wrapped in its OWN `try/except
+    # OSError` -- individually, never one shared block -- so an
+    # unreadable directory under ANY one of them degrades ONLY that check
+    # to `not-run` instead of discarding the twelve already-computed
+    # finding lists above it. Only `OSError` is caught: a `ValueError`
+    # from any of the three (e.g. a `relative_to` call against a path a
+    # scan helper should never have produced) is a documented caller bug,
+    # never the environment's fault, and stays propagating uncaught,
+    # exactly like D1's `bundle_dot_directory` guard in
+    # `application/doctor.py`.
+    not_run: list[read_outcome.NotRun] = []
+
     # issue #474: a names-only walk, never the docs list -- collect_docs
     # cannot see a decomposed directory, non-`.md` file, or unreadable doc.
-    non_nfc = lint_check.check_non_nfc_names(layout.bundle_dir)
+    try:
+        non_nfc = lint_check.check_non_nfc_names(layout.bundle_dir)
+    except OSError as exc:
+        non_nfc = []
+        not_run.append(read_outcome.NotRun(label="Non-NFC names", reason=str(exc)))
+
     # task 3.6: a names-only walk over `bundle/.state/` alone, never the
     # `docs` list -- `collect_docs`/`_iter_docs` never descends there.
-    state_dir_markdown = lint_check.check_state_dir_contains_no_markdown(
-        layout.bundle_dir
-    )
+    try:
+        state_dir_markdown = lint_check.check_state_dir_contains_no_markdown(
+            layout.bundle_dir
+        )
+    except OSError as exc:
+        state_dir_markdown = []
+        not_run.append(read_outcome.NotRun(label="State-dir markdown", reason=str(exc)))
+
     # issue #984: another names-only walk over the bundle, never the `docs`
     # list -- `collect_docs`/`_iter_docs` never descends into a
     # dot-directory at all (the same structural exclusion this check is the
     # safety net for). `.state/` keeps its own, more specific finding above.
-    dot_dir_markdown = lint_check.check_dot_dir_markdown(layout.bundle_dir)
+    try:
+        dot_dir_markdown = lint_check.check_dot_dir_markdown(layout.bundle_dir)
+    except OSError as exc:
+        dot_dir_markdown = []
+        not_run.append(
+            read_outcome.NotRun(label="Dot-directory markdown", reason=str(exc))
+        )
+
     notices = window_notices + skip_notices
 
     return lint_check.LintReport(
@@ -194,4 +236,5 @@ def build_lint_report(layout: config.WorkspaceLayout) -> lint_check.LintReport:
         state_dir_markdown=state_dir_markdown,
         dot_dir_markdown=dot_dir_markdown,
         notices=notices,
+        not_run=tuple(not_run),
     )

@@ -20,7 +20,7 @@ from datetime import date, timedelta
 from pathlib import Path, PurePosixPath
 from typing import Final
 
-from openkos import config, fsio
+from openkos import config, fsio, read_outcome
 from openkos.bundle import provenance as bundle_provenance
 from openkos.model import okf, types
 from openkos.model import relations as relation_vocabulary
@@ -275,6 +275,17 @@ class LintReport:
     keeps its own, more specific `state_dir_markdown` finding instead --
     see `check_dot_dir_markdown`."""
     notices: list[str] = field(default_factory=list)
+    not_run: tuple[read_outcome.NotRun, ...] = ()
+    """Late-walk checks that could not run, and why (ADR-0022, design.md
+    Decision 6): a `NotRun` entry for `check_non_nfc_names`,
+    `check_state_dir_contains_no_markdown`, or `check_dot_dir_markdown`
+    when its own directory walk raised `OSError` instead of returning --
+    containment happens in `application/lint.py`, not here; this field is
+    only the shape the result is carried in. A `tuple`, unlike its fourteen
+    `list` siblings above: it is never mutated after `build_lint_report`
+    constructs it, mirroring `application.doctor.run_diagnostics`' own
+    `tuple[CheckResult, ...]` return shape. Empty on a fully complete run
+    -- the common case."""
 
 
 def collect_docs(bundle_dir: Path) -> tuple[list[LintDoc], list[str]]:
