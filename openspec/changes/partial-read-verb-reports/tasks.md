@@ -308,13 +308,13 @@ combined diff exceeds the 400-line review budget.
 
 ### `LintReport.not_run`
 
-- [ ] **T2.1** [TEST] add `test_lint_report_not_run_is_empty_on_a_complete_run`
+- [x] **T2.1** [TEST] add `test_lint_report_not_run_is_empty_on_a_complete_run`
   in the `lint.py`/`application/lint.py` test suite (co-locate with existing
   `LintReport` construction tests). GIVEN a run where every late walk
   completes, THEN `report.not_run == ()`. **RED today**: `LintReport` has no
   `not_run` field — `AttributeError`.
 
-- [ ] **T2.2** [IMPL] `src/openkos/lint.py`: add
+- [x] **T2.2** [IMPL] `src/openkos/lint.py`: add
   `not_run: tuple[NotRun, ...] = ()` to `LintReport`, importing `NotRun` from
   `read_outcome` (T1.1). A `tuple` with no `default_factory`, unlike its 14
   `list` siblings — it is never mutated, mirroring `run_diagnostics`' own
@@ -322,7 +322,7 @@ combined diff exceeds the 400-line review budget.
 
 ### Containment (L1–L3)
 
-- [ ] **T2.3** [TEST] `tests/unit/cli/test_lint.py` — rename
+- [x] **T2.3** [TEST] `tests/unit/cli/test_lint.py` — rename
   `test_lint_lets_a_late_name_walk_failure_propagate_uncaught` (line ~1113)
   to `test_lint_reports_a_late_name_walk_failure_as_not_run_without_losing_findings`.
   Keep the exact `Path.rglob` monkeypatch trigger. Replace the assertions
@@ -340,7 +340,7 @@ combined diff exceeds the 400-line review budget.
   `OSError`, and neither the counts line nor the surviving `Stale stamps:`
   section exists.
 
-- [ ] **T2.4** [TEST] add `test_lint_reports_a_state_dir_walk_failure_as_not_run_without_losing_findings`.
+- [x] **T2.4** [TEST] add `test_lint_reports_a_state_dir_walk_failure_as_not_run_without_losing_findings`.
   Do NOT reuse L1's `Path.rglob` patch (it also breaks `collect_docs` →
   `LintInputUnavailable` → the wrong exit path). Patch
   `openkos.lint.check_state_dir_contains_no_markdown` directly to raise
@@ -349,23 +349,23 @@ combined diff exceeds the 400-line review budget.
   Same assertion shape as T2.3 (adjust the surviving-count line to match).
   **RED today**: uncaught `OSError`.
 
-- [ ] **T2.5** [TEST] add `test_lint_reports_a_dot_dir_walk_failure_as_not_run_without_losing_findings`,
+- [x] **T2.5** [TEST] add `test_lint_reports_a_dot_dir_walk_failure_as_not_run_without_losing_findings`,
   same shape as T2.4 but patching `openkos.lint.check_dot_dir_markdown`.
   **RED today**: uncaught `OSError`.
 
-- [ ] **T2.6** [TEST] add `test_total_checks_matches_the_number_of_check_calls_in_build_lint_report`
+- [x] **T2.6** [TEST] add `test_total_checks_matches_the_number_of_check_calls_in_build_lint_report`
   (AST drift guard, same style as `tests/unit/application/test_layering.py`):
   parse `application/lint.py`'s AST, count `lint_check.check_*`/`scan_*` call
   sites inside `build_lint_report`, and assert the count equals
   `application_lint.TOTAL_CHECKS`. **RED today**: `TOTAL_CHECKS` does not
   exist — `AttributeError`.
 
-- [ ] **T2.7** [IMPL] `application/lint.py`: add `TOTAL_CHECKS: Final = 13`
+- [x] **T2.7** [IMPL] `application/lint.py`: add `TOTAL_CHECKS: Final = 13`
   (13 `check_*`/`scan_*` calls; `check_below_source_sensitivity` feeds both
   `below_source` and `multi_source_uncovered`, which is why `LintReport`
   declares 14 finding fields against 13 calls). Makes T2.6 GREEN.
 
-- [ ] **T2.8** [IMPL] `application/lint.py`: wrap the
+- [x] **T2.8** [IMPL] `application/lint.py`: wrap the
   `lint_check.check_non_nfc_names(layout.bundle_dir)` call (L1) in
   `try/except OSError as exc:`; on catch, append
   `NotRun(label="Non-NFC names", reason=str(exc))` to a local `not_run` list
@@ -375,28 +375,28 @@ combined diff exceeds the 400-line review budget.
   raising, uncaught. Pass the accumulated `not_run` tuple into the returned
   `LintReport`. Contributes to making T2.3 GREEN.
 
-- [ ] **T2.9** [IMPL] `application/lint.py`: same pattern (L2) around
+- [x] **T2.9** [IMPL] `application/lint.py`: same pattern (L2) around
   `lint_check.check_state_dir_contains_no_markdown(layout.bundle_dir)`.
   Contributes to making T2.4 GREEN.
 
-- [ ] **T2.10** [IMPL] `application/lint.py`: same pattern (L3) around
+- [x] **T2.10** [IMPL] `application/lint.py`: same pattern (L3) around
   `lint_check.check_dot_dir_markdown(layout.bundle_dir)`. Contributes to
   making T2.5 GREEN.
 
-- [ ] **T2.11** [TEST, both directions] Mutate L1's guard (T2.8) per the
+- [x] **T2.11** [TEST, both directions] Mutate L1's guard (T2.8) per the
   mutation-discipline section. Broad-direction tripwire: confirm (or add) a
   test pinning that `check_non_nfc_names`'s `relative_to`-derived `ValueError`
   still propagates uncaught when the guard correctly narrows to `OSError`.
 
-- [ ] **T2.12** [TEST, both directions] Mutate L2's guard (T2.9), same
+- [x] **T2.12** [TEST, both directions] Mutate L2's guard (T2.9), same
   tripwire shape for `check_state_dir_contains_no_markdown`.
 
-- [ ] **T2.13** [TEST, both directions] Mutate L3's guard (T2.10), same
+- [x] **T2.13** [TEST, both directions] Mutate L3's guard (T2.10), same
   tripwire shape for `check_dot_dir_markdown`.
 
 ### Render and exit rule (Decision 5/4, lint half)
 
-- [ ] **T2.14** [IMPL] `cli/main.py`'s `lint()`: add a `Checks that did not
+- [x] **T2.14** [IMPL] `cli/main.py`'s `lint()`: add a `Checks that did not
   run:` section, rendered **first** — after `report.notices`, before the
   `Stale stamps:` block — one line per `NotRun` entry
   (`f"  {nr.label}: {nr.reason}"`), with an empty-state line when
@@ -405,7 +405,7 @@ combined diff exceeds the 400-line review budget.
   `f"{application_lint.TOTAL_CHECKS - len(report.not_run)} check(s) completed, {len(report.not_run)} did not run."`.
   Contributes to making T2.3/T2.4/T2.5's stdout assertions GREEN.
 
-- [ ] **T2.15** [IMPL] `cli/main.py`'s `lint()`: after all rendering, add
+- [x] **T2.15** [IMPL] `cli/main.py`'s `lint()`: after all rendering, add
   `if report.not_run: raise typer.Exit(code=2)`. Findings alone (the other
   11 fields) never gate; only a non-empty `not_run` does. Makes the
   remaining `exit_code == 2` assertions in T2.3/T2.4/T2.5 GREEN — this is

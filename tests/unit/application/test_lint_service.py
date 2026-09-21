@@ -19,6 +19,8 @@ and check before its first `typer.echo` (see `application.lint`'s module
 docstring for the line-range evidence) -- there is no partial-output
 property to preserve here, so one function is the whole service, not two."""
 
+import ast
+import inspect
 from pathlib import Path
 
 import pytest
@@ -232,6 +234,18 @@ def test_build_lint_report_creates_no_files(tmp_path: Path) -> None:
 # --- LintReport round-trips every section the CLI renders ---
 
 
+def test_lint_report_not_run_is_empty_on_a_complete_run(tmp_path: Path) -> None:
+    """A run where every late walk completes reports an empty `not_run`
+    (ADR-0022, design.md Decision 6) -- the common case, proven directly
+    rather than only implied by every other fixture in this file never
+    asserting on it."""
+    layout = _workspace(tmp_path)
+
+    report = lint_service.build_lint_report(layout)
+
+    assert report.not_run == ()
+
+
 def test_build_lint_report_returns_the_shared_lint_report_type(
     tmp_path: Path,
 ) -> None:
@@ -249,3 +263,85 @@ def test_build_lint_report_returns_the_shared_lint_report_type(
     assert report.stale == []
     assert report.orphans == []
     assert report.notices == []
+
+
+# --- TOTAL_CHECKS drift guard (ADR-0022, design.md Decision 5) ---
+
+
+def test_total_checks_matches_the_number_of_check_calls_in_build_lint_report() -> None:
+    """AST drift guard, same style as `test_layering.py`'s own AST-based
+    guards: `TOTAL_CHECKS` must equal the number of
+    `lint_check.check_*`/`lint_check.scan_*` call sites inside
+    `build_lint_report`'s body. Thirteen calls populate `LintReport`'s
+    fourteen finding-list fields because `check_below_source_sensitivity`
+    feeds both `below_source` and `multi_source_uncovered` (tasks.md
+    T2.6/T2.7) -- so the count this guard pins is NOT the field count."""
+    source = inspect.getsource(lint_service.build_lint_report)
+    tree = ast.parse(source)
+    call_count = sum(
+        1
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr.startswith(("check_", "scan_"))
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "lint_check"
+    )
+
+    assert call_count == lint_service.TOTAL_CHECKS
+
+
+# --- mutation-discipline broad-direction tripwires (tasks.md T2.11-T2.13):
+# each of L1/L2/L3's `except OSError` guards is deliberately narrow, and
+# these pin that a caller-bug `ValueError` from the same check keeps
+# propagating uncaught -- containing it would silently convert a
+# programming error into a permanently green `not-run` (design.md
+# Decision 3 table, ADR-0022). Each must go RED if its guard is ever
+# widened to bare `Exception`. Mirrors
+# `test_doctor_service.py::test_run_diagnostics_lets_a_bundle_dot_directory_value_error_propagate_uncaught`.
+
+
+def test_build_lint_report_lets_a_non_nfc_names_value_error_propagate_uncaught(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """L1's `except OSError` guard (T2.8) around `check_non_nfc_names`."""
+    layout = _workspace(tmp_path)
+
+    def _raise(bundle_dir: Path) -> list[object]:
+        raise ValueError("path outside the bundle")
+
+    monkeypatch.setattr(lint_check, "check_non_nfc_names", _raise)
+
+    with pytest.raises(ValueError, match="path outside the bundle"):
+        lint_service.build_lint_report(layout)
+
+
+def test_build_lint_report_lets_a_state_dir_markdown_value_error_propagate_uncaught(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """L2's `except OSError` guard (T2.9) around
+    `check_state_dir_contains_no_markdown`."""
+    layout = _workspace(tmp_path)
+
+    def _raise(bundle_dir: Path) -> list[object]:
+        raise ValueError("path outside the bundle")
+
+    monkeypatch.setattr(lint_check, "check_state_dir_contains_no_markdown", _raise)
+
+    with pytest.raises(ValueError, match="path outside the bundle"):
+        lint_service.build_lint_report(layout)
+
+
+def test_build_lint_report_lets_a_dot_dir_markdown_value_error_propagate_uncaught(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """L3's `except OSError` guard (T2.10) around `check_dot_dir_markdown`."""
+    layout = _workspace(tmp_path)
+
+    def _raise(bundle_dir: Path) -> list[object]:
+        raise ValueError("path outside the bundle")
+
+    monkeypatch.setattr(lint_check, "check_dot_dir_markdown", _raise)
+
+    with pytest.raises(ValueError, match="path outside the bundle"):
+        lint_service.build_lint_report(layout)
