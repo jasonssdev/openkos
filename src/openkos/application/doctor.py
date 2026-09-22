@@ -110,13 +110,13 @@ parameterless `shutil.which` predicates) and, inside check 13's violation
 branch only, `repo_root(root)`/`has_reset_point(root)` (used purely to pick
 which remediation STRING check 13 prints; they never affect pass/fail).
 All four stay adapter-side, matching `lifecycle.py`'s precedent: the CLI
-adapter computes three booleans (`git_available`, `filter_repo_available`,
-`reset_point_available`, a thunk so its two `git` subprocess calls are
-still paid only inside check 13's violation branch) and injects them; this
-module never imports `openkos.vcs` and performs no git I/O of its own.
-Unlike the two booleans, it is called by this module, inside check 13's
-violation branch and nowhere else; `run_diagnostics`' own docstring
-carries why.
+adapter injects TWO plain booleans (`git_available`,
+`filter_repo_available`) and ONE thunk (`reset_point_available`, a
+`Callable[[], bool]`, so its two `git` subprocess calls are still paid
+only inside check 13's violation branch); this module never imports
+`openkos.vcs` and performs no git I/O of its own. Unlike the two
+booleans, the thunk is called by this module, inside check 13's violation
+branch and nowhere else; `run_diagnostics`' own docstring carries why.
 
 `okf.survey_bundle` (check 6), `state.vectorstore.probe_vec_loadable`
 (check 8), and `bundle.ledger.scan_torn_writes`/`scan_nesting_violations`

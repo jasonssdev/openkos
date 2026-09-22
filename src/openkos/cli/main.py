@@ -14973,15 +14973,16 @@ def doctor() -> None:
     `[PASS]` lines on a healthy workspace, issue #995 PR 6), appends each
     to a `list[CheckResult]`, renders every line unconditionally, then
     exits ONCE (`code=1`) if any CRITICAL check failed (spec: Doctor Runs
-    And Prints All Applicable Checks). Remediation TEXT lives only here --
-    in `application/doctor.py`, not this adapter -- because that is where
+    And Prints All Applicable Checks). Remediation TEXT lives in
+    `application/doctor.py`, not in this adapter, because that is where
     every check's own pass/fail/skip branching now lives (issue #995,
     PR 6): this command body only supplies a `build_client` factory over
     the one concrete `OllamaClient` (WALL 1, issue #1002 item B -- see
-    below), computes the three `openkos.vcs` booleans `run_diagnostics`
-    needs injected (WALL 2, `application/doctor.py`'s own module
-    docstring), calls `application_doctor.run_diagnostics` once, and
-    renders. `llm/` stays config-free (D1).
+    below), computes the two `openkos.vcs` booleans and the one
+    `reset_point_available` thunk `run_diagnostics` needs injected
+    (WALL 2, `application/doctor.py`'s own module docstring), calls
+    `application_doctor.run_diagnostics` once, and renders. `llm/` stays
+    config-free (D1).
 
     Output leads with an `openkos {version}` banner -- the same line
     `--version` prints (cli-version-flag, #181). It is informational only,
