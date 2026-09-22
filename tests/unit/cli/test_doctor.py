@@ -1322,6 +1322,59 @@ def test_doctor_ledger_checks_pass_trivially_when_no_ledgers_exist(
     assert "[PASS] Merge ledger entries free of post-merge mutation" in result.stdout
 
 
+def test_doctor_reset_point_probe_is_lazy_at_the_adapter_call_site(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pins the ADAPTER's own laziness (#1002 item E), the CLI-layer
+    counterpart to `tests/unit/application/test_doctor_service.py::
+    test_reset_point_thunk_is_not_called_without_a_nesting_violation`.
+    That service-layer test proves `run_diagnostics` does not CONSULT an
+    injected thunk absent a nesting violation, using a counting thunk IT
+    builds -- but `cli/main.py`'s own `_reset_point_available` closure is
+    a SEPARATE piece of code, built adapter-side, wrapping two real
+    `openkos.vcs.git` calls (`repo_root` + `has_reset_point`). Nothing
+    proved that closure itself stays lazy rather than the command eagerly
+    computing it before injection -- `grep reset_point_available
+    tests/unit/cli/test_doctor.py` returned nothing before this test
+    existed.
+
+    Counts calls to `openkos.vcs.git.repo_root`/`has_reset_point`
+    directly -- never `git_available`/`filter_repo_available`, which are
+    separate `shutil.which` probes the adapter computes eagerly and
+    unconditionally by design (`_fake_client_and_git` above already fakes
+    those) -- across a `doctor` run on a workspace with NO nesting
+    violation, so check 13 never enters its `if violations:` branch. This
+    can only fail on the CALL COUNT, never on `doctor`'s exit code or
+    printed output, which is the property under test: an eagerly computed
+    boolean looks identical from the outside once it has been computed.
+    It would MISS a laziness regression that also happens to flip the
+    `if violations:` branch itself into firing (the two would then fail
+    together, and this test alone could not tell them apart)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _fake_client_and_git(monkeypatch)
+
+    repo_root_calls: list[None] = []
+    has_reset_point_calls: list[None] = []
+
+    def _counting_repo_root(root: Path) -> Path | None:
+        repo_root_calls.append(None)
+        return None
+
+    def _counting_has_reset_point(root: Path) -> bool:
+        has_reset_point_calls.append(None)
+        return True
+
+    monkeypatch.setattr("openkos.vcs.git.repo_root", _counting_repo_root)
+    monkeypatch.setattr("openkos.vcs.git.has_reset_point", _counting_has_reset_point)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert "[PASS] Merge ledger entries free of post-merge mutation" in result.stdout
+    assert repo_root_calls == []
+    assert has_reset_point_calls == []
+
+
 def test_doctor_torn_write_check_fails_with_merge_unmerge_remediation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

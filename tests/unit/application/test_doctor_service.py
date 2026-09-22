@@ -105,7 +105,19 @@ def test_run_diagnostics_returns_exactly_fifteen_checks(tmp_path: Path) -> None:
     """Thirteen numbered checks plus two lettered sub-checks (5b, 7b) = 15
     -- the pre-extraction docstring's "twelve" was already stale before
     this extraction (`tests/unit/cli/test_doctor.py` already asserted 15
-    `[PASS]` lines); this pins the ACTUAL count at the service layer."""
+    `[PASS]` lines); this pins the ACTUAL count at the service layer.
+
+    Also pins the exact SEQUENCE (#1002 item E): the section header above
+    this test promises "fifteen checks, in order, compute-then-render" and
+    `run_diagnostics`' own docstring promises the checks run "in the SAME
+    order the pre-extraction command body ran them", but until this
+    assertion existed nothing checked that -- `_by_label` is a lookup, not
+    an order proof, and every other test in this file reads results
+    through it. A reordering of two checks (e.g. swapping the append calls
+    for checks 9 and 10) would leave `len(results) == 15` green and every
+    `_by_label`-based test green too, while changing which refusal an
+    operator sees first. This assertion is the only thing in this file
+    that can fail on order alone."""
     layout = _workspace(tmp_path)
     results = doctor_service.run_diagnostics(
         layout.root,
@@ -117,15 +129,63 @@ def test_run_diagnostics_returns_exactly_fifteen_checks(tmp_path: Path) -> None:
         reset_point_available=lambda: True,
     )
     assert len(results) == 15
+    assert [r.label for r in results] == [
+        "Workspace initialized",
+        "Config valid",
+        "Ollama reachable",
+        f"Model '{config.DEFAULT_MODEL}' installed",
+        f"Embedding model '{config.DEFAULT_EMBEDDING_MODEL}' installed",
+        "Task models installed",
+        "Bundle readable",
+        "Workspace vector index present",
+        "Workspace FTS index present",
+        "Vector extension loadable",
+        "git available",
+        "git-filter-repo available",
+        "Backend host locality",
+        "Merge ledger torn writes",
+        "Merge ledger entries free of post-merge mutation",
+    ]
 
 
-def test_run_diagnostics_never_raises_for_any_injected_failure_mode(
+def test_run_diagnostics_never_raises_outside_a_workspace_with_unreachable_backend_and_both_vcs_booleans_false(
     tmp_path: Path,
 ) -> None:
-    """D5: every check accumulates a `fail`/`skip` `CheckResult` rather than
-    propagating -- outside a workspace, with an unreachable backend, and
-    with both vcs booleans false, `run_diagnostics` still returns 15
-    results instead of raising."""
+    """Renamed from `..._never_raises_for_any_injected_failure_mode`
+    (#1002 item E): that name overclaimed. It passes `tmp_path` DIRECTLY
+    rather than a real workspace, so `in_workspace` is False and checks
+    6/12/13 all take their `skip` branch instead of reaching
+    `okf.survey_bundle`/`bundle_ledger.scan_torn_writes`/
+    `bundle_ledger.scan_nesting_violations` -- THREE of the four paths
+    "THE RAISE CONTRACT" (`run_diagnostics`' own docstring) names as able
+    to raise straight out of this function. This test never enters any of
+    them, and its `reset_point_available` lambda returns a plain `False`
+    rather than raising, so the fourth path is untouched too -- a test
+    named for "any injected failure mode" was, in fact, injecting a
+    failure mode none of the four raise paths can see.
+
+    What this test genuinely proves, and the reason it is RENAMED rather
+    than widened into a workspace: OUTSIDE a workspace, with an
+    UNREACHABLE backend and BOTH `openkos.vcs` booleans false,
+    `run_diagnostics` still accumulates and returns all 15 results instead
+    of raising (D5) -- a real, distinct scenario (a machine with no
+    workspace and no git at all, pointed at `doctor` before `ollama
+    serve` has ever run), not a placeholder for the four raise paths.
+
+    What it deliberately does NOT cover, so as not to duplicate existing
+    coverage: the four documented raise paths themselves. Three are
+    already exercised, post-ADR-0022, by
+    `test_run_diagnostics_reports_not_run_when_survey_bundle_scan_torn_writes_or_scan_nesting_violations_raises`
+    (they now degrade to `not-run` rather than propagate) and by
+    `test_run_diagnostics_reports_the_integrity_check_as_not_run_when_reset_point_available_raises`.
+    The contract is also NOT "never raises" in the absolute --
+    `test_run_diagnostics_lets_a_bundle_dot_directory_value_error_propagate_uncaught`
+    and
+    `test_run_diagnostics_lets_an_unrelated_reset_point_available_exception_propagate_uncaught`
+    both assert a `ValueError`/`RuntimeError` DOES propagate uncaught.
+    Widening THIS test to enter a workspace would duplicate those four,
+    not add coverage; this test's job is the outside-workspace,
+    everything-unreachable case those four never touch."""
     results = doctor_service.run_diagnostics(
         tmp_path,
         build_client=lambda _model: _FakeBackend(
