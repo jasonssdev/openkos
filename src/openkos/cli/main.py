@@ -14950,10 +14950,11 @@ def doctor() -> None:
     And Prints All Applicable Checks). Remediation TEXT lives only here --
     in `application/doctor.py`, not this adapter -- because that is where
     every check's own pass/fail/skip branching now lives (issue #995,
-    PR 6): this command body only resolves the model tag, builds the one
-    concrete `OllamaClient`, computes the three `openkos.vcs` booleans
-    `run_diagnostics` needs injected (WALL 2, `application/doctor.py`'s own
-    module docstring), calls `application_doctor.run_diagnostics` once, and
+    PR 6): this command body only supplies a `build_client` factory over
+    the one concrete `OllamaClient` (WALL 1, issue #1002 item B -- see
+    below), computes the three `openkos.vcs` booleans `run_diagnostics`
+    needs injected (WALL 2, `application/doctor.py`'s own module
+    docstring), calls `application_doctor.run_diagnostics` once, and
     renders. `llm/` stays config-free (D1).
 
     Output leads with an `openkos {version}` banner -- the same line
@@ -15055,16 +15056,22 @@ def doctor() -> None:
             raise application_doctor.ProbeUnavailable(str(exc)) from exc
 
     # WALL 1 (`application/doctor.py`'s own module docstring): the CLI
-    # adapter builds the one concrete `OllamaClient` and passes it in as a
-    # `BackendDiagnostics` -- `resolve_diagnostic_model` mirrors check 2's
-    # own `openkos.yaml` fallback so the client and the service's own
-    # config-valid check always agree on what model was probed.
-    model = application_doctor.resolve_diagnostic_model(root)
-    client = OllamaClient(model=model, timeout=_PREFLIGHT_TIMEOUT)
+    # adapter never builds a client itself; it supplies HOW to build one --
+    # `build_client`, a factory over the one concrete `OllamaClient` as a
+    # `BackendDiagnostics`. Check 2's `config.read_config` call, inside
+    # `run_diagnostics`, is the ONLY read of `openkos.yaml` a `doctor` run
+    # performs, and `build_client` is called with that SAME `cfg.model` (or
+    # `config.DEFAULT_MODEL` on its existing fallback), so the model
+    # PROBED and the model REPORTED can never be two different reads
+    # disagreeing with each other (issue #1002 item B; `resolve_diagnostic_model`,
+    # which used to read `openkos.yaml` a second time just to produce this
+    # client BEFORE `run_diagnostics` ran, is gone).
+    def _build_client(model: str) -> OllamaClient:
+        return OllamaClient(model=model, timeout=_PREFLIGHT_TIMEOUT)
 
     results = application_doctor.run_diagnostics(
         root,
-        client=client,
+        build_client=_build_client,
         git_available=git_available_ok,
         filter_repo_available=filter_repo_ok,
         reset_point_available=_reset_point_available,
