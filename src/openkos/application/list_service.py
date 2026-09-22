@@ -78,7 +78,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from openkos import config
+from openkos import config, read_outcome
 from openkos.bundle import listing
 from openkos.bundle import provenance as bundle_provenance
 from openkos.model import okf, types
@@ -243,6 +243,18 @@ class ProvenanceSources:
     branch either (it returned immediately after the "No Source reaches
     ..." line)."""
 
+    not_run: tuple[read_outcome.NotRun, ...] = ()
+    """Every bundle document `read_text` could not read while building the
+    provenance graph (#1002 item D, ADR-0022's settled vocabulary): the
+    skip itself is unchanged (an unreadable document still contributes no
+    provenance edges, mirroring `_parse_provenance_by_id`'s own
+    skip-not-crash contract) -- what changes is that the skip is no longer
+    silent. Without this, "no Source reaches this object" and "the
+    document that proves one does could not be read" render identically,
+    a false negative `list --sources`' own caller cannot detect. `label`
+    is the document's path relative to `layout.bundle_dir`, exactly as it
+    would key `files` on success; `reason` is `str(exc)`."""
+
 
 def list_provenance_sources(
     layout: config.WorkspaceLayout, canonical_id: str
@@ -263,17 +275,32 @@ def list_provenance_sources(
     widening this function to also perform and guard that resolution
     would widen the `try` scope that guard originally covered -- exactly
     the mistake a previous extraction made and review caught (see module
-    docstring)."""
+    docstring).
+
+    #1002 item D, ADR-0022: a document this function cannot read is still
+    skipped -- the behaviour of contributing no provenance edges is
+    unchanged -- but the skip now lands in the returned `not_run`, so "no
+    Source reaches this object" and "the document that proves one does
+    could not be read" are distinguishable outcomes instead of one silent
+    false negative. Out of scope here (recorded as a follow-up, see the
+    feature document): `files` still buffers every decoded document in
+    memory rather than streaming, because streaming would change
+    `bundle_provenance.provenance_source_ancestors`'s signature and its
+    other callers -- a separate change."""
     files: dict[str, str] = {}
+    not_run: list[read_outcome.NotRun] = []
     for path in okf.iter_bundle_markdown(layout.bundle_dir):
         if path.name in okf.RESERVED_FILENAMES:
             continue
         rel = path.relative_to(layout.bundle_dir).as_posix()
         try:
             files[rel] = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            # An unreadable doc contributes no provenance edges; mirrors
-            # `_parse_provenance_by_id`'s skip-not-crash contract.
+        except (OSError, UnicodeDecodeError) as exc:
+            # An unreadable doc still contributes no provenance edges
+            # (mirrors `_parse_provenance_by_id`'s skip-not-crash
+            # contract) -- but the skip is now visible as a `NotRun`
+            # instead of silently vanishing.
+            not_run.append(read_outcome.NotRun(label=rel, reason=str(exc)))
             continue
 
     ancestors = tuple(
@@ -282,4 +309,4 @@ def list_provenance_sources(
     rows: tuple[listing.BundleObject, ...] = ()
     if ancestors:
         rows = tuple(listing.list_objects(layout.bundle_dir))
-    return ProvenanceSources(ancestors=ancestors, rows=rows)
+    return ProvenanceSources(ancestors=ancestors, rows=rows, not_run=tuple(not_run))
