@@ -58,3 +58,4 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 | [0020](0020-concurrency-across-three-writers.md) | Concurrency across three writers -- per-operation locking, detection for the rest | Proposed | 2026-09-16 |
 | [0021](0021-sync-async-boundary.md) | The sync/async boundary -- a worker thread per operation, and no cancellation below it | Proposed | 2026-09-17 |
 | [0022](0022-incomplete-read-verbs-report-incompleteness.md) | An incomplete read verb reports incompleteness as data and as exit code 2 | Accepted | 2026-09-21 |
+| [0023](0023-source-event-date.md) | A Source records its event date as an optional, never-defaulted `event_date` key | Proposed | 2026-09-25 |

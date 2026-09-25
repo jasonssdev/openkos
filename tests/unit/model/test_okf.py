@@ -10,6 +10,7 @@ import re
 import stat
 import unicodedata
 from collections.abc import Callable, Iterator
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
@@ -692,6 +693,111 @@ def test_build_source_concept_emits_no_volatility_key() -> None:
     text = _build_call_source()
 
     assert "volatility" not in text
+
+
+def test_build_source_concept_emits_no_event_date_key_by_default() -> None:
+    """`event_date` is absent by default, like every other optional Source
+    key (issue #1014c, ADR-0023) -- a Source ingested with no evidence
+    stays byte-identical to before this key existed."""
+    text = _build_call_source()
+
+    assert "event_date" not in text
+
+
+def test_build_source_concept_emits_event_date_key_with_exact_bytes() -> None:
+    """A full-bytes pin (design.md Decision 2): `event_date` is written as
+    a QUOTED ISO date string, and `dump_frontmatter`'s alphabetical key
+    sort places the line between `description` and `freshness` -- the same
+    quoting `timestamp` already gets (test_okf.py:922)."""
+    text = _build_call_source(event_date=date(2026, 7, 14))
+
+    assert "event_date: '2026-07-14'\n" in text
+    metadata, _ = okf.load_frontmatter(text)
+    assert metadata["event_date"] == "2026-07-14"
+    description_index = text.index("description:")
+    event_date_index = text.index("event_date:")
+    freshness_index = text.index("freshness:")
+    assert description_index < event_date_index < freshness_index
+
+
+def test_build_source_concept_raises_on_datetime_event_date() -> None:
+    """A `datetime` (not `date`) `event_date` raises `TypeError` -- it is a
+    `date` subclass, and its `isoformat()` would write a time of day no
+    input ever stated."""
+    with pytest.raises(TypeError):
+        _build_call_source(event_date=datetime(2026, 7, 14, 10, 0, tzinfo=UTC))
+
+
+def test_build_source_concept_round_trips_event_date_through_load_frontmatter() -> None:
+    """A built `event_date` round-trips through `load_frontmatter` then
+    `read_event_date` back to the exact `date` it was built with."""
+    text = _build_call_source(event_date=date(2026, 7, 14))
+
+    metadata, _ = okf.load_frontmatter(text)
+
+    assert okf.read_event_date(metadata) == okf.StoredEventDate(
+        value=date(2026, 7, 14), malformed=False, raw="2026-07-14"
+    )
+
+
+@pytest.mark.parametrize(
+    ("metadata", "expected"),
+    [
+        ({}, okf.StoredEventDate(value=None, malformed=False, raw=None)),
+        (
+            {"event_date": "2026-07-14"},
+            okf.StoredEventDate(
+                value=date(2026, 7, 14), malformed=False, raw="2026-07-14"
+            ),
+        ),
+        (
+            # PyYAML resolves an unquoted date to a native `datetime.date`.
+            {"event_date": date(2026, 7, 14)},
+            okf.StoredEventDate(
+                value=date(2026, 7, 14), malformed=False, raw=date(2026, 7, 14)
+            ),
+        ),
+        (
+            # The `datetime.datetime` check MUST run before the `date`
+            # check -- a midnight `datetime` would otherwise pass an
+            # `isinstance(x, date)` test first.
+            {"event_date": datetime(2026, 7, 14, 0, 0, tzinfo=UTC)},
+            okf.StoredEventDate(
+                value=None,
+                malformed=True,
+                raw=datetime(2026, 7, 14, 0, 0, tzinfo=UTC),
+            ),
+        ),
+        (
+            {"event_date": "14/07/2026"},
+            okf.StoredEventDate(value=None, malformed=True, raw="14/07/2026"),
+        ),
+        (
+            {"event_date": "2026-13-01"},
+            okf.StoredEventDate(value=None, malformed=True, raw="2026-13-01"),
+        ),
+        (
+            {"event_date": ""},
+            okf.StoredEventDate(value=None, malformed=True, raw=""),
+        ),
+        (
+            {"event_date": None},
+            okf.StoredEventDate(value=None, malformed=True, raw=None),
+        ),
+        (
+            {"event_date": 20260714},
+            okf.StoredEventDate(value=None, malformed=True, raw=20260714),
+        ),
+        (
+            {"event_date": ["2026-07-14"]},
+            okf.StoredEventDate(value=None, malformed=True, raw=["2026-07-14"]),
+        ),
+    ],
+)
+def test_read_event_date(
+    metadata: dict[str, object], expected: "okf.StoredEventDate"
+) -> None:
+    assert okf.read_event_date(metadata) == expected
 
 
 def test_build_source_concept_passes_check_conformance(tmp_path: Path) -> None:
@@ -1550,6 +1656,38 @@ def test_build_merged_document_keeps_the_survivors_own_type_alternative() -> Non
     )
 
     assert merged[okf.TYPE_ALTERNATIVE_KEY] == "Project"
+
+
+def test_build_merged_document_never_inherits_absorbed_event_date() -> None:
+    """#1014c/ADR-0023: `event_date` records evidence about WHEN a single
+    Source's event happened, not a property that generalizes to a merged
+    entity -- the absorbed side's value must never be imported onto a
+    survivor that lacks its own."""
+    merged, _ = okf.build_merged_document(
+        _survivor_metadata(),
+        "Survivor body.",
+        _absorbed_metadata(event_date="2026-07-14"),
+        "Absorbed body.",
+        "concepts/absorbed-id",
+        "concepts/survivor-id",
+    )
+
+    assert okf.EVENT_DATE_KEY not in merged
+
+
+def test_build_merged_document_keeps_survivors_own_event_date() -> None:
+    """A survivor carrying its own `event_date` keeps it, unaffected by the
+    absorbed side's (possibly different) value."""
+    merged, _ = okf.build_merged_document(
+        _survivor_metadata(event_date="2026-07-14"),
+        "Survivor body.",
+        _absorbed_metadata(event_date="2026-08-01"),
+        "Absorbed body.",
+        "concepts/absorbed-id",
+        "concepts/survivor-id",
+    )
+
+    assert merged[okf.EVENT_DATE_KEY] == "2026-07-14"
 
 
 def test_build_merged_document_type_alternative_cannot_equal_merged_type() -> None:
