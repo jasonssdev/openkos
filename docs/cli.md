@@ -776,6 +776,11 @@ max_generation_tokens: 8192  # safety rail: hard ceiling on tokens a chat call m
 context_window: 12288     # tokens the model holds at once (prompt + reply); unpinned it
                           # reserves its own 32K default and ~10 GB. Refused below the
                           # derived floor; blank the value to leave it unpinned.
+# temperature: 0.2        # sampling temperature forwarded as options.temperature;
+                          # unset follows the model's own Modelfile (qwen3:8b: 0.6).
+                          # Reduces run-to-run variance -- not a determinism guarantee
+# seed: 42                # sampling seed forwarded as options.seed; unset means
+                          # unseeded. Same caveat as temperature.
 # volatility_windows:     # per-tier stale-stamp windows (overrides freshness_window
 #   slow: 90d             # by knowledge-volatility tier; see docs/adr/0007)
 #   volatile: 7d
@@ -869,6 +874,32 @@ The 4096-token prompt allowance is measured, not guessed. Both prompt shapes the
 A value **absent** from the file resolves to the default, raised if necessary to clear this workspace's own floor: a workspace that had set `max_generation_tokens: 16384` and never heard of this key gets `20480`, not a window that would truncate it. An **explicitly null** value (`context_window:` written with no value) means *do not pin*, sending a request byte-identical to the pre-#691 one. This is the one setting whose explicit null does not mean the packaged default, and deliberately so: "no window pinned" is a real state that no positive integer can express.
 
 Related, from the same measurement session: `OLLAMA_KEEP_ALIVE` defaults to 5 minutes, so any pause longer than that pays a full model reload. That is an Ollama environment variable, not an OpenKOS setting.
+
+### `temperature`
+
+Sampling temperature pinned on every `llm.chat` request, forwarded to Ollama as `options.temperature`. Default unset ([#1013](https://github.com/jasonssdev/openkos/issues/1013)).
+
+It governs the same CHAT seams `chat_timeout`, `max_generation_tokens`, and `context_window` do, and nothing else — every chat verb the CLI builds a client for (`ingest`, `curate`, `query`, `adjudicate`, `suggest-relations`, `suggest-volatility`, `contradictions`). Embedding calls and the startup liveness probes are unaffected.
+
+**Unset means unpinned, not zero.** Left alone, sampling follows whatever the model's own Modelfile ships — `qwen3:8b` ships `0.6` — which is measured run-to-run variance on identical extraction input ([#454](https://github.com/jasonssdev/openkos/issues/454)). A value absent from the file or explicitly null resolves to `None`, sending a request byte-identical to before this key existed.
+
+**`0` is a real value, not an omission.** Writing `temperature: 0` pins greedy decoding and reaches the request as `0`, never dropped by a falsy check.
+
+**Pinning this REDUCES run-to-run variance. It does not guarantee identical output.** Even with a fixed `temperature` and `seed`, Ollama version, hardware, and `OLLAMA_NUM_PARALLEL` can still perturb the result — this key narrows variance, it does not eliminate it, and nothing in this project claims otherwise.
+
+**No value is recommended.** Which temperature suits extraction has not been measured: the one probe that compared two settings ([#454](https://github.com/jasonssdev/openkos/issues/454)) saw temperature `0` and model-default sampling fail alike. Pin it for a specific need, such as reproducing a run.
+
+Validated as a finite number `>= 0` when the config is read: a boolean, a non-numeric value, `NaN`/infinity, or a negative number is refused rather than coerced — `temperature: true` would otherwise resolve to `1.0`, a real sampling value nobody asked for.
+
+### `seed`
+
+Sampling seed pinned on every `llm.chat` request, forwarded to Ollama as `options.seed`. Default unset ([#1013](https://github.com/jasonssdev/openkos/issues/1013)).
+
+Governs the same CHAT seams `temperature` does, and nothing else. Absent or explicitly null resolves to `None`, sending a request byte-identical to before this key existed.
+
+Pairs with `temperature` to further reduce run-to-run variance — the same caveat applies: not a determinism guarantee across Ollama versions, hardware, or a concurrently-configured server.
+
+Validated as a plain integer when the config is read: a boolean or a fractional value is refused rather than coerced — Ollama treats a seed as an opaque reproducibility token, not a quantity, so `seed: 7.5` is a config error rather than a silently truncated `7`.
 
 ### `union_judge`
 

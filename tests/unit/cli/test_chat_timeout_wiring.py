@@ -16,10 +16,16 @@ and insists.
 """
 
 import ast
+import json
+import urllib.request
 from pathlib import Path
+from typing import Any
+
+import pytest
 
 from openkos import config
 from openkos.cli import main as main_module
+from openkos.llm.ollama import OllamaClient
 
 _SRC = Path(main_module.__file__).parent
 
@@ -222,6 +228,170 @@ def test_every_chat_client_construction_passes_a_context_window() -> None:
     )
 
 
+# --- temperature/seed: the same wiring pinned for the sampling pins (#1013) --
+
+
+def test_chat_client_applies_configured_temperature() -> None:
+    """`_chat_client` hands the workspace's `temperature` to the client."""
+    cfg = _cfg(temperature=0.2)
+
+    assert main_module._chat_client(cfg)._temperature == 0.2
+
+
+def test_chat_client_applies_a_configured_temperature_of_zero() -> None:
+    """`temperature: 0` is a real value, not an omission -- a truthiness
+    check anywhere in the wiring would silently drop it."""
+    cfg = _cfg(temperature=0.0)
+
+    assert main_module._chat_client(cfg)._temperature == 0.0
+
+
+def test_chat_client_forwards_an_opted_out_temperature() -> None:
+    """An absent/null `temperature` (the packaged default) reaches the
+    client as `None`, so the opt-out is real rather than a value the wiring
+    quietly replaces."""
+    cfg = _cfg(temperature=None)
+
+    assert main_module._chat_client(cfg)._temperature is None
+
+
+def test_every_chat_client_construction_passes_a_temperature() -> None:
+    """No chat client is constructed without an explicit `temperature=`.
+
+    Mirrors `test_every_chat_client_construction_passes_a_context_window`: a
+    site that omits `temperature=` compiles, type-checks, and runs -- it
+    just silently ignores the workspace's sampling pin.
+    """
+    offenders: list[str] = []
+    seen = 0
+    for path in sorted(_SRC.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for call in _chat_client_calls(tree):
+            seen += 1
+            if any(kw.arg == "temperature" for kw in call.keywords):
+                continue
+            offenders.append(f"{path.name}:{call.lineno}")
+
+    assert seen > 0, "no chat client constructions found -- the guard is blind"
+    assert not offenders, (
+        "chat client(s) constructed without an explicit temperature, so the "
+        "workspace's sampling pin is ignored there:\n  " + "\n  ".join(offenders)
+    )
+
+
+def test_chat_client_applies_configured_seed() -> None:
+    """`_chat_client` hands the workspace's `seed` to the client."""
+    cfg = _cfg(seed=7)
+
+    assert main_module._chat_client(cfg)._seed == 7
+
+
+def test_chat_client_forwards_an_opted_out_seed() -> None:
+    """An absent/null `seed` (the packaged default) reaches the client as
+    `None`."""
+    cfg = _cfg(seed=None)
+
+    assert main_module._chat_client(cfg)._seed is None
+
+
+def test_every_chat_client_construction_passes_a_seed() -> None:
+    """No chat client is constructed without an explicit `seed=`."""
+    offenders: list[str] = []
+    seen = 0
+    for path in sorted(_SRC.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for call in _chat_client_calls(tree):
+            seen += 1
+            if any(kw.arg == "seed" for kw in call.keywords):
+                continue
+            offenders.append(f"{path.name}:{call.lineno}")
+
+    assert seen > 0, "no chat client constructions found -- the guard is blind"
+    assert not offenders, (
+        "chat client(s) constructed without an explicit seed, so the "
+        "workspace's sampling pin is ignored there:\n  " + "\n  ".join(offenders)
+    )
+
+
+def _sent_options(client: OllamaClient) -> dict[str, Any]:
+    """Wire `client`'s private `_urlopen` to a capturing fake, run one real
+    `chat()` call through it, and return the `options` object actually
+    serialized into the request JSON (or `{}` if `options` was omitted
+    entirely).
+
+    Asserts on the ACTUAL request payload rather than on `Config` or the
+    client's private constructor state, so a regression in
+    `OllamaClient.chat`'s own `is not None` guards (dropping a configured
+    value, or a falsy-zero bug swallowing `temperature: 0`) would be caught
+    here too, not just a wiring mismatch between `_chat_client` and
+    `OllamaClient.__init__`.
+    """
+    captured: list[urllib.request.Request] = []
+
+    def _fake_urlopen(
+        request: urllib.request.Request, timeout: float | None = None
+    ) -> Any:
+        captured.append(request)
+        body = json.dumps(
+            {"message": {"role": "assistant", "content": "ok"}, "done": True}
+        ).encode("utf-8")
+
+        class _FakeResponse:
+            def read(self) -> bytes:
+                return body
+
+        return _FakeResponse()
+
+    client._urlopen = _fake_urlopen
+    client.chat([{"role": "user", "content": "hi"}])
+    data = captured[0].data
+    assert isinstance(data, bytes)
+    sent: dict[str, Any] = json.loads(data)
+    result: dict[str, Any] = sent.get("options", {})
+    return result
+
+
+def test_chat_client_omits_temperature_and_seed_from_the_request_when_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Requirement 1: with both keys unset (the packaged default), the
+    request's `options` carry neither `temperature` nor `seed` -- byte
+    identical to a request built before #1013 existed.
+
+    `monkeypatch.setattr(main_module, "OllamaClient", OllamaClient)`
+    restores the REAL client class for this one test: `tests/unit/conftest.py`'s
+    autouse `_offline_ollama_by_default` fixture patches
+    `openkos.cli.main.OllamaClient` to `OfflineOllama`, whose `chat()` is
+    fully overridden and never touches `_urlopen` -- this test needs the
+    real `chat()` body so it can inspect the actual JSON it builds. A
+    function-level patch resolves after the module-level autouse fixture, so
+    it takes precedence, exactly as that fixture's own docstring documents.
+    """
+    monkeypatch.setattr(main_module, "OllamaClient", OllamaClient)
+    cfg = _cfg(temperature=None, seed=None)
+
+    options = _sent_options(main_module._chat_client(cfg))
+
+    assert "temperature" not in options
+    assert "seed" not in options
+
+
+def test_chat_client_sends_a_configured_temperature_of_zero_and_seed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Requirement 2: `temperature: 0` reaches the request as `0`, and a
+    configured `seed` reaches it unchanged -- both read straight off the
+    real outgoing JSON payload, not off `Config` or a private attribute.
+    See the sibling test above for why the real `OllamaClient` is restored."""
+    monkeypatch.setattr(main_module, "OllamaClient", OllamaClient)
+    cfg = _cfg(temperature=0.0, seed=7)
+
+    options = _sent_options(main_module._chat_client(cfg))
+
+    assert options["temperature"] == 0.0
+    assert options["seed"] == 7
+
+
 # --- #515: the same seam now resolves a PER-TASK model ---------------------
 
 
@@ -236,6 +406,8 @@ def _cfg(**overrides: object) -> config.Config:
         "chat_timeout": config.DEFAULT_CHAT_TIMEOUT,
         "max_generation_tokens": config.DEFAULT_MAX_GENERATION_TOKENS,
         "context_window": config.DEFAULT_CONTEXT_WINDOW,
+        "temperature": config.DEFAULT_TEMPERATURE,
+        "seed": config.DEFAULT_SEED,
         "confidential_local_exemption": True,
         "volatility_windows": {},
         "type_tiers": {},

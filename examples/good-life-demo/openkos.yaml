@@ -9,6 +9,16 @@ max_generation_tokens: 8192  # safety rail: hard ceiling on tokens a chat call m
 context_window: 12288     # tokens the model holds at once (prompt + reply); unpinned it
                           # reserves its own 32K default and ~10 GB. Refused below the
                           # derived floor; blank the value to leave it unpinned.
+# temperature: 0.2        # sampling temperature forwarded as options.temperature.
+                          # UNSET by default -- unpinned, sampling follows whatever
+                          # the model's Modelfile ships (qwen3:8b: 0.6). Pinning it
+                          # REDUCES run-to-run variance; it does NOT guarantee identical
+                          # output across Ollama versions, hardware, or
+                          # OLLAMA_NUM_PARALLEL. 0 is a real, valid value (greedy
+                          # decoding); no value is recommended.
+# seed: 42                # sampling seed forwarded as options.seed. UNSET by default,
+                          # same caveat as temperature: reduces variance, is not a
+                          # determinism guarantee.
 # volatility_windows:     # per-tier stale-stamp windows (overrides freshness_window
 #   slow: 90d             # by knowledge-volatility tier; see docs/adr/0007)
 #   volatile: 7d
