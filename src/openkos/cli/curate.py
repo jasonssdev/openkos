@@ -2068,6 +2068,8 @@ def run_curate(ctx: CurateContext) -> list[StageOutcome]:
                     timeout=ctx.cfg.chat_timeout,
                     max_generation_tokens=ctx.cfg.max_generation_tokens,
                     context_window=ctx.cfg.context_window,
+                    temperature=ctx.cfg.temperature,
+                    seed=ctx.cfg.seed,
                 )
                 ctx.ollama_clients[model] = cached
             ctx.ollama_client = cached

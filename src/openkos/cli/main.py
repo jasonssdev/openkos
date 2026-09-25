@@ -192,12 +192,21 @@ def _chat_client(cfg: config.Config, *, task: str | None = None) -> OllamaClient
     The per-task tag changes WHICH model runs and nothing else: both safety
     rails still apply, which matters most precisely for the large models
     #516's sweep favors at edge typing.
+
+    Also honors `cfg.temperature`/`cfg.seed` (issue #1013): the sampling
+    pins `OllamaClient` already forwards as `options.temperature`/
+    `options.seed` (`llm/ollama.py`) once handed a non-`None` value. Both
+    default to `None`, so an unset workspace sends a request byte-identical
+    to before this key existed; pinning them REDUCES run-to-run variance, it
+    does not guarantee identical output.
     """
     return OllamaClient(
         model=config.resolve_task_model(cfg, task),
         timeout=cfg.chat_timeout,
         max_generation_tokens=cfg.max_generation_tokens,
         context_window=cfg.context_window,
+        temperature=cfg.temperature,
+        seed=cfg.seed,
     )
 
 

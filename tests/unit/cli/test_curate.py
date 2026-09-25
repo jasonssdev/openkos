@@ -161,6 +161,8 @@ class _FakeConfig:
         chat_timeout: float = config.DEFAULT_CHAT_TIMEOUT,
         max_generation_tokens: int = config.DEFAULT_MAX_GENERATION_TOKENS,
         context_window: int | None = config.DEFAULT_CONTEXT_WINDOW,
+        temperature: float | None = config.DEFAULT_TEMPERATURE,
+        seed: int | None = config.DEFAULT_SEED,
         models: dict[str, str] | None = None,
     ) -> None:
         self.model = model
@@ -168,6 +170,8 @@ class _FakeConfig:
         self.chat_timeout = chat_timeout
         self.max_generation_tokens = max_generation_tokens
         self.context_window = context_window
+        self.temperature = temperature
+        self.seed = seed
         self.models = models or {}
 
 
@@ -192,12 +196,16 @@ def _fake_ctx(
     *,
     auto: bool = False,
     models: dict[str, str] | None = None,
+    temperature: float | None = config.DEFAULT_TEMPERATURE,
+    seed: int | None = config.DEFAULT_SEED,
     accepted_stages: frozenset[str] = frozenset(),
 ) -> curate.CurateContext:
     return curate.CurateContext(
         root=tmp_path,
         layout=_FakeLayout(tmp_path),  # type: ignore[arg-type]
-        cfg=_FakeConfig(models=models),  # type: ignore[arg-type]
+        cfg=_FakeConfig(  # type: ignore[arg-type]
+            models=models, temperature=temperature, seed=seed
+        ),
         auto=auto,
         accepted_stages=accepted_stages,
     )
@@ -5208,6 +5216,35 @@ def test_stages_sharing_a_model_share_one_client(
     # `gemma2:27b` once for Structure's task; `stub-model` once, SHARED by
     # the two stages that both fall back to the global default.
     assert built == ["gemma2:27b", "stub-model"]
+
+
+def test_curate_forwards_configured_temperature_and_seed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`curate`'s own client construction (main.py cannot import curate.py,
+    so `_chat_client` cannot be reused here) forwards the workspace's
+    `temperature`/`seed` exactly like `chat_timeout`/`max_generation_tokens`/
+    `context_window` already do (issue #1013)."""
+    built: list[dict[str, object]] = []
+
+    def _record(**kwargs: object) -> _OfflineOllama:
+        built.append(kwargs)
+        return _OfflineOllama()
+
+    monkeypatch.setattr(curate, "OllamaClient", _record)
+    stage = _fake_stage(
+        "First",
+        probe=lambda ctx: curate.StageProbe(items=(1,), llm_calls=1),
+        writes=False,
+        task="edge_typing",
+    )
+    monkeypatch.setattr(curate, "_STAGES", (stage,))
+
+    ctx = _fake_ctx(Path("unused-root"), auto=True, temperature=0.0, seed=7)
+    curate.run_curate(ctx)
+
+    assert built[0]["temperature"] == 0.0
+    assert built[0]["seed"] == 7
 
 
 def test_model_not_found_names_the_STAGE_model_not_the_global_one(

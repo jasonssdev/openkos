@@ -6,6 +6,7 @@ on its own -- `raw/` sits outside it by design, so the workspace root is
 where the engine's own files live, not the OKF bundle root.
 """
 
+import math
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -298,6 +299,37 @@ def minimum_context_window(max_generation_tokens: int) -> int:
     raised ceiling next to an unchanged window.
     """
     return PROMPT_CONTEXT_ALLOWANCE + max_generation_tokens
+
+
+DEFAULT_TEMPERATURE: Final[float | None] = None
+"""Packaged default for `temperature` (issue #1013): pin nothing, so every
+`llm.chat` request keeps sampling at whatever the model's own Modelfile
+ships (`qwen3:8b`: 0.6).
+
+`None`, on the same reasoning `DEFAULT_RATIONALE_LANGUAGE` documents: unset
+must mean "send the request that shipped, byte for byte", so no existing
+workspace's output moves and no measurement is owed for it. `OllamaClient`
+already forwards `temperature` as `options.temperature` when given one
+(`llm/ollama.py`) -- this key is the workspace-facing way to reach that
+seam, matching `chat_timeout`/`max_generation_tokens`/`context_window`
+before it.
+
+Pinning a temperature REDUCES run-to-run variance (the sampling variance
+#454 measured on identical extraction input); it does not make output
+DETERMINISTIC -- seed and temperature together do not guarantee identical
+replies across Ollama versions, hardware, or `OLLAMA_NUM_PARALLEL`. Docs and
+the template say "reduces variance" and never "deterministic" for that
+reason. `0` is a real, valid value (greedy decoding). No value is
+recommended: which temperature suits extraction is unmeasured, and the one
+probe that ran two settings (#454) saw temperature 0 and model-default
+sampling collapse alike."""
+
+DEFAULT_SEED: Final[int | None] = None
+"""Packaged default for `seed` (issue #1013): pin nothing, matching
+`DEFAULT_TEMPERATURE`'s reasoning exactly -- unset sends the pre-#1013
+request byte for byte. Forwarded as `options.seed` by `OllamaClient` when
+given one; see `DEFAULT_TEMPERATURE` for why pinning it reduces variance
+without being a determinism guarantee."""
 
 
 DEFAULT_CONCURRENT_EXTRACTION = False
@@ -1020,6 +1052,42 @@ class Config:
     returns a confident answer built on a truncated document, with no error
     anywhere. Validation is the only place that failure can be made
     impossible rather than documented."""
+    temperature: float | None
+    """Sampling temperature pinned on every `llm.chat` request as
+    `options.temperature` (issue #1013), or `None` -- the default -- to
+    leave the model's own Modelfile temperature in place (`qwen3:8b`: 0.6).
+
+    Both an ABSENT key and an EXPLICIT `temperature:` (YAML null) resolve to
+    `None` here -- the same two-way `is not None` fallback `chat_timeout`
+    and `max_generation_tokens` use, NOT `context_window`'s three-way split.
+    `context_window` needs three states because its absent behaviour derives
+    a non-`None` value from `max_generation_tokens`; this field's absent
+    behaviour already IS `None` (nothing to pin), so there is no third state
+    to distinguish -- an explicit null therefore behaves exactly like
+    `context_window`'s own explicit null (opt out, unpinned), it just
+    reaches that answer without needing a `_present` companion flag.
+
+    `0` is a real value, not an omission: greedy decoding is precisely the
+    minimal-variance setting a caller pins by writing `temperature: 0`,
+    checked `is not None` throughout so it is never dropped as falsy.
+    Validated as a finite number `>= 0` at read time: NaN or infinity cannot
+    be forwarded to Ollama's JSON payload meaningfully, and a negative
+    temperature has no defined meaning.
+
+    Pinning this REDUCES run-to-run variance; it never guarantees identical
+    output -- Ollama version, hardware, and `OLLAMA_NUM_PARALLEL` can still
+    perturb the result even with `seed` set alongside it. No value is
+    recommended; see `DEFAULT_TEMPERATURE`."""
+    seed: int | None
+    """Sampling seed pinned on every `llm.chat` request as `options.seed`
+    (issue #1013), or `None` -- the default -- to leave sampling unseeded.
+
+    Same two-way fallback as `temperature` above: an absent key and an
+    explicit `seed:` (YAML null) both resolve to `None`, so the request is
+    byte-identical to the pre-#1013 one either way. Validated as a plain
+    integer, never a `bool` or a `float` -- Ollama treats a seed as an
+    opaque reproducibility token, not a quantity, so a fractional or
+    boolean value is refused rather than silently truncated or coerced."""
     confidential_local_exemption: bool
     """Whether a `confidential` concept may be included in an `llm.chat`
     payload when the backend host is verifiably this machine (issue #240),
@@ -1196,6 +1264,8 @@ def read_config(root: Path) -> Config:
     # one at all. This is the only key that needs to tell them apart.
     context_window_present = "context_window" in raw
     context_window = raw.get("context_window")
+    temperature = raw.get("temperature")
+    seed = raw.get("seed")
     confidential_local_exemption = raw.get("confidential_local_exemption")
     volatility_windows = raw.get("volatility_windows")
     type_tiers = raw.get("type_tiers")
@@ -1296,6 +1366,41 @@ def read_config(root: Path) -> Config:
                 f"write `context_window:` with no value to leave the window "
                 f"unpinned."
             )
+    if temperature is not None and (
+        isinstance(temperature, bool)
+        or not isinstance(temperature, int | float)
+        or not math.isfinite(temperature)
+        or temperature < 0
+    ):
+        # `bool` excluded FIRST and explicitly, the same int-as-bool hazard
+        # `chat_timeout`/`max_generation_tokens`/`context_window` each guard:
+        # without it, `temperature: true` would resolve to `1.0`, a real
+        # sampling value nobody asked for.
+        #
+        # NaN/inf are refused rather than forwarded: Ollama's `options` is a
+        # JSON payload, and neither has a meaningful JSON encoding as a
+        # sampling parameter. Negative values are refused too -- Ollama's
+        # temperature has no defined meaning below zero, and a typo like
+        # `temperature: -1` should fail loudly here rather than reach the
+        # model as some other value.
+        #
+        # `0` is deliberately NOT excluded: it is the real, valid "greedy
+        # decoding" setting, checked `is not None` below and forwarded
+        # unchanged -- never treated as unset by a truthiness slip.
+        raise ValueError(
+            f"{layout.config_path.name}: 'temperature' must be a finite "
+            f"number >= 0, got {temperature!r}"
+        )
+    if seed is not None and (isinstance(seed, bool) or not isinstance(seed, int)):
+        # `bool` excluded FIRST, the same hazard as every numeric key above:
+        # without it, `seed: true` would resolve to `1`. `float` is refused
+        # too (not merely truncated) -- Ollama treats a seed as an opaque
+        # reproducibility token, and silently truncating `seed: 7.5` to `7`
+        # would hide a config typo behind a value that happens to work.
+        raise ValueError(
+            f"{layout.config_path.name}: 'seed' must be an integer, got "
+            f"{type(seed).__name__}"
+        )
     if confidential_local_exemption is not None and not isinstance(
         confidential_local_exemption, bool
     ):
@@ -1520,6 +1625,15 @@ def read_config(root: Path) -> Config:
                 else max(DEFAULT_CONTEXT_WINDOW, context_floor)
             )
         ),
+        # Coerced to `float`, like `chat_timeout` above: `temperature: 0` is
+        # a YAML int and the field is typed `float`, so the boundary
+        # normalizes it once. Two-way `is not None` fallback, unlike
+        # `context_window` -- see `Config.temperature` for why this field
+        # has no third state to distinguish.
+        temperature=(
+            float(temperature) if temperature is not None else DEFAULT_TEMPERATURE
+        ),
+        seed=(seed if seed is not None else DEFAULT_SEED),
         confidential_local_exemption=(
             confidential_local_exemption
             if confidential_local_exemption is not None

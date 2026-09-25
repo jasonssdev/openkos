@@ -1843,6 +1843,236 @@ def test_written_config_carries_context_window(tmp_path: Path) -> None:
     assert config.read_config(tmp_path).context_window == config.DEFAULT_CONTEXT_WINDOW
 
 
+# --- temperature/seed: pinned sampling parameters (#1013) --------------------
+
+
+def test_default_temperature_is_unset() -> None:
+    """The packaged default pins nothing, so sampling follows whatever the
+    model's own Modelfile ships (`qwen3:8b`: 0.6) -- the measured variance
+    #454 documents. A pinned temperature is an opt-in, not a shipped
+    posture."""
+    assert config.DEFAULT_TEMPERATURE is None
+
+
+def test_default_seed_is_unset() -> None:
+    """The packaged default leaves sampling unseeded, mirroring
+    `DEFAULT_TEMPERATURE`."""
+    assert config.DEFAULT_SEED is None
+
+
+def test_read_config_reads_present_temperature(tmp_path: Path) -> None:
+    """A `temperature` present in `openkos.yaml` passes through (#1013)."""
+    (tmp_path / "openkos.yaml").write_text("temperature: 0.2\n", encoding="utf-8")
+
+    result = config.read_config(tmp_path)
+
+    assert result.temperature == 0.2
+
+
+def test_read_config_reads_a_configured_temperature_of_zero(tmp_path: Path) -> None:
+    """`temperature: 0` is a real value, not an omission -- a truthiness
+    check anywhere in the read path would silently drop it, and greedy
+    decoding is precisely the setting an operator pins by writing this."""
+    (tmp_path / "openkos.yaml").write_text("temperature: 0\n", encoding="utf-8")
+
+    result = config.read_config(tmp_path)
+
+    assert result.temperature == 0.0
+    assert result.temperature is not None
+
+
+def test_read_config_coerces_integer_temperature_to_float(tmp_path: Path) -> None:
+    """`temperature: 1` is a YAML int; the field is typed `float`, mirroring
+    `chat_timeout`'s own int-to-float coercion at the boundary."""
+    (tmp_path / "openkos.yaml").write_text("temperature: 1\n", encoding="utf-8")
+
+    result = config.read_config(tmp_path)
+
+    assert result.temperature == 1.0
+    assert isinstance(result.temperature, float)
+
+
+def test_read_config_falls_back_to_none_when_temperature_absent(
+    tmp_path: Path,
+) -> None:
+    """An `openkos.yaml` omitting `temperature` sends a request unpinned,
+    byte-identical to before #1013."""
+    (tmp_path / "openkos.yaml").write_text("model: qwen3:8b\n", encoding="utf-8")
+
+    result = config.read_config(tmp_path)
+
+    assert result.temperature is config.DEFAULT_TEMPERATURE
+
+
+@pytest.mark.parametrize("yaml_body", ["temperature: null\n", "temperature:\n"])
+def test_read_config_explicit_null_temperature_falls_back(
+    tmp_path: Path, yaml_body: str
+) -> None:
+    """A present-but-null `temperature` falls back to `None` too -- the SAME
+    answer an absent key gives, unlike `context_window`'s three-way split.
+    `context_window`'s absent behaviour derives a non-`None` value, so it
+    needs a third state to keep "leave it unpinned" expressible; this field's
+    absent behaviour already IS `None`, so there is nothing a third state
+    would add (see `Config.temperature`)."""
+    (tmp_path / "openkos.yaml").write_text(yaml_body, encoding="utf-8")
+
+    result = config.read_config(tmp_path)
+
+    assert result.temperature is None
+
+
+def test_read_config_rejects_boolean_temperature(tmp_path: Path) -> None:
+    """`temperature: true` is rejected, not read as `1.0` -- the same
+    int-as-bool hazard `chat_timeout` guards."""
+    (tmp_path / "openkos.yaml").write_text("temperature: true\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="'temperature' must be a finite number"):
+        config.read_config(tmp_path)
+
+
+def test_read_config_rejects_negative_temperature(tmp_path: Path) -> None:
+    """A negative temperature has no defined meaning to Ollama."""
+    (tmp_path / "openkos.yaml").write_text("temperature: -0.1\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="'temperature' must be a finite number"):
+        config.read_config(tmp_path)
+
+
+@pytest.mark.parametrize("yaml_body", ["temperature: .nan\n", "temperature: .inf\n"])
+def test_read_config_rejects_non_finite_temperature(
+    tmp_path: Path, yaml_body: str
+) -> None:
+    """NaN and infinity are refused: neither has a meaningful JSON encoding
+    as a sampling parameter in Ollama's `options` payload."""
+    (tmp_path / "openkos.yaml").write_text(yaml_body, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="'temperature' must be a finite number"):
+        config.read_config(tmp_path)
+
+
+def test_read_config_rejects_non_numeric_temperature(tmp_path: Path) -> None:
+    """A non-numeric `temperature` fails loudly rather than being coerced."""
+    (tmp_path / "openkos.yaml").write_text("temperature: hot\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="'temperature' must be a finite number"):
+        config.read_config(tmp_path)
+
+
+def test_read_config_reads_present_seed(tmp_path: Path) -> None:
+    """A `seed` present in `openkos.yaml` passes through (#1013)."""
+    (tmp_path / "openkos.yaml").write_text("seed: 7\n", encoding="utf-8")
+
+    result = config.read_config(tmp_path)
+
+    assert result.seed == 7
+    assert isinstance(result.seed, int)
+
+
+def test_read_config_falls_back_to_none_when_seed_absent(tmp_path: Path) -> None:
+    """An `openkos.yaml` omitting `seed` leaves sampling unseeded."""
+    (tmp_path / "openkos.yaml").write_text("model: qwen3:8b\n", encoding="utf-8")
+
+    result = config.read_config(tmp_path)
+
+    assert result.seed is config.DEFAULT_SEED
+
+
+@pytest.mark.parametrize("yaml_body", ["seed: null\n", "seed:\n"])
+def test_read_config_explicit_null_seed_falls_back(
+    tmp_path: Path, yaml_body: str
+) -> None:
+    """A present-but-null `seed` falls back to `None`, the same answer an
+    absent key gives -- mirroring `temperature`'s own two-way fallback."""
+    (tmp_path / "openkos.yaml").write_text(yaml_body, encoding="utf-8")
+
+    result = config.read_config(tmp_path)
+
+    assert result.seed is None
+
+
+def test_read_config_rejects_boolean_seed(tmp_path: Path) -> None:
+    """`seed: true` is rejected, not read as `1` -- the same int-as-bool
+    hazard every numeric key in this file guards."""
+    (tmp_path / "openkos.yaml").write_text("seed: true\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="'seed' must be an integer"):
+        config.read_config(tmp_path)
+
+
+def test_read_config_rejects_float_seed(tmp_path: Path) -> None:
+    """A fractional seed is refused rather than silently truncated: Ollama
+    treats a seed as an opaque token, not a quantity."""
+    (tmp_path / "openkos.yaml").write_text("seed: 7.5\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="'seed' must be an integer"):
+        config.read_config(tmp_path)
+
+
+def test_read_config_rejects_non_numeric_seed(tmp_path: Path) -> None:
+    """A non-numeric `seed` fails loudly rather than being coerced."""
+    (tmp_path / "openkos.yaml").write_text("seed: lucky\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="'seed' must be an integer"):
+        config.read_config(tmp_path)
+
+
+def test_the_template_documents_the_temperature_and_seed_keys() -> None:
+    """The shipped template must mention both keys and that they reduce
+    variance without guaranteeing determinism (issue #1013).
+
+    Pinned as documentation, on the same reasoning as `sufficiency_check`'s
+    own template test: no test reads comment prose, so a template that goes
+    on teaching a stale claim does it silently for a whole release."""
+    template = (
+        Path(config.__file__).parent / "templates" / "openkos.yaml.template"
+    ).read_text(encoding="utf-8")
+
+    assert "temperature" in template
+    assert "seed" in template
+    assert "variance" in template.lower()
+    assert "deterministic" not in template.lower()
+
+
+def test_the_template_temperature_and_seed_round_trip_through_read_config(
+    tmp_path: Path,
+) -> None:
+    """Uncommenting the template's own lines yields a workspace that reads
+    back the values the template shows, the same guard
+    `rationale_language`'s round-trip test applies -- the template ships
+    both keys commented out, so nothing else in the suite ever parses these
+    exact lines."""
+    config.write_config(tmp_path)
+    written = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
+    assert "# temperature:" in written
+    assert "# seed:" in written
+
+    uncommented = written.replace("# temperature:", "temperature:").replace(
+        "# seed:", "seed:"
+    )
+    (tmp_path / "openkos.yaml").write_text(uncommented, encoding="utf-8")
+
+    result = config.read_config(tmp_path)
+
+    assert result.temperature == 0.2
+    assert result.seed == 42
+
+
+def test_written_config_does_not_carry_temperature_or_seed_by_default(
+    tmp_path: Path,
+) -> None:
+    """A freshly-initialized workspace ships both keys OFF -- commented out,
+    unlike `chat_timeout`/`max_generation_tokens`/`context_window`, which
+    ship active with a packaged value. `temperature`/`seed` ship inactive
+    because the packaged default IS unpinned; there is no packaged number to
+    show active without contradicting `DEFAULT_TEMPERATURE`/`DEFAULT_SEED`."""
+    config.write_config(tmp_path, model="qwen3:8b", embedding_model="bge-m3")
+
+    result = config.read_config(tmp_path)
+
+    assert result.temperature is None
+    assert result.seed is None
+
+
 # --- union_judge: opt-out flag for the union+judge extraction pipeline (#456) --
 
 
@@ -2097,6 +2327,8 @@ def test_resolve_task_model_survives_a_hand_built_non_mapping_models() -> None:
         chat_timeout=600.0,
         max_generation_tokens=4096,
         context_window=config.DEFAULT_CONTEXT_WINDOW,
+        temperature=None,
+        seed=None,
         confidential_local_exemption=False,
         volatility_windows={},
         type_tiers={},

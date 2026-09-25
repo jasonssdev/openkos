@@ -155,6 +155,8 @@ def _cfg(exemption: bool) -> config.Config:
         chat_timeout=config.DEFAULT_CHAT_TIMEOUT,
         max_generation_tokens=config.DEFAULT_MAX_GENERATION_TOKENS,
         context_window=config.DEFAULT_CONTEXT_WINDOW,
+        temperature=config.DEFAULT_TEMPERATURE,
+        seed=config.DEFAULT_SEED,
         confidential_local_exemption=exemption,
         volatility_windows={},
         type_tiers={},

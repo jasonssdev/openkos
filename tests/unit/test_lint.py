@@ -1563,6 +1563,8 @@ def _cfg(
         chat_timeout=config.DEFAULT_CHAT_TIMEOUT,
         max_generation_tokens=config.DEFAULT_MAX_GENERATION_TOKENS,
         context_window=config.DEFAULT_CONTEXT_WINDOW,
+        temperature=config.DEFAULT_TEMPERATURE,
+        seed=config.DEFAULT_SEED,
         confidential_local_exemption=config.DEFAULT_CONFIDENTIAL_LOCAL_EXEMPTION,
         volatility_windows=({} if volatility_windows is None else volatility_windows),  # type: ignore[arg-type]
         type_tiers=({} if type_tiers is None else type_tiers),  # type: ignore[arg-type]
