@@ -127,6 +127,19 @@ inheritance could leave a survivor carrying `type: X` plus
 carrying its OWN `type_alternative` MUST keep it; the absorbed document's
 value MUST be restored to it unchanged by `unmerge`.
 
+`event_date` is likewise EXCLUDED from the generic fill-the-gap branch:
+the absorbed side's value MUST NEVER be imported onto a survivor that
+lacks its own (issue #1014c). It records evidence about WHEN a single
+Source's event happened, not a property that generalizes to a merged
+entity, so importing it would stamp a date onto a survivor whose own
+content carries no such evidence. A survivor carrying its OWN `event_date`
+MUST keep it, unaffected by the absorbed side's value, whatever that value
+is. A survivor with none MUST remain without one after the merge;
+`unmerge` MUST restore the absorbed document's own `event_date`, if it had
+one, unchanged.
+(Previously: `event_date` did not exist; this exclusion did not apply to
+it.)
+
 #### Scenario: Conflicting fields resolved and surfaced
 - GIVEN differing scalar and list-field values on both sides
 - WHEN `merge` runs
@@ -155,6 +168,21 @@ value MUST be restored to it unchanged by `unmerge`.
 - WHEN `merge <survivor> <absorbed>` is confirmed
 - THEN the merged document carries the survivor's value
 
+#### Scenario: The absorbed event_date does not cross the merge
+
+- GIVEN a survivor with no `event_date` and an absorbed object declaring
+  `event_date: 2026-07-14`
+- WHEN `merge <survivor> <absorbed>` is confirmed
+- THEN the merged document carries no `event_date`, and `unmerge` restores
+  the absorbed document's `2026-07-14` value unchanged
+
+#### Scenario: The survivor keeps its own event_date
+
+- GIVEN a survivor declaring `event_date: 2026-07-14` and an absorbed
+  object declaring a DIFFERENT `event_date: 2026-08-01`
+- WHEN `merge <survivor> <absorbed>` is confirmed
+- THEN the merged document's `event_date` is `2026-07-14`, the survivor's
+  own value
 ### Requirement: Sensitivity High-Water-Mark Recomputation
 
 Sensitivity MUST be RECOMPUTED via `combine_sensitivity`, never copied,
