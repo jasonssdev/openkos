@@ -16,7 +16,7 @@ import re
 import unicodedata
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path, PurePosixPath
 from typing import Final, Literal, get_args
 
@@ -117,7 +117,12 @@ one derived object was written -- no `ok`/`none` sentinel, so absence means
 exactly one thing: healthy. Stamped onto freshly built content only, never
 merged onto on-disk frontmatter (a merge would make a stale marker sticky
 forever); never read back from disk by any writer, unlike `sensitivity`
-(#229)."""
+(#229). The one exception (ADR-0023, design.md Decision 6, mechanism lands
+in a later slice): a converged re-ingest whose only change is a resolved
+`event_date` carries this marker forward via
+`application.ingest.carried_extraction_status`, unread by any FRESH
+extraction -- no extraction runs on that path, so the marker it describes
+is still true, and dropping it would erase a fact instead of a stale one."""
 
 ExtractionStatus = Literal[
     "no-extractable-text", "blocked-by-sensitivity", "failed", "no-concepts-found"
@@ -193,12 +198,89 @@ def origin_key_for(path: Path) -> str:
     return digest[:_ORIGIN_KEY_HEX_CHARS]
 
 
+EVENT_DATE_KEY: Final = "event_date"
+"""The optional frontmatter key holding a Source's event date (issue
+#1014c, ADR-0023) -- WHEN the recorded event happened, distinct from
+`timestamp`, which always records ingest time.
+
+Emitted only when user-controlled evidence resolved one: the
+`--event-date` flag, file-name inference, or carry-forward on re-ingest
+(`application.ingest.resolve_event_date`). NEVER defaulted to ingest time
+or any other derived value -- absence means exactly one thing: no
+evidence, matching `ORIGIN_KEY_KEY`'s convention above.
+
+Written as a QUOTED ISO-8601 calendar date string
+(`event_date: '2026-07-14'`), never a bare unquoted scalar, so every YAML
+parser reads the same text (ADR-0023's YAML-implicit-typing forces). The
+tolerant reader is `read_event_date` below, which also accepts a bare
+`date` a person wrote by hand.
+
+`build_merged_document`'s `_SPECIAL_KEYS` also excludes this key from the
+generic fill-the-gap merge rule: a survivor keeps only its own value, the
+same exclusion `type_alternative` gets (#803) and for the same reason --
+it records evidence about ONE Source, not a property of a merged entity."""
+
+
+@dataclass(frozen=True)
+class StoredEventDate:
+    """The result of tolerantly reading a Source's on-disk `event_date`
+    (design.md Decision 2). `malformed` distinguishes "absent" (`value`
+    and `raw` both `None`, `malformed=False`) from "present but
+    unreadable" (`value=None`, `malformed=True`, `raw` holding the
+    verbatim on-disk value, kept only so a caller can print it in a
+    warning). A malformed value counts as absent for
+    `application.ingest.resolve_event_date`'s precedence chain: it is
+    never carried forward as-is."""
+
+    value: date | None
+    malformed: bool
+    raw: object
+
+
+def read_event_date(metadata: Mapping[str, object]) -> StoredEventDate:
+    """Tolerantly read `EVENT_DATE_KEY` off `metadata` (design.md Decision
+    2's reader-tolerance table).
+
+    PyYAML resolves an unquoted `2026-07-14` to a native `datetime.date`,
+    exactly as it already does for `timestamp`, so this reader MUST accept
+    both a quoted string and a bare `date` and normalize to one form.
+
+    The `datetime.datetime` check MUST run before the `date` check,
+    because `datetime` is a `date` SUBCLASS: an unquoted
+    `2026-07-14 10:00` would otherwise pass an `isinstance(x, date)` check
+    and silently drop its time component instead of being reported as
+    malformed.
+
+    Reuses `_ISO_DATE_RE` (this module's §7 date-heading shape check) plus
+    a calendar-validity check via `date.fromisoformat` -- a deliberate,
+    documented narrow twin of `source_date.parse_event_date`, kept inside
+    this seam rather than importing that module (design.md Decision 2)."""
+    if EVENT_DATE_KEY not in metadata:
+        return StoredEventDate(value=None, malformed=False, raw=None)
+    raw = metadata[EVENT_DATE_KEY]
+    if isinstance(raw, datetime):
+        return StoredEventDate(value=None, malformed=True, raw=raw)
+    if isinstance(raw, date):
+        return StoredEventDate(value=raw, malformed=False, raw=raw)
+    if isinstance(raw, str) and _ISO_DATE_RE.match(raw):
+        try:
+            value = date.fromisoformat(raw)
+        except ValueError:
+            return StoredEventDate(value=None, malformed=True, raw=raw)
+        return StoredEventDate(value=value, malformed=False, raw=raw)
+    return StoredEventDate(value=None, malformed=True, raw=raw)
+
+
 EXTRACTION_NOTICE_KEY: Final = "extraction_notice"
 """The optional frontmatter key a Source concept carries when its
 extraction succeeded but produced output worth disclosing (#585); ABSENT
 otherwise, following `EXTRACTION_STATUS_KEY`'s convention exactly -- no
 `ok`/`none` sentinel, stamped onto freshly built content only, never merged
-onto on-disk frontmatter, never read back by a writer.
+onto on-disk frontmatter, never read back by a writer. It gains the same
+carried-marker exception `EXTRACTION_STATUS_KEY` does (ADR-0023, design.md
+Decision 6): a converged re-ingest whose only change is a resolved
+`event_date` carries an existing notice forward via
+`carried_extraction_notice` with no fresh extraction to make it stale.
 
 A SEPARATE key rather than a fifth `ExtractionStatus` token, and the split
 is semantic, not cosmetic. `extraction_status` answers "why did this run
@@ -487,6 +569,7 @@ def build_source_concept(
     extraction_status: ExtractionStatus | None = None,
     extraction_notice: ExtractionNotice | tuple[ExtractionNotice, ...] | None = None,
     origin_key: str | None = None,
+    event_date: date | None = None,
 ) -> str:
     """Build a conformant OKF Source concept document (D4/ingest-source-body D1).
 
@@ -553,6 +636,13 @@ def build_source_concept(
     -- but that is `ingest`'s invariant to hold, and a writer that silently
     dropped one of them would hide a future caller's mistake instead of
     letting it surface on disk.
+
+    `event_date` (issue #1014c, ADR-0023) is emitted as `EVENT_DATE_KEY`
+    under exactly the same "only when not `None`" rule; the caller has
+    already resolved the value (`application.ingest.resolve_event_date`)
+    -- this function performs no resolution of its own. A `datetime`
+    argument raises `TypeError`: it is a `date` subclass, and its
+    `isoformat()` would write a time of day no input ever stated.
     """
     metadata: dict[str, object] = {
         "type": "Source",
@@ -586,6 +676,13 @@ def build_source_concept(
         metadata[EXTRACTION_NOTICE_KEY] = tokens[0] if len(tokens) == 1 else tokens
     if origin_key is not None:
         metadata[ORIGIN_KEY_KEY] = origin_key
+    if event_date is not None:
+        if isinstance(event_date, datetime):
+            raise TypeError(
+                "event_date must be a date, not a datetime "
+                f"(it would write a time of day no input stated): {event_date!r}"
+            )
+        metadata[EVENT_DATE_KEY] = event_date.isoformat()
     if raw_content is None:
         section = (
             "_Source content could not be embedded as text "
@@ -1664,7 +1761,14 @@ def build_merged_document(
     no such check, so inheritance could leave a survivor carrying
     `type: X` + `type_alternative: X` -- a state the builder will not
     produce. A survivor that carries its OWN `type_alternative` keeps it,
-    since `merged` starts as `dict(survivor_metadata)`.
+    since `merged` starts as `dict(survivor_metadata)`. `event_date`
+    (issue #1014c, ADR-0023) is EXCLUDED from the same generic branch, for
+    the same reason: it records evidence about WHEN ONE Source's event
+    happened, not a property of a merged entity, so importing it would
+    stamp a date onto a survivor whose own content carries no such
+    evidence. A survivor with its own `event_date` keeps it; a survivor
+    with none stays without one, and the absorbed value remains
+    recoverable through `unmerge` and git, same as `type_alternative`'s.
     `sensitivity` is RECOMPUTED via
     `combine_sensitivity`, never copied; `freshness`+`timestamp` are
     taken TOGETHER from whichever side has the strictly more recent
@@ -1709,6 +1813,7 @@ def build_merged_document(
         MERGED_FROM_KEY,
         RELATIONS_KEY,
         TYPE_ALTERNATIVE_KEY,
+        EVENT_DATE_KEY,
     )
     for key, absorbed_value in absorbed_metadata.items():
         if key in _SPECIAL_KEYS:
