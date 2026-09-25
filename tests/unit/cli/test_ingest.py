@@ -9396,3 +9396,470 @@ def test_ingest_reports_a_failed_optional_call_on_stderr(
     assert "participant_capture: OllamaGenerationCapped" in result.stderr
     assert "judge selection unavailable" not in result.stderr
     assert (tmp_path / "bundle" / "concepts" / "backup-encryption.md").is_file()
+
+
+# --- issue #1014c: event_date (ADR-0023, design.md Decisions 3, 5, 6, 7)
+
+
+def test_ingest_rejects_invalid_event_date_flag_before_any_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ingestion spec: "An invalid calendar date is refused before any
+    write" / "A malformed value is refused before any write" (design.md
+    Decision 5)."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes.", encoding="utf-8")
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--event-date", "2026-13-01"])
+
+    assert result.exit_code == 2
+    assert (
+        "openkos ingest: --event-date must be a calendar date written "
+        "YYYY-MM-DD, got '2026-13-01'." in result.stderr
+    )
+    assert _snapshot(tmp_path) == before
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--event-date", "not-a-date"])
+
+    assert result.exit_code == 2
+    assert (
+        "openkos ingest: --event-date must be a calendar date written "
+        "YYYY-MM-DD, got 'not-a-date'." in result.stderr
+    )
+    assert _snapshot(tmp_path) == before
+
+
+def test_ingest_rejects_event_date_with_a_directory_before_any_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ingestion spec: "A directory input with --event-date is refused"
+    (design.md Decision 5) -- decided by shape, before any write."""
+    _init_workspace(tmp_path, monkeypatch)
+    notes = tmp_path / "notes"
+    notes.mkdir()
+    (notes / "a.md").write_text("Alpha notes.", encoding="utf-8")
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["ingest", "notes", "--event-date", "2026-07-14"])
+
+    assert result.exit_code == 2
+    assert "--event-date applies to a single file" in result.stderr
+    assert "notes" in result.stderr
+    assert _snapshot(tmp_path) == before
+
+
+def test_ingest_rejects_event_date_with_a_glob_before_any_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ingestion spec: "A glob input with --event-date is refused, even
+    matching one file" (design.md Decision 5)."""
+    _init_workspace(tmp_path, monkeypatch)
+    notes = tmp_path / "notes"
+    notes.mkdir()
+    (notes / "a.md").write_text("Alpha notes.", encoding="utf-8")
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["ingest", "notes/*.md", "--event-date", "2026-07-14"])
+
+    assert result.exit_code == 2
+    assert "--event-date applies to a single file" in result.stderr
+    assert _snapshot(tmp_path) == before
+
+
+def test_ingest_writes_event_date_from_a_valid_flag_and_prints_preview_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ingestion spec: "A valid flag value is accepted" / "The line names
+    the flag origin" (design.md Decision 7)."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes.", encoding="utf-8")
+
+    result = runner.invoke(
+        app, ["ingest", "notes.txt", "--event-date", "2026-07-14", "--auto"]
+    )
+
+    assert result.exit_code == 0
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["event_date"] == "2026-07-14"
+    assert "event date 2026-07-14 (from --event-date)" in result.stdout
+
+
+def test_ingest_writes_event_date_from_file_name_with_no_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ingestion spec: "The file name is used when no flag is given" /
+    "The line names the file-name origin"."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "call-2026-07-14.txt"
+    source.write_text("Some raw notes.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "call-2026-07-14.txt", "--auto"])
+
+    assert result.exit_code == 0
+    concept_path = tmp_path / "bundle" / "sources" / "call-2026-07-14.md"
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["event_date"] == "2026-07-14"
+    assert "event date 2026-07-14 (from the file name)" in result.stdout
+
+
+def test_ingest_reingest_keeps_event_date_with_no_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ingestion spec: "Re-ingest with no flag keeps the stored value" /
+    "The line names a carried-forward value as kept". Forced non-converged
+    via `--re-extract`, so the preview actually renders (a plain converged
+    re-ingest writes -- and prints -- nothing at all)."""
+    _init_workspace(tmp_path, monkeypatch)
+    run1 = _concept_reply(title="Stoic Dichotomy Of Control")
+    run2 = _concept_reply(title="Negative Visualization")
+    _patch_sequenced_llm(
+        monkeypatch,
+        [
+            run1,
+            run2,
+            '{"keep": ["Stoic Dichotomy Of Control", "Negative Visualization"]}',
+        ],
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text(_GROUNDED_NOTES, encoding="utf-8")
+    result = runner.invoke(
+        app, ["ingest", "notes.txt", "--event-date", "2026-07-14", "--auto"]
+    )
+    assert result.exit_code == 0
+
+    _patch_sequenced_llm(
+        monkeypatch,
+        [
+            run1,
+            run2,
+            '{"keep": ["Stoic Dichotomy Of Control", "Negative Visualization"]}',
+        ],
+    )
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto", "--re-extract"])
+
+    assert result.exit_code == 0
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["event_date"] == "2026-07-14"
+    assert "event date 2026-07-14 (kept from the existing Source)" in result.stdout
+
+
+def test_ingest_reingest_overwrites_event_date_with_a_differing_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ingestion spec: "A differing flag overwrites the stored value" / "An
+    overwrite names both the old and new value"."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes.", encoding="utf-8")
+    result = runner.invoke(
+        app, ["ingest", "notes.txt", "--event-date", "2026-07-14", "--auto"]
+    )
+    assert result.exit_code == 0
+
+    result = runner.invoke(
+        app, ["ingest", "notes.txt", "--event-date", "2026-08-01", "--auto"]
+    )
+
+    assert result.exit_code == 0
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["event_date"] == "2026-08-01"
+    assert (
+        "event date 2026-08-01 (from --event-date, replacing 2026-07-14)"
+        in result.stdout
+    )
+
+
+def test_ingest_warns_on_malformed_stored_event_date_and_does_not_carry_it_forward(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ingestion spec: "A malformed stored value is not carried forward and
+    warns". Forced non-converged via `--re-extract` so the regenerate
+    actually runs and the "not carried forward" claim is directly
+    checkable on the rewritten document."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes.", encoding="utf-8")
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert result.exit_code == 0
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+    metadata, body = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert "event_date" not in metadata
+    metadata["event_date"] = "2026-13-01"
+    concept_path.write_text(okf.dump_frontmatter(metadata, body), encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto", "--re-extract"])
+
+    assert result.exit_code == 0
+    assert (
+        "openkos ingest: ignoring the malformed event_date '2026-13-01' in "
+        "'bundle/sources/notes.md' -- expected YYYY-MM-DD." in result.stderr
+    )
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert "event_date" not in metadata
+
+
+def test_ingest_fills_malformed_stored_event_date_from_flag_or_file_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ingestion spec: "A malformed stored value is filled by the flag or
+    the file name" -- exercised via the flag half."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes.", encoding="utf-8")
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert result.exit_code == 0
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+    metadata, body = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    metadata["event_date"] = "2026-13-01"
+    concept_path.write_text(okf.dump_frontmatter(metadata, body), encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        ["ingest", "notes.txt", "--auto", "--re-extract", "--event-date", "2026-09-01"],
+    )
+
+    assert result.exit_code == 0
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["event_date"] == "2026-09-01"
+    assert "ignoring the malformed event_date" in result.stderr
+
+
+def test_ingest_prints_no_event_date_line_when_none_is_recorded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ingestion spec: "No line is printed when no event date is
+    recorded"."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert "event date" not in result.stdout
+
+
+def test_ingest_converged_reingest_with_differing_flag_rewrites_with_no_extraction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ingestion spec: "A differing flag on a converged Source rewrites it
+    with no extraction" (design.md Decision 6). The second run's stub LLM
+    raises on any `chat()` call, so a real LLM contact fails this test
+    loudly."""
+    _init_workspace(tmp_path, monkeypatch)
+    run1 = _concept_reply(title="Stoic Dichotomy Of Control")
+    run2 = _concept_reply(title="Negative Visualization")
+    _patch_sequenced_llm(
+        monkeypatch,
+        [
+            run1,
+            run2,
+            '{"keep": ["Stoic Dichotomy Of Control", "Negative Visualization"]}',
+        ],
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text(_GROUNDED_NOTES, encoding="utf-8")
+    result = runner.invoke(
+        app, ["ingest", "notes.txt", "--event-date", "2026-07-10", "--auto"]
+    )
+    assert result.exit_code == 0
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["event_date"] == "2026-07-10"
+    assert metadata.get("origin_key") is not None
+    concepts_dir = tmp_path / "bundle" / "concepts"
+    before_concepts = {p.name: p.read_bytes() for p in concepts_dir.glob("*.md")}
+
+    fake = _patch_llm(monkeypatch, raises=AssertionError("must not be called"))
+    result = runner.invoke(
+        app, ["ingest", "notes.txt", "--event-date", "2026-07-14", "--auto"]
+    )
+
+    assert result.exit_code == 0
+    assert fake.calls == []
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["event_date"] == "2026-07-14"
+    assert metadata.get("origin_key") is not None
+    after_concepts = {p.name: p.read_bytes() for p in concepts_dir.glob("*.md")}
+    assert after_concepts == before_concepts
+
+
+def test_ingest_converged_reingest_backfills_event_date_from_file_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ingestion spec: "A pre-feature Source with a dated file name gains
+    the date on plain re-ingest" (design.md Decision 6). The stored Source
+    has its `event_date` key stripped to simulate a pre-feature document."""
+    _init_workspace(tmp_path, monkeypatch)
+    run1 = _concept_reply(title="Stoic Dichotomy Of Control")
+    run2 = _concept_reply(title="Negative Visualization")
+    _patch_sequenced_llm(
+        monkeypatch,
+        [
+            run1,
+            run2,
+            '{"keep": ["Stoic Dichotomy Of Control", "Negative Visualization"]}',
+        ],
+    )
+    source = tmp_path / "call-2026-07-14.txt"
+    source.write_text(_GROUNDED_NOTES, encoding="utf-8")
+    result = runner.invoke(app, ["ingest", "call-2026-07-14.txt", "--auto"])
+    assert result.exit_code == 0
+    concept_path = tmp_path / "bundle" / "sources" / "call-2026-07-14.md"
+    metadata, body = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["event_date"] == "2026-07-14"
+    del metadata["event_date"]
+    concept_path.write_text(okf.dump_frontmatter(metadata, body), encoding="utf-8")
+    concepts_dir = tmp_path / "bundle" / "concepts"
+    before_concepts = {p.name: p.read_bytes() for p in concepts_dir.glob("*.md")}
+
+    fake = _patch_llm(monkeypatch, raises=AssertionError("must not be called"))
+    result = runner.invoke(app, ["ingest", "call-2026-07-14.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert fake.calls == []
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["event_date"] == "2026-07-14"
+    after_concepts = {p.name: p.read_bytes() for p in concepts_dir.glob("*.md")}
+    assert after_concepts == before_concepts
+
+
+def test_ingest_converged_reingest_with_equal_resolved_date_writes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ingestion spec: "A resolved date equal to the stored value writes
+    nothing" -- a regression pin against today's #773 convergence
+    behavior, unaffected by this feature."""
+    _init_workspace(tmp_path, monkeypatch)
+    run1 = _concept_reply(title="Stoic Dichotomy Of Control")
+    run2 = _concept_reply(title="Negative Visualization")
+    _patch_sequenced_llm(
+        monkeypatch,
+        [
+            run1,
+            run2,
+            '{"keep": ["Stoic Dichotomy Of Control", "Negative Visualization"]}',
+        ],
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text(_GROUNDED_NOTES, encoding="utf-8")
+    result = runner.invoke(
+        app, ["ingest", "notes.txt", "--event-date", "2026-07-14", "--auto"]
+    )
+    assert result.exit_code == 0
+    before = snapshot_with_mtime(tmp_path)
+
+    fake = _patch_llm(monkeypatch, raises=AssertionError("must not be called"))
+    result = runner.invoke(
+        app, ["ingest", "notes.txt", "--event-date", "2026-07-14", "--auto"]
+    )
+
+    assert result.exit_code == 0
+    assert fake.calls == []
+    assert "skipping extraction" in result.stderr
+    assert snapshot_with_mtime(tmp_path) == before
+
+
+def test_ingest_converged_date_only_rewrite_is_idempotent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ingestion spec: "The date-only rewrite is idempotent" -- a
+    regression pin, meaningfully testable only once the date-only rewrite
+    (Decision 6) exists; the property is emergent from resolve_event_date
+    (slice 2) plus the CLI's convergence condition (this slice), not a new
+    code path of its own."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes.", encoding="utf-8")
+    result = runner.invoke(
+        app, ["ingest", "notes.txt", "--event-date", "2026-07-10", "--auto"]
+    )
+    assert result.exit_code == 0
+    result = runner.invoke(
+        app, ["ingest", "notes.txt", "--event-date", "2026-07-14", "--auto"]
+    )
+    assert result.exit_code == 0
+    before = snapshot_with_mtime(tmp_path)
+
+    fake = _patch_llm(monkeypatch, raises=AssertionError("must not be called"))
+    result = runner.invoke(
+        app, ["ingest", "notes.txt", "--event-date", "2026-07-14", "--auto"]
+    )
+
+    assert result.exit_code == 0
+    assert fake.calls == []
+    assert snapshot_with_mtime(tmp_path) == before
+
+
+def test_ingest_never_writes_event_date_on_a_derived_concept(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ingestion spec: "Derived objects never carry an event date"."""
+    _init_workspace(tmp_path, monkeypatch)
+    run1 = _concept_reply(title="Stoic Dichotomy Of Control")
+    run2 = _concept_reply(title="Negative Visualization")
+    _patch_sequenced_llm(
+        monkeypatch,
+        [
+            run1,
+            run2,
+            '{"keep": ["Stoic Dichotomy Of Control", "Negative Visualization"]}',
+        ],
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text(_GROUNDED_NOTES, encoding="utf-8")
+
+    result = runner.invoke(
+        app, ["ingest", "notes.txt", "--event-date", "2026-07-14", "--auto"]
+    )
+
+    assert result.exit_code == 0
+    for concept_path in (tmp_path / "bundle" / "concepts").glob("*.md"):
+        metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+        assert "event_date" not in metadata
+
+
+def test_batch_cost_gate_bills_zero_for_a_converged_date_only_rewrite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#775 x #1014c: a batch file whose `event_date` backfills from its
+    dated name on a converged re-ingest still spends zero LLM calls
+    (design.md Decision 6 makes no LLM call on that path either), so the
+    cost gate's `_reingest_will_skip` estimate stays accurate even though
+    the file is no longer left byte-for-byte untouched."""
+    _init_workspace(tmp_path, monkeypatch)
+    corpus = tmp_path / "notes"
+    corpus.mkdir()
+    (corpus / "call-2026-07-14.md").write_text(_GROUNDED_NOTES, encoding="utf-8")
+    run1 = _concept_reply(title="Stoic Dichotomy Of Control")
+    run2 = _concept_reply(title="Negative Visualization")
+    _patch_sequenced_llm(
+        monkeypatch,
+        [
+            run1,
+            run2,
+            '{"keep": ["Stoic Dichotomy Of Control", "Negative Visualization"]}',
+        ],
+    )
+    assert runner.invoke(app, ["ingest", "notes", "--auto"]).exit_code == 0
+    concept_path = tmp_path / "bundle" / "sources" / "call-2026-07-14.md"
+    metadata, body = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["event_date"] == "2026-07-14"
+    del metadata["event_date"]
+    concept_path.write_text(okf.dump_frontmatter(metadata, body), encoding="utf-8")
+
+    fake = _patch_llm(monkeypatch, raises=AssertionError("must not be called"))
+    _simulate_tty(monkeypatch)
+    result = runner.invoke(app, ["ingest", "notes"], input="y\n")
+
+    assert result.exit_code == 0
+    assert fake.calls == []
+    assert "~0 LLM call(s)" in result.stderr
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["event_date"] == "2026-07-14"
