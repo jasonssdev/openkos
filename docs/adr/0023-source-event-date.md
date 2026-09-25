@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0023: A Source records its event date as an optional, never-defaulted event_date key"
 description: A Source may carry an event_date frontmatter key holding a quoted ISO calendar date, set only from user-controlled evidence and never defaulted to ingest time.
-status: Proposed
+status: Accepted
 date: 2026-09-25
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0023: A Source records its event date as an optional, never-defaulted event_date key
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-09-25
 
 ## Context
