@@ -13,7 +13,7 @@ from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 from pathlib import Path, PurePosixPath
@@ -22,7 +22,7 @@ from typing import Final, Literal, NamedTuple, TypedDict, TypeVar
 import typer
 from rich.console import Console
 
-from openkos import config, fsio, lock, read_outcome, source_title
+from openkos import config, fsio, lock, read_outcome, source_date, source_title
 from openkos import lint as lint_check
 from openkos.application import consent as application_consent
 from openkos.application import doctor as application_doctor
@@ -4263,6 +4263,39 @@ class _SingleIngestOutcome:
     disclosure can read this field instead of re-deriving it."""
 
 
+def _echo_event_date_preview_line(
+    resolution: application_ingest.EventDateResolution,
+) -> None:
+    """Print the ONE `event_date` preview line (design.md Decision 7),
+    stdout, right after the `bundle/sources/{slug}.md` line -- or nothing,
+    when `resolution.value is None` (ingestion spec: "No line is printed
+    when no event date is recorded"). Printed BEFORE the confirm gate, so
+    an inferred or overwritten value is reviewed before anything is
+    written.
+
+    `origin == "flag"` prints the `replacing` clause only when the value
+    actually CHANGED from a real prior value -- an unchanged re-supplied
+    flag (`changed` is `False`) or a fresh flag with no prior value
+    (`previous is None`) both print the plain form."""
+    if resolution.value is None:
+        return
+    value = resolution.value.isoformat()
+    if resolution.origin == "flag":
+        if resolution.changed and resolution.previous is not None:
+            typer.echo(
+                f"    event date {value} (from --event-date, replacing "
+                f"{resolution.previous.isoformat()})"
+            )
+        else:
+            typer.echo(f"    event date {value} (from --event-date)")
+    elif resolution.origin == "file name":
+        typer.echo(f"    event date {value} (from the file name)")
+    else:
+        # origin == "kept" -- the only remaining non-`None` origin
+        # (`resolve_event_date`'s vocabulary: "flag" | "file name" | "kept").
+        typer.echo(f"    event date {value} (kept from the existing Source)")
+
+
 def _echo_type_alternative_summary(
     derived_count: int, pairs: Sequence[tuple[str, str]]
 ) -> None:
@@ -4868,6 +4901,20 @@ def ingest(
             "(a byte-identical re-ingest skips it by default, #773)."
         ),
     ),
+    event_date: str | None = typer.Option(
+        None,
+        "--event-date",
+        metavar="YYYY-MM-DD",
+        # Traceability (issue #1014c, ADR-0023) stays here in source, never
+        # in the published `help=` text below (#389).
+        help=(
+            "The recorded Source's event_date -- a calendar date naming "
+            "when the recorded event happened, distinct from the ingest "
+            "timestamp. Precedence on re-ingest: this flag, then the "
+            "stored value, then the file name, then unset. Applies to a "
+            "single file only -- refused with a directory or glob src."
+        ),
+    ),
 ) -> None:
     """Ingest one source file, a whole directory, or a glob's matches into
     the workspace in a single invocation (issue #267).
@@ -4905,7 +4952,35 @@ def ingest(
     exit 3 per file), and 1 when any skip was a hard refusal (issue #349). An empty
     directory or a glob matching nothing refuses (exit 1, nothing
     written). See `_ingest_batch` for the full batch contract.
+
+    `--event-date` (issue #1014c, ADR-0023, design.md Decision 5) is
+    validated and refused, exit 2, BEFORE `_expand_batch_sources` runs and
+    before any read of the workspace: an unparseable value, and a
+    directory or glob `src` (regardless of how many files it matches,
+    including exactly one -- decided by the input's SHAPE, not its match
+    count) both refuse with no write of any kind.
     """
+    parsed_event_date: date | None = None
+    if event_date is not None:
+        parsed_event_date = source_date.parse_event_date(event_date)
+        if parsed_event_date is None:
+            typer.echo(
+                "openkos ingest: --event-date must be a calendar date "
+                f"written YYYY-MM-DD, got {event_date!r}.",
+                err=True,
+            )
+            raise typer.Exit(code=2)
+        if not src.is_file() and (
+            src.is_dir() or any(char in str(src) for char in _GLOB_MAGIC_CHARS)
+        ):
+            typer.echo(
+                "openkos ingest: --event-date applies to a single file; "
+                f"'{src}' is a directory or a glob. Ingest each file with "
+                "its own --event-date, or name the date in each file name.",
+                err=True,
+            )
+            raise typer.Exit(code=2)
+
     try:
         expansion = _expand_batch_sources(src)
     except OSError as exc:
@@ -4920,6 +4995,7 @@ def ingest(
             auto=auto,
             include_confidential=include_confidential,
             re_extract=re_extract,
+            event_date=parsed_event_date,
         )
         # ONE aggregate torn-classification line per run (#566), printed by
         # the command -- never by `_ingest_single`, which the batch path
@@ -4958,6 +5034,7 @@ def _ingest_single(
     include_confidential: bool,
     warn_nonlocal_embed_host: bool = True,
     re_extract: bool = False,
+    event_date: date | None = None,
 ) -> _SingleIngestOutcome:
     """Copy `src` into `raw/`, generate one OKF Source concept, and attempt
     LLM extraction of zero or more distinct derived objects, up to
@@ -5236,12 +5313,25 @@ def _ingest_single(
             concept_text=concept_text,
             cfg=cfg,
             timestamp=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            event_date_flag=event_date,
+            source_name=src.name,
         )
         title = source_plan.title
         resolved_sensitivity = source_plan.resolved_sensitivity
         on_disk_sensitivity = source_plan.on_disk_sensitivity
         on_disk_title = source_plan.on_disk_title
         concept_content = source_plan.content
+        if source_plan.event_date.stored_malformed:
+            # design.md Decision 7's warning: printed right after `compose_
+            # source_document` returns, regardless of whether the run below
+            # converges and leaves the file untouched -- "ignoring", never
+            # "removed", is what stays true either way.
+            typer.echo(
+                "openkos ingest: ignoring the malformed event_date "
+                f"{source_plan.event_date.stored_raw!r} in "
+                f"'bundle/sources/{slug}.md' -- expected YYYY-MM-DD.",
+                err=True,
+            )
 
         # #773: the convergence short-circuit, decided BEFORE any model
         # contact and before any write. A byte-identical re-ingest of a
@@ -5266,7 +5356,18 @@ def _ingest_single(
             if had_prior_source and concept_text is not None
             else None
         )
-        if converged is not None:
+        # design.md Decision 6: convergence skips ONLY when the resolved
+        # `event_date` did not change. A converged Source whose date DID
+        # change (an explicit flag, or file-name backfill on a pre-feature
+        # Source) falls through to the block below with `converged` still
+        # set -- `stage_derived_objects(carried=converged)` short-circuits
+        # before any LLM call, and `compose_catalog_update` rebuilds the
+        # Source with the carried markers and the new date. `event_date.
+        # changed` is always `False` when `converged is None` (a fresh
+        # ingest, or a non-converged regenerate that already runs the full
+        # path), so this condition is a strict narrowing of the pre-#1014c
+        # skip, never a widening of it.
+        if converged is not None and not source_plan.event_date.changed:
             typer.echo(
                 "openkos ingest: source unchanged and already "
                 "extracted; skipping extraction -- existing derived "
@@ -5303,14 +5404,22 @@ def _ingest_single(
         # `stage_notice` is the single-call sibling of `progress_callback`.
         # Printed even when the confidential-floor short-circuit inside
         # `application_ingest.stage_derived_objects` skips the LLM: harmless
-        # on a TTY, and the skip itself is reported right after.
-        observability.stage_notice(
-            "ingest", "extracting derived objects (waiting on the LLM)..."
-        )
+        # on a TTY, and the skip itself is reported right after. Guarded by
+        # `converged is None` (design.md Decision 6): a date-only rewrite
+        # extracts nothing, so this wording would misdescribe the run.
+        if converged is None:
+            observability.stage_notice(
+                "ingest", "extracting derived objects (waiting on the LLM)..."
+            )
         # `_chat_client` is constructed BEFORE the spinner opens (issue #918
         # Slice 2) -- mirrors the pre-move evaluation order, where it was a
         # plain call argument to `_stage_derived_objects` and so ran before
         # that function's own internal `with Console(...).status(...)` did.
+        # Still constructed on the date-only-rewrite path (`converged` set,
+        # `event_date.changed` true): harmless, since `stage_derived_
+        # objects(carried=...)` never calls `llm.chat` on that path (design.md
+        # Decision 6) -- the spinner context below stays as-is too, entered
+        # and left at once, to avoid re-indenting the whole extraction block.
         extraction_llm = _chat_client(cfg, task="extraction")
         try:
             with Console(stderr=True).status(
@@ -5329,6 +5438,7 @@ def _ingest_single(
                     include_confidential=include_confidential,
                     union_judge=cfg.union_judge,
                     on_progress=observability.phase_callback("ingest", status.update),
+                    carried=converged,
                 )
         except OllamaError as exc:
             typer.echo(
@@ -5382,7 +5492,12 @@ def _ingest_single(
                 drops=(),
                 lost_in_staging=0,
             )
-        _render_staged_derived_objects(staged)
+        # Guarded like `stage_notice` above (design.md Decision 6): a
+        # date-only rewrite ran no extraction, so none of this render's
+        # wording (degrade notes, per-candidate drops, the report summary)
+        # describes anything that actually happened this run.
+        if converged is None:
+            _render_staged_derived_objects(staged)
         derived_plans = staged.plans
         skip_reason = staged.skip_reason
         extraction_notice = staged.notices
@@ -5464,6 +5579,7 @@ def _ingest_single(
             f"  ~ bundle/sources/{slug}.md (regenerated -- sensitivity "
             f"{resolved_sensitivity} {sensitivity_clause}{title_clause})"
         )
+        _echo_event_date_preview_line(source_plan.event_date)
         for plan in derived_plans:
             typer.echo(f"  + bundle/{plan.link_dir}/{plan.slug}.md")
         typer.echo(f"  ~ {index_path.name} (Source entry refreshed)")
@@ -5472,6 +5588,7 @@ def _ingest_single(
         typer.echo("openkos ingest: proposed changes:")
         typer.echo(f"  + raw/{name}")
         typer.echo(f"  + bundle/sources/{slug}.md")
+        _echo_event_date_preview_line(source_plan.event_date)
         for plan in derived_plans:
             typer.echo(f"  + bundle/{plan.link_dir}/{plan.slug}.md")
         typer.echo(f"  ~ {index_path.name} (new Source entry)")
@@ -5564,7 +5681,12 @@ def _ingest_single(
 
     return _SingleIngestOutcome(
         regenerated=regenerate,
-        extraction_degraded=skip_reason is not None,
+        # design.md Decision 6: a date-only rewrite (`converged is not
+        # None`) carries the PRIOR run's `skip_reason` forward unread by any
+        # fresh extraction -- that is not a fresh degrade, so it must not
+        # count as one; `extraction_skipped` reports the carry instead.
+        extraction_degraded=skip_reason is not None and converged is None,
+        extraction_skipped=converged is not None,
         extraction_notice=extraction_notice,
         derived_count=len(derived_plans),
         alternative_pairs=tuple(
