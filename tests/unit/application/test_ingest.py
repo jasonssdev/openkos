@@ -945,3 +945,229 @@ def test_compose_catalog_update_regenerate_dedupes_the_source_index_entry() -> N
     )
     assert update.new_index_text.count("sources/notes.md") == 1
     assert "Re-ingest" in update.new_log_text
+
+
+# -- Slice 2 (issue #1014c / ADR-0023): `resolve_event_date`, stored
+# read-back, `compose_source_document`/`compose_catalog_update` threading,
+# and the carried-marker short-circuit (design.md Decisions 4, 3, 6) --
+
+
+@pytest.mark.parametrize(
+    (
+        "flag",
+        "stored",
+        "inferred",
+        "expected_value",
+        "expected_origin",
+        "expected_previous",
+        "expected_changed",
+    ),
+    [
+        pytest.param(
+            date(2026, 7, 14),
+            okf.StoredEventDate(
+                value=date(2026, 1, 1), malformed=False, raw="2026-01-01"
+            ),
+            date(2026, 3, 3),
+            date(2026, 7, 14),
+            "flag",
+            date(2026, 1, 1),
+            True,
+            id="flag-wins-over-stored-and-inferred",
+        ),
+        pytest.param(
+            None,
+            okf.StoredEventDate(
+                value=date(2026, 1, 1), malformed=False, raw="2026-01-01"
+            ),
+            date(2026, 3, 3),
+            date(2026, 1, 1),
+            "kept",
+            date(2026, 1, 1),
+            False,
+            id="stored-value-kept-when-no-flag",
+        ),
+        pytest.param(
+            None,
+            None,
+            date(2026, 3, 3),
+            date(2026, 3, 3),
+            "file name",
+            None,
+            True,
+            id="inferred-fills-the-gap-when-stored-is-absent",
+        ),
+        pytest.param(
+            None,
+            okf.StoredEventDate(value=None, malformed=True, raw="14/07/2026"),
+            date(2026, 3, 3),
+            date(2026, 3, 3),
+            "file name",
+            None,
+            True,
+            id="inferred-fills-the-gap-when-stored-is-malformed",
+        ),
+        pytest.param(
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            False,
+            id="no-evidence-leaves-the-key-unset",
+        ),
+    ],
+)
+def test_resolve_event_date_precedence(
+    flag: date | None,
+    stored: okf.StoredEventDate | None,
+    inferred: date | None,
+    expected_value: date | None,
+    expected_origin: str | None,
+    expected_previous: date | None,
+    expected_changed: bool,
+) -> None:
+    """design.md Decision 4's precedence table: `flag` set wins regardless
+    of `stored`/`inferred`; otherwise a VALID stored value is `"kept"`;
+    otherwise an inferred file-name date fills the gap; otherwise the
+    result is unset. A malformed stored value counts as absent -- that is
+    the mechanism that keeps it from being carried forward. `.changed` is
+    `value != previous`, where `previous` is the stored value only when it
+    is not malformed."""
+    resolution = ingest_service.resolve_event_date(
+        flag=flag, stored=stored, inferred=inferred
+    )
+    assert resolution.value == expected_value
+    assert resolution.origin == expected_origin
+    assert resolution.previous == expected_previous
+    assert resolution.changed is expected_changed
+
+
+def test_compose_source_document_emits_event_date_when_given() -> None:
+    """ingest-application-service spec: "A given event_date reaches the
+    generated document" -- `event_date_flag` reaches `resolve_event_date`
+    and then the built frontmatter unchanged; the service resolves nothing
+    of its own beyond calling `resolve_event_date` (design Decision 4)."""
+    plan = _source_plan(event_date_flag=date(2026, 7, 14))
+    metadata, _ = okf.load_frontmatter(plan.content)
+    assert metadata.get(okf.EVENT_DATE_KEY) == "2026-07-14"
+    assert plan.event_date.value == date(2026, 7, 14)
+    assert plan.event_date.origin == "flag"
+
+
+def test_compose_source_document_is_byte_identical_when_event_date_is_none() -> None:
+    """ingest-application-service spec: "A None event_date produces a
+    byte-identical Source" -- the default call (no flag, no source_name)
+    produces exactly the same bytes as an explicit `event_date_flag=None,
+    source_name=None` call, and neither carries the key."""
+    with_defaults = _source_plan()
+    explicit_none = _source_plan(event_date_flag=None, source_name=None)
+    assert with_defaults.content == explicit_none.content
+    metadata, _ = okf.load_frontmatter(with_defaults.content)
+    assert okf.EVENT_DATE_KEY not in metadata
+    assert with_defaults.event_date.value is None
+    assert with_defaults.event_date.origin is None
+
+
+def test_compose_source_document_reads_back_stored_event_date() -> None:
+    """design.md Decision 4: "Where the stored value is read back" -- a
+    re-ingest whose `concept_text` carries a prior `event_date` surfaces it
+    on `SourceDocumentPlan.event_date.previous`, mirroring `on_disk_
+    sensitivity`/`on_disk_title`'s existing read-back shape. No flag and no
+    `source_name` here, so the ONLY evidence is the stored value -- the
+    resolution keeps it (`origin == "kept"`)."""
+    prior = _prior_concept_text(event_date=date(2026, 7, 10))
+    plan = _source_plan(concept_text=prior)
+    assert plan.event_date.previous == date(2026, 7, 10)
+    assert plan.event_date.origin == "kept"
+    assert plan.event_date.value == date(2026, 7, 10)
+
+
+def test_compose_catalog_update_preserves_event_date_on_marker_only_rebuild() -> None:
+    """ingest-application-service spec: "A marker-only catalog rebuild
+    keeps the resolved event_date" -- design.md Decision 3's SECOND
+    `build_source_concept` call site, the one the proposal missed. A
+    Source whose resolved `event_date` is set must not lose it when
+    `compose_catalog_update` rebuilds solely to stamp a fresh
+    `extraction_status`/`extraction_notice` marker."""
+    source = _source_plan(event_date_flag=date(2026, 7, 14))
+    staged = _staged(skip_reason="no-concepts-found")
+    update = ingest_service.compose_catalog_update(
+        source=source,
+        staged=staged,
+        slug="notes",
+        resource="raw/notes.txt",
+        index_text="---\nokf_version: '0.1'\n---\n",
+        log_text="---\nokf_version: '0.1'\n---\n",
+        regenerate=False,
+        timestamp="2026-07-14T18:30:00Z",
+        entry_date=date(2026, 7, 14),
+    )
+    # Sanity: the rebuild branch actually fired (matches the existing
+    # `test_compose_catalog_update_conditional_rerender_on_skip_reason`).
+    assert update.concept_content != source.content
+    metadata, _ = okf.load_frontmatter(update.concept_content)
+    assert metadata.get(okf.EVENT_DATE_KEY) == "2026-07-14"
+
+
+def test_carried_extraction_status_fails_closed() -> None:
+    """design.md Decision 6: `carried_extraction_status` mirrors
+    `carried_extraction_notice`'s fail-closed membership check
+    (`application/ingest.py:547-568`), narrowed to a SINGLE
+    `okf.ExtractionStatus | None` rather than a tuple --
+    `EXTRACTION_STATUS_KEY` has never carried more than one token (#187).
+    A value inside `okf.EXTRACTION_STATUS_VALUES` narrows through;
+    anything else -- a missing key, an unrecognised string, or a wrong
+    type -- yields `None`, matching `carried_extraction_notice`'s posture
+    that frontmatter is hand-editable and a later release's token must
+    never crash an otherwise-healthy run."""
+    for status in okf.EXTRACTION_STATUS_VALUES:
+        assert (
+            ingest_service.carried_extraction_status(
+                {okf.EXTRACTION_STATUS_KEY: status}
+            )
+            == status
+        )
+
+    assert ingest_service.carried_extraction_status({}) is None
+    assert (
+        ingest_service.carried_extraction_status(
+            {okf.EXTRACTION_STATUS_KEY: "quarantined"}
+        )
+        is None
+    )
+    assert (
+        ingest_service.carried_extraction_status({okf.EXTRACTION_STATUS_KEY: True})
+        is None
+    )
+    assert (
+        ingest_service.carried_extraction_status({okf.EXTRACTION_STATUS_KEY: None})
+        is None
+    )
+
+
+def test_stage_derived_objects_returns_carried_markers_without_llm_call(
+    tmp_path: Path,
+) -> None:
+    """design.md Decision 6: the carried-marker short-circuit -- GIVEN a
+    `ConvergedReingest` whose `carried_status` and `carried_notices` are
+    both set, WHEN `stage_derived_objects(carried=...)` runs with a stub
+    `LLMBackend` whose `chat` raises, THEN it returns the carried markers
+    and the stub's `chat` is never invoked -- the SAME pre-extraction
+    short-circuit shape as `test_stage_derived_objects_returns_no_
+    extractable_text_reason`/`..._blocked_by_sensitivity_reason` above."""
+    converged = ingest_service.ConvergedReingest(
+        carried_notices=(okf.EXTRACTION_NOTICE_SOLE_OBJECT_RESTATES,),
+        carried_status="no-concepts-found",
+    )
+    stub_llm = _FakeLLM(raises=AssertionError("must not be called"))
+    outcome = ingest_service.stage_derived_objects(
+        **_stage_kwargs(tmp_path, llm=stub_llm, carried=converged)  # type: ignore[arg-type]
+    )
+    assert outcome.plans == ()
+    assert outcome.skip_reason == "no-concepts-found"
+    assert outcome.notices == (okf.EXTRACTION_NOTICE_SOLE_OBJECT_RESTATES,)
+    assert outcome.report is None
+    assert outcome.drops == ()
+    assert outcome.lost_in_staging == 0

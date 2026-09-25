@@ -39,7 +39,7 @@ from datetime import date
 from pathlib import Path
 from typing import Literal
 
-from openkos import config, source_title
+from openkos import config, source_date, source_title
 from openkos.bundle import index as bundle_index
 from openkos.bundle import log as bundle_log
 from openkos.bundle import source_titles
@@ -278,6 +278,7 @@ def stage_derived_objects(
     include_confidential: bool = False,
     union_judge: bool = False,
     on_progress: ProgressHook | None = None,
+    carried: ConvergedReingest | None = None,
 ) -> StagedDerivedObjects:
     """Attempt LLM extraction of zero or more distinct derived objects from
     the source's decoded text, and stage each validated candidate for Phase
@@ -336,7 +337,27 @@ def stage_derived_objects(
     Source's `extraction_notice` frontmatter key), distinct from the STRING
     notices the 14 `_*_notice(report)` helpers render to stderr -- those
     stay in `cli/main.py` and read `report` directly.
+
+    `carried` (issue #1014c, ADR-0023, design.md Decision 6) is the ONE
+    exception to everything above: when set, this function returns the
+    carried markers BEFORE any of the checks below run and BEFORE the LLM
+    is ever called -- the same pre-extraction short-circuit shape as the
+    `no-extractable-text`/`blocked-by-sensitivity` returns. It exists for
+    the #773 convergence gate's date-only rewrite: a Source whose only
+    change is a resolved `event_date` has nothing new to extract, so
+    carrying the PRIOR run's markers forward is the honest answer -- they
+    describe derived objects that are still exactly as they were.
     """
+    if carried is not None:
+        return StagedDerivedObjects(
+            plans=(),
+            skip_reason=carried.carried_status,
+            notices=carried.carried_notices,
+            report=None,
+            drops=(),
+            lost_in_staging=0,
+        )
+
     if raw_content is None or not raw_content.strip():
         return StagedDerivedObjects(
             plans=(),
@@ -568,6 +589,33 @@ def carried_extraction_notice(
     return okf.extraction_notices(metadata)
 
 
+def carried_extraction_status(
+    metadata: Mapping[str, object],
+) -> okf.ExtractionStatus | None:
+    """The `extraction_status` a Source's frontmatter CARRIES, narrowed to
+    the closed vocabulary (`okf.EXTRACTION_STATUS_VALUES`) by matching a
+    member -- mirrors `carried_extraction_notice` above exactly, except
+    `EXTRACTION_STATUS_KEY` has never carried more than one token (#187),
+    so this narrows to a single `okf.ExtractionStatus | None` rather than a
+    tuple.
+
+    FAILS CLOSED, for the same reason `carried_extraction_notice` does: an
+    absent key, an unrecognised string, and a wrong-typed value (`bool`,
+    `None`, ...) are all dropped rather than raised on -- frontmatter is
+    hand-editable, and a Source written by a later release may carry a
+    token this build cannot spell.
+
+    The one caller is design.md Decision 6's converged date-only rewrite:
+    `converged_reingest` reads the PRIOR run's `extraction_status` so
+    `stage_derived_objects(carried=...)` can carry it forward unread by any
+    fresh extraction (`okf.py:113-125`'s documented exception)."""
+    raw = metadata.get(okf.EXTRACTION_STATUS_KEY)
+    known = set(okf.EXTRACTION_STATUS_VALUES)
+    if isinstance(raw, str) and raw in known:
+        return raw
+    return None
+
+
 @dataclass(frozen=True)
 class ConvergedReingest:
     """A non-`None` `converged_reingest` result -- the #773 convergence
@@ -575,9 +623,19 @@ class ConvergedReingest:
     mid-region `return`"). The adapter maps this to the SAME exit path it
     used before this move: echo the verbatim disclosure line and return
     `_SingleIngestOutcome(regenerated=True, extraction_degraded=False,
-    extraction_skipped=True, extraction_notice=carried_notices)`."""
+    extraction_skipped=True, extraction_notice=carried_notices)`.
+
+    Also the input `stage_derived_objects(carried=...)` accepts (design.md
+    Decision 6): when the resolved `event_date` still CHANGES on an
+    otherwise-converged Source, the CLI passes this same value on, so its
+    `carried_status`/`carried_notices` become that call's short-circuit
+    return -- no fresh extraction runs, so no fresh markers are computed."""
 
     carried_notices: tuple[okf.ExtractionNotice, ...]
+    carried_status: okf.ExtractionStatus | None
+    """The PRIOR run's `extraction_status`, read via
+    `carried_extraction_status` (design.md Decision 6) -- `None` on a
+    clean convergence, matching `carried_notices`' empty-tuple sibling."""
 
 
 def converged_reingest(
@@ -637,7 +695,10 @@ def converged_reingest(
         return None
     if extraction_retry_due(prior_metadata):
         return None
-    return ConvergedReingest(carried_notices=carried_extraction_notice(prior_metadata))
+    return ConvergedReingest(
+        carried_notices=carried_extraction_notice(prior_metadata),
+        carried_status=carried_extraction_status(prior_metadata),
+    )
 
 
 def _read_source_sensitivity(source_display_path: str, text: str) -> object:
@@ -688,6 +749,109 @@ def _read_source_title(source_display_path: str, text: str) -> object:
     return metadata.get("title")
 
 
+EventDateOrigin = Literal["flag", "file name", "kept"]
+"""Where a resolved `event_date` value came from (design.md Decision 4) --
+`None` iff `EventDateResolution.value` is `None` (no evidence). `"kept"`
+names a re-ingest that carried a PRIOR stored value forward unchanged,
+distinct from `"flag"` and `"file name"`, which both name evidence THIS run
+supplied."""
+
+
+@dataclass(frozen=True)
+class EventDateResolution:
+    """One `resolve_event_date` call's typed result (design.md Decision 4:
+    Interfaces/Contracts) -- what this run writes, where it came from, and
+    enough of the PRIOR state for the CLI to render the exact preview line
+    and stderr warning (design.md Decision 7) without re-reading anything."""
+
+    value: date | None
+    """What this run writes -- `None` means the key stays absent."""
+
+    origin: EventDateOrigin | None
+    """`None` iff `value` is `None`."""
+
+    previous: date | None
+    """The prior stored value, ONLY when it was validly readable -- `None`
+    both when the key was absent and when it was malformed (a malformed
+    value is never carried forward, so it cannot be a `previous`)."""
+
+    stored_malformed: bool
+    """Whether the on-disk key was present but unreadable -- the CLI's
+    stderr warning (design.md Decision 7) fires on this, not on `previous`
+    being `None`, which is also true for a plain absence."""
+
+    stored_raw: object
+    """The verbatim on-disk value, kept only so the CLI's warning can print
+    it -- never interpreted here."""
+
+    @property
+    def changed(self) -> bool:
+        """Whether THIS run's resolved `value` differs from `previous` --
+        the #773 convergence gate's date-only rewrite trigger (design.md
+        Decision 6): a converged Source is rewritten only when this is
+        `True`."""
+        return self.value != self.previous
+
+
+def resolve_event_date(
+    *, flag: date | None, stored: okf.StoredEventDate | None, inferred: date | None
+) -> EventDateResolution:
+    """The ONE place a Source's `event_date` is resolved (design.md
+    Decision 4), in precedence order: an explicit `--event-date` flag
+    always wins, over a validly-stored prior value, over a file-name
+    inference, over leaving the key unset. A malformed stored value counts
+    as absent -- that is the mechanism by which it is "not carried
+    forward" and can be filled by a flag or the file name.
+
+    Pure: it reads no disk and parses nothing itself -- `stored` and
+    `inferred` are already-resolved inputs the caller (`compose_source_
+    document`) supplies, matching `stage_derived_objects`' and this
+    module's other composition functions' "renders/resolves nothing of its
+    own" posture."""
+    previous = stored.value if stored is not None and not stored.malformed else None
+    stored_malformed = stored.malformed if stored is not None else False
+    stored_raw = stored.raw if stored is not None else None
+
+    if flag is not None:
+        value: date | None = flag
+        origin: EventDateOrigin | None = "flag"
+    elif previous is not None:
+        value = previous
+        origin = "kept"
+    elif inferred is not None:
+        value = inferred
+        origin = "file name"
+    else:
+        value = None
+        origin = None
+
+    return EventDateResolution(
+        value=value,
+        origin=origin,
+        previous=previous,
+        stored_malformed=stored_malformed,
+        stored_raw=stored_raw,
+    )
+
+
+def _read_source_event_date(
+    source_document_display_path: str, text: str
+) -> okf.StoredEventDate:
+    """Raw `event_date` from an EXISTING Source concept, tolerantly parsed
+    via `okf.read_event_date` -- mirrors `_read_source_title`'s shape
+    exactly, for `event_date` rather than `title` (design.md Decision 4:
+    "Where the stored value is read back"). Does NOT decide precedence --
+    the caller passes the result to `resolve_event_date`."""
+    try:
+        metadata, _ = okf.load_frontmatter(text)
+    except Exception as exc:
+        raise ValueError(
+            f"refusing to ingest -- '{source_document_display_path}' frontmatter "
+            f"could not be parsed to resolve its existing event_date: {exc}"
+        ) from exc
+    return okf.read_event_date(metadata)
+
+
 @dataclass(frozen=True)
 class SourceDocumentPlan:
     """The composed Source document for THIS run, plus the on-disk facts
@@ -717,6 +881,17 @@ class SourceDocumentPlan:
     internally rather than re-threaded through a second parameter list --
     see this change's apply-progress deviations)."""
 
+    event_date: EventDateResolution = EventDateResolution(
+        value=None, origin=None, previous=None, stored_malformed=False, stored_raw=None
+    )
+    """This run's resolved `event_date` (design.md Decision 4), carried so
+    `compose_catalog_update`'s marker-only rebuild (Decision 3) and the
+    CLI's preview line, stderr warning, and #773 convergence gate
+    (Decision 6/7) all read the SAME resolution rather than re-deriving it.
+    A frozen "no evidence" default keeps every pre-existing `compose_
+    source_document` call in this file valid unmodified -- the value is
+    always actually set below, never left at this default in practice."""
+
 
 def compose_source_document(
     *,
@@ -729,6 +904,8 @@ def compose_source_document(
     concept_text: str | None,
     cfg: config.Config,
     timestamp: str,
+    event_date_flag: date | None = None,
+    source_name: str | None = None,
 ) -> SourceDocumentPlan:
     """Compose this run's Source document from local inputs (design:
     Interfaces/Contracts) -- `concept_text is None` is exactly the
@@ -754,6 +931,15 @@ def compose_source_document(
 
     `origin_key` is stamped as `_RawDestination.origin_key` resolved (#865)
     -- the caller's concern, passed through unchanged.
+
+    `event_date_flag`/`source_name` (issue #1014c, ADR-0023, design.md
+    Decision 4) feed `resolve_event_date` -- this function performs NO
+    resolution policy of its own beyond that one call: `source_name` is
+    inferred through `source_date.event_date_from_name` only when given
+    (`None` turns inference off, keeping every pre-#1014c caller inert),
+    and the stored value is read back beside `on_disk_sensitivity`/
+    `on_disk_title` above. `resolution.value` is the ONLY thing that
+    reaches `build_source_concept`.
 
     Renders nothing (spec: "The service module renders nothing") and calls
     no presentation primitive, matching `stage_derived_objects`."""
@@ -790,10 +976,23 @@ def compose_source_document(
             on_disk_sensitivity, cfg.default_sensitivity
         )
         on_disk_title = _read_source_title(source_document_display_path, concept_text)
+        stored_event_date = _read_source_event_date(
+            source_document_display_path, concept_text
+        )
     else:
         on_disk_sensitivity = None
         resolved_sensitivity = cfg.default_sensitivity
         on_disk_title = None
+        stored_event_date = None
+
+    inferred_event_date = (
+        source_date.event_date_from_name(source_name)
+        if source_name is not None
+        else None
+    )
+    event_date_resolution = resolve_event_date(
+        flag=event_date_flag, stored=stored_event_date, inferred=inferred_event_date
+    )
 
     content = okf.build_source_concept(
         title=title,
@@ -807,6 +1006,7 @@ def compose_source_document(
         extraction_status=None,
         extraction_notice=(),
         origin_key=origin_key,
+        event_date=event_date_resolution.value,
     )
     source_metadata, _ = okf.load_frontmatter(content)
     source_sensitivity = str(source_metadata["sensitivity"])
@@ -821,6 +1021,7 @@ def compose_source_document(
         content=content,
         raw_content=raw_content,
         origin_key=origin_key,
+        event_date=event_date_resolution,
     )
 
 
@@ -890,6 +1091,7 @@ def compose_catalog_update(
             extraction_status=staged.skip_reason,
             extraction_notice=staged.notices,
             origin_key=source.origin_key,
+            event_date=source.event_date.value,
         )
 
     working_index_text = index_text
