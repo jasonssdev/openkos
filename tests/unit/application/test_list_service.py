@@ -454,6 +454,68 @@ def test_list_provenance_sources_skips_unreadable_files_without_crashing(
     assert result.ancestors == ("sources/good",)
 
 
+def test_list_provenance_sources_records_unreadable_files_as_not_run(
+    tmp_path: Path,
+) -> None:
+    """T2 (#1002 item D): a document `read_text` genuinely cannot read
+    (permission denied, not a decode failure) is still skipped -- the
+    ancestor it might have supplied is silently absent, exactly as before
+    -- but the skip is no longer invisible: it lands in `result.not_run` as
+    a `read_outcome.NotRun(label=<relative path>, reason=str(exc))`, per
+    ADR-0022's settled vocabulary. `chmod 000` is a REAL unreadable file,
+    not a monkeypatch: unlike `Path.rglob` (which swallows `OSError`
+    internally), `read_text` genuinely raises `PermissionError` here, on a
+    non-root test uid."""
+    layout = _workspace(tmp_path)
+    _write_doc(
+        layout.bundle_dir / "concepts" / "solo.md",
+        provenance=["sources/good"],
+    )
+    _write_doc(
+        layout.bundle_dir / "sources" / "good.md",
+        type_="Source",
+        title="Good",
+    )
+    blocked_path = layout.bundle_dir / "concepts" / "blocked.md"
+    blocked_path.parent.mkdir(parents=True, exist_ok=True)
+    blocked_path.write_text("---\ntype: Concept\n---\n", encoding="utf-8")
+    blocked_path.chmod(0o000)
+    try:
+        result = list_service.list_provenance_sources(layout, "concepts/solo")
+    finally:
+        # Restore so tmp_path cleanup (and any later test in the same
+        # session) can still remove the directory tree.
+        blocked_path.chmod(0o644)
+
+    assert result.ancestors == ("sources/good",)
+    assert len(result.not_run) == 1
+    not_run = result.not_run[0]
+    assert not_run.label == "concepts/blocked.md"
+    assert not_run.reason  # str(exc) -- non-empty, exact wording not pinned.
+
+
+def test_list_provenance_sources_clean_bundle_reports_no_not_run(
+    tmp_path: Path,
+) -> None:
+    """The ordinary path -- nothing unreadable -- must not gain noise:
+    `not_run` stays empty exactly like every other list-service result
+    field defaults to empty on a clean bundle."""
+    layout = _workspace(tmp_path)
+    _write_doc(
+        layout.bundle_dir / "concepts" / "solo.md",
+        provenance=["sources/good"],
+    )
+    _write_doc(
+        layout.bundle_dir / "sources" / "good.md",
+        type_="Source",
+        title="Good",
+    )
+
+    result = list_service.list_provenance_sources(layout, "concepts/solo")
+
+    assert result.not_run == ()
+
+
 def test_list_provenance_sources_reports_no_ancestors_as_empty(
     tmp_path: Path,
 ) -> None:

@@ -10452,7 +10452,17 @@ def _run_list_sources(layout: config.WorkspaceLayout, object_id: str) -> None:
     (`application_list.list_provenance_sources`'s own docstring explains
     why): the `try` below wraps ONLY `resolve_concept_path`, exactly as it
     did before this extraction, so a failure in the provenance walk that
-    follows is never mislabelled as a bad concept id."""
+    follows is never mislabelled as a bad concept id.
+
+    #1002 item D, ADR-0022: a bundle document the service could not read
+    while walking for provenance edges (`result.not_run`) used to vanish
+    silently -- "no Source reaches this object" and "the document that
+    proves one does could not be read" rendered identically. Now the
+    count and each unreadable document's path are printed, and the run
+    exits `2` (the same incomplete-report exit `doctor`/`lint` give an
+    incomplete report), same as those two verbs -- but ONLY when
+    `not_run` is non-empty: a clean bundle prints no incompleteness line
+    and exits `0`, exactly as before this change."""
     try:
         _, canonical_id = application_lifecycle.resolve_concept_path(
             layout.bundle_dir, object_id
@@ -10462,28 +10472,44 @@ def _run_list_sources(layout: config.WorkspaceLayout, object_id: str) -> None:
         raise typer.Exit(code=1) from exc
 
     result = application_list.list_provenance_sources(layout, canonical_id)
+
+    if result.not_run:
+        typer.echo(
+            f"{len(result.not_run)} document(s) could not be read while "
+            "walking for provenance -- this report may be incomplete:"
+        )
+        for not_run in result.not_run:
+            typer.echo(f"  {not_run.label}: {not_run.reason}")
+
     if not result.ancestors:
         typer.echo(f"No Source reaches '{canonical_id}' through provenance.")
-        return
+    else:
+        rows_by_id = {row.concept_id: row for row in result.rows}
+        typer.echo(f"Sources whose provenance reaches '{canonical_id}':")
+        id_w = max(len("ID"), *(len(ancestor) for ancestor in result.ancestors))
+        sens_w = max(
+            len("SENSITIVITY"),
+            *(
+                len(rows_by_id[a].sensitivity) if a in rows_by_id else 0
+                for a in result.ancestors
+            ),
+        )
+        typer.echo(f"{'ID'.ljust(id_w)}  {'SENSITIVITY'.ljust(sens_w)}  TITLE")
+        for ancestor in result.ancestors:
+            row = rows_by_id.get(ancestor)
+            if row is None:
+                typer.echo(f"{ancestor.ljust(id_w)}  (not in bundle)")
+                continue
+            title = row.title or ("(unreadable)" if not row.readable else "(untitled)")
+            typer.echo(
+                f"{ancestor.ljust(id_w)}  {row.sensitivity.ljust(sens_w)}  {title}"
+            )
 
-    rows_by_id = {row.concept_id: row for row in result.rows}
-    typer.echo(f"Sources whose provenance reaches '{canonical_id}':")
-    id_w = max(len("ID"), *(len(ancestor) for ancestor in result.ancestors))
-    sens_w = max(
-        len("SENSITIVITY"),
-        *(
-            len(rows_by_id[a].sensitivity) if a in rows_by_id else 0
-            for a in result.ancestors
-        ),
-    )
-    typer.echo(f"{'ID'.ljust(id_w)}  {'SENSITIVITY'.ljust(sens_w)}  TITLE")
-    for ancestor in result.ancestors:
-        row = rows_by_id.get(ancestor)
-        if row is None:
-            typer.echo(f"{ancestor.ljust(id_w)}  (not in bundle)")
-            continue
-        title = row.title or ("(unreadable)" if not row.readable else "(untitled)")
-        typer.echo(f"{ancestor.ljust(id_w)}  {row.sensitivity.ljust(sens_w)}  {title}")
+    # Exit rule (ADR-0022, design.md Decision 4, Non-Gating Exit Contract,
+    # same posture as `lint`/`doctor`): an incomplete read is the only
+    # thing that gates here -- which Sources were found does not.
+    if result.not_run:
+        raise typer.Exit(code=2)
 
 
 @app.command(
@@ -14947,14 +14973,16 @@ def doctor() -> None:
     `[PASS]` lines on a healthy workspace, issue #995 PR 6), appends each
     to a `list[CheckResult]`, renders every line unconditionally, then
     exits ONCE (`code=1`) if any CRITICAL check failed (spec: Doctor Runs
-    And Prints All Applicable Checks). Remediation TEXT lives only here --
-    in `application/doctor.py`, not this adapter -- because that is where
+    And Prints All Applicable Checks). Remediation TEXT lives in
+    `application/doctor.py`, not in this adapter, because that is where
     every check's own pass/fail/skip branching now lives (issue #995,
-    PR 6): this command body only resolves the model tag, builds the one
-    concrete `OllamaClient`, computes the three `openkos.vcs` booleans
-    `run_diagnostics` needs injected (WALL 2, `application/doctor.py`'s own
-    module docstring), calls `application_doctor.run_diagnostics` once, and
-    renders. `llm/` stays config-free (D1).
+    PR 6): this command body only supplies a `build_client` factory over
+    the one concrete `OllamaClient` (WALL 1, issue #1002 item B -- see
+    below), computes the two `openkos.vcs` booleans and the one
+    `reset_point_available` thunk `run_diagnostics` needs injected
+    (WALL 2, `application/doctor.py`'s own module docstring), calls
+    `application_doctor.run_diagnostics` once, and renders. `llm/` stays
+    config-free (D1).
 
     Output leads with an `openkos {version}` banner -- the same line
     `--version` prints (cli-version-flag, #181). It is informational only,
@@ -15055,16 +15083,22 @@ def doctor() -> None:
             raise application_doctor.ProbeUnavailable(str(exc)) from exc
 
     # WALL 1 (`application/doctor.py`'s own module docstring): the CLI
-    # adapter builds the one concrete `OllamaClient` and passes it in as a
-    # `BackendDiagnostics` -- `resolve_diagnostic_model` mirrors check 2's
-    # own `openkos.yaml` fallback so the client and the service's own
-    # config-valid check always agree on what model was probed.
-    model = application_doctor.resolve_diagnostic_model(root)
-    client = OllamaClient(model=model, timeout=_PREFLIGHT_TIMEOUT)
+    # adapter never builds a client itself; it supplies HOW to build one --
+    # `build_client`, a factory over the one concrete `OllamaClient` as a
+    # `BackendDiagnostics`. Check 2's `config.read_config` call, inside
+    # `run_diagnostics`, is the ONLY read of `openkos.yaml` a `doctor` run
+    # performs, and `build_client` is called with that SAME `cfg.model` (or
+    # `config.DEFAULT_MODEL` on its existing fallback), so the model
+    # PROBED and the model REPORTED can never be two different reads
+    # disagreeing with each other (issue #1002 item B; `resolve_diagnostic_model`,
+    # which used to read `openkos.yaml` a second time just to produce this
+    # client BEFORE `run_diagnostics` ran, is gone).
+    def _build_client(model: str) -> OllamaClient:
+        return OllamaClient(model=model, timeout=_PREFLIGHT_TIMEOUT)
 
     results = application_doctor.run_diagnostics(
         root,
-        client=client,
+        build_client=_build_client,
         git_available=git_available_ok,
         filter_repo_available=filter_repo_ok,
         reset_point_available=_reset_point_available,

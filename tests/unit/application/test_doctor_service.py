@@ -11,13 +11,18 @@ proved at the CLI layer alone: that `run_diagnostics` never imports a
 concrete backend and still tells `BackendUnavailable` apart from a generic
 `BackendError` (WALL 1), that the `git_available`/`filter_repo_available`/
 `reset_point_available` booleans are genuinely INJECTED rather than
-computed (WALL 2), and that `resolve_diagnostic_model` mirrors check 2's
-own config fallback.
+computed (WALL 2), and that `build_client` -- the factory that replaced a
+constructed `client` parameter, issue #1002 item B -- is always called
+with the SAME model check 2's own `CheckResult` reports, across every
+fallback branch config-valid has (outside a workspace, inside one, and on
+a malformed `openkos.yaml`).
 
 Written BEFORE `openkos.application.doctor` existed (strict TDD)."""
 
 from __future__ import annotations
 
+import dataclasses
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -100,11 +105,23 @@ def test_run_diagnostics_returns_exactly_fifteen_checks(tmp_path: Path) -> None:
     """Thirteen numbered checks plus two lettered sub-checks (5b, 7b) = 15
     -- the pre-extraction docstring's "twelve" was already stale before
     this extraction (`tests/unit/cli/test_doctor.py` already asserted 15
-    `[PASS]` lines); this pins the ACTUAL count at the service layer."""
+    `[PASS]` lines); this pins the ACTUAL count at the service layer.
+
+    Also pins the exact SEQUENCE (#1002 item E): the section header above
+    this test promises "fifteen checks, in order, compute-then-render" and
+    `run_diagnostics`' own docstring promises the checks run "in the SAME
+    order the pre-extraction command body ran them", but until this
+    assertion existed nothing checked that -- `_by_label` is a lookup, not
+    an order proof, and every other test in this file reads results
+    through it. A reordering of two checks (e.g. swapping the append calls
+    for checks 9 and 10) would leave `len(results) == 15` green and every
+    `_by_label`-based test green too, while changing which refusal an
+    operator sees first. This assertion is the only thing in this file
+    that can fail on order alone."""
     layout = _workspace(tmp_path)
     results = doctor_service.run_diagnostics(
         layout.root,
-        client=_FakeBackend(
+        build_client=lambda _model: _FakeBackend(
             tags=[config.DEFAULT_MODEL, config.DEFAULT_EMBEDDING_MODEL]
         ),
         git_available=True,
@@ -112,23 +129,121 @@ def test_run_diagnostics_returns_exactly_fifteen_checks(tmp_path: Path) -> None:
         reset_point_available=lambda: True,
     )
     assert len(results) == 15
+    assert [r.label for r in results] == [
+        "Workspace initialized",
+        "Config valid",
+        "Ollama reachable",
+        f"Model '{config.DEFAULT_MODEL}' installed",
+        f"Embedding model '{config.DEFAULT_EMBEDDING_MODEL}' installed",
+        "Task models installed",
+        "Bundle readable",
+        "Workspace vector index present",
+        "Workspace FTS index present",
+        "Vector extension loadable",
+        "git available",
+        "git-filter-repo available",
+        "Backend host locality",
+        "Merge ledger torn writes",
+        "Merge ledger entries free of post-merge mutation",
+    ]
 
 
-def test_run_diagnostics_never_raises_for_any_injected_failure_mode(
+def test_run_diagnostics_never_raises_outside_a_workspace_with_unreachable_backend_and_both_vcs_booleans_false(
     tmp_path: Path,
 ) -> None:
-    """D5: every check accumulates a `fail`/`skip` `CheckResult` rather than
-    propagating -- outside a workspace, with an unreachable backend, and
-    with both vcs booleans false, `run_diagnostics` still returns 15
-    results instead of raising."""
+    """Renamed from `..._never_raises_for_any_injected_failure_mode`
+    (#1002 item E): that name overclaimed. It passes `tmp_path` DIRECTLY
+    rather than a real workspace, so `in_workspace` is False and checks
+    6/12/13 all take their `skip` branch instead of reaching
+    `okf.survey_bundle`/`bundle_ledger.scan_torn_writes`/
+    `bundle_ledger.scan_nesting_violations` -- THREE of the four paths
+    "THE RAISE CONTRACT" (`run_diagnostics`' own docstring) names as able
+    to raise straight out of this function. This test never enters any of
+    them, and its `reset_point_available` lambda returns a plain `False`
+    rather than raising, so the fourth path is untouched too -- a test
+    named for "any injected failure mode" was, in fact, injecting a
+    failure mode none of the four raise paths can see.
+
+    What this test genuinely proves, and the reason it is RENAMED rather
+    than widened into a workspace: OUTSIDE a workspace, with an
+    UNREACHABLE backend and BOTH `openkos.vcs` booleans false,
+    `run_diagnostics` still accumulates and returns all 15 results instead
+    of raising (D5) -- a real, distinct scenario (a machine with no
+    workspace and no git at all, pointed at `doctor` before `ollama
+    serve` has ever run), not a placeholder for the four raise paths.
+
+    What it deliberately does NOT cover, so as not to duplicate existing
+    coverage: the four documented raise paths themselves. Three are
+    already exercised, post-ADR-0022, by
+    `test_run_diagnostics_reports_not_run_when_survey_bundle_scan_torn_writes_or_scan_nesting_violations_raises`
+    (they now degrade to `not-run` rather than propagate) and by
+    `test_run_diagnostics_reports_the_integrity_check_as_not_run_when_reset_point_available_raises`.
+    The contract is also NOT "never raises" in the absolute --
+    `test_run_diagnostics_lets_a_bundle_dot_directory_value_error_propagate_uncaught`
+    and
+    `test_run_diagnostics_lets_an_unrelated_reset_point_available_exception_propagate_uncaught`
+    both assert a `ValueError`/`RuntimeError` DOES propagate uncaught.
+    Widening THIS test to enter a workspace would duplicate those four,
+    not add coverage; this test's job is the outside-workspace,
+    everything-unreachable case those four never touch."""
     results = doctor_service.run_diagnostics(
         tmp_path,
-        client=_FakeBackend(error=_CustomBackendUnavailable("down")),
+        build_client=lambda _model: _FakeBackend(
+            error=_CustomBackendUnavailable("down")
+        ),
         git_available=False,
         filter_repo_available=False,
         reset_point_available=lambda: False,
     )
     assert len(results) == 15
+
+
+# --- item B (#1002): one config read, and the client is built from it ---
+
+
+def test_build_client_gets_the_same_model_check_2_reports_even_when_config_drifts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The titular defect (#1002 item B): with TWO `config.read_config`
+    calls, an `openkos.yaml` edit landing between them lets the model
+    PROBED (what the injected client is built with) and the model REPORTED
+    (check 2's own `CheckResult.detail`) come apart. This drives
+    `read_config` to return a DIFFERENT `Config` on each call it receives
+    and asserts `build_client` is handed the SAME model check 2's own
+    `CheckResult` states -- and that `read_config` is called exactly ONCE,
+    which is the only way that agreement can be guaranteed rather than
+    coincidental."""
+    layout = _workspace(tmp_path, model="model-a")
+    real_cfg = config.read_config(tmp_path)
+    responses = [real_cfg, dataclasses.replace(real_cfg, model="model-b")]
+    calls: list[None] = []
+
+    def _fake_read_config(root: Path) -> config.Config:
+        calls.append(None)
+        return responses[len(calls) - 1]
+
+    monkeypatch.setattr(config, "read_config", _fake_read_config)
+
+    built_with: list[str] = []
+
+    def _build_client(model: str) -> _FakeBackend:
+        built_with.append(model)
+        return _FakeBackend(tags=[model])
+
+    results = doctor_service.run_diagnostics(
+        layout.root,
+        build_client=_build_client,
+        git_available=True,
+        filter_repo_available=True,
+        reset_point_available=lambda: True,
+    )
+
+    assert len(calls) == 1, f"expected exactly one read_config call, got {len(calls)}"
+    config_check = _by_label(results, "Config valid")
+    assert config_check.status == "pass"
+    assert config_check.detail is not None
+    reported_model = config_check.detail.removeprefix("model ")
+    assert built_with == [reported_model]
 
 
 # --- not-run (ADR-0022, D1/D2/D3): a raising in-workspace read degrades ---
@@ -157,7 +272,7 @@ def test_run_diagnostics_lets_a_bundle_dot_directory_value_error_propagate_uncau
     with pytest.raises(ValueError, match="path outside the bundle"):
         doctor_service.run_diagnostics(
             layout.root,
-            client=_FakeBackend(
+            build_client=lambda _model: _FakeBackend(
                 tags=[config.DEFAULT_MODEL, config.DEFAULT_EMBEDDING_MODEL]
             ),
             git_available=True,
@@ -209,7 +324,7 @@ def test_run_diagnostics_reports_not_run_when_survey_bundle_scan_torn_writes_or_
 
     results = doctor_service.run_diagnostics(
         layout.root,
-        client=_FakeBackend(
+        build_client=lambda _model: _FakeBackend(
             tags=[config.DEFAULT_MODEL, config.DEFAULT_EMBEDDING_MODEL]
         ),
         git_available=True,
@@ -248,7 +363,7 @@ def test_run_diagnostics_reports_the_integrity_check_as_not_run_when_reset_point
 
     results = doctor_service.run_diagnostics(
         layout.root,
-        client=_FakeBackend(
+        build_client=lambda _model: _FakeBackend(
             tags=[config.DEFAULT_MODEL, config.DEFAULT_EMBEDDING_MODEL]
         ),
         git_available=True,
@@ -285,7 +400,7 @@ def test_run_diagnostics_lets_an_unrelated_reset_point_available_exception_propa
     with pytest.raises(RuntimeError, match="bug in the thunk itself"):
         doctor_service.run_diagnostics(
             layout.root,
-            client=_FakeBackend(
+            build_client=lambda _model: _FakeBackend(
                 tags=[config.DEFAULT_MODEL, config.DEFAULT_EMBEDDING_MODEL]
             ),
             git_available=True,
@@ -312,7 +427,7 @@ def test_run_diagnostics_reports_the_index_checks_as_not_run_when_bundle_readabl
 
     results = doctor_service.run_diagnostics(
         layout.root,
-        client=_FakeBackend(
+        build_client=lambda _model: _FakeBackend(
             tags=[config.DEFAULT_MODEL, config.DEFAULT_EMBEDDING_MODEL]
         ),
         git_available=True,
@@ -340,7 +455,7 @@ def test_outside_workspace_workspace_check_fails_and_config_check_skips(
 ) -> None:
     results = doctor_service.run_diagnostics(
         tmp_path,
-        client=_FakeBackend(tags=[config.DEFAULT_MODEL]),
+        build_client=lambda _model: _FakeBackend(tags=[config.DEFAULT_MODEL]),
         git_available=True,
         filter_repo_available=True,
         reset_point_available=lambda: False,
@@ -358,7 +473,7 @@ def test_outside_workspace_workspace_check_fails_and_config_check_skips(
 def test_outside_workspace_workspace_only_checks_all_skip(tmp_path: Path) -> None:
     results = doctor_service.run_diagnostics(
         tmp_path,
-        client=_FakeBackend(
+        build_client=lambda _model: _FakeBackend(
             tags=[config.DEFAULT_MODEL, config.DEFAULT_EMBEDDING_MODEL]
         ),
         git_available=True,
@@ -383,7 +498,7 @@ def test_outside_workspace_backend_checks_still_run_against_default_model(
     `config.DEFAULT_EMBEDDING_MODEL`."""
     results = doctor_service.run_diagnostics(
         tmp_path,
-        client=_FakeBackend(
+        build_client=lambda _model: _FakeBackend(
             tags=[config.DEFAULT_MODEL, config.DEFAULT_EMBEDDING_MODEL]
         ),
         git_available=True,
@@ -414,7 +529,7 @@ def test_critical_flag_matches_spec_per_check(tmp_path: Path) -> None:
     layout = _workspace(tmp_path)
     results = doctor_service.run_diagnostics(
         layout.root,
-        client=_FakeBackend(
+        build_client=lambda _model: _FakeBackend(
             tags=[config.DEFAULT_MODEL, config.DEFAULT_EMBEDDING_MODEL]
         ),
         git_available=True,
@@ -453,7 +568,7 @@ def test_critical_check_failure_is_distinguishable_from_noncritical_failure(
 
     results = doctor_service.run_diagnostics(
         layout.root,
-        client=_FakeBackend(tags=[config.DEFAULT_MODEL]),
+        build_client=lambda _model: _FakeBackend(tags=[config.DEFAULT_MODEL]),
         git_available=True,
         filter_repo_available=True,
         reset_point_available=lambda: False,
@@ -481,7 +596,9 @@ def test_backend_unavailable_uses_the_generic_base_type_not_a_concrete_ollama_ty
     monkeypatch.setattr(shutil, "which", lambda _name: "/usr/local/bin/ollama")
     results = doctor_service.run_diagnostics(
         tmp_path,
-        client=_FakeBackend(error=_CustomBackendUnavailable("connection refused")),
+        build_client=lambda _model: _FakeBackend(
+            error=_CustomBackendUnavailable("connection refused")
+        ),
         git_available=True,
         filter_repo_available=True,
         reset_point_available=lambda: False,
@@ -501,7 +618,9 @@ def test_backend_unavailable_names_the_missing_binary_when_ollama_is_not_on_path
     monkeypatch.setattr(shutil, "which", lambda _name: None)
     results = doctor_service.run_diagnostics(
         tmp_path,
-        client=_FakeBackend(error=_CustomBackendUnavailable("connection refused")),
+        build_client=lambda _model: _FakeBackend(
+            error=_CustomBackendUnavailable("connection refused")
+        ),
         git_available=True,
         filter_repo_available=True,
         reset_point_available=lambda: False,
@@ -519,7 +638,9 @@ def test_backend_error_that_is_not_unavailable_fails_with_no_remediation(
     remediation -- only a transport failure does."""
     results = doctor_service.run_diagnostics(
         tmp_path,
-        client=_FakeBackend(error=_CustomBackendError("Ollama request failed (500)")),
+        build_client=lambda _model: _FakeBackend(
+            error=_CustomBackendError("Ollama request failed (500)")
+        ),
         git_available=True,
         filter_repo_available=True,
         reset_point_available=lambda: False,
@@ -539,7 +660,9 @@ def test_unreachable_backend_blocks_model_and_embedding_checks_with_skip(
     them rather than reporting a second, redundant `fail`."""
     results = doctor_service.run_diagnostics(
         tmp_path,
-        client=_FakeBackend(error=_CustomBackendUnavailable("down")),
+        build_client=lambda _model: _FakeBackend(
+            error=_CustomBackendUnavailable("down")
+        ),
         git_available=True,
         filter_repo_available=True,
         reset_point_available=lambda: False,
@@ -562,7 +685,7 @@ def test_model_tag_matches_bare_configured_against_latest_installed(
     layout = _workspace(tmp_path, model="customtag")
     results = doctor_service.run_diagnostics(
         layout.root,
-        client=_FakeBackend(tags=["customtag:latest"]),
+        build_client=lambda _model: _FakeBackend(tags=["customtag:latest"]),
         git_available=True,
         filter_repo_available=True,
         reset_point_available=lambda: True,
@@ -576,7 +699,7 @@ def test_model_tag_matches_bare_configured_against_latest_installed(
 def test_git_available_boolean_is_injected_verbatim(tmp_path: Path) -> None:
     results_true = doctor_service.run_diagnostics(
         tmp_path,
-        client=_FakeBackend(tags=[config.DEFAULT_MODEL]),
+        build_client=lambda _model: _FakeBackend(tags=[config.DEFAULT_MODEL]),
         git_available=True,
         filter_repo_available=True,
         reset_point_available=lambda: False,
@@ -585,7 +708,7 @@ def test_git_available_boolean_is_injected_verbatim(tmp_path: Path) -> None:
 
     results_false = doctor_service.run_diagnostics(
         tmp_path,
-        client=_FakeBackend(tags=[config.DEFAULT_MODEL]),
+        build_client=lambda _model: _FakeBackend(tags=[config.DEFAULT_MODEL]),
         git_available=False,
         filter_repo_available=True,
         reset_point_available=lambda: False,
@@ -599,7 +722,7 @@ def test_git_available_boolean_is_injected_verbatim(tmp_path: Path) -> None:
 def test_filter_repo_available_boolean_is_injected_verbatim(tmp_path: Path) -> None:
     results = doctor_service.run_diagnostics(
         tmp_path,
-        client=_FakeBackend(tags=[config.DEFAULT_MODEL]),
+        build_client=lambda _model: _FakeBackend(tags=[config.DEFAULT_MODEL]),
         git_available=True,
         filter_repo_available=False,
         reset_point_available=lambda: False,
@@ -669,7 +792,7 @@ def test_reset_point_available_true_names_the_git_reset_remedy(tmp_path: Path) -
 
     results = doctor_service.run_diagnostics(
         layout.root,
-        client=_FakeBackend(tags=[config.DEFAULT_MODEL]),
+        build_client=lambda _model: _FakeBackend(tags=[config.DEFAULT_MODEL]),
         git_available=True,
         filter_repo_available=True,
         reset_point_available=lambda: True,
@@ -690,7 +813,7 @@ def test_reset_point_available_false_names_no_reset_remedy(tmp_path: Path) -> No
 
     results = doctor_service.run_diagnostics(
         layout.root,
-        client=_FakeBackend(tags=[config.DEFAULT_MODEL]),
+        build_client=lambda _model: _FakeBackend(tags=[config.DEFAULT_MODEL]),
         git_available=True,
         filter_repo_available=True,
         reset_point_available=lambda: False,
@@ -702,28 +825,63 @@ def test_reset_point_available_false_names_no_reset_remedy(tmp_path: Path) -> No
     assert "no git reset point is available" in check.remediation
 
 
-# --- resolve_diagnostic_model ---
+# --- build_client's model, in every fallback branch check 2 has (the ---
+# --- coverage `resolve_diagnostic_model` used to carry on its own) ---
 
 
-def test_resolve_diagnostic_model_outside_workspace_returns_default(
+def _recording_build_client(
+    built_with: list[str],
+) -> Callable[[str], _FakeBackend]:
+    def _build(model: str) -> _FakeBackend:
+        built_with.append(model)
+        return _FakeBackend()
+
+    return _build
+
+
+def test_build_client_gets_the_default_model_outside_a_workspace(
     tmp_path: Path,
 ) -> None:
-    assert doctor_service.resolve_diagnostic_model(tmp_path) == config.DEFAULT_MODEL
+    built_with: list[str] = []
+    doctor_service.run_diagnostics(
+        tmp_path,
+        build_client=_recording_build_client(built_with),
+        git_available=True,
+        filter_repo_available=True,
+        reset_point_available=lambda: False,
+    )
+    assert built_with == [config.DEFAULT_MODEL]
 
 
-def test_resolve_diagnostic_model_inside_workspace_returns_configured_model(
+def test_build_client_gets_the_configured_model_inside_a_workspace(
     tmp_path: Path,
 ) -> None:
     layout = _workspace(tmp_path, model="custom-model:8b")
-    assert doctor_service.resolve_diagnostic_model(layout.root) == "custom-model:8b"
+    built_with: list[str] = []
+    doctor_service.run_diagnostics(
+        layout.root,
+        build_client=_recording_build_client(built_with),
+        git_available=True,
+        filter_repo_available=True,
+        reset_point_available=lambda: True,
+    )
+    assert built_with == ["custom-model:8b"]
 
 
-def test_resolve_diagnostic_model_degrades_to_default_on_malformed_config(
+def test_build_client_gets_the_default_model_when_config_is_malformed(
     tmp_path: Path,
 ) -> None:
     layout = _workspace(tmp_path)
     layout.config_path.write_text("not: [valid, yaml, mapping", encoding="utf-8")
-    assert doctor_service.resolve_diagnostic_model(layout.root) == config.DEFAULT_MODEL
+    built_with: list[str] = []
+    doctor_service.run_diagnostics(
+        layout.root,
+        build_client=_recording_build_client(built_with),
+        git_available=True,
+        filter_repo_available=True,
+        reset_point_available=lambda: True,
+    )
+    assert built_with == [config.DEFAULT_MODEL]
 
 
 # --- locality: always emitted, reuses the same client, never fails ---
@@ -737,7 +895,9 @@ def test_backend_host_locality_reads_from_the_same_client_check_3_used(
     )
     results = doctor_service.run_diagnostics(
         tmp_path,
-        client=_FakeBackend(tags=[config.DEFAULT_MODEL], locality=remote_locality),
+        build_client=lambda _model: _FakeBackend(
+            tags=[config.DEFAULT_MODEL], locality=remote_locality
+        ),
         git_available=True,
         filter_repo_available=True,
         reset_point_available=lambda: False,
@@ -754,7 +914,9 @@ def test_backend_host_locality_skips_but_still_reports_when_unreachable(
 ) -> None:
     results = doctor_service.run_diagnostics(
         tmp_path,
-        client=_FakeBackend(error=_CustomBackendUnavailable("down")),
+        build_client=lambda _model: _FakeBackend(
+            error=_CustomBackendUnavailable("down")
+        ),
         git_available=True,
         filter_repo_available=True,
         reset_point_available=lambda: False,
@@ -793,7 +955,7 @@ def test_reset_point_thunk_is_not_called_without_a_nesting_violation(
 
     doctor_service.run_diagnostics(
         layout.root,
-        client=_FakeBackend(
+        build_client=lambda _model: _FakeBackend(
             tags=[config.DEFAULT_MODEL, config.DEFAULT_EMBEDDING_MODEL]
         ),
         git_available=True,

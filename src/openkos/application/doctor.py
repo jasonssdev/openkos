@@ -51,12 +51,15 @@ nor `Embedder` covers any of that, so `openkos.llm.base` gained a THIRD
 capability-scoped Protocol, `BackendDiagnostics`, declaring exactly those
 two members -- see its own docstring for why it is separate from
 `LLMBackend` rather than folded into it. This module takes a
-`BackendDiagnostics` as an injected parameter and imports ONLY
-`openkos.llm.base` (`tests/unit/application/test_layering.py::
+`build_client: Callable[[str], BackendDiagnostics]` FACTORY as its
+injected parameter, not a constructed client -- check 2's own paragraph
+below explains why a factory is what closes issue #1002 item B -- and
+imports ONLY `openkos.llm.base` (`tests/unit/application/test_layering.py::
 test_application_modules_bind_no_concrete_llm_backend`) -- never
-`openkos.llm.ollama`. The CLI adapter builds the one concrete
-`OllamaClient` and passes it in; structural typing means it satisfies
-`BackendDiagnostics` with no extra construction.
+`openkos.llm.ollama`. The CLI adapter supplies
+`build_client=lambda model: OllamaClient(model=model, timeout=...)`;
+structural typing means whatever it returns satisfies `BackendDiagnostics`
+with no extra construction on this module's side.
 
 That boundary also had to cover EXCEPTIONS, which the brief for this slice
 did not spell out: check 3 must distinguish "nothing is listening"
@@ -75,21 +78,28 @@ from `ollama.py` into `base.py` too, with `ollama.py` re-exporting it
 (and `InstalledModel`/`BackendHostLocality`) so every existing
 `from openkos.llm.ollama import ...` call site is unaffected.
 
-`resolve_diagnostic_model` exists ONLY because the CLI adapter must build
-the concrete `BackendDiagnostics` client BEFORE it can call
-`run_diagnostics` (WALL 1's injection contract), yet check 2's own
-`config.read_config` read -- which is what actually DECIDES `model` on the
-ordinary path -- lives inside `run_diagnostics`, alongside the
-`CheckResult` it produces. Splitting `config.read_config`'s call site in
-two is the one place this module's shape is NOT the pre-extraction body's
-shape verbatim: `resolve_diagnostic_model` reads `openkos.yaml` once, purely
-to hand the adapter a model tag; `run_diagnostics`'s own check 2 reads it
-again to build its `CheckResult` and to hand later checks their `cfg`. Both
-reads are the same file, read moments apart, in the same process, with no
-write in between -- so they always agree in practice -- and this is
-plumbing forced by the injection boundary, not a second RENDER-boundary
-service call in the `status`-style sense (`run_diagnostics` alone is still
-the one call that produces every `CheckResult`).
+Issue #1002 item B: an earlier shape of this module had the CLI adapter
+build the concrete `BackendDiagnostics` client BEFORE calling
+`run_diagnostics` (WALL 1's injection contract), which forced a SEPARATE
+`resolve_diagnostic_model` helper to read `openkos.yaml` once just to hand
+the adapter a model tag -- while check 2's own `config.read_config` read,
+inside `run_diagnostics`, was what actually DECIDED `model` on the ordinary
+path. Two reads of the same file in the same process, moments apart, with
+no write between them, so they agreed in practice -- until three review
+lenses independently flagged that "in practice" is not a guarantee: nothing
+stops `openkos.yaml` changing between the two reads, and when it does, the
+model PROBED (what the adapter's client was built with) and the model
+REPORTED (check 2's own `CheckResult.detail`) come apart.
+
+The fix inverts the injection instead of eliminating it (ADR-0018 still
+requires *something* be injected across WALL 1): the adapter no longer
+builds a client at all, it supplies `build_client: Callable[[str],
+BackendDiagnostics]`, a factory. Check 2's `config.read_config` call below
+is now the ONLY read of `openkos.yaml` a `doctor` run performs, and its own
+`model` -- the exact value check 2's `CheckResult` reports -- is what gets
+handed to `build_client`. `resolve_diagnostic_model` is gone; there is
+nothing left for it to do. `run_diagnostics` is still the one call that
+produces every `CheckResult`, and now also the one call that reads config.
 
 WALL 2 -- `openkos.vcs`. `test_layering.py` bans `openkos.vcs` from
 `application/*` unconditionally (`application/lifecycle.py`'s own module
@@ -100,13 +110,13 @@ parameterless `shutil.which` predicates) and, inside check 13's violation
 branch only, `repo_root(root)`/`has_reset_point(root)` (used purely to pick
 which remediation STRING check 13 prints; they never affect pass/fail).
 All four stay adapter-side, matching `lifecycle.py`'s precedent: the CLI
-adapter computes three booleans (`git_available`, `filter_repo_available`,
-`reset_point_available`, a thunk so its two `git` subprocess calls are
-still paid only inside check 13's violation branch) and injects them; this
-module never imports `openkos.vcs` and performs no git I/O of its own.
-Unlike the two booleans, it is called by this module, inside check 13's
-violation branch and nowhere else; `run_diagnostics`' own docstring
-carries why.
+adapter injects TWO plain booleans (`git_available`,
+`filter_repo_available`) and ONE thunk (`reset_point_available`, a
+`Callable[[], bool]`, so its two `git` subprocess calls are still paid
+only inside check 13's violation branch); this module never imports
+`openkos.vcs` and performs no git I/O of its own. Unlike the two
+booleans, the thunk is called by this module, inside check 13's violation
+branch and nowhere else; `run_diagnostics`' own docstring carries why.
 
 `okf.survey_bundle` (check 6), `state.vectorstore.probe_vec_loadable`
 (check 8), and `bundle.ledger.scan_torn_writes`/`scan_nesting_violations`
@@ -174,39 +184,36 @@ change: no test currently references the private name, and the rename is
 unforecast scope left to a reviewer)."""
 
 
-def resolve_diagnostic_model(root: Path) -> str:
-    """The `model` tag the CLI adapter probes Ollama with (checks 3/4,
-    reachability and model-installed) -- `cfg.model` inside a workspace
-    with valid config, `config.DEFAULT_MODEL` otherwise. Mirrors check 2's
-    own fallback exactly (see module docstring for why this reads
-    `openkos.yaml` a second time), so the client the adapter builds and
-    this module's own config-valid check always agree on what was probed.
-
-    Never raises: a missing or malformed `openkos.yaml` degrades to the
-    default, exactly as check 2 does."""
-    if config.require_workspace(root) is not None:
-        return config.DEFAULT_MODEL
-    try:
-        return config.read_config(root).model
-    except (OSError, ValueError):
-        return config.DEFAULT_MODEL
-
-
 def run_diagnostics(
     root: Path,
     *,
-    client: BackendDiagnostics,
+    build_client: Callable[[str], BackendDiagnostics],
     git_available: bool,
     filter_repo_available: bool,
     reset_point_available: Callable[[], bool],
 ) -> tuple[CheckResult, ...]:
     """Run every one of `doctor`'s fifteen checks, in the SAME order the
     pre-extraction command body ran them, WITHOUT rendering a single line
-    (see module docstring for why this is one call, not two). `client`,
+    (see module docstring for why this is one call, not two). `build_client`,
     `git_available`, `filter_repo_available`, and `reset_point_available`
     are the CLI adapter's injected answers to WALL 1 and WALL 2 above --
     this module performs no network I/O and no `openkos.vcs` I/O of its
     own.
+
+    `build_client` is a FACTORY (`Callable[[str], BackendDiagnostics]`),
+    not a constructed client, and the difference closes issue #1002 item B.
+    Check 2 below performs the ONLY `config.read_config` call in a
+    `doctor` run; its resulting `model` -- the same value its own
+    `CheckResult.detail` reports -- is what gets passed to `build_client`
+    to produce check 3's client. A constructed-client parameter would force
+    the adapter to read `openkos.yaml` itself, BEFORE calling this
+    function, so the model probed and the model reported could only agree
+    because nothing edited the file in the moment between two separate
+    reads -- exactly the gap three review lenses flagged. Injecting a
+    factory instead keeps `run_diagnostics` as the single reader while
+    still satisfying ADR-0018 (backends are injected, never constructed by
+    a service): this module builds no `BackendDiagnostics` itself, it only
+    calls the one it was handed.
 
     `reset_point_available` is a CALLABLE, not a `bool`, and the difference
     is load-bearing. The two predicates beside it are `shutil.which` probes
@@ -253,8 +260,8 @@ def run_diagnostics(
     and it deserves its own issue; closing it means deciding what a
     partial `doctor` run should report, which is a product decision.
 
-    The `client` parameter carries no such caveat: check 3 catches
-    `BackendError`/`BackendUnavailable` itself.
+    The client `build_client` returns carries no such caveat: check 3
+    catches `BackendError`/`BackendUnavailable` itself.
 
     Remediation TEXT lives only here; `llm/` stays config-free (D1)."""
     results: list[CheckResult] = []
@@ -272,7 +279,13 @@ def run_diagnostics(
         )
     )
 
-    # 2. config-valid (critical, workspace-only; SKIP outside)
+    # 2. config-valid (critical, workspace-only; SKIP outside). This is the
+    # ONLY `config.read_config` call in a `doctor` run (issue #1002 item
+    # B) -- its `cfg.model` (or the fallback below, outside a workspace or
+    # on a read failure) is what `build_client` gets called with, a few
+    # lines down, so the model this check REPORTS and the model check 3
+    # PROBES can never be two different reads of `openkos.yaml` coming
+    # apart.
     cfg: config.Config | None = None
     if in_workspace:
         try:
@@ -299,6 +312,7 @@ def run_diagnostics(
     embedding_model = (
         cfg.embedding_model if cfg is not None else config.DEFAULT_EMBEDDING_MODEL
     )
+    client = build_client(model)
 
     # 3. Ollama-reachable (critical, always)
     reachable = False

@@ -744,6 +744,54 @@ def test_list_sources_marks_a_dangling_source_entry(
     assert "(not in bundle)" in result.stdout
 
 
+def test_list_sources_reports_unreadable_documents_and_exits_2(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T2 (#1002 item D, ADR-0022): a bundle document `list --sources`
+    cannot read is no longer a silent false negative -- the CLI reports
+    the count and its label, and exits `2` (the same incomplete-report
+    exit ADR-0022 gives `doctor`/`lint`), never a bare `0` that looks like
+    a clean 'No Source reaches' answer. `chmod 000` is a genuinely
+    unreadable file on this non-root test uid, not a monkeypatch."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_provenance_doc(
+        tmp_path / "bundle" / "concepts" / "solo.md",
+        provenance=["sources/good"],
+    )
+    _write_provenance_doc(
+        tmp_path / "bundle" / "sources" / "good.md",
+        type_="Source",
+        title="Good",
+    )
+    blocked_path = tmp_path / "bundle" / "concepts" / "blocked.md"
+    blocked_path.parent.mkdir(parents=True, exist_ok=True)
+    blocked_path.write_text("---\ntype: Concept\ntitle: T\n---\n", encoding="utf-8")
+    blocked_path.chmod(0o000)
+    try:
+        result = runner.invoke(app, ["list", "--sources", "concepts/solo"])
+    finally:
+        blocked_path.chmod(0o644)
+
+    assert result.exit_code == 2
+    assert "concepts/blocked.md" in result.stdout
+    assert "sources/good" in result.stdout
+
+
+def test_list_sources_clean_bundle_has_no_incompleteness_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ordinary path -- nothing unreadable -- gains no noise: exit `0`
+    and no incompleteness marker, exactly as before T2."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_provenance_doc(tmp_path / "bundle" / "concepts" / "solo.md")
+
+    result = runner.invoke(app, ["list", "--sources", "concepts/solo"])
+
+    assert result.exit_code == 0
+    assert "did not run" not in result.stdout
+    assert "could not be read" not in result.stdout
+
+
 def test_list_sources_refuses_a_type_filter_and_a_bad_id(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
