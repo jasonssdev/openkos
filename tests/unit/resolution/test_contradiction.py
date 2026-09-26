@@ -28,6 +28,7 @@ from openkos.llm import parsing
 from openkos.llm.base import Message
 from openkos.llm.ollama import OllamaGenerationCapped, OllamaUnavailable
 from openkos.model import okf
+from openkos.model.relations import RESOLUTION_RELATION_TYPES
 from openkos.resolution import contradiction as contradiction_mod
 
 
@@ -371,6 +372,88 @@ def test_candidate_pairs_self_loop_drop_survives_the_uncapped_call() -> None:
 
     assert pairs == []
     assert total == 0
+
+
+@pytest.mark.parametrize(
+    ("resolution_type", "holder_id", "counterpart_id"),
+    [
+        (rtype, holder, counterpart)
+        for rtype in sorted(RESOLUTION_RELATION_TYPES)
+        for holder, counterpart in [("a", "b"), ("b", "a")]
+    ],
+)
+def test_resolved_pairs_excluded_from_candidates(
+    resolution_type: str, holder_id: str, counterpart_id: str
+) -> None:
+    """A pair joined by any of the three resolution relation types
+    (`supersedes`, `reconciled_with`, `revises`), in EITHER direction, is
+    excluded from candidates entirely -- a human already resolved it with
+    `reconcile` (revises-relation delta, contradiction-detection: "A resolved
+    pair is excluded from candidates, before the count and the cap";
+    "Resolution exclusion applies regardless of which member holds the
+    edge"). An unrelated live pair connected only by an ordinary typed edge
+    is unaffected."""
+    resolved = Edge(
+        source_id=holder_id, target_id=counterpart_id, relation_type=resolution_type
+    )
+    live = Edge(source_id="c", target_id="d", relation_type="related_to")
+    store: GraphStore = _FakeGraphStore([resolved, live])
+
+    pairs, total = contradiction_mod._candidate_pairs(store)
+
+    assert pairs == [("c", "d")]
+    assert total == 1
+
+
+def test_resolved_pair_excluded_even_with_another_typed_edge_present() -> None:
+    """A pair carrying BOTH an ordinary typed edge (`related_to`) and a
+    resolution edge (`supersedes`) is still excluded -- the resolution edge
+    alone is sufficient, regardless of what else links the same pair."""
+    related = Edge(source_id="a", target_id="b", relation_type="related_to")
+    resolved = Edge(source_id="a", target_id="b", relation_type="supersedes")
+    live = Edge(source_id="c", target_id="d", relation_type="related_to")
+    store: GraphStore = _FakeGraphStore([related, resolved, live])
+
+    pairs, total = contradiction_mod._candidate_pairs(store)
+
+    assert pairs == [("c", "d")]
+    assert total == 1
+
+
+@pytest.mark.parametrize("cap", [1, None])
+def test_resolution_exclusion_applied_before_cap(cap: int | None) -> None:
+    """The resolved pair never consumes a cap slot: with `cap=1`, the one
+    live pair is still returned and `total == 1` -- the resolved pair does
+    not starve it. `cap=None` (the branch `find_contradictions` uses to
+    merge with merged-body candidates before its own higher-level cap) keeps
+    the same guarantee (spec: "The exclusion keeps the cost gate exact"; "...
+    applied before the total candidate count and the cap are computed")."""
+    resolved = Edge(source_id="a", target_id="b", relation_type="reconciled_with")
+    live = Edge(source_id="c", target_id="d", relation_type="related_to")
+    store: GraphStore = _FakeGraphStore([resolved, live])
+
+    pairs, total = contradiction_mod._candidate_pairs(store, cap=cap)
+
+    assert pairs == [("c", "d")]
+    assert total == 1
+
+
+def test_unrelated_live_pair_still_judged_alongside_a_resolved_pair() -> None:
+    """Multiple resolved pairs of DIFFERENT resolution types coexisting with
+    one unrelated live pair: the live pair still surfaces regardless of how
+    many resolved pairs the exclusion drops (spec: "An unrelated live pair is
+    still judged"). A genuine regression check against an over-broad
+    exclusion that drops every pair once ANY resolution edge exists in the
+    store, not only the pairs it actually joins."""
+    resolved_one = Edge(source_id="a", target_id="b", relation_type="supersedes")
+    resolved_two = Edge(source_id="e", target_id="f", relation_type="revises")
+    live = Edge(source_id="c", target_id="d", relation_type="related_to")
+    store: GraphStore = _FakeGraphStore([resolved_one, resolved_two, live])
+
+    pairs, total = contradiction_mod._candidate_pairs(store)
+
+    assert pairs == [("c", "d")]
+    assert total == 1
 
 
 # ---------------------------------------------------------------------------
@@ -791,17 +874,36 @@ def test_find_contradictions_relation_label_prefers_genuine_type_over_derived_fr
     assert "derived_from" not in user_message
 
 
+@pytest.mark.parametrize(
+    "excluded_type", ["derived_from", *sorted(RESOLUTION_RELATION_TYPES)]
+)
 def test_find_contradictions_genuine_typed_edge_still_surfaced(
-    tmp_path: Path,
+    tmp_path: Path, excluded_type: str
 ) -> None:
-    """A genuine typed non-`derived_from` edge (e.g. two event concepts
-    linked `related_to`) is still surfaced and judged, confirming the
-    exclusion applies only to `derived_from`, not to all typed edges (spec:
-    "Genuine typed contradiction-eligible edge is still surfaced"; task
-    5.3)."""
+    """A genuine typed edge (`related_to`, between an UNRELATED pair) is
+    still surfaced and judged even while ANOTHER pair carries an excluded-
+    type edge -- `derived_from` or one of the three resolution types
+    (`supersedes`, `reconciled_with`, `revises`) -- confirming the exclusion
+    is scoped to exactly those four relation types and nothing broader
+    (spec: "Genuine typed contradiction-eligible edge is still surfaced";
+    task 2.5). Runs with `include_deprecated=True` so a `supersedes` edge's
+    OWN, unrelated deprecation effect (`lifecycle.py:78`) never confounds
+    this exclusion check: design notes the resolution exclusion applies
+    unconditionally, "under --include-deprecated too"."""
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()
     (bundle_dir / "concepts").mkdir()
+    (bundle_dir / "concepts" / "excluded_a.md").write_text(
+        "---\ntype: Concept\ntitle: Excluded A\nsensitivity: private\n"
+        f"relations:\n  - target: concepts/excluded_b\n    type: {excluded_type}\n"
+        "---\nExcluded pair, holder side.\n",
+        encoding="utf-8",
+    )
+    (bundle_dir / "concepts" / "excluded_b.md").write_text(
+        "---\ntype: Concept\ntitle: Excluded B\nsensitivity: private\n---\n"
+        "Excluded pair, counterpart side.\n",
+        encoding="utf-8",
+    )
     (bundle_dir / "concepts" / "a.md").write_text(
         "---\ntype: Concept\ntitle: A\nsensitivity: private\n"
         "relations:\n  - target: concepts/b\n    type: related_to\n"
@@ -815,7 +917,9 @@ def test_find_contradictions_genuine_typed_edge_still_surfaced(
     )
     llm = _FakeLLM(replies=[_valid_reply()])
 
-    batch, total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+    batch, total = contradiction_mod.find_contradictions(
+        bundle_dir, llm=llm, include_deprecated=True
+    )
     verdicts = batch.results
 
     assert total == 1
@@ -1404,16 +1508,26 @@ def test_include_deprecated_true_restores_a_pair_touching_a_superseded_concept(
 ) -> None:
     """`include_deprecated=True` restores a pair that would otherwise be
     dropped, judging it normally (spec: Flag restores a deprecated
-    concept)."""
+    concept).
+
+    Uses B's own `status: deprecated` field, not a `supersedes` edge:
+    revises-relation's resolution exclusion now drops a `supersedes`-joined
+    pair UNCONDITIONALLY, even under `include_deprecated=True` (a resolved
+    pair is resolved either way), so a `supersedes` edge here would no longer
+    exercise the deprecation-restore path this test pins -- it would stay
+    excluded via the resolution exclusion instead. `related_to` keeps the
+    pair a genuine candidate through the ordinary deprecation filter alone."""
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()
     (bundle_dir / "concepts").mkdir()
     _write_lifecycle_doc(
         bundle_dir / "concepts" / "a.md",
         title="A",
-        relations=[("concepts/b", "supersedes")],
+        relations=[("concepts/b", "related_to")],
     )
-    _write_lifecycle_doc(bundle_dir / "concepts" / "b.md", title="B")
+    _write_lifecycle_doc(
+        bundle_dir / "concepts" / "b.md", title="B", status="deprecated"
+    )
     llm = _FakeLLM(replies=[_valid_reply(verdict="consistent")])
 
     batch, _total = contradiction_mod.find_contradictions(
@@ -2666,6 +2780,25 @@ def test_typed_edges_keep_the_budget_they_do_not_owe_the_floor(
 
     assert merged_judged == 2
     assert edge_judged == contradiction_mod._MAX_PAIRS - 2
+
+
+def test_plan_candidates_cost_gate_excludes_resolved_pairs(tmp_path: Path) -> None:
+    """`plan_candidates` -- not only `find_contradictions` -- carries the
+    resolved-pair exclusion, since `curate`'s cost gate reads `plan.edge_total`
+    and `plan.llm_calls` (`curate.py:1664-1667`) straight from this plan, and
+    both must already reflect the excluded pair (spec: "The exclusion keeps
+    the cost gate exact"). A pair joined by `reconciled_with` costs nothing;
+    the unrelated live pair costs exactly one `llm.chat` call."""
+    bundle_dir = tmp_path / "bundle"
+    _merged_bundle(bundle_dir, 0)
+    resolved = Edge(source_id="a", target_id="b", relation_type="reconciled_with")
+    live = Edge(source_id="c", target_id="d", relation_type="related_to")
+    store: GraphStore = _FakeGraphStore([resolved, live])
+
+    plan = contradiction_mod.plan_candidates(bundle_dir, store=store)
+
+    assert plan.edge_total == 1
+    assert plan.llm_calls == 1
 
 
 def _plan(
