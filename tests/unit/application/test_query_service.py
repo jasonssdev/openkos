@@ -8,6 +8,7 @@ itself is patched; they exist only to satisfy `run_query`'s Protocol-typed
 parameters.
 """
 
+import dataclasses
 from collections.abc import Sequence
 from contextlib import nullcontext
 from pathlib import Path
@@ -297,3 +298,41 @@ class TestOpenFtsOrDegrade:
         assert unavailable is True
         with cm as handle:
             assert handle is None
+
+
+def test_run_query_threads_revision_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`run_query` reads `cfg.revision_history` and passes it to `answer`,
+    mirroring `sufficiency_check`'s own single-place threading (#1014 piece
+    b): the product default lives in `Config`, and `answer` itself stays
+    off for every library/eval caller that never passes the kwarg."""
+    captured: dict[str, object] = {}
+
+    def fake_answer(question: str, **kwargs: object) -> AnswerResult:
+        captured.update(kwargs)
+        return _fixed_result()
+
+    monkeypatch.setattr(query_service, "answer", fake_answer)
+
+    off_dir = tmp_path / "off"
+    off_dir.mkdir()
+    _run(off_dir, monkeypatch)
+    assert captured["revision_history"] is False
+
+    on_dir = tmp_path / "on"
+    on_dir.mkdir()
+    layout, cfg = _workspace(on_dir)
+    captured.clear()
+    query_service.run_query(
+        "a question",
+        layout=layout,
+        cfg=dataclasses.replace(cfg, revision_history=True),
+        llm=_FakeLLM(),
+        embedder=_FakeEmbedder(),
+        limit=5,
+        include_deprecated=False,
+        include_confidential=False,
+        local_exemption=False,
+    )
+    assert captured["revision_history"] is True

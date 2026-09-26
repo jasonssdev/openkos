@@ -160,6 +160,11 @@ def run_query(
             # (#760), so the product-ON default lives in the config and
             # `answer` itself stays OFF for library callers.
             sufficiency_check=cfg.sufficiency_check,
+            # Same single-place threading as `sufficiency_check` above, for
+            # `cfg.revision_history` (#1014 piece b): `answer` itself
+            # defaults `False`, so every library and eval caller stays
+            # unchanged.
+            revision_history=cfg.revision_history,
         )
     return QueryOutcome(
         result=result,
@@ -576,6 +581,17 @@ def stage_filed_answer(
     # wins via the high-water-mark inside `type_birth_sensitivity`.
     sensitivity = config.type_birth_sensitivity(cfg, doc_type, cited_high_water_mark)
 
+    # #1014 piece b, design Decision 7: a history citation's bullet is
+    # marked with its role. `None` when no citation carries `history` (the
+    # common case), never an empty dict -- `build_concept` treats both the
+    # same, but `None` is the byte-identical-by-construction spelling.
+    related_notes = {
+        citation.concept_id: (
+            f"earlier version ({citation.history}) cited as history for this answer"
+        )
+        for citation in citations
+        if citation.history
+    } or None
     content = okf.build_concept(
         type=doc_type,
         title=resolved_title,
@@ -585,6 +601,7 @@ def stage_filed_answer(
         sensitivity=sensitivity,
         timestamp=timestamp,
         related_note="concept cited to produce this answer",
+        related_notes=related_notes,
     )
 
     return FiledAnswerPlan(
