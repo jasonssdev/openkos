@@ -368,6 +368,8 @@ A second, deterministic check backs it up: a `SAME` verdict whose own rationale 
 
 When the cap does truncate, the notice now names **which kind** went unjudged — `142 of 260 candidate(s) shown (cap reached); dropped: 108 typed-edge, 10 merged-body` — rather than one combined number that left you unable to tell whether merged-body detection had run at all.
 
+**A pair a human already resolved is never a candidate.** Once two concepts are joined, in either direction, by a `supersedes`, `reconciled_with`, or `revises` edge — the three relation types `reconcile` (below) writes — that pair is excluded from candidates entirely, before the count and the cap, including under `--include-deprecated`. It is not re-judged even after a later edit to either concept; removing the resolution edge is what makes the pair a candidate again.
+
 ### `openkos reconcile <id-a> <id-b>`
 
 Records a human's resolution of a contradiction between two concepts — the write counterpart to `contradictions`, which only reports. **No LLM in the write path**: `<id-a>`, `<id-b>`, `--winner`, and `--revision` are plain concept-id arguments; `reconcile` never invokes contradiction detection. Both ids resolve exactly as `relate`'s do, and must be two distinct existing concepts.
