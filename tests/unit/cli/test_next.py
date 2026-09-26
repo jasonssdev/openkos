@@ -1,5 +1,5 @@
 """Unit tests for the `next` CLI command and its tier engine
-(`openkos.cli.next_action`): a read-only, deterministic pointer to the one
+(`openkos.application.next_action`): a read-only, deterministic pointer to the one
 runnable command worth running next over the current bundle.
 
 Follows `test_status.py`'s pattern exactly: `_init_workspace` is copied
@@ -19,7 +19,7 @@ from typer.testing import CliRunner
 
 from openkos import config
 from openkos import lint as lint_check
-from openkos.cli import next_action
+from openkos.application import next_action
 from openkos.cli.main import app
 from openkos.graph import sqlite_graph
 from openkos.llm.base import EMBED_DIM
@@ -44,7 +44,9 @@ def _fts_index_present_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     index present -- the same sanctioned convention those tests already use
     to get past tier 1 (patching the public `vector_store_is_empty`). The
     #553 tests restore `_REAL_FTS_INDEX_PRESENT` explicitly."""
-    monkeypatch.setattr("openkos.cli.next_action.fts_index_present", lambda _path: True)
+    monkeypatch.setattr(
+        "openkos.application.next_action.fts_index_present", lambda _path: True
+    )
 
 
 def _init_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -150,7 +152,7 @@ def _write_unextracted_source(
     )
 
 
-# --- Phase 1: cost-contract foundation (`_BundleSignals`) -----------------
+# --- Phase 1: cost-contract foundation (`BundleSignals`) -----------------
 
 
 def test_tier1_only_path_pays_only_the_bootstrap_gates_single_walk(
@@ -178,10 +180,11 @@ def test_tier1_only_path_pays_only_the_bootstrap_gates_single_walk(
         return []
 
     monkeypatch.setattr(
-        "openkos.cli.next_action.lint_check.collect_docs", _counting_collect_docs
+        "openkos.application.next_action.lint_check.collect_docs",
+        _counting_collect_docs,
     )
     monkeypatch.setattr(
-        "openkos.cli.next_action.find_exact_title_groups",
+        "openkos.application.next_action.find_exact_title_groups",
         _counting_find_exact_title_groups,
     )
 
@@ -196,7 +199,7 @@ def test_tier1_only_path_pays_only_the_bootstrap_gates_single_walk(
 def test_docs_property_calls_collect_docs_exactly_once_when_read_twice(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`_BundleSignals.docs`, read twice within one run (tiers 2 and 3),
+    """`BundleSignals.docs`, read twice within one run (tiers 2 and 3),
     still calls `collect_docs` exactly once -- the memo makes "one
     `collect_docs()` call" true by construction (design: "lazy memoized
     signals")."""
@@ -216,7 +219,7 @@ def test_docs_property_calls_collect_docs_exactly_once_when_read_twice(
     from openkos import config
 
     layout = config.WorkspaceLayout(tmp_path)
-    signals = next_action._BundleSignals(layout)
+    signals = next_action.BundleSignals(layout)
 
     _ = signals.docs
     _ = signals.docs
@@ -244,10 +247,11 @@ def _spy_walks(
         return _real_find_exact_title_groups(bundle_dir) if real_groups else []
 
     monkeypatch.setattr(
-        "openkos.cli.next_action.lint_check.collect_docs", _counting_collect_docs
+        "openkos.application.next_action.lint_check.collect_docs",
+        _counting_collect_docs,
     )
     monkeypatch.setattr(
-        "openkos.cli.next_action.find_exact_title_groups",
+        "openkos.application.next_action.find_exact_title_groups",
         _counting_find_exact_title_groups,
     )
     return docs_calls, groups_calls
@@ -279,7 +283,7 @@ def test_tier3_only_path_shares_tier2s_single_bundle_walk(
     seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """Stopping at tier 3 shares tier 2's single `collect_docs` call,
-    exercised through the real CLI path, not `_BundleSignals` directly
+    exercised through the real CLI path, not `BundleSignals` directly
     (spec: First-Hit Short-Circuit Cost Contract, "...sharing tier 2's
     walk")."""
     _init_workspace(tmp_path, monkeypatch)
@@ -375,7 +379,7 @@ def test_bootstrap_declines_when_the_vector_store_is_populated(
 def test_bootstrap_pays_one_docs_walk_and_no_group_walk(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The bootstrap rung reuses `_BundleSignals.docs` -- one memoized
+    """The bootstrap rung reuses `BundleSignals.docs` -- one memoized
     `collect_docs` call, never a redundant walk, and never the exact-title
     group walk (module cost contract, #386)."""
     _init_workspace(tmp_path, monkeypatch)
@@ -837,7 +841,9 @@ def test_duplicate_group_check_does_not_run_when_tier_1_fires(
         calls["n"] += 1
         return []
 
-    monkeypatch.setattr("openkos.cli.next_action.find_exact_title_groups", _counting)
+    monkeypatch.setattr(
+        "openkos.application.next_action.find_exact_title_groups", _counting
+    )
 
     result = runner.invoke(app, ["next"])
 
@@ -863,7 +869,9 @@ def test_duplicate_group_check_does_not_run_when_tier_2_fires(
         calls["n"] += 1
         return []
 
-    monkeypatch.setattr("openkos.cli.next_action.find_exact_title_groups", _counting)
+    monkeypatch.setattr(
+        "openkos.application.next_action.find_exact_title_groups", _counting
+    )
 
     result = runner.invoke(app, ["next"])
 
@@ -890,7 +898,9 @@ def test_duplicate_group_check_does_not_run_when_tier_3_fires(
         calls["n"] += 1
         return []
 
-    monkeypatch.setattr("openkos.cli.next_action.find_exact_title_groups", _counting)
+    monkeypatch.setattr(
+        "openkos.application.next_action.find_exact_title_groups", _counting
+    )
 
     result = runner.invoke(app, ["next"])
 
@@ -917,7 +927,9 @@ def test_duplicate_group_check_runs_only_when_tiers_1_to_3_are_empty(
         calls["n"] += 1
         return _real_find_exact_title_groups(bundle_dir)
 
-    monkeypatch.setattr("openkos.cli.next_action.find_exact_title_groups", _counting)
+    monkeypatch.setattr(
+        "openkos.application.next_action.find_exact_title_groups", _counting
+    )
 
     result = runner.invoke(app, ["next"])
 
@@ -1433,7 +1445,7 @@ def test_next_recommends_reindex_when_the_derived_indexes_are_stale(
     vectorstore.open_vector_store(tmp_path / ".openkos" / "vectors.db").close()
     _write_stale_indexes(tmp_path)
     monkeypatch.setattr(
-        "openkos.cli.next_action.vector_store_is_empty", lambda _path: False
+        "openkos.application.next_action.vector_store_is_empty", lambda _path: False
     )
 
     result = next_action.next_action(config.WorkspaceLayout(tmp_path))
@@ -1454,7 +1466,7 @@ def test_next_prefers_the_missing_vector_index_over_staleness(
     _init_workspace(tmp_path, monkeypatch)
     _write_stale_indexes(tmp_path)
     monkeypatch.setattr(
-        "openkos.cli.next_action.vector_store_is_empty", lambda _path: True
+        "openkos.application.next_action.vector_store_is_empty", lambda _path: True
     )
 
     result = next_action.next_action(config.WorkspaceLayout(tmp_path))
@@ -1473,7 +1485,7 @@ def test_next_does_not_recommend_reindex_for_staleness_on_a_fresh_workspace(
     #386 reports -- recommending `reindex` over an empty workspace."""
     _init_workspace(tmp_path, monkeypatch)
     monkeypatch.setattr(
-        "openkos.cli.next_action.vector_store_is_empty", lambda _path: False
+        "openkos.application.next_action.vector_store_is_empty", lambda _path: False
     )
 
     result = next_action.next_action(config.WorkspaceLayout(tmp_path))
@@ -1491,7 +1503,7 @@ def test_next_stays_silent_about_staleness_when_the_indexes_are_fresh(
     fts.write_fts_index(tmp_path / ".openkos" / "fts.db", bundle_dir)
     sqlite_graph.write_graph_store(tmp_path / ".openkos" / "graph.db", bundle_dir)
     monkeypatch.setattr(
-        "openkos.cli.next_action.vector_store_is_empty", lambda _path: False
+        "openkos.application.next_action.vector_store_is_empty", lambda _path: False
     )
 
     result = next_action.next_action(config.WorkspaceLayout(tmp_path))
@@ -1618,7 +1630,7 @@ def _spy_non_nfc(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
         return real(bundle_dir)
 
     monkeypatch.setattr(
-        "openkos.cli.next_action.lint_check.scan_non_nfc_entries", _counting
+        "openkos.application.next_action.lint_check.scan_non_nfc_entries", _counting
     )
     return calls
 
@@ -1649,10 +1661,10 @@ def test_non_nfc_tier_is_ranked_last() -> None:
 
 def test_non_nfc_scan_is_memoized_when_read_twice(tmp_path: Path) -> None:
     """Reading the property twice pays exactly one walk, matching every
-    other signal on `_BundleSignals`."""
+    other signal on `BundleSignals`."""
     _init_workspace_dirs = tmp_path / "bundle"
     _init_workspace_dirs.mkdir(parents=True, exist_ok=True)
-    signals = next_action._BundleSignals(config.WorkspaceLayout(tmp_path))
+    signals = next_action.BundleSignals(config.WorkspaceLayout(tmp_path))
     calls = {"n": 0}
     real = lint_check.scan_non_nfc_entries
 
@@ -1661,7 +1673,9 @@ def test_non_nfc_scan_is_memoized_when_read_twice(tmp_path: Path) -> None:
         return real(bundle_dir)
 
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr("openkos.cli.next_action.lint_check.scan_non_nfc_entries", _counting)
+        mp.setattr(
+            "openkos.application.next_action.lint_check.scan_non_nfc_entries", _counting
+        )
         first = signals.non_nfc_entries
         second = signals.non_nfc_entries
 
@@ -1754,11 +1768,11 @@ def test_next_recommends_reindex_when_the_fts_index_is_missing(
     recommending curation over a silently degraded retrieval channel."""
     _init_workspace(tmp_path, monkeypatch)
     monkeypatch.setattr(
-        "openkos.cli.next_action.fts_index_present", _REAL_FTS_INDEX_PRESENT
+        "openkos.application.next_action.fts_index_present", _REAL_FTS_INDEX_PRESENT
     )
     vectorstore.open_vector_store(tmp_path / ".openkos" / "vectors.db").close()
     monkeypatch.setattr(
-        "openkos.cli.next_action.vector_store_is_empty", lambda _path: False
+        "openkos.application.next_action.vector_store_is_empty", lambda _path: False
     )
     _write_doc(tmp_path / "bundle" / "concepts" / "c.md", title="Alpha")
 
@@ -1777,7 +1791,7 @@ def test_next_prefers_the_missing_vector_index_over_the_missing_fts_index(
     the channel whose absence also blocks candidate edges."""
     _init_workspace(tmp_path, monkeypatch)
     monkeypatch.setattr(
-        "openkos.cli.next_action.fts_index_present", _REAL_FTS_INDEX_PRESENT
+        "openkos.application.next_action.fts_index_present", _REAL_FTS_INDEX_PRESENT
     )
     _write_doc(tmp_path / "bundle" / "concepts" / "c.md", title="Alpha")
 
@@ -1798,7 +1812,7 @@ def test_next_fts_tier_declines_when_the_fts_index_is_present(
     must not manufacture a reindex recommendation."""
     _init_workspace(tmp_path, monkeypatch)
     monkeypatch.setattr(
-        "openkos.cli.next_action.fts_index_present", _REAL_FTS_INDEX_PRESENT
+        "openkos.application.next_action.fts_index_present", _REAL_FTS_INDEX_PRESENT
     )
     seed_vectors_db(tmp_path)
     concepts = tmp_path / "bundle" / "concepts"

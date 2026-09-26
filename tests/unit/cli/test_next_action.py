@@ -1,4 +1,4 @@
-"""Unit tests for `openkos.cli.next_action`'s open-contradiction tier
+"""Unit tests for `openkos.application.next_action`'s open-contradiction tier
 (pending-work design, Decision 6): the last tier in `_TIERS`, wired directly
 to `.openkos/findings.db` and `bundle/.state/decisions/**` -- the two stores
 Slice A/B1/B2 already ship, joined at read time by `decision_key_for`.
@@ -16,8 +16,8 @@ import pytest
 from typer.testing import CliRunner
 
 from openkos import config
+from openkos.application import next_action
 from openkos.bundle import decisions as bundle_decisions
-from openkos.cli import next_action
 from openkos.cli.main import app
 from openkos.state import derived, findings
 
@@ -31,7 +31,9 @@ def _fts_index_present_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     reports present by default -- the same convention `seed_vectors_db`
     already applies to tier 1 (see `test_next.py`'s fixture of the same
     name)."""
-    monkeypatch.setattr("openkos.cli.next_action.fts_index_present", lambda _path: True)
+    monkeypatch.setattr(
+        "openkos.application.next_action.fts_index_present", lambda _path: True
+    )
 
 
 def _init_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

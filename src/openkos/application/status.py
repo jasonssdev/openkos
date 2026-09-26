@@ -207,7 +207,7 @@ def stale_index_names(
 ) -> tuple[str, ...]:
     """The manifest-gated derived stores whose contents predate the bundle,
     named for a user-facing advisory (#381) -- shared by `query` and
-    `status` (and mirrored by `next`'s `_BundleSignals.stale_indexes`) so
+    `status` (and mirrored by `next`'s `BundleSignals.stale_indexes`) so
     all three agree on what "stale" means and on the wording of the names
     they print.
 

@@ -9,11 +9,11 @@ generalizing #134's spend-consent-before-model-call pattern), the sequencer
 (`run_curate`), and the end-of-run summary (`render_summary`). `cli/main.py`
 gains only the thin Typer command: workspace gate, config read, context
 build, one call into `run_curate`, and an echo loop over `render_summary` --
-the same `cli/next_action.py` shape (module owns the ordered engine,
+the same `application/next_action.py` shape (module owns the ordered engine,
 `main.py` stays thin).
 
 ONE deliberate inversion from `next_action.py`: `next` memoizes its signals
-in `_BundleSignals` because every tier there reads the SAME pre-run
+in `BundleSignals` because every tier there reads the SAME pre-run
 snapshot. `curate` MUST NOT memoize anything across stages -- Identity may
 auto-commit a merge, and Structure/Metadata/Contradictions (slice 2) then
 have to see the POST-merge bundle, not a stale pre-run view (design D4,
@@ -58,8 +58,8 @@ import typer
 
 from openkos import config, lint, sensitivity
 from openkos.application import lifecycle as application_lifecycle
+from openkos.application import next_action as next_action_module
 from openkos.application import pending as application_pending
-from openkos.cli import next_action as next_action_module
 from openkos.cli import observability
 from openkos.graph.base import Edge
 from openkos.graph.sqlite_graph import build_graph
@@ -716,7 +716,7 @@ def _confirm(prompt_text: str) -> bool:
 def _preconditions_probe(ctx: CurateContext) -> StageProbe:
     """Reuses `_open_proximity_or_degrade` (main.py) for the SAME
     missing-or-empty `vectors.db` check `suggest-relations`/`contradictions`
-    already make, and `next_action._tier_missing_vector_index`'s own wording
+    already make, and `next_action.tier_missing_vector_index`'s own wording
     for the consequence -- byte-compatible messaging, one source of truth
     (design D4/#266 task 1.17). Never returns items: Preconditions is a
     binary gate, not a queue, so it is resolved entirely via the
@@ -725,8 +725,8 @@ def _preconditions_probe(ctx: CurateContext) -> StageProbe:
 
     source = cli_main._open_proximity_or_degrade(ctx.layout.vectors_db_path)
     if source is None:
-        signals = next_action_module._BundleSignals(ctx.layout)
-        action = next_action_module._tier_missing_vector_index(signals)
+        signals = next_action_module.BundleSignals(ctx.layout)
+        action = next_action_module.tier_missing_vector_index(signals)
         reason = (
             action.reason
             if action is not None
@@ -1946,7 +1946,7 @@ def run_curate(ctx: CurateContext) -> list[StageOutcome]:
     """The whole sequencer (design's Data Flow): walk `_STAGES` in order,
     re-deriving every stage's queue fresh with no state carried between
     iterations (design D4 -- the deliberate inversion from `next_action`'s
-    memoized `_BundleSignals`). Always returns exactly `len(_STAGES)`
+    memoized `BundleSignals`). Always returns exactly `len(_STAGES)`
     outcomes, one per stage, in order, regardless of how many stages were
     actually reached.
 

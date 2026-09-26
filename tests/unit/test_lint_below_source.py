@@ -451,6 +451,6 @@ def test_the_safe_argument_regexes_have_not_drifted_apart() -> None:
     `remediation` `lint` considers safe could be one `next` would refuse, and
     the guarantee becomes a comment rather than a fact.
     """
-    from openkos.cli import next_action
+    from openkos.application import next_action
 
     assert lint._SAFE_COMMAND_ARGUMENT.pattern == next_action._SAFE_ARGUMENT.pattern
