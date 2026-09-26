@@ -61,7 +61,7 @@ context_window: 12288     # tokens the model holds at once (prompt + reply); unp
                           # false to remove it and restore the pre-#760 path
 # revision_history: false  # attach each retrieved concept's earlier versions
                           # (reached via supersedes/revises) to it as labelled
-                          # history (default OFF; #1014 piece b). UNMEASURED --
+                          # history (default OFF). UNMEASURED --
                           # no harness has scored its citation quality or
                           # prompt-budget cost yet. Not recommended to enable.
 # concurrent_extraction: true  # send chunk windows 2-at-a-time instead of one
