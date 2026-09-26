@@ -61,4 +61,4 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 | [0023](0023-source-event-date.md) | A Source records its event date as an optional, never-defaulted `event_date` key | Accepted | 2026-09-25 |
 | [0024](0024-revises-relation-and-resolved-pairs.md) | A refinement is a stored `revises` relation, and a resolved pair is never re-judged | Accepted | 2026-09-25 |
 | [0025](0025-llm-derived-attributes-live-in-a-cache.md) | LLM-derived concept attributes live in a rebuildable cache, and temporal direction never comes from the model | Proposed | 2026-09-25 |
-| [0026](0026-superseded-concepts-re-enter-answers-only-as-labelled-history.md) | A superseded concept re-enters an answer only as labelled, citable history, and only when the workspace opts in | Proposed | 2026-09-26 |
+| [0026](0026-superseded-concepts-re-enter-answers-only-as-labelled-history.md) | A superseded concept re-enters an answer only as labelled, citable history, and only when the workspace opts in | Accepted | 2026-09-26 |
