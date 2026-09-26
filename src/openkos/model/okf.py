@@ -707,6 +707,7 @@ def build_concept(
     timestamp: str,
     related_note: str = "source this was extracted from",
     type_alternative: str | None = None,
+    related_notes: Mapping[str, str] | None = None,
 ) -> str:
     """Build a conformant OKF derived-object document from LLM-extracted,
     UNTRUSTED fields (design: "Builder validation").
@@ -733,6 +734,19 @@ def build_concept(
     byte-identical). A filed `query --save` answer passes a concept-to-concept
     phrasing instead (design: "Parameterize `## Related` wording (byte-identical
     ingest)"). `tags` is always `[]`: this slice has no tagging step.
+
+    `related_notes` (#1014 piece b, design Decision 7) is an OPTIONAL
+    per-reference override: a bullet reads `related_notes.get(ref,
+    related_note)` when `related_notes` is not `None`, so any reference not
+    present in the mapping falls back to the shared `related_note`. `None`
+    -- the default, and what every existing call site passes -- produces
+    output byte-identical to the pre-#1014 builder. A key naming a
+    reference not present in `provenance` is a caller bug and raises
+    `ValueError` rather than silently rendering a note for a citation that
+    was never filed. `query --save`'s `stage_filed_answer` uses this to mark
+    a revision-history citation's bullet (`"earlier version (superseded) …"`
+    / `"earlier version (refined) …"`) while every ordinary citation keeps
+    the shared `related_note` text.
     """
     if type not in _CONCEPT_TYPES:
         raise ValueError(f"type must be one of {sorted(_CONCEPT_TYPES)}, got {type!r}")
@@ -765,6 +779,14 @@ def build_concept(
             raise ValueError(
                 f"type_alternative must differ from type, both were {type!r}"
             )
+    if related_notes is not None:
+        # A key not in `provenance` names a citation that was never filed --
+        # a caller bug, not something to silently drop or render for.
+        unknown = sorted(set(related_notes) - set(provenance))
+        if unknown:
+            raise ValueError(
+                f"related_notes names reference(s) not in provenance: {unknown}"
+            )
 
     metadata: dict[str, object] = {
         "type": type,
@@ -782,7 +804,11 @@ def build_concept(
         # Set only when present, so a document with no near-boundary call
         # stays byte-identical to what this builder emitted before #401.
         metadata[TYPE_ALTERNATIVE_KEY] = type_alternative
-    related = "\n".join(f"- [{ref}](/{ref}.md) — {related_note}" for ref in provenance)
+    related = "\n".join(
+        f"- [{ref}](/{ref}.md) — "
+        f"{related_notes.get(ref, related_note) if related_notes is not None else related_note}"
+        for ref in provenance
+    )
     # `description` is a one-line lede; append `body` only when it adds content,
     # so a blank-body fallback does not render the description paragraph twice.
     lede = description if not body.strip() else f"{description}\n\n{body}"
