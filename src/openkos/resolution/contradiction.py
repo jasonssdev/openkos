@@ -63,6 +63,17 @@ past `_MAX_PAIRS` -- starving those live pairs of judgment even when the
 deprecation-filtered ("live") count BEFORE the cap, so the existing
 `total_pair_count > len(verdicts)` cap-reached signal fires only when live
 pairs genuinely exceed the cap.
+
+revises-relation delta: `_candidate_pairs` also excludes, unconditionally
+and before that same cap, any pair joined in either direction by a
+`supersedes`, `reconciled_with`, or `revises` edge -- the resolution
+relation types `reconcile` writes to record a human's resolution of a pair
+(`RESOLUTION_RELATION_TYPES`, `openkos.model.relations`). A resolved pair is
+never re-judged, even after a later edit to either concept -- removing the
+resolution edge is what restores it to candidacy. Because `plan_candidates`
+(the `curate` cost gate's source) and `find_contradictions` (the spend) both
+read this same function, the gate's reported count and the actual spend
+drop by exactly the excluded count with no change anywhere else.
 """
 
 import math
@@ -78,6 +89,7 @@ from openkos.llm import parsing
 from openkos.llm.base import LLMBackend, Message
 from openkos.llm.ollama import OllamaError
 from openkos.model import okf
+from openkos.model.relations import RESOLUTION_RELATION_TYPES
 
 _MAX_PAIRS = 200
 """Hard cap on the number of deduped candidate pairs judged in one
@@ -314,6 +326,20 @@ def _candidate_pairs(
     multi-edge pairs collapse to exactly one candidate (spec: Symmetric and
     multi-edge pairs judged once).
 
+    revises-relation delta: a pair joined, in EITHER direction, by any edge
+    whose `relation_type` is in `RESOLUTION_RELATION_TYPES` (`supersedes`,
+    `reconciled_with`, or `revises` -- the three types `reconcile` writes to
+    record a human's resolution) is excluded from candidates entirely, before
+    the dedup set is even ordered -- so it never reaches `total_count` or the
+    cap slice below (spec: "A resolved pair is excluded from candidates,
+    before the count and the cap"). This exclusion is unconditional: it
+    applies even when the caller passes a non-empty `deprecated` set or the
+    caller's own `include_deprecated` flag is set, because a resolved pair is
+    resolved whether or not its `supersedes`-loser is shown. Once a pair
+    carries a resolution edge it is never re-judged, even after a later edit
+    to either concept's content -- removing the resolution edge is what
+    restores the pair to candidacy.
+
     `deprecated` (status-aware-retrieval Phase 3, post-review correction) is
     applied to the deduped, sorted set BEFORE the `_MAX_PAIRS` cap slice --
     any pair where either id is in `deprecated` is dropped first, so the cap
@@ -334,13 +360,14 @@ def _candidate_pairs(
     before applying a SINGLE `_MAX_PAIRS` slice at that higher level --
     never two independent caps that could drift apart.
 
-    Returns `(pairs, total_count)`: `pairs` is the deduped, deprecation-
-    filtered set sorted by `tuple(sorted(pair))`, truncated to `cap` (or
-    returned in full when `cap is None`); `total_count` is the FULL deduped,
-    deprecation-filtered count BEFORE truncation, so the caller can detect
-    and report a cap-reached truncation (spec: Cap truncation is reported)
-    -- truncation is never silent, and the cap-reached signal now only
-    fires when LIVE pairs genuinely exceed the cap."""
+    Returns `(pairs, total_count)`: `pairs` is the deduped, resolution- and
+    deprecation-filtered set sorted by `tuple(sorted(pair))`, truncated to
+    `cap` (or returned in full when `cap is None`); `total_count` is the FULL
+    deduped, resolution- and deprecation-filtered count BEFORE truncation, so
+    the caller can detect and report a cap-reached truncation (spec: Cap
+    truncation is reported) -- truncation is never silent, and the
+    cap-reached signal now only fires when LIVE pairs genuinely exceed the
+    cap."""
     typed_edges = [
         edge
         for edge in store.edges()
@@ -348,7 +375,14 @@ def _candidate_pairs(
         and edge.relation_type != "derived_from"
         and edge.source_id != edge.target_id
     ]
-    pair_keys = {_pair_key(edge.source_id, edge.target_id) for edge in typed_edges}
+    resolved = {
+        _pair_key(edge.source_id, edge.target_id)
+        for edge in typed_edges
+        if edge.relation_type in RESOLUTION_RELATION_TYPES
+    }
+    pair_keys = {
+        _pair_key(edge.source_id, edge.target_id) for edge in typed_edges
+    } - resolved
     ordered = sorted(pair_keys)
     live = [
         pair
@@ -836,8 +870,8 @@ class CandidatePlan:
     """The candidates to judge, in order, already sliced to `_MAX_PAIRS`.
     Exactly one `llm.chat` call is made per element."""
     edge_total: int
-    """Deduped, self-loop-free, deprecation/sensitivity-filtered typed-edge
-    pair count BEFORE the cap."""
+    """Deduped, self-loop-free, resolution- and deprecation/sensitivity-
+    filtered typed-edge pair count BEFORE the cap."""
     merged_total: int
     """Merged-body candidate count BEFORE the cap -- one per
     `MergeLedgerEntry` on every non-deprecated survivor."""

@@ -1197,15 +1197,25 @@ def test_contradictions_include_deprecated_restores_the_superseded_pair(
 ) -> None:
     """The same real bundle with `--include-deprecated` restores the pair,
     so `find_contradictions` actually judges it and `contradictions` renders
-    the resulting verdict (spec: `--include-deprecated` Escape Flag)."""
+    the resulting verdict (spec: `--include-deprecated` Escape Flag).
+
+    Uses B's own `status: deprecated` field, not a `supersedes` edge:
+    revises-relation's resolution exclusion drops a `supersedes`-joined pair
+    UNCONDITIONALLY, even under `--include-deprecated` (a resolved pair is
+    resolved either way), so a `supersedes` edge here would no longer be
+    restored by the flag -- it would stay excluded via the resolution
+    exclusion instead. `related_to` keeps the pair a genuine candidate
+    through the ordinary deprecation filter alone."""
     _init_workspace(tmp_path, monkeypatch)
     bundle_dir = tmp_path / "bundle"
     _write_relation_doc(
         bundle_dir / "concepts" / "a.md",
         title="A",
-        relations=[("concepts/b", "supersedes")],
+        relations=[("concepts/b", "related_to")],
     )
-    _write_relation_doc(bundle_dir / "concepts" / "b.md", title="B")
+    _write_relation_doc(
+        bundle_dir / "concepts" / "b.md", title="B", status="deprecated"
+    )
     monkeypatch.setattr("openkos.cli.main.OllamaClient", _FakeOllamaClient)
 
     result = runner.invoke(app, ["contradictions", "--include-deprecated"])
