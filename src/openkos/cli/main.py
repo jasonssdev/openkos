@@ -9529,7 +9529,7 @@ def _reconcile_anchor_present(body: str, counterpart_id: str) -> bool:
     )
 
 
-_ReconcileRole = Literal["reconciled", "supersedes", "superseded"]
+_ReconcileRole = Literal["reconciled", "supersedes", "superseded", "revises", "revised"]
 
 
 def _reconcile_sentence(
@@ -9537,10 +9537,12 @@ def _reconcile_sentence(
 ) -> str:
     """One human-readable sentence for a `## Reconciliation` note, per
     `role` (design: Interfaces / Contracts) -- `reconciled` (symmetric,
-    both coexist), `supersedes` (this concept wins), or `superseded`
-    (label-only, no status change). `role` is a closed `Literal`, and any
-    other value raises defensively (rather than silently falling through to
-    the "superseded" sentence) so a typo can never mislabel a note."""
+    both coexist), `supersedes` (this concept wins), `superseded`
+    (label-only, no status change), `revises` (this concept refines its
+    counterpart; both remain current), or `revised` (the mirror role on the
+    refined counterpart). `role` is a closed `Literal`, and any other value
+    raises defensively (rather than silently falling through to the
+    "superseded" sentence) so a typo can never mislabel a note."""
     link = f"[{counterpart_id}](/{counterpart_id}.md)"
     if role == "reconciled":
         return f"Reconciled with {link} on {date_str} (both coexist)."
@@ -9548,6 +9550,10 @@ def _reconcile_sentence(
         return f"Supersedes {link} as of {date_str} (this concept wins)."
     if role == "superseded":
         return f"Superseded by {link} as of {date_str} (label-only, no status change)."
+    if role == "revises":
+        return f"Revises {link} as of {date_str} (refinement; both remain current)."
+    if role == "revised":
+        return f"Revised by {link} as of {date_str} (refinement; both remain current)."
     raise ValueError(f"unexpected reconciliation role {role!r}")
 
 
@@ -9589,55 +9595,109 @@ def _add_relation_if_absent(
     return [*relations, new_relation], True
 
 
+_ResolutionMode = Literal["none", "symmetric", "directional", "revision", "mixed"]
+_RequestedMode = Literal["symmetric", "directional", "revision"]
+
+_MODE_BY_RESOLUTION_TYPE: dict[str, _RequestedMode] = {
+    "reconciled_with": "symmetric",
+    "supersedes": "directional",
+    "revises": "revision",
+}
+"""The mode `reconcile`'s classifier assigns to each `RESOLUTION_RELATION_
+TYPES` member (design Decision 2). Keyed by that shared constant rather than
+hand-listed a second time, so a type added to one and not the other becomes
+`test_mode_and_role_tables_cover_every_resolution_type`'s failing assertion
+instead of a `KeyError` at classify time."""
+
+_DIRECTED_ROLES: dict[str, tuple[_ReconcileRole, _ReconcileRole]] = {
+    "supersedes": ("supersedes", "superseded"),
+    "revises": ("revises", "revised"),
+}
+"""The (holder role, target role) pair for each DIRECTED resolution type --
+`reconciled_with` has no entry here, since a symmetric edge has no holder
+(design Decision 4)."""
+
+
 def _existing_reconciliation_state(
     *,
     relations_a: list[okf.Relation],
     relations_b: list[okf.Relation],
     canonical_a: str,
     canonical_b: str,
-) -> tuple[Literal["none", "symmetric", "directional"], str | None]:
+) -> tuple[_ResolutionMode, str | None]:
     """Classify the pair's EXISTING reconciliation state from
-    already-loaded (pre-mutation) relations, gathering both `supersedes`
-    directions and the symmetric `reconciled_with` edge between `{a, b}` --
-    the CRITICAL refuse-on-conflict gate (fix: a mode-switch re-run must
-    never add a second, contradictory reconciliation resolution). Returns
-    `("none", None)` when the pair carries no prior reconciliation,
-    `("symmetric", None)` when a `reconciled_with` edge already links them,
-    or `("directional", winner)` when a `supersedes` edge already points
-    winner -> loser."""
-    a_supersedes_b = any(
-        relation.target == canonical_b and relation.type == "supersedes"
-        for relation in relations_a
-    )
-    b_supersedes_a = any(
-        relation.target == canonical_a and relation.type == "supersedes"
-        for relation in relations_b
-    )
-    if a_supersedes_b:
-        return "directional", canonical_a
-    if b_supersedes_a:
-        return "directional", canonical_b
+    already-loaded (pre-mutation) relations -- the CRITICAL refuse-on-conflict
+    gate (fix: a mode-switch re-run must never add a second, contradictory
+    reconciliation resolution). One table-driven pass (design Decision 2)
+    collects the set of `(mode, holder)` pairs any `RESOLUTION_RELATION_TYPES`
+    edge between `{a, b}` implies -- a symmetric `reconciled_with` always
+    contributes `(symmetric, None)` regardless of which side holds it (so a
+    ONE-SIDED `reconciled_with` still classifies as `symmetric`, not
+    `mixed`), while `supersedes`/`revises` contribute `(mode, <holder>)`.
 
-    symmetric = any(
-        relation.target == canonical_b and relation.type == "reconciled_with"
-        for relation in relations_a
-    ) or any(
-        relation.target == canonical_a and relation.type == "reconciled_with"
-        for relation in relations_b
-    )
-    if symmetric:
-        return "symmetric", None
-    return "none", None
+    Returns `("none", None)` when the pair carries no prior reconciliation,
+    the single collected `(mode, holder)` when exactly one kind of edge (in
+    at most one direction) is present, or `("mixed", None)` when the pair
+    carries more than one -- disagreeing resolutions only a hand edit can
+    produce, which this classifier refuses to rank by precedence."""
+    found: set[tuple[_RequestedMode, str | None]] = set()
+    for relation in relations_a:
+        if relation.target == canonical_b and relation.type in _MODE_BY_RESOLUTION_TYPE:
+            mode = _MODE_BY_RESOLUTION_TYPE[relation.type]
+            found.add((mode, None if mode == "symmetric" else canonical_a))
+    for relation in relations_b:
+        if relation.target == canonical_a and relation.type in _MODE_BY_RESOLUTION_TYPE:
+            mode = _MODE_BY_RESOLUTION_TYPE[relation.type]
+            found.add((mode, None if mode == "symmetric" else canonical_b))
+
+    if not found:
+        return "none", None
+    if len(found) == 1:
+        (mode, holder) = next(iter(found))
+        return mode, holder
+    return "mixed", None
 
 
-def _reconciliation_state_description(
-    mode: Literal["none", "symmetric", "directional"], winner: str | None
-) -> str:
+def _reconciliation_state_description(mode: _ResolutionMode, holder: str | None) -> str:
     """Human-readable description of an existing reconciliation state, for
     the refuse-on-conflict error message."""
     if mode == "directional":
-        return f"a directional reconciliation ({winner!r} supersedes its counterpart)"
+        return f"a directional reconciliation ({holder!r} supersedes its counterpart)"
+    if mode == "revision":
+        return f"a revision ({holder!r} revises its counterpart; both remain current)"
+    if mode == "mixed":
+        return (
+            "conflicting resolutions (more than one 'supersedes', 'revises' "
+            "or 'reconciled_with' edge between the pair, and they disagree)"
+        )
     return "a symmetric reconciliation ('reconciled_with')"
+
+
+def _resolve_pair_member(
+    layout: config.WorkspaceLayout,
+    flag: str,
+    value: str,
+    canonical_a: str,
+    canonical_b: str,
+) -> tuple[str, str]:
+    """Resolve `value` (an id passed to `flag`, e.g. `--winner` or
+    `--revision`) to `(holder, counterpart)`, where `holder` is EXACTLY one
+    of `canonical_a`/`canonical_b` (design Decision 5 step 3). `value` is
+    resolved via `application_lifecycle.resolve_concept_path` first -- an
+    absolute id, a `..` segment, a reserved basename, or a nonexistent
+    concept refuses there, byte-identical to how `--winner` already refused
+    before this helper existed. Only once `value` resolves to a REAL concept
+    that is not a pair member does this raise its own message, shared by
+    both flags so their validation cannot drift apart by copy-paste."""
+    _, resolved = application_lifecycle.resolve_concept_path(layout.bundle_dir, value)
+    if resolved == canonical_a:
+        return canonical_a, canonical_b
+    if resolved == canonical_b:
+        return canonical_b, canonical_a
+    raise ValueError(
+        f"{flag} {value!r} must resolve to one of the pair "
+        f"({canonical_a!r}, {canonical_b!r}), got {resolved!r}"
+    )
 
 
 @app.command(
@@ -9663,6 +9723,15 @@ def reconcile(
         help=(
             "Concept id (must resolve to id_a or id_b) that supersedes its "
             "counterpart. Omit for a symmetric 'reconciled_with' reconciliation."
+        ),
+    ),
+    revision: str | None = typer.Option(
+        None,
+        "--revision",
+        help=(
+            "Concept id (must resolve to id_a or id_b) that revises (refines) "
+            "its counterpart; both remain current. Cannot be combined with "
+            "--winner."
         ),
     ),
     auto: bool = typer.Option(
@@ -9696,42 +9765,52 @@ def reconcile(
     (the literal duplicate, clearer message) and as `samefile` device+inode
     identity (#324), since a case-insensitive filesystem or a symlink can
     make two differing ids denote one file, which the byte-comparing drift
-    guard cannot detect. If `--winner <id>` is given, it is
-    ALSO resolved via `_resolve_concept_path` and its canonical id MUST
-    equal EXACTLY one of the two pair members -- else this refuses (no
-    write, spec: "--winner gamma (not in pair {alpha,beta})"); the other
-    pair member becomes the loser.
+    guard cannot detect. If `--winner <id>` or `--revision <id>` is given,
+    it is resolved the same way (`_resolve_pair_member`, shared by both
+    flags) and its canonical id MUST equal EXACTLY one of the two pair
+    members -- else this refuses (no write, spec: "--winner gamma (not in
+    pair {alpha,beta})"; "--revision id not in pair"); the other pair member
+    becomes the loser (`--winner`) or the refined counterpart
+    (`--revision`). `--winner` and `--revision` are mutually exclusive
+    (refuse, exit 1, zero writes) -- a reconciliation is either a reversal
+    or a refinement, never both.
 
     Before building any new edge, `_existing_reconciliation_state` gathers
-    the pair's EXISTING reconciliation edges (any `reconciled_with` or
-    `supersedes` already linking `id_a`/`id_b`, in either direction) and
-    classifies them as `"none"`, `"symmetric"`, or `"directional"` (with a
-    winner). This is compared to what THIS invocation requests: if the pair
-    carries NO prior reconciliation, this proceeds as a fresh write; if the
-    prior state matches the request EXACTLY (same mode, same winner for
-    `--winner`), this proceeds to the ordinary idempotent no-op path below;
-    if the prior state DIFFERS (a mode switch, e.g. symmetric then
-    `--winner`, or an opposite `--winner`), this REFUSES here (`ValueError`,
-    exit 1, ZERO writes) rather than adding a second, contradictory
-    resolution -- a pair can carry AT MOST ONE reconciliation resolution
-    written by `reconcile` (CRITICAL fix: a mode-switch re-run used to dedup
-    the new edge only on `(target, type)`, so a DIFFERENT edge type was
-    added alongside the stale one, while the anchor-gated note below matches
-    on `target` alone and is blind to `role`, so it silently kept describing
-    the earlier resolution -- frontmatter and body note went out of sync
-    with no way to repair it on a later run).
+    the pair's EXISTING reconciliation edges (any `RESOLUTION_RELATION_
+    TYPES` member already linking `id_a`/`id_b`, in either direction) and
+    classifies them as `"none"`, `"symmetric"`, `"directional"` (with a
+    holder), `"revision"` (with a holder), or `"mixed"` (disagreeing edges,
+    only reachable by hand-editing). This is compared to what THIS
+    invocation requests: if the pair carries NO prior reconciliation, this
+    proceeds as a fresh write; if the prior state matches the request
+    EXACTLY (same mode, same holder for `--winner`/`--revision`), this
+    proceeds to the ordinary idempotent no-op path below; if the prior state
+    DIFFERS (a mode switch, e.g. symmetric then `--winner`, an opposite
+    `--winner`/`--revision`, or a `"mixed"` prior state), this REFUSES here
+    (`ValueError`, exit 1, ZERO writes) rather than adding a second,
+    contradictory resolution -- a pair can carry AT MOST ONE reconciliation
+    resolution written by `reconcile` (CRITICAL fix: a mode-switch re-run
+    used to dedup the new edge only on `(target, type)`, so a DIFFERENT edge
+    type was added alongside the stale one, while the anchor-gated note
+    below matches on `target` alone and is blind to `role`, so it silently
+    kept describing the earlier resolution -- frontmatter and body note went
+    out of sync with no way to repair it on a later run).
 
     The rest of Phase A builds the entire result in memory. With no
-    `--winner`, a SYMMETRIC `reconciled_with` edge is added to BOTH
-    concepts (each targeting the other, design: "Symmetric edge = one
+    `--winner`/`--revision`, a SYMMETRIC `reconciled_with` edge is added to
+    BOTH concepts (each targeting the other, design: "Symmetric edge = one
     outbound edge per side"); with `--winner`, a single DIRECTIONAL
     `supersedes` edge is added on the winner's document only, pointing at
     the loser -- no `superseded_by` back-edge; `supersedes` is LABEL-ONLY,
     this verb never writes `status` or any deprecation field (spec:
-    Additive-Only, No Status/Lifecycle Write). Either edge shape dedups on
-    `(target, type)` (`_add_relation_if_absent`), mirroring `relate`'s
-    idempotency -- safe now that the refuse-on-conflict gate above has
-    already ruled out a mode switch reaching this point. Each side then gets
+    Additive-Only, No Status/Lifecycle Write). With `--revision`, a single
+    DIRECTIONAL `revises` edge is added on the refining concept's document
+    only, pointing at its counterpart -- no back-edge either, and nothing is
+    hidden: `revises` deprecates neither end (ADR-0024). Either edge shape
+    dedups on `(target, type)` (`_add_relation_if_absent`), mirroring
+    `relate`'s idempotency -- safe now that the refuse-on-conflict gate
+    above has already ruled out a mode switch reaching this point. Each side
+    then gets
     a `## Reconciliation` body note appended -- unless a hidden `<!--
     okos:reconcile target=<counterpart> ... -->` anchor for that counterpart
     is already present (`_reconcile_anchor_present`), in which case the note
@@ -9793,17 +9872,33 @@ def reconcile(
             raise typer.Exit(code=1)
 
         # #567: `--from-findings` is a whole mode, never a modifier. Explicit
-        # ids, `--winner`, and `--auto` all belong to the two-id form -- a
-        # directional resolution needs a human to NAME the winner, and the
-        # batch walk's consent is per item by design, so there is no bulk
-        # path to skip a prompt on.
+        # ids, `--winner`, `--revision`, and `--auto` all belong to the
+        # two-id form -- a directional or revision resolution needs a human
+        # to NAME the holder, and the batch walk's consent is per item by
+        # design, so there is no bulk path to skip a prompt on.
         if from_findings:
-            if id_a is not None or id_b is not None or winner is not None or auto:
+            if (
+                id_a is not None
+                or id_b is not None
+                or winner is not None
+                or revision is not None
+                or auto
+            ):
                 raise ValueError(
-                    "--from-findings takes no concept ids, no --winner, and "
-                    "no --auto; use the two-id form for a directional or "
-                    "unattended reconciliation"
+                    "--from-findings takes no concept ids, no --winner, no "
+                    "--revision, and no --auto; use the two-id form for a "
+                    "directional, revision, or unattended reconciliation"
                 )
+        # Decision 5 step 2: this runs before any id is resolved, so the
+        # refusal never depends on whether `id_a`/`id_b`/the flag values
+        # exist -- a reconciliation is either a reversal or a refinement,
+        # never both.
+        elif winner is not None and revision is not None:
+            raise ValueError(
+                "--winner and --revision are mutually exclusive: a "
+                "reconciliation is either a reversal (--winner) or a "
+                "refinement (--revision), never both"
+            )
         elif id_a is None or id_b is None:
             raise ValueError(
                 "two concept ids are required (or pass --from-findings to "
@@ -9848,21 +9943,18 @@ def reconcile(
                 f"{canonical_b!r} resolve to the same file on this filesystem"
             )
 
-        winner_canonical: str | None = None
-        loser_canonical: str | None = None
+        holder_canonical: str | None = None
+        target_canonical: str | None = None
+        edge_type: Literal["supersedes", "revises"] = "supersedes"
         if winner is not None:
-            _, winner_resolved = application_lifecycle.resolve_concept_path(
-                layout.bundle_dir, winner
+            holder_canonical, target_canonical = _resolve_pair_member(
+                layout, "--winner", winner, canonical_a, canonical_b
             )
-            if winner_resolved == canonical_a:
-                winner_canonical, loser_canonical = canonical_a, canonical_b
-            elif winner_resolved == canonical_b:
-                winner_canonical, loser_canonical = canonical_b, canonical_a
-            else:
-                raise ValueError(
-                    f"--winner {winner!r} must resolve to one of the pair "
-                    f"({canonical_a!r}, {canonical_b!r}), got {winner_resolved!r}"
-                )
+        elif revision is not None:
+            holder_canonical, target_canonical = _resolve_pair_member(
+                layout, "--revision", revision, canonical_a, canonical_b
+            )
+            edge_type = "revises"
     except (OSError, ValueError) as exc:
         typer.echo(f"openkos reconcile: refusing to reconcile -- {exc}.", err=True)
         raise typer.Exit(code=1) from exc
@@ -9885,9 +9977,10 @@ def reconcile(
         canonical_a,
         path_b,
         canonical_b,
-        winner_canonical,
-        loser_canonical,
+        holder_canonical,
+        target_canonical,
         auto=auto,
+        edge_type=edge_type,
     )
     # #655: the last write verb joins #640's contract -- once, end of run,
     # only when a concept document actually changed (the idempotent
@@ -9905,11 +9998,12 @@ def _reconcile_pair(
     canonical_a: str,
     path_b: Path,
     canonical_b: str,
-    winner_canonical: str | None,
-    loser_canonical: str | None,
+    holder_canonical: str | None,
+    target_canonical: str | None,
     *,
     auto: bool,
     announce_preview: bool = True,
+    edge_type: Literal["supersedes", "revises"] = "supersedes",
 ) -> bool:
     """One pair's complete reconcile transaction -- Phase A in-memory build,
     conflict gate, preview, confirm gate, drift re-validation, Phase B
@@ -9920,6 +10014,14 @@ def _reconcile_pair(
     from the finding context before calling); every gate below still runs.
     Raises `typer.Exit` exactly as the two-id form always did: exit 1 for a
     prepare/conflict/write failure, exit 3 for post-consent target drift.
+
+    `holder_canonical is None` means a SYMMETRIC request (`edge_type` is
+    then ignored); otherwise `holder_canonical` is the pair member that gets
+    the outbound edge and `target_canonical` its counterpart, with
+    `edge_type` naming which directed resolution (`"supersedes"` or
+    `"revises"`, design Decision 4) -- `_run_reconcile_from_findings` always
+    passes `None, None` and the `edge_type="supersedes"` default, so its
+    call site stays byte-unchanged by this change.
 
     Returns whether this run CHANGED a concept document (#655): an edge
     added or a note appended on either side. `False` is the idempotent
@@ -9957,20 +10059,22 @@ def _reconcile_pair(
         # to frontmatter (the note-append gate below is anchor-keyed on
         # `target` alone and blind to `role`, so it cannot itself repair a
         # mismatched note on a later run).
-        existing_mode, existing_winner = _existing_reconciliation_state(
+        existing_mode, existing_holder = _existing_reconciliation_state(
             relations_a=relations_a,
             relations_b=relations_b,
             canonical_a=canonical_a,
             canonical_b=canonical_b,
         )
-        requested_mode: Literal["symmetric", "directional"] = (
-            "directional" if winner_canonical is not None else "symmetric"
+        requested_mode: _RequestedMode = (
+            _MODE_BY_RESOLUTION_TYPE[edge_type]
+            if holder_canonical is not None
+            else "symmetric"
         )
         if existing_mode != "none" and (
-            existing_mode != requested_mode or existing_winner != winner_canonical
+            existing_mode != requested_mode or existing_holder != holder_canonical
         ):
             description = _reconciliation_state_description(
-                existing_mode, existing_winner
+                existing_mode, existing_holder
             )
             raise ValueError(
                 f"concepts {canonical_a!r} and {canonical_b!r} are already "
@@ -9983,7 +10087,7 @@ def _reconcile_pair(
         edge_added_b = False
         role_a: _ReconcileRole
         role_b: _ReconcileRole
-        if winner_canonical is None:
+        if holder_canonical is None:
             relations_a, edge_added_a = _add_relation_if_absent(
                 relations_a, okf.Relation(target=canonical_b, type="reconciled_with")
             )
@@ -9991,16 +10095,18 @@ def _reconcile_pair(
                 relations_b, okf.Relation(target=canonical_a, type="reconciled_with")
             )
             role_a, role_b = "reconciled", "reconciled"
-        elif winner_canonical == canonical_a:
-            relations_a, edge_added_a = _add_relation_if_absent(
-                relations_a, okf.Relation(target=canonical_b, type="supersedes")
-            )
-            role_a, role_b = "supersedes", "superseded"
         else:
-            relations_b, edge_added_b = _add_relation_if_absent(
-                relations_b, okf.Relation(target=canonical_a, type="supersedes")
-            )
-            role_a, role_b = "superseded", "supersedes"
+            holder_role, target_role = _DIRECTED_ROLES[edge_type]
+            if holder_canonical == canonical_a:
+                relations_a, edge_added_a = _add_relation_if_absent(
+                    relations_a, okf.Relation(target=canonical_b, type=edge_type)
+                )
+                role_a, role_b = holder_role, target_role
+            else:
+                relations_b, edge_added_b = _add_relation_if_absent(
+                    relations_b, okf.Relation(target=canonical_a, type=edge_type)
+                )
+                role_a, role_b = target_role, holder_role
 
         note_added_a = False
         if not _reconcile_anchor_present(body_a, canonical_b):
@@ -10034,17 +10140,23 @@ def _reconcile_pair(
                 f"[{canonical_b}](/{canonical_b}.md) are already reconciled; "
                 "no change."
             )
-        elif winner_canonical is None:
+        elif holder_canonical is None:
             log_line = (
                 "**Reconcile**: Recorded a symmetric 'reconciled_with' "
                 f"between [{canonical_a}](/{canonical_a}.md) and "
                 f"[{canonical_b}](/{canonical_b}.md)."
             )
+        elif edge_type == "supersedes":
+            log_line = (
+                f"**Reconcile**: [{holder_canonical}](/{holder_canonical}.md) "
+                f"supersedes [{target_canonical}](/{target_canonical}.md) "
+                "(recorded 'supersedes')."
+            )
         else:
             log_line = (
-                f"**Reconcile**: [{winner_canonical}](/{winner_canonical}.md) "
-                f"supersedes [{loser_canonical}](/{loser_canonical}.md) "
-                "(recorded 'supersedes')."
+                f"**Reconcile**: [{holder_canonical}](/{holder_canonical}.md) "
+                f"revises [{target_canonical}](/{target_canonical}.md) "
+                "(recorded 'revises'; both remain current)."
             )
         new_log_text = bundle_log.insert_log_entry(log_text, today, log_line)
     except (OSError, ValueError) as exc:
@@ -10056,6 +10168,11 @@ def _reconcile_pair(
 
     if announce_preview:
         typer.echo("openkos reconcile: proposed changes:")
+        if holder_canonical is not None:
+            # Names the direction before the confirm gate, so a preview
+            # reader sees who revises/supersedes whom -- not only the
+            # post-write echo (design Decision 6).
+            typer.echo(f"  = {holder_canonical!r} {edge_type} {target_canonical!r}")
         typer.echo(
             f"  ~ bundle/{canonical_a}.md (relation "
             f"{'added' if edge_added_a else 'unchanged'}; note "
@@ -10104,29 +10221,43 @@ def _reconcile_pair(
         )
         raise typer.Exit(code=1) from exc
 
-    if winner_canonical is None:
+    if holder_canonical is None:
         typer.echo(
             "openkos reconcile: recorded a symmetric reconciliation between "
             f"'bundle/{canonical_a}.md' and 'bundle/{canonical_b}.md' "
             f"({log_path.name} updated)."
         )
-    else:
+    elif edge_type == "supersedes":
         # Name the STATUS the loser will carry, not only the act (#389).
         # This verb said "recorded as superseding" while `list` shows
         # `deprecated` in its STATUS column, so the operator met two words
         # for the action they had just performed and its effect, with
         # nothing connecting them.
         typer.echo(
-            f"openkos reconcile: recorded '{winner_canonical}' as superseding "
-            f"'{loser_canonical}'; '{loser_canonical}' now lists as "
+            f"openkos reconcile: recorded '{holder_canonical}' as superseding "
+            f"'{target_canonical}'; '{target_canonical}' now lists as "
             f"deprecated ({log_path.name} updated)."
         )
+    else:
+        # Mirrors #389 for the OPPOSITE case: a revision hides nothing, so
+        # the echo names that directly rather than leaving the operator to
+        # infer it from silence (design Decision 6).
+        typer.echo(
+            f"openkos reconcile: recorded '{holder_canonical}' as revising "
+            f"'{target_canonical}'; both remain current "
+            f"({log_path.name} updated)."
+        )
 
-    reconcile_message = (
-        f"openkos: reconcile {canonical_a} <-> {canonical_b}"
-        if winner_canonical is None
-        else f"openkos: reconcile {winner_canonical} supersedes {loser_canonical}"
-    )
+    if holder_canonical is None:
+        reconcile_message = f"openkos: reconcile {canonical_a} <-> {canonical_b}"
+    elif edge_type == "supersedes":
+        reconcile_message = (
+            f"openkos: reconcile {holder_canonical} supersedes {target_canonical}"
+        )
+    else:
+        reconcile_message = (
+            f"openkos: reconcile {holder_canonical} revises {target_canonical}"
+        )
     _autocommit(
         root,
         [f"bundle/{canonical_a}.md", f"bundle/{canonical_b}.md", "bundle/log.md"],

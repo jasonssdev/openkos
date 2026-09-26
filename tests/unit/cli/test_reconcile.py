@@ -16,6 +16,7 @@ from typer.testing import CliRunner, _NamedTextIOWrapper
 from openkos.cli import main
 from openkos.cli.main import app
 from openkos.model import okf
+from openkos.model.relations import RESOLUTION_RELATION_TYPES
 from tests.unit.cli.conftest import (
     changed_paths,
     confirm_after,
@@ -65,6 +66,24 @@ def _body_of(tmp_path: Path, concept_id: str) -> str:
 
 def _log_text(tmp_path: Path) -> str:
     return (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
+
+
+def _concept_bytes(tmp_path: Path, concept_id: str) -> bytes:
+    return (tmp_path / "bundle" / f"{concept_id}.md").read_bytes()
+
+
+def _set_relations(
+    tmp_path: Path, concept_id: str, relations: list[okf.Relation]
+) -> None:
+    """Hand-set `concept_id`'s `relations:` frontmatter directly (bypassing
+    `reconcile`), for constructing a hand-edited MIXED resolution state no
+    `reconcile` call can itself produce (design: Testing Strategy, "CLI
+    (mixed)")."""
+    path = tmp_path / "bundle" / f"{concept_id}.md"
+    text = path.read_text(encoding="utf-8")
+    metadata, body = okf.load_frontmatter(text)
+    metadata[okf.RELATIONS_KEY] = okf.encode_relations(relations)
+    path.write_text(okf.dump_frontmatter(metadata, body), encoding="utf-8")
 
 
 # -- 1.2: error-before-write (unknown id, self-pair, --winner not in pair) --
@@ -1129,3 +1148,364 @@ def test_two_id_form_still_requires_both_ids(
 
     assert result.exit_code == 1
     assert "two concept ids" in result.stderr
+
+
+# -- revises-relation: table-driven classifier, --revision, mixed states ----
+# (openspec/changes/revises-relation, slice 1)
+
+
+def test_mode_and_role_tables_cover_every_resolution_type() -> None:
+    """`_MODE_BY_RESOLUTION_TYPE` and `_DIRECTED_ROLES` are keyed by
+    `RESOLUTION_RELATION_TYPES` -- a fourth resolution type added to one
+    table but not the other becomes a failing test here instead of a silent
+    `KeyError` at classify time (design Decision 2)."""
+    assert set(main._MODE_BY_RESOLUTION_TYPE) == RESOLUTION_RELATION_TYPES
+    assert set(main._DIRECTED_ROLES) == RESOLUTION_RELATION_TYPES - {"reconciled_with"}
+
+
+_TRANSITION_TABLE: dict[tuple[str, str], str] = {
+    ("none", "symmetric"): "write",
+    ("none", "directional(A)"): "write",
+    ("none", "revision(A)"): "write",
+    ("symmetric", "symmetric"): "idempotent",
+    ("symmetric", "directional(A)"): "refuse",
+    ("symmetric", "revision(A)"): "refuse",
+    ("directional(A)", "symmetric"): "refuse",
+    ("directional(A)", "directional(A)"): "idempotent",
+    ("directional(A)", "revision(A)"): "refuse",
+    ("directional(B)", "symmetric"): "refuse",
+    ("directional(B)", "directional(A)"): "refuse",
+    ("directional(B)", "revision(A)"): "refuse",
+    ("revision(A)", "symmetric"): "refuse",
+    ("revision(A)", "directional(A)"): "refuse",
+    ("revision(A)", "revision(A)"): "idempotent",
+    ("revision(B)", "symmetric"): "refuse",
+    ("revision(B)", "directional(A)"): "refuse",
+    ("revision(B)", "revision(A)"): "refuse",
+}
+"""design.md's full transition table (existing state -> requested state),
+flattened to the 18 cells this run exercises: every existing state paired
+with every requested state actually offered below (`symmetric`,
+`directional(A)`, `revision(A)`)."""
+
+
+def _existing_state_args(state: str, a: str, b: str) -> list[str] | None:
+    """The `reconcile` invocation (minus `id_a id_b`) that puts the pair into
+    `state` -- `None` for `"none"` (no setup call at all)."""
+    if state == "none":
+        return None
+    if state == "symmetric":
+        return ["--auto"]
+    if state == "directional(A)":
+        return ["--winner", a, "--auto"]
+    if state == "directional(B)":
+        return ["--winner", b, "--auto"]
+    if state == "revision(A)":
+        return ["--revision", a, "--auto"]
+    if state == "revision(B)":
+        return ["--revision", b, "--auto"]
+    raise AssertionError(state)  # pragma: no cover -- exhaustive above
+
+
+def _requested_state_args(state: str, a: str, b: str) -> list[str]:
+    if state == "symmetric":
+        return ["--auto"]
+    if state == "directional(A)":
+        return ["--winner", a, "--auto"]
+    if state == "revision(A)":
+        return ["--revision", a, "--auto"]
+    raise AssertionError(state)  # pragma: no cover -- exhaustive above
+
+
+@pytest.mark.parametrize(
+    ("existing_state", "requested_state"), sorted(_TRANSITION_TABLE)
+)
+def test_reconciliation_transition_matrix(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    existing_state: str,
+    requested_state: str,
+) -> None:
+    """One parametrized test over the transition table (spec: "At Most One
+    Resolution Per Pair"): from an existing state built by a REAL prior
+    `reconcile` run, a `"none"` existing state WRITES, an exact repeat is an
+    IDEMPOTENT no-op (concept bytes unchanged, log gains "already
+    reconciled; no change."), and every other combination REFUSES (exit 1,
+    "already reconciled" in stderr, zero writes at all -- including
+    `log.md`). Kills a holder-blind comparison (e.g. `directional(A)` vs
+    `directional(B)` treated as equal) and a `revision` holder returned as
+    `None`."""
+    _init_workspace(tmp_path, monkeypatch)
+    a_id = _ingest_source(tmp_path, "a.txt")
+    b_id = _ingest_source(tmp_path, "b.txt")
+
+    setup_args = _existing_state_args(existing_state, a_id, b_id)
+    if setup_args is not None:
+        setup = runner.invoke(app, ["reconcile", a_id, b_id, *setup_args])
+        assert setup.exit_code == 0
+
+    bytes_a_before = _concept_bytes(tmp_path, a_id)
+    bytes_b_before = _concept_bytes(tmp_path, b_id)
+    snapshot_before = _snapshot(tmp_path)
+    request_args = _requested_state_args(requested_state, a_id, b_id)
+
+    result = runner.invoke(app, ["reconcile", a_id, b_id, *request_args])
+
+    outcome = _TRANSITION_TABLE[(existing_state, requested_state)]
+    if outcome == "write":
+        assert result.exit_code == 0
+        if requested_state == "symmetric":
+            assert okf.Relation(target=b_id, type="reconciled_with") in (
+                _relations_of(tmp_path, a_id)
+            )
+        elif requested_state == "directional(A)":
+            assert okf.Relation(target=b_id, type="supersedes") in _relations_of(
+                tmp_path, a_id
+            )
+        else:
+            assert okf.Relation(target=b_id, type="revises") in _relations_of(
+                tmp_path, a_id
+            )
+    elif outcome == "idempotent":
+        assert result.exit_code == 0
+        assert _concept_bytes(tmp_path, a_id) == bytes_a_before
+        assert _concept_bytes(tmp_path, b_id) == bytes_b_before
+        assert "already reconciled; no change." in _log_text(tmp_path)
+    else:
+        assert outcome == "refuse"
+        assert result.exit_code == 1
+        assert isinstance(result.exception, SystemExit)
+        assert "already reconciled" in result.stderr
+        assert _snapshot(tmp_path) == snapshot_before
+
+
+@pytest.mark.parametrize(
+    ("type_a", "type_b"),
+    [
+        ("revises", "revises"),
+        ("supersedes", "supersedes"),
+        ("revises", "supersedes"),
+        ("revises", "reconciled_with"),
+        ("supersedes", "reconciled_with"),
+    ],
+)
+def test_mixed_resolution_state_refuses_every_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, type_a: str, type_b: str
+) -> None:
+    """A pair carrying two disagreeing resolution edges -- only possible by
+    hand-editing, since the at-most-one gate prevents `reconcile` itself
+    from producing this -- refuses every request (symmetric, `--winner`
+    either member, `--revision` either member), naming the conflict rather
+    than picking one edge by precedence (spec: "A hand-edited pair with
+    conflicting resolutions refuses every request"). Asserting the MESSAGE,
+    not only the exit code, is what kills removal of the `len(found) > 1`
+    branch specifically: without it, tuple-unpacking two-or-more results
+    still raises a bare `ValueError`, which still exits 1."""
+    _init_workspace(tmp_path, monkeypatch)
+    a_id = _ingest_source(tmp_path, "a.txt")
+    b_id = _ingest_source(tmp_path, "b.txt")
+    _set_relations(tmp_path, a_id, [okf.Relation(target=b_id, type=type_a)])
+    _set_relations(tmp_path, b_id, [okf.Relation(target=a_id, type=type_b)])
+    before_a = _concept_bytes(tmp_path, a_id)
+    before_b = _concept_bytes(tmp_path, b_id)
+
+    for args in (
+        ["--auto"],
+        ["--winner", a_id, "--auto"],
+        ["--winner", b_id, "--auto"],
+        ["--revision", a_id, "--auto"],
+        ["--revision", b_id, "--auto"],
+    ):
+        result = runner.invoke(app, ["reconcile", a_id, b_id, *args])
+        assert result.exit_code == 1, args
+        assert "conflicting resolutions" in result.stderr, args
+
+    assert _concept_bytes(tmp_path, a_id) == before_a
+    assert _concept_bytes(tmp_path, b_id) == before_b
+
+
+def test_one_sided_reconciled_with_stays_symmetric(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only `a_id` holds a `reconciled_with -> b_id` edge (as a hand edit
+    would leave it); a plain symmetric request still PROCEEDS -- one-sided
+    `reconciled_with` classifies as `symmetric`, not `mixed` (design
+    Decision 2's shipped-behavior note: today's `_existing_reconciliation_
+    state` already treats it this way, and this is deliberately preserved).
+    A follow-up `--revision` on the same pair then refuses."""
+    _init_workspace(tmp_path, monkeypatch)
+    a_id = _ingest_source(tmp_path, "a.txt")
+    b_id = _ingest_source(tmp_path, "b.txt")
+    _set_relations(tmp_path, a_id, [okf.Relation(target=b_id, type="reconciled_with")])
+
+    result = runner.invoke(app, ["reconcile", a_id, b_id, "--auto"])
+
+    assert result.exit_code == 0
+    assert okf.Relation(target=a_id, type="reconciled_with") in _relations_of(
+        tmp_path, b_id
+    )
+
+    second = runner.invoke(app, ["reconcile", a_id, b_id, "--revision", a_id, "--auto"])
+
+    assert second.exit_code == 1
+    assert "already reconciled" in second.stderr
+
+
+def test_revision_flag_refuses_when_id_is_not_in_the_pair(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--revision <id>` MUST resolve to exactly one pair member (spec:
+    "--revision id not in pair"). A genuinely existing, non-member id
+    refuses with a message naming both the flag and the pair; a nonexistent
+    id or a traversal-shaped value refuses earlier, through the same
+    `resolve_concept_path` path-safety/existence gate `--winner` already
+    shares (design Decision 5 step 3, "exactly as --winner does") -- exit 1
+    and zero writes either way."""
+    _init_workspace(tmp_path, monkeypatch)
+    a_id = _ingest_source(tmp_path, "a.txt")
+    b_id = _ingest_source(tmp_path, "b.txt")
+    c_id = _ingest_source(tmp_path, "c.txt")
+    before = _snapshot(tmp_path)
+
+    not_in_pair = runner.invoke(
+        app, ["reconcile", a_id, b_id, "--revision", c_id, "--auto"]
+    )
+    assert not_in_pair.exit_code == 1
+    assert isinstance(not_in_pair.exception, SystemExit)
+    assert "--revision" in not_in_pair.stderr
+    assert "must resolve to one of the pair" in not_in_pair.stderr
+    assert _snapshot(tmp_path) == before
+
+    for bad_value in ("sources/nonexistent", "../../evil"):
+        result = runner.invoke(
+            app, ["reconcile", a_id, b_id, "--revision", bad_value, "--auto"]
+        )
+        assert result.exit_code == 1, bad_value
+        assert isinstance(result.exception, SystemExit)
+        assert _snapshot(tmp_path) == before
+
+
+def test_revision_flag_conflicts_with_winner_and_from_findings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--revision` combined with `--winner` refuses (exit 1, zero writes,
+    "mutually exclusive"); combined with `--from-findings` it refuses
+    through the same whole-mode gate `--winner`/ids/`--auto` already share
+    (spec: both "--revision combined with ..." scenarios)."""
+    _init_workspace(tmp_path, monkeypatch)
+    a_id = _ingest_source(tmp_path, "a.txt")
+    b_id = _ingest_source(tmp_path, "b.txt")
+    before = _snapshot(tmp_path)
+
+    winner_and_revision = runner.invoke(
+        app,
+        ["reconcile", a_id, b_id, "--winner", a_id, "--revision", a_id, "--auto"],
+    )
+    assert winner_and_revision.exit_code == 1
+    assert isinstance(winner_and_revision.exception, SystemExit)
+    assert "mutually exclusive" in winner_and_revision.stderr
+    assert _snapshot(tmp_path) == before
+
+    from_findings_and_revision = runner.invoke(
+        app, ["reconcile", "--from-findings", "--revision", a_id]
+    )
+    assert from_findings_and_revision.exit_code == 1
+    assert "--from-findings" in from_findings_and_revision.stderr
+    assert _snapshot(tmp_path) == before
+
+
+def test_from_findings_combination_gate_names_every_excluded_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The extended `--from-findings` combination message (Decision 5 step
+    1) names `--revision` alongside the pre-existing `--winner`/`--auto`
+    exclusions, so `--from-findings --winner <id>` (no `--revision`
+    involved at all) still refuses with the updated wording."""
+    _init_workspace(tmp_path, monkeypatch)
+    a_id = _ingest_source(tmp_path, "a.txt")
+
+    with_winner = runner.invoke(app, ["reconcile", "--from-findings", "--winner", a_id])
+
+    assert with_winner.exit_code == 1
+    assert "no --winner, no --revision, and no --auto" in with_winner.stderr
+
+
+def test_revision_writes_a_single_outbound_edge_and_notes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`reconcile a b --revision a --auto` writes ONE outbound `revises`
+    edge on `a`, no edge on `b`, a `## Reconciliation` note on each side
+    naming its own role, a `**Reconcile**` log line, and a success echo
+    naming both the direction and that nothing is hidden (spec: "Revision
+    writes a single outbound edge")."""
+    _init_workspace(tmp_path, monkeypatch)
+    a_id = _ingest_source(tmp_path, "a.txt")
+    b_id = _ingest_source(tmp_path, "b.txt")
+
+    result = runner.invoke(app, ["reconcile", a_id, b_id, "--revision", a_id, "--auto"])
+
+    assert result.exit_code == 0
+    assert _relations_of(tmp_path, a_id) == [okf.Relation(target=b_id, type="revises")]
+    assert _relations_of(tmp_path, b_id) == []
+
+    body_a = _body_of(tmp_path, a_id)
+    body_b = _body_of(tmp_path, b_id)
+    assert f"<!-- okos:reconcile target={b_id} role=revises -->" in body_a
+    assert f"<!-- okos:reconcile target={a_id} role=revised -->" in body_b
+    assert f"Revises [{b_id}](/{b_id}.md) as of " in body_a
+    assert "(refinement; both remain current)." in body_a
+    assert f"Revised by [{a_id}](/{a_id}.md) as of " in body_b
+    assert "(refinement; both remain current)." in body_b
+
+    log_text = _log_text(tmp_path)
+    assert "**Reconcile**" in log_text
+    assert "revises" in log_text.lower()
+    assert "both remain current" in log_text
+
+    assert "as revising" in result.stdout
+    assert "both remain current" in result.stdout
+
+
+def test_revision_holder_may_be_either_pair_member(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--revision <b_id>` (the SECOND pair argument) makes `b_id` the
+    holder -- the `else` branch of `_DIRECTED_ROLES`/`_resolve_pair_member`,
+    unexercised by the first-argument case above."""
+    _init_workspace(tmp_path, monkeypatch)
+    a_id = _ingest_source(tmp_path, "a.txt")
+    b_id = _ingest_source(tmp_path, "b.txt")
+
+    result = runner.invoke(app, ["reconcile", a_id, b_id, "--revision", b_id, "--auto"])
+
+    assert result.exit_code == 0
+    assert _relations_of(tmp_path, b_id) == [okf.Relation(target=a_id, type="revises")]
+    assert _relations_of(tmp_path, a_id) == []
+
+
+def test_revises_edge_leaves_both_concepts_active_end_to_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Hides-nothing, exercised through the verb: after `--revision`, both
+    concepts stay `active` in `list`'s STATUS column and neither appears in
+    `lifecycle.deprecated_concept_ids` (spec: "A revises edge deprecates
+    neither end")."""
+    from openkos import config as config_mod
+    from openkos import lifecycle
+    from openkos.bundle import listing
+
+    _init_workspace(tmp_path, monkeypatch)
+    a_id = _ingest_source(tmp_path, "a.txt")
+    b_id = _ingest_source(tmp_path, "b.txt")
+
+    result = runner.invoke(app, ["reconcile", a_id, b_id, "--revision", a_id, "--auto"])
+    assert result.exit_code == 0
+
+    layout = config_mod.WorkspaceLayout(tmp_path)
+    deprecated = lifecycle.deprecated_concept_ids(layout.bundle_dir)
+    assert a_id not in deprecated
+    assert b_id not in deprecated
+
+    rows = {row.concept_id: row for row in listing.list_objects(layout.bundle_dir)}
+    assert rows[a_id].status == "active"
+    assert rows[b_id].status == "active"
