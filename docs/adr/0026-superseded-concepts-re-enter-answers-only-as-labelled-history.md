@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0026: A superseded concept re-enters an answer only as labelled, citable history, and only when the workspace opts in"
 description: query may attach the earlier versions a retrieved concept supersedes or revises as separately numbered, labelled history blocks under every send-time gate; a cited history block is filed by --save as ordinary provenance with a prose mark; the behavior is off by default until measured.
-status: Proposed
+status: Accepted
 date: 2026-09-26
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0026: A superseded concept re-enters an answer only as labelled, citable history, and only when the workspace opts in
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-09-26
 
 ## Context
