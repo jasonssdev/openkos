@@ -8,6 +8,7 @@ judge tests use a module-local `_ScriptedLLM`/`_RaisingLLM` double
 zero real Ollama process.
 """
 
+import inspect
 import itertools
 import json
 import math
@@ -18,6 +19,7 @@ from difflib import SequenceMatcher
 
 import pytest
 
+from openkos import event_dates
 from openkos.llm.base import Message
 from openkos.llm.ollama import OllamaUnavailable
 from openkos.model.relations import RESOLUTION_RELATION_TYPES
@@ -42,6 +44,29 @@ def _date(state: DateState, value: date | None = None) -> DecisionDate:
         assert value is not None
         return DecisionDate(value=value, state=state)
     return DecisionDate(value=None, state=state)
+
+
+def test_date_state_is_the_event_dates_alias() -> None:
+    """`decision_revision.DateState` is an explicit alias of
+    `event_dates.DateState` (design.md Decision 1) -- a source-level alias,
+    not a second, separate `Literal` definition.
+
+    `typing.Literal` caches by value (`_tp_cache`), so an `is` comparison
+    ALONE cannot distinguish an alias from an independently re-typed local
+    `Literal` carrying the same 4 states -- two separately constructed
+    `Literal["dated", "missing", "multiple", "none-reached"]` objects are
+    already `is`-identical on this interpreter, confirmed directly:
+    `Literal["dated", "missing", "multiple", "none-reached"] is Literal[
+    "dated", "missing", "multiple", "none-reached"]` is `True`. So this
+    test ALSO inspects `decision_revision`'s own source for the alias
+    assignment, which DOES distinguish the two. Kills a future
+    re-introduction of a local `Literal` definition in place of the
+    alias."""
+    assert decision_revision.DateState is event_dates.DateState
+
+    source = inspect.getsource(decision_revision)
+    assert "DateState = event_dates.DateState" in source
+    assert "DateState = Literal[" not in source
 
 
 def _build_direction_table() -> list[

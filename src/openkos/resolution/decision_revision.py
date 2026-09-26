@@ -48,6 +48,7 @@ from difflib import SequenceMatcher
 from enum import Enum
 from typing import Final, Literal, cast
 
+from openkos import event_dates
 from openkos.llm import parsing
 from openkos.llm.base import LLMBackend, Message
 from openkos.llm.ollama import OllamaError
@@ -55,11 +56,14 @@ from openkos.resolution import similarity
 from openkos.resolution.decision_subject import quoted_verbatim
 from openkos.resolution.normalize import normalize_key
 
-DateState = Literal["dated", "missing", "multiple", "none-reached"]
+DateState = event_dates.DateState
 """A Decision's resolved event-date state (design.md Decision 3 /
 decision-revision-detection's "Decision Event Date Resolution" requirement).
-Resolved by the service (Phase B, S6) via `bundle.provenance` +
-`okf.read_event_date`; this leaf only ever consumes the result."""
+An explicit alias of `event_dates.DateState` (design.md Decision 1 for
+`superseded-history-in-query`) -- resolved by the service (Phase B, S6) via
+`bundle.provenance` + `okf.read_event_date`; this leaf only ever consumes
+the result. Kept as an alias, not a re-typed local `Literal`, so the two
+features share one vocabulary rather than drifting apart independently."""
 
 DirectionReason = Literal["dated", "missing", "multiple", "none-reached", "equal"]
 """Why `pair_direction` returned the `holder`/`earlier` it did: one of the
