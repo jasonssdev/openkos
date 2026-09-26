@@ -295,6 +295,26 @@ def test_supersedes_cycle_marks_all_members_deprecated(tmp_path: Path) -> None:
     assert {row.status for row in rows} == {"deprecated"}
 
 
+def test_revises_edge_leaves_both_rows_active(tmp_path: Path) -> None:
+    """A `revises` edge (revises-relation change) leaves both rows
+    `"active"`: this predicate special-cases only the literal string
+    `"supersedes"` and is deliberately NOT modified by that change
+    (status-aware-retrieval spec: "A revises edge deprecates neither end, in
+    retrieval or in list STATUS")."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "a.md",
+        status="active",
+        relations=[("concepts/b", "revises")],
+    )
+    _write_doc(bundle_dir / "concepts" / "b.md", status="active")
+
+    rows = {row.concept_id: row for row in listing.list_objects(bundle_dir)}
+
+    assert rows["concepts/a"].status == "active"
+    assert rows["concepts/b"].status == "active"
+
+
 def test_malformed_relations_contributes_no_edges_and_does_not_crash(
     tmp_path: Path,
 ) -> None:

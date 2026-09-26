@@ -230,6 +230,26 @@ def test_all_live_bundle_returns_empty_frozenset(tmp_path: Path) -> None:
     assert deprecated == frozenset()
 
 
+def test_revises_edge_does_not_deprecate_either_end(tmp_path: Path) -> None:
+    """A `revises` edge (written by `reconcile --revision`, revises-relation
+    change) deprecates NEITHER end: this predicate special-cases only the
+    literal string `"supersedes"` and is deliberately NOT modified by that
+    change (status-aware-retrieval spec: "A revises edge deprecates neither
+    end, in retrieval or in list STATUS") -- this pins the non-deprecation
+    as a tested requirement rather than an incidental fact."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "a.md",
+        status="active",
+        relations=[("concepts/b", "revises")],
+    )
+    _write_doc(bundle_dir / "concepts" / "b.md", status="active")
+
+    deprecated = lifecycle.deprecated_concept_ids(bundle_dir)
+
+    assert deprecated == frozenset()
+
+
 @dataclass(frozen=True)
 class _FakeHit:
     """Minimal stand-in for `FtsHit`/`VecHit`/`GraphHit`: `filter_hits` only
