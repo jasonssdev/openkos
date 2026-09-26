@@ -14466,6 +14466,19 @@ def query(
             "cited. Raise context_window in openkos.yaml.",
             err=True,
         )
+    if result.history_truncated_titles:
+        # #1014 piece b, design Decision 6: printed after the omitted-context
+        # notice above, and only when `revision_history` is on and at least
+        # one retrieved successor's chain continues beyond what was shown
+        # (the block cap or the depth bound) -- `[]` on every disabled run.
+        truncated = ", ".join(result.history_truncated_titles)
+        typer.echo(
+            "openkos query: the revision history of "
+            f"{len(result.history_truncated_titles)} document(s) "
+            f"({truncated}) goes back further than the earlier versions "
+            "shown; the answer did not see the rest.",
+            err=True,
+        )
     if result.sufficiency_degraded:
         # #764: the check failed OPEN, which is deliberate -- a backend error
         # is not evidence that the bundle cannot answer. But an operator whose
@@ -14535,9 +14548,19 @@ def query(
                 if application_query.is_synthesis_citation(citation)
                 else ""
             )
+            # #1014 piece b, design Decision 6: rendered FIRST in the marker
+            # sequence -- an ordinary hit citation's `history` is `None` and
+            # renders neither marker.
+            history = (
+                " [superseded]"
+                if citation.history == "superseded"
+                else " [refined]"
+                if citation.history == "refined"
+                else ""
+            )
             typer.echo(
                 f"  → {citation.concept_id} ({citation.title})"
-                f"{synthesis}{partial}{marker}"
+                f"{history}{synthesis}{partial}{marker}"
             )
     elif result.attribution == "reported":
         # #753: the answer itself reported drawing on none of the concepts

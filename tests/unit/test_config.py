@@ -2877,6 +2877,84 @@ def test_the_template_documents_the_sufficiency_check_key() -> None:
     assert "sufficiency_check" in template
 
 
+# --- revision_history: opt-in flag for attaching earlier versions ------------
+# (#1014 piece b, superseded-history-in-query)
+
+
+def test_revision_history_key_validation(tmp_path: Path) -> None:
+    """Bool-only, mirroring `sufficiency_check`/`union_judge`'s own guard:
+    absent or an explicit null default to off; `true` is read; a non-bool
+    value is refused with the same message shape rather than
+    truthy-coerced. The key is unmeasured and off by default -- see
+    `config.DEFAULT_REVISION_HISTORY`."""
+    (tmp_path / "openkos.yaml").write_text("model: gemma3\n", encoding="utf-8")
+    assert config.read_config(tmp_path).revision_history is False
+
+    (tmp_path / "openkos.yaml").write_text("revision_history: null\n", encoding="utf-8")
+    assert config.read_config(tmp_path).revision_history is False
+
+    (tmp_path / "openkos.yaml").write_text("revision_history: true\n", encoding="utf-8")
+    assert config.read_config(tmp_path).revision_history is True
+
+    (tmp_path / "openkos.yaml").write_text(
+        "revision_history: false\n", encoding="utf-8"
+    )
+    assert config.read_config(tmp_path).revision_history is False
+
+
+@pytest.mark.parametrize(
+    "yaml_body",
+    [
+        "revision_history: 1\n",
+        'revision_history: "yes"\n',
+        "revision_history: [true]\n",
+    ],
+)
+def test_read_config_refuses_a_non_boolean_revision_history(
+    tmp_path: Path, yaml_body: str
+) -> None:
+    """`isinstance(x, bool)`, not truthiness -- YAML resolves `1` to `int`,
+    and accepting int-as-bool would make `revision_history: 1` and `: true`
+    agree only by coincidence of Python's numeric tower."""
+    (tmp_path / "openkos.yaml").write_text(yaml_body, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="'revision_history' must be a boolean"):
+        config.read_config(tmp_path)
+
+
+def test_the_template_documents_the_revision_history_key() -> None:
+    """The shipped template must mention the key, that it is off by
+    default, and that it is unmeasured -- and must not recommend enabling
+    it. No test reads comment prose otherwise, which is exactly where a
+    stale or over-eager default hid before (`sufficiency_check`'s own
+    template test, pinned for the same reason)."""
+    template = (
+        Path(config.__file__).parent / "templates" / "openkos.yaml.template"
+    ).read_text(encoding="utf-8")
+
+    assert "revision_history" in template
+    assert "unmeasured" in template.casefold()
+
+
+def test_read_config_ignores_a_leftover_revision_history_key(
+    tmp_path: Path,
+) -> None:
+    """A stale `revision_history: true` line left behind after this feature
+    is hypothetically reverted must not break `read_config` -- it reads
+    declared keys by name and never rejects a key it does not look for
+    (design Decision 9's "leftover-key tolerance"). This is a regression
+    pin on `read_config`'s existing unknown-key tolerance, exercised with
+    THIS specific key name so a future revert is provably safe."""
+    (tmp_path / "openkos.yaml").write_text(
+        "model: gemma3\nrevision_history: true\nsome_other_unknown_key: 1\n",
+        encoding="utf-8",
+    )
+
+    cfg = config.read_config(tmp_path)
+
+    assert cfg.model == "gemma3"
+
+
 def test_generated_agents_carries_version_control_section(tmp_path: Path) -> None:
     """The generated `AGENTS.md` orients its reader about version control
     (issue #800).

@@ -1063,6 +1063,68 @@ def test_build_concept_custom_related_note_renders() -> None:
     assert "source this was extracted from" not in body
 
 
+def test_build_concept_related_notes() -> None:
+    """`related_notes` (#1014 piece b, design Decision 7) is an OPTIONAL
+    per-reference override of `related_note`: absent stays byte-identical
+    to the pre-feature output (a regression pin against the same golden as
+    `test_build_concept_output_byte_identical_regression`); a mapped
+    reference renders that reference's OWN note instead of the shared
+    default; a key naming a reference not in `provenance` is a caller bug
+    and raises `ValueError`."""
+    byte_identical = _build_call_concept()
+    assert byte_identical == (
+        "---\n"
+        "description: Hellenistic school holding that virtue is the only good, and that freedom\n"
+        "  comes from knowing what is up to us.\n"
+        "freshness: snapshot\n"
+        "provenance:\n"
+        "- sources/call-with-maria-salazar\n"
+        "sensitivity: confidential\n"
+        "status: active\n"
+        "tags: []\n"
+        "timestamp: '2026-07-14T18:30:00Z'\n"
+        "title: Stoicism\n"
+        "type: Concept\n"
+        "version: 1\n"
+        "---\n"
+        "\n"
+        "# Stoicism\n"
+        "\n"
+        "Hellenistic school holding that virtue is the only good, and that freedom "
+        "comes from knowing what is up to us.\n"
+        "\n"
+        "The dichotomy of control separates what is up to us from what is not.\n"
+        "\n"
+        "## Related\n"
+        "\n"
+        "- [sources/call-with-maria-salazar](/sources/call-with-maria-salazar.md) "
+        "— source this was extracted from\n"
+    )
+
+    text = _build_call_concept(
+        provenance=["sources/first-source", "sources/second-source"],
+        related_notes={
+            "sources/first-source": "earlier version (superseded) cited as "
+            "history for this answer"
+        },
+    )
+    _, body = okf.load_frontmatter(text)
+    assert (
+        "- [sources/first-source](/sources/first-source.md) — earlier version "
+        "(superseded) cited as history for this answer" in body
+    )
+    assert (
+        "- [sources/second-source](/sources/second-source.md) — source this "
+        "was extracted from" in body
+    )
+
+    with pytest.raises(ValueError, match="related_notes names reference"):
+        _build_call_concept(
+            provenance=["sources/first-source"],
+            related_notes={"sources/not-a-cited-reference": "whatever"},
+        )
+
+
 def test_build_concept_emits_no_volatility_key() -> None:
     """`build_concept` never emits a `volatility` key (freshness-lint-v1,
     design: "INGEST UNCHANGED"), mirroring

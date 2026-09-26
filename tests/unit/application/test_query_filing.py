@@ -188,6 +188,81 @@ def test_stage_filed_answer_builds_a_plan_from_a_readable_citation(
     assert plan.type_floor_raised is False
 
 
+def test_stage_filed_answer_marks_history_citations(tmp_path: Path) -> None:
+    """A history citation's `## Related` bullet is marked with its role
+    (#1014 piece b, design Decision 7); `provenance:` stays a flat id list,
+    UNCHANGED in shape, and an ordinary (non-history) citation's own bullet
+    is unaffected."""
+    layout, cfg = _workspace(tmp_path)
+    _write_concept(layout.bundle_dir, "concepts", "superseded-one", title="P1")
+    _write_concept(layout.bundle_dir, "concepts", "refined-one", title="P2")
+    _write_concept(layout.bundle_dir, "concepts", "ordinary", title="Ordinary")
+    citations = [
+        Citation(
+            concept_id="concepts/superseded-one",
+            title="P1",
+            history="superseded",
+        ),
+        Citation(concept_id="concepts/refined-one", title="P2", history="refined"),
+        _citation("concepts/ordinary"),
+    ]
+
+    plan = query_service.stage_filed_answer(
+        question="what changed?",
+        answer_text="Something changed.",
+        citations=citations,
+        bundle_dir=layout.bundle_dir,
+        default_sensitivity="private",
+        timestamp="2026-07-23T00:00:00Z",
+        cfg=cfg,
+    )
+
+    assert (
+        "provenance:\n- concepts/superseded-one\n- concepts/refined-one\n"
+        "- concepts/ordinary\n" in plan.content
+    )
+    assert (
+        "[concepts/superseded-one](/concepts/superseded-one.md) — earlier "
+        "version (superseded) cited as history for this answer" in plan.content
+    )
+    assert (
+        "[concepts/refined-one](/concepts/refined-one.md) — earlier version "
+        "(refined) cited as history for this answer" in plan.content
+    )
+    assert (
+        "[concepts/ordinary](/concepts/ordinary.md) — concept cited to "
+        "produce this answer" in plan.content
+    )
+
+
+def test_stage_filed_answer_byte_identical_with_no_history_citations(
+    tmp_path: Path,
+) -> None:
+    """With zero history citations, the filed plan's content is
+    byte-identical to the pre-#1014 output -- `related_notes` must never be
+    constructed as a non-empty (even if vacuous) mapping when nothing
+    qualifies, since `okf.build_concept` must treat that identically to
+    `None`/no mapping."""
+    layout, cfg = _workspace(tmp_path)
+    _write_concept(layout.bundle_dir, "concepts", "stoicism", title="Stoicism")
+    citations = [_citation("concepts/stoicism")]
+
+    plan = query_service.stage_filed_answer(
+        question="what is stoicism?",
+        answer_text="Stoicism teaches the dichotomy of control.",
+        citations=citations,
+        bundle_dir=layout.bundle_dir,
+        default_sensitivity="private",
+        timestamp="2026-07-23T00:00:00Z",
+        cfg=cfg,
+    )
+
+    assert (
+        "[concepts/stoicism](/concepts/stoicism.md) — concept cited to "
+        "produce this answer" in plan.content
+    )
+
+
 def test_declarative_answer_title_promotes_a_usable_first_sentence() -> None:
     """Fixture mirrors
     `test_query_save.py::test_declarative_answer_title_promotes_a_usable_first_sentence`."""
