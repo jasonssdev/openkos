@@ -152,3 +152,21 @@ def test_asymmetric_relation_types_are_a_subset_of_the_suggestable_vocabulary() 
     suggestion is consented to, never what may be suggested -- mirroring
     `ENGINE_OWNED_RELATION_TYPES`' narrowing contract."""
     assert relations.ASYMMETRIC_RELATION_TYPES <= relations.SUGGESTABLE_RELATION_TYPES
+
+
+def test_resolution_relation_types_membership() -> None:
+    """`RESOLUTION_RELATION_TYPES` names exactly the three types `reconcile`
+    writes, and is disjoint from every vocabulary an LLM may read from --
+    `revises` stays out of the suggestable vocabulary (reconcile-command
+    spec: "revises stays out of the suggestable vocabulary")."""
+    assert (
+        frozenset({"supersedes", "reconciled_with", "revises"})
+        == relations.RESOLUTION_RELATION_TYPES
+    )
+    assert relations.RESOLUTION_RELATION_TYPES.isdisjoint(
+        relations.SEEDED_RELATION_TYPES
+    )
+    assert relations.RESOLUTION_RELATION_TYPES.isdisjoint(
+        relations.SUGGESTABLE_RELATION_TYPES
+    )
+    assert "revises" not in {rt.name for rt in relations.REGISTRY}

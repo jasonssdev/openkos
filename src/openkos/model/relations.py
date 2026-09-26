@@ -113,6 +113,26 @@ mis-directed citation claim is checkable against the citing document in a
 way invented containment/causal structure is not."""
 
 
+RESOLUTION_RELATION_TYPES: frozenset[str] = frozenset(
+    {"supersedes", "reconciled_with", "revises"}
+)
+"""The three relation types `reconcile` writes to record a human's
+resolution of a pair (ADR-0024): `supersedes` (a reversal -- the loser is
+hidden as current), `reconciled_with` (symmetric -- both coexist, no
+order), and `revises` (a refinement -- both remain current). Deliberately
+OUTSIDE `REGISTRY`, `SEEDED_RELATION_TYPES`, and `SUGGESTABLE_RELATION_TYPES`
+-- a resolution is a human judgment `reconcile`'s confirm gate makes, and an
+LLM edge suggester must never be able to propose one, mirroring the verified
+`supersedes`/`reconciled_with` precedent this set only makes explicit and
+shared.
+
+Read by two consumers that must never drift apart: `cli.main`'s reconcile
+state classifier (`_MODE_BY_RESOLUTION_TYPE` is keyed by this set) and
+`resolution.contradiction._candidate_pairs`'s resolved-pair exclusion. A
+type added to one but not the other would otherwise be a silent gap; keying
+both off this one constant makes it a failing test instead."""
+
+
 def validate_relation_type(rel_type: str, *, warn: bool = True) -> str:
     """Validate `rel_type` for the `relate` CLI verb's write path.
 
