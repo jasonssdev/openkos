@@ -284,3 +284,80 @@ def test_fair_shares_is_order_independent() -> None:
         backward = list(reversed(prompt_budget.fair_shares(reverse, budget=budget)))
         assert forward == backward, f"budget={budget}: {forward} != {backward}"
         assert sum(forward) <= budget
+
+
+def test_nested_shares_no_history_equals_fair_shares() -> None:
+    """A group with no history block gets exactly `fair_shares`'s own
+    share and an empty `inner` -- the outer split is reused UNCHANGED,
+    never recomputed as `budget - Σoverhead`."""
+    head_sizes_options = [[10, 20, 30], [5, 5, 500], [0, 100], [7, 9, 100]]
+    for head_sizes in head_sizes_options:
+        inner_sizes: list[list[int]] = [[] for _ in head_sizes]
+        inner_overheads = [0] * len(head_sizes)
+        for budget in range(0, 200, 23):
+            expected = prompt_budget.fair_shares(head_sizes, budget=budget)
+            groups = prompt_budget.nested_shares(
+                head_sizes, inner_sizes, inner_overheads, budget=budget
+            )
+            assert [g.head for g in groups] == expected, f"budget={budget}"
+            assert all(g.inner == () for g in groups)
+            assert all(g.dropped is False for g in groups)
+
+
+def test_nested_shares_total_fits_budget() -> None:
+    """For groups with non-empty `inner_sizes`, the sum of every group's
+    `head + sum(inner)` never exceeds `budget`, across a sweep of sizes
+    and overheads -- the slack stage must never double-spend unspent
+    budget across groups."""
+    head_sizes = [50, 30, 100]
+    inner_sizes = [[20, 10], [], [5, 5, 5]]
+    inner_overheads = [4, 0, 6]
+    for budget in range(0, 400, 13):
+        groups = prompt_budget.nested_shares(
+            head_sizes, inner_sizes, inner_overheads, budget=budget
+        )
+        total = sum(g.head + sum(g.inner) for g in groups)
+        assert total <= budget, f"budget={budget}: total={total}"
+
+
+def test_nested_shares_slack_funds_the_nested_pool() -> None:
+    """A small history block on a hit that already fits well under budget
+    is sent in FULL, unexcerpted, funded from today's UNSPENT budget --
+    never carved out of the successor's own outer share alone. Without the
+    slack stage, the hit's own share would be cut to make room."""
+    head_sizes = [10]
+    inner_sizes = [[5]]
+    inner_overheads = [0]
+    budget = 100
+
+    outer = prompt_budget.fair_shares(head_sizes, budget=budget)
+    groups = prompt_budget.nested_shares(
+        head_sizes, inner_sizes, inner_overheads, budget=budget
+    )
+
+    assert groups[0].head == outer[0] == 10
+    assert groups[0].inner == (5,)
+    assert groups[0].dropped is False
+
+
+def test_nested_shares_dropped_group_keeps_outer_share() -> None:
+    """A group whose nested pool cannot give the head a non-zero share
+    under the `split[0] == 0` rule (design Decision 4 step 4) is marked
+    `dropped=True`, its `head` equals its own `outer[i]` from step 1 --
+    NOT `head_sizes[i]` and not `0` -- and every entry in `inner` is `0`."""
+    head_sizes = [10, 1000]
+    inner_sizes: list[list[int]] = [[1000, 1000], []]
+    inner_overheads = [2, 0]
+    outer = prompt_budget.fair_shares(head_sizes, budget=8)
+
+    groups = prompt_budget.nested_shares(
+        head_sizes, inner_sizes, inner_overheads, budget=8
+    )
+
+    assert groups[0].dropped is True
+    assert groups[0].head == outer[0]
+    assert groups[0].head != head_sizes[0]
+    assert groups[0].inner == (0, 0)
+    assert groups[1].dropped is False
+    assert groups[1].head == outer[1]
+    assert groups[1].inner == ()

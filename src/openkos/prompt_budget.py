@@ -24,6 +24,7 @@ overrides them.
 """
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Final
 
 PLANNING_CONTEXT_WINDOW: Final = 12_288
@@ -307,3 +308,90 @@ def fair_shares(sizes: Sequence[int], *, budget: int) -> list[int]:
                 shares[index] += 1
             break
     return shares
+
+
+@dataclass(frozen=True)
+class GroupShares:
+    """One hit's nested budget split (superseded-history-in-query,
+    design.md Decision 4): `head` is the hit's own share, `inner` is one
+    share per attached history block (empty for a hit with no history),
+    and `dropped` is `True` when the group's history is sent NOT AT ALL --
+    `head` then equals the group's plain `fair_shares` value, exactly as
+    if it had no history."""
+
+    head: int
+    inner: tuple[int, ...]
+    dropped: bool
+
+
+def nested_shares(
+    head_sizes: Sequence[int],
+    inner_sizes: Sequence[Sequence[int]],
+    inner_overheads: Sequence[int],
+    *,
+    budget: int,
+) -> list[GroupShares]:
+    """The nested budget split of design.md Decision 4, exactly.
+
+    `head_sizes` are the hits' own body sizes, `inner_sizes[i]` are hit
+    `i`'s history blocks' sizes (`[]` for a hit with no history), and
+    `inner_overheads[i]` is the marginal prompt-frame growth hit `i`'s
+    history labels add. `budget` is the SAME whole-window budget
+    `fair_shares` plans against today.
+
+    1. `outer = fair_shares(head_sizes, budget=budget)` -- today's shares,
+       UNCHANGED. This is why an unrelated hit's bounded body never moves:
+       it uses the same sizes and the same budget as today.
+    2. `slack = max(budget, 0) - sum(outer)` -- the budget that today goes
+       unspent, non-zero only when every hit already fits.
+    3. For every group WITH history, `need_i` is what MORE it would take
+       to send the head at its full size plus its whole history: `(head -
+       outer) + overhead + Σinner`. `extra = fair_shares(needs, budget=
+       slack)` -- ONE water-filled split of the slack across every
+       history-bearing group at once, so groups compete for it fairly.
+    4. `pool_i = outer[i] + extra_i - overhead_i` is what group `i` may
+       spend on itself plus its history. `pool_i <= 0` drops the group
+       outright. Otherwise `split = fair_shares([head, *inner], budget=
+       pool_i)`; if `split[0] == 0` while the hit is non-empty and its
+       outer share was non-zero, the group is dropped too -- history must
+       never cost its own successor the whole body.
+    5. A dropped group's `head` is `outer[i]` (its value today, unchanged)
+       and every `inner` share is `0` -- never `head_sizes[i]` (the
+       group's UNBOUNDED size) and never `0` (which would shrink a hit
+       history was never meant to touch).
+    6. A group with no history is `head=outer[i]`, `inner=()` -- an exact
+       `fair_shares` pass-through."""
+    outer = fair_shares(head_sizes, budget=budget)
+    slack = max(budget, 0) - sum(outer)
+
+    history_indexes = [i for i, sizes in enumerate(inner_sizes) if sizes]
+    needs = [
+        (head_sizes[i] - outer[i]) + inner_overheads[i] + sum(inner_sizes[i])
+        for i in history_indexes
+    ]
+    extras = fair_shares(needs, budget=slack)
+    extra_by_index = dict(zip(history_indexes, extras, strict=True))
+
+    groups: list[GroupShares] = []
+    for i in range(len(head_sizes)):
+        if i not in extra_by_index:
+            groups.append(GroupShares(head=outer[i], inner=(), dropped=False))
+            continue
+        pool = outer[i] + extra_by_index[i] - inner_overheads[i]
+        if pool <= 0:
+            groups.append(
+                GroupShares(
+                    head=outer[i], inner=(0,) * len(inner_sizes[i]), dropped=True
+                )
+            )
+            continue
+        split = fair_shares([head_sizes[i], *inner_sizes[i]], budget=pool)
+        if split[0] == 0 and head_sizes[i] > 0 and outer[i] > 0:
+            groups.append(
+                GroupShares(
+                    head=outer[i], inner=(0,) * len(inner_sizes[i]), dropped=True
+                )
+            )
+            continue
+        groups.append(GroupShares(head=split[0], inner=tuple(split[1:]), dropped=False))
+    return groups
