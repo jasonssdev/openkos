@@ -2053,3 +2053,141 @@ def test_query_discloses_omitted_documents_even_on_a_no_match(
     assert result.exit_code == 0
     assert "Transcription 1, Transcription 3" in result.stderr
     assert "did not fit the model's context window at all" in result.stderr
+
+
+# --- #1014 piece b: revision-history citation markers and truncation notice --
+
+
+def test_citation_history_markers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `history="superseded"` citation renders `[superseded]`, a
+    `history="refined"` one renders `[refined]`, and an ordinary citation
+    (`history=None`) carries neither -- the same trailing-marker convention
+    as `[confidential]`/`[synthesis]`/`[partial]`, and rendered FIRST in the
+    marker sequence (design Decision 6)."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_result = AnswerResult(
+        answer="An answer.",
+        citations=[
+            Citation(
+                concept_id="concepts/p1",
+                title="P1",
+                history="superseded",
+            ),
+            Citation(concept_id="concepts/p2", title="P2", history="refined"),
+            Citation(concept_id="concepts/ordinary", title="Ordinary"),
+            Citation(
+                concept_id="concepts/p3",
+                title="P3",
+                history="superseded",
+                confidential=True,
+                excerpted=True,
+            ),
+        ],
+        fts_hit_count=4,
+        llm_invoked=True,
+        no_match_cause="none",
+        skip_notices=[],
+        attribution="reported",
+    )
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
+
+    result = runner.invoke(app, ["query", "what changed?"])
+
+    assert result.exit_code == 0
+    lines = [line for line in result.stdout.splitlines() if line.startswith("  →")]
+    assert lines[0].endswith("[superseded]")
+    assert lines[1].endswith("[refined]")
+    assert "[superseded]" not in lines[2]
+    assert "[refined]" not in lines[2]
+    # The combined line (history + partial + confidential) keeps history
+    # FIRST in the marker sequence, ahead of the pre-existing markers.
+    assert lines[3].endswith("[superseded] [partial] [confidential]")
+
+
+def test_history_truncation_stderr_notice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`history_truncated_titles` non-empty prints one stderr notice, after
+    the existing omitted-context notice, naming the count and titles;
+    empty (including every `revision_history=False` run) prints none."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_result = AnswerResult(
+        answer="An answer.",
+        citations=[Citation(concept_id="concepts/s1", title="S1")],
+        fts_hit_count=1,
+        llm_invoked=True,
+        no_match_cause="none",
+        skip_notices=[],
+        attribution="reported",
+        omitted_titles=["Dropped Doc"],
+        history_truncated_titles=["S1"],
+    )
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
+
+    result = runner.invoke(app, ["query", "what changed?"])
+
+    assert result.exit_code == 0
+    assert (
+        "openkos query: the revision history of 1 document(s) (S1) goes "
+        "back further than the earlier versions shown; the answer did not "
+        "see the rest." in result.stderr
+    )
+    omitted_idx = result.stderr.index("did not fit the model's context window at all")
+    history_idx = result.stderr.index("goes back further")
+    assert omitted_idx < history_idx
+
+
+def test_history_truncation_stderr_notice_names_multiple_titles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two truncated successors are named together, and the count reads 2."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_result = AnswerResult(
+        answer="An answer.",
+        citations=[Citation(concept_id="concepts/s1", title="S1")],
+        fts_hit_count=1,
+        llm_invoked=True,
+        no_match_cause="none",
+        skip_notices=[],
+        attribution="reported",
+        history_truncated_titles=["S1", "S2"],
+    )
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
+
+    result = runner.invoke(app, ["query", "what changed?"])
+
+    assert result.exit_code == 0
+    assert "the revision history of 2 document(s) (S1, S2)" in result.stderr
+
+
+def test_no_history_truncation_prints_no_notice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`history_truncated_titles == []` -- the default, and every
+    `revision_history=False` run -- prints no revision-history notice."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_result = AnswerResult(
+        answer="An answer.",
+        citations=[Citation(concept_id="concepts/s1", title="S1")],
+        fts_hit_count=1,
+        llm_invoked=True,
+        no_match_cause="none",
+        skip_notices=[],
+        attribution="reported",
+    )
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
+
+    result = runner.invoke(app, ["query", "what changed?"])
+
+    assert result.exit_code == 0
+    assert "goes back further" not in result.stderr
