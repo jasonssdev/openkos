@@ -59,3 +59,4 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 | [0021](0021-sync-async-boundary.md) | The sync/async boundary -- a worker thread per operation, and no cancellation below it | Proposed | 2026-09-17 |
 | [0022](0022-incomplete-read-verbs-report-incompleteness.md) | An incomplete read verb reports incompleteness as data and as exit code 2 | Accepted | 2026-09-21 |
 | [0023](0023-source-event-date.md) | A Source records its event date as an optional, never-defaulted `event_date` key | Accepted | 2026-09-25 |
+| [0024](0024-revises-relation-and-resolved-pairs.md) | A refinement is a stored `revises` relation, and a resolved pair is never re-judged | Proposed | 2026-09-25 |

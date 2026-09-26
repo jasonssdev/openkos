@@ -370,22 +370,24 @@ When the cap does truncate, the notice now names **which kind** went unjudged �
 
 ### `openkos reconcile <id-a> <id-b>`
 
-Records a human's resolution of a contradiction between two concepts — the write counterpart to `contradictions`, which only reports. **No LLM in the write path**: `<id-a>`, `<id-b>`, and `--winner` are plain concept-id arguments; `reconcile` never invokes contradiction detection. Both ids resolve exactly as `relate`'s do, and must be two distinct existing concepts.
+Records a human's resolution of a contradiction between two concepts — the write counterpart to `contradictions`, which only reports. **No LLM in the write path**: `<id-a>`, `<id-b>`, `--winner`, and `--revision` are plain concept-id arguments; `reconcile` never invokes contradiction detection. Both ids resolve exactly as `relate`'s do, and must be two distinct existing concepts.
 
-There are two shapes, chosen by `--winner`:
+There are three shapes, chosen by `--winner`/`--revision`:
 
-- **Omit `--winner`** — a **symmetric** reconciliation: a `reconciled_with` edge is added to **both** concepts' `relations:`, recording that a human judged them reconciled.
-- **`--winner <id>`** (must resolve to `id-a` or `id-b`) — a **directional supersede**: a single `supersedes` edge is written on the winner's document, pointing at its counterpart. A `--winner` that resolves to neither id refuses (exit 1).
+- **Omit both** — a **symmetric** reconciliation: a `reconciled_with` edge is added to **both** concepts' `relations:`, recording that a human judged them reconciled.
+- **`--winner <id>`** (must resolve to `id-a` or `id-b`) — a **directional supersede**: a single `supersedes` edge is written on the winner's document, pointing at its counterpart, and the counterpart lists as `deprecated`. A `--winner` that resolves to neither id refuses (exit 1).
+- **`--revision <id>`** (must resolve to `id-a` or `id-b`) — a **directional refinement**: a single `revises` edge is written on the refining concept's document, pointing at its counterpart. Unlike `--winner`, nothing is hidden — both concepts stay `active`. A `--revision` that resolves to neither id refuses (exit 1), and `--revision` combined with `--winner` refuses (exit 1): a reconciliation is either a reversal or a refinement, never both.
 
-Reconciliation is idempotent per pair: re-running the exact same request (same mode, same winner) is a no-op; requesting a **different** resolution for a pair already reconciled (a mode switch, or an opposite `--winner`) refuses rather than silently flipping it. Same Phase A / confirm gate / Phase B shape and `--auto` precedence as `relate`.
+Reconciliation is idempotent per pair: re-running the exact same request (same mode, same holder for `--winner`/`--revision`) is a no-op; requesting a **different** resolution for a pair already reconciled (a mode switch, or an opposite `--winner`/`--revision`) refuses rather than silently flipping it. A pair carrying disagreeing resolutions — only possible by hand-editing the frontmatter directly — refuses every request rather than picking one by precedence. Same Phase A / confirm gate / Phase B shape and `--auto` precedence as `relate`.
 
-**Batch mode** (`--from-findings`, no ids): instead of transcribing pair ids from `contradictions` output by hand, walk the persisted open contradiction findings directly. Each actionable finding — open (not declined), not stale, a high-confidence CONTRADICTS verdict, and a real pair (merged-content findings are excluded) — is shown with its verdict, confidence, and rationale, then gated behind a per-item `[y/N]` prompt; an accepted pair gets the **same symmetric `reconciled_with` transaction** the two-id form performs, through the same write path. Consent is per item and TTY-only — there is deliberately no unattended bulk path, so `--from-findings` refuses on a pipe and rejects `--auto`, `--winner`, and explicit ids (a directional resolution still needs the two-id form, where the human names the winner). A pair whose transaction refuses (e.g. already reconciled differently) is counted as skipped and the walk continues; declines are listed at the end.
+**Batch mode** (`--from-findings`, no ids): instead of transcribing pair ids from `contradictions` output by hand, walk the persisted open contradiction findings directly. Each actionable finding — open (not declined), not stale, a high-confidence CONTRADICTS verdict, and a real pair (merged-content findings are excluded) — is shown with its verdict, confidence, and rationale, then gated behind a per-item `[y/N]` prompt; an accepted pair gets the **same symmetric `reconciled_with` transaction** the two-id form performs, through the same write path. Consent is per item and TTY-only — there is deliberately no unattended bulk path, so `--from-findings` refuses on a pipe and rejects `--auto`, `--winner`, `--revision`, and explicit ids (a directional or revision resolution still needs the two-id form, where the human names the holder). A pair whose transaction refuses (e.g. already reconciled differently) is counted as skipped and the walk continues; declines are listed at the end.
 
 | Flag | Meaning |
 | --- | --- |
-| `--winner <id>` | The concept (must resolve to `id-a` or `id-b`) that supersedes its counterpart — writes a directional `supersedes` edge. Omit for a symmetric `reconciled_with` reconciliation. |
+| `--winner <id>` | The concept (must resolve to `id-a` or `id-b`) that supersedes its counterpart — writes a directional `supersedes` edge; the counterpart lists as `deprecated`. Omit for a symmetric `reconciled_with` reconciliation. Mutually exclusive with `--revision`. |
+| `--revision <id>` | The concept (must resolve to `id-a` or `id-b`) that revises (refines) its counterpart — writes a directional `revises` edge; both concepts stay `active`. Mutually exclusive with `--winner`. |
 | `--auto` | Skip the confirmation prompt and write immediately (unattended). Config `review: false` skips the prompt the same way. |
-| `--from-findings` | Walk the persisted open contradiction findings with a per-item consent prompt instead of naming one pair — see **Batch mode** above. Takes no ids, no `--winner`, no `--auto`. |
+| `--from-findings` | Walk the persisted open contradiction findings with a per-item consent prompt instead of naming one pair — see **Batch mode** above. Takes no ids, no `--winner`, no `--revision`, no `--auto`. |
 
 ### `openkos suggest-relations`
 
