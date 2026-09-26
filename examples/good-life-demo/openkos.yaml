@@ -59,6 +59,11 @@ context_window: 12288     # tokens the model holds at once (prompt + reply); unp
                           # extra chat call per answered query (median ~1.1s
                           # against a default Ollama, which serialises); set
                           # false to remove it and restore the pre-#760 path
+# revision_history: false  # attach each retrieved concept's earlier versions
+                          # (reached via supersedes/revises) to it as labelled
+                          # history (default OFF; #1014 piece b). UNMEASURED --
+                          # no harness has scored its citation quality or
+                          # prompt-budget cost yet. Not recommended to enable.
 # concurrent_extraction: true  # send chunk windows 2-at-a-time instead of one
                           # by one (default OFF). Chunked sources only; below
                           # the chunk threshold there are no windows to

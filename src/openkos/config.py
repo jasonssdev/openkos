@@ -392,6 +392,23 @@ turning it off restores the pre-#760 path byte-for-byte. The `USED:`
 attribution still strips citations off an ungrounded answer either way, so
 `False` is degraded, never unguarded."""
 
+DEFAULT_REVISION_HISTORY = False
+"""Packaged default for `revision_history` (#1014 piece b): whether `query`
+attaches each retrieved concept's earlier versions -- reached through its
+outbound `supersedes`/`revises` edges -- to its own context block as
+separately labelled history.
+
+`False`, and deliberately so. Unlike `sufficiency_check` (#760), this key
+ships with NO harness behind it yet: no `evals/` probe has measured its
+citation quality, its prompt-budget cost, or its effect on answer grounding.
+`DEFAULT_SUFFICIENCY_CHECK` could default ON because the cost side was
+measured; this key cannot make that claim, so it stays OFF until a harness
+does. Turning it on is not recommended.
+
+The rollback is one key: reverting to `False` (or leaving it unset) restores
+the pre-#1014 path byte-for-byte -- `answer()` never calls the revision-
+history walk, and the prompt, citations, and `--save` filing are unaffected."""
+
 DEFAULT_RATIONALE_LANGUAGE: Final[str | None] = None
 """Packaged default for `rationale_language` (issue #812): the language
 `curate`'s Metadata and Structure stages write their per-item RATIONALES in.
@@ -1220,6 +1237,18 @@ class Config:
     suggestions: a run that serves a suggestion an earlier run paid for
     (#799) shows that earlier run's rationale, in that run's language, and
     curate's own served-count notice is where that shows up."""
+    revision_history: bool = DEFAULT_REVISION_HISTORY
+    """Whether `query` attaches each retrieved concept's earlier versions as
+    labelled history blocks (#1014 piece b), defaulting to
+    `DEFAULT_REVISION_HISTORY` (`False`) when the key is absent or
+    explicitly null. The CLI passes this value explicitly to `answer`'s
+    `revision_history` kwarg rather than defaulting it there, so the
+    product default lives in exactly ONE place -- `answer` itself defaults
+    `False`, which keeps every library and eval caller unchanged.
+
+    Added LAST and DEFAULTED, like every other bool key in this file: the
+    hand-built `config.Config(**fields)` test helpers that predate this key
+    stay valid without edits."""
 
 
 def read_config(root: Path) -> Config:
@@ -1275,6 +1304,7 @@ def read_config(root: Path) -> Config:
     concurrent_extraction = raw.get("concurrent_extraction")
     type_sensitivity_defaults = raw.get("type_sensitivity_defaults")
     rationale_language = raw.get("rationale_language")
+    revision_history = raw.get("revision_history")
     if model is not None and not isinstance(model, str):
         raise ValueError(
             f"{layout.config_path.name}: 'model' must be a string, got "
@@ -1538,6 +1568,15 @@ def read_config(root: Path) -> Config:
                     f"offset between 0 and {len(okf.SENSITIVITY_ORDER) - 1}, "
                     f"got {offset!r}"
                 )
+    if revision_history is not None and not isinstance(revision_history, bool):
+        # Same narrow `isinstance(x, bool)` guard as `sufficiency_check`/
+        # `union_judge` above: YAML resolves `1` to `int`, and this key gates
+        # an extra per-hit walk and re-read, so a value that looks like a
+        # count must not be silently truthy-coerced into turning it on.
+        raise ValueError(
+            f"{layout.config_path.name}: 'revision_history' must be a "
+            f"boolean, got {type(revision_history).__name__}"
+        )
     if rationale_language is not None and (
         not isinstance(rationale_language, str)
         or not rationale_language.strip()
@@ -1668,6 +1707,11 @@ def read_config(root: Path) -> Config:
             rationale_language.strip()
             if rationale_language is not None
             else DEFAULT_RATIONALE_LANGUAGE
+        ),
+        revision_history=(
+            revision_history
+            if revision_history is not None
+            else DEFAULT_REVISION_HISTORY
         ),
     )
 
