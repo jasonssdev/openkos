@@ -1,19 +1,25 @@
 """Unit tests for `resolution/decision_revision.py`: the pure direction
-rule, subject-overlap scoring, and candidate generation
-(decision-revision-detector, Phase A, Slice 3 / S3).
+rule, subject-overlap scoring, candidate generation, and the judge
+(decision-revision-detector, Phase A, Slices 3 and 4 / S3-S4).
 
-All tests are pure -- no `LLMBackend` double is needed for this slice; the
-judge (Slice 4) is a separate task list.
+Slices 3's tests are pure -- no `LLMBackend` double is needed. Slice 4's
+judge tests use a module-local `_ScriptedLLM`/`_RaisingLLM` double
+(byte-identical shape to `test_decision_subject.py`'s) -- zero network,
+zero real Ollama process.
 """
 
 import itertools
+import json
+import math
 import string
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from datetime import date
 from difflib import SequenceMatcher
 
 import pytest
 
+from openkos.llm.base import Message
+from openkos.llm.ollama import OllamaUnavailable
 from openkos.model.relations import RESOLUTION_RELATION_TYPES
 from openkos.resolution import decision_revision, similarity
 from openkos.resolution.decision_revision import (
@@ -361,3 +367,379 @@ def test_plan_revision_candidates_exclusions_applied_before_the_cap() -> None:
     pair_concept_ids = {cid for pair in plan.candidates for cid in pair.pair_ids}
     assert "decisions/resolved-a" not in pair_concept_ids
     assert "decisions/resolved-b" not in pair_concept_ids
+
+
+# ---------------------------------------------------------------------------
+# The judge (Slice 4 / S4)
+# ---------------------------------------------------------------------------
+
+
+class _ScriptedLLM:
+    """A structural `LLMBackend`: returns queued replies in call order,
+    recording every call's messages. Byte-identical shape to
+    `test_decision_subject.py`'s double."""
+
+    def __init__(self, replies: Sequence[str]) -> None:
+        self._replies = list(replies)
+        self.calls: list[list[Message]] = []
+
+    def chat(self, messages: Sequence[Message]) -> str:
+        self.calls.append(list(messages))
+        return self._replies.pop(0)
+
+
+class _RaisingLLM:
+    """A structural `LLMBackend`: raises `error` on its `error_at`-th
+    (1-based) call, otherwise returns the next queued reply."""
+
+    def __init__(
+        self,
+        replies: Sequence[str],
+        *,
+        error: BaseException,
+        error_at: int,
+    ) -> None:
+        self._replies = list(replies)
+        self.error = error
+        self.error_at = error_at
+        self.calls: list[list[Message]] = []
+
+    def chat(self, messages: Sequence[Message]) -> str:
+        self.calls.append(list(messages))
+        if len(self.calls) == self.error_at:
+            raise self.error
+        return self._replies.pop(0)
+
+
+def _judge_side(
+    concept_id: str,
+    title: str,
+    body: str,
+    *,
+    date_value: date | None = None,
+    date_state: DateState = "missing",
+) -> decision_revision.JudgeSide:
+    return decision_revision.JudgeSide(
+        concept_id=concept_id,
+        title=title,
+        body=body,
+        date=DecisionDate(value=date_value, state=date_state),
+    )
+
+
+# ---------------------------------------------------------------------------
+# build_judge_messages
+# ---------------------------------------------------------------------------
+
+
+def test_build_judge_messages_known_direction_orders_earlier_first() -> None:
+    earlier = _judge_side(
+        "decisions/early",
+        "Use Postgres",
+        "We chose Postgres for billing.",
+        date_value=date(2026, 1, 1),
+        date_state="dated",
+    )
+    later = _judge_side(
+        "decisions/late",
+        "Use SQLite",
+        "Billing moves to SQLite; Postgres is dropped.",
+        date_value=date(2026, 3, 1),
+        date_state="dated",
+    )
+
+    # Argument order is deliberately reversed from chronological/id order,
+    # to prove presentation order comes from `pair_direction`, never from
+    # the order `a`/`b` are passed in.
+    messages = decision_revision.build_judge_messages(later, earlier)
+
+    assert messages[0] == {
+        "role": "system",
+        "content": decision_revision._JUDGE_SYSTEM_PROMPT,
+    }
+    user_content = messages[1]["content"]
+    assert (
+        "EARLIER DECISION (2026-01-01) [decisions/early — Use Postgres]" in user_content
+    )
+    assert "LATER DECISION (2026-03-01) [decisions/late — Use SQLite]" in user_content
+    assert user_content.index("EARLIER DECISION") < user_content.index("LATER DECISION")
+    assert user_content.index(earlier.body) < user_content.index(later.body)
+
+
+def test_build_judge_messages_unknown_direction_orders_by_id() -> None:
+    first_by_id = _judge_side("decisions/aaa", "Aaa", "Aaa body sentence.")
+    second_by_id = _judge_side("decisions/bbb", "Bbb", "Bbb body sentence.")
+
+    # Argument order reversed from id order, same reason as above.
+    messages = decision_revision.build_judge_messages(second_by_id, first_by_id)
+
+    user_content = messages[1]["content"]
+    assert user_content.startswith(
+        "ORDER UNKNOWN: the dates of these decisions do not establish which came first."
+    )
+    assert "DECISION 1 [decisions/aaa — Aaa]" in user_content
+    assert "DECISION 2 [decisions/bbb — Bbb]" in user_content
+    assert user_content.index("DECISION 1") < user_content.index("DECISION 2")
+    assert user_content.index(first_by_id.body) < user_content.index(second_by_id.body)
+
+
+# ---------------------------------------------------------------------------
+# parse_judge_reply
+# ---------------------------------------------------------------------------
+
+
+def test_parse_judge_reply_direction_is_structurally_unreadable() -> None:
+    """design.md's stated success criterion for Decision 6: an extra
+    `"later"` field naming the WRONG (earlier-dated) Decision, plus quotes
+    that could be read as implying the same wrong order, never changes the
+    `RevisionVerdict.direction` a caller later builds -- direction is a
+    `@property` computed from the stored `dates`, and the parser reads
+    only the five schema keys."""
+    earlier_date = DecisionDate(value=date(2026, 1, 1), state="dated")
+    later_date = DecisionDate(value=date(2026, 3, 1), state="dated")
+    pair_ids = ("decisions/early", "decisions/late")
+    first_body = "We chose Postgres for billing."
+    second_body = "Billing moves to SQLite; Postgres is dropped."
+
+    raw = json.dumps(
+        {
+            "verdict": "reverses",
+            "confidence": 0.9,
+            "rationale": "Billing tool changed.",
+            "quote_first": second_body,
+            "quote_second": first_body,
+            "later": "decisions/early",  # extra field claiming the WRONG order
+        }
+    )
+
+    parsed = decision_revision.parse_judge_reply(raw, first_body, second_body)
+    assert parsed is not None
+
+    verdict = decision_revision.RevisionVerdict(
+        pair_ids=pair_ids,
+        verdict=parsed.verdict,
+        confidence=parsed.confidence,
+        rationale=parsed.rationale,
+        quotes=(parsed.quote_first, parsed.quote_second),
+        dates=(earlier_date, later_date),
+    )
+
+    assert verdict.direction.holder == "decisions/late"
+    assert verdict.direction.earlier == "decisions/early"
+
+
+def test_parse_judge_reply_unknown_verdict_maps_to_unrelated_keeping_confidence() -> (
+    None
+):
+    raw = json.dumps({"verdict": "supersedes", "confidence": 0.6})
+    parsed = decision_revision.parse_judge_reply(raw, "body one.", "body two.")
+    assert parsed is not None
+    assert parsed.verdict is decision_revision.RevisionVerdictValue.UNRELATED
+    assert parsed.confidence == pytest.approx(0.6)
+
+
+def _parse_with_confidence(confidence_value: object, *, omit: bool = False) -> float:
+    payload: dict[str, object] = {"verdict": "unrelated"}
+    if not omit:
+        payload["confidence"] = confidence_value
+    parsed = decision_revision.parse_judge_reply(json.dumps(payload), "b1", "b2")
+    assert parsed is not None
+    return parsed.confidence
+
+
+def test_parse_judge_reply_confidence_coercion() -> None:
+    assert _parse_with_confidence(math.nan) == 0.0
+    assert _parse_with_confidence(True) == 0.0
+    assert _parse_with_confidence("0.9") == 0.0
+    assert _parse_with_confidence(None, omit=True) == 0.0
+    assert _parse_with_confidence(0.85) == pytest.approx(0.85)
+    assert _parse_with_confidence(1.5) == 1.0
+    assert _parse_with_confidence(-0.5) == 0.0
+
+
+def test_parse_judge_reply_rationale_non_string_becomes_empty() -> None:
+    raw = json.dumps({"verdict": "unrelated", "rationale": 42})
+    parsed = decision_revision.parse_judge_reply(raw, "b1", "b2")
+    assert parsed is not None
+    assert parsed.rationale == ""
+
+
+def test_parse_judge_reply_quotes_verified_and_mapped_by_presentation_order() -> None:
+    # `earlier`'s id sorts alphabetically AFTER `later`'s id, so
+    # presentation order (earlier-first) and sorted-id order disagree.
+    earlier_body = "Priya owns the schema migration plan."
+    later_body = "The schema migration plan moves to a new owner."
+    assert "decisions/zzz-earlier" > "decisions/aaa-later"
+
+    raw = json.dumps(
+        {
+            "verdict": "refines",
+            "confidence": 0.9,
+            "quote_first": earlier_body,
+            "quote_second": later_body,
+        }
+    )
+
+    parsed = decision_revision.parse_judge_reply(raw, earlier_body, later_body)
+    assert parsed is not None
+    assert parsed.quote_first == earlier_body
+    assert parsed.quote_second == later_body
+
+    mismatched_raw = json.dumps(
+        {
+            "verdict": "refines",
+            "confidence": 0.9,
+            "quote_first": "A wholly different sentence.",
+            "quote_second": later_body,
+        }
+    )
+    mismatched = decision_revision.parse_judge_reply(
+        mismatched_raw, earlier_body, later_body
+    )
+    assert mismatched is not None
+    # A quote that fails verification against its OWN side's body becomes
+    # `None` on that side only.
+    assert mismatched.quote_first is None
+    assert mismatched.quote_second == later_body
+
+
+# ---------------------------------------------------------------------------
+# is_actionable_revision / is_reportable_revision / RELATION_FOR_VERDICT
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("verdict", list(decision_revision.RevisionVerdictValue))
+@pytest.mark.parametrize("confidence", [0.69, 0.70])
+@pytest.mark.parametrize(
+    ("quote_0", "quote_1"),
+    [
+        ("earlier quote", "later quote"),
+        (None, "later quote"),
+        (None, None),
+    ],
+)
+def test_is_actionable_revision_truth_table(
+    verdict: decision_revision.RevisionVerdictValue,
+    confidence: float,
+    quote_0: str | None,
+    quote_1: str | None,
+) -> None:
+    result = decision_revision.is_actionable_revision(
+        verdict.value, confidence, quote_0, quote_1
+    )
+    expected = (
+        verdict
+        in (
+            decision_revision.RevisionVerdictValue.REVERSES,
+            decision_revision.RevisionVerdictValue.REFINES,
+        )
+        and confidence >= 0.70
+        and quote_0 is not None
+        and quote_1 is not None
+    )
+    assert result is expected
+
+
+def test_is_reportable_revision_includes_reaffirms_but_not_unrelated() -> None:
+    reaffirms = decision_revision.RevisionVerdictValue.REAFFIRMS.value
+    unrelated = decision_revision.RevisionVerdictValue.UNRELATED.value
+
+    assert (
+        decision_revision.is_reportable_revision(
+            reaffirms, 0.70, "earlier quote", "later quote"
+        )
+        is True
+    )
+    assert (
+        decision_revision.is_actionable_revision(
+            reaffirms, 0.70, "earlier quote", "later quote"
+        )
+        is False
+    )
+    assert (
+        decision_revision.is_reportable_revision(
+            unrelated, 1.0, "earlier quote", "later quote"
+        )
+        is False
+    )
+
+
+def test_relation_for_verdict_matches_resolution_relation_types() -> None:
+    assert set(
+        decision_revision.RELATION_FOR_VERDICT.values()
+    ) == RESOLUTION_RELATION_TYPES - {"reconciled_with"}
+
+
+# ---------------------------------------------------------------------------
+# judge_pairs
+# ---------------------------------------------------------------------------
+
+
+def test_judge_pairs_partial_batch_on_llm_failure() -> None:
+    pairs = [
+        (
+            _judge_side(f"decisions/a{i}", f"A{i}", f"Body a{i}."),
+            _judge_side(f"decisions/b{i}", f"B{i}", f"Body b{i}."),
+        )
+        for i in range(3)
+    ]
+    well_formed_reply = json.dumps({"verdict": "unrelated", "confidence": 0.1})
+    error = OllamaUnavailable("backend down")
+    llm = _RaisingLLM([well_formed_reply], error=error, error_at=2)
+
+    batch = decision_revision.judge_pairs(pairs, llm=llm)
+
+    assert len(batch.results) == 1
+    assert batch.failure is error
+    assert batch.failed_index == 2
+    assert len(llm.calls) == 2
+
+
+def test_judge_pairs_malformed_reply_degrades_without_aborting() -> None:
+    malformed_pair = (
+        _judge_side("decisions/malformed-a", "Malformed A", "Body malformed a."),
+        _judge_side("decisions/malformed-b", "Malformed B", "Body malformed b."),
+    )
+    well_formed_pair = (
+        _judge_side("decisions/well-a", "Well A", "Body well a."),
+        _judge_side("decisions/well-b", "Well B", "Body well b."),
+    )
+    malformed_reply = "not json"
+    well_formed_reply = json.dumps({"verdict": "refines", "confidence": 0.8})
+    llm = _ScriptedLLM([malformed_reply, well_formed_reply])
+
+    batch = decision_revision.judge_pairs([malformed_pair, well_formed_pair], llm=llm)
+
+    assert batch.failure is None
+    assert len(batch.results) == 2
+    malformed_result, well_formed_result = batch.results
+    assert malformed_result.malformed is True
+    assert malformed_result.verdict is decision_revision.RevisionVerdictValue.UNRELATED
+    assert malformed_result.confidence == 0.0
+    assert malformed_result.rationale == decision_revision._MALFORMED_REPLY_RATIONALE
+    assert malformed_result.quotes == (None, None)
+    assert well_formed_result.malformed is False
+    assert well_formed_result.verdict is decision_revision.RevisionVerdictValue.REFINES
+
+
+def test_judge_pairs_guards_only_the_chat_call() -> None:
+    """The `OllamaError` guard wraps ONLY `llm.chat` (design.md, mirroring
+    `find_contradictions`'s #441 contract, and `decision_subject
+    .derive_subjects`'s own guard test): an `OllamaError` raised by the
+    caller's own `on_progress` -- code that runs AFTER the guarded call --
+    must still propagate untouched, never be caught and folded into
+    `RevisionBatch.failure`."""
+    pair = (
+        _judge_side("decisions/only-a", "Only A", "Body only a."),
+        _judge_side("decisions/only-b", "Only B", "Body only b."),
+    )
+    llm = _ScriptedLLM([json.dumps({"verdict": "unrelated", "confidence": 0.1})])
+    progress_error = OllamaUnavailable("on_progress exploded")
+
+    def _raising_progress(
+        index: int, total: int, verdict: decision_revision.RevisionVerdict
+    ) -> None:
+        raise progress_error
+
+    with pytest.raises(OllamaUnavailable):
+        decision_revision.judge_pairs([pair], llm=llm, on_progress=_raising_progress)
