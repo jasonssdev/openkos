@@ -38,14 +38,18 @@ probe hides its complement).
 
 ## Fixture
 
-`revision_fixtures.load_fixture()` -- currently T1's tiny SYNTHETIC
-placeholder (NOT AMI, and not meant to measure anything about the
-production judge); T2 replaces its contents with a hand-written,
-owner-adjudicated fixture. See this harness's `README.md`.
+A live run measures `revision_fixture_library.load_library_fixture()` --
+hand-written community-library meeting notes (NOT AMI), labelled by
+construction with every doubtful call flagged `contested` for the owner.
+`--self-test` keeps running over `revision_fixtures.load_fixture()`, T1's
+tiny SYNTHETIC placeholder, whose exact numbers it pins. `--print-fixture`
+renders the real fixture as a markdown adjudication sheet. See this
+harness's `README.md`.
 
 Usage:
 
     uv run python evals/decision_revisions/run_decision_revisions_eval.py --self-test
+    uv run python evals/decision_revisions/run_decision_revisions_eval.py --print-fixture
     uv run python evals/decision_revisions/run_decision_revisions_eval.py --runs 15
     uv run python evals/decision_revisions/run_decision_revisions_eval.py \\
         --runs 15 --model qwen3:8b --temperature 0.0 --seed 7
@@ -73,6 +77,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 sys.path.append(str(REPO_ROOT / "evals"))
 
 from harness_report import arm_identity_line  # noqa: E402
+from revision_fixture_library import load_library_fixture  # noqa: E402
 from revision_fixtures import (  # noqa: E402
     Fixture,
     LabelledPair,
@@ -518,6 +523,177 @@ def direction_accuracy(
 
 
 # ---------------------------------------------------------------------------
+# Fixture integrity and the adjudication rendering -- pure, no LLM, no I/O.
+# ---------------------------------------------------------------------------
+
+_SHARED_SOURCE_TAG: Final = "shared-source"
+"""The only hard-case tag allowed to pair two Decisions that cite a common
+source -- the candidate stage must never propose such a pair, so it exists
+only as a deliberate negative."""
+
+_NO_DIRECTION_TAG_REASON: Final[dict[str, str]] = {
+    "undated": "missing",
+    "equal-date": "equal",
+    "multi-date": "multiple",
+}
+"""A pair tagged with one of these hard cases must have NO direction, for
+exactly this `pair_direction` reason -- otherwise the tag probes nothing."""
+
+
+def fixture_integrity(fixture: Fixture) -> list[str]:
+    """Every structural defect in `fixture`, as one message each; empty
+    when sound. Checks: unique ids; every cited source and every paired
+    Decision exists; no pair repeats or pairs a Decision with itself; two
+    sides share a source iff the pair is tagged `shared-source`;
+    `expected_later_id` equals `pair_direction`'s holder over the
+    fixture's OWN dates (never narrative); a no-direction tag has exactly
+    its `pair_direction` reason; a contested pair carries a note."""
+    problems: list[str] = []
+    sources_by_id = {s.source_id: s for s in fixture.sources}
+    decisions_by_id = {d.concept_id: d for d in fixture.decisions}
+    if len(sources_by_id) != len(fixture.sources):
+        problems.append("duplicate source id")
+    if len(decisions_by_id) != len(fixture.decisions):
+        problems.append("duplicate decision id")
+    for decision in fixture.decisions:
+        for source_id in decision.source_ids:
+            if source_id not in sources_by_id:
+                problems.append(
+                    f"{decision.concept_id}: cites unknown source {source_id}"
+                )
+
+    seen: set[tuple[str, str]] = set()
+    for labelled in fixture.pairs:
+        id_a, id_b = _pair_key(*labelled.decision_ids)
+        label = f"{id_a} <-> {id_b}"
+        missing = [i for i in (id_a, id_b) if i not in decisions_by_id]
+        if missing:
+            problems.append(f"{label}: unknown decision {', '.join(missing)}")
+            continue
+        if id_a == id_b:
+            problems.append(f"{label}: pairs a decision with itself")
+        if (id_a, id_b) in seen:
+            problems.append(f"{label}: duplicate pair")
+        seen.add((id_a, id_b))
+
+        shares_source = bool(
+            set(decisions_by_id[id_a].source_ids)
+            & set(decisions_by_id[id_b].source_ids)
+        )
+        tagged_shared = labelled.hard_case == _SHARED_SOURCE_TAG
+        if shares_source != tagged_shared:
+            problems.append(
+                f"{label}: shares a source = {shares_source}, but tagged "
+                f"{labelled.hard_case!r}"
+            )
+
+        direction = pair_direction(
+            id_a,
+            resolve_decision_date(decisions_by_id[id_a], sources_by_id),
+            id_b,
+            resolve_decision_date(decisions_by_id[id_b], sources_by_id),
+        )
+        if direction.holder != labelled.expected_later_id:
+            problems.append(
+                f"{label}: expected_later_id {labelled.expected_later_id!r}, "
+                f"but the dates make it {direction.holder!r}"
+            )
+        wanted_reason = _NO_DIRECTION_TAG_REASON.get(labelled.hard_case or "")
+        if wanted_reason is not None and direction.reason != wanted_reason:
+            problems.append(
+                f"{label}: tagged {labelled.hard_case!r}, but the direction "
+                f"reason is {direction.reason!r}"
+            )
+        if labelled.contested and not labelled.note.strip():
+            problems.append(f"{label}: contested with no note")
+    return problems
+
+
+@dataclass(frozen=True)
+class FixtureCounts:
+    by_verdict: Counter[str]
+    by_hard_case: Counter[str]
+    contested: tuple[int, int]
+    """`(k, n)`: contested pairs of every labelled pair."""
+
+
+def fixture_counts(fixture: Fixture) -> FixtureCounts:
+    return FixtureCounts(
+        by_verdict=Counter(p.expected_verdict for p in fixture.pairs),
+        by_hard_case=Counter(p.hard_case or "(none)" for p in fixture.pairs),
+        contested=(sum(p.contested for p in fixture.pairs), len(fixture.pairs)),
+    )
+
+
+def _date_text(decision_id: str, fixture: Fixture) -> str:
+    sources_by_id = {s.source_id: s for s in fixture.sources}
+    decision = next(d for d in fixture.decisions if d.concept_id == decision_id)
+    resolved = resolve_decision_date(decision, sources_by_id)
+    if resolved.state == "dated" and resolved.value is not None:
+        return resolved.value.isoformat()
+    if resolved.state == "multiple":
+        dates = sorted(
+            str(sources_by_id[s].event_date)
+            for s in decision.source_ids
+            if s in sources_by_id and sources_by_id[s].event_date is not None
+        )
+        return f"multiple dates ({', '.join(dates)})"
+    return "undated"
+
+
+def render_fixture_markdown(fixture: Fixture) -> str:
+    """Every labelled pair as markdown for owner adjudication -- contested
+    pairs first, then the rest, each in fixture order."""
+    decisions_by_id = {d.concept_id: d for d in fixture.decisions}
+    counts = fixture_counts(fixture)
+    ordered = [p for p in fixture.pairs if p.contested] + [
+        p for p in fixture.pairs if not p.contested
+    ]
+    k, n = counts.contested
+    lines = [
+        "# decision-revisions fixture -- adjudication sheet",
+        "",
+        "Generated by `run_decision_revisions_eval.py --print-fixture` from "
+        "`revision_fixture_library.py`. Labels are BY CONSTRUCTION; settle "
+        "every contested pair in the fixture module BEFORE any live score is "
+        "trusted, then regenerate this sheet.",
+        "",
+        f"- decisions: {len(fixture.decisions)}; sources: "
+        f"{len(fixture.sources)}; labelled pairs: {n}",
+        f"- contested: {k} of {n}",
+        "- by verdict: "
+        + ", ".join(f"{v} {c}" for v, c in sorted(counts.by_verdict.items())),
+        "- by hard case: "
+        + ", ".join(f"{t} {c}" for t, c in sorted(counts.by_hard_case.items())),
+        "",
+    ]
+    for index, labelled in enumerate(ordered, start=1):
+        if index == 1 and labelled.contested:
+            lines += ["## Contested pairs", ""]
+        if not labelled.contested and (index == 1 or ordered[index - 2].contested):
+            lines += ["## Uncontested pairs", ""]
+        later = labelled.expected_later_id or "none (direction not established)"
+        flag = " -- CONTESTED" if labelled.contested else ""
+        lines += [
+            f"### {index}. expected {labelled.expected_verdict}{flag}",
+            "",
+            f"- hard case: {labelled.hard_case or '(none)'}",
+            f"- expected later: `{later}`",
+            f"- note: {labelled.note}",
+            "",
+        ]
+        for side in labelled.decision_ids:
+            decision = decisions_by_id[side]
+            lines += [
+                f"> **{decision.title}** `{side}` ({_date_text(side, fixture)})",
+                ">",
+                f"> {decision.body}",
+                "",
+            ]
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # `--self-test`: proves the wiring AND the scoring math, zero network.
 # ---------------------------------------------------------------------------
 
@@ -866,6 +1042,20 @@ def _self_test() -> int:
             (None, None),
         )
 
+    # -- fixture integrity, over the placeholder AND the real fixture ------
+    check("placeholder fixture integrity", fixture_integrity(fixture), [])
+    library = load_library_fixture()
+    library_problems = fixture_integrity(library)
+    check("library fixture integrity", library_problems, [])
+    if not library_problems:
+        # Rendering indexes every paired id, so it is only meaningful (and
+        # only safe) over a fixture that passed integrity.
+        check(
+            "the adjudication sheet renders every labelled pair",
+            render_fixture_markdown(library).count("\n### "),
+            len(library.pairs),
+        )
+
     for line in failures:
         print(f"FAIL {line}")
     print(f"\nself-test: {'FAILED' if failures else 'passed'}")
@@ -919,14 +1109,23 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Run the model-free wiring+scoring self-test and exit.",
     )
+    parser.add_argument(
+        "--print-fixture",
+        action="store_true",
+        help="Print the real fixture's labelled pairs as a markdown "
+        "adjudication sheet (contested first) and exit. No model call.",
+    )
     args = parser.parse_args(argv)
 
     if args.self_test:
         return _self_test()
+    if args.print_fixture:
+        print(render_fixture_markdown(load_library_fixture()))
+        return 0
 
     from openkos.llm.ollama import OllamaClient
 
-    fixture = load_fixture()
+    fixture = load_library_fixture()
     client = OllamaClient(
         model=args.model,
         max_generation_tokens=DEFAULT_MAX_GENERATION_TOKENS,
@@ -1003,7 +1202,7 @@ def main(argv: list[str] | None = None) -> int:
             extra=extra,
         ),
         "",
-        "Fixture: `evals/decision_revisions/revision_fixtures.py` -- NOT AMI. "
+        "Fixture: `evals/decision_revisions/revision_fixture_library.py` -- NOT AMI. "
         "Labels are owner-adjudicated (T3), never scored before settlement.",
         "",
         "## Subject pass",

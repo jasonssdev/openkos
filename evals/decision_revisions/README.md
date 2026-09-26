@@ -9,6 +9,7 @@ reads the numbers this harness produces.
 
 ```bash
 uv run python evals/decision_revisions/run_decision_revisions_eval.py --self-test
+uv run python evals/decision_revisions/run_decision_revisions_eval.py --print-fixture
 uv run python evals/decision_revisions/run_decision_revisions_eval.py --runs 15
 uv run python evals/decision_revisions/run_decision_revisions_eval.py \
     --runs 15 --model qwen3:8b --temperature 0.0 --seed 7
@@ -20,21 +21,55 @@ reimplementation of any of them. What is measured is what ships.
 
 ## The fixture is deliberately NOT AMI
 
-`revision_fixtures.py` is hand-written, in a domain that is not the AMI
-meeting corpus. This project's thesis evaluation (C2) measures against AMI
+`revision_fixture_library.py` is hand-written, in a domain that is not the
+AMI meeting corpus. This project's thesis evaluation (C2) measures against AMI
 separately; if this harness's own fixture were drawn from AMI too, tuning a
 prompt against numbers this harness reports would contaminate that later,
 independent evaluation. Keeping the two fixtures disjoint is what keeps the
 AMI evaluation honest.
 
-**As shipped, `load_fixture()` returns T1's tiny SYNTHETIC placeholder set**
--- a handful of invented decisions, built only to give `--self-test`
-something to run the real pipeline over with zero network calls. It is not
-meant to measure anything about the production judge, and a live run against
-it (`--runs N` with no `--self-test`) measures the placeholder, not a real
-question. T2 replaces `load_fixture`'s contents with hand-written, dated
-meeting notes and owner-adjudicated labels; T3 is the owner settling every
-`LabelledPair.contested` case BEFORE any live run's numbers are trusted.
+Two fixtures live here, and they are never mixed:
+
+- **`revision_fixture_library.py`** (`load_library_fixture()`) is the REAL
+  fixture a live run measures: hand-written meeting notes from a volunteer
+  committee running a small community library -- 8 sources (two committee
+  meetings and a volunteer huddle share one date, two sources are undated,
+  one Decision cites two meetings with different dates), 42 Decisions, 46
+  labelled pairs over all four verdicts. Its hard cases are tagged in
+  `LabelledPair.hard_case` (the tag vocabulary is in the module docstring),
+  and more than half the pairs are UNRELATED hard negatives on purpose, so a
+  judge that answers one verdict for everything scores badly instead of
+  well.
+- **`revision_fixtures.py`** (`load_fixture()`) keeps T1's tiny SYNTHETIC
+  placeholder. `--self-test` pins exact numbers against it and never runs
+  over the real fixture's model-dependent stages.
+
+**The real fixture's labels are by construction, not adjudicated.** Every
+pair where a careful reader could reasonably pick a different verdict is
+flagged `contested` with a one-line note. T3 is the owner settling every
+contested pair BEFORE any live run's numbers are trusted. To review them in
+one file:
+
+```bash
+uv run python evals/decision_revisions/run_decision_revisions_eval.py --print-fixture
+```
+
+prints every labelled pair (both Decisions, their resolved dates, the
+expected verdict and later side, the note and the hard-case tag), contested
+pairs first. `fixture-adjudication.md` is that output, committed; after
+changing a label, regenerate it with the same command.
+
+`expected_later_id` follows only from the sources' dates, never from the
+narrative. `--self-test` enforces that, and the rest of the fixture's
+structure, with a pure `fixture_integrity` check over both fixtures: every
+cited source and paired Decision exists, no pair repeats, two sides share a
+source only when the pair is tagged `shared-source`, `expected_later_id`
+equals `pair_direction`'s holder over the fixture's own dates, and an
+`undated`/`equal-date`/`multi-date` tag has exactly that no-direction
+reason. It was checked that this can fail: renaming one pair's reference to
+a nonexistent Decision, and separately pointing one pair's
+`expected_later_id` at its earlier side, each turned `--self-test` red with
+a specific message; both were reverted by the inverse edit.
 
 ## Stage order
 

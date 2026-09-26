@@ -2,11 +2,11 @@
 (a), sub-change 3), plus a tiny synthetic example set used only by
 `run_decision_revisions_eval.py --self-test`.
 
-**This is not the real fixture.** T2 hand-writes dated meeting notes (in a
-domain deliberately NOT AMI -- see this harness's README) and fills them in
-here, or into a sibling data module `load_fixture` is repointed at; T3 is
-the owner adjudicating every `LabelledPair.contested` case BEFORE any
-scoring runs. The synthetic set below exists only to give `--self-test`
+**This is not the real fixture.** The real one -- hand-written, dated
+meeting notes in a domain deliberately NOT AMI (see this harness's README)
+-- lives in the sibling `revision_fixture_library.py`, in this same schema;
+T3 is the owner adjudicating every `LabelledPair.contested` case there
+BEFORE any scoring runs. The synthetic set below exists only to give `--self-test`
 something to run the real pipeline over with zero network calls -- it is
 deliberately small, hand-solvable, and not meant to measure anything about
 the production judge.
