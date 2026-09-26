@@ -67,13 +67,15 @@ skips the predicate walk entirely -- no `_iter_docs` pass, no filtering --
 restoring today's status-blind behavior byte-for-byte at zero added cost.
 """
 
+import functools
 import re
 import sqlite3
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Final, Literal
 
-from openkos import lifecycle, prompt_budget, sensitivity
+from openkos import event_dates, lifecycle, prompt_budget, sensitivity
 from openkos.extraction.concept import LANGUAGE_FUNCTION_WORDS
 from openkos.llm.base import Embedder, LLMBackend, Message
 from openkos.llm.ollama import (
@@ -84,7 +86,7 @@ from openkos.llm.ollama import (
 )
 from openkos.model import okf
 from openkos.model.types import INSIGHT_TYPE as _INSIGHT_TYPE
-from openkos.retrieval import fusion, pool
+from openkos.retrieval import fusion, history, pool
 from openkos.state import fts
 from openkos.state.vectorstore import VecHit, VectorStore, VecUnavailable
 
@@ -356,6 +358,13 @@ class Citation:
     false 'confidential' marker on an unlabeled doc would train users to
     ignore the real ones. Defaults `False` so every existing construction
     site stays valid."""
+    history: Literal["superseded", "refined"] | None = None
+    """Set on a citation produced from a revision-history block
+    (superseded-history-in-query, design.md Decision 6): `"superseded"` for
+    a `supersedes` predecessor, `"refined"` for a `revises` predecessor,
+    and `None` for every ordinary hit citation. Mirrors `excerpted`'s and
+    `confidential`'s default-`False`-equivalent posture -- every existing
+    construction site stays valid without passing this."""
 
 
 @dataclass(frozen=True)
@@ -481,6 +490,15 @@ class AnswerResult:
     (`OllamaUnavailable`, `OllamaModelNotFound`,
     `OllamaEmbeddingDimensionMismatch`) -- those propagate instead, so no
     `AnswerResult` is produced at all (issue #209)."""
+    history_truncated_titles: list[str] = field(default_factory=list)
+    """Titles of every retrieved successor whose OWN attached-history chain
+    was cut short -- by the per-successor block cap, by the depth bound, or
+    by both (superseded-history-in-query, design.md Decision 6) -- listed
+    in fused order. A successor whose full reachable chain within the depth
+    bound was shown in full is never listed. `[]` when `revision_history`
+    is disabled (the default) or when no chain was ever cut short.
+    Defaults empty via `default_factory` so every short-circuit return
+    above stays valid and no two results share one list."""
 
 
 def _bound_bodies(
@@ -566,6 +584,173 @@ to its single-window fallback; 800 keeps even coverage available at the
 share sizes this path actually produces."""
 
 
+def _classify_bound(
+    was_bounded: bool, bounded: str, original: str
+) -> tuple[bool, bool]:
+    """From one `prompt_budget.bounded_text` result, `(excerpted, omitted)`
+    -- `omitted` when the excerpt collapsed a non-empty body to nothing
+    (#882's zero-share case), `excerpted` when it was clipped but kept
+    something, and `(False, False)` when it fit whole. The exact rule
+    `_bound_bodies`'s own caller (`_assemble_context`'s no-history tail)
+    applies inline; factored out so `_bound_with_history` (superseded-
+    history-in-query, slice 2b) applies the identical rule to a hit's head
+    share and to every one of its history blocks' inner shares."""
+    if was_bounded and not bounded and original:
+        return False, True
+    return was_bounded, False
+
+
+def _bound_with_history(
+    labels: list[str],
+    bodies: list[str],
+    holders: list[int],
+    *,
+    llm: LLMBackend | None,
+    question: str,
+) -> tuple[list[str], list[bool], list[bool]]:
+    """The nested budget split of design.md Decision 4: `labels`/`bodies`
+    are already in FINAL send order (a hit immediately followed by its own
+    history blocks, if any); `holders[i]` is the index, within this same
+    list, of the hit that entry `i` belongs to -- a hit's own entry is its
+    own holder, so grouping by `holders` value recovers each hit's
+    `[hit, *history]` group with the hit always first.
+
+    Returns `(bounded_bodies, excerpted_flags, omitted_flags)`, aligned to
+    `labels`/`bodies`. `llm=None` or no bodies at all means NO bound -- the
+    same opt-in seam `_bound_bodies` documents, so a caller with history
+    blocks but no backend still gets every body whole and unflagged.
+
+    1. Group entries by `holders`; the FIRST entry of each group is the
+       hit's own (`head_sizes`), the rest are its history blocks
+       (`inner_sizes`).
+    2. `overhead_hits` is computed EXACTLY as `_bound_bodies` computes it
+       today: over the hit labels ONLY, never the history labels -- this is
+       why an unrelated hit's share never moves (design.md Decision 4's
+       proof).
+    3. `inner_overheads[i]` is the MARGINAL frame growth of inserting group
+       `i`'s own history labels, in final order, into the label sequence
+       that already carries every earlier group's history -- computed by
+       construction (real `_user_content` lengths), never estimated, and
+       the per-group deltas telescope to the exact total growth.
+    4. `prompt_budget.nested_shares` turns those into one `GroupShares` per
+       hit; each group's head/inner sizes are then bounded via the same
+       `prompt_budget.bounded_text` call `_bound_bodies` uses, and
+       `_classify_bound` decides excerpted/omitted per entry -- so a
+       zero-share history block within an otherwise-kept group, and every
+       entry of a `dropped` group (whose `inner` is already all-zero by
+       `nested_shares`'s own contract), come out `omitted` exactly like a
+       zero-share hit does today."""
+    if llm is None or not bodies:
+        return list(bodies), [False] * len(bodies), [False] * len(bodies)
+
+    groups: dict[int, list[int]] = {}
+    for index, holder in enumerate(holders):
+        groups.setdefault(holder, []).append(index)
+    group_order = list(groups.keys())
+
+    hit_labels = [labels[groups[holder][0]] for holder in group_order]
+    head_sizes = [len(bodies[groups[holder][0]]) for holder in group_order]
+    inner_sizes = [
+        [len(bodies[index]) for index in groups[holder][1:]] for holder in group_order
+    ]
+
+    overhead_hits = len(_user_content(hit_labels, question)) + max(
+        len(_SYSTEM_PROMPT), len(_SUFFICIENCY_PROMPT)
+    )
+    budget = prompt_budget.budget_chars(
+        planning=prompt_budget.planning_window(llm),
+        generation_reserve_tokens=prompt_budget.reply_reserve(llm),
+        overhead_chars=overhead_hits,
+    )
+
+    # The telescoping marginal overhead (design.md Decision 4, "How the
+    # overhead is measured, by construction"): `current_sequence` grows one
+    # group's history labels at a time, in final order, and each group's
+    # `inner_overheads` entry is the exact growth ITS insertion caused.
+    current_sequence = list(hit_labels)
+    insertion_positions = list(range(len(hit_labels)))
+    inner_overheads: list[int] = []
+    previous_len = len(_user_content(current_sequence, question))
+    for position, holder in enumerate(group_order):
+        history_indexes = groups[holder][1:]
+        if not history_indexes:
+            inner_overheads.append(0)
+            continue
+        history_labels = [labels[index] for index in history_indexes]
+        insert_at = insertion_positions[position] + 1
+        current_sequence[insert_at:insert_at] = history_labels
+        for later in range(position + 1, len(insertion_positions)):
+            insertion_positions[later] += len(history_labels)
+        new_len = len(_user_content(current_sequence, question))
+        inner_overheads.append(new_len - previous_len)
+        previous_len = new_len
+
+    shares = prompt_budget.nested_shares(
+        head_sizes, inner_sizes, inner_overheads, budget=budget
+    )
+
+    bounded_bodies: list[str] = [""] * len(bodies)
+    excerpted_flags: list[bool] = [False] * len(bodies)
+    omitted_flags: list[bool] = [False] * len(bodies)
+    for group_share, holder in zip(shares, group_order, strict=True):
+        entry_indexes = groups[holder]
+        entry_shares = [group_share.head, *group_share.inner]
+        for entry_index, share in zip(entry_indexes, entry_shares, strict=True):
+            body = bodies[entry_index]
+            text, was_bounded = prompt_budget.bounded_text(
+                body,
+                budget=share,
+                windows=prompt_budget.chunk_lines(body, _CONTEXT_CHUNK_TARGET),
+                marker=CONTEXT_ELISION_MARKER,
+            )
+            excerpted, omitted = _classify_bound(was_bounded, text, body)
+            bounded_bodies[entry_index] = text
+            excerpted_flags[entry_index] = excerpted
+            omitted_flags[entry_index] = omitted
+    return bounded_bodies, excerpted_flags, omitted_flags
+
+
+def _guarded_read(
+    bundle_dir: Path,
+    concept_id: str,
+    blocked: frozenset[str],
+    *,
+    include_confidential: bool,
+    local_exemption: bool,
+) -> tuple[dict[str, object], str] | None:
+    """The ONE guarded re-read every send-time consumer of a bundle doc goes
+    through -- a hit in `_assemble_context`'s own loop, and (slice 2b,
+    superseded-history-in-query) a revision-history predecessor via
+    `history.walk_history`'s injected `read`. Extracted verbatim from the
+    former hit-loop body (design.md Decision 2's "guarded-read refactor") so
+    a predecessor can never diverge from a hit on which gates apply.
+
+    Returns `None` on any guard failure: `concept_id in blocked` (the
+    sensitivity-fail-closed-filter defense-in-depth net, S3b), an unreadable
+    file (`OSError`/`UnicodeDecodeError`), unparsable frontmatter (any
+    `Exception` from `okf.load_frontmatter`), or a fresh
+    `sensitivity.should_block` re-check of the just-read frontmatter --
+    never raises. Otherwise returns `(metadata, body)`, the parsed
+    frontmatter and body text, so the caller pays for exactly one read."""
+    if concept_id in blocked:
+        return None
+    try:
+        text = okf.concept_path_for(concept_id, bundle_dir).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    try:
+        metadata, body = okf.load_frontmatter(text)
+    except Exception:  # broad: any parse failure skips this hit (D2)
+        return None
+    if sensitivity.should_block(
+        metadata,
+        include_confidential=include_confidential,
+        local_exemption=local_exemption,
+    ):
+        return None
+    return metadata, body
+
+
 def _assemble_context(
     bundle_dir: Path,
     concept_ids: list[str],
@@ -576,6 +761,9 @@ def _assemble_context(
     llm: LLMBackend | None = None,
     question: str = "",
     omitted_titles_out: list[str] | None = None,
+    revision_history: bool = False,
+    deprecated: frozenset[str] = frozenset(),
+    history_truncated_out: list[str] | None = None,
 ) -> tuple[list[str], list[Citation]]:
     """Guarded per-hit re-read (D2): re-read + re-parse each fused
     `concept_id`'s doc, skipping anything unreadable or unparseable rather
@@ -629,29 +817,68 @@ def _assemble_context(
     The exemption must be honored HERE as well as at the hit-seam filter,
     not only there: this is the layer that actually assembles the prompt, so
     a re-check that ignored it would drop every concept the upstream filter
-    had just admitted and make the exemption cosmetic."""
+    had just admitted and make the exemption cosmetic.
+
+    superseded-history-in-query, slice 2b (design.md Decisions 2/3/4/5):
+    when `revision_history`, each fused concept's outbound `supersedes`/
+    `revises` edges are walked (`history.walk_history`) and every reachable
+    predecessor is attached as its OWN separately numbered block right
+    after its successor's, labelled per `history.label_note` and
+    `history.date_phrase`. The walk's reader is `_guarded_read` itself, so a
+    predecessor can never diverge from a hit on which gates apply; a
+    predecessor already in `concept_ids` (an ordinary hit) or already
+    attached under an earlier successor is skipped and never re-attached
+    (design.md Decision 3's dedupe, generalizing the proposal's `revises`-
+    only rule to both relations). `deprecated` decides a `revises`
+    predecessor's OWN currency, independent of the traversing edge's role.
+    `history_truncated_out`, when given, receives the retrieved successor's
+    OWN title whenever its reachable chain was cut short by the block cap,
+    the depth bound, or both -- computed by `history.walk_history` with no
+    extra read. Defaults (`revision_history=False`) take the EXACT
+    pre-feature code path below unchanged."""
     labels: list[str] = []
     bodies: list[str] = []
     citations: list[Citation] = []
-    for concept_id in concept_ids:
-        if concept_id in blocked:
-            continue
-        try:
-            text = okf.concept_path_for(concept_id, bundle_dir).read_text(
-                encoding="utf-8"
-            )
-        except (OSError, UnicodeDecodeError):
-            continue
-        try:
-            metadata, body = okf.load_frontmatter(text)
-        except Exception:  # noqa: S112 -- broad: any parse failure skips this hit (D2)
-            continue
-        if sensitivity.should_block(
-            metadata,
+    holders: list[int] = []
+    fused_set = frozenset(concept_ids)
+    attached: set[str] = set()
+    rejected: set[str] = set()
+
+    guarded_read_for_walk = functools.partial(
+        _guarded_read,
+        bundle_dir,
+        blocked=blocked,
+        include_confidential=include_confidential,
+        local_exemption=local_exemption,
+    )
+
+    def _read_for_history(cid: str) -> tuple[dict[str, object], str] | None:
+        result = guarded_read_for_walk(cid)
+        if result is None:
+            rejected.add(cid)
+        return result
+
+    def _admit(cid: str, meta: Mapping[str, object]) -> bool:
+        if cid in blocked:
+            return False
+        return not sensitivity.should_block(
+            meta,
             include_confidential=include_confidential,
             local_exemption=local_exemption,
-        ):
+        )
+
+    history_attached = False
+    for concept_id in concept_ids:
+        result = _guarded_read(
+            bundle_dir,
+            concept_id,
+            blocked,
+            include_confidential=include_confidential,
+            local_exemption=local_exemption,
+        )
+        if result is None:
             continue
+        metadata, body = result
         title = str(metadata.get("title") or "") or concept_id
         # Issue #570: an `Insight` is a FILED SYNTHESIS -- model output over
         # the bundle's state at some earlier answer time, not knowledge
@@ -666,6 +893,7 @@ def _assemble_context(
             if metadata.get("type") == _INSIGHT_TYPE
             else ""
         )
+        group_index = len(labels)
         labels.append(f"[concept_id: {concept_id} — {title}{synthesis_note}]\n")
         bodies.append(body)
         citations.append(
@@ -680,12 +908,84 @@ def _assemble_context(
                 ),
             )
         )
+        holders.append(group_index)
+
+        if revision_history:
+            walk = history.walk_history(
+                concept_id,
+                metadata,
+                read=_read_for_history,
+                skip=fused_set | attached | rejected,
+            )
+            for pred in walk.predecessors:
+                resolved = event_dates.resolve_event_date(
+                    bundle_dir, pred.metadata, admit=_admit
+                )
+                pred_title = str(pred.metadata.get("title") or "") or pred.concept_id
+                pred_synthesis_note = (
+                    " (filed synthesis: model output over an earlier bundle "
+                    "state, not a source-backed concept)"
+                    if pred.metadata.get("type") == _INSIGHT_TYPE
+                    else ""
+                )
+                note = history.label_note(
+                    pred.role,
+                    pred.holder_id,
+                    resolved,
+                    current=pred.concept_id not in deprecated,
+                )
+                labels.append(
+                    f"[concept_id: {pred.concept_id} — "
+                    f"{pred_title}{pred_synthesis_note}{note}]\n"
+                )
+                bodies.append(pred.body)
+                citations.append(
+                    Citation(
+                        concept_id=pred.concept_id,
+                        title=pred_title,
+                        confidential=(
+                            str(pred.metadata.get("sensitivity", "")).strip()
+                            == okf.SENSITIVITY_ORDER[-1]
+                        ),
+                        history=pred.role,
+                    )
+                )
+                holders.append(group_index)
+                attached.add(pred.concept_id)
+                history_attached = True
+            if walk.truncated and history_truncated_out is not None:
+                history_truncated_out.append(title)
+
+    if history_attached:
+        bounded_bodies, excerpted_flags, omitted_flags = _bound_with_history(
+            labels, bodies, holders, llm=llm, question=question
+        )
+        context_blocks = []
+        kept: list[Citation] = []
+        for label, bounded, was_excerpted, was_omitted, citation in zip(
+            labels,
+            bounded_bodies,
+            excerpted_flags,
+            omitted_flags,
+            citations,
+            strict=True,
+        ):
+            if was_omitted:
+                if omitted_titles_out is not None:
+                    suffix = " (earlier version)" if citation.history else ""
+                    omitted_titles_out.append(citation.title + suffix)
+                continue
+            context_blocks.append(label + bounded)
+            kept.append(
+                replace(citation, excerpted=True) if was_excerpted else citation
+            )
+        return context_blocks, kept
 
     bounded_bodies, bounded_flags = _bound_bodies(
         labels, bodies, llm=llm, question=question
     )
     context_blocks = []
-    kept: list[Citation] = []
+    kept = []
     for label, original, bounded, was_bounded, citation in zip(
         labels, bodies, bounded_bodies, bounded_flags, citations, strict=True
     ):
@@ -931,6 +1231,7 @@ def answer(
     include_confidential: bool = False,
     local_exemption: bool = False,
     sufficiency_check: bool = False,
+    revision_history: bool = False,
 ) -> AnswerResult:
     """Answer `question` from `bundle_dir` using `llm`, citing the concepts used.
 
@@ -1032,6 +1333,12 @@ def answer(
     # showed the slot cost a real hit and bought centrality, not relevance.
     fused_ids = fusion.fuse(hits, vec_hits)[: max(limit, 0)]
     omitted_titles: list[str] = []
+    history_truncated_titles: list[str] = []
+    # superseded-history-in-query, design.md Decision 8: under
+    # `include_deprecated`, a formerly deprecated predecessor is already an
+    # ordinary hit, so attaching it again as a non-current history block
+    # would contradict its restored status -- the walk does not run at all.
+    walk_history_enabled = revision_history and not include_deprecated
     context_blocks, citations = _assemble_context(
         bundle_dir,
         fused_ids,
@@ -1041,11 +1348,20 @@ def answer(
         llm=llm,
         question=question,
         omitted_titles_out=omitted_titles,
+        revision_history=walk_history_enabled,
+        deprecated=deprecated,
+        history_truncated_out=history_truncated_titles,
     )
     # Captured BEFORE #753's attribution filter runs below: this reports
     # what was SENT, and a model that cites nothing must not also erase the
-    # notice that it was shown a fraction of the corpus (#882).
-    excerpted_titles = [c.title for c in citations if c.excerpted]
+    # notice that it was shown a fraction of the corpus (#882). A history
+    # block's title carries the same ` (earlier version)` suffix its
+    # omission disclosure does (design.md Decision 6).
+    excerpted_titles = [
+        c.title + (" (earlier version)" if c.history else "")
+        for c in citations
+        if c.excerpted
+    ]
 
     if not context_blocks:
         # The disclosure travels on THIS return too (#882). When the budget
@@ -1068,6 +1384,7 @@ def answer(
             dense_degraded=dense_degraded,
             excerpted_titles=excerpted_titles,
             omitted_titles=omitted_titles,
+            history_truncated_titles=history_truncated_titles,
         )
 
     user_content = _user_content(context_blocks, question)
@@ -1102,6 +1419,7 @@ def answer(
             context_block_count=len(context_blocks),
             excerpted_titles=excerpted_titles,
             omitted_titles=omitted_titles,
+            history_truncated_titles=history_truncated_titles,
         )
 
     reply = llm.chat(_build_messages(user_content))
@@ -1148,4 +1466,5 @@ def answer(
         attribution=attribution,
         excerpted_titles=excerpted_titles,
         omitted_titles=omitted_titles,
+        history_truncated_titles=history_truncated_titles,
     )

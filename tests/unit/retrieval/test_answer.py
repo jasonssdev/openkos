@@ -27,7 +27,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from openkos import lifecycle, sensitivity
+from openkos import lifecycle, prompt_budget, sensitivity
 from openkos.cli.main import app
 from openkos.llm.base import EMBED_DIM, Message
 from openkos.llm.ollama import (
@@ -53,6 +53,8 @@ def _write_doc(
     status: str | None = None,
     relations: list[tuple[str, str]] | None = None,
     sensitivity_value: str | None = "private",
+    provenance: list[str] | None = None,
+    event_date: str | None = None,
 ) -> None:
     """Write a minimal concept `.md` file. `status`/`relations` are optional
     lifecycle frontmatter (status-aware-retrieval, Phase 2): `relations` is a
@@ -62,7 +64,9 @@ def _write_doc(
     real `ingest` always writes) so fixtures unrelated to the
     sensitivity-fail-closed-filter feature are never collaterally blocked by
     the fail-closed default; pass `None` explicitly for the absent-field
-    case."""
+    case. `provenance`/`event_date` (superseded-history-in-query, slice 2b)
+    mirror `tests/unit/test_event_dates.py`'s helper, so a predecessor's
+    resolved event date can be fixtured the same way."""
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = [
         "---",
@@ -79,6 +83,12 @@ def _write_doc(
         for target, rel_type in relations:
             lines.append(f"  - target: {target}")
             lines.append(f"    type: {rel_type}")
+    if provenance is not None:
+        lines.append("provenance:")
+        for entry in provenance:
+            lines.append(f"  - {entry}")
+    if event_date is not None:
+        lines.append(f"event_date: {event_date}")
     lines.append("---")
     frontmatter = "\n".join(lines) + "\n"
     path.write_text(f"{frontmatter}{body}", encoding="utf-8")
@@ -3568,3 +3578,1052 @@ def test_a_document_the_model_was_shown_none_of_is_dropped_not_cited(
     assert result.excerpted_titles == []
     assert result.citations == []
     assert not any("Huge" in str(m) for call in llm.calls for m in call)
+
+
+# --- superseded-history-in-query, slice 2b: attach, label, and currency ----
+#
+# `revision_history` walks a successor's outbound `supersedes`/`revises`
+# edges (design.md Decision 2/3) and attaches each predecessor as its own
+# separately numbered history block, labelled per design.md Decision 5.
+
+
+def test_history_block_attached_with_label_and_citation(tmp_path: Path) -> None:
+    """(a) A `supersedes` predecessor is attached as its own block after the
+    successor's, labelled `superseded by concept_id: <holder>`, `no longer
+    current`, with `Citation.history == "superseded"`.
+    (b) A `revises` predecessor not itself deprecated elsewhere is labelled
+    `refined by concept_id: <holder>`, `still current`.
+    (c) The same edge, but the predecessor IS separately superseded
+    elsewhere (in `deprecated`) -- the label still says `refined` (the
+    traversing edge's relation) but `no longer current` (the predecessor's
+    own deprecated-set membership).
+    (d) A depth-2 predecessor's label names its IMMEDIATE holder (the
+    intermediate), never the top-level successor.
+    (e) The successor's own label is byte-identical with and without
+    `revision_history`.
+    Covers query-answer's "A supersedes predecessor is attached as a
+    history block", "...names the retrieved successor as holder", "...names
+    its immediate holder, not the top-level successor", "...still current",
+    "...no longer current", "The successor's own label is unaffected", and
+    status-aware-retrieval's "A superseded concept reaches the prompt only
+    as an attached history block". RED today: `_assemble_context` accepts
+    no `revision_history` keyword -- `TypeError`."""
+    bundle_dir = tmp_path / "bundle"
+
+    # (a) supersedes
+    _write_doc(
+        bundle_dir / "concepts" / "s.md",
+        title="S",
+        body="s body",
+        relations=[("concepts/p", "supersedes")],
+    )
+    _write_doc(
+        bundle_dir / "concepts" / "p.md",
+        title="P",
+        body="p body",
+        status="deprecated",
+    )
+
+    context_blocks, citations = answer_mod._assemble_context(
+        bundle_dir, ["concepts/s"], revision_history=True
+    )
+
+    assert len(context_blocks) == 2
+    assert context_blocks[0].startswith("[concept_id: concepts/s — S]\n")
+    assert context_blocks[1].startswith(
+        "[concept_id: concepts/p — P (earlier version, superseded by "
+        "concept_id: concepts/s; event date unknown; no longer current)]\n"
+    )
+    assert citations[0].history is None
+    assert citations[1].concept_id == "concepts/p"
+    assert citations[1].history == "superseded"
+
+    # (b) revises, predecessor not deprecated elsewhere
+    _write_doc(
+        bundle_dir / "concepts" / "s2.md",
+        title="S2",
+        body="s2 body",
+        relations=[("concepts/p2", "revises")],
+    )
+    _write_doc(bundle_dir / "concepts" / "p2.md", title="P2", body="p2 body")
+
+    _, citations_b = answer_mod._assemble_context(
+        bundle_dir, ["concepts/s2"], revision_history=True
+    )
+
+    assert citations_b[1].history == "refined"
+    _, citations_b2 = answer_mod._assemble_context(
+        bundle_dir, ["concepts/s2"], revision_history=True
+    )
+    context_blocks_b, _ = answer_mod._assemble_context(
+        bundle_dir, ["concepts/s2"], revision_history=True
+    )
+    assert "refined by concept_id: concepts/s2" in context_blocks_b[1]
+    assert "still current" in context_blocks_b[1]
+    del citations_b2
+
+    # (c) revises, predecessor IS separately deprecated elsewhere
+    context_blocks_c, citations_c = answer_mod._assemble_context(
+        bundle_dir,
+        ["concepts/s2"],
+        revision_history=True,
+        deprecated=frozenset({"concepts/p2"}),
+    )
+    assert "refined by concept_id: concepts/s2" in context_blocks_c[1]
+    assert "no longer current" in context_blocks_c[1]
+    assert citations_c[1].history == "refined"
+
+    # (d) depth-2 predecessor's label names its immediate holder
+    _write_doc(
+        bundle_dir / "concepts" / "s3.md",
+        title="S3",
+        body="s3 body",
+        relations=[("concepts/p3", "supersedes")],
+    )
+    _write_doc(
+        bundle_dir / "concepts" / "p3.md",
+        title="P3",
+        body="p3 body",
+        status="deprecated",
+        relations=[("concepts/q3", "revises")],
+    )
+    _write_doc(bundle_dir / "concepts" / "q3.md", title="Q3", body="q3 body")
+
+    context_blocks_d, _ = answer_mod._assemble_context(
+        bundle_dir, ["concepts/s3"], revision_history=True
+    )
+    assert len(context_blocks_d) == 3
+    assert "refined by concept_id: concepts/p3" in context_blocks_d[2]
+    assert "concept_id: concepts/s3" not in context_blocks_d[2]
+
+    # (e) the successor's own label is byte-identical with/without history
+    context_blocks_no_history, _ = answer_mod._assemble_context(
+        bundle_dir, ["concepts/s"]
+    )
+    context_blocks_with_history, _ = answer_mod._assemble_context(
+        bundle_dir, ["concepts/s"], revision_history=True
+    )
+    assert context_blocks_no_history[0] == context_blocks_with_history[0]
+
+
+def test_date_phrase_rendering_end_to_end(tmp_path: Path) -> None:
+    """A predecessor with one resolved event date renders `event date <D>`;
+    one with multiple distinct dates renders `event dates <D1> to <D2>`; one
+    whose resolution is `missing`/`none-reached` renders `event date
+    unknown` and never the concept's own ingest timestamp. Covers "An
+    unresolved date renders as unknown, never ingest time" and "Multiple
+    distinct dates render as an earliest-to-latest range". RED today: same
+    reason as the attach test above."""
+    bundle_dir = tmp_path / "bundle"
+
+    _write_doc(
+        bundle_dir / "concepts" / "s.md",
+        title="S",
+        relations=[
+            ("concepts/dated", "supersedes"),
+            ("concepts/multi", "supersedes"),
+            ("concepts/unknown", "supersedes"),
+        ],
+    )
+    _write_doc(
+        bundle_dir / "concepts" / "dated.md",
+        title="Dated",
+        status="deprecated",
+        provenance=["sources/s1"],
+    )
+    _write_doc(bundle_dir / "sources" / "s1.md", event_date="2026-07-14")
+    _write_doc(
+        bundle_dir / "concepts" / "multi.md",
+        title="Multi",
+        status="deprecated",
+        provenance=["sources/m1", "sources/m2"],
+    )
+    _write_doc(bundle_dir / "sources" / "m1.md", event_date="2026-01-01")
+    _write_doc(bundle_dir / "sources" / "m2.md", event_date="2026-03-01")
+    _write_doc(
+        bundle_dir / "concepts" / "unknown.md",
+        title="Unknown",
+        status="deprecated",
+    )
+
+    context_blocks, _ = answer_mod._assemble_context(
+        bundle_dir, ["concepts/s"], revision_history=True
+    )
+
+    by_id = {}
+    for block in context_blocks[1:]:
+        cid = block.split("concept_id: ", 1)[1].split(" —", 1)[0]
+        by_id[cid] = block
+
+    assert "event date 2026-07-14" in by_id["concepts/dated"]
+    assert "event dates 2026-01-01 to 2026-03-01" in by_id["concepts/multi"]
+    assert "event date unknown" in by_id["concepts/unknown"]
+
+
+# --- superseded-history-in-query, slice 2b: send-time guards + dedupe ------
+
+
+def test_predecessor_send_time_guards(tmp_path: Path) -> None:
+    """A predecessor whose freshly re-read frontmatter is confidential is
+    absent from history blocks/citations with `include_confidential` off,
+    and present with it (or `local_exemption`) on; a `blocked` predecessor
+    is silently omitted; an unreadable predecessor is silently omitted with
+    no exception. Covers "A confidential predecessor is excluded like a
+    hit" and "An unreadable predecessor is skipped without raising". RED
+    today: `_assemble_context` accepts no `revision_history` keyword --
+    `TypeError`. Kills calling a raw read instead of `_guarded_read` inside
+    the walk's reader."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "s.md",
+        title="S",
+        relations=[
+            ("concepts/secret", "supersedes"),
+            ("concepts/blocked-one", "supersedes"),
+            ("concepts/gone", "supersedes"),
+        ],
+    )
+    _write_doc(
+        bundle_dir / "concepts" / "secret.md",
+        title="Secret",
+        status="deprecated",
+        sensitivity_value="confidential",
+    )
+    _write_doc(
+        bundle_dir / "concepts" / "blocked-one.md",
+        title="Blocked",
+        status="deprecated",
+    )
+    # "concepts/gone" is never written -- an unreadable predecessor.
+
+    context_blocks, citations = answer_mod._assemble_context(
+        bundle_dir,
+        ["concepts/s"],
+        blocked=frozenset({"concepts/blocked-one"}),
+        revision_history=True,
+    )
+
+    cited_ids = {c.concept_id for c in citations}
+    assert "concepts/secret" not in cited_ids
+    assert "concepts/blocked-one" not in cited_ids
+    assert "concepts/gone" not in cited_ids
+    assert not any("Secret" in b for b in context_blocks)
+
+    context_blocks_open, citations_open = answer_mod._assemble_context(
+        bundle_dir,
+        ["concepts/s"],
+        blocked=frozenset({"concepts/blocked-one"}),
+        revision_history=True,
+        include_confidential=True,
+    )
+    cited_ids_open = {c.concept_id for c in citations_open}
+    assert "concepts/secret" in cited_ids_open
+    assert any("Secret" in b for b in context_blocks_open)
+
+    _, citations_local = answer_mod._assemble_context(
+        bundle_dir,
+        ["concepts/s"],
+        blocked=frozenset({"concepts/blocked-one"}),
+        revision_history=True,
+        local_exemption=True,
+    )
+    assert "concepts/secret" in {c.concept_id for c in citations_local}
+
+
+def test_refused_predecessor_is_a_dead_end(tmp_path: Path) -> None:
+    """A predecessor P that fails a send-time guard (here: confidential)
+    holds an outbound `supersedes` edge to Q -- Q is never attached, because
+    the walk never follows a refused node's own edges. Covers "A refused
+    predecessor is a dead end, never traversed" at the integration level
+    (re-confirms `test_dead_end_on_refused_read`'s pure-walk coverage
+    against the REAL `_guarded_read`). RED today: same reason as above."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "s.md",
+        title="S",
+        relations=[("concepts/p", "supersedes")],
+    )
+    _write_doc(
+        bundle_dir / "concepts" / "p.md",
+        title="P",
+        status="deprecated",
+        sensitivity_value="confidential",
+        relations=[("concepts/q", "supersedes")],
+    )
+    _write_doc(bundle_dir / "concepts" / "q.md", title="Q", status="deprecated")
+
+    context_blocks, citations = answer_mod._assemble_context(
+        bundle_dir, ["concepts/s"], revision_history=True
+    )
+
+    cited_ids = {c.concept_id for c in citations}
+    assert "concepts/p" not in cited_ids
+    assert "concepts/q" not in cited_ids
+    assert len(context_blocks) == 1
+
+
+def test_confidential_source_date_shown_as_unknown(tmp_path: Path) -> None:
+    """A predecessor P whose `provenance:` names only a Source the
+    sensitivity gate refuses (confidential, `include_confidential` off),
+    while P's own frontmatter passes its own guards: P's label reads `event
+    date unknown` and P's own history block IS still attached -- the
+    Source's refusal affects only the date lookup. Covers "A confidential
+    Source's date resolves as unknown, without excluding the predecessor's
+    own block". RED today: same reason as above. Kills dropping the `admit`
+    closure when calling `resolve_event_date`."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "s.md",
+        title="S",
+        relations=[("concepts/p", "supersedes")],
+    )
+    _write_doc(
+        bundle_dir / "concepts" / "p.md",
+        title="P",
+        status="deprecated",
+        provenance=["sources/secret-source"],
+    )
+    _write_doc(
+        bundle_dir / "sources" / "secret-source.md",
+        doc_type="Source",
+        event_date="2026-07-14",
+        sensitivity_value="confidential",
+    )
+
+    context_blocks, citations = answer_mod._assemble_context(
+        bundle_dir, ["concepts/s"], revision_history=True
+    )
+
+    assert "concepts/p" in {c.concept_id for c in citations}
+    assert len(context_blocks) == 2
+    assert "event date unknown" in context_blocks[1]
+    assert "2026-07-14" not in context_blocks[1]
+
+
+def test_dedup_rules(tmp_path: Path) -> None:
+    """(a) predecessor P is both an ordinary fused hit and reachable from
+    successor S via a `revises` edge -- P appears exactly once, as its
+    ordinary hit block, never also as history. (b) predecessor P is
+    reachable from both successor S1 (ranked before S2) and successor S2 --
+    P is attached exactly once, under S1. Covers "A revises predecessor
+    already a hit is not repeated" and "A predecessor shared by two
+    successors is attached once". RED today: same reason as above. Kills
+    passing `skip=` without the fused set, or without tracking `attached`
+    across loop iterations."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "s.md",
+        title="S",
+        relations=[("concepts/p", "revises")],
+    )
+    _write_doc(bundle_dir / "concepts" / "p.md", title="P")
+
+    context_blocks, citations = answer_mod._assemble_context(
+        bundle_dir, ["concepts/s", "concepts/p"], revision_history=True
+    )
+
+    assert [c.concept_id for c in citations] == ["concepts/s", "concepts/p"]
+    assert citations[1].history is None
+    assert len(context_blocks) == 2
+
+    bundle_dir2 = tmp_path / "bundle2"
+    _write_doc(
+        bundle_dir2 / "concepts" / "s1.md",
+        title="S1",
+        relations=[("concepts/shared", "supersedes")],
+    )
+    _write_doc(
+        bundle_dir2 / "concepts" / "s2.md",
+        title="S2",
+        relations=[("concepts/shared", "supersedes")],
+    )
+    _write_doc(
+        bundle_dir2 / "concepts" / "shared.md", title="Shared", status="deprecated"
+    )
+
+    context_blocks2, citations2 = answer_mod._assemble_context(
+        bundle_dir2, ["concepts/s1", "concepts/s2"], revision_history=True
+    )
+
+    shared_citations = [c for c in citations2 if c.concept_id == "concepts/shared"]
+    assert len(shared_citations) == 1
+    assert len(context_blocks2) == 3
+    # attached under S1 (the first block after S1, before S2's own block)
+    assert "concepts/shared" in context_blocks2[1]
+    assert "concepts/s2" in context_blocks2[2]
+
+
+# --- superseded-history-in-query, slice 2b: the nested budget split -------
+
+
+def test_budget_isolation_unrelated_hits_unchanged(tmp_path: Path) -> None:
+    """Four hits under the default window, one of which (the last) is a
+    successor with an attached history block: the other three hits'
+    bounded bodies are byte-identical to a history-free twin run with the
+    same hits and window. Covers "Adding history to one successor leaves
+    other hits' bodies unchanged". RED today: `_bound_with_history` does
+    not exist; `_assemble_context` never calls `nested_shares`. Kills
+    measuring `overhead_hits` over all labels (the history-inclusive "flat
+    pool") instead of only the hit labels."""
+    bundle_a = tmp_path / "bundle_a"
+    bundle_b = tmp_path / "bundle_b"
+    huge = "\n".join(f"dichotomyzz line {n:04d} " + "y" * 60 for n in range(1_500))
+    for bundle_dir, with_history in ((bundle_a, True), (bundle_b, False)):
+        for n in range(3):
+            _write_doc(bundle_dir / "concepts" / f"h{n}.md", title=f"H{n}", body=huge)
+        _write_doc(
+            bundle_dir / "concepts" / "succ.md",
+            title="Succ",
+            body=huge,
+            relations=[("concepts/pred", "supersedes")] if with_history else None,
+        )
+        if with_history:
+            _write_doc(
+                bundle_dir / "concepts" / "pred.md",
+                title="Pred",
+                status="deprecated",
+                body="p" * 50,
+            )
+
+    llm = _WindowedLLM()
+    ids = ["concepts/h0", "concepts/h1", "concepts/h2", "concepts/succ"]
+
+    blocks_a, _ = answer_mod._assemble_context(
+        bundle_a, ids, llm=llm, question="q", revision_history=True
+    )
+    blocks_b, _ = answer_mod._assemble_context(
+        bundle_b, ids, llm=llm, question="q", revision_history=True
+    )
+
+    assert blocks_a[:3] == blocks_b[:3]
+    assert len(blocks_a) == 5
+    assert len(blocks_b) == 4
+
+
+def test_bound_with_history_overhead_uses_hit_labels_only() -> None:
+    """A direct, non-integration proof that `_bound_with_history`'s outer
+    `overhead_hits` is measured over the HIT labels only: an unrelated
+    hit's own bounded body, under a window tight enough to force real
+    excerpting, is byte-identical to what `_bound_bodies` alone computes
+    for the SAME hits with no history labels in the mix at all. Kills
+    measuring `overhead_hits` over the history-inclusive "flat pool" of
+    every label (a larger overhead there silently shrinks every hit's
+    outer share, including an unrelated one's)."""
+    labels = [
+        "[H0]\n",
+        "[H1]\n",
+        "[SUCC]\n",
+        "[PRED - a rather long history label engineered to make a flat-pool "
+        "overhead mistake visible in the budget math]\n",
+    ]
+    bodies = ["z" * 20_000, "z" * 20_000, "z" * 20_000, "p" * 50]
+    holders = [0, 1, 2, 2]
+    llm = _WindowedLLM(context_window=5_000, max_generation_tokens=200)
+
+    bounded, _, _ = answer_mod._bound_with_history(
+        labels, bodies, holders, llm=llm, question="q"
+    )
+    hit_only_bounded, _ = answer_mod._bound_bodies(
+        labels[:3], bodies[:3], llm=llm, question="q"
+    )
+
+    assert len(bounded[0]) < len(bodies[0]), "fixture must actually force excerpting"
+    assert bounded[0] == hit_only_bounded[0]
+    assert bounded[1] == hit_only_bounded[1]
+
+
+def test_fit_within_todays_bound(tmp_path: Path) -> None:
+    """Across a sweep of window sizes with mixed history/no-history hits,
+    `len(user_content) + max(system prompt lengths)` never exceeds the
+    bound today's plan already allows. Kills the marginal-overhead
+    computation (using the final label set's total overhead instead of the
+    telescoping per-group marginal sum)."""
+    bundle_dir = tmp_path / "bundle"
+    huge = "\n".join(f"dichotomyzz line {n:04d} " + "y" * 60 for n in range(400))
+    _write_doc(bundle_dir / "concepts" / "other.md", title="Other", body=huge)
+    _write_doc(
+        bundle_dir / "concepts" / "succ.md",
+        title="Succ",
+        body=huge,
+        relations=[("concepts/pred", "supersedes")],
+    )
+    _write_doc(
+        bundle_dir / "concepts" / "pred.md",
+        title="Pred",
+        status="deprecated",
+        body=huge,
+    )
+
+    for window in (20_000, 30_000, 60_000, 200_000):
+        llm = _WindowedLLM(context_window=window, max_generation_tokens=1_000)
+        context_blocks, _ = answer_mod._assemble_context(
+            bundle_dir,
+            ["concepts/other", "concepts/succ"],
+            llm=llm,
+            question="q",
+            revision_history=True,
+        )
+        hit_labels = [context_blocks[0].split("]\n", 1)[0] + "]\n"]
+        overhead_hits = len(answer_mod._user_content(hit_labels, "q")) + max(
+            len(answer_mod._SYSTEM_PROMPT), len(answer_mod._SUFFICIENCY_PROMPT)
+        )
+        budget = prompt_budget.budget_chars(
+            planning=prompt_budget.planning_window(llm),
+            generation_reserve_tokens=prompt_budget.reply_reserve(llm),
+            overhead_chars=overhead_hits,
+        )
+        sent = answer_mod._user_content(context_blocks, "q")
+        assert (
+            len(sent)
+            + max(len(answer_mod._SYSTEM_PROMPT), len(answer_mod._SUFFICIENCY_PROMPT))
+            <= budget + overhead_hits
+        )
+
+
+def test_unspent_budget_lets_small_history_fit_without_excerpting(
+    tmp_path: Path,
+) -> None:
+    """A window where every hit's outer share already comfortably fits its
+    body, leaving unspent budget; one successor carries one small history
+    block: it is sent in full, unexcerpted, funded from the unspent budget
+    rather than carved out of the successor's own outer share. Covers
+    "Unspent budget lets a small history block fit without excerpting".
+    RED today: same reason as above. Kills funding history only from the
+    successor's own outer share with no slack stage."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "other.md", title="Other", body="tiny body")
+    _write_doc(
+        bundle_dir / "concepts" / "succ.md",
+        title="Succ",
+        body="succ body",
+        relations=[("concepts/pred", "supersedes")],
+    )
+    _write_doc(
+        bundle_dir / "concepts" / "pred.md",
+        title="Pred",
+        status="deprecated",
+        body="pred body small",
+    )
+    llm = _WindowedLLM()  # default 12288/8192 window -- generous slack
+
+    context_blocks, citations = answer_mod._assemble_context(
+        bundle_dir,
+        ["concepts/other", "concepts/succ"],
+        llm=llm,
+        question="q",
+        revision_history=True,
+    )
+
+    pred_citation = next(c for c in citations if c.concept_id == "concepts/pred")
+    assert pred_citation.excerpted is False
+    pred_block = next(b for b in context_blocks if "concept_id: concepts/pred" in b)
+    assert pred_block.endswith("pred body small")
+
+
+def test_fully_spent_window_splits_within_own_share(tmp_path: Path) -> None:
+    """A window where every hit's outer share is fully spent (no unspent
+    budget); a successor carries history: its nested pool equals exactly
+    its own outer share minus the history frame overhead, split across
+    `[successor, *history]` -- proved by comparing the successor's own
+    bounded length against a history-free twin run at the same window,
+    which keeps its FULL outer share. RED today: same reason as above."""
+    bundle_a = tmp_path / "bundle_a"
+    bundle_b = tmp_path / "bundle_b"
+    huge = "\n".join(f"dichotomyzz line {n:04d} " + "y" * 60 for n in range(400))
+    for bundle_dir, with_history in ((bundle_a, True), (bundle_b, False)):
+        _write_doc(bundle_dir / "concepts" / "other.md", title="Other", body=huge)
+        _write_doc(
+            bundle_dir / "concepts" / "succ.md",
+            title="Succ",
+            body=huge,
+            relations=[("concepts/pred", "supersedes")] if with_history else None,
+        )
+        if with_history:
+            _write_doc(
+                bundle_dir / "concepts" / "pred.md",
+                title="Pred",
+                status="deprecated",
+                body=huge,
+            )
+    llm_a = _WindowedLLM(context_window=20_000, max_generation_tokens=1_000)
+    llm_b = _WindowedLLM(context_window=20_000, max_generation_tokens=1_000)
+
+    blocks_a, citations_a = answer_mod._assemble_context(
+        bundle_a,
+        ["concepts/other", "concepts/succ"],
+        llm=llm_a,
+        question="q",
+        revision_history=True,
+    )
+    blocks_b, _ = answer_mod._assemble_context(
+        bundle_b,
+        ["concepts/other", "concepts/succ"],
+        llm=llm_b,
+        question="q",
+        revision_history=True,
+    )
+
+    pred_citation = next(c for c in citations_a if c.concept_id == "concepts/pred")
+    assert pred_citation is not None
+    succ_block_a = next(b for b in blocks_a if "concept_id: concepts/succ" in b)
+    succ_block_b = next(b for b in blocks_b if "concept_id: concepts/succ" in b)
+    assert len(succ_block_a) < len(succ_block_b)
+
+
+def test_oversized_history_block_excerpted_not_dropped(tmp_path: Path) -> None:
+    """A history block whose body exceeds its computed sub-share, within a
+    group that is not dropped as a whole: it receives an even-coverage
+    excerpt of its sub-share, and its citation is marked `excerpted`.
+    RED today: same reason as above."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "succ.md",
+        title="Succ",
+        body="succ body",
+        relations=[("concepts/pred", "supersedes")],
+    )
+    huge_body = "\n".join(f"pred line {n:04d} " + "y" * 60 for n in range(500))
+    _write_doc(
+        bundle_dir / "concepts" / "pred.md",
+        title="Pred",
+        status="deprecated",
+        body=huge_body,
+    )
+    llm = _WindowedLLM()  # default window: generous, but far smaller than huge_body
+
+    context_blocks, citations = answer_mod._assemble_context(
+        bundle_dir, ["concepts/succ"], llm=llm, question="q", revision_history=True
+    )
+
+    pred_citation = next(c for c in citations if c.concept_id == "concepts/pred")
+    assert pred_citation.excerpted is True
+    pred_block = next(b for b in context_blocks if "concept_id: concepts/pred" in b)
+    assert len(pred_block) < len(huge_body)
+
+
+def test_zero_share_history_block_dropped_and_disclosed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A history block whose sub-share of the successor's nested split
+    leaves it zero characters, while the successor itself keeps a
+    non-zero share: it is dropped from the prompt and from citations,
+    while a SIBLING history block in the same (non-dropped) group keeps
+    its own full share. Covers "A zero-share history block within a kept
+    group is dropped and disclosed as omitted". `budget_chars` is
+    monkeypatched to an exact value so this test exercises the module's
+    OWN arithmetic (`nested_shares`/`fair_shares`, already proven correct
+    in `test_prompt_budget.py`) with a precisely controlled outer budget,
+    rather than reverse-engineering a token/char ratio. RED today:
+    `_bound_with_history` does not exist. Kills the omission rule for
+    history."""
+    labels = ["[H]\n", "[P1]\n", "[P2]\n"]
+    bodies = ["z", "a", "b"]
+    holders = [0, 0, 0]
+    hit_labels = [labels[0]]
+    inner_overhead = len(answer_mod._user_content(labels, "")) - len(
+        answer_mod._user_content(hit_labels, "")
+    )
+    # Chosen so that outer=[1] (succ's tiny body fits), slack=inner_overhead+1,
+    # and the resulting nested pool for [succ, p1, p2] is exactly 2 --
+    # enough to fully fund succ+p1 (1 char each) but nothing for p2.
+    target_budget = inner_overhead + 2
+    monkeypatch.setattr(prompt_budget, "budget_chars", lambda **_kwargs: target_budget)
+
+    bounded, excerpted, omitted = answer_mod._bound_with_history(
+        labels, bodies, holders, llm=_FakeLLM(), question=""
+    )
+
+    assert bounded == ["z", "a", ""]
+    assert excerpted == [False, False, False]
+    assert omitted == [False, False, True]
+
+
+def test_history_group_dropped_entirely_when_it_would_zero_the_successor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A successor whose nested split, if applied, would leave the
+    successor's own share at zero despite a non-zero outer share: NONE of
+    that successor's history blocks are sent, and its own share reverts to
+    its unchanged outer share. Covers "A history group that would cost its
+    successor its whole body is dropped entirely instead". RED today:
+    same reason as above."""
+    labels = ["[H]\n", "[P]\n"]
+    bodies = ["z", "abcde"]
+    holders = [0, 0]
+    hit_labels = [labels[0]]
+    inner_overhead = len(answer_mod._user_content(labels, "")) - len(
+        answer_mod._user_content(hit_labels, "")
+    )
+    # Chosen so the nested pool for [succ, p] is exactly 1 -- fair_shares([1,
+    # 5], budget=1) gives the larger item (p) the sole leftover char, so
+    # succ's own split entry is 0 and the whole group is dropped instead.
+    target_budget = inner_overhead + 1
+    monkeypatch.setattr(prompt_budget, "budget_chars", lambda **_kwargs: target_budget)
+
+    bounded, excerpted, omitted = answer_mod._bound_with_history(
+        labels, bodies, holders, llm=_FakeLLM(), question=""
+    )
+
+    assert bounded == ["z", ""]
+    assert excerpted == [False, False]
+    assert omitted == [False, True]
+
+
+# --- superseded-history-in-query, slice 2b: Citation.history + attribution -
+
+
+def test_used_naming_and_citation_history_field(tmp_path: Path) -> None:
+    """(a) The model's `USED:` line naming a history block's number keeps
+    a `Citation` for that predecessor with `history` set to its role.
+    (b) An ordinary hit citation always carries `history=None`.
+    (c) An absent attribution line keeps every context-included block, hit
+    and history, with hits at `history=None` and history blocks at their
+    relation. Covers "A reported attribution naming a history block sets
+    history", "An ordinary hit citation always carries history=None",
+    "Absent attribution keeps every included block, hit or history". RED
+    today: `Citation` has no `history` field -- `AttributeError`."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "s.md",
+        title="S",
+        body="dichotomyzz s body",
+        relations=[("concepts/p", "supersedes")],
+    )
+    _write_doc(
+        bundle_dir / "concepts" / "p.md", title="P", body="p body", status="deprecated"
+    )
+    recording_index = _RecordingIndex(
+        hits=[fts.FtsHit(concept_id="concepts/s", score=1.0)]
+    )
+
+    result_a = answer_mod.answer(
+        "dichotomyzz",
+        bundle_dir=bundle_dir,
+        llm=_FakeLLM(reply="an answer\n\nUSED: 1, 2"),
+        fts_index=recording_index,
+        revision_history=True,
+    )
+    history_citation = next(
+        c for c in result_a.citations if c.concept_id == "concepts/p"
+    )
+    assert history_citation.history == "superseded"
+    hit_citation = next(c for c in result_a.citations if c.concept_id == "concepts/s")
+    assert hit_citation.history is None
+
+    result_c = answer_mod.answer(
+        "dichotomyzz",
+        bundle_dir=bundle_dir,
+        llm=_FakeLLM(reply="an answer with no marker line"),
+        fts_index=recording_index,
+        revision_history=True,
+    )
+    assert result_c.attribution == "absent"
+    by_id_c = {c.concept_id: c for c in result_c.citations}
+    assert by_id_c["concepts/s"].history is None
+    assert by_id_c["concepts/p"].history == "superseded"
+
+
+def test_context_block_count_includes_history(tmp_path: Path) -> None:
+    """`revision_history=True`, a successor with 2 attached history blocks
+    among otherwise ordinary hits: `context_block_count` equals the
+    hit-block count plus 2, while `fused_count`, `fts_hit_count`, and
+    `dense_hit_count` are unaffected. Covers "context_block_count includes
+    attached history blocks". RED today: same reason as above. Kills
+    counting history blocks in `fused_count`/`fts_hit_count`/
+    `dense_hit_count`."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "s.md",
+        title="S",
+        body="dichotomyzz s body",
+        relations=[("concepts/p1", "supersedes"), ("concepts/p2", "revises")],
+    )
+    _write_doc(bundle_dir / "concepts" / "p1.md", title="P1", status="deprecated")
+    _write_doc(bundle_dir / "concepts" / "p2.md", title="P2")
+    recording_index = _RecordingIndex(
+        hits=[fts.FtsHit(concept_id="concepts/s", score=1.0)]
+    )
+
+    result = answer_mod.answer(
+        "dichotomyzz",
+        bundle_dir=bundle_dir,
+        llm=_FakeLLM(reply="ok"),
+        fts_index=recording_index,
+        revision_history=True,
+    )
+
+    assert result.context_block_count == 3
+    assert result.fused_count == 1
+    assert result.fts_hit_count == 1
+    assert result.dense_hit_count == 0
+
+
+def test_truncation_signal_cap_and_depth_causes(tmp_path: Path) -> None:
+    """(a) A successor whose reachable predecessors within depth 3 exceed
+    3 sets `history_truncated_titles` to its title.
+    (b) A successor whose chain continues past depth 3 with fewer than 3
+    blocks attached STILL sets it. Covers "The truncation signal names the
+    capped successor's title" and "A chain cut by the depth bound also
+    sets the truncation signal". RED today: `AnswerResult` has no
+    `history_truncated_titles` field. Kills reporting truncation for only
+    one of the two causes."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "s_cap.md",
+        title="S Cap",
+        body="dichotomyzz cap",
+        relations=[(f"concepts/p{i}", "supersedes") for i in range(4)],
+    )
+    for i in range(4):
+        _write_doc(
+            bundle_dir / "concepts" / f"p{i}.md", title=f"P{i}", status="deprecated"
+        )
+    _write_doc(
+        bundle_dir / "concepts" / "s_depth.md",
+        title="S Depth",
+        body="dichotomyzz depth",
+        relations=[("concepts/d1", "supersedes")],
+    )
+    _write_doc(
+        bundle_dir / "concepts" / "d1.md",
+        title="D1",
+        status="deprecated",
+        relations=[("concepts/d2", "supersedes")],
+    )
+    _write_doc(
+        bundle_dir / "concepts" / "d2.md",
+        title="D2",
+        status="deprecated",
+        relations=[("concepts/d3", "supersedes")],
+    )
+    _write_doc(
+        bundle_dir / "concepts" / "d3.md",
+        title="D3",
+        status="deprecated",
+        relations=[("concepts/d4", "supersedes")],
+    )
+    _write_doc(bundle_dir / "concepts" / "d4.md", title="D4", status="deprecated")
+    recording_index = _RecordingIndex(
+        hits=[
+            fts.FtsHit(concept_id="concepts/s_cap", score=1.0),
+            fts.FtsHit(concept_id="concepts/s_depth", score=0.9),
+        ]
+    )
+
+    result = answer_mod.answer(
+        "dichotomyzz",
+        bundle_dir=bundle_dir,
+        llm=_FakeLLM(reply="ok"),
+        fts_index=recording_index,
+        revision_history=True,
+    )
+
+    assert "S Cap" in result.history_truncated_titles
+    assert "S Depth" in result.history_truncated_titles
+
+
+def test_disabled_reports_no_truncation(tmp_path: Path) -> None:
+    """`revision_history=False` (the default): `history_truncated_titles
+    == []`, and `context_block_count` is unaffected by this requirement.
+    RED today: same reason as above."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "s.md",
+        title="S",
+        body="dichotomyzz s",
+        relations=[(f"concepts/p{i}", "supersedes") for i in range(4)],
+    )
+    for i in range(4):
+        _write_doc(
+            bundle_dir / "concepts" / f"p{i}.md", title=f"P{i}", status="deprecated"
+        )
+    recording_index = _RecordingIndex(
+        hits=[fts.FtsHit(concept_id="concepts/s", score=1.0)]
+    )
+
+    result = answer_mod.answer(
+        "dichotomyzz",
+        bundle_dir=bundle_dir,
+        llm=_FakeLLM(reply="ok"),
+        fts_index=recording_index,
+    )
+
+    assert result.history_truncated_titles == []
+    assert result.context_block_count == 1
+
+
+# --- superseded-history-in-query, slice 2b: off path + include_deprecated --
+
+
+def test_off_path_zero_extra_reads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`revision_history` omitted (its default) and `revision_history=False`
+    both make exactly one read per fused hit -- no extra reads for any
+    chain member; `revision_history=True` on the SAME bundle reads strictly
+    more, proving the spy is not vacuous. Covers "Disabled by default makes
+    zero extra reads". RED today: `revision_history` is not a recognized
+    keyword -- `TypeError` on the `True` call. Kills calling the walk
+    unconditionally regardless of the flag."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "s.md",
+        title="S",
+        body="dichotomyzz s",
+        relations=[("concepts/p", "supersedes")],
+    )
+    _write_doc(bundle_dir / "concepts" / "p.md", title="P", status="deprecated")
+    recording_index = _RecordingIndex(
+        hits=[fts.FtsHit(concept_id="concepts/s", score=1.0)]
+    )
+
+    read_calls: list[Path] = []
+    original_read_text = Path.read_text
+
+    def _spy_read_text(
+        self: Path, encoding: str | None = None, errors: str | None = None
+    ) -> str:
+        read_calls.append(self)
+        return original_read_text(self, encoding=encoding, errors=errors)
+
+    monkeypatch.setattr(Path, "read_text", _spy_read_text)
+
+    answer_mod.answer(
+        "dichotomyzz",
+        bundle_dir=bundle_dir,
+        llm=_FakeLLM(reply="ok"),
+        fts_index=recording_index,
+    )
+    count_default = len(read_calls)
+    read_calls.clear()
+
+    answer_mod.answer(
+        "dichotomyzz",
+        bundle_dir=bundle_dir,
+        llm=_FakeLLM(reply="ok"),
+        fts_index=recording_index,
+        revision_history=False,
+    )
+    count_explicit_false = len(read_calls)
+    read_calls.clear()
+
+    # `count_default`/`count_explicit_false` also include the pre-existing
+    # bundle-wide `lifecycle.deprecated_concept_ids`/
+    # `sensitivity.sensitive_concept_ids` walks (status-aware-retrieval,
+    # sensitivity-fail-closed-filter) -- unaffected by `revision_history`,
+    # so they must be EQUAL to each other; the with-history run below reads
+    # strictly more on top of that same baseline.
+    assert count_default == count_explicit_false
+
+    answer_mod.answer(
+        "dichotomyzz",
+        bundle_dir=bundle_dir,
+        llm=_FakeLLM(reply="ok"),
+        fts_index=recording_index,
+        revision_history=True,
+    )
+    count_with_history = len(read_calls)
+
+    assert count_with_history > count_explicit_false
+
+
+def test_off_path_messages_byte_identical(tmp_path: Path) -> None:
+    """With `revision_history=False` and with the parameter omitted, the
+    captured LLM `messages` argument on a bundle with `supersedes`/
+    `revises` chains is byte-for-byte equal to the captured `messages`
+    against a chain-free twin bundle carrying the same hits. Covers the
+    "byte-identical to the pre-history-feature behavior" clause and
+    "revision_history is caller-supplied, not config-read". RED today:
+    same reason as above. Kills any code path that runs even a trivial
+    no-op when the flag is off."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "s.md",
+        title="S",
+        body="dichotomyzz s",
+        relations=[("concepts/p", "supersedes")],
+    )
+    _write_doc(bundle_dir / "concepts" / "p.md", title="P", status="deprecated")
+    bundle_twin = tmp_path / "bundle_twin"
+    _write_doc(bundle_twin / "concepts" / "s.md", title="S", body="dichotomyzz s")
+    recording_index = _RecordingIndex(
+        hits=[fts.FtsHit(concept_id="concepts/s", score=1.0)]
+    )
+    llm_default = _FakeLLM(reply="ok")
+    llm_explicit_false = _FakeLLM(reply="ok")
+    llm_twin = _FakeLLM(reply="ok")
+
+    answer_mod.answer(
+        "dichotomyzz",
+        bundle_dir=bundle_dir,
+        llm=llm_default,
+        fts_index=recording_index,
+    )
+    answer_mod.answer(
+        "dichotomyzz",
+        bundle_dir=bundle_dir,
+        llm=llm_explicit_false,
+        fts_index=recording_index,
+        revision_history=False,
+    )
+    answer_mod.answer(
+        "dichotomyzz", bundle_dir=bundle_twin, llm=llm_twin, fts_index=recording_index
+    )
+
+    assert llm_default.calls == llm_explicit_false.calls == llm_twin.calls
+
+
+def test_include_deprecated_suppresses_history_walk(tmp_path: Path) -> None:
+    """`include_deprecated=True` with `revision_history=True` produces no
+    history blocks at all, and the captured `messages` equal those of the
+    same call with `revision_history=False`. Covers status-aware-
+    retrieval's "History is suppressed under --include-deprecated". RED
+    today: same reason as above. Kills dropping the `not
+    include_deprecated` term."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "s.md",
+        title="S",
+        body="dichotomyzz s",
+        relations=[("concepts/p", "supersedes")],
+    )
+    # `p` is ALSO an ordinary hit under `--include-deprecated` -- to prove
+    # the walk itself does not run (Decision 8), not merely that the
+    # fused_set dedupe (Decision 3) masks an already-hit predecessor, `p`
+    # holds its OWN outbound edge to `q`, which is never itself a hit.
+    _write_doc(
+        bundle_dir / "concepts" / "p.md",
+        title="P",
+        status="deprecated",
+        relations=[("concepts/q", "supersedes")],
+    )
+    _write_doc(bundle_dir / "concepts" / "q.md", title="Q", status="deprecated")
+    recording_index = _RecordingIndex(
+        hits=[
+            fts.FtsHit(concept_id="concepts/s", score=1.0),
+            fts.FtsHit(concept_id="concepts/p", score=0.5),
+        ]
+    )
+    llm_a = _FakeLLM(reply="ok")
+    llm_b = _FakeLLM(reply="ok")
+
+    result_a = answer_mod.answer(
+        "dichotomyzz",
+        bundle_dir=bundle_dir,
+        llm=llm_a,
+        fts_index=recording_index,
+        revision_history=True,
+        include_deprecated=True,
+    )
+    answer_mod.answer(
+        "dichotomyzz",
+        bundle_dir=bundle_dir,
+        llm=llm_b,
+        fts_index=recording_index,
+        revision_history=False,
+        include_deprecated=True,
+    )
+
+    assert llm_a.calls == llm_b.calls
+    assert all(c.history is None for c in result_a.citations)
+    assert "concepts/q" not in {c.concept_id for c in result_a.citations}
