@@ -32,6 +32,16 @@ targeted by a non-self `supersedes` edge is deprecated — including both
 members of a mutual (2-node) cycle and every member of a longer supersedes
 cycle of any length.
 
+An inbound `revises` edge (written by `reconcile --revision`) MUST NOT mark
+either end deprecated. Deprecation is governed only by the `status` field
+and inbound `supersedes` edges as described above; this holds uniformly
+across every consumer of the shared effective-status predicate, including
+`lifecycle.deprecated_concept_ids` and the `list` STATUS column.
+(Previously: this requirement defined deprecation via `status` and
+`supersedes` only, with no explicit statement about `revises`; this adds
+the explicit non-deprecation guarantee for `revises` as a tested
+requirement, since `reconcile --revision` newly writes that edge type.)
+
 #### Scenario: status field alone marks deprecated
 - GIVEN a concept with `status: deprecated` and no supersedes edges
 - WHEN its effective status is resolved
@@ -54,6 +64,12 @@ cycle of any length.
 - WHEN their effective status is resolved
 - THEN A, B, and C are all deprecated
 
+#### Scenario: A revises edge deprecates neither end, in retrieval or in list STATUS
+- GIVEN concept A holds an outbound `revises` edge targeting concept B
+- WHEN the effective status of A and B is resolved by
+  `lifecycle.deprecated_concept_ids` and by the `list` STATUS column
+- THEN neither A nor B appears in `deprecated_concept_ids`, and `list`
+  reports both as `active`
 ### Requirement: Deprecated Concepts Excluded By Default
 
 By default, retrieval and candidate-generation paths MUST NOT return, rank,

@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0024: A refinement is a stored revises relation, and a resolved pair is never re-judged"
 description: reconcile records a refinement as a directional revises edge that hides nothing, and any pair joined by supersedes, reconciled_with or revises leaves contradiction candidacy.
-status: Proposed
+status: Accepted
 date: 2026-09-25
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0024: A refinement is a stored revises relation, and a resolved pair is never re-judged
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-09-25
 
 ## Context
