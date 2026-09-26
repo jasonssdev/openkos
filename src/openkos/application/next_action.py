@@ -3,7 +3,7 @@
 
 This module owns the whole decision: an ordered tuple of tier callables
 (`_TIERS`, D1 priority order) plus one lazily-memoized signal holder
-(`_BundleSignals`). `cli/main.py` gains only the workspace gate, one call
+(`BundleSignals`). `cli/main.py` gains only the workspace gate, one call
 into `next_action()`, and an echo loop over `render_lines()` -- no ranking
 logic lives there.
 
@@ -47,9 +47,9 @@ as a function this module could call -- `status` folds it into its own
 rendered section. The principle it serves is the same one, though: the walk
 logic still lives in `okf`, and this module only reads its result.
 
-Cost contract, enforced STRUCTURALLY, not by discipline: `_BundleSignals` is
+Cost contract, enforced STRUCTURALLY, not by discipline: `BundleSignals` is
 the only object holding a `Path`. A tier callable receives only a
-`_BundleSignals` instance, never a directory -- the same pinned-signature
+`BundleSignals` instance, never a directory -- the same pinned-signature
 guard `lint.py` already documents for `check_unextracted(docs)` -- so a tier
 that never receives a directory is incapable of opening a walk on its own.
 Each property memoizes its own walk, so reading `signals.docs` from both
@@ -166,7 +166,7 @@ class NextResult:
     buy them with the walk the cost contract forbids (D3)."""
 
 
-class _BundleSignals:
+class BundleSignals:
     """Lazily-memoized signals over one bundle, each paying its own walk
     exactly once no matter how many tiers read it (design: "lazy memoized
     signals, not self-contained tier closures")."""
@@ -416,11 +416,11 @@ def _command_from_detail(detail: str, verb: str, *, takes_argument: bool) -> str
     return None
 
 
-def _tier_bootstrap_empty_bundle(signals: _BundleSignals) -> NextAction | None:
+def _tier_bootstrap_empty_bundle(signals: BundleSignals) -> NextAction | None:
     """Rank 0 (#386): a bundle with zero eligible documents needs its FIRST
     ingest, not a reindex -- there is nothing to index, so recommending
     `openkos reindex` over an empty bundle is a runnable command that does
-    nothing. This rung gates `_tier_missing_vector_index`: it checks the
+    nothing. This rung gates `tier_missing_vector_index`: it checks the
     same zero-walk `vector_store_empty` signal first and declines outright
     when the index is populated, so the docs walk it needs (the SAME
     memoized `signals.docs` walk tiers 2/3 share -- never a new one) is
@@ -461,7 +461,7 @@ def _tier_bootstrap_empty_bundle(signals: _BundleSignals) -> NextAction | None:
     )
 
 
-def _tier_missing_vector_index(signals: _BundleSignals) -> NextAction | None:
+def tier_missing_vector_index(signals: BundleSignals) -> NextAction | None:
     """Rank 1: missing or empty vector index. Ranked first among the
     content-presupposing tiers because it BLOCKS every later judgment, not
     because it is cheap; that it is also the cheapest check -- no walk of
@@ -480,7 +480,7 @@ def _tier_missing_vector_index(signals: _BundleSignals) -> NextAction | None:
     )
 
 
-def _tier_missing_fts_index(signals: _BundleSignals) -> NextAction | None:
+def _tier_missing_fts_index(signals: BundleSignals) -> NextAction | None:
     """Rank 1b (#553): missing on-disk FTS index. Ranked directly BELOW the
     missing-vector-index tier (same command, and when BOTH are missing the
     user is told about the vector index, whose absence also blocks candidate
@@ -505,7 +505,7 @@ def _tier_missing_fts_index(signals: _BundleSignals) -> NextAction | None:
     )
 
 
-def _tier_stale_derived_indexes(signals: _BundleSignals) -> NextAction | None:
+def _tier_stale_derived_indexes(signals: BundleSignals) -> NextAction | None:
     """Rank 2: `fts.db`/`graph.db` describing an older bundle than the one on
     disk (#381). Ranked directly BELOW the missing-vector-index tier because
     both recommend the same command and only the reason can differ: an absent
@@ -536,7 +536,7 @@ def _tier_stale_derived_indexes(signals: _BundleSignals) -> NextAction | None:
     )
 
 
-def _tier_unextracted_source(signals: _BundleSignals) -> NextAction | None:
+def _tier_unextracted_source(signals: BundleSignals) -> NextAction | None:
     """Rank 2: unextracted source (`extraction_status: failed`). Ranked
     above tier 3 because this is knowledge ABSENT from the bundle, and
     absence outranks mislabelling: judging a label over a set still missing
@@ -596,7 +596,7 @@ def _tier_unextracted_source(signals: _BundleSignals) -> NextAction | None:
     return None
 
 
-def _tier_unjudged_extraction(signals: _BundleSignals) -> NextAction | None:
+def _tier_unjudged_extraction(signals: BundleSignals) -> NextAction | None:
     """Rank between unextracted source and below-source sensitivity:
     derived objects stored WITHOUT judge selection (#772's quarantine
     tokens, read via `lint_check.check_unjudged`) are knowledge that
@@ -645,7 +645,7 @@ def _tier_unjudged_extraction(signals: _BundleSignals) -> NextAction | None:
     return None
 
 
-def _tier_below_source_sensitivity(signals: _BundleSignals) -> NextAction | None:
+def _tier_below_source_sensitivity(signals: BundleSignals) -> NextAction | None:
     """Rank 3: below-source-sensitivity descendant. Ranked above tier 4 --
     its single-document sibling (#693), where this tier's sweep repairs a
     whole closure at once -- and above tier 5 because a mislabelled
@@ -681,7 +681,7 @@ def _tier_below_source_sensitivity(signals: _BundleSignals) -> NextAction | None
     return None
 
 
-def _tier_multi_source_uncovered(signals: _BundleSignals) -> NextAction | None:
+def _tier_multi_source_uncovered(signals: BundleSignals) -> NextAction | None:
     """Rank 4 (#693): a `multi-source-uncovered` document, resolvable with
     `openkos set-sensitivity`.
 
@@ -738,7 +738,7 @@ def _tier_multi_source_uncovered(signals: _BundleSignals) -> NextAction | None:
     return None
 
 
-def _tier_duplicate_groups(signals: _BundleSignals) -> NextAction | None:
+def _tier_duplicate_groups(signals: BundleSignals) -> NextAction | None:
     """Rank 5: pending exact-title duplicate group. Ranked below every
     sensitivity tier because it is
     merely AMBIGUOUS -- everything it concerns is present and correctly
@@ -779,7 +779,7 @@ def _tier_duplicate_groups(signals: _BundleSignals) -> NextAction | None:
     )
 
 
-def _tier_non_nfc_names(signals: _BundleSignals) -> NextAction | None:
+def _tier_non_nfc_names(signals: BundleSignals) -> NextAction | None:
     """Rank 6: on-disk names that are not NFC (issue #491).
 
     Ranked LAST, below even the duplicate-groups tier, and the position is
@@ -818,7 +818,7 @@ def _tier_non_nfc_names(signals: _BundleSignals) -> NextAction | None:
     )
 
 
-def _tier_open_contradictions(signals: _BundleSignals) -> NextAction | None:
+def _tier_open_contradictions(signals: BundleSignals) -> NextAction | None:
     """Rank 7, LAST (pending-work design, Decision 6): a persisted
     contradiction finding that is open, non-stale, and non-declined.
 
@@ -865,11 +865,11 @@ def _tier_open_contradictions(signals: _BundleSignals) -> NextAction | None:
     )
 
 
-Tier = Callable[[_BundleSignals], NextAction | None]
+Tier = Callable[[BundleSignals], NextAction | None]
 
 _TIERS: tuple[Tier, ...] = (
     _tier_bootstrap_empty_bundle,
-    _tier_missing_vector_index,
+    tier_missing_vector_index,
     _tier_missing_fts_index,
     _tier_stale_derived_indexes,
     _tier_unextracted_source,
@@ -897,7 +897,7 @@ def next_action(layout: config.WorkspaceLayout) -> NextResult:
     The result also carries whatever skip notices the run happened to
     observe, which is none at all when a tier fired before the docs walk
     was ever paid."""
-    signals = _BundleSignals(layout)
+    signals = BundleSignals(layout)
     action: NextAction | None = None
     for tier in _TIERS:
         action = tier(signals)

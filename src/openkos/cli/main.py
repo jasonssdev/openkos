@@ -30,6 +30,7 @@ from openkos.application import ingest as application_ingest
 from openkos.application import lifecycle as application_lifecycle
 from openkos.application import lint as application_lint
 from openkos.application import list_service as application_list
+from openkos.application import next_action as next_action_module
 from openkos.application import pending as application_pending
 from openkos.application import query as application_query
 from openkos.application import status as application_status
@@ -41,7 +42,6 @@ from openkos.bundle import log as bundle_log
 from openkos.bundle import merge as bundle_merge
 from openkos.bundle import provenance as bundle_provenance
 from openkos.cli import curate as curate_module
-from openkos.cli import next_action as next_action_module
 from openkos.cli import observability
 from openkos.extraction import judge as judge_mod
 from openkos.extraction.concept import (
@@ -10673,8 +10673,8 @@ def next_cmd() -> None:
     freshly initialized, empty bundle, exits 0.
 
     Delegates the whole ranked decision to
-    `openkos.cli.next_action.next_action` (the ordered `_TIERS` tuple over
-    a lazily-memoized `_BundleSignals` holder) and echoes
+    `openkos.application.next_action.next_action` (the ordered `_TIERS` tuple over
+    a lazily-memoized `BundleSignals` holder) and echoes
     `next_action.render_lines`'s output verbatim. `status`'s body is not
     read or touched here (design D2): every signal `next` reads comes from
     a function `status`/`lint` already ship, so no walk logic is
