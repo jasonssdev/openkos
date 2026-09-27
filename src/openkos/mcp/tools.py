@@ -4,7 +4,7 @@
 `execute` is the ONE composition (design Decision 2): validate arguments,
 run the tool's service call, take a fresh disclosure snapshot, read the
 consistency warnings, then let `mcp.gate` build the final disclosure-safe
-payload. This slice registers `get`, the first real tool.
+payload. Slice 5 registered `get`; this slice adds `navigate`.
 """
 
 from __future__ import annotations
@@ -106,8 +106,55 @@ _GET_TOOL: Final = Tool(
     disclose=gate.disclose_get,
 )
 
-REGISTRY: Final[Mapping[str, Tool]] = {"get": _GET_TOOL}
-"""`navigate`, `pending`, and `query` join in slices 6-9."""
+
+def _navigate_run(
+    arguments: Mapping[str, object],
+    ctx: ToolContext,
+    progress: ProgressSink | None,
+) -> concept_read.Neighborhood:
+    """`navigate`'s service call (design Decision 5): read every neighbor
+    `build_graph`'s projection holds for the target, in both directions --
+    unfiltered; `gate.disclose_navigate` is what decides what may be
+    disclosed."""
+    concept_id = cast(
+        str, arguments["concept_id"]
+    )  # `inputSchema` already enforced this
+    return concept_read.concept_neighbors(ctx.layout, concept_id)
+
+
+_NAVIGATE_INPUT_SCHEMA: Final[Mapping[str, object]] = {
+    "type": "object",
+    "properties": {"concept_id": {"type": "string", "minLength": 1}},
+    "required": ["concept_id"],
+    "additionalProperties": False,
+}
+
+_NAVIGATE_OUTPUT_SCHEMA: Final[Mapping[str, object]] = {
+    "type": "object",
+    "properties": {
+        "concept_id": {"type": ["string", "null"]},
+        "neighbors": {"type": "array"},
+        "withheld": {"type": "integer", "minimum": 0},
+        "warnings": {"type": "array"},
+        "not_run": {"type": "array"},
+        "error": {"type": "object"},
+    },
+    "required": ["withheld", "warnings", "not_run"],
+}
+
+_NAVIGATE_TOOL: Final = Tool(
+    name="navigate",
+    title="Navigate Concept Graph",
+    description="Read one concept's neighbors from the graph projection, "
+    "both outbound and inbound, typed and untyped.",
+    input_schema=_NAVIGATE_INPUT_SCHEMA,
+    output_schema=_NAVIGATE_OUTPUT_SCHEMA,
+    run=_navigate_run,
+    disclose=gate.disclose_navigate,
+)
+
+REGISTRY: Final[Mapping[str, Tool]] = {"get": _GET_TOOL, "navigate": _NAVIGATE_TOOL}
+"""`pending` and `query` join in slices 7-9."""
 
 
 SUPPORTED_SCHEMA_KEYWORDS: Final = frozenset(

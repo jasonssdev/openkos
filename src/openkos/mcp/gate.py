@@ -12,13 +12,15 @@ raw `not_run` entries with `application.consistency.Consistency`'s own,
 renders both into the fixed, count-only vocabulary (design Decision 3),
 and renders `warnings` from the consistency check (design Decision 11).
 
-This slice adds `disclose_get` (design Decision 4), the first real
-`disclose_*` function; `disclose_navigate`/`disclose_pending`/
-`disclose_query` land in slices 6-9 as their tools do.
+Slice 5 added `disclose_get` (design Decision 4), the first real
+`disclose_*` function; this slice adds `disclose_navigate` (design
+Decision 5). `disclose_pending`/`disclose_query` land in slices 7-9 as
+their tools do.
 """
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -85,6 +87,30 @@ read_consistency`'s staleness check never raises); `graph_build` (slice
 outcomes. This constant documents the complete vocabulary design Decision 3
 names, independent of which labels this slice's aggregation touches."""
 
+_GRAPH_BUILD_REASON_RE: Final = re.compile(r"[1-9][0-9]* edges? could not be included")
+"""The EXACT count-only shape `disclose_navigate` builds for a `graph_build`
+entry (`"<n> edge(s) could not be included"`). `_render_not_run` fullmatches
+every `graph_build` entry's `reason` against this before forwarding it --
+the label alone is NOT a trust boundary, since `finish` also composes
+`NotRun`s a *service* could emit under the same label vocabulary. A reason
+that does not fullmatch (a document path, `str(exc)`, anything else) is
+therefore treated as unrecognized and folded into the aggregate bucket
+instead, exactly like any other untrusted entry -- fail-closed on shape,
+never on label or producer."""
+
+_PASSTHROUGH_REASON_PATTERNS: Final[Mapping[str, re.Pattern[str]]] = {
+    _GRAPH_BUILD: _GRAPH_BUILD_REASON_RE,
+}
+"""Labels whose `reason` legitimately varies per call (so a single
+`_FIXED_REASONS` string cannot represent it) but is still safe to forward
+ONCE VALIDATED against a fixed shape -- `graph_build` (slice 6's
+`navigate`) is the only member today. Unlike `_SINGLE_ENTRY_LABELS` (label
+kept, reason always replaced by a `_FIXED_REASONS` lookup) or the
+aggregate bucket (folded into one `provenance_walk` entry), a passthrough
+label's reason is kept verbatim ONLY when it fullmatches its pattern;
+otherwise it degrades to the aggregate bucket, same as an unrecognized
+label."""
+
 _SINGLE_ENTRY_LABELS: Final = frozenset({_IN_FLIGHT_WRITE, _CONCEPT_READ, _RELATIONS})
 """Labels a service already emits directly and correctly (never a document
 path): `finish` keeps the label and only replaces the `reason` text, since
@@ -112,18 +138,30 @@ def _render_not_run(
     entries: tuple[read_outcome.NotRun, ...],
 ) -> list[dict[str, object]]:
     """Render raw `NotRun` outcomes into the fixed, count-only vocabulary
-    (design Decision 3). Every `reason` is a hardcoded string -- never the
-    raw entry's own `reason`, which may be `str(exc)` or carry a document
-    path. Order follows the fixed vocabulary, not arrival order, so the
-    rendered list is deterministic."""
+    (design Decision 3). Every `reason` is EITHER a hardcoded string (never
+    the raw entry's own `reason`, which may be `str(exc)` or carry a
+    document path) OR, for a passthrough label, the entry's own `reason` --
+    but ONLY after it fullmatches that label's fixed shape
+    (`_PASSTHROUGH_REASON_PATTERNS`); an entry whose label claims to be
+    `graph_build` but whose `reason` does NOT match (a document path,
+    exception text, anything else) is treated as unrecognized and folded
+    into the aggregate bucket instead, exactly like a genuinely unknown
+    label -- the label alone is never trusted as a boundary, since `finish`
+    composes entries a service could produce under the SAME label
+    vocabulary. Order follows the fixed vocabulary, not arrival order, so
+    the rendered list is deterministic."""
     single: dict[str, dict[str, object]] = {}
+    passthrough: list[dict[str, object]] = []
     aggregate_count = 0
     for entry in entries:
+        pattern = _PASSTHROUGH_REASON_PATTERNS.get(entry.label)
         if entry.label in _SINGLE_ENTRY_LABELS:
             single[entry.label] = {
                 "label": entry.label,
                 "reason": _FIXED_REASONS[entry.label],
             }
+        elif pattern is not None and pattern.fullmatch(entry.reason):
+            passthrough.append({"label": entry.label, "reason": entry.reason})
         else:
             aggregate_count += 1
 
@@ -131,6 +169,7 @@ def _render_not_run(
     for label in (_IN_FLIGHT_WRITE, _CONCEPT_READ, _RELATIONS):
         if label in single:
             rendered.append(single[label])
+    rendered.extend(passthrough)
     if aggregate_count:
         noun = "document" if aggregate_count == 1 else "documents"
         rendered.append(
@@ -279,7 +318,7 @@ def disclose_get(raw: object, snapshot: Snapshot) -> dict[str, object]:
         )
     not_run.extend(raw.sources.not_run)
 
-    concept = {
+    concept: dict[str, object] = {
         "id": record.concept_id,
         "type": record.type,
         "title": record.title,
@@ -292,3 +331,61 @@ def disclose_get(raw: object, snapshot: Snapshot) -> dict[str, object]:
         "source_ancestors": source_ancestors,
     }
     return {"concept": concept, "withheld": withheld, "not_run": tuple(not_run)}
+
+
+def disclose_navigate(raw: object, snapshot: Snapshot) -> dict[str, object]:
+    """Build `navigate`'s disclosure-safe payload (design Decision 5).
+
+    `raw` is typed `object` to match `Tool.disclose`'s contravariant
+    signature; it is always a `concept_read.Neighborhood` at runtime, since
+    `mcp/tools.py` only ever pairs `navigate`'s `run` (which returns one)
+    with this function.
+
+    The target itself must be disclosable, else `concept_id: null,
+    withheld: 1` with no neighbors listed at all -- the graph projection is
+    sensitivity-blind by construction (`graph/base.py`), so there is no
+    second, freshly-read label to re-check the way `get`'s conjunction
+    does; `snapshot.discloses` is the only check for a neighbor too, in
+    EITHER direction: an inbound edge is filtered exactly like an outbound
+    one (the proposal's "both ends disclosable" rule). `raw.skipped_count`
+    becomes a `graph_build` `not_run` entry built directly from the count
+    -- `finish`'s `_render_not_run` forwards its `reason` verbatim only
+    after re-validating it against `_PASSTHROUGH_REASON_PATTERNS`'s fixed
+    shape (this module's own docstring): the label alone is not trusted,
+    so this entry is safe only because its `reason` is ALSO built in the
+    exact shape that validation expects, never because this function is
+    the one that built it."""
+    raw = cast(concept_read.Neighborhood, raw)
+    if not snapshot.discloses(raw.concept_id):
+        return {"concept_id": None, "withheld": 1, "neighbors": [], "not_run": ()}
+
+    withheld = 0
+    neighbors: list[dict[str, object]] = []
+    for neighbor in raw.neighbors:
+        if snapshot.discloses(neighbor.concept_id):
+            neighbors.append(
+                {
+                    "id": neighbor.concept_id,
+                    "direction": neighbor.direction,
+                    "relation": neighbor.relation_type,
+                }
+            )
+        else:
+            withheld += 1
+
+    not_run: tuple[read_outcome.NotRun, ...] = ()
+    if raw.skipped_count > 0:
+        noun = "edge" if raw.skipped_count == 1 else "edges"
+        not_run = (
+            read_outcome.NotRun(
+                label=_GRAPH_BUILD,
+                reason=f"{raw.skipped_count} {noun} could not be included",
+            ),
+        )
+
+    return {
+        "concept_id": raw.concept_id,
+        "neighbors": neighbors,
+        "withheld": withheld,
+        "not_run": not_run,
+    }

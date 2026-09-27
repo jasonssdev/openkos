@@ -19,6 +19,7 @@ from typing import Literal
 
 from openkos import config, lifecycle, read_outcome
 from openkos.application import lifecycle as application_lifecycle
+from openkos.graph.sqlite_graph import build_graph
 from openkos.model import okf
 
 
@@ -130,4 +131,75 @@ def read_concept(
         relations=relations,
         provenance=_provenance_entries(metadata),
         not_run=tuple(not_run),
+    )
+
+
+@dataclass(frozen=True)
+class Neighbor:
+    """One neighbor of a `navigate` target: an edge from `build_graph`'s
+    projection, oriented from the target's perspective (design Decision 5).
+
+    `relation_type` is `None` for an untyped body link, the relation's own
+    type string for a typed `relations:` edge, or `"derived_from"` for a
+    provenance-mirror edge (`graph.sqlite_graph`'s own synthesis)."""
+
+    concept_id: str
+    direction: Literal["out", "in"]
+    relation_type: str | None
+
+
+@dataclass(frozen=True)
+class Neighborhood:
+    """`navigate`'s read core result: every neighbor in both directions,
+    plus how many edges the graph build had to skip (design Decision 5)."""
+
+    concept_id: str
+    neighbors: tuple[Neighbor, ...]
+    skipped_count: int
+
+
+def concept_neighbors(layout: config.WorkspaceLayout, concept_id: str) -> Neighborhood:
+    """Resolve `concept_id` (the same path-safety validation as
+    `read_concept`) and return every neighbor `build_graph`'s projection
+    holds for it in EITHER direction (design Decision 5): edges where it is
+    the source (`"out"`) and edges where it is the target (`"in"`).
+
+    `SqliteGraphStore.neighbors` is out-only, which is why this filters
+    `store.edges()` directly instead. No candidate proximity edges are
+    requested (`build_graph(layout.bundle_dir)`, no `candidates=`), matching
+    the CLI's own graph-summary reads. The graph rebuilds per call (design:
+    "measured before any caching").
+    """
+    try:
+        _, canonical_id = application_lifecycle.resolve_concept_path(
+            layout.bundle_dir, concept_id
+        )
+    except ValueError as exc:
+        raise ConceptNotFound(str(exc)) from exc
+
+    with build_graph(layout.bundle_dir) as store:
+        neighbors = [
+            Neighbor(
+                concept_id=edge.target_id,
+                direction="out",
+                relation_type=edge.relation_type,
+            )
+            for edge in store.edges()
+            if edge.source_id == canonical_id
+        ] + [
+            Neighbor(
+                concept_id=edge.source_id,
+                direction="in",
+                relation_type=edge.relation_type,
+            )
+            for edge in store.edges()
+            if edge.target_id == canonical_id
+        ]
+        skipped_count = len(store.skipped)
+
+    neighbors.sort(key=lambda n: (n.direction, n.concept_id, n.relation_type or ""))
+    return Neighborhood(
+        concept_id=canonical_id,
+        neighbors=tuple(neighbors),
+        skipped_count=skipped_count,
     )

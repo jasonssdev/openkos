@@ -323,3 +323,179 @@ def test_finish_never_raises_stale_index_as_not_run() -> None:
     rendered = gate.finish(payload, _consistency(stale_stores=("fts",)))
     assert _rendered_not_run(rendered) == []
     assert any(w["code"] == "stale_index" for w in _rendered_warnings(rendered))
+
+
+# ---------------------------------------------------------------------------
+# 6.2: disclose_navigate's table (design Decision 5)
+# ---------------------------------------------------------------------------
+
+
+def _neighborhood(
+    *,
+    concept_id: str = "concepts/target",
+    neighbors: tuple[concept_read.Neighbor, ...] = (),
+    skipped_count: int = 0,
+) -> concept_read.Neighborhood:
+    return concept_read.Neighborhood(
+        concept_id=concept_id, neighbors=neighbors, skipped_count=skipped_count
+    )
+
+
+def test_disclose_navigate_table_target_not_disclosable() -> None:
+    """A target `concept_id` itself not disclosable returns `concept_id:
+    null, withheld: 1` -- no neighbors listed, even if some were passed."""
+    raw = _neighborhood(
+        neighbors=(
+            concept_read.Neighbor(
+                concept_id="concepts/other", direction="out", relation_type=None
+            ),
+        )
+    )
+    result = gate.disclose_navigate(raw, _snapshot(frozenset()))
+    assert result["concept_id"] is None
+    assert result["withheld"] == 1
+    assert result["neighbors"] == []
+
+
+def test_disclose_navigate_removes_confidential_outbound_neighbor() -> None:
+    """A confidential neighbor reachable via an OUTBOUND edge is removed
+    and counted."""
+    raw = _neighborhood(
+        neighbors=(
+            concept_read.Neighbor(
+                concept_id="concepts/blocked-out", direction="out", relation_type=None
+            ),
+        )
+    )
+    result = gate.disclose_navigate(raw, _snapshot(frozenset({"concepts/target"})))
+    assert result["concept_id"] == "concepts/target"
+    assert result["neighbors"] == []
+    assert result["withheld"] == 1
+
+
+def test_disclose_navigate_removes_confidential_inbound_neighbor() -> None:
+    """The same via an INBOUND edge is also removed and counted -- this is
+    the case a mutation that filters only outbound edges must fail."""
+    raw = _neighborhood(
+        neighbors=(
+            concept_read.Neighbor(
+                concept_id="concepts/blocked-in", direction="in", relation_type=None
+            ),
+        )
+    )
+    result = gate.disclose_navigate(raw, _snapshot(frozenset({"concepts/target"})))
+    assert result["concept_id"] == "concepts/target"
+    assert result["neighbors"] == []
+    assert result["withheld"] == 1
+
+
+def test_disclose_navigate_keeps_disclosable_neighbors_both_directions() -> None:
+    """A disclosable outbound and a disclosable inbound neighbor both
+    survive, each rendered with `id`, `direction`, and `relation`."""
+    raw = _neighborhood(
+        neighbors=(
+            concept_read.Neighbor(
+                concept_id="concepts/allowed-in",
+                direction="in",
+                relation_type="related_to",
+            ),
+            concept_read.Neighbor(
+                concept_id="concepts/allowed-out",
+                direction="out",
+                relation_type=None,
+            ),
+        )
+    )
+    result = gate.disclose_navigate(
+        raw,
+        _snapshot(
+            frozenset(
+                {"concepts/target", "concepts/allowed-in", "concepts/allowed-out"}
+            )
+        ),
+    )
+    assert result["concept_id"] == "concepts/target"
+    assert result["withheld"] == 0
+    assert result["neighbors"] == [
+        {"id": "concepts/allowed-in", "direction": "in", "relation": "related_to"},
+        {"id": "concepts/allowed-out", "direction": "out", "relation": None},
+    ]
+
+
+def test_disclose_navigate_reports_graph_build_not_run() -> None:
+    """`store.skipped` non-empty produces a `not_run` entry labelled
+    `graph_build` with a count-only reason, and the tool still returns
+    whatever neighbors it did read."""
+    raw = _neighborhood(
+        neighbors=(
+            concept_read.Neighbor(
+                concept_id="concepts/allowed-out", direction="out", relation_type=None
+            ),
+        ),
+        skipped_count=2,
+    )
+    result = gate.disclose_navigate(
+        raw, _snapshot(frozenset({"concepts/target", "concepts/allowed-out"}))
+    )
+    assert result["concept_id"] == "concepts/target"
+    assert result["neighbors"] == [
+        {"id": "concepts/allowed-out", "direction": "out", "relation": None}
+    ]
+    not_run = _raw_not_run(result)
+    assert len(not_run) == 1
+    assert not_run[0].label == "graph_build"
+    reason = not_run[0].reason
+    assert "2" in reason
+
+
+def test_graph_build_reason_validated_before_forwarding() -> None:
+    """`finish` must not forward a `graph_build` `NotRun`'s raw `reason`
+    unless it matches the EXACT count-only shape `disclose_navigate`
+    produces (design Decision 3: every `reason` is fixed and count-only,
+    never exception text or a document path). The label alone is not a
+    trust boundary -- `finish` also receives service-produced `NotRun`s
+    under the same label vocabulary, so a reason carrying a document path
+    or `str(exc)` must be treated as unrecognized (aggregated, count-only)
+    exactly like any other untrusted entry, never forwarded verbatim."""
+    document_path_payload = {
+        "concept_id": None,
+        "withheld": 0,
+        "not_run": (
+            read_outcome.NotRun(
+                label="graph_build", reason="/concepts/secret.md: boom"
+            ),
+        ),
+    }
+    rendered = gate.finish(document_path_payload, _consistency())
+    rendered_text = str(_rendered_not_run(rendered))
+    assert "/concepts/secret.md" not in rendered_text
+    assert "boom" not in rendered_text
+
+    exception_text_payload = {
+        "concept_id": None,
+        "withheld": 0,
+        "not_run": (
+            read_outcome.NotRun(
+                label="graph_build",
+                reason="cannot read concepts/zq-canary-7f3a: ZQ-CANARY-BODY-7F3A",
+            ),
+        ),
+    }
+    rendered = gate.finish(exception_text_payload, _consistency())
+    rendered_text = str(_rendered_not_run(rendered))
+    assert "zq-canary-7f3a" not in rendered_text
+    assert "ZQ-CANARY-BODY-7F3A" not in rendered_text
+
+    legitimate_payload = {
+        "concept_id": None,
+        "withheld": 0,
+        "not_run": (
+            read_outcome.NotRun(
+                label="graph_build", reason="2 edges could not be included"
+            ),
+        ),
+    }
+    rendered = gate.finish(legitimate_payload, _consistency())
+    assert _rendered_not_run(rendered) == [
+        {"label": "graph_build", "reason": "2 edges could not be included"}
+    ]
