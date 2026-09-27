@@ -250,7 +250,8 @@ def test_query_ollama_unavailable_over_stdio(tmp_path: Path) -> None:
                 call_result = message
                 break
     finally:
-        proc.stdin.close()
+        # `communicate()` closes stdin itself; closing it first makes
+        # Python 3.12's POSIX `communicate()` raise "flush of closed file".
         _, stderr = proc.communicate(timeout=10)
 
     assert proc.returncode == 0, stderr.decode("utf-8", "replace")
