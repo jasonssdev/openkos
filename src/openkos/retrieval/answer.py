@@ -529,6 +529,31 @@ class AnswerResult:
     """`concept_id`s index-aligned one-to-one with `history_truncated_titles`,
     for the same reason `excerpted_ids` pairs with `excerpted_titles`
     above."""
+    context_ids: list[str] = field(default_factory=list)
+    """Every concept id whose content was actually PLACED in the prompt,
+    index-aligned one-to-one with `context_blocks` (mcp-read-surface slice
+    9 correction, design Decision 9) -- captured BEFORE #753's
+    model-self-reported subset filter narrows `citations` down to the
+    blocks the model says it drew on.
+
+    `citations` alone is not a safe input for a disclosure decision: a
+    model that does not cite a block it was nonetheless SHOWN (`USED: 1`
+    over three blocks) narrows `citations` to one entry, but the other
+    two blocks' content still reached the prompt and the wording may still
+    have drawn on them. A downstream gate that withholds the answer only
+    when a CITED id is undisclosable misses exactly the race design
+    Decision 9 exists to close: an object read as public by
+    `_assemble_context`, then raised to confidential before the model
+    replies, whose block the model happens not to name.
+
+    `len(context_ids) == context_block_count` always holds by
+    construction (both are built from the same `citations` list `_assemble_
+    context` returns, before any later narrowing) -- a caller that finds
+    them inconsistent is looking at a defect and should treat it exactly
+    like `query-answer`'s own index-alignment contract for the title/id
+    list pairs: fail closed. Defaults empty via `default_factory`, so
+    every short-circuit return above (and every existing caller that never
+    reads this field) stays valid."""
 
 
 def _bound_bodies(
@@ -1430,6 +1455,13 @@ def answer(
         if c.excerpted
     ]
     excerpted_ids = [c.concept_id for c in citations if c.excerpted]
+    # Captured HERE, before #753's model-self-reported subset filter below
+    # reassigns `citations` -- this is every id whose content actually
+    # entered the prompt, index-aligned with `context_blocks`, regardless
+    # of whether the model went on to cite it (mcp-read-surface slice 9
+    # correction, design Decision 9). See `AnswerResult.context_ids`'s own
+    # docstring for why a citation-only check cannot close this race.
+    context_ids = [c.concept_id for c in citations]
 
     if not context_blocks:
         # The disclosure travels on THIS return too (#882). When the budget
@@ -1456,6 +1488,7 @@ def answer(
             excerpted_ids=excerpted_ids,
             omitted_ids=omitted_ids,
             history_truncated_ids=history_truncated_ids,
+            context_ids=context_ids,
         )
 
     user_content = _user_content(context_blocks, question)
@@ -1496,6 +1529,7 @@ def answer(
             excerpted_ids=excerpted_ids,
             omitted_ids=omitted_ids,
             history_truncated_ids=history_truncated_ids,
+            context_ids=context_ids,
         )
 
     if progress is not None:
@@ -1548,4 +1582,5 @@ def answer(
         excerpted_ids=excerpted_ids,
         omitted_ids=omitted_ids,
         history_truncated_ids=history_truncated_ids,
+        context_ids=context_ids,
     )

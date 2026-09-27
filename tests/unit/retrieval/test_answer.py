@@ -2676,6 +2676,31 @@ def test_reported_blocks_filter_the_citations(tmp_path: Path) -> None:
     assert result.attribution == "reported"
 
 
+def test_context_ids_names_every_prompt_object_not_only_reported_ones(
+    tmp_path: Path,
+) -> None:
+    """`context_ids` names EVERY object whose content actually entered the
+    prompt, captured BEFORE #753's model-self-reported subset filter narrows
+    `citations` (mcp-read-surface slice 9 correction). A model reporting
+    `USED: 1` narrows `citations` to one entry, but the other two blocks'
+    content was placed in the prompt just as much -- `context_ids` must
+    still name all three, index-aligned with `context_block_count`, so a
+    disclosure gate downstream can withhold on any of them, not only the
+    one(s) the model happened to cite. Kills capturing `context_ids` from
+    the POST-filter `citations` instead of the pre-filter one (that mutation
+    collapses this test's `len(...) == 3` to `1`)."""
+    result = _answer_over_three(tmp_path, "An answer.\n\nUSED: 1")
+
+    assert len(result.citations) == 1
+    assert len(result.context_ids) == 3
+    assert result.context_block_count == 3
+    assert set(result.context_ids) == {
+        "concepts/alpha",
+        "concepts/beta",
+        "concepts/gamma",
+    }
+
+
 def test_the_attribution_line_never_reaches_the_prose(tmp_path: Path) -> None:
     """The marker is machinery, so it is stripped like #193's ids.
 
