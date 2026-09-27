@@ -988,3 +988,108 @@ def test_progress_dropped_when_not_monotonically_increasing() -> None:
     notifications = asyncio.run(_scenario())
 
     assert [n["params"]["progress"] for n in notifications] == [0, 1, 2]
+
+
+# -- orchestrator review correction: withhold on ANY prompt object, not only
+# a cited one (design Decision 9) -------------------------------------------
+
+
+class _MidFlightRaiseLLM:
+    """A structural `LLMBackend` reproducing, end to end, the exact race
+    design Decision 9's fail-closed answer-withholding rule closes: `chat()`
+    echoes the WHOLE prompt back as its reply (so a leak would be
+    observable verbatim in the raw, unfiltered answer), flips the target
+    concept's on-disk `sensitivity` to `confidential` BEFORE returning, and
+    reports `USED: none` -- the model's own footer cites NOTHING, so
+    `citations` narrows to empty and a citation-only withholding check would
+    find zero withheld citations and never withhold the answer, even though
+    the now-confidential concept's content is sitting verbatim in the
+    echoed reply."""
+
+    def __init__(self, concept_path: Path) -> None:
+        self._concept_path = concept_path
+        self.calls: list[list[Message]] = []
+
+    def chat(self, messages: Sequence[Message]) -> str:
+        self.calls.append(list(messages))
+        text = "\n".join(message["content"] for message in messages)
+        self._concept_path.write_text(
+            self._concept_path.read_text(encoding="utf-8").replace(
+                "sensitivity: public", "sensitivity: confidential"
+            ),
+            encoding="utf-8",
+        )
+        return f"{text}\n\nUSED: none"
+
+
+def test_answer_withheld_when_a_prompt_object_is_raised_mid_flight(
+    tmp_path: Path,
+) -> None:
+    """End-to-end proof, through the REAL server path, of the exact race
+    design Decision 9 closes (orchestrator review finding): an object read
+    as public by `_assemble_context` is raised to confidential DURING
+    `llm.chat` -- literally on disk here, by the fake LLM itself, before it
+    replies citing nothing. `citations` ends up empty (`USED: none`), so a
+    citation-only check would see nothing to withhold and return the raw
+    echoed reply verbatim, leaking the marker. `context_ids` (captured
+    BEFORE that citation narrowing) closes it: the object entered the
+    prompt regardless of citation, so the disclosure snapshot taken AFTER
+    `run()` completes still catches it and withholds the whole answer.
+    Kills reverting to a citation-only withholding check."""
+    bundle = tmp_path / "bundle"
+    concepts = bundle / "concepts"
+    concepts.mkdir(parents=True)
+    (bundle / "index.md").write_text("# Index\n", encoding="utf-8")
+    (bundle / "log.md").write_text("# Log\n", encoding="utf-8")
+    marker = "RACE-CANARY-MARKER-9C2A"
+    concept_path = concepts / "a.md"
+    concept_path.write_text(
+        "---\ntype: Concept\ntitle: A\nsensitivity: public\n---\n"
+        f"This concept mentions {marker} in its body.\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "openkos.yaml").write_text(
+        "sufficiency_check: false\n", encoding="utf-8"
+    )
+    layout = config.WorkspaceLayout(root=tmp_path)
+    fts.write_fts_index(layout.fts_db_path, layout.bundle_dir)
+
+    llm = _MidFlightRaiseLLM(concept_path)
+    ctx = _query_ctx(layout, llm)
+
+    async def _scenario() -> tuple[bytes, dict[str, Any]]:
+        buffer = io.BytesIO()
+        srv = server.Server(tools.REGISTRY, ctx, transport.MessageWriter(buffer))
+        await srv.handle_raw(
+            _msg(
+                jsonrpc="2.0",
+                id="__init__",
+                method="initialize",
+                params={"protocolVersion": "2025-11-25"},
+            )
+        )
+        buffer.seek(0)
+        buffer.truncate(0)
+
+        await srv.handle_raw(
+            _msg(
+                jsonrpc="2.0",
+                id=1,
+                method="tools/call",
+                params={"name": "query", "arguments": {"question": marker}},
+            )
+        )
+        for _ in range(500):
+            matching = [r for r in _responses(buffer) if r.get("id") == 1]
+            if matching:
+                return buffer.getvalue(), matching[0]
+            await asyncio.sleep(0.01)
+        raise TimeoutError("query never completed")
+
+    raw_bytes, response = asyncio.run(_scenario())
+
+    assert marker.encode("utf-8") not in raw_bytes
+    result = response["result"]
+    structured = result["structuredContent"]
+    assert structured["answer"] == ""
+    assert structured["answer_withheld"] is True

@@ -611,8 +611,11 @@ def _answer_result(
     omitted_ids: list[str] | None = None,
     history_truncated_titles: list[str] | None = None,
     history_truncated_ids: list[str] | None = None,
+    context_ids: list[str] | None = None,
+    context_block_count: int | None = None,
     skip_notices: tuple[str, ...] = (),
 ) -> AnswerResult:
+    resolved_context_ids = context_ids if context_ids is not None else []
     return AnswerResult(
         answer=answer,
         citations=citations,
@@ -629,6 +632,12 @@ def _answer_result(
         ),
         history_truncated_ids=(
             history_truncated_ids if history_truncated_ids is not None else []
+        ),
+        context_ids=resolved_context_ids,
+        context_block_count=(
+            context_block_count
+            if context_block_count is not None
+            else len(resolved_context_ids)
         ),
     )
 
@@ -716,6 +725,65 @@ def test_disclose_query_one_withheld_citation_withholds_the_whole_answer() -> No
             "history": None,
         }
     ]
+
+
+def test_disclose_query_uncited_context_object_withholds_the_answer() -> None:
+    """A model may not cite every object whose content entered the prompt
+    (#753's own model-self-reported subset filter). A citation-only check
+    is not enough to close the race design Decision 9 names: if a prompt
+    object is raised to confidential AFTER `_assemble_context` read it but
+    the model's footer never named it, checking only `result.citations`
+    (which the model's footer already narrowed) would miss it entirely,
+    since the still-cited id remains disclosable. `context_ids` -- captured
+    BEFORE that narrowing -- is what closes it: the answer must still be
+    withheld even though every CITED id is disclosable (mcp-read-surface
+    slice 9 correction). Kills checking only `result.citations` and
+    ignoring `result.context_ids`."""
+    result = _answer_result(
+        answer="drew on a since-confidential block",
+        citations=[Citation(concept_id="concepts/cited", title="Cited")],
+        context_ids=["concepts/cited", "concepts/uncited-but-raised"],
+        context_block_count=2,
+    )
+    outcome = _outcome(result)
+    snapshot = _snapshot(frozenset({"concepts/cited"}))
+
+    rendered = gate.disclose_query(outcome, snapshot)
+
+    assert rendered["answer"] == ""
+    assert rendered["answer_withheld"] is True
+    # The citation itself is still disclosable and survives in its own
+    # channel -- only the ANSWER TEXT is withheld, since its wording may
+    # have drawn on the now-confidential, uncited block.
+    assert rendered["citations"] == [
+        {
+            "id": "concepts/cited",
+            "title": "Cited",
+            "excerpted": False,
+            "confidential": False,
+            "history": None,
+        }
+    ]
+
+
+def test_disclose_query_misaligned_context_ids_withholds_the_answer() -> None:
+    """`context_ids` inconsistent with `context_block_count` (a defect
+    condition -- the two must stay aligned by construction) withholds the
+    answer, fail-closed, mirroring `_filtered_titles`'s identical
+    misaligned-length handling."""
+    result = _answer_result(
+        answer="an answer",
+        citations=[Citation(concept_id="concepts/cited", title="Cited")],
+        context_ids=["concepts/cited"],  # one entry short of context_block_count
+        context_block_count=2,
+    )
+    outcome = _outcome(result)
+    snapshot = _snapshot(frozenset({"concepts/cited"}))
+
+    rendered = gate.disclose_query(outcome, snapshot)
+
+    assert rendered["answer"] == ""
+    assert rendered["answer_withheld"] is True
 
 
 def test_disclose_query_title_scrubbed_by_paired_id_not_title_text() -> None:

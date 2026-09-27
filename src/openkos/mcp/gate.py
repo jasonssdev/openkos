@@ -494,22 +494,34 @@ def disclose_query(raw: object, snapshot: Snapshot) -> dict[str, object]:
     `mcp/tools.py` only ever pairs `query`'s `run` (which returns one) with
     this function.
 
-    `citations` are kept only when disclosable, else counted. WHEN ANY
-    citation is withheld, the answer text itself is withheld too (`answer:
-    ""`, `answer_withheld: true`) -- the answer's wording may have drawn on
-    that withheld citation's content, and this is reachable even with the
-    launch opt-in off, through a race between the prompt's read and this
-    snapshot; withholding the answer alongside the citation is the
-    fail-closed choice for that race. Each of the three title lists is
-    zipped with its own id list (`_filtered_titles`) and filtered the same
-    way; `excerpted_titles`/`omitted_titles`/`history_truncated_titles`
-    already carry their own suffixes (e.g. ` (earlier version)`) from
-    `answer.py` -- this function never touches the title TEXT, only whether
-    each title's paired id may cross the boundary at all. `skip_notices`
-    become `skipped_documents`, a count separate from `withheld` -- a
-    skipped document was never read, so it was never a disclosure decision.
-    Every count, flag, `attribution`, and `no_match_cause` passes through
-    unchanged."""
+    `citations` are kept only when disclosable, else counted. The answer
+    text itself is withheld (`answer: ""`, `answer_withheld: true`) whenever
+    EITHER (a) any citation is withheld, OR (b) any object whose content
+    actually entered the prompt -- `result.context_ids`, captured in
+    `answer.py` BEFORE the model-self-reported subset filter narrows
+    `citations` -- is not disclosable, regardless of whether the model
+    happened to cite it (mcp-read-surface slice 9 correction). (a) alone
+    missed the race design Decision 9 exists to close: an object read as
+    public by `_assemble_context`, then raised to confidential before the
+    model replies, whose block the model does not go on to name, would
+    survive in `citations` filtered down to ONLY the cited ids and never
+    trip the withhold at all. `context_ids` closes it, since it names every
+    object the wording may have drawn on, cited or not. A `context_ids`
+    length inconsistent with `context_block_count` (a defect condition --
+    the two must stay aligned by construction) is ALSO treated as "some
+    object may be withheld," fail-closed, mirroring `_filtered_titles`'s
+    identical misaligned-length handling. Neither half of this rule adds to
+    `withheld`'s own count: an uncited context object was never a citation,
+    title, or any other counted channel entry to begin with. Each of the
+    three title lists is zipped with its own id list (`_filtered_titles`)
+    and filtered the same way; `excerpted_titles`/`omitted_titles`/
+    `history_truncated_titles` already carry their own suffixes (e.g. `
+    (earlier version)`) from `answer.py` -- this function never touches the
+    title TEXT, only whether each title's paired id may cross the boundary
+    at all. `skip_notices` become `skipped_documents`, a count separate
+    from `withheld` -- a skipped document was never read, so it was never a
+    disclosure decision. Every count, flag, `attribution`, and
+    `no_match_cause` passes through unchanged."""
     raw = cast(query_service.QueryOutcome, raw)
     result = raw.result
     withheld = 0
@@ -544,7 +556,13 @@ def disclose_query(raw: object, snapshot: Snapshot) -> dict[str, object]:
     )
     withheld += removed
 
-    answer_withheld = any_citation_withheld
+    any_context_object_withheld = len(
+        result.context_ids
+    ) != result.context_block_count or any(
+        not snapshot.discloses(concept_id) for concept_id in result.context_ids
+    )
+
+    answer_withheld = any_citation_withheld or any_context_object_withheld
     answer_text = "" if answer_withheld else result.answer
 
     return {
