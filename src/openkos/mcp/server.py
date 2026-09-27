@@ -10,9 +10,16 @@ module's testable core: it drives one session to completion over an
 already-claimed `transport.StdioStreams`, independent of whether those
 streams are real stdio (`serve()`) or an in-memory pipe (the unit tests).
 
-`execute`'s full disclosure/consistency composition is layered in once
-`mcp.gate` (slice 4) and `application.consistency` (slice 5) exist; see
-`mcp/tools.py`'s module docstring.
+The tool-error table (design Decision 12) maps a service exception raised
+from `tools.execute` to a structured tool result (`isError: true`,
+`structuredContent.error = {code, retryable, message}`) instead of the
+generic `-32603` fallback -- a distinct, EXPECTED failure a client can act
+on (retry, or not), never an unexpected internal error. It is ordered
+subclass-first (`_tool_error_table_is_subclass_ordered` pins this), and
+grows incrementally: this slice adds `get`'s two rows
+(`ConceptNotFound`/`OSError`); the Ollama-related rows land in slice 9.
+Every `message` is a fixed string, never `str(exc)` -- the same reason the
+`-32603` fallback's message is fixed.
 """
 
 from __future__ import annotations
@@ -31,6 +38,7 @@ from pathlib import Path
 from typing import Final, Literal, TypeGuard
 
 from openkos import config
+from openkos.application import concept_read
 from openkos.llm.base import Embedder, LLMBackend
 from openkos.mcp import tools as mcp_tools
 from openkos.mcp import transport
@@ -45,6 +53,35 @@ _METHOD_NOT_FOUND: Final = -32601
 _INVALID_PARAMS: Final = -32602
 _INTERNAL_ERROR: Final = -32603
 _INTERNAL_ERROR_MESSAGE: Final = "internal error"
+
+_TOOL_ERROR_TABLE: Final[tuple[tuple[type[BaseException], str, bool, str], ...]] = (
+    (
+        concept_read.ConceptNotFound,
+        "concept_not_found",
+        False,
+        "the requested concept does not exist",
+    ),
+    (
+        OSError,
+        "read_failed",
+        True,
+        "a read failed",
+    ),
+)
+"""Rows land incrementally (this slice's two, then slice 9's Ollama-related
+ones); ordering is subclass-first so a specific row is matched before a
+more general one that would also `isinstance`-match it."""
+
+
+def _mapped_tool_error(exc: BaseException) -> tuple[str, bool, str] | None:
+    """The `(code, retryable, message)` row matching `exc`, or `None` when
+    no row applies -- the caller then falls through to the generic
+    `-32603`."""
+    for exc_type, code, retryable, message in _TOOL_ERROR_TABLE:
+        if isinstance(exc, exc_type):
+            return code, retryable, message
+    return None
+
 
 _INSTRUCTIONS: Final = (
     "This server exposes one OpenKOS workspace as four read-only tools: "
@@ -387,7 +424,28 @@ class Server:
         except asyncio.CancelledError:
             logger.info("request %r cancelled; its worker was abandoned", request_id)
             raise
-        except Exception:
+        except Exception as exc:
+            mapped = _mapped_tool_error(exc)
+            if mapped is not None:
+                code, retryable, message = mapped
+                self._finish_inflight(key)
+                self._send_result(
+                    request_id,
+                    _tool_call_result(
+                        True,
+                        {
+                            "error": {
+                                "code": code,
+                                "retryable": retryable,
+                                "message": message,
+                            },
+                            "withheld": 0,
+                            "warnings": [],
+                            "not_run": [],
+                        },
+                    ),
+                )
+                return
             logger.exception(
                 "internal error handling tools/call for request %r", request_id
             )

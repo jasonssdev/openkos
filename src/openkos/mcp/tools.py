@@ -1,28 +1,23 @@
 """The tool registry, hand-written schemas, and the argument validator
 (design Decisions 2 and 15, ADR-0027).
 
-This slice adds the registry *skeleton* only: an empty `REGISTRY`, the
-`Tool`/`ToolContext` shapes every real tool registers against starting in
-slice 5, and `validate_arguments` -- the small in-repo schema validator
-Decision 15 chose over adding `jsonschema` as a dependency for four small,
-fixed schemas.
-
-`execute`'s full composition with `mcp.gate` (disclosure) and
-`application.consistency` (the `warnings` checks) is layered in once those
-modules exist -- `gate.py` in slice 4, `application/consistency.py` in
-slice 5 -- without changing this function's contract. This slice's
-`execute` validates arguments and dispatches straight to a tool's
-`run`/`disclose`, with no forward reference to either module.
+`execute` is the ONE composition (design Decision 2): validate arguments,
+run the tool's service call, take a fresh disclosure snapshot, read the
+consistency warnings, then let `mcp.gate` build the final disclosure-safe
+payload. This slice registers `get`, the first real tool.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, cast
 
 from openkos import config
+from openkos.application import concept_read, list_service
+from openkos.application import consistency as application_consistency
 from openkos.llm.base import Embedder, LLMBackend
+from openkos.mcp import gate
 
 ProgressSink = Callable[[str, int, int], None]
 """`(phase, completed, total)`, called from the worker thread running a
@@ -51,13 +46,7 @@ class ToolContext:
 class Tool:
     """One registered MCP tool: a service call (`run`) and the disclosure
     function that turns its raw result into a serializable payload
-    (`disclose`).
-
-    `disclose`'s second parameter is typed `object` in this slice, because
-    `mcp.gate.Snapshot` (slice 4) does not exist yet and this module must
-    not forward-reference it; a real tool's `disclose` narrows it once
-    `gate.py` lands.
-    """
+    (`disclose`)."""
 
     name: str
     title: str
@@ -65,13 +54,60 @@ class Tool:
     input_schema: Mapping[str, object]
     output_schema: Mapping[str, object]
     run: Callable[[Mapping[str, object], ToolContext, ProgressSink | None], object]
-    disclose: Callable[[object, object], dict[str, object]]
+    disclose: Callable[[object, gate.Snapshot], dict[str, object]]
     stale_reads: tuple[str, ...] = ()
     emits_progress: bool = False
 
 
-REGISTRY: Final[Mapping[str, Tool]] = {}
-"""Empty until slice 5 registers `get`, the first real tool."""
+def _get_run(
+    arguments: Mapping[str, object],
+    ctx: ToolContext,
+    progress: ProgressSink | None,
+) -> gate.GetRaw:
+    """`get`'s service call (design Decisions 2 and 4): read the target
+    concept, then walk its provenance ancestors -- BOTH before the
+    disclosure snapshot is taken, so an object raised to confidential
+    mid-read is still caught by the gate, never by this function."""
+    concept_id = cast(
+        str, arguments["concept_id"]
+    )  # `inputSchema` already enforced this
+    record = concept_read.read_concept(ctx.layout, concept_id)
+    sources = list_service.list_provenance_sources(ctx.layout, record.concept_id)
+    return gate.GetRaw(target_id=record.concept_id, record=record, sources=sources)
+
+
+_GET_INPUT_SCHEMA: Final[Mapping[str, object]] = {
+    "type": "object",
+    "properties": {"concept_id": {"type": "string", "minLength": 1}},
+    "required": ["concept_id"],
+    "additionalProperties": False,
+}
+
+_GET_OUTPUT_SCHEMA: Final[Mapping[str, object]] = {
+    "type": "object",
+    "properties": {
+        "concept": {"type": ["object", "null"]},
+        "withheld": {"type": "integer", "minimum": 0},
+        "warnings": {"type": "array"},
+        "not_run": {"type": "array"},
+        "error": {"type": "object"},
+    },
+    "required": ["withheld", "warnings", "not_run"],
+}
+
+_GET_TOOL: Final = Tool(
+    name="get",
+    title="Get Concept",
+    description="Read one concept: its curated fields, filtered relations, "
+    "filtered provenance, and source ancestors.",
+    input_schema=_GET_INPUT_SCHEMA,
+    output_schema=_GET_OUTPUT_SCHEMA,
+    run=_get_run,
+    disclose=gate.disclose_get,
+)
+
+REGISTRY: Final[Mapping[str, Tool]] = {"get": _GET_TOOL}
+"""`navigate`, `pending`, and `query` join in slices 6-9."""
 
 
 SUPPORTED_SCHEMA_KEYWORDS: Final = frozenset(
@@ -203,10 +239,12 @@ def execute(
     confirmed against the 2025-11-25 tools page's Error Handling section
     ("Orchestrator verification").
 
-    This slice's success path calls `tool.disclose(raw, None)` directly:
-    the real disclosure snapshot (`gate.take_snapshot`) and the consistency
-    warnings (`application.consistency.read_consistency`) are layered in
-    once those modules exist, without changing this function's contract.
+    The success path is design Decision 2's one composition: `run`, THEN
+    take a fresh disclosure snapshot and read the consistency warnings, so
+    both reflect the bundle's state at (or after) the read rather than
+    before it -- an object raised to confidential while `run` was reading
+    is still caught. A raised exception (e.g. `ConceptNotFound`) propagates
+    unchanged; `mcp/server.py` maps it to a tool error or `-32603`.
     """
     error = validate_arguments(tool.input_schema, arguments)
     if error is not None:
@@ -222,4 +260,10 @@ def execute(
         }
 
     raw = tool.run(arguments, ctx, progress)
-    return False, tool.disclose(raw, None)
+    snapshot = gate.take_snapshot(
+        ctx.layout.bundle_dir, expose_confidential=ctx.expose_confidential
+    )
+    consistency = application_consistency.read_consistency(
+        ctx.layout, stale_reads=tool.stale_reads
+    )
+    return False, gate.finish(tool.disclose(raw, snapshot), consistency)

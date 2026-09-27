@@ -131,10 +131,17 @@ class Call:
     label: str = ""
 
 
-GUARD_MATRIX: dict[str, list[Call]] = {}
-"""Empty until slice 5 registers `get`'s row. `tools.REGISTRY` is empty in
-this slice too, so `set(tools.REGISTRY) == set(GUARD_MATRIX)` holds
-trivially (design Decision 16, assertion 1)."""
+GUARD_MATRIX: dict[str, list[Call]] = {
+    "get": [
+        Call(arguments={"concept_id": PUBLIC_ID}, label="disclosable"),
+        Call(arguments={"concept_id": CANARY_ID}, label="canary_concept"),
+        Call(arguments={"concept_id": CANARY_SOURCE_ID}, label="canary_source"),
+        Call(arguments={"concept_id": "concepts/does-not-exist-7f3a"}, label="missing"),
+        Call(arguments={}, label="invalid_arguments"),
+    ]
+}
+"""`navigate`/`pending`/`query`'s rows join in slices 6-9 as each tool
+lands."""
 
 
 async def _run_matrix_async(

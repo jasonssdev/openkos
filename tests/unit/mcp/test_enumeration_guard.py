@@ -84,6 +84,66 @@ def test_guard_matrix_covers_empty_registry_and_leaky_probe(tmp_path: Path) -> N
         _assert_matrix_matches_registry(leaky_registry, dict(canary.GUARD_MATRIX))
 
 
+def test_get_tool_injected_failures_never_leak_the_canary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`get`'s error paths are covered too (design Decision 16's matrix):
+    an injected `OSError`/`RuntimeError` carrying the canary's body marker
+    in its message must never leak it -- the `OSError` maps to the
+    `read_failed` tool error with a FIXED message (never `str(exc)`), and
+    the `RuntimeError` (not in the tool-error table) falls through to the
+    generic `-32603` internal error, also fixed."""
+    canary.build_canary_bundle(tmp_path)
+    ctx = _ctx(tmp_path)
+
+    from openkos.application import concept_read
+
+    def _raise_os_error(
+        layout: object, concept_id: str
+    ) -> concept_read.ConceptRecord | concept_read.UnreadableConcept:
+        raise OSError(f"cannot read {canary.CANARY_ID}: {canary.CANARY_BODY_MARKER}")
+
+    monkeypatch.setattr(concept_read, "read_concept", _raise_os_error)
+    lines = canary.run_matrix(
+        mcp_tools.REGISTRY,
+        {"get": [canary.Call(arguments={"concept_id": canary.CANARY_ID})]},
+        ctx,
+    )
+    assert canary.find_canary_leaks(lines) == []
+
+    def _raise_runtime_error(
+        layout: object, concept_id: str
+    ) -> concept_read.ConceptRecord | concept_read.UnreadableConcept:
+        raise RuntimeError(canary.CANARY_TITLE)
+
+    monkeypatch.setattr(concept_read, "read_concept", _raise_runtime_error)
+    lines = canary.run_matrix(
+        mcp_tools.REGISTRY,
+        {"get": [canary.Call(arguments={"concept_id": canary.CANARY_ID})]},
+        ctx,
+    )
+    assert canary.find_canary_leaks(lines) == []
+
+
+def test_get_positive_control_finds_the_canary_with_the_flag_on(
+    tmp_path: Path,
+) -> None:
+    """With `expose_confidential=True`, `get` on the canary concept DOES
+    contain its title -- the real per-tool positive control design
+    Decision 16 requires, proving the fixture's needle is genuinely
+    reachable through `get`, not just through `leaky_probe`."""
+    canary.build_canary_bundle(tmp_path)
+    ctx = _ctx(tmp_path, expose_confidential=True)
+
+    lines = canary.run_matrix(
+        mcp_tools.REGISTRY,
+        {"get": [canary.Call(arguments={"concept_id": canary.CANARY_ID})]},
+        ctx,
+    )
+
+    assert canary.CANARY_TITLE in canary.find_canary_leaks(lines)
+
+
 def test_positive_controls_prove_the_fixture_is_live(tmp_path: Path) -> None:
     """With `leaky_probe` registered and `expose_confidential=True` passed
     through `ToolContext`, the canary needle IS found -- proving the
