@@ -4,8 +4,9 @@
 `execute` is the ONE composition (design Decision 2): validate arguments,
 run the tool's service call, take a fresh disclosure snapshot, read the
 consistency warnings, then let `mcp.gate` build the final disclosure-safe
-payload. Slice 5 registered `get`; slice 6 added `navigate`; this slice
-adds `pending`.
+payload. Slice 5 registered `get`; slice 6 added `navigate`; slice 7 added
+`pending`; this slice adds `query`, the only tool that calls
+`ctx.make_llm`/`ctx.make_embedder`/`ctx.local_exemption_for`.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from typing import Final, cast
 from openkos import config
 from openkos.application import concept_read, list_service, next_action
 from openkos.application import consistency as application_consistency
+from openkos.application import query as query_service
 from openkos.llm.base import Embedder, LLMBackend
 from openkos.mcp import gate
 
@@ -41,6 +43,21 @@ class ToolContext:
     make_llm: Callable[[config.Config], LLMBackend]
     make_embedder: Callable[[config.Config], Embedder]
     local_exemption_for: Callable[[LLMBackend, config.Config], bool]
+
+
+class WorkspaceReadError(OSError):
+    """Wraps a `ValueError` a tool's `run()` raises while reading workspace
+    configuration (design Decision 12): `config.read_config` -- called by
+    `query`'s `run()` to resolve `cfg.model`/`cfg.embedding_model`/
+    `cfg.sufficiency_check`/`cfg.revision_history` -- raises `ValueError`
+    for a malformed `openkos.yaml` (an `OSError` already covers an
+    unreadable one). `execute` (below) is what performs this wrapping, so
+    that BOTH failure modes fall through the SAME `read_failed` row in
+    `server.py`'s `_TOOL_ERROR_TABLE`: subclassing `OSError` means no new
+    row is needed there. A caller must retry either mode identically --
+    fix the workspace, then call again -- and neither the wrapped
+    `ValueError`'s message nor this one ever crosses the boundary, since
+    the table always substitutes its own fixed string, never `str(exc)`."""
 
 
 @dataclass(frozen=True)
@@ -198,12 +215,98 @@ _PENDING_TOOL: Final = Tool(
     disclose=gate.disclose_pending,
 )
 
+
+def _query_run(
+    arguments: Mapping[str, object],
+    ctx: ToolContext,
+    progress: ProgressSink | None,
+) -> query_service.QueryOutcome:
+    """`query`'s service call (design Decision 9): resolve this workspace's
+    configuration, build the chat and embedding backends through the
+    injected factories, resolve `local_exemption` ONLY when the launch
+    opt-in (`ctx.expose_confidential`) is on, and call `run_query` with
+    `include_confidential` ALWAYS `False` -- a confidential object reaching
+    the LLM still requires BOTH the launch opt-in AND the resolved
+    local-exemption gate (`sensitivity.should_block`'s disjunction is what
+    actually releases the block once `local_exemption` is `True`; this
+    function never bypasses that by passing `include_confidential=True`
+    instead). `progress` is threaded straight through to `answer()`,
+    unmodified. `limit` defaults to `5` -- the CLI's own default -- when
+    omitted."""
+    question = cast(str, arguments["question"])  # inputSchema already enforced this
+    limit = cast(int, arguments.get("limit", 5))
+    cfg = config.read_config(ctx.layout.root)
+    llm = ctx.make_llm(cfg)
+    embedder = ctx.make_embedder(cfg)
+    local_exemption = (
+        ctx.local_exemption_for(llm, cfg) if ctx.expose_confidential else False
+    )
+    return query_service.run_query(
+        question,
+        layout=ctx.layout,
+        cfg=cfg,
+        llm=llm,
+        embedder=embedder,
+        limit=limit,
+        include_deprecated=False,
+        include_confidential=False,
+        local_exemption=local_exemption,
+        progress=progress,
+    )
+
+
+_QUERY_INPUT_SCHEMA: Final[Mapping[str, object]] = {
+    "type": "object",
+    "properties": {
+        "question": {"type": "string", "minLength": 1},
+        "limit": {"type": "integer", "minimum": 1},
+    },
+    "required": ["question"],
+    "additionalProperties": False,
+}
+
+_QUERY_OUTPUT_SCHEMA: Final[Mapping[str, object]] = {
+    "type": "object",
+    "properties": {
+        "answer": {"type": "string"},
+        "answer_withheld": {"type": "boolean"},
+        "citations": {"type": "array"},
+        "llm_invoked": {"type": "boolean"},
+        "no_match_cause": {"type": "string"},
+        "attribution": {"type": "string"},
+        "counts": {"type": "object"},
+        "degraded": {"type": "object"},
+        "excerpted_titles": {"type": "array"},
+        "omitted_titles": {"type": "array"},
+        "history_truncated_titles": {"type": "array"},
+        "skipped_documents": {"type": "integer", "minimum": 0},
+        "withheld": {"type": "integer", "minimum": 0},
+        "warnings": {"type": "array"},
+        "not_run": {"type": "array"},
+        "error": {"type": "object"},
+    },
+    "required": ["withheld", "warnings", "not_run"],
+}
+
+_QUERY_TOOL: Final = Tool(
+    name="query",
+    title="Query",
+    description="Answer a question from this workspace's bundle, citing "
+    "the concepts used.",
+    input_schema=_QUERY_INPUT_SCHEMA,
+    output_schema=_QUERY_OUTPUT_SCHEMA,
+    run=_query_run,
+    disclose=gate.disclose_query,
+    stale_reads=("fts",),
+    emits_progress=True,
+)
+
 REGISTRY: Final[Mapping[str, Tool]] = {
+    "query": _QUERY_TOOL,
     "get": _GET_TOOL,
     "navigate": _NAVIGATE_TOOL,
     "pending": _PENDING_TOOL,
 }
-"""`query` joins in slice 9."""
 
 
 SUPPORTED_SCHEMA_KEYWORDS: Final = frozenset(
@@ -340,7 +443,11 @@ def execute(
     both reflect the bundle's state at (or after) the read rather than
     before it -- an object raised to confidential while `run` was reading
     is still caught. A raised exception (e.g. `ConceptNotFound`) propagates
-    unchanged; `mcp/server.py` maps it to a tool error or `-32603`.
+    unchanged; `mcp/server.py` maps it to a tool error or `-32603`. The one
+    exception: a `ValueError` `run` raises (today, only `query`'s
+    `config.read_config` call) is wrapped into `WorkspaceReadError` here,
+    so it funnels through the SAME `read_failed` tool-error row an ordinary
+    unreadable-file `OSError` already uses (design Decision 12).
     """
     error = validate_arguments(tool.input_schema, arguments)
     if error is not None:
@@ -355,7 +462,10 @@ def execute(
             "not_run": [],
         }
 
-    raw = tool.run(arguments, ctx, progress)
+    try:
+        raw = tool.run(arguments, ctx, progress)
+    except ValueError as exc:
+        raise WorkspaceReadError(str(exc)) from exc
     snapshot = gate.take_snapshot(
         ctx.layout.bundle_dir, expose_confidential=ctx.expose_confidential
     )

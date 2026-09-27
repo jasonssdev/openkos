@@ -11,9 +11,11 @@ from typing import cast
 from openkos import read_outcome
 from openkos.application import concept_read, list_service, next_action
 from openkos.application import consistency as application_consistency
+from openkos.application import query as query_service
 from openkos.bundle import listing
-from openkos.mcp import gate
+from openkos.mcp import gate, tools
 from openkos.model import okf
+from openkos.retrieval.answer import AnswerResult, Citation
 
 
 def _concept(result: dict[str, object]) -> dict[str, object]:
@@ -592,3 +594,232 @@ def test_disclose_pending_skip_notices_become_skipped_documents_not_withheld() -
     result = gate.disclose_pending(raw, _snapshot(frozenset()))
     assert result["skipped_documents"] == 1
     assert result["withheld"] == 0
+
+
+# ---------------------------------------------------------------------------
+# 9.2: disclose_query's table (design Decision 9)
+# ---------------------------------------------------------------------------
+
+
+def _answer_result(
+    *,
+    answer: str = "the reply",
+    citations: list[Citation] = [],  # noqa: B006 -- never mutated by callers below
+    excerpted_titles: list[str] | None = None,
+    excerpted_ids: list[str] | None = None,
+    omitted_titles: list[str] | None = None,
+    omitted_ids: list[str] | None = None,
+    history_truncated_titles: list[str] | None = None,
+    history_truncated_ids: list[str] | None = None,
+    skip_notices: tuple[str, ...] = (),
+) -> AnswerResult:
+    return AnswerResult(
+        answer=answer,
+        citations=citations,
+        fts_hit_count=1,
+        llm_invoked=True,
+        no_match_cause="none",
+        skip_notices=list(skip_notices),
+        excerpted_titles=excerpted_titles if excerpted_titles is not None else [],
+        excerpted_ids=excerpted_ids if excerpted_ids is not None else [],
+        omitted_titles=omitted_titles if omitted_titles is not None else [],
+        omitted_ids=omitted_ids if omitted_ids is not None else [],
+        history_truncated_titles=(
+            history_truncated_titles if history_truncated_titles is not None else []
+        ),
+        history_truncated_ids=(
+            history_truncated_ids if history_truncated_ids is not None else []
+        ),
+    )
+
+
+def _outcome(
+    result: AnswerResult,
+    *,
+    vector_store_unavailable: bool = False,
+    fts_unavailable: bool = False,
+) -> query_service.QueryOutcome:
+    return query_service.QueryOutcome(
+        result=result,
+        vector_store_unavailable=vector_store_unavailable,
+        fts_unavailable=fts_unavailable,
+    )
+
+
+def test_disclose_query_citations_filtered_per_snapshot() -> None:
+    """Citations are kept when disclosable, else counted -- and every
+    citation disclosable means `answer_withheld` is `false`, the answer
+    text passes through, and every count/flag/attribution/no_match_cause
+    passes through unchanged. Covers "No withheld citation discloses the
+    answer normally"."""
+    result = _answer_result(
+        answer="the reply",
+        citations=[
+            Citation(concept_id="concepts/allowed", title="Allowed"),
+            Citation(concept_id="concepts/allowed2", title="Allowed Two"),
+        ],
+    )
+    outcome = _outcome(result)
+    snapshot = _snapshot(frozenset({"concepts/allowed", "concepts/allowed2"}))
+
+    rendered = gate.disclose_query(outcome, snapshot)
+
+    assert rendered["answer"] == "the reply"
+    assert rendered["answer_withheld"] is False
+    assert rendered["withheld"] == 0
+    assert rendered["citations"] == [
+        {
+            "id": "concepts/allowed",
+            "title": "Allowed",
+            "excerpted": False,
+            "confidential": False,
+            "history": None,
+        },
+        {
+            "id": "concepts/allowed2",
+            "title": "Allowed Two",
+            "excerpted": False,
+            "confidential": False,
+            "history": None,
+        },
+    ]
+    assert rendered["llm_invoked"] is True
+    assert rendered["no_match_cause"] == "none"
+
+
+def test_disclose_query_one_withheld_citation_withholds_the_whole_answer() -> None:
+    """ONE withheld citation empties the answer text and sets
+    `answer_withheld: true` -- covers "A withheld citation withholds the
+    whole answer text". Kills keeping the answer text when any citation is
+    withheld."""
+    result = _answer_result(
+        answer="the reply drew on a confidential source",
+        citations=[
+            Citation(concept_id="concepts/allowed", title="Allowed"),
+            Citation(concept_id="concepts/blocked", title="Blocked"),
+        ],
+    )
+    outcome = _outcome(result)
+    snapshot = _snapshot(frozenset({"concepts/allowed"}))
+
+    rendered = gate.disclose_query(outcome, snapshot)
+
+    assert rendered["answer"] == ""
+    assert rendered["answer_withheld"] is True
+    assert rendered["withheld"] == 1
+    assert rendered["citations"] == [
+        {
+            "id": "concepts/allowed",
+            "title": "Allowed",
+            "excerpted": False,
+            "confidential": False,
+            "history": None,
+        }
+    ]
+
+
+def test_disclose_query_title_scrubbed_by_paired_id_not_title_text() -> None:
+    """A title is scrubbed by its PAIRED id, not by title text -- two
+    identical titles with different ids are treated independently."""
+    result = _answer_result(
+        excerpted_titles=["Same Title", "Same Title"],
+        excerpted_ids=["concepts/allowed", "concepts/blocked"],
+    )
+    outcome = _outcome(result)
+    snapshot = _snapshot(frozenset({"concepts/allowed"}))
+
+    rendered = gate.disclose_query(outcome, snapshot)
+
+    assert rendered["excerpted_titles"] == ["Same Title"]
+    assert rendered["withheld"] == 1
+
+
+def test_disclose_query_misaligned_title_id_pair_drops_every_title() -> None:
+    """A misaligned title/id pair (different lengths) drops EVERY title in
+    that list and counts them all -- fail closed rather than pairing a
+    title with the wrong id."""
+    result = _answer_result(
+        omitted_titles=["Omitted One", "Omitted Two"],
+        omitted_ids=["concepts/allowed"],  # one entry short
+    )
+    outcome = _outcome(result)
+    snapshot = _snapshot(frozenset({"concepts/allowed"}))
+
+    rendered = gate.disclose_query(outcome, snapshot)
+
+    assert rendered["omitted_titles"] == []
+    assert rendered["withheld"] == 2
+
+
+def test_disclose_query_skip_notices_become_skipped_documents() -> None:
+    """`skip_notices` become `skipped_documents`, separate from
+    `withheld`."""
+    result = _answer_result(skip_notices=("concepts/broken.md: skipped",))
+    outcome = _outcome(result)
+
+    rendered = gate.disclose_query(outcome, _snapshot(frozenset()))
+
+    assert rendered["skipped_documents"] == 1
+    assert rendered["withheld"] == 0
+
+
+def test_disclose_query_counts_and_degraded_pass_through() -> None:
+    """`counts`/`degraded` are built from `AnswerResult`'s own fields and
+    `QueryOutcome`'s two store-unavailable flags, all passed through
+    unchanged."""
+    result = AnswerResult(
+        answer="ok",
+        citations=[],
+        fts_hit_count=3,
+        llm_invoked=True,
+        no_match_cause="none",
+        skip_notices=[],
+        dense_hit_count=2,
+        fused_count=4,
+        context_block_count=1,
+        dense_degraded=True,
+        sufficiency_degraded=True,
+    )
+    outcome = _outcome(result, vector_store_unavailable=True, fts_unavailable=False)
+
+    rendered = gate.disclose_query(outcome, _snapshot(frozenset()))
+
+    assert rendered["counts"] == {
+        "fts_hits": 3,
+        "dense_hits": 2,
+        "fused": 4,
+        "context_blocks": 1,
+    }
+    assert rendered["degraded"] == {
+        "dense": True,
+        "sufficiency": True,
+        "vector_store_unavailable": True,
+        "fts_unavailable": False,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 9.6: stale_index only on query (design Decision 11)
+# ---------------------------------------------------------------------------
+
+
+def test_stale_index_only_on_query() -> None:
+    """`query`'s `stale_reads` declares `("fts",)`; `get`/`navigate`/
+    `pending` declare `()`, and `finish` only ever renders `stale_index`
+    when `Consistency.stale_stores` is non-empty regardless of the
+    declaring tool -- so a tool that never declares a stale read can never
+    surface one. Covers "A stale derived store warns only on query" and
+    "get, navigate, and pending do not report stale_index"."""
+    assert tools.REGISTRY["query"].stale_reads == ("fts",)
+    assert tools.REGISTRY["get"].stale_reads == ()
+    assert tools.REGISTRY["navigate"].stale_reads == ()
+    assert tools.REGISTRY["pending"].stale_reads == ()
+
+    payload = {"concept": None, "withheld": 0, "not_run": ()}
+    rendered = gate.finish(payload, _consistency(stale_stores=("fts",)))
+    assert any(w["code"] == "stale_index" for w in _rendered_warnings(rendered))
+
+    rendered_no_stale = gate.finish(payload, _consistency())
+    assert not any(
+        w["code"] == "stale_index" for w in _rendered_warnings(rendered_no_stale)
+    )
