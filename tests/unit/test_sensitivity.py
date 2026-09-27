@@ -8,6 +8,7 @@ volatility) filters against before sending concept content to the LLM -- see
 mirrors `tests/unit/test_lifecycle.py::_write_doc`.
 """
 
+import ast
 import inspect
 from collections.abc import Iterator
 from pathlib import Path
@@ -553,6 +554,153 @@ def test_merged_content_blocked_local_exemption_short_circuits() -> None:
         sensitivity.merged_content_blocked("confidential", entry, local_exemption=True)
         is False
     )
+
+
+# ---------------------------------------------------------------------------
+# `blocks_disclosure` / `disclosable_concept_ids` -- the disclosure-boundary
+# predicate (mcp-read-surface, #1010). Distinct from every predicate above:
+# those gate LLM egress, this gates disclosure to a non-LLM consumer (an MCP
+# client), and it takes no `include_confidential`/`local_exemption` hatch.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        None,
+        "",
+        "  ",
+        "public",
+        "private",
+        "confidential",
+        "Confidential",
+        "secret",
+        1,
+        [],
+        {},
+        True,
+    ],
+)
+def test_blocks_disclosure_matches_llm_rank(value: object) -> None:
+    """`blocks_disclosure` mirrors `blocks_llm_send`'s fail-closed rank
+    exactly with the opt-in off, over a corpus spanning `None`, blank,
+    every known rank (any case), an unrecognized string, and non-string
+    values; with the opt-in on it always discloses (spec:
+    sensitivity-aware-llm -- "An explicit confidential value is withheld by
+    default", "A resolved-confidential value is disclosable once the opt-in
+    is on", "Private and public values are always disclosable")."""
+    assert sensitivity.blocks_disclosure(value) == sensitivity.blocks_llm_send(value)
+    assert sensitivity.blocks_disclosure(value, expose_confidential=True) is False
+
+
+def test_blocks_disclosure_signature_has_no_llm_hatch() -> None:
+    """`blocks_disclosure`'s signature is exactly `(value, *,
+    expose_confidential=False)` -- keyword-only, defaulting `False`, with no
+    `local_exemption` or `include_confidential` parameter of any kind (spec:
+    sensitivity-aware-llm -- "The predicate accepts no LLM-egress escape
+    parameters"). Neither hatch has an honest meaning for disclosure to a
+    non-LLM consumer (ADR-0028)."""
+    parameters = inspect.signature(sensitivity.blocks_disclosure).parameters
+
+    assert list(parameters) == ["value", "expose_confidential"]
+    assert parameters["value"].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+    assert parameters["expose_confidential"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert parameters["expose_confidential"].default is False
+    assert "local_exemption" not in parameters
+    assert "include_confidential" not in parameters
+
+
+def test_disclosable_concept_ids_ranks_and_flag(tmp_path: Path) -> None:
+    """`disclosable_concept_ids` returns exactly the public and private ids
+    with the opt-in off, and every walked id -- including the unreadable
+    (invalid-UTF-8) and unparseable ones -- once the opt-in is on (spec:
+    sensitivity-aware-llm -- "The bulk sibling applies the identical rank").
+    This is an ALLOWED set, so a doc that could not be verified is excluded
+    unless the flag discloses every rank."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "pub.md", sensitivity_value="public")
+    _write_doc(bundle_dir / "concepts" / "priv.md", sensitivity_value="private")
+    _write_doc(bundle_dir / "concepts" / "conf.md", sensitivity_value="confidential")
+    _write_doc(
+        bundle_dir / "concepts" / "blank.md", sensitivity_raw='sensitivity: "   "'
+    )
+    _write_doc(bundle_dir / "concepts" / "absent.md")
+    unreadable_path = bundle_dir / "concepts" / "unreadable.md"
+    unreadable_path.parent.mkdir(parents=True, exist_ok=True)
+    unreadable_path.write_bytes(b"---\ntype: Concept\n---\n\xff\xfe invalid body\n")
+    unparseable_path = bundle_dir / "concepts" / "malformed.md"
+    unparseable_path.write_text(
+        "---\ntitle: [unterminated\n---\nbody\n", encoding="utf-8"
+    )
+
+    without_flag = sensitivity.disclosable_concept_ids(bundle_dir)
+    with_flag = sensitivity.disclosable_concept_ids(
+        bundle_dir, expose_confidential=True
+    )
+
+    assert without_flag == frozenset({"concepts/pub", "concepts/priv"})
+    assert with_flag == frozenset(
+        {
+            "concepts/pub",
+            "concepts/priv",
+            "concepts/conf",
+            "concepts/blank",
+            "concepts/absent",
+            "concepts/unreadable",
+            "concepts/malformed",
+        }
+    )
+
+
+def test_dangling_id_withheld_even_with_flag(tmp_path: Path) -> None:
+    """An id referenced by a relation or provenance entry for which no file
+    exists on disk is absent from `disclosable_concept_ids`'s returned set,
+    both with `expose_confidential=True` and `False` -- the must-have
+    dangling-id proof (spec: sensitivity-aware-llm -- "An id with no walked
+    document is withheld even under the opt-in"; design Decision 1: an
+    allowed set withholds any id the walk never reached, by construction,
+    unlike a blocked set which would fail open for it)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "referrer.md",
+        sensitivity_value="public",
+        body="See [[concepts/ghost]] for more.",
+    )
+    dangling_id = "concepts/ghost"
+
+    without_flag = sensitivity.disclosable_concept_ids(bundle_dir)
+    with_flag = sensitivity.disclosable_concept_ids(
+        bundle_dir, expose_confidential=True
+    )
+
+    assert dangling_id not in without_flag
+    assert dangling_id not in with_flag
+    assert without_flag == frozenset({"concepts/referrer"})
+
+
+def test_sensitivity_module_import_bound() -> None:
+    """An AST scan of `sensitivity.py`'s import statements asserts every
+    imported module is stdlib or `openkos.model.okf` -- the module stays a
+    leaf, and this is the standing regression guard against a future
+    disallowed import (e.g. `resolution`, an `mcp` module), mirroring
+    `tests/unit/bundle/test_layering.py`'s AST-based canonical-import
+    guard."""
+    repo_root = Path(__file__).resolve().parents[2]
+    module_path = repo_root / "src" / "openkos" / "sensitivity.py"
+    tree = ast.parse(module_path.read_text(encoding="utf-8"))
+
+    imported_modules: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported_modules.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported_modules.add(node.module)
+
+    _stdlib_prefixes = ("collections", "pathlib")
+    for module in imported_modules:
+        assert module in ("openkos.model", "openkos.model.okf") or module.startswith(
+            _stdlib_prefixes
+        ), f"sensitivity.py imports disallowed module {module!r}"
 
 
 def test_merged_content_blocked_custom_threshold() -> None:

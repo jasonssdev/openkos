@@ -68,6 +68,23 @@ identically to `should_block`/`sensitive_concept_ids`. This is a sibling
 gate, not a fourth accidental copy of the same authority: it exists because
 the OTHER two gates are structurally incapable of inspecting `merged_from`.
 
+`blocks_disclosure` and `disclosable_concept_ids` (mcp-read-surface, #1010,
+ADR-0028) gate a SECOND, deliberately separate boundary: disclosure to a
+non-LLM consumer (an MCP client), not an `llm.chat` send. Every predicate
+above protects LLM egress and offers `include_confidential`/
+`local_exemption` hatches; neither has an honest meaning here, because a
+tool result usually leaves this process toward a remote model provider the
+server cannot observe, and there is no per-request human to grant
+`include_confidential`, and a stdio peer's locality says nothing about
+where it forwards what it received. `blocks_disclosure` therefore takes
+exactly one policy input -- the consuming surface's launch-time opt-in,
+`expose_confidential` -- and reuses `blocks_llm_send`'s identical
+fail-closed rank unchanged. `disclosable_concept_ids` is an ALLOWED set,
+the mirror image of `sensitive_concept_ids`'s BLOCKED set: a blocked set
+fails open for any id the walk never reached (a dangling reference, a file
+created after the walk), while an allowed set withholds all of them by
+construction, because it is built only from ids the walk actually saw.
+
 `blocks_llm_send` is the ONE fail-closed authority both `sensitive_concept_ids`
 (per-bundle walk) and every single-value gate outside a walk (the `ingest`
 extract floor gate in `cli/main.py`, and `retrieval/answer.py`'s per-doc
@@ -275,3 +292,67 @@ def sensitive_concept_ids(
         if blocks_llm_send(raw, threshold=threshold):
             blocked.add(cid)
     return frozenset(blocked)
+
+
+def blocks_disclosure(value: object, *, expose_confidential: bool = False) -> bool:
+    """Return `True` when a raw `sensitivity` `value` must NOT be disclosed
+    to a non-LLM consumer (an MCP client) -- the disclosure boundary's
+    per-value check (mcp-read-surface, #1010, ADR-0028).
+
+    Delegates to `blocks_llm_send` unchanged, so absent, blank,
+    whitespace-only, unrecognized and non-string values all block, exactly
+    like an explicit `confidential` value -- the SAME fail-closed rank the
+    LLM-egress boundary uses, applied at a second boundary.
+
+    `expose_confidential` is the ONE policy input this predicate accepts: the
+    consuming surface's launch-time opt-in (e.g. `openkos mcp
+    --expose-confidential`). When `True`, this always returns `False`
+    (never blocked) -- there is deliberately no `include_confidential` or
+    `local_exemption` parameter, because neither escape hatch has an honest
+    meaning for disclosure to a program rather than a human-directed
+    `llm.chat` send (see the module docstring)."""
+    if expose_confidential:
+        return False
+    return blocks_llm_send(value)
+
+
+def disclosable_concept_ids(
+    bundle_dir: Path, *, expose_confidential: bool = False
+) -> frozenset[str]:
+    """Compute the ALLOWED set of concept ids that MAY be disclosed to a
+    non-LLM consumer, in one `okf._iter_docs` walk, never raising
+    (mcp-read-surface, #1010, ADR-0028).
+
+    This is the mirror image of `sensitive_concept_ids`'s BLOCKED set, and
+    the direction is deliberate, not stylistic: a blocked set fails OPEN for
+    any id the walk never reached (a dangling provenance target, a file
+    created after the walk, a subtree the walk could not list), because an
+    id absent from a blocked set reads as "not blocked". An allowed set
+    withholds every such id by construction, because it is built only from
+    ids the walk actually saw and could verify.
+
+    A document that failed to read or parse
+    (`scan.read_error`/`scan.parse_error` set) is excluded unless
+    `expose_confidential` is `True` -- its value cannot be verified, so it
+    ranks confidential, exactly like `blocks_llm_send`'s own fail-closed
+    ranking. Any other document is included when
+    `not blocks_disclosure(meta.get("sensitivity"), expose_confidential=
+    expose_confidential)`.
+
+    Under `expose_confidential=True`, every WALKED id is included -- even
+    the unreadable and unparseable ones, because the policy then discloses
+    every rank. A dangling id is still absent even then: there is no
+    document behind it for the walk to have included in the first place,
+    so `expose_confidential` has nothing to disclose (ADR-0028's recorded
+    consequence)."""
+    allowed: set[str] = set()
+    for scan in okf._iter_docs(bundle_dir):
+        cid = okf.concept_id_for(scan.path, bundle_dir)
+        if scan.read_error is not None or scan.parse_error is not None:
+            if expose_confidential:
+                allowed.add(cid)
+            continue
+        raw = (scan.metadata or {}).get("sensitivity")
+        if not blocks_disclosure(raw, expose_confidential=expose_confidential):
+            allowed.add(cid)
+    return frozenset(allowed)
