@@ -327,6 +327,112 @@ def test_internal_error_never_echoes_exception_text(
     assert confidential_text in caplog.text
 
 
+# -- 5.12: the tool-error table (design Decision 12, slice 5's two rows) -----
+
+
+def _raising_tool(name: str, exc: BaseException) -> tools.Tool:
+    def _run(
+        arguments: Mapping[str, object],
+        ctx: tools.ToolContext,
+        progress: tools.ProgressSink | None,
+    ) -> object:
+        raise exc
+
+    return tools.Tool(
+        name=name,
+        title=name.title(),
+        description="Test-only tool that always raises a specific exception.",
+        input_schema={"type": "object"},
+        output_schema={"type": "object"},
+        run=_run,
+        disclose=lambda raw, snapshot: {"withheld": 0, "warnings": [], "not_run": []},
+    )
+
+
+async def _call_and_collect(tool_name: str, tool: tools.Tool) -> dict[str, Any]:
+    buffer = io.BytesIO()
+    srv = await _initialized_server(buffer, {tool_name: tool})
+    await srv.handle_raw(
+        _msg(jsonrpc="2.0", id=1, method="tools/call", params={"name": tool_name})
+    )
+    for _ in range(500):
+        if _responses(buffer):
+            break
+        await asyncio.sleep(0.01)
+    responses = _responses(buffer)
+    assert len(responses) == 1
+    return responses[0]
+
+
+def test_concept_not_found_is_a_tool_error_not_retryable() -> None:
+    """`ConceptNotFound` maps to a tool result (`isError: true`,
+    `structuredContent.error.code == "concept_not_found"`, `retryable:
+    false`) -- an ordinary JSON-RPC result, never `-32603` or a protocol
+    error. Covers mcp's "A missing concept is reported as not retryable".
+    Kills leaving `ConceptNotFound` unmapped (it would fall through to the
+    generic `-32603`, which has no `error.code` field at all)."""
+    from openkos.application import concept_read
+
+    response = asyncio.run(
+        _call_and_collect(
+            "missing", _raising_tool("missing", concept_read.ConceptNotFound("nope"))
+        )
+    )
+
+    assert "error" not in response  # not a JSON-RPC protocol error
+    result = response["result"]
+    assert result["isError"] is True
+    error = result["structuredContent"]["error"]
+    assert error["code"] == "concept_not_found"
+    assert error["retryable"] is False
+    assert "nope" not in error["message"]
+
+
+def test_os_error_is_a_retryable_read_failed_tool_error() -> None:
+    """Any `OSError` maps to `read_failed` (`retryable: true`), with a
+    FIXED message -- never `str(exc)`, which may carry a confidential path.
+    Covers "Tool Errors Are Structured And Retryable-Tagged"'s `read_failed`
+    row."""
+    response = asyncio.run(
+        _call_and_collect(
+            "broken", _raising_tool("broken", OSError("cannot read /bundle/zq.md"))
+        )
+    )
+
+    result = response["result"]
+    assert result["isError"] is True
+    error = result["structuredContent"]["error"]
+    assert error["code"] == "read_failed"
+    assert error["retryable"] is True
+    assert "/bundle/zq.md" not in error["message"]
+
+
+def test_tool_error_table_is_subclass_ordered() -> None:
+    """Design Decision 12: "The table is ordered, subclass first." No
+    earlier row's exception type may be a superclass of a LATER row's
+    type -- that would let the earlier, more general row shadow the later,
+    more specific one."""
+    table = server._TOOL_ERROR_TABLE
+    for earlier_index, (earlier_type, *_rest) in enumerate(table):
+        for later_type, *_rest2 in table[earlier_index + 1 :]:
+            assert not issubclass(later_type, earlier_type), (
+                f"{later_type} is a subclass of {earlier_type} but is listed after it"
+            )
+
+
+def test_unmapped_exception_still_falls_through_to_internal_error() -> None:
+    """An exception NOT in the tool-error table (e.g. a bare
+    `RuntimeError`) still becomes the generic `-32603`, exactly as before
+    -- the tool-error table is additive, not a replacement for the
+    fallback (mirrors `test_internal_error_never_echoes_exception_text`)."""
+    response = asyncio.run(
+        _call_and_collect("boom", _raising_tool("boom", RuntimeError("secret")))
+    )
+
+    assert response["error"]["code"] == -32603
+    assert response["error"]["message"] == "internal error"
+
+
 # -- 3.7: duplicate in-flight ids ---------------------------------------------
 
 
