@@ -278,6 +278,7 @@ _READ_ONLY_COMMANDS = frozenset(
         "list",
         "lint",
         "doctor",
+        "mcp",
     }
 )
 """The commands that never write to the workspace, and so take no lock (#925).
@@ -15723,6 +15724,81 @@ def curate(
     # stage and NOT inside `_commit_one_merge` (Identity commits per item).
     if any(outcome.applied for outcome in outcomes):
         _refresh_derived_after_write(layout, cfg, verb="curate")
+
+
+@app.command(
+    "mcp",
+    help="Serve this workspace to an MCP client over stdio (read-only).",
+    rich_help_panel="Explore",
+)
+def mcp_cmd(
+    workspace: Path = typer.Option(
+        Path(),
+        "--workspace",
+        help="Workspace directory to serve (default: the current directory).",
+    ),
+    expose_confidential: bool = typer.Option(
+        False,
+        "--expose-confidential",
+        help=(
+            "Disclose confidential objects to the connecting client. Read "
+            "once at launch, with no per-request override. Off by "
+            "default, meaning every confidential object is withheld."
+        ),
+    ),
+) -> None:
+    """Serve one workspace over stdio to a Model Context Protocol client,
+    exposing four read-only tools: `query`, `get`, `navigate`, `pending`
+    (design Decision 14). Never writes, never acquires the workspace
+    lock -- `mcp` is read-only (`_READ_ONLY_COMMANDS`), the same class
+    `status`/`next`/`list`/`lint`/`doctor` belong to.
+
+    `--workspace` (default: the current directory) is validated with the
+    same `config.require_workspace` + `config.read_config` gate every read
+    command uses, and BEFORE any stdio activity starts -- an invalid
+    workspace exits 1 with the refusal on stderr and never emits a
+    protocol frame on stdout, matching the "Workspace root selection"
+    threat-matrix row.
+
+    `--expose-confidential` is read ONCE, here, at launch: there is no
+    per-request override anywhere in the protocol surface this command
+    hands off to. Confidential objects stay withheld unless this flag was
+    passed.
+
+    `openkos.mcp` is imported LAZILY, inside this function's own body, so
+    `asyncio` never loads on any other verb's ordinary startup path
+    (`tests/unit/mcp/test_layering.py` pins the import-shape half;
+    `tests/unit/cli/test_mcp_cmd.py` pins that `openkos.mcp` stays absent
+    from `sys.modules` after a plain `import openkos.cli.main`).
+    """
+    root = workspace.resolve()
+    reason = config.require_workspace(root)
+    if reason is not None:
+        typer.echo(f"openkos mcp: refusing to serve -- {reason}.", err=True)
+        raise typer.Exit(code=1)
+
+    try:
+        cfg = config.read_config(root)
+    except (OSError, ValueError) as exc:
+        typer.echo(
+            f"openkos mcp: failed while reading the workspace -- {exc}.", err=True
+        )
+        raise typer.Exit(code=1) from exc
+
+    # Advisory only (issue #199), mirroring `query`/`ingest`/`reindex`: the
+    # embedding client is constructed only to read its resolved locality --
+    # it makes no network call here, and `query` (slice 9) is what actually
+    # uses one during serving.
+    embedder = OllamaClient(model=cfg.embedding_model)
+    _warn_if_nonlocal_embed_host("mcp", embedder.locality)
+
+    from openkos.mcp import (
+        server as mcp_server,  # lazy: asyncio stays off every other verb
+    )
+
+    raise typer.Exit(
+        code=mcp_server.serve(root, expose_confidential=expose_confidential)
+    )
 
 
 PANEL_ORDER: Final[tuple[str, ...]] = (
