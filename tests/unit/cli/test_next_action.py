@@ -9,6 +9,7 @@ tier 1 never fires, and every fixture writes a persisted finding directly
 via `state.findings.record_findings`/`bundle.decisions.write_decisions` --
 no CLI writer is exercised here, mirroring Slice B1's own test posture."""
 
+import ast
 from collections.abc import Callable
 from pathlib import Path
 
@@ -275,3 +276,289 @@ def test_mixed_verdicts_rank_only_the_contradiction(
     assert result_cli.exit_code == 0
     assert "concepts/gamma <-> concepts/delta" in result_cli.stdout
     assert "concepts/alpha" not in result_cli.stdout
+
+
+# --- mcp-read-surface Slice 7: structured `subjects` (design Decision 6) --
+
+
+def test_every_next_action_and_declination_call_declares_subjects() -> None:
+    """An AST scan of `next_action.py` asserts every `NextAction(` call site
+    passes `subjects=` explicitly (never relying on the `None` default), and
+    every `record_declination(` call passes `subjects=` explicitly (design
+    Decision 6) -- so a new tier landing later without declaring `subjects=`
+    fails this test rather than silently defaulting to `None` (undeclared,
+    which `gate.disclose_pending` must withhold)."""
+    repo_root = Path(__file__).resolve().parents[3]
+    module_path = repo_root / "src" / "openkos" / "application" / "next_action.py"
+    tree = ast.parse(module_path.read_text(encoding="utf-8"))
+
+    missing: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name: str | None = None
+        if isinstance(func, ast.Name):
+            name = func.id
+        elif isinstance(func, ast.Attribute):
+            name = func.attr
+        if name not in ("NextAction", "record_declination"):
+            continue
+        kw_names = {kw.arg for kw in node.keywords}
+        if "subjects" not in kw_names:
+            missing.append(f"{name}() at line {node.lineno}")
+
+    assert not missing, f"call sites missing explicit subjects=: {missing}"
+
+
+def _write_below_source_sensitivity_bundle(tmp_path: Path) -> None:
+    sources_dir = tmp_path / "bundle" / "sources"
+    sources_dir.mkdir(parents=True, exist_ok=True)
+    (sources_dir / "a.md").write_text(
+        "---\ntype: Source\ntitle: A\nresource: raw/a.txt\n"
+        "sensitivity: confidential\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    concepts_dir = tmp_path / "bundle" / "concepts"
+    concepts_dir.mkdir(parents=True, exist_ok=True)
+    (concepts_dir / "derived.md").write_text(
+        "---\ntype: Concept\ntitle: Derived\nsensitivity: public\n"
+        "provenance:\n  - sources/a\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+
+def _write_multi_source_uncovered_only_bundle(tmp_path: Path) -> None:
+    sources_dir = tmp_path / "bundle" / "sources"
+    sources_dir.mkdir(parents=True, exist_ok=True)
+    (sources_dir / "a.md").write_text(
+        "---\ntype: Source\ntitle: A\nresource: raw/a.txt\n"
+        "sensitivity: public\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    (sources_dir / "c.md").write_text(
+        "---\ntype: Source\ntitle: C\nresource: raw/c.txt\n"
+        "sensitivity: confidential\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    concepts_dir = tmp_path / "bundle" / "concepts"
+    concepts_dir.mkdir(parents=True, exist_ok=True)
+    (concepts_dir / "from-c.md").write_text(
+        "---\ntype: Concept\ntitle: From C\nsensitivity: confidential\n"
+        "provenance:\n  - sources/c\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    (concepts_dir / "mixed.md").write_text(
+        "---\ntype: Concept\ntitle: Mixed\nsensitivity: public\n"
+        "provenance:\n  - sources/a\n  - concepts/from-c\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+
+def _write_unextracted_source(
+    tmp_path: Path, *, name: str = "notes", resource: str = "raw/notes.txt"
+) -> None:
+    sources_dir = tmp_path / "bundle" / "sources"
+    sources_dir.mkdir(parents=True, exist_ok=True)
+    resource_line = f"resource: {resource}\n" if resource else ""
+    (sources_dir / f"{name}.md").write_text(
+        f"---\ntype: Source\ntitle: {name.title()}\n{resource_line}"
+        "extraction_status: failed\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+
+def _write_unjudged_source(
+    tmp_path: Path,
+    *,
+    name: str = "notes",
+    resource: str = "raw/notes.txt",
+    notice: str = "judge-selection-unavailable",
+) -> None:
+    sources_dir = tmp_path / "bundle" / "sources"
+    sources_dir.mkdir(parents=True, exist_ok=True)
+    resource_line = f"resource: {resource}\n" if resource else ""
+    (sources_dir / f"{name}.md").write_text(
+        f"---\ntype: Source\ntitle: {name.title()}\n{resource_line}"
+        f"extraction_notice: {notice}\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+
+def _write_doc(path: Path, *, title: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"---\ntype: Concept\ntitle: {title}\n---\n# {title}\n", encoding="utf-8"
+    )
+
+
+def test_per_tier_subjects_match_design_table(
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One assertion per tier from design Decision 6's table: bootstrap,
+    missing-vector-index, missing-FTS, stale-indexes, duplicate-groups, and
+    non-NFC give `subjects=()`; unextracted and unjudged (action and both
+    declinations) give `(finding.concept_id,)`; below-source-sensitivity
+    gives `(finding.concept_id, *finding.related_ids)`;
+    multi-source-uncovered (action and declination) gives
+    `(finding.concept_id, *finding.related_ids)`; open contradictions gives
+    `finding.pair_ids`; `declination_subjects` stays index-aligned with
+    `declinations`."""
+    monkeypatch.setattr(
+        "openkos.application.next_action.fts_index_present", lambda _path: True
+    )
+
+    # -- bootstrap: `subjects=()` --
+    root = tmp_path_factory.mktemp("subjects_bootstrap")
+    _init_workspace(root, monkeypatch)
+    result = next_action.next_action(config.WorkspaceLayout(root))
+    assert result.action is not None
+    assert result.action.subjects == ()
+
+    # -- missing vector index: `subjects=()` --
+    root = tmp_path_factory.mktemp("subjects_missing_vector")
+    _init_workspace(root, monkeypatch)
+    _write_doc(root / "bundle" / "concepts" / "alpha.md", title="Alpha")
+    result = next_action.next_action(config.WorkspaceLayout(root))
+    assert result.action is not None
+    assert result.action.command == "openkos reindex"
+    assert result.action.subjects == ()
+
+    # -- missing FTS index: `subjects=()` --
+    root = tmp_path_factory.mktemp("subjects_missing_fts")
+    _init_workspace(root, monkeypatch)
+    monkeypatch.setattr(
+        "openkos.application.next_action.vector_store_is_empty", lambda _path: False
+    )
+    monkeypatch.setattr(
+        "openkos.application.next_action.fts_index_present", lambda _path: False
+    )
+    result = next_action.next_action(config.WorkspaceLayout(root))
+    monkeypatch.setattr(
+        "openkos.application.next_action.fts_index_present", lambda _path: True
+    )
+    assert result.action is not None
+    assert result.action.command == "openkos reindex"
+    assert "FTS" in result.action.reason
+    assert result.action.subjects == ()
+
+    # -- stale indexes: `subjects=()` --
+    root = tmp_path_factory.mktemp("subjects_stale")
+    _init_workspace(root, monkeypatch)
+    from openkos.graph import sqlite_graph
+    from openkos.state import fts as fts_module
+
+    bundle_dir = root / "bundle"
+    fts_module.write_fts_index(root / ".openkos" / "fts.db", bundle_dir)
+    sqlite_graph.write_graph_store(root / ".openkos" / "graph.db", bundle_dir)
+    (bundle_dir / "concepts").mkdir(parents=True, exist_ok=True)
+    (bundle_dir / "concepts" / "new.md").write_text(
+        "---\ntype: Concept\ntitle: New\n---\nBody.\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        "openkos.application.next_action.vector_store_is_empty", lambda _path: False
+    )
+    result = next_action.next_action(config.WorkspaceLayout(root))
+    assert result.action is not None
+    assert result.action.command == "openkos reindex"
+    assert "older than the bundle" in result.action.reason
+    assert result.action.subjects == ()
+
+    # -- unextracted: action `(concept_id,)`, declination `(concept_id,)` --
+    root = tmp_path_factory.mktemp("subjects_unextracted")
+    _init_workspace(root, monkeypatch)
+    _write_unextracted_source(root, name="broken", resource="")
+    _write_unextracted_source(root, name="notes", resource="raw/notes.txt")
+    result = next_action.next_action(config.WorkspaceLayout(root))
+    assert result.action is not None
+    assert result.action.command == "openkos ingest raw/notes.txt"
+    assert result.action.subjects == ("sources/notes",)
+    assert len(result.declination_subjects) == len(result.declinations)
+    assert result.declination_subjects[0] == ("sources/broken",)
+
+    # -- unjudged: action `(concept_id,)`, declination `(concept_id,)` --
+    root = tmp_path_factory.mktemp("subjects_unjudged")
+    _init_workspace(root, monkeypatch)
+    _write_unjudged_source(root, name="broken", resource="")
+    _write_unjudged_source(root, name="notes", resource="raw/notes.txt")
+    result = next_action.next_action(config.WorkspaceLayout(root))
+    assert result.action is not None
+    assert result.action.command == "openkos ingest raw/notes.txt"
+    assert result.action.subjects == ("sources/notes",)
+    assert len(result.declination_subjects) == len(result.declinations)
+    assert result.declination_subjects[0] == ("sources/broken",)
+
+    # -- below-source-sensitivity: `(concept_id, *related_ids)` --
+    root = tmp_path_factory.mktemp("subjects_below_source")
+    _init_workspace(root, monkeypatch)
+    _write_below_source_sensitivity_bundle(root)
+    result = next_action.next_action(config.WorkspaceLayout(root))
+    assert result.action is not None
+    assert result.action.command == "openkos backfill-sensitivity"
+    assert result.action.subjects == ("concepts/derived", "sources/a")
+
+    # -- multi-source-uncovered: action + declination both
+    # `(concept_id, *related_ids)` --
+    root = tmp_path_factory.mktemp("subjects_multi_source")
+    _init_workspace(root, monkeypatch)
+    _write_multi_source_uncovered_only_bundle(root)
+    odd_dir = root / "bundle" / "concepts" / "a b"
+    odd_dir.mkdir(parents=True, exist_ok=True)
+    (odd_dir / "early.md").write_text(
+        "---\ntype: Concept\ntitle: Early\nsensitivity: public\n"
+        "provenance:\n  - sources/a\n  - concepts/from-c\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    result = next_action.next_action(config.WorkspaceLayout(root))
+    assert result.action is not None
+    assert (
+        result.action.command == "openkos set-sensitivity concepts/mixed confidential"
+    )
+    assert result.action.subjects == (
+        "concepts/mixed",
+        "sources/a",
+        "concepts/from-c",
+    )
+    assert len(result.declination_subjects) == len(result.declinations)
+    assert result.declination_subjects[0] == (
+        "concepts/a b/early",
+        "sources/a",
+        "concepts/from-c",
+    )
+
+    # -- duplicate groups: `subjects=()` --
+    root = tmp_path_factory.mktemp("subjects_duplicates")
+    _init_workspace(root, monkeypatch)
+    _write_doc(root / "bundle" / "concepts" / "dup-a.md", title="Stoicism")
+    _write_doc(root / "bundle" / "concepts" / "dup-b.md", title="STOICISM")
+    result = next_action.next_action(config.WorkspaceLayout(root))
+    assert result.action is not None
+    assert result.action.command == "openkos curate"
+    assert result.action.subjects == ()
+
+    # -- non-NFC: `subjects=()` --
+    root = tmp_path_factory.mktemp("subjects_non_nfc")
+    _init_workspace(root, monkeypatch)
+    import unicodedata
+
+    nfd_cafe = unicodedata.normalize("NFD", "café")
+    (root / "bundle" / "concepts").mkdir(parents=True, exist_ok=True)
+    (root / "bundle" / "concepts" / f"{nfd_cafe}.md").write_text(
+        "---\ntype: Concept\ntitle: Cafe\n---\nBody.\n", encoding="utf-8"
+    )
+    result = next_action.next_action(config.WorkspaceLayout(root))
+    assert result.action is not None
+    assert result.action.command == "openkos normalize-names"
+    assert result.action.subjects == ()
+
+    # -- open contradictions: `finding.pair_ids` --
+    root = tmp_path_factory.mktemp("subjects_contradiction")
+    _init_workspace(root, monkeypatch)
+    _write_doc(root / "bundle" / "concepts" / "alpha.md", title="Alpha")
+    _write_doc(root / "bundle" / "concepts" / "beta.md", title="Beta")
+    _record_finding(root)
+    result = next_action.next_action(config.WorkspaceLayout(root))
+    assert result.action is not None
+    assert result.action.command == "openkos contradictions"
+    assert result.action.subjects == ("concepts/alpha", "concepts/beta")

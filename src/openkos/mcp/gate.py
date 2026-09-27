@@ -12,10 +12,9 @@ raw `not_run` entries with `application.consistency.Consistency`'s own,
 renders both into the fixed, count-only vocabulary (design Decision 3),
 and renders `warnings` from the consistency check (design Decision 11).
 
-Slice 5 added `disclose_get` (design Decision 4), the first real
-`disclose_*` function; this slice adds `disclose_navigate` (design
-Decision 5). `disclose_pending`/`disclose_query` land in slices 7-9 as
-their tools do.
+Slice 5 added `disclose_get` (design Decision 4); slice 6 added
+`disclose_navigate` (design Decision 5); this slice adds `disclose_pending`
+(design Decision 6). `disclose_query` lands in slice 9 with its tool.
 """
 
 from __future__ import annotations
@@ -27,7 +26,7 @@ from pathlib import Path
 from typing import Final, cast
 
 from openkos import read_outcome, sensitivity
-from openkos.application import concept_read, list_service
+from openkos.application import concept_read, list_service, next_action
 from openkos.application import consistency as application_consistency
 from openkos.model import okf
 
@@ -388,4 +387,76 @@ def disclose_navigate(raw: object, snapshot: Snapshot) -> dict[str, object]:
         "neighbors": neighbors,
         "withheld": withheld,
         "not_run": not_run,
+    }
+
+
+def _subjects_disclosable(subjects: tuple[str, ...] | None, snapshot: Snapshot) -> bool:
+    """`True` only when `subjects` is DECLARED (not `None`) and every
+    subject it names is in the snapshot's allowed set. `None` -- undeclared
+    -- is never trusted, regardless of what it might turn out to contain;
+    an explicitly declared `()` trivially satisfies "every subject", per
+    design Decision 6."""
+    return subjects is not None and all(
+        snapshot.discloses(subject) for subject in subjects
+    )
+
+
+def disclose_pending(raw: object, snapshot: Snapshot) -> dict[str, object]:
+    """Build `pending`'s disclosure-safe payload (design Decision 6).
+
+    `raw` is typed `object` to match `Tool.disclose`'s contravariant
+    signature; it is always a `next_action.NextResult` at runtime, since
+    `mcp/tools.py` only ever pairs `pending`'s `run` (which calls
+    `next_action.next_action`) with this function.
+
+    Unlike `get`/`navigate`, this gate never reads `reason`/`detail` prose
+    at all -- the ONLY input to its decision is the structured `subjects`/
+    `declination_subjects` fields `next_action.py` populates, which is what
+    keeps a document-controlled string from ever influencing what crosses
+    the boundary (design Decision 6's whole point).
+
+    `action`: kept only when `raw.action.subjects` is declared (not `None`)
+    and every subject in it is disclosable; otherwise `action: null` and
+    `withheld` is incremented by exactly one for it, regardless of whether
+    the underlying finding is itself harmless -- fail-closed on the absence
+    of a declaration, not on content.
+
+    `declinations`: when `len(raw.declination_subjects) !=
+    len(raw.declinations)` (a defect condition), EVERY declination is
+    withheld -- pairing a declination with the wrong subjects by an
+    accidental index shift would be worse than losing all of them. With
+    aligned lengths, each declination is kept only when its own subjects
+    are declared and all disclosable, and withheld individually otherwise.
+
+    `skip_notices` become `skipped_documents: len(...)`, a count separate
+    from `withheld` -- a skipped document was never read at all, so it was
+    never a disclosure decision (design Decision 3)."""
+    raw = cast(next_action.NextResult, raw)
+    withheld = 0
+
+    action: dict[str, object] | None = None
+    if raw.action is not None:
+        if _subjects_disclosable(raw.action.subjects, snapshot):
+            action = {"command": raw.action.command, "reason": raw.action.reason}
+        else:
+            withheld += 1
+
+    declinations: list[str] = []
+    if len(raw.declination_subjects) != len(raw.declinations):
+        withheld += len(raw.declinations)
+    else:
+        for declination, subjects in zip(
+            raw.declinations, raw.declination_subjects, strict=True
+        ):
+            if _subjects_disclosable(subjects, snapshot):
+                declinations.append(declination)
+            else:
+                withheld += 1
+
+    return {
+        "action": action,
+        "declinations": declinations,
+        "skipped_documents": len(raw.skip_notices),
+        "withheld": withheld,
+        "not_run": (),
     }

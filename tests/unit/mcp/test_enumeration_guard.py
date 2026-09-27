@@ -199,6 +199,69 @@ def test_navigate_positive_control_finds_the_canary_with_the_flag_on(
     assert canary.CANARY_ID in canary.find_canary_leaks(lines)
 
 
+def _patch_next_action_healthy_indexes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Mirror `test_next.py`'s own convention (`_fts_index_present_by_
+    default`): patch the two zero-walk seams `next_action.py`'s bootstrap
+    and index tiers gate on to their "healthy" values, so the canary
+    Source's `unextracted` finding is the tier that actually fires --
+    otherwise the bootstrap/missing-index tiers would short-circuit first
+    and the canary declination would never be reached (design Decision
+    16's fixture note for `pending`)."""
+    from openkos.application import next_action
+
+    monkeypatch.setattr(next_action, "vector_store_is_empty", lambda _path: False)
+    monkeypatch.setattr(next_action, "fts_index_present", lambda _path: True)
+
+
+def test_pending_tool_injected_failures_never_leak_the_canary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`pending`'s error path is covered too (design Decision 16's matrix):
+    an injected `OSError`/`RuntimeError` carrying the canary's body marker
+    or title in its message must never leak it."""
+    canary.build_canary_bundle(tmp_path)
+    ctx = _ctx(tmp_path)
+
+    from openkos.application import next_action
+
+    def _raise_os_error(layout: object) -> next_action.NextResult:
+        raise OSError(f"cannot read {canary.CANARY_ID}: {canary.CANARY_BODY_MARKER}")
+
+    monkeypatch.setattr(next_action, "next_action", _raise_os_error)
+    lines = canary.run_matrix(
+        mcp_tools.REGISTRY, {"pending": [canary.Call(arguments={})]}, ctx
+    )
+    assert canary.find_canary_leaks(lines) == []
+
+    def _raise_runtime_error(layout: object) -> next_action.NextResult:
+        raise RuntimeError(canary.CANARY_TITLE)
+
+    monkeypatch.setattr(next_action, "next_action", _raise_runtime_error)
+    lines = canary.run_matrix(
+        mcp_tools.REGISTRY, {"pending": [canary.Call(arguments={})]}, ctx
+    )
+    assert canary.find_canary_leaks(lines) == []
+
+
+def test_pending_positive_control_finds_the_canary_with_the_flag_on(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With `expose_confidential=True` and the two healthy-index seams
+    patched, the canary Source's `unextracted` declination DOES surface --
+    the real per-tool positive control design Decision 16 requires, proving
+    the fixture's unextracted-tier canary is genuinely reachable through
+    `pending`, not just through `leaky_probe`."""
+    canary.build_canary_bundle(tmp_path)
+    _patch_next_action_healthy_indexes(monkeypatch)
+    ctx = _ctx(tmp_path, expose_confidential=True)
+
+    lines = canary.run_matrix(
+        mcp_tools.REGISTRY, {"pending": [canary.Call(arguments={})]}, ctx
+    )
+
+    assert canary.CANARY_SOURCE_ID in canary.find_canary_leaks(lines)
+
+
 def test_positive_controls_prove_the_fixture_is_live(tmp_path: Path) -> None:
     """With `leaky_probe` registered and `expose_confidential=True` passed
     through `ToolContext`, the canary needle IS found -- proving the

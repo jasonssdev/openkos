@@ -4,7 +4,8 @@
 `execute` is the ONE composition (design Decision 2): validate arguments,
 run the tool's service call, take a fresh disclosure snapshot, read the
 consistency warnings, then let `mcp.gate` build the final disclosure-safe
-payload. Slice 5 registered `get`; this slice adds `navigate`.
+payload. Slice 5 registered `get`; slice 6 added `navigate`; this slice
+adds `pending`.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ from dataclasses import dataclass
 from typing import Final, cast
 
 from openkos import config
-from openkos.application import concept_read, list_service
+from openkos.application import concept_read, list_service, next_action
 from openkos.application import consistency as application_consistency
 from openkos.llm.base import Embedder, LLMBackend
 from openkos.mcp import gate
@@ -153,8 +154,56 @@ _NAVIGATE_TOOL: Final = Tool(
     disclose=gate.disclose_navigate,
 )
 
-REGISTRY: Final[Mapping[str, Tool]] = {"get": _GET_TOOL, "navigate": _NAVIGATE_TOOL}
-"""`pending` and `query` join in slices 7-9."""
+
+def _pending_run(
+    arguments: Mapping[str, object],
+    ctx: ToolContext,
+    progress: ProgressSink | None,
+) -> next_action.NextResult:
+    """`pending`'s service call (design Decision 6): `next_action.
+    next_action` unmodified -- no arguments to pass, per Decision 15's
+    empty `inputSchema`; `gate.disclose_pending` is what decides what may
+    be disclosed."""
+    return next_action.next_action(ctx.layout)
+
+
+_PENDING_INPUT_SCHEMA: Final[Mapping[str, object]] = {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": False,
+}
+
+_PENDING_OUTPUT_SCHEMA: Final[Mapping[str, object]] = {
+    "type": "object",
+    "properties": {
+        "action": {"type": ["object", "null"]},
+        "declinations": {"type": "array"},
+        "skipped_documents": {"type": "integer", "minimum": 0},
+        "withheld": {"type": "integer", "minimum": 0},
+        "warnings": {"type": "array"},
+        "not_run": {"type": "array"},
+        "error": {"type": "object"},
+    },
+    "required": ["withheld", "warnings", "not_run"],
+}
+
+_PENDING_TOOL: Final = Tool(
+    name="pending",
+    title="Pending Work",
+    description="Read the single ranked recommendation, plus the findings "
+    "seen and declined or skipped along the way.",
+    input_schema=_PENDING_INPUT_SCHEMA,
+    output_schema=_PENDING_OUTPUT_SCHEMA,
+    run=_pending_run,
+    disclose=gate.disclose_pending,
+)
+
+REGISTRY: Final[Mapping[str, Tool]] = {
+    "get": _GET_TOOL,
+    "navigate": _NAVIGATE_TOOL,
+    "pending": _PENDING_TOOL,
+}
+"""`query` joins in slice 9."""
 
 
 SUPPORTED_SCHEMA_KEYWORDS: Final = frozenset(

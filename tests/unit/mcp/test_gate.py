@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import cast
 
 from openkos import read_outcome
-from openkos.application import concept_read, list_service
+from openkos.application import concept_read, list_service, next_action
 from openkos.application import consistency as application_consistency
 from openkos.bundle import listing
 from openkos.mcp import gate
@@ -499,3 +499,96 @@ def test_graph_build_reason_validated_before_forwarding() -> None:
     assert _rendered_not_run(rendered) == [
         {"label": "graph_build", "reason": "2 edges could not be included"}
     ]
+
+
+# ---------------------------------------------------------------------------
+# 7.7: disclose_pending's truth table (design Decision 6)
+# ---------------------------------------------------------------------------
+
+
+def _next_result(
+    *,
+    action: next_action.NextAction | None = None,
+    declinations: tuple[str, ...] = (),
+    declination_subjects: tuple[tuple[str, ...] | None, ...] = (),
+    skip_notices: tuple[str, ...] = (),
+) -> next_action.NextResult:
+    return next_action.NextResult(
+        action=action,
+        declinations=declinations,
+        declination_subjects=declination_subjects,
+        skip_notices=skip_notices,
+    )
+
+
+def test_disclose_pending_undeclared_action_is_withheld() -> None:
+    """An action whose `subjects` is `None` (undeclared) is withheld
+    regardless of whether the underlying finding is itself harmless --
+    fail-closed on the absence of a declaration, not on content."""
+    action = next_action.NextAction(command="openkos reindex", reason="r")
+    assert action.subjects is None
+    raw = _next_result(action=action)
+    result = gate.disclose_pending(raw, _snapshot(frozenset()))
+    assert result["action"] is None
+    assert result["withheld"] == 1
+
+
+def test_disclose_pending_declared_subject_free_action_is_disclosed() -> None:
+    """An action whose `subjects` is the explicit empty tuple `()` is
+    disclosed normally -- an explicitly declared empty set trivially
+    satisfies "every subject is disclosable"."""
+    action = next_action.NextAction(command="openkos reindex", reason="r", subjects=())
+    raw = _next_result(action=action)
+    result = gate.disclose_pending(raw, _snapshot(frozenset()))
+    assert result["action"] == {"command": "openkos reindex", "reason": "r"}
+    assert result["withheld"] == 0
+
+
+def test_disclose_pending_action_with_one_non_disclosable_subject_is_withheld() -> None:
+    """An action whose `subjects` includes one non-disclosable concept id is
+    withheld in full, not partially disclosed."""
+    action = next_action.NextAction(
+        command="openkos backfill-sensitivity",
+        reason="r",
+        subjects=("concepts/derived", "sources/a"),
+    )
+    raw = _next_result(action=action)
+    result = gate.disclose_pending(
+        raw, _snapshot(frozenset({"concepts/derived"}))
+    )  # "sources/a" is missing from the allowed set
+    assert result["action"] is None
+    assert result["withheld"] == 1
+
+
+def test_disclose_pending_misaligned_declination_subjects_withholds_all() -> None:
+    """`declination_subjects` a different length from `declinations` (a
+    defect condition) withholds every declination, fail-closed, rather than
+    pairing any declination with the wrong subjects."""
+    raw = _next_result(
+        declinations=("a: declined", "b: declined"),
+        declination_subjects=(("concepts/a",),),  # one entry short
+    )
+    result = gate.disclose_pending(raw, _snapshot(frozenset({"concepts/a"})))
+    assert result["declinations"] == []
+    assert result["withheld"] == 2
+
+
+def test_disclose_pending_aligned_declination_subjects_filter_individually() -> None:
+    """With aligned lengths, each declination is kept when its own subjects
+    are declared and all disclosable, and withheld individually otherwise."""
+    raw = _next_result(
+        declinations=("a: declined", "b: declined"),
+        declination_subjects=(("concepts/a",), ("concepts/b",)),
+    )
+    result = gate.disclose_pending(raw, _snapshot(frozenset({"concepts/a"})))
+    assert result["declinations"] == ["a: declined"]
+    assert result["withheld"] == 1
+
+
+def test_disclose_pending_skip_notices_become_skipped_documents_not_withheld() -> None:
+    """`skip_notices` become `skipped_documents: len(...)`, never counted
+    toward `withheld`."""
+    raw = _next_result(skip_notices=("concepts/broken.md: skipped (unparseable)",))
+    result = gate.disclose_pending(raw, _snapshot(frozenset()))
+    assert result["skipped_documents"] == 1
+    assert result["withheld"] == 0

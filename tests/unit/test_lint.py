@@ -49,6 +49,71 @@ def _write_doc(
     path.write_text(f"{frontmatter}{body}", encoding="utf-8")
 
 
+def test_related_ids_populated_and_excluded_from_equality(tmp_path: Path) -> None:
+    """`LintFinding.related_ids` defaults to `()`; is populated with
+    `(source_id,)` for `below-source-sensitivity` and with the cited ids
+    for `multi-source-uncovered`; and never affects `LintFinding` equality
+    (`compare=False`) -- mcp-read-surface Slice 7, design Decision 6:
+    `related_ids` feeds `next_action`'s structured `subjects`, and never
+    changes lint's own rendering or existing equality assertions."""
+    default_finding = lint.LintFinding(kind="stale", path="concepts/x.md", detail="d")
+    assert default_finding.related_ids == ()
+
+    same_except_related_ids_a = lint.LintFinding(
+        kind="stale", path="concepts/x.md", detail="d", related_ids=()
+    )
+    same_except_related_ids_b = lint.LintFinding(
+        kind="stale", path="concepts/x.md", detail="d", related_ids=("concepts/y",)
+    )
+    assert same_except_related_ids_a == same_except_related_ids_b
+
+    bundle_dir = tmp_path / "bundle"
+    sources_dir = bundle_dir / "sources"
+    sources_dir.mkdir(parents=True, exist_ok=True)
+    (sources_dir / "a.md").write_text(
+        "---\ntype: Source\ntitle: A\nsensitivity: confidential\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    concepts_dir = bundle_dir / "concepts"
+    concepts_dir.mkdir(parents=True, exist_ok=True)
+    (concepts_dir / "derived.md").write_text(
+        "---\ntype: Concept\ntitle: Derived\nsensitivity: public\n"
+        "provenance:\n  - sources/a\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    docs, _ = lint.collect_docs(bundle_dir)
+    below = [
+        finding
+        for finding in lint.check_below_source_sensitivity(docs)
+        if finding.kind == "below-source-sensitivity"
+    ]
+    assert len(below) == 1
+    assert below[0].related_ids == ("sources/a",)
+
+    (sources_dir / "c.md").write_text(
+        "---\ntype: Source\ntitle: C\nsensitivity: confidential\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    (concepts_dir / "from-c.md").write_text(
+        "---\ntype: Concept\ntitle: From C\nsensitivity: confidential\n"
+        "provenance:\n  - sources/c\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    (concepts_dir / "mixed.md").write_text(
+        "---\ntype: Concept\ntitle: Mixed\nsensitivity: public\n"
+        "provenance:\n  - sources/a\n  - concepts/from-c\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    docs, _ = lint.collect_docs(bundle_dir)
+    uncovered = [
+        finding
+        for finding in lint.check_below_source_sensitivity(docs)
+        if finding.kind == "multi-source-uncovered"
+    ]
+    assert len(uncovered) == 1
+    assert uncovered[0].related_ids == ("sources/a", "concepts/from-c")
+
+
 def test_collect_docs_computes_identity_rel_dir_and_body(tmp_path: Path) -> None:
     """`collect_docs` computes `identity` (bundle-relative path minus
     `.md`), `rel_dir` (its parent directory), and `body` (the text after

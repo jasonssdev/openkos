@@ -146,8 +146,15 @@ GUARD_MATRIX: dict[str, list[Call]] = {
         Call(arguments={"concept_id": "concepts/does-not-exist-7f3a"}, label="missing"),
         Call(arguments={}, label="invalid_arguments"),
     ],
+    "pending": [
+        Call(arguments={}, label="disclosable"),
+        Call(arguments={"unexpected": True}, label="invalid_arguments"),
+    ],
 }
-"""`pending`/`query`'s rows join in slices 7-9 as each tool lands."""
+"""`query`'s row joins in slice 9. `pending` takes no arguments (Decision
+15's empty `inputSchema`), so its own row varies the CALL rather than a
+per-id target: a bare call, and one with an unexpected property (its own
+`additionalProperties: false` refusal)."""
 
 
 async def _run_matrix_async(
