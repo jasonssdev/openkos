@@ -172,3 +172,77 @@ def test_read_concept_unreadable_and_malformed(tmp_path: Path) -> None:
     entry = record.not_run[0]
     assert isinstance(entry, read_outcome.NotRun)
     assert entry.label == "relations"
+
+
+# ---------------------------------------------------------------------------
+# 6.1: concept_neighbors returns both directions, typed and untyped
+# ---------------------------------------------------------------------------
+
+
+def test_concept_neighbors_both_directions(tmp_path: Path) -> None:
+    """A concept with an outbound typed relation, an outbound untyped link,
+    and an INBOUND edge from another concept -- `concept_neighbors` returns
+    all three, each with the correct `direction` (`"out"`/`"in"`) and
+    `relation_type` (`None` for untyped, the type string for typed,
+    `"derived_from"` for a provenance-derived edge); a missing concept id
+    raises `ConceptNotFound`."""
+    layout = _workspace(tmp_path)
+    _write_doc(
+        layout.bundle_dir / "concepts" / "target.md",
+        frontmatter_lines=[
+            "type: Concept",
+            "title: Target",
+            "sensitivity: public",
+            "relations:",
+            "  - target: concepts/typed-out",
+            "    type: related_to",
+        ],
+        body="See [Untyped Out](/concepts/untyped-out.md) for more.\n",
+    )
+    _write_doc(
+        layout.bundle_dir / "concepts" / "typed-out.md",
+        frontmatter_lines=["type: Concept", "title: Typed Out", "sensitivity: public"],
+        body="An outbound typed-relation target.\n",
+    )
+    _write_doc(
+        layout.bundle_dir / "concepts" / "untyped-out.md",
+        frontmatter_lines=[
+            "type: Concept",
+            "title: Untyped Out",
+            "sensitivity: public",
+        ],
+        body="An outbound untyped-link target.\n",
+    )
+    _write_doc(
+        layout.bundle_dir / "concepts" / "inbound.md",
+        frontmatter_lines=[
+            "type: Concept",
+            "title: Inbound",
+            "sensitivity: public",
+            "relations:",
+            "  - target: concepts/target",
+            "    type: related_to",
+        ],
+        body="Points back at the target concept.\n",
+    )
+
+    neighborhood = concept_read.concept_neighbors(layout, "concepts/target")
+
+    assert neighborhood.concept_id == "concepts/target"
+    assert neighborhood.skipped_count == 0
+    assert neighborhood.neighbors == (
+        concept_read.Neighbor(
+            concept_id="concepts/inbound", direction="in", relation_type="related_to"
+        ),
+        concept_read.Neighbor(
+            concept_id="concepts/typed-out",
+            direction="out",
+            relation_type="related_to",
+        ),
+        concept_read.Neighbor(
+            concept_id="concepts/untyped-out", direction="out", relation_type=None
+        ),
+    )
+
+    with pytest.raises(concept_read.ConceptNotFound):
+        concept_read.concept_neighbors(layout, "concepts/does-not-exist")

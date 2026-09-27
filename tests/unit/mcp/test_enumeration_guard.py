@@ -144,6 +144,61 @@ def test_get_positive_control_finds_the_canary_with_the_flag_on(
     assert canary.CANARY_TITLE in canary.find_canary_leaks(lines)
 
 
+def test_navigate_tool_injected_failures_never_leak_the_canary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`navigate`'s error paths are covered too (design Decision 16's
+    matrix): an injected `OSError`/`RuntimeError` carrying the canary's
+    body marker or title in its message must never leak it."""
+    canary.build_canary_bundle(tmp_path)
+    ctx = _ctx(tmp_path)
+
+    from openkos.application import concept_read
+
+    def _raise_os_error(layout: object, concept_id: str) -> concept_read.Neighborhood:
+        raise OSError(f"cannot read {canary.CANARY_ID}: {canary.CANARY_BODY_MARKER}")
+
+    monkeypatch.setattr(concept_read, "concept_neighbors", _raise_os_error)
+    lines = canary.run_matrix(
+        mcp_tools.REGISTRY,
+        {"navigate": [canary.Call(arguments={"concept_id": canary.CANARY_ID})]},
+        ctx,
+    )
+    assert canary.find_canary_leaks(lines) == []
+
+    def _raise_runtime_error(
+        layout: object, concept_id: str
+    ) -> concept_read.Neighborhood:
+        raise RuntimeError(canary.CANARY_TITLE)
+
+    monkeypatch.setattr(concept_read, "concept_neighbors", _raise_runtime_error)
+    lines = canary.run_matrix(
+        mcp_tools.REGISTRY,
+        {"navigate": [canary.Call(arguments={"concept_id": canary.CANARY_ID})]},
+        ctx,
+    )
+    assert canary.find_canary_leaks(lines) == []
+
+
+def test_navigate_positive_control_finds_the_canary_with_the_flag_on(
+    tmp_path: Path,
+) -> None:
+    """With `expose_confidential=True`, `navigate(pub)` DOES list the
+    canary concept -- the real per-tool positive control design Decision
+    16 requires, proving the fixture's needle is genuinely reachable
+    through `navigate`, not just through `leaky_probe`."""
+    canary.build_canary_bundle(tmp_path)
+    ctx = _ctx(tmp_path, expose_confidential=True)
+
+    lines = canary.run_matrix(
+        mcp_tools.REGISTRY,
+        {"navigate": [canary.Call(arguments={"concept_id": canary.PUBLIC_ID})]},
+        ctx,
+    )
+
+    assert canary.CANARY_ID in canary.find_canary_leaks(lines)
+
+
 def test_positive_controls_prove_the_fixture_is_live(tmp_path: Path) -> None:
     """With `leaky_probe` registered and `expose_confidential=True` passed
     through `ToolContext`, the canary needle IS found -- proving the

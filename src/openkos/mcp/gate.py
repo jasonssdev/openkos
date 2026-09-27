@@ -12,9 +12,10 @@ raw `not_run` entries with `application.consistency.Consistency`'s own,
 renders both into the fixed, count-only vocabulary (design Decision 3),
 and renders `warnings` from the consistency check (design Decision 11).
 
-This slice adds `disclose_get` (design Decision 4), the first real
-`disclose_*` function; `disclose_navigate`/`disclose_pending`/
-`disclose_query` land in slices 6-9 as their tools do.
+Slice 5 added `disclose_get` (design Decision 4), the first real
+`disclose_*` function; this slice adds `disclose_navigate` (design
+Decision 5). `disclose_pending`/`disclose_query` land in slices 7-9 as
+their tools do.
 """
 
 from __future__ import annotations
@@ -85,6 +86,14 @@ read_consistency`'s staleness check never raises); `graph_build` (slice
 outcomes. This constant documents the complete vocabulary design Decision 3
 names, independent of which labels this slice's aggregation touches."""
 
+_PASSTHROUGH_LABELS: Final = frozenset({_GRAPH_BUILD})
+"""`graph_build` (slice 6's `navigate`) is built directly from a count by
+its own `disclose_navigate`, never from an untrusted service's raw
+`NotRun.reason` -- so, unlike `_SINGLE_ENTRY_LABELS`, its already-safe
+count-only reason passes through `_render_not_run` unchanged, rather than
+being replaced by a `_FIXED_REASONS` lookup (there is none for this label,
+since the count varies per call) or folded into the aggregate bucket."""
+
 _SINGLE_ENTRY_LABELS: Final = frozenset({_IN_FLIGHT_WRITE, _CONCEPT_READ, _RELATIONS})
 """Labels a service already emits directly and correctly (never a document
 path): `finish` keeps the label and only replaces the `reason` text, since
@@ -117,6 +126,7 @@ def _render_not_run(
     path. Order follows the fixed vocabulary, not arrival order, so the
     rendered list is deterministic."""
     single: dict[str, dict[str, object]] = {}
+    passthrough: list[dict[str, object]] = []
     aggregate_count = 0
     for entry in entries:
         if entry.label in _SINGLE_ENTRY_LABELS:
@@ -124,6 +134,8 @@ def _render_not_run(
                 "label": entry.label,
                 "reason": _FIXED_REASONS[entry.label],
             }
+        elif entry.label in _PASSTHROUGH_LABELS:
+            passthrough.append({"label": entry.label, "reason": entry.reason})
         else:
             aggregate_count += 1
 
@@ -131,6 +143,7 @@ def _render_not_run(
     for label in (_IN_FLIGHT_WRITE, _CONCEPT_READ, _RELATIONS):
         if label in single:
             rendered.append(single[label])
+    rendered.extend(passthrough)
     if aggregate_count:
         noun = "document" if aggregate_count == 1 else "documents"
         rendered.append(
@@ -279,7 +292,7 @@ def disclose_get(raw: object, snapshot: Snapshot) -> dict[str, object]:
         )
     not_run.extend(raw.sources.not_run)
 
-    concept = {
+    concept: dict[str, object] = {
         "id": record.concept_id,
         "type": record.type,
         "title": record.title,
@@ -292,3 +305,57 @@ def disclose_get(raw: object, snapshot: Snapshot) -> dict[str, object]:
         "source_ancestors": source_ancestors,
     }
     return {"concept": concept, "withheld": withheld, "not_run": tuple(not_run)}
+
+
+def disclose_navigate(raw: object, snapshot: Snapshot) -> dict[str, object]:
+    """Build `navigate`'s disclosure-safe payload (design Decision 5).
+
+    `raw` is typed `object` to match `Tool.disclose`'s contravariant
+    signature; it is always a `concept_read.Neighborhood` at runtime, since
+    `mcp/tools.py` only ever pairs `navigate`'s `run` (which returns one)
+    with this function.
+
+    The target itself must be disclosable, else `concept_id: null,
+    withheld: 1` with no neighbors listed at all -- the graph projection is
+    sensitivity-blind by construction (`graph/base.py`), so there is no
+    second, freshly-read label to re-check the way `get`'s conjunction
+    does; `snapshot.discloses` is the only check for a neighbor too, in
+    EITHER direction: an inbound edge is filtered exactly like an outbound
+    one (the proposal's "both ends disclosable" rule). `raw.skipped_count`
+    becomes a `graph_build` `not_run` entry built directly from the count
+    -- never routed through `finish`'s generic aggregation, since this
+    reason is already safe (this module's `_PASSTHROUGH_LABELS`)."""
+    raw = cast(concept_read.Neighborhood, raw)
+    if not snapshot.discloses(raw.concept_id):
+        return {"concept_id": None, "withheld": 1, "neighbors": [], "not_run": ()}
+
+    withheld = 0
+    neighbors: list[dict[str, object]] = []
+    for neighbor in raw.neighbors:
+        if snapshot.discloses(neighbor.concept_id):
+            neighbors.append(
+                {
+                    "id": neighbor.concept_id,
+                    "direction": neighbor.direction,
+                    "relation": neighbor.relation_type,
+                }
+            )
+        else:
+            withheld += 1
+
+    not_run: tuple[read_outcome.NotRun, ...] = ()
+    if raw.skipped_count > 0:
+        noun = "edge" if raw.skipped_count == 1 else "edges"
+        not_run = (
+            read_outcome.NotRun(
+                label=_GRAPH_BUILD,
+                reason=f"{raw.skipped_count} {noun} could not be included",
+            ),
+        )
+
+    return {
+        "concept_id": raw.concept_id,
+        "neighbors": neighbors,
+        "withheld": withheld,
+        "not_run": not_run,
+    }

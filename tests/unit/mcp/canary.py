@@ -138,10 +138,16 @@ GUARD_MATRIX: dict[str, list[Call]] = {
         Call(arguments={"concept_id": CANARY_SOURCE_ID}, label="canary_source"),
         Call(arguments={"concept_id": "concepts/does-not-exist-7f3a"}, label="missing"),
         Call(arguments={}, label="invalid_arguments"),
-    ]
+    ],
+    "navigate": [
+        Call(arguments={"concept_id": PUBLIC_ID}, label="disclosable"),
+        Call(arguments={"concept_id": CANARY_ID}, label="canary_concept"),
+        Call(arguments={"concept_id": CANARY_SOURCE_ID}, label="canary_source"),
+        Call(arguments={"concept_id": "concepts/does-not-exist-7f3a"}, label="missing"),
+        Call(arguments={}, label="invalid_arguments"),
+    ],
 }
-"""`navigate`/`pending`/`query`'s rows join in slices 6-9 as each tool
-lands."""
+"""`pending`/`query`'s rows join in slices 7-9 as each tool lands."""
 
 
 async def _run_matrix_async(
