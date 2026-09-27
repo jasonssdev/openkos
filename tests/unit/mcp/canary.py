@@ -3,13 +3,13 @@ must-have): a confidential canary object plus a public referrer, a needle
 list, `find_canary_leaks`, `GUARD_MATRIX` scaffolding, `run_matrix`, and
 the deliberately violating test-only `leaky_probe` tool.
 
-This slice's fixture covers exactly what `test_enumeration_guard.py`'s two
-permanent-assertion tests need -- the guard's own self-test (it can catch
-a violation) and the positive control that proves the needles are
-genuinely reachable. Decision 16 also names a pending merge-ledger marker,
-a findings row, an FTS index, and a fake `LLMBackend`; those are added by
-the slice whose real tool first needs them (5's `get`, 7's `pending`, 9's
-`query`), so this module is EXTENDED there, never rebuilt.
+Slices 5-7 extended this module's fixture as `get`/`navigate`/`pending`
+landed; this slice adds the FTS index and the fake `LLMBackend` design
+Decision 16 names for `query`: an FTS index built over the SAME bundle (so
+a question can genuinely retrieve the canary through real, unmocked
+retrieval) and `EchoingLLM`, a fake backend that echoes the whole user
+message back as its reply, so any canary content that reached the prompt
+reaches the echoed answer text too.
 """
 
 from __future__ import annotations
@@ -17,13 +17,16 @@ from __future__ import annotations
 import asyncio
 import io
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
 
+from openkos import config
+from openkos.llm.base import BackendHostLocality, Message
 from openkos.mcp import server as mcp_server
 from openkos.mcp import tools as mcp_tools
 from openkos.mcp import transport
+from openkos.state import fts
 
 CANARY_ID: Final = "concepts/zq-canary-7f3a"
 CANARY_TITLE: Final = "Zq Canary Title 7f3a"
@@ -97,6 +100,9 @@ def build_canary_bundle(root: Path) -> Path:
     (concepts / "zq-broken-7f3a.md").write_bytes(
         b"---\ntype: Concept\ntitle: Broken\n---\n\xff\xfe invalid body\n"
     )
+    (root / "openkos.yaml").write_text("sufficiency_check: false\n", encoding="utf-8")
+    layout = config.WorkspaceLayout(root=root)
+    fts.write_fts_index(layout.fts_db_path, bundle_dir)
     return bundle_dir
 
 
@@ -150,11 +156,54 @@ GUARD_MATRIX: dict[str, list[Call]] = {
         Call(arguments={}, label="disclosable"),
         Call(arguments={"unexpected": True}, label="invalid_arguments"),
     ],
+    "query": [
+        Call(arguments={"question": "public referrer"}, label="disclosable"),
+        Call(arguments={"question": "canary"}, label="canary_surfaced"),
+        Call(
+            arguments={"question": "zzznonexistenttermxyzzy999"},
+            label="no_match",
+        ),
+        Call(arguments={}, label="invalid_arguments"),
+    ],
 }
-"""`query`'s row joins in slice 9. `pending` takes no arguments (Decision
-15's empty `inputSchema`), so its own row varies the CALL rather than a
-per-id target: a bare call, and one with an unexpected property (its own
-`additionalProperties: false` refusal)."""
+"""`pending` takes no arguments (Decision 15's empty `inputSchema`), so its
+own row varies the CALL rather than a per-id target: a bare call, and one
+with an unexpected property (its own `additionalProperties: false`
+refusal). `query`'s "canary_surfaced" question ("canary") is a real,
+UNMOCKED FTS hit against the fixture's own canary title/body -- neither
+`pub.md`'s prose (P1: it never mentions a canary) nor any other document
+contains that word, so this genuinely exercises the gate against a live
+retrieval hit, never a monkeypatched one. `expose_confidential=False`
+throughout this matrix (Decision 16), so every row must come back clean."""
+
+
+@dataclass
+class EchoingLLM:
+    """A fake `LLMBackend` that echoes the whole user message back as its
+    reply (design Decision 16): if canary content reached the prompt, it
+    reaches the echoed answer text too. `.locality` is always local, so a
+    `local_exemption_for` wired to the real `resolve_local_exemption`
+    resolves `True` for it under the default `confidential_local_exemption`
+    policy -- the positive control's own requirement."""
+
+    calls: list[list[Message]] = field(default_factory=list)
+
+    def chat(self, messages: Sequence[Message]) -> str:
+        self.calls.append(list(messages))
+        return "\n".join(message["content"] for message in messages)
+
+    @property
+    def locality(self) -> BackendHostLocality:
+        return BackendHostLocality(is_local=True, display_host="localhost")
+
+
+class NeverCalledEmbedder:
+    """A fake `Embedder` for a fixture with no `vectors.db`: dense
+    retrieval degrades before ever calling `embed()`, so this must never be
+    invoked."""
+
+    def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        raise AssertionError("the canary fixture has no vectors.db to embed against")
 
 
 async def _run_matrix_async(

@@ -16,9 +16,13 @@ import os
 import subprocess
 import sys
 import textwrap
+import time
 from pathlib import Path
 
 import pytest
+
+from openkos import config
+from openkos.state import fts
 
 pytestmark = pytest.mark.cross_platform_smoke
 
@@ -149,3 +153,112 @@ def test_full_handshake_over_stdio(tmp_path: Path) -> None:
 
     ids = {message["id"] for message in messages if "id" in message}
     assert ids == {1, 2, 3}
+
+
+# -- 9.8: query's Ollama-unavailable mapping, over a real subprocess -------
+
+
+def _build_query_fixture_workspace(root: Path) -> None:
+    """A workspace with one FTS-matched public concept, so a real `query`
+    call reaches the synthesis `llm.chat` call -- which the poisoned
+    `OLLAMA_HOST` this test's env sets then fails to reach."""
+    bundle = root / "bundle"
+    concepts = bundle / "concepts"
+    concepts.mkdir(parents=True)
+    (bundle / "index.md").write_text("# Index\n", encoding="utf-8")
+    (bundle / "log.md").write_text("# Log\n", encoding="utf-8")
+    (concepts / "a.md").write_text(
+        "---\ntype: Concept\ntitle: A\nsensitivity: public\n---\n"
+        "This concept is about the mcp subprocess test widget.\n",
+        encoding="utf-8",
+    )
+    (root / "openkos.yaml").write_text("sufficiency_check: false\n", encoding="utf-8")
+    layout = config.WorkspaceLayout(root=root)
+    fts.write_fts_index(layout.fts_db_path, layout.bundle_dir)
+
+
+def test_query_ollama_unavailable_over_stdio(tmp_path: Path) -> None:
+    """A real subprocess's `query` call against the poisoned host returns a
+    tool result with `isError: true`,
+    `structuredContent.error.code == "ollama_unavailable"`, `retryable:
+    true`. Covers "An unreachable Ollama server is reported as retryable"
+    at the real-process level. Kills a mapping that reports `retryable:
+    false` for `OllamaUnavailable`, or fails to catch the connection error
+    at all.
+
+    Unlike `test_full_handshake_over_stdio` above, stdin must stay OPEN
+    until the `query` response actually arrives: `tools/call` dispatch is
+    fire-and-forget from the server's own read loop (design Decision 13),
+    so closing stdin (as `subprocess.run(input=...)` does immediately after
+    writing) would race end-of-input's OWN abandonment against this
+    request's completion -- and abandonment sends no response at all. This
+    writes directly to a `Popen`'s pipes and only closes stdin AFTER
+    reading the id-2 response line."""
+    _build_query_fixture_workspace(tmp_path)
+
+    env = dict(os.environ)
+    env["OLLAMA_HOST"] = "http://127.0.0.1:9"
+
+    proc = subprocess.Popen(  # noqa: S603
+        [
+            sys.executable,
+            "-c",
+            _CHILD_ENTRYPOINT,
+            "mcp",
+            "--workspace",
+            str(tmp_path),
+        ],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+    )
+    assert proc.stdin is not None
+    assert proc.stdout is not None
+
+    call_result: dict[str, object] | None = None
+    try:
+        proc.stdin.write(
+            _frame(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {"protocolVersion": "2025-11-25"},
+                }
+            )
+        )
+        proc.stdin.write(
+            _frame(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "tools/call",
+                    "params": {"name": "query", "arguments": {"question": "widget"}},
+                }
+            )
+        )
+        proc.stdin.flush()
+
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            line = proc.stdout.readline()
+            if not line:
+                break
+            message = json.loads(line)
+            if message.get("id") == 2:
+                call_result = message
+                break
+    finally:
+        proc.stdin.close()
+        _, stderr = proc.communicate(timeout=10)
+
+    assert proc.returncode == 0, stderr.decode("utf-8", "replace")
+    assert call_result is not None, "expected a response for request id 2"
+
+    result = call_result["result"]
+    assert isinstance(result, dict)
+    assert result["isError"] is True
+    error = result["structuredContent"]["error"]
+    assert error["code"] == "ollama_unavailable"
+    assert error["retryable"] is True

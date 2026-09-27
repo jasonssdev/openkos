@@ -4,43 +4,71 @@ byte, and proves the guard ITSELF is capable of catching a leak, shown
 FAILING against a deliberately violating test-only tool before any real
 tool is trusted against it.
 
-`tools.REGISTRY` is empty in this slice, so the guard's own coverage
-assertion (`set(tools.REGISTRY) == set(canary.GUARD_MATRIX)`) holds
-trivially; the real per-tool rows land in slices 5-9 as `get`, `navigate`,
-`pending`, and `query` are registered.
-"""
+`tools.REGISTRY` now carries all four real tools (`query` joined in this
+slice): the guard's own coverage assertion
+(`set(tools.REGISTRY) == set(canary.GUARD_MATRIX)`) exercises every one of
+them for real."""
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 import pytest
 
 from openkos import config
+from openkos.application import backends as application_backends
 from openkos.llm.base import Embedder, LLMBackend
 from openkos.mcp import tools as mcp_tools
 from tests.unit.mcp import canary
 
 
-def _never_called_llm(cfg: config.Config) -> LLMBackend:
-    raise AssertionError("no tool in this slice's guard calls make_llm")
-
-
-def _never_called_embedder(cfg: config.Config) -> Embedder:
-    raise AssertionError("no tool in this slice's guard calls make_embedder")
-
-
 def _never_called_local_exemption(client: LLMBackend, cfg: config.Config) -> bool:
-    raise AssertionError("no tool in this slice's guard calls local_exemption_for")
+    raise AssertionError("this ctx's expose_confidential is off; never called")
 
 
 def _ctx(root: Path, *, expose_confidential: bool = False) -> mcp_tools.ToolContext:
+    """The default guard ctx: `make_llm`/`make_embedder` are REAL (this
+    slice's `query` row calls them for every matrix pass, including the
+    unmocked sweep), `local_exemption_for` stays a never-called guard since
+    `expose_confidential` defaults off here and `query` only resolves it
+    when the flag is on."""
     return mcp_tools.ToolContext(
         layout=config.WorkspaceLayout(root=root),
         expose_confidential=expose_confidential,
-        make_llm=_never_called_llm,
-        make_embedder=_never_called_embedder,
+        make_llm=lambda cfg: canary.EchoingLLM(),
+        make_embedder=lambda cfg: canary.NeverCalledEmbedder(),
         local_exemption_for=_never_called_local_exemption,
+    )
+
+
+def _query_positive_ctx(root: Path) -> mcp_tools.ToolContext:
+    """A ctx for `query`'s positive control: `expose_confidential=True`
+    with the REAL `resolve_local_exemption`, so `EchoingLLM`'s always-local
+    `.locality` genuinely resolves the local-exemption gate open under the
+    fixture's default `confidential_local_exemption` policy."""
+
+    def _real_llm(cfg: config.Config) -> LLMBackend:
+        return canary.EchoingLLM()
+
+    def _real_embedder(cfg: config.Config) -> Embedder:
+        return canary.NeverCalledEmbedder()
+
+    def _local_exemption_for(client: LLMBackend, cfg: config.Config) -> bool:
+        # `EchoingLLM` structurally satisfies `HasLocality` (it carries a
+        # `.locality` property); the cast narrows back from the wider
+        # `LLMBackend` Protocol `ToolContext` declares, exactly like
+        # `server.py`'s own `_local_exemption_for`.
+        return application_backends.resolve_local_exemption(
+            cast(application_backends.HasLocality, client), cfg
+        )
+
+    return mcp_tools.ToolContext(
+        layout=config.WorkspaceLayout(root=root),
+        expose_confidential=True,
+        make_llm=_real_llm,
+        make_embedder=_real_embedder,
+        local_exemption_for=_local_exemption_for,
     )
 
 
@@ -260,6 +288,58 @@ def test_pending_positive_control_finds_the_canary_with_the_flag_on(
     )
 
     assert canary.CANARY_SOURCE_ID in canary.find_canary_leaks(lines)
+
+
+def test_query_tool_injected_failures_never_leak_the_canary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`query`'s error paths are covered too (design Decision 16's matrix):
+    each `Ollama*`/`FtsUnavailable` error, injected with the canary in its
+    message, must never leak it -- every one maps to a FIXED tool-error
+    message (`server.py`'s `_TOOL_ERROR_TABLE`), never `str(exc)`."""
+    canary.build_canary_bundle(tmp_path)
+    ctx = _ctx(tmp_path)
+
+    from openkos.application import query as query_service
+    from openkos.llm.ollama import OllamaError, OllamaUnavailable
+    from openkos.state.fts import FtsUnavailable
+
+    for exc in (
+        OllamaUnavailable(f"cannot reach ollama: {canary.CANARY_BODY_MARKER}"),
+        OllamaError(canary.CANARY_TITLE),
+        FtsUnavailable(f"fts5 missing: {canary.CANARY_ID}"),
+    ):
+
+        def _raise(*args: object, exc: BaseException = exc, **kwargs: object) -> object:
+            raise exc
+
+        monkeypatch.setattr(query_service, "run_query", _raise)
+        lines = canary.run_matrix(
+            mcp_tools.REGISTRY,
+            {"query": [canary.Call(arguments={"question": "public referrer"})]},
+            ctx,
+        )
+        assert canary.find_canary_leaks(lines) == []
+
+
+def test_query_positive_control_finds_the_canary_with_the_flag_on(
+    tmp_path: Path,
+) -> None:
+    """With `expose_confidential=True`, a LOCAL fake backend, and a
+    question that retrieves the canary, `query`'s echoed answer DOES
+    contain the canary body marker -- the real per-tool positive control
+    design Decision 16 requires, proving the fixture's needle is genuinely
+    reachable through `query`, not just through `leaky_probe`."""
+    canary.build_canary_bundle(tmp_path)
+    ctx = _query_positive_ctx(tmp_path)
+
+    lines = canary.run_matrix(
+        mcp_tools.REGISTRY,
+        {"query": [canary.Call(arguments={"question": "canary"})]},
+        ctx,
+    )
+
+    assert canary.CANARY_BODY_MARKER in canary.find_canary_leaks(lines)
 
 
 def test_positive_controls_prove_the_fixture_is_live(tmp_path: Path) -> None:
