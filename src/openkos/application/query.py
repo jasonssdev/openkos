@@ -42,7 +42,7 @@ from openkos.model.types import (
     TYPE_TO_SECTION,
 )
 from openkos.resolution import insight_identity
-from openkos.retrieval.answer import AnswerResult, Citation, answer
+from openkos.retrieval.answer import AnswerResult, Citation, ProgressCallback, answer
 from openkos.state import fts, question_vectors
 from openkos.state.vectorstore import VectorStoreDB, VecUnavailable, open_vector_store
 
@@ -118,9 +118,15 @@ def run_query(
     include_deprecated: bool,
     include_confidential: bool,
     local_exemption: bool,
+    progress: ProgressCallback | None = None,
 ) -> QueryOutcome:
     """Compose store opening (degrade-to-`None`) and the `answer()` call for
     one query.
+
+    `progress` (mcp-read-surface slice 8, design Decision 9) is threaded to
+    `answer()` unmodified -- the same callback object, never wrapped --
+    keyword-only and defaulting `None`, so a caller that omits it composes
+    the exact call this function made before the parameter existed.
 
     Raises:
         OllamaUnavailable: the configured Ollama server is unreachable.
@@ -165,6 +171,7 @@ def run_query(
             # defaults `False`, so every library and eval caller stays
             # unchanged.
             revision_history=cfg.revision_history,
+            progress=progress,
         )
     return QueryOutcome(
         result=result,

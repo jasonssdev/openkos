@@ -70,7 +70,7 @@ restoring today's status-blind behavior byte-for-byte at zero added cost.
 import functools
 import re
 import sqlite3
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Final, Literal
@@ -110,6 +110,20 @@ first says it ignored the instruction, the second says it tried and produced
 something unusable. Collapsing them would make the eval harness unable to
 tell a compliance problem from a format problem -- which is exactly the
 number that decides whether the fallback can ever be tightened."""
+
+AnswerPhase = Literal["retrieving", "assembling", "checking", "synthesizing"]
+"""One step of `answer()`'s own progress, in the order it always runs them
+(mcp-read-surface slice 8, design Decision 8). `"checking"` is emitted only
+when the sufficiency check (#760) is enabled for that call -- it is a real
+extra `llm.chat` round trip, not a step every call makes."""
+
+ProgressCallback = Callable[[AnswerPhase, int, int], None]
+"""`(phase, completed, total)`. `total` is `4` when the sufficiency check is
+enabled and `3` otherwise, so `"checking"`'s presence and `total`'s value
+always agree; `completed` starts at `0` and strictly increases within one
+call. Purely an observability seam: `answer()`'s return value and every
+call it makes to `fts_index`/`vector_store`/`embedder`/`llm` are unaffected
+by whether a caller supplies one."""
 
 NoMatchCause = Literal[
     "none", "empty_query", "zero_hits", "all_unreadable", "insufficient_context"
@@ -499,6 +513,22 @@ class AnswerResult:
     is disabled (the default) or when no chain was ever cut short.
     Defaults empty via `default_factory` so every short-circuit return
     above stays valid and no two results share one list."""
+    excerpted_ids: list[str] = field(default_factory=list)
+    """`concept_id`s index-aligned one-to-one with `excerpted_titles`
+    (mcp-read-surface slice 8, design Decision 8): the id at position `n`
+    names the same concept as the title at position `n`. Additive and
+    purely observational -- `excerpted_titles` remains the field every
+    existing caller reads. Lets a consumer that must scrub a title by
+    disclosure policy identify precisely which concept a given title names,
+    without inferring it from the title text, which is not guaranteed
+    unique (#882 titles are for a human to read, not to key by)."""
+    omitted_ids: list[str] = field(default_factory=list)
+    """`concept_id`s index-aligned one-to-one with `omitted_titles`, for the
+    same reason `excerpted_ids` pairs with `excerpted_titles` above."""
+    history_truncated_ids: list[str] = field(default_factory=list)
+    """`concept_id`s index-aligned one-to-one with `history_truncated_titles`,
+    for the same reason `excerpted_ids` pairs with `excerpted_titles`
+    above."""
 
 
 def _bound_bodies(
@@ -764,6 +794,8 @@ def _assemble_context(
     revision_history: bool = False,
     deprecated: frozenset[str] = frozenset(),
     history_truncated_out: list[str] | None = None,
+    omitted_ids_out: list[str] | None = None,
+    history_truncated_ids_out: list[str] | None = None,
 ) -> tuple[list[str], list[Citation]]:
     """Guarded per-hit re-read (D2): re-read + re-parse each fused
     `concept_id`'s doc, skipping anything unreadable or unparseable rather
@@ -835,7 +867,14 @@ def _assemble_context(
     OWN title whenever its reachable chain was cut short by the block cap,
     the depth bound, or both -- computed by `history.walk_history` with no
     extra read. Defaults (`revision_history=False`) take the EXACT
-    pre-feature code path below unchanged."""
+    pre-feature code path below unchanged.
+
+    `omitted_ids_out`/`history_truncated_ids_out` (mcp-read-surface slice 8,
+    design Decision 8) are additive, id-carrying siblings of
+    `omitted_titles_out`/`history_truncated_out`: each receives the same
+    concept's id in the SAME statement as its paired title, so the two
+    lists can never desynchronize under a later edit. Both default `None`
+    and are otherwise unread here."""
     labels: list[str] = []
     bodies: list[str] = []
     citations: list[Citation] = []
@@ -955,6 +994,8 @@ def _assemble_context(
                 history_attached = True
             if walk.truncated and history_truncated_out is not None:
                 history_truncated_out.append(title)
+                if history_truncated_ids_out is not None:
+                    history_truncated_ids_out.append(concept_id)
 
     if history_attached:
         bounded_bodies, excerpted_flags, omitted_flags = _bound_with_history(
@@ -974,6 +1015,8 @@ def _assemble_context(
                 if omitted_titles_out is not None:
                     suffix = " (earlier version)" if citation.history else ""
                     omitted_titles_out.append(citation.title + suffix)
+                    if omitted_ids_out is not None:
+                        omitted_ids_out.append(citation.concept_id)
                 continue
             context_blocks.append(label + bounded)
             kept.append(
@@ -997,6 +1040,8 @@ def _assemble_context(
             # for the caller so the omission is disclosed, never silent.
             if omitted_titles_out is not None:
                 omitted_titles_out.append(citation.title)
+                if omitted_ids_out is not None:
+                    omitted_ids_out.append(citation.concept_id)
             continue
         context_blocks.append(label + bounded)
         kept.append(replace(citation, excerpted=True) if was_bounded else citation)
@@ -1232,6 +1277,7 @@ def answer(
     local_exemption: bool = False,
     sufficiency_check: bool = False,
     revision_history: bool = False,
+    progress: ProgressCallback | None = None,
 ) -> AnswerResult:
     """Answer `question` from `bundle_dir` using `llm`, citing the concepts used.
 
@@ -1278,6 +1324,17 @@ def answer(
     docstring). Defaults to `False`: a caller that cannot prove locality
     gets today's blanket blocking, so forgetting the parameter can only ever
     be MORE restrictive.
+
+    `progress` (mcp-read-surface slice 8, design Decision 8), when given,
+    is invoked with `("retrieving", 0, total)`, `("assembling", 1, total)`,
+    `("checking", 2, total)` (only when `sufficiency_check`), and
+    `("synthesizing", total - 1, total)`, in that order as each phase is
+    reached; `total` is `4` with the sufficiency check enabled and `3`
+    otherwise. Defaults to `None`, in which case this call makes exactly the
+    same calls to `fts_index`/`vector_store`/`embedder`/`llm` and returns
+    the same `AnswerResult` as before this parameter existed -- `progress`
+    is a pure observability seam, never a control-flow input. Never read
+    from configuration: this module stays config-free.
     """
     if not question.split():
         return AnswerResult(
@@ -1290,6 +1347,10 @@ def answer(
         )
 
     limit_pool = pool.pool_limit(limit)
+    progress_total = 4 if sufficiency_check else 3
+
+    if progress is not None:
+        progress("retrieving", 0, progress_total)
 
     # #648: the lexical channel searches content words only; the dense
     # channel keeps the full question (see `_fts_query_terms`).
@@ -1333,12 +1394,16 @@ def answer(
     # showed the slot cost a real hit and bought centrality, not relevance.
     fused_ids = fusion.fuse(hits, vec_hits)[: max(limit, 0)]
     omitted_titles: list[str] = []
+    omitted_ids: list[str] = []
     history_truncated_titles: list[str] = []
+    history_truncated_ids: list[str] = []
     # superseded-history-in-query, design.md Decision 8: under
     # `include_deprecated`, a formerly deprecated predecessor is already an
     # ordinary hit, so attaching it again as a non-current history block
     # would contradict its restored status -- the walk does not run at all.
     walk_history_enabled = revision_history and not include_deprecated
+    if progress is not None:
+        progress("assembling", 1, progress_total)
     context_blocks, citations = _assemble_context(
         bundle_dir,
         fused_ids,
@@ -1351,6 +1416,8 @@ def answer(
         revision_history=walk_history_enabled,
         deprecated=deprecated,
         history_truncated_out=history_truncated_titles,
+        omitted_ids_out=omitted_ids,
+        history_truncated_ids_out=history_truncated_ids,
     )
     # Captured BEFORE #753's attribution filter runs below: this reports
     # what was SENT, and a model that cites nothing must not also erase the
@@ -1362,6 +1429,7 @@ def answer(
         for c in citations
         if c.excerpted
     ]
+    excerpted_ids = [c.concept_id for c in citations if c.excerpted]
 
     if not context_blocks:
         # The disclosure travels on THIS return too (#882). When the budget
@@ -1385,6 +1453,9 @@ def answer(
             excerpted_titles=excerpted_titles,
             omitted_titles=omitted_titles,
             history_truncated_titles=history_truncated_titles,
+            excerpted_ids=excerpted_ids,
+            omitted_ids=omitted_ids,
+            history_truncated_ids=history_truncated_ids,
         )
 
     user_content = _user_content(context_blocks, question)
@@ -1401,6 +1472,8 @@ def answer(
     # added latency unless it opts in.
     sufficiency_degraded = False
     if sufficiency_check:
+        if progress is not None:
+            progress("checking", 2, progress_total)
         holds, sufficiency_degraded = _context_holds_the_answer(llm, user_content)
     else:
         holds = True
@@ -1420,8 +1493,13 @@ def answer(
             excerpted_titles=excerpted_titles,
             omitted_titles=omitted_titles,
             history_truncated_titles=history_truncated_titles,
+            excerpted_ids=excerpted_ids,
+            omitted_ids=omitted_ids,
+            history_truncated_ids=history_truncated_ids,
         )
 
+    if progress is not None:
+        progress("synthesizing", progress_total - 1, progress_total)
     reply = llm.chat(_build_messages(user_content))
 
     # #753: the citation list is decided HERE, after the model has spoken,
@@ -1467,4 +1545,7 @@ def answer(
         excerpted_titles=excerpted_titles,
         omitted_titles=omitted_titles,
         history_truncated_titles=history_truncated_titles,
+        excerpted_ids=excerpted_ids,
+        omitted_ids=omitted_ids,
+        history_truncated_ids=history_truncated_ids,
     )
