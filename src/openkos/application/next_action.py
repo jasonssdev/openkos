@@ -137,6 +137,20 @@ class NextAction:
     the list -- one exception is worth a sentence, two are worth a field."""
     reason: str
     """A single line explaining why this command was recommended."""
+    subjects: tuple[str, ...] | None = None
+    """Every concept id this recommendation concerns, structured rather than
+    parsed out of `reason` (mcp-read-surface Slice 7, design Decision 6): the
+    MCP `pending` tool's disclosure gate must decide what may cross the
+    boundary without ever reading free-form prose a document can shape.
+
+    `None` means UNDECLARED, and any disclosure gate reading this field MUST
+    withhold the action -- every `_TIERS` call site passes `subjects=`
+    explicitly (an AST scan pins this), so `None` here can only mean a
+    caller outside this module constructed a `NextAction` without an opinion,
+    never "this tier has nothing to declare". `()` means declared
+    subject-free (a fixed-text or count-only recommendation, e.g. a missing
+    index or a duplicate-group count) -- distinct from `None` on purpose, so
+    a gate can tell "nothing to check" from "not yet checked"."""
 
 
 @dataclass(frozen=True)
@@ -159,6 +173,16 @@ class NextResult:
     is correct -- a command that does not run is worse than none -- but
     declining silently is not: the finding is genuine and would otherwise
     leave no trace on any output at all."""
+    declination_subjects: tuple[tuple[str, ...] | None, ...] = ()
+    """Index-aligned with `declinations` (mcp-read-surface Slice 7, design
+    Decision 6): `declination_subjects[i]` is the structured subjects for
+    `declinations[i]`, with the same `None`-means-undeclared /
+    `()`-means-subject-free distinction `NextAction.subjects` documents. A
+    disclosure gate reading a mismatched length (this tuple's length differs
+    from `declinations`'s) MUST withhold every declination -- the two are
+    built by the SAME loop in lockstep, so a mismatch here means a call site
+    forgot to record one, and misalignment must fail closed rather than pair
+    the wrong subjects with the wrong text."""
     skip_notices: tuple[str, ...] = ()
     """Only what this run ACTUALLY observed, never what a further walk
     might have found. A run whose first tier fires without paying the docs
@@ -176,19 +200,29 @@ class BundleSignals:
         self._docs: list[lint_check.LintDoc] | None = None
         self._skip_notices: tuple[str, ...] = ()
         self._declinations: list[str] = []
+        self._declination_subjects: list[tuple[str, ...] | None] = []
         self._exact_title_groups: list[CandidateGroup] | None = None
         self._stale_indexes: tuple[str, ...] | None = None
         self._walk_incomplete: bool | None = None
         self._non_nfc_entries: list[lint_check.NonNfcEntry] | None = None
         self._open_contradictions: tuple[findings.PersistedFinding, ...] | None = None
 
-    def record_declination(self, notice: str) -> None:
+    def record_declination(
+        self, notice: str, *, subjects: tuple[str, ...] | None
+    ) -> None:
         """Note a real finding this run deliberately refused to turn into a
         recommendation (#276). Kept on the signals object rather than
         threaded through the tier return type so `Tier`'s pinned signature
         -- the structural guard that a tier receives only signals, never a
-        directory -- stays exactly as it is."""
+        directory -- stays exactly as it is.
+
+        `subjects` is a REQUIRED keyword (mcp-read-surface Slice 7, design
+        Decision 6): mypy rejects a call site that omits it, so a new
+        declination can never silently default to undeclared. Appended in
+        lockstep with `notice`, so `observed_declination_subjects` stays
+        index-aligned with `observed_declinations` by construction."""
         self._declinations.append(notice)
+        self._declination_subjects.append(subjects)
 
     @property
     def observed_declinations(self) -> tuple[str, ...]:
@@ -196,6 +230,14 @@ class BundleSignals:
         `observed_skip_notices`, this reports only what an already-paid
         walk produced and never triggers one."""
         return tuple(self._declinations)
+
+    @property
+    def observed_declination_subjects(self) -> tuple[tuple[str, ...] | None, ...]:
+        """`subjects` for each declination, in the SAME evaluation order as
+        `observed_declinations` -- appended by the same call in
+        `record_declination`, so the two tuples can never drift apart in
+        length (mcp-read-surface Slice 7, design Decision 6)."""
+        return tuple(self._declination_subjects)
 
     @property
     def vector_store_empty(self) -> bool:
@@ -451,6 +493,7 @@ def _tier_bootstrap_empty_bundle(signals: BundleSignals) -> NextAction | None:
                 "This bundle looks empty, but at least one directory could "
                 "not be read -- check which one before ingesting anything."
             ),
+            subjects=(),
         )
     return NextAction(
         command="openkos ingest <path>",
@@ -458,6 +501,7 @@ def _tier_bootstrap_empty_bundle(signals: BundleSignals) -> NextAction | None:
             "This bundle has no documents yet -- ingest your first source "
             "to give it something to index."
         ),
+        subjects=(),
     )
 
 
@@ -477,6 +521,7 @@ def tier_missing_vector_index(signals: BundleSignals) -> NextAction | None:
             "Dense retrieval and candidate edges are unavailable -- the "
             "vector index is missing or empty."
         ),
+        subjects=(),
     )
 
 
@@ -502,6 +547,7 @@ def _tier_missing_fts_index(signals: BundleSignals) -> NextAction | None:
         reason=(
             "Lexical (full-text) retrieval is unavailable -- the FTS index is missing."
         ),
+        subjects=(),
     )
 
 
@@ -533,6 +579,7 @@ def _tier_stale_derived_indexes(signals: BundleSignals) -> NextAction | None:
             f"Retrieval is answering from indexes older than the bundle "
             f"({', '.join(stale)})."
         ),
+        subjects=(),
     )
 
 
@@ -577,7 +624,8 @@ def _tier_unextracted_source(signals: BundleSignals) -> NextAction | None:
             # bare `openkos ingest`, no argument -- trap 2
             signals.record_declination(
                 f"{finding.concept_id}: extraction failed, but the document "
-                "records no resource to re-ingest"
+                "records no resource to re-ingest",
+                subjects=(finding.concept_id,),
             )
             continue
         command = _command_from_detail(
@@ -586,12 +634,14 @@ def _tier_unextracted_source(signals: BundleSignals) -> NextAction | None:
         if command != f"{_INGEST_VERB} {doc.resource}":
             signals.record_declination(
                 f"{finding.concept_id}: extraction failed, but its resource "
-                "is not a runnable argument -- rename the file and re-ingest"
+                "is not a runnable argument -- rename the file and re-ingest",
+                subjects=(finding.concept_id,),
             )
             continue
         return NextAction(
             command=command,
             reason=f"{finding.concept_id}: {finding.detail}",
+            subjects=(finding.concept_id,),
         )
     return None
 
@@ -625,7 +675,8 @@ def _tier_unjudged_extraction(signals: BundleSignals) -> NextAction | None:
             signals.record_declination(
                 f"{finding.concept_id}: derived objects lack judge "
                 "selection, but the document records no resource to "
-                "re-ingest"
+                "re-ingest",
+                subjects=(finding.concept_id,),
             )
             continue
         command = _command_from_detail(
@@ -635,12 +686,14 @@ def _tier_unjudged_extraction(signals: BundleSignals) -> NextAction | None:
             signals.record_declination(
                 f"{finding.concept_id}: derived objects lack judge "
                 "selection, but its resource is not a runnable argument -- "
-                "rename the file and re-ingest"
+                "rename the file and re-ingest",
+                subjects=(finding.concept_id,),
             )
             continue
         return NextAction(
             command=command,
             reason=f"{finding.concept_id}: {finding.detail}",
+            subjects=(finding.concept_id,),
         )
     return None
 
@@ -677,6 +730,7 @@ def _tier_below_source_sensitivity(signals: BundleSignals) -> NextAction | None:
         return NextAction(
             command=command,
             reason=f"{finding.concept_id}: {finding.detail}",
+            subjects=(finding.concept_id, *finding.related_ids),
         )
     return None
 
@@ -728,12 +782,14 @@ def _tier_multi_source_uncovered(signals: BundleSignals) -> NextAction | None:
             signals.record_declination(
                 f"{finding.concept_id}: sensitivity sits below its cited "
                 "concepts, but its id is not a runnable argument -- rename "
-                "it, or run `openkos set-sensitivity` by hand"
+                "it, or run `openkos set-sensitivity` by hand",
+                subjects=(finding.concept_id, *finding.related_ids),
             )
             continue
         return NextAction(
             command=finding.remediation,
             reason=f"{finding.concept_id}: {finding.detail}",
+            subjects=(finding.concept_id, *finding.related_ids),
         )
     return None
 
@@ -776,6 +832,7 @@ def _tier_duplicate_groups(signals: BundleSignals) -> NextAction | None:
             f"titles {_agree(count, 'is', 'are')} pending review. "
             "Review them first with `openkos duplicates`."
         ),
+        subjects=(),
     )
 
 
@@ -815,6 +872,7 @@ def _tier_non_nfc_names(signals: BundleSignals) -> NextAction | None:
             "disagrees with the canonical id. Review them first with "
             "`openkos lint`."
         ),
+        subjects=(),
     )
 
 
@@ -862,6 +920,7 @@ def _tier_open_contradictions(signals: BundleSignals) -> NextAction | None:
             f"{source_id} <-> {target_id}: an open contradiction finding "
             f"is pending review (confidence: {finding.confidence:.2f})."
         ),
+        subjects=finding.pair_ids,
     )
 
 
@@ -906,6 +965,7 @@ def next_action(layout: config.WorkspaceLayout) -> NextResult:
     return NextResult(
         action=action,
         declinations=signals.observed_declinations,
+        declination_subjects=signals.observed_declination_subjects,
         skip_notices=signals.observed_skip_notices,
     )
 

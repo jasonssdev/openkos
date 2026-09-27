@@ -180,6 +180,24 @@ class LintFinding:
     detail-parsing tier untouched. A later kind earns this field when it has
     a consumer, not on principle."""
 
+    related_ids: tuple[str, ...] = field(default=(), compare=False)
+    """Every concept id `detail` names, computed by this module rather than
+    parsed out of that prose (mcp-read-surface Slice 7, design Decision 6):
+    `next_action`'s structured `subjects` -- what `mcp.gate.disclose_pending`
+    checks before a recommendation may cross the disclosure boundary -- must
+    never be derived from free-form text a document can shape (the same
+    reasoning `remediation`'s own docstring gives for that field).
+
+    Populated for exactly two kinds: `"below-source-sensitivity"` gets
+    `(source_id,)` (the one Source `detail` names); `"multi-source-uncovered"`
+    gets every cited concept id, in citation order (the same ids `detail`'s
+    `cites:` clause lists). Every other kind defaults to `()`.
+
+    `compare=False`: every existing `LintFinding` equality assertion across
+    the lint suite compares only `kind`/`path`/`detail`/`remediation`, and a
+    comparable field here would silently break every one of them the moment
+    `related_ids` was added."""
+
     @property
     def concept_id(self) -> str:
         """`path` minus its `.md` extension -- the OKF Concept ID (SPEC §2),
@@ -1352,6 +1370,7 @@ def check_below_source_sensitivity(docs: list[LintDoc]) -> list[LintFinding]:
                     f"'{source_id}' ({source_level!r}); `openkos "
                     f"backfill-sensitivity` would raise it to {new_level!r}"
                 ),
+                related_ids=(source_id,),
             )
         )
 
@@ -1431,6 +1450,7 @@ def check_below_source_sensitivity(docs: list[LintDoc]) -> list[LintFinding]:
                     f"cites: {cited_detail}"
                 ),
                 remediation=remediation,
+                related_ids=tuple(cited_id for cited_id, _ in cited_levels),
             )
         )
 
