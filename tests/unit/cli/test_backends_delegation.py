@@ -1,0 +1,160 @@
+"""Delegation guard for `cli/main.py`'s chat-client construction
+(mcp-read-surface slice 8, design Decision 7): `_chat_client` and
+`_resolve_local_exemption` are relocated definitions -- their real bodies
+now live in `application/backends.py` -- kept under their existing names
+as one-line delegators, so every existing test seam that patches them BY
+NAME keeps working. Most load-bearingly, `tests/unit/conftest.py`'s
+autouse network guard patches `openkos.cli.main.OllamaClient`, never
+`application.backends`; a delegator that stopped reading that name at call
+time would make roughly 200 existing patches silently inert.
+"""
+
+from __future__ import annotations
+
+import ast
+from pathlib import Path
+
+import pytest
+
+from openkos import config
+from openkos.application import backends as application_backends
+from openkos.cli import main as main_mod
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_SRC = _REPO_ROOT / "src" / "openkos"
+
+
+def _delegator_function(name: str) -> ast.FunctionDef:
+    tree = ast.parse((_SRC / "cli" / "main.py").read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            return node
+    raise AssertionError(f"{name} not found in cli/main.py")
+
+
+def _non_docstring_body(node: ast.FunctionDef) -> list[ast.stmt]:
+    body = node.body
+    if (
+        body
+        and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant)
+        and isinstance(body[0].value.value, str)
+    ):
+        return body[1:]
+    return body
+
+
+def _count_definitions(name: str) -> int:
+    """How many `def <name>(...)` exist under `src/`, across every module --
+    a second copy of a relocated body left behind by an incomplete move
+    would pass every OTHER test while quietly diverging from the one
+    callers actually reach."""
+    count = 0
+    for path in _SRC.rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        count += sum(
+            1
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and node.name == name
+        )
+    return count
+
+
+def test_delegators_are_single_line_and_singly_defined() -> None:
+    """`cli.main._chat_client` and `_resolve_local_exemption` are each a
+    single `return` statement calling `application_backends.*`; a
+    source-wide AST/grep confirms each function's real body (`chat_client`,
+    `resolve_local_exemption`) has exactly one definition under `src/`.
+    Covers "The CLI keeps one-line delegators under their existing names"
+    and "The CLI's observable behavior, and its test seam, are unaffected"
+    (structural half). RED today: `_chat_client`/`_resolve_local_exemption`
+    do not exist as delegators yet -- today's bodies are the full
+    implementations. Kills leaving a second copy of either body after the
+    move."""
+    for delegator, real_name in (
+        ("_chat_client", "chat_client"),
+        ("_resolve_local_exemption", "resolve_local_exemption"),
+    ):
+        node = _delegator_function(delegator)
+        body = _non_docstring_body(node)
+        assert len(body) == 1, f"{delegator} must be a single statement: {body}"
+        (stmt,) = body
+        assert isinstance(stmt, ast.Return), f"{delegator} must be a bare return"
+        call = stmt.value
+        assert isinstance(call, ast.Call), f"{delegator} must return a call"
+        func = call.func
+        assert isinstance(func, ast.Attribute), f"{delegator} must call an attribute"
+        assert func.attr == real_name, (
+            f"{delegator} must call application_backends.{real_name}, found "
+            f"{ast.dump(func)}"
+        )
+        assert _count_definitions(real_name) == 1, (
+            f"{real_name} must be defined exactly once under src/"
+        )
+
+
+def test_ollama_client_monkeypatch_still_intercepts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reuses (does not rewrite) the existing autouse network-guard fixture
+    that patches `openkos.cli.main.OllamaClient`, and confirms a call path
+    that constructs a chat client through the new
+    `application/backends.py` delegator still gets the patched class.
+    Proven with a mutation: patch `application.backends.chat_client` to
+    bypass the injected factory and construct `OllamaClient` imported
+    directly from `openkos.llm.ollama` instead; confirm this mutation makes
+    the existing `tests/unit/conftest.py` network guard's patch silently
+    inert (the returned client is no longer the patched class); then
+    restore the real `chat_client` and confirm the patch intercepts again.
+    Covers "The CLI's observable behavior, and its test seam, are
+    unaffected" (the ~200-monkeypatch must-have). RED today: same reason as
+    above -- `_chat_client` is not yet a delegator that reads `OllamaClient`
+    from `cli.main`'s own module globals at call time through
+    `application.backends.chat_client`."""
+    config.write_config(tmp_path)
+    cfg = config.read_config(tmp_path)
+
+    # The autouse `_offline_ollama_by_default` fixture already patched
+    # `openkos.cli.main.OllamaClient` to `OfflineOllama` for this test.
+    # Read via `__dict__` (not `main_mod.OllamaClient`, and typed
+    # `type[object]` rather than the module's own declared return type) so
+    # this reads whatever class is bound RIGHT NOW, including the mutation
+    # below, rather than a name mypy would otherwise treat as statically
+    # fixed and unmodifiable.
+    patched_class: type[object] = main_mod.__dict__["OllamaClient"]
+    client = main_mod._chat_client(cfg)
+    assert isinstance(client, patched_class)
+
+    # The mutation: bypass the injected factory entirely, importing
+    # OllamaClient directly the way a REPOINTED call site (not a
+    # delegator) would -- this is exactly what design Decision 7 forbids.
+    from openkos.llm import ollama as ollama_module
+
+    original_chat_client = application_backends.chat_client
+
+    def _bypassing_chat_client(
+        bypassed_cfg: config.Config, *, factory: object, task: str | None = None
+    ) -> object:
+        del factory  # deliberately ignored -- the defect under test
+        return ollama_module.OllamaClient(
+            model=config.resolve_task_model(bypassed_cfg, task),
+            timeout=bypassed_cfg.chat_timeout,
+            max_generation_tokens=bypassed_cfg.max_generation_tokens,
+            context_window=bypassed_cfg.context_window,
+            temperature=bypassed_cfg.temperature,
+            seed=bypassed_cfg.seed,
+        )
+
+    monkeypatch.setattr(application_backends, "chat_client", _bypassing_chat_client)
+    mutated_client = main_mod._chat_client(cfg)
+    assert not isinstance(mutated_client, patched_class), (
+        "the network guard's patch went silently inert once the injected "
+        "factory was bypassed -- this is exactly the regression this test "
+        "exists to catch"
+    )
+    assert isinstance(mutated_client, ollama_module.OllamaClient)
+
+    # Restore, and confirm the guard's patch intercepts again.
+    monkeypatch.setattr(application_backends, "chat_client", original_chat_client)
+    restored_client = main_mod._chat_client(cfg)
+    assert isinstance(restored_client, patched_class)

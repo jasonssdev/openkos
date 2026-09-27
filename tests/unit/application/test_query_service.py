@@ -188,6 +188,40 @@ def test_run_query_propagates_fts_unavailable(
         _run(tmp_path, monkeypatch)
 
 
+def test_run_query_threads_progress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A spy on `answer()` records the `progress` kwarg it receives;
+    `run_query(..., progress=cb)` passes that exact `cb` through unmodified;
+    omitting `progress` keeps the composed call byte-identical to before
+    this parameter existed (`progress=None`, `answer()`'s own default).
+    Covers query-application-service's "Progress is threaded through
+    unmodified" and "Omitting progress keeps composition byte-identical".
+    RED today: `TypeError` -- `run_query` accepts no `progress` keyword
+    yet. Kills dropping the kwarg between `run_query` and `answer`."""
+    captured: dict[str, object] = {}
+
+    def _spy(*args: object, **kwargs: object) -> AnswerResult:
+        captured.update(kwargs)
+        return _fixed_result()
+
+    monkeypatch.setattr(query_service, "answer", _spy)
+
+    def _callback(phase: str, completed: int, total: int) -> None:
+        raise AssertionError("never actually invoked -- answer() is patched")
+
+    with_progress_dir = tmp_path / "with_progress"
+    with_progress_dir.mkdir()
+    _run(with_progress_dir, monkeypatch, progress=_callback)
+    assert captured["progress"] is _callback
+
+    captured.clear()
+    without_progress_dir = tmp_path / "without_progress"
+    without_progress_dir.mkdir()
+    _run(without_progress_dir, monkeypatch)
+    assert captured["progress"] is None
+
+
 def test_resolve_llm_status_refused_on_insufficient_context() -> None:
     """A sufficiency refusal DID reach the model -- one cheap call was made
     and paid for -- so `resolve_llm_status` reports `"refused"` rather than

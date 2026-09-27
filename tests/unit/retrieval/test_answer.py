@@ -4627,3 +4627,216 @@ def test_include_deprecated_suppresses_history_walk(tmp_path: Path) -> None:
     assert llm_a.calls == llm_b.calls
     assert all(c.history is None for c in result_a.citations)
     assert "concepts/q" not in {c.concept_id for c in result_a.citations}
+
+
+# --- mcp-read-surface slice 8: the optional progress callback (design D8) --
+
+
+class _RecordingProgress:
+    """A structural `ProgressCallback`: records every `(phase, completed,
+    total)` call in order, and nothing else."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, int, int]] = []
+
+    def __call__(self, phase: str, completed: int, total: int) -> None:
+        self.calls.append((phase, completed, total))
+
+
+def test_progress_byte_identity_and_phase_order(tmp_path: Path) -> None:
+    """`answer(progress=None)` and `answer(progress=recorder)` return equal
+    `AnswerResult`s and send byte-identical `messages` to the fake LLM; the
+    recorder observed `"retrieving"`, `"assembling"`, `"synthesizing"` in
+    order with `completed` strictly increasing and `total == 3` when the
+    sufficiency check is disabled, and additionally `"checking"` with
+    `total == 4` when it is enabled; the empty-question short-circuit
+    invokes the callback zero times; a static AST check confirms
+    `retrieval/answer.py` imports no `openkos.config`. Covers query-answer's
+    "Omitting progress is byte-identical to today's contract", "A supplied
+    callback observes the four phases in order", "Without the sufficiency
+    check, checking is absent and total is 3", "The empty-question
+    short-circuit emits no progress", and "progress is not read from
+    configuration". RED today: `TypeError` -- `answer()` accepts no
+    `progress` keyword yet. Kills emitting a progress call even when
+    `progress is None`, and reporting `total == 3` when the sufficiency
+    check is enabled (or vice versa)."""
+    bundle_dir = _bundle_with_two(tmp_path)
+
+    # -- sufficiency check disabled: three phases, no "checking" --
+    with fts.build_index(bundle_dir) as idx:
+        llm_a = _FakeLLM(reply="answer a")
+        result_a = answer_mod.answer(
+            "dichotomyzz", bundle_dir=bundle_dir, llm=llm_a, fts_index=idx
+        )
+        llm_b = _FakeLLM(reply="answer a")
+        recorder = _RecordingProgress()
+        result_b = answer_mod.answer(
+            "dichotomyzz",
+            bundle_dir=bundle_dir,
+            llm=llm_b,
+            fts_index=idx,
+            progress=recorder,
+        )
+
+    assert result_a == result_b
+    assert llm_a.calls == llm_b.calls
+    phases = [phase for phase, _, _ in recorder.calls]
+    assert phases == ["retrieving", "assembling", "synthesizing"]
+    completed = [c for _, c, _ in recorder.calls]
+    assert completed == sorted(set(completed)), "completed must strictly increase"
+    assert len(completed) == len(set(completed)), "completed must strictly increase"
+    assert all(total == 3 for _, _, total in recorder.calls)
+
+    # -- sufficiency check enabled: four phases, "checking" included --
+    with fts.build_index(bundle_dir) as idx2:
+        llm_c = _ScriptedLLM("dichotomyzz alpha body", "The answer.\n\nUSED: 1")
+        result_c = answer_mod.answer(
+            "dichotomyzz",
+            bundle_dir=bundle_dir,
+            llm=llm_c,
+            fts_index=idx2,
+            sufficiency_check=True,
+        )
+        llm_d = _ScriptedLLM("dichotomyzz alpha body", "The answer.\n\nUSED: 1")
+        recorder2 = _RecordingProgress()
+        result_d = answer_mod.answer(
+            "dichotomyzz",
+            bundle_dir=bundle_dir,
+            llm=llm_d,
+            fts_index=idx2,
+            sufficiency_check=True,
+            progress=recorder2,
+        )
+
+    assert result_c == result_d
+    assert llm_c.calls == llm_d.calls
+    phases2 = [phase for phase, _, _ in recorder2.calls]
+    assert phases2 == ["retrieving", "assembling", "checking", "synthesizing"]
+    completed2 = [c for _, c, _ in recorder2.calls]
+    assert completed2 == sorted(set(completed2)), "completed must strictly increase"
+    assert len(completed2) == len(set(completed2)), "completed must strictly increase"
+    assert all(total == 4 for _, _, total in recorder2.calls)
+
+    # -- the empty-question short-circuit emits no progress at all --
+    recorder3 = _RecordingProgress()
+    empty_result = answer_mod.answer(
+        "   ", bundle_dir=bundle_dir, llm=_FakeLLM(), progress=recorder3
+    )
+    assert empty_result.no_match_cause == "empty_query"
+    assert recorder3.calls == []
+
+    # -- progress is not read from configuration (static import check) --
+    module_path = _REPO_ROOT / "src" / "openkos" / "retrieval" / "answer.py"
+    tree = ast.parse(module_path.read_text(encoding="utf-8"))
+    imported: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module)
+    assert not any("config" in name for name in imported), (
+        f"{module_path} imports config: {imported}"
+    )
+
+
+# --- mcp-read-surface slice 8: id lists aligned with title lists (design D8) --
+
+
+def test_id_lists_align_with_title_lists(tmp_path: Path) -> None:
+    """On the existing #882 excerpt/omission fixtures and a
+    history-truncation fixture (from the merged
+    `superseded-history-in-query` change), `excerpted_ids[n]`/
+    `omitted_ids[n]`/`history_truncated_ids[n]` name the same concept as
+    position `n` of their paired title list, for both a populated case and
+    the empty-list case. Covers query-answer's "Each id list stays
+    index-aligned with its title list" and "An empty title list pairs with
+    an empty id list". RED today: `AttributeError` -- `AnswerResult` has no
+    id-list fields yet. Kills appending an id outside the same statement as
+    its title, which would desynchronize the two lists under a future
+    edit."""
+    # -- populated case: two excerpted documents, in fused-rank order --
+    excerpted_bundle = tmp_path / "excerpted_bundle"
+    for name, title in (("aaa", "Alpha Source"), ("bbb", "Bravo Source")):
+        _write_doc(
+            excerpted_bundle / "sources" / f"{name}.md",
+            doc_type="Source",
+            title=title,
+            body="\n".join(
+                f"dichotomyzz {name} line {n:04d} " + "y" * 60 for n in range(1_200)
+            ),
+        )
+    with fts.build_index(excerpted_bundle) as idx:
+        excerpted_result = answer_mod.answer(
+            "dichotomyzz",
+            bundle_dir=excerpted_bundle,
+            llm=_WindowedLLM(),
+            fts_index=idx,
+        )
+    assert excerpted_result.excerpted_titles == ["Alpha Source", "Bravo Source"]
+    assert excerpted_result.excerpted_ids == ["sources/aaa", "sources/bbb"]
+
+    # -- populated case: one document shown NONE of --
+    omitted_bundle = tmp_path / "omitted_bundle"
+    _write_doc(
+        omitted_bundle / "sources" / "huge.md",
+        doc_type="Source",
+        title="Huge",
+        body="\n".join(f"dichotomyzz line {n:04d} " + "y" * 60 for n in range(1_500)),
+    )
+    with fts.build_index(omitted_bundle) as idx2:
+        omitted_result = answer_mod.answer(
+            "dichotomyzz",
+            bundle_dir=omitted_bundle,
+            llm=_WindowedLLM(context_window=4_096, max_generation_tokens=None),
+            fts_index=idx2,
+        )
+    assert omitted_result.omitted_titles == ["Huge"]
+    assert omitted_result.omitted_ids == ["sources/huge"]
+
+    # -- populated case: one successor's history chain cut short by the cap --
+    history_bundle = tmp_path / "history_bundle"
+    _write_doc(
+        history_bundle / "concepts" / "s_cap.md",
+        title="S Cap",
+        body="dichotomyzz cap",
+        relations=[(f"concepts/p{i}", "supersedes") for i in range(4)],
+    )
+    for i in range(4):
+        _write_doc(
+            history_bundle / "concepts" / f"p{i}.md",
+            title=f"P{i}",
+            status="deprecated",
+        )
+    recording_index = _RecordingIndex(
+        hits=[fts.FtsHit(concept_id="concepts/s_cap", score=1.0)]
+    )
+    history_result = answer_mod.answer(
+        "dichotomyzz",
+        bundle_dir=history_bundle,
+        llm=_FakeLLM(reply="ok"),
+        fts_index=recording_index,
+        revision_history=True,
+    )
+    assert history_result.history_truncated_titles == ["S Cap"]
+    assert history_result.history_truncated_ids == ["concepts/s_cap"]
+
+    # -- empty-list case: nothing excerpted, omitted, or truncated --
+    fitting_bundle = tmp_path / "fitting_bundle"
+    _write_doc(
+        fitting_bundle / "concepts" / "stoicism.md",
+        title="Stoicism",
+        body="dichotomyzz of control",
+    )
+    with fts.build_index(fitting_bundle) as idx3:
+        fitting_result = answer_mod.answer(
+            "dichotomyzz",
+            bundle_dir=fitting_bundle,
+            llm=_WindowedLLM(),
+            fts_index=idx3,
+        )
+    assert fitting_result.excerpted_titles == []
+    assert fitting_result.excerpted_ids == []
+    assert fitting_result.omitted_titles == []
+    assert fitting_result.omitted_ids == []
+    assert fitting_result.history_truncated_titles == []
+    assert fitting_result.history_truncated_ids == []

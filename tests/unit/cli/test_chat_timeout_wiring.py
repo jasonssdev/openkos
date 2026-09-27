@@ -28,6 +28,22 @@ from openkos.cli import main as main_module
 from openkos.llm.ollama import OllamaClient
 
 _SRC = Path(main_module.__file__).parent
+_APPLICATION_BACKENDS = _SRC.parent / "application" / "backends.py"
+"""mcp-read-surface slice 8 (design Decision 7): `_chat_client` no longer
+constructs `OllamaClient` directly -- it delegates to
+`application.backends.chat_client(cfg, factory=OllamaClient, ...)`, whose
+own body is the real (and now only shared) construction call, shaped
+`factory(model=..., ...)`. The guards below must see that site too, or they
+would go blind to `main.py`'s whole chat-client seam the moment it became a
+delegator."""
+
+
+def _scanned_source_files() -> list[Path]:
+    """Every module a chat-client construction site could live in: `cli/*.py`
+    (`curate.py`'s own, independent construction) plus
+    `application/backends.py` (the shared definition every CLI delegator now
+    calls through)."""
+    return [*sorted(_SRC.glob("*.py")), _APPLICATION_BACKENDS]
 
 
 def _is_chat_model_expr(value: ast.expr) -> bool:
@@ -67,19 +83,25 @@ def _is_chat_model_arg(node: ast.keyword) -> bool:
 
 
 def _chat_client_calls(tree: ast.AST) -> list[ast.Call]:
-    """Every real `OllamaClient(model=<something>.model, ...)` CALL.
+    """Every real chat-client construction CALL: either a direct
+    `OllamaClient(model=<something>, ...)` (`curate.py`'s own site) or the
+    injected-factory shape `factory(model=<something>, ...)`
+    (`application/backends.py`'s shared `chat_client` definition,
+    mcp-read-surface slice 8, design Decision 7 -- the concrete class name
+    is deliberately absent from THAT call site, so the detector must
+    recognize the factory parameter too, not only the literal class name).
 
     Walks the AST rather than the raw text on purpose: several docstrings in
-    `main.py` quote `OllamaClient(model=cfg.model)` while describing the
-    injection seam, and a text scan flags those as offenders. Prose is not a
-    construction site; only a `Call` node is.
+    `main.py`/`backends.py` quote `OllamaClient(model=cfg.model)` while
+    describing the injection seam, and a text scan flags those as
+    offenders. Prose is not a construction site; only a `Call` node is.
     """
     return [
         node
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Name)
-        and node.func.id == "OllamaClient"
+        and node.func.id in {"OllamaClient", "factory"}
         and any(_is_chat_model_arg(kw) for kw in node.keywords)
     ]
 
@@ -111,7 +133,7 @@ def test_every_chat_client_construction_passes_a_timeout() -> None:
     """
     offenders: list[str] = []
     seen = 0
-    for path in sorted(_SRC.glob("*.py")):
+    for path in _scanned_source_files():
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for call in _chat_client_calls(tree):
             seen += 1
@@ -166,7 +188,7 @@ def test_every_chat_client_construction_passes_max_generation_tokens() -> None:
     """
     offenders: list[str] = []
     seen = 0
-    for path in sorted(_SRC.glob("*.py")):
+    for path in _scanned_source_files():
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for call in _chat_client_calls(tree):
             seen += 1
@@ -212,7 +234,7 @@ def test_every_chat_client_construction_passes_a_context_window() -> None:
     """
     offenders: list[str] = []
     seen = 0
-    for path in sorted(_SRC.glob("*.py")):
+    for path in _scanned_source_files():
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for call in _chat_client_calls(tree):
             seen += 1
@@ -264,7 +286,7 @@ def test_every_chat_client_construction_passes_a_temperature() -> None:
     """
     offenders: list[str] = []
     seen = 0
-    for path in sorted(_SRC.glob("*.py")):
+    for path in _scanned_source_files():
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for call in _chat_client_calls(tree):
             seen += 1
@@ -298,7 +320,7 @@ def test_every_chat_client_construction_passes_a_seed() -> None:
     """No chat client is constructed without an explicit `seed=`."""
     offenders: list[str] = []
     seen = 0
-    for path in sorted(_SRC.glob("*.py")):
+    for path in _scanned_source_files():
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for call in _chat_client_calls(tree):
             seen += 1
@@ -481,7 +503,7 @@ def test_the_chat_client_ast_guard_still_sees_every_construction() -> None:
     detector's own coverage so that failure mode cannot happen quietly.
     """
     seen = 0
-    for path in sorted(_SRC.glob("*.py")):
+    for path in _scanned_source_files():
         tree = ast.parse(path.read_text(encoding="utf-8"))
         seen += len(_chat_client_calls(tree))
 
