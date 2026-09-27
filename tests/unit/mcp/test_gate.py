@@ -446,3 +446,56 @@ def test_disclose_navigate_reports_graph_build_not_run() -> None:
     assert not_run[0].label == "graph_build"
     reason = not_run[0].reason
     assert "2" in reason
+
+
+def test_graph_build_reason_validated_before_forwarding() -> None:
+    """`finish` must not forward a `graph_build` `NotRun`'s raw `reason`
+    unless it matches the EXACT count-only shape `disclose_navigate`
+    produces (design Decision 3: every `reason` is fixed and count-only,
+    never exception text or a document path). The label alone is not a
+    trust boundary -- `finish` also receives service-produced `NotRun`s
+    under the same label vocabulary, so a reason carrying a document path
+    or `str(exc)` must be treated as unrecognized (aggregated, count-only)
+    exactly like any other untrusted entry, never forwarded verbatim."""
+    document_path_payload = {
+        "concept_id": None,
+        "withheld": 0,
+        "not_run": (
+            read_outcome.NotRun(
+                label="graph_build", reason="/concepts/secret.md: boom"
+            ),
+        ),
+    }
+    rendered = gate.finish(document_path_payload, _consistency())
+    rendered_text = str(_rendered_not_run(rendered))
+    assert "/concepts/secret.md" not in rendered_text
+    assert "boom" not in rendered_text
+
+    exception_text_payload = {
+        "concept_id": None,
+        "withheld": 0,
+        "not_run": (
+            read_outcome.NotRun(
+                label="graph_build",
+                reason="cannot read concepts/zq-canary-7f3a: ZQ-CANARY-BODY-7F3A",
+            ),
+        ),
+    }
+    rendered = gate.finish(exception_text_payload, _consistency())
+    rendered_text = str(_rendered_not_run(rendered))
+    assert "zq-canary-7f3a" not in rendered_text
+    assert "ZQ-CANARY-BODY-7F3A" not in rendered_text
+
+    legitimate_payload = {
+        "concept_id": None,
+        "withheld": 0,
+        "not_run": (
+            read_outcome.NotRun(
+                label="graph_build", reason="2 edges could not be included"
+            ),
+        ),
+    }
+    rendered = gate.finish(legitimate_payload, _consistency())
+    assert _rendered_not_run(rendered) == [
+        {"label": "graph_build", "reason": "2 edges could not be included"}
+    ]
