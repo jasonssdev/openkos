@@ -46,6 +46,16 @@ Hard-case tags (`LabelledPair.hard_case`):
   must never pair them.
 - `equal-date`, `undated`, `multi-date`: the direction rule cannot order
   the pair (`pair_direction` reason `equal`, `missing`, `multiple`).
+
+**Confirmation split (#1014 piece (a) task T1).** The pairs at the end of
+`_PAIRS`, tagged `split="confirmation"`, are new decisions written BEFORE
+the judge prompt fix, in fresh wording that never reuses the diagnosis's
+own lure phrases ("at all times", "only", "in general", "children's",
+"dropped", "stays"). Every confirmation pair is `contested=False` by
+construction (`fixture_integrity` enforces this): each one is meant to be
+unambiguous to a careful reader, so measuring the prompt fix against it
+cannot be contaminated by the same doubtful calls the original 46 pairs'
+diagnosis used. `original` and `confirmation` are never scored together.
 """
 
 from __future__ import annotations
@@ -55,6 +65,7 @@ from datetime import date
 from revision_fixtures import (
     DecisionDoc,
     Fixture,
+    JudgeSplit,
     LabelledPair,
     RevisionExpectation,
     SourceDoc,
@@ -397,6 +408,182 @@ _DECISIONS: tuple[DecisionDoc, ...] = (
         "at the Corner Cafe instead of the library.",
         _MAY,
     ),
+    # == Confirmation split (#1014 task T1): new decisions, fresh
+    # vocabulary, written BEFORE the judge prompt changes. None of these
+    # reuse the diagnosis's own lure phrases ("at all times", "only", "in
+    # general", "children's", "dropped", "stays"). ====================
+    # -- pattern A (REFINES): an absolute/exclusive qualifier narrowed or
+    # extended, choice kept in force -------------------------------------
+    _d(
+        "study-room-booking",
+        "Study Room Booking",
+        "Visitors may book the small study room for up to two hours every "
+        "day the library is open.",
+        _JAN,
+    ),
+    _d(
+        "study-room-weekday-cap",
+        "Study Room Weekly Cap",
+        "The small study room now has a three-booking weekly cap per "
+        "visitor, because demand has increased.",
+        _MAR,
+    ),
+    _d(
+        "book-borrowing-limit",
+        "Book Borrowing Limit",
+        "Members may borrow up to five books at a time.",
+        _FEB,
+    ),
+    _d(
+        "book-borrowing-limit-media",
+        "Book Borrowing Limit, Media Added",
+        "Members may also borrow up to two DVDs at a time, alongside their five books.",
+        _APR,
+    ),
+    _d(
+        "photocopier-free-use",
+        "Photocopier Free Use",
+        "Members may use the self-service photocopier free of charge every weekday.",
+        _JAN,
+    ),
+    _d(
+        "photocopier-free-use-review",
+        "Photocopier Free Use Review",
+        "The self-service photocopier remains free every weekday except the "
+        "first Monday of each month, when it is serviced off-site.",
+        _MAY,
+    ),
+    _d(
+        "donation-drop-off-hours",
+        "Donation Drop-Off Hours",
+        "Donations may be left at the front desk every weekday during opening hours.",
+        _FEB,
+    ),
+    _d(
+        "donation-drop-off-expanded",
+        "Donation Drop-Off Expanded",
+        "Donations may now also be left in the outside book bin on "
+        "weekends, in addition to the front desk during weekday opening "
+        "hours.",
+        _MAR,
+    ),
+    # -- pattern B (UNRELATED): different subjects sharing a lure word ----
+    _d(
+        "audio-book-app-subscription",
+        "Audio Book App Subscription",
+        "The library will subscribe to an audiobook app for members, "
+        "funded by the friends group.",
+        _JAN,
+    ),
+    _d(
+        "print-magazine-subscriptions",
+        "Print Magazine Subscriptions",
+        "Print magazine subscriptions at the front desk are no longer "
+        "offered; the budget moves to online resources instead.",
+        _MAY,
+    ),
+    _d(
+        "teen-lounge-furniture",
+        "Teen Lounge Furniture",
+        "New bean bag chairs will be added to the teen lounge corner.",
+        _FEB,
+    ),
+    _d(
+        "teen-volunteer-badge-programme",
+        "Teen Volunteer Badge Programme",
+        "The teen volunteer badge programme is retired; teen volunteers "
+        "will instead earn certificates through the county library "
+        "service.",
+        _APR,
+    ),
+    # -- control REVERSES: keep/continue-sounding language over a
+    # genuinely overturned choice -----------------------------------------
+    _d(
+        "reference-desk-staffing",
+        "Reference Desk Staffing",
+        "The reference desk will be staffed by a volunteer every afternoon.",
+        _JAN,
+    ),
+    _d(
+        "reference-desk-staffing-review",
+        "Reference Desk Staffing Review",
+        "The reference desk keeps its afternoon hours on the schedule, but "
+        "from June the desk will no longer be staffed, and patrons should "
+        "ask any volunteer for help instead.",
+        _MAR,
+    ),
+    _d(
+        "late-fee-reminder-calls",
+        "Late Fee Reminder Calls",
+        "Volunteers will phone borrowers with overdue items every Friday afternoon.",
+        _FEB,
+    ),
+    _d(
+        "late-fee-reminder-calls-review",
+        "Late Fee Reminder Calls Review",
+        "The Friday afternoon volunteer slot remains on the roster, but "
+        "reminder calls to borrowers will be sent by automatic text "
+        "message instead, and no volunteer will phone borrowers.",
+        _MAY,
+    ),
+    _d(
+        "seed-library-envelope-tracking",
+        "Seed Library Envelope Tracking",
+        "Seed packets borrowed from the seed library will be tracked using "
+        "paper index cards at the front desk.",
+        _MAR,
+    ),
+    _d(
+        "seed-library-envelope-tracking-review",
+        "Seed Library Envelope Tracking Review",
+        "The seed library keeps its shelf of paper envelopes for patrons "
+        "to browse, but the desk will switch entirely to a phone-app "
+        "checkout system for tracking loans, and the paper cards will be "
+        "shredded.",
+        _APR,
+    ),
+    # -- plain sanity controls: an ordinary REFINES, REFINES, REAFFIRMS ---
+    _d(
+        "book-repair-kit-purchase",
+        "Book Repair Kit Purchase",
+        "The committee approved buying a basic book repair kit for minor "
+        "tears and loose pages.",
+        _JAN,
+    ),
+    _d(
+        "book-repair-kit-restock",
+        "Book Repair Kit Restock",
+        "The book repair kit will be restocked twice a year, each spring "
+        "and autumn, using the small supplies budget.",
+        _FEB,
+    ),
+    _d(
+        "large-print-book-section",
+        "Large-Print Book Section",
+        "The library will create a dedicated large-print book section "
+        "near the front windows.",
+        _MAR,
+    ),
+    _d(
+        "large-print-book-section-labels",
+        "Large-Print Book Section Labels",
+        "The large-print section will also get shelf-edge labels in bold "
+        "type to help patrons find titles by genre.",
+        _MAY,
+    ),
+    _d(
+        "board-game-lending",
+        "Board Game Lending",
+        "The library will lend board games from the front desk for two-week loans.",
+        _FEB,
+    ),
+    _d(
+        "board-game-lending-review",
+        "Board Game Lending Review",
+        "The front-desk board game loans continue on their existing "
+        "two-week cycle; no change was proposed at this meeting.",
+        _APR,
+    ),
 )
 
 
@@ -409,6 +596,7 @@ def _p(
     note: str,
     hard_case: str | None = None,
     contested: bool = False,
+    split: JudgeSplit = "original",
 ) -> LabelledPair:
     later_id = None if later is None else f"decisions/{later}"
     return LabelledPair(
@@ -418,6 +606,7 @@ def _p(
         contested=contested,
         note=note,
         hard_case=hard_case,
+        split=split,
     )
 
 
@@ -836,11 +1025,157 @@ _PAIRS: tuple[LabelledPair, ...] = (
         note="Volunteers in both; staffing one event vs onboarding training.",
         hard_case="same-subject-unrelated",
     ),
+    # == Confirmation split (#1014 task T1) ==============================
+    # Every pair below is `contested=False`: written to be unambiguous to
+    # a careful reader, so re-measuring the judge here cannot be
+    # contaminated by the same doubtful calls the diagnosis used. None
+    # reuse the diagnosis's own lure phrases.
+    # -- pattern A: REFINES, an absolute/exclusive qualifier narrowed or
+    # extended, but the choice stays in force ----------------------------
+    _p(
+        "study-room-booking",
+        "study-room-weekday-cap",
+        "REFINES",
+        "study-room-weekday-cap",
+        note="Every-day room access is unchanged; a per-visitor weekly cap "
+        "narrows how OFTEN it can be booked, not whether it can be -- "
+        "unambiguous because nothing withdraws the booking option itself.",
+        hard_case="partial-refine-reads-as-reversal",
+        split="confirmation",
+    ),
+    _p(
+        "book-borrowing-limit",
+        "book-borrowing-limit-media",
+        "REFINES",
+        "book-borrowing-limit-media",
+        note="The five-book cap is untouched; DVDs are a new, separate "
+        "allowance added on top of it -- unambiguous because the later "
+        "side only adds, it never replaces or removes.",
+        hard_case="partial-refine-reads-as-reversal",
+        split="confirmation",
+    ),
+    _p(
+        "photocopier-free-use",
+        "photocopier-free-use-review",
+        "REFINES",
+        "photocopier-free-use-review",
+        note="'Remains free every weekday except' keeps the choice and "
+        "narrows only the one serviced day -- unambiguous since the kept "
+        "choice is stated explicitly.",
+        hard_case="partial-refine-reads-as-reversal",
+        split="confirmation",
+    ),
+    _p(
+        "donation-drop-off-hours",
+        "donation-drop-off-expanded",
+        "REFINES",
+        "donation-drop-off-expanded",
+        note="Weekday front-desk drop-off is unchanged; the weekend bin is "
+        "'in addition to' it -- unambiguous, since addition rules out a "
+        "reversal reading.",
+        hard_case="partial-refine-reads-as-reversal",
+        split="confirmation",
+    ),
+    # -- pattern B: UNRELATED, different subjects sharing a lure word ----
+    _p(
+        "audio-book-app-subscription",
+        "print-magazine-subscriptions",
+        "UNRELATED",
+        "print-magazine-subscriptions",
+        note="Two different subscription products (an app vs print "
+        "magazines); ending one says nothing about the other -- "
+        "unambiguous since neither side references the other's choice, "
+        "and only the word 'subscription' is shared.",
+        hard_case="shared-cue-unrelated",
+        split="confirmation",
+    ),
+    _p(
+        "teen-lounge-furniture",
+        "teen-volunteer-badge-programme",
+        "UNRELATED",
+        "teen-volunteer-badge-programme",
+        note="Furniture for the teen lounge vs a volunteer recognition "
+        "programme; retiring the badge programme has no bearing on the "
+        "chairs -- unambiguous, since only the word 'teen' is shared.",
+        hard_case="shared-cue-unrelated",
+        split="confirmation",
+    ),
+    # -- controls: REVERSES written with keep/continue-sounding language
+    # over a genuinely overturned choice (the risk the fix carries) ------
+    _p(
+        "reference-desk-staffing",
+        "reference-desk-staffing-review",
+        "REVERSES",
+        "reference-desk-staffing-review",
+        note="The afternoon slot 'on the schedule' is a distraction; "
+        "staffing itself is withdrawn outright ('will no longer be "
+        "staffed') -- unambiguous because that phrase overturns the "
+        "earlier choice regardless of the schedule-continuation wording.",
+        hard_case="reversal-reads-as-refine",
+        split="confirmation",
+    ),
+    _p(
+        "late-fee-reminder-calls",
+        "late-fee-reminder-calls-review",
+        "REVERSES",
+        "late-fee-reminder-calls-review",
+        note="The volunteer slot 'remaining on the roster' is a "
+        "distraction; phoning borrowers is replaced outright by automatic "
+        "texts -- unambiguous because 'no volunteer will phone borrowers' "
+        "is an explicit, unconditional overturn.",
+        hard_case="reversal-reads-as-refine",
+        split="confirmation",
+    ),
+    _p(
+        "seed-library-envelope-tracking",
+        "seed-library-envelope-tracking-review",
+        "REVERSES",
+        "seed-library-envelope-tracking-review",
+        note="The envelope shelf 'staying put' is about browsing, not "
+        "tracking; the tracking method itself switches entirely to an app "
+        "and the paper cards are destroyed -- unambiguous because 'switch "
+        "entirely' and 'will be shredded' leave no other reading.",
+        hard_case="reversal-reads-as-refine",
+        split="confirmation",
+    ),
+    # -- plain sanity controls -------------------------------------------
+    _p(
+        "book-repair-kit-purchase",
+        "book-repair-kit-restock",
+        "REFINES",
+        "book-repair-kit-restock",
+        note="Adds a restocking cadence to the kit purchase; nothing about "
+        "the kit is withdrawn -- unambiguous, purely additive detail.",
+        split="confirmation",
+    ),
+    _p(
+        "large-print-book-section",
+        "large-print-book-section-labels",
+        "REFINES",
+        "large-print-book-section-labels",
+        note="Adds shelf labelling to the already-created section; the "
+        "section itself is untouched -- unambiguous, purely additive "
+        "detail.",
+        split="confirmation",
+    ),
+    _p(
+        "board-game-lending",
+        "board-game-lending-review",
+        "REAFFIRMS",
+        "board-game-lending-review",
+        note="Same two-week loan terms restated after a survey, "
+        "explicitly with 'no change was proposed' -- unambiguous, leaves "
+        "only one reading.",
+        hard_case="reaffirm-different-words",
+        split="confirmation",
+    ),
 )
 
 
 def load_library_fixture() -> Fixture:
     """The real T2 fixture: a community-library volunteer committee's
     meeting notes. Labels by construction, pending owner adjudication of
-    every `contested` pair (T3)."""
+    every `contested` pair (T3). Includes the `split="confirmation"`
+    pairs added by task T1, which are never scored together with the
+    `split="original"` ones -- see this module's docstring."""
     return Fixture(sources=_SOURCES, decisions=_DECISIONS, pairs=_PAIRS)

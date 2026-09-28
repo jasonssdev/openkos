@@ -24,7 +24,10 @@ own `ConceptDoc`/`LabelledPair` split:
 - `LabelledPair`: one owner-adjudicated verdict over two Decision ids
   (design.md's contract): the drafter labels by construction and FLAGS
   every contested case (`contested`); contested calls are settled BEFORE
-  scoring, never after (project memory).
+  scoring, never after (project memory). Its `split` field (`JudgeSplit`)
+  marks whether the pair is part of the `"original"` fixture or a later
+  `"confirmation"` split added to re-measure a prompt change honestly
+  (#1014 piece (a) task T1) -- the two are never scored together.
 """
 
 from __future__ import annotations
@@ -40,6 +43,16 @@ RevisionExpectation = Literal["REVERSES", "REFINES", "REAFFIRMS", "UNRELATED"]
 labelled pair's `expected_verdict` visually distinct from the judge's own
 lower-case wire values (`RevisionVerdictValue.REVERSES.value ==
 "reverses"`, ...) it is scored against."""
+
+JudgeSplit = Literal["original", "confirmation"]
+"""Which measurement split a `LabelledPair` belongs to (#1014's judge
+prompt fix, task T1). `"original"` is every pair the first live run's
+diagnosis already saw -- re-measuring only on those would inflate a
+prompt fix's result. `"confirmation"` pairs are written BEFORE the prompt
+changes, with fresh wording, specifically to measure the fix honestly.
+The two are never blended: every judge metric this harness reports is
+computed once per split (plus an explicit, separately-labelled `"all"`),
+never as one pooled number that hides which split it came from."""
 
 
 @dataclass(frozen=True)
@@ -84,6 +97,14 @@ class LabelledPair:
     purpose" list) this pair exists to probe, e.g. `"paraphrase"`,
     `"same-subject-unrelated"`, `"reaffirm-different-words"`,
     `"undated"`. `None` for an ordinary pair."""
+    split: JudgeSplit = "original"
+    """`"original"` for every pair the first live run's diagnosis already
+    saw (the default -- every pre-existing pair in this module and in
+    `revision_fixture_library.py` keeps it implicitly); `"confirmation"`
+    for a pair added afterward, specifically to re-measure a prompt fix
+    without overfitting to the pairs the diagnosis used. A confirmation
+    pair is written to be unambiguous, so it must never carry
+    `contested=True` (`fixture_integrity` enforces this)."""
 
 
 @dataclass(frozen=True)
@@ -263,6 +284,11 @@ _PAIRS: tuple[LabelledPair, ...] = (
         contested=False,
         note="Both mention the office; neither bears on the other's choice.",
         hard_case="same-subject-unrelated",
+        split="confirmation",
+        # The one pair in this synthetic placeholder tagged "confirmation",
+        # so `--self-test` can prove the split-filtering machinery (never
+        # the judge's own numbers) with zero network calls. Its verdict,
+        # judge script, and every other property are otherwise unchanged.
     ),
     LabelledPair(
         ("decisions/oncall-rotation-v1", "decisions/oncall-rotation-v2"),

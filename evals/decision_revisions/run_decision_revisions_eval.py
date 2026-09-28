@@ -66,7 +66,7 @@ from collections import Counter, defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Final
+from typing import Final, cast
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
@@ -80,6 +80,7 @@ from harness_report import arm_identity_line  # noqa: E402
 from revision_fixture_library import load_library_fixture  # noqa: E402
 from revision_fixtures import (  # noqa: E402
     Fixture,
+    JudgeSplit,
     LabelledPair,
     RevisionExpectation,
     load_fixture,
@@ -189,6 +190,23 @@ class JudgeRow:
     the candidate stage may propose any pair. It still counts toward
     `actionable_rate` (production would act on it), and no label-reading
     metric can match it, since every `expected == <label>` test is false."""
+    split: JudgeSplit | None
+    """The matched `LabelledPair.split`, or `None` for an unlabelled
+    stage (a) candidate pair -- it belongs to neither named split, but
+    still counts in `rows_for_split(rows, None)` ("all"), since a real
+    production candidate is not itself part of this measurement's
+    original-vs-confirmation question."""
+    directed: bool | None
+    """`True` when the matched `LabelledPair.expected_later_id is not
+    None` (a known direction), `False` when it is `None` (undirected --
+    undated/equal/multi-date), and `None` for an unlabelled stage (a)
+    candidate row, mirroring `split`'s own three-state shape (#1014 Plan 2,
+    task T7). This is read from the FIXTURE's own `expected_later_id`, not
+    recomputed from a model reply or from `RevisionVerdict.direction`:
+    `fixture_integrity` already pins `expected_later_id ==
+    pair_direction(...).holder` over the fixture's own dates, so the two
+    are equivalent, and reading the fixture keeps this scoring module
+    independent of any particular judged batch's own verdicts."""
     observed: str
     confidence: float
     quote_0: str | None
@@ -213,6 +231,10 @@ def judge_rows(
                 JudgeRow(
                     pair_ids=verdict.pair_ids,
                     expected=None if labelled is None else labelled.expected_verdict,
+                    split=None if labelled is None else labelled.split,
+                    directed=None
+                    if labelled is None
+                    else labelled.expected_later_id is not None,
                     observed=verdict.verdict.value,
                     confidence=verdict.confidence,
                     quote_0=verdict.quotes[0],
@@ -220,6 +242,44 @@ def judge_rows(
                     malformed=verdict.malformed,
                 )
             )
+    return rows
+
+
+def rows_from_stored_json(
+    entries: Sequence[dict[str, object]], pairs: Sequence[LabelledPair]
+) -> list[JudgeRow]:
+    """Reconstruct `JudgeRow`s from a stored `runs-*.json`'s `rows_a`/
+    `rows_b` list -- zero model calls, for `--rescore` (#1014 Plan 2, task
+    T7). Re-matches each entry's `pair_ids` against the CURRENT fixture's
+    `LabelledPair`s by sorted key, exactly as `judge_rows` matches a live
+    `judge_pairs` batch -- so `expected`, `split` and `directed` are always
+    freshly DERIVED from `pairs` here, never trusted from the stored JSON.
+    This is deliberate, not just convenient: an older stored run's JSON may
+    carry no `split` key at all (it predates task T1), and never carried a
+    `directed` key (it predates this task); only `observed`/`confidence`/
+    `quote_0`/`quote_1`/`malformed` -- what the model actually produced --
+    are read from the stored entry."""
+    by_key = {_pair_key(*p.decision_ids): p for p in pairs}
+    rows: list[JudgeRow] = []
+    for entry in entries:
+        raw_pair_ids = cast("list[str]", entry["pair_ids"])
+        pair_ids = _pair_key(raw_pair_ids[0], raw_pair_ids[1])
+        labelled = by_key.get(pair_ids)
+        rows.append(
+            JudgeRow(
+                pair_ids=pair_ids,
+                expected=None if labelled is None else labelled.expected_verdict,
+                split=None if labelled is None else labelled.split,
+                directed=None
+                if labelled is None
+                else labelled.expected_later_id is not None,
+                observed=str(entry["observed"]),
+                confidence=float(entry["confidence"]),  # type: ignore[arg-type]
+                quote_0=cast("str | None", entry.get("quote_0")),
+                quote_1=cast("str | None", entry.get("quote_1")),
+                malformed=bool(entry["malformed"]),
+            )
+        )
     return rows
 
 
@@ -320,6 +380,57 @@ def run_pipeline(fixture: Fixture, llm: LLMBackend, *, runs: int) -> PipelineRes
 # ---------------------------------------------------------------------------
 # Pure scoring functions -- importable, no LLM, no I/O.
 # ---------------------------------------------------------------------------
+
+
+def rows_for_split(
+    rows: Sequence[JudgeRow], split: JudgeSplit | None
+) -> list[JudgeRow]:
+    """Every `JudgeRow` belonging to `split` -- `split=None` means "all",
+    unfiltered, and is the ONLY way to get a pooled number: naming
+    `"original"` or `"confirmation"` never silently includes the other,
+    and never includes an unlabelled stage (a) candidate row
+    (`JudgeRow.split is None`) either. Every judge-stage scoring function
+    in this module reads a plain `Sequence[JudgeRow]`, so this is the one
+    place split filtering happens -- callers filter first, then call the
+    existing pure functions unchanged."""
+    if split is None:
+        return list(rows)
+    return [row for row in rows if row.split == split]
+
+
+def pairs_for_split(
+    pairs: Sequence[LabelledPair], split: JudgeSplit | None
+) -> list[LabelledPair]:
+    """`rows_for_split`'s counterpart over `LabelledPair`s directly, for
+    the fixture-level metrics (`candidate_recall`, `direction_accuracy`)
+    that read the fixture's own pairs rather than judged rows."""
+    if split is None:
+        return list(pairs)
+    return [pair for pair in pairs if pair.split == split]
+
+
+def directed_rows(rows: Sequence[JudgeRow]) -> list[JudgeRow]:
+    """Every `JudgeRow` whose matched pair has a KNOWN direction
+    (`JudgeRow.directed is True`) -- an unlabelled row (`directed is None`)
+    and an undirected row (`directed is False`) are both excluded (#1014
+    Plan 2, task T7). This is the "directed pairs keep the four-way
+    scoring" half of the split: every existing judge-stage scoring
+    function (`confusion_matrix`, `precision_recall`,
+    `reverses_refines_confusion`, `actionable_rate`) reads a plain
+    `Sequence[JudgeRow]` unchanged, so filtering happens here, once,
+    exactly as `rows_for_split` already does for the original/confirmation
+    axis -- directedness and split are independent axes over the same
+    rows."""
+    return [row for row in rows if row.directed is True]
+
+
+def undirected_rows(rows: Sequence[JudgeRow]) -> list[JudgeRow]:
+    """`directed_rows`'s complement over LABELLED rows: `JudgeRow.directed
+    is False` -- an unlabelled row (`directed is None`) is excluded here
+    too, so `directed_rows(rows) + undirected_rows(rows)` never equals
+    `rows` when `rows` includes stage (a) candidate pairs the fixture never
+    labelled (#1014 Plan 2, task T7)."""
+    return [row for row in rows if row.directed is False]
 
 
 @dataclass(frozen=True)
@@ -473,6 +584,73 @@ def reverses_refines_confusion(rows: Sequence[JudgeRow]) -> ReversesRefinesConfu
     )
 
 
+_CHANGE_WIRE_VALUES: Final[frozenset[str]] = frozenset(
+    {RevisionVerdictValue.REVERSES.value, RevisionVerdictValue.REFINES.value}
+)
+"""The judge's wire verdicts that collapse to CHANGE under the undirected
+scoring rule (#1014 Plan 2, task T7) -- the SAME two values
+`decision_revision._ACTIONABLE_VERDICT_VALUES` names, read fresh here via
+the public `RevisionVerdictValue` enum rather than importing that private
+set, so this harness never silently drifts from production's own
+REVERSES/REFINES vocabulary."""
+
+_CHANGE_EXPECTED_LABELS: Final[frozenset[str]] = frozenset({"REVERSES", "REFINES"})
+"""The fixture's own label vocabulary members that collapse to CHANGE --
+`_WIRE_FOR_EXPECTED`'s keys restricted to the two directional labels."""
+
+
+def is_change_wire(observed: str) -> bool:
+    """`True` iff the judge's wire verdict is `"reverses"` or `"refines"` --
+    the observed-side half of the undirected change/no-change collapse."""
+    return observed in _CHANGE_WIRE_VALUES
+
+
+@dataclass(frozen=True)
+class ChangePrecisionRecall:
+    """Precision/recall of the undirected change/no-change collapse
+    (#1014 Plan 2, task T7): expected `REVERSES` or `REFINES` collapses to
+    CHANGE; observed `reverses` or `refines` collapses to change. Both
+    `(k, n)`, never a bare float, per this harness's `n of TOTAL` rule."""
+
+    precision: tuple[int, int]
+    recall: tuple[int, int]
+
+
+def change_precision_recall(rows: Sequence[JudgeRow]) -> ChangePrecisionRecall:
+    """Score `rows` -- meant to be `undirected_rows(...)`, never a mixed or
+    directed set, though this function itself reads no `directed` field and
+    trusts the caller's filtering, exactly as `precision_recall` trusts its
+    caller's `rows` -- as one binary classifier: CHANGE vs NOT-CHANGE.
+    `TP` = observed change AND expected change; `FP` = observed change AND
+    expected NOT change (a labelled `REAFFIRMS`/`UNRELATED` row misread as
+    a change); `FN` = observed NOT change AND expected change. A row with
+    `expected=None` (unlabelled) can be neither a hit nor a miss against
+    any label, so it counts toward nothing -- `precision_recall`'s own
+    contract. `(0, 0)` on an empty denominator, never a
+    `ZeroDivisionError`, mirroring `precision_recall`."""
+    true_positive = sum(
+        1
+        for row in rows
+        if is_change_wire(row.observed) and row.expected in _CHANGE_EXPECTED_LABELS
+    )
+    false_positive = sum(
+        1
+        for row in rows
+        if is_change_wire(row.observed)
+        and row.expected is not None
+        and row.expected not in _CHANGE_EXPECTED_LABELS
+    )
+    false_negative = sum(
+        1
+        for row in rows
+        if not is_change_wire(row.observed) and row.expected in _CHANGE_EXPECTED_LABELS
+    )
+    return ChangePrecisionRecall(
+        precision=(true_positive, true_positive + false_positive),
+        recall=(true_positive, true_positive + false_negative),
+    )
+
+
 def actionable_rate(rows: Sequence[JudgeRow]) -> tuple[int, int]:
     """`(k, n)`: of every judged row, how many satisfy
     `is_actionable_revision` -- the production citation gate
@@ -616,6 +794,11 @@ def fixture_integrity(fixture: Fixture) -> list[str]:
             )
         if labelled.contested and not labelled.note.strip():
             problems.append(f"{label}: contested with no note")
+        if labelled.split == "confirmation" and labelled.contested:
+            problems.append(
+                f"{label}: confirmation-split pair is contested -- it must "
+                "be unambiguous by construction"
+            )
     return problems
 
 
@@ -623,6 +806,7 @@ def fixture_integrity(fixture: Fixture) -> list[str]:
 class FixtureCounts:
     by_verdict: Counter[str]
     by_hard_case: Counter[str]
+    by_split: Counter[str]
     contested: tuple[int, int]
     """`(k, n)`: contested pairs of every labelled pair."""
 
@@ -631,6 +815,7 @@ def fixture_counts(fixture: Fixture) -> FixtureCounts:
     return FixtureCounts(
         by_verdict=Counter(p.expected_verdict for p in fixture.pairs),
         by_hard_case=Counter(p.hard_case or "(none)" for p in fixture.pairs),
+        by_split=Counter(p.split for p in fixture.pairs),
         contested=(sum(p.contested for p in fixture.pairs), len(fixture.pairs)),
     )
 
@@ -652,13 +837,21 @@ def _date_text(decision_id: str, fixture: Fixture) -> str:
 
 
 def render_fixture_markdown(fixture: Fixture) -> str:
-    """Every labelled pair as markdown for owner adjudication -- contested
-    pairs first, then the rest, each in fixture order."""
+    """Every labelled pair as markdown for owner adjudication, in three
+    groups: contested pairs (all `split="original"`, since a confirmation
+    pair must never be contested), the remaining uncontested original
+    pairs, then every confirmation pair in its own section -- confirmation
+    pairs are written to be unambiguous, so that section is meant to be a
+    quick read (#1014 task T2), never mixed into the adjudication groups
+    above it."""
     decisions_by_id = {d.concept_id: d for d in fixture.decisions}
     counts = fixture_counts(fixture)
-    ordered = [p for p in fixture.pairs if p.contested] + [
-        p for p in fixture.pairs if not p.contested
+    contested_pairs = [p for p in fixture.pairs if p.contested]
+    uncontested_original = [
+        p for p in fixture.pairs if not p.contested and p.split == "original"
     ]
+    confirmation_pairs = [p for p in fixture.pairs if p.split == "confirmation"]
+
     k, n = counts.contested
     lines = [
         "# decision-revisions fixture -- adjudication sheet",
@@ -671,35 +864,56 @@ def render_fixture_markdown(fixture: Fixture) -> str:
         f"- decisions: {len(fixture.decisions)}; sources: "
         f"{len(fixture.sources)}; labelled pairs: {n}",
         f"- contested: {k} of {n}",
+        "- split: " + ", ".join(f"{s} {c}" for s, c in sorted(counts.by_split.items())),
         "- by verdict: "
         + ", ".join(f"{v} {c}" for v, c in sorted(counts.by_verdict.items())),
         "- by hard case: "
         + ", ".join(f"{t} {c}" for t, c in sorted(counts.by_hard_case.items())),
         "",
     ]
-    for index, labelled in enumerate(ordered, start=1):
-        if index == 1 and labelled.contested:
-            lines += ["## Contested pairs", ""]
-        if not labelled.contested and (index == 1 or ordered[index - 2].contested):
-            lines += ["## Uncontested pairs", ""]
-        later = labelled.expected_later_id or "none (direction not established)"
-        flag = " -- CONTESTED" if labelled.contested else ""
-        lines += [
-            f"### {index}. expected {labelled.expected_verdict}{flag}",
-            "",
-            f"- hard case: {labelled.hard_case or '(none)'}",
-            f"- expected later: `{later}`",
-            f"- note: {labelled.note}",
-            "",
-        ]
-        for side in labelled.decision_ids:
-            decision = decisions_by_id[side]
-            lines += [
-                f"> **{decision.title}** `{side}` ({_date_text(side, fixture)})",
-                ">",
-                f"> {decision.body}",
-                "",
-            ]
+
+    index = 0
+
+    def render_group(heading: str, group: list[LabelledPair]) -> None:
+        nonlocal index
+        if not group:
+            return
+        lines.append(f"## {heading}")
+        lines.append("")
+        for labelled in group:
+            index += 1
+            later = labelled.expected_later_id or "none (direction not established)"
+            flag = " -- CONTESTED" if labelled.contested else ""
+            lines.extend(
+                [
+                    f"### {index}. expected {labelled.expected_verdict}{flag}",
+                    "",
+                    f"- split: {labelled.split}",
+                    f"- hard case: {labelled.hard_case or '(none)'}",
+                    f"- expected later: `{later}`",
+                    f"- note: {labelled.note}",
+                    "",
+                ]
+            )
+            for side in labelled.decision_ids:
+                decision = decisions_by_id[side]
+                lines.extend(
+                    [
+                        f"> **{decision.title}** `{side}` "
+                        f"({_date_text(side, fixture)})",
+                        ">",
+                        f"> {decision.body}",
+                        "",
+                    ]
+                )
+
+    render_group("Contested pairs", contested_pairs)
+    render_group("Uncontested pairs", uncontested_original)
+    render_group(
+        "Confirmation pairs (written before the prompt fix -- unambiguous "
+        "by construction, a quick read)",
+        confirmation_pairs,
+    )
     return "\n".join(lines)
 
 
@@ -927,6 +1141,34 @@ def _self_test() -> int:
         6 * self_test_runs,
     )
 
+    # --- split filtering (#1014 task T1): `office` is this placeholder's
+    # one `split="confirmation"` pair; everything else stays "original" ---
+    check(
+        "stage (b) original split is 5 pairs x runs",
+        len(rows_for_split(result.rows_b, "original")),
+        5 * self_test_runs,
+    )
+    check(
+        "stage (b) confirmation split is 1 pair x runs",
+        len(rows_for_split(result.rows_b, "confirmation")),
+        1 * self_test_runs,
+    )
+    check(
+        "stage (b) split=None ('all') is unfiltered",
+        len(rows_for_split(result.rows_b, None)),
+        len(result.rows_b),
+    )
+    check(
+        "stage (a) original split is 4 candidates x runs",
+        len(rows_for_split(result.rows_a, "original")),
+        4 * self_test_runs,
+    )
+    check(
+        "stage (a) confirmation split is 1 candidate x runs",
+        len(rows_for_split(result.rows_a, "confirmation")),
+        1 * self_test_runs,
+    )
+
     # --- subject-pass stats -------------------------------------------------
     subject_stats = subject_pass_stats(result.subject_results)
     check(
@@ -1032,6 +1274,318 @@ def _self_test() -> int:
         1.0,
     )
 
+    # --- per-split judge metrics (#1014 task T1): "original" excludes the
+    # confirmation-tagged `office` pair entirely, "confirmation" is ONLY
+    # `office`, and neither ever silently reappears in the other -------
+    original_b = rows_for_split(result.rows_b, "original")
+    confirmation_b = rows_for_split(result.rows_b, "confirmation")
+    office_key = _pair_key("decisions/office-seating", "decisions/office-snacks")
+
+    check(
+        "original split confusion matrix has no UNRELATED cell "
+        "(office is the only UNRELATED pair, and it is confirmation-only)",
+        confusion_matrix(original_b),
+        Counter(
+            {
+                ("REVERSES", "reverses"): 2,
+                ("REVERSES", "refines"): 1,
+                ("REFINES", "refines"): 8,
+                ("REFINES", "unrelated"): 1,
+                ("REAFFIRMS", "reaffirms"): 3,
+            }
+        ),
+    )
+    check(
+        "confirmation split confusion matrix is ONLY the office pair",
+        confusion_matrix(confirmation_b),
+        Counter({("UNRELATED", "unrelated"): 3}),
+    )
+    check(
+        "original + confirmation confusion matrices sum to the unfiltered one",
+        confusion_matrix(original_b) + confusion_matrix(confirmation_b),
+        matrix,
+    )
+    check(
+        "REVERSES precision/recall unchanged on the original split "
+        "(office carries no REVERSES/REFINES rows)",
+        precision_recall(original_b, "REVERSES"),
+        PrecisionRecall(precision=(2, 2), recall=(2, 3)),
+    )
+    check(
+        "REFINES precision/recall unchanged on the original split",
+        precision_recall(original_b, "REFINES"),
+        PrecisionRecall(precision=(8, 9), recall=(8, 9)),
+    )
+    check(
+        "confirmation split has no REVERSES rows at all: (0, 0), never "
+        "a ZeroDivisionError",
+        precision_recall(confirmation_b, "REVERSES"),
+        PrecisionRecall(precision=(0, 0), recall=(0, 0)),
+    )
+    check(
+        "confirmation split has no REFINES rows at all: (0, 0)",
+        precision_recall(confirmation_b, "REFINES"),
+        PrecisionRecall(precision=(0, 0), recall=(0, 0)),
+    )
+    check(
+        "REVERSES<->REFINES confusion unchanged on the original split",
+        reverses_refines_confusion(original_b),
+        ReversesRefinesConfusion(
+            reverses_as_refines=(1, 3), refines_as_reverses=(0, 9)
+        ),
+    )
+    check(
+        "REVERSES<->REFINES confusion is (0, 0) on the confirmation split",
+        reverses_refines_confusion(confirmation_b),
+        ReversesRefinesConfusion(
+            reverses_as_refines=(0, 0), refines_as_reverses=(0, 0)
+        ),
+    )
+    check(
+        "actionable rate, original split: 11 of 15 (office's 3 rows carried "
+        "zero actionable hits, so removing them keeps the numerator)",
+        actionable_rate(original_b),
+        (11, 15),
+    )
+    check(
+        "actionable rate, confirmation split: 0 of 3 (UNRELATED is never actionable)",
+        actionable_rate(confirmation_b),
+        (0, 3),
+    )
+    original_stability = pair_stability(original_b)
+    check(
+        "original split stability excludes the office pair",
+        office_key in original_stability,
+        False,
+    )
+    check(
+        "confirmation split stability is ONLY the office pair, at 1.0",
+        pair_stability(confirmation_b),
+        {office_key: 1.0},
+    )
+
+    # --- directed_rows/undirected_rows + change_precision_recall (#1014
+    # Plan 2, task T7): `parking` is this placeholder's ONLY undirected
+    # labelled pair (its second side is deliberately undated), split
+    # "original", expected REFINES -- runs: "refines" (change, hit),
+    # malformed->"unrelated" (not change, MISS), "refines" (change, hit).
+    # Every other labelled pair is directed. --------------------------------
+    parking_key = _pair_key(
+        "decisions/parking-policy-v1", "decisions/parking-policy-v2"
+    )
+    check(
+        "stage (b) directed rows: 5 of 6 labelled pairs x 3 runs (every "
+        "pair except parking)",
+        len(directed_rows(result.rows_b)),
+        5 * self_test_runs,
+    )
+    check(
+        "stage (b) undirected rows: ONLY parking, 1 pair x 3 runs",
+        len(undirected_rows(result.rows_b)),
+        1 * self_test_runs,
+    )
+    check(
+        "directed_rows + undirected_rows never double-counts a labelled row",
+        len(directed_rows(result.rows_b)) + len(undirected_rows(result.rows_b)),
+        len(result.rows_b),
+    )
+    check(
+        "stage (a) directed rows: 4 of 5 candidates x 3 runs (parking is "
+        "the only undirected candidate)",
+        len(directed_rows(result.rows_a)),
+        4 * self_test_runs,
+    )
+    check(
+        "stage (a) undirected rows: ONLY parking, 1 candidate x 3 runs",
+        len(undirected_rows(result.rows_a)),
+        1 * self_test_runs,
+    )
+    check(
+        "an unlabelled stage (a) row is neither directed nor undirected",
+        [row.directed for row in result.rows_a if row.pair_ids == parking_key],
+        [False, False, False],
+    )
+
+    directed_original_matrix = confusion_matrix(directed_rows(original_b))
+    check(
+        "directed-only original matrix drops parking's 2 REFINES-as-refines "
+        "and 1 REFINES-as-unrelated rows out of the (unfiltered) original "
+        "matrix's REFINES cells",
+        directed_original_matrix,
+        Counter(
+            {
+                ("REVERSES", "reverses"): 2,
+                ("REVERSES", "refines"): 1,
+                ("REFINES", "refines"): 6,
+                ("REAFFIRMS", "reaffirms"): 3,
+            }
+        ),
+    )
+    check(
+        "undirected-only original matrix is ONLY parking's own 3 rows",
+        confusion_matrix(undirected_rows(original_b)),
+        Counter({("REFINES", "refines"): 2, ("REFINES", "unrelated"): 1}),
+    )
+    check(
+        "directed_rows(original) + undirected_rows(original) sums back to "
+        "the unfiltered original matrix",
+        directed_original_matrix + confusion_matrix(undirected_rows(original_b)),
+        confusion_matrix(original_b),
+    )
+
+    change_original = change_precision_recall(undirected_rows(original_b))
+    check(
+        "undirected change precision 2 of 2, recall 2 of 3 (parking's one "
+        "malformed run is the one miss)",
+        change_original,
+        ChangePrecisionRecall(precision=(2, 2), recall=(2, 3)),
+    )
+    change_confirmation = change_precision_recall(undirected_rows(confirmation_b))
+    check(
+        "undirected change precision/recall on the confirmation split: "
+        "(0, 0) -- office is directed, so no undirected confirmation row "
+        "exists, never a ZeroDivisionError",
+        change_confirmation,
+        ChangePrecisionRecall(precision=(0, 0), recall=(0, 0)),
+    )
+    check(
+        "undirected change precision/recall over an empty row list: (0, 0)",
+        change_precision_recall([]),
+        ChangePrecisionRecall(precision=(0, 0), recall=(0, 0)),
+    )
+
+    # -- change_precision_recall's TP/FP/FN/TN cells, tested directly over
+    # synthetic rows (the placeholder fixture has no undirected pair whose
+    # expected verdict is REVERSES, UNRELATED, or REAFFIRMS, so a
+    # false-positive/true-negative cell cannot arise from `run_pipeline`
+    # alone) -- one row per cell, exact (1, 2)/(1, 2). ----------------------
+    synthetic_change_rows = [
+        JudgeRow(  # true positive: observed change, expected change
+            pair_ids=("synthetic/tp-a", "synthetic/tp-b"),
+            expected="REVERSES",
+            split="original",
+            directed=False,
+            observed="reverses",
+            confidence=0.9,
+            quote_0="q0",
+            quote_1="q1",
+            malformed=False,
+        ),
+        JudgeRow(  # false positive: observed change, expected NOT change
+            pair_ids=("synthetic/fp-a", "synthetic/fp-b"),
+            expected="REAFFIRMS",
+            split="original",
+            directed=False,
+            observed="refines",
+            confidence=0.9,
+            quote_0="q0",
+            quote_1="q1",
+            malformed=False,
+        ),
+        JudgeRow(  # false negative: observed NOT change, expected change
+            pair_ids=("synthetic/fn-a", "synthetic/fn-b"),
+            expected="REFINES",
+            split="original",
+            directed=False,
+            observed="unrelated",
+            confidence=0.1,
+            quote_0=None,
+            quote_1=None,
+            malformed=False,
+        ),
+        JudgeRow(  # true negative: observed NOT change, expected NOT change
+            pair_ids=("synthetic/tn-a", "synthetic/tn-b"),
+            expected="UNRELATED",
+            split="original",
+            directed=False,
+            observed="unrelated",
+            confidence=0.5,
+            quote_0=None,
+            quote_1=None,
+            malformed=False,
+        ),
+    ]
+    check(
+        "change_precision_recall's TP/FP/FN/TN table: precision 1 of 2, recall 1 of 2",
+        change_precision_recall(synthetic_change_rows),
+        ChangePrecisionRecall(precision=(1, 2), recall=(1, 2)),
+    )
+
+    # -- `--rescore` round trip: reconstruct stage (b) rows from the exact
+    # JSON shape `_rows_to_json` writes, with zero model calls, and confirm
+    # every field matches the live rows -- including `directed`, which is
+    # NEVER read from the JSON (older stored runs carry no such key) but
+    # re-derived fresh from the fixture, exactly as `judge_rows` derives it
+    # from a live batch (#1014 Plan 2, task T7). --------------------------
+    stored_rows_b = _rows_to_json(result.rows_b)
+    check(
+        "a stored row JSON entry carries no 'directed' key (older runs "
+        "cannot carry one either)",
+        all("directed" not in entry for entry in stored_rows_b),
+        True,
+    )
+    rescored_rows_b = rows_from_stored_json(stored_rows_b, fixture.pairs)
+    check(
+        "--rescore round trip reconstructs every stage (b) row exactly, "
+        "including 'directed' re-derived from the fixture",
+        rescored_rows_b,
+        result.rows_b,
+    )
+
+    # --- per-split fixture-level metrics (candidate recall, direction) ----
+    original_pairs = pairs_for_split(fixture.pairs, "original")
+    confirmation_pairs = pairs_for_split(fixture.pairs, "confirmation")
+    recall_original = candidate_recall(result.candidate_pair_ids, original_pairs)
+    recall_confirmation = candidate_recall(
+        result.candidate_pair_ids, confirmation_pairs
+    )
+    check(
+        "candidate recall, original split: 4 of 5 (same paraphrase miss)",
+        recall_original.hit,
+        (4, 5),
+    )
+    check(
+        "candidate recall, confirmation split: 0 of 0 -- office is "
+        "UNRELATED, so it contributes no adjudicated-true pair at all",
+        recall_confirmation.hit,
+        (0, 0),
+    )
+    direction_original = direction_accuracy(original_pairs, result.dates_by_id)
+    direction_confirmation = direction_accuracy(confirmation_pairs, result.dates_by_id)
+    check(
+        "direction accuracy, original split: 5 of 5, still with the one "
+        "missing-direction (parking) reason",
+        (direction_original.correct, direction_original.no_direction_reasons),
+        ((5, 5), Counter({"missing": 1})),
+    )
+    check(
+        "direction accuracy, confirmation split: 1 of 1, no missing reason "
+        "(office has an established direction)",
+        (direction_confirmation.correct, direction_confirmation.no_direction_reasons),
+        ((1, 1), Counter()),
+    )
+
+    # --- fixture_integrity flags a contested confirmation-split pair ------
+    bogus_pair = LabelledPair(
+        ("decisions/billing-tool-v1", "decisions/billing-tool-v2"),
+        "REVERSES",
+        "decisions/billing-tool-v2",
+        contested=True,
+        note="deliberately invalid: a confirmation pair must be unambiguous.",
+        split="confirmation",
+    )
+    bogus_fixture = Fixture(
+        sources=fixture.sources, decisions=fixture.decisions, pairs=(bogus_pair,)
+    )
+    check(
+        "fixture_integrity flags a contested confirmation-split pair",
+        any(
+            "confirmation-split pair is contested" in problem
+            for problem in fixture_integrity(bogus_fixture)
+        ),
+        True,
+    )
+
     # --- the one malformed judge reply degrades, never raises --------------
     malformed_rows = [row for row in result.rows_b if row.malformed]
     check("exactly one malformed judge row in stage (b)", len(malformed_rows), 1)
@@ -1108,6 +1662,7 @@ def _rows_to_json(rows: Sequence[JudgeRow]) -> list[dict[str, object]]:
         {
             "pair_ids": list(row.pair_ids),
             "expected": row.expected,
+            "split": row.split,
             "observed": row.observed,
             "confidence": row.confidence,
             "quote_0": row.quote_0,
@@ -1122,6 +1677,292 @@ def _rate_line(label: str, value: tuple[int, int]) -> str:
     k, n = value
     pct = k / n if n else 0.0
     return f"| {label} | {k} of {n} ({pct:.2f}) |"
+
+
+def _judge_section_lines(title: str, rows: Sequence[JudgeRow]) -> list[str]:
+    """Every stage (b) judge metric this harness reports, rendered for one
+    split's `rows` -- `title` names which one (`"original split"`,
+    `"confirmation split"`, or `"all (never blended with the splits
+    above)"`). Callers pass `rows_for_split(result.rows_b, <split>)`, so
+    `original`/`confirmation`/`all` are always three independently
+    computed blocks, never one pooled number that hides which split it
+    came from (#1014 task T1)."""
+    matrix = confusion_matrix(rows)
+    reverses_pr = precision_recall(rows, "REVERSES")
+    refines_pr = precision_recall(rows, "REFINES")
+    confusion = reverses_refines_confusion(rows)
+    actionable = actionable_rate(rows)
+    stability = pair_stability(rows)
+    mean_stability = statistics.fmean(stability.values()) if stability else 0.0
+    return [
+        f"## Judge -- stage (b), {title}",
+        "",
+        "| metric | value |",
+        "| --- | --- |",
+        _rate_line("REVERSES precision", reverses_pr.precision),
+        _rate_line("REVERSES recall", reverses_pr.recall),
+        _rate_line("REFINES precision", refines_pr.precision),
+        _rate_line("REFINES recall", refines_pr.recall),
+        _rate_line("REVERSES judged REFINES", confusion.reverses_as_refines),
+        _rate_line("REFINES judged REVERSES", confusion.refines_as_reverses),
+        _rate_line("actionable rate", actionable),
+        f"| mean pair stability | {mean_stability:.2f} |",
+        "",
+        "Confusion matrix (expected, observed) -> count:",
+        "",
+        "```",
+        *(
+            f"{expected:10s} -> {observed:10s}: {count}"
+            for (expected, observed), count in sorted(matrix.items())
+        ),
+        "```",
+        "",
+    ]
+
+
+def _undirected_section_lines(title: str, rows: Sequence[JudgeRow]) -> list[str]:
+    """The undirected change/no-change counterpart to `_judge_section_lines`
+    (#1014 Plan 2, task T7): expected `REVERSES`/`REFINES` collapses to
+    CHANGE, observed `reverses`/`refines` collapses to change -- the judge
+    cannot reliably type an undirected verdict (measured: it never answers
+    REFINES without an established order), so this scores only whether a
+    change was detected at all. Callers pass `undirected_rows(...)`, never
+    a mixed or directed set."""
+    change = change_precision_recall(rows)
+    return [
+        f"## Judge -- stage (b), {title}, UNDIRECTED pairs (change/no-change)",
+        "",
+        "Expected REVERSES or REFINES = CHANGE; observed reverses or refines "
+        "= change. The judge cannot reliably tell REVERSES from REFINES apart "
+        "without an established direction, so an undirected verdict is scored "
+        "only on whether a change was detected, never on which type.",
+        "",
+        "| metric | value |",
+        "| --- | --- |",
+        _rate_line("change precision", change.precision),
+        _rate_line("change recall", change.recall),
+        f"| undirected rows | {len(rows)} |",
+        "",
+    ]
+
+
+def _bars_under_new_rule_lines(
+    *,
+    direction_original: DirectionAccuracy,
+    recall_original: CandidateRecall,
+    original_b: Sequence[JudgeRow],
+) -> list[str]:
+    """B1-B8 (this harness's own README table) evaluated under the #1014
+    Plan 2 untyped-undirected rule, over the `original` split only -- the
+    split the bars were set against before the confirmation split existed.
+    B3/B4/B6/B7 (REVERSES/REFINES precision, recall and confusion -- the
+    four bars the undirected-collapse diagnosis implicates) read
+    `directed_rows(original_b)` only; B1/B2/B5/B8 are unaffected by the
+    undirected rule and read exactly as the original bars do (all rows/all
+    pairs). **Thresholds are UNCHANGED** -- this table never moves a bar,
+    it only asks what each already-agreed bar reads once undirected rows
+    are scored honestly. The undirected rule itself was motivated by a
+    diagnosis made AFTER seeing the data (post-hoc; #1014's task doc
+    records it), never by this table."""
+    directed_original = directed_rows(original_b)
+    reverses_pr = precision_recall(directed_original, "REVERSES")
+    refines_pr_directed = precision_recall(directed_original, "REFINES")
+    refines_pr_all = precision_recall(original_b, "REFINES")
+    confusion = reverses_refines_confusion(directed_original)
+    confusion_hits = confusion.reverses_as_refines[0] + confusion.refines_as_reverses[0]
+    confusion_total = (
+        confusion.reverses_as_refines[1] + confusion.refines_as_reverses[1]
+    )
+    stability = pair_stability(original_b)
+    mean_stability = statistics.fmean(stability.values()) if stability else 0.0
+
+    def verdict(k: int, n: int, *, minimum: float | None, maximum: float | None) -> str:
+        if n == 0:
+            return "n/a (empty denominator)"
+        rate = k / n
+        if minimum is not None:
+            return "pass" if rate >= minimum else "fail"
+        if maximum is not None:
+            return "pass" if rate <= maximum else "fail"
+        return "n/a"
+
+    b1_k, b1_n = direction_original.correct
+    b2_k, b2_n = recall_original.hit
+    return [
+        "## Bars B1-B8 under the untyped-undirected rule (original split)",
+        "",
+        "Thresholds are the SAME as this README's own bar table -- never "
+        "moved by this rescoring. B3, B4, B6 and B7 read DIRECTED rows "
+        "only; B1, B2, B5 and B8 are unaffected by the untyped-undirected "
+        "rule and read exactly as the original bars do.",
+        "",
+        "| Bar | Metric | Result | Verdict |",
+        "| --- | --- | --- | --- |",
+        f"| B1 | Direction accuracy | {b1_k} of {b1_n} | "
+        f"{'pass' if b1_k == b1_n else 'fail'} |",
+        f"| B2 | Candidate-stage recall | {b2_k} of {b2_n} | "
+        f"{verdict(b2_k, b2_n, minimum=0.75, maximum=None)} |",
+        f"| B3 | REVERSES precision (directed) | {reverses_pr.precision[0]} of "
+        f"{reverses_pr.precision[1]} | "
+        f"{verdict(*reverses_pr.precision, minimum=0.80, maximum=None)} |",
+        f"| B4 | REVERSES recall (directed) | {reverses_pr.recall[0]} of "
+        f"{reverses_pr.recall[1]} | "
+        f"{verdict(*reverses_pr.recall, minimum=0.60, maximum=None)} |",
+        f"| B5 | REFINES precision (all rows, unaffected) | "
+        f"{refines_pr_all.precision[0]} of {refines_pr_all.precision[1]} | "
+        f"{verdict(*refines_pr_all.precision, minimum=0.60, maximum=None)} |",
+        f"| B6 | REFINES recall (directed) | {refines_pr_directed.recall[0]} of "
+        f"{refines_pr_directed.recall[1]} | "
+        f"{verdict(*refines_pr_directed.recall, minimum=0.50, maximum=None)} |",
+        f"| B7 | REVERSES<->REFINES confusion (directed) | {confusion_hits} of "
+        f"{confusion_total} | "
+        f"{verdict(confusion_hits, confusion_total, minimum=None, maximum=0.10)} |",
+        f"| B8 | Mean modal-verdict share (all rows, unaffected) | "
+        f"{mean_stability:.2f} | {'pass' if mean_stability >= 0.80 else 'fail'} |",
+    ]
+
+
+def _rescore(runs_path: pathlib.Path) -> int:
+    """Recompute the judge-stage, candidate-recall, and direction-accuracy
+    metrics from a stored `runs-*.json` -- zero model calls (#1014 Plan 2,
+    task T7). Rebuilds `JudgeRow`s via `rows_from_stored_json` against the
+    CURRENT `load_library_fixture()`, so `expected`/`split`/`directed` are
+    always freshly derived from the fixture, never trusted from the
+    (possibly older, possibly `directed`-less) stored JSON. Candidate
+    recall is recomputed from the stored `candidates` list; direction
+    accuracy is deterministic and reads the fixture's own dates, never the
+    stored run at all. The subject-pass section CANNOT be rescored: its raw
+    per-Decision replies are not persisted in `runs-*.json`, so this
+    report omits it rather than fabricating it. Writes
+    `decision-revisions-<stamp>-<model>-rescored.md` next to `runs_path`
+    and prints it; returns `0`."""
+    data = json.loads(runs_path.read_text(encoding="utf-8"))
+    fixture = load_library_fixture()
+    model = data.get("model", "unknown-model")
+    stamp = data.get("generated_at", "unknown-stamp")
+    slug = f"{stamp}-{str(model).replace(':', '-')}"
+
+    rows_b = rows_from_stored_json(data.get("rows_b", []), fixture.pairs)
+    rows_a = rows_from_stored_json(data.get("rows_a", []), fixture.pairs)
+
+    candidate_pair_ids = {
+        _pair_key(str(entry[0]), str(entry[1])) for entry in data.get("candidates", [])
+    }
+    recall = candidate_recall(candidate_pair_ids, fixture.pairs)
+    recall_by_split = {
+        split: candidate_recall(
+            candidate_pair_ids, pairs_for_split(fixture.pairs, split)
+        )
+        for split in ("original", "confirmation")
+    }
+
+    sources_by_id = {s.source_id: s for s in fixture.sources}
+    decisions_by_id = {d.concept_id: d for d in fixture.decisions}
+    dates_by_id = {
+        concept_id: resolve_decision_date(decision, sources_by_id)
+        for concept_id, decision in decisions_by_id.items()
+    }
+    direction = direction_accuracy(fixture.pairs, dates_by_id)
+    direction_by_split = {
+        split: direction_accuracy(pairs_for_split(fixture.pairs, split), dates_by_id)
+        for split in ("original", "confirmation")
+    }
+    actionable_a = actionable_rate(rows_a)
+
+    lines = [
+        "# decision-revision-detector eval -- RESCORE "
+        "(#1014 Plan 2, task T7: the untyped-undirected rule)",
+        "",
+        f"_Rescored from `{runs_path.name}` -- zero model calls._",
+        "",
+        f"model `{model}`, {data.get('runs', '?')} run(s), judge prompt "
+        f"`{data.get('judge_prompt_version', '?')}` (UNCHANGED by this "
+        "rescore -- only the SCORING RULE for undirected pairs is new).",
+        "",
+        "This recomputes the judge-stage, candidate-recall and "
+        "direction-accuracy metrics from the stored raw verdicts under the "
+        "untyped-undirected scoring rule. It cannot recompute the "
+        "subject-pass section: that stage's raw per-Decision replies are "
+        "not stored in `runs-*.json`.",
+        "",
+        "## Candidate-stage recall",
+        "",
+        "| metric | value |",
+        "| --- | --- |",
+        _rate_line("true pairs proposed as a candidate (all)", recall.hit),
+        _rate_line(
+            "true pairs proposed as a candidate (original)",
+            recall_by_split["original"].hit,
+        ),
+        _rate_line(
+            "true pairs proposed as a candidate (confirmation)",
+            recall_by_split["confirmation"].hit,
+        ),
+        "",
+        "## Direction accuracy (deterministic -- a lower number is a bug)",
+        "",
+        "| metric | value |",
+        "| --- | --- |",
+        _rate_line(
+            "direction agrees with the fixture's own dates (all)", direction.correct
+        ),
+        _rate_line(
+            "direction agrees with the fixture's own dates (original)",
+            direction_by_split["original"].correct,
+        ),
+        _rate_line(
+            "direction agrees with the fixture's own dates (confirmation)",
+            direction_by_split["confirmation"].correct,
+        ),
+        f"| no-direction reasons | {dict(direction.no_direction_reasons)} |",
+        "",
+        *_judge_section_lines("original split", rows_for_split(rows_b, "original")),
+        *_judge_section_lines(
+            "original split, DIRECTED pairs only",
+            directed_rows(rows_for_split(rows_b, "original")),
+        ),
+        *_undirected_section_lines(
+            "original split", undirected_rows(rows_for_split(rows_b, "original"))
+        ),
+        *_judge_section_lines(
+            "confirmation split", rows_for_split(rows_b, "confirmation")
+        ),
+        *_judge_section_lines(
+            "confirmation split, DIRECTED pairs only",
+            directed_rows(rows_for_split(rows_b, "confirmation")),
+        ),
+        *_undirected_section_lines(
+            "confirmation split",
+            undirected_rows(rows_for_split(rows_b, "confirmation")),
+        ),
+        *_judge_section_lines(
+            "all (never blended with the splits above)", rows_for_split(rows_b, None)
+        ),
+        *_judge_section_lines(
+            "all, DIRECTED pairs only", directed_rows(rows_for_split(rows_b, None))
+        ),
+        *_undirected_section_lines(
+            "all", undirected_rows(rows_for_split(rows_b, None))
+        ),
+        *_bars_under_new_rule_lines(
+            direction_original=direction_by_split["original"],
+            recall_original=recall_by_split["original"],
+            original_b=rows_for_split(rows_b, "original"),
+        ),
+        "",
+        "## Judge -- stage (a), the real candidate set only",
+        "",
+        "| metric | value |",
+        "| --- | --- |",
+        _rate_line("actionable rate (a)", actionable_a),
+    ]
+
+    report = "\n".join(lines) + "\n"
+    out_path = runs_path.parent / f"decision-revisions-{slug}-rescored.md"
+    out_path.write_text(report, encoding="utf-8")
+    print(report)
+    print(f"\nwrote {out_path}")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1151,6 +1992,15 @@ def main(argv: list[str] | None = None) -> int:
         help="Print the real fixture's labelled pairs as a markdown "
         "adjudication sheet (contested first) and exit. No model call.",
     )
+    parser.add_argument(
+        "--rescore",
+        metavar="RUNS_JSON",
+        default=None,
+        help="Recompute the report from a stored runs-*.json under the "
+        "untyped-undirected scoring rule (#1014 Plan 2) -- zero model "
+        "calls. Writes decision-revisions-<stamp>-<model>-rescored.md "
+        "next to RUNS_JSON.",
+    )
     args = parser.parse_args(argv)
 
     if args.self_test:
@@ -1158,6 +2008,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.print_fixture:
         print(render_fixture_markdown(load_library_fixture()))
         return 0
+    if args.rescore is not None:
+        return _rescore(pathlib.Path(args.rescore))
 
     from openkos.llm.ollama import OllamaClient
 
@@ -1181,15 +2033,20 @@ def main(argv: list[str] | None = None) -> int:
         result.subjects_by_id, fixture.pairs, SUBJECT_OVERLAP_THRESHOLD
     )
     recall = candidate_recall(result.candidate_pair_ids, fixture.pairs)
+    recall_by_split = {
+        split: candidate_recall(
+            result.candidate_pair_ids, pairs_for_split(fixture.pairs, split)
+        )
+        for split in ("original", "confirmation")
+    }
     direction = direction_accuracy(fixture.pairs, result.dates_by_id)
-    matrix_b = confusion_matrix(result.rows_b)
-    reverses_pr = precision_recall(result.rows_b, "REVERSES")
-    refines_pr = precision_recall(result.rows_b, "REFINES")
-    confusion = reverses_refines_confusion(result.rows_b)
+    direction_by_split = {
+        split: direction_accuracy(
+            pairs_for_split(fixture.pairs, split), result.dates_by_id
+        )
+        for split in ("original", "confirmation")
+    }
     actionable_a = actionable_rate(result.rows_a)
-    actionable_b = actionable_rate(result.rows_b)
-    stability_b = pair_stability(result.rows_b)
-    mean_stability_b = statistics.fmean(stability_b.values()) if stability_b else 0.0
     truncation = revision_truncation_notice(result.plan)
 
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
@@ -1239,7 +2096,9 @@ def main(argv: list[str] | None = None) -> int:
         ),
         "",
         "Fixture: `evals/decision_revisions/revision_fixture_library.py` -- NOT AMI. "
-        "Labels are owner-adjudicated (T3), never scored before settlement.",
+        "Labels are owner-adjudicated (T3), never scored before settlement. "
+        "The `original` and `confirmation` splits (#1014 task T1) are always "
+        "reported separately below, plus `all`; never blended.",
         "",
         "## Subject pass",
         "",
@@ -1257,7 +2116,15 @@ def main(argv: list[str] | None = None) -> int:
         "",
         "| metric | value |",
         "| --- | --- |",
-        _rate_line("true pairs proposed as a candidate", recall.hit),
+        _rate_line("true pairs proposed as a candidate (all)", recall.hit),
+        _rate_line(
+            "true pairs proposed as a candidate (original)",
+            recall_by_split["original"].hit,
+        ),
+        _rate_line(
+            "true pairs proposed as a candidate (confirmation)",
+            recall_by_split["confirmation"].hit,
+        ),
         f"| missed true pairs | {', '.join(' <-> '.join(p) for p in recall.missed) or '(none)'} |",
     ]
     if truncation is not None:
@@ -1268,30 +2135,63 @@ def main(argv: list[str] | None = None) -> int:
         "",
         "| metric | value |",
         "| --- | --- |",
-        _rate_line("direction agrees with the fixture's own dates", direction.correct),
+        _rate_line(
+            "direction agrees with the fixture's own dates (all)", direction.correct
+        ),
+        _rate_line(
+            "direction agrees with the fixture's own dates (original)",
+            direction_by_split["original"].correct,
+        ),
+        _rate_line(
+            "direction agrees with the fixture's own dates (confirmation)",
+            direction_by_split["confirmation"].correct,
+        ),
         f"| no-direction reasons | {dict(direction.no_direction_reasons)} |",
         "",
-        "## Judge -- stage (b), every labelled pair directly",
+        "Every split below reports the existing BLENDED four-way numbers "
+        "unchanged (#1014 task T1), then the same rows restricted to "
+        "DIRECTED pairs only (still four-way), then the UNDIRECTED pairs "
+        "scored change/no-change only (#1014 Plan 2, task T7) -- an "
+        "undirected verdict is never scored on WHICH type it named, only "
+        "on whether it detected a change at all.",
         "",
-        "| metric | value |",
-        "| --- | --- |",
-        _rate_line("REVERSES precision", reverses_pr.precision),
-        _rate_line("REVERSES recall", reverses_pr.recall),
-        _rate_line("REFINES precision", refines_pr.precision),
-        _rate_line("REFINES recall", refines_pr.recall),
-        _rate_line("REVERSES judged REFINES", confusion.reverses_as_refines),
-        _rate_line("REFINES judged REVERSES", confusion.refines_as_reverses),
-        _rate_line("actionable rate (b)", actionable_b),
-        f"| mean pair stability (b) | {mean_stability_b:.2f} |",
-        "",
-        "Confusion matrix (expected, observed) -> count:",
-        "",
-        "```",
-        *(
-            f"{expected:10s} -> {observed:10s}: {count}"
-            for (expected, observed), count in sorted(matrix_b.items())
+        *_judge_section_lines(
+            "original split", rows_for_split(result.rows_b, "original")
         ),
-        "```",
+        *_judge_section_lines(
+            "original split, DIRECTED pairs only",
+            directed_rows(rows_for_split(result.rows_b, "original")),
+        ),
+        *_undirected_section_lines(
+            "original split", undirected_rows(rows_for_split(result.rows_b, "original"))
+        ),
+        *_judge_section_lines(
+            "confirmation split", rows_for_split(result.rows_b, "confirmation")
+        ),
+        *_judge_section_lines(
+            "confirmation split, DIRECTED pairs only",
+            directed_rows(rows_for_split(result.rows_b, "confirmation")),
+        ),
+        *_undirected_section_lines(
+            "confirmation split",
+            undirected_rows(rows_for_split(result.rows_b, "confirmation")),
+        ),
+        *_judge_section_lines(
+            "all (never blended with the splits above)",
+            rows_for_split(result.rows_b, None),
+        ),
+        *_judge_section_lines(
+            "all, DIRECTED pairs only",
+            directed_rows(rows_for_split(result.rows_b, None)),
+        ),
+        *_undirected_section_lines(
+            "all", undirected_rows(rows_for_split(result.rows_b, None))
+        ),
+        *_bars_under_new_rule_lines(
+            direction_original=direction_by_split["original"],
+            recall_original=recall_by_split["original"],
+            original_b=rows_for_split(result.rows_b, "original"),
+        ),
         "",
         "## Judge -- stage (a), the real candidate set only",
         "",

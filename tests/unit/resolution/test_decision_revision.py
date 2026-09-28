@@ -696,6 +696,112 @@ def test_relation_for_verdict_matches_resolution_relation_types() -> None:
 
 
 # ---------------------------------------------------------------------------
+# RevisionVerdict.is_untyped_change / relation_for (#1014 Plan 2: an
+# undirected REVERSES/REFINES is an untyped CHANGE -- measured, the judge
+# never answers REFINES without an established order (0 of 30 undirected
+# pairs), so the engine must not infer a relation type from an undirected
+# verdict; the person picks both the later side and the type in reconcile.
+# ---------------------------------------------------------------------------
+
+
+def _revision_verdict(
+    verdict_value: decision_revision.RevisionVerdictValue, *, directed: bool
+) -> decision_revision.RevisionVerdict:
+    """One `RevisionVerdict` over a fixed pair, `directed` choosing whether
+    `.direction.holder` resolves (both sides dated, distinct values) or not
+    (both sides `missing`) -- the only two inputs `is_untyped_change`/
+    `relation_for` read besides `verdict` itself."""
+    pair_ids = ("decisions/a", "decisions/b")
+    if directed:
+        dates = (
+            DecisionDate(value=date(2026, 1, 1), state="dated"),
+            DecisionDate(value=date(2026, 3, 1), state="dated"),
+        )
+    else:
+        dates = (
+            DecisionDate(value=None, state="missing"),
+            DecisionDate(value=None, state="missing"),
+        )
+    return decision_revision.RevisionVerdict(
+        pair_ids=pair_ids,
+        verdict=verdict_value,
+        confidence=0.9,
+        rationale="",
+        quotes=("earlier quote", "later quote"),
+        dates=dates,
+    )
+
+
+@pytest.mark.parametrize("directed", [True, False])
+@pytest.mark.parametrize("verdict_value", list(decision_revision.RevisionVerdictValue))
+def test_is_untyped_change_and_relation_for_truth_table(
+    verdict_value: decision_revision.RevisionVerdictValue, directed: bool
+) -> None:
+    """Directed REVERSES -> `supersedes`, directed REFINES -> `revises`
+    (`RELATION_FOR_VERDICT` unchanged); undirected REVERSES and undirected
+    REFINES -> `is_untyped_change=True`, `relation_for(...) is None`;
+    REAFFIRMS/UNRELATED are never untyped-changed and never get a relation,
+    directed or not -- `RELATION_FOR_VERDICT` has no entry for either."""
+    verdict = _revision_verdict(verdict_value, directed=directed)
+
+    expected_untyped = not directed and verdict_value in (
+        decision_revision.RevisionVerdictValue.REVERSES,
+        decision_revision.RevisionVerdictValue.REFINES,
+    )
+    assert verdict.is_untyped_change is expected_untyped
+
+    relation = decision_revision.relation_for(verdict)
+    if expected_untyped:
+        assert relation is None
+    else:
+        assert relation == decision_revision.RELATION_FOR_VERDICT.get(verdict_value)
+
+
+def test_relation_for_never_types_an_undirected_reverses_or_refines() -> None:
+    """Named explicitly (not just as one parametrized cell): the two cases
+    #1014 Plan 2 exists for -- an undirected REVERSES and an undirected
+    REFINES both fail to type, even though `RELATION_FOR_VERDICT` itself
+    maps both verdicts when directed."""
+    undirected_reverses = _revision_verdict(
+        decision_revision.RevisionVerdictValue.REVERSES, directed=False
+    )
+    undirected_refines = _revision_verdict(
+        decision_revision.RevisionVerdictValue.REFINES, directed=False
+    )
+    assert decision_revision.relation_for(undirected_reverses) is None
+    assert decision_revision.relation_for(undirected_refines) is None
+    assert (
+        decision_revision.RELATION_FOR_VERDICT[
+            decision_revision.RevisionVerdictValue.REVERSES
+        ]
+        == "supersedes"
+    )
+    assert (
+        decision_revision.RELATION_FOR_VERDICT[
+            decision_revision.RevisionVerdictValue.REFINES
+        ]
+        == "revises"
+    )
+
+
+def test_is_actionable_revision_unaffected_by_undirected_change() -> None:
+    """`is_actionable_revision`/`is_reportable_revision` keep their current
+    contracts (#1014 Plan 2): an undirected REVERSES/REFINES with
+    confidence and both quotes verified is still actionable -- the human
+    types it in `reconcile`'s combined prompt, so the engine must still
+    surface it, only without a pre-picked relation type."""
+    assert (
+        decision_revision.is_actionable_revision(
+            decision_revision.RevisionVerdictValue.REVERSES.value,
+            0.9,
+            "earlier quote",
+            "later quote",
+        )
+        is True
+    )
+
+
+# ---------------------------------------------------------------------------
 # judge_pairs
 # ---------------------------------------------------------------------------
 
