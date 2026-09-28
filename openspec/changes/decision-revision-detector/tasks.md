@@ -887,7 +887,7 @@ Tests: `tests/unit/state/test_vectorstore.py`, `tests/unit/state/test_reindex.py
 
 ### `state/vectorstore.py` — `document_vectors` (design.md Decision B1, Interfaces)
 
-- [ ] **P1.1** [TEST] `tests/unit/state/test_vectorstore.py` — add
+- [x] **P1.1** [TEST] `tests/unit/state/test_vectorstore.py` — add
   `test_document_vectors_returns_the_derived_document_vector_not_a_chunk_row`:
   `upsert_many` a multi-chunk document, then `document_vectors([concept_id])`
   returns `{concept_id: StoredDocVector(vector=<the doc_vectors row>,
@@ -895,21 +895,21 @@ Tests: `tests/unit/state/test_vectorstore.py`, `tests/unit/state/test_reindex.py
   `vectors` rows. **RED today**: `AttributeError` — `document_vectors`/
   `StoredDocVector` do not exist. Kills reading from `vectors` instead of
   `doc_vectors`.
-- [ ] **P1.2** [TEST] Same file — add
+- [x] **P1.2** [TEST] Same file — add
   `test_document_vectors_omits_ids_with_no_stored_row`:
   `document_vectors(["a", "b"])` where only `"a"` was ever upserted returns
   `{"a": ...}` only — no `KeyError`, no exception, no entry for `"b"`. **RED
   today**: same `AttributeError`.
-- [ ] **P1.3** [TEST] Same file — add
+- [x] **P1.3** [TEST] Same file — add
   `test_document_vectors_hash_equals_the_upserted_content_hash`: after
   `upsert_many` with `content_hash="h1"`, `document_vectors([concept_id])[
   concept_id].content_hash == "h1"`. **RED today**: same `AttributeError`.
   Kills the hash read from the wrong table (a per-chunk `vectors.content_hash`
   that a future schema change could desynchronize from `vector_meta`).
-- [ ] **P1.4** [TEST] Same file — add
+- [x] **P1.4** [TEST] Same file — add
   `test_document_vectors_empty_input_returns_empty_dict`:
   `document_vectors([]) == {}`. **RED today**: same `AttributeError`.
-- [ ] **P1.5** [IMPL] `src/openkos/state/vectorstore.py`: add
+- [x] **P1.5** [IMPL] `src/openkos/state/vectorstore.py`: add
   `StoredDocVector(vector: tuple[float, ...], content_hash: str)` (frozen
   dataclass) and `VectorStoreDB.document_vectors(self, concept_ids:
   Collection[str]) -> dict[str, StoredDocVector]` — a `JOIN` of `doc_vectors`
@@ -920,17 +920,17 @@ Tests: `tests/unit/state/test_vectorstore.py`, `tests/unit/state/test_reindex.py
 
 ### `state/reindex.py` — public `embedding_tag` (design.md File changes, P1)
 
-- [ ] **P1.6** [TEST] `tests/unit/state/test_reindex.py` — add
+- [x] **P1.6** [TEST] `tests/unit/state/test_reindex.py` — add
   `test_embedding_tag_composes_model_and_the_chunk_composition_tag`:
   `embedding_tag("bge-m3") == "bge-m3#chunk-v1"` (`EMBED_COMPOSITION_TAG`).
   **RED today**: `AttributeError` — `embedding_tag` is not a public name
   (only the private `_effective_model_tag` exists).
-- [ ] **P1.7** [TEST] Same file — add
+- [x] **P1.7** [TEST] Same file — add
   `test_effective_model_tag_delegates_to_embedding_tag_and_keeps_none_passthrough`:
   `_effective_model_tag(None) is None` (unchanged); `_effective_model_tag(
   "bge-m3") == embedding_tag("bge-m3")` (parity, not a duplicated
   computation). **RED today**: same `AttributeError` on `embedding_tag`.
-- [ ] **P1.8** [IMPL] `src/openkos/state/reindex.py`: promote `embedding_tag(
+- [x] **P1.8** [IMPL] `src/openkos/state/reindex.py`: promote `embedding_tag(
   model: str) -> str` to a public function (`f"{model}#{EMBED_COMPOSITION_TAG}"`);
   `_effective_model_tag(model_tag: str | None)` keeps its `None` passthrough
   and otherwise delegates to `embedding_tag(model_tag)` — behavior unchanged
@@ -938,12 +938,12 @@ Tests: `tests/unit/state/test_vectorstore.py`, `tests/unit/state/test_reindex.py
 
 ### Slice P1 verification
 
-- [ ] **P1.9** Run `uv run ruff check . && uv run ruff format --check . &&
+- [x] **P1.9** Run `uv run ruff check . && uv run ruff format --check . &&
   uv run mypy .` — must be green.
-- [ ] **P1.10** Run `uv run pytest tests/unit/state/test_vectorstore.py
+- [x] **P1.10** Run `uv run pytest tests/unit/state/test_vectorstore.py
   tests/unit/state/test_reindex.py` focused, then `uv run pytest` (unpiped)
   full suite — must be green.
-- [ ] **P1.11** Commit as one or more work-unit commits. The project scope
+- [x] **P1.11** Commit as one or more work-unit commits. The project scope
   list (`AGENTS.md`) has no bare `state` entry; confirm against the most
   recent commit touching `state/vectorstore.py`/`state/reindex.py` before
   finalizing — likely `graph` (vector-store-adjacent work) or `ingest`

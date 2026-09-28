@@ -318,3 +318,98 @@ with Slices 1 and 3's recommendation.
   out of scope for this tasks.md pass (see tasks.md's own "CHECKPOINT — STOP"
   and "Phase B" sections). Per tasks.md's own instruction, Phase B does not
   start until the owner has read the harness numbers.
+
+---
+
+## Phase B — Slice P1 (2026-09-28): the vector read seam
+
+Checkpoint passed (sub-change 3 harness, live run `runs-20260928T204537Z`,
+all bars B1-B8); the owner accepted the 2026-09-28 Phase B re-plan
+(design.md, "Phase B re-plan"). Scope for this batch: tasks.md's "Slice P1
+(PR 4 → after Phase A's PR 3): the vector read seam" — `P1.1`–`P1.11` only.
+Basis: design.md Decision B1 ("Candidate vectors come from `vectors.db`;
+`revisions` never embeds") and spec requirement "Candidate Vectors Come
+From The Reindexed Vector Store" (`specs/decision-revision-detection/
+spec.md`). Branch `feat/1014-phase-b-p1-vector-read`, off `main` @ `9cbedc8`
+(which already carries commit `c5c3f64`, the Phase B planning docs).
+
+### TDD Cycle Evidence
+
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|------|-----------|-------|------------|-----|-------|-------------|----------|
+| P1.1–P1.4 (`document_vectors`, `StoredDocVector`) | `test_vectorstore.py` | Unit | ✅ 147/147 (pre-existing `test_vectorstore.py` + `test_reindex.py`, genuinely run before any edit) | ✅ `AttributeError: 'VectorStoreDB' object has no attribute 'document_vectors'` (genuinely observed: all 4 new tests run against the pre-edit module before any production code was written) | ✅ 80/80 passed (`test_vectorstore.py` alone, after P1.5) | ✅ 4 cases: derived-vector-not-chunk-row (multi-chunk, asserts the result differs from EITHER raw chunk), omits-missing-id, hash-from-vector_meta, empty-input-short-circuit | ➖ None needed — the method is already the minimal correct join |
+| P1.5 (`document_vectors` IMPL) | `vectorstore.py` | — | — | — | ✅ makes P1.1–P1.4 GREEN | — | ➖ None needed |
+| P1.6–P1.7 (`embedding_tag`, delegation) | `test_reindex.py` | Unit | ✅ 73/73 (pre-existing `test_reindex.py`, genuinely run before any edit) | ✅ `AttributeError: module 'openkos.state.reindex' has no attribute 'embedding_tag'` (genuinely observed: both new tests run against the pre-edit module before any production code was written) | ✅ 73/73 passed (`test_reindex.py` alone, after P1.8; includes the 2 new tests) | ➖ Single — a pure one-line composition and a delegation check need no additional case beyond the `None`-passthrough/real-model pair already written | ➖ None needed |
+| P1.8 (`embedding_tag` IMPL, `_effective_model_tag` delegation) | `reindex.py` | — | — | — | ✅ makes P1.6–P1.7 GREEN, and keeps the pre-existing `test_reindex_effective_model_tag_is_*` tests green (delegation preserves behavior) | — | ➖ None needed |
+
+### Mutation-Kill Verification (mandatory per apply instructions)
+
+Each mutation was applied, verified to make the targeted test(s) FAIL,
+`__pycache__` purged (`find . -name __pycache__ -prune -exec rm -rf {} +`),
+then reverted with the exact inverse edit (never `git checkout --`), and the
+relevant file re-verified GREEN before moving to the next mutation.
+
+| # | Mutation | File / line | Test(s) that must fail | Result |
+|---|---|---|---|---|
+| 1 | `document_vectors`'s `FROM doc_vectors AS dv` changed to `FROM vectors AS dv` (the per-chunk table) | `vectorstore.py`, `document_vectors` | `test_document_vectors_returns_the_derived_document_vector_not_a_chunk_row` | ✅ FAILED as expected: `AssertionError` — the returned vector (`0.9`-filled, one chunk's raw embedding) no longer matched the derived doc vector (`_derive_document_vector` of both chunks). Proves the test actually distinguishes the derived vector from a raw chunk row, not a tautology. Reverted. |
+| 2 | Row-unpacking order swapped: `for concept_id, content_hash, blob in rows` (columns are actually `concept_id, blob, content_hash`) | `vectorstore.py`, `document_vectors` | `test_document_vectors_returns_the_derived_document_vector_not_a_chunk_row`, `test_document_vectors_omits_ids_with_no_stored_row`, `test_document_vectors_hash_equals_the_upserted_content_hash` | ✅ FAILED as expected (3 tests, all populated-result cases): `TypeError: a bytes-like object is required, not 'str'` — `array.frombytes` received the content-hash string instead of the embedding blob. Proves column-to-field mapping is exercised, not assumed. Reverted. |
+| 3 | Removed the `if not ids: return {}` empty-input guard | `vectorstore.py`, `document_vectors` | `test_document_vectors_empty_input_returns_empty_dict` | Did NOT fail — SQLite's `IN ()` with zero placeholders matches no rows, so the guard is a query-avoidance optimization, not a correctness requirement; the test still passes without it by genuinely exercising the empty-`IN`-clause path. Restored the guard anyway (matches the docstring's "without issuing a query" claim and avoids a needless round trip). Disclosed here rather than presented as a kill. |
+| 4 | `embedding_tag`'s separator changed from `#` to `-`: `f"{model}-{EMBED_COMPOSITION_TAG}"` | `reindex.py`, `embedding_tag` | `test_embedding_tag_composes_model_and_the_chunk_composition_tag` (and incidentally the pre-existing `test_reindex_effective_model_tag_is_reported_on_the_report`, via delegation) | ✅ FAILED as expected (2 tests): `AssertionError: assert 'bge-m3-chunk-v1' == 'bge-m3#chunk-v1'`. Proves both the new test and the delegation path exercise the real composition. Reverted. |
+| 5 | `_effective_model_tag`'s non-`None` branch de-delegated: `return f"{model_tag}-{EMBED_COMPOSITION_TAG}"` instead of `return embedding_tag(model_tag)` | `reindex.py`, `_effective_model_tag` | `test_effective_model_tag_delegates_to_embedding_tag_and_keeps_none_passthrough` (and the pre-existing `test_reindex_effective_model_tag_is_reported_on_the_report`) | ✅ FAILED as expected (2 tests): same tag-mismatch assertion, confirming the delegation itself — not just the composed value — is under test. Reverted. |
+
+Mutation 3 is disclosed as a non-kill rather than omitted: the empty-input
+guard turned out to be behaviorally redundant given SQLite's own `IN ()`
+semantics, so no test can "kill" its removal without changing the
+assertion to something the design never asked for (e.g. asserting a query
+was never issued). This is the same honest-disclosure posture as Slices 1,
+3, and 4's mutation tables — a mutation that does not fail is reported, not
+hidden.
+
+### Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `uv run pytest tests/unit/state/test_vectorstore.py tests/unit/state/test_reindex.py -v` → **153 passed** (up from the pre-slice baseline of 147; 6 new tests: 4 `document_vectors` + 2 `embedding_tag`) |
+| Runtime harness command/scenario and exact result | N/A — a store-level read method with no CLI wiring yet (tasks.md's own Slice P1 row in "Suggested Work Units (Phase B)"); the first runtime consumer is Slice P5a's `application/revisions.py` service layer, not yet implemented |
+| Rollback boundary | Revert the new method/function and their tests: `VectorStoreDB.document_vectors`/`StoredDocVector` and their 4 tests in `vectorstore.py`/`test_vectorstore.py`; `reindex.embedding_tag` (public) and its 2 tests in `reindex.py`/`test_reindex.py`, restoring `_effective_model_tag`'s original inline computation. `reindex`'s existing write path (`reindex()`, `upsert_many`, `_compose_header`, etc.) is untouched by this batch. `git revert 5815fe7` cleanly isolates this. |
+
+### Full Verification (this work unit)
+
+| Command | Result |
+|---|---|
+| `uv run ruff check .` | All checks passed! |
+| `uv run ruff format --check .` | 349 files already formatted |
+| `uv run mypy .` | Success: no issues found in 349 source files |
+| `uv run pytest --cov` (full, unpiped) | **6823 passed, 2 skipped** in 432.09s, exit 0 (up from Phase A's 6596 baseline + this slice's 6 new tests + Phase B planning/harness additions already on `main`); coverage 97.07%, gate 90% reached |
+| `uv run python evals/run_self_tests.py` | **43 of 43 harness self-test(s) run, 0 failing** |
+
+### Commit
+
+`5815fe7` — `feat(graph): add the document-vector read seam for revision
+candidate blocking (#1014)` (scope `graph`, per tasks.md's own P1.11
+guidance — the most recent commits touching these two files use `privacy`/
+`retrieval`/`state`(legacy)/`cli` scopes, none of which fit; `graph` matches
+tasks.md's explicit suggestion for vector-store-adjacent work). 4 files
+changed, 171 insertions(+), 3 deletions(-). Staged explicitly by path
+(`src/openkos/state/vectorstore.py`, `src/openkos/state/reindex.py`,
+`tests/unit/state/test_vectorstore.py`, `tests/unit/state/test_reindex.py`)
+— `openspec/changes/decision-revision-detector/tasks.md`'s checkbox update
+was left uncommitted in the working tree (same posture as Phase A's
+Slice 4: `openspec/` is never staged by this batch). Not pushed. Branched
+from `main` @ `9cbedc8` on `feat/1014-phase-b-p1-vector-read`.
+
+**Budget**: 174 authored changed lines (`git diff --shortstat c5c3f64..HEAD`
+= 171 insertions + 3 deletions across the 4 staged files), well under the
+400-line review budget — no `size:exception` needed for this slice, unlike
+Phase A's Slices 1/3/4.
+
+### Remaining Tasks (Phase B)
+
+- Slice P1 (`P1.1`–`P1.11`) is complete. PR 4 (targeting `main`, per
+  `stacked-to-main`) is ready to open on `feat/1014-phase-b-p1-vector-read`.
+- Slices P2 through P8b (`P2`–`P8b.*` — harness production-shape arm,
+  revision findings store, `provenance_source_ancestors_many`, the
+  `application/revisions.py` service layer, judging, the report renderer,
+  the `revisions` verb, the combined judge prompt, and the `reconcile
+  --from-findings` walk) remain, in that chain order, each as its own PR
+  per tasks.md's "Phase B: tasks (2026-09-28 re-plan)" section.
