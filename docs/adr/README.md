@@ -55,12 +55,12 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 | [0017](0017-merge-ledger-stores-the-catalog-delta.md) | The merge ledger stores the catalog delta, not a catalog snapshot | Accepted | 2026-08-17 |
 | [0018](0018-application-layer-for-bounded-context-services.md) | An application layer for bounded-context services | Accepted | 2026-08-31 |
 | [0019](0019-dot-directories-are-not-knowledge.md) | Dot-directories are not knowledge | Accepted | 2026-09-14 |
-| [0020](0020-concurrency-across-three-writers.md) | Concurrency across three writers -- per-operation locking, detection for the rest | Proposed | 2026-09-16 |
-| [0021](0021-sync-async-boundary.md) | The sync/async boundary -- a worker thread per operation, and no cancellation below it | Proposed | 2026-09-17 |
+| [0020](0020-concurrency-across-three-writers.md) | Concurrency across three writers -- per-operation locking, detection for the rest | Accepted | 2026-09-16 |
+| [0021](0021-sync-async-boundary.md) | The sync/async boundary -- a worker thread per operation, and no cancellation below it | Accepted | 2026-09-17 |
 | [0022](0022-incomplete-read-verbs-report-incompleteness.md) | An incomplete read verb reports incompleteness as data and as exit code 2 | Accepted | 2026-09-21 |
 | [0023](0023-source-event-date.md) | A Source records its event date as an optional, never-defaulted `event_date` key | Accepted | 2026-09-25 |
 | [0024](0024-revises-relation-and-resolved-pairs.md) | A refinement is a stored `revises` relation, and a resolved pair is never re-judged | Accepted | 2026-09-25 |
 | [0025](0025-llm-derived-attributes-live-in-a-cache.md) | LLM-derived concept attributes live in a rebuildable cache, and temporal direction never comes from the model | Proposed | 2026-09-25 |
 | [0026](0026-superseded-concepts-re-enter-answers-only-as-labelled-history.md) | A superseded concept re-enters an answer only as labelled, citable history, and only when the workspace opts in | Accepted | 2026-09-26 |
-| [0027](0027-hand-rolled-stdio-mcp-server.md) | The MCP adapter is a hand-rolled stdio server for protocol revision 2025-11-25, with no SDK | Proposed | 2026-09-26 |
-| [0028](0028-mcp-disclosure-is-its-own-boundary.md) | Disclosure to an MCP client is its own sensitivity boundary -- hidden by default, opened only at launch | Proposed | 2026-09-26 |
+| [0027](0027-hand-rolled-stdio-mcp-server.md) | The MCP adapter is a hand-rolled stdio server for protocol revision 2025-11-25, with no SDK | Accepted | 2026-09-26 |
+| [0028](0028-mcp-disclosure-is-its-own-boundary.md) | Disclosure to an MCP client is its own sensitivity boundary -- hidden by default, opened only at launch | Accepted | 2026-09-26 |

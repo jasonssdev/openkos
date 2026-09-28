@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0028: Disclosure to an MCP client is its own sensitivity boundary -- hidden by default, opened only at launch"
 description: A confidential object is never disclosed to an MCP client unless the server was launched with --expose-confidential; the check is a separate fail-closed predicate in sensitivity.py with no LLM-send escape hatches, applied only at the adapter boundary, and withheld objects are reported as counts.
-status: Proposed
+status: Accepted
 date: 2026-09-26
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0028: Disclosure to an MCP client is its own sensitivity boundary -- hidden by default, opened only at launch
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-09-26
 
 ## Context
