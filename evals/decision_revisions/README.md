@@ -460,6 +460,35 @@ telling us.
   REFINES precision and confusion even under the new rule, consistent with
   the task doc's "capacity is not the lever" conclusion.
 
+## Adopted judge prompt: the `reverses`/`refines` clauses
+
+A/B on qwen3:8b, 15 runs, production sampling, same fixture. Baseline
+`runs-20260928T103525Z` (prompt `6de49030`) against treatment
+`runs-20260928T173355Z` (prompt `d8238af6`); original split, untyped-undirected
+rule:
+
+| Metric | Baseline | Treatment |
+|---|---|---|
+| B3 REVERSES precision (directed) | 94 of 117 (0.80) | 87 of 94 (0.93) |
+| B4 REVERSES recall (directed) | 94 of 120 (0.78) | 87 of 120 (0.73) |
+| B6 REFINES recall (directed) | 67 of 90 (0.74) | 75 of 90 (0.83) |
+| B7 confusion (directed) | 22 of 210 (0.105), fail | 18 of 210 (0.086), pass |
+| Undirected change precision | 60 of 60 | 52 of 52 |
+| Undirected change recall | 60 of 75 (0.80) | 52 of 75 (0.69) |
+| Confirmation split | one pair wrong (15 rows) | every metric 1.00 |
+
+The adoption rule stated before this run required undirected change recall
+not to drop, and it dropped on one pair (`guest-wifi-access` /
+`guest-wifi-password-rotation`: 15 of 15 detected, now 7 of 15). **The owner
+adopted the prompt anyway**, trading a missed finding (nothing written, the
+decision stays visible) for fewer false REVERSES (which would hide a decision
+still in force). Every judge bar passes on directed pairs; B2 (candidate
+recall) remains the open failure.
+
+An earlier variant that also added an `unrelated` clause (prompt `5223c59f`,
+`runs-20260928T121032Z`) was rejected: it lost the same undirected pair and
+did not fix the shared-word pattern.
+
 ## Tool-agnostic by construction
 
 This harness names no personal AI-agent tooling, memory system, or IDE. It

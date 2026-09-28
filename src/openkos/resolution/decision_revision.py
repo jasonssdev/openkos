@@ -451,8 +451,12 @@ Reply with JSON only, no other text:
 {"verdict": "reverses"|"refines"|"reaffirms"|"unrelated", "confidence": 0.0-1.0, "rationale": "...", "quote_first": "...", "quote_second": "..."}
 
 Never add a field naming which Decision is earlier or later -- that is determined elsewhere, from recorded dates, never from this reply. Never paraphrase; each quote must be copied character-for-character from its own Decision's body."""
-"""The judge's system prompt (design.md Decision 6). UNMEASURED: placeholder
-wording until sub-change 3's harness measures it. Deliberately defines no
+"""The judge's system prompt (design.md Decision 6). Measured by
+`evals/decision_revisions/`: the `reverses` and `refines` rules separate a
+choice that no longer applies from one kept in force but narrowed by an
+exception, a limit, or an extra option -- the confusion the harness's first
+runs found. `unrelated` is deliberately bare: a clause there cost undirected
+change recall in an A/B. Deliberately defines no
 field for direction or ordering -- `parse_judge_reply` reads only the five
 schema keys this prompt asks for, so no reply can ever set direction
 (ADR-0025)."""
