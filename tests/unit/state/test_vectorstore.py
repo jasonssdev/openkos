@@ -857,6 +857,77 @@ def test_meta_hashes_on_empty_store_returns_empty_dict(tmp_path: Path) -> None:
     assert hashes == {}
 
 
+def test_document_vectors_returns_the_derived_document_vector_not_a_chunk_row(
+    tmp_path: Path,
+) -> None:
+    """`document_vectors` reads the ONE `doc_vectors` row per concept id --
+    the derived document-level vector -- never a per-chunk `vectors` row
+    (design.md Decision B1: candidate vectors come from the reindexed vector
+    store). A multi-chunk upsert leaves several `vectors` rows but exactly
+    one `doc_vectors` row; the returned vector must be THAT one, not any
+    chunk's."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+    chunk_one = [0.1] * EMBED_DIM
+    chunk_two = [0.9] * EMBED_DIM
+
+    with vectorstore.open_vector_store(db_path) as db:
+        db.upsert_many([("concepts/a", [chunk_one, chunk_two], "hash-a")])
+        db.commit()
+
+        result = db.document_vectors(["concepts/a"])
+
+    assert list(result.keys()) == ["concepts/a"]
+    expected = vectorstore._derive_document_vector([chunk_one, chunk_two])
+    assert result["concepts/a"].vector == pytest.approx(tuple(expected))
+    # Neither raw chunk equals the derived doc vector for these inputs, so a
+    # test that accidentally read `vectors` instead of `doc_vectors` would
+    # fail this assertion.
+    assert result["concepts/a"].vector != pytest.approx(tuple(chunk_one))
+    assert result["concepts/a"].vector != pytest.approx(tuple(chunk_two))
+
+
+def test_document_vectors_omits_ids_with_no_stored_row(tmp_path: Path) -> None:
+    """`document_vectors` skips any requested id with no stored row -- no
+    `KeyError`, no exception, no entry for that id in the result."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        db.upsert("concepts/a", [0.1] * EMBED_DIM, "hash-a")
+
+        result = db.document_vectors(["concepts/a", "concepts/b"])
+
+    assert list(result.keys()) == ["concepts/a"]
+
+
+def test_document_vectors_hash_equals_the_upserted_content_hash(
+    tmp_path: Path,
+) -> None:
+    """The `content_hash` on the returned `StoredDocVector` is the one
+    `upsert` stored in `vector_meta` -- read from `vector_meta`, never a
+    per-chunk `vectors.content_hash` that a future schema change could
+    desynchronize from it."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        db.upsert("concepts/a", [0.1] * EMBED_DIM, "h1")
+
+        result = db.document_vectors(["concepts/a"])
+
+    assert result["concepts/a"].content_hash == "h1"
+
+
+def test_document_vectors_empty_input_returns_empty_dict(tmp_path: Path) -> None:
+    """`document_vectors([])` returns `{}` without issuing a query."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        db.upsert("concepts/a", [0.1] * EMBED_DIM, "hash-a")
+
+        result = db.document_vectors([])
+
+    assert result == {}
+
+
 def test_prune_removes_rows_from_both_vectors_and_vector_meta(
     tmp_path: Path,
 ) -> None:

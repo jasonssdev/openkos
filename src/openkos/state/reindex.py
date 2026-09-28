@@ -101,13 +101,25 @@ window that never truncates, since a wider window keeps more intra-document
 context in one vector."""
 
 
+def embedding_tag(model: str) -> str:
+    """Compose `model` with `EMBED_COMPOSITION_TAG` (design.md Decision B1,
+    "Candidate Vectors Come From The Reindexed Vector Store"): the stored
+    `embedding_model` tag format a reader compares against to decide
+    whether `vectors.db`'s vectors match the currently configured embedding
+    model. Public so a caller outside this module (`application/
+    revisions.py`) can compute the SAME tag without duplicating the
+    composition -- find it and use it, do not invent a parallel one."""
+    return f"{model}#{EMBED_COMPOSITION_TAG}"
+
+
 def _effective_model_tag(model_tag: str | None) -> str | None:
     """Compose `model_tag` with `EMBED_COMPOSITION_TAG` for the tag-gate
     comparison and persistence -- `None` stays `None` (the tag gate's
-    pure-no-op default, unaffected by the composition scheme)."""
+    pure-no-op default, unaffected by the composition scheme). Delegates to
+    `embedding_tag` for the non-`None` case so the two never drift apart."""
     if model_tag is None:
         return None
-    return f"{model_tag}#{EMBED_COMPOSITION_TAG}"
+    return embedding_tag(model_tag)
 
 
 def _compose_header(metadata: dict[str, object]) -> str:

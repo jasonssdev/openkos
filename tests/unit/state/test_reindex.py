@@ -1909,6 +1909,23 @@ def test_reindex_effective_model_tag_is_none_when_model_tag_is_none(
     assert report.effective_model_tag is None
 
 
+def test_embedding_tag_composes_model_and_the_chunk_composition_tag() -> None:
+    """`embedding_tag` (public, design.md Decision B1) composes a bare model
+    name with `EMBED_COMPOSITION_TAG` -- the same `<model>#chunk-v1` shape
+    `revisions` compares against `vectors.db`'s stored tag."""
+    assert reindex.embedding_tag("bge-m3") == "bge-m3#chunk-v1"
+
+
+def test_effective_model_tag_delegates_to_embedding_tag_and_keeps_none_passthrough() -> (
+    None
+):
+    """`_effective_model_tag` keeps its `None` passthrough unchanged, and for
+    a real model name delegates to `embedding_tag` rather than duplicating
+    its computation -- the two must never drift apart."""
+    assert reindex._effective_model_tag(None) is None
+    assert reindex._effective_model_tag("bge-m3") == reindex.embedding_tag("bge-m3")
+
+
 # --- #922: the embed gate. `sensitivity` governs EGRESS, and a non-local
 # embedding backend IS egress ------------------------------------------------
 
