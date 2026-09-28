@@ -284,11 +284,13 @@ class DecisionInput:
     """`None` when the subject pass failed, was malformed, or never ran for
     this Decision. Sub-change 3: no longer read by `plan_revision_candidates`
     itself (candidate blocking is by embedding, via the separate `vectors`
-    argument) -- kept on this dataclass for the service layer's own use
-    (e.g. a future report), and still read by the harness's independent
-    subject-pass diagnostic. A missing subject no longer excludes a Decision
-    from pairing; a missing VECTOR does (`RevisionCandidatePlan.
-    without_vector`)."""
+    argument). Phase B re-plan (design.md Decision B3): the production
+    subject pass was dropped entirely -- `load_decisions`/`plan_revisions`
+    always pass `None` here. Only the harness's own subject-pass diagnostic
+    (sub-change 3) sets a real value, exercising this leaf's field for
+    measurement purposes only; no production caller reads it. A missing
+    subject no longer excludes a Decision from pairing; a missing VECTOR
+    does (`RevisionCandidatePlan.without_vector`)."""
     source_ids: frozenset[str]
     resolved_with: frozenset[str]
     """Targets of this Decision's own `RESOLUTION_RELATION_TYPES` edges
