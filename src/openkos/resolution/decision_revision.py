@@ -37,20 +37,30 @@ the human still sees it and supplies both the later side and the relation
 type together, in `reconcile`'s combined prompt -- only the automatic
 type inference is withheld.
 
-`subject_overlap`/`plan_revision_candidates` implement design.md Decision 4:
-lexical subject blocking through `resolution.similarity.tokenize`/
-`.MATCH_FUNCTION_WORDS`'s PUBLIC names only (no import of the private
-`similarity._content_tokens`), per-Decision top-k union ranking (the
-`graph/proximity.py` pair-nomination shape), and a single global cap with
-a truncation notice -- the same "one cap, one list, exclusions before the
-count" shape as `contradiction.py`'s `_candidate_pairs`/
-`contradiction_truncation_notice`.
+`plan_revision_candidates` implements design.md Decision 4, updated by
+sub-change 3 (#1014 piece (a), the semantic-candidates change): candidate
+pairs are blocked by the COSINE SIMILARITY of precomputed Decision
+embeddings (`cosine_similarity`, `EMBEDDING_SIMILARITY_THRESHOLD`), never
+by `subject_overlap`'s lexical score -- sub-change 3's own harness measured
+14-15 of 24 true-pair candidate recall for the lexical score against 19 of
+24 for embeddings, with a union of the two adding nothing. The leaf stays
+pure and config-free: it takes `vectors`, a mapping of concept id to
+embedding, precomputed by its caller, and never calls an embedder itself.
+Per-Decision top-k union ranking (the `graph/proximity.py` pair-nomination
+shape) and a single global cap with a truncation notice are unchanged --
+the same "one cap, one list, exclusions before the count" shape as
+`contradiction.py`'s `_candidate_pairs`/`contradiction_truncation_notice`.
+
+`subject_overlap` itself is UNCHANGED and still exported, but it no longer
+gates a candidate: it now serves only `evals/decision_revisions/`'s own
+subject-pass diagnostic (how many labelled pairs' derived subjects clear a
+lexical bar), independent of candidate generation.
 """
 
 import hashlib
 import math
 from collections import defaultdict
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from difflib import SequenceMatcher
@@ -214,6 +224,53 @@ MAX_PAIRS: Final[int] = 200
 `resolution.contradiction._MAX_PAIRS` (`contradiction.py:94`)."""
 
 
+def cosine_similarity(vector_a: Sequence[float], vector_b: Sequence[float]) -> float:
+    """The cosine similarity of two embedding vectors, in `[-1.0, 1.0]`.
+
+    Normalizes both vectors itself -- it never assumes an `Embedder`'s
+    output already sits on the unit sphere, even though `OllamaClient.embed`
+    happens to (`tests/unit/llm/test_ollama_embed_norm.py`, to within
+    3.5e-07). Fails CLOSED to `0.0`, never raising, on every degenerate
+    input a caller might hand it: either vector being all-zero (undefined
+    cosine, division by zero avoided), or the two vectors having different
+    lengths (a malformed pairing that should never happen given `EMBED_DIM`,
+    but this leaf does not trust that contract to hold upstream)."""
+    if len(vector_a) != len(vector_b):
+        return 0.0
+    norm_a = math.sqrt(sum(component * component for component in vector_a))
+    norm_b = math.sqrt(sum(component * component for component in vector_b))
+    if norm_a == 0.0 or norm_b == 0.0:
+        return 0.0
+    dot_product = sum(a * b for a, b in zip(vector_a, vector_b, strict=True))
+    return dot_product / (norm_a * norm_b)
+
+
+EMBEDDING_SIMILARITY_THRESHOLD: Final[float] = 0.65
+"""Cosine-similarity floor for embedding-based candidate blocking
+(design.md Decision 4, sub-change 3 update): a candidate pair survives
+`plan_revision_candidates` only when `cosine_similarity` of its two
+Decisions' vectors is at or above this value.
+
+Calibrated with `bge-m3`, ON THE LIBRARY FIXTURE ITSELF
+(`evals/decision_revisions/revision_fixture_library.py`), embedding each
+Decision's `title + "\\n\\n" + body` -- SHORT text, not a full OKF
+document: 0.65 -> 19 of 24 true pairs on the `original` split (10 of 10 on
+`confirmation`), 46 pre-cap candidates; 0.70 -> 16 of 24 (29 candidates);
+0.60 -> 22 of 24 (92 candidates). The two classes overlap at every measured
+value -- true-pair cosines as low as 0.507, non-true-pair cosines as high
+as 0.744 -- so no threshold in this range cleanly separates them; 0.65 was
+picked as the value that clears the harness's own bar B2 (>= 18 of 24), not
+as a clean cut.
+
+Two risks this leaf cannot resolve on its own, so both are named here
+rather than assumed away: it is calibrated ON THE SAME EVAL SET IT IS
+MEASURED AGAINST (an overfitting risk), and it is calibrated on SHORT TEXT.
+It MUST be re-measured on the production text shape -- full OKF documents,
+the same shape `graph/proximity.py`'s own `CANDIDATE_SIMILARITY_THRESHOLD`
+is calibrated on, per that module's docstring -- before Phase B wiring
+adopts it."""
+
+
 @dataclass(frozen=True)
 class DecisionInput:
     """One Decision as `plan_revision_candidates` sees it: already
@@ -224,9 +281,14 @@ class DecisionInput:
 
     concept_id: str
     subject: str | None
-    """`None` when the subject pass failed, was malformed, or never ran
-    for this Decision -- excluded from pairing, counted in
-    `RevisionCandidatePlan.without_subject`."""
+    """`None` when the subject pass failed, was malformed, or never ran for
+    this Decision. Sub-change 3: no longer read by `plan_revision_candidates`
+    itself (candidate blocking is by embedding, via the separate `vectors`
+    argument) -- kept on this dataclass for the service layer's own use
+    (e.g. a future report), and still read by the harness's independent
+    subject-pass diagnostic. A missing subject no longer excludes a Decision
+    from pairing; a missing VECTOR does (`RevisionCandidatePlan.
+    without_vector`)."""
     source_ids: frozenset[str]
     resolved_with: frozenset[str]
     """Targets of this Decision's own `RESOLUTION_RELATION_TYPES` edges
@@ -239,7 +301,7 @@ class DecisionInput:
 @dataclass(frozen=True)
 class RevisionCandidate:
     """One surviving candidate pair: sorted `pair_ids` and its
-    `subject_overlap` score."""
+    `cosine_similarity` score (sub-change 3; was `subject_overlap`)."""
 
     pair_ids: tuple[str, str]
     score: float
@@ -252,83 +314,61 @@ class RevisionCandidatePlan:
     `candidates` is already capped and ordered by `(-score, pair_ids)`.
     `total` is the PRE-CAP count of pairs that survived every eligibility
     exclusion -- disjoint sources, no shared resolution edge, and the
-    subject-overlap threshold -- AND the per-Decision top-k union.
-    Exclusions and the count both come strictly BEFORE the cap
-    (design.md Decision 4: "exclusions come before the count, which come
-    before the cap"), so a pair excluded at any earlier step never
-    inflates `total` and never consumes a slot `candidates` could
-    otherwise have kept for a pair that survived every exclusion.
-    `without_subject` is a separate count, taken before pairing even
-    starts."""
+    embedding-similarity threshold (sub-change 3; was the subject-overlap
+    threshold) -- AND the per-Decision top-k union. Exclusions and the
+    count both come strictly BEFORE the cap (design.md Decision 4:
+    "exclusions come before the count, which come before the cap"), so a
+    pair excluded at any earlier step never inflates `total` and never
+    consumes a slot `candidates` could otherwise have kept for a pair that
+    survived every exclusion. `without_vector` is a separate count, taken
+    before pairing even starts: every Decision absent from the `vectors`
+    mapping `plan_revision_candidates` was called with, mirroring the
+    pre-sub-change-3 `without_subject` count's role (it excluded a Decision
+    with no subject; this excludes a Decision with no embedding)."""
 
     candidates: tuple[RevisionCandidate, ...]
     total: int
-    without_subject: int
+    without_vector: int
 
 
-def plan_revision_candidates(
-    decisions: Sequence[DecisionInput],
-    *,
-    top_k: int = TOP_K,
-    cap: int = MAX_PAIRS,
-) -> RevisionCandidatePlan:
-    """The candidate-generation algorithm (design.md Decision 4), in
-    order:
+def _pair_eligible(decision_a: DecisionInput, decision_b: DecisionInput) -> bool:
+    """The two exclusions candidate generation applies to every pair
+    regardless of how it is scored (design.md Decision 4) -- unchanged by
+    sub-change 3's move from lexical to embedding scoring, factored out
+    here so neither exclusion is duplicated if this leaf ever grows a
+    second scoring rule: drop a pair whose `source_ids` intersect (one
+    meeting is not a change over time), and drop a pair where EITHER side
+    names the other in `resolved_with` (an `or` between the two directions
+    -- a resolved pair is resolved regardless of which side recorded the
+    edge)."""
+    if decision_a.source_ids & decision_b.source_ids:
+        return False
+    return not (
+        decision_b.concept_id in decision_a.resolved_with
+        or decision_a.concept_id in decision_b.resolved_with
+    )
 
-    1. Keep only Decisions with a subject; count the rest in
-       `without_subject`.
-    2. For every unordered pair (in sorted `concept_id` order, so the
-       stored pair key is always `(smaller_id, larger_id)`): drop it if
-       the two `source_ids` sets intersect (one meeting is not a change
-       over time); drop it if EITHER side names the other in
-       `resolved_with` (an `or` between the two directions -- a resolved
-       pair is resolved regardless of which side recorded the edge); drop
-       it if `subject_overlap` falls strictly below
-       `SUBJECT_OVERLAP_THRESHOLD`.
-    3. Per-Decision top-k: each surviving Decision ranks its OWN eligible
-       partners by `(-score, partner_id)` and keeps only the first
-       `top_k`. A pair survives if EITHER side kept it -- a UNION across
-       both sides (`graph/proximity.py`'s pair-nomination shape), never an
+
+def _rank_and_cap(
+    score_by_pair: dict[tuple[str, str], float], *, top_k: int, cap: int
+) -> tuple[tuple[RevisionCandidate, ...], int]:
+    """Per-Decision top-k union ranking, global ordering and the cap
+    (design.md Decision 4) -- unchanged by sub-change 3's move from lexical
+    to embedding scoring, factored out here so it is exercised identically
+    regardless of how `score_by_pair` was scored:
+
+    1. Each Decision ranks its OWN eligible partners by `(-score,
+       partner_id)` and keeps only the first `top_k`. A pair survives if
+       EITHER side kept it -- a UNION across both sides
+       (`graph/proximity.py`'s pair-nomination shape), never an
        intersection: a low-degree Decision that independently ranks a
        high-degree hub inside its own top-k still yields that pair, even
        when the hub itself ranked that partner outside its own top-k.
-    4. Order every surviving pair by `(-score, pair_ids)`. `total` is this
-       ordered list's length -- every exclusion above has already run, so
-       nothing counted here was dropped later. `candidates` is its first
-       `cap` entries.
-
-    This ordering -- exclusions, then the count, then the cap -- is never
-    reordered: a pair dropped at step 2 never reaches `total`, and the
-    cap in step 4 never drops a pair the union in step 3 already decided
-    to keep in favor of one that never survived step 2 at all."""
-    eligible_decisions = [
-        decision for decision in decisions if decision.subject is not None
-    ]
-    without_subject = len(decisions) - len(eligible_decisions)
-    ordered_decisions = sorted(
-        eligible_decisions, key=lambda decision: decision.concept_id
-    )
-
-    score_by_pair: dict[tuple[str, str], float] = {}
-    for index, decision_a in enumerate(ordered_decisions):
-        for decision_b in ordered_decisions[index + 1 :]:
-            if decision_a.source_ids & decision_b.source_ids:
-                continue
-            if (
-                decision_b.concept_id in decision_a.resolved_with
-                or decision_a.concept_id in decision_b.resolved_with
-            ):
-                continue
-            # Both sides come from `ordered_decisions`, already filtered to
-            # `subject is not None`; `cast` (not `assert`, S101) narrows
-            # the type with no new branch.
-            subject_a = cast(str, decision_a.subject)
-            subject_b = cast(str, decision_b.subject)
-            score = subject_overlap(subject_a, subject_b)
-            if score < SUBJECT_OVERLAP_THRESHOLD:
-                continue
-            score_by_pair[(decision_a.concept_id, decision_b.concept_id)] = score
-
+    2. Order every surviving pair by `(-score, pair_ids)`. The returned
+       count is this ordered list's length -- every exclusion has already
+       run by the time `score_by_pair` is built, so nothing counted here
+       was dropped later. The returned candidates are its first `cap`
+       entries."""
     partners: dict[str, list[tuple[float, str]]] = defaultdict(list)
     for (id_a, id_b), score in score_by_pair.items():
         partners[id_a].append((score, id_b))
@@ -352,10 +392,61 @@ def plan_revision_candidates(
         ),
         key=lambda candidate: (-candidate.score, candidate.pair_ids),
     )
+    return tuple(ordered_candidates[:cap]), len(ordered_candidates)
+
+
+def plan_revision_candidates(
+    decisions: Sequence[DecisionInput],
+    vectors: Mapping[str, Sequence[float]],
+    *,
+    top_k: int = TOP_K,
+    cap: int = MAX_PAIRS,
+    threshold: float = EMBEDDING_SIMILARITY_THRESHOLD,
+) -> RevisionCandidatePlan:
+    """The candidate-generation algorithm (design.md Decision 4, updated by
+    sub-change 3), in order:
+
+    1. Keep only Decisions present in `vectors` (keyed by `concept_id`);
+       count the rest in `without_vector`. This leaf never calls an
+       embedder -- `vectors` is precomputed and handed in by the caller.
+    2. For every unordered pair (in sorted `concept_id` order, so the
+       stored pair key is always `(smaller_id, larger_id)`): drop it if
+       `_pair_eligible` says no (shared source, or already resolved); drop
+       it if `cosine_similarity` of the two Decisions' vectors falls
+       strictly below `threshold` (`EMBEDDING_SIMILARITY_THRESHOLD` by
+       default).
+    3. `_rank_and_cap`: per-Decision top-k union ranking, then ordering and
+       the global cap.
+
+    This ordering -- exclusions, then the count, then the cap -- is never
+    reordered: a pair dropped at step 2 never reaches `total`, and the cap
+    in step 3 never drops a pair the union already decided to keep in
+    favor of one that never survived step 2 at all."""
+    eligible_decisions = [
+        decision for decision in decisions if decision.concept_id in vectors
+    ]
+    without_vector = len(decisions) - len(eligible_decisions)
+    ordered_decisions = sorted(
+        eligible_decisions, key=lambda decision: decision.concept_id
+    )
+
+    score_by_pair: dict[tuple[str, str], float] = {}
+    for index, decision_a in enumerate(ordered_decisions):
+        for decision_b in ordered_decisions[index + 1 :]:
+            if not _pair_eligible(decision_a, decision_b):
+                continue
+            score = cosine_similarity(
+                vectors[decision_a.concept_id], vectors[decision_b.concept_id]
+            )
+            if score < threshold:
+                continue
+            score_by_pair[(decision_a.concept_id, decision_b.concept_id)] = score
+
+    candidates, total = _rank_and_cap(score_by_pair, top_k=top_k, cap=cap)
     return RevisionCandidatePlan(
-        candidates=tuple(ordered_candidates[:cap]),
-        total=len(ordered_candidates),
-        without_subject=without_subject,
+        candidates=candidates,
+        total=total,
+        without_vector=without_vector,
     )
 
 

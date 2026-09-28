@@ -9,13 +9,10 @@ zero real Ollama process.
 """
 
 import inspect
-import itertools
 import json
 import math
-import string
 from collections.abc import Iterable, Sequence
 from datetime import date
-from difflib import SequenceMatcher
 
 import pytest
 
@@ -23,7 +20,7 @@ from openkos import event_dates
 from openkos.llm.base import Message
 from openkos.llm.ollama import OllamaUnavailable
 from openkos.model.relations import RESOLUTION_RELATION_TYPES
-from openkos.resolution import decision_revision, similarity
+from openkos.resolution import decision_revision
 from openkos.resolution.decision_revision import (
     DateState,
     DecisionDate,
@@ -142,6 +139,41 @@ def test_subject_overlap(subject_a: str, subject_b: str, expected: float) -> Non
 
 
 # ---------------------------------------------------------------------------
+# cosine_similarity
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("vector_a", "vector_b", "expected"),
+    [
+        ((1.0, 0.0), (1.0, 0.0), 1.0),
+        ((1.0, 0.0), (0.0, 1.0), 0.0),
+        ((1.0, 0.0), (-1.0, 0.0), -1.0),
+        # Not pre-normalized: a longer vector pointing the same direction
+        # still scores 1.0 -- the function must normalize itself.
+        ((2.0, 0.0), (5.0, 0.0), 1.0),
+        ((3.0, 4.0), (3.0, 4.0), 1.0),
+    ],
+)
+def test_cosine_similarity(
+    vector_a: tuple[float, ...], vector_b: tuple[float, ...], expected: float
+) -> None:
+    assert decision_revision.cosine_similarity(vector_a, vector_b) == pytest.approx(
+        expected
+    )
+
+
+def test_cosine_similarity_zero_vector_fails_closed_to_zero() -> None:
+    assert decision_revision.cosine_similarity((0.0, 0.0), (1.0, 0.0)) == 0.0
+    assert decision_revision.cosine_similarity((1.0, 0.0), (0.0, 0.0)) == 0.0
+    assert decision_revision.cosine_similarity((0.0, 0.0), (0.0, 0.0)) == 0.0
+
+
+def test_cosine_similarity_mismatched_length_fails_closed_to_zero() -> None:
+    assert decision_revision.cosine_similarity((1.0, 0.0), (1.0, 0.0, 0.0)) == 0.0
+
+
+# ---------------------------------------------------------------------------
 # plan_revision_candidates
 # ---------------------------------------------------------------------------
 
@@ -161,36 +193,56 @@ def _decision(
     )
 
 
-def _mutually_dissimilar_tokens(count: int) -> list[str]:
-    """`count` tokens, each a double-letter-run pair (e.g. `"aaabbb"`),
-    generated so every two returned tokens have a `SequenceMatcher.ratio()`
-    strictly below `similarity.SIMILARITY_THRESHOLD` against EVERY token
-    already returned -- i.e. two "isolated" fixture Decisions built from
-    two different tokens never accidentally score a `subject_overlap`
-    match. Generated (deterministically, via `itertools.permutations` over
-    `string.ascii_lowercase`) rather than hardcoded, so a large fixture
-    stays legible and auditable instead of being an opaque literal list."""
-    tokens: list[str] = []
-    for first, second in itertools.permutations(string.ascii_lowercase, 2):
-        candidate = first * 3 + second * 3
-        if all(
-            SequenceMatcher(None, candidate, existing).ratio()
-            < similarity.SIMILARITY_THRESHOLD
-            for existing in tokens
-        ):
-            tokens.append(candidate)
-        if len(tokens) >= count:
-            break
-    assert len(tokens) == count
-    return tokens
+def _unit_vector(index: int, dims: int) -> list[float]:
+    """An orthonormal basis vector: `1.0` at `index`, else `0.0`. Two
+    DIFFERENT indices have `cosine_similarity` exactly `0.0`; the SAME
+    index used for two Decisions gives exactly `1.0`."""
+    vector = [0.0] * dims
+    vector[index] = 1.0
+    return vector
+
+
+def _vector_at_cosine(
+    base_index: int, other_index: int, cosine: float, dims: int
+) -> list[float]:
+    """A unit vector whose `cosine_similarity` against
+    `_unit_vector(base_index, dims)` is exactly `cosine`: it combines the
+    `base_index` and `other_index` basis dimensions as
+    `cosine * e_base + sin(theta) * e_other`, which is itself a unit vector
+    (`cosine**2 + sin(theta)**2 == 1`) and stays exactly orthogonal to
+    every other family's basis dimension."""
+    vector = [0.0] * dims
+    vector[base_index] = cosine
+    vector[other_index] = math.sqrt(max(0.0, 1.0 - cosine * cosine))
+    return vector
+
+
+def _mutually_orthogonal_pairs(
+    count: int,
+) -> list[tuple[str, list[float]]]:
+    """`count` one-hot vectors, one per index -- every two returned vectors
+    have `cosine_similarity` exactly `0.0` against each other, so `count`
+    isolated pair fixtures never accidentally score a cross-pair match
+    (mirrors the retired `_mutually_dissimilar_tokens`'s lexical-isolation
+    role, now geometrically exact instead of approximated)."""
+    return [(f"decisions/pair{i:03d}", _unit_vector(i, count)) for i in range(count)]
 
 
 def test_plan_revision_candidates_excludes_shared_source_pairs() -> None:
     shared_a = _decision("decisions/shared-a", "billing tool", sources=["sources/one"])
     shared_b = _decision("decisions/shared-b", "billing tool", sources=["sources/one"])
     disjoint = _decision("decisions/disjoint", "billing tool", sources=["sources/two"])
+    # All three share the SAME vector (cosine 1.0 every pair) -- proves the
+    # source exclusion applies even at the highest possible similarity.
+    vectors = {
+        "decisions/shared-a": [1.0, 0.0],
+        "decisions/shared-b": [1.0, 0.0],
+        "decisions/disjoint": [1.0, 0.0],
+    }
 
-    plan = decision_revision.plan_revision_candidates([shared_a, shared_b, disjoint])
+    plan = decision_revision.plan_revision_candidates(
+        [shared_a, shared_b, disjoint], vectors
+    )
 
     pairs = {candidate.pair_ids for candidate in plan.candidates}
     assert ("decisions/shared-a", "decisions/shared-b") not in pairs
@@ -225,101 +277,173 @@ def test_plan_revision_candidates_excludes_resolved_pairs(
             sources=["sources/b"],
             resolved_with=["decisions/a"],
         )
+    # Identical vectors -- cosine 1.0 -- so only the resolution exclusion
+    # can be why this pair is dropped.
+    vectors = {"decisions/a": [1.0, 0.0], "decisions/b": [1.0, 0.0]}
 
-    plan = decision_revision.plan_revision_candidates([a, b])
+    plan = decision_revision.plan_revision_candidates([a, b], vectors)
 
     assert plan.candidates == ()
     assert plan.total == 0
 
 
-def test_plan_revision_candidates_drops_pairs_below_the_overlap_threshold() -> None:
-    at_threshold_a = _decision("decisions/at-a", "alpha bravo", sources=["sources/1"])
-    at_threshold_b = _decision("decisions/at-b", "alpha zulu", sources=["sources/2"])
-    kept_plan = decision_revision.plan_revision_candidates(
-        [at_threshold_a, at_threshold_b]
+def test_plan_revision_candidates_paraphrase_with_no_lexical_overlap_is_a_candidate() -> (
+    None
+):
+    """A pair whose SUBJECTS share no lexical token at all is still a
+    candidate when their embeddings are close -- the whole point of
+    sub-change 3: `subject_overlap("billing tool", "payment processor")`
+    is `0.0` (no shared token), but candidate blocking no longer reads
+    `subject` at all."""
+    paraphrase_a = _decision(
+        "decisions/paraphrase-a", "billing tool", sources=["sources/1"]
     )
-    assert len(kept_plan.candidates) == 1
-    assert kept_plan.candidates[0].score == pytest.approx(0.5)
+    paraphrase_b = _decision(
+        "decisions/paraphrase-b", "payment processor", sources=["sources/2"]
+    )
+    assert decision_revision.subject_overlap("billing tool", "payment processor") == 0.0
+    vectors = {
+        "decisions/paraphrase-a": [1.0, 0.0],
+        "decisions/paraphrase-b": [0.9, math.sqrt(1 - 0.9**2)],
+    }
 
-    below_a = _decision("decisions/below-a", "alpha bravo", sources=["sources/3"])
-    below_b = _decision("decisions/below-b", "charlie delta", sources=["sources/4"])
-    dropped_plan = decision_revision.plan_revision_candidates([below_a, below_b])
+    plan = decision_revision.plan_revision_candidates(
+        [paraphrase_a, paraphrase_b], vectors
+    )
+
+    assert len(plan.candidates) == 1
+    only_candidate = plan.candidates[0]
+    assert only_candidate.pair_ids == (
+        "decisions/paraphrase-a",
+        "decisions/paraphrase-b",
+    )
+    assert only_candidate.score == pytest.approx(0.9)
+
+
+def test_plan_revision_candidates_at_threshold_is_kept_below_threshold_is_dropped() -> (
+    None
+):
+    threshold = decision_revision.EMBEDDING_SIMILARITY_THRESHOLD
+    at_a = _decision("decisions/at-a", "alpha", sources=["sources/1"])
+    at_b = _decision("decisions/at-b", "alpha", sources=["sources/2"])
+    at_vectors = {
+        "decisions/at-a": _unit_vector(0, 2),
+        "decisions/at-b": _vector_at_cosine(0, 1, threshold, 2),
+    }
+    kept_plan = decision_revision.plan_revision_candidates([at_a, at_b], at_vectors)
+    assert len(kept_plan.candidates) == 1
+    assert kept_plan.candidates[0].score == pytest.approx(threshold)
+
+    below_a = _decision("decisions/below-a", "alpha", sources=["sources/3"])
+    below_b = _decision("decisions/below-b", "alpha", sources=["sources/4"])
+    below_vectors = {
+        "decisions/below-a": _unit_vector(0, 2),
+        "decisions/below-b": _vector_at_cosine(0, 1, threshold - 0.01, 2),
+    }
+    dropped_plan = decision_revision.plan_revision_candidates(
+        [below_a, below_b], below_vectors
+    )
     assert dropped_plan.candidates == ()
 
 
-def test_plan_revision_candidates_counts_decisions_without_a_subject() -> None:
-    no_subject = _decision("decisions/no-subject", None, sources=["sources/1"])
-    with_subject_a = _decision(
-        "decisions/with-a", "billing tool", sources=["sources/2"]
-    )
-    with_subject_b = _decision(
-        "decisions/with-b", "billing tool", sources=["sources/3"]
-    )
+def test_plan_revision_candidates_counts_decisions_without_a_vector() -> None:
+    no_vector = _decision("decisions/no-vector", "billing tool", sources=["sources/1"])
+    with_vector_a = _decision("decisions/with-a", "billing tool", sources=["sources/2"])
+    with_vector_b = _decision("decisions/with-b", "billing tool", sources=["sources/3"])
+    # `decisions/no-vector` is deliberately ABSENT from `vectors` -- a
+    # missing entry, not a present-but-empty one.
+    vectors = {
+        "decisions/with-a": [1.0, 0.0],
+        "decisions/with-b": [1.0, 0.0],
+    }
 
     plan = decision_revision.plan_revision_candidates(
-        [no_subject, with_subject_a, with_subject_b]
+        [no_vector, with_vector_a, with_vector_b], vectors
     )
 
-    assert plan.without_subject == 1
+    assert plan.without_vector == 1
     pair_concept_ids = {cid for pair in plan.candidates for cid in pair.pair_ids}
-    assert "decisions/no-subject" not in pair_concept_ids
+    assert "decisions/no-vector" not in pair_concept_ids
+
+
+def test_plan_revision_candidates_a_zero_vector_does_not_crash_and_is_no_candidate() -> (
+    None
+):
+    """A Decision whose vector is present but degenerate (all-zero) is
+    NOT counted as `without_vector` (it has an entry), but
+    `cosine_similarity` fails closed to `0.0` against it, so it forms no
+    candidate and, critically, raises nothing."""
+    zero = _decision("decisions/zero", "billing tool", sources=["sources/1"])
+    normal = _decision("decisions/normal", "billing tool", sources=["sources/2"])
+    vectors = {
+        "decisions/zero": [0.0, 0.0],
+        "decisions/normal": [1.0, 0.0],
+    }
+
+    plan = decision_revision.plan_revision_candidates([zero, normal], vectors)
+
+    assert plan.without_vector == 0
+    assert plan.candidates == ()
 
 
 def test_plan_revision_candidates_top_k_is_a_union() -> None:
     hub = _decision("decisions/hub", "billing tool", sources=["sources/hub"])
-    groups = [
-        ("p1", ["quartz", "jungle", "marble", "violet"]),
-        ("p2", ["cactus", "dragon", "falcon", "gizmo"]),
-        ("p3", ["harbor", "igloo", "jockey", "kernel"]),
-        ("p4", ["lentil", "mirror", "nickel", "oyster"]),
-        ("p5", ["pepper", "quiver", "raptor", "salmon"]),
-        ("p6", ["tundra", "umpire", "velvet", "walrus"]),
-        ("p7", ["xenon", "yeoman", "anchor", "bishop"]),
-    ]
-    # Every partner's subject is "billing tool" plus 4 tokens unique to
-    # that partner. Against the hub (2 tokens), the smaller set is the
-    # hub's own 2 tokens, both found in every partner -> score 1.0 for
-    # every hub/partner pair, a tie. Against each other, the smaller set
-    # is 6 tokens with only 2 (billing, tool) ever matching -> 2/6 = 0.333,
-    # below `SUBJECT_OVERLAP_THRESHOLD`, so partners never pair with each
-    # other -- the fixture isolates the hub's fan-out from any partner's
-    # OWN unrelated candidates.
+    names = [f"p{i}" for i in range(1, 8)]
     partners = [
-        _decision(
-            f"decisions/{name}",
-            "billing tool " + " ".join(words),
-            sources=[f"sources/{name}"],
-        )
-        for name, words in groups
+        _decision(f"decisions/{name}", "billing tool", sources=[f"sources/{name}"])
+        for name in names
     ]
+    dims = 1 + len(names)
+    # Every hub/partner cosine ties at 0.8 (>= 0.65, a candidate); every
+    # partner/partner cosine is 0.8**2 = 0.64 (< 0.65, dropped) -- the
+    # geometric equivalent of the retired lexical fixture's "hub ties with
+    # everyone, partners don't pair with each other" shape (see
+    # `_vector_at_cosine`'s docstring for why the cross term vanishes).
+    vectors = {"decisions/hub": _unit_vector(0, dims)}
+    for index, name in enumerate(names, start=1):
+        vectors[f"decisions/{name}"] = _vector_at_cosine(0, index, 0.8, dims)
 
-    plan = decision_revision.plan_revision_candidates([hub, *partners])
+    plan = decision_revision.plan_revision_candidates([hub, *partners], vectors)
 
     hub_pairs = {
         candidate.pair_ids
         for candidate in plan.candidates
         if "decisions/hub" in candidate.pair_ids
     }
-    expected = {
-        tuple(sorted(("decisions/hub", f"decisions/{name}"))) for name, _ in groups
+    expected = {tuple(sorted(("decisions/hub", f"decisions/{name}"))) for name in names}
+    partner_pairs = {
+        candidate.pair_ids
+        for candidate in plan.candidates
+        if "decisions/hub" not in candidate.pair_ids
     }
-    # All 7 hub/partner pairs tie at score 1.0. The hub's OWN top-5 (by
+    # All 7 hub/partner pairs tie at score 0.8. The hub's OWN top-5 (by
     # partner id) keeps only p1-p5; p6 and p7 survive ONLY because each
     # independently ranks the hub inside its own top-5 (it has no other
     # eligible partner) -- proving top-k is a UNION across both sides, not
-    # an intersection.
+    # an intersection. No partner/partner pair survives (0.64 < 0.65).
     assert hub_pairs == expected
+    assert partner_pairs == set()
 
 
 def test_plan_revision_candidates_ordering() -> None:
     tied_a = _decision("decisions/tied-a", "billing tool", sources=["sources/1"])
     tied_b = _decision("decisions/tied-b", "billing tool", sources=["sources/2"])
     tied_c = _decision("decisions/tied-c", "billing tool", sources=["sources/3"])
-    lower_a = _decision("decisions/lower-a", "alpha bravo", sources=["sources/4"])
-    lower_b = _decision("decisions/lower-b", "alpha zulu", sources=["sources/5"])
+    lower_a = _decision("decisions/lower-a", "alpha", sources=["sources/4"])
+    lower_b = _decision("decisions/lower-b", "alpha", sources=["sources/5"])
+    # tied-a/b/c share one vector (cosine 1.0 every combo); lower-a/b sit
+    # at cosine 0.7 -- above the 0.65 threshold, so still a candidate, but
+    # strictly below the tied trio's 1.0.
+    vectors = {
+        "decisions/tied-a": _unit_vector(0, 3),
+        "decisions/tied-b": _unit_vector(0, 3),
+        "decisions/tied-c": _unit_vector(0, 3),
+        "decisions/lower-a": _unit_vector(1, 3),
+        "decisions/lower-b": _vector_at_cosine(1, 2, 0.7, 3),
+    }
 
     plan = decision_revision.plan_revision_candidates(
-        [tied_a, tied_b, tied_c, lower_a, lower_b], top_k=10, cap=10
+        [tied_a, tied_b, tied_c, lower_a, lower_b], vectors, top_k=10, cap=10
     )
 
     scores = [candidate.score for candidate in plan.candidates]
@@ -334,18 +458,19 @@ def test_plan_revision_candidates_ordering() -> None:
 
 
 def test_plan_revision_candidates_cap_and_truncation_notice() -> None:
-    tokens = _mutually_dissimilar_tokens(205)
+    pairs = _mutually_orthogonal_pairs(205)
     decisions = [
-        _decision(
-            f"decisions/pair{i:03d}{side}",
-            token,
-            sources=[f"sources/pair{i:03d}{side}"],
-        )
-        for i, token in enumerate(tokens)
-        for side in ("a", "b")
+        _decision(f"{concept_id}{side}", token_id, sources=[f"{concept_id}{side}"])
+        for concept_id, _vector in pairs
+        for token_id, side in ((concept_id, "a"), (concept_id, "b"))
     ]
+    vectors = {
+        f"{concept_id}{side}": vector
+        for concept_id, vector in pairs
+        for side in ("a", "b")
+    }
 
-    plan = decision_revision.plan_revision_candidates(decisions)
+    plan = decision_revision.plan_revision_candidates(decisions, vectors)
 
     assert plan.total == 205
     assert len(plan.candidates) == 200
@@ -354,34 +479,42 @@ def test_plan_revision_candidates_cap_and_truncation_notice() -> None:
         == "200 of 205 candidate pair(s) shown (cap reached); dropped: 5"
     )
 
-    under_cap_plan = decision_revision.plan_revision_candidates(decisions[:20])
+    under_cap_decisions = decisions[:40]
+    under_cap_plan = decision_revision.plan_revision_candidates(
+        under_cap_decisions, vectors
+    )
     assert decision_revision.revision_truncation_notice(under_cap_plan) is None
 
 
 def test_plan_revision_candidates_exclusions_applied_before_the_cap() -> None:
-    tokens = _mutually_dissimilar_tokens(206)
+    pairs = _mutually_orthogonal_pairs(206)
     decisions = [
-        _decision(
-            f"decisions/pair{i:03d}{side}",
-            token,
-            sources=[f"sources/pair{i:03d}{side}"],
-        )
-        for i, token in enumerate(tokens[:205])
-        for side in ("a", "b")
+        _decision(f"{concept_id}{side}", token_id, sources=[f"{concept_id}{side}"])
+        for concept_id, _vector in pairs[:205]
+        for token_id, side in ((concept_id, "a"), (concept_id, "b"))
     ]
-    resolved_token = tokens[205]
+    vectors = {
+        f"{concept_id}{side}": vector
+        for concept_id, vector in pairs[:205]
+        for side in ("a", "b")
+    }
+    resolved_concept_id, resolved_vector = pairs[205]
     resolved_a = _decision(
-        "decisions/resolved-a",
-        resolved_token,
-        sources=["sources/resolved-a"],
-        resolved_with=["decisions/resolved-b"],
+        f"{resolved_concept_id}a",
+        resolved_concept_id,
+        sources=[f"{resolved_concept_id}a"],
+        resolved_with=[f"{resolved_concept_id}b"],
     )
     resolved_b = _decision(
-        "decisions/resolved-b", resolved_token, sources=["sources/resolved-b"]
+        f"{resolved_concept_id}b",
+        resolved_concept_id,
+        sources=[f"{resolved_concept_id}b"],
     )
     decisions.extend([resolved_a, resolved_b])
+    vectors[f"{resolved_concept_id}a"] = resolved_vector
+    vectors[f"{resolved_concept_id}b"] = resolved_vector
 
-    plan = decision_revision.plan_revision_candidates(decisions)
+    plan = decision_revision.plan_revision_candidates(decisions, vectors)
 
     # If the resolved pair were dropped AFTER the cap (post-cap filtering)
     # rather than excluded before it, `total` would read 206 (it would have
@@ -390,8 +523,8 @@ def test_plan_revision_candidates_exclusions_applied_before_the_cap() -> None:
     assert plan.total == 205
     assert len(plan.candidates) == 200
     pair_concept_ids = {cid for pair in plan.candidates for cid in pair.pair_ids}
-    assert "decisions/resolved-a" not in pair_concept_ids
-    assert "decisions/resolved-b" not in pair_concept_ids
+    assert f"{resolved_concept_id}a" not in pair_concept_ids
+    assert f"{resolved_concept_id}b" not in pair_concept_ids
 
 
 # ---------------------------------------------------------------------------
