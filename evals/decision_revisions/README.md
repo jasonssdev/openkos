@@ -44,7 +44,7 @@ Two fixtures live here, and they are never mixed:
   placeholder. `--self-test` pins exact numbers against it and never runs
   over the real fixture's model-dependent stages.
 
-**The real fixture's labels are by construction, not adjudicated.** Every
+**The real fixture's labels are owner-adjudicated** (T3, 2026-09-27: all 16 contested labels accepted as proposed). Every
 pair where a careful reader could reasonably pick a different verdict is
 flagged `contested` with a one-line note. T3 is the owner settling every
 contested pair BEFORE any live run's numbers are trusted. To review them in
@@ -220,6 +220,34 @@ at different `--runs` counts, on different fixture contents, or under
 different client settings (mirrors `evals/contradictions/README.md`'s own
 warning) -- and never compare a run against T1's synthetic placeholder to a
 run against T2's real fixture; they are not the same measurement.
+
+## Pass/fail bars (stated before the first live run)
+
+Committed before any live number was seen, so a result cannot move them.
+All bars read stage **(b)** -- every labelled pair judged directly, pooled
+over every run -- except B1 and B2, which are not model judgements.
+
+| Bar | Metric | Pass when | Why this level |
+|---|---|---|---|
+| B1 | Direction accuracy | 46 of 46 | Deterministic; anything lower is a bug, not a model property |
+| B2 | Candidate-stage recall | >= 18 of 24 true pairs | The judge's ceiling; two `paraphrase` pairs are expected misses by design, so 75% leaves room for them and little else |
+| B3 | REVERSES precision | >= 0.80 | A false REVERSES writes `supersedes` and hides a decision that is still current -- the costliest error |
+| B4 | REVERSES recall | >= 0.60 | A missed reversal leaves a stale decision looking current, but the human still sees both |
+| B5 | REFINES precision | >= 0.60 | A false REFINES writes `revises`, which hides nothing |
+| B6 | REFINES recall | >= 0.50 | Refinements are the subtlest class; half is the floor for the verb to be worth running |
+| B7 | REVERSES<->REFINES confusion | <= 10% of rows expected REVERSES or REFINES | The wrong relation type in the bundle; named separately because B3-B6 can pass while this one fails |
+| B8 | Mean modal-verdict share | >= 0.80 | A judge that changes its answer run to run cannot back a durable finding |
+
+The first live run uses production sampling: `--temperature` and `--seed`
+left unset, exactly as a workspace without the #1013 keys runs. Pinning
+both would make every run identical and B8 would measure nothing.
+
+**Reading the result.** All eight pass: Phase B may start. Any bar fails:
+the result is "no" for that axis, and the owner decides whether Phase B
+waits for a fix (prompt, threshold, candidate stage) or proceeds with the
+gap named. The thresholds `SUBJECT_OVERLAP_THRESHOLD` (0.5) and
+`_ACTIONABLE_CONFIDENCE` (0.7) are revisited with these numbers before S6,
+as design.md already requires.
 
 ## Tool-agnostic by construction
 
