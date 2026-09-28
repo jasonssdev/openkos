@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0020: Concurrency across three writers -- per-operation locking, detection for the rest"
 description: The interprocess lock synchronises OpenKOS operations, not processes or sessions; writers it cannot reach are handled by detection, and reads stay lock-free.
-status: Proposed
+status: Accepted
 date: 2026-09-16
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0020: Concurrency across three writers -- per-operation locking, detection for the rest
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-09-16
 
 ## Context

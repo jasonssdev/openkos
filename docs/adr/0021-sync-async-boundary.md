@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0021: The sync/async boundary -- a worker thread per operation, and no cancellation below it"
 description: The application layer stays synchronous and the MCP adapter owns the only event loop, calling in through one worker thread per operation; cancellation does not exist below that line and adapters must not pretend it does.
-status: Proposed
+status: Accepted
 date: 2026-09-17
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0021: The sync/async boundary -- a worker thread per operation, and no cancellation below it
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-09-17
 
 ## Context

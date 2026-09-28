@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0027: The MCP adapter is a hand-rolled stdio server for protocol revision 2025-11-25, with no SDK"
 description: OpenKOS serves MCP from its own stdlib-only package under src/openkos/mcp/ -- newline-delimited JSON-RPC over stdio, tools only, targeting revision 2025-11-25 -- instead of adopting the official SDK, and it owns stdout structurally while serving.
-status: Proposed
+status: Accepted
 date: 2026-09-26
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0027: The MCP adapter is a hand-rolled stdio server for protocol revision 2025-11-25, with no SDK
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-09-26
 
 ## Context

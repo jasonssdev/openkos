@@ -36,6 +36,14 @@ its own. Workspace gating stays the caller's step: `config.require_workspace`
 already returns a refusal reason rather than printing or exiting, so an
 adapter can refuse an uninitialized workspace in its own idiom.
 
+The callable (`run_query`) MUST additionally accept an optional keyword-only
+`progress` callback and thread it, unmodified, into its `answer()` call.
+WHEN a caller omits `progress` (the default), the composed call's behavior,
+return value, and every side effect MUST remain byte-identical to the
+callable's contract before this parameter existed.
+(Previously: `run_query` had no `progress` parameter and could not thread
+one into `answer()`.)
+
 #### Scenario: A non-CLI caller answers a question
 
 - GIVEN a module that imports nothing from `openkos.cli`
@@ -50,6 +58,20 @@ adapter can refuse an uninitialized workspace in its own idiom.
 - THEN the LLM backend and embedder arrive as parameters, and the module
   names no concrete backend implementation of its own
 
+#### Scenario: Progress is threaded through unmodified
+
+- GIVEN a caller supplies a `progress` callback to the composed callable
+- WHEN it calls `run_query(..., progress=callback)`
+- THEN the same `callback` object is passed through to the underlying
+  `answer()` call without wrapping or modification
+
+#### Scenario: Omitting progress keeps composition byte-identical
+
+- GIVEN a caller invokes the composed callable without a `progress`
+  argument
+- WHEN it runs
+- THEN its return value and its call to `answer()` are byte-identical to
+  the callable's behavior before the `progress` parameter existed
 ### Requirement: Filing Composition Is Independently Callable
 
 The service MUST expose a callable that composes the `--save` filing domain
