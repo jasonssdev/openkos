@@ -874,3 +874,24 @@ def test_judge_pairs_guards_only_the_chat_call() -> None:
 
     with pytest.raises(OllamaUnavailable):
         decision_revision.judge_pairs([pair], llm=llm, on_progress=_raising_progress)
+
+
+def test_judge_prompt_separates_a_narrowed_choice_from_an_overturned_one() -> None:
+    """The harness (#1014) found a choice kept in force but narrowed by an
+    exception or limit read as REVERSES. Pin the two definitions that
+    separate them, so a later prompt edit cannot drop either rule silently.
+    `unrelated` is deliberately left as it was: a clause there cost
+    undirected change recall in the A/B."""
+    lines = {
+        line.split(":", 1)[0].removeprefix("- "): line
+        for line in decision_revision._JUDGE_SYSTEM_PROMPT.splitlines()
+        if line.startswith("- ")
+    }
+
+    assert "no longer applies" in lines["reverses"]
+    assert "an exception, a limit, or an extra option" in lines["refines"]
+    assert "otherwise continues" in lines["refines"]
+    assert lines["unrelated"] == (
+        "- unrelated: the two concern a different subject, or one has no bearing "
+        "on the other."
+    )

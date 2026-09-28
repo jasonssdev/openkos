@@ -438,8 +438,8 @@ def _format_resolved_date(decision_date: DecisionDate) -> str:
 _JUDGE_SYSTEM_PROMPT: Final = """You are comparing two Decisions recorded in a knowledge base, from different meetings.
 
 Decide how the second Decision relates to the first Decision's choice on the same subject:
-- reverses: the second overturns or replaces the first's choice.
-- refines: the second keeps the first's choice but narrows, extends, or conditions it.
+- reverses: the second overturns or replaces the first's choice, so the first's choice no longer applies.
+- refines: the second keeps the first's choice but narrows, extends, or conditions it -- including adding an exception, a limit, or an extra option to a choice that otherwise continues.
 - reaffirms: the second restates the same choice.
 - unrelated: the two concern a different subject, or one has no bearing on the other.
 
