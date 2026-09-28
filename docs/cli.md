@@ -769,7 +769,7 @@ An unreachable Ollama, a missing embedding model, an unusable `sqlite-vec` exten
 
 ### `openkos mcp`
 
-**Read-only.** Serves one workspace to a Model Context Protocol client over stdio, exposing four tools: `query`, `get`, `navigate`, and `pending`. This is the ask surface MVP 3 describes — the same knowledge base the CLI reads, addressed from a chat client instead of a terminal. `mcp` never writes and never acquires the workspace lock; it belongs to the same read-only class as `status`/`next`/`list`/`lint`/`doctor`.
+**Read-only.** Serves one workspace to a Model Context Protocol client over stdio, exposing the tools `query`, `get`, `navigate`, and `pending`. This is the ask surface MVP 3 describes — the same knowledge base the CLI reads, addressed from a chat client instead of a terminal. `mcp` never writes and never acquires the workspace lock; it belongs to the same read-only class as `status`/`next`/`list`/`lint`/`doctor`.
 
 | Flag | Meaning |
 | --- | --- |

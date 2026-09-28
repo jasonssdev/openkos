@@ -126,9 +126,9 @@ Two measurements set the boundaries, rather than taste:
 
 Two edges of the original arc move out on the same reasoning. A local **REST API** goes to the horizon, because MCP already answers the question REST was there to answer, and a second network surface doubles the trust boundary for no user we can name. **Memory projections** go with it: they are a research direction, not a deliverable with someone waiting on it.
 
-Deliverables — **all five shipped**:
+Deliverables — **all shipped**:
 
-- **Application services for the read verbs** (shipped, as part of [#1009](https://github.com/jasonssdev/openkos/issues/1009)) — `get`, `navigate`, and *pending* lifted out of the CLI, so a second adapter is a thin layer over shared cores rather than a second implementation of them
+- **Application services for the read verbs** (shipped) — `status`, `list`, and navigation lifted out of the CLI, so a second adapter is a thin layer over shared cores rather than a second implementation of them
 - **A stable Python API**, which falls out of the above as the surface those services present
 - **An MCP server** ([#1009](https://github.com/jasonssdev/openkos/issues/1009), shipped) exposing the bundle as tools any compatible agent can call: `query`, `get`, `navigate`, and *what is pending* — the last of which is answerable only because durable pending work shipped first
 - **Sensitivity enforcement at the MCP boundary** ([#1010](https://github.com/jasonssdev/openkos/issues/1010), shipped). The egress gate already covering embeddings ([#922](https://github.com/jasonssdev/openkos/issues/922), closed) is joined by a disclosure gate specific to the MCP surface, so confidential objects do not leave through the new surface either as LLM egress or as a raw tool result
