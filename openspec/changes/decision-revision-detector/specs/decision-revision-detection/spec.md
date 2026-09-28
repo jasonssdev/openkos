@@ -2,99 +2,6 @@
 
 ## ADDED Requirements
 
-### Requirement: Post-Hoc Subject Pass Over Decisions Only
-
-The system MUST derive `subject`, `value` and one `evidence` quote for a
-Decision through a separate, post-hoc LLM call over that Decision's own
-`title`/`description`/`body`, parsed fail-closed through `llm/parsing.py`.
-This pass MUST NOT read or modify any other concept, MUST NOT run over any
-non-Decision object, and MUST NOT change the shared extraction/
-classification prompt used at `ingest` time.
-
-#### Scenario: Subject pass runs only over Decisions
-
-- GIVEN a bundle containing Decisions, Concepts, and Entities
-- WHEN the subject pass runs
-- THEN it is called once per Decision needing a subject, and never for a
-  Concept or an Entity
-
-#### Scenario: A well-formed reply yields subject, value and evidence
-
-- GIVEN a Decision whose body supports a clear subject
-- WHEN the subject pass parses a well-formed JSON reply
-- THEN the Decision's `subject`, `value`, and `evidence` are recorded as
-  given by the reply
-
-### Requirement: Verbatim Evidence Quote Check
-
-An `evidence` quote returned by the subject pass MUST be checked against
-the Decision's body. WHEN the quote does not appear verbatim in the body,
-the `evidence` field MUST be dropped for that Decision, and the `subject`
-and `value` fields MUST still be recorded (the subject stands even when
-its evidence is dropped).
-
-#### Scenario: A verbatim quote is kept
-
-- GIVEN a subject-pass reply whose `evidence` string appears verbatim in
-  the Decision's body
-- WHEN the reply is validated
-- THEN the evidence is recorded alongside the subject and value
-
-#### Scenario: A non-verbatim quote is dropped without dropping the subject
-
-- GIVEN a subject-pass reply whose `evidence` string does not appear
-  verbatim anywhere in the Decision's body
-- WHEN the reply is validated
-- THEN the evidence field is dropped, and the subject and value are still
-  recorded for that Decision
-
-### Requirement: Subject Cache Keyed By Concept Id, Body Digest And Prompt Version
-
-Every Decision's subject-pass result MUST be stored in a derived cache
-inside `.openkos/findings.db`, keyed by the Decision's concept id, a digest
-of its body, and the subject prompt's version constant. The subject pass
-MUST run lazily, only when the detector needs a Decision's subject and the
-cache has no entry matching all three key components (a cache miss). The
-subject pass MUST NOT run during `openkos ingest`, and `ingest`'s behavior
-and cost gate MUST be unaffected by this cache's existence.
-
-#### Scenario: A cache hit serves the stored subject with no LLM call
-
-- GIVEN a Decision whose subject was cached on a prior `revisions` run and
-  whose body and the prompt version are unchanged
-- WHEN `revisions` runs again
-- THEN that Decision's subject is served from the cache and no subject-pass
-  LLM call is made for it
-
-#### Scenario: An edited body invalidates the cache entry
-
-- GIVEN a Decision whose body changes after its subject was cached
-- WHEN `revisions` runs again
-- THEN the stale entry is a cache miss, and the subject pass runs again for
-  that Decision
-
-#### Scenario: ingest never touches the subject cache
-
-- GIVEN a bundle with Decisions whose subjects have never been computed
-- WHEN `openkos ingest` runs
-- THEN no subject-pass LLM call is made and no subject-cache row is written
-
-### Requirement: A Malformed Subject-Pass Reply Does Not Abort The Run
-
-WHEN a subject-pass call for one Decision fails to produce a reply that
-parses fail-closed, that Decision MUST be left without a subject for this
-run, MUST NOT populate the subject cache, and MUST NOT abort the detection
-run for any other Decision.
-
-#### Scenario: One Decision's malformed reply does not block the others
-
-- GIVEN two Decisions needing a subject pass, where one call returns a
-  malformed reply and the other returns a well-formed reply
-- WHEN the subject pass runs for both
-- THEN the well-formed Decision's subject is recorded and cached, the
-  malformed Decision is left without a subject and without a cache entry,
-  and the run continues
-
 ### Requirement: Decision Event Date Resolution
 
 The system MUST provide a helper that resolves a Decision's event date by
@@ -171,6 +78,14 @@ passed.
 - THEN it becomes eligible for candidate pairing, subject to every other
   exclusion
 
+#### Scenario: An included confidential Decision without a stored vector is counted, not embedded
+
+- GIVEN a confidential Decision made eligible with `--include-confidential`,
+  with no current stored vector in `.openkos/vectors.db`
+- WHEN candidate generation runs
+- THEN it forms no candidate pair, it is counted as without an embedding,
+  and no embedding call is made for it
+
 ### Requirement: Candidate Ranking And Caps
 
 Eligible candidate pairs MUST be blocked by the semantic similarity of the
@@ -208,6 +123,43 @@ are shown out of the pre-cap total.
 - WHEN candidate generation runs
 - THEN no candidate pair involves that Decision, and it is counted
   separately from the pairs eligible for similarity ranking
+
+### Requirement: Candidate Vectors Come From The Reindexed Vector Store
+
+Candidate generation MUST use each Decision's document vector as stored in
+`.openkos/vectors.db` by `openkos reindex`. `openkos revisions` MUST NOT
+compute an embedding itself. A vector MUST be used for a Decision only when
+the vector store is present and non-empty, its stored embedding-model tag
+matches the currently configured embedding model, and the stored vector's
+content hash matches the Decision file's current content hash.
+
+#### Scenario: An absent or empty vector store yields zero LLM calls and a remedy message
+
+- GIVEN a workspace whose `.openkos/vectors.db` is absent or empty
+- WHEN `openkos revisions` runs
+- THEN no LLM call and no embedding call is made, and a message naming
+  `openkos reindex` is printed
+
+#### Scenario: A mismatched embedding-model tag yields the same remedy
+
+- GIVEN a `.openkos/vectors.db` whose stored embedding-model tag differs
+  from the currently configured embedding model
+- WHEN `openkos revisions` runs
+- THEN no LLM call and no embedding call is made, and the same remedy
+  message naming `openkos reindex` is printed
+
+#### Scenario: A Decision edited since its vector was stored forms no candidate
+
+- GIVEN a Decision whose file content hash differs from the content hash
+  recorded when its vector was last stored
+- WHEN candidate generation runs
+- THEN that Decision forms no candidate pair, and it is counted separately
+
+#### Scenario: A Decision with no stored vector forms no candidate
+
+- GIVEN a Decision with no row in `.openkos/vectors.db`'s document vectors
+- WHEN candidate generation runs
+- THEN that Decision forms no candidate pair, and it is counted separately
 
 ### Requirement: Judge Verdict Vocabulary And Reply Shape
 
@@ -370,43 +322,33 @@ invocation, stating that the detector's accuracy is unmeasured.
 - THEN stderr includes one line stating the detector's quality is
   unmeasured
 
-### Requirement: Zero-LLM Probe Precedes Each Cost Gate
+### Requirement: Zero-LLM Probe Precedes The Cost Gate
 
-Before any subject-pass LLM call, and again before any judge LLM call, the
-system MUST compute and display an exact count for that phase — the number
-of subject-cache misses, then the number of candidate pairs to judge —
-using zero LLM calls to produce either count.
-
-#### Scenario: The subject-pass count is exact and LLM-free
-
-- GIVEN a bundle with a known number of Decisions whose subject cache
-  entry is missing or stale
-- WHEN `revisions` computes its subject-pass probe
-- THEN the displayed count exactly matches that number, and no subject-pass
-  LLM call has yet been made
+Before any judge LLM call, the system MUST compute and display an exact
+count of the candidate pairs to judge, using zero LLM calls and zero
+embedding calls to produce that count.
 
 #### Scenario: The pair-judgment count is exact and LLM-free
 
 - GIVEN a resolved candidate plan with a known judgeable pair count
 - WHEN `revisions` computes its pair-judgment probe
 - THEN the displayed count exactly matches the candidate plan's judged
-  count, and no judge LLM call has yet been made
+  count, and no judge LLM call and no embedding call has yet been made
 
-### Requirement: Two Sequential Exact Cost Gates
+### Requirement: One Exact Cost Gate Before Pair Judgment
 
-`openkos revisions` MUST gate proceeding past each of the two LLM-spending
-phases — the subject pass, then pair judgment — behind confirmation, in
-that order: subject calls are gated and made (for cache misses) before
-candidate generation runs, and pair judgments are gated and made only
-after candidates exist. Declining a gate MUST stop before any LLM call in
-that phase is made and MUST NOT prevent a later, separate `revisions`
-invocation from being offered the same gate again.
+(Previously: "Two Sequential Exact Cost Gates" — a subject-pass gate
+followed by a pair-judgment gate. The subject pass is not built in
+production, so the verb has exactly one gate.)
 
-#### Scenario: Declining the subject-pass gate makes no subject-pass call
-
-- GIVEN a bundle with subject-cache misses
-- WHEN the operator declines the subject-pass gate
-- THEN no subject-pass LLM call is made and no candidates are generated
+`openkos revisions` MUST gate proceeding past the pair-judgment phase — the
+one LLM-spending phase in the run — behind confirmation. Candidate
+generation (vector lookup, exclusions, ranking, and the cap) MUST complete
+before the gate is shown, using zero LLM calls and zero embedding calls, so
+the gate's displayed count is the exact number of judge calls to be made.
+Declining the gate MUST stop before any judge LLM call is made and MUST NOT
+prevent a later, separate `revisions` invocation from being offered the
+same gate again.
 
 #### Scenario: Declining the pair-judgment gate makes no judge call
 
@@ -417,18 +359,19 @@ invocation from being offered the same gate again.
 
 ### Requirement: `revisions` Writes Only Derived State, Never The Bundle
 
-`openkos revisions` MUST write only to `.openkos/findings.db` (the subject
-cache and revision findings tables). It MUST NOT modify any file under
-`bundle/`. A `REAFFIRMS` or `UNRELATED` verdict MUST be persisted as a
-finding but MUST cause no bundle write and MUST NOT be offered for any
-relation.
+`openkos revisions` MUST NOT modify any file under `bundle/`. It MUST NOT
+write to any derived store other than `.openkos/findings.db` (the revision
+findings tables). It MAY read `.openkos/vectors.db` to look up Decision
+embeddings. It MUST make no embedding call. A `REAFFIRMS` or `UNRELATED`
+verdict MUST be persisted as a finding but MUST cause no bundle write and
+MUST NOT be offered for any relation.
 
-#### Scenario: A full run changes no bundle file
+#### Scenario: A full run changes no bundle file and no other derived store
 
 - GIVEN a bundle with Decisions eligible for detection
-- WHEN `openkos revisions` runs to completion, accepting both gates
-- THEN no file under `bundle/` is created, deleted, or modified, and only
-  `.openkos/findings.db` changes
+- WHEN `openkos revisions` runs to completion, accepting the gate
+- THEN no file under `bundle/` is created, deleted, or modified, and no
+  other derived store's content changes besides `.openkos/findings.db`
 
 #### Scenario: REAFFIRMS and UNRELATED cause no bundle write
 
@@ -437,14 +380,19 @@ relation.
 - WHEN the finding is persisted
 - THEN no relation is written to either Decision's document
 
+#### Scenario: The verb makes no embedding call
+
+- GIVEN a workspace with `.openkos/vectors.db` present and current
+- WHEN `openkos revisions` runs to completion
+- THEN no embedding call is made at any point in the run
+
 ### Requirement: Revision Findings Persist In Sibling Tables
 
-Revision findings and the subject cache MUST be stored in tables that are
-siblings of, and separate from, the existing `findings` table in
-`.openkos/findings.db`. Every existing reader of the `findings` table
-(contradiction serving, `status`, `next`, pending-work surfaces, and
-`_partition_persisted_serves`) MUST be unaffected by the presence of
-revision-finding or subject-cache rows.
+Revision findings MUST be stored in tables that are siblings of, and
+separate from, the existing `findings` table in `.openkos/findings.db`.
+Every existing reader of the `findings` table (contradiction serving,
+`status`, `next`, pending-work surfaces, and `_partition_persisted_serves`)
+MUST be unaffected by the presence of revision-finding rows.
 
 #### Scenario: Contradiction serving is unaffected by revision findings
 
@@ -458,8 +406,7 @@ revision-finding or subject-cache rows.
 
 - GIVEN a bundle with persisted revision findings
 - WHEN `openkos status`, `openkos next`, or a pending-work surface runs
-- THEN its output is unaffected by the existence of revision findings or
-  subject-cache rows
+- THEN its output is unaffected by the existence of revision findings
 
 ### Requirement: Revision Findings Are Served From Cache Keyed By Input Digests
 
@@ -474,7 +421,7 @@ digests are unchanged since the finding was last computed.
   `event_date` values are unchanged since the last `revisions` run
 - WHEN `revisions` runs again
 - THEN every previously judged pair is served from persisted findings and
-  no LLM call (subject or judge) is made
+  no LLM call is made
 
 #### Scenario: Editing a Decision's body re-judges only pairs containing it
 

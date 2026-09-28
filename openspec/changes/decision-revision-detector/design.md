@@ -6,6 +6,14 @@ Refs #1014 piece (a), sub-change 2 of 3. Proposal: `proposal.md`, including
 `openspec/changes/decision-revision-detection/exploration.md`. Decision record:
 ADR-0025 (`docs/adr/0025-llm-derived-attributes-live-in-a-cache.md`).
 
+> **Phase B re-plan (2026-09-28).** Phase A (S1, S3, S4) shipped as written
+> below, and candidate blocking moved to embeddings (Decision 4, "Update").
+> The Phase B parts of this document (S2, S5-S8, the subject cache, gate 1,
+> the vector source) are revised by the section **"Phase B re-plan
+> (2026-09-28)"** at the end. Where a section below is superseded, it
+> carries a short banner pointing there. The Phase A history is kept as it
+> was decided.
+
 ## Technical Approach
 
 The detector follows the shape `contradictions` already has: config-free leaves
@@ -47,6 +55,11 @@ stays synchronous.
 
 ### Decision 1: Module layout and names
 
+> **Superseded in part (2026-09-28):** under the Phase B re-plan,
+> `state/decision_subjects.py` is not built, and `application/revisions.py`
+> also imports `state.vectorstore` and `state.reindex` (read-only). See
+> "Phase B re-plan", Decisions B1 and B3.
+
 **Choice**:
 
 | Module | Role | May import |
@@ -72,6 +85,13 @@ and the `--revision` flag (ADR-0024).
 - **Orchestration in `application/`.** ADR-0018. `cli/main.py` already holds 14k lines, and the proposal commits to a thin `curate` caller later.
 
 ### Decision 2: `findings.db` schema: two new tenants
+
+> **Superseded in part (2026-09-28):** under the Phase B re-plan only the
+> `revision_findings` tenant is built. The `decision_subjects` table, its
+> staleness rule, its sweep and `prune_missing_subjects` are dropped. The
+> revision-findings schema, strict freshness rule, input digests and
+> source-inclusive sweep below stand unchanged. See "Phase B re-plan",
+> Decision B3.
 
 **Choice**: two modules, four tables. Both modules follow the tenant pattern of
 `state/edge_suggestions.py`:
@@ -358,7 +378,17 @@ egress gate (which applies to sending a Decision's text to an embedding
 backend, not to this leaf's pure vector comparison) are both Phase B wiring
 decisions, out of scope for sub-change 3.
 
+**Resolved (2026-09-28):** the production vectors are read from
+`vectors.db`, and the verb never embeds. See "Phase B re-plan", Decisions
+B1 and B2.
+
 ### Decision 5: The subject pass (prompt, parse, quote check)
+
+> **Superseded in part (2026-09-28):** the leaf below shipped in S1 and
+> stays, because the judge imports `quoted_verbatim` and the harness uses
+> `derive_subjects` as a diagnostic. Under the Phase B re-plan it is **not
+> wired into production**: no service call, no cache, no gate. See "Phase B
+> re-plan", Decision B3.
 
 **Choice**:
 - `build_subject_messages(concept_id, title, body)` returns
@@ -492,6 +522,12 @@ the opposite order.
 
 ### Decision 7: The two cost gates and the flag shape
 
+> **Superseded in part (2026-09-28):** steps 3-5 (subject probe, gate 1,
+> subject derivation) are removed, and a vector-coverage step is added
+> before the pair probe. The verb has **one** gate. The flag set, the
+> zero-count rule, `--auto` semantics and the lock are unchanged. See
+> "Phase B re-plan", Decision B4.
+
 **Choice**: `openkos revisions [--auto] [--include-confidential] [--fresh] [--all]`.
 The flags mirror `ingest`'s gate (`main.py:4670-4711`) and `suggest-relations`'s
 served clause (`main.py:12404-12426`), with this sequence:
@@ -551,6 +587,12 @@ in `@_guard_workspace_lock("revisions")`, as `contradictions` is.
   word is the established shape.
 
 ### Decision 8: The report and the experimental notice
+
+> **Superseded in part (2026-09-28):** the stderr notice text, the counts
+> line (item 3) and the no-candidates message change, because subjects no
+> longer exist in production and vector coverage is new. Grouping, line
+> shapes and the default filter are unchanged. See "Phase B re-plan",
+> Decision B4.
 
 **Choice**:
 - **Help text** (`@app.command(help=...)`, `rich_help_panel="Explore"`):
@@ -722,6 +764,10 @@ The `next:` line names the only verb that applies a finding.
 
 ## Data Flow
 
+> **Superseded (2026-09-28):** the first diagram below is the original
+> two-gate flow. The current flow is in "Phase B re-plan", Data flow. The
+> reconcile and forget diagrams stand, minus `decision_subjects`.
+
 ```
 openkos revisions [--auto] [--include-confidential] [--fresh] [--all]
   │ stderr: experimental notice
@@ -772,6 +818,9 @@ purge  → deletes findings.db wholesale (unchanged)
 
 ## File Changes
 
+> **Superseded in part (2026-09-28):** see "Phase B re-plan", File changes,
+> for the current Phase B list.
+
 | File | Action | Description |
 |------|--------|-------------|
 | `src/openkos/resolution/decision_subject.py` | Create | Subject prompt, digest, verbatim check, fail-closed parse, `derive_subjects` + batch |
@@ -799,6 +848,11 @@ purge  → deletes findings.db wholesale (unchanged)
 `next` and `pending` are **not modified**.
 
 ## Interfaces / Contracts
+
+> **Superseded in part (2026-09-28):** `state/decision_subjects.py` is not
+> built; `DecisionInput`/`RevisionCandidatePlan`/`plan_revision_candidates`
+> shipped with `vectors`/`without_vector` (Decision 4, "Update"); the
+> service signatures are revised in "Phase B re-plan", Interfaces.
 
 ```python
 # resolution/decision_subject.py
@@ -949,6 +1003,10 @@ def actionable_revision_findings(layout) -> tuple[RevisionFinding, ...]: ...
 
 ## Testing Strategy
 
+> **Superseded in part (2026-09-28):** the S2 rows and the gate-1 parts of
+> S6/S7 are dropped; Phase B test additions are in "Phase B re-plan",
+> Testing.
+
 Strict TDD applies, with runner `uv run pytest`. Every test is written RED
 first. The **mutation** column names the line a test must kill. Revert each
 mutation with the inverse edit (never `git checkout --`), purge `__pycache__`
@@ -987,6 +1045,11 @@ guard, atomic writes, autocommit), reused unchanged. LLM calls go through the
 existing `LLMBackend` with the existing sensitivity gates.
 
 ## Migration / Rollout
+
+> **Superseded in part (2026-09-28):** the slice table below is the
+> original plan. Phase A actuals were 557 / 708 / 857 authored lines
+> against forecasts of 320 / 380 / 380 (apply-progress.md). The Phase B
+> slice list and forecasts are re-derived in "Phase B re-plan", Slices.
 
 No migration is required. The new tables are created lazily with
 `CREATE TABLE IF NOT EXISTS`. Older builds never read them, and `purge`
@@ -1054,3 +1117,526 @@ The owner chose to measure before building the plumbing. The eight slices ship i
 ## Orchestrator correction (2026-09-25)
 
 The subject cache key MUST include the chat model tag (`resolve_task_model` result), in addition to concept id, body digest and prompt version. Otherwise a model change keeps serving subjects the new model never produced. This applies to S2's table schema and its freshness check, and does not affect Phase A.
+
+> **Moot under the Phase B re-plan (2026-09-28)**, which drops S2. It
+> applies again, unchanged, only if the alternative in Decision B3 is
+> chosen.
+
+## Phase B re-plan (2026-09-28)
+
+### Why this section exists
+
+Four facts changed after the Phase B slices above were planned:
+
+1. **Candidate blocking is by embedding** (PR #1050, `main` @ `9cbedc8`).
+   `plan_revision_candidates(decisions, vectors, ...)` is pure and takes
+   precomputed vectors keyed by concept id. It no longer reads
+   `DecisionInput.subject`, and nothing else in `decision_revision.py` does.
+   The judge (`JudgeSide`) takes `title`, `body` and `date` only.
+2. **The harness passes all bars** (live run `runs-20260928T204537Z`: B1-B8
+   pass, B2 19/24, up from 14/24 lexical).
+3. **The threshold transfers to the production vector shape.** An offline
+   probe (2026-09-28, not committed) wrote the fixture Decisions as real OKF
+   concepts, embedded them through `state/reindex.py`, and read
+   `doc_vectors` back by concept id. At 0.65: 19/24 original, 10/10
+   confirmation, 55 pre-cap candidates (title+body shape: 19/24 at 46).
+   The tightest threshold that still clears 18/24 on that shape is
+   0.66-0.68. No shape separates the classes cleanly, and the margin over
+   18/24 is 0-1 pairs.
+4. **What reindex embeds** (verified in code): a header of `title`,
+   `description` and `tags` (`_compose_header`, `state/reindex.py:113`)
+   followed by body chunks (`EMBED_COMPOSITION_TAG = "chunk-v1"`). The
+   frontmatter is never embedded. Reindex applies the #922 egress gate
+   (`sensitivity.should_block(metadata, local_exemption=...)`,
+   `state/reindex.py:428`) before queuing a document, so a withheld
+   confidential document gets no new vector, and a vector computed earlier
+   on a local backend is kept. A stored `embedding_model` tag
+   (`<model>#chunk-v1`) forces a full re-embed on a model or scheme change.
+
+### Decision B1: Candidate vectors come from `vectors.db`; `revisions` never embeds
+
+**Choice.** The service reads each eligible Decision's document vector from
+`vectors.db`'s `doc_vectors` table, the one-row-per-document vector reindex
+derives from the chunk vectors (`_derive_document_vector`). `revisions`
+makes **zero embedding calls**. A vector is **used** only when all three
+hold:
+
+1. The store is present and non-empty (`vector_store_is_empty` is false),
+   and `sqlite-vec` loads.
+2. The store's model tag equals `embedding_tag(cfg.embedding_model)`, the
+   same `<model>#chunk-v1` composition reindex writes. An absent stored tag
+   counts as a mismatch, as it does in reindex's own gate.
+3. The Decision's stored `vector_meta.content_hash` equals
+   `content_hash(current file bytes)`.
+
+Otherwise the verb behaves as follows. Every case makes zero LLM calls, and
+none of them embeds or reindexes on the user's behalf:
+
+| Case | Scope | What `revisions` does | Exit |
+|---|---|---|---|
+| Store absent, empty, or `sqlite-vec` unavailable | whole run | stderr `openkos revisions: no document embeddings found -- run 'openkos reindex' first.`; no gate, no judge | 0 |
+| Model tag mismatch or absent | whole run | stderr `openkos revisions: vectors.db was embedded with a different embedding model or scheme than 'embedding_model' -- run 'openkos reindex' first.`; no gate, no judge | 0 |
+| Decision has no `doc_vectors` row | that Decision | excluded from pairing, counted as `missing` | unchanged |
+| Decision edited since its vector was stored (hash differs) | that Decision | excluded from pairing, counted as `stale` | unchanged |
+
+`missing` and `stale` are reported on one stdout counts line, which names
+the remedy (Decision B4). Both reach the leaf the same way: the Decision is
+simply absent from the `vectors` mapping, so the leaf's `without_vector`
+count equals `missing + stale`. The split is kept in the service, because
+the two have different causes (never embedded or withheld, versus edited
+since).
+
+The store is probed with `vector_store_is_empty(path)` **before**
+`open_vector_store`, because `open_vector_store` creates `.openkos/` and the
+file when they are absent. A read verb must never create a derived store.
+
+**Exit code.** A whole-run degrade exits 0 with a message. That mirrors
+`suggest-relations`/`contradictions`, which key the same state on the same
+predicate (`_CANDIDATES_UNAVAILABLE_MESSAGE`, `main.py:11790`). ADR-0022's
+exit 2 does not apply: nothing failed during the run. The store is simply
+not built for the current model, which is user state with a named remedy.
+Per-Decision gaps are reported as data (counts), not as incompleteness.
+
+**Alternatives considered**:
+
+- **Embed each Decision at detection time.**
+  - Rejected: a second embed seam with its own #922 gate, locality
+    resolution, host advisory, failure ladder and cost gate. That is
+    exactly the duplication #922 had to close across three seams.
+  - It would be a third gate for spend the user did not ask to count.
+  - The text shape would differ from reindex's unless the chunking were
+    re-implemented. The probe showed the shape moves candidate counts
+    (46 vs 55).
+  - It would put embedding egress inside a verb whose spec says it writes
+    only `findings.db`, and whose flag set has no egress control for
+    embedding.
+- **Call `reindex` from inside `revisions` when vectors are stale.**
+  Rejected. It writes `vectors.db`, fts and possibly the model tag, which
+  breaks the "writes only derived findings" contract. It also hides a slow,
+  egress-bearing operation behind a detection verb. Every bundle-writing
+  verb already refreshes vectors (`_refresh_derived_after_write`, #640), so
+  staleness arises mainly from hand edits, a model change, or a failed
+  embed. For all three, the user-visible remedy `openkos reindex` is the
+  honest one.
+- **Use a stale vector anyway.** Rejected. Pairing would be decided on
+  text the Decision no longer holds, while the finding's input digests are
+  over the current bytes, so candidacy and freshness would disagree. The
+  cost of the strict rule is known and fail-closed: a frontmatter-only hand
+  edit also marks the vector stale, because `content_hash` is over raw
+  bytes.
+- **Refuse (exit 1) when the store is absent.** Rejected. There is no
+  failure, and the sibling verbs degrade with exit 0.
+
+**Rationale.**
+
+- **Reconstructible.** The vector is a cache of canonical text, and a stale
+  or missing one is detected exactly, never guessed.
+- **Egress.** The #922 gate has one authority, at the one seam that
+  already applies it.
+- **Measured shape.** The vectors are exactly the shape the threshold was
+  just measured on (fact 3).
+- **Cost.** Zero embedding calls, so the single cost gate stays exact.
+
+### Decision B2: `--include-confidential` releases the judge send, not an embed
+
+The spec's scenario "A confidential Decision is excluded by default and
+included with the flag" is satisfied as written. With the flag, the
+Decision passes the concept-level exclusion and becomes **eligible**.
+Eligible is not paired. Pairing still requires a current vector ("Candidate
+Ranking And Caps": "A Decision without an embedding forms no candidate and
+is counted"). The resulting behavior:
+
+| Backend / policy | Confidential Decision's vector | With `--include-confidential` |
+|---|---|---|
+| Local, exemption on (default) | embedded by reindex | eligible, paired, judged locally |
+| Remote, never embedded locally | none (withheld by reindex) | eligible, counted `missing`, never paired |
+| Remote, vector from an earlier local reindex, file unchanged | present and current | eligible, paired; judge send released by the flag |
+| Remote, file edited since that local vector | stale | counted `stale`, never paired |
+
+Comparing two stored vectors on this machine is not egress, so no
+sensitivity gate applies to the read. The flag keeps the meaning it has on
+every other verb: it releases the `llm.chat` send of a confidential body.
+It does not authorize embedding egress, which `reindex` has never offered a
+flag for.
+
+**Named gap (product).** Should `--include-confidential` on `revisions` also
+authorize sending a confidential Decision to a remote **embedder**?
+Recommendation: **no**. It would make this flag mean more here than
+anywhere else. It would need the detection-time embed seam that B1 rejects.
+And the remote-backend-plus-confidential case is already the documented
+"no vector, lexical only" state (`docs/cli.md`, "Embedding is egress too").
+The spec should add one scenario pinning this (see "Spec changes").
+
+### Decision B3: Drop the production subject pass (S2, gate 1, ADR-0025's cache half)
+
+**Finding.** After #1050, nothing in Phase B consumes `subject`, `value` or
+`evidence`:
+
+| Consumer | Reads subject/value/evidence? |
+|---|---|
+| Candidate blocking (`plan_revision_candidates`) | No. Vectors only (fact 1) |
+| Judge (`JudgeSide`, `build_judge_messages`) | No. Title, body, date |
+| Actionability / reportability | No. Verdict, confidence, the judge's two quotes |
+| `revision_findings` schema (Decision 2) | No subject column |
+| Report (Decision 8) | Only the counts line `"N Decision(s) without a subject"` and the no-candidates message. Both exist only because subjects gated candidates |
+| REAFFIRMS history line | No. Built from the finding |
+| `reconcile --from-findings` walk (Decision 9) | No |
+
+The harness passed B1-B8 with the judge receiving no subject. The only
+remaining readers are `quoted_verbatim` (imported by the judge; not
+subject-specific) and the harness's own subject-pass diagnostic.
+
+**Choice (recommended).** Build no production subject pass:
+
+- **S2 is dropped.** That removes `state/decision_subjects.py`, its sweep,
+  `prune_missing_subjects`, the subject-cache forget tests, and the
+  model-tag cache-key correction.
+- **Gate 1 and its probe are dropped.** The verb has one exact gate
+  (Decision B4).
+- **The S1 leaf stays in `src/` unchanged.** `decision_revision.py` imports
+  `quoted_verbatim` from it, and the harness runs `derive_subjects` as a
+  diagnostic. Its module docstring gains one sentence: the subject pass has
+  no production caller.
+- **`DecisionInput.subject` stays** (the harness sets it). The service
+  always passes `None`. Its docstring phrase "kept for the service layer's
+  own use (e.g. a future report)" is corrected to say production never sets
+  it.
+- **ADR-0025 is narrowed before it is accepted.** It is `Proposed`, so it
+  is still editable, and the append-only rule starts at acceptance. See
+  Decision B6.
+
+**Named gap (scope, owner decides).** Dropping a proposal-level "decision
+already taken" (the subject pass) needs the owner's confirmation. The
+proposal lists "subject and value come from a separate post-hoc LLM pass"
+as taken, but it was taken to feed lexical blocking, which #1050 replaced.
+Recommendation: **drop**.
+
+- It removes one LLM call per Decision per prompt or model change, a gate,
+  a table and a privacy-sweep tenant.
+- It serves no consumer.
+- #1014 piece (b) (per-decision history) may want a subject later. It can
+  then add the pass with a measured consumer, and ADR-0025's cache rule can
+  return with it, written against real implementation context.
+
+**If the owner keeps the subject pass (the alternative)**, these return
+exactly as originally designed:
+
+- **S2**: Decision 2 subject table, including the 2026-09-25 model-tag
+  key correction; about 650 lines realistic.
+- **Gate 1 in S7**: Decision 7 steps 3-5; about +150.
+- **Service parts**: `plan_subjects`, `derive_subjects` persistence,
+  subject-cache pruning; about +200.
+- **ADR-0025 unchanged**, shipping with S2.
+- **Spec**: every subject requirement below stays.
+- **Report**: the counts line gains `"N Decision(s) without a subject"`
+  again.
+
+Even then, the subject would feed nothing downstream. It would be computed,
+cached, swept and gated for display only, unless a consumer is added to the
+report.
+
+### Decision B4: Verb sequence, one gate, report wording (revises Decisions 7 and 8)
+
+**Sequence** (replaces Decision 7 steps 3-7):
+
+1. Workspace gate, `read_config`, experimental stderr notice.
+2. `llm = _chat_client(cfg)`, then `local_exemption = _resolve_local_exemption(llm, cfg)`.
+3. `service.load_decisions(...)` applies the exclusions. When there are
+   none, it prints `No Decision objects found.` and exits 0.
+4. `service.plan_revisions(layout, decisions, embedding_model=cfg.embedding_model, effective_confidential=..., fresh=...)`
+   is zero-LLM. It returns the vector coverage (B1), the candidate plan, and
+   the served/to-judge split. A whole-run vector degrade prints its B1
+   message and exits 0 here.
+5. **The one gate**, only when `len(to_judge) > 0`. The truncation notice is
+   printed first, then:
+   `"{candidates} candidate pair(s), {served} served -> {to_judge} LLM call(s) to judge (this can take a while). Pass --auto to skip this prompt."`
+   It has the same three branches as before (`--auto` / TTY confirm /
+   non-TTY refusal, exit 1).
+6. `service.judge_revisions(...)` persists the non-malformed verdicts. The
+   report renders; a partial batch exits 1.
+
+**Report changes** (Decision 8):
+
+- **Stderr notice**:
+  `openkos revisions: experimental -- detection quality is unmeasured on real bundles; review every finding before applying it with 'openkos reconcile --from-findings'.`
+- **Counts line**, printed when any count is non-zero:
+  `"{missing} Decision(s) without an embedding; {stale} changed since the last reindex; {m} excluded (unreadable relations). Run 'openkos reindex' to include them."`
+  Zero-valued clauses are omitted. The remedy clause appears only when
+  `missing + stale > 0`.
+- **No-candidates message**:
+  `No candidate Decision pairs found (need two Decisions from different Sources with similar embeddings).`
+
+### Decision B5: Keep 0.65, cite the production-shape measurement, and make that measurement reproducible
+
+**Choice.** `EMBEDDING_SIMILARITY_THRESHOLD` stays `0.65`. Its docstring is
+rewritten to:
+
+- cite both measurements: title+body 19/24 at 46 candidates; reindex
+  `doc_vectors` shape 19/24, 10/10 confirmation, 55 candidates;
+- state the thin margin: 0.66-0.68 is the tightest value still clearing
+  18/24, 0-1 pairs of headroom, and no clean separation in any shape;
+- keep the overfitting caveat, since both runs use the same library;
+- drop its pointer to `graph/proximity.py`'s docstring as "the production
+  shape", which is stale (see B7). It should cite `state/reindex.py`'s
+  `_compose_header`/`EMBED_COMPOSITION_TAG` instead.
+
+The scratchpad probe is not in the repository, so a docstring citing it
+cites something nobody can re-run. Phase B therefore adds a
+**production-shape arm to the harness** (slice P2). The arm:
+
+- writes the fixture Decisions as OKF concepts into a temporary bundle;
+- runs the real `state.reindex.reindex` with the configured embedder;
+- reads the vectors back through the new `VectorStoreDB.document_vectors`
+  (B1).
+
+The arm is model-free under `--self-test`, using a deterministic fake
+embedder, so the self-test sweep's poisoned `OLLAMA_HOST` still holds. One
+live run is committed to `evals/decision_revisions/results/`, and the
+docstring cites that file. If the committed run disagrees with the probe
+(below 18/24 at 0.65), the threshold is changed in the same slice, before
+the service (P5) ships.
+
+**Alternatives considered**:
+
+- **Tighten to 0.66-0.68.** Rejected. It leaves zero margin on the bar in
+  exchange for 0-few fewer judge calls. Recall matters more here, because
+  the judge is the precision layer.
+- **Cite the scratchpad probe only.** Rejected as unfalsifiable.
+
+**Risk (recorded).** The threshold is measured only for `bge-m3` (the
+ADR-0006 default). With another `embedding_model` it is unmeasured. The
+experimental notice covers this; no model-specific behavior is added.
+
+### Decision B6: ADRs
+
+- **No new ADR is warranted.**
+  - Reading `vectors.db` as a derived input follows the existing
+    precedent: `graph/proximity.py` and `contradictions`/`suggest-relations`
+    already consume it.
+  - Keeping one egress seam is #922's existing decision.
+  - Dropping the subject pass removes an unbuilt plan rather than making a
+    hard-to-reverse choice.
+  - The next free number stays 0029.
+- **ADR-0025, under the recommendation in B3**, is narrowed while still
+  `Proposed`. This is not written now, because it depends on the B3 gap:
+  - Retitle it to its direction half: "Temporal direction between two
+    concepts never comes from a model".
+  - Rename the file to `docs/adr/0025-temporal-direction-never-comes-from-the-model.md`.
+  - Update the README index row.
+  - Move the per-concept-attribute cache rule to "Alternatives considered"
+    as deferred: nothing consumed it, and it returns with its first
+    consumer.
+  - It ships with **P3**, the slice whose schema stores dates and no holder,
+    the last unrealized clause of the direction decision. S3/S4 already
+    realize the rest. Archive flips it to Accepted.
+- **Under the alternative**, ADR-0025 is unchanged and ships with S2.
+
+### Decision B7: The stale `graph/proximity.py` docstring is a follow-up, not in this chain
+
+`graph/proximity.py`'s module docstring says `CANDIDATE_SIMILARITY_THRESHOLD =
+0.70` was calibrated on "the shape `state/reindex.py` actually embeds (whole
+file text, frontmatter included)". That was true before #554.
+`EMBED_COMPOSITION_TAG`'s own docstring records that reindex no longer
+embeds raw frontmatter+body. Since #888 it embeds a title/description/tags
+header plus body chunks.
+
+The fix belongs to `graph`, not this change. An honest correction must also
+say that 0.70 was never re-measured on `chunk-v1`, which is a measurement
+question for graph's owner. **Recommendation:** file a follow-up issue (doc
+correction plus an optional re-measurement), outside this chain. This
+change only stops *citing* that docstring (B5).
+
+### Data flow (current)
+
+```
+openkos revisions [--auto] [--include-confidential] [--fresh] [--all]
+  │ stderr: experimental notice
+  ▼
+load_decisions ──► Decisions minus deprecated ∪ confidential(unless flag/exemption) ∪ bad-relations
+  │   dates: provenance_source_ancestors_many → okf.read_event_date → DecisionDate
+  ▼
+plan_revisions (zero LLM, zero embed)
+  ├─ vector_store_is_empty? ──yes──► "run 'openkos reindex'"  exit 0
+  ├─ open_vector_store (read) ─ tag == embedding_tag(cfg.embedding_model)? ──no──► "run 'openkos reindex'" exit 0
+  ├─ document_vectors(ids) ─ hash == content_hash(file)? ─► vectors | missing | stale
+  ├─ plan_revision_candidates(decisions, vectors) (disjoint, unresolved, cos ≥ 0.65, top-5 union, cap 200)
+  └─ revision_input_digests ──► revision_findings fresh? ──► served / to_judge
+  │   THE GATE (only if to_judge > 0) — exact count; truncation notice first
+  ▼
+judge_revisions ──► pair_direction ──► build_judge_messages ──► llm.chat ──► parse ──► persist
+  ▼
+report                                       writes: .openkos/findings.db only
+```
+
+### File changes (Phase B, current)
+
+| File | Action | Slice | Description |
+|---|---|---|---|
+| `src/openkos/state/vectorstore.py` | Modify | P1 | `VectorStoreDB.document_vectors(concept_ids) -> dict[str, StoredDocVector]`, off the `VectorStore` Protocol (as `neighbors` is): joins `doc_vectors` and `vector_meta` and decodes the float32 blob |
+| `src/openkos/state/reindex.py` | Modify | P1 | Public `embedding_tag(model) -> str`; `_effective_model_tag` delegates to it (behavior unchanged) |
+| `evals/decision_revisions/run_decision_revisions_eval.py`, `README.md`, `results/` | Modify | P2 | `--vector-source {text,reindex}` arm, self-test coverage, one committed live run |
+| `src/openkos/resolution/decision_revision.py` | Modify | P2 | `EMBEDDING_SIMILARITY_THRESHOLD` docstring (value unchanged unless the committed run disagrees); `DecisionInput.subject` docstring |
+| `src/openkos/resolution/decision_subject.py` | Modify | P2 | One docstring sentence: no production caller |
+| `src/openkos/state/revision_findings.py` | Create | P3 | As Decision 2 (unchanged) |
+| `src/openkos/cli/main.py` | Modify | P3, P7b, P8a, P8b | Sweep join (P3); verb (P7b); combined prompt helper (P8a); second walk (P8b) |
+| `docs/adr/0025-*.md`, `docs/adr/README.md` | Modify/rename | P3 | Per Decision B6, only if B3 is accepted |
+| `src/openkos/bundle/provenance.py` | Modify | P4 | `provenance_source_ancestors_many` (Decision 3, unchanged) |
+| `src/openkos/application/revisions.py` | Create | P5, P6 | Service (Interfaces below) |
+| `src/openkos/application/revisions_report.py` *(or a private renderer in `cli/main.py`; tasks decides by the `application/` precedent for renderers)* | Create | P7a | Pure report renderer over service results |
+| `docs/cli.md` | Modify | P7b, P8b | `revisions` section: one gate, reads `vectors.db`, never embeds, `openkos reindex` remedy. `reconcile --from-findings` and `forget` sentences |
+| tests | Create/Modify | each | See Testing |
+
+Not built: `state/decision_subjects.py`, its tests, and its sweep join.
+
+### Interfaces (Phase B, current)
+
+```python
+# state/vectorstore.py
+@dataclass(frozen=True)
+class StoredDocVector:
+    vector: tuple[float, ...]
+    content_hash: str          # vector_meta.content_hash at embed time
+
+class VectorStoreDB:
+    def document_vectors(self, concept_ids: Collection[str]) -> dict[str, StoredDocVector]: ...
+        # ids with no doc_vectors row are absent from the result; never raises for them
+
+# state/reindex.py
+def embedding_tag(model: str) -> str: ...   # f"{model}#{EMBED_COMPOSITION_TAG}"
+
+# application/revisions.py
+VectorStoreState = Literal["ok", "absent", "model-mismatch"]
+
+@dataclass(frozen=True)
+class VectorCoverage:
+    store: VectorStoreState
+    vectors: Mapping[str, Sequence[float]]   # current vectors only
+    missing: frozenset[str]                  # no doc_vectors row
+    stale: frozenset[str]                    # hash differs from the current file
+
+def load_decisions(layout, *, include_confidential: bool, local_exemption: bool) -> DecisionSet: ...
+def read_decision_vectors(layout, decision_ids: Collection[str], files: Mapping[str, bytes],
+                          *, embedding_model: str) -> VectorCoverage: ...
+def plan_revisions(layout, decisions: DecisionSet, *, embedding_model: str,
+                   effective_confidential: bool, fresh: bool) -> RevisionPlan: ...
+    # RevisionPlan carries coverage, candidate plan, served findings, to_judge
+def judge_revisions(layout, plan: RevisionPlan, *, llm: LLMBackend,
+                    effective_confidential: bool, on_progress=None) -> RevisionOutcome: ...
+def revision_input_digests(layout, files, pair_ids) -> tuple[InputDigest, ...]: ...
+def is_fresh(layout, finding: RevisionFinding, *, effective_confidential: bool | None = None) -> bool: ...
+def actionable_revision_findings(layout) -> tuple[RevisionFinding, ...]: ...
+```
+
+Removed from Decision 1's service surface: `plan_subjects`, `derive_subjects`,
+and the `subjects` parameter of `plan_revisions`.
+
+### Testing (Phase B additions; strict TDD, `uv run pytest`)
+
+| Slice | What to test | Mutation killed |
+|---|---|---|
+| P1 | `document_vectors` round trip after `upsert_many` (multi-chunk doc returns the derived doc vector, not a chunk); absent id omitted; returned hash equals the upserted one; empty input gives `{}`; `embedding_tag` parity with `_effective_model_tag` | Returning a chunk row instead of `doc_vectors`; the hash from the wrong table |
+| P2 | Harness `--self-test`: the reindex arm materializes N Decisions and reads back N vectors keyed by concept id, using the fake embedder; the arm refuses (not silently empty) when read-back count ≠ written count; the arm is discovered by `evals/run_self_tests.py` | A read-back that silently returns zero vectors and scores 0/24 as a "no" |
+| P3 | Decision 2 revision-findings rows (four sweep arms, four tests; forget integration by a Source id) | As Decision 2 |
+| P4 | `_many` parity (Decision 3) | Divergent walk |
+| P5 | Coverage: store absent → `absent` **and no `.openkos/vectors.db` created** (filesystem assert); `sqlite-vec` unavailable → `absent`; stored tag `None` or different → `model-mismatch`; hash differs → `stale`; no row → `missing`; `missing`/`stale` ids absent from `vectors`; leaf `without_vector == missing + stale`. Confidential: without the flag, excluded before coverage; with the flag and no stored vector, `missing`; with the flag and a current stored vector, paired. Plus Decision-3 dates, exclusions, serving and staleness rows from the original S6 row, minus the subject rows | `==` → `!=` on hash; tag compared without the `#chunk-v1` suffix; `open_vector_store` called before the emptiness probe |
+| P6 | Judge persistence, malformed not persisted, partial batch; `actionable_revision_findings` strict freshness | As original S6 |
+| P7a | Renderer: counts-line clauses (each alone, all, none), remedy clause only when `missing + stale > 0`, grouping and line shapes (Decision 8) | A remedy printed with nothing to remedy |
+| P7b | One gate: stub-LLM call count == printed count; **zero embedding calls** (a raising `Embedder` stub injected where the verb could reach one, plus an assertion that `OllamaClient.embed` is never called); store-absent and model-mismatch → exit 0, zero LLM calls, message text; nothing under `bundle/` changes; `vectors.db` row content unchanged (content, not file bytes, because WAL side files may appear) | A gate firing at zero; an embed call; a bundle write |
+| P8a/P8b | As original S8 (Decision 9) | As original S8 |
+
+### Slices and dependency order (auto-chain, stacked to `main`)
+
+The forecasts are re-derived from Phase A actuals, which averaged about 1.95×
+the original forecasts (dense docstrings and exhaustive tables are this
+repo's convention). Lines are authored additions plus deletions, tests
+included, specs excluded.
+
+| # | Slice | Depends on | Forecast | 400-line risk |
+|---|---|---|---|---|
+| P1 | Vector read seam (`document_vectors`, `embedding_tag`) + tests | — | ~250 | Low |
+| P2 | Harness production-shape arm + committed run + threshold/`subject` docstrings | P1 | ~400 | Medium |
+| P3 | Revision findings store + sweep join + forget tests (+ ADR-0025 narrowing, per B3) | — | ~550 | High: the table and its sweep may not be split (Decision 2's rule). Recommend `size:exception` |
+| P4 | `provenance_source_ancestors_many` + parity tests | — | ~200 | Low |
+| P5 | Service, planning half: `load_decisions`, dates, `read_decision_vectors`, digests, `is_fresh`, `plan_revisions` | P1, P3, P4 | ~600 | High. The natural seam is coverage+exclusions vs. serving; tasks may split it as P5a/P5b (~300 each) |
+| P6 | Service, judging half: `judge_revisions`, `actionable_revision_findings` | P5 | ~400 | Medium |
+| P7a | Report renderer (pure) + tests | P6 | ~300 | Low |
+| P7b | `revisions` verb, one gate, `docs/cli.md` + tests | P7a | ~400 | Medium |
+| P8a | `_ask_later_decision_and_type` + tests | — (pure CLI helper) | ~200 | Low |
+| P8b | `--from-findings` revision walk, help, docs + tests | P6, P8a | ~450 | Medium |
+
+Chain order: P1 → P2 → P3 → P4 → P5 → P6 → P7a → P7b → P8a → P8b. P3, P4
+and P8a have no upstream dependency and may be reordered earlier freely.
+Total is about 3,750 lines. The alternative in B3 adds about 1,000 (S2
+about 650, gate 1 about 150, service subject parts about 200), plus one
+slice.
+
+### Spec changes the sdd-spec phase must apply
+
+B3 was decided by the owner on 2026-09-28 (drop the subject pass), so all
+of these apply.
+
+`decision-revision-detection`:
+
+1. **Remove** "Post-Hoc Subject Pass Over Decisions Only". It is an ADDED
+   requirement in this delta and was never merged, so it is deleted from
+   the delta rather than marked REMOVED.
+2. **Remove** "Verbatim Evidence Quote Check". Judge-quote verification is
+   covered by the actionability rules.
+3. **Remove** "Subject Cache Keyed By Concept Id, Body Digest And Prompt
+   Version".
+4. **Remove** "A Malformed Subject-Pass Reply Does Not Abort The Run".
+5. **Rename and modify** "Zero-LLM Probe Precedes Each Cost Gate" to "Zero-LLM Probe Precedes The Cost Gate", a single probe:
+   the exact to-judge count, computed with zero LLM calls **and zero
+   embedding calls**. Drop the subject-pass scenario.
+6. **Rename and modify** "Two Sequential Exact Cost Gates" to "One Exact
+   Cost Gate Before Pair Judgment". Drop the subject-gate scenario and keep
+   "Declining the pair-judgment gate makes no judge call".
+7. **Modify** "`revisions` Writes Only Derived State, Never The Bundle".
+   The verb MUST NOT modify `bundle/`. It MUST NOT write any derived store
+   other than `.openkos/findings.db`. It MAY read `.openkos/vectors.db`.
+   It MUST make no embedding call. Drop "the subject cache" from the table
+   list. Reword the scenario's "only `.openkos/findings.db` changes" to
+   "no other derived store's content changes", because opening `vectors.db`
+   in WAL mode may create side files.
+8. **Modify** "Revision Findings Persist In Sibling Tables": drop the
+   subject-cache mentions.
+9. **Add** a requirement, "Candidate Vectors Come From The Reindexed Vector
+   Store", with scenarios:
+   - an absent/empty store yields zero LLM calls and a message naming
+     `openkos reindex`;
+   - a stored embedding-model tag that differs from the configured one
+     yields the same;
+   - a Decision edited since its vector was stored forms no candidate and
+     is counted;
+   - a Decision with no stored vector forms no candidate and is counted.
+10. **Add** a scenario under "Candidate Eligibility Exclusions Applied
+    Before Counting": "With `--include-confidential`, a confidential
+    Decision that has no stored vector is counted as without an embedding
+    and is not embedded". This pins B2 and applies either way.
+11. **Modify** "Revision Findings Are Served From Cache Keyed By Input
+    Digests": the scenario phrase "no LLM call (subject or judge)" becomes
+    "no LLM call".
+
+`forget-command`, "Deletion Sweep Includes Persisted Findings":
+
+12. Drop the SUBJECT-CACHE sentence and "fourth tenant" wording, and the
+    "(Previously: ...)" note's subject-cache mention.
+13. **Remove** the scenario "Forgetting a concept scrubs its subject-cache
+    row".
+14. **Modify** "An unrelated revision finding and subject-cache row are
+    preserved" to cover the revision finding only.
+
+`reconcile-command`: no change.
+
+### Open questions (Phase B)
+
+- [x] **B3 (owner):** drop the production subject pass. **Decided 2026-09-28: yes.**
+- [x] **B2 (owner):** may `--include-confidential` authorize a remote
+      embed? **Decided 2026-09-28: no.**
+- [ ] O(D²) pure-Python cosine over 1024-dimensional vectors is unmeasured
+      at scale. At D = 500 that is about 125k pairs; `cosine_similarity`
+      re-normalizes both vectors per pair, roughly 3 passes of 1024. P5's
+      apply measures it once at D = 500 with synthetic vectors and records
+      the wall time in apply-progress (not a test: timing assertions are
+      flaky). The recorded mitigation, if it binds, is pre-normalizing once
+      in the service, a leaf-compatible change. Not decided now.
