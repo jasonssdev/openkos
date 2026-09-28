@@ -249,6 +249,32 @@ gap named. The thresholds `SUBJECT_OVERLAP_THRESHOLD` (0.5) and
 `_ACTIONABLE_CONFIDENCE` (0.7) are revisited with these numbers before S6,
 as design.md already requires.
 
+## First live run against the bars
+
+`results/decision-revisions-20260928T033104Z-qwen3-8b.md` (raw verdicts in
+the matching `runs-*.json`): qwen3:8b, 15 runs, production sampling.
+**Three of eight bars fail**, so the answer is "no" on those axes.
+
+| Bar | Result | Verdict |
+|---|---|---|
+| B1 direction | 46 of 46 | pass |
+| B2 candidate recall | 15 of 24 (0.62) | **fail** (needs 18) |
+| B3 REVERSES precision | 121 of 173 (0.70) | **fail** (needs 0.80) |
+| B4 REVERSES recall | 121 of 165 (0.73) | pass |
+| B5 REFINES precision | 68 of 84 (0.81) | pass |
+| B6 REFINES recall | 68 of 120 (0.57) | pass |
+| B7 REVERSES<->REFINES confusion | 53 of 285 (0.19) | **fail** (needs <= 0.10) |
+| B8 stability | 0.99 | pass |
+
+Where the failures come from, read from the confusion matrix:
+
+- **B3 and B7 share a cause: REFINES read as REVERSES** (37 of 120 REFINES
+  rows). Those are 37 of the 52 false REVERSES; the other 15 are UNRELATED
+  pairs. Each would write `supersedes` and hide a decision still in force.
+- **B2**: 9 true pairs are never proposed -- 2 are the expected `paraphrase`
+  misses, the other 7 are real candidate-stage gaps (chains through
+  `no-charges-for-late-returns` and the Saturday thread account for 5).
+
 ## Tool-agnostic by construction
 
 This harness names no personal AI-agent tooling, memory system, or IDE. It
