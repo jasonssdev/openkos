@@ -100,6 +100,7 @@ from openkos.resolution.decision_revision import (  # noqa: E402
     JudgeSide,
     RevisionCandidatePlan,
     RevisionVerdict,
+    RevisionVerdictValue,
     is_actionable_revision,
     judge_pairs,
     pair_direction,
@@ -183,7 +184,11 @@ class JudgeRow:
     every judge-stage scoring function below reads."""
 
     pair_ids: tuple[str, str]
-    expected: RevisionExpectation
+    expected: RevisionExpectation | None
+    """`None` for a stage (a) candidate pair the fixture never labelled --
+    the candidate stage may propose any pair. It still counts toward
+    `actionable_rate` (production would act on it), and no label-reading
+    metric can match it, since every `expected == <label>` test is false."""
     observed: str
     confidence: float
     quote_0: str | None
@@ -196,16 +201,18 @@ def judge_rows(
 ) -> list[JudgeRow]:
     """Flatten `runs` (one `judge_pairs` batch's `.results` per run) into
     one `JudgeRow` per `(pair, run)`, matched back to its `LabelledPair`
-    by sorted `pair_ids`."""
+    by sorted `pair_ids`. A pair with no label keeps its row with
+    `expected=None` rather than raising: stage (a) judges whatever the
+    candidate stage proposed, labelled or not."""
     by_key = {_pair_key(*p.decision_ids): p for p in pairs}
     rows: list[JudgeRow] = []
     for run in runs:
         for verdict in run:
-            labelled = by_key[verdict.pair_ids]
+            labelled = by_key.get(verdict.pair_ids)
             rows.append(
                 JudgeRow(
                     pair_ids=verdict.pair_ids,
-                    expected=labelled.expected_verdict,
+                    expected=None if labelled is None else labelled.expected_verdict,
                     observed=verdict.verdict.value,
                     confidence=verdict.confidence,
                     quote_0=verdict.quotes[0],
@@ -402,8 +409,11 @@ def candidate_recall(
 
 
 def confusion_matrix(rows: Sequence[JudgeRow]) -> Counter[tuple[str, str]]:
-    """`(expected, observed)` -> count, over every judged row."""
-    return Counter((row.expected, row.observed) for row in rows)
+    """`(expected, observed)` -> count, over every LABELLED judged row;
+    a row with `expected=None` has no cell to land in."""
+    return Counter(
+        (row.expected, row.observed) for row in rows if row.expected is not None
+    )
 
 
 @dataclass(frozen=True)
@@ -1040,6 +1050,32 @@ def _self_test() -> int:
             "a malformed row keeps no quotes",
             (malformed_rows[0].quote_0, malformed_rows[0].quote_1),
             (None, None),
+        )
+
+    # -- an UNLABELLED candidate pair (a live-run regression) --------------
+    # The candidate stage may propose a pair the fixture never labelled;
+    # stage (a) must keep it as a row (a production finding would come from
+    # it) with no expected verdict, never raise. Built from a real verdict
+    # so only the pair differs.
+    unlabelled_ids = ("decisions/zz-unlabelled-a", "decisions/zz-unlabelled-b")
+    undated = DecisionDate(value=None, state="missing")
+    unlabelled = RevisionVerdict(
+        pair_ids=unlabelled_ids,
+        verdict=RevisionVerdictValue.UNRELATED,
+        confidence=0.0,
+        rationale="",
+        quotes=(None, None),
+        dates=(undated, undated),
+    )
+    try:
+        unlabelled_rows = judge_rows(fixture.pairs, [[unlabelled]])
+    except KeyError as exc:
+        failures.append(f"an unlabelled candidate pair raised KeyError {exc}")
+    else:
+        check(
+            "an unlabelled candidate pair becomes one row with no expected verdict",
+            [(r.pair_ids, r.expected) for r in unlabelled_rows],
+            [(unlabelled_ids, None)],
         )
 
     # -- fixture integrity, over the placeholder AND the real fixture ------

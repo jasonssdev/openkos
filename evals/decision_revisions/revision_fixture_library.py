@@ -9,11 +9,16 @@ README).
 which `--self-test` pins exact numbers against; this module is what a live
 run measures.
 
-**Labels are BY CONSTRUCTION, not yet adjudicated.** The drafter wrote each
+**Labels are owner-adjudicated (2026-09-27).** The drafter wrote each
 scenario and labelled it; every pair where a careful reader could
 reasonably pick a different verdict carries `contested=True` and a one-line
-note. The owner settles every contested pair (task T3) BEFORE any score is
-trusted -- never after (project memory).
+note. The owner settled all 16 contested pairs BEFORE the first live run
+and accepted every proposed label. One was discussed:
+`spring-book-sale-date`/`spring-book-sale` reads as REFINES as text, but
+both Decisions come from one meeting, so it stays UNRELATED -- the
+candidate stage excludes shared-source pairs by design and equal dates give
+no later side, so REFINES would score as a miss no model could avoid.
+`contested` stays set as a record of which calls were doubtful.
 
 `expected_later_id` follows ONLY from the sources' dates below (via
 `resolve_decision_date` + `pair_direction`), never from the narrative:
