@@ -84,7 +84,7 @@ Where the community can contribute: extraction strategies, relation vocabularies
 
 *Goal: a user who never opens a terminal can ask the base a question and see what it is waiting on.*
 
-**Status: in progress — both prerequisites below have shipped.**
+**Status: complete and shipped.** Both prerequisites and every deliverable below have shipped, including the `mcp` adapter itself.
 
 MVP 3 gives the bundle a second surface. Reading it without a terminal is already solved: `bundle/` opens directly as an Obsidian vault, with links that resolve, a graph view over the typed edges, and OKF frontmatter rendered as properties — no plugin, and no configuration shipped by us ([ADR-0019](adr/0019-dot-directories-are-not-knowledge.md), [#981](https://github.com/jasonssdev/openkos/issues/981)–[#984](https://github.com/jasonssdev/openkos/issues/984), closed). What remains terminal-only is *asking* and *deciding*. MCP closes that gap without a frontend: an MCP-speaking chat client becomes the interface, so humans and agents address one surface instead of two that have to be kept in agreement.
 
@@ -126,13 +126,13 @@ Two measurements set the boundaries, rather than taste:
 
 Two edges of the original arc move out on the same reasoning. A local **REST API** goes to the horizon, because MCP already answers the question REST was there to answer, and a second network surface doubles the trust boundary for no user we can name. **Memory projections** go with it: they are a research direction, not a deliverable with someone waiting on it.
 
-Deliverables:
+Deliverables — **all shipped**:
 
-- **Application services for the read verbs** — `status`, `list`, and navigation lifted out of the CLI, so that a second adapter is a thin layer over shared cores rather than a second implementation of them
+- **Application services for the read verbs** (shipped) — `status`, `list`, and navigation lifted out of the CLI, so a second adapter is a thin layer over shared cores rather than a second implementation of them
 - **A stable Python API**, which falls out of the above as the surface those services present
-- **An MCP server** exposing the bundle as tools any compatible agent can call: `query`, `get`, `navigate`, and *what is pending* — the last of which is answerable only because durable pending work shipped first
-- **Sensitivity enforcement at the MCP boundary.** The egress gate already covering embeddings ([#922](https://github.com/jasonssdev/openkos/issues/922), closed) extends to every tool response, so confidential objects do not leave through the new surface
-- **Two ADRs before code**: the sync/async boundary, and concurrency across a human in an editor, an agent over MCP, and (from MVP 4) a daemon. The interprocess lock shipped for concurrent `openkos` processes ([#925](https://github.com/jasonssdev/openkos/issues/925), closed) makes those processes safe with respect to each other; it says nothing about those three writers
+- **An MCP server** ([#1009](https://github.com/jasonssdev/openkos/issues/1009), shipped) exposing the bundle as tools any compatible agent can call: `query`, `get`, `navigate`, and *what is pending* — the last of which is answerable only because durable pending work shipped first
+- **Sensitivity enforcement at the MCP boundary** ([#1010](https://github.com/jasonssdev/openkos/issues/1010), shipped). The egress gate already covering embeddings ([#922](https://github.com/jasonssdev/openkos/issues/922), closed) is joined by a disclosure gate specific to the MCP surface, so confidential objects do not leave through the new surface either as LLM egress or as a raw tool result
+- **Two ADRs before code** (written): the sync/async boundary ([ADR-0021](adr/0021-sync-async-boundary.md)), and concurrency across a human in an editor, an agent over MCP, and (from MVP 4) a daemon ([ADR-0020](adr/0020-concurrency-across-three-writers.md)). The interprocess lock shipped for concurrent `openkos` processes ([#925](https://github.com/jasonssdev/openkos/issues/925), closed) makes those processes safe with respect to each other; the MCP adapter itself never writes and never takes that lock. Building the adapter itself added two more: the hand-rolled server choice ([ADR-0027](adr/0027-hand-rolled-stdio-mcp-server.md)) and MCP disclosure as its own boundary, separate from LLM egress ([ADR-0028](adr/0028-mcp-disclosure-is-its-own-boundary.md))
 
 What a user can do after MVP 3: ask their knowledge base questions from a chat client they already have, see what the base is waiting on, and read and edit the answer in Obsidian — without a terminal.
 
