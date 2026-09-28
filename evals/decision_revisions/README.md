@@ -125,9 +125,10 @@ Every run: **subject pass** (once) -> **candidate generation** (once) ->
 
 The judge is run twice per iteration on purpose: (a) alone cannot tell "the
 judge is wrong" apart from "the judge was never asked", and a pair the
-candidate stage misses (design's own "hard cases on purpose": paraphrased
-subjects lexical overlap can miss) still deserves a judge-quality number. The
-report labels every metric `(a)` or `(b)`.
+candidate stage misses (design's own "hard cases on purpose": a paraphrase
+whose embeddings still fall short of `EMBEDDING_SIMILARITY_THRESHOLD`) still
+deserves a judge-quality number. The report labels every metric `(a)` or
+`(b)`.
 
 Subject pass and candidate generation run exactly once per invocation, not
 once per judge run: both are deterministic given one subject-pass reply per
@@ -147,10 +148,13 @@ requires it.
      subject, how many also kept a verbatim `evidence` quote.
    - *pair overlap >= threshold (of pairs with both subjects)*: of the
      LABELLED pairs where both sides produced a subject, how many clear
-     `SUBJECT_OVERLAP_THRESHOLD` (0.5) -- a prior, purely lexical number,
-     computed directly from `subject_overlap`, independent of the source-
-     disjointness/`resolved_with`/top-k exclusions candidate generation
-     applies on top of it.
+     `SUBJECT_OVERLAP_THRESHOLD` (0.5) -- a purely lexical number, computed
+     directly from `subject_overlap`. This is a DIAGNOSTIC only (#1014
+     sub-change 3): candidate generation itself no longer blocks on it --
+     `plan_revision_candidates` blocks by embedding cosine similarity
+     (`EMBEDDING_SIMILARITY_THRESHOLD`) -- so this metric is independent of,
+     and no longer feeds, the source-disjointness/`resolved_with`/top-k
+     exclusions candidate generation applies.
 2. **Candidate-stage recall**: of the adjudicated TRUE pairs (labelled
    REVERSES/REFINES/REAFFIRMS -- UNRELATED is excluded, since the candidate
    stage proposing an unrelated pair is not itself a miss), how many
@@ -220,8 +224,9 @@ The synthetic fixture is built to cover, on purpose:
 
 - one pair of each of the four verdicts (REVERSES, REFINES, REAFFIRMS,
   UNRELATED);
-- one true pair the candidate stage MISSES (scripted with two subjects that
-  share no lexical tokens at all -- the "paraphrase" hard case);
+- one true pair the candidate stage MISSES (scripted with a `_FakeEmbedder`
+  vector pair whose cosine similarity sits below
+  `EMBEDDING_SIMILARITY_THRESHOLD` -- the "paraphrase" hard case);
 - one pair with NO established direction (one side deliberately undated);
 - one malformed judge reply (degrades to an `UNRELATED`, `malformed=True`
   row, never raises);
@@ -302,7 +307,9 @@ both would make every run identical and B8 would measure nothing.
 **Reading the result.** All eight pass: Phase B may start. Any bar fails:
 the result is "no" for that axis, and the owner decides whether Phase B
 waits for a fix (prompt, threshold, candidate stage) or proceeds with the
-gap named. The thresholds `SUBJECT_OVERLAP_THRESHOLD` (0.5) and
+gap named. The thresholds `EMBEDDING_SIMILARITY_THRESHOLD` (0.65, the
+production candidate blocking rule as of #1014 sub-change 3),
+`SUBJECT_OVERLAP_THRESHOLD` (0.5, now a diagnostic only) and
 `_ACTIONABLE_CONFIDENCE` (0.7) are revisited with these numbers before S6,
 as design.md already requires.
 
