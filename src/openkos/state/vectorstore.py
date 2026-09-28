@@ -40,7 +40,8 @@ import contextlib
 import hashlib
 import math
 import sqlite3
-from collections.abc import Callable, Sequence
+from array import array
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
@@ -167,6 +168,12 @@ _BUSY_TIMEOUT_MS = 5000
 `state/derived.py`'s `_BUSY_TIMEOUT_MS` for `fts.db`/`graph.db` -- keeps all
 three on-disk derived stores consistent (Slice 5, follow-up #4)."""
 
+_TYPECODE = "f"
+"""`array` typecode for float32 -- matches `sqlite_vec.serialize_float32`'s
+own on-disk width, and `state/question_vectors.py`'s identical constant for
+the same reason: decoding must use the SAME width the blob was written
+with."""
+
 
 class VecUnavailable(RuntimeError):
     """Raised when the `sqlite-vec` extension cannot be loaded into SQLite
@@ -183,6 +190,21 @@ class VecHit:
     """The OKF concept ID (bundle-relative path, `.md` suffix removed)."""
     distance: float
     """The vec0 KNN distance -- lower is more similar."""
+
+
+@dataclass(frozen=True)
+class StoredDocVector:
+    """One `document_vectors` result: a document's derived vector and the
+    content hash it was stored under (design.md Decision B1, "Candidate
+    Vectors Come From The Reindexed Vector Store")."""
+
+    vector: tuple[float, ...]
+    """The `doc_vectors` row's derived document-level embedding, decoded
+    from its float32 blob -- never a per-chunk `vectors` row."""
+    content_hash: str
+    """The `vector_meta` row's stored content hash, for the caller to
+    compare against the Decision file's CURRENT content hash and decide
+    whether this vector is stale."""
 
 
 class VectorStore(Protocol):
@@ -661,6 +683,52 @@ class VectorStoreDB:
         decide which discovered docs are unchanged."""
         rows = self._conn.execute(_SELECT_META_HASHES_SQL).fetchall()
         return {str(row[0]): str(row[1]) for row in rows}
+
+    def document_vectors(
+        self, concept_ids: Collection[str]
+    ) -> dict[str, StoredDocVector]:
+        """Return `{concept_id: StoredDocVector}` for every requested id that
+        has a stored row (design.md Decision B1: "Candidate Vectors Come
+        From The Reindexed Vector Store").
+
+        A `JOIN` of `doc_vectors` (the derived one-row-per-document vector,
+        NEVER a per-chunk `vectors` row) and `vector_meta` (the content-hash
+        cache) on `concept_id`, decoding each row's float32 blob the same
+        way `state/question_vectors.py`'s `iter_vectors` does. Deliberately
+        NOT on the `VectorStore` Protocol -- the same "concrete-store-only
+        capability" reasoning `neighbors` already documents applies here: a
+        dict-backed test fake has no `doc_vectors`/`vector_meta` join to
+        offer.
+
+        Any requested id with no stored row is simply absent from the
+        result -- no `KeyError`, no exception. The caller (`revisions`'
+        candidate-vector read) is expected to treat that absence as
+        `missing` or `stale` on its own terms (design.md Decision B1's
+        `missing`/`stale` split), never as an error here. An empty
+        `concept_ids` returns `{}` without issuing a query."""
+        ids = list(concept_ids)
+        if not ids:
+            return {}
+        placeholders = ",".join("?" for _ in ids)
+        # `placeholders` is a run of "?" built from the COUNT of ids passed
+        # in; the ids themselves are bound parameters and are never
+        # interpolated into the SQL text.
+        sql = (
+            "SELECT dv.concept_id, dv.embedding, vm.content_hash "  # noqa: S608
+            "FROM doc_vectors AS dv "
+            "JOIN vector_meta AS vm ON vm.concept_id = dv.concept_id "
+            f"WHERE dv.concept_id IN ({placeholders})"
+        )
+        rows = self._conn.execute(sql, ids).fetchall()
+        result: dict[str, StoredDocVector] = {}
+        for concept_id, blob, content_hash in rows:
+            vector = array(_TYPECODE)
+            vector.frombytes(blob)
+            result[str(concept_id)] = StoredDocVector(
+                vector=tuple(float(x) for x in vector),
+                content_hash=str(content_hash),
+            )
+        return result
 
     def prune(self, concept_id: str) -> None:
         """Remove `concept_id`'s rows from `vectors` (every chunk, #888),
