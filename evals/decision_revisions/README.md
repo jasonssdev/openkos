@@ -13,6 +13,8 @@ uv run python evals/decision_revisions/run_decision_revisions_eval.py --print-fi
 uv run python evals/decision_revisions/run_decision_revisions_eval.py --runs 15
 uv run python evals/decision_revisions/run_decision_revisions_eval.py \
     --runs 15 --model qwen3:8b --temperature 0.0 --seed 7
+uv run python evals/decision_revisions/run_decision_revisions_eval.py \
+    --rescore evals/decision_revisions/results/runs-20260928T103525Z-qwen3-8b.json
 ```
 
 The runner drives the REAL production leaves through their own public API --
@@ -158,7 +160,11 @@ requires it.
 3. **Judge** (both stages, primarily read from (b) since it has no recall
    gap). Stage (b)'s own metrics below are rendered three times each --
    `original`, `confirmation`, `all` -- never pooled into one number ("The
-   confirmation split" above):
+   confirmation split" above), and EACH of those three is itself rendered as
+   three blocks: the blended numbers below (unchanged), the same rows
+   restricted to directed pairs, and the undirected pairs scored
+   change/no-change ("Undirected pairs are scored change/no-change,
+   directed pairs unchanged" below):
    - a confusion matrix, `(expected, observed)` -> count, over the fixture's
      four-value vocabulary (REVERSES/REFINES/REAFFIRMS/UNRELATED);
    - precision and recall of REVERSES and of REFINES specifically;
@@ -192,6 +198,13 @@ function in `run_decision_revisions_eval.py`: `subject_pass_stats`,
 `pair_stability`, `direction_accuracy`. None of them touches a network or a
 model -- they read only the `JudgeRow`/`RevisionCandidatePlan`/
 `DecisionSubject` shapes the real pipeline (`run_pipeline`) already produced.
+
+The untyped-undirected rule (above) adds three more, same posture:
+`directed_rows`/`undirected_rows` (filter `JudgeRow`s by `.directed`) and
+`change_precision_recall` (the undirected change/no-change scorer).
+`rows_from_stored_json` is the `--rescore` counterpart to `judge_rows`,
+rebuilding the same `JudgeRow` shape from a stored run's raw JSON instead
+of a live `judge_pairs` batch.
 
 ## `--self-test`: model-free, zero network
 
@@ -318,6 +331,134 @@ Where the failures come from, read from the confusion matrix:
 - **B2**: 9 true pairs are never proposed -- 2 are the expected `paraphrase`
   misses, the other 7 are real candidate-stage gaps (chains through
   `no-charges-for-late-returns` and the Saturday thread account for 5).
+
+## The undirected rule: an undirected REVERSES/REFINES is an untyped change
+
+Root-caused after the prompt-fix runs above (qwen3:8b baseline, its rejected
+variant, and qwen3:14b): every run's failures concentrate on pairs with NO
+established direction (undated / equal / multiple dates). On the qwen3:8b
+baseline, directed pairs judge at 89% correct; undirected pairs at 56%.
+**Undirected REFINES is never answered at all -- 0 of 30** -- because REFINES
+is directional by the judge prompt's own definition ("keeps the first's
+choice but narrows, extends, or conditions it"), so a judge asked to apply
+that definition with no established order has nothing to narrow relative to.
+
+The owner's decision (2026-09-28, maximum automation, imperfect is fine, no
+new human step): **an undirected REVERSES or REFINES verdict is an untyped
+CHANGE.** The engine (`resolution/decision_revision.py`'s
+`RevisionVerdict.is_untyped_change` / `relation_for`) never infers a relation
+type from it. Detection stays fully automatic; the person picks both the
+later side and the relation type together, in one combined keystroke, during
+`reconcile`'s per-item walk (`openspec/changes/decision-revision-detector/design.md`
+step 7 is updated to describe that prompt). The judge PROMPT itself is
+UNCHANGED by this decision -- it is a scoring-and-consumption rule over the
+judge's existing four-value vocabulary, not a fifth verdict and not a new
+model call, which is exactly what lets every stored `runs-*.json` be
+rescored for free (`--rescore` below).
+
+**This rule was motivated by a diagnosis made AFTER seeing the data** (the
+subgroup breakdown above), not stated in advance like bars B1-B8. Those
+eight bars were fixed before any live run and are **never moved** by this
+rule -- the "Rescored under the untyped-undirected rule" section below
+reports the same eight thresholds, only recomputed with directed and
+undirected rows scored differently, so the comparison stays honest about
+what changed and what did not.
+
+## Undirected pairs are scored change/no-change, directed pairs unchanged
+
+Every judge-stage report (live run or `--rescore`) now shows THREE blocks per
+split (`original`, `confirmation`, `all`), never replacing one with another:
+
+1. The existing BLENDED four-way numbers (`#1014` task T1's own split
+   reporting) -- unchanged, so the old view stays visible.
+2. The same rows restricted to **directed** pairs only (`directed_rows`) --
+   still the ordinary four-way REVERSES/REFINES/REAFFIRMS/UNRELATED scoring.
+3. The **undirected** pairs only (`undirected_rows`), scored as a binary
+   change/no-change classifier (`change_precision_recall`): expected
+   REVERSES or REFINES collapses to CHANGE; observed `reverses` or
+   `refines` collapses to change. Precision and recall of CHANGE are
+   reported `k of n`, exactly as every other rate in this harness.
+
+`JudgeRow.directed` (`True`/`False`/`None` for an unlabelled stage (a)
+candidate row) is read from the fixture's own `LabelledPair.expected_later_id`
+(non-`None` iff direction is known) -- never recomputed from a judged
+verdict, and never stored in `runs-*.json`, so it is always derived fresh
+against whichever fixture is loaded.
+
+## `--rescore`: recomputing a report with zero model calls
+
+```bash
+uv run python evals/decision_revisions/run_decision_revisions_eval.py \
+    --rescore evals/decision_revisions/results/runs-20260928T103525Z-qwen3-8b.json
+```
+
+Rebuilds every judge-stage, candidate-recall, and direction-accuracy metric
+from a stored `runs-*.json`'s raw `rows_a`/`rows_b` -- zero Ollama calls,
+zero re-judging. `pair_ids` are re-matched against the CURRENT
+`load_library_fixture()` (`rows_from_stored_json`), so `expected`, `split`,
+and `directed` are always freshly derived from the fixture, never trusted
+from the stored JSON -- an older run's JSON carries no `split` key at all
+(it predates task T1) and none ever carries a `directed` key (it predates
+this rule); only what the model actually produced
+(`observed`/`confidence`/`quote_0`/`quote_1`/`malformed`) is read back.
+Candidate recall is recomputed from the stored `candidates` list; direction
+accuracy is deterministic and reads only the fixture's own dates, never the
+stored run. **The subject-pass section cannot be rescored** -- its raw
+per-Decision replies are never persisted in `runs-*.json` -- so a rescored
+report omits it rather than fabricating it.
+
+Writes `decision-revisions-<stamp>-<model>-rescored.md` next to the input
+file, `<stamp>`/`<model>` read from the JSON's own `generated_at`/`model`
+fields, and prints the report.
+
+## Rescored under the untyped-undirected rule
+
+The three stored runs from the prompt-fix task (T3/T5, above) were rescored.
+`runs-20260928T033104Z-qwen3-8b.json` (the very first live run, predating
+the confirmation split) was tried too: its rows still resolve cleanly
+against the current fixture (the confirmation pairs are additive, so an
+older run's `pair_ids` are all still present), so it rescores without error
+-- it is not committed as a fourth report here, since it belongs to an
+earlier task's own delivery, not this one.
+
+**Baseline, `runs-20260928T103525Z-qwen3-8b.json`** (qwen3:8b, base prompt,
+original split, B1-B8 thresholds UNCHANGED):
+
+| Bar | Metric | Result | Verdict |
+|---|---|---|---|
+| B1 | Direction accuracy | 46 of 46 | pass |
+| B2 | Candidate-stage recall | 14 of 24 | fail |
+| B3 | REVERSES precision (directed) | 94 of 117 (0.80) | pass |
+| B4 | REVERSES recall (directed) | 94 of 120 (0.78) | pass |
+| B5 | REFINES precision (all rows, unaffected) | 67 of 81 (0.83) | pass |
+| B6 | REFINES recall (directed) | 67 of 90 (0.74) | pass |
+| B7 | REVERSES<->REFINES confusion (directed) | 22 of 210 (0.10) | fail |
+| B8 | Mean modal-verdict share | 0.98 | pass |
+
+Read against the ORIGINAL (blended) numbers this same run reported (B3 0.70,
+B4 0.73, B6 0.57, B7 0.19, all fail or borderline): **B3, B4 and B6 pass
+once undirected rows are removed from the REVERSES/REFINES bars**, and B7
+moves from a clear fail (0.19) to a near-miss (0.10, still technically not
+`<=`) -- confirming the diagnosis: the failures the prompt-fix task chased
+were concentrated in the undirected subgroup, not evenly spread across the
+whole judge. B2 (candidate recall) and B8 (stability) are unaffected by
+this rule and unchanged. This does **not** flip the prompt-fix decision
+(that decision was already settled on other evidence, in the section
+above) -- it only shows what the ORIGINAL fixture's numbers were actually
+telling us.
+
+**The other two stored runs, in one line each:**
+
+- `runs-20260928T121032Z-qwen3-8b.json` (the REJECTED prompt variant):
+  directed B3 90/105 (0.86), B4 90/120 (0.75), B6 75/90 (0.83), B7 15/210
+  (0.07) -- all four pass under the new rule too, but this run stays
+  rejected: it was rejected for the guest-wifi-access regression on the
+  original split, a defect this rescoring does not touch.
+- `runs-20260928T145434Z-qwen3-14b.json` (qwen3:14b, base prompt): directed
+  B3 90/112 (0.80) pass, B4 90/120 (0.75) pass, B5 60/105 (0.57) **fail**,
+  B6 60/90 (0.67) pass, B7 45/210 (0.21) **fail** -- worse than qwen3:8b on
+  REFINES precision and confusion even under the new rule, consistent with
+  the task doc's "capacity is not the lever" conclusion.
 
 ## Tool-agnostic by construction
 
