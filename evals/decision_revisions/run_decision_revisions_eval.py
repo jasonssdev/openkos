@@ -59,6 +59,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import pathlib
 import statistics
 import sys
@@ -89,10 +90,12 @@ from revision_fixtures import (  # noqa: E402
 
 from openkos.config import (  # noqa: E402
     DEFAULT_CONTEXT_WINDOW,
+    DEFAULT_EMBEDDING_MODEL,
     DEFAULT_MAX_GENERATION_TOKENS,
 )
-from openkos.llm.base import LLMBackend, Message  # noqa: E402
+from openkos.llm.base import Embedder, LLMBackend, Message  # noqa: E402
 from openkos.resolution.decision_revision import (  # noqa: E402
+    EMBEDDING_SIMILARITY_THRESHOLD,
     JUDGE_PROMPT_VERSION,
     RELATION_FOR_VERDICT,
     SUBJECT_OVERLAP_THRESHOLD,
@@ -172,6 +175,32 @@ class ScriptedBackend:
         reply = self.replies[self.calls]
         self.calls += 1
         return reply
+
+
+@dataclass
+class _FakeEmbedder:
+    """A model-free `Embedder` for `--self-test` (#1014 sub-change 3): zero
+    network, zero Ollama. Returns `vectors` verbatim, ignoring `texts`'
+    content entirely -- scripted by POSITION, exactly like `ScriptedBackend`
+    is scripted by call order rather than by message content.
+    `run_pipeline` embeds every Decision in ONE batched call, in sorted
+    `concept_id` order (`embed_text` builds the text, but this double never
+    reads it), so `vectors[i]` is understood to belong to
+    `sorted(decisions_by_id)[i]`. Exhausting -- a length mismatch -- is a
+    fixture bug, never a silent wrong-length reply."""
+
+    vectors: list[list[float]]
+    calls: int = field(default=0)
+
+    def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        if len(texts) != len(self.vectors):
+            raise AssertionError(
+                f"_FakeEmbedder scripted for {len(self.vectors)} vector(s), "
+                f"got {len(texts)} text(s) -- the fixture's Decision count "
+                "and this double's vector count have drifted apart"
+            )
+        self.calls += 1
+        return self.vectors
 
 
 # ---------------------------------------------------------------------------
@@ -301,12 +330,29 @@ class PipelineResult:
     dates_by_id: dict[str, DecisionDate]
 
 
-def run_pipeline(fixture: Fixture, llm: LLMBackend, *, runs: int) -> PipelineResult:
-    """Run the full measured pipeline once -- subject pass and candidate
-    generation exactly once, then the judge `runs` times over (a) and (b)
-    -- entirely through the production leaves' own public API. `llm` is
-    one shared backend for every stage: the caller decides whether that
-    is a `ScriptedBackend` (`--self-test`) or a real `OllamaClient`."""
+def embed_text(title: str, body: str) -> str:
+    """The exact text `run_pipeline` embeds for one Decision: title, a
+    blank line, then body -- the same shape the offline calibration probe
+    used (#1014 sub-change 3), SHORT text, not a full OKF document. A
+    module-level function (not inlined) so a live run and a rescore/report
+    reader can agree on the shape without re-deriving it."""
+    return f"{title}\n\n{body}"
+
+
+def run_pipeline(
+    fixture: Fixture, llm: LLMBackend, embedder: Embedder, *, runs: int
+) -> PipelineResult:
+    """Run the full measured pipeline once -- subject pass, embedding, and
+    candidate generation exactly once, then the judge `runs` times over (a)
+    and (b) -- entirely through the production leaves' own public API.
+    `llm` is one shared chat backend for every stage that talks
+    (subject pass, judge): the caller decides whether that is a
+    `ScriptedBackend` (`--self-test`) or a real `OllamaClient`. `embedder`
+    is separate (the `Embedder` protocol, not `LLMBackend`) -- ONE batched
+    `embed()` call embeds every Decision (#1014 sub-change 3): vectors do
+    not change across the `runs` judge iterations, and embedding is
+    deterministic enough that embedding once, not once per run, is the
+    right cost/robustness trade for this harness."""
     sources_by_id = {s.source_id: s for s in fixture.sources}
     decisions_by_id = {d.concept_id: d for d in fixture.decisions}
     dates_by_id = {
@@ -330,6 +376,13 @@ def run_pipeline(fixture: Fixture, llm: LLMBackend, *, runs: int) -> PipelineRes
         if subject is not None
     }
 
+    embed_texts = [
+        embed_text(decisions_by_id[concept_id].title, decisions_by_id[concept_id].body)
+        for concept_id in ordered_ids
+    ]
+    embedded_vectors = embedder.embed(embed_texts)
+    vectors_by_id = dict(zip(ordered_ids, embedded_vectors, strict=True))
+
     decision_inputs = [
         DecisionInput(
             concept_id=concept_id,
@@ -339,7 +392,7 @@ def run_pipeline(fixture: Fixture, llm: LLMBackend, *, runs: int) -> PipelineRes
         )
         for concept_id in ordered_ids
     ]
-    plan = plan_revision_candidates(decision_inputs)
+    plan = plan_revision_candidates(decision_inputs, vectors_by_id)
     candidate_pair_ids = {candidate.pair_ids for candidate in plan.candidates}
 
     def judge_side(concept_id: str) -> JudgeSide:
@@ -944,6 +997,30 @@ _MALFORMED_JUDGE_REPLY: Final = "the model got confused and did not reply in JSO
 _MALFORMED_SUBJECT_REPLY: Final = "not a JSON object at all, just prose."
 
 
+def _unit_vector(index: int, dims: int) -> list[float]:
+    """An orthonormal basis vector for `_self_test`'s `_FakeEmbedder`
+    script: `1.0` at `index`, else `0.0`. Two DIFFERENT indices score
+    `cosine_similarity` exactly `0.0`; the SAME index given to two
+    Decisions scores exactly `1.0`."""
+    vector = [0.0] * dims
+    vector[index] = 1.0
+    return vector
+
+
+def _vector_at_cosine(
+    base_index: int, other_index: int, cosine: float, dims: int
+) -> list[float]:
+    """A unit vector scoring `cosine_similarity` exactly `cosine` against
+    `_unit_vector(base_index, dims)`, staying exactly orthogonal to every
+    other family's basis dimension (see `test_decision_revision.py`'s
+    identical helper, which this mirrors for the same reason: geometrically
+    EXACT control over the scripted score, not an approximation)."""
+    vector = [0.0] * dims
+    vector[base_index] = cosine
+    vector[other_index] = math.sqrt(max(0.0, 1.0 - cosine * cosine))
+    return vector
+
+
 def _self_test() -> int:
     """Runs the REAL pipeline (`run_pipeline`) over `revision_fixtures`'s
     tiny synthetic set through a `ScriptedBackend`, then asserts exact
@@ -1105,17 +1182,64 @@ def _self_test() -> int:
         judge_replies += [judge_reply(key, run_index) for key in stage_b_order]
 
     backend = ScriptedBackend(replies=subject_replies + judge_replies)
-    result = run_pipeline(fixture, backend, runs=self_test_runs)
 
-    # --- wiring: candidate generation over the SCRIPTED subjects ----------
+    # Embedding script (#1014 sub-change 3): one unit vector per family --
+    # billing/office/parking/release/standup each get ONE shared dimension
+    # per pair (cosine 1.0 within the pair, 0.0 against every other
+    # family). `oncall` gets its OWN two dimensions, combined so its pair's
+    # cosine is exactly 0.5 -- BELOW `EMBEDDING_SIMILARITY_THRESHOLD`
+    # (0.65) on purpose: the geometric equivalent of the retired lexical
+    # fixture's "paraphrase" miss (deliverable: "one true pair the
+    # candidate stage MISSES"). `orphan-note` gets its own isolated
+    # dimension too: its scripted subject-pass reply is still malformed
+    # (`_MALFORMED_SUBJECT_REPLY`), but embedding never depends on the
+    # subject pass succeeding, so it now DOES get a vector -- it simply
+    # pairs with nothing, being alone in its family.
+    (
+        _BILLING,
+        _OFFICE,
+        _ORPHAN,
+        _PARKING,
+        _RELEASE,
+        _STANDUP,
+        _ONCALL,
+        _ONCALL_OFFSET,
+    ) = range(8)
+    vector_by_id = {
+        "decisions/billing-tool-v1": _unit_vector(_BILLING, 8),
+        "decisions/billing-tool-v2": _unit_vector(_BILLING, 8),
+        "decisions/office-seating": _unit_vector(_OFFICE, 8),
+        "decisions/office-snacks": _unit_vector(_OFFICE, 8),
+        "decisions/oncall-rotation-v1": _unit_vector(_ONCALL, 8),
+        "decisions/oncall-rotation-v2": _vector_at_cosine(
+            _ONCALL, _ONCALL_OFFSET, 0.5, 8
+        ),
+        "decisions/orphan-note": _unit_vector(_ORPHAN, 8),
+        "decisions/parking-policy-v1": _unit_vector(_PARKING, 8),
+        "decisions/parking-policy-v2": _unit_vector(_PARKING, 8),
+        "decisions/release-cadence-v1": _unit_vector(_RELEASE, 8),
+        "decisions/release-cadence-v2": _unit_vector(_RELEASE, 8),
+        "decisions/standup-time-v1": _unit_vector(_STANDUP, 8),
+        "decisions/standup-time-v2": _unit_vector(_STANDUP, 8),
+    }
     check(
-        "without_subject excludes exactly the orphan note",
-        result.plan.without_subject,
-        1,
+        "embedding script covers exactly the fixture's own decisions",
+        sorted(vector_by_id),
+        sorted(bodies),
+    )
+    embedder = _FakeEmbedder(vectors=[vector_by_id[cid] for cid in ordered_ids])
+
+    result = run_pipeline(fixture, backend, embedder, runs=self_test_runs)
+
+    # --- wiring: candidate generation over the SCRIPTED embeddings --------
+    check(
+        "without_vector: every fixture decision has a scripted vector",
+        result.plan.without_vector,
+        0,
     )
     check("no candidate truncation on this tiny fixture", result.plan.total, 5)
     check(
-        "candidate set is exactly the 5 lexically-overlapping pairs",
+        "candidate set is exactly the 5 embedding-similar pairs",
         result.candidate_pair_ids,
         {
             _pair_key("decisions/billing-tool-v1", "decisions/billing-tool-v2"),
@@ -2021,12 +2145,18 @@ def main(argv: list[str] | None = None) -> int:
         temperature=args.temperature,
         seed=args.seed,
     )
+    # A SEPARATE client, not `client` above: `OllamaClient` embeds through
+    # the same `self._model` it chats through, and the embedding model
+    # (`bge-m3`, ADR-0006) is never the same tag as `args.model` (a chat
+    # model, e.g. `qwen3:8b`) -- see `OllamaClient.__init__`'s own
+    # docstring.
+    embedder = OllamaClient(model=DEFAULT_EMBEDDING_MODEL)
 
     print(
-        f"model {args.model}, {args.runs} run(s), "
+        f"model {args.model}, embedding {DEFAULT_EMBEDDING_MODEL}, {args.runs} run(s), "
         f"{len(fixture.decisions)} decisions, {len(fixture.pairs)} labelled pairs\n"
     )
-    result = run_pipeline(fixture, client, runs=args.runs)
+    result = run_pipeline(fixture, client, embedder, runs=args.runs)
 
     subject_stats = subject_pass_stats(result.subject_results)
     overlap_stats = pair_overlap_stats(
@@ -2067,7 +2197,10 @@ def main(argv: list[str] | None = None) -> int:
                 "subject_prompt_version": SUBJECT_PROMPT_VERSION,
                 "judge_prompt_version": JUDGE_PROMPT_VERSION,
                 "subject_overlap_threshold": SUBJECT_OVERLAP_THRESHOLD,
-                "without_subject": result.plan.without_subject,
+                "candidate_mode": "embedding",
+                "embedding_model": DEFAULT_EMBEDDING_MODEL,
+                "embedding_similarity_threshold": EMBEDDING_SIMILARITY_THRESHOLD,
+                "without_vector": result.plan.without_vector,
                 "candidate_total": result.plan.total,
                 "candidates": [[*c.pair_ids, c.score] for c in result.plan.candidates],
                 "rows_a": _rows_to_json(result.rows_a),
@@ -2099,6 +2232,11 @@ def main(argv: list[str] | None = None) -> int:
         "Labels are owner-adjudicated (T3), never scored before settlement. "
         "The `original` and `confirmation` splits (#1014 task T1) are always "
         "reported separately below, plus `all`; never blended.",
+        "",
+        f"Candidate mode: `embedding` (#1014 sub-change 3), embedding model "
+        f"`{DEFAULT_EMBEDDING_MODEL}`, similarity threshold "
+        f"`{EMBEDDING_SIMILARITY_THRESHOLD}` -- see `EMBEDDING_SIMILARITY_THRESHOLD`'s "
+        "own docstring for its calibration basis and re-measurement requirement.",
         "",
         "## Subject pass",
         "",
