@@ -62,6 +62,8 @@ openkos/
 │   │   └── consent.py            # confirmation gates staged as typed data
 │   ├── cli/                      # Typer entry layer
 │   │   ├── main.py  curate.py  next_action.py  observability.py
+│   ├── mcp/                      # stdio MCP adapter (read-only), async edge over the sync core
+│   │   ├── transport.py  server.py  tools.py  gate.py
 │   ├── config.py                 # openkos.yaml + WorkspaceLayout
 │   ├── lint.py  lifecycle.py  sensitivity.py
 │   ├── fsio.py  lock.py          # filesystem primitives; interprocess lock
@@ -77,7 +79,7 @@ openkos/
 
 The principles that shape it:
 
-- **Each package is a piece of the architecture.** `model` is the Knowledge Object; `bundle` + `vcs` are the durable canonical layer; `state` + `retrieval` + `graph` are the derived layer; `extraction` + `resolution` are the pipeline that turns text into objects and then decides what they mean; `lint`/`lifecycle`/`sensitivity` are the disciplines; `cli` is the entry layer.
+- **Each package is a piece of the architecture.** `model` is the Knowledge Object; `bundle` + `vcs` are the durable canonical layer; `state` + `retrieval` + `graph` are the derived layer; `extraction` + `resolution` are the pipeline that turns text into objects and then decides what they mean; `lint`/`lifecycle`/`sensitivity` are the disciplines; `cli` and `mcp` are entry layers, one synchronous over stdin/args, one async over stdio.
 - **The `base.py` files are the seams that exist today.** `graph/base.py` and `llm/base.py` define the shapes their implementations satisfy (`sqlite_graph.py`, `ollama.py`). They are internal seams, not a published plugin API: OpenKOS ships no `Producer`/`Consumer` interface and no entry-point group. That extension surface is a roadmap item, not present code — see [`roadmap.md`](roadmap.md).
 - **Use-case services, not one orchestrator.** [ADR-0018](adr/0018-application-layer-for-bounded-context-services.md) chose narrow synchronous services under `application/` over a single `engine.py`, so each use case owns its own composition instead of one module owning all of them. All three have landed — `query.py`, `ingest.py`, `lifecycle.py` — with `consent.py` holding the confirmation contracts as typed data so a non-TTY adapter can answer a gate without re-deriving its prompt ([#918](https://github.com/jasonssdev/openkos/issues/918)). `cli/` keeps parsing, presentation, exit codes, and the shared write mechanics the services call through rather than own.
 - **The derived layer is reconstructible — but not uniformly, and not for free.** The five SQLite stores under `.openkos/` sit at three different points on that scale. See [State taxonomy](#state-taxonomy) below, which is the one place that distinction is written down.
@@ -91,7 +93,7 @@ A few conventions keep the repository clean as it grows:
 - **Specs are the contract, and they live in `openspec/`.** Behavior is agreed before it is built: `openspec/specs/{domain}/spec.md` is the living per-domain contract, and `openspec/changes/{change-name}/` carries a change in flight — proposal, delta specs, design, tasks — until it lands and its deltas merge into the main spec. The directory is tracked and reviewed like any other file, so the contract is readable by contributors rather than private to whoever wrote the code. `openspec/config.yaml` configures that process only; it does not compete with `pyproject.toml`, which remains the single source of config for the toolchain.
 - **Ship types.** Include an empty `src/openkos/py.typed` marker so type information is published to tools and to packages that extend OpenKOS.
 - **Internal seams are `typing.Protocol`.** Structural typing lets an implementation satisfy a seam without importing or subclassing it. Today this is used inside the engine (the graph and LLM backends); publishing any of it as a third-party extension point is a roadmap item and would need its own ADR.
-- **The core is synchronous.** The CLI, the application services, the extraction pipeline, and the stores are plain sync code. When the local API and MCP server arrive in MVP 3 they form an async edge that calls the sync core through a thread pool; parallel work such as batch embedding also uses a thread pool from sync code. The core is not made async — which is why ADR-0018's services are specified as synchronous.
+- **The core is synchronous.** The CLI, the application services, the extraction pipeline, and the stores are plain sync code. The `mcp` adapter is the one async edge over that core today: it owns the only event loop reaching into `mcp/`, and each tool call runs the synchronous application services on its own worker thread (ADR-0021, ADR-0027). A future local API would form its async edge the same way; parallel work such as batch embedding also uses a thread pool from sync code. The core itself is not made async — which is why ADR-0018's services are specified as synchronous.
 - **Layering is a followed convention, not yet an automated guard.** The canonical layer (`model`, `bundle`, `vcs`) does not depend on the derived layer (`state`, `retrieval`, `graph`); derived depends on canonical, never the reverse. `fsio` and `lock` are leaf modules that import nothing from `openkos`, so either layer may use them. A tool such as import-linter would guard these boundaries in CI; it is not wired yet.
 - **The OKF adapter is one seam.** Everything that knows the on-disk shape of the format — parsing and emitting frontmatter, the reserved-file structure, the conformance rules of §9 — lives in `model/okf.py` and nowhere else. The rest of the engine works with Knowledge Objects and never touches the format directly. This is deliberate risk containment: OKF is a **v0.1 draft**, and §11 permits a major version to rename required fields or change reserved filenames. Keeping the format behind one module makes a spec revision a contained change to one file instead of a search across the codebase, and it is the reason we can adopt a young standard without betting the engine on it.
 
@@ -192,7 +194,7 @@ Local-first constrains *where the data and compute live* — on the user's machi
 - **Chat / agent (MCP)** — the user "just talks to" OpenKOS from an AI client. For some non-technical users this is the lowest-friction interface of all.
 - **CLI** — for technical users and automation.
 
-The key architectural point: all of these are **thin adapters over the same local engine**. Today only `cli` exists; `api` and `mcp` are MVP 3 work, and the application services under `application/` are being extracted precisely so those adapters have a surface to call that is not Typer's internals. Adding a front-end never touches the core; UIs stack on top of one engine. For non-technical users the likely order is desktop app first, then chat/MCP, then an editor plugin.
+The key architectural point: all of these are **thin adapters over the same local engine**. Today `cli` and `mcp` both exist; `api` remains MVP 3 work. The application services under `application/` are what let `mcp` be a thin adapter rather than a second implementation of the CLI's read verbs — the same reason a future `api` would extract nothing new. Adding a front-end never touches the core; UIs stack on top of one engine. For non-technical users the likely order is desktop app first, then chat/MCP, then an editor plugin.
 
 The one thing outside the local-first spirit is a **cloud-hosted, multi-tenant** service holding users' knowledge. A legitimate middle ground is **self-hosting** — the user runs the local web UI on their *own* server or VPS: still their data and their machine, just remote, rather than someone else's cloud.
 
@@ -202,10 +204,9 @@ Nothing in this section exists yet. It is kept separate from everything above so
 a reader can never mistake a plan for a module, and it is deliberately short —
 dates and scope belong to [`roadmap.md`](roadmap.md), not here.
 
-- **`api/` and `mcp/` (MVP 3).** Thin async adapters over the synchronous
-  application services — which is the reason those services are being extracted
-  first. An adapter built on Typer command internals would duplicate behaviour
-  and drift.
+- **`api/` (MVP 3).** A thin async adapter over the synchronous application
+  services, following the same pattern `mcp/` already ships: an adapter built
+  on Typer command internals would duplicate behaviour and drift.
 - **A published extension surface.** `Producer`/`Consumer` interfaces and an
   entry-point group for third-party ingesters and exporters are a roadmap item
   (MVP 3 and Horizon). No interface, protocol, or entry point for them exists
@@ -281,5 +282,8 @@ break that.
   irreversible `purge` backed by `vcs/git.py`), and sensitivity enforcement at
   the retrieval boundary — confidential concepts are filtered before any send to
   a backend not verifiably on this machine.
-- **MVP 3 (The Runtime and Interoperability)** — in progress. The orchestration
-  prerequisite is the application-service extraction above; the adapters follow.
+- **MVP 3 (The Ask Surface)** — delivered: the application-service extraction
+  for the read verbs (`application/concept_read.py`, `application/consistency.py`,
+  `application/backends.py`), and the `mcp` adapter built on it. A local REST
+  API and full OKF import/export were split out to their own arcs; see
+  [`roadmap.md`](roadmap.md).

@@ -767,6 +767,40 @@ Prints one summary line reporting how many documents were embedded, cache-hit, p
 
 An unreachable Ollama, a missing embedding model, an unusable `sqlite-vec` extension, an unusable `fts5` module, or a filesystem error writing the graph index is reported on stderr with no raw traceback and exits 1 — the same ordered ladder `query` uses, extended to cover all three stores. `.openkos/vectors.db` and `.openkos/fts.db` are `query`'s two retrieval seams (hybrid-retrieval-fusion Slice 3; performance-caching Slice 5): run `reindex` at least once to enable dense/FTS retrieval — without it, or with a corrupt store, `query` still works, falling back to whichever list remains healthy, with a stderr hint. `.openkos/graph.db` is still written here, but its readers are now `contradictions` and the typed-graph tooling, not `query` (#434).
 
+### `openkos mcp`
+
+**Read-only.** Serves one workspace to a Model Context Protocol client over stdio, exposing four tools: `query`, `get`, `navigate`, and `pending`. This is the ask surface MVP 3 describes — the same knowledge base the CLI reads, addressed from a chat client instead of a terminal. `mcp` never writes and never acquires the workspace lock; it belongs to the same read-only class as `status`/`next`/`list`/`lint`/`doctor`.
+
+| Flag | Meaning |
+| --- | --- |
+| `--workspace <dir>` | Workspace directory to serve. Defaults to the current directory. Validated with the same `require_workspace` + `read_config` gate every read command uses, and *before* any stdio activity starts — an invalid workspace exits `1` with the refusal on stderr, and nothing is ever written to stdout. |
+| `--expose-confidential` | Disclose confidential objects to the connecting client. Read once at launch, with no per-request override anywhere in the protocol surface. Off by default: every confidential object is withheld. |
+
+`openkos mcp` speaks JSON-RPC 2.0 over stdin/stdout, one message per line, and runs as a subprocess a client launches and manages — there is no network flag and no port to open. A generic client configuration looks like:
+
+```json
+{
+  "mcpServers": {
+    "openkos": {
+      "command": "openkos",
+      "args": ["mcp", "--workspace", "/path/to/workspace"]
+    }
+  }
+}
+```
+
+or, launched directly:
+
+```bash
+openkos mcp --workspace /path/to/workspace
+```
+
+**With the flag off, answers are less complete than `openkos query` on a local backend.** The `query` tool always resolves `include_confidential=False`, so a confidential object never enters the prompt unless `--expose-confidential` was passed at launch **and** the configured chat backend is verifiably local (the same [locality rule](#sensitivity-and-the-local-backend) the CLI's own `query` command already follows) — the launch flag alone is not enough. The `get`, `navigate`, and `pending` tools apply the identical rule to their own structured output: a confidential concept, edge, or provenance entry is withheld and counted rather than shown, and the opt-in is the only way to see it.
+
+**A disclosable object's text is shown as written**, even when it names a confidential one by name — sensitivity is a property of the object being disclosed, never of what its prose happens to mention. Only structured channels are gated (ids, titles, edges, provenance, and pending-work subjects); a public or private document's own body is never redacted.
+
+Every tool result is a success — never a JSON-RPC error for a disclosure decision — carrying `withheld` (a count, never content), `warnings` (an in-flight write or a stale derived store), and `not_run` (a check that could not complete, reported rather than raised): incompleteness is data, not failure (ADR-0022). `get`, `navigate`, and `pending` never report a stale derived store; only `query` reads one recent enough to go stale.
+
 ## `openkos.yaml` (workspace config)
 
 Structured settings for the workspace, read by the engine. It lives at the workspace root, beside `raw/` and `bundle/` — not inside the bundle, which holds concept documents and nothing else.
@@ -1033,4 +1067,4 @@ A withheld document is **not** an error and does not change the exit code. `rein
 
 ## Still deferred (MVP 3)
 
-For orientation, these are **not** yet part of the CLI: the MCP server, the local REST API, and full OKF import/export, together with sensitivity enforcement at those new export/agent boundaries. Everything else described above — hybrid semantic/graph query, volatility-aware freshness windows, entity resolution and merge, the typed graph, reference-aware/cascade `forget`, and the `purge` verb — ships today (MVP 1 and MVP 2 complete).
+For orientation, these are **not** yet part of the CLI: the local REST API and full OKF import/export. `openkos mcp` (above) already ships the ask surface — an MCP client, not the CLI, is its interface. Everything else described above — hybrid semantic/graph query, volatility-aware freshness windows, entity resolution and merge, the typed graph, reference-aware/cascade `forget`, and the `purge` verb — ships today (MVP 1 and MVP 2 complete).
