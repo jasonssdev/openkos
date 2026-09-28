@@ -28,6 +28,15 @@ list) reads this same function to choose presentation order, and
 holder -- so there is exactly one authority on direction, and no reply
 field can ever disagree with it.
 
+A judged REVERSES/REFINES verdict over a pair with NO established
+direction (`direction.holder is None`) is an UNTYPED change
+(`RevisionVerdict.is_untyped_change`, `relation_for`): the judge cannot
+tell an overturn from a narrowing apart without an order to reason over,
+so this leaf never infers a relation type for one. It stays actionable --
+the human still sees it and supplies both the later side and the relation
+type together, in `reconcile`'s combined prompt -- only the automatic
+type inference is withheld.
+
 `subject_overlap`/`plan_revision_candidates` implement design.md Decision 4:
 lexical subject blocking through `resolution.similarity.tokenize`/
 `.MATCH_FUNCTION_WORDS`'s PUBLIC names only (no import of the private
@@ -647,6 +656,26 @@ class RevisionVerdict:
             self.pair_ids[0], self.dates[0], self.pair_ids[1], self.dates[1]
         )
 
+    @property
+    def is_untyped_change(self) -> bool:
+        """`True` iff this verdict is `REVERSES` or `REFINES` AND
+        `direction.holder is None` -- an undirected change (#1014 Plan 2,
+        after the harness's own subgroup diagnosis): the judge cannot tell
+        REVERSES from REFINES apart without an established order (measured:
+        0 of 30 undirected pairs ever answered REFINES, since REFINES is
+        directional by the judge prompt's own definition), so an undirected
+        verdict is a CHANGE of unknown type, never one this engine may
+        label on the model's say-so. `direction` is itself recomputed from
+        `dates` (ADR-0025) -- this property reads no new state, only
+        `verdict` and the existing `direction` `@property`. `REAFFIRMS`/
+        `UNRELATED` are never untyped changes, directed or not: neither is
+        a change at all."""
+        return (
+            self.verdict
+            in (RevisionVerdictValue.REVERSES, RevisionVerdictValue.REFINES)
+            and self.direction.holder is None
+        )
+
 
 @dataclass(frozen=True)
 class RevisionBatch:
@@ -710,7 +739,17 @@ def is_actionable_revision(
     or `"refines"`, `confidence >= _ACTIONABLE_CONFIDENCE`, and BOTH quotes
     were verified (neither is `None`). `REAFFIRMS` is never actionable, no
     matter the confidence or quotes -- see `is_reportable_revision` for the
-    weaker rule it satisfies instead."""
+    weaker rule it satisfies instead.
+
+    **Contract unchanged by #1014 Plan 2**: this function reads only the
+    four wire-level inputs it always has, never `direction`/
+    `is_untyped_change` -- an UNDIRECTED REVERSES/REFINES with confidence
+    and both quotes is still actionable. "Actionable" means the human is
+    shown it and can act; it does not mean the engine already knows which
+    relation type to write. `relation_for` (not this function) is where the
+    untyped-change rule lives: reconcile's combined prompt is what lets the
+    human supply the missing type in one keystroke, for a finding this
+    function already surfaced."""
     return (
         verdict in _ACTIONABLE_VERDICT_VALUES
         and confidence >= _ACTIONABLE_CONFIDENCE
@@ -742,13 +781,39 @@ RELATION_FOR_VERDICT: Final[dict[RevisionVerdictValue, str]] = {
     RevisionVerdictValue.REFINES: "revises",
 }
 """The two verdicts `reconcile --from-findings` (Phase B, S8/S9) may write
-a relation for. Deliberately keyed by `RevisionVerdictValue`, not by the
-`str` vocabulary `is_actionable_revision` reads -- this map's job is to
-choose which relation TYPE a write uses, not to gate whether one happens
-at all. `REAFFIRMS`/`UNRELATED` are absent by construction: neither ever
-causes a bundle write (design.md Decision 6). A test ties this map's
-values to `RESOLUTION_RELATION_TYPES - {"reconciled_with"}`, so a fourth
-resolution type added to one side but not mapped here fails loudly."""
+a relation for, WHEN the pair is directed. Deliberately keyed by
+`RevisionVerdictValue` alone, not by a whole `RevisionVerdict` -- this map
+answers only "which relation TYPE does this verdict value use", never
+"should a write happen at all for this particular verdict occurrence".
+`REAFFIRMS`/`UNRELATED` are absent by construction: neither ever causes a
+bundle write (design.md Decision 6). A test ties this map's values to
+`RESOLUTION_RELATION_TYPES - {"reconciled_with"}`, so a fourth resolution
+type added to one side but not mapped here fails loudly.
+
+**This map alone is not the write gate for an undirected change**
+(#1014 Plan 2): a caller choosing a relation type for one judged
+`RevisionVerdict` reads `relation_for(verdict)` below, never this map
+directly -- `relation_for` additionally checks `verdict.is_untyped_change`
+and returns `None` for an undirected REVERSES/REFINES, where this map
+alone would still (correctly, for a DIRECTED occurrence of the same verdict
+value) return `"supersedes"`/`"revises"`."""
+
+
+def relation_for(verdict: RevisionVerdict) -> str | None:
+    """The relation type `reconcile --from-findings` (Phase B, S8/S9) may
+    write for ONE judged `verdict`, or `None` when none should be written
+    (#1014 Plan 2). `None` for the same three reasons `RELATION_FOR_VERDICT`
+    already covers -- `REAFFIRMS`, `UNRELATED`, or a verdict value absent
+    from that map -- via `RELATION_FOR_VERDICT.get`, PLUS a fourth: an
+    undirected REVERSES/REFINES (`verdict.is_untyped_change`). Takes the
+    whole `RevisionVerdict`, not a bare `RevisionVerdictValue`, because
+    typing a change also depends on `direction`, which comes only from
+    resolved dates (`pair_direction`), never from the model (ADR-0025) --
+    `RELATION_FOR_VERDICT` itself stays keyed by the bare verdict value,
+    since it still answers correctly for every DIRECTED occurrence."""
+    if verdict.is_untyped_change:
+        return None
+    return RELATION_FOR_VERDICT.get(verdict.verdict)
 
 
 def judge_pairs(
