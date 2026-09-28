@@ -23,6 +23,15 @@ complete. The CHECKPOINT (sub-change 3 harness) and Phase B (S2, S5-S8)
 remain out of scope for this task list, per its own "CHECKPOINT — STOP"
 and "Phase B" sections.
 
+**Phase B, Slice P1 (`P1.1`–`P1.11`, 11/11) complete** — PR 4 on
+`feat/1014-phase-b-p1-vector-read`, merged to `main` at `62e0e11` (#1055).
+
+**Phase B, Slice P2: 10/12 tasks complete (`P2.1`–`P2.4`, `P2.8`–`P2.12`)**
+— this batch, on `feat/1014-phase-b-p2-harness-shape`. `P2.5` (the live-run
+operator step against a real Ollama), `P2.6`, and `P2.7` are intentionally
+NOT done — see the "Phase B — Slice P2" section below for the exact
+command and why.
+
 ---
 
 ## Slice 1 (PR 1 → `main`, merged): the subject-pass leaf,
@@ -403,7 +412,7 @@ from `main` @ `9cbedc8` on `feat/1014-phase-b-p1-vector-read`.
 400-line review budget — no `size:exception` needed for this slice, unlike
 Phase A's Slices 1/3/4.
 
-### Remaining Tasks (Phase B)
+### Remaining Tasks (after Slice P1)
 
 - Slice P1 (`P1.1`–`P1.11`) is complete. PR 4 (targeting `main`, per
   `stacked-to-main`) is ready to open on `feat/1014-phase-b-p1-vector-read`.
@@ -413,3 +422,148 @@ Phase A's Slices 1/3/4.
   the `revisions` verb, the combined judge prompt, and the `reconcile
   --from-findings` walk) remain, in that chain order, each as its own PR
   per tasks.md's "Phase B: tasks (2026-09-28 re-plan)" section.
+
+---
+
+## Phase B — Slice P2 (2026-09-28): harness production-shape arm
+
+Scope for this batch: tasks.md's "Slice P2 (PR 5): harness production-shape
+arm, committed run, docstring updates" — `P2.1`–`P2.4`, `P2.8`–`P2.12`.
+Basis: design.md Decision B5 ("Keep 0.65, cite the production-shape
+measurement, and make that measurement reproducible") and Decision B3
+("Drop the production subject pass"). Branch
+`feat/1014-phase-b-p2-harness-shape`, off `main` @ `62e0e11` (which already
+carries Slice P1 via PR #1055).
+
+**Explicitly out of scope for this batch (per the orchestrator's own
+instruction), never attempted**: `P2.5` — the operator step that runs the
+harness's new `--vector-source reindex` arm against a REAL local Ollama and
+commits the live measurement. `P2.6` (compare that run's recall against
+18/24) and `P2.7` (rewrite `EMBEDDING_SIMILARITY_THRESHOLD`'s docstring to
+cite the committed numbers) both READ P2.5's output and cannot be honestly
+completed without it — no numbers were fabricated; both stay unchecked.
+**Exact command the orchestrator (or a human operator) must run to
+complete P2.5**, per tasks.md's own text and this harness's `--help`:
+
+```
+uv run python evals/decision_revisions/run_decision_revisions_eval.py \
+    --vector-source reindex --runs 15
+```
+
+(No `--model`/`--temperature`/`--seed` override needed — defaults match
+`DEFAULT_MODEL`/unpinned sampling, same as every other live run this
+harness has already produced under `evals/decision_revisions/results/`.)
+This writes `results/decision-revisions-<stamp>-<model>.md` and
+`results/runs-<stamp>-<model>.json`, both tagged `"vector_source":
+"reindex"` in the JSON (added this batch) so a later reader can tell which
+arm produced them.
+
+### Files changed
+
+| File | Action |
+|---|---|
+| `evals/decision_revisions/run_decision_revisions_eval.py` | Modified — extended |
+| `evals/decision_revisions/README.md` | Modified — extended |
+| `src/openkos/resolution/decision_revision.py` | Modified — docstring only |
+| `src/openkos/resolution/decision_subject.py` | Modified — docstring only |
+
+### TDD Cycle Evidence
+
+| Task(s) | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|---|---|
+| P2.1–P2.2 (self-test assertions) + P2.3 (`embed_via_reindex`, `_write_decisions_bundle`, `VectorSourceMismatch`, `_ReindexFakeEmbedder`) | `--self-test` (this harness has no `tests/unit/**` file; its own `--self-test` flag is the runner, per tasks.md's own framing) | Harness self-test (model-free) | ✅ `uv run python evals/decision_revisions/run_decision_revisions_eval.py --self-test` passed BEFORE this batch's edits (confirmed by running it against the pre-edit file before touching anything) | ✅ genuinely observed: renamed `embed_via_reindex` to `_embed_via_reindex_not_yet_built` (simulating "does not exist yet") with the two new self-test assertions already written, reran `--self-test` — `NameError: name 'embed_via_reindex' is not defined`, exactly the `AttributeError`-family failure tasks.md's P2.1 predicts for "no such arm function exists" | ✅ reverted the rename (exact inverse edit) — `self-test: passed` | ✅ 2 explicit self-test assertions (happy path: exact vector count + concept-id keys; checked mismatch: `VectorSourceMismatch` raised via a lossy embedder) over the harness's own 13-Decision synthetic fixture — every mapped concept id, per design.md's interface | ➖ None needed — the function is already the minimal correct wiring |
+| P2.4 (README) | N/A — prose | — | — | — | — | — | — |
+| P2.8–P2.9 (docstring corrections) | N/A — prose, no behavior | — | — | — | — | — | — |
+
+**Note on this slice's TDD shape**: this harness lives entirely under
+`evals/`, outside the pytest suite (tasks.md's own framing: "`--self-test`
+... is the 'runner'"), so there is no `pytest`-style RED/GREEN cycle to run
+— the equivalent discipline is running `--self-test` before and after each
+change and treating any failure/exception as RED. `P2.4`/`P2.8`/`P2.9` are
+prose-only (`[DOC]`-shaped, though the task list did not tag `P2.4`
+explicitly) and carry no RED/GREEN pairing, matching tasks.md's own stated
+convention for `[DOC]` tasks in this section.
+
+### Mutation-Kill Verification (mandatory per apply instructions)
+
+Each mutation was applied, verified to make the targeted self-test
+assertion(s) FAIL, `__pycache__` purged
+(`find . -name __pycache__ -prune -exec rm -rf {} +`), then reverted with
+the exact inverse edit (never `git checkout --`), and the harness
+re-verified `self-test: passed` before moving to the next mutation.
+
+| # | Mutation | File / line | Assertion(s) that must fail | Result |
+|---|---|---|---|---|
+| 1 | `embed_via_reindex` renamed to `_embed_via_reindex_not_yet_built` (simulates the function not existing yet — the genuine pre-implementation RED state) | `run_decision_revisions_eval.py`, `embed_via_reindex` | Both new self-test assertions (collection-level failure) | ✅ FAILED as expected: `NameError: name 'embed_via_reindex' is not defined`. Reverted. |
+| 2 | The read-back mismatch check inverted (`if len(stored) != len(decisions):` → `if len(stored) == len(decisions):`) | `run_decision_revisions_eval.py`, `embed_via_reindex` | Both assertions (via an uncaught `VectorSourceMismatch`/its absence) | ✅ FAILED as expected: the HAPPY-PATH call itself now raised `VectorSourceMismatch: reindex arm wrote 13 Decision(s) ... read back only 13 vector(s) ... missing: []` — proving the condition is genuinely load-bearing in both directions, not a tautology that only ever fires one way. Reverted. |
+| 3 | `_write_decisions_bundle`'s per-Decision path collapsed to a single fixed filename (`bundle_dir / f"{decision.concept_id}.md"` → `bundle_dir / "same.md"`) | `run_decision_revisions_eval.py`, `_write_decisions_bundle` | "reindex arm reads back exactly one vector per fixture Decision" / "...keys vectors by concept id" | ✅ FAILED as expected: `VectorSourceMismatch: ... read back only 0 vector(s) ... missing: [<all 13 concept ids>]` — proves the concept-id-keyed bundle write is what the read-back assertions actually depend on, not an artifact of the fixture already having 13 entries. Reverted. |
+
+All three mutations killed. `find . -name __pycache__ -prune -exec rm -rf
+{} +` was run before every GREEN/RED verdict, and every revert used the
+exact inverse edit — never `git checkout --`.
+
+### Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `uv run python evals/decision_revisions/run_decision_revisions_eval.py --self-test` → `self-test: passed` (zero network, poisoned-`OLLAMA_HOST`-safe) |
+| Runtime harness command/scenario and exact result | `uv run python evals/run_self_tests.py` under `OLLAMA_HOST=http://127.0.0.1:1` → **43 of 43 harness self-test(s) run, 0 failing** (confirms `evals/run_self_tests.py`'s existing discovery sweep still finds and passes this harness's `--self-test`, including the two new assertions, with zero live-model dependency) |
+| Rollback boundary | Revert the new `--vector-source` CLI option, `run_pipeline`'s `vector_source` parameter, `embed_via_reindex`/`_write_decisions_bundle`/`VectorSourceMismatch`/`_ReindexFakeEmbedder`, and the two new self-test assertions in `run_decision_revisions_eval.py`; revert the README section; revert the two docstring edits in `decision_revision.py`/`decision_subject.py`. No other module imports any of these new names yet — `main()`'s live-run path is the only production caller of `vector_source`, and it defaults to `"text"` (unchanged behavior) |
+
+### Full Verification (this work unit)
+
+| Command | Result |
+|---|---|
+| `uv run ruff check .` | All checks passed! |
+| `uv run ruff format --check .` | Failed once (`run_decision_revisions_eval.py` needed reformatting after the new additions) → ran `uv run ruff format` on that file → re-verified `--check .`: **349 files already formatted** |
+| `uv run mypy .` | Success: no issues found in 349 source files |
+| `uv run pytest --cov` (full, unpiped) | **6823 passed, 2 skipped** in 516.53s, exit 0 — UNCHANGED from Slice P1's baseline, as tasks.md's own P2.11 note predicts ("this slice adds no `tests/unit/**` file"); coverage 96.33%, gate 90% reached |
+| `uv run python evals/decision_revisions/run_decision_revisions_eval.py --self-test` | `self-test: passed` |
+| `uv run python evals/run_self_tests.py` (`OLLAMA_HOST` poisoned) | **43 of 43 harness self-test(s) run, 0 failing** |
+
+### Commits
+
+`7b793e0` — `eval(decision-revisions): add a production-shape reindex
+vector arm (#1014)` (P2.1–P2.4). 2 files changed, 235 insertions(+), 13
+deletions(-). Staged explicitly by path (`run_decision_revisions_eval.py`,
+`README.md`).
+
+`0be85dd` — `docs(resolution): correct the subject-pass docstrings for
+Phase B (#1014)` (P2.8–P2.9). 2 files changed, 16 insertions(+), 6
+deletions(-). Staged explicitly by path (`decision_revision.py`,
+`decision_subject.py`).
+
+Both on branch `feat/1014-phase-b-p2-harness-shape`. `openspec/`,
+`odd/`, and every other tracked path were left untouched by both commits
+(the checkbox ticks and this section are recorded in a separate, final
+`docs(sdd)` commit, per the executor's own instructions). Not pushed. No
+PR opened.
+
+**Scope correction (P2.12's own instruction, followed literally)**: the
+task text suggested scope `sdd` for the harness commit "per the `sdd`
+scope precedent in this project's commit history for cross-cutting
+measurement work." Confirming against `git log --oneline -- evals/` (as
+the task's own parenthetical directs) found NO `sdd`-scoped commit
+anywhere in this project's history for eval-harness work — the actual,
+consistent precedent across 12+ prior `evals/decision_revisions/` and
+sibling-harness commits (`b9f382b`, `fb0172e`, `351b4c9`, `ce914bd`, …) is
+scope `eval(<harness-name>)`. Used `eval(decision-revisions)` instead of
+the suggested `sdd`, and recorded the correction on tasks.md's own P2.12
+line rather than silently deviating.
+
+**Budget**: 251 authored changed lines (`git diff --shortstat` across the
+two commits: 235+13 insertions/deletions for the harness commit, 16+6 for
+the docstring commit = 251 total), well under the 400-line review budget
+— no `size:exception` needed for this slice.
+
+### Remaining Tasks (Phase B)
+
+- Slice P2's TDD-eligible tasks (`P2.1`–`P2.4`, `P2.8`–`P2.12`) are
+  complete. `P2.5` (the live-Ollama operator step), `P2.6` (the recall
+  comparison gated on it), and `P2.7` (the threshold docstring rewrite
+  gated on both) are NOT complete — they need the exact command recorded
+  above run by an operator or the orchestrator, then a follow-up apply
+  batch (or the same one, resumed) to finish `P2.6`/`P2.7` from its
+  output and commit the result under `evals/decision_revisions/results/`.
+- Slices P3 through P8b remain, in chain order, each as its own PR, per
+  tasks.md's "Phase B: tasks (2026-09-28 re-plan)" section.

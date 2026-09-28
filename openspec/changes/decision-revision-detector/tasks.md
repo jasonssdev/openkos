@@ -972,7 +972,7 @@ list.
 
 ### `evals/decision_revisions/run_decision_revisions_eval.py` — the `--vector-source reindex` arm
 
-- [ ] **P2.1** [TEST] Add a self-test case (in the harness's existing
+- [x] **P2.1** [TEST] Add a self-test case (in the harness's existing
   `--self-test` assertion block) asserting that running the `reindex` arm
   over the harness's own tiny synthetic fixture (`revision_fixtures.load_fixture()`)
   writes N fixture Decisions into a temporary OKF bundle, runs
@@ -983,7 +983,7 @@ list.
   `--vector-source` option and no such arm function exists — the assertion
   cannot even be written against real code yet (`AttributeError`/`SystemExit`
   on the unknown flag).
-- [ ] **P2.2** [TEST] Same file — add a self-test asserting the arm RAISES
+- [x] **P2.2** [TEST] Same file — add a self-test asserting the arm RAISES
   (never silently returns fewer vectors, never scores a real 0/24 read-back
   loss as a quiet "no") when the read-back vector count differs from the
   written Decision count — inject a fake vector store / embedder that "loses"
@@ -991,7 +991,7 @@ list.
   scored as a real recall failure (`unworked-queue-fakes-a-recall-failure`-
   style hazard, generalized to this harness). **RED today**: same as P2.1 —
   the arm does not exist.
-- [ ] **P2.3** [IMPL] `evals/decision_revisions/run_decision_revisions_eval.py`:
+- [x] **P2.3** [IMPL] `evals/decision_revisions/run_decision_revisions_eval.py`:
   add a `--vector-source {text,reindex}` CLI option (default `text` — the
   existing title+body cosine measurement, behavior unchanged); implement the
   `reindex` arm per design.md Decision B5 (write fixture Decisions as real
@@ -1001,7 +1001,7 @@ list.
   read-back count does not match the written count; wire both self-test
   assertions (P2.1, P2.2) into the existing `--self-test` block. Makes P2.1
   and P2.2 GREEN.
-- [ ] **P2.4** `evals/decision_revisions/README.md`: document the
+- [x] **P2.4** `evals/decision_revisions/README.md`: document the
   `--vector-source {text,reindex}` flag and what each arm measures.
 
 ### One committed live measurement (design.md Decision B5 — operator step, not TDD)
@@ -1037,12 +1037,12 @@ list.
   `state/reindex.py`'s `_compose_header`/`EMBED_COMPOSITION_TAG` (per
   Decision B7 — this change only stops CITING the stale docstring; fixing it
   is a separate follow-up, not a task here).
-- [ ] **P2.8** [DOC] `src/openkos/resolution/decision_revision.py`:
+- [x] **P2.8** [DOC] `src/openkos/resolution/decision_revision.py`:
   `DecisionInput.subject`'s docstring currently says the field is "kept for
   the service layer's own use (e.g. a future report)" — correct it to say
   production `load_decisions`/`plan_revisions` always pass `None`; only the
   harness sets it (as its own subject-pass diagnostic, per Decision B3).
-- [ ] **P2.9** [DOC] `src/openkos/resolution/decision_subject.py`: add one
+- [x] **P2.9** [DOC] `src/openkos/resolution/decision_subject.py`: add one
   module-docstring sentence stating the subject pass has no production
   caller as of the Phase B re-plan (Decision B3) — the judge imports only
   `quoted_verbatim` from this module, and the harness runs `derive_subjects`
@@ -1050,14 +1050,14 @@ list.
 
 ### Slice P2 verification
 
-- [ ] **P2.10** Run `uv run ruff check . && uv run ruff format --check . &&
+- [x] **P2.10** Run `uv run ruff check . && uv run ruff format --check . &&
   uv run mypy .` — must be green.
-- [ ] **P2.11** Run `uv run python evals/decision_revisions/run_decision_revisions_eval.py
+- [x] **P2.11** Run `uv run python evals/decision_revisions/run_decision_revisions_eval.py
   --self-test`, then `uv run python evals/run_self_tests.py` (confirms this
   harness's self-test is still discovered), then `uv run pytest` (unpiped)
   full suite — must be green. (This slice adds no `tests/unit/**` file, so
   the pytest suite itself is unaffected except by the docstring edits.)
-- [ ] **P2.12** Commit as one or more work-unit commits, scope `sdd` (evals
+- [x] **P2.12** Commit as one or more work-unit commits, scope `sdd` (evals
   harnesses are documented under the `sdd` scope precedent in this project's
   commit history for cross-cutting measurement work — confirm against the
   most recent `evals/decision_revisions/` commit before finalizing) or
@@ -1065,6 +1065,17 @@ list.
   production-shape vector arm to the decision-revisions harness` +
   `docs(resolution): cite the reindex-shape measurement in the embedding
   threshold docstring`. Open PR 5 (Slice P2) targeting PR 4's branch.
+  **Correction (apply, 2026-09-28): confirming against actual git history**
+  **(the P2.12 instruction's own directive) showed the real precedent for**
+  **`evals/decision_revisions/` commits is scope `eval`** (e.g. `b9f382b`,
+  `eval(decision-revisions): measure-first harness...`), **not `sdd`** — no
+  `sdd`-scoped commit exists in this project's history for eval-harness
+  work. Landed as two commits instead: `7b793e0`
+  `eval(decision-revisions): add a production-shape reindex vector arm
+  (#1014)` (P2.1-P2.4) and `0be85dd` `docs(resolution): correct the
+  subject-pass docstrings for Phase B (#1014)` (P2.8-P2.9). PR 5 was NOT
+  opened by this apply batch (no push, per the executor's own scope) — the
+  commits are ready on `feat/1014-phase-b-p2-harness-shape`.
 
 ---
 
