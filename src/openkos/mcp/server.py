@@ -16,10 +16,10 @@ from `tools.execute` to a structured tool result (`isError: true`,
 generic `-32603` fallback -- a distinct, EXPECTED failure a client can act
 on (retry, or not), never an unexpected internal error. It is ordered
 subclass-first (`_tool_error_table_is_subclass_ordered` pins this), and
-grows incrementally: this slice adds `get`'s two rows
-(`ConceptNotFound`/`OSError`); the Ollama-related rows land in slice 9.
-Every `message` is a fixed string, never `str(exc)` -- the same reason the
-`-32603` fallback's message is fixed.
+grew incrementally: slice 5 added `get`'s two rows
+(`ConceptNotFound`/`OSError`); this slice adds the five Ollama/FTS rows
+`query` needs. Every `message` is a fixed string, never `str(exc)` -- the
+same reason the `-32603` fallback's message is fixed.
 """
 
 from __future__ import annotations
@@ -35,13 +35,22 @@ from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 from json import dumps as _json_dumps
 from pathlib import Path
-from typing import Final, Literal, TypeGuard
+from typing import Final, Literal, TypeGuard, cast
 
 from openkos import config
+from openkos.application import backends as application_backends
 from openkos.application import concept_read
 from openkos.llm.base import Embedder, LLMBackend
+from openkos.llm.ollama import (
+    OllamaClient,
+    OllamaEmbeddingDimensionMismatch,
+    OllamaError,
+    OllamaModelNotFound,
+    OllamaUnavailable,
+)
 from openkos.mcp import tools as mcp_tools
 from openkos.mcp import transport
+from openkos.state.fts import FtsUnavailable
 
 logger = logging.getLogger("openkos.mcp")
 
@@ -56,6 +65,36 @@ _INTERNAL_ERROR_MESSAGE: Final = "internal error"
 
 _TOOL_ERROR_TABLE: Final[tuple[tuple[type[BaseException], str, bool, str], ...]] = (
     (
+        OllamaUnavailable,
+        "ollama_unavailable",
+        True,
+        "the configured Ollama server is unreachable",
+    ),
+    (
+        OllamaModelNotFound,
+        "model_not_found",
+        False,
+        "the configured model is not installed",
+    ),
+    (
+        OllamaEmbeddingDimensionMismatch,
+        "embedding_dimension_mismatch",
+        False,
+        "the configured embedding model's dimension does not match",
+    ),
+    (
+        FtsUnavailable,
+        "fts_unavailable",
+        False,
+        "full-text search is unavailable",
+    ),
+    (
+        OllamaError,
+        "ollama_error",
+        True,
+        "the chat backend failed",
+    ),
+    (
         concept_read.ConceptNotFound,
         "concept_not_found",
         False,
@@ -68,9 +107,14 @@ _TOOL_ERROR_TABLE: Final[tuple[tuple[type[BaseException], str, bool, str], ...]]
         "a read failed",
     ),
 )
-"""Rows land incrementally (this slice's two, then slice 9's Ollama-related
-ones); ordering is subclass-first so a specific row is matched before a
-more general one that would also `isinstance`-match it."""
+"""Rows land incrementally (slice 5's two, then this slice's five
+Ollama/FTS ones); ordering is subclass-first so a specific row is matched
+before a more general one that would also `isinstance`-match it --
+`OllamaUnavailable`/`OllamaModelNotFound`/`OllamaEmbeddingDimensionMismatch`
+all subclass `OllamaError`, so each must precede it. `mcp_tools.
+WorkspaceReadError` (a `config.read_config` `ValueError` `tools.execute`
+wraps) is itself an `OSError` subclass, so it is matched by the generic
+`OSError` row without a dedicated row of its own."""
 
 
 def _mapped_tool_error(exc: BaseException) -> tuple[str, bool, str] | None:
@@ -139,37 +183,45 @@ def _server_version() -> str:
         return "0+unknown"
 
 
-def _unwired_make_llm(cfg: config.Config) -> LLMBackend:
-    raise NotImplementedError(
-        "query's LLM factory is wired once the query tool is registered (slice 9)"
-    )
+def _make_llm(cfg: config.Config) -> LLMBackend:
+    """Build the CHAT client `query` uses, through the SAME non-CLI seam
+    the CLI's own `_chat_client` delegates to (design Decision 7): no
+    per-task model override here, mirroring `cli/main.py`'s own `query`
+    command, which omits `task=` for the same reason
+    `application/backends.py`'s docstring gives (`query` has no harness)."""
+    return application_backends.chat_client(cfg, factory=OllamaClient)
 
 
-def _unwired_make_embedder(cfg: config.Config) -> Embedder:
-    raise NotImplementedError(
-        "query's embedder factory is wired once the query tool is registered (slice 9)"
-    )
+def _make_embedder(cfg: config.Config) -> Embedder:
+    return OllamaClient(model=cfg.embedding_model)
 
 
-def _unwired_local_exemption_for(client: LLMBackend, cfg: config.Config) -> bool:
-    raise NotImplementedError(
-        "the local-exemption check is wired once the query tool is registered (slice 9)"
+def _local_exemption_for(client: LLMBackend, cfg: config.Config) -> bool:
+    """Resolve `query`'s local-exemption gate exactly as the CLI resolves
+    it (design Decision 9): `client` is always a concrete `OllamaClient` at
+    runtime here (`_make_llm`'s only return value), which carries the
+    `.locality` property `resolve_local_exemption` reads --
+    `LLMBackend` itself does not declare that property, since it is
+    deliberately the narrower Protocol every `application/*` seam is
+    allowed to depend on (ADR-0018 D1); the `cast` below narrows back to
+    the structural `HasLocality` shape `resolve_local_exemption` actually
+    needs, without widening `LLMBackend` itself."""
+    return application_backends.resolve_local_exemption(
+        cast(application_backends.HasLocality, client), cfg
     )
 
 
 def _build_context(root: Path, *, expose_confidential: bool) -> mcp_tools.ToolContext:
     """Build the `ToolContext` `serve()` hands to every tool call.
 
-    `make_llm`/`make_embedder`/`local_exemption_for` are placeholders: the
-    registry is empty in this slice, so nothing ever calls them. `query`
-    (slice 9) is what replaces these three with real factories.
-    """
+    Only `query` ever calls `make_llm`/`make_embedder`/`local_exemption_for`
+    -- every other registered tool's `run()` ignores them entirely."""
     return mcp_tools.ToolContext(
         layout=config.WorkspaceLayout(root=root),
         expose_confidential=expose_confidential,
-        make_llm=_unwired_make_llm,
-        make_embedder=_unwired_make_embedder,
-        local_exemption_for=_unwired_local_exemption_for,
+        make_llm=_make_llm,
+        make_embedder=_make_embedder,
+        local_exemption_for=_local_exemption_for,
     )
 
 
@@ -407,8 +459,67 @@ class Server:
             self._send_error(request_id, _INVALID_REQUEST, "duplicate request id")
             return
 
-        task = asyncio.ensure_future(self._run_tool(request_id, key, tool, arguments))
+        token = meta.get("progressToken") if isinstance(meta, dict) else None
+        progress: mcp_tools.ProgressSink | None = None
+        if tool.emits_progress and _valid_id(token):
+            progress = self._make_progress_sink(key, token)
+
+        task = asyncio.ensure_future(
+            self._run_tool(request_id, key, tool, arguments, progress)
+        )
         self._inflight[key] = InFlight(task=task)
+
+    def _make_progress_sink(
+        self, key: RequestKey, token: str | int
+    ) -> mcp_tools.ProgressSink:
+        """Build the `ProgressSink` a tool's `run()` calls from the worker
+        thread (design Decision 13). The sink itself never touches the
+        writer directly -- it only schedules `_send_progress` back onto the
+        loop thread via `call_soon_threadsafe`, exactly like `run_in_worker`
+        schedules a tool's eventual result, so every progress post and the
+        final result share one FIFO ordering. A closed loop's `RuntimeError`
+        is swallowed the same way `run_in_worker`/`transport.start_reader`
+        already swallow it."""
+        loop = asyncio.get_running_loop()
+
+        def _sink(phase: str, completed: int, total: int) -> None:
+            with suppress(RuntimeError):
+                loop.call_soon_threadsafe(
+                    self._send_progress, key, token, phase, completed, total
+                )
+
+        return _sink
+
+    def _send_progress(
+        self,
+        key: RequestKey,
+        token: str | int,
+        phase: str,
+        completed: int,
+        total: int,
+    ) -> None:
+        """Loop-thread-only: write one `notifications/progress` frame,
+        gated by the monotonic/finished guard (design Decision 13). Dropped
+        when the request is unknown, already finished (a normal completion,
+        or -- since `_run_tool`'s `CancelledError` branch also calls
+        `_finish_inflight` -- a cancellation too), or when `completed` has
+        not strictly increased since the last post for this request."""
+        entry = self._inflight.get(key)
+        if entry is None or entry.finished or completed <= entry.last_progress:
+            return
+        entry.last_progress = completed
+        self._writer.send(
+            {
+                "jsonrpc": "2.0",
+                "method": "notifications/progress",
+                "params": {
+                    "progressToken": token,
+                    "progress": completed,
+                    "total": total,
+                    "message": phase,
+                },
+            }
+        )
 
     async def _run_tool(
         self,
@@ -416,13 +527,15 @@ class Server:
         key: RequestKey,
         tool: mcp_tools.Tool,
         arguments: Mapping[str, object],
+        progress: mcp_tools.ProgressSink | None,
     ) -> None:
         try:
             is_error, structured_content = await run_in_worker(
-                lambda: mcp_tools.execute(tool, arguments, self._ctx, None)
+                lambda: mcp_tools.execute(tool, arguments, self._ctx, progress)
             )
         except asyncio.CancelledError:
             logger.info("request %r cancelled; its worker was abandoned", request_id)
+            self._finish_inflight(key)
             raise
         except Exception as exc:
             mapped = _mapped_tool_error(exc)

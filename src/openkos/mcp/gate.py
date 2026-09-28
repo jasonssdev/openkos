@@ -13,8 +13,8 @@ renders both into the fixed, count-only vocabulary (design Decision 3),
 and renders `warnings` from the consistency check (design Decision 11).
 
 Slice 5 added `disclose_get` (design Decision 4); slice 6 added
-`disclose_navigate` (design Decision 5); this slice adds `disclose_pending`
-(design Decision 6). `disclose_query` lands in slice 9 with its tool.
+`disclose_navigate` (design Decision 5); slice 7 added `disclose_pending`
+(design Decision 6); this slice adds `disclose_query` (design Decision 9).
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ from typing import Final, cast
 from openkos import read_outcome, sensitivity
 from openkos.application import concept_read, list_service, next_action
 from openkos.application import consistency as application_consistency
+from openkos.application import query as query_service
 from openkos.model import okf
 
 
@@ -457,6 +458,136 @@ def disclose_pending(raw: object, snapshot: Snapshot) -> dict[str, object]:
         "action": action,
         "declinations": declinations,
         "skipped_documents": len(raw.skip_notices),
+        "withheld": withheld,
+        "not_run": (),
+    }
+
+
+def _filtered_titles(
+    titles: list[str], ids: list[str], snapshot: Snapshot
+) -> tuple[list[str], int]:
+    """Zip `titles` with its paired `ids` list (design Decision 9) and keep
+    only the entries whose id is disclosable.
+
+    A LENGTH mismatch (a defect condition -- the two lists must stay
+    index-aligned by construction, `query-answer`'s own contract) drops
+    every title in the pair and counts them all, fail-closed, rather than
+    pairing a title with the wrong id -- mirrors `disclose_pending`'s
+    identical misaligned-length handling."""
+    if len(titles) != len(ids):
+        return [], len(titles)
+    kept: list[str] = []
+    removed = 0
+    for title, concept_id in zip(titles, ids, strict=True):
+        if snapshot.discloses(concept_id):
+            kept.append(title)
+        else:
+            removed += 1
+    return kept, removed
+
+
+def disclose_query(raw: object, snapshot: Snapshot) -> dict[str, object]:
+    """Build `query`'s disclosure-safe payload (design Decision 9).
+
+    `raw` is typed `object` to match `Tool.disclose`'s contravariant
+    signature; it is always a `query_service.QueryOutcome` at runtime, since
+    `mcp/tools.py` only ever pairs `query`'s `run` (which returns one) with
+    this function.
+
+    `citations` are kept only when disclosable, else counted. The answer
+    text itself is withheld (`answer: ""`, `answer_withheld: true`) whenever
+    EITHER (a) any citation is withheld, OR (b) any object whose content
+    actually entered the prompt -- `result.context_ids`, captured in
+    `answer.py` BEFORE the model-self-reported subset filter narrows
+    `citations` -- is not disclosable, regardless of whether the model
+    happened to cite it (mcp-read-surface slice 9 correction). (a) alone
+    missed the race design Decision 9 exists to close: an object read as
+    public by `_assemble_context`, then raised to confidential before the
+    model replies, whose block the model does not go on to name, would
+    survive in `citations` filtered down to ONLY the cited ids and never
+    trip the withhold at all. `context_ids` closes it, since it names every
+    object the wording may have drawn on, cited or not. A `context_ids`
+    length inconsistent with `context_block_count` (a defect condition --
+    the two must stay aligned by construction) is ALSO treated as "some
+    object may be withheld," fail-closed, mirroring `_filtered_titles`'s
+    identical misaligned-length handling. Neither half of this rule adds to
+    `withheld`'s own count: an uncited context object was never a citation,
+    title, or any other counted channel entry to begin with. Each of the
+    three title lists is zipped with its own id list (`_filtered_titles`)
+    and filtered the same way; `excerpted_titles`/`omitted_titles`/
+    `history_truncated_titles` already carry their own suffixes (e.g. `
+    (earlier version)`) from `answer.py` -- this function never touches the
+    title TEXT, only whether each title's paired id may cross the boundary
+    at all. `skip_notices` become `skipped_documents`, a count separate
+    from `withheld` -- a skipped document was never read, so it was never a
+    disclosure decision. Every count, flag, `attribution`, and
+    `no_match_cause` passes through unchanged."""
+    raw = cast(query_service.QueryOutcome, raw)
+    result = raw.result
+    withheld = 0
+
+    citations: list[dict[str, object]] = []
+    any_citation_withheld = False
+    for citation in result.citations:
+        if snapshot.discloses(citation.concept_id):
+            citations.append(
+                {
+                    "id": citation.concept_id,
+                    "title": citation.title,
+                    "excerpted": citation.excerpted,
+                    "confidential": citation.confidential,
+                    "history": citation.history,
+                }
+            )
+        else:
+            withheld += 1
+            any_citation_withheld = True
+
+    excerpted_titles, removed = _filtered_titles(
+        result.excerpted_titles, result.excerpted_ids, snapshot
+    )
+    withheld += removed
+    omitted_titles, removed = _filtered_titles(
+        result.omitted_titles, result.omitted_ids, snapshot
+    )
+    withheld += removed
+    history_truncated_titles, removed = _filtered_titles(
+        result.history_truncated_titles, result.history_truncated_ids, snapshot
+    )
+    withheld += removed
+
+    any_context_object_withheld = len(
+        result.context_ids
+    ) != result.context_block_count or any(
+        not snapshot.discloses(concept_id) for concept_id in result.context_ids
+    )
+
+    answer_withheld = any_citation_withheld or any_context_object_withheld
+    answer_text = "" if answer_withheld else result.answer
+
+    return {
+        "answer": answer_text,
+        "answer_withheld": answer_withheld,
+        "citations": citations,
+        "llm_invoked": result.llm_invoked,
+        "no_match_cause": result.no_match_cause,
+        "attribution": result.attribution,
+        "counts": {
+            "fts_hits": result.fts_hit_count,
+            "dense_hits": result.dense_hit_count,
+            "fused": result.fused_count,
+            "context_blocks": result.context_block_count,
+        },
+        "degraded": {
+            "dense": result.dense_degraded,
+            "sufficiency": result.sufficiency_degraded,
+            "vector_store_unavailable": raw.vector_store_unavailable,
+            "fts_unavailable": raw.fts_unavailable,
+        },
+        "excerpted_titles": excerpted_titles,
+        "omitted_titles": omitted_titles,
+        "history_truncated_titles": history_truncated_titles,
+        "skipped_documents": len(result.skip_notices),
         "withheld": withheld,
         "not_run": (),
     }
