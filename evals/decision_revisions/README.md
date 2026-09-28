@@ -35,7 +35,9 @@ Two fixtures live here, and they are never mixed:
   committee running a small community library -- 8 sources (two committee
   meetings and a volunteer huddle share one date, two sources are undated,
   one Decision cites two meetings with different dates), 42 Decisions, 46
-  labelled pairs over all four verdicts. Its hard cases are tagged in
+  labelled pairs over all four verdicts -- this is the `"original"` split
+  (see "The confirmation split" below for the 12 pairs added afterward).
+  Its hard cases are tagged in
   `LabelledPair.hard_case` (the tag vocabulary is in the module docstring),
   and more than half the pairs are UNRELATED hard negatives on purpose, so a
   judge that answers one verdict for everything scores badly instead of
@@ -70,6 +72,43 @@ reason. It was checked that this can fail: renaming one pair's reference to
 a nonexistent Decision, and separately pointing one pair's
 `expected_later_id` at its earlier side, each turned `--self-test` red with
 a specific message; both were reverted by the inverse edit.
+
+## The confirmation split
+
+`LabelledPair.split` (`"original"` or `"confirmation"`) marks a second
+measurement inside `revision_fixture_library.py`, added by #1014's judge
+prompt fix (task T1) to re-measure that fix honestly. The first live run's
+diagnosis read all 46 `"original"` pairs to find its two failure patterns
+(a refinement with an absolute/exclusive qualifier narrowed or extended,
+misread as a reversal; two different subjects sharing a lure word, misread
+as related); re-measuring the fix against only those same 46 pairs would
+inflate the result, since the prompt could simply be fit to what the
+diagnosis already saw.
+
+The confirmation pairs are ~12 NEW Decisions, written in the same
+community-library domain, with fresh vocabulary, BEFORE the prompt changes
+-- and they never reuse the diagnosis's own lure phrases ("at all times",
+"only", "in general", "children's", "dropped", "stays"). Every confirmation
+pair is `contested=False`: each one is meant to be unambiguous to a careful
+reader (`fixture_integrity` enforces this, and flags a confirmation pair
+that is contested), so a doubtful call from the original 46 can never leak
+into what the fix is measured against. They cover the same hard cases the
+fix targets, plus reversal and reaffirm/refine controls -- see
+`revision_fixture_library.py`'s own "Confirmation split" docstring section
+for the exact mix and every pair's rationale.
+
+**`original` and `confirmation` are never blended.** Every judge metric
+this harness reports -- REVERSES/REFINES precision and recall, the
+REVERSES<->REFINES confusion, the confusion matrix, actionable rate, and
+stability -- is computed once per split, plus a separately-labelled `all`,
+never as one pooled number that hides which split it came from
+(`rows_for_split`/`pairs_for_split`). Candidate-stage recall and direction
+accuracy report the same three ways, since filtering the fixture's own
+pairs by `split` is trivial once judged rows carry it. Each stored
+`runs-*.json` row also carries its own `split`, so a past run can be
+rescored by split later without spending another Ollama call. The bars
+B1-B8 below read the **original** split, exactly as they did before this
+split existed -- adding the confirmation split does not move them.
 
 ## Stage order
 
@@ -117,7 +156,9 @@ requires it.
    never offered. **A judge can only be as good as the candidates it is
    shown** -- this number is the ceiling on stage (a)'s numbers below it.
 3. **Judge** (both stages, primarily read from (b) since it has no recall
-   gap):
+   gap). Stage (b)'s own metrics below are rendered three times each --
+   `original`, `confirmation`, `all` -- never pooled into one number ("The
+   confirmation split" above):
    - a confusion matrix, `(expected, observed)` -> count, over the fixture's
      four-value vocabulary (REVERSES/REFINES/REAFFIRMS/UNRELATED);
    - precision and recall of REVERSES and of REFINES specifically;
@@ -225,7 +266,10 @@ run against T2's real fixture; they are not the same measurement.
 
 Committed before any live number was seen, so a result cannot move them.
 All bars read stage **(b)** -- every labelled pair judged directly, pooled
-over every run -- except B1 and B2, which are not model judgements.
+over every run -- except B1 and B2, which are not model judgements. They
+read the **`original`** split ("The confirmation split" above): the
+confirmation pairs did not exist when these bars were set, and adding them
+does not move any of the eight.
 
 | Bar | Metric | Pass when | Why this level |
 |---|---|---|---|
