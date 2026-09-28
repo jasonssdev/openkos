@@ -63,11 +63,12 @@ import math
 import pathlib
 import statistics
 import sys
+import tempfile
 from collections import Counter, defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Final, cast
+from typing import Final, Literal, cast
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
@@ -80,6 +81,7 @@ sys.path.append(str(REPO_ROOT / "evals"))
 from harness_report import arm_identity_line  # noqa: E402
 from revision_fixture_library import load_library_fixture  # noqa: E402
 from revision_fixtures import (  # noqa: E402
+    DecisionDoc,
     Fixture,
     JudgeSplit,
     LabelledPair,
@@ -93,7 +95,9 @@ from openkos.config import (  # noqa: E402
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_MAX_GENERATION_TOKENS,
 )
-from openkos.llm.base import Embedder, LLMBackend, Message  # noqa: E402
+from openkos.llm.base import EMBED_DIM, Embedder, LLMBackend, Message  # noqa: E402
+from openkos.llm.ollama import OllamaError  # noqa: E402
+from openkos.model import okf  # noqa: E402
 from openkos.resolution.decision_revision import (  # noqa: E402
     EMBEDDING_SIMILARITY_THRESHOLD,
     JUDGE_PROMPT_VERSION,
@@ -118,6 +122,7 @@ from openkos.resolution.decision_subject import (  # noqa: E402
     SubjectRequest,
     derive_subjects,
 )
+from openkos.state import reindex, vectorstore  # noqa: E402
 
 DEFAULT_MODEL = "qwen3:8b"
 DEFAULT_RUNS = 15
@@ -201,6 +206,106 @@ class _FakeEmbedder:
             )
         self.calls += 1
         return self.vectors
+
+
+@dataclass
+class _ReindexFakeEmbedder:
+    """A model-free per-CHUNK `Embedder` for the `--vector-source reindex`
+    arm's self-test coverage (P2, #1014 Phase B) -- unlike `_FakeEmbedder`
+    above, which is scripted for ONE whole-batch call across every
+    Decision, `state.reindex.reindex` calls `embed([chunk_text])` once PER
+    CHUNK (reindex.py's own per-doc-grain contract), so this double is
+    scripted by TITLE instead of by call position: each written Decision's
+    `_compose_header` puts its (unique, per the fixture) title on the
+    chunk text's first line, which this double reads back out to look up
+    the right vector regardless of walk order. `fail_titles` raises a
+    generic transient `OllamaError` for any chunk whose title is a member
+    -- reindex's per-document isolation (design D6) then leaves that one
+    Decision with NO stored vector at all, the deterministic "lost chunk"
+    shape `test_embed_via_reindex_raises_on_a_read_back_count_mismatch`
+    needs, with zero network calls."""
+
+    vectors_by_title: dict[str, list[float]]
+    fail_titles: frozenset[str] = frozenset()
+    calls: int = field(default=0)
+
+    def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        if len(texts) != 1:
+            raise AssertionError(
+                "reindex() embeds exactly one chunk per embed() call "
+                f"(per-chunk grain); got {len(texts)} text(s)"
+            )
+        title = texts[0].split("\n\n", 1)[0]
+        self.calls += 1
+        if title in self.fail_titles:
+            raise OllamaError(
+                f"_ReindexFakeEmbedder: simulated transient embed failure for {title!r}"
+            )
+        if title not in self.vectors_by_title:
+            raise AssertionError(
+                f"_ReindexFakeEmbedder has no vector scripted for title {title!r}"
+            )
+        return [self.vectors_by_title[title]]
+
+
+class VectorSourceMismatch(RuntimeError):
+    """Raised by `embed_via_reindex` (design.md Decision B5, "Keep 0.65,
+    cite the production-shape measurement") when `VectorStoreDB
+    .document_vectors`'s read-back count does not equal the number of
+    Decisions just written and reindexed. Never silently returned as a
+    partial or empty mapping: a candidate stage starved of a vector by a
+    silent read-back loss would score as a real recall miss rather than a
+    harness defect (`unworked-queue-fakes-a-recall-failure`, generalized to
+    this harness's own vector-read seam)."""
+
+
+def _write_decisions_bundle(
+    bundle_dir: pathlib.Path, decisions: Sequence[DecisionDoc]
+) -> None:
+    """Materialize `decisions` as real OKF `Decision` concept documents
+    under `bundle_dir`, one file per Decision, via the SHIPPED
+    `okf.dump_frontmatter` -- never an f-string that interpolates the title
+    unquoted (the silent-drop hazard #895 found in three sibling
+    harnesses)."""
+    for decision in decisions:
+        path = bundle_dir / f"{decision.concept_id}.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        frontmatter = okf.dump_frontmatter(
+            {"type": "Decision", "title": decision.title, "sensitivity": "private"}
+        )
+        path.write_text(f"{frontmatter}{decision.body}\n", encoding="utf-8")
+
+
+def embed_via_reindex(
+    decisions: Sequence[DecisionDoc], embedder: Embedder, *, tmp_dir: pathlib.Path
+) -> dict[str, list[float]]:
+    """The `--vector-source reindex` arm (design.md Decision B5): writes
+    `decisions` as real OKF concepts into a TEMPORARY bundle under
+    `tmp_dir`, runs the REAL `state.reindex.reindex` (never a
+    reimplementation of it) with `embedder`, and reads the resulting
+    document vectors back through `VectorStoreDB.document_vectors`
+    (Phase B, slice P1) -- the exact production read seam
+    `application/revisions.py` will use (slice P5a). Measures the SAME
+    shape production reads, unlike `embed_text`'s title+body shape above.
+
+    Raises `VectorSourceMismatch`, never silently returns a partial
+    mapping, when the read-back vector count differs from `len(decisions)`
+    -- see that exception's own docstring."""
+    bundle_dir = tmp_dir / "bundle"
+    _write_decisions_bundle(bundle_dir, decisions)
+    with vectorstore.open_vector_store(tmp_dir / ".openkos" / "vectors.db") as db:
+        reindex.reindex(bundle_dir, db, embedder)
+        stored = db.document_vectors([decision.concept_id for decision in decisions])
+    if len(stored) != len(decisions):
+        missing = sorted({decision.concept_id for decision in decisions} - set(stored))
+        raise VectorSourceMismatch(
+            f"reindex arm wrote {len(decisions)} Decision(s) into a temporary "
+            f"bundle but read back only {len(stored)} vector(s) via "
+            f"document_vectors() -- missing: {missing!r}"
+        )
+    return {
+        concept_id: list(doc_vector.vector) for concept_id, doc_vector in stored.items()
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -340,7 +445,12 @@ def embed_text(title: str, body: str) -> str:
 
 
 def run_pipeline(
-    fixture: Fixture, llm: LLMBackend, embedder: Embedder, *, runs: int
+    fixture: Fixture,
+    llm: LLMBackend,
+    embedder: Embedder,
+    *,
+    runs: int,
+    vector_source: Literal["text", "reindex"] = "text",
 ) -> PipelineResult:
     """Run the full measured pipeline once -- subject pass, embedding, and
     candidate generation exactly once, then the judge `runs` times over (a)
@@ -352,7 +462,16 @@ def run_pipeline(
     `embed()` call embeds every Decision (#1014 sub-change 3): vectors do
     not change across the `runs` judge iterations, and embedding is
     deterministic enough that embedding once, not once per run, is the
-    right cost/robustness trade for this harness."""
+    right cost/robustness trade for this harness.
+
+    `vector_source` (design.md Decision B5, slice P2) picks which shape
+    `embedder` is measured on: `"text"` (default, unchanged) embeds
+    `embed_text`'s title+body string directly, ONE whole-batch call across
+    every Decision; `"reindex"` instead runs `embed_via_reindex` -- the
+    REAL `state.reindex.reindex`, the production read seam -- inside a
+    throw-away temporary directory, so this harness measures the exact
+    shape `application/revisions.py` will read from `vectors.db` (slice
+    P5a), never a reimplementation of it."""
     sources_by_id = {s.source_id: s for s in fixture.sources}
     decisions_by_id = {d.concept_id: d for d in fixture.decisions}
     dates_by_id = {
@@ -376,12 +495,20 @@ def run_pipeline(
         if subject is not None
     }
 
-    embed_texts = [
-        embed_text(decisions_by_id[concept_id].title, decisions_by_id[concept_id].body)
-        for concept_id in ordered_ids
-    ]
-    embedded_vectors = embedder.embed(embed_texts)
-    vectors_by_id = dict(zip(ordered_ids, embedded_vectors, strict=True))
+    if vector_source == "text":
+        embed_texts = [
+            embed_text(
+                decisions_by_id[concept_id].title, decisions_by_id[concept_id].body
+            )
+            for concept_id in ordered_ids
+        ]
+        embedded_vectors = embedder.embed(embed_texts)
+        vectors_by_id = dict(zip(ordered_ids, embedded_vectors, strict=True))
+    else:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            vectors_by_id = embed_via_reindex(
+                fixture.decisions, embedder, tmp_dir=pathlib.Path(tmp_dir)
+            )
 
     decision_inputs = [
         DecisionInput(
@@ -1756,6 +1883,51 @@ def _self_test() -> int:
             [(unlabelled_ids, None)],
         )
 
+    # -- `--vector-source reindex` arm: wiring + a checked mismatch --------
+    # A deterministic vector per fixture Decision, keyed by its (unique)
+    # title -- `_ReindexFakeEmbedder` reads the title back out of the chunk
+    # text `reindex()` actually embeds, never Ollama.
+    reindex_vector_by_title = {
+        decision.title: _unit_vector(index, EMBED_DIM)
+        for index, decision in enumerate(fixture.decisions)
+    }
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        reindex_vectors = embed_via_reindex(
+            fixture.decisions,
+            _ReindexFakeEmbedder(vectors_by_title=reindex_vector_by_title),
+            tmp_dir=pathlib.Path(tmp_dir),
+        )
+    check(
+        "reindex arm reads back exactly one vector per fixture Decision",
+        len(reindex_vectors),
+        len(fixture.decisions),
+    )
+    check(
+        "reindex arm keys vectors by concept id",
+        sorted(reindex_vectors),
+        sorted(decision.concept_id for decision in fixture.decisions),
+    )
+
+    lossy_embedder = _ReindexFakeEmbedder(
+        vectors_by_title=reindex_vector_by_title,
+        fail_titles=frozenset({fixture.decisions[0].title}),
+    )
+    try:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            embed_via_reindex(
+                fixture.decisions, lossy_embedder, tmp_dir=pathlib.Path(tmp_dir)
+            )
+    except VectorSourceMismatch:
+        vector_source_mismatch_raised = True
+    else:
+        vector_source_mismatch_raised = False
+    check(
+        "reindex arm raises (never silently returns fewer vectors) on a "
+        "read-back count mismatch",
+        vector_source_mismatch_raised,
+        True,
+    )
+
     # -- fixture integrity, over the placeholder AND the real fixture ------
     check("placeholder fixture integrity", fixture_integrity(fixture), [])
     library = load_library_fixture()
@@ -2125,6 +2297,16 @@ def main(argv: list[str] | None = None) -> int:
         "calls. Writes decision-revisions-<stamp>-<model>-rescored.md "
         "next to RUNS_JSON.",
     )
+    parser.add_argument(
+        "--vector-source",
+        choices=("text", "reindex"),
+        default="text",
+        help="Which shape the embedder is measured on (design.md Decision "
+        "B5, slice P2): 'text' (default) embeds title+body directly; "
+        "'reindex' runs the REAL state.reindex.reindex over a temporary "
+        "bundle and reads vectors back via VectorStoreDB.document_vectors "
+        "-- the production read seam application/revisions.py uses.",
+    )
     args = parser.parse_args(argv)
 
     if args.self_test:
@@ -2156,7 +2338,9 @@ def main(argv: list[str] | None = None) -> int:
         f"model {args.model}, embedding {DEFAULT_EMBEDDING_MODEL}, {args.runs} run(s), "
         f"{len(fixture.decisions)} decisions, {len(fixture.pairs)} labelled pairs\n"
     )
-    result = run_pipeline(fixture, client, embedder, runs=args.runs)
+    result = run_pipeline(
+        fixture, client, embedder, runs=args.runs, vector_source=args.vector_source
+    )
 
     subject_stats = subject_pass_stats(result.subject_results)
     overlap_stats = pair_overlap_stats(
@@ -2198,6 +2382,7 @@ def main(argv: list[str] | None = None) -> int:
                 "judge_prompt_version": JUDGE_PROMPT_VERSION,
                 "subject_overlap_threshold": SUBJECT_OVERLAP_THRESHOLD,
                 "candidate_mode": "embedding",
+                "vector_source": args.vector_source,
                 "embedding_model": DEFAULT_EMBEDDING_MODEL,
                 "embedding_similarity_threshold": EMBEDDING_SIMILARITY_THRESHOLD,
                 "without_vector": result.plan.without_vector,
@@ -2233,8 +2418,9 @@ def main(argv: list[str] | None = None) -> int:
         "The `original` and `confirmation` splits (#1014 task T1) are always "
         "reported separately below, plus `all`; never blended.",
         "",
-        f"Candidate mode: `embedding` (#1014 sub-change 3), embedding model "
-        f"`{DEFAULT_EMBEDDING_MODEL}`, similarity threshold "
+        f"Candidate mode: `embedding` (#1014 sub-change 3), vector source "
+        f"`{args.vector_source}` (design.md Decision B5, slice P2), embedding "
+        f"model `{DEFAULT_EMBEDDING_MODEL}`, similarity threshold "
         f"`{EMBEDDING_SIMILARITY_THRESHOLD}` -- see `EMBEDDING_SIMILARITY_THRESHOLD`'s "
         "own docstring for its calibration basis and re-measurement requirement.",
         "",
