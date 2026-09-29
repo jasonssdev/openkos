@@ -3172,6 +3172,211 @@ def test_the_template_rationale_language_key_round_trips_through_read_config(
     assert config.read_config(tmp_path).rationale_language == "Spanish"
 
 
+# --- #1057 Phase 3: `backend`/`base_url`/`embedding_base_url` config surface -
+
+
+def test_config_backend_defaults_to_ollama() -> None:
+    """An existing minimal `Config(...)` construction -- every field named
+    except the three this phase adds -- resolves `.backend` to `"ollama"`
+    without needing to name the field at all. The #1057 config surface is
+    additive with defaults, so every hand-built `Config(...)` predating it
+    keeps compiling (design Decision 6)."""
+    cfg = config.Config(
+        model="qwen3:8b",
+        review=True,
+        default_sensitivity="internal",
+        freshness_window="30d",
+        embedding_model="mxbai-embed-large",
+        chat_timeout=600.0,
+        max_generation_tokens=4096,
+        context_window=config.DEFAULT_CONTEXT_WINDOW,
+        temperature=None,
+        seed=None,
+        confidential_local_exemption=False,
+        volatility_windows={},
+        type_tiers={},
+        models={},
+        union_judge=True,
+        sufficiency_check=True,
+        concurrent_extraction=False,
+        type_sensitivity_defaults={},
+        rationale_language=None,
+    )
+
+    assert cfg.backend == "ollama"
+
+
+@pytest.mark.parametrize(
+    ("yaml_body", "expected_backend"),
+    [
+        ("model: gemma3\n", "ollama"),
+        ("backend: ollama\n", "ollama"),
+    ],
+)
+def test_read_config_backend_key(
+    tmp_path: Path, yaml_body: str, expected_backend: str
+) -> None:
+    """WHEN `backend` is absent or explicitly `ollama`, `Config.backend`
+    resolves to `"ollama"` (design Decision 6)."""
+    (tmp_path / "openkos.yaml").write_text(yaml_body, encoding="utf-8")
+
+    assert config.read_config(tmp_path).backend == expected_backend
+
+
+def test_read_config_rejects_backend_openai_compatible_before_the_enabling_slice(
+    tmp_path: Path,
+) -> None:
+    """`backend: openai-compatible` is refused with a message stating it is
+    not available in THIS version -- Phase 3 keeps it refused until Phase 14
+    enables it (design Decision 10). The client and resolver land in earlier
+    phases of #1057, but selecting the new backend does not."""
+    (tmp_path / "openkos.yaml").write_text(
+        "backend: openai-compatible\n", encoding="utf-8"
+    )
+
+    with pytest.raises(
+        ValueError, match=r"not available in this version; supported: ollama"
+    ):
+        config.read_config(tmp_path)
+
+
+def test_read_config_rejects_an_unrecognized_backend_value(tmp_path: Path) -> None:
+    """Any other `backend` value is refused, naming the bad value and the
+    accepted set."""
+    (tmp_path / "openkos.yaml").write_text(
+        "backend: something-else\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="unrecognized value") as excinfo:
+        config.read_config(tmp_path)
+
+    assert "something-else" in str(excinfo.value)
+    assert "ollama" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("field", ["base_url", "embedding_base_url"])
+@pytest.mark.parametrize(
+    ("yaml_value", "expected"),
+    [
+        ("http://127.0.0.1:8080/", "http://127.0.0.1:8080"),
+        (
+            "https://models.example.internal:8443",
+            "https://models.example.internal:8443",
+        ),
+    ],
+)
+def test_read_config_base_url_validation_accepts(
+    tmp_path: Path, field: str, yaml_value: str, expected: str
+) -> None:
+    """A well-formed `http(s)://host[:port]` value is accepted, and a
+    trailing `/` is stripped -- the same table applies to `base_url` and
+    `embedding_base_url` (design Decision 6)."""
+    (tmp_path / "openkos.yaml").write_text(f"{field}: {yaml_value}\n", encoding="utf-8")
+
+    cfg = config.read_config(tmp_path)
+
+    assert getattr(cfg, field) == expected
+
+
+@pytest.mark.parametrize("field", ["base_url", "embedding_base_url"])
+@pytest.mark.parametrize(
+    ("yaml_value", "match"),
+    [
+        ("127.0.0.1:8080", "must start with"),
+        ("http://", "non-empty host"),
+        ("http:// 127.0.0.1:8080", "whitespace"),
+        ("http://user@127.0.0.1:8080", "OPENKOS_OPENAI_API_KEY"),
+        ("http://user:pw@127.0.0.1:8080", "OPENKOS_OPENAI_API_KEY"),
+        ("http://127.0.0.1:8080?x=1", "query string"),
+        ("http://127.0.0.1:8080#frag", "query string"),
+    ],
+)
+def test_read_config_base_url_validation_rejects(
+    tmp_path: Path, field: str, yaml_value: str, match: str
+) -> None:
+    """Missing scheme, empty host, whitespace, userinfo, a query string, and
+    a fragment are all refused -- userinfo names `OPENKOS_OPENAI_API_KEY` as
+    the correct place for a credential (design Decision 6)."""
+    (tmp_path / "openkos.yaml").write_text(
+        f'{field}: "{yaml_value}"\n', encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match=match):
+        config.read_config(tmp_path)
+
+
+@pytest.mark.parametrize("key", ["api_key", "openai_api_key", "OPENKOS_OPENAI_API_KEY"])
+def test_read_config_refuses_api_key_in_yaml(tmp_path: Path, key: str) -> None:
+    """A top-level `api_key`, `openai_api_key`, or `OPENKOS_OPENAI_API_KEY`
+    key is refused: the key is read only from the environment, because
+    `init` autocommits `openkos.yaml` to the user's repository (design
+    Decision 6)."""
+    (tmp_path / "openkos.yaml").write_text(f"{key}: sk-secret\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="read only from the"):
+        config.read_config(tmp_path)
+
+
+def test_unknown_top_level_keys_still_ignored(tmp_path: Path) -> None:
+    """A genuinely unrelated unknown top-level key stays silently ignored,
+    unaffected by the three new refusals above -- the rollback-story
+    regression pin: `read_config` reads by `raw.get` and only the `models:`
+    sub-mapping rejects unknown keys."""
+    (tmp_path / "openkos.yaml").write_text(
+        "model: gemma3\nsome_future_key: 1\n", encoding="utf-8"
+    )
+
+    cfg = config.read_config(tmp_path)
+
+    assert cfg.model == "gemma3"
+
+
+def test_ollama_default_path_config_is_byte_identical(tmp_path: Path) -> None:
+    """A workspace with none of `backend`/`base_url`/`embedding_base_url`
+    set produces `.backend/.base_url/.embedding_base_url ==
+    "ollama"/None/None`, and no other `Config` field's resolution changed --
+    the default-path invariant design.md pins for every slice of #1057."""
+    (tmp_path / "openkos.yaml").write_text("model: gemma3\n", encoding="utf-8")
+
+    cfg = config.read_config(tmp_path)
+
+    assert cfg.backend == "ollama"
+    assert cfg.base_url is None
+    assert cfg.embedding_base_url is None
+    assert cfg.model == "gemma3"
+    assert cfg.review == config.DEFAULT_REVIEW
+    assert cfg.default_sensitivity == config.DEFAULT_SENSITIVITY
+    assert cfg.freshness_window == config.DEFAULT_FRESHNESS_WINDOW
+    assert cfg.embedding_model == config.DEFAULT_EMBEDDING_MODEL
+    assert cfg.chat_timeout == config.DEFAULT_CHAT_TIMEOUT
+    assert cfg.max_generation_tokens == config.DEFAULT_MAX_GENERATION_TOKENS
+    assert cfg.temperature == config.DEFAULT_TEMPERATURE
+    assert cfg.seed == config.DEFAULT_SEED
+    assert (
+        cfg.confidential_local_exemption == config.DEFAULT_CONFIDENTIAL_LOCAL_EXEMPTION
+    )
+    assert cfg.union_judge == config.DEFAULT_UNION_JUDGE
+    assert cfg.sufficiency_check == config.DEFAULT_SUFFICIENCY_CHECK
+    assert cfg.concurrent_extraction == config.DEFAULT_CONCURRENT_EXTRACTION
+    assert cfg.revision_history == config.DEFAULT_REVISION_HISTORY
+
+
+def test_backend_openai_compatible_without_base_url_message(tmp_path: Path) -> None:
+    """A workspace setting BOTH `backend: openai-compatible` and no
+    `base_url` currently surfaces 3.4's pre-enable refusal ("not available in
+    this version"), because that check fires before any base_url-required
+    check could. Superseded by task 14.3 once the backend value is accepted
+    for real."""
+    (tmp_path / "openkos.yaml").write_text(
+        "backend: openai-compatible\n", encoding="utf-8"
+    )
+
+    with pytest.raises(
+        ValueError, match=r"not available in this version; supported: ollama"
+    ):
+        config.read_config(tmp_path)
+
+
 # --- Symlink boundary (#926) -------------------------------------------------
 #
 # `require_workspace` gates every command AFTER init, and until #926 it checked

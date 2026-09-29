@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
 from typing import Final, NamedTuple
+from urllib.parse import urlsplit
 
 import yaml
 
@@ -441,6 +442,23 @@ never persisted, never bundle-wide. Promoting it would have shipped a
 "bundle language" that cannot name most languages and abstains exactly when
 a mixed corpus needs it most."""
 
+DEFAULT_BACKEND: Final = "ollama"
+"""The packaged default LLM backend family (issue #1057, design Decision
+6). `Config.backend`, `SELECTABLE_BACKENDS`, and `state.reindex.embedding_tag`'s
+own default parameter all key off this one constant, so the "no backend key
+set" default-path invariant design.md pins for every slice of #1057 (byte-
+identical Ollama behavior) lives in exactly one place."""
+
+SELECTABLE_BACKENDS: Final = frozenset({DEFAULT_BACKEND})
+"""Every `backend:` value `read_config` accepts in THIS version (design
+Decision 10). `OpenAICompatibleClient`, the resolver in
+`application/backends.py`, and the `base_url`/`embedding_base_url` config
+keys below all land in earlier phases of issue #1057 than the slice that
+adds `"openai-compatible"` to this set -- until then a workspace cannot
+select the new backend at all; `read_config` refuses it with a message
+naming this set, so the two-step rollout is enforced by the one value a
+later commit widens, never duplicated at each call site."""
+
 DEFAULT_VOLATILITY_WINDOWS: dict[str, str] = {"slow": "90d", "volatile": "7d"}
 """Packaged per-tier default windows (freshness-lint-v1, design: "Per-tier
 windows (CONCRETE, FINAL)"): `slow` = 90d, `volatile` = 7d -- continuity
@@ -545,6 +563,57 @@ def validate_embedding_model(tag: str) -> str:
     written, never silently coerced to the default.
     """
     return _validate_model_token(tag, "embedding_model")
+
+
+_MISPLACED_API_KEY_KEYS: Final = ("api_key", "openai_api_key", "OPENKOS_OPENAI_API_KEY")
+"""Top-level `openkos.yaml` keys `read_config` refuses outright (issue
+#1057, design Decision 6, `backend-selection` spec's "The API Key Is Read
+Only From An Environment Variable"). The API key is read only from
+`OPENKOS_OPENAI_API_KEY` in the environment, never from a config file
+`init` autocommits to the user's repository -- a key written here would be
+committed alongside it."""
+
+
+def _validate_base_url(value: str, field: str) -> str:
+    """Validate and normalize a `base_url`/`embedding_base_url` value
+    (issue #1057, design Decision 6): an absolute `http://`/`https://` URL
+    with a non-empty host, no whitespace, no userinfo, and no query string
+    or fragment. `openkos.yaml` is a git-diffable, committed file, so the
+    endpoint must be unambiguous (a full URL, never a bare `host:port`) and
+    must never carry a credential -- the userinfo branch below names
+    `OPENKOS_OPENAI_API_KEY` as the correct place for one instead of merely
+    refusing.
+
+    Stored with the trailing `/` stripped, so it composes cleanly with
+    `OpenAICompatibleClient.resolved_base_url`'s own `/v1`-stripping
+    (design Decision 2) without producing a double slash. Raises a plain
+    `ValueError` naming only `field` -- the caller prefixes the workspace
+    file name, matching every other `read_config` refusal in this module.
+    """
+    if any(ch.isspace() for ch in value):
+        raise ValueError(f"'{field}' must not contain whitespace, got {value!r}")
+    if not (value.startswith("http://") or value.startswith("https://")):
+        raise ValueError(
+            f"'{field}' must start with 'http://' or 'https://', got {value!r}"
+        )
+    try:
+        parsed = urlsplit(value)
+    except ValueError as exc:
+        raise ValueError(
+            f"'{field}' is not a valid URL ({exc}), got {value!r}"
+        ) from exc
+    if "@" in parsed.netloc:
+        raise ValueError(
+            f"'{field}' must not contain a credential in the URL -- set "
+            f"OPENKOS_OPENAI_API_KEY in the environment instead, got {value!r}"
+        )
+    if not parsed.hostname:
+        raise ValueError(f"'{field}' must name a non-empty host, got {value!r}")
+    if parsed.query or parsed.fragment:
+        raise ValueError(
+            f"'{field}' must not contain a query string or a fragment, got {value!r}"
+        )
+    return value.rstrip("/")
 
 
 @dataclass(frozen=True)
@@ -1249,6 +1318,31 @@ class Config:
     Added LAST and DEFAULTED, like every other bool key in this file: the
     hand-built `config.Config(**fields)` test helpers that predate this key
     stay valid without edits."""
+    backend: str = DEFAULT_BACKEND
+    """Which LLM backend family this workspace targets: `"ollama"` (the
+    default) or, once selectable (issue #1057, design Decision 10),
+    `"openai-compatible"`. Defaults to `DEFAULT_BACKEND` when `backend:` is
+    absent or explicit null, validated against `SELECTABLE_BACKENDS` at
+    `read_config` time.
+
+    Added LAST and DEFAULTED, like `revision_history` above: every
+    hand-built `Config(...)` test construction that predates #1057 keeps
+    compiling without naming this field."""
+    base_url: str | None = None
+    """The chat endpoint for whichever `backend` is selected, or `None` to
+    let that backend resolve its own default (issue #1057, design Decision
+    6) -- `ollama` has one (`OLLAMA_HOST`, or the packaged default);
+    `openai-compatible` does not, and refuses to be selected without this
+    key (the `backend-selection` spec's "Endpoint Resolution Precedence").
+    Validated at `read_config` time by `_validate_base_url`: an absolute
+    `http://`/`https://` URL with no userinfo, no query string, and no
+    fragment, stored with the trailing `/` stripped."""
+    embedding_base_url: str | None = None
+    """The embedding endpoint, or `None` to fall back to `base_url` (or that
+    backend's own default) for embedding requests too (issue #1057, design
+    Decision 6) -- an OpenAI-compatible embedding model is often served by a
+    separate process or port from the chat model. Same validation as
+    `base_url`."""
 
 
 def read_config(root: Path) -> Config:
@@ -1280,6 +1374,14 @@ def read_config(root: Path) -> Config:
         raise ValueError(
             f"{layout.config_path.name}: expected a mapping at the document root"
         )
+    for misplaced_key in _MISPLACED_API_KEY_KEYS:
+        if misplaced_key in raw:
+            raise ValueError(
+                f"{layout.config_path.name}: {misplaced_key!r} is not a valid "
+                "config key -- the API key is read only from the "
+                "OPENKOS_OPENAI_API_KEY environment variable, never from "
+                "openkos.yaml"
+            )
     model = raw.get("model")
     review = raw.get("review")
     default_sensitivity = raw.get("default_sensitivity")
@@ -1305,6 +1407,9 @@ def read_config(root: Path) -> Config:
     type_sensitivity_defaults = raw.get("type_sensitivity_defaults")
     rationale_language = raw.get("rationale_language")
     revision_history = raw.get("revision_history")
+    backend = raw.get("backend")
+    base_url = raw.get("base_url")
+    embedding_base_url = raw.get("embedding_base_url")
     if model is not None and not isinstance(model, str):
         raise ValueError(
             f"{layout.config_path.name}: 'model' must be a string, got "
@@ -1628,6 +1733,53 @@ def read_config(root: Path) -> Config:
             f"{_MAX_RATIONALE_LANGUAGE_CHARS} characters and no sentence "
             f"punctuation, got {rationale_language!r}"
         )
+    if backend is not None and not isinstance(backend, str):
+        raise ValueError(
+            f"{layout.config_path.name}: 'backend' must be a string, got "
+            f"{type(backend).__name__}"
+        )
+    resolved_backend = backend if backend is not None else DEFAULT_BACKEND
+    if resolved_backend not in SELECTABLE_BACKENDS:
+        accepted = ", ".join(sorted(SELECTABLE_BACKENDS))
+        if resolved_backend == "openai-compatible":
+            # Refused by name specifically (rather than falling into the
+            # generic branch below), because #1057's client and resolver
+            # already exist by the time this refusal ships (Phases 4-13) --
+            # "not available" is the accurate word, not "unrecognized"
+            # (design Decision 10). Widened to a real accept once Phase 14
+            # adds it to `SELECTABLE_BACKENDS`.
+            raise ValueError(
+                f"{layout.config_path.name}: 'backend: openai-compatible' is "
+                f"not available in this version; supported: {accepted}"
+            )
+        raise ValueError(
+            f"{layout.config_path.name}: 'backend' names unrecognized value "
+            f"{resolved_backend!r}; supported: {accepted}"
+        )
+    if base_url is not None and not isinstance(base_url, str):
+        raise ValueError(
+            f"{layout.config_path.name}: 'base_url' must be a string, got "
+            f"{type(base_url).__name__}"
+        )
+    if embedding_base_url is not None and not isinstance(embedding_base_url, str):
+        raise ValueError(
+            f"{layout.config_path.name}: 'embedding_base_url' must be a "
+            f"string, got {type(embedding_base_url).__name__}"
+        )
+    resolved_base_url = None
+    if base_url is not None:
+        try:
+            resolved_base_url = _validate_base_url(base_url, "base_url")
+        except ValueError as exc:
+            raise ValueError(f"{layout.config_path.name}: {exc}") from exc
+    resolved_embedding_base_url = None
+    if embedding_base_url is not None:
+        try:
+            resolved_embedding_base_url = _validate_base_url(
+                embedding_base_url, "embedding_base_url"
+            )
+        except ValueError as exc:
+            raise ValueError(f"{layout.config_path.name}: {exc}") from exc
     return Config(
         model=model if model is not None else DEFAULT_MODEL,
         review=review if review is not None else DEFAULT_REVIEW,
@@ -1713,6 +1865,9 @@ def read_config(root: Path) -> Config:
             if revision_history is not None
             else DEFAULT_REVISION_HISTORY
         ),
+        backend=resolved_backend,
+        base_url=resolved_base_url,
+        embedding_base_url=resolved_embedding_base_url,
     )
 
 
