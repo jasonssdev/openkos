@@ -1513,7 +1513,7 @@ Depends on P5b (`plan_revisions`, `is_fresh`), P3
 (`record_revision_findings`), and Phase A's `judge_pairs`/
 `is_actionable_revision` leaf. Same module and test file.
 
-- [ ] **P6.1** [TEST] `tests/unit/application/test_revisions_service.py`
+- [x] **P6.1** [TEST] `tests/unit/application/test_revisions_service.py`
   — add `test_judge_revisions_persists_only_non_malformed_verdicts`: a
   `_ScriptedLLM` returning one malformed reply and one well-formed reply
   across a two-pair `to_judge` list — after `judge_revisions(...)`,
@@ -1521,7 +1521,7 @@ Depends on P5b (`plan_revisions`, `is_fresh`), P3
   well-formed one; the malformed pair is never persisted (so it is
   re-judged next run). **RED today**: `AttributeError` —
   `judge_revisions` does not exist.
-- [ ] **P6.2** [TEST] Same file — add
+- [x] **P6.2** [TEST] Same file — add
   `test_judge_revisions_partial_batch_persists_the_completed_prefix`: a
   `_RaisingLLM` failing on its 2nd of 3 `to_judge` pairs — the FIRST,
   already-judged pair IS persisted before the failure propagates;
@@ -1529,7 +1529,7 @@ Depends on P5b (`plan_revisions`, `is_fresh`), P3
   `judge_pairs` (Phase A leaf) returns. Covers "One malformed reply
   degrades without aborting the batch" at the full-run level. **RED
   today**: same `AttributeError`.
-- [ ] **P6.3** [IMPL] Same module: add `judge_revisions(layout, plan, *,
+- [x] **P6.3** [IMPL] Same module: add `judge_revisions(layout, plan, *,
   llm, effective_confidential, on_progress=None) -> RevisionOutcome` —
   builds `JudgeSide` pairs from `plan.to_judge` (direction from each
   side's `DecisionDate`), calls `judge_pairs` (Phase A leaf), persists
@@ -1537,7 +1537,7 @@ Depends on P5b (`plan_revisions`, `is_fresh`), P3
   (P3.4) AS IT COMPLETES (so a partial batch keeps its already-paid-for
   prefix), never persists a `malformed=True` result. Makes P6.1 and P6.2
   GREEN.
-- [ ] **P6.4** [TEST] Same file — add
+- [x] **P6.4** [TEST] Same file — add
   `test_actionable_revision_findings_strict_freshness_and_actionability`:
   of three persisted findings — one fresh AND actionable (REVERSES,
   confidence ≥ 0.7, both quotes verified), one fresh but REAFFIRMS (never
@@ -1545,7 +1545,7 @@ Depends on P5b (`plan_revisions`, `is_fresh`), P3
   `actionable_revision_findings(layout)` returns ONLY the first. **RED
   today**: `AttributeError` — `actionable_revision_findings` does not
   exist.
-- [ ] **P6.5** [IMPL] Same module: add `actionable_revision_findings(
+- [x] **P6.5** [IMPL] Same module: add `actionable_revision_findings(
   layout) -> tuple[RevisionFinding, ...]` — takes the LATEST row per pair
   from `open_revision_findings` (P3.4), keeps it only if `is_fresh`
   (P5b.4) and `is_actionable_revision` (Phase A leaf) both hold. Makes
@@ -1553,12 +1553,12 @@ Depends on P5b (`plan_revisions`, `is_fresh`), P3
 
 ### Slice P6 verification
 
-- [ ] **P6.6** Run `uv run ruff check . && uv run ruff format --check . &&
+- [x] **P6.6** Run `uv run ruff check . && uv run ruff format --check . &&
   uv run mypy .` — must be green.
-- [ ] **P6.7** Run `uv run pytest tests/unit/application/test_revisions_service.py`
+- [x] **P6.7** Run `uv run pytest tests/unit/application/test_revisions_service.py`
   (the full file: P5a + P5b + P6 together), then `uv run pytest` (unpiped)
   full suite — must be green.
-- [ ] **P6.8** Commit as one or more work-unit commits (e.g. `feat(cli):
+- [x] **P6.8** Commit as one or more work-unit commits (e.g. `feat(cli):
   add judging and actionable-finding selection to the revisions service`).
   Open PR 10 (Slice P6) targeting PR 9's branch.
 

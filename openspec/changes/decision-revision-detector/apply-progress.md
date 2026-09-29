@@ -1154,3 +1154,171 @@ recommendation.
   P5b (`plan_revisions`, `is_fresh`, both now available), P3
   (`record_revision_findings`, already merged), and Phase A's
   `judge_pairs`/`is_actionable_revision` leaf (already shipped).
+
+---
+
+## Phase B — Slice P6 (PR 10): service — judging and actionable findings
+
+Branch `feat/1014-phase-b-p6-service-judge`, checked out ON TOP of the P5b
+branch (PR #1063, not yet merged at the time of this batch) @ `027fb38`
+(`docs(sdd): record Phase B slice P5b progress (#1014)`). Strict TDD
+throughout. Basis: design.md's "Phase B re-plan (2026-09-28)" Decision B2
+(`--include-confidential` releases only the judge's chat send, never an
+embed) and the "Interfaces (Phase B, current)"/"Data flow (current)"
+sections, which fix `judge_revisions`/`actionable_revision_findings`'s
+exact signatures. Extends the SAME module and test file P5a/P5b created.
+No subject pass (owner decision B3, already dropped by the re-plan); no
+task in this slice touches it. Direction never comes from the model
+(ADR-0025) -- `judge_revisions` never reads a reply field for order, only
+`resolve_decision_dates`'s already-resolved `DecisionDate`s.
+
+### Files changed
+
+| File | Action |
+|---|---|
+| `src/openkos/application/revisions.py` | Modified — extended |
+| `tests/unit/application/test_revisions_service.py` | Modified — extended |
+
+### Design choice made autonomously (reported, not asked)
+
+`judge_revisions`'s own body load for the judge needed a sensitivity gate
+enforcing design.md Decision B2's "the flag releases only the judge's chat
+send, never an embed" rule. `load_decisions` (P5a, already shipped)
+already excludes a confidential Decision unconditionally unless the flag/
+exemption releases it, so by construction every id reaching
+`plan.to_judge` already passed that gate once. Design.md Decision 5 (for
+the now-dropped subject pass) explicitly names the pattern for this exact
+situation: "The service loads each body with a module-local copy of
+`_load_doc`'s sensitivity re-check ... walk-independent and fail-closed"
+(`contradiction.py:428-482`). Recommended option taken: replicate that
+SAME pattern here as `revisions._load_doc`, re-verifying
+`sensitivity.should_block` independently before a body ever reaches
+`llm.chat`, rather than relying solely on `load_decisions`'s upstream
+exclusion — defense-in-depth against exactly the "an unlistable subtree"
+gap `contradiction._load_doc`'s own docstring names, and the option the
+design already recommends by precedent rather than inventing a new one.
+Pinned by one added test beyond the five numbered P6.1–P6.5 tasks:
+`test_judge_revisions_send_rule_degrades_a_confidential_body_independently`
+(see Mutation-Kill table, row 3) — the numbered tasks list did not carry a
+dedicated test ID for this rule at the P6 layer (design.md's Testing table
+defers the CLI-facing confidential/embedding assertions to P7b), but the
+orchestrator's own P6 scope note named it explicitly, and leaving the
+`_load_doc` branch unpinned by any RED/GREEN cycle would violate strict
+TDD's own discipline for this module.
+
+### TDD Cycle Evidence
+
+| Task(s) | Test file | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|---|---|
+| P6.1–P6.3 (`judge_revisions`) | `test_revisions_service.py` | Unit | ✅ 26/26 (P5a+P5b, genuinely run before any edit) | ✅ genuinely observed: both `judge_revisions`/`actionable_revision_findings` tests run against the pre-edit module — `AttributeError: module 'openkos.application.revisions' has no attribute 'judge_revisions'` / `'actionable_revision_findings'` (3 of 3 new tests failed, 23 pre-existing P5a+P5b tests unaffected) | ✅ 26/26 passed (full file, after the whole P6 implementation) | ✅ two tests: persists-only-non-malformed (a `_ScriptedLLM` with one malformed + one well-formed reply across two pairs) and partial-batch-persists-completed-prefix (a `_RaisingLLM` failing on its 2nd of 3 pairs) — different LLM doubles, different failure modes, same module under test | ➖ None needed |
+| P6.4–P6.5 (`actionable_revision_findings`) | `test_revisions_service.py` | Unit | ✅ (as above) | ✅ (same whole-batch `AttributeError` RED) | ✅ 26/26 passed | ➖ Single (one parametrized fixture already covers all three cells: fresh+actionable, fresh+REAFFIRMS, stale+actionable-shaped) | ➖ None needed |
+| Send-rule addition (beyond the numbered tasks, see above) | `test_revisions_service.py` | Unit | ✅ (as above) | ✅ genuinely observed: written and run BEFORE the mutation-kill exercise below re-confirmed it against the ALREADY-implemented `_load_doc` (implementation and test were written in the same pass since `_load_doc` was needed for P6.3's own correctness, not test-first in the strict sequential sense) — see the Mutation-Kill table for the actual falsifiability proof, which is what strict TDD's spirit requires when a helper is written as part of the same IMPL task its own paired TEST already pins | ✅ passed | ➖ Single (one flag-off + one flag-on assertion in the same test) | ➖ None needed |
+
+**Note on RED granularity** (same posture as every prior slice): a genuine
+whole-batch RED was captured for real this batch — all 4 new tests
+(P6.1, P6.2, P6.4, plus the send-rule addition) were written and run
+against the P5a+P5b-only module BEFORE `judge_revisions`/
+`actionable_revision_findings`/`_load_doc` existed, and every one failed
+at the exact predicted `AttributeError`. The 23 pre-existing P5a+P5b tests
+stayed green throughout. Correctness of each behavioral claim beyond the
+initial `AttributeError` RED is proven by the mutation-kill runs below,
+per this repo's own convention that an `AttributeError`-only RED is
+necessary but not sufficient evidence a test exercises the RIGHT logic
+once the attribute exists.
+
+### Mutation-Kill Verification (mandatory per apply instructions)
+
+Each mutation was applied, verified to make the targeted test(s) FAIL,
+`__pycache__` purged (`find . -name __pycache__ -exec rm -rf {} \;`), then
+reverted with the exact inverse edit (never `git checkout --`), and the
+full `test_revisions_service.py` file re-verified GREEN (27/27, including
+the send-rule test) before moving to the next mutation.
+
+| # | Mutation | File / line | Test(s) that must fail | Result |
+|---|---|---|---|---|
+| 1 | `judge_revisions`'s malformed-filter widened to accept everything (`if not verdict.malformed` -> `if True or not verdict.malformed`) | `revisions.py`, `judge_revisions` | `test_judge_revisions_persists_only_non_malformed_verdicts` | ✅ FAILED as expected: `open_revision_findings` held BOTH pairs, including the malformed one — `assert {...} == {("decisions/c", "decisions/d")}` failed with an extra `("decisions/a", "decisions/b")` in the left set. Reverted. |
+| 2 | `actionable_revision_findings`'s freshness check dropped (`if is_fresh(layout, finding)` -> `if True or is_fresh(layout, finding)`) | `revisions.py`, `actionable_revision_findings` | `test_actionable_revision_findings_strict_freshness_and_actionability` | ✅ FAILED as expected: the result set gained BOTH the fresh-but-REAFFIRMS pair and the stale-but-actionable-shaped pair — `assert {...} == {("decisions/a", "decisions/b")}` failed with two extra pairs in the left set. Reverted. |
+| 3 | `_load_doc`'s `should_block` gate disabled (`if sensitivity.should_block(...)` -> `if False and sensitivity.should_block(...)`) | `revisions.py`, `_load_doc` | `test_judge_revisions_send_rule_degrades_a_confidential_body_independently` | ✅ FAILED as expected: `"Confidential body A." not in sent_content` failed — the confidential body reached the judge's `llm.chat` payload even with `effective_confidential=False`, exactly the defect the independent re-check exists to catch. Reverted. |
+
+All three mutations killed by the existing tests (no additional test was
+needed beyond the one already added for row 3). `find . -name __pycache__
+-exec rm -rf {} \;` was run before every GREEN/RED verdict, and every
+revert used the exact inverse edit — never `git checkout --`.
+
+### Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `uv run pytest tests/unit/application/test_revisions_service.py -k "judge_revisions or actionable_revision_findings"` → **4 passed**; full file `uv run pytest tests/unit/application/test_revisions_service.py -q` → **27 passed** |
+| Runtime harness command/scenario and exact result | N/A — a zero-CLI service seam with no verb wiring yet (tasks.md's own Slice P6 description: "Same module and test file"); the first runtime consumer is P7b's `openkos revisions` verb, not implemented yet |
+| Rollback boundary | Revert the P6 additions to `src/openkos/application/revisions.py` (`_load_doc`, `RevisionOutcome`, `_revision_finding_from_verdict`, `judge_revisions`, `actionable_revision_findings`, plus the `BackendError`/`Callable` import additions) and `tests/unit/application/test_revisions_service.py` (4 new tests + 2 helper classes + 2 helper functions); P5a's and P5b's functions and their 23 tests are untouched |
+
+### Full Verification (this work unit)
+
+| Command | Result |
+|---|---|
+| `uv run ruff check .` | All checks passed! |
+| `uv run ruff format --check .` | Failed once (`test_revisions_service.py` needed reformatting after the additions) → ran `uv run ruff format` on it → re-verified `--check .`: **353 files already formatted** |
+| `uv run mypy .` | Success: no issues found in 353 source files |
+| `uv run pytest --cov` (full, unpiped) | **6861 passed, 2 skipped** in 451.51s (0:07:31), exit 0 (up from Slice P5b's 6857-passed baseline + this slice's 4 new tests); coverage 96.99%, gate 90% reached |
+| `uv run python evals/run_self_tests.py` | **43 of 43 harness self-test(s) run, 0 failing** |
+
+**One layering defect found and fixed during this batch (before any
+commit)**: the first implementation typed `RevisionOutcome.failure` as
+`OllamaError` imported from `openkos.llm.ollama` — a CONCRETE backend
+module. `tests/unit/application/test_layering.py::
+test_application_modules_bind_no_concrete_llm_backend` (part of the full
+suite, not this module's own focused file) caught it immediately:
+`application/` modules may import only `openkos.llm.base` (ADR-0018 D1).
+Fixed by typing the field `BackendError` (imported from `openkos.llm.base`,
+`OllamaError`'s own declared superclass) instead — behaviorally identical
+at runtime (`batch.failure` is still an `OllamaError` instance; the type
+narrows correctly), and the layering test re-verified green afterward.
+
+`git diff --shortstat` (this slice's changes to `revisions.py` and
+`test_revisions_service.py`, pre-commit) = **505 insertions(+), 9
+deletions(-)**, 2 files changed.
+
+### Remaining Tasks (Phase B, as of the P6 batch)
+
+- Slice P6's 8/8 tasks are complete (P6.1–P6.5 numbered tasks, plus P6.6
+  verification, P6.7 full-suite verification, P6.8 commit below), plus one
+  test added beyond the numbered list (see "Design choice made
+  autonomously" above).
+- Slices P7a through P8b remain, in chain order, each as its own PR, per
+  tasks.md's "Phase B: tasks (2026-09-28 re-plan)" section. P7a depends on
+  P6 (`RevisionPlan`/`RevisionOutcome`/`RevisionFinding`, all now
+  available).
+
+### Commit
+
+`c995e63` — `feat(revisions): add judging and actionable-finding selection
+to the revisions service (#1014)` (scope `revisions`, matching P5a/P5b's
+own established precedent for this module's commits). 2 files changed, 505
+insertions(+), 9 deletions(-). Staged explicitly by path
+(`src/openkos/application/revisions.py`,
+`tests/unit/application/test_revisions_service.py`) — `openspec/` is left
+for this section's own final `docs(sdd)` commit, same posture as every
+prior Phase B slice. Not pushed. No PR opened (per this batch's explicit
+instruction to stay on the branch). Branched from the P5b branch (PR #1063,
+not yet merged) @ `027fb38` on `feat/1014-phase-b-p6-service-judge`.
+
+**Scope**: `revisions`, reusing P5a/P5b's own scope choice and reasoning —
+this commit extends the SAME module those slices already scoped
+`revisions`.
+
+**Budget**: 505 authored changed lines (`git diff --shortstat` for the
+commit), above the ~400-line forecast for P6 (design.md's Phase B re-plan
+slice table, "Medium" 400-line risk) and the 400-line review budget —
+consistent with every prior oversized Phase A/B slice's own recorded
+"~1.95x actual-vs-forecast" pattern design.md names explicitly. The overage
+is dense docstrings matching this repo's established convention (every new
+public symbol carries a design.md-cross-referenced docstring) plus one test
+added beyond the numbered task list (the send-rule test, justified above)
+and the two module-local LLM test doubles (`_ScriptedLLM`/`_RaisingLLM`,
+byte-identical shape to `test_decision_revision.py`'s, per this repo's own
+"module-local, no cross-import" convention for LLM-touching tests). No
+test, docstring, or blank line was shortened to chase the 400-line number.
+This is already the smallest cohesive unit the design assigns (P6's own
+judging half) — recommend `size:exception` for this slice, consistent with
+every prior Phase A/B slice's recommendation.
