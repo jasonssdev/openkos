@@ -480,7 +480,7 @@ requirements.
 
 ### Error hierarchy + leaf constraint
 
-- [ ] **4.1** [TEST] `tests/unit/llm/test_openai_compatible_errors.py` (new)
+- [x] **4.1** [TEST] `tests/unit/llm/test_openai_compatible_errors.py` (new)
   — add `test_error_hierarchy`: `OpenAICompatibleError` subclasses
   `BackendError`; `OpenAICompatibleUnavailable` subclasses BOTH
   `OpenAICompatibleError` and `BackendUnavailable`;
@@ -488,11 +488,19 @@ requirements.
   `EmbeddingDimensionMismatch` each subclass `OpenAICompatibleError`. **RED
   today**: `ModuleNotFoundError` — the module doesn't exist. Covers
   "Error Hierarchy Mirrors Ollama's Under The Neutral Bases".
-- [ ] **4.2** [IMPL] `src/openkos/llm/openai_compatible.py` (new): error
+
+  **Observed**: RED confirmed — moved the not-yet-existing implementation
+  aside, ran the full new Phase 4 test set, got 3 `ModuleNotFoundError`
+  collection errors (this file plus `test_openai_compatible_chat.py`/
+  `test_openai_compatible_ladder.py`) and 2 real assertion failures on the
+  two module-independent guards (`test_layering.py`,
+  `test_openai_compatible_thread_safety.py`). Restored the implementation;
+  GREEN after 4.2.
+- [x] **4.2** [IMPL] `src/openkos/llm/openai_compatible.py` (new): error
   hierarchy only, plus a module docstring declaring the leaf constraint
   (stdlib + `openkos.llm.base` only, no config/env import). Makes 4.1
   GREEN.
-- [ ] **4.2a** [TEST] `tests/unit/llm/test_layering.py` (extend the existing
+- [x] **4.2a** [TEST] `tests/unit/llm/test_layering.py` (extend the existing
   no-config-import check) — add
   `test_llm_package_no_config_import_includes_new_module`: the existing
   AST/import scan over `llm/*.py` now also covers `openai_compatible.py`.
@@ -500,17 +508,30 @@ requirements.
   extension landing in the same commit as 4.2 — confirm the scanner
   auto-discovers every file under `llm/` (glob-based) rather than a
   hardcoded list; if hardcoded, this task's RED is a literal missing entry.
-- [ ] **4.2b** [IMPL] extend the layering guard's scanned-file list if it is
+
+  **Observed**: `tests/unit/llm/test_layering.py` did not exist yet (the
+  existing no-config-import check lives in `test_ollama.py::
+  test_llm_modules_do_not_import_config`, already glob-based over
+  `llm/*.py`). Created the new file with its own independent pin
+  (`test_llm_package_no_config_import_includes_new_module`), asserting
+  `openai_compatible.py` is present in the glob-discovered set — RED
+  confirmed (`AssertionError`, module absent) before 4.2 landed.
+- [x] **4.2b** [IMPL] extend the layering guard's scanned-file list if it is
   not already glob-based. Makes 4.2a GREEN.
+
+  **Observed**: the scan was already glob-based
+  (`Path.glob("*.py")` in both `test_ollama.py`'s existing check and the
+  new `test_layering.py` pin), so no source-code or scanner change was
+  needed — creating `openai_compatible.py` in 4.2 alone made both GREEN.
 
 ### Construction, `resolved_base_url`
 
-- [ ] **4.3** [TEST] same errors file — add
+- [x] **4.3** [TEST] same errors file — add
   `test_class_constructs_with_required_args`:
   `OpenAICompatibleClient(model="m", base_url="http://127.0.0.1:8080")`
   constructs with every other keyword defaulted, mirroring `OllamaClient`'s
   shape. **RED today**: `AttributeError` — class doesn't exist.
-- [ ] **4.4** [IMPL] `OpenAICompatibleClient.__init__` per design's
+- [x] **4.4** [IMPL] `OpenAICompatibleClient.__init__` per design's
   Interfaces/Contracts signature: `model`, `base_url` (required kwarg),
   `timeout=DEFAULT_TIMEOUT` (600.0, same floor as Ollama),
   `max_generation_tokens=None`, `temperature=None`, `seed=None`,
@@ -520,113 +541,172 @@ requirements.
   `embed_retry_backoff_base=DEFAULT_EMBED_RETRY_BACKOFF_BASE`,
   `sleep=time.sleep`; store each as a private instance attribute. Makes 4.3
   GREEN.
-- [ ] **4.5** [TEST] same file — add
+- [x] **4.5** [TEST] same file — add
   `test_resolved_base_url_strips_trailing_slash_and_one_v1`, parametrized:
   `http://127.0.0.1:8080` unchanged; trailing `/` stripped; trailing `/v1`
   stripped; trailing `/v1/` stripped to no `/v1`; a reverse-proxy mount
   `http://host/proxy/v1` -> `http://host/proxy` (kept, not stripped
   further). **RED today**: property not implemented.
-- [ ] **4.6** [IMPL] implement `resolved_base_url` (exactly one trailing `/`
+- [x] **4.6** [IMPL] implement `resolved_base_url` (exactly one trailing `/`
   then exactly one trailing `/v1` stripped; any other path prefix kept).
   Makes 4.5 GREEN.
 
 ### `chat()` happy path
 
-- [ ] **4.7** [TEST] `tests/unit/llm/test_openai_compatible_chat.py` (new) —
+- [x] **4.7** [TEST] `tests/unit/llm/test_openai_compatible_chat.py` (new) —
   add `test_chat_posts_to_v1_chat_completions_with_stream_false`: fake
   `urlopen` captures the `Request`; URL == `{base_url}/v1/chat/completions`,
   method POST, body carries `"model"`, `"messages"`, `"stream": false`.
   Covers "Successful Chat Call Returns Assistant Text" (request half). **RED
   today**: `chat` not implemented.
-- [ ] **4.8** [IMPL] `OpenAICompatibleClient.chat(messages)`: build the
+- [x] **4.8** [IMPL] `OpenAICompatibleClient.chat(messages)`: build the
   request body, POST via injected `urlopen`. No instance-attribute writes
   inside `chat` (thread-safety, mirrors `OllamaClient`). Makes 4.7 GREEN.
-- [ ] **4.9** [TEST] same file — add
+- [x] **4.9** [TEST] same file — add
   `test_chat_returns_assistant_content_string`: server responds 200 with
   `{"choices":[{"message":{"role":"assistant","content":"hi"},
   "finish_reason":"stop"}]}`; `chat(...)` returns `"hi"`. Covers the same
   requirement's response half.
-- [ ] **4.10** [IMPL] parse `choices[0].message.content`, return as `str`; a
+- [x] **4.10** [IMPL] parse `choices[0].message.content`, return as `str`; a
   `null`/non-string content raises `OpenAICompatibleError`. Makes 4.9
   GREEN.
-- [ ] **4.11** [TEST] same file — add
+- [x] **4.11** [TEST] same file — add
   `test_chat_forwards_system_and_user_messages_in_order`: a message list
   with one `system` and one `user` entry is forwarded verbatim, same order.
   Covers "System And User Roles Supported".
 
 ### Error ladder
 
-- [ ] **4.12** [TEST] `tests/unit/llm/test_openai_compatible_ladder.py`
+- [x] **4.12** [TEST] `tests/unit/llm/test_openai_compatible_ladder.py`
   (new) — add `test_connection_refused_raises_unavailable`: fake `urlopen`
   raises `URLError(ConnectionRefusedError())`; `chat(...)` raises
   `OpenAICompatibleUnavailable`, no `URLError` escapes. Covers "Server
   Unavailable Raises A Typed Error".
-- [ ] **4.13** [TEST] same file — add `test_timeout_raises_unavailable` /
+- [x] **4.13** [TEST] same file — add `test_timeout_raises_unavailable` /
   `test_incomplete_read_raises_unavailable`: `socket.timeout` and
   `http.client.IncompleteRead` both map the same way.
-- [ ] **4.14** [IMPL] transport-error mapping in `openai_compatible.py`:
+- [x] **4.14** [IMPL] transport-error mapping in `openai_compatible.py`:
   connection/timeout/incomplete-read -> `OpenAICompatibleUnavailable`,
   naming `locality.display_host` only (the #355 rule — never the raw
   configured value). Makes 4.12-4.13 GREEN.
-- [ ] **4.15** [TEST] same file — add
+- [x] **4.15** [TEST] same file — add
   `test_404_with_model_body_raises_model_not_found` /
   `test_400_with_model_not_found_body_raises_model_not_found`: an
   `HTTPError` 404 (body names the model, "not found"/"does not exist") and
   a 400 whose body carries `"model_not_found"` both raise
   `OpenAICompatibleModelNotFound`. Covers "Unknown Model Raises A Typed
   Not-Found Error" (status is not solely determinative).
-- [ ] **4.16** [TEST] same file — add `test_other_4xx_5xx_raises_generic_error`,
+- [x] **4.16** [TEST] same file — add `test_other_4xx_5xx_raises_generic_error`,
   parametrized over 401 (no key configured), 403, 500, 503: each raises
   `OpenAICompatibleError`, NOT `OpenAICompatibleModelNotFound`. Covers
   "Other Failures Raise A Generic Typed Error".
-- [ ] **4.17** [TEST] same file — add
+- [x] **4.17** [TEST] same file — add
   `test_401_403_message_names_env_var_never_key_value`: with an API key
   configured, a 401/403 raises `OpenAICompatibleError` whose message says
   authentication failed and names `OPENKOS_OPENAI_API_KEY`, and the
   configured key's VALUE never appears (sentinel-key assertion).
-- [ ] **4.18** [TEST] same file — add
+- [x] **4.18** [TEST] same file — add
   `test_malformed_json_raises_generic_error` /
   `test_missing_choices_content_shape_raises_generic_error`: a non-JSON
   body, and a valid-JSON body missing `choices[0].message.content`, both
   raise `OpenAICompatibleError` with no unhandled `JSONDecodeError`/
   `KeyError`/`IndexError` escaping.
-- [ ] **4.19** [IMPL] `_map_http_error(status, body)` implementing the full
+
+  **Observed**: also added `test_null_content_raises_generic_error`
+  (a `null` `content` value), pinning 4.10's "must be a `str`" clause
+  explicitly rather than leaving it implicit in the happy-path tests.
+- [x] **4.19** [IMPL] `_map_http_error(status, body)` implementing the full
   classification table (404 or 400-with-marker -> `ModelNotFound`; 401/403
   -> generic error naming `OPENKOS_OPENAI_API_KEY`, never the key;
   everything else -> generic error with status+detail), plus the
   malformed-JSON/missing-shape guards inside `chat`'s response parsing.
   Makes 4.15-4.18 GREEN.
-- [ ] **4.20** [TEST] same file — add
+
+  **Observed**: implemented as `self._map_http_error(exc)`, an instance
+  method (not the bare `(status, body)` module function design.md
+  sketched) precisely so 4.20's mutation-proof test can plausibly
+  interpolate `self._api_key` in the auth-failure branch — a module-level
+  function would have no access to the key to leak, which would make that
+  mutation-proof test untestable. Classification signature: 404 with a
+  "not found"/"does not exist" body, OR 400 with a `model_not_found`
+  marker, -> `OpenAICompatibleModelNotFound`; else 401/403 -> generic error
+  naming `OPENKOS_OPENAI_API_KEY`; else -> generic error with status+detail.
+- [x] **4.20** [TEST] same file — add
   `test_key_never_appears_in_any_ladder_rung_exception_message`,
   parametrized over EVERY rung above with a client constructed with a
   sentinel API key: the sentinel never appears in `str(exc)` for any rung.
   Mutation-proof: mutate `_map_http_error`'s auth-failure branch to
   interpolate the key value directly, confirm this test fails, then revert.
-- [ ] **4.21** [TEST] same file — add
+
+  **Observed mutation proof**: edited the 401/403 branch in
+  `openai_compatible.py` to add `f"(tried {self._api_key})"` to the
+  message; ran `test_401_403_message_names_env_var_never_key_value` and
+  `test_key_never_appears_in_any_ladder_rung_exception_message` — 3 failed
+  (the dedicated test plus rung indices 4 and 5, the 401/403 rungs),
+  showing the sentinel value leaking into the message. Reverted with the
+  exact inverse edit, purged `__pycache__` (repo-wide), reconfirmed all
+  Phase 4 tests green (36 passed).
+- [x] **4.21** [TEST] same file — add
   `test_key_sent_as_bearer_header_when_present` /
   `test_no_authorization_header_when_absent`: fake `urlopen` captures
   headers; a client with a key sends `Authorization: Bearer <key>` on
   every request; a client without sends no `Authorization` header at all.
   Covers "An Optional Bearer Key Is Applied Per Request And Never Logged".
-- [ ] **4.22** [IMPL] wire the `Authorization` header conditionally in the
+- [x] **4.22** [IMPL] wire the `Authorization` header conditionally in the
   shared request-building helper `chat`/`embed`/`list_models` all use.
   Makes 4.21 GREEN.
-- [ ] **4.23** [TEST] `tests/unit/llm/test_openai_compatible_thread_safety.py`
+
+  **Observed**: implemented as `_build_request(url, payload, *, method)`,
+  used by `chat` now; `embed`/`list_models` (Phases 6-7) will reuse it —
+  no duplicate header-building logic to keep in sync later.
+- [x] **4.23** [TEST] `tests/unit/llm/test_openai_compatible_thread_safety.py`
   (new) — add `test_chat_writes_no_instance_attribute`: AST guard copied
   from `test_ollama.py`'s equivalent (#748), scanning `chat`'s body for any
   `self.<name> = ...` assignment. Mutation-proof: temporarily add
   `self._last = messages` inside `chat`, confirm the guard fails, then
   remove it.
 
+  **Observed mutation proof**: added `self._last = messages` as the first
+  line of `chat` in `openai_compatible.py`; `test_chat_writes_no_instance_
+  attribute` failed (`assert [214] == []`, the mutated line's number).
+  Reverted with the exact inverse edit, purged `__pycache__`, reconfirmed
+  green. Also added a second, synthetic-source
+  `test_the_self_mutation_guard_catches_a_mutation` (reduced form-catalog,
+  since the shared AST-walk helper's exhaustive form coverage is already
+  proven in `test_ollama.py`).
+
 ### Phase 4 verification
 
-- [ ] **4.24** Run `uv run ruff check . && uv run ruff format --check . &&
+- [x] **4.24** Run `uv run ruff check . && uv run ruff format --check . &&
   uv run mypy .` — must be green.
-- [ ] **4.25** Run `uv run pytest tests/unit/llm/test_openai_compatible*.py
+
+  **Observed**: `ruff check .` clean; `ruff format --check .` initially
+  flagged 2 files (`test_openai_compatible_errors.py`,
+  `test_openai_compatible_ladder.py`), reformatted with `uv run ruff
+  format`, reconfirmed clean (373 files); `mypy .` found one error
+  (`test_openai_compatible_chat.py`'s untyped `messages` literal not
+  narrowing to `Sequence[Message]`), fixed with an explicit
+  `list[Message]` annotation; reconfirmed clean (373 source files).
+- [x] **4.25** Run `uv run pytest tests/unit/llm/test_openai_compatible*.py
   tests/unit/llm/test_layering.py` focused, then `uv run pytest --cov` full
   suite; then `uv run python evals/run_self_tests.py`.
+
+  **Observed**: focused (`tests/unit/llm/test_openai_compatible*.py
+  tests/unit/llm/test_layering.py`) → 36 passed. Full `pytest --cov`
+  (unpiped, backgrounded — 433.18s wall time) → **7267 passed, 0 failed, 2
+  skipped**, 96.92% branch coverage (>= 90% gate held);
+  `llm/openai_compatible.py` itself: 90 statements, 2 missed, 97% (an
+  `_map_http_error` error-reading-the-error-body branch and one
+  `resolved_base_url` ternary arm not independently exercised — both are
+  defensive/degenerate paths covered by the design's own fail-open
+  contract, not a gap in the tested requirements). `evals/
+  run_self_tests.py`: 44/44 green.
 - [ ] **4.26** Commit, scope `llm`. Open PR 4 targeting `main`, after PR 1,
   2a, 2b merge.
+
+  **Observed**: committed on the current branch (`feat/1057-openai-p4`,
+  cut from `main` after PR #1096/#1097) — no push, no PR opened per the
+  apply run's instructions; PR creation is left to the maintainer.
 
 **Rollback boundary**: delete `llm/openai_compatible.py`; nothing else
 references it yet.
