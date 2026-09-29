@@ -89,6 +89,21 @@ IDs, one parametrized 4 ways). 707 authored changed lines, above both the
 `size:exception`, consistent with every prior oversized Phase A/B slice;
 see the "Budget" note in the Slice P7a section below.
 
+**Phase B, Slice P7b (`P7b.1`–`P7b.17`, 17/17) complete** — this batch, on
+`feat/1014-phase-b-p7b-verb` (checked out ON TOP of the P7a branch, PR
+#1066, not yet merged, at `8890972`). PR 12 boundary: the `openkos
+revisions` Typer command in `src/openkos/cli/main.py` (wiring
+`load_decisions` -> `plan_revisions` -> the one exact cost gate ->
+`judge_revisions` -> `revisions_report`), new test file
+`tests/unit/cli/test_revisions.py` (14 test cases covering all 12 P7b.1-
+P7b.12 task IDs — P7b.4's parametrized pair was split into two named
+tests, and P7b.5's ordering half was split into its own test), and a new
+`docs/cli.md` section. ~823 authored changed lines (269 in
+`main.py`/`docs/cli.md` + 554 new in the test file), above both the
+~400-line forecast and the 400-line review budget — recommend
+`size:exception`, consistent with every prior oversized Phase A/B slice;
+see the "Budget" note in the Slice P7b section below.
+
 ---
 
 ## Slice 1 (PR 1 → `main`, merged): the subject-pass leaf,
@@ -1534,3 +1549,146 @@ slice's recommendation.
   tasks.md's "Phase B: tasks (2026-09-28 re-plan)" section. P7b depends on
   this slice's `revisions_report` function per its own task text
   ("render via `revisions_report` (P7a.9)").
+
+---
+
+## Phase B — Slice P7b (PR 12): the `openkos revisions` verb
+
+Scope for this batch: tasks.md's "Slice P7b (PR 12): the `revisions` verb"
+— `P7b.1`–`P7b.17`. Depends on P5a/P5b/P6 (the service,
+`application/revisions.py`) and P7a (the renderer,
+`application/revisions_report.py`), both already on this branch's history.
+Basis: design.md's "Phase B re-plan (2026-09-28)" section, Decision B4
+("Verb sequence, one gate, report wording"), and the four spec
+requirements named in the launch prompt (`openkos revisions` Is Labelled
+Experimental; Zero-LLM Probe Precedes The Cost Gate; One Exact Cost Gate
+Before Pair Judgment; `revisions` Writes Only Derived State). Branch
+`feat/1014-phase-b-p7b-verb` (checked out ON TOP of the P7a branch, PR
+#1066, not yet merged, at `8890972`).
+
+### Files changed
+
+| File | Action |
+|---|---|
+| `src/openkos/cli/main.py` | Modified — new `revisions` Typer command + two helper functions |
+| `tests/unit/cli/test_revisions.py` | Created |
+| `docs/cli.md` | Modified — new `openkos revisions` section |
+
+### TDD Cycle Evidence
+
+| Task(s) | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|---|---|
+| P7b.1–P7b.12 (all 12 test IDs, as 14 test functions) | `test_revisions.py` | Unit (CLI, `CliRunner.invoke`) | N/A (new file) | ✅ genuinely observed: `git stash push --keep-index -- src/openkos/cli/main.py` (removing the `revisions` command while keeping the new test file in place), ran the full file — all 14 collected tests failed with `SystemExit(2)` / "No such command 'revisions'", exactly the failure tasks.md's own P7b.1 predicts ("Typer reports 'No such command'"). Stash popped, implementation restored. | ✅ 14/14 passed on the first full run after restoring the implementation (the command was written against design.md Decision B4's fully-specified sequence as one cohesive unit, same posture as every prior Phase A/B slice's "Note on RED granularity") | ✅ see Mutation-Kill Verification below — 3 targeted mutations, each independently RED then reverted GREEN | ➖ None needed |
+
+**Note on RED granularity** (same posture as every prior slice): a genuine
+whole-command RED was captured for real (`git stash`, not merely
+asserted) before any implementation existed. Given design.md Decision B4's
+fully-specified sequence (workspace gate, `read_config`, experimental
+notice, `_chat_client`, `_resolve_local_exemption`, `load_decisions`,
+`plan_revisions`, the one gate, `judge_revisions`, `revisions_report`),
+the command was then implemented as one cohesive unit and verified GREEN
+as a whole (14/14). Correctness of each behavioral claim — not just "does
+it exist" — is proven by the three required mutation-kill runs below,
+naming exactly the three mutations the apply instructions specified: a
+gate printing a pre-exclusion count, a gate that fires at zero, and a
+bundle write.
+
+Two small deviations from a literal 1:1 test-ID mapping, both disclosed
+rather than silent:
+- **P7b.4** ("parametrized over BOTH Decision B1 cases") was written as
+  two separately named tests
+  (`test_vector_store_absent_exits_zero_with_remedy_and_zero_calls`,
+  `test_vector_store_model_mismatch_exits_zero_with_remedy_and_zero_calls`)
+  instead of one `@pytest.mark.parametrize` — identical coverage, clearer
+  failure attribution per case.
+- **P7b.5**'s two claims (gate count exactness; truncation-notice
+  ordering) were split into two tests
+  (`test_the_one_gate_count_matches_the_stub_llm_call_count`,
+  `test_truncation_notice_prints_before_the_gate_line`) — the ordering
+  test forces the notice via a monkeypatch on
+  `openkos.cli.main.revision_truncation_notice` rather than a 200+-pair
+  fixture, since the notice STRING itself is already pinned at the
+  Phase-A leaf level (Slice 3); this test only pins the ORDER the verb
+  prints it in relative to the gate line.
+
+### Mutation-Kill Verification (mandatory per apply instructions, naming the exact three mutations specified)
+
+Each mutation was applied, verified to make the targeted test(s) FAIL,
+`__pycache__` purged (`find . -name __pycache__ -prune -exec rm -rf {} +`),
+then reverted with the exact inverse edit (never `git checkout --`), and
+the full test file re-verified GREEN (14/14) before moving to the next
+mutation.
+
+| # | Mutation | File / line | Test(s) that must fail | Result |
+|---|---|---|---|---|
+| 1 | The gate printed the PRE-EXCLUSION candidate count instead of the post-serving `to_judge` count (`{len(plan.to_judge)} LLM` → `{len(plan.candidate_plan.candidates)} LLM`) — "a gate printing a pre-exclusion count" | `main.py`, `revisions` (the gate line) | `test_the_one_gate_count_matches_the_stub_llm_call_count` (rewritten with a 3-Decision/1-served fixture specifically so `candidates` (3) ≠ `to_judge` (2), making the mutation genuinely distinguishable) | ✅ FAILED as expected: `assert '3 candidate pair(s), 1 served -> 2 LLM call(s) to judge' in "...-> 3 LLM call(s)..."` — proving the test discriminates the post-serving count from the pre-exclusion one, not merely that SOME number prints. Reverted. |
+| 2 | The gate guard widened to fire unconditionally (`if plan.to_judge:` → `if True:`) — "a gate that fires at zero" | `main.py`, `revisions` (the gate guard) | `test_gate_never_fires_when_to_judge_is_zero` | ✅ FAILED as expected: the fully-served fixture (0 pairs to judge) now hit the non-TTY refusal branch and exited 1 instead of 0, because the always-printed gate line reached the `if not auto` refusal with no TTY. Reverted. |
+| 3 | A stray bundle write inserted right after `judge_revisions` and before rendering (`(layout.bundle_dir / "revisions-mutation-marker.md").write_text("x")`) — "a bundle write" | `main.py`, `revisions` (between `judge_revisions` and the report echo) | `test_full_run_writes_no_bundle_file_and_no_other_derived_store_content` | ✅ FAILED as expected: `bundle_after == bundle_before` failed, showing exactly one new key, `{'revisions-mutation-marker.md': 'x'}` — proving the snapshot genuinely inspects `bundle/`'s contents rather than trivially matching. Reverted. |
+
+All three mutations killed by the tests named above (mutation 1 required
+strengthening the fixture first — disclosed above under "two small
+deviations", not hidden). `find . -name __pycache__ -prune -exec rm -rf {}
++` was run before every GREEN/RED verdict, and every revert used the exact
+inverse edit — never `git checkout --`.
+
+A fourth deviation is also disclosed here, not a mutation-kill but a
+genuine RUNTIME defect this batch's own test suite caught: `typer.Typer()`
+in this codebase runs with `rich_markup_mode="rich"` (confirmed via
+`app.rich_markup_mode`), so an unescaped `[experimental]` inside a
+`help=` string is interpreted as (invalid, unclosed) Rich console markup
+and silently disappears from `--help` output rather than rendering
+literally — `test_help_labels_the_verb_experimental` caught this on the
+FIRST run (before any mutation), and the fix was escaping it as
+`\[experimental]`.
+
+### Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `uv run pytest tests/unit/cli/test_revisions.py -v` → **14 passed** |
+| Runtime harness command/scenario and exact result | The design's own suggested harness (`uv run openkos revisions --auto` against a small local bundle with Ollama running, on a workspace with `.openkos/vectors.db` populated by `openkos reindex`) needs a real local Ollama server, which this sandboxed batch does not have; the equivalent proof used here is `test_full_run_writes_no_bundle_file_and_no_other_derived_store_content`, a REAL end-to-end `CliRunner.invoke` run (real `WorkspaceLayout`, real `vectors.db`, real `findings.db`, real `application.revisions`/`application.revisions_report` code — only `llm.chat` is a stub) that exercises the full command body from workspace gate through report rendering and persistence |
+| Rollback boundary | Revert the `revisions` Typer command, `_echo_revisions_batch_failure`, `_REVISIONS_EXPERIMENTAL_NOTICE`/`_REVISIONS_NO_VECTORS_MESSAGE`/`_REVISIONS_MODEL_MISMATCH_MESSAGE`, and the three added imports in `src/openkos/cli/main.py`; delete `tests/unit/cli/test_revisions.py`; revert the new `docs/cli.md` section. `application/revisions.py` (P5a/P5b/P6) and `application/revisions_report.py` (P7a) stay usable by a future caller — this slice is purely additive at the call site. |
+
+### Full Verification (this work unit)
+
+| Command | Result |
+|---|---|
+| `uv run ruff check .` | Found 3 (2 unused imports in the new test file, 1 `UP031` percent-format string) → fixed → **All checks passed!** |
+| `uv run ruff format --check .` | Failed once (`main.py`, `test_revisions.py` needed reformatting) → ran `uv run ruff format` on both files → re-verified: **356 files already formatted** |
+| `uv run mypy .` | Success: no issues found in 356 source files |
+| `uv run pytest --cov` (full, unpiped) | **6886 passed, 2 skipped** in 421.22s (0:07:01), exit 0 (up from the P7a baseline of 6872 passed + this slice's 14 new tests); coverage 96.97%, gate 90% reached |
+| `uv run python evals/run_self_tests.py` (`OLLAMA_HOST` poisoned) | **43 of 43 harness self-test(s) run, 0 failing** |
+
+### Commit
+
+`3f3aa3d` — `feat(cli): add the openkos revisions verb (#1014)` (scope
+`cli`, per AGENTS.md: "a verb change is scoped `cli`"). 3 files changed,
+823 insertions(+) (`docs/cli.md` +21, `src/openkos/cli/main.py` +248,
+`tests/unit/cli/test_revisions.py` +554, new file). Staged explicitly by
+path (`src/openkos/cli/main.py`, `tests/unit/cli/test_revisions.py`,
+`docs/cli.md`) — `openspec/` is left for this section's own final
+`docs(sdd)` commit, same posture as every prior Phase B slice. Not
+pushed. No PR opened (per this batch's explicit instruction to stay on
+the branch, not switch/rebase/push). Branched from the P7a branch (PR
+#1066, not yet merged) at `8890972` on `feat/1014-phase-b-p7b-verb`.
+
+**Budget**: 823 authored changed lines, above both the ~400-line forecast
+(design.md's Phase B re-plan slice table lists P7b at "~400-450 each ...
+even before Phase A's ~1.95x actual multiplier is applied") and the
+400-line review budget — consistent with every prior oversized Phase A/B
+slice's own "~1.95x actual-vs-forecast" pattern design.md names
+explicitly (400 × ~1.95 ≈ 780, close to the actual 823). No test,
+docstring, or blank line was shortened to chase the 400-line number, per
+the work-unit-commits skill's "budget is not code-golf" rule — recommend
+`size:exception` for this slice, consistent with every prior Phase A/B
+slice's recommendation.
+
+### Remaining Tasks (after Slice P7b)
+
+- Slice P7b (`P7b.1`–`P7b.17`) is complete. PR 12 (targeting the P7a
+  branch, per `stacked-to-main`'s chain order P1 → ... → P7a → P7b →
+  P8a → P8b) is ready to open on `feat/1014-phase-b-p7b-verb`.
+- Slices P8a and P8b (`P8a.*`/`P8b.*` — the combined "who is later, which
+  type" reconcile prompt helper, and the `reconcile --from-findings`
+  revision walk) remain, in that chain order, each as its own PR, per
+  tasks.md's "Phase B: tasks (2026-09-28 re-plan)" section.
