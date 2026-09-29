@@ -52,8 +52,11 @@ than today's separation requires (it will miss some genuinely related
 pairs), even though it produced zero observed false positives here. The
 pre-registered rule this measurement used -- keep 0.70 only if
 `min(related) > 0.70 > max(unrelated)` -- does NOT hold, so this is left
-an OPEN QUESTION rather than silently kept or silently changed: the
-measured gap's midpoint is 0.4919, but moving
+an OPEN QUESTION rather than silently kept or silently changed. Nine
+scored pairs are a smoke check of the shape, not a calibration: the
+measured gap's midpoint is 0.4919, which is NOT a recommended value, and a
+new floor needs a labelled set large enough to show where the two classes
+actually meet. Moving
 `CANDIDATE_SIMILARITY_THRESHOLD` changes what `suggest-relations` and
 `contradictions` see, which is its own design discussion, not a
 docstring-correction side effect. The anchor pair holding this
