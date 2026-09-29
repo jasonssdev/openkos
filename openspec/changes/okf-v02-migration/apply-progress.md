@@ -14,8 +14,8 @@ stacked-to-main, 8 PRs (`tasks.md` "Review Workload Forecast").
 | 3a | Migration function | PR 4 → `main` | **Done** — commit `0edb102` |
 | 3b | Ledger migration | PR 5 → `main` | **Done** — commit `363107e` |
 | 3c | `repair` verb | PR 6 → `main` | **Done** — commit `42459a5` |
-| 4a | Fixture + template | PR 7 → `main` | Not started |
-| 4b | Docs + renumbering | PR 8 → `main` | Not started |
+| 4a | Fixture (Phase 7) | PR 7 → `main` | **Done** — commit `a3cb43f` |
+| 4b | Docs + renumbering (Phase 8) | PR 8 → `main` | Not started |
 
 ## Slice 1 (Phase 1, PR 1) — Done
 
@@ -1061,10 +1061,174 @@ CLI wiring, and the round-trip-unskip closure all depend on the same
 `apply-progress.md` update and `tasks.md`'s checkbox updates land in the
 separate `docs(sdd)` commit that follows.
 
+## Slice 7 (Phase 7, PR 7) — Done
+
+**Branch**: `feat/1064-okf-v02-p4a-fixture`, stacked on `1d7116f` (Phase 6,
+PR #1082, not yet merged to `main`).
+**Commit**: `a3cb43f` — `docs: regenerate the good-life-demo example to
+OKF v0.2 via repair (#1064)`.
+**Mode**: Strict TDD (`uv run pytest`).
+**Tasks**: 7.1–7.10, all `[x]` in `tasks.md`.
+
+### Procedure (design.md "Goldens and fixtures", tasks.md 7.1–7.2)
+
+1. Froze the CURRENT (pre-slice) v0.1-shaped `examples/good-life-demo/`
+   verbatim into `tests/unit/fixtures/good_life_demo_v01/` (task 7.1) — a
+   byte-for-byte copy (`openkos.yaml`, `AGENTS.md`, `raw/`, `bundle/`), so
+   the example stays pinned to `repair(v0.1 fixture)` and is reproducible
+   from a known input.
+2. Copied that frozen fixture into a scratch git repository under this
+   session's scratchpad
+   (`/private/tmp/claude-501/.../scratchpad/okf-fixture-regen/`), created
+   ONE baseline commit, then ran the REAL installed `openkos` binary
+   (`.venv/bin/openkos`, not a CLI-runner mock) — `openkos repair` — inside
+   that scratch repo. The product migrated its own canonical example: one
+   commit `openkos: repair (migrate 6 document(s) and 0 ledger sidecar(s)
+   to OKF 0.2)`, exit 0.
+3. A second `openkos repair` run in the same scratch repo printed "nothing
+   to migrate", confirming idempotency; `openkos lint` (13/13 checks
+   clean) and `openkos status` (clean, no v0.1-shape finding) both ran
+   clean against the migrated scratch bundle.
+4. Copied the migrated `bundle/**` bytes back over the live
+   `examples/good-life-demo/bundle/**` tree (task 7.2) — the 7 files
+   `index.md`, `concepts/{stoicism,epicureanism}.md`,
+   `decisions/frame-the-essay-on-the-dichotomy-of-control.md`,
+   `people/maria-salazar.md`, `sources/{call-with-maria-2026-07-14,
+   notes-on-the-enchiridion-2026-07-05}.md`. `log.md` and `raw/**` are
+   untouched by `repair` and stayed byte-identical (confirmed by diff).
+   No migrated document was hand-edited at any point.
+5. `concepts/stoicism.md` kept its hand-written, non-empty `# Citations`
+   list untouched, and the migration report named it: `openkos repair:
+   left in place -- 4 documents keep a hand-written # Citations list
+   (legacy, OKF 0.2 section 13.1): concepts/epicureanism, concepts/
+   stoicism, decisions/frame-the-essay-on-the-dichotomy-of-control,
+   people/maria-salazar` — 4 of the bundle's 6 documents carry a
+   hand-authored Citations section, all correctly preserved (owner
+   decision C, the pinned case this slice's tests fix in place).
+
+### TDD Cycle Evidence
+
+| Task(s) | Test file | RED reason (observed) | GREEN |
+|---|---|---|---|
+| 7.3 | `tests/unit/test_canonical_example.py` — `test_good_life_demo_bundle_equals_repair_of_frozen_v01_fixture` | `AssertionError: concepts/epicureanism.md: ... diverges from the committed example` — observed by `git stash`-ing the just-regenerated `examples/good-life-demo/bundle/**` back to its pre-slice v0.1 bytes, confirming the test fails against the OLD (still-v0.1) committed fixture, exactly as tasks.md's own docstring anticipates | pass after `git stash pop` restored the migrated bundle (task 7.2's output) |
+| 7.4 | same file — `test_good_life_demo_bundle_has_no_v01_shaped_frontmatter` | `AssertionError: assert '0.1' == '0.2'` (root `index.md`), observed under the same stash | pass after the stash pop |
+| 7.5 | same file — `test_good_life_demo_passes_lint_and_status_clean` | Confirmed a genuine "misleading pass" under the same stash (v0.1 content): `lint`/`status` both still exit 0 and print no literal `"0.1"` substring even against the OLD bundle, because neither command's output ever names an OKF version string — tasks.md's own docstring anticipates exactly this ("either fails or is meaningless against v0.1 content"). Real, decisive coverage for the v0.1-vs-v0.2 shape comes from 7.3/7.4, not this test; this test's job is exercising the CLI runtime path (`lint`/`status` against the shipped example), which it does regardless of shape | unaffected by the stash either way (passed both before and after) |
+
+`test_v01_fixture_exists` (guard test, no RED needed — trivially passes
+once 7.1's fixture directory exists, mirroring `test_the_example_exists`'s
+own role for the shipped example).
+
+### Design/implementation deviations (owner pre-authorized: take the
+design's recommended option, report it)
+
+- **Task 7.4's "extend the existing conformance test" targets a NEW test
+  in `test_canonical_example.py`, not `test_okf.py`'s existing
+  `test_check_conformance_passes_on_reference_bundle`.** The actual
+  "Reference Bundle Full §11 Conformance" test tasks.md/design.md
+  describe lives in `tests/unit/model/test_okf.py:319`
+  (`test_check_conformance_passes_on_reference_bundle`, a single
+  `okf.check_conformance(bundle_dir) == []` assertion with no notion of
+  `okf_version`/`timestamp`/`status` at all — `check_conformance` checks
+  OKF §11's three structural rules, not field-shape). Task 7.4's actual
+  ask — assert `okf_version: "0.2"` and no bare `timestamp`/`status:
+  active` — is a DIFFERENT property than conformance, so it was added as
+  its own new test in `test_canonical_example.py` (the file 7.3 already
+  established as this slice's home), rather than bolted onto an unrelated
+  assertion in a different file under a misleading name. Same class of
+  naming-drift-against-the-actual-repository already recorded in Slices
+  2a/2b (e.g. task 2.19's fixture-naming note) — not a missed task; the
+  conformance test itself needed no change and stayed green throughout
+  (confirmed: still passes, `uv run pytest
+  tests/unit/model/test_okf.py::test_check_conformance_passes_on_reference_bundle`).
+- **The frozen v0.1 fixture also carries `AGENTS.md`, even though `repair`
+  never touches it.** Task 7.1 names `bundle/`+`raw/`+`openkos.yaml` as
+  the minimum; `AGENTS.md` was included too so the frozen copy is a
+  complete, self-consistent workspace snapshot (useful independent
+  evidence per the Rollback boundary note), not because `repair` or any
+  test in this slice reads it.
+- **No drift found (task 7.6 was a no-op).** `repair`'s scratch-run output
+  matched the hand-verified expectations on the first attempt — no
+  non-deterministic actor string or ordering issue surfaced (confirmed:
+  `generated.by` is `openkos/legacy` everywhere, deterministic per
+  design.md Decision 5; YAML list/mapping key ordering matched
+  `project_sources`'s pinned `id`-then-`resource` order and
+  `dump_frontmatter`'s existing alphabetical top-level sort in every
+  file). No fix was needed in `application/repair.py` or the fixture
+  commit.
+
+### Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command | `uv run pytest tests/unit/test_canonical_example.py` → 21 passed (17 pre-existing + 4 new) |
+| Runtime harness | The REAL `openkos` binary (`.venv/bin/openkos`, installed editable), run twice in a scratch git repo under this session's scratchpad: first `openkos repair` (exit 0, one commit, the exact report line shape design.md specifies), then a second `openkos repair` (exit 0, "nothing to migrate", no new commit) — plus `openkos lint` (13/13 checks clean) and `openkos status` (clean) against both the scratch bundle and the FINAL shipped `examples/good-life-demo` directory itself (read-only; confirmed no `.openkos/` cache or other stray file was left behind by that direct run, via `git status --porcelain examples/good-life-demo` showing only the intended bundle-content diffs) |
+| Rollback boundary | `git revert` of commit `a3cb43f` restores the v0.1-shaped `examples/good-life-demo/bundle/**` and drops the three new tests; the frozen v0.1 fixture (`tests/unit/fixtures/good_life_demo_v01/`) is independent evidence and may be kept regardless, per tasks.md's own stated rollback boundary for this phase |
+
+### Mutation-proof check (this session, `__pycache__` purged before the
+verdict)
+
+Flipped one byte in the ALREADY-COMMITTED-TO-WORKING-TREE
+`examples/good-life-demo/bundle/concepts/stoicism.md` (`status: stable` →
+`status: STABLE`) and confirmed
+`test_good_life_demo_bundle_equals_repair_of_frozen_v01_fixture` fails
+with the exact byte-offset diff naming that file; reverted with the exact
+inverse edit (`STABLE` → `stable`) and re-confirmed all 21 tests green
+(`git diff --stat` on that one file returned to the same 22/11 line-change
+shape as before the mutation, confirming no residual drift from the
+revert).
+
+### Full verification (this session, unpiped, foreground/background as noted)
+
+- `uv run ruff check .`: **All checks passed!**
+- `uv run ruff format --check .`: 1 file needed reformatting
+  (`tests/unit/test_canonical_example.py`) — applied via `uv run ruff
+  format .`, then re-verified clean (364 files already formatted).
+- `uv run mypy .`: **Success: no issues found in 364 source files** (clean
+  on first run, no fixes needed).
+- `uv run pytest tests/unit/test_canonical_example.py` (focused): **21
+  passed**.
+- `uv run pytest --cov` (unpiped, background, ~7 min): **7032 passed, 2
+  skipped in 420.86s (0:07:00)**. Coverage 96.92% total (line+branch),
+  90.0% branch gate held (`Required test coverage of 90.0% reached`). Up
+  from Slice 3c's 7028 passed (+4 new tests: `test_v01_fixture_exists`,
+  `test_good_life_demo_bundle_equals_repair_of_frozen_v01_fixture`,
+  `test_good_life_demo_bundle_has_no_v01_shaped_frontmatter`,
+  `test_good_life_demo_passes_lint_and_status_clean`).
+- `uv run python evals/run_self_tests.py`: **44 of 44 harness self-test(s)
+  run, 0 failing.**
+- `openkos lint` and `openkos status` against the shipped
+  `examples/good-life-demo` directly (not a copy): both exit 0, 13/13
+  lint checks clean, status clean with no v0.1-shape finding (see Runtime
+  harness row above for the exact output).
+
+### Deviations from design/tasks
+
+None beyond the two naming-drift/no-op items recorded above under
+"Design/implementation deviations" (7.4's actual test location, and 7.6
+finding no drift to fix) — the frozen v0.1 fixture, the real `repair`-run
+regeneration procedure, and all three new tests match `tasks.md` 7.1–7.10
+and design.md's "Goldens and fixtures" section exactly.
+
+### Git
+
+`git diff --shortstat 1d7116f..HEAD` (after commit `a3cb43f`, before the
+following `docs(sdd)` commit): `20 files changed, 611 insertions(+), 56
+deletions(-)`. Of that, `tests/unit/fixtures/good_life_demo_v01/**` is 392
+lines (12 new files, a byte-for-byte COPY of pre-existing content — the
+example as it stood before this slice — excluded from authored risk count
+per the review-budget policy, the same treatment Phase 2's
+`okf_v01_documents.json` fixture received). Authored risk: 158 lines
+across the 7 regenerated `examples/good-life-demo/bundle/**` files +
+117 new lines in `tests/unit/test_canonical_example.py` = **275 authored
+lines**, within design.md's ~150-290 forecast for this slice (4a). This
+`apply-progress.md` update and `tasks.md`'s checkbox updates land in the
+separate `docs(sdd)` commit that follows.
+
 ## Next
 
-Phase 7 (Slice 4a, PR 7 → `main`, after PR 6 merges): fixture
-regeneration for `examples/good-life-demo/` (run `openkos repair` on the
-frozen v0.1 copy and commit the result), and the `okf.yaml.template`/other
-shipped-template audit. Requires a fresh `sdd-apply` dispatch scoped to
-Phase 7.
+Phase 8 (Slice 4b, PR 8 → `main`, after PR 3 merges, parallel-eligible
+with Phases 4-6 — all now landed): docs, repository `AGENTS.md`,
+`templates/agents.md.template`, example `AGENTS.md`, ~37 OKF section
+citations in `src/`, numbered-citation drift fix, and recording the two
+living-spec archive-time notes (task 8.9). This is the LAST phase before
+`sdd-archive`. Requires a fresh `sdd-apply` dispatch scoped to Phase 8.
