@@ -1,26 +1,16 @@
 ---
-description: Chose the dichotomy of control over apatheia as the essay's organising
-  idea.
-freshness: snapshot
-generated:
-  at: '2026-07-14T18:30:00Z'
-  by: openkos/legacy
-provenance:
-- sources/notes-on-the-enchiridion-2026-07-05
-- sources/call-with-maria-2026-07-14
-sensitivity: confidential
-sources:
-- id: sources/notes-on-the-enchiridion-2026-07-05
-  resource: /sources/notes-on-the-enchiridion-2026-07-05.md
-- id: sources/call-with-maria-2026-07-14
-  resource: /sources/call-with-maria-2026-07-14.md
-status: stable
-tags:
-- essay
-- philosophy
-title: Frame the essay on the dichotomy of control
 type: Decision
+title: Frame the essay on the dichotomy of control
+description: Chose the dichotomy of control over apatheia as the essay's organising idea.
+tags: [essay, philosophy]
+timestamp: 2026-07-14T18:30:00Z
+status: active
 version: 1
+freshness: snapshot
+sensitivity: confidential
+provenance:
+  - sources/notes-on-the-enchiridion-2026-07-05
+  - sources/call-with-maria-2026-07-14
 ---
 
 # Frame the essay on the dichotomy of control
