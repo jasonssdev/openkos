@@ -3163,11 +3163,16 @@ def test_derived_object_inherits_source_document_value_not_config(
     """The derived object's `sensitivity` MUST be read back from the built
     Source document's own resolved value, not merely share
     `cfg.default_sensitivity` with it. The Source's built content is forged
-    (via `okf.build_source_concept`) to carry `confidential` while the
-    config default stays `public` -- an implementation that stamps derived
-    objects from the config constant instead of the Source's own value gets
-    `public` here and fails (spec: ingestion, "Inheritance tracks the
-    Source's resolved value, not the config default")."""
+    (via `okf.build_source_concept`) to carry `private` while the config
+    default stays `public` -- an implementation that stamps derived objects
+    from the config constant instead of the Source's own value gets `public`
+    here and fails (spec: ingestion, "Inheritance tracks the Source's
+    resolved value, not the config default"). Forged to `private`, not
+    `confidential` (pre-#1086-fix this test used `confidential`): post-fix,
+    the extraction gate reads this SAME round-tripped value, and
+    `confidential` would block the very extraction this test needs to
+    observe -- `private` still differs from the `public` config default,
+    which is all this test needs to prove inheritance."""
     _init_workspace(tmp_path, monkeypatch)
     _set_config_field(
         tmp_path, "default_sensitivity: private", "default_sensitivity: public"
@@ -3177,7 +3182,7 @@ def test_derived_object_inherits_source_document_value_not_config(
     real_build_source_concept = okf.build_source_concept
 
     def _forged_build_source_concept(**kwargs: object) -> str:
-        kwargs["sensitivity"] = "confidential"
+        kwargs["sensitivity"] = "private"
         return real_build_source_concept(**kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(
@@ -3191,24 +3196,26 @@ def test_derived_object_inherits_source_document_value_not_config(
     assert result.exit_code == 0
     source_path = tmp_path / "bundle" / "sources" / "notes.md"
     source_metadata, _ = okf.load_frontmatter(source_path.read_text(encoding="utf-8"))
-    assert source_metadata["sensitivity"] == "confidential"
+    assert source_metadata["sensitivity"] == "private"
     concept_path = tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
     metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
-    assert metadata["sensitivity"] == "confidential"
+    assert metadata["sensitivity"] == "private"
 
 
-def test_extract_gate_still_reads_workspace_floor(
+def test_extract_gate_tracks_the_same_resolved_value_as_the_stamp(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Reading the Source's own resolved `sensitivity` back for the derived-
-    object STAMP must not change what the fail-closed `extract` gate reads:
-    the gate stays pinned to the WORKSPACE floor (`cfg.default_sensitivity`),
-    never the Source's own resolved value, even when the two differ
-    (`sensitivity-aware-llm` Requirement 4, declared unchanged by this
-    change). The Source's built content is forged to `public` while the
-    config floor stays `confidential` -- an implementation that (incorrectly)
-    fed the Source's own value into the `extract` gate instead of the
-    workspace floor would let extraction proceed here and fail this test."""
+    """Post-#1086-fix: the `extract` gate's `workspace_floor` and the
+    derived-object sensitivity STAMP both read the SAME
+    `source_plan.source_sensitivity` field, so they can never diverge --
+    unlike pre-fix, where the gate read the literal `cfg.default_sensitivity`
+    constant while the stamp read the Source's own resolved value. Config
+    `default_sensitivity: confidential` would normally block extraction
+    outright; forging the Source's BUILT content (via `build_source_concept`)
+    to carry `public` changes what `source_plan.source_sensitivity` reads
+    back as (round-tripped from the built document, see
+    `compose_source_document`), which now ALSO lifts the gate -- proving the
+    two are the identical value, not independently derived."""
     _init_workspace(tmp_path, monkeypatch)
     _set_config_field(
         tmp_path, "default_sensitivity: private", "default_sensitivity: confidential"
@@ -3230,10 +3237,13 @@ def test_extract_gate_still_reads_workspace_floor(
     result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
 
     assert result.exit_code == 0
-    assert "keeping the Source only" in result.stderr
-    assert fake.calls == []
+    assert fake.calls != []
+    source_path = tmp_path / "bundle" / "sources" / "notes.md"
+    source_metadata, _ = okf.load_frontmatter(source_path.read_text(encoding="utf-8"))
+    assert source_metadata["sensitivity"] == "public"
     concept_path = tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
-    assert not concept_path.exists()
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["sensitivity"] == "public"
     source_path = tmp_path / "bundle" / "sources" / "notes.md"
     source_metadata, _ = okf.load_frontmatter(source_path.read_text(encoding="utf-8"))
     assert source_metadata["sensitivity"] == "public"
@@ -3288,13 +3298,23 @@ def test_reingest_stamps_new_derived_objects_with_the_preserved_level(
     """A derived object newly extracted on the SAME re-ingest that
     preserves a raised Source sensitivity is stamped with that preserved
     level, not the (lower) config default (design: "one resolved value
-    flows through every downstream consumer unchanged")."""
+    flows through every downstream consumer unchanged"). Raised to
+    `private` over a `public` config default -- not `confidential`
+    (pre-#1086-fix this test raised to `confidential` over a `private`
+    default): post-fix, `confidential` would also block the very
+    re-extraction this test needs to observe, since the gate now reads this
+    SAME preserved level. `private` still differs from `public`, which is
+    all this test needs to prove the preserved level reaches a NEW derived
+    object, not just the Source."""
     _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(
+        tmp_path, "default_sensitivity: private", "default_sensitivity: public"
+    )
     source = tmp_path / "notes.txt"
     source.write_text("Some raw notes about self-control.", encoding="utf-8")
     first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
     assert first.exit_code == 0
-    _set_source_sensitivity(tmp_path, "notes", "confidential")
+    _set_source_sensitivity(tmp_path, "notes", "private")
     _patch_llm(monkeypatch, _concept_reply())
 
     result = runner.invoke(app, ["ingest", "notes.txt", "--auto", "--re-extract"])
@@ -3302,7 +3322,7 @@ def test_reingest_stamps_new_derived_objects_with_the_preserved_level(
     assert result.exit_code == 0
     concept_path = tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
     metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
-    assert metadata["sensitivity"] == "confidential"
+    assert metadata["sensitivity"] == "private"
 
 
 # --- `extraction_status` frontmatter stamping (issue #187, spec: Extraction
@@ -3484,7 +3504,12 @@ def test_sensitivity_and_extraction_status_independent(
     `confidential` Source, config `default_sensitivity: private`, and an
     `OllamaError`-raising LLM backend must end with BOTH `sensitivity ==
     'confidential'` (preserved, never downgraded) AND `extraction_status ==
-    'failed'` (this run's own outcome) in the same rewritten document."""
+    'failed'` (this run's own outcome) in the same rewritten document.
+    `--include-confidential` is required post-#1086-fix: the extraction
+    gate now also reads the Source's own resolved (confidential) sensitivity
+    (not just `cfg.default_sensitivity`), so without it this run would stop
+    at `blocked-by-sensitivity` and never reach the LLM this test needs to
+    fail."""
     _init_workspace(tmp_path, monkeypatch)
     source = tmp_path / "notes.txt"
     source.write_text("Some raw notes about self-control.", encoding="utf-8")
@@ -3493,7 +3518,10 @@ def test_sensitivity_and_extraction_status_independent(
     _set_source_sensitivity(tmp_path, "notes", "confidential")
     _patch_llm(monkeypatch, raises=OllamaUnavailable("boom"))
 
-    result = runner.invoke(app, ["ingest", "notes.txt", "--auto", "--re-extract"])
+    result = runner.invoke(
+        app,
+        ["ingest", "notes.txt", "--auto", "--re-extract", "--include-confidential"],
+    )
 
     assert result.exit_code == 0
     concept_path = tmp_path / "bundle" / "sources" / "notes.md"
@@ -3863,18 +3891,111 @@ def test_reingest_with_blank_on_disk_sensitivity_resolves_to_private(
     assert metadata["sensitivity"] == "private"
 
 
-def test_reingest_resolved_sensitivity_does_not_leak_into_workspace_floor(
+def test_reingest_resolved_sensitivity_gates_extraction(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Invariant guard (design "Testing Strategy" #11): re-ingest with a
-    Source raised to `confidential` on disk, config `default_sensitivity:
-    public`, and a NEW-slug LLM reply must still call the LLM and write the
-    new derived object -- `blocks_llm_send` gates on the LITERAL
-    `cfg.default_sensitivity` (`public`), never the resolved value. Feeding
-    `resolved` into `workspace_floor` would short-circuit extraction here
-    and fail this test. Complements
-    `test_extract_gate_still_reads_workspace_floor` (above), which must
-    pass unmodified."""
+    """Issue #1086 fix: re-extracting a Source raised to `confidential` on
+    disk (via `set-sensitivity`, the high-water mark, or a later raise) MUST
+    NOT send its text to the extraction LLM just because the WORKSPACE
+    default is lower. `stage_derived_objects`'s `workspace_floor` argument
+    now tracks `source_plan.source_sensitivity` -- the SAME
+    `combine_sensitivity(on_disk_value, cfg.default_sensitivity)` high-water
+    mark `ingest` already resolves and stamps onto the Source and onto any
+    derived object (ingestion spec: "Default Sensitivity from Config") --
+    instead of `cfg.default_sensitivity` alone. Precondition asserted below
+    so the exact steps from the issue reproduce: on-disk `confidential`
+    BEFORE re-ingest. The sibling test right below proves this zero is not
+    vacuous (the same setup WITH `--include-confidential` DOES call the
+    LLM); `test_reingest_private_source_on_private_workspace_still_extracts`
+    guards the non-confidential path stays unchanged."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+    first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert first.exit_code == 0
+    _set_source_sensitivity(tmp_path, "notes", "confidential")
+    source_path = tmp_path / "bundle" / "sources" / "notes.md"
+    on_disk_metadata, _ = okf.load_frontmatter(source_path.read_text(encoding="utf-8"))
+    assert on_disk_metadata["sensitivity"] == "confidential"  # precondition
+    fake = _patch_llm(monkeypatch, _concept_reply())
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto", "--re-extract"])
+
+    assert result.exit_code == 0
+    assert fake.calls == []
+    concept_path = tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
+    assert not concept_path.exists()
+    metadata, _ = okf.load_frontmatter(source_path.read_text(encoding="utf-8"))
+    assert metadata["sensitivity"] == "confidential"
+    assert metadata["extraction_status"] == "blocked-by-sensitivity"
+
+
+def test_reingest_resolved_sensitivity_gate_lifts_with_include_confidential(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sibling of `test_reingest_resolved_sensitivity_gates_extraction`: the
+    SAME setup (on-disk `confidential`, workspace default `private`) WITH
+    `--include-confidential` DOES call the LLM and writes the new derived
+    object -- proving the blocked zero above is not vacuous, and that the
+    escape flag's semantics are unchanged by this fix."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+    first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert first.exit_code == 0
+    _set_source_sensitivity(tmp_path, "notes", "confidential")
+    fake = _patch_llm(monkeypatch, _concept_reply())
+
+    result = runner.invoke(
+        app,
+        [
+            "ingest",
+            "notes.txt",
+            "--auto",
+            "--re-extract",
+            "--include-confidential",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert fake.calls != []
+    concept_path = tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
+    assert concept_path.is_file()
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["sensitivity"] == "confidential"
+
+
+def test_reingest_private_source_on_private_workspace_still_extracts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression guard for the #1086 fix: a Source that resolves to
+    `private` on a `private`-default workspace must keep extracting on
+    `--re-extract` exactly as before -- the more-restrictive-of-two floor
+    must never become MORE restrictive than either input alone."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+    first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert first.exit_code == 0
+    fake = _patch_llm(monkeypatch, _concept_reply())
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto", "--re-extract"])
+
+    assert result.exit_code == 0
+    assert fake.calls != []
+    concept_path = tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
+    assert concept_path.is_file()
+
+
+def test_reingest_confidential_source_blocks_even_under_public_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other direction of the #1086 fix, workspace default `public` (the
+    MOST permissive value): a Source raised to `confidential` on disk still
+    blocks re-extraction's `llm.chat` call, because the gate's floor is the
+    high-water mark of the two, never the workspace value alone -- this is
+    the exact scenario a pre-fix version of this test pinned as correct
+    (`fake.calls != []`); it now asserts the opposite."""
     _init_workspace(tmp_path, monkeypatch)
     _set_config_field(
         tmp_path, "default_sensitivity: private", "default_sensitivity: public"
@@ -3889,12 +4010,9 @@ def test_reingest_resolved_sensitivity_does_not_leak_into_workspace_floor(
     result = runner.invoke(app, ["ingest", "notes.txt", "--auto", "--re-extract"])
 
     assert result.exit_code == 0
-    assert fake.calls != []
+    assert fake.calls == []
     concept_path = tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
-    assert concept_path.is_file()
-    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
-    assert metadata["sensitivity"] == "confidential"
-    assert "workspace default_sensitivity floor is confidential" not in result.stderr
+    assert not concept_path.exists()
 
 
 def test_reingest_preview_reports_preserved_level(

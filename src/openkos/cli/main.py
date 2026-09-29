@@ -5447,7 +5447,7 @@ def _ingest_single(
                     raw_content=raw_content,
                     source_title=title,
                     source_slug=slug,
-                    workspace_floor=cfg.default_sensitivity,
+                    workspace_floor=source_plan.source_sensitivity,
                     stamp_sensitivity=source_plan.source_sensitivity,
                     timestamp=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
                     bundle_dir=layout.bundle_dir,
