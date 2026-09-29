@@ -1258,14 +1258,14 @@ Depends on nothing new — may be reordered earlier per design.md. Files:
 `src/openkos/bundle/provenance.py`. Tests:
 `tests/unit/bundle/test_provenance.py`.
 
-- [ ] **P4.1** [TEST] `tests/unit/bundle/test_provenance.py` — add
+- [x] **P4.1** [TEST] `tests/unit/bundle/test_provenance.py` — add
   `test_provenance_source_ancestors_many_matches_the_single_id_function`:
   on a fixture with an intermediate concept, a provenance cycle, and a
   dangling Source reference, for EVERY id in the fixture,
   `provenance_source_ancestors_many(files, object_ids=ids)[id] ==
   provenance_source_ancestors(files, object_id=id)`. **RED today**:
   `AttributeError` — `provenance_source_ancestors_many` does not exist.
-- [ ] **P4.2** [IMPL] `src/openkos/bundle/provenance.py`: extract the walk
+- [x] **P4.2** [IMPL] `src/openkos/bundle/provenance.py`: extract the walk
   inside `provenance_source_ancestors` into a shared private helper
   operating on an already-parsed `provenance_by_id` map (from
   `_parse_provenance_by_id`); add `provenance_source_ancestors_many(files,
@@ -1277,11 +1277,11 @@ Depends on nothing new — may be reordered earlier per design.md. Files:
 
 ### Slice P4 verification
 
-- [ ] **P4.3** Run `uv run ruff check . && uv run ruff format --check . &&
+- [x] **P4.3** Run `uv run ruff check . && uv run ruff format --check . &&
   uv run mypy .` — must be green.
-- [ ] **P4.4** Run `uv run pytest tests/unit/bundle/test_provenance.py`
+- [x] **P4.4** Run `uv run pytest tests/unit/bundle/test_provenance.py`
   focused, then `uv run pytest` (unpiped) full suite — must be green.
-- [ ] **P4.5** Commit as one or more work-unit commits, scope `bundle`
+- [x] **P4.5** Commit as one or more work-unit commits, scope `bundle`
   (e.g. `perf(bundle): parse provenance once for many-id ancestor lookups`).
   Open PR 7 (Slice P4) targeting PR 6's branch (or `main`/tracker directly,
   since P4 has no upstream Phase B dependency).
