@@ -9963,6 +9963,30 @@ def test_ingest_fills_malformed_stored_event_date_from_flag_or_file_name(
     assert "ignoring the malformed event_date" in result.stderr
 
 
+def test_event_date_origin_disclosure_line_names_frontmatter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Task 4.10: ingestion spec: "The line names the frontmatter origin" --
+    a fresh ingest with no flag, no dated file name, and incoming
+    frontmatter carrying `date: 2026-07-14` prints exactly one line naming
+    `2026-07-14` and `frontmatter` as its origin. **RED today**:
+    `AssertionError` (or an uncovered-branch failure in `_echo_event_date_
+    preview_line`, which currently has no `"frontmatter"` branch)."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("---\ndate: 2026-07-14\n---\nSome raw notes.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["event_date"] == "2026-07-14"
+    assert "event date 2026-07-14 (from the source's frontmatter date)" in (
+        result.stdout
+    )
+
+
 def test_ingest_prints_no_event_date_line_when_none_is_recorded(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

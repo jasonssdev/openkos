@@ -872,6 +872,96 @@ def test_read_event_date(
     assert okf.read_event_date(metadata) == expected
 
 
+# -- Phase 4 (preserve-source-frontmatter, issue #1062): `_tolerant_date`
+# refactor and `read_incoming_date` (design.md Decision 5) --
+
+
+def test_read_event_date_unchanged_after_tolerant_date_refactor() -> None:
+    """Task 4.1: a PRECONDITION-style regression pin, independent of
+    `test_read_event_date`'s own parametrize table, proving `read_event_
+    date`'s PUBLIC behavior is unchanged once its body is extracted into a
+    shared `_tolerant_date` helper (design.md Decision 5). Written BEFORE
+    the refactor (4.4); it must stay GREEN through it -- if it ever goes
+    RED, the refactor broke something and must be fixed before continuing.
+    **RED today**: passes vacuously (nothing has changed yet)."""
+    assert okf.read_event_date({}) == okf.StoredEventDate(
+        value=None, malformed=False, raw=None
+    )
+    assert okf.read_event_date({"event_date": "2026-07-14"}) == okf.StoredEventDate(
+        value=date(2026, 7, 14), malformed=False, raw="2026-07-14"
+    )
+    assert okf.read_event_date(
+        {"event_date": date(2026, 7, 14)}
+    ) == okf.StoredEventDate(
+        value=date(2026, 7, 14), malformed=False, raw=date(2026, 7, 14)
+    )
+    assert okf.read_event_date(
+        {"event_date": datetime(2026, 7, 14, 0, 0, tzinfo=UTC)}
+    ) == okf.StoredEventDate(
+        value=None, malformed=True, raw=datetime(2026, 7, 14, 0, 0, tzinfo=UTC)
+    )
+    assert okf.read_event_date({"event_date": "2026-13-01"}) == okf.StoredEventDate(
+        value=None, malformed=True, raw="2026-13-01"
+    )
+    assert okf.read_event_date({"event_date": None}) == okf.StoredEventDate(
+        value=None, malformed=True, raw=None
+    )
+
+
+@pytest.mark.parametrize(
+    ("mapping", "expected"),
+    [
+        ({"date": date(2026, 7, 14)}, date(2026, 7, 14)),
+        ({"date": "2026-07-14"}, date(2026, 7, 14)),
+        ({"date": datetime(2026, 7, 14, 10, 0, tzinfo=UTC)}, None),
+        ({"date": "2026-13-45"}, None),
+        ({}, None),
+    ],
+)
+def test_read_incoming_date_shape_table(
+    mapping: dict[str, object], expected: date | None
+) -> None:
+    """Task 4.2: design.md Decision 3's `date` row -- a bare `date`, or a
+    quoted `YYYY-MM-DD` string that is a real calendar date, lifts; a
+    `datetime`, an invalid calendar string, or an absent `date` key lifts
+    nothing. **RED today**: `AttributeError` -- `okf.read_incoming_date`
+    does not exist."""
+    assert okf.read_incoming_date(mapping) == expected
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "2026-07-14",
+        date(2026, 7, 14),
+        "not-a-real-date",
+        datetime(2026, 7, 14, 10, 0, tzinfo=UTC),
+    ],
+)
+def test_read_incoming_date_and_read_event_date_share_tolerance_rules(
+    raw: object,
+) -> None:
+    """Task 4.3: `read_incoming_date` and `read_event_date` MUST agree on
+    every raw value's tolerance (design.md: "the same tolerant date shape
+    checks... with a separate key") -- the incoming reader's result equals
+    the stored reader's `value`, treating a malformed stored read as `None`
+    exactly like the incoming reader already does. **RED today**:
+    `AttributeError`. **MUTATION** (after 4.4): make `read_incoming_date`
+    accept a `datetime` by dropping its time component instead of rejecting
+    it, and confirm this test fails on the `datetime` row."""
+    stored = okf.read_event_date({"event_date": raw})
+    expected = None if stored.malformed else stored.value
+    assert okf.read_incoming_date({"date": raw}) == expected
+
+
+def test_read_incoming_date_and_read_event_date_agree_on_absent_key() -> None:
+    """The absent-key row of the parity table above, checked separately
+    since the two readers use different key names and cannot share one
+    mapping literal."""
+    assert okf.read_incoming_date({}) is None
+    assert okf.read_event_date({}).value is None
+
+
 def test_build_source_concept_emits_source_frontmatter_when_given() -> None:
     """design.md Decision 2 / task 2.1: `source_frontmatter` reaches the
     built document's frontmatter equal to the given mapping, and the

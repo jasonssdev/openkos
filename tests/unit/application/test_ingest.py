@@ -1412,6 +1412,113 @@ def test_resolve_event_date_precedence(
     assert resolution.changed is expected_changed
 
 
+@pytest.mark.parametrize(
+    (
+        "flag",
+        "stored",
+        "incoming",
+        "inferred",
+        "expected_value",
+        "expected_origin",
+    ),
+    [
+        pytest.param(
+            date(2026, 8, 1),
+            okf.StoredEventDate(
+                value=date(2026, 1, 1), malformed=False, raw="2026-01-01"
+            ),
+            date(2026, 7, 14),
+            date(2026, 3, 3),
+            date(2026, 8, 1),
+            "flag",
+            id="flag-wins-over-stored-incoming-and-inferred",
+        ),
+        pytest.param(
+            None,
+            okf.StoredEventDate(
+                value=date(2026, 1, 1), malformed=False, raw="2026-01-01"
+            ),
+            date(2026, 7, 14),
+            date(2026, 3, 3),
+            date(2026, 1, 1),
+            "kept",
+            id="stored-wins-over-incoming-and-inferred",
+        ),
+        pytest.param(
+            None,
+            None,
+            date(2026, 7, 14),
+            date(2026, 3, 3),
+            date(2026, 7, 14),
+            "frontmatter",
+            id="incoming-wins-over-inferred-when-stored-absent",
+        ),
+        pytest.param(
+            None,
+            okf.StoredEventDate(value=None, malformed=True, raw="14/07/2026"),
+            date(2026, 7, 14),
+            date(2026, 3, 3),
+            date(2026, 7, 14),
+            "frontmatter",
+            id="incoming-wins-over-inferred-when-stored-malformed",
+        ),
+        pytest.param(
+            None,
+            None,
+            None,
+            date(2026, 3, 3),
+            date(2026, 3, 3),
+            "file name",
+            id="inferred-fills-the-gap-when-incoming-absent",
+        ),
+        pytest.param(
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            id="no-evidence-leaves-the-key-unset",
+        ),
+    ],
+)
+def test_resolve_event_date_four_tier_precedence_table(
+    flag: date | None,
+    stored: okf.StoredEventDate | None,
+    incoming: date | None,
+    inferred: date | None,
+    expected_value: date | None,
+    expected_origin: str | None,
+) -> None:
+    """Task 4.5: design.md Decision 5's four-tier precedence: `flag` >
+    validly `stored` (`kept`) > `incoming` (`frontmatter`) > `inferred`
+    (`file name`) > unset. **RED today**: `TypeError` -- `resolve_event_
+    date` has no `incoming` parameter yet."""
+    resolution = ingest_service.resolve_event_date(
+        flag=flag, stored=stored, incoming=incoming, inferred=inferred
+    )
+    assert resolution.value == expected_value
+    assert resolution.origin == expected_origin
+
+
+def test_resolve_event_date_created_key_never_consulted() -> None:
+    """Task 4.6: an incoming mapping carrying `created` and no `date` key
+    computes `incoming=None` via `okf.read_incoming_date` (which never
+    reads `created`), so `resolve_event_date`'s chain falls through to
+    inference/unset exactly as if no incoming frontmatter existed at all --
+    an end-to-end confirmation of "created is ignored for this precedence"
+    at the `resolve_event_date` call boundary. **RED today**: `TypeError`
+    until 4.7 adds the `incoming` parameter."""
+    incoming = okf.read_incoming_date({"created": "2026-01-01"})
+    assert incoming is None
+
+    resolution = ingest_service.resolve_event_date(
+        flag=None, stored=None, incoming=incoming, inferred=date(2026, 3, 3)
+    )
+    assert resolution.value == date(2026, 3, 3)
+    assert resolution.origin == "file name"
+
+
 def test_compose_source_document_emits_event_date_when_given() -> None:
     """ingest-application-service spec: "A given event_date reaches the
     generated document" -- `event_date_flag` reaches `resolve_event_date`
@@ -1450,6 +1557,22 @@ def test_compose_source_document_reads_back_stored_event_date() -> None:
     assert plan.event_date.previous == date(2026, 7, 10)
     assert plan.event_date.origin == "kept"
     assert plan.event_date.value == date(2026, 7, 10)
+
+
+def test_compose_source_document_reads_incoming_date_independently_of_lift() -> None:
+    """Task 4.8 (tasks-phase decision 2): a fixture with incoming
+    frontmatter carrying ONLY `date: 2026-07-14` (no `tags`, no
+    `sensitivity`) still resolves `event_date` to `2026-07-14` --
+    `compose_source_document` calls `okf.read_incoming_date` directly off
+    the parsed mapping, not through `lift_incoming_frontmatter` (whose
+    `event_date` field stays `None` in this change). **RED today**:
+    `AssertionError` -- no call site exists yet."""
+    plan = _source_plan(
+        raw_content="---\ndate: 2026-07-14\n---\nSome raw notes.",
+        concept_text=None,
+    )
+    assert plan.event_date.value == date(2026, 7, 14)
+    assert plan.event_date.origin == "frontmatter"
 
 
 def test_compose_catalog_update_preserves_event_date_on_marker_only_rebuild() -> None:
