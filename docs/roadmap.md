@@ -36,10 +36,10 @@ This is the smallest slice that delivers real value: point OpenKOS at a folder o
 Deliverables:
 
 - Text and markdown ingestion, with raw sources kept immutable in a `raw/` directory that sits beside the OKF bundle rather than inside it — so sources keep their own names and extensions, and nothing dropped there can break bundle conformance
-- Compilation of sources into OKF concept documents (`type`, `title`, `description`, `resource`, `tags`, `timestamp`), with `# Citations` mirroring provenance into the body
+- Compilation of sources into OKF concept documents (`type`, `title`, `description`, `resource`, `tags`, `generated`, `status`), with `sources` generated from `provenance`
 - Provenance chain linking every object back to its source
-- Automatic `index.md` (catalog) and `log.md` (chronological history), following the OKF reserved-file structure, with `okf_version: "0.1"` declared at the bundle root
-- A conformance check for the three rules of OKF §9, run in CI against the reference bundle
+- Automatic `index.md` (catalog) and `log.md` (chronological history), following the OKF reserved-file structure, with `okf_version: "0.2"` declared at the bundle root
+- A conformance check for the three rules of OKF §11, run in CI against the reference bundle
 - A **model spike** (done): the same ingest was run against candidate tags at the 7–8B tier — `qwen3:8b`, `mistral:7b`, and `gemma4:e4b` — measuring which returned schema-valid extraction with fewest retries, using [`examples/good-life-demo/`](../examples/good-life-demo/) as the target shape. The measurement settled `qwen3:8b` as the default (recorded in [ADR-0001](adr/0001-default-extraction-model.md)), not argument — and it stays a config value either way. The licence of each candidate was confirmed against the vendor's terms as part of the spike
 - Lexical retrieval (SQLite FTS5) with an index-first navigation strategy
 - Query answering with citations

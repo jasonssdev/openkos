@@ -13,7 +13,7 @@ def render_log(today: date) -> str:
     `today` is a parameter rather than an internal `date.today()` call, so
     output is deterministic and testable; callers pass a timezone-aware
     timestamp's date (Ruff DTZ), per design's one testability injection.
-    `log.md` is a reserved file and carries no frontmatter (§6/§7).
+    `log.md` is a reserved file and carries no frontmatter (§8/§9).
     """
     return (
         "# Directory Update Log\n"
@@ -204,8 +204,8 @@ def remove_log_entry(log_text: str, concept_id: str) -> tuple[str, int]:
     `_ANCHOR_RE` on top, since a `forget` tombstone entry is identified by a
     structured `(id: <concept_id>)` anchor rather than (only) its own link.
 
-    Unlike `remove_index_entry`, `log.md` carries no frontmatter block (§6/
-    §7) -- there is nothing to split off, so the whole text is walked line
+    Unlike `remove_index_entry`, `log.md` carries no frontmatter block (§8/
+    §9) -- there is nothing to split off, so the whole text is walked line
     by line directly. Count semantics mirror `remove_index_entry` exactly:
     zero matches returns `(log_text, 0)` completely UNCHANGED; one or more
     matches drops every matching line, reporting the total count.

@@ -104,7 +104,7 @@ SQLite, FTS5, and everything git-related add nothing: SQLite ships with Python, 
 - **Typer** for the command-line interface (Click, MIT, is the mature fallback if we ever want fewer abstractions)
 - **Stdlib dataclasses and hand-rolled validators** for schemas and validation — Pydantic was in the original plan but has not been needed; it remains an option if validation outgrows the stdlib
 - **FastAPI** for the local API layer (introduced in MVP 3)
-- **Markdown + YAML frontmatter** using the OKF v0.1 field set (`type`, `title`, `description`, `resource`, `tags`, `timestamp`)
+- **Markdown + YAML frontmatter** using the OKF v0.2 field set (`type`, `title`, `description`, `resource`, `tags`, `generated`, `status`, `sources`)
 
 ## Local AI
 
