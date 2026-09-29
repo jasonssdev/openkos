@@ -1211,6 +1211,7 @@ def build_concept(
     related_note: str = "source this was extracted from",
     type_alternative: str | None = None,
     related_notes: Mapping[str, str] | None = None,
+    tags: Sequence[str] = (),
 ) -> str:
     """Build a conformant OKF derived-object document from LLM-extracted,
     UNTRUSTED fields (design: "Builder validation").
@@ -1236,7 +1237,11 @@ def build_concept(
     literal -- ingest never passes this kwarg, so its output stays
     byte-identical). A filed `query --save` answer passes a concept-to-concept
     phrasing instead (design: "Parameterize `## Related` wording (byte-identical
-    ingest)"). `tags` is always `[]`: this slice has no tagging step.
+    ingest)"). `tags` defaults to `()`, emitting `tags: []` exactly as
+    before this parameter existed (preserve-source-frontmatter, issue
+    #1062, design.md Decision 6) -- every existing caller passes no `tags`
+    kwarg and stays byte-identical; `ingest`'s `stage_derived_objects` is
+    the one caller that passes the Source's resolved tags.
 
     `related_notes` (#1014 piece b, design Decision 7) is an OPTIONAL
     per-reference override: a bullet reads `related_notes.get(ref,
@@ -1295,7 +1300,7 @@ def build_concept(
         "type": type,
         "title": title,
         "description": description,
-        "tags": [],
+        "tags": list(tags),
         "generated": {"by": generated.by, "at": generated.at},
         "status": "stable",
         "version": 1,

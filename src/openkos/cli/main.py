@@ -5460,6 +5460,7 @@ def _ingest_single(
                     source_slug=slug,
                     workspace_floor=source_plan.source_sensitivity,
                     stamp_sensitivity=source_plan.source_sensitivity,
+                    source_tags=source_plan.tags,
                     timestamp=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
                     bundle_dir=layout.bundle_dir,
                     llm=extraction_llm,

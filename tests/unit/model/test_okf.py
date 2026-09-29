@@ -1674,6 +1674,62 @@ def test_build_concept_sources_matches_provenance_projection() -> None:
     )
 
 
+def test_build_concept_default_tags_byte_identical() -> None:
+    """Task 5.1 (preserve-source-frontmatter, issue #1062): calling
+    `build_concept` with NO `tags` argument still produces a document
+    byte-identical to today's golden output for the same other arguments --
+    `tags: []`, exactly as before this task. This is the SAME golden
+    `test_build_concept_output_byte_identical_regression` pins above,
+    reused here as this task's PRECONDITION so the byte-identity claim is
+    checked against real pre-change bytes, not a freshly regenerated one."""
+    text = _build_call_concept()
+
+    assert text == (
+        "---\n"
+        "description: Hellenistic school holding that virtue is the only good, and that freedom\n"
+        "  comes from knowing what is up to us.\n"
+        "freshness: snapshot\n"
+        "generated:\n"
+        "  at: '2026-07-14T18:30:00Z'\n"
+        "  by: openkos/test\n"
+        "provenance:\n"
+        "- sources/call-with-maria-salazar\n"
+        "sensitivity: confidential\n"
+        "sources:\n"
+        "- id: sources/call-with-maria-salazar\n"
+        "  resource: /sources/call-with-maria-salazar.md\n"
+        "status: stable\n"
+        "tags: []\n"
+        "title: Stoicism\n"
+        "type: Concept\n"
+        "version: 1\n"
+        "---\n"
+        "\n"
+        "# Stoicism\n"
+        "\n"
+        "Hellenistic school holding that virtue is the only good, and that freedom "
+        "comes from knowing what is up to us.\n"
+        "\n"
+        "The dichotomy of control separates what is up to us from what is not.\n"
+        "\n"
+        "## Related\n"
+        "\n"
+        "- [sources/call-with-maria-salazar](/sources/call-with-maria-salazar.md) "
+        "— source this was extracted from\n"
+    )
+
+
+def test_build_concept_emits_given_tags() -> None:
+    """Task 5.2 (preserve-source-frontmatter, issue #1062):
+    `build_concept(..., tags=["alpha", "beta"])` emits `tags: [alpha, beta]`
+    in place of the default `[]`."""
+    text = _build_call_concept(tags=["alpha", "beta"])
+
+    metadata, _ = okf.load_frontmatter(text)
+
+    assert metadata["tags"] == ["alpha", "beta"]
+
+
 def test_build_source_concept_never_writes_sources() -> None:
     """okf-v02-migration Phase 3, task 3.9: `build_source_concept`'s only
     `provenance` is its own `raw/` original, which `project_sources` never
@@ -1895,6 +1951,26 @@ def test_build_merged_document_sources_matches_unioned_provenance() -> None:
     assert merged["sources"] == okf.project_sources(
         ["sources/call-a", "sources/call-b"]
     )
+
+
+def test_build_merged_document_tags_generic_union_unaffected() -> None:
+    """Task 5.10 (preserve-source-frontmatter, issue #1062, design.md
+    Decision 6): a survivor with `tags: [alpha]` and an absorbed object with
+    `tags: [beta]` merge to `tags: [alpha, beta]` -- `tags` is NOT in
+    `_SPECIAL_KEYS`, so the EXISTING generic list-union branch already
+    handles it. This is a pure regression pin: it protects the behavior
+    from a later change accidentally adding `tags` to `_SPECIAL_KEYS`, which
+    would silently break derived-tag-propagation's union semantics (Phase 5)."""
+    merged, _ = okf.build_merged_document(
+        _survivor_metadata(tags=["alpha"]),
+        "Survivor body.",
+        _absorbed_metadata(tags=["beta"]),
+        "Absorbed body.",
+        "absorbed-id",
+        "survivor-id",
+    )
+
+    assert merged["tags"] == ["alpha", "beta"]
 
 
 def test_build_merged_document_freshness_and_timestamp_from_most_recent() -> None:

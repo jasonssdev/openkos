@@ -547,6 +547,68 @@ def test_stage_derived_objects_drops_a_build_failure(
     assert outcome.drops[0].error
 
 
+# -- Phase 5 (preserve-source-frontmatter, issue #1062): derived tag
+# propagation -- `stage_derived_objects(source_tags=)` (design.md
+# Decision 6) --
+
+
+def test_stage_derived_objects_threads_source_tags_to_every_build_concept_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Task 5.4: a fake extractor returns two DISTINCT candidates (so both
+    stage, not just the first);
+    `stage_derived_objects(..., source_tags=("alpha", "beta"))` stages BOTH
+    candidates' plans with `tags: [alpha, beta]` reaching each `build_concept`
+    call."""
+    first = concept_mod.ExtractionResult(
+        type="Concept", title="Stoic Practice", description="d1", body="b1"
+    )
+    second = concept_mod.ExtractionResult(
+        type="Concept", title="Negative Visualization", description="d2", body="b2"
+    )
+    monkeypatch.setattr(
+        ingest_service, "extract_concept", _fake_extractor([first, second])
+    )
+
+    outcome = ingest_service.stage_derived_objects(
+        **_stage_kwargs(  # type: ignore[arg-type]
+            tmp_path, source_tags=("alpha", "beta")
+        )
+    )
+
+    assert len(outcome.plans) == 2
+    for plan in outcome.plans:
+        metadata, _ = okf.load_frontmatter(plan.content)
+        assert metadata["tags"] == ["alpha", "beta"]
+
+
+def test_stage_derived_objects_carried_path_ignores_source_tags(
+    tmp_path: Path,
+) -> None:
+    """Task 5.5: the `carried=` short-circuit (pre-extraction return)
+    returns immediately regardless of `source_tags`, staging NO plans and
+    calling NO `build_concept` -- a Source-only rewrite creates nothing, so
+    tags never reach it. PRECONDITION: `carried` is genuinely set (a real
+    `ConvergedReingest`) before asserting the short-circuit fired."""
+    converged = ingest_service.ConvergedReingest(
+        carried_notices=(), carried_status="no-concepts-found"
+    )
+    assert converged is not None  # precondition: carried is genuinely set
+
+    stub_llm = _FakeLLM(raises=AssertionError("must not be called"))
+    outcome = ingest_service.stage_derived_objects(
+        **_stage_kwargs(  # type: ignore[arg-type]
+            tmp_path,
+            llm=stub_llm,
+            carried=converged,
+            source_tags=("alpha", "beta"),
+        )
+    )
+
+    assert outcome.plans == ()
+    assert outcome.skip_reason == "no-concepts-found"
+
+
 # -- Slice 3: `converged_reingest`, `compose_source_document`,
 # `compose_catalog_update` (issue #918, design: Interfaces/Contracts) --
 
