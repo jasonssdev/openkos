@@ -40,7 +40,7 @@ Every change must respect these. A technically good change that violates one is 
 - **The core is synchronous.** Async only at the MVP 3 API/MCP edge (which calls the sync engine via a thread pool). Do not make the core async.
 - **Layering:** the canonical layer (`model`, `bundle`, `state`) never depends on the derived layer (`retrieval`, `graph`, `memory`).
 - **The OKF adapter is one seam.** All knowledge of the format's on-disk shape — frontmatter parsing/emission, reserved files, §9 conformance — lives in `model/okf.py` and nowhere else; the rest of the engine handles Knowledge Objects. OKF is a v0.1 **draft** whose §11 permits breaking major bumps, so this containment is what lets us adopt it safely. Do not spread format knowledge across the codebase.
-- **LLM calls** go behind `LLMBackend` (`llm/base.py`) and talk to Ollama's OpenAI-compatible endpoint. `chat` returns `str`; structured replies are recovered by the **fail-closed JSON extraction** in `llm/parsing.py` (`extract_json_object`/`extract_json_items`), not by a validation library — `pydantic` and `instructor` are deliberately not dependencies. The extraction pipeline is **deterministic with LLM steps** — no agent framework in the core.
+- **LLM calls** go behind `LLMBackend` (`llm/base.py`) and talk to Ollama's native HTTP API (`/api/chat`, `/api/embed`, `/api/tags` in `llm/ollama.py`), not the OpenAI-compatible one. `chat` returns `str`; structured replies are recovered by the **fail-closed JSON extraction** in `llm/parsing.py` (`extract_json_object`/`extract_json_items`), not by a validation library — `pydantic` and `instructor` are deliberately not dependencies. The extraction pipeline is **deterministic with LLM steps** — no agent framework in the core.
 
 ## Quality gates
 

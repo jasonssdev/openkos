@@ -110,7 +110,7 @@ SQLite, FTS5, and everything git-related add nothing: SQLite ships with Python, 
 
 Two kinds of model are used: a **generative model** (to compile, extract, and answer) and, from MVP 2, an **embedding model** (for vector search). The model is never hard-coded — it is set in `openkos.yaml`, behind an `LLMBackend` interface, so the user chooses.
 
-**Runtime.** [Ollama](https://ollama.com) is the recommended local runtime (one-click install, cross-platform, manages model downloads); llama.cpp and LM Studio are alternatives. They all speak the same **OpenAI-compatible HTTP API** — this names the *request/response shape* that became a de-facto standard (like "S3-compatible" storage), **not** OpenAI the company or its cloud. No data leaves the machine; speaking one common dialect simply lets OpenKOS work with any conforming local runtime, which is the opposite of lock-in. Ollama and llama.cpp are both MIT-licensed.
+**Runtime.** [Ollama](https://ollama.com) is the recommended local runtime (one-click install, cross-platform, manages model downloads); OpenKOS's one LLM client, `llm/ollama.py`, speaks **Ollama's native HTTP API** (`/api/chat`, `/api/embed`, `/api/tags`), so Ollama is the runtime OpenKOS requires. Other local runtimes such as llama.cpp and LM Studio expose the **OpenAI-compatible HTTP API** instead (a de-facto request/response shape, like "S3-compatible" storage, **not** OpenAI the company or its cloud); OpenKOS does not speak it, so they cannot be used in its place. The `LLMBackend` and `Embedder` protocols are the seam a second, OpenAI-compatible backend would plug into. No data leaves the machine either way. Ollama and llama.cpp are both MIT-licensed.
 
 **Recommended generative models, by hardware:**
 
