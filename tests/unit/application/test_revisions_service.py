@@ -12,6 +12,7 @@ no LLM, no embedder. `read_decision_vectors`'s tests build a REAL
 rather than a hand-rolled fake -- this is a read seam over that exact
 schema, and a fake risks drifting from it."""
 
+import hashlib
 from datetime import date
 from pathlib import Path
 
@@ -20,9 +21,11 @@ import pytest
 from openkos import config
 from openkos.application import revisions
 from openkos.llm.base import EMBED_DIM
+from openkos.model import okf
 from openkos.model.relations import RESOLUTION_RELATION_TYPES
+from openkos.resolution import decision_revision
 from openkos.resolution.decision_revision import DecisionDate
-from openkos.state import reindex, vectorstore
+from openkos.state import derived, reindex, revision_findings, vectorstore
 from openkos.state.vectorstore import content_hash
 
 
@@ -381,3 +384,544 @@ def test_read_decision_vectors_confidential_interaction(tmp_path: Path) -> None:
         embedding_model=_MODEL,
     )
     assert "decisions/confidential" in coverage_with_vector.vectors
+
+
+# ---------------------------------------------------------------------------
+# revision_input_digests (Slice P5b, design.md Decision 2)
+# ---------------------------------------------------------------------------
+
+
+def _bundle_snapshot(layout: config.WorkspaceLayout) -> dict[str, str]:
+    """Test-local reimplementation of the service's own whole-bundle text
+    snapshot -- the `Mapping[str, str]` shape (bundle-relative POSIX path,
+    WITH the `.md` suffix, -> decoded text)
+    `bundle_provenance.provenance_source_ancestors_many` expects, and the
+    exact shape `revision_input_digests`'s `files` parameter takes. Small
+    enough to duplicate here rather than reach into the service's own
+    private `_bundle_text_snapshot` helper from a test."""
+    files: dict[str, str] = {}
+    for path in okf.iter_bundle_markdown(layout.bundle_dir):
+        if path.name in okf.RESERVED_FILENAMES:
+            continue
+        files[path.relative_to(layout.bundle_dir).as_posix()] = path.read_text(
+            encoding="utf-8"
+        )
+    return files
+
+
+def test_revision_input_digests_covers_both_decisions_and_their_reached_sources(
+    tmp_path: Path,
+) -> None:
+    """design.md Decision 2's input-digest table: ordinals 1-2 are each
+    Decision's own `content_hash`; 3-4 are `sources-of:<id>` (a digest over
+    the SORTED reached-Source id LIST, independent of whether those files
+    exist); 5+ are every reached Source's `content_hash`, sorted and
+    deduped across both sides -- and a dangling `sources/gone` reference
+    (no file behind it) contributes NO content-hash row of its own, while
+    still being counted in its side's `sources-of:` id-list digest."""
+    layout = _workspace(tmp_path)
+    _write_doc(
+        layout.bundle_dir / "decisions" / "a.md",
+        provenance=["sources/shared", "sources/only-a"],
+        body="Body A.",
+    )
+    _write_doc(
+        layout.bundle_dir / "decisions" / "b.md",
+        provenance=["sources/shared", "sources/only-b", "sources/gone"],
+        body="Body B.",
+    )
+    _write_doc(layout.bundle_dir / "sources" / "shared.md", type_="Source")
+    _write_doc(layout.bundle_dir / "sources" / "only-a.md", type_="Source")
+    _write_doc(layout.bundle_dir / "sources" / "only-b.md", type_="Source")
+    # `sources/gone.md` is deliberately never created.
+
+    files = _bundle_snapshot(layout)
+    digests = revisions.revision_input_digests(
+        layout, files, ("decisions/a", "decisions/b")
+    )
+
+    # `sources/only-b` is reached ONLY by `decisions/b`'s side -- present in
+    # the union only because BOTH sides' reached sets are combined, not just
+    # `decisions/a`'s (the ordinal-1 side).
+    assert [digest.input_ref for digest in digests] == [
+        "decisions/a",
+        "decisions/b",
+        "sources-of:decisions/a",
+        "sources-of:decisions/b",
+        "sources/only-a",
+        "sources/only-b",
+        "sources/shared",
+    ]
+    assert len(digests) == 7  # gone.md contributes no row of its own
+
+    by_ref = {digest.input_ref: digest.digest for digest in digests}
+    assert by_ref["decisions/a"] == content_hash(
+        (layout.bundle_dir / "decisions" / "a.md").read_bytes()
+    )
+    assert by_ref["sources/shared"] == content_hash(
+        (layout.bundle_dir / "sources" / "shared.md").read_bytes()
+    )
+    assert by_ref["sources/only-b"] == content_hash(
+        (layout.bundle_dir / "sources" / "only-b.md").read_bytes()
+    )
+    assert (
+        by_ref["sources-of:decisions/a"]
+        == hashlib.sha256(
+            "\n".join(sorted(["sources/only-a", "sources/shared"])).encode("utf-8")
+        ).hexdigest()
+    )
+    assert (
+        by_ref["sources-of:decisions/b"]
+        == hashlib.sha256(
+            "\n".join(
+                sorted(["sources/gone", "sources/only-b", "sources/shared"])
+            ).encode("utf-8")
+        ).hexdigest()
+    )
+
+
+def test_revision_input_digests_a_missing_source_yields_one_fewer_row_than_if_it_existed(
+    tmp_path: Path,
+) -> None:
+    """The digest tuple genuinely differs in LENGTH depending on whether a
+    reached Source's file exists -- proving the row is dropped, not merely
+    that its ref string differs. This is what lets a later `is_fresh` strict
+    equality check catch an input that BECAME unreadable (P5b.3)."""
+    layout = _workspace(tmp_path)
+    _write_doc(layout.bundle_dir / "decisions" / "a.md", provenance=["sources/x"])
+    _write_doc(layout.bundle_dir / "decisions" / "b.md", provenance=[])
+
+    files = _bundle_snapshot(layout)
+    without_source = revisions.revision_input_digests(
+        layout, files, ("decisions/a", "decisions/b")
+    )
+
+    _write_doc(layout.bundle_dir / "sources" / "x.md", type_="Source")
+    files = _bundle_snapshot(layout)
+    with_source = revisions.revision_input_digests(
+        layout, files, ("decisions/a", "decisions/b")
+    )
+
+    assert len(with_source) == len(without_source) + 1
+    assert "sources/x" not in {digest.input_ref for digest in without_source}
+    assert "sources/x" in {digest.input_ref for digest in with_source}
+
+
+# ---------------------------------------------------------------------------
+# is_fresh (Slice P5b, design.md Decision 2's strict freshness rule)
+# ---------------------------------------------------------------------------
+
+_PAIR = ("decisions/a", "decisions/b")
+
+
+def _finding(
+    layout: config.WorkspaceLayout,
+    files: dict[str, str],
+    *,
+    pair_ids: tuple[str, str] = _PAIR,
+    prompt_version: str | None = None,
+    include_confidential: bool = False,
+    digests: tuple[revision_findings.InputDigest, ...] | None = None,
+) -> revision_findings.RevisionFinding:
+    """One `RevisionFinding` ready to persist. `prompt_version` defaults to
+    the REAL `JUDGE_PROMPT_VERSION` and `digests` to the REAL current digest
+    tuple (via `revision_input_digests`), so an unmodified call is, by
+    construction, exactly the "fresh" case `is_fresh` should accept."""
+    return revision_findings.RevisionFinding(
+        pair_ids=pair_ids,
+        verdict="reaffirms",
+        confidence=0.9,
+        rationale="stub rationale",
+        quotes=(None, None),
+        dates=(None, None),
+        date_states=("none-reached", "none-reached"),
+        include_confidential=include_confidential,
+        prompt_version=prompt_version or decision_revision.JUDGE_PROMPT_VERSION,
+        input_digests=(
+            digests
+            if digests is not None
+            else revisions.revision_input_digests(layout, files, pair_ids)
+        ),
+    )
+
+
+def _record(
+    layout: config.WorkspaceLayout, batch: list[revision_findings.RevisionFinding]
+) -> None:
+    conn = derived.open_derived_connection(layout.findings_db_path)
+    try:
+        revision_findings.record_revision_findings(conn, batch)
+    finally:
+        conn.close()
+
+
+def _read_back(
+    layout: config.WorkspaceLayout, pair_ids: tuple[str, str]
+) -> revision_findings.RevisionFinding:
+    conn = derived.open_derived_connection(layout.findings_db_path)
+    try:
+        by_pair = {
+            row.pair_ids: row for row in revision_findings.open_revision_findings(conn)
+        }
+    finally:
+        conn.close()
+    return by_pair[pair_ids]
+
+
+def test_is_fresh_true_when_prompt_version_confidential_and_digests_all_match(
+    tmp_path: Path,
+) -> None:
+    layout = _workspace(tmp_path)
+    _write_doc(layout.bundle_dir / "decisions" / "a.md")
+    _write_doc(layout.bundle_dir / "decisions" / "b.md")
+    files = _bundle_snapshot(layout)
+    _record(layout, [_finding(layout, files, include_confidential=True)])
+
+    stored = _read_back(layout, _PAIR)
+
+    assert revisions.is_fresh(layout, stored, effective_confidential=True) is True
+
+
+def test_is_fresh_false_for_a_superseded_non_latest_row(tmp_path: Path) -> None:
+    """Recording a NEW finding for the same pair REPLACEs the old row
+    (`record_revision_findings`'s own contract). The caller's stale
+    in-memory copy of the OLD row is therefore no longer the pair's CURRENT
+    row, and `is_fresh` must say so rather than trusting the object it was
+    handed -- design.md Decision 2's condition 1, "the latest row for its
+    pair key"."""
+    layout = _workspace(tmp_path)
+    _write_doc(layout.bundle_dir / "decisions" / "a.md")
+    _write_doc(layout.bundle_dir / "decisions" / "b.md")
+    files = _bundle_snapshot(layout)
+    old_finding = _finding(layout, files, prompt_version="v-old")
+    _record(layout, [old_finding])
+
+    newer_finding = _finding(layout, files, prompt_version="v-old")
+    newer_finding = revision_findings.RevisionFinding(
+        pair_ids=newer_finding.pair_ids,
+        verdict=newer_finding.verdict,
+        confidence=0.5,
+        rationale="a newer judgment superseded the old one",
+        quotes=newer_finding.quotes,
+        dates=newer_finding.dates,
+        date_states=newer_finding.date_states,
+        include_confidential=newer_finding.include_confidential,
+        prompt_version=decision_revision.JUDGE_PROMPT_VERSION,
+        input_digests=newer_finding.input_digests,
+    )
+    _record(layout, [newer_finding])
+
+    assert revisions.is_fresh(layout, old_finding) is False
+    assert revisions.is_fresh(layout, newer_finding) is True
+
+
+def test_is_fresh_false_on_prompt_version_mismatch(tmp_path: Path) -> None:
+    layout = _workspace(tmp_path)
+    _write_doc(layout.bundle_dir / "decisions" / "a.md")
+    _write_doc(layout.bundle_dir / "decisions" / "b.md")
+    files = _bundle_snapshot(layout)
+    _record(layout, [_finding(layout, files, prompt_version="an-old-prompt-version")])
+
+    stored = _read_back(layout, _PAIR)
+
+    assert revisions.is_fresh(layout, stored) is False
+
+
+def test_is_fresh_false_on_include_confidential_mismatch(tmp_path: Path) -> None:
+    layout = _workspace(tmp_path)
+    _write_doc(layout.bundle_dir / "decisions" / "a.md")
+    _write_doc(layout.bundle_dir / "decisions" / "b.md")
+    files = _bundle_snapshot(layout)
+    _record(layout, [_finding(layout, files, include_confidential=False)])
+
+    stored = _read_back(layout, _PAIR)
+
+    assert revisions.is_fresh(layout, stored, effective_confidential=True) is False
+    assert revisions.is_fresh(layout, stored, effective_confidential=False) is True
+
+
+def test_is_fresh_false_when_a_stored_input_became_unreadable(tmp_path: Path) -> None:
+    """A Source reached at record time, later deleted, leaves the STORED
+    digest tuple with one more row than the RECOMPUTED one. Strict equality
+    catches this immediately -- design.md Decision 2: "an input that cannot
+    currently be read must never count as unchanged", explicitly contrasted
+    with `findings._is_stale`'s lenient `None`-means-unchanged rule, which
+    must NOT apply here."""
+    layout = _workspace(tmp_path)
+    _write_doc(layout.bundle_dir / "decisions" / "a.md", provenance=["sources/x"])
+    _write_doc(layout.bundle_dir / "decisions" / "b.md")
+    _write_doc(layout.bundle_dir / "sources" / "x.md", type_="Source")
+    files = _bundle_snapshot(layout)
+    _record(layout, [_finding(layout, files)])
+    (layout.bundle_dir / "sources" / "x.md").unlink()
+
+    stored = _read_back(layout, _PAIR)
+
+    assert revisions.is_fresh(layout, stored) is False
+
+
+# ---------------------------------------------------------------------------
+# plan_revisions (Slice P5b, design.md's Phase B re-plan Data flow)
+# ---------------------------------------------------------------------------
+
+
+def _embed(dim_index: int) -> list[float]:
+    """An `EMBED_DIM`-length unit vector with a single `1.0` at
+    `dim_index`, else `0.0` -- two vectors sharing a `dim_index` have
+    `cosine_similarity` exactly `1.0`; two with DIFFERENT indices have
+    exactly `0.0`, cleanly on either side of
+    `EMBEDDING_SIMILARITY_THRESHOLD` (0.65) without needing real
+    embeddings."""
+    vector = [0.0] * EMBED_DIM
+    vector[dim_index] = 1.0
+    return vector
+
+
+def _seed_decision_and_vector(
+    layout: config.WorkspaceLayout,
+    concept_id: str,
+    dim_index: int,
+    **doc_kwargs: object,
+) -> None:
+    """Write one Decision `.md` file and seed its CURRENT document vector in
+    `.openkos/vectors.db`, as if `openkos reindex` had just run over it --
+    the fixture shape every `plan_revisions` test needs so its Decisions are
+    both loadable (`load_decisions`) and vector-eligible
+    (`read_decision_vectors`)."""
+    path = layout.bundle_dir / f"{concept_id}.md"
+    _write_doc(path, **doc_kwargs)  # type: ignore[arg-type]
+    with vectorstore.open_vector_store(layout.vectors_db_path) as store:
+        store.upsert(concept_id, _embed(dim_index), content_hash(path.read_bytes()))
+        store.write_model_tag(reindex.embedding_tag(_MODEL))
+        store.commit()
+
+
+def _record_current_finding(
+    layout: config.WorkspaceLayout,
+    files: dict[str, str],
+    pair_ids: tuple[str, str],
+) -> None:
+    """Persist a finding for `pair_ids` whose stored digests are the REAL
+    current ones (via `revision_input_digests`) -- the "this pair was
+    already judged and nothing has changed since" fixture shape every
+    served-vs-to_judge test starts from."""
+    digests = revisions.revision_input_digests(layout, files, pair_ids)
+    _record(
+        layout,
+        [
+            revision_findings.RevisionFinding(
+                pair_ids=pair_ids,
+                verdict="reaffirms",
+                confidence=0.9,
+                rationale="stub rationale",
+                quotes=(None, None),
+                dates=(None, None),
+                date_states=("none-reached", "none-reached"),
+                include_confidential=False,
+                prompt_version=decision_revision.JUDGE_PROMPT_VERSION,
+                input_digests=digests,
+            )
+        ],
+    )
+
+
+def test_plan_revisions_serves_unchanged_findings_with_zero_llm_calls(
+    tmp_path: Path,
+) -> None:
+    """A bundle whose Decisions, dates, and vectors are unchanged since the
+    last run: the previously-judged pair is served, and NONE appear in
+    `to_judge` -- `plan_revisions` itself has no `llm` parameter at all, so
+    "zero LLM calls" is an architectural guarantee, not a runtime count."""
+    layout = _workspace(tmp_path)
+    _seed_decision_and_vector(layout, "decisions/a", 0)
+    _seed_decision_and_vector(layout, "decisions/b", 0)
+
+    decisions = revisions.load_decisions(
+        layout, include_confidential=False, local_exemption=False
+    )
+    files = _bundle_snapshot(layout)
+    _record_current_finding(layout, files, ("decisions/a", "decisions/b"))
+
+    plan = revisions.plan_revisions(
+        layout,
+        decisions,
+        embedding_model=_MODEL,
+        effective_confidential=False,
+        fresh=False,
+    )
+
+    assert {finding.pair_ids for finding in plan.served} == {
+        ("decisions/a", "decisions/b")
+    }
+    assert plan.to_judge == ()
+
+
+def test_plan_revisions_edited_decision_body_rejudges_only_its_own_pairs(
+    tmp_path: Path,
+) -> None:
+    """Editing one Decision's body moves ONLY pairs containing it from
+    served to `to_judge`; every other persisted finding stays served."""
+    layout = _workspace(tmp_path)
+    for concept_id in ("decisions/a", "decisions/b", "decisions/c"):
+        _seed_decision_and_vector(layout, concept_id, 0, body=f"Body {concept_id}.")
+
+    decisions = revisions.load_decisions(
+        layout, include_confidential=False, local_exemption=False
+    )
+    files = _bundle_snapshot(layout)
+    for pair in (
+        ("decisions/a", "decisions/b"),
+        ("decisions/a", "decisions/c"),
+        ("decisions/b", "decisions/c"),
+    ):
+        _record_current_finding(layout, files, pair)
+
+    # Edit decisions/a's body, then simulate a reindex: re-upsert its
+    # vector with the SAME direction but the NEW content hash, so `a` stays
+    # a current candidate and only its JUDGE FINDINGS go stale.
+    a_path = layout.bundle_dir / "decisions" / "a.md"
+    _write_doc(a_path, body="Body decisions/a, edited.")
+    with vectorstore.open_vector_store(layout.vectors_db_path) as store:
+        store.upsert("decisions/a", _embed(0), content_hash(a_path.read_bytes()))
+        store.write_model_tag(reindex.embedding_tag(_MODEL))
+        store.commit()
+
+    plan = revisions.plan_revisions(
+        layout,
+        decisions,
+        embedding_model=_MODEL,
+        effective_confidential=False,
+        fresh=False,
+    )
+
+    assert {candidate.pair_ids for candidate in plan.to_judge} == {
+        ("decisions/a", "decisions/b"),
+        ("decisions/a", "decisions/c"),
+    }
+    assert {finding.pair_ids for finding in plan.served} == {
+        ("decisions/b", "decisions/c")
+    }
+
+
+def test_plan_revisions_edited_source_event_date_rejudges_only_affected_pairs(
+    tmp_path: Path,
+) -> None:
+    """Editing one Source's `event_date` moves ONLY pairs whose Decisions
+    reach that Source to `to_judge` -- caught by the `sources-of:<id>`
+    digest rows' reached-Source content-hash rows (ordinal 5+), never by
+    ordinals 1-2 (neither Decision's own body changes)."""
+    layout = _workspace(tmp_path)
+    _seed_decision_and_vector(layout, "decisions/a", 0, provenance=["sources/s1"])
+    _seed_decision_and_vector(layout, "decisions/b", 0, provenance=["sources/s3"])
+    _seed_decision_and_vector(layout, "decisions/c", 1, provenance=["sources/s2"])
+    _seed_decision_and_vector(layout, "decisions/d", 1, provenance=["sources/s4"])
+    _write_doc(
+        layout.bundle_dir / "sources" / "s1.md", type_="Source", event_date="2026-01-01"
+    )
+    _write_doc(
+        layout.bundle_dir / "sources" / "s2.md", type_="Source", event_date="2026-02-02"
+    )
+    _write_doc(
+        layout.bundle_dir / "sources" / "s3.md", type_="Source", event_date="2026-03-03"
+    )
+    _write_doc(
+        layout.bundle_dir / "sources" / "s4.md", type_="Source", event_date="2026-04-04"
+    )
+
+    decisions = revisions.load_decisions(
+        layout, include_confidential=False, local_exemption=False
+    )
+    files = _bundle_snapshot(layout)
+    _record_current_finding(layout, files, ("decisions/a", "decisions/b"))
+    _record_current_finding(layout, files, ("decisions/c", "decisions/d"))
+
+    _write_doc(
+        layout.bundle_dir / "sources" / "s1.md", type_="Source", event_date="2026-06-06"
+    )
+
+    plan = revisions.plan_revisions(
+        layout,
+        decisions,
+        embedding_model=_MODEL,
+        effective_confidential=False,
+        fresh=False,
+    )
+
+    assert {candidate.pair_ids for candidate in plan.to_judge} == {
+        ("decisions/a", "decisions/b")
+    }
+    assert {finding.pair_ids for finding in plan.served} == {
+        ("decisions/c", "decisions/d")
+    }
+
+
+def test_plan_revisions_provenance_path_change_marks_stale(tmp_path: Path) -> None:
+    """Rewiring an INTERMEDIATE concept so a Decision now reaches a
+    DIFFERENT Source, with neither Decision's own body edited, moves the
+    affected pair to `to_judge` -- caught by the `sources-of:<id>` digest
+    rows (ordinals 3-4), not by rows 1-2."""
+    layout = _workspace(tmp_path)
+    _seed_decision_and_vector(layout, "decisions/a", 0, provenance=["concepts/mid"])
+    _seed_decision_and_vector(layout, "decisions/b", 0, provenance=["sources/s2"])
+    _write_doc(
+        layout.bundle_dir / "concepts" / "mid.md",
+        type_="Concept",
+        provenance=["sources/s1"],
+    )
+    _write_doc(layout.bundle_dir / "sources" / "s1.md", type_="Source")
+    _write_doc(layout.bundle_dir / "sources" / "s2.md", type_="Source")
+    _write_doc(layout.bundle_dir / "sources" / "s3.md", type_="Source")
+
+    decisions = revisions.load_decisions(
+        layout, include_confidential=False, local_exemption=False
+    )
+    files = _bundle_snapshot(layout)
+    _record_current_finding(layout, files, ("decisions/a", "decisions/b"))
+
+    # Rewire the INTERMEDIATE concept only -- decisions/a.md itself, and
+    # its vector, are untouched.
+    _write_doc(
+        layout.bundle_dir / "concepts" / "mid.md",
+        type_="Concept",
+        provenance=["sources/s3"],
+    )
+
+    plan = revisions.plan_revisions(
+        layout,
+        decisions,
+        embedding_model=_MODEL,
+        effective_confidential=False,
+        fresh=False,
+    )
+
+    assert {candidate.pair_ids for candidate in plan.to_judge} == {
+        ("decisions/a", "decisions/b")
+    }
+    assert plan.served == ()
+
+
+def test_plan_revisions_fresh_flag_bypasses_serving(tmp_path: Path) -> None:
+    """`fresh=True` sends EVERY eligible candidate to `to_judge` regardless
+    of persisted findings."""
+    layout = _workspace(tmp_path)
+    _seed_decision_and_vector(layout, "decisions/a", 0)
+    _seed_decision_and_vector(layout, "decisions/b", 0)
+
+    decisions = revisions.load_decisions(
+        layout, include_confidential=False, local_exemption=False
+    )
+    files = _bundle_snapshot(layout)
+    _record_current_finding(layout, files, ("decisions/a", "decisions/b"))
+
+    plan = revisions.plan_revisions(
+        layout,
+        decisions,
+        embedding_model=_MODEL,
+        effective_confidential=False,
+        fresh=True,
+    )
+
+    assert plan.served == ()
+    assert {candidate.pair_ids for candidate in plan.to_judge} == {
+        ("decisions/a", "decisions/b")
+    }
