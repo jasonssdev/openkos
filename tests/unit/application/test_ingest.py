@@ -355,19 +355,21 @@ def _fake_extractor(
     judge_status: str = "skipped",
     sole_object_restates_source: bool = False,
     unevidenced_titles: tuple[str, ...] = (),
+    skipped_chunks: tuple[int, ...] = (),
 ) -> object:
     """Monkeypatch stand-in for `extract_concept`/`extract_concept_union`,
     mirroring `tests/unit/cli/test_ingest.py::_capturing_extractor` -- lets a
     test fabricate an exact `ExtractionOutcome` (objects + report) without
     driving the real extraction pipeline, so branches gated on `report`
-    fields (judge status, sole-object-restates, unevidenced titles) are
-    reachable without an LLM call."""
+    fields (judge status, sole-object-restates, unevidenced titles, skipped
+    chunks) are reachable without an LLM call."""
     report = concept_mod.ExtractionReport(
         produced=len(objects),
         retained=len(objects),
         judge_status=judge_status,
         sole_object_restates_source=sole_object_restates_source,
         unevidenced_titles=unevidenced_titles,
+        skipped_chunks=skipped_chunks,
     )
 
     def _extractor(*args: object, **kwargs: object) -> object:
@@ -402,6 +404,25 @@ def test_stage_derived_objects_carries_judge_empty_notice(
         **_stage_kwargs(tmp_path)  # type: ignore[arg-type]
     )
     assert okf.EXTRACTION_NOTICE_JUDGE_EMPTY in outcome.notices
+
+
+def test_stage_derived_objects_carries_chunk_partial_notice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Triangulation: `report.skipped_chunks` feeds the notices tuple
+    independently of the judge/sole-object/unevidenced branches (#1053)."""
+    result = concept_mod.ExtractionResult(
+        type="Concept", title="Stoic Practice", description="desc", body="body"
+    )
+    monkeypatch.setattr(
+        ingest_service,
+        "extract_concept",
+        _fake_extractor([result], skipped_chunks=(2,)),
+    )
+    outcome = ingest_service.stage_derived_objects(
+        **_stage_kwargs(tmp_path)  # type: ignore[arg-type]
+    )
+    assert okf.EXTRACTION_NOTICE_CHUNK_PARTIAL in outcome.notices
 
 
 def test_stage_derived_objects_carries_sole_object_and_unevidenced_notices(
@@ -581,6 +602,15 @@ def test_converged_reingest_falls_through_on_judge_degrade_notice() -> None:
     text = _prior_concept_text(
         extraction_notice=okf.EXTRACTION_NOTICE_JUDGE_UNAVAILABLE
     )
+    assert ingest_service.converged_reingest(text, re_extract=False) is None
+
+
+def test_converged_reingest_falls_through_on_chunk_partial_notice() -> None:
+    """Triangulation: retryable debt also includes #1053's chunk-skip
+    `extraction_notice` token -- a `BackendError`-family chunk failure is
+    transient, so a plain re-ingest genuinely can answer differently, the
+    same reasoning that already applies to the two judge tokens."""
+    text = _prior_concept_text(extraction_notice=okf.EXTRACTION_NOTICE_CHUNK_PARTIAL)
     assert ingest_service.converged_reingest(text, re_extract=False) is None
 
 

@@ -329,9 +329,10 @@ def stage_derived_objects(
     untrusted LLM fields that slipped past the extractor's own validation
     can still fail `build_concept`'s stricter gate (`"build-failed"`).
 
-    `notices` (issue #585/#843/#884) carries the SAME `okf.ExtractionNotice`
-    computation the pre-move function carried in its persisted-marker
-    branches -- judge degrade, sole-object-restates, unevidenced-titles, and
+    `notices` (issue #585/#843/#884/#1053) carries the SAME `okf.
+    ExtractionNotice` computation the pre-move function carried in its
+    persisted-marker branches -- a chunk skipped after its retry also
+    failed, judge degrade, sole-object-restates, unevidenced-titles, and
     (appended after the staging loop) candidates-dropped-in-staging when
     `lost_in_staging` is non-zero. These are the PERSISTED tokens (a
     Source's `extraction_notice` frontmatter key), distinct from the STRING
@@ -379,7 +380,11 @@ def stage_derived_objects(
         )
 
     extractor = extract_concept_union if union_judge else extract_concept
-    # `OllamaError` propagates unswallowed -- see docstring above.
+    # `OllamaError` propagates unswallowed on total failure -- see docstring
+    # above. A chunked source's single-window failure no longer reaches
+    # here as an exception at all (#1053): the extractor itself retries and
+    # skips that window, and the loss shows up below as `report.
+    # skipped_chunks`, not as a caught exception.
     outcome = extractor(
         raw_content,
         source_title=source_title,
@@ -391,10 +396,14 @@ def stage_derived_objects(
     extractions = outcome.objects
     report = outcome.report
 
-    # #772/#884: same precedence and "append, never substitute" rule the
-    # pre-move function carried -- see this module's `notices` field
-    # docstring above.
+    # #772/#884/#1053: same precedence and "append, never substitute" rule
+    # the pre-move function carried -- see this module's `notices` field
+    # docstring above. The chunk-skip check comes FIRST: it is the earliest
+    # condition the pipeline can detect (during extraction itself, before
+    # the judge ever runs), and order here is detection order, not severity.
     notices: list[okf.ExtractionNotice] = []
+    if report.skipped_chunks:
+        notices.append(okf.EXTRACTION_NOTICE_CHUNK_PARTIAL)
     if report.judge_status == "failed":
         notices.append(okf.EXTRACTION_NOTICE_JUDGE_UNAVAILABLE)
     elif report.judge_status == "empty":
@@ -525,9 +534,19 @@ def stage_derived_objects(
 def extraction_retry_due(metadata: Mapping[str, object]) -> bool:
     """Whether a byte-identical re-ingest should still re-run extraction
     (#773): only when the previous run left RETRYABLE DEBT on the Source --
-    `extraction_status: failed` (#187, the one status `lint` flags) or a
+    `extraction_status: failed` (#187, the one status `lint` flags), a
     judge-degrade `extraction_notice` token (#772's quarantine, whose
-    `lint` retry hint names exactly this re-ingest as the remedy).
+    `lint` retry hint names exactly this re-ingest as the remedy), or
+    #1053's `chunk-extraction-partial` (a window skipped after its retry
+    also raised a `BackendError`).
+
+    The chunk-skip token joins the judge tokens rather than #585/#801's
+    disclosures for the SAME reason those two are excluded (see below): a
+    `BackendError`-family failure is a TRANSIENT backend condition, not a
+    deterministic property of the bytes or the prompt, so re-running the
+    identical prompt over the identical window can genuinely answer this
+    time -- exactly the retry logic already applies once, inline, before
+    ever reaching this marker.
 
     Every other state -- markers absent, a deliberate-policy
     `extraction_status` (`no-extractable-text`/`blocked-by-sensitivity`/
@@ -560,6 +579,7 @@ def extraction_retry_due(metadata: Mapping[str, object]) -> bool:
         {
             okf.EXTRACTION_NOTICE_JUDGE_UNAVAILABLE,
             okf.EXTRACTION_NOTICE_JUDGE_EMPTY,
+            okf.EXTRACTION_NOTICE_CHUNK_PARTIAL,
         }
         & set(okf.extraction_notices(metadata))
     )

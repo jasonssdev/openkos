@@ -28,7 +28,7 @@ from openkos import prompt_budget
 from openkos.extraction import evidence as evidence_mod
 from openkos.extraction import judge as judge_mod
 from openkos.llm import parsing
-from openkos.llm.base import LLMBackend, Message
+from openkos.llm.base import BackendError, BackendUnavailable, LLMBackend, Message
 from openkos.model.types import CLASSIFIABLE_TYPES as _VALID_TYPES
 
 # `_VALID_TYPES` is now derived from `openkos.model.types.REGISTRY` -- see
@@ -2380,8 +2380,10 @@ def _fan_out_windows(
     *,
     concurrent: bool,
     on_progress: ProgressHook | None,
-) -> list[ExtractionResult]:
-    """Every window's validated results, concatenated in WINDOW order.
+) -> tuple[list[ExtractionResult], tuple[int, ...]]:
+    """Every window's validated results, concatenated in WINDOW order,
+    alongside the 1-indexed positions of any window skipped after its retry
+    also failed (#1053; see `_fan_out_window_lists`).
 
     Shared by both production entry points (`extract_concept` and
     `extract_concept_union`) for the same reason `_chunk_threshold_for` is
@@ -2403,10 +2405,13 @@ def _fan_out_windows(
       as a throughput change. #739's own probe shipped that bug and three of
       four review lenses caught it.
     - **Failure.** `map` re-raises in input order as the iterator is
-      consumed, preserving this module's all-or-nothing contract exactly:
-      a backend failure on any window propagates unswallowed and the partial
-      results are discarded with it. Which thread failed first cannot change
-      which exception the caller sees.
+      consumed. A window whose retry also fails no longer propagates through
+      `map` at all (#1053): `_fan_out_window_lists`' own wrapper catches and
+      retries `BackendError` internally and only lets an exception reach
+      `map` when the window is `BackendUnavailable` (never retried -- see
+      below) or every window in this fan-out has now failed twice. Which
+      thread failed first still cannot change which exception the caller
+      sees, because at most one exception ever reaches this level.
     - **The progress hook.** The iterator is consumed on the CALLING thread,
       so `_report` is never invoked from a worker and needs no lock. #701's
       hook writes to stderr and was written for a single-threaded caller.
@@ -2426,17 +2431,17 @@ def _fan_out_windows(
     builds its request locally and mutates no instance state, which is what
     makes that true today.
     """
-    return [
-        result
-        for window_results in _fan_out_window_lists(
-            windows,
-            source_title,
-            llm,
-            concurrent=concurrent,
-            on_progress=on_progress,
-        )
-        for result in window_results
-    ]
+    window_lists, skipped_chunks = _fan_out_window_lists(
+        windows,
+        source_title,
+        llm,
+        concurrent=concurrent,
+        on_progress=on_progress,
+    )
+    return (
+        [result for window_results in window_lists for result in window_results],
+        skipped_chunks,
+    )
 
 
 def _fan_out_window_lists(
@@ -2446,48 +2451,116 @@ def _fan_out_window_lists(
     *,
     concurrent: bool,
     on_progress: ProgressHook | None,
-) -> list[list[ExtractionResult]]:
+) -> tuple[list[list[ExtractionResult]], tuple[int, ...]]:
     """`_fan_out_windows` with the per-window grouping kept (#905): one
-    inner list per window, in WINDOW order, empty lists included.
+    inner list per window, in WINDOW order, empty lists included -- plus the
+    1-indexed positions of every window this call SKIPPED (#1053).
 
-    The fan-out mechanics -- serial-vs-`map` choice, order, all-or-nothing
-    failure, progress reporting -- live here once; `_fan_out_windows` above
-    is its flatten and keeps the signature every pre-#905 caller relies on.
+    The fan-out mechanics -- serial-vs-`map` choice, order, retry/skip,
+    progress reporting -- live here once; `_fan_out_windows` above is its
+    flatten and keeps the signature every pre-#905 caller relies on.
     `extract_concept_union` calls THIS shape because its pre-judge ceiling
     round-robins across windows, and a flat concatenation has already
-    forgotten which window contributed which candidate."""
+    forgotten which window contributed which candidate.
+
+    **Per-window failure isolation (#1053).** Before this change, any
+    `OllamaError`-family exception on ANY window propagated unswallowed and
+    discarded every other window's results with it -- one capped chunk of
+    fifty threw away forty-nine good ones. Now a window whose call raises a
+    `BackendError` is retried EXACTLY ONCE; if the retry also raises a
+    `BackendError`, that window is SKIPPED (its slot in the returned list
+    stays `[]`) and its 1-indexed position is recorded in the returned
+    tuple, while every other window's results are kept. `BackendUnavailable`
+    (the backend could not be reached at all, e.g. `OllamaUnavailable`) is
+    the one exception NEVER retried or skipped: a down server will not
+    answer a different window either, so the existing whole-source degrade
+    is still the honest answer, and it propagates on the FIRST failure,
+    exactly as before this change. A plain (non-`BackendError`) exception is
+    likewise never retried -- it is not this module's failure vocabulary --
+    and propagates immediately, unswallowed, as it always has.
+
+    If EVERY window's retry fails, the module's original all-or-nothing
+    contract holds exactly: rather than return an all-empty result, this
+    re-raises the LAST window's exception unswallowed, so the caller's
+    existing Source-only degrade fires byte-identically to a pre-#1053
+    single-window failure. Only a source with at least one SURVIVING window
+    ever reaches its `return` below."""
     chunk_count = len(windows)
     collected: list[list[ExtractionResult]] = []
+    skipped: list[int] = []
+    last_error: BackendError | None = None
+
+    def _extract_window_or_skip(index: int, window: str) -> list[ExtractionResult]:
+        nonlocal last_error
+        try:
+            return _extract_once(window, source_title, llm)
+        except BackendUnavailable:
+            # The backend itself is unreachable -- retrying or skipping
+            # buys nothing (the next window will not answer either), and
+            # #1053 explicitly keeps this case propagating on the FIRST
+            # failure, exactly like the pre-#1053 all-or-nothing contract.
+            raise
+        except BackendError as exc:
+            _report(
+                on_progress,
+                f"retrying chunk {index}/{chunk_count} after {type(exc).__name__}",
+            )
+            try:
+                return _extract_once(window, source_title, llm)
+            except BackendUnavailable:
+                raise
+            except BackendError as retry_exc:
+                last_error = retry_exc
+                skipped.append(index)
+                _report(
+                    on_progress,
+                    f"skipping chunk {index}/{chunk_count} -- retry also "
+                    f"raised {type(retry_exc).__name__}",
+                )
+                return []
+
     if not concurrent:
         for index, window in enumerate(windows, start=1):
             _report(on_progress, f"extracting chunk {index}/{chunk_count}")
-            collected.append(_extract_once(window, source_title, llm))
-        return collected
+            collected.append(_extract_window_or_skip(index, window))
+    else:
+        indexed = list(enumerate(windows, start=1))
 
-    def _extract_window(window: str) -> list[ExtractionResult]:
-        return _extract_once(window, source_title, llm)
+        def _extract_indexed(pair: tuple[int, str]) -> list[ExtractionResult]:
+            return _extract_window_or_skip(*pair)
 
-    # One report BEFORE the pool starts, then one per COMPLETION. Both halves
-    # are needed. Completion reporting is the only honest per-chunk statement
-    # available here -- with two windows in flight there is no single chunk the
-    # run "is on", and a pre-call label would name a window whose neighbour is
-    # already finished. But completion reporting ALONE would leave the display
-    # silent until the first window returns, which on measured latencies is
-    # 5-20 seconds of exactly the frozen line #701 exists to prevent. The
-    # opening line covers that span and is the only place the fan-out's shape
-    # is stated at all.
-    _report(
-        on_progress,
-        f"extracting {chunk_count} chunks, {FAN_OUT_CONCURRENCY} at a time",
-    )
-    pool = ThreadPoolExecutor(max_workers=FAN_OUT_CONCURRENCY)
-    try:
-        for done, results in enumerate(pool.map(_extract_window, windows), start=1):
-            _report(on_progress, f"extracted chunk {done}/{chunk_count}")
-            collected.append(results)
-    finally:
-        pool.shutdown(wait=True, cancel_futures=True)
-    return collected
+        # One report BEFORE the pool starts, then one per COMPLETION. Both
+        # halves are needed. Completion reporting is the only honest
+        # per-chunk statement available here -- with two windows in flight
+        # there is no single chunk the run "is on", and a pre-call label
+        # would name a window whose neighbour is already finished. But
+        # completion reporting ALONE would leave the display silent until
+        # the first window returns, which on measured latencies is 5-20
+        # seconds of exactly the frozen line #701 exists to prevent. The
+        # opening line covers that span and is the only place the fan-out's
+        # shape is stated at all.
+        _report(
+            on_progress,
+            f"extracting {chunk_count} chunks, {FAN_OUT_CONCURRENCY} at a time",
+        )
+        pool = ThreadPoolExecutor(max_workers=FAN_OUT_CONCURRENCY)
+        try:
+            for done, results in enumerate(
+                pool.map(_extract_indexed, indexed), start=1
+            ):
+                _report(on_progress, f"extracted chunk {done}/{chunk_count}")
+                collected.append(results)
+        finally:
+            pool.shutdown(wait=True, cancel_futures=True)
+
+    if skipped and len(skipped) == chunk_count and last_error is not None:
+        # Every window failed even after its retry: preserve the module's
+        # original all-or-nothing contract rather than silently return an
+        # all-empty result -- the caller's existing Source-only degrade must
+        # still fire, byte-identical to a pre-#1053 single-window failure.
+        raise last_error
+
+    return collected, tuple(skipped)
 
 
 def _dedup_merged(results: list[ExtractionResult]) -> list[ExtractionResult]:
@@ -3297,6 +3370,32 @@ class ExtractionReport:
     call's instructions intact where the server-side truncation it
     replaces silently cut them."""
 
+    skipped_chunks: tuple[int, ...] = ()
+    """1-indexed `_chunk_lines` window positions dropped because their
+    extraction call raised a `BackendError`-family exception TWICE -- once
+    on the ordinary attempt, once on the one retry `_fan_out_window_lists`
+    spends on it (#1053) -- in window order. Always `()` on the
+    single-call path (there are no windows to lose) and whenever every
+    chunk answered, which stays the overwhelmingly common case.
+
+    Named positions, mirroring every other drop field on this report
+    (`discarded_titles`, `judged_out_titles`, `wrong_language_dropped_
+    titles`...): the reader must be able to tell WHICH part of the source
+    is missing from what `retained` stores, not just that a part is
+    missing. `cli/main._chunk_skip_notice` renders them as "chunk N of
+    `chunks`" and `application.ingest.stage_derived_objects` turns a
+    non-empty tuple into `okf.EXTRACTION_NOTICE_CHUNK_PARTIAL` on the
+    Source, so the loss is disclosed on stderr AND survives on disk.
+
+    Distinct from a TOTAL extraction failure. When every window's retry
+    also fails, `_fan_out_window_lists` never returns at all: it re-raises
+    the last window's exception unswallowed, exactly as a single
+    unretried failure did before this field existed, and the caller's
+    existing Source-only degrade fires -- this report is never built on
+    that path. A non-empty `skipped_chunks` therefore always means
+    "objects from every OTHER chunk are stored", never "nothing was
+    stored"."""
+
 
 @dataclass(frozen=True)
 class ExtractionOutcome:
@@ -3377,18 +3476,26 @@ def extract_concept(
     wording, the multiplicity lever on long material). `report.chunks`
     carries the fan-out; `1` means the single-call path.
 
-    Any `OllamaError`-family exception raised by `llm.chat` propagates
-    unswallowed to the caller (see module docstring). The caller loops
-    `openkos.model.okf.build_concept` once per returned object.
+    On the single-call path, any `OllamaError`-family exception raised by
+    `llm.chat` propagates unswallowed to the caller (see module docstring).
+    On the chunked path, a single window's failure no longer takes the
+    whole source down with it (#1053): `_fan_out_windows` retries that
+    window once and, if it fails again, skips it -- keeping every other
+    window's objects -- and `report.skipped_chunks` names which window was
+    lost. Only when EVERY window's retry fails does the original
+    unswallowed-propagation contract still apply, degrading the whole
+    source exactly as a pre-#1053 single-window failure did. The caller
+    loops `openkos.model.okf.build_concept` once per returned object.
 
     `concurrent` (issue #744) opts the CHUNKED fan-out into sending its
     windows `FAN_OUT_CONCURRENCY` at a time instead of one after another.
     It changes the schedule and nothing else: results still concatenate in
-    window order, a window failure still propagates and still discards the
-    partial results, and a source below the chunking threshold is untouched
-    because it has no windows to overlap. `False`, the default, is the serial
-    path verbatim. See `_fan_out_windows` for why the gain depends on a
-    setting on the Ollama server that this process does not own.
+    window order, a window that still fails after its retry (#1053) is
+    still skipped the same way, and a source below the chunking threshold is
+    untouched because it has no windows to overlap. `False`, the default, is
+    the serial path verbatim. See `_fan_out_windows` for why the gain
+    depends on a setting on the Ollama server that this process does not
+    own.
     """
     # #746: asked of `fans_out` rather than re-derived, so the predicate a
     # CALLER uses to reason about this pipeline and the branch the pipeline
@@ -3410,6 +3517,7 @@ def extract_concept(
             results = _extract_once(source_text, source_title, llm)
         results = _strip_ungrounded_expansions(results, source_text=source_text)
         chunk_count = 1
+        skipped_chunks: tuple[int, ...] = ()
         wrong_language_dropped: tuple[str, ...] = ()
         recombined_dropped: tuple[str, ...] = ()
     else:
@@ -3418,12 +3526,14 @@ def extract_concept(
         # window and merge. Every chunk is prompted with the SAME source
         # title -- the probe's part-style labels were measured to change
         # nothing (cell B), and one title keeps the twin rule's target
-        # stable. A backend failure on any chunk propagates unswallowed,
-        # per the module contract; partial fan-out results are discarded
-        # with it (the caller's degrade seam is all-or-nothing).
+        # stable. A chunk whose call raises a `BackendError` is retried once
+        # and, if it fails again, SKIPPED -- every other chunk's objects are
+        # kept (#1053); only a `BackendUnavailable` chunk, or every chunk
+        # failing even after its retry, still propagates unswallowed and
+        # discards the whole source, exactly as before this change.
         windows = _chunk_lines(source_text)
         chunk_count = len(windows)
-        merged = _fan_out_windows(
+        merged, skipped_chunks = _fan_out_windows(
             windows,
             source_title,
             llm,
@@ -3469,6 +3579,7 @@ def extract_concept(
                 result.title for result in results[_MAX_OBJECTS_PER_SOURCE:]
             ),
             chunks=chunk_count,
+            skipped_chunks=skipped_chunks,
             reask_runs=reask_runs,
             reask_added_titles=reask_added_titles,
             sole_object_restates_source=_sole_object_restates_source(
@@ -3755,16 +3866,21 @@ def extract_concept_union(
     pre-judge ceiling, so `_extraction_cap_notice` (CLI) keeps rendering
     unchanged (it reads these three fields and nothing else).
 
-    Any `OllamaError`-family exception from an `_extract_once` call
-    (including run 2, unchunked path) propagates unswallowed to the caller,
-    exactly like `extract_concept` -- the judge's own fail-closed contract
-    is `judge.select`'s alone and is never extended to cover extraction
-    failures.
+    On the unchunked path (run 1 or run 2), any `OllamaError`-family
+    exception from an `_extract_once` call propagates unswallowed to the
+    caller, exactly like `extract_concept` -- the judge's own fail-closed
+    contract is `judge.select`'s alone and is never extended to cover
+    extraction failures. On the CHUNKED path, a single window's failure is
+    isolated the same way `extract_concept` isolates it (#1053): retried
+    once, skipped if the retry also fails (keeping every other window's
+    candidates, `report.skipped_chunks` naming the loss), and only
+    propagated unswallowed -- discarding the whole source -- when the
+    window is `BackendUnavailable` or every window's retry has failed.
 
     `concurrent` (issue #744) carries the identical meaning it has on
     `extract_concept`, and is honoured on the identical seam
-    (`_fan_out_windows`): the chunked branch sends its windows
-    `FAN_OUT_CONCURRENCY` at a time, window order and the all-or-nothing
+    (`_fan_out_window_lists`): the chunked branch sends its windows
+    `FAN_OUT_CONCURRENCY` at a time, window order and the retry-then-skip
     failure contract both unchanged. Both entry points take it because
     `cli/main.py` picks between them on `union_judge`, so a lever wired into
     one only would leave whether it is active depending on that setting.
@@ -3816,6 +3932,7 @@ def extract_concept_union(
             _merge_union(run1 + run2), source_title=source_title
         )
         chunk_count = 1
+        skipped_chunks: tuple[int, ...] = ()
         run_count = 2
         wrong_language_dropped: tuple[str, ...] = ()
         recombined_dropped: tuple[str, ...] = ()
@@ -3828,7 +3945,13 @@ def extract_concept_union(
     else:
         windows = _chunk_lines(source_text)
         chunk_count = len(windows)
-        window_lists = _fan_out_window_lists(
+        # A window whose call raises a `BackendError` is retried once and,
+        # if it fails again, SKIPPED -- every other window's candidates are
+        # kept, and `skipped_chunks` names which window was lost (#1053).
+        # `BackendUnavailable`, or every window failing even after its
+        # retry, still propagates unswallowed and discards the whole
+        # source, exactly as before this change.
+        window_lists, skipped_chunks = _fan_out_window_lists(
             windows,
             source_title,
             llm,
@@ -3958,6 +4081,7 @@ def extract_concept_union(
                 produced=0,
                 retained=0,
                 chunks=chunk_count,
+                skipped_chunks=skipped_chunks,
                 runs=run_count,
                 reask_runs=reask_runs,
                 reask_added_titles=reask_added_titles,
@@ -4141,6 +4265,7 @@ def extract_concept_union(
                 else ()
             ),
             chunks=chunk_count,
+            skipped_chunks=skipped_chunks,
             runs=run_count,
             judge_status=judge_status,
             judged_out_titles=judged_out_titles,

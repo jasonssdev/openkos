@@ -3271,6 +3271,35 @@ def _pre_judge_ceiling_notice(report: ExtractionReport) -> str | None:
     return f"{line}: {listed}"
 
 
+def _chunk_skip_notice(report: ExtractionReport) -> str | None:
+    """Name the `_chunk_lines` windows a chunked extraction skipped after
+    their retry also failed (#1053), or `None` when every window answered
+    -- the common case, and the ONLY case reachable before this change (a
+    single window's `OllamaError`-family failure used to discard the whole
+    source's extraction instead of costing just that window).
+
+    Named positions ("chunk N of M"), mirroring every sibling notice in
+    this file: the reader has to be able to tell WHICH part of the source
+    is missing from what got stored, not merely that something is.
+    Positioned FIRST in `_render_staged_derived_objects`'s tuple, ahead of
+    the wrong-language/judge/cap notices below -- a skipped chunk is the
+    earliest thing that can go wrong in the pipeline, chronologically, and
+    every later notice describes a decision made over whatever this one
+    left behind."""
+    if not report.skipped_chunks:
+        return None
+    positions = ", ".join(
+        f"chunk {position} of {report.chunks}" for position in report.skipped_chunks
+    )
+    return (
+        f"{len(report.skipped_chunks)} of {report.chunks} chunk(s) failed "
+        "extraction after one retry and were skipped "
+        f"({positions}); objects from every other chunk were kept -- "
+        f"marking the Source (extraction_notice: "
+        f"{okf.EXTRACTION_NOTICE_CHUNK_PARTIAL})."
+    )
+
+
 def _wrong_language_notice(report: ExtractionReport) -> str | None:
     """Render the deterministic wrong-language-title drop (#618), or `None`
     when the gate dropped nothing -- the common case, and the only possible
@@ -3824,6 +3853,7 @@ def _render_staged_derived_objects(
 
     report = staged.report
     for notice_text in (
+        _chunk_skip_notice(report),
         _wrong_language_notice(report),
         _recombined_title_notice(report),
         _bounded_prompt_notice(report),
@@ -4762,22 +4792,27 @@ def _ingest_batch(
     for line in outcome_lines:
         typer.echo(line)
     # `noticed_count` counts a file whose Source finished carrying ANY
-    # `okf.ExtractionNotice` token -- all FIVE of them, not only the two
+    # `okf.ExtractionNotice` token -- all SIX of them, not only the two
     # retryable judge causes. Still a WIDER set than any single `lint`
     # section, but the margin narrowed with #801/#843 and the reason
-    # changed with them. `lint` now reports four of the five across three
+    # changed with them. `lint` reports four of the six across three
     # sections: the two judge tokens under "Unjudged extractions"
     # (`lint._UNJUDGED_NOTICE_CAUSES`, which `application_ingest.extraction_retry_due`
     # matches exactly), `objects-without-evidence` under "Unevidenced
     # objects" (`lint._UNEVIDENCED_NOTICE`), and
     # `candidates-dropped-in-staging` under "Staging-dropped candidates"
-    # (`lint._STAGING_DROP_NOTICE`). #585's
-    # `sole-object-restates-source` is the ONE token no `lint` section
-    # flags -- a disclosure with no repair to name -- which is precisely
-    # why the run's last word must still say it happened. Read the two
-    # numbers as different questions: this term answers "how many files
-    # finished with something disclosed on the Source", `lint` answers
-    # "how many of those have a next step".
+    # (`lint._STAGING_DROP_NOTICE`). #585's `sole-object-restates-source`
+    # and #1053's `chunk-extraction-partial` are the two tokens no `lint`
+    # section flags -- the sole-object one is a disclosure with no repair
+    # to name; the chunk-skip one is disclosed on stderr (`_chunk_skip_
+    # notice`, naming the exact chunk) and self-heals on the next plain
+    # re-ingest (`extraction_retry_due`), so a dedicated `lint` section
+    # would only repeat what the run already said and what the next
+    # ordinary re-ingest already fixes -- which is precisely why the run's
+    # last word must still say it happened for BOTH. Read the two numbers
+    # as different questions: this term answers "how many files finished
+    # with something disclosed on the Source", `lint` answers "how many of
+    # those have a next step `lint` itself can name".
     #
     # The term never double-counts `extraction-degraded`. That one counts a
     # `skip_reason` (Source-only, zero derived objects), and
@@ -4791,14 +4826,15 @@ def _ingest_batch(
         # Only when there is something to recover -- an advisory that fires
         # on the healthy path is noise (the `_echo_type_*_summary` rule).
         # It names BOTH surfaces honestly: the frontmatter key carries
-        # every kind, `lint` flags all but #585's sole-object disclosure.
-        # It said "the retryable ones" until #801 added a token that is NOT
-        # retryable debt and that `lint.check_unevidenced` reports anyway --
-        # wording a reader with only that notice would have taken to mean
-        # `lint` had nothing for them.
+        # every kind, `lint` flags all but #585's sole-object disclosure and
+        # #1053's chunk-partial disclosure. It said "the retryable ones"
+        # until #801 added a token that is NOT retryable debt and that
+        # `lint.check_unevidenced` reports anyway -- wording a reader with
+        # only that notice would have taken to mean `lint` had nothing for
+        # them.
         notice_pointer = (
-            " Their Sources carry `extraction_notice`; "
-            "`openkos lint` names all but the sole-object disclosure."
+            " Their Sources carry `extraction_notice`; `openkos lint` "
+            "names all but the sole-object and chunk-partial disclosures."
         )
     typer.echo(
         f"openkos ingest: batch summary -- {total} file(s): "

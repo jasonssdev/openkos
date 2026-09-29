@@ -925,6 +925,7 @@ def test_extraction_notice_vocabulary_constants() -> None:
         "judge-selection-empty",
         "objects-without-evidence",
         "candidates-dropped-in-staging",
+        "chunk-extraction-partial",
     )
     assert okf.EXTRACTION_NOTICE_SOLE_OBJECT_RESTATES == "sole-object-restates-source"
     # #772: the two judge-degrade tokens quarantine an unjudged extraction.
@@ -946,6 +947,10 @@ def test_extraction_notice_vocabulary_constants() -> None:
     # written -- it says extraction produced a candidate the run could not
     # store, which can be true beside stored objects or with none at all.
     assert okf.EXTRACTION_NOTICE_CANDIDATES_DROPPED == "candidates-dropped-in-staging"
+    # #1053: a sixth token, and unlike the two before it, IS retryable
+    # debt -- a `BackendError`-family failure is a transient backend
+    # condition rather than a deterministic property of the source's bytes.
+    assert okf.EXTRACTION_NOTICE_CHUNK_PARTIAL == "chunk-extraction-partial"
 
 
 def test_build_source_concept_omits_extraction_notice_by_default() -> None:
