@@ -85,6 +85,40 @@ def test_read_concept_curated_fields_only(tmp_path: Path) -> None:
     assert record.not_run == ()
 
 
+def test_read_concept_never_discloses_source_frontmatter(tmp_path: Path) -> None:
+    """design.md Decision 9 (preserve-source-frontmatter, issue #1062):
+    `get`'s curated field set (`ConceptRecord`) never carries
+    `source_frontmatter` -- no new MCP egress for the incoming mapping.
+    Task 2.21. PRECONDITION: assert the on-disk document DOES carry the
+    key, so an absent field never makes this pass vacuously for the wrong
+    reason (a doc that never had the key in the first place)."""
+    layout = _workspace(tmp_path)
+    doc_path = layout.bundle_dir / "sources" / "notes.md"
+    _write_doc(
+        doc_path,
+        frontmatter_lines=[
+            "type: Source",
+            "title: Notes",
+            "description: A one-line summary.",
+            "sensitivity: public",
+            "source_frontmatter:",
+            "  author: Jane",
+        ],
+        body="Body text.\n",
+    )
+
+    # PRECONDITION: the on-disk document actually carries the key.
+    on_disk_metadata, _ = okf.load_frontmatter(doc_path.read_text(encoding="utf-8"))
+    assert on_disk_metadata[okf.SOURCE_FRONTMATTER_KEY] == {"author": "Jane"}
+
+    record = concept_read.read_concept(layout, "sources/notes")
+
+    assert isinstance(record, concept_read.ConceptRecord)
+    field_names = {f.name for f in dataclasses.fields(record)}
+    assert okf.SOURCE_FRONTMATTER_KEY not in field_names
+    assert not hasattr(record, okf.SOURCE_FRONTMATTER_KEY)
+
+
 def test_concept_record_status_is_stable_not_active(tmp_path: Path) -> None:
     """A live (non-deprecated) concept's `ConceptRecord.status` reads
     `"stable"`, never `"active"` (okf-v02-migration design.md Decision 7,

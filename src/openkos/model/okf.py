@@ -10,6 +10,7 @@ All three §11 rules are implemented here: rules 1-2 walk every non-reserved
 (`index.md`/`log.md`) to check their fixed structure per §8/§9/§12.
 """
 
+import copy
 import hashlib
 import math
 import os
@@ -926,6 +927,7 @@ def build_source_concept(
     extraction_notice: ExtractionNotice | tuple[ExtractionNotice, ...] | None = None,
     origin_key: str | None = None,
     event_date: date | None = None,
+    source_frontmatter: Mapping[str, object] | None = None,
 ) -> str:
     """Build a conformant OKF Source concept document (D4/ingest-source-body D1).
 
@@ -1002,6 +1004,16 @@ def build_source_concept(
     -- this function performs no resolution of its own. A `datetime`
     argument raises `TypeError`: it is a `date` subclass, and its
     `isoformat()` would write a time of day no input ever stated.
+
+    `source_frontmatter` (design.md Decision 2; preserve-source-frontmatter,
+    issue #1062) is emitted as `SOURCE_FRONTMATTER_KEY` under the same "only
+    when not `None`" rule, and is `copy.deepcopy`d before assignment: the
+    caller's own mapping is never shared with the built document, and no
+    Python object here is ever shared with `tags` either -- a shared list
+    would make `SafeDumper` write an `&`/`*` anchor-alias pair, which this
+    engine's own parser would then reject on the next read (Decision 1).
+    This function performs no parsing or lifting of its own; the caller has
+    already decided what the mapping is.
     """
     metadata: dict[str, object] = {
         "type": "Source",
@@ -1046,6 +1058,8 @@ def build_source_concept(
                 f"(it would write a time of day no input stated): {event_date!r}"
             )
         metadata[EVENT_DATE_KEY] = event_date.isoformat()
+    if source_frontmatter is not None:
+        metadata[SOURCE_FRONTMATTER_KEY] = copy.deepcopy(source_frontmatter)
     if raw_content is None:
         section = (
             "_Source content could not be embedded as text "
@@ -2266,6 +2280,7 @@ def build_merged_document(
         RELATIONS_KEY,
         TYPE_ALTERNATIVE_KEY,
         EVENT_DATE_KEY,
+        SOURCE_FRONTMATTER_KEY,
     )
     for key, absorbed_value in absorbed_metadata.items():
         if key in _SPECIAL_KEYS:

@@ -233,6 +233,74 @@ def test_single_merge_then_unmerge_is_byte_identical_modulo_log(
     assert "**Unmerge**" in log_text
 
 
+def test_unmerge_restores_absorbed_source_frontmatter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """entity-resolution-merge: "The absorbed source_frontmatter does not
+    cross the merge" -- `unmerge` restores the absorbed document's own
+    `source_frontmatter`, byte-identical to what it carried before the
+    merge (preserve-source-frontmatter, issue #1062, task 2.19).
+    PRECONDITION: assert the pre-merge value first, so the restore claim is
+    provably against something that existed."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(
+        tmp_path, "concepts/survivor", title="Survivor", body="Survivor body."
+    )
+
+    absorbed_path = tmp_path / "bundle" / "concepts" / "absorbed.md"
+    absorbed_text = okf.dump_frontmatter(
+        {
+            "type": "Concept",
+            "title": "Absorbed",
+            okf.SOURCE_FRONTMATTER_KEY: {"tags": ["alpha"], "author": "Jane"},
+        },
+        "# Absorbed\n\nAbsorbed body.\n",
+    )
+    absorbed_path.write_text(absorbed_text, encoding="utf-8")
+    index_path = tmp_path / "bundle" / "index.md"
+    index_path.write_text(
+        bundle_index.insert_index_entry(
+            index_path.read_text(encoding="utf-8"),
+            section="Concepts",
+            link_dir="concepts",
+            title="Absorbed",
+            slug="absorbed",
+            description="Absorbed.",
+        ),
+        encoding="utf-8",
+    )
+    commit_pending_fixture_docs()
+
+    # PRECONDITION: the pre-merge document actually carries the mapping.
+    pre_metadata, _ = okf.load_frontmatter(absorbed_path.read_text(encoding="utf-8"))
+    assert pre_metadata[okf.SOURCE_FRONTMATTER_KEY] == {
+        "tags": ["alpha"],
+        "author": "Jane",
+    }
+
+    merge_result = runner.invoke(
+        app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+    assert merge_result.exit_code == 0, merge_result.stderr
+    survivor_metadata, _ = okf.load_frontmatter(
+        (tmp_path / "bundle" / "concepts" / "survivor.md").read_text(encoding="utf-8")
+    )
+    assert okf.SOURCE_FRONTMATTER_KEY not in survivor_metadata
+
+    unmerge_result = runner.invoke(
+        app, ["unmerge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+    assert unmerge_result.exit_code == 0, unmerge_result.stderr
+
+    restored_metadata, _ = okf.load_frontmatter(
+        absorbed_path.read_text(encoding="utf-8")
+    )
+    assert restored_metadata[okf.SOURCE_FRONTMATTER_KEY] == {
+        "tags": ["alpha"],
+        "author": "Jane",
+    }
+
+
 def test_absorbed_type_alternative_never_crosses_the_merge(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

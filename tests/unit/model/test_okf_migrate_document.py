@@ -314,6 +314,52 @@ def test_migrate_document_unchanged_returns_input_bytes_untouched() -> None:
     assert result.legacy_citations is False
 
 
+def test_migrate_document_unchanged_with_nested_engine_owned_keys_in_source_frontmatter() -> (
+    None
+):
+    """design.md Decision 9 (preserve-source-frontmatter, issue #1062):
+    `migrate_document`'s R1/R2/R3 rules read only TOP-LEVEL `timestamp`,
+    `generated`, `status`, `provenance`/`sources` -- a v0.2 Source already
+    carrying `generated`, `status: stable` and no projectable `provenance`
+    still migrates to `Unchanged`, even when its `source_frontmatter` nests
+    `timestamp`, `status: active` and `sources` keys ONE LEVEL DOWN, never
+    at the document's own top level. Task 2.20.
+
+    PRECONDITION: first assert the pre-migration document IS the document
+    under test (parses to the described shape), so this is not a vacuous
+    pass on a document that never had those nested keys."""
+    text = okf.dump_frontmatter(
+        {
+            "type": "Source",
+            "title": "Notes",
+            "generated": {"by": "openkos/0.3.0", "at": "2026-01-01T00:00:00Z"},
+            "status": "stable",
+            okf.SOURCE_FRONTMATTER_KEY: {
+                "timestamp": "2020-01-01T00:00:00Z",
+                "status": "active",
+                "sources": ["not-a-real-provenance-entry"],
+            },
+        },
+        "Body.\n",
+    )
+
+    # PRECONDITION.
+    metadata, _ = okf.load_frontmatter(text)
+    assert "generated" in metadata
+    assert metadata["status"] == "stable"
+    assert metadata.get("provenance") is None
+    nested = metadata[okf.SOURCE_FRONTMATTER_KEY]
+    assert isinstance(nested, dict)
+    assert nested["timestamp"] == "2020-01-01T00:00:00Z"
+    assert nested["status"] == "active"
+    assert nested["sources"] == ["not-a-real-provenance-entry"]
+
+    result = okf.migrate_document(text)
+
+    assert isinstance(result, okf.Unchanged)
+    assert result.legacy_citations is False
+
+
 # -- Properties (tasks 4.13-4.17) ---------------------------------------------
 
 

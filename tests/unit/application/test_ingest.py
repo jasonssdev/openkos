@@ -850,6 +850,157 @@ def test_compose_source_document_binary_source_description() -> None:
     assert plan.title == "notes"
 
 
+# -- Phase 2 (preserve-source-frontmatter, issue #1062): `compose_source_
+# document` parses and forwards incoming frontmatter (design.md Decisions
+# 1, 2; Interfaces/Contracts) --
+
+
+def test_compose_source_document_parses_and_forwards_frontmatter() -> None:
+    """ingest-application-service: "A given frontmatter mapping ... reach
+    the generated document" (frontmatter half); ingestion: "Valid incoming
+    frontmatter yields source_frontmatter and lifted tags" (frontmatter
+    half). Task 2.5. **RED today**: `compose_source_document` does not call
+    `okf.parse_incoming_frontmatter` yet."""
+    raw_content = "---\nauthor: Jane\n---\nSome raw notes about self-control."
+    plan = ingest_service.compose_source_document(
+        raw_content=raw_content,
+        source_stem="notes",
+        source_display_path="notes.txt",
+        source_document_display_path="bundle/sources/notes.md",
+        resource="raw/notes.txt",
+        origin_key="deadbeef",
+        concept_text=None,
+        cfg=_default_cfg(),
+        timestamp="2026-07-14T18:30:00Z",
+    )
+    metadata, _ = okf.load_frontmatter(plan.content)
+    assert metadata[okf.SOURCE_FRONTMATTER_KEY] == {"author": "Jane"}
+
+
+def test_compose_source_document_malformed_frontmatter_lifts_nothing() -> None:
+    """ingestion: "Malformed incoming frontmatter yields neither, and ingest
+    still succeeds". Task 2.6: pins that the CALL SITE never raises, not
+    just the parser (1.11 already guarantees the parser itself never
+    raises)."""
+    raw_content = "---\ntitle: [unclosed\n---\nSome raw notes about self-control."
+    plan = ingest_service.compose_source_document(
+        raw_content=raw_content,
+        source_stem="notes",
+        source_display_path="notes.txt",
+        source_document_display_path="bundle/sources/notes.md",
+        resource="raw/notes.txt",
+        origin_key="deadbeef",
+        concept_text=None,
+        cfg=_default_cfg(),
+        timestamp="2026-07-14T18:30:00Z",
+    )
+    metadata, _ = okf.load_frontmatter(plan.content)
+    assert okf.SOURCE_FRONTMATTER_KEY not in metadata
+    assert plan.raw_content == raw_content
+
+
+def test_compose_source_document_frontmatter_free_is_byte_identical() -> None:
+    """ingest-application-service's byte-identity scenario at the
+    service-composition level (task 2.2 pinned it at the builder level).
+    Task 2.7: a source with NO leading frontmatter block produces a plan
+    identical to independently calling `okf.build_source_concept` with no
+    `source_frontmatter=` argument at all -- the same reference-building
+    shape `compose_source_document` uses internally, so a wiring bug that
+    always forwarded SOMETHING would be caught here."""
+    raw_content = "Some raw notes about self-control."
+    plan = ingest_service.compose_source_document(
+        raw_content=raw_content,
+        source_stem="notes",
+        source_display_path="notes.txt",
+        source_document_display_path="bundle/sources/notes.md",
+        resource="raw/notes.txt",
+        origin_key="deadbeef",
+        concept_text=None,
+        cfg=_default_cfg(),
+        timestamp="2026-07-14T18:30:00Z",
+    )
+    expected = okf.build_source_concept(
+        title=plan.title,
+        description=plan.description,
+        resource="raw/notes.txt",
+        tags=[],
+        generated=okf.Generated(by=okf.engine_actor(), at="2026-07-14T18:30:00Z"),
+        sensitivity=plan.resolved_sensitivity,
+        provenance=["raw/notes.txt"],
+        raw_content=raw_content,
+        extraction_status=None,
+        extraction_notice=(),
+        origin_key="deadbeef",
+        event_date=plan.event_date.value,
+    )
+    assert plan.content == expected
+    assert okf.SOURCE_FRONTMATTER_KEY not in plan.content
+
+
+def test_compose_source_document_never_parses_frontmatter_for_non_utf8_or_blank_sources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Task 1.16 (deferred to Phase 2, per this file's deferral note in
+    `tasks.md`): a CALL-SITE contract, not `parse_incoming_frontmatter`'s
+    own behavior -- the guard `compose_source_document` already applies
+    before `source_title.derive_source_title` (`raw_content is None or not
+    raw_content.strip()`) must ALSO gate the new parse call (2.8), reusing
+    the SAME guard rather than a second one (task 1.17). Ingestion: "A
+    source that is not valid UTF-8 is never parsed for frontmatter".
+
+    PRECONDITION: the spy DOES fire for ordinary non-blank content first --
+    proving it is wired into the path this test is about to gate, so an
+    absent call site cannot vacuously pass."""
+    calls: list[str] = []
+    original = okf.parse_incoming_frontmatter
+
+    def _spy(text: str) -> okf.IncomingFrontmatter:
+        calls.append(text)
+        return original(text)
+
+    monkeypatch.setattr(okf, "parse_incoming_frontmatter", _spy)
+
+    ingest_service.compose_source_document(
+        raw_content="Some raw notes about self-control.",
+        source_stem="notes",
+        source_display_path="notes.txt",
+        source_document_display_path="bundle/sources/notes.md",
+        resource="raw/notes.txt",
+        origin_key="deadbeef",
+        concept_text=None,
+        cfg=_default_cfg(),
+        timestamp="2026-07-14T18:30:00Z",
+    )
+    assert len(calls) == 1
+    calls.clear()
+
+    ingest_service.compose_source_document(
+        raw_content=None,
+        source_stem="notes",
+        source_display_path="notes.bin",
+        source_document_display_path="bundle/sources/notes.md",
+        resource="raw/notes.bin",
+        origin_key="deadbeef",
+        concept_text=None,
+        cfg=_default_cfg(),
+        timestamp="2026-07-14T18:30:00Z",
+    )
+    assert calls == []
+
+    ingest_service.compose_source_document(
+        raw_content="   \n\t  ",
+        source_stem="notes",
+        source_display_path="notes.txt",
+        source_document_display_path="bundle/sources/notes.md",
+        resource="raw/notes.txt",
+        origin_key="deadbeef",
+        concept_text=None,
+        cfg=_default_cfg(),
+        timestamp="2026-07-14T18:30:00Z",
+    )
+    assert calls == []
+
+
 def _source_plan(**overrides: object) -> ingest_service.SourceDocumentPlan:
     fields: dict[str, object] = {
         "raw_content": "Some raw notes about self-control.",
@@ -1022,6 +1173,40 @@ def test_compose_catalog_update_regenerate_dedupes_the_source_index_entry() -> N
     )
     assert update.new_index_text.count("sources/notes.md") == 1
     assert "Re-ingest" in update.new_log_text
+
+
+def test_compose_catalog_update_second_build_carries_source_frontmatter() -> None:
+    """design.md Decision 7: the second, conditional `build_source_concept`
+    call (today's `tags=[]` hard-code with no `source_frontmatter=`
+    argument at all) must also carry `source_frontmatter`, mirroring
+    `test_compose_catalog_update_preserves_event_date_on_marker_only_rebuild`'s
+    shape for `event_date`. Task 2.9. **RED today**: the rebuilt
+    `concept_content`'s frontmatter is absent even though the first build
+    had it -- **MUTATION**: after 2.10 fixes it, reverting only this call
+    site's `source_frontmatter=` argument must fail this test again,
+    proving it exercises the SECOND build, not the first."""
+    source = _source_plan(
+        raw_content="---\nauthor: Jane\n---\nSome raw notes about self-control."
+    )
+    metadata, _ = okf.load_frontmatter(source.content)
+    assert metadata[okf.SOURCE_FRONTMATTER_KEY] == {"author": "Jane"}
+    staged = _staged(skip_reason="no-concepts-found")
+    update = ingest_service.compose_catalog_update(
+        source=source,
+        staged=staged,
+        slug="notes",
+        resource="raw/notes.txt",
+        index_text="---\nokf_version: '0.1'\n---\n",
+        log_text="---\nokf_version: '0.1'\n---\n",
+        regenerate=False,
+        timestamp="2026-07-14T18:30:00Z",
+        entry_date=date(2026, 7, 14),
+    )
+    # Sanity: the rebuild branch actually fired (matches the existing
+    # `test_compose_catalog_update_conditional_rerender_on_skip_reason`).
+    assert update.concept_content != source.content
+    rebuilt_metadata, _ = okf.load_frontmatter(update.concept_content)
+    assert rebuilt_metadata.get(okf.SOURCE_FRONTMATTER_KEY) == {"author": "Jane"}
 
 
 # -- Slice 2 (issue #1014c / ADR-0023): `resolve_event_date`, stored

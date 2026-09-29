@@ -769,6 +769,27 @@ def _read_source_title(source_display_path: str, text: str) -> object:
     return metadata.get("title")
 
 
+def _read_source_frontmatter(
+    source_display_path: str, text: str
+) -> Mapping[str, object] | None:
+    """Raw `source_frontmatter` from an EXISTING Source concept, read so
+    `compose_source_document` can compute Decision 7's frontmatter delta --
+    mirrors `_read_source_sensitivity`/`_read_source_title`'s shape exactly,
+    for `source_frontmatter` (preserve-source-frontmatter, issue #1062).
+    Absent key reads as `None`, matching every other optional Source key
+    this module reads back."""
+    try:
+        metadata, _ = okf.load_frontmatter(text)
+    except Exception as exc:
+        raise ValueError(
+            f"refusing to ingest -- '{source_display_path}' frontmatter "
+            "could not be parsed to resolve its existing "
+            f"{okf.SOURCE_FRONTMATTER_KEY}: {exc}"
+        ) from exc
+    stored = metadata.get(okf.SOURCE_FRONTMATTER_KEY)
+    return stored if isinstance(stored, Mapping) else None
+
+
 EventDateOrigin = Literal["flag", "file name", "kept"]
 """Where a resolved `event_date` value came from (design.md Decision 4) --
 `None` iff `EventDateResolution.value` is `None` (no evidence). `"kept"`
@@ -912,6 +933,22 @@ class SourceDocumentPlan:
     source_document` call in this file valid unmodified -- the value is
     always actually set below, never left at this default in practice."""
 
+    source_frontmatter: Mapping[str, object] | None = None
+    """This run's parsed incoming frontmatter mapping (preserve-source-
+    frontmatter, issue #1062, design.md Decisions 1-2), `None` unless
+    `okf.parse_incoming_frontmatter` returned `status == "parsed"`. Carried
+    so `compose_catalog_update`'s conditional rebuild can also pass it to
+    the SECOND `build_source_concept` call, which otherwise silently drops
+    it (task 2.9/2.10) -- the same reason `event_date` is carried here."""
+
+    lift_changed: bool = False
+    """Whether THIS run's lifted state differs from what is stored
+    (design.md Decision 7, preserve-source-frontmatter issue #1062) -- for
+    this slice, exactly the frontmatter delta; Phase 3 ORs in the tags and
+    sensitivity deltas. The CLI's #773 convergence skip condition also
+    requires this to be `False` (task 2.13), generalizing the date-only
+    rewrite into a Source-only rewrite."""
+
 
 def compose_source_document(
     *,
@@ -999,11 +1036,15 @@ def compose_source_document(
         stored_event_date = _read_source_event_date(
             source_document_display_path, concept_text
         )
+        stored_source_frontmatter = _read_source_frontmatter(
+            source_document_display_path, concept_text
+        )
     else:
         on_disk_sensitivity = None
         resolved_sensitivity = cfg.default_sensitivity
         on_disk_title = None
         stored_event_date = None
+        stored_source_frontmatter = None
 
     inferred_event_date = (
         source_date.event_date_from_name(source_name)
@@ -1013,6 +1054,32 @@ def compose_source_document(
     event_date_resolution = resolve_event_date(
         flag=event_date_flag, stored=stored_event_date, inferred=inferred_event_date
     )
+
+    # preserve-source-frontmatter (issue #1062), design.md Decision 1: the
+    # SAME guard that already gates `source_title.derive_source_title`
+    # above (task 1.16/1.17) also gates the new parse call -- a binary/
+    # non-UTF-8 source (`raw_content is None`) or a blank/whitespace-only
+    # one is never handed to the parser. `parse_incoming_frontmatter` never
+    # raises (design.md Decision 1), so no exception handling is needed
+    # here; only `status == "parsed"` reaches the builder -- every other
+    # status (including `"absent"`) is treated identically as "nothing to
+    # forward" (Phase 3 differentiates a parsed mapping's CONTENT for
+    # lifting, not this function).
+    incoming_frontmatter = (
+        None
+        if raw_content is None or not raw_content.strip()
+        else okf.parse_incoming_frontmatter(raw_content)
+    )
+    source_frontmatter = (
+        incoming_frontmatter.mapping
+        if incoming_frontmatter is not None and incoming_frontmatter.status == "parsed"
+        else None
+    )
+    # design.md Decision 7 (this slice's one delta): a frontmatter-free
+    # source whose Source has no key compares `None == None` -> `False`,
+    # matching the "never fires for" column -- the general OR of the tags/
+    # sensitivity deltas lands in Phase 3.
+    lift_changed = stored_source_frontmatter != source_frontmatter
 
     content = okf.build_source_concept(
         title=title,
@@ -1027,6 +1094,7 @@ def compose_source_document(
         extraction_notice=(),
         origin_key=origin_key,
         event_date=event_date_resolution.value,
+        source_frontmatter=source_frontmatter,
     )
     source_metadata, _ = okf.load_frontmatter(content)
     source_sensitivity = str(source_metadata["sensitivity"])
@@ -1042,6 +1110,8 @@ def compose_source_document(
         raw_content=raw_content,
         origin_key=origin_key,
         event_date=event_date_resolution,
+        source_frontmatter=source_frontmatter,
+        lift_changed=lift_changed,
     )
 
 
@@ -1112,6 +1182,7 @@ def compose_catalog_update(
             extraction_notice=staged.notices,
             origin_key=source.origin_key,
             event_date=source.event_date.value,
+            source_frontmatter=source.source_frontmatter,
         )
 
     working_index_text = index_text

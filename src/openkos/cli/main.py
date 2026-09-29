@@ -5374,18 +5374,26 @@ def _ingest_single(
             if had_prior_source and concept_text is not None
             else None
         )
-        # design.md Decision 6: convergence skips ONLY when the resolved
-        # `event_date` did not change. A converged Source whose date DID
-        # change (an explicit flag, or file-name backfill on a pre-feature
-        # Source) falls through to the block below with `converged` still
-        # set -- `stage_derived_objects(carried=converged)` short-circuits
-        # before any LLM call, and `compose_catalog_update` rebuilds the
-        # Source with the carried markers and the new date. `event_date.
-        # changed` is always `False` when `converged is None` (a fresh
-        # ingest, or a non-converged regenerate that already runs the full
-        # path), so this condition is a strict narrowing of the pre-#1014c
-        # skip, never a widening of it.
-        if converged is not None and not source_plan.event_date.changed:
+        # design.md Decision 6/7: convergence skips ONLY when the resolved
+        # `event_date` did not change AND the lifted state (preserve-
+        # source-frontmatter, issue #1062 -- for this slice, the
+        # frontmatter delta alone) did not change either. A converged
+        # Source whose date OR lifted state DID change (an explicit flag,
+        # file-name backfill on a pre-feature Source, or newly-present/
+        # changed incoming frontmatter) falls through to the block below
+        # with `converged` still set -- `stage_derived_objects(carried=
+        # converged)` short-circuits before any LLM call, and `compose_
+        # catalog_update` rebuilds the Source with the carried markers and
+        # the new date/frontmatter -- the "Source-only rewrite". Both
+        # `event_date.changed` and `lift_changed` are always `False` when
+        # `converged is None` (a fresh ingest, or a non-converged
+        # regenerate that already runs the full path), so this condition is
+        # a strict narrowing of the pre-#1014c skip, never a widening of it.
+        if (
+            converged is not None
+            and not source_plan.event_date.changed
+            and not source_plan.lift_changed
+        ):
             typer.echo(
                 "openkos ingest: source unchanged and already "
                 "extracted; skipping extraction -- existing derived "
@@ -5598,6 +5606,17 @@ def _ingest_single(
             f"{resolved_sensitivity} {sensitivity_clause}{title_clause})"
         )
         _echo_event_date_preview_line(source_plan.event_date)
+        # preserve-source-frontmatter (issue #1062), design.md Decision 7:
+        # printed only when this Source-only rewrite's frontmatter delta is
+        # the one that fired -- `lift_changed` IS exactly that delta in
+        # this slice (Phase 3 ORs in tags/sensitivity), so it is reused
+        # directly rather than re-derived, keeping the printed line and the
+        # skip decision provably in agreement (task 2.13/2.15). The `tags
+        # added:` line and the sensitivity-raise advisory are Phase 3's.
+        if converged is not None and source_plan.lift_changed:
+            frontmatter = source_plan.source_frontmatter
+            key_count = len(frontmatter) if frontmatter is not None else 0
+            typer.echo(f"    source frontmatter recorded ({key_count} key(s))")
         for plan in derived_plans:
             typer.echo(f"  + bundle/{plan.link_dir}/{plan.slug}.md")
         typer.echo(f"  ~ {index_path.name} (Source entry refreshed)")

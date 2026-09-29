@@ -10196,3 +10196,133 @@ def test_batch_cost_gate_bills_zero_for_a_converged_date_only_rewrite(
     assert "~0 LLM call(s)" in result.stderr
     metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
     assert metadata["event_date"] == "2026-07-14"
+
+
+# --- preserve-source-frontmatter (issue #1062): Source-only rewrite,
+# frontmatter delta (design.md Decision 7, part 1 of 3; Decision 1/2) ---
+
+
+def test_reingest_converged_source_with_new_frontmatter_triggers_rewrite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ingestion: "Newly-present incoming frontmatter on an otherwise
+    converged Source triggers a rewrite" (design.md Decision 7). Task 2.11.
+    **RED today**: the skip condition fires regardless of a new
+    `source_frontmatter`, so the run wrongly reports "skipping extraction"
+    with nothing rewritten."""
+    _init_workspace(tmp_path, monkeypatch)
+    run1 = _concept_reply(title="Stoic Dichotomy Of Control")
+    run2 = _concept_reply(title="Negative Visualization")
+    _patch_sequenced_llm(
+        monkeypatch,
+        [
+            run1,
+            run2,
+            '{"keep": ["Stoic Dichotomy Of Control", "Negative Visualization"]}',
+        ],
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text(_GROUNDED_NOTES, encoding="utf-8")
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert result.exit_code == 0
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert okf.SOURCE_FRONTMATTER_KEY not in metadata
+
+    # PRECONDITION: a plain re-ingest of the SAME, unchanged source still
+    # converges to a no-op -- existing behavior, unaffected by this feature.
+    fake_precondition = _patch_llm(
+        monkeypatch, raises=AssertionError("must not be called")
+    )
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert result.exit_code == 0
+    assert fake_precondition.calls == []
+    assert "skipping extraction" in result.stderr
+
+    concepts_dir = tmp_path / "bundle" / "concepts"
+    before_concepts = {p.name: p.read_bytes() for p in concepts_dir.glob("*.md")}
+
+    with_frontmatter = f"---\nauthor: Jane\n---\n{_GROUNDED_NOTES}"
+    source.write_text(with_frontmatter, encoding="utf-8")
+    (tmp_path / "raw" / "notes.txt").write_text(with_frontmatter, encoding="utf-8")
+
+    fake = _patch_llm(monkeypatch, raises=AssertionError("must not be called"))
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert fake.calls == []
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata[okf.SOURCE_FRONTMATTER_KEY] == {"author": "Jane"}
+    after_concepts = {p.name: p.read_bytes() for p in concepts_dir.glob("*.md")}
+    assert after_concepts == before_concepts
+
+
+def test_reingest_converged_source_with_unchanged_frontmatter_stays_converged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ingestion: "A converged Source with no changes writes nothing"
+    (frontmatter half; Phase 3 extends this table with the tags/sensitivity
+    rows). Task 2.12: a regression pin so 2.13's new condition cannot
+    accidentally widen the skip."""
+    _init_workspace(tmp_path, monkeypatch)
+    run1 = _concept_reply(title="Stoic Dichotomy Of Control")
+    run2 = _concept_reply(title="Negative Visualization")
+    _patch_sequenced_llm(
+        monkeypatch,
+        [
+            run1,
+            run2,
+            '{"keep": ["Stoic Dichotomy Of Control", "Negative Visualization"]}',
+        ],
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text(f"---\nauthor: Jane\n---\n{_GROUNDED_NOTES}", encoding="utf-8")
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert result.exit_code == 0
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata[okf.SOURCE_FRONTMATTER_KEY] == {"author": "Jane"}
+    before = snapshot_with_mtime(tmp_path)
+
+    fake = _patch_llm(monkeypatch, raises=AssertionError("must not be called"))
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert fake.calls == []
+    assert "skipping extraction" in result.stderr
+    assert snapshot_with_mtime(tmp_path) == before
+
+
+def test_source_only_rewrite_preview_names_recorded_frontmatter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ingestion: "The preview names the recorded frontmatter when that
+    delta fires". Task 2.14. **RED today**: no such line is printed."""
+    _init_workspace(tmp_path, monkeypatch)
+    run1 = _concept_reply(title="Stoic Dichotomy Of Control")
+    run2 = _concept_reply(title="Negative Visualization")
+    _patch_sequenced_llm(
+        monkeypatch,
+        [
+            run1,
+            run2,
+            '{"keep": ["Stoic Dichotomy Of Control", "Negative Visualization"]}',
+        ],
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text(_GROUNDED_NOTES, encoding="utf-8")
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert result.exit_code == 0
+
+    with_frontmatter = (
+        f"---\nauthor: Jane\ntitle: Old\nupdated: today\n---\n{_GROUNDED_NOTES}"
+    )
+    source.write_text(with_frontmatter, encoding="utf-8")
+    (tmp_path / "raw" / "notes.txt").write_text(with_frontmatter, encoding="utf-8")
+
+    fake = _patch_llm(monkeypatch, raises=AssertionError("must not be called"))
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert fake.calls == []
+    assert "source frontmatter recorded (3 key(s))" in result.stdout
