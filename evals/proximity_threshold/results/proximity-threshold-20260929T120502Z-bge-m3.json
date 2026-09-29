@@ -1,0 +1,24 @@
+{
+  "related_n": 3,
+  "related_total": 3,
+  "unrelated_n": 6,
+  "unrelated_total": 6,
+  "related_scores": [
+    0.799743435838405,
+    0.8042940059632986,
+    0.5841525381166839
+  ],
+  "unrelated_scores": [
+    0.3557523629130145,
+    0.38773940325287126,
+    0.27735285291507283,
+    0.27053981214515577,
+    0.39105023046016524,
+    0.39962639699932806
+  ],
+  "min_related": 0.5841525381166839,
+  "max_unrelated": 0.39962639699932806,
+  "falsifiable": true,
+  "separates_at_current_threshold": false,
+  "proposed_midpoint": 0.491889467558006
+}

@@ -27,19 +27,47 @@ interchangeable via `cosine = 1 - d^2 / 2`. The threshold is declared as a
 SIMILARITY floor because that is the number a human can reason about, and
 converted to a distance ceiling exactly once, here.
 
-`CANDIDATE_SIMILARITY_THRESHOLD = 0.70` was calibrated against `bge-m3` over
-FULL OKF concept documents -- the shape `state/reindex.py` actually embeds
-(whole file text, frontmatter included), NOT bare titles. Measured on that
-shape, topically-related pairs scored 0.7614-0.8018 and unrelated pairs
-0.3837-0.6460; 0.70 sits essentially at the midpoint of that gap. The anchor
-pair holding the floor honest is `Stoicism` / `Stoic Ethics` (related) against
+`CANDIDATE_SIMILARITY_THRESHOLD = 0.70` was ORIGINALLY calibrated against
+`bge-m3` over full OKF concept documents -- whole file text, frontmatter
+included -- the shape `state/reindex.py` embedded before #554. Since #888
+(#889) that is NOT what `reindex()` embeds any more: it composes
+`_compose_header` (title, description, tags -- frontmatter is NEVER
+embedded) with one or more `EMBED_COMPOSITION_TAG = "chunk-v1"` body
+chunks, and a document's stored vector is the chunk mean,
+L2-renormalized -- `normalize(mean(normalize(chunk_i) for every chunk_i))`
+-- never a single whole-file embedding.
+
+`evals/proximity_threshold/run_proximity_threshold_probe.py` re-measured
+the floor on THIS current shape (#1052), driving the real `reindex()`
+path end to end (never a reimplementation of `_compose_header` or the
+chunk-mean derivation): an 8-document hand-written fixture (no pre-existing
+labelled set is reproducible from this checkout alone) scored 3 of 3
+related pairs and 6 of 6 unrelated pairs, giving related cosines
+0.5842-0.8043 and unrelated cosines 0.2705-0.3996
+(`evals/proximity_threshold/results/proximity-threshold-20260929T120502Z-bge-m3.json`).
+The two classes still do NOT overlap on this fixture -- no unrelated pair
+came close to 0.70 -- but 0.70 no longer sits strictly between them: the
+weakest related pair (0.5842) falls BELOW it, so the floor is stricter
+than today's separation requires (it will miss some genuinely related
+pairs), even though it produced zero observed false positives here. The
+pre-registered rule this measurement used -- keep 0.70 only if
+`min(related) > 0.70 > max(unrelated)` -- does NOT hold, so this is left
+an OPEN QUESTION rather than silently kept or silently changed. Nine
+scored pairs are a smoke check of the shape, not a calibration: the
+measured gap's midpoint is 0.4919, which is NOT a recommended value, and a
+new floor needs a labelled set large enough to show where the two classes
+actually meet. Moving
+`CANDIDATE_SIMILARITY_THRESHOLD` changes what `suggest-relations` and
+`contradictions` see, which is its own design discussion, not a
+docstring-correction side effect. The anchor pair holding this
+measurement honest is still `Stoicism` / `Stoic Ethics` (related) against
 `Medieval Crop Rotation` (unrelated), mirroring `resolution/similarity.py`'s
 `stoic`/`stoicism` lexical lock one layer down.
 
-Calibrating on bare titles instead gives a materially different and WRONG
-distribution -- it suggested a floor near 0.45, which would fill the graph
-with noise. If these constants are ever revisited, re-measure on full
-documents.
+If these constants are ever revisited, re-run the harness above rather
+than re-deriving a fixture from scratch -- and re-measure on whatever
+`reindex()` embeds AT THAT TIME: this docstring is honest only about the
+shape that produced the numbers it currently cites.
 """
 
 from __future__ import annotations
