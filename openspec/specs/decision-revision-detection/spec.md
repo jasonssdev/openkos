@@ -2,7 +2,14 @@
 
 ## Purpose
 
-Defines `openkos revisions` — the decision-revision detector that identifies when one Decision supersedes or refines another based on semantic similarity and temporal information. Part of MVP 3, used by `reconcile --from-findings` to surface actionable relationship changes.
+Defines `openkos revisions`, the decision-revision detector. It pairs
+Decisions from different Sources by the similarity of the document vectors
+`openkos reindex` already stores, asks a judge whether the later Decision
+reverses, refines or reaffirms the earlier one, and takes the direction only
+from resolved Source event dates, never from the model. It writes advisory
+findings to derived state and never to the bundle; `reconcile --from-findings`
+is the path that turns an actionable finding into a `supersedes` or
+`revises` relation, with per-item human consent.
 
 ## Requirements
 
