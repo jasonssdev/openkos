@@ -63,13 +63,13 @@ from openkos.application import pending as application_pending
 from openkos.cli import observability
 from openkos.graph.base import Edge
 from openkos.graph.sqlite_graph import build_graph
-from openkos.llm.base import LLMBackend
-from openkos.llm.ollama import (
-    OllamaClient,
-    OllamaError,
-    OllamaModelNotFound,
-    OllamaUnavailable,
+from openkos.llm.base import (
+    BackendError,
+    BackendModelNotFound,
+    BackendUnavailable,
+    LLMBackend,
 )
+from openkos.llm.ollama import OllamaClient
 from openkos.model import okf
 from openkos.model.relations import ASYMMETRIC_RELATION_TYPES
 from openkos.resolution import candidate_group_truncation_notice, find_candidates_report
@@ -322,7 +322,7 @@ class CurateContext:
     """What a WRITING stage had already applied when an availability failure
     forced it to re-raise instead of return (issue #468 item 4).
 
-    The `OllamaUnavailable`/`OllamaModelNotFound` arms of the partial-batch
+    The `BackendUnavailable`/`BackendModelNotFound` arms of the partial-batch
     split (#441) stay raise-shaped so the sequencer keeps its run-scoped
     skip of later `needs_llm` stages -- but a raise carries no return value,
     so the `applied`/`skipped` the stage had just counted died with it and
@@ -810,7 +810,7 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
 
     A drift refusal (`_reject_drifted_targets`) raises `typer.Exit(code=3)`
     and is deliberately let propagate all the way out of `run_curate` --
-    unlike an `OllamaError`, drift is terminal for the WHOLE RUN (design D6):
+    unlike an `BackendError`, drift is terminal for the WHOLE RUN (design D6):
     it proves the workspace is racing, so every later stage's plan would be
     computed from a state already disproved. A mid-run `(OSError, ValueError)`
     write failure stops the loop immediately too, mirroring
@@ -821,11 +821,11 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
     walk below runs over `batch.results` exactly as over a complete run --
     the merge cores need no model, so a dead server cannot invalidate
     verdicts already paid for. Only then is the failure surfaced, split by
-    class: `OllamaUnavailable`/`OllamaModelNotFound` are RE-RAISED so the
+    class: `BackendUnavailable`/`BackendModelNotFound` are RE-RAISED so the
     sequencer's existing handlers keep their run-scoped skip (later
     `needs_llm` stages must not ask the operator to spend against a server
     this stage just proved dead/misconfigured), while the rest of the
-    `OllamaError` family returns a `failed` outcome with completed-of-total
+    `BackendError` family returns a `failed` outcome with completed-of-total
     counts, leaving later stages to run -- the same fails-only-this-stage
     scope the sequencer's generic handler already pins."""
     from openkos.cli import main as cli_main
@@ -1042,7 +1042,7 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
             cli_main._echo_commit_disclosure(merge_sha, prefix="  ")
         applied += 1
 
-    if isinstance(batch.failure, OllamaUnavailable | OllamaModelNotFound):
+    if isinstance(batch.failure, BackendUnavailable | BackendModelNotFound):
         # Availability failures stay raise-shaped so the sequencer's handler
         # keeps its run-scoped skip of later `needs_llm` stages; the walk
         # above already ran, so the completed verdicts survive (#441).
@@ -1173,11 +1173,11 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
     the walk below runs over `batch.results` exactly as over a complete run
     -- the relate core needs no model, so a dead server cannot invalidate
     suggestions already paid for. Only then is the failure surfaced, split
-    by class: `OllamaUnavailable`/`OllamaModelNotFound` are RE-RAISED so
+    by class: `BackendUnavailable`/`BackendModelNotFound` are RE-RAISED so
     the sequencer's existing handlers keep their run-scoped skip (later
     `needs_llm` stages must not ask the operator to spend against a server
     this stage just proved dead/misconfigured), while the rest of the
-    `OllamaError` family returns a `failed` outcome, leaving later stages
+    `BackendError` family returns a `failed` outcome, leaving later stages
     to run -- the same fails-only-this-stage scope the sequencer's generic
     handler already pins. Unlike Identity's failed notice, this one also
     carries the walk's applied/skipped counts (issue #468 follow-up 4): the
@@ -1366,7 +1366,7 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
             cli_main._echo_commit_disclosure(relate_sha, prefix="  ")
         applied += 1
 
-    if isinstance(batch.failure, OllamaUnavailable | OllamaModelNotFound):
+    if isinstance(batch.failure, BackendUnavailable | BackendModelNotFound):
         # Availability failures stay raise-shaped so the sequencer's handler
         # keeps its run-scoped skip of later `needs_llm` stages; the walk
         # above already ran, so the accepted writes survive (#441). The
@@ -1484,11 +1484,11 @@ def _metadata_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
     invalidate suggestions already paid for -- and the sensitivity-gap
     report still prints, since it reads the bundle, never the model. Only
     then is the failure surfaced, split by class:
-    `OllamaUnavailable`/`OllamaModelNotFound` are RE-RAISED so the
+    `BackendUnavailable`/`BackendModelNotFound` are RE-RAISED so the
     sequencer's existing handlers keep their run-scoped skip (later
     `needs_llm` stages must not ask the operator to spend against a server
     this stage just proved dead/misconfigured), while the rest of the
-    `OllamaError` family returns a `failed` outcome, leaving later stages
+    `BackendError` family returns a `failed` outcome, leaving later stages
     to run -- the same fails-only-this-stage scope the sequencer's generic
     handler already pins. Like Structure's failed notice (issue #468
     follow-up 4), this one carries the walk's applied/skipped counts
@@ -1581,7 +1581,7 @@ def _metadata_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
             f"set. Run `openkos set-sensitivity {concept_id} <level>`."
         )
 
-    if isinstance(batch.failure, OllamaUnavailable | OllamaModelNotFound):
+    if isinstance(batch.failure, BackendUnavailable | BackendModelNotFound):
         # Availability failures stay raise-shaped so the sequencer's handler
         # keeps its run-scoped skip of later `needs_llm` stages; the walk
         # above already ran, so the accepted writes survive (#441). The
@@ -1778,11 +1778,11 @@ def _contradictions_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
     report below runs over `batch.results` exactly as over a complete run
     -- they are already-paid-for reports, and this stage never writes. Only
     then is the failure surfaced, split by class:
-    `OllamaUnavailable`/`OllamaModelNotFound` are RE-RAISED so the
+    `BackendUnavailable`/`BackendModelNotFound` are RE-RAISED so the
     sequencer's existing handlers keep their run-scoped skip wording
     uniform (this stage is last, so there is no later stage to protect --
     the split exists so all four batch stages fail in the same shapes),
-    while the rest of the `OllamaError` family returns a `failed` outcome.
+    while the rest of the `BackendError` family returns a `failed` outcome.
     The stage is READ-ONLY, so unlike Structure/Metadata the failed notice
     carries completed-of-total counts only, never applied/skipped write
     counts (issue #468 follow-up 4: write counts belong only where the walk
@@ -1841,7 +1841,7 @@ def _contradictions_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
 
     persist_findings(ctx.layout, plan, verdicts)
 
-    if isinstance(batch.failure, OllamaUnavailable | OllamaModelNotFound):
+    if isinstance(batch.failure, BackendUnavailable | BackendModelNotFound):
         # Availability failures stay raise-shaped so the sequencer's handler
         # keeps its run-scoped skip of later `needs_llm` stages; the report
         # above already ran, so the completed verdicts survive (#441).
@@ -2076,14 +2076,14 @@ def run_curate(ctx: CurateContext) -> list[StageOutcome]:
 
         try:
             outcome = stage.run(ctx, probe)
-        except OllamaUnavailable as exc:
+        except BackendUnavailable as exc:
             notice = (
                 f"unavailable -- {exc}. Start it with "
                 f"`ollama serve`, then try again.{_DOCTOR_HINT}"
             )
             ctx.ollama_unavailable_notices[model] = notice
             outcome = _availability_outcome(ctx, notice)
-        except OllamaModelNotFound:
+        except BackendModelNotFound:
             # Names the model THIS stage resolved, not `cfg.model` (#515).
             # A remediation naming the global default would send the
             # operator to pull a model that is already installed while the
@@ -2097,11 +2097,11 @@ def run_curate(ctx: CurateContext) -> list[StageOutcome]:
             ctx.ollama_unavailable_notices[model] = notice
             outcome = _availability_outcome(ctx, notice)
         # The two specific handlers above MUST precede this generic one:
-        # both subclass `OllamaError`, mirroring `adjudicate`'s ordering
-        # discipline (main.py:7134-7141) -- a generic `OllamaError` fails
+        # both subclass `BackendError`, mirroring `adjudicate`'s ordering
+        # discipline (main.py:7134-7141) -- a generic `BackendError` fails
         # only THIS stage; no run-scoped flag is set, so a later stage still
         # tries its own call.
-        except OllamaError as exc:
+        except BackendError as exc:
             outcome = StageOutcome(status="failed", notice=f"failed -- {exc}.")
 
         outcomes.append(outcome)

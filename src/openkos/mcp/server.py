@@ -40,14 +40,15 @@ from typing import Final, Literal, TypeGuard, cast
 from openkos import config
 from openkos.application import backends as application_backends
 from openkos.application import concept_read
-from openkos.llm.base import Embedder, LLMBackend
-from openkos.llm.ollama import (
-    OllamaClient,
-    OllamaEmbeddingDimensionMismatch,
-    OllamaError,
-    OllamaModelNotFound,
-    OllamaUnavailable,
+from openkos.llm.base import (
+    BackendEmbeddingDimensionMismatch,
+    BackendError,
+    BackendModelNotFound,
+    BackendUnavailable,
+    Embedder,
+    LLMBackend,
 )
+from openkos.llm.ollama import OllamaClient
 from openkos.mcp import tools as mcp_tools
 from openkos.mcp import transport
 from openkos.state.fts import FtsUnavailable
@@ -65,19 +66,19 @@ _INTERNAL_ERROR_MESSAGE: Final = "internal error"
 
 _TOOL_ERROR_TABLE: Final[tuple[tuple[type[BaseException], str, bool, str], ...]] = (
     (
-        OllamaUnavailable,
+        BackendUnavailable,
         "ollama_unavailable",
         True,
         "the configured Ollama server is unreachable",
     ),
     (
-        OllamaModelNotFound,
+        BackendModelNotFound,
         "model_not_found",
         False,
         "the configured model is not installed",
     ),
     (
-        OllamaEmbeddingDimensionMismatch,
+        BackendEmbeddingDimensionMismatch,
         "embedding_dimension_mismatch",
         False,
         "the configured embedding model's dimension does not match",
@@ -89,7 +90,7 @@ _TOOL_ERROR_TABLE: Final[tuple[tuple[type[BaseException], str, bool, str], ...]]
         "full-text search is unavailable",
     ),
     (
-        OllamaError,
+        BackendError,
         "ollama_error",
         True,
         "the chat backend failed",
@@ -110,8 +111,8 @@ _TOOL_ERROR_TABLE: Final[tuple[tuple[type[BaseException], str, bool, str], ...]]
 """Rows land incrementally (slice 5's two, then this slice's five
 Ollama/FTS ones); ordering is subclass-first so a specific row is matched
 before a more general one that would also `isinstance`-match it --
-`OllamaUnavailable`/`OllamaModelNotFound`/`OllamaEmbeddingDimensionMismatch`
-all subclass `OllamaError`, so each must precede it. `mcp_tools.
+`BackendUnavailable`/`BackendModelNotFound`/`BackendEmbeddingDimensionMismatch`
+all subclass `BackendError`, so each must precede it. `mcp_tools.
 WorkspaceReadError` (a `config.read_config` `ValueError` `tools.execute`
 wraps) is itself an `OSError` subclass, so it is matched by the generic
 `OSError` row without a dedicated row of its own."""

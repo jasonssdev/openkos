@@ -19,8 +19,10 @@ modules must migrate, in Phases 2a (non-CLI) and 2b (CLI/curate/MCP). This
 guard is written once, unconditionally, with no `_PENDING_SITES` allowlist
 -- unlike the Phase 9-10 construction-guard ratchet, which stages ten
 sites across two phases on purpose. Phase 2a's own migration (task 2.6)
-narrows this guard's failing set to the CLI/curate/MCP sites only; it does
-not close it. Phase 2b (task 2.11) is what closes it fully."""
+narrowed this guard's failing set to the CLI/curate/MCP sites only,
+without closing it; Phase 2b (task 2.11) migrated those three modules and
+is what closes this guard fully -- it is unconditionally GREEN from this
+point on, with no allowlist ever introduced for it."""
 
 import ast
 from pathlib import Path
@@ -105,15 +107,16 @@ def test_no_concrete_backend_class_named_outside_client_modules() -> None:
     `llm/openai_compatible.py` may reference a concrete `Ollama*`/
     `OpenAICompatible*` error class at all (design.md Decision 3).
 
-    **RED today**: fails immediately -- about 55 known sites still name a
-    concrete Ollama class across `resolution/*.py`, `state/reindex.py`,
-    `retrieval/answer.py`, `extraction/judge.py`, `extraction/concept.py`,
-    `application/query.py`, `application/ingest.py`, `cli/main.py`,
-    `cli/curate.py`, `mcp/server.py`.
-
-    After task 2.6 (this phase) migrates every non-CLI site, this test is
-    expected to still fail, narrowed to exactly the CLI/curate/MCP sites --
-    task 2.11 (Phase 2b) is what closes it. See this module's docstring."""
+    **History** (issue #1057): RED on creation (Phase 2a, task 2.5) --
+    about 55 known sites named a concrete Ollama class across
+    `resolution/*.py`, `state/reindex.py`, `retrieval/answer.py`,
+    `extraction/judge.py`, `extraction/concept.py`, `application/query.py`,
+    `application/ingest.py`, `cli/main.py`, `cli/curate.py`,
+    `mcp/server.py`. Task 2.6 (Phase 2a) migrated every non-CLI site,
+    narrowing the failing set to exactly `cli/main.py`, `cli/curate.py`,
+    `mcp/server.py` -- still RED, by design (see this module's docstring).
+    Task 2.11 (Phase 2b) migrated those three modules, closing this guard
+    to GREEN unconditionally, with no allowlist ever introduced."""
     offenders: dict[str, list[str]] = {}
     for path in _scanned_modules():
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -135,3 +138,18 @@ def test_no_concrete_backend_class_named_outside_client_modules() -> None:
 # not merely the sites that were never migrated. Reverted immediately after
 # (inverse edit), with `__pycache__` purged before re-running to confirm
 # GREEN-for-this-site again.
+#
+# Mutation-proof (task 2.12, Phase 2b): after migrating cli/main.py,
+# cli/curate.py and mcp/server.py, reintroduced `except OllamaError as
+# exc:` into `cli/main.py` in place of `except BackendError as exc:`
+# (one of its ~32 migrated sites); the guard went red, reporting exactly
+# `{'cli/main.py': ['OllamaError (line 5475)']}`. Reverted (inverse
+# edit), purged `__pycache__`, reconfirmed GREEN. Separately, reintroduced
+# a concrete `OllamaUnavailable` as the first element of
+# `mcp/server.py`'s `_TOOL_ERROR_TABLE` tuple (the class-name-as-data
+# pattern this guard's broadened scan exists to catch, see the module
+# docstring); the guard went red, reporting exactly
+# `{'mcp/server.py': ['OllamaUnavailable (line 69)']}`. Reverted, purged
+# `__pycache__`, reconfirmed GREEN. Both mutations confirm the guard
+# detects a regression on every migrated CLI/curate/MCP module, closing
+# the fully-unconditional form this guard's own docstring describes.

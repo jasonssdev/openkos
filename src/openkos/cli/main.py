@@ -58,14 +58,16 @@ from openkos.graph import proximity, sqlite_graph
 from openkos.graph.base import Edge, GraphStore
 from openkos.graph.sqlite_graph import build_graph
 from openkos.graph.summary import graph_edge_summary
+from openkos.llm.base import (
+    BackendEmbeddingDimensionMismatch,
+    BackendError,
+    BackendModelNotFound,
+    BackendUnavailable,
+)
 from openkos.llm.ollama import (
     BackendHostLocality,
     InstalledModel,
     OllamaClient,
-    OllamaEmbeddingDimensionMismatch,
-    OllamaError,
-    OllamaModelNotFound,
-    OllamaUnavailable,
     is_embedding_model,
     is_timeout_failure,
     model_tag_matches,
@@ -171,7 +173,7 @@ def _chat_client(cfg: config.Config, *, task: str | None = None) -> OllamaClient
     return application_backends.chat_client(cfg, factory=OllamaClient, task=task)
 
 
-# Shared remediation clause appended to the OllamaUnavailable handlers of
+# Shared remediation clause appended to the BackendUnavailable handlers of
 # query, adjudicate, and suggest-relations -- kept as a single constant so
 # the three verbs cannot drift from each other in wording.
 _DOCTOR_HINT = " Or run `openkos doctor` to diagnose the environment."
@@ -1738,8 +1740,8 @@ def init(
 
     # Non-fatal Ollama preflight (D2): purely observational, runs strictly
     # after the workspace already exists. `except Exception` (not
-    # `BaseException`) deliberately catches OllamaUnavailable/
-    # OllamaModelNotFound/OllamaError AND any unexpected probe error while
+    # `BaseException`) deliberately catches BackendUnavailable/
+    # BackendModelNotFound/BackendError AND any unexpected probe error while
     # still letting Ctrl-C/SystemExit propagate; nothing here ever raises
     # `typer.Exit` or pulls a model/spawns a server -- init's exit code
     # stays 0 on every outcome, and the file-writer guarantee above is
@@ -2030,20 +2032,20 @@ def _echo_adjudicate_batch_failure(
     3-tier cause-specific wording the raise-path handlers use, prefixed with
     how much paid-for work survived. The `isinstance` dispatch mirrors the
     handlers' ORDER for the same reason they are ordered: both specific
-    classes subclass `OllamaError`, so the generic branch must come last or
+    classes subclass `BackendError`, so the generic branch must come last or
     their actionable remediation is lost."""
     failure = batch.failure
     context = (
         f"openkos adjudicate: failed after adjudicating {len(batch.results)} "
         f"of {total} candidate group(s)"
     )
-    if isinstance(failure, OllamaUnavailable):
+    if isinstance(failure, BackendUnavailable):
         typer.echo(
             f"{context} -- {failure}. Start it with `ollama serve`, then try "
             f"again.{_DOCTOR_HINT}",
             err=True,
         )
-    elif isinstance(failure, OllamaModelNotFound):
+    elif isinstance(failure, BackendModelNotFound):
         typer.echo(
             f"{context} -- model '{model}' is not installed. Pull it with "
             f"`ollama pull {model}`, then try again.",
@@ -2061,20 +2063,20 @@ def _echo_suggest_relations_batch_failure(
     how much paid-for work survived (mirrors
     `_echo_adjudicate_batch_failure`). The `isinstance` dispatch mirrors the
     handlers' ORDER for the same reason they are ordered: both specific
-    classes subclass `OllamaError`, so the generic branch must come last or
+    classes subclass `BackendError`, so the generic branch must come last or
     their actionable remediation is lost."""
     failure = batch.failure
     context = (
         f"openkos suggest-relations: failed after suggesting "
         f"{len(batch.results)} of {total} untyped edge(s)"
     )
-    if isinstance(failure, OllamaUnavailable):
+    if isinstance(failure, BackendUnavailable):
         typer.echo(
             f"{context} -- {failure}. Start it with `ollama serve`, then try "
             f"again.{_DOCTOR_HINT}",
             err=True,
         )
-    elif isinstance(failure, OllamaModelNotFound):
+    elif isinstance(failure, BackendModelNotFound):
         typer.echo(
             f"{context} -- model '{model}' is not installed. Pull it with "
             f"`ollama pull {model}`, then try again.",
@@ -2095,20 +2097,20 @@ def _echo_contradictions_batch_failure(
     second planning pass; the line says "planned" (#685 item 6) so the
     denominator reads as the plan and never overstates what was sent. The `isinstance` dispatch mirrors the handlers'
     ORDER for the same reason they are ordered: both specific classes
-    subclass `OllamaError`, so the generic branch must come last or their
+    subclass `BackendError`, so the generic branch must come last or their
     actionable remediation is lost."""
     failure = batch.failure
     context = (
         f"openkos contradictions: failed after judging {len(batch.results)} "
         f"of {total} planned candidate(s)"
     )
-    if isinstance(failure, OllamaUnavailable):
+    if isinstance(failure, BackendUnavailable):
         typer.echo(
             f"{context} -- {failure}. Start it with `ollama serve`, then try "
             f"again.{_DOCTOR_HINT}",
             err=True,
         )
-    elif isinstance(failure, OllamaModelNotFound):
+    elif isinstance(failure, BackendModelNotFound):
         typer.echo(
             f"{context} -- model '{model}' is not installed. Pull it with "
             f"`ollama pull {model}`, then try again.",
@@ -2129,20 +2131,20 @@ def _echo_suggest_volatility_batch_failure(
     leaf, so the verb holds no pre-flight total and fabricating one would
     cost a second full bundle walk for an error line. The `isinstance`
     dispatch mirrors the handlers' ORDER for the same reason they are
-    ordered: both specific classes subclass `OllamaError`, so the generic
+    ordered: both specific classes subclass `BackendError`, so the generic
     branch must come last or their actionable remediation is lost."""
     failure = batch.failure
     context = (
         f"openkos suggest-volatility: failed after suggesting "
         f"{len(batch.results)} concept type(s)"
     )
-    if isinstance(failure, OllamaUnavailable):
+    if isinstance(failure, BackendUnavailable):
         typer.echo(
             f"{context} -- {failure}. Start it with `ollama serve`, then try "
             f"again.{_DOCTOR_HINT}",
             err=True,
         )
-    elif isinstance(failure, OllamaModelNotFound):
+    elif isinstance(failure, BackendModelNotFound):
         typer.echo(
             f"{context} -- model '{model}' is not installed. Pull it with "
             f"`ollama pull {model}`, then try again.",
@@ -3306,7 +3308,7 @@ def _chunk_skip_notice(report: ExtractionReport) -> str | None:
     """Name the `_chunk_lines` windows a chunked extraction skipped after
     their retry also failed (#1053), or `None` when every window answered
     -- the common case, and the ONLY case reachable before this change (a
-    single window's `OllamaError`-family failure used to discard the whole
+    single window's `BackendError`-family failure used to discard the whole
     source's extraction instead of costing just that window).
 
     Named positions ("chunk N of M"), mirroring every sibling notice in
@@ -3854,14 +3856,14 @@ def _render_staged_derived_objects(
     instead of inline `typer.echo` calls inside the (former) function body.
 
     Called by `_ingest_single` AFTER the `Console(...).status(...)` spinner
-    context exits, on both the success and the `OllamaError` path (design:
+    context exits, on both the success and the `BackendError` path (design:
     "Ordering invariant that makes this byte-identical") -- exactly mirrors
     the pre-move function, where every echo except the two pre-extraction
     degrades already ran after that `with` block unwound.
 
-    The `"failed"` `skip_reason` (an `OllamaError` was caught) is
+    The `"failed"` `skip_reason` (an `BackendError` was caught) is
     deliberately NOT handled here: that echo (plus the #746 concurrency
-    advisory) fires at the `except OllamaError` call site itself, because it
+    advisory) fires at the `except BackendError` call site itself, because it
     needs the caught exception, which `StagedDerivedObjects` never carries.
     """
     if staged.report is None:
@@ -4021,7 +4023,7 @@ def _embed_after_ingest(
 
     The `except Exception` is broad ON PURPOSE, mirroring
     `vectorstore.probe_vec_loadable`'s rationale: not just the three mapped
-    `OllamaError` subclasses, but any exception a backend might raise that
+    `BackendError` subclasses, but any exception a backend might raise that
     nobody anticipated. `KeyboardInterrupt` and `SystemExit` derive from
     `BaseException`, so a user's Ctrl-C still interrupts the command rather
     than being mistaken for a degraded embed.
@@ -4067,9 +4069,9 @@ def _embed_after_ingest(
         return
 
     # An exception is not the only way embedding degrades. `reindex` treats
-    # a generic `OllamaError` as a PER-DOC transient failure and folds it
-    # into `embed_failed` instead of raising -- only `OllamaUnavailable` and
-    # `OllamaModelNotFound` are fatal enough to propagate. Reporting solely
+    # a generic `BackendError` as a PER-DOC transient failure and folds it
+    # into `embed_failed` instead of raising -- only `BackendUnavailable` and
+    # `BackendModelNotFound` are fatal enough to propagate. Reporting solely
     # on exceptions would therefore let a run where nothing was embedded
     # look identical to a clean one, and the user would meet the silence
     # later, as an inexplicably empty `suggest-relations`.
@@ -4121,9 +4123,9 @@ def _refresh_derived_after_write(
     the exit code. FAIL-OPEN with `except Exception` ON PURPOSE, mirroring
     `_embed_after_ingest`'s rationale verbatim: the bundle write is already
     COMMITTED by the time this runs, so no refresh failure -- the full
-    mapped ladder (`OllamaUnavailable`, `OllamaModelNotFound`,
-    `OllamaEmbeddingDimensionMismatch`, `VecUnavailable`, `FtsUnavailable`,
-    `OllamaError`, `sqlite3.Error` including lock contention) or anything
+    mapped ladder (`BackendUnavailable`, `BackendModelNotFound`,
+    `BackendEmbeddingDimensionMismatch`, `VecUnavailable`, `FtsUnavailable`,
+    `BackendError`, `sqlite3.Error` including lock contention) or anything
     nobody anticipated -- may cost the user the write itself. Ctrl-C still
     interrupts: `KeyboardInterrupt`/`SystemExit` derive from
     `BaseException`.
@@ -4187,7 +4189,7 @@ def _refresh_derived_after_write(
             )
         _warn_withheld_from_embedding(verb, report.withheld_confidential)
         # An exception is not the only way embedding degrades: `reindex`
-        # folds a generic per-doc `OllamaError` into `embed_failed` instead
+        # folds a generic per-doc `BackendError` into `embed_failed` instead
         # of raising (same trap `_embed_after_ingest` documents), so a run
         # that embedded nothing must not report a complete refresh.
         if report.embed_failed:
@@ -5470,7 +5472,7 @@ def _ingest_single(
                     on_progress=observability.phase_callback("ingest", status.update),
                     carried=converged,
                 )
-        except OllamaError as exc:
+        except BackendError as exc:
             typer.echo(
                 f"openkos ingest: concept extraction skipped -- {exc}; "
                 "keeping the Source only.",
@@ -5491,7 +5493,7 @@ def _ingest_single(
             # setting while their server is not running.
             if (
                 cfg.concurrent_extraction
-                # `raw_content` is provably non-`None` here (an `OllamaError`
+                # `raw_content` is provably non-`None` here (an `BackendError`
                 # can only be raised from inside the extractor call, which
                 # the service never reaches on `None`/blank content) -- the
                 # explicit check is for mypy: the pre-extraction narrowing
@@ -8629,7 +8631,7 @@ def _reconcile_merged_survivor(
             absorbed_body=absorbed_body,
             llm=_chat_client(cfg),
         )
-    except OllamaError as exc:
+    except BackendError as exc:
         return prepared, str(exc)
     if reconciled is None:
         return prepared, "the model reply failed validation"
@@ -11817,8 +11819,8 @@ def adjudicate(
 
     A no-model/no-Ollama failure comes back INSIDE the returned
     `AdjudicationBatch` (#441) and maps onto the SAME 3-tier ORDERED wording
-    `query` uses -- `OllamaUnavailable`, then `OllamaModelNotFound`, then
-    the generic `OllamaError` fallback -- each with its own actionable
+    `query` uses -- `BackendUnavailable`, then `BackendModelNotFound`, then
+    the generic `BackendError` fallback -- each with its own actionable
     stderr message and exit 1. The completed verdicts are NEVER discarded:
     every output mode (report, `--json`, `--apply`, `--apply-same`) first
     processes `batch.results` exactly as a complete run over that list,
@@ -12008,14 +12010,14 @@ def adjudicate(
                 "adjudicate", "adjudicating group"
             ),
         )
-    except OllamaUnavailable as exc:
+    except BackendUnavailable as exc:
         typer.echo(
             f"openkos adjudicate: failed -- {exc}. Start it with `ollama serve`, "
             f"then try again.{_DOCTOR_HINT}",
             err=True,
         )
         raise typer.Exit(code=1) from exc
-    except OllamaModelNotFound as exc:
+    except BackendModelNotFound as exc:
         typer.echo(
             f"openkos adjudicate: failed -- model '{cfg.model}' is not "
             f"installed. Pull it with `ollama pull {cfg.model}`, then try "
@@ -12024,11 +12026,11 @@ def adjudicate(
         )
         raise typer.Exit(code=1) from exc
     # The two specific handlers above MUST precede this generic handler:
-    # both `OllamaUnavailable` and `OllamaModelNotFound` subclass
-    # `OllamaError`, so reordering would silently funnel them into this
+    # both `BackendUnavailable` and `BackendModelNotFound` subclass
+    # `BackendError`, so reordering would silently funnel them into this
     # fallback and lose their actionable remediation messages (mirrors
     # `query`'s ordering).
-    except OllamaError as exc:
+    except BackendError as exc:
         typer.echo(f"openkos adjudicate: failed -- {exc}.", err=True)
         raise typer.Exit(code=1) from exc
 
@@ -12113,7 +12115,7 @@ def adjudicate(
         # Partial batch (#441): every output mode above already processed the
         # completed verdicts exactly as a complete run over that list -- the
         # paid-for work is never discarded -- so all that remains is the one
-        # stderr failure line and the OllamaError-family exit code.
+        # stderr failure line and the BackendError-family exit code.
         _echo_adjudicate_batch_failure(batch, total=len(candidates), model=cfg.model)
         raise typer.Exit(code=1) from batch.failure
 
@@ -12484,8 +12486,8 @@ def suggest_relations_cmd(
 
     A no-model/no-Ollama failure comes back INSIDE the returned
     `EdgeSuggestionBatch` (#441) and maps onto the SAME 3-tier ORDERED
-    wording `adjudicate`/`query` use -- `OllamaUnavailable`, then
-    `OllamaModelNotFound`, then the generic `OllamaError` fallback -- each
+    wording `adjudicate`/`query` use -- `BackendUnavailable`, then
+    `BackendModelNotFound`, then the generic `BackendError` fallback -- each
     with its own actionable stderr message and exit 1. The completed
     suggestions are NEVER discarded: the report first renders
     `batch.results` exactly as a complete run over that list, THEN one
@@ -12722,14 +12724,14 @@ def suggest_relations_cmd(
             rationale_language=cfg.rationale_language,
             on_progress=_on_progress,
         )
-    except OllamaUnavailable as exc:
+    except BackendUnavailable as exc:
         typer.echo(
             f"openkos suggest-relations: failed -- {exc}. Start it with "
             f"`ollama serve`, then try again.{_DOCTOR_HINT}",
             err=True,
         )
         raise typer.Exit(code=1) from exc
-    except OllamaModelNotFound as exc:
+    except BackendModelNotFound as exc:
         typer.echo(
             f"openkos suggest-relations: failed -- model '{cfg.model}' is "
             f"not installed. Pull it with `ollama pull {cfg.model}`, then "
@@ -12738,11 +12740,11 @@ def suggest_relations_cmd(
         )
         raise typer.Exit(code=1) from exc
     # The two specific handlers above MUST precede this generic handler:
-    # both `OllamaUnavailable` and `OllamaModelNotFound` subclass
-    # `OllamaError`, so reordering would silently funnel them into this
+    # both `BackendUnavailable` and `BackendModelNotFound` subclass
+    # `BackendError`, so reordering would silently funnel them into this
     # fallback and lose their actionable remediation messages (mirrors
     # `adjudicate`'s ordering).
-    except OllamaError as exc:
+    except BackendError as exc:
         typer.echo(f"openkos suggest-relations: failed -- {exc}.", err=True)
         raise typer.Exit(code=1) from exc
 
@@ -12810,7 +12812,7 @@ def suggest_relations_cmd(
         # Partial batch (#441): the report above already rendered the
         # completed suggestions exactly as a complete run over that list --
         # the paid-for work is never discarded -- so all that remains is the
-        # one stderr failure line and the OllamaError-family exit code.
+        # one stderr failure line and the BackendError-family exit code.
         _echo_suggest_relations_batch_failure(batch, total=total, model=cfg.model)
         raise typer.Exit(code=1) from batch.failure
 
@@ -12859,8 +12861,8 @@ def suggest_volatility_cmd(
     A no-model/no-Ollama failure comes back INSIDE the returned
     `TierSuggestionBatch` (#441) and maps onto the SAME 3-tier ORDERED
     wording `suggest-relations`/`adjudicate`/`query` use --
-    `OllamaUnavailable`, then `OllamaModelNotFound`, then the generic
-    `OllamaError` fallback -- each with its own actionable stderr message
+    `BackendUnavailable`, then `BackendModelNotFound`, then the generic
+    `BackendError` fallback -- each with its own actionable stderr message
     and exit 1. The completed suggestions are NEVER discarded: the report
     first renders `batch.results` exactly as a complete run over that list,
     THEN one stderr line reports the failure with the completed count (no
@@ -12920,14 +12922,14 @@ def suggest_volatility_cmd(
                 "suggest-volatility", "suggesting type"
             ),
         )
-    except OllamaUnavailable as exc:
+    except BackendUnavailable as exc:
         typer.echo(
             f"openkos suggest-volatility: failed -- {exc}. Start it with "
             f"`ollama serve`, then try again.{_DOCTOR_HINT}",
             err=True,
         )
         raise typer.Exit(code=1) from exc
-    except OllamaModelNotFound as exc:
+    except BackendModelNotFound as exc:
         typer.echo(
             f"openkos suggest-volatility: failed -- model '{cfg.model}' is "
             f"not installed. Pull it with `ollama pull {cfg.model}`, then "
@@ -12936,11 +12938,11 @@ def suggest_volatility_cmd(
         )
         raise typer.Exit(code=1) from exc
     # The two specific handlers above MUST precede this generic handler:
-    # both `OllamaUnavailable` and `OllamaModelNotFound` subclass
-    # `OllamaError`, so reordering would silently funnel them into this
+    # both `BackendUnavailable` and `BackendModelNotFound` subclass
+    # `BackendError`, so reordering would silently funnel them into this
     # fallback and lose their actionable remediation messages (mirrors
     # `suggest-relations`'s ordering).
-    except OllamaError as exc:
+    except BackendError as exc:
         typer.echo(f"openkos suggest-volatility: failed -- {exc}.", err=True)
         raise typer.Exit(code=1) from exc
 
@@ -12969,7 +12971,7 @@ def suggest_volatility_cmd(
         # Partial batch (#441): the report above already rendered the
         # completed suggestions exactly as a complete run over that list --
         # the paid-for work is never discarded -- so all that remains is the
-        # one stderr failure line and the OllamaError-family exit code.
+        # one stderr failure line and the BackendError-family exit code.
         _echo_suggest_volatility_batch_failure(batch, model=cfg.model)
         raise typer.Exit(code=1) from batch.failure
 
@@ -13964,8 +13966,8 @@ def contradictions(
     A no-model/no-Ollama failure comes back INSIDE the returned
     `ContradictionBatch` (#441) and maps onto the SAME 3-tier ORDERED
     wording `suggest-relations`/`adjudicate`/`query` use --
-    `OllamaUnavailable`, then `OllamaModelNotFound`, then the generic
-    `OllamaError` fallback -- each with its own actionable stderr message
+    `BackendUnavailable`, then `BackendModelNotFound`, then the generic
+    `BackendError` fallback -- each with its own actionable stderr message
     and exit 1. The completed verdicts are NEVER discarded: the report
     first renders `batch.results` exactly as a complete run over that list
     (the `--all`/high-confidence display filter included), THEN one stderr
@@ -14127,14 +14129,14 @@ def contradictions(
                     "contradictions", "checking pair"
                 ),
             )
-        except OllamaUnavailable as exc:
+        except BackendUnavailable as exc:
             typer.echo(
                 f"openkos contradictions: failed -- {exc}. Start it with "
                 f"`ollama serve`, then try again.{_DOCTOR_HINT}",
                 err=True,
             )
             raise typer.Exit(code=1) from exc
-        except OllamaModelNotFound as exc:
+        except BackendModelNotFound as exc:
             typer.echo(
                 f"openkos contradictions: failed -- model '{cfg.model}' is not "
                 f"installed. Pull it with `ollama pull {cfg.model}`, then try "
@@ -14143,11 +14145,11 @@ def contradictions(
             )
             raise typer.Exit(code=1) from exc
         # The two specific handlers above MUST precede this generic handler:
-        # both `OllamaUnavailable` and `OllamaModelNotFound` subclass
-        # `OllamaError`, so reordering would silently funnel them into this
+        # both `BackendUnavailable` and `BackendModelNotFound` subclass
+        # `BackendError`, so reordering would silently funnel them into this
         # fallback and lose their actionable remediation messages (mirrors
         # `suggest-relations`'s ordering).
-        except OllamaError as exc:
+        except BackendError as exc:
             typer.echo(f"openkos contradictions: failed -- {exc}.", err=True)
             raise typer.Exit(code=1) from exc
 
@@ -14310,7 +14312,7 @@ def contradictions(
         # Partial batch (#441): the report above already rendered the
         # completed verdicts exactly as a complete run over that list -- the
         # paid-for work is never discarded -- so all that remains is the one
-        # stderr failure line and the OllamaError-family exit code.
+        # stderr failure line and the BackendError-family exit code.
         # #653: the completed-of-total counts describe what was actually
         # SENT to the model this run -- the judged subset, not the full
         # plan, since served candidates cost nothing and cannot fail.
@@ -14358,13 +14360,13 @@ def _echo_revisions_batch_failure(
         f"openkos revisions: failed after judging {len(outcome.results)} "
         f"of {total} planned pair(s)"
     )
-    if isinstance(failure, OllamaUnavailable):
+    if isinstance(failure, BackendUnavailable):
         typer.echo(
             f"{context} -- {failure}. Start it with `ollama serve`, then "
             f"try again.{_DOCTOR_HINT}",
             err=True,
         )
-    elif isinstance(failure, OllamaModelNotFound):
+    elif isinstance(failure, BackendModelNotFound):
         typer.echo(
             f"{context} -- model '{model}' is not installed. Pull it with "
             f"`ollama pull {model}`, then try again.",
@@ -14440,7 +14442,7 @@ def revisions(
     either Decision's document; only `openkos reconcile --from-findings`
     (a later slice) ever writes a relation from a revision finding.
 
-    A partial batch (a mid-run `OllamaError`) renders every verdict judged
+    A partial batch (a mid-run `BackendError`) renders every verdict judged
     so far exactly as a complete run over that list would, then reports the
     failure and exits 1 -- the same #441 posture `contradictions`/
     `suggest-relations` already follow; already-judged, non-malformed
@@ -14558,7 +14560,7 @@ def revisions(
         # report above already rendered every verdict judged so far exactly
         # as a complete run over that list would -- the paid-for work is
         # never discarded -- so all that remains is the one stderr failure
-        # line and the OllamaError-family exit code.
+        # line and the BackendError-family exit code.
         _echo_revisions_batch_failure(
             outcome, total=len(plan.to_judge), model=cfg.model
         )
@@ -14854,14 +14856,14 @@ def query(
             include_confidential=include_confidential,
             local_exemption=local_exemption,
         )
-    except OllamaUnavailable as exc:
+    except BackendUnavailable as exc:
         typer.echo(
             f"openkos query: failed -- {exc}. Start it with `ollama serve`, "
             f"then try again.{_DOCTOR_HINT}",
             err=True,
         )
         raise typer.Exit(code=1) from exc
-    except OllamaModelNotFound as exc:
+    except BackendModelNotFound as exc:
         # Names the REAL failing model from the exception text -- `query`
         # now builds TWO Ollama-backed seams (chat `llm` + `embedder`), so
         # a hardcoded `cfg.model` would be wrong whenever the embedding
@@ -14872,7 +14874,7 @@ def query(
             err=True,
         )
         raise typer.Exit(code=1) from exc
-    # `OllamaEmbeddingDimensionMismatch` is a PERMANENT, non-healing
+    # `BackendEmbeddingDimensionMismatch` is a PERMANENT, non-healing
     # misconfiguration (issue #209): the configured `embedding_model` does
     # not emit `EMBED_DIM`-dimensional vectors, so dense retrieval is
     # structurally impossible, not merely unhelpful this run -- `run_query`
@@ -14884,10 +14886,10 @@ def query(
     # that hint would be actively misleading here. MUST NOT say "will retry
     # next run" (phrasing reserved for a transient `embed_failed` skip).
     # Placed BEFORE the generic tuple below for the same ordering reason as
-    # the two handlers above: `OllamaEmbeddingDimensionMismatch` subclasses
-    # `OllamaError`, so reordering would swallow it into the bare message
+    # the two handlers above: `BackendEmbeddingDimensionMismatch` subclasses
+    # `BackendError`, so reordering would swallow it into the bare message
     # and lose this remediation.
-    except OllamaEmbeddingDimensionMismatch as exc:
+    except BackendEmbeddingDimensionMismatch as exc:
         typer.echo(
             f"openkos query: failed -- {exc} Restore the working "
             "'embedding_model' value in openkos.yaml, then try again.",
@@ -14895,11 +14897,11 @@ def query(
         )
         raise typer.Exit(code=1) from exc
     # The three specific handlers above MUST precede this generic tuple:
-    # `OllamaUnavailable`, `OllamaModelNotFound`, and
-    # `OllamaEmbeddingDimensionMismatch` all subclass `OllamaError`, so
+    # `BackendUnavailable`, `BackendModelNotFound`, and
+    # `BackendEmbeddingDimensionMismatch` all subclass `BackendError`, so
     # reordering would silently funnel them into this fallback and lose
     # their actionable remediation messages.
-    except (FtsUnavailable, OllamaError) as exc:
+    except (FtsUnavailable, BackendError) as exc:
         typer.echo(f"openkos query: failed -- {exc}.", err=True)
         raise typer.Exit(code=1) from exc
 
@@ -15476,8 +15478,8 @@ def reindex(
     `embedding_model` in `openkos.yaml` (default `bge-m3`, ADR-0006).
     An unreachable Ollama, a missing embedding model, or an unusable
     `sqlite-vec` extension is reported on stderr with no raw traceback and
-    exits 1 -- the SAME ordered ladder `query` uses (`OllamaUnavailable` →
-    `OllamaModelNotFound` → a generic `(VecUnavailable, OllamaError)`
+    exits 1 -- the SAME ordered ladder `query` uses (`BackendUnavailable` →
+    `BackendModelNotFound` → a generic `(VecUnavailable, BackendError)`
     fallback), with `VecUnavailable` substituted for `FtsUnavailable` (spec:
     Error Ladder Mirrors query). A concurrent process holding a write lock
     on `vectors.db`/`fts.db`/`graph.db` past `busy_timeout` (e.g. a
@@ -15527,14 +15529,14 @@ def reindex(
                 on_progress=observability.progress_callback("reindex", "embedding doc"),
                 local_exemption=_resolve_local_exemption(embedder, cfg),
             )
-    except OllamaUnavailable as exc:
+    except BackendUnavailable as exc:
         typer.echo(
             f"openkos reindex: failed -- {exc}. Start it with `ollama serve`, "
             f"then try again.{_DOCTOR_HINT}",
             err=True,
         )
         raise typer.Exit(code=1) from exc
-    except OllamaModelNotFound as exc:
+    except BackendModelNotFound as exc:
         typer.echo(
             "openkos reindex: failed -- embedding model "
             f"'{cfg.embedding_model}' is not installed. Pull it with "
@@ -15542,19 +15544,19 @@ def reindex(
             err=True,
         )
         raise typer.Exit(code=1) from exc
-    # `OllamaEmbeddingDimensionMismatch` is a PERMANENT, non-healing
-    # misconfiguration -- unlike `OllamaUnavailable`/`OllamaModelNotFound`,
+    # `BackendEmbeddingDimensionMismatch` is a PERMANENT, non-healing
+    # misconfiguration -- unlike `BackendUnavailable`/`BackendModelNotFound`,
     # it names a concrete remediation: the configured `embedding_model` no
     # longer produces `EMBED_DIM`-dimensional vectors, so it must be
     # restored in `openkos.yaml`. Placed BEFORE the generic
-    # `(VecUnavailable, FtsUnavailable, OllamaError)` tuple below --
-    # `OllamaEmbeddingDimensionMismatch` subclasses `OllamaError`, so
+    # `(VecUnavailable, FtsUnavailable, BackendError)` tuple below --
+    # `BackendEmbeddingDimensionMismatch` subclasses `BackendError`, so
     # reordering this branch after that tuple would silently swallow it
     # into the generic message (same ordering discipline as the two
     # handlers above). MUST NOT say "will retry next run" -- that phrasing
     # is reserved for a transient `embed_failed` skip, not a permanent
     # misconfiguration.
-    except OllamaEmbeddingDimensionMismatch as exc:
+    except BackendEmbeddingDimensionMismatch as exc:
         typer.echo(
             f"openkos reindex: failed -- {exc} Restore the working "
             "'embedding_model' value in openkos.yaml, then run `openkos "
@@ -15569,7 +15571,7 @@ def reindex(
     # `BEGIN IMMEDIATE` (propagated unchanged by `state/fts.py`'s errorcode
     # discrimination) -- so this clause wraps the ENTIRE try, catching all
     # three. Placed BEFORE the generic `(VecUnavailable, FtsUnavailable,
-    # OllamaError)` tuple below (reindex-lock-handling, decision 2): a
+    # BackendError)` tuple below (reindex-lock-handling, decision 2): a
     # non-lock `OperationalError` is deliberately RE-RAISED, not swallowed
     # into a generic clean exit -- this stays strictly additive, matching
     # this catch's ONLY documented job (lock contention), and preserves
@@ -15581,15 +15583,15 @@ def reindex(
             raise typer.Exit(code=1) from exc
         raise
     # The two specific handlers above MUST precede this generic tuple, same
-    # ordering rationale as `query`'s ladder: both `OllamaUnavailable` and
-    # `OllamaModelNotFound` subclass `OllamaError`. `FtsUnavailable` joins
+    # ordering rationale as `query`'s ladder: both `BackendUnavailable` and
+    # `BackendModelNotFound` subclass `BackendError`. `FtsUnavailable` joins
     # `VecUnavailable` here (Slice 5 review correction, Finding A): reindex
     # now reaches the FTS write path (`state.reindex._reindex_fts` ->
     # `fts.write_fts_index`), which raises `FtsUnavailable` exactly like
     # `query`'s FTS read path already does -- this mirrors `query`'s own
-    # `(FtsUnavailable, OllamaError)` ladder instead of leaving it as a raw,
+    # `(FtsUnavailable, BackendError)` ladder instead of leaving it as a raw,
     # uncaught traceback.
-    except (VecUnavailable, FtsUnavailable, OllamaError) as exc:
+    except (VecUnavailable, FtsUnavailable, BackendError) as exc:
         typer.echo(f"openkos reindex: failed -- {exc}.", err=True)
         raise typer.Exit(code=1) from exc
 
@@ -15664,7 +15666,7 @@ def reindex(
     # will NOT fix). Deliberately NEVER keys on `skipped` alone, so the two
     # skip kinds stay distinct on stderr, matching `ReindexReport.skipped`
     # vs `embed_failed`'s separation. This only reaches an exit-0 run: the
-    # fatal ladder above (`OllamaUnavailable`/`OllamaModelNotFound`) exits 1
+    # fatal ladder above (`BackendUnavailable`/`BackendModelNotFound`) exits 1
     # before the summary is ever printed.
     if report.embed_failed > 0:
         typer.echo(
