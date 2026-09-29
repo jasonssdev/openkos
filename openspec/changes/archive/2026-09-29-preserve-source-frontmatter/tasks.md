@@ -1167,14 +1167,17 @@ Design.md Decision 6.
 
 ### Phase 5 verification
 
-- [ ] **5.11** Run `uv run ruff check . && uv run ruff format --check . &&
+- [x] **5.11** Run `uv run ruff check . && uv run ruff format --check . &&
   uv run mypy .` — must be green.
-- [ ] **5.12** Run `uv run pytest tests/unit/model/test_okf.py
+  - Done at archive: verified in slice 5 (ruff, format and mypy clean), then merged as PR #1092.
+- [x] **5.12** Run `uv run pytest tests/unit/model/test_okf.py
   tests/unit/application/test_ingest.py tests/unit/cli/test_ingest.py`
   focused, then `uv run pytest --cov` (unpiped) full suite — must be
   green, 90% branch gate held.
-- [ ] **5.13** Run `uv run python evals/run_self_tests.py` — must be green.
-- [ ] **5.14** Commit as one or more work-unit commits, scope `ingest` (e.g.
+  - Done at archive: verified in slice 5 (pytest --cov: 7176 passed), then merged as PR #1092.
+- [x] **5.13** Run `uv run python evals/run_self_tests.py` — must be green.
+  - Done at archive: verified in slice 5 (evals/run_self_tests.py: 44 of 44).
+- [x] **5.14** Commit as one or more work-unit commits, scope `ingest` (e.g.
   `feat(ingest): propagate a Source's resolved tags onto derived objects
   created in the same run`). Open PR 5 (Phase 5: derived tag propagation)
   targeting `main`, branched from `main` after PR 3 merges.
@@ -1190,6 +1193,7 @@ unchanged, and `query --save`'s output stays byte-identical throughout.
 
 Design.md "Migration / Rollout" and proposal.md's follow-up list.
 
+  - Done at archive: committed and squash-merged as PR #1092.
 - [x] **6.1** [DOC] `docs/knowledge-object-model.md` and/or
   `docs/okf-alignment.md`: add one short note (no counts, per AGENTS.md's
   "docs describe the shape, not the diff") stating that `source_frontmatter`
@@ -1206,7 +1210,7 @@ Design.md "Migration / Rollout" and proposal.md's follow-up list.
     (design's "and/or" is satisfied by one file), since it already
     cross-references `knowledge-object-model.md` as the place the
     OKF/OpenKOS field mapping is specified in detail.
-- [ ] **6.2** [PROCESS] Open follow-up issue **F1: Re-sync tags onto
+- [x] **6.2** [PROCESS] Open follow-up issue **F1: Re-sync tags onto
   existing derived concepts**, per proposal.md's follow-up list: when a
   Source's incoming tags change on re-ingest, existing derived concepts
   keep their creation-time tags; propose an explicit, reviewable verb (or
@@ -1218,6 +1222,7 @@ Design.md "Migration / Rollout" and proposal.md's follow-up list.
     instruction for this slice: the orchestrator opens this follow-up
     issue itself. Not a deviation from design — a routing decision for
     this run.
+  - Done at archive: opened as issue #1093.
 - [x] **6.3** Run `uv run ruff check . && uv run ruff format --check . &&
   uv run mypy .` — must be green (docs-only change; confirms no code was
   accidentally touched).

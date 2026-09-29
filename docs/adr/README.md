@@ -65,4 +65,4 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 | [0027](0027-hand-rolled-stdio-mcp-server.md) | The MCP adapter is a hand-rolled stdio server for protocol revision 2025-11-25, with no SDK | Accepted | 2026-09-26 |
 | [0028](0028-mcp-disclosure-is-its-own-boundary.md) | Disclosure to an MCP client is its own sensitivity boundary -- hidden by default, opened only at launch | Accepted | 2026-09-26 |
 | [0029](0029-adopt-okf-v02-frontmatter.md) | Adopt OKF v0.2 frontmatter -- provenance stays the truth, sources is its projection, and repair migrates existing bundles | Accepted | 2026-09-29 |
-| [0030](0030-untrusted-incoming-frontmatter.md) | Incoming frontmatter is untrusted -- preserved whole in one namespace, with a closed per-key lift | Proposed | 2026-09-29 |
+| [0030](0030-untrusted-incoming-frontmatter.md) | Incoming frontmatter is untrusted -- preserved whole in one namespace, with a closed per-key lift | Accepted | 2026-09-29 |

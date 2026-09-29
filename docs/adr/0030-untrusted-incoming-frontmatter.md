@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0030: Incoming frontmatter is untrusted -- preserved whole in one namespace, with a closed per-key lift"
 description: A source file's own YAML frontmatter is parsed fail-closed (YAML only, bounded, no anchors or aliases, plain data only), stored whole under the Source's source_frontmatter extension key, and only tags, sensitivity (raise-only) and date are lifted into engine fields; engine-owned keys are never lifted, and author/updated stay namespace-only.
-status: Proposed
+status: Accepted
 date: 2026-09-29
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0030: Incoming frontmatter is untrusted -- preserved whole in one namespace, with a closed per-key lift
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-09-29
 
 ## Context

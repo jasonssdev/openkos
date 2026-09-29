@@ -146,6 +146,20 @@ one, unchanged.
 (Previously: `event_date` did not exist; this exclusion did not apply to
 it.)
 
+`source_frontmatter` is likewise EXCLUDED from the generic fill-the-gap
+branch: the absorbed side's value MUST NEVER be imported onto a survivor
+that lacks its own. It records the verbatim incoming frontmatter of ONE
+raw file `ingest` parsed, not a property that generalizes to a merged
+entity, so filling a survivor's gap with it would misattribute one file's
+metadata as belonging to the merged object under the survivor's own
+`resource`. A survivor carrying its OWN `source_frontmatter` MUST keep it,
+unaffected by the absorbed side's value, whatever that value is. A
+survivor with none MUST remain without one after the merge; `unmerge`
+MUST restore the absorbed document's own `source_frontmatter`, if it had
+one, unchanged.
+(Previously: `source_frontmatter` did not exist; this exclusion did not
+apply to it.)
+
 #### Scenario: Conflicting fields resolved and surfaced
 - GIVEN differing scalar and list-field values on both sides
 - WHEN `merge` runs
@@ -189,6 +203,24 @@ it.)
 - WHEN `merge <survivor> <absorbed>` is confirmed
 - THEN the merged document's `event_date` is `2026-07-14`, the survivor's
   own value
+
+#### Scenario: The absorbed source_frontmatter does not cross the merge
+
+- GIVEN a survivor Source with no `source_frontmatter` and an absorbed
+  Source declaring `source_frontmatter: {tags: [alpha]}`
+- WHEN `merge <survivor> <absorbed>` is confirmed
+- THEN the merged document carries no `source_frontmatter` key, and
+  `unmerge` restores the absorbed document's `source_frontmatter` value
+  unchanged
+
+#### Scenario: The survivor keeps its own source_frontmatter
+
+- GIVEN a survivor Source declaring `source_frontmatter: {tags: [alpha]}`
+  and an absorbed Source declaring a DIFFERENT
+  `source_frontmatter: {tags: [beta]}`
+- WHEN `merge <survivor> <absorbed>` is confirmed
+- THEN the merged document's `source_frontmatter` is the survivor's own
+  `{tags: [alpha]}`, unaffected by the absorbed value
 ### Requirement: Sensitivity High-Water-Mark Recomputation
 
 Sensitivity MUST be RECOMPUTED via `combine_sensitivity`, never copied,
