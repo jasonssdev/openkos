@@ -79,21 +79,22 @@ newest-first.
 - WHEN `openkos status` runs
 - THEN it reports a sensible "no recent activity" state and exits 0
 
-### Requirement: Needs-Attention via §9 Conformance
+### Requirement: Needs-Attention via §11 Conformance
 
-`openkos status` MUST surface OKF §9 conformance findings (unparseable
+`openkos status` MUST surface OKF §11 conformance findings (unparseable
 frontmatter, missing/empty `type`) by reusing `check_conformance`, under a
 "needs attention" section. Findings MUST be informational: their presence
 MUST NOT cause a non-zero exit.
+(Previously: named "Needs-Attention via §9 Conformance" and cited OKF §9
+conformance; OKF v0.2 renumbers the conformance section to §11 (v0.2
+§13.1); the underlying `check_conformance` behavior is unchanged.)
 
 #### Scenario: No conformance issues
-
 - GIVEN a bundle where every non-reserved file passes `check_conformance`
 - WHEN `openkos status` runs
 - THEN it reports a "no issues" needs-attention line and exits 0
 
 #### Scenario: Conformance violation is surfaced but non-fatal
-
 - GIVEN a bundle containing a concept file with a missing `type` field
 - WHEN `openkos status` runs
 - THEN the violation is listed under "needs attention" and the command still
@@ -103,12 +104,14 @@ MUST NOT cause a non-zero exit.
 
 `openkos status` MUST fold `lint`'s dangling-reference findings
 (`check_dangling_targets`) into its "needs attention" section, alongside
-§9 conformance findings. Each surfaced entry MUST name the referring
+§11 conformance findings. Each surfaced entry MUST name the referring
 document and the missing target id. Findings MUST be informational: their
 presence MUST NOT cause a non-zero exit.
+(Previously: cited "§9 conformance findings"; OKF v0.2 renumbers the
+conformance section to §11 (v0.2 §13.1); the folding behavior is
+unchanged.)
 
 #### Scenario: Dangling reference is surfaced under needs attention
-
 - GIVEN a bundle containing a concept document whose `relations:` target or
   body link resolves to a concept id absent from disk
 - WHEN `openkos status` runs
@@ -117,7 +120,6 @@ presence MUST NOT cause a non-zero exit.
   exits 0
 
 #### Scenario: Purge-created dangling reference is detected by status
-
 - GIVEN a concept document referencing concept `<id>`, and `<id>` is then
   removed by `openkos purge <id> --force` leaving the referring document's
   reference dangling
@@ -125,12 +127,10 @@ presence MUST NOT cause a non-zero exit.
 - THEN the dangling reference is listed under "needs attention"
 
 #### Scenario: No dangling references, no new needs-attention entries
-
 - GIVEN a bundle where every `relations:` target and resolvable body link
   points to a concept id present on disk
 - WHEN `openkos status` runs
 - THEN no dangling-reference entry appears under "needs attention"
-
 ### Requirement: Needs-Attention Surfaces Pending Duplicate Groups
 
 `openkos status` MUST consult the exact-title-only entry point

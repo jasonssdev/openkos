@@ -1009,11 +1009,17 @@ membership, never by the traversing edge's role alone.
 event-date resolution is unambiguous; `event dates <D1> to <D2>` (earliest
 to latest, ISO) when multiple distinct dates were found across the chain
 member's provenance; or `event date unknown` when resolution is missing or
-unreached. The label MUST NEVER substitute the concept's ingest timestamp
-for an unresolved event date. An event date is resolved by reading only the
+unreached. The label MUST NEVER substitute the concept's generation time
+(`generated.at`, or a legacy `timestamp` on an unmigrated document) for an
+unresolved event date. An event date is resolved by reading only the
 predecessor's own already-admitted `provenance:` entries and, at most one
 hop further, the `provenance:` of any non-Source entry among them; it MUST
 NOT depend on any read outside that bound.
+(Previously: this requirement said the label "MUST NEVER substitute the
+concept's ingest timestamp for an unresolved event date," naming only the
+OKF v0.1 `timestamp` field; OKF v0.2 records that value as `generated.at`,
+with legacy `timestamp` still read on an unmigrated document, and the
+prohibition covers both.)
 
 The successor's own label MUST remain byte-identical to its non-history
 label; the history relationship is carried only on the predecessor's block.
@@ -1057,7 +1063,7 @@ Adding history blocks MUST NOT change the system prompt text.
 - GIVEN a predecessor whose event-date resolution is missing or unreached
 - WHEN `answer(...)` renders its history block label
 - THEN the label reads `event date unknown`, and never substitutes that
-  predecessor's ingest timestamp
+  predecessor's `generated.at` (or legacy `timestamp`) value
 
 #### Scenario: A confidential Source's date resolves as unknown, without excluding the predecessor's own block
 
@@ -1083,7 +1089,6 @@ Adding history blocks MUST NOT change the system prompt text.
 - WHEN `answer(...)` renders the successor's own context block label
 - THEN it is byte-identical to the label it would carry with
   `revision_history` disabled
-
 ### Requirement: Revision History Budget Is A Nested Split Of The Successor's Share Plus Unspent Budget
 
 WHEN one or more history blocks are attached to a successor, the character

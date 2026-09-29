@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0029: Adopt OKF v0.2 frontmatter -- provenance stays the truth, sources is its projection, and repair migrates existing bundles"
 description: OpenKOS writes OKF v0.2 (generated, status stable, sources, okf_version 0.2); provenance remains the internal source of truth and sources is a one-way generated projection; existing bundles migrate only through an explicit repair commit that also migrates the merge ledger; deprecation stays computed from supersedes edges; migrated documents are attributed to openkos/legacy; per-claim footnotes are deferred indefinitely.
-status: Proposed
+status: Accepted
 date: 2026-09-29
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0029: Adopt OKF v0.2 frontmatter -- provenance stays the truth, sources is its projection, and repair migrates existing bundles
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-09-29
 
 ## Context

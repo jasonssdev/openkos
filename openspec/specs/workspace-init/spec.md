@@ -48,15 +48,17 @@ call to action rather than under it.
 ### Requirement: Bundle Index Shape
 
 `bundle/index.md` MUST carry frontmatter whose parsed form has exactly one
-key, `okf_version`, with parsed value equal to the string `0.1`, and an
+key, `okf_version`, with parsed value equal to the string `0.2`, and an
 empty body. The requirement is on the parsed value, not on the byte
 sequence — either single- or double-quoted YAML scalars satisfy it.
+(Previously: the parsed value was `0.1`; OKF v0.2 adoption bumps the
+bundle-root declared version.)
 
 #### Scenario: Exact parsed frontmatter, empty body
 
 - GIVEN a successful init
 - WHEN `bundle/index.md` is parsed
-- THEN the parsed frontmatter equals exactly `{okf_version: "0.1"}` as data
+- THEN the parsed frontmatter equals exactly `{okf_version: "0.2"}` as data
   (quote style on disk is not asserted) and the body is empty
 
 ### Requirement: Bundle Log Shape
@@ -697,7 +699,7 @@ permissions; no `chmod` MUST be applied.
 
 ### Requirement: OKF Conformance
 
-Init's output MUST satisfy OKF §9 conformance for a fresh bundle. Rules 1
+Init's output MUST satisfy OKF §11 conformance for a fresh bundle. Rules 1
 (frontmatter present) and 2 (non-empty `type`) MUST pass vacuously, because
 a fresh bundle contains zero non-reserved `.md` files for the mechanical
 conformance check to inspect. Rule 3 (reserved-file structure) MUST hold by
@@ -708,6 +710,9 @@ When the mechanical conformance check encounters a file it cannot read or
 decode (for example a permission error or invalid encoding), it MUST
 report that failure distinctly as an I/O/read error and MUST NOT report it
 as a conformance violation.
+(Previously: cited OKF §9 conformance; OKF v0.2 renumbers the conformance
+section to §11 (v0.2 §13.1); the underlying rules and their pass/fail
+behavior are unchanged.)
 
 #### Scenario: Mechanical check reports no violations on a fresh bundle
 
@@ -721,7 +726,7 @@ as a conformance violation.
 - GIVEN a successful init
 - WHEN `bundle/index.md` and `bundle/log.md` are inspected against the
   shapes required by Bundle Index Shape and Bundle Log Shape
-- THEN both satisfy OKF §9 rule 3 by construction
+- THEN both satisfy OKF §11 rule 3 by construction
 - AND no mechanical rule-3 check is performed by this slice; that check is
   deferred to `lint`
 
@@ -734,7 +739,6 @@ as a conformance violation.
 - THEN the failure is reported as an I/O/read error distinct from a
   conformance violation, and is not phrased as "no parseable frontmatter"
   or any other conformance-violation wording
-
 ### Requirement: Conditional Git Repository Initialization
 
 `init` MUST run `git init` in the workspace root ONLY when

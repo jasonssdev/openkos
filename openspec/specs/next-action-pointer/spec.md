@@ -354,6 +354,9 @@ Declinations and skip notices are NOT commandless findings and are exempt
 from that sameness rule: both name specific documents this run actually
 observed, so withholding them to keep the output uniform would trade an
 honest report for a tidy one.
+(Previously: the example commandless finding cited "a §9 conformance
+violation"; OKF v0.2 renumbers the conformance section to §11 (v0.2
+§13.1); the requirement's behavior is unchanged.)
 
 #### Scenario: No ranked tier fires on a truly empty bundle
 
@@ -367,12 +370,11 @@ honest report for a tidy one.
 
 - GIVEN a bundle with a present vector index, no unextracted sources, no
   below-source-sensitivity descendants, no exact-title duplicate groups, and
-  at least one commandless finding (a §9 conformance violation, a dangling
+  at least one commandless finding (a §11 conformance violation, a dangling
   reference, or a multi-source-uncovered descendant)
 - WHEN `openkos next` runs
 - THEN it still prints the same no-runnable-action line naming `openkos
   status`, and does not claim the bundle is clean
-
 ### Requirement: No Count of Unseen Findings
 
 `openkos next` MUST NOT print any numeral representing a count of findings
