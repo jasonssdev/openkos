@@ -10,6 +10,7 @@ note. Cases are grouped to mirror `tasks.md` Phase 1's RED/GREEN pairs.
 import pytest
 
 from openkos import source_title
+from openkos.model import okf
 
 # --- `_frontmatter_end`: bounded leading `---` probe (tasks 1.1/1.2) -------
 
@@ -31,6 +32,132 @@ class TestFrontmatterEnd:
         lines = ["---", "not a real frontmatter block"]
 
         assert source_title._frontmatter_end(lines) == 0
+
+
+# --- Shared boundary rule moves to `okf.py` (design.md Decision 10; task 1.1) --
+
+
+class TestFrontmatterEndMovedToOkfModule:
+    def test_frontmatter_end_moved_to_okf_module(self) -> None:
+        """`source_title._frontmatter_end` is no longer its own function body --
+        it is REBOUND to `okf.frontmatter_block_end` (identity, not a wrapper),
+        so the two names can never independently drift apart."""
+        assert source_title._frontmatter_end is okf.frontmatter_block_end
+
+
+# --- Boundary parity: both consumers must agree on where the block ends -------
+# (task 1.2; design.md Decision 10's edge-case table)
+#
+# NOTE ON CIRCULARITY (tasks.md header rule): after task 1.1's rebinding,
+# `source_title._frontmatter_end` and `okf.frontmatter_block_end` are the
+# SAME object, so comparing their outputs to each other would be a property
+# test whose two sides call the same function under test -- exactly the
+# circular shape tasks.md's header warns against. This table instead pairs
+# each row with a LITERAL, independently-reasoned expected index for
+# `okf.frontmatter_block_end`, AND a literal expected title for
+# `source_title.derive_source_title`'s real PUBLIC output on the same text
+# (a marker/decoy H1 placed so a wrong boundary would surface a different,
+# also-literal title). Both sides are checked against hand-computed
+# literals, never against each other.
+
+
+_PARITY_ROWS: list[tuple[str, list[str], int, str | None]] = [
+    ("no_fence", ["# Marker", "", "body"], 0, "Marker"),
+    (
+        # No closing `---` anywhere: `lines[0]` is ordinary content, so the
+        # boundary is `0` and the whole text (including the literal `---`
+        # line) is in scope for title derivation, which finds `# Decoy`.
+        "unterminated_fence",
+        ["---", "# Decoy", "not closed"],
+        0,
+        "Decoy",
+    ),
+    (
+        # `---\n---`: the block is empty, boundary skips both dash lines.
+        "empty_block",
+        ["---", "---", "# Marker"],
+        2,
+        "Marker",
+    ),
+    (
+        # A `---` line inside a markdown fence: the probe is FENCE-BLIND
+        # (module docstring: "a named, accepted inaccuracy, not an
+        # oversight"), so it treats the fence-internal `---` as the real
+        # close (boundary=3). Title derivation then resumes at the `` ``` ``
+        # on that same line, which re-opens an unclosed fence that swallows
+        # `# Marker`, so the title is `None` -- matching the existing
+        # `test_frontmatter_probe_is_fence_blind_by_design` fixture.
+        "dashes_inside_fenced_code_block",
+        ["---", "```", "---", "```", "# Marker"],
+        3,
+        None,
+    ),
+    (
+        # A UTF-8 BOM before the opening `---` defeats detection: `lines[0]`
+        # is `"﻿---"`, not `"---"`, so the boundary stays `0` and the
+        # scan finds `# Decoy` first. A parser that stripped the BOM before
+        # comparing would instead skip to the real closing `---` and surface
+        # `# Marker` -- a different, equally literal title.
+        "utf8_bom_before_opening_dashes",
+        ["﻿---", "# Decoy", "---", "# Marker"],
+        0,
+        "Decoy",
+    ),
+    (
+        # `"--- "` (trailing space) must NOT open a block: boundary stays
+        # `0`, so `# Decoy` is found first, not `# Marker`.
+        "trailing_space_after_dashes",
+        ["--- ", "# Decoy", "---", "# Marker"],
+        0,
+        "Decoy",
+    ),
+    (
+        # A bare `----` line must NOT open a block either.
+        "bare_four_dashes",
+        ["----", "# Decoy", "---", "# Marker"],
+        0,
+        "Decoy",
+    ),
+    (
+        # Closing fence is the very last element of `lines` -- no trailing
+        # empty-string entry for a final newline. Boundary equals
+        # `len(lines)`, so no body line remains and the title is `None`.
+        "closing_fence_on_last_line_no_trailing_newline",
+        ["---", "# Marker", "---"],
+        3,
+        None,
+    ),
+    (
+        # A CRLF-newline file: `Path.read_text(encoding="utf-8")` already
+        # applies universal-newline translation before either function ever
+        # sees the text, so by the time `lines` exists here, no `\r`
+        # survives -- ordinary well-formed frontmatter, documented as this
+        # specific edge case rather than exercising a `\r`-handling path.
+        "crlf_file_after_universal_newline_translation",
+        ["---", "# Decoy", "---", "# Marker"],
+        3,
+        "Marker",
+    ),
+]
+
+
+class TestFrontmatterBlockEndParityTable:
+    @pytest.mark.parametrize(
+        ("lines", "expected_index", "expected_title"),
+        [(row[1], row[2], row[3]) for row in _PARITY_ROWS],
+        ids=[row[0] for row in _PARITY_ROWS],
+    )
+    def test_frontmatter_block_end_parity_table(
+        self, lines: list[str], expected_index: int, expected_title: str | None
+    ) -> None:
+        """`okf.frontmatter_block_end` returns the literal expected index for
+        each edge case (design.md Decision 10's table), and
+        `source_title.derive_source_title`'s real public output over the
+        same text is consistent with that exact boundary -- both checked
+        against independently hand-computed literals, not against each
+        other (see the module note above on avoiding a circular pair)."""
+        assert okf.frontmatter_block_end(lines) == expected_index
+        assert source_title.derive_source_title("\n".join(lines)) == expected_title
 
 
 # --- Frontmatter skipping via the PUBLIC API (review finding: `_frontmatter_end`
