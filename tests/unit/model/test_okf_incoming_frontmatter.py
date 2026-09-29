@@ -105,11 +105,11 @@ class TestParseTooLargeBoundary:
 
 # --- `alias`: anchor/alias expansion guard (task 1.7) -----------------------
 #
-# Only an ACTUAL alias reference (an `AliasEvent`) is a hazard -- a bare,
-# unreferenced anchor is harmless and must parse normally (this narrows
-# design.md Decision 1 check #3's "any non-None anchor" wording to the
-# case that actually matters: reflexive/amplifying alias REFERENCES, not
-# anchor DEFINITIONS on their own).
+# design.md Decision 1 check #3 and ADR-0030: ANY anchor definition or
+# alias reference is rejected. An anchor on its own is harmless, but
+# rejecting every anchor removes the whole amplification class at the cheapest
+# point, and it keeps the stored `source_frontmatter` free of `&`/`*` forever
+# (design.md Decision 2: our own parser would refuse them on the next read).
 
 
 class TestParseAliasCases:
@@ -134,10 +134,17 @@ class TestParseAliasCases:
 
         assert result == okf.IncomingFrontmatter(status="alias", mapping=None)
 
-    def test_lone_anchor_with_no_alias_is_not_rejected(self) -> None:
+    def test_lone_anchor_with_no_alias_is_rejected(self) -> None:
         lone_anchor = "key: &a value"
 
         result = okf.parse_incoming_frontmatter(_frontmatter_text(lone_anchor))
+
+        assert result == okf.IncomingFrontmatter(status="alias", mapping=None)
+
+    def test_plain_mapping_without_anchor_still_parses(self) -> None:
+        # Precondition for the rejection above: the same shape WITHOUT the
+        # `&a` anchor parses, so the rejection is caused by the anchor alone.
+        result = okf.parse_incoming_frontmatter(_frontmatter_text("key: value"))
 
         assert result.status == "parsed"
         assert result.mapping == {"key": "value"}

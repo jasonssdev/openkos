@@ -685,9 +685,11 @@ def _incoming_frontmatter_prescan(
     block: str,
 ) -> IncomingFrontmatterStatus | None:
     """One pass over the YAML event stream (design.md Decision 1, checks
-    3-5): reject an actual alias REFERENCE (an `AliasEvent`) -- not a bare,
-    unreferenced anchor definition, which is harmless on its own and must
-    still parse -- reject nesting deeper than
+    3-5): reject ANY anchor definition or alias reference (design.md
+    Decision 1 check 3, ADR-0030) -- an anchor alone is inert, but rejecting
+    every anchor removes the whole amplification class at the cheapest point
+    and keeps stored `source_frontmatter` free of `&`/`*` -- reject nesting
+    deeper than
     `INCOMING_FRONTMATTER_MAX_DEPTH` (root mapping counts as depth 1), and
     reject more than one `DocumentStartEvent`. That last branch is
     defensive: given `_incoming_frontmatter_block`'s own boundary rule (any
@@ -709,7 +711,9 @@ def _incoming_frontmatter_prescan(
     document_starts = 0
     try:
         for event in yaml.parse(block, Loader=yaml.SafeLoader):
-            if isinstance(event, yaml.AliasEvent):
+            if isinstance(event, yaml.AliasEvent) or (
+                getattr(event, "anchor", None) is not None
+            ):
                 return "alias"
             if isinstance(event, yaml.DocumentStartEvent):
                 document_starts += 1

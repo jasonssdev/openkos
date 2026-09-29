@@ -208,6 +208,7 @@ bundle byte.
   entirely and confirm the billion-laughs row no longer returns `"alias"`
   (it must not hang or exhaust memory either, but the status assertion
   alone proves the guard fired).
+  - Corrected at review: ANY anchor definition is rejected (design.md Decision 1 check 3 and ADR-0030), not only alias references; the "lone anchor must parse" wording in this task contradicted the design and was dropped. RED was observed on the flipped test before the one-line guard change.
 - [x] **1.8** [TEST] Same file — add `test_parse_too_deep_boundary`: a
   block with nested-collection depth exactly
   `INCOMING_FRONTMATTER_MAX_DEPTH` (32) parses (`status="parsed"`); depth
