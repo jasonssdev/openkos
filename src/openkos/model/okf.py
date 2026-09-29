@@ -23,6 +23,7 @@ from pathlib import Path, PurePosixPath
 from typing import Final, Literal, get_args
 
 import frontmatter
+import yaml
 
 from openkos.model.types import BUILDABLE_TYPES as _CONCEPT_TYPES
 
@@ -2109,6 +2110,228 @@ def build_merged_document(
         merged_body += "\n"
 
     return merged, merged_body
+
+
+_CITATIONS_HEADING: Final = "# Citations"
+"""The exact, bare OKF §8 reserved heading `build_source_concept` used to
+write at the end of every Source's body (before this change removed the
+append -- design.md Decision 3). `migrate_document`'s R4 rule looks for
+this EXACT line, nothing looser (a `## Citations` or `# Citations Notes`
+line is prose the engine never wrote, and is left alone as ordinary body
+content, not scanned by this constant)."""
+
+
+def _citations_state(body: str) -> tuple[bool, bool, int]:
+    """Scan `body` (already-parsed, no leading/trailing framing whitespace --
+    `load_frontmatter`'s `.content`) for the LAST line that is exactly
+    `_CITATIONS_HEADING`. Returns `(has_citations, bare_trailing,
+    heading_line_index)`: `has_citations` is `False` (heading_line_index
+    `-1`) when no such line exists; `bare_trailing` is `True` only when
+    every line AFTER that heading is blank/whitespace-only -- "only
+    whitespace after it" (okf-v02-migration design.md Decision 8's R4 row).
+    A heading with real content after it (hand-authored citations), or a
+    bare one followed by MORE body content (a heading that is not actually
+    the document's last section), is `bare_trailing=False` -- left in place
+    and reported, never guessed at."""
+    lines = body.split("\n")
+    indices = [i for i, line in enumerate(lines) if line.strip() == _CITATIONS_HEADING]
+    if not indices:
+        return False, False, -1
+    last = indices[-1]
+    after = "\n".join(lines[last + 1 :])
+    return True, not after.strip(), last
+
+
+def _scalar_source_text(frontmatter_block: str, key: str) -> str | None:
+    """The RAW, UNRESOLVED source text of `key`'s top-level scalar value
+    inside `frontmatter_block` (the `---`-delimited block
+    `split_frontmatter_verbatim` returns), via `yaml.compose` -- which
+    yields the exact characters the author wrote, never the value PyYAML
+    would RESOLVE it to. A bare, unquoted `timestamp: 2026-07-14T09:00:00Z`
+    resolves to a `datetime` whose `isoformat()` would rewrite the `Z`
+    suffix as `+00:00` -- exactly the corruption design.md Decision 5 calls
+    out and this function exists to avoid. Returns `None` if `key` is
+    absent, or is not a top-level scalar entry of the mapping."""
+    inner = frontmatter_block[len("---\n") : -len("---\n")]
+    node = yaml.compose(inner)
+    if not isinstance(node, yaml.MappingNode):
+        return None
+    for key_node, value_node in node.value:
+        if key_node.value == key and isinstance(value_node, yaml.ScalarNode):
+            scalar_value = value_node.value
+            if isinstance(scalar_value, str):
+                return scalar_value
+            return None
+    return None
+
+
+@dataclass(frozen=True)
+class MigrationChanges:
+    """Which of `migrate_document`'s independent rules fired for one
+    `Migrated` result (okf-v02-migration design.md Decision 8's Interfaces/
+    Contracts table). `legacy_citations` is `True` when a hand-authored
+    `# Citations` section was left in place (decision C) -- it can be
+    `True` on a `Migrated` result even when `citations_removed` is `False`,
+    if some OTHER rule (R1/R2/R3) also fired on the same document."""
+
+    generated: bool
+    status: bool
+    sources: bool
+    citations_removed: bool
+    legacy_citations: bool
+
+
+@dataclass(frozen=True)
+class Unchanged:
+    """`migrate_document` found nothing to rewrite. Carries NO `text` field
+    by design (design.md Decision 8): the caller keeps using its OWN input
+    bytes, untouched -- this is what makes "no rule fired" and "the bytes
+    are identical" the same fact, and is why an already-v0.2 or hand-
+    formatted document is never cosmetically re-serialized. `legacy_citations`
+    still reports a hand-authored `# Citations` section left in place, even
+    though nothing else about the document changed."""
+
+    legacy_citations: bool
+
+
+@dataclass(frozen=True)
+class Migrated:
+    """`migrate_document` rewrote at least one rule; `text` is the full,
+    re-serialized document (frontmatter re-dumped via `dump_frontmatter`,
+    body preserved byte-for-byte except R4's removal)."""
+
+    text: str
+    changes: MigrationChanges
+
+
+@dataclass(frozen=True)
+class Refused:
+    """`migrate_document` could not migrate this document deterministically
+    -- unparseable/missing frontmatter, or a non-scalar `timestamp` with no
+    `generated` to fall back to. The caller (`repair`, Phase 6) refuses the
+    WHOLE run rather than guessing at one document (design.md Decision 9:
+    "repair never guesses")."""
+
+    reason: str
+
+
+MigrationResult = Unchanged | Migrated | Refused
+"""The three-way outcome of `migrate_document` (okf-v02-migration design.md
+Decision 8)."""
+
+
+def migrate_document(text: str) -> MigrationResult:
+    """Pure, bytes-in/bytes-out migration of ONE OKF v0.1-shaped document to
+    v0.2 shape (okf-v02-migration design.md Decision 8; okf-format-migration
+    spec: "`repair` Migrates An OKF v0.1 Bundle To v0.2 In One Commit").
+    Every rule is independent and, when it fires, is applied to the SAME
+    re-serialized result -- there is no early return once any rule fires,
+    so a document needing several rewrites gets all of them in one pass:
+
+    - **R1 `generated`**: `generated` absent and `timestamp` a scalar ->
+      `generated: {by: openkos/legacy, at: <timestamp's exact source
+      text>}`, `timestamp` removed. `generated` present (with or without a
+      leftover `timestamp`), or neither key present -> no-op. `timestamp` a
+      mapping or list with no `generated` -> `Refused("timestamp is not a
+      scalar")` -- this is the ONLY case that refuses; every other
+      documented condition is a no-op or a rewrite.
+    - **R2 `status`**: the EXACT literal `"active"` -> `"stable"` in place;
+      every other value (`"stable"`, `"draft"`, `"deprecated"`, absent, or
+      any other string) is left untouched -- no engine path ever writes
+      `deprecated` (design.md Decision 6).
+    - **R3 `sources`**: when `project_sources(provenance)` is not `None`
+      and differs from the current `sources` value (absent counts as
+      differing), it is set via the same insert-or-replace rule
+      `build_concept` uses. When the projection IS `None`, this rule never
+      touches `sources` -- it does not remove a stale key the way
+      `refresh_sources` does (that maintenance-only behavior is
+      `apply_provenance_rewrites`'s job, not this function's).
+    - **R4 `# Citations`**: only for `type: Source`, and only when the
+      document's body ends with a BARE `# Citations` heading (nothing but
+      whitespace after it) -- that heading and the blank line before it are
+      removed. A hand-authored, non-empty `# Citations` section anywhere in
+      the body, OR a bare heading that is NOT the body's true last content,
+      is left in place untouched and reported via
+      `MigrationChanges.legacy_citations`/`Unchanged.legacy_citations`
+      (decision C) -- `migrate_document` never converts hand-authored
+      citation content into `sources` entries, and never removes anything
+      it cannot prove is the engine's own bare, empty heading. A non-Source
+      document carrying ANY `# Citations` heading (bare or not, trailing or
+      not) is reported the same way, conservatively, since only a Source's
+      OWN engine-written heading is ever eligible for silent removal.
+
+    When NO rule fires, the result is `Unchanged` -- the input bytes are
+    returned untouched (no re-serialization at all), so detection is
+    exactly "would migration change the bytes", and an already-v0.2 or
+    hand-formatted document is never cosmetically rewritten. When any rule
+    fires, the frontmatter is re-serialized through `dump_frontmatter` (the
+    same path every other engine rewrite in this module already takes).
+
+    Refuses (never guesses) on unparseable or missing frontmatter, and on a
+    non-scalar `timestamp` with no `generated` present -- matching
+    `repair`'s "refuse the whole run rather than migrate a document
+    incorrectly" posture (design.md Decision 9).
+    """
+    try:
+        block, _ = split_frontmatter_verbatim(text, label="migrate_document")
+    except ValueError:
+        return Refused("unparseable frontmatter")
+    try:
+        metadata, body = load_frontmatter(text)
+    except Exception:  # broad: any malformed YAML must refuse, not crash
+        return Refused("unparseable frontmatter")
+
+    has_generated = "generated" in metadata
+    has_timestamp = "timestamp" in metadata
+    generated_change = False
+    new_generated_at = ""
+    if not has_generated and has_timestamp:
+        timestamp_value = metadata["timestamp"]
+        if isinstance(timestamp_value, dict | list):
+            return Refused("timestamp is not a scalar")
+        raw_at = _scalar_source_text(block, "timestamp")
+        if raw_at is None:
+            return Refused("unparseable frontmatter")
+        new_generated_at = raw_at
+        generated_change = True
+
+    status_change = metadata.get("status") == "active"
+
+    projected_sources = project_sources(metadata.get("provenance"))
+    sources_change = (
+        projected_sources is not None and metadata.get(SOURCES_KEY) != projected_sources
+    )
+
+    doc_type = metadata.get("type")
+    has_citations, bare_trailing, heading_index = _citations_state(body)
+    citations_removed = doc_type == "Source" and has_citations and bare_trailing
+    legacy_citations = has_citations and not citations_removed
+
+    if not (generated_change or status_change or sources_change or citations_removed):
+        return Unchanged(legacy_citations=legacy_citations)
+
+    new_metadata = dict(metadata)
+    if generated_change:
+        del new_metadata["timestamp"]
+        new_metadata["generated"] = {"by": LEGACY_ACTOR, "at": new_generated_at}
+    if status_change:
+        new_metadata["status"] = "stable"
+    if sources_change:
+        new_metadata[SOURCES_KEY] = projected_sources
+
+    new_body = body
+    if citations_removed:
+        lines = body.split("\n")
+        new_body = "\n".join(lines[:heading_index])
+
+    changes = MigrationChanges(
+        generated=generated_change,
+        status=status_change,
+        sources=sources_change,
+        citations_removed=citations_removed,
+        legacy_citations=legacy_citations,
+    )
+    return Migrated(text=dump_frontmatter(new_metadata, new_body), changes=changes)
 
 
 @dataclass(frozen=True)
