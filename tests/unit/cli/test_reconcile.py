@@ -609,7 +609,7 @@ def test_additive_only_preserves_existing_body_and_relations(
     metadata_a, _ = okf.load_frontmatter(
         (tmp_path / "bundle" / f"{a_id}.md").read_text(encoding="utf-8")
     )
-    assert metadata_a.get("status") == "active"
+    assert metadata_a.get("status") == "stable"
 
 
 # -- #313: re-validate every write target after the confirm gate ------------

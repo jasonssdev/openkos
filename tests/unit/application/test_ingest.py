@@ -279,6 +279,26 @@ def test_stage_derived_objects_returns_plans_on_success(tmp_path: Path) -> None:
     assert outcome.lost_in_staging == 0
 
 
+def test_stage_derived_objects_emits_generated_and_stable_status(
+    tmp_path: Path,
+) -> None:
+    """Task 2.10 (derived-object half): a staged `DerivedPlan`'s content
+    carries `generated`/`status: stable`, mirroring the Source path, with no
+    `timestamp` key."""
+    outcome = ingest_service.stage_derived_objects(
+        **_stage_kwargs(tmp_path, llm=_FakeLLM(_concept_reply()))  # type: ignore[arg-type]
+    )
+
+    metadata, _ = okf.load_frontmatter(outcome.plans[0].content)
+
+    assert metadata["generated"] == {
+        "by": okf.engine_actor(),
+        "at": "2026-07-14T18:30:00Z",
+    }
+    assert metadata["status"] == "stable"
+    assert "timestamp" not in metadata
+
+
 def test_stage_derived_objects_renders_nothing(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -544,7 +564,7 @@ def _prior_concept_text(**overrides: object) -> str:
         ),
         "resource": "raw/notes.txt",
         "tags": [],
-        "timestamp": "2026-07-01T00:00:00Z",
+        "generated": okf.Generated(by="openkos/test", at="2026-07-01T00:00:00Z"),
         "sensitivity": "private",
         "provenance": ["raw/notes.txt"],
         "raw_content": "Some raw notes about self-control.",
@@ -662,6 +682,33 @@ def test_compose_source_document_concept_text_none_means_no_prior_source() -> No
     assert plan.on_disk_title is None
     assert plan.resolved_sensitivity == "private"
     assert "Some raw notes about self-control." in plan.content
+
+
+def test_compose_source_document_emits_generated_and_stable_status() -> None:
+    """Task 2.10: the written Source's frontmatter carries `generated: {by:
+    <engine_actor()>, at: <the same instant previously passed as
+    timestamp>}` and `status: stable`, with no `timestamp` key
+    (okf-v02-migration design.md Decision 5)."""
+    plan = ingest_service.compose_source_document(
+        raw_content="Some raw notes about self-control.",
+        source_stem="notes",
+        source_display_path="notes.txt",
+        source_document_display_path="bundle/sources/notes.md",
+        resource="raw/notes.txt",
+        origin_key="deadbeef",
+        concept_text=None,
+        cfg=_default_cfg(),
+        timestamp="2026-07-14T18:30:00Z",
+    )
+
+    metadata, _ = okf.load_frontmatter(plan.content)
+
+    assert metadata["generated"] == {
+        "by": okf.engine_actor(),
+        "at": "2026-07-14T18:30:00Z",
+    }
+    assert metadata["status"] == "stable"
+    assert "timestamp" not in metadata
 
 
 def test_compose_source_document_reads_back_on_disk_sensitivity() -> None:

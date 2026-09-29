@@ -127,7 +127,11 @@ def test_plan_merge_frontmatter_conflicts_scalar_list_freshness() -> None:
 
     assert metadata["title"] == "Stoicism"
     assert metadata["tags"] == ["philosophy", "ethics"]
-    assert metadata["timestamp"] == "2026-07-15T09:00:00Z"
+    assert metadata["generated"] == {
+        "by": okf.LEGACY_ACTOR,
+        "at": "2026-07-15T09:00:00Z",
+    }
+    assert "timestamp" not in metadata
     assert metadata["freshness"] == "verified"
 
 

@@ -176,7 +176,7 @@ def _write_derived_concept(
         body="",
         provenance=provenance,
         sensitivity=sensitivity,
-        timestamp="2024-01-01T00:00:00Z",
+        generated=okf.Generated(by="openkos/test", at="2024-01-01T00:00:00Z"),
     )
     path = tmp_path / "bundle" / "concepts" / f"{slug}.md"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -1436,7 +1436,7 @@ def test_raise_does_not_propagate_into_a_dot_directory(
             body="",
             provenance=[source_id],
             sensitivity="public",
-            timestamp="2024-01-01T00:00:00Z",
+            generated=okf.Generated(by="openkos/test", at="2024-01-01T00:00:00Z"),
         ),
         encoding="utf-8",
     )

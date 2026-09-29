@@ -1,0 +1,72 @@
+{
+  "concept_minimal": {
+    "args": {
+      "body": "The dichotomy of control separates what is up to us from what is not.",
+      "description": "Hellenistic school holding that virtue is the only good, and that freedom comes from knowing what is up to us.",
+      "provenance": [
+        "sources/call-with-maria-salazar"
+      ],
+      "sensitivity": "confidential",
+      "timestamp": "2026-07-14T18:30:00Z",
+      "title": "Stoicism",
+      "type": "Concept"
+    },
+    "builder": "build_concept",
+    "text": "---\ndescription: Hellenistic school holding that virtue is the only good, and that freedom\n  comes from knowing what is up to us.\nfreshness: snapshot\nprovenance:\n- sources/call-with-maria-salazar\nsensitivity: confidential\nstatus: active\ntags: []\ntimestamp: '2026-07-14T18:30:00Z'\ntitle: Stoicism\ntype: Concept\nversion: 1\n---\n\n# Stoicism\n\nHellenistic school holding that virtue is the only good, and that freedom comes from knowing what is up to us.\n\nThe dichotomy of control separates what is up to us from what is not.\n\n## Related\n\n- [sources/call-with-maria-salazar](/sources/call-with-maria-salazar.md) — source this was extracted from\n"
+  },
+  "concept_with_related_notes": {
+    "args": {
+      "body": "An answer synthesized from two cited concepts.",
+      "description": "What is the dichotomy of control?",
+      "provenance": [
+        "sources/first-source",
+        "sources/second-source"
+      ],
+      "related_note": "concept cited to produce this answer",
+      "related_notes": {
+        "sources/first-source": "earlier version (superseded) cited as history for this answer"
+      },
+      "sensitivity": "private",
+      "timestamp": "2026-08-01T12:00:00Z",
+      "title": "Filed Answer About Stoicism",
+      "type": "Insight"
+    },
+    "builder": "build_concept",
+    "text": "---\ndescription: What is the dichotomy of control?\nfreshness: snapshot\nprovenance:\n- sources/first-source\n- sources/second-source\nsensitivity: private\nstatus: active\ntags: []\ntimestamp: '2026-08-01T12:00:00Z'\ntitle: Filed Answer About Stoicism\ntype: Insight\nversion: 1\n---\n\n# Filed Answer About Stoicism\n\nWhat is the dichotomy of control?\n\nAn answer synthesized from two cited concepts.\n\n## Related\n\n- [sources/first-source](/sources/first-source.md) — earlier version (superseded) cited as history for this answer\n- [sources/second-source](/sources/second-source.md) — concept cited to produce this answer\n"
+  },
+  "source_binary_fallback": {
+    "args": {
+      "description": "Raw source imported from raw/attachment.bin; not yet compiled or extracted into concepts.",
+      "provenance": [
+        "raw/attachment.bin"
+      ],
+      "raw_content": null,
+      "resource": "raw/attachment.bin",
+      "sensitivity": "private",
+      "tags": [],
+      "timestamp": "2026-07-20T09:15:00Z",
+      "title": "Binary Attachment"
+    },
+    "builder": "build_source_concept",
+    "text": "---\ndescription: Raw source imported from raw/attachment.bin; not yet compiled or extracted\n  into concepts.\nfreshness: snapshot\nprovenance:\n- raw/attachment.bin\nresource: raw/attachment.bin\nsensitivity: private\nstatus: active\ntags: []\ntimestamp: '2026-07-20T09:15:00Z'\ntitle: Binary Attachment\ntype: Source\nversion: 1\n---\n\n# Binary Attachment\n\nRaw source imported from raw/attachment.bin; not yet compiled or extracted into concepts.\n\n_Source content could not be embedded as text (binary or non-UTF-8); see the linked resource._\n\n# Citations\n"
+  },
+  "source_verbatim_embed": {
+    "args": {
+      "description": "Raw source imported from raw/call-with-maria.txt; not yet compiled or extracted into concepts.",
+      "provenance": [
+        "raw/call-with-maria.txt"
+      ],
+      "raw_content": "Full verbatim call notes about self-control and virtue.",
+      "resource": "raw/call-with-maria.txt",
+      "sensitivity": "private",
+      "tags": [
+        "call",
+        "philosophy"
+      ],
+      "timestamp": "2026-07-14T18:30:00Z",
+      "title": "Call with Maria Salazar"
+    },
+    "builder": "build_source_concept",
+    "text": "---\ndescription: Raw source imported from raw/call-with-maria.txt; not yet compiled or\n  extracted into concepts.\nfreshness: snapshot\nprovenance:\n- raw/call-with-maria.txt\nresource: raw/call-with-maria.txt\nsensitivity: private\nstatus: active\ntags:\n- call\n- philosophy\ntimestamp: '2026-07-14T18:30:00Z'\ntitle: Call with Maria Salazar\ntype: Source\nversion: 1\n---\n\n# Call with Maria Salazar\n\nRaw source imported from raw/call-with-maria.txt; not yet compiled or extracted into concepts.\n\n## Source content\n\nFull verbatim call notes about self-control and virtue.\n\n# Citations\n"
+  }
+}

@@ -272,7 +272,7 @@ Design.md "Technical Approach" layer 2 (first half) and Decision 5. No
 
 ### `model/okf.py` — `Generated`, `engine_actor`, `LEGACY_ACTOR`, `OKF_VERSION`
 
-- [ ] **2.1** [TEST] `tests/unit/model/test_okf.py` — add
+- [x] **2.1** [TEST] `tests/unit/model/test_okf.py` — add
   `test_engine_actor_reads_installed_distribution_version`: monkeypatches
   `importlib.metadata.version("openkos")` to return `"9.9.9"` and asserts
   `okf.engine_actor() == "openkos/9.9.9"`; a second case monkeypatches it to
@@ -281,22 +281,22 @@ Design.md "Technical Approach" layer 2 (first half) and Decision 5. No
   existing degrade pattern — grep it for the exact fallback string before
   writing this assertion). **RED today**: `AttributeError` —
   `okf.engine_actor` does not exist.
-- [ ] **2.2** [IMPL] `src/openkos/model/okf.py`: add `@dataclass(frozen=True)
+- [x] **2.2** [IMPL] `src/openkos/model/okf.py`: add `@dataclass(frozen=True)
   class Generated: by: str; at: str`, `LEGACY_ACTOR: Final =
   "openkos/legacy"`, and `engine_actor() -> str`, copying `mcp/server.py`'s
   existing version-lookup degrade pattern exactly (no new dependency).
   Makes 2.1 GREEN.
-- [ ] **2.3** [TEST] Same file — add
+- [x] **2.3** [TEST] Same file — add
   `test_okf_version_is_0_2`: `okf.OKF_VERSION == "0.2"`. **RED today**:
   `AssertionError` — currently `"0.1"`.
-- [ ] **2.4** [IMPL] Same module: change `OKF_VERSION: Final = "0.1"` to
+- [x] **2.4** [IMPL] Same module: change `OKF_VERSION: Final = "0.1"` to
   `"0.2"`. **Do not** run the full suite yet — this single-line change is
   expected to turn many existing golden-byte assertions RED across the repo;
   those are fixed by 2.16 below. Makes 2.3 GREEN in isolation.
 
 ### `model/okf.py` — builders take `generated`, drop `timestamp`
 
-- [ ] **2.5** [TEST] `tests/unit/model/test_okf.py` — add
+- [x] **2.5** [TEST] `tests/unit/model/test_okf.py` — add
   `test_build_source_concept_emits_generated_and_stable_status`: calling
   `build_source_concept(..., generated=okf.Generated(by="openkos/test",
   at="2026-01-01T00:00:00Z"), ...)` (dropping the current `timestamp=`
@@ -305,7 +305,7 @@ Design.md "Technical Approach" layer 2 (first half) and Decision 5. No
   Covers ingestion's "Ingest Raw Copy and Source Concept Generation" v0.2
   field-set clause. **RED today**: `TypeError` — `build_source_concept` has
   no `generated` parameter and still requires `timestamp`.
-- [ ] **2.6** [TEST] Same file — add
+- [x] **2.6** [TEST] Same file — add
   `test_build_source_concept_body_has_no_trailing_citations_heading`: the
   built Source's body, for both the verbatim-embed and undecodable-fallback
   cases, ends with exactly one trailing `\n` and no `# Citations` heading.
@@ -313,36 +313,36 @@ Design.md "Technical Approach" layer 2 (first half) and Decision 5. No
   no-Citations clause) and design.md's note that the new
   `build_source_concept` body ends `...{section.rstrip("\n")}\n`. **RED
   today**: `AssertionError` — the current builder appends the heading.
-- [ ] **2.7** [IMPL] `src/openkos/model/okf.py`: change
+- [x] **2.7** [IMPL] `src/openkos/model/okf.py`: change
   `build_source_concept`'s signature to take `generated: Generated` instead
   of `timestamp: str`, write `generated`/`status: "stable"` into the
   frontmatter dict, and remove the empty `# Citations` heading append at the
   end of body construction (`...{section.rstrip("\n")}\n`). Makes 2.5-2.6
   GREEN.
-- [ ] **2.8** [TEST] Same file — add
+- [x] **2.8** [TEST] Same file — add
   `test_build_concept_emits_generated_and_stable_status`: same shape as 2.5
   for `build_concept`. **RED today**: `TypeError`.
-- [ ] **2.9** [IMPL] Same module: change `build_concept`'s signature
+- [x] **2.9** [IMPL] Same module: change `build_concept`'s signature
   identically (`generated: Generated` replaces `timestamp: str`; writes
   `generated`/`status: "stable"`). Makes 2.8 GREEN.
 
 ### Call sites: `application/ingest.py`, `application/query.py`, `cli/main.py`
 
-- [ ] **2.10** [TEST] `tests/unit/application/test_ingest.py` — extend the
+- [x] **2.10** [TEST] `tests/unit/application/test_ingest.py` — extend the
   existing successful-ingest assertions to check the written Source's
   frontmatter carries `generated: {by: <engine_actor()>, at: <the same
   instant previously passed as timestamp>}` and `status: "stable"`, with no
   `timestamp` key. **RED today**: `TypeError` at the `build_source_concept`
   call site (still passes `timestamp=`).
-- [ ] **2.11** [IMPL] `src/openkos/application/ingest.py`: replace every
+- [x] **2.11** [IMPL] `src/openkos/application/ingest.py`: replace every
   `timestamp=<now>` argument passed to `build_source_concept`/`build_concept`
   with `generated=okf.Generated(by=okf.engine_actor(), at=<now
   ISO-8601>)`. Makes 2.10 GREEN.
-- [ ] **2.12** [TEST] `tests/unit/application/test_query.py` — same pattern
+- [x] **2.12** [TEST] `tests/unit/application/test_query.py` — same pattern
   for the `query --save` (Insight) write path. **RED today**: `TypeError`.
-- [ ] **2.13** [IMPL] `src/openkos/application/query.py`: same replacement
+- [x] **2.13** [IMPL] `src/openkos/application/query.py`: same replacement
   for the Insight builder call. Makes 2.12 GREEN.
-- [ ] **2.14** [IMPL] `src/openkos/cli/main.py`: update the
+- [x] **2.14** [IMPL] `src/openkos/cli/main.py`: update the
   `application_ingest`/`application_query` staging call sites design.md
   names (approx. lines 5302, 5421, 5516, 15081) that currently pass
   `timestamp=` down into `model/okf.py` builders, to pass `generated=`
@@ -351,7 +351,7 @@ Design.md "Technical Approach" layer 2 (first half) and Decision 5. No
 
 ### `build_merged_document` generation rule + `active` → `stable`
 
-- [ ] **2.15** [TEST] `tests/unit/model/test_okf.py` — add
+- [x] **2.15** [TEST] `tests/unit/model/test_okf.py` — add
   `test_build_merged_document_generation_rule_table`, parametrized over the
   four cases design.md Decision 5 names: v0.2 survivor + legacy-timestamped
   absorbed (survivor's `generated` wins if more recent, else absorbed's is
@@ -366,13 +366,13 @@ Design.md "Technical Approach" layer 2 (first half) and Decision 5. No
   document still carries a bare `timestamp` key. Kills the winner picked by
   raw-string comparison instead of `generation_time`, and kills a merged
   document that keeps `timestamp` instead of writing `generated`.
-- [ ] **2.16** [TEST] Same file — add
+- [x] **2.16** [TEST] Same file — add
   `test_build_merged_document_status_active_to_stable`: a survivor or
   absorbed side carrying `status: active` yields a merged document with
   `status: "stable"`; a side carrying `status: draft` or `status: deprecated`
   is left untouched (survivor-wins default applies as today). **RED today**:
   no normalization exists yet.
-- [ ] **2.17** [IMPL] `src/openkos/model/okf.py`: replace
+- [x] **2.17** [IMPL] `src/openkos/model/okf.py`: replace
   `_absorbed_is_more_recent`'s two `_parse_timestamp` calls with
   `generation_time` calls over each side's full metadata mapping; add
   `generated`/`timestamp` to `build_merged_document`'s special-keys handling
@@ -385,7 +385,7 @@ Design.md "Technical Approach" layer 2 (first half) and Decision 5. No
 
 ### Frozen v0.1 fixture + golden regeneration
 
-- [ ] **2.18** [IMPL] Move today's v0.1 builder goldens into
+- [x] **2.18** [IMPL] Move today's v0.1 builder goldens into
   `tests/unit/model/fixtures/okf_v01_documents.json` (new file): a
   representative set of `build_source_concept`/`build_concept` outputs
   produced with the OLD `timestamp=`/`status: active` signature, frozen as
@@ -393,12 +393,12 @@ Design.md "Technical Approach" layer 2 (first half) and Decision 5. No
   Phase 2's "what a pre-this-change engine wrote" regression baseline. No
   paired TEST — this is fixture data, verified indirectly by every test that
   loads it in Phase 4.
-- [ ] **2.19** [IMPL] Regenerate `tests/unit/model/fixtures/
+- [x] **2.19** [IMPL] Regenerate `tests/unit/model/fixtures/
   okf_framing_goldens.json` with the new v0.2 builder signatures and a fixed
   `Generated(by="openkos/test", at="2026-01-01T00:00:00Z")` (or the file's
   existing convention for a pinned actor) so every golden test using it is
   deterministic across machines.
-- [ ] **2.20** [IMPL] Update every test file design.md's "Goldens and
+- [x] **2.20** [IMPL] Update every test file design.md's "Goldens and
   fixtures" section names (about 80 occurrences across 12 test files) that
   pin `status: active`/`timestamp:` byte sequences, to the new
   `generated`/`status: stable` shape — grep `timestamp:` and `status:
@@ -408,16 +408,16 @@ Design.md "Technical Approach" layer 2 (first half) and Decision 5. No
 
 ### Phase 2 verification
 
-- [ ] **2.21** Run `uv run ruff check . && uv run ruff format --check . &&
+- [x] **2.21** Run `uv run ruff check . && uv run ruff format --check . &&
   uv run mypy .` — must be green.
-- [ ] **2.22** Run `uv run pytest tests/unit/model/test_okf.py
+- [x] **2.22** Run `uv run pytest tests/unit/model/test_okf.py
   tests/unit/application/test_ingest.py tests/unit/application/test_query.py`
   focused, then `uv run pytest --cov` (unpiped) full suite — must be green,
   90% branch gate held. Full-stream CLI goldens that assert on `timestamp`/
   `status: active` bytes are expected to need the 2.20 update; do not skip
   or xfail any — fix the golden.
-- [ ] **2.23** Run `uv run python evals/run_self_tests.py` — must be green.
-- [ ] **2.24** Commit as one or more work-unit commits, scope `model` (e.g.
+- [x] **2.23** Run `uv run python evals/run_self_tests.py` — must be green.
+- [x] **2.24** Commit as one or more work-unit commits, scope `model` (e.g.
   `feat(model): emit generated/status: stable from every writer`). Open PR 2
   (Phase 2: writers — generated + status) targeting `main`, branched from
   `main` after PR 1 merges.

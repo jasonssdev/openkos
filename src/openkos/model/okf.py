@@ -17,6 +17,8 @@ import unicodedata
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _pkg_version
 from pathlib import Path, PurePosixPath
 from typing import Final, Literal, get_args
 
@@ -24,8 +26,42 @@ import frontmatter
 
 from openkos.model.types import BUILDABLE_TYPES as _CONCEPT_TYPES
 
-OKF_VERSION: Final = "0.1"
-"""The OKF version this engine targets and declares, per §11."""
+OKF_VERSION: Final = "0.2"
+"""The OKF version this engine targets and declares, per §12
+(okf-v02-migration, issue #1064: adopts `generated`/`sources`/`status`
+lifecycle over the retired `timestamp`/`# Citations` v0.1 shape)."""
+
+LEGACY_ACTOR: Final = "openkos/legacy"
+"""The `generated.by` value `migrate_document`/`build_merged_document` write
+when converting a v0.1 document's bare `timestamp` into v0.2 `generated`
+shape (design.md Decision 5): the engine did not generate that content, an
+earlier, unversioned write did."""
+
+
+@dataclass(frozen=True)
+class Generated:
+    """A `generated: {by, at}` frontmatter value (OKF §5.2), replacing the
+    v0.1 `timestamp` scalar (design.md Decision 5). `by` is an OKF §7
+    actor; `at` is the ISO-8601 instant, carried as a `str` so a caller can
+    pass either a fresh ISO-8601 string or a migrated document's preserved
+    legacy timestamp source text unchanged."""
+
+    by: str
+    at: str
+
+
+def engine_actor() -> str:
+    """The `generated.by` value for content THIS engine wrote:
+    `"openkos/<installed-distribution-version>"`, degrading to
+    `"openkos/0+unknown"` on `PackageNotFoundError` (design.md Decision 5) --
+    the exact pattern `mcp/server.py::_server_version` already uses, so a
+    raw `sys.path` run with no install step degrades the same way in both
+    places rather than drifting."""
+    try:
+        return f"openkos/{_pkg_version('openkos')}"
+    except PackageNotFoundError:
+        return "openkos/0+unknown"
+
 
 RESERVED_FILENAMES: Final[frozenset[str]] = frozenset({"index.md", "log.md"})
 """§6/§7 give these a fixed structure; §9 rule 1 exempts them from frontmatter."""
@@ -592,7 +628,7 @@ def build_source_concept(
     description: str,
     resource: str,
     tags: list[str],
-    timestamp: str,
+    generated: Generated,
     sensitivity: str,
     provenance: list[str],
     raw_content: str | None = None,
@@ -650,7 +686,10 @@ def build_source_concept(
     non-blank text embeds it verbatim under a `## Source content` heading;
     `None` (a decode failure) renders a short note that the content could
     not be embedded as text; blank/whitespace-only text renders a distinct
-    "source is empty" note. All three end with `# Citations`.
+    "source is empty" note. None of the three appends a `# Citations`
+    heading (okf-v02-migration, issue #1064): OKF v0.2 §13.1 retires that
+    body convention in favor of frontmatter `sources` (Decision 3, Phase 3
+    of this change); the body ends `...{section.rstrip("\\n")}\\n`.
 
     `extraction_status` (issue #187) is emitted as `EXTRACTION_STATUS_KEY`
     ONLY when not `None`; the default `None` keeps a healthy Source's
@@ -680,8 +719,8 @@ def build_source_concept(
         "description": description,
         "resource": resource,
         "tags": tags,
-        "timestamp": timestamp,
-        "status": "active",
+        "generated": {"by": generated.by, "at": generated.at},
+        "status": "stable",
         "version": 1,
         "freshness": "snapshot",
         "sensitivity": sensitivity,
@@ -722,7 +761,7 @@ def build_source_concept(
         section = "_The source file is empty._\n\n"
     else:
         section = f"## Source content\n\n{raw_content}\n\n"
-    body = f"# {title}\n\n{description}\n\n{section}# Citations\n"
+    body = f"# {title}\n\n{description}\n\n{section.rstrip('\n')}\n"
     return dump_frontmatter(metadata, body)
 
 
@@ -734,7 +773,7 @@ def build_concept(
     body: str,
     provenance: list[str],
     sensitivity: str,
-    timestamp: str,
+    generated: Generated,
     related_note: str = "source this was extracted from",
     type_alternative: str | None = None,
     related_notes: Mapping[str, str] | None = None,
@@ -823,8 +862,8 @@ def build_concept(
         "title": title,
         "description": description,
         "tags": [],
-        "timestamp": timestamp,
-        "status": "active",
+        "generated": {"by": generated.by, "at": generated.at},
+        "status": "stable",
         "version": 1,
         "freshness": "snapshot",
         "sensitivity": sensitivity,
@@ -1669,31 +1708,22 @@ def declares_deprecated(metadata: Mapping[str, object]) -> bool:
     return metadata.get("status") == "deprecated"
 
 
-def _parse_timestamp(value: object) -> datetime | None:
-    """Parse `value` as an ISO-8601 timestamp, returning `None` on anything
-    unparseable (missing, non-string, or malformed) rather than raising --
-    the freshness/timestamp merge rule fails closed to survivor-wins on any
-    parse failure."""
-    if not isinstance(value, str):
-        return None
-    try:
-        return datetime.fromisoformat(value)
-    except ValueError:
-        return None
-
-
 def _absorbed_is_more_recent(
-    survivor_timestamp: object, absorbed_timestamp: object
+    survivor_metadata: Mapping[str, object], absorbed_metadata: Mapping[str, object]
 ) -> bool:
-    """True only if the absorbed side's `timestamp` is STRICTLY more recent
-    than the survivor's. Fails closed to `False` (survivor wins) when either
-    side is missing or unparseable, matching every other scalar's
-    survivor-wins default -- and ALSO fails closed when both sides parse but
-    are incomparable (one timezone-aware, one naive): stdlib `datetime`
-    raises `TypeError` for that comparison rather than picking a winner, and
-    this function must never assume a timezone to paper over it."""
-    survivor_dt = _parse_timestamp(survivor_timestamp)
-    absorbed_dt = _parse_timestamp(absorbed_timestamp)
+    """True only if the absorbed side's generation time is STRICTLY more
+    recent than the survivor's, resolved through `generation_time` over
+    each side's FULL metadata mapping (okf-v02-migration design.md Decision
+    6/entity-resolution-merge delta: reads `generated.at` with legacy
+    `timestamp` fallback, rather than either key directly). Fails closed to
+    `False` (survivor wins) when either side is missing or unparseable,
+    matching every other scalar's survivor-wins default -- and ALSO fails
+    closed when both sides parse but are incomparable (one timezone-aware,
+    one naive): stdlib `datetime` raises `TypeError` for that comparison
+    rather than picking a winner, and this function must never assume a
+    timezone to paper over it."""
+    survivor_dt = generation_time(survivor_metadata)
+    absorbed_dt = generation_time(absorbed_metadata)
     if survivor_dt is None or absorbed_dt is None:
         return False
     try:
@@ -1874,10 +1904,20 @@ def build_merged_document(
     with none stays without one, and the absorbed value remains
     recoverable through `unmerge` and git, same as `type_alternative`'s.
     `sensitivity` is RECOMPUTED via
-    `combine_sensitivity`, never copied; `freshness`+`timestamp` are
-    taken TOGETHER from whichever side has the strictly more recent
-    `timestamp` (`_absorbed_is_more_recent`), falling back to the
-    survivor's own value when either timestamp is missing/unparseable.
+    `combine_sensitivity`, never copied; `freshness`+generation are taken
+    TOGETHER from whichever side has the strictly more recent generation
+    time (`_absorbed_is_more_recent`, resolved via `generation_time` --
+    reads `generated.at` with legacy `timestamp` fallback), falling back to
+    the survivor's own value when either side's generation time is
+    missing/unparseable. The winner's generation is written as v0.2
+    `generated`: the winner's OWN `generated` mapping verbatim when it has
+    one, or `{by: openkos/legacy, at: <winner's timestamp>}` when the
+    winner is legacy-shaped; the merged document NEVER carries a bare
+    `timestamp` key (okf-v02-migration design.md Decision 5/6). `status`
+    is normalized: an exact `"active"` becomes `"stable"` after the
+    generic scalar resolution above; every other value (`draft`,
+    `deprecated`, an unknown string) is left untouched (Decision 6, no
+    engine path writes `deprecated`).
     `relations:` is EXCLUDED from the generic list-union (which cannot tell
     a dangling `target: {absorbed_id}` edge or a resulting self-loop from
     any other list value) and instead computed via the dedicated
@@ -1900,20 +1940,27 @@ def build_merged_document(
     """
     merged: dict[str, object] = dict(survivor_metadata)
     merged.pop(MERGED_FROM_KEY, None)
+    merged.pop("timestamp", None)
+    merged.pop("generated", None)
 
-    if _absorbed_is_more_recent(
-        survivor_metadata.get("timestamp"), absorbed_metadata.get("timestamp")
-    ):
-        merged["timestamp"] = absorbed_metadata.get("timestamp")
-        merged["freshness"] = absorbed_metadata.get("freshness")
+    absorbed_wins = _absorbed_is_more_recent(survivor_metadata, absorbed_metadata)
+    winner_metadata = absorbed_metadata if absorbed_wins else survivor_metadata
+    merged["freshness"] = winner_metadata.get("freshness")
+
+    winner_generated = winner_metadata.get("generated")
+    if isinstance(winner_generated, Mapping):
+        merged["generated"] = dict(winner_generated)
     else:
-        merged["timestamp"] = survivor_metadata.get("timestamp")
-        merged["freshness"] = survivor_metadata.get("freshness")
+        winner_timestamp = winner_metadata.get("timestamp")
+        if isinstance(winner_timestamp, str):
+            merged["generated"] = {"by": LEGACY_ACTOR, "at": winner_timestamp}
+        # else: the winner carries neither key -- no `generated` is written.
 
     _SPECIAL_KEYS = (
         "sensitivity",
         "freshness",
         "timestamp",
+        "generated",
         MERGED_FROM_KEY,
         RELATIONS_KEY,
         TYPE_ALTERNATIVE_KEY,
@@ -1930,6 +1977,9 @@ def build_merged_document(
         elif key not in merged:
             merged[key] = absorbed_value
         # else: a scalar already present on the survivor wins -- no-op.
+
+    if merged.get("status") == "active":
+        merged["status"] = "stable"
 
     merged["sensitivity"] = combine_sensitivity(
         survivor_metadata.get("sensitivity"), absorbed_metadata.get("sensitivity")

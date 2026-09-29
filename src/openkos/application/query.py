@@ -606,7 +606,7 @@ def stage_filed_answer(
         body=answer_text,
         provenance=[citation.concept_id for citation in citations],
         sensitivity=sensitivity,
-        timestamp=timestamp,
+        generated=okf.Generated(by=okf.engine_actor(), at=timestamp),
         related_note="concept cited to produce this answer",
         related_notes=related_notes,
     )
