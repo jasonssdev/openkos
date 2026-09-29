@@ -2760,11 +2760,21 @@ def test_forget_scrubs_a_revision_finding_referencing_the_purged_concept_and_pre
         ("concepts/unrelated-a", "concepts/unrelated-b"),
         quote="unrelated quote survives",
     )
+    wal_path = db_path.with_name(db_path.name + "-wal")
+
+    def _on_disk_bytes() -> bytes:
+        # A WAL-mode write may live only in the `-wal` side file until a
+        # checkpoint, so both files together are what "on disk" means.
+        wal = wal_path.read_bytes() if wal_path.is_file() else b""
+        return db_path.read_bytes() + wal
+
+    # Precondition: without it the absence check below could pass vacuously.
+    assert b"SECRET-REVISION-QUOTE-TEXT" in _on_disk_bytes()
 
     result = runner.invoke(app, ["forget", "concepts/target", "--auto"])
 
     assert result.exit_code == 0, result.output
-    assert b"SECRET-REVISION-QUOTE-TEXT" not in db_path.read_bytes()
+    assert b"SECRET-REVISION-QUOTE-TEXT" not in _on_disk_bytes()
     from openkos.state import derived, revision_findings
 
     conn = derived.open_derived_connection(db_path)
