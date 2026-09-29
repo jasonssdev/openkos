@@ -2140,3 +2140,37 @@ def test_unmerge_to_midchain_drift_refusal_propagates_exit_3(
     assert "Traceback" not in result.stderr
     assert "step 2" in result.stderr
     assert "steps 1..1 completed" in result.stderr
+
+
+def test_unmerge_refusal_names_repair_on_an_unrepaired_bundle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """okf-v02-migration Phase 6, task 6.15: `unmerge`'s existing drift
+    refusal, when the bundle's `index.md` declares an `okf_version` other
+    than `okf.OKF_VERSION`, appends the exact sentence naming `repair` --
+    the drift itself may be unrelated to the migration, but an unrepaired
+    bundle is the more actionable fact for the operator to fix first."""
+    _merged_pair_with_all_three_rewrite_groups(tmp_path, monkeypatch)
+    index_path = tmp_path / "bundle" / "index.md"
+    index_metadata, index_body = okf.load_frontmatter(
+        index_path.read_text(encoding="utf-8")
+    )
+    index_metadata["okf_version"] = "0.1"
+    index_path.write_text(
+        okf.dump_frontmatter(index_metadata, index_body), encoding="utf-8"
+    )
+    target_path = tmp_path / "bundle" / "concepts" / "survivor.md"
+    concurrent = "hand-edited while the preview printed\n"
+    hook = echo_after(
+        monkeypatch,
+        lambda: target_path.write_text(concurrent, encoding="utf-8"),
+        trigger="absorbed.md (restore)",
+    )
+
+    result = runner.invoke(
+        app, ["unmerge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+
+    assert hook.fired, "echo_after trigger never matched -- stale preview wording?"
+    assert result.exit_code == 3
+    assert "this bundle predates OKF 0.2; run `openkos repair` first." in result.stderr

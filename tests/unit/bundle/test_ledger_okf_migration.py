@@ -26,12 +26,17 @@ import pytest
 
 from openkos import config
 from openkos.application import lifecycle as lifecycle_service
+from openkos.application import repair as application_repair
 from openkos.bundle import bundle
 from openkos.bundle import ledger as bundle_ledger
 from openkos.model import okf
 
 
 def _workspace(root: Path) -> config.WorkspaceLayout:
+    # `root` may be a not-yet-created subdirectory of `tmp_path` (the
+    # round-trip tests' separate "merged"/"reference" workspaces) --
+    # `config.write_config` assumes the directory already exists.
+    root.mkdir(parents=True, exist_ok=True)
     config.write_config(root)
     layout = config.WorkspaceLayout(root)
     bundle.create(layout.bundle_dir, datetime(2026, 1, 1, tzinfo=UTC).date())
@@ -610,22 +615,12 @@ def _downgrade_to_schema(
     )
 
 
-@pytest.mark.skip(reason="okf-v02-migration Phase 6 not yet landed")
 def test_merge_repair_unmerge_round_trip_v1_schema(tmp_path: Path) -> None:
     """`unmerge(repair(merge(B)))[d] == repair(B)[d]` for every concept `d`
     the merge touched (design.md Decision 1's commutation invariant),
     forcing a V1 ledger entry (no `relation_rewrites`/`provenance_rewrites`
-    at all). `application/repair.py` (Phase 6) does not exist yet --
-    **RED today**: `ModuleNotFoundError` on the deferred import below.
-    Collected now, skip-marked; unskip once Phase 6 lands
-    (task 6.16 references back to this task)."""
-    # Phase 6 module -- does not exist yet, hence the ModuleNotFoundError
-    # RED this task names; type: ignore is removed along with the skip
-    # mark once Phase 6 lands.
-    from openkos.application import (  # type: ignore[attr-defined]
-        repair as application_repair,
-    )
-
+    at all). Unskipped by okf-v02-migration Phase 6 (task 6.16), which adds
+    `application/repair.py`'s `plan_repair`/`apply_repair`."""
     layout = _workspace(tmp_path / "merged")
     _write_v01_concept(layout.bundle_dir, "concepts/survivor", title="Survivor")
     _write_v01_concept(layout.bundle_dir, "concepts/absorbed", title="Absorbed")
@@ -681,18 +676,10 @@ def test_merge_repair_unmerge_round_trip_v1_schema(tmp_path: Path) -> None:
         ).read_text(encoding="utf-8")
 
 
-@pytest.mark.skip(reason="okf-v02-migration Phase 6 not yet landed")
 def test_merge_repair_unmerge_round_trip_v2_schema(tmp_path: Path) -> None:
     """Same shape as the V1 case, forcing a V2 ledger entry
     (`relation_rewrites` populated, `provenance_rewrites` empty). Same
-    skip-until-Phase-6 treatment; **RED today**: `ModuleNotFoundError`."""
-    # Phase 6 module -- does not exist yet, hence the ModuleNotFoundError
-    # RED this task names; type: ignore is removed along with the skip
-    # mark once Phase 6 lands.
-    from openkos.application import (  # type: ignore[attr-defined]
-        repair as application_repair,
-    )
-
+    unskipped by okf-v02-migration Phase 6."""
     layout = _workspace(tmp_path / "merged")
     _write_v01_concept(layout.bundle_dir, "concepts/survivor", title="Survivor")
     _write_v01_concept(layout.bundle_dir, "concepts/absorbed", title="Absorbed")
@@ -754,17 +741,9 @@ def test_merge_repair_unmerge_round_trip_v2_schema(tmp_path: Path) -> None:
     ).read_text(encoding="utf-8")
 
 
-@pytest.mark.skip(reason="okf-v02-migration Phase 6 not yet landed")
 def test_merge_repair_unmerge_round_trip_v3_schema(tmp_path: Path) -> None:
     """Same shape, forcing V3 (`provenance_rewrites` populated too). Same
-    skip-until-Phase-6 treatment; **RED today**: `ModuleNotFoundError`."""
-    # Phase 6 module -- does not exist yet, hence the ModuleNotFoundError
-    # RED this task names; type: ignore is removed along with the skip
-    # mark once Phase 6 lands.
-    from openkos.application import (  # type: ignore[attr-defined]
-        repair as application_repair,
-    )
-
+    unskipped by okf-v02-migration Phase 6."""
     layout = _workspace(tmp_path / "merged")
     _write_v01_concept(layout.bundle_dir, "concepts/survivor", title="Survivor")
     _write_v01_concept(layout.bundle_dir, "concepts/absorbed", title="Absorbed")
@@ -830,19 +809,10 @@ def test_merge_repair_unmerge_round_trip_v3_schema(tmp_path: Path) -> None:
     ).read_text(encoding="utf-8")
 
 
-@pytest.mark.skip(reason="okf-v02-migration Phase 6 not yet landed")
 def test_merge_repair_unmerge_round_trip_v4_schema(tmp_path: Path) -> None:
     """Forcing V4 (`carried_content_ids` populated via a SECOND merge onto
     the same survivor -- the shape only a real double-absorption produces).
-    Same skip-until-Phase-6 treatment; **RED today**:
-    `ModuleNotFoundError`."""
-    # Phase 6 module -- does not exist yet, hence the ModuleNotFoundError
-    # RED this task names; type: ignore is removed along with the skip
-    # mark once Phase 6 lands.
-    from openkos.application import (  # type: ignore[attr-defined]
-        repair as application_repair,
-    )
-
+    Unskipped by okf-v02-migration Phase 6."""
     layout = _workspace(tmp_path / "merged")
     _write_v01_concept(layout.bundle_dir, "concepts/survivor", title="Survivor")
     _write_v01_concept(layout.bundle_dir, "concepts/absorbed", title="Absorbed")
@@ -920,22 +890,13 @@ def test_merge_repair_unmerge_round_trip_v4_schema(tmp_path: Path) -> None:
     ).read_text(encoding="utf-8")
 
 
-@pytest.mark.skip(reason="okf-v02-migration Phase 6 not yet landed")
 def test_merge_repair_unmerge_round_trip_v5_schema(tmp_path: Path) -> None:
     """Using an UNFORCED (current-default) real merge, which per
     `MERGE_LEDGER_SCHEMA_V5` writes `index_restores` instead of
     `index_before`/`log_before` -- asserts the same invariant AND that no
     v0.1-shaped document remains anywhere in the bundle after `unmerge`
     (okf-format-migration: "Merge, Repair, And Unmerge Leave No V0.1-Shaped
-    Document"). Same skip-until-Phase-6 treatment; **RED today**:
-    `ModuleNotFoundError`."""
-    # Phase 6 module -- does not exist yet, hence the ModuleNotFoundError
-    # RED this task names; type: ignore is removed along with the skip
-    # mark once Phase 6 lands.
-    from openkos.application import (  # type: ignore[attr-defined]
-        repair as application_repair,
-    )
-
+    Document"). Unskipped by okf-v02-migration Phase 6."""
     layout = _workspace(tmp_path / "merged")
     _write_v01_concept(layout.bundle_dir, "concepts/survivor", title="Survivor")
     _write_v01_concept(layout.bundle_dir, "concepts/absorbed", title="Absorbed")
