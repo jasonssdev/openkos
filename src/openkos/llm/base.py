@@ -1,8 +1,9 @@
 """The `LLMBackend` seam: a chat-completion Protocol and its message shape.
 
-This module is a leaf: stdlib `typing` only, no import of `openkos.config`
-or any other `openkos` module. Any concrete backend (e.g. `ollama.OllamaClient`)
-implements `LLMBackend` structurally -- no explicit inheritance required.
+This module is a leaf: stdlib `typing`/`urllib.error` only, no import of
+`openkos.config` or any other `openkos` module. Any concrete backend (e.g.
+`ollama.OllamaClient`) implements `LLMBackend` structurally -- no explicit
+inheritance required.
 
 `InstalledModel`, `BackendHostLocality`, `model_tag_matches`,
 `BackendError`/`BackendUnavailable`, and `BackendDiagnostics` (issue #995,
@@ -15,12 +16,21 @@ this leaf module, never a concrete backend. `ollama.py` imports all five
 back from here rather than redefining them, so every existing `from
 openkos.llm.ollama import InstalledModel` (etc.) call site -- `cli/main.py`,
 the test suite -- keeps working unchanged; only the DEFINITION moved.
-`classify_backend_host`, `is_embedding_model`, and the rest of the
-Ollama-specific host/family classification logic stayed in `ollama.py`:
-they are about how to derive a value from Ollama's own wire shapes, not
-the shared TYPE those values are handed around as.
+
+`classify_backend_host` (and its six private helpers), `measured_counters`
+(public name for `ollama._measured_counters`), and `is_timeout_failure`
+moved here from `ollama.py` too (issue #1057 Phase 1, Decision 1): they are
+pure and backend-agnostic, and the OpenAI-compatible client (Phase 4 on)
+needs the SAME locality classifier and timeout predicate `OllamaClient`
+uses, rather than a duplicate. `ollama.py` re-exports all three (plus the
+six private helpers) so every existing `from openkos.llm.ollama import
+classify_backend_host` call site keeps working unchanged; `is_embedding_model`
+and the rest of the Ollama-specific model/family classification logic stayed
+in `ollama.py` -- that is about how to derive a value from Ollama's own wire
+shapes, not a shared, backend-agnostic value or check.
 """
 
+import urllib.error
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol, TypedDict
@@ -174,3 +184,271 @@ class BackendDiagnostics(Protocol):
     def locality(self) -> BackendHostLocality:
         """This backend's own locality verdict (issue #240)."""
         ...  # pragma: no cover -- Protocol stub body, never executed
+
+
+_LOCAL_HOST_LITERALS = frozenset({"localhost", "::1"})
+"""Non-IPv4 literal loopback spellings (after lowercasing, one optional
+trailing root dot stripped, brackets removed). LITERAL forms only: the
+expanded-zeros IPv6 loopback (`0:0:0:0:0:0:0:1`) deliberately does not
+count -- over-warning is the accepted failure direction (issue #199)."""
+
+
+_UNPARSEABLE_DISPLAY = "<unparseable>"
+"""`display_host` placeholder for a malformed value whose redacted remainder
+is EMPTY (`@`, `user:s3cret/x@`): the advisory must name something, an empty
+string reads like a bug, and the raw value can never be shown (issue #353)."""
+
+_HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
+
+
+def _plausible_bracketless_ipv6(value: str) -> bool:
+    """True when a bracket-less multi-colon value plausibly IS an IPv6
+    literal: it contains `::`, or it consists solely of hex digits and
+    colons with every segment at most 4 hex chars (issue #353, item 1).
+
+    Anything else (`user:s3cret:extra`) is NOT granted the whole-value-host
+    treatment -- the whole value would put a pasted credential on stderr."""
+    if "::" in value:
+        return True
+    return all(
+        len(segment) <= 4 and all(char in _HEX_DIGITS for char in segment)
+        for segment in value.split(":")
+    )
+
+
+def _is_clean_hostport(authority: str) -> bool:
+    """True when `authority` parses as a plain host[:numeric-port]: no `@`,
+    non-empty host, port absent or all digits (issue #353, item 5).
+
+    This is the authority-shape discriminator for a value whose only `@`
+    sits AFTER the first path/query/fragment separator: a clean authority
+    means the `@` belongs to the path and the authority is the host; a
+    suspicious one (non-numeric port -- the credential-typo shape) keeps
+    the redact-against-full-remainder treatment."""
+    if "@" in authority:
+        return False
+    if authority.startswith("["):
+        closing = authority.find("]")
+        if closing == -1:
+            return False
+        host = authority[1:closing]
+        tail = authority[closing + 1 :]
+        return bool(host) and (
+            not tail or (tail.startswith(":") and tail[1:].isdigit())
+        )
+    if authority.count(":") > 1:
+        return _plausible_bracketless_ipv6(authority)
+    host, colon, port = authority.partition(":")
+    return bool(host) and (not colon or port.isdigit())
+
+
+def _is_loopback_ipv4_literal(host: str) -> bool:
+    """True for a literal `127.0.0.0/8` dotted quad: four ASCII-digit
+    octets, each 0-255, the first exactly `127`. No DNS, no `ipaddress`
+    equivalence -- literal form only (issue #199)."""
+    parts = host.split(".")
+    if len(parts) != 4 or parts[0] != "127":
+        return False
+    return all(part.isascii() and part.isdigit() and int(part) <= 255 for part in parts)
+
+
+def classify_backend_host(raw: str | None) -> BackendHostLocality:
+    """Classify a configured Ollama host value as literally local or not,
+    never raising, with userinfo always redacted from `display_host`
+    (issue #199; the withdrawn #183-PR3 predecessor is the trap spec).
+
+    This is the ONE locality authority in the codebase: the embedding-host
+    advisory (#199/#353) and the confidential local exemption (#240) both
+    read it, so locality can never be answered two different ways by two
+    different callers. Its classification rules below are frozen -- #240
+    changed only WHAT gets passed in (the host a client actually resolved,
+    not an env var read independently), never how a value is judged.
+
+    Local means loopback BY LITERAL FORM only -- `localhost` (any case, one
+    optional trailing root dot), a `127.0.0.0/8` dotted quad, or `::1`
+    (bracketed or not). No DNS resolution, ever: the check runs on every
+    ingest/reindex/query and a lookup can hang. `None`/empty means the
+    default local host; a port-only value (`:11434`) overrides only the
+    port, so its empty host is likewise the local default.
+
+    Deliberately does NOT use `urlsplit`: it raises `ValueError: Invalid
+    IPv6 URL` on an unmatched bracket (`[::1:11434`, a plausible typo) and
+    splits a bracket-less IPv6 literal at the FIRST colon (`fe80::1234:5678`
+    -> host `fe80`, which nobody configured). This parse degrades instead:
+    an unmatched bracket classifies as non-local (over-warning is the
+    accepted direction for an advisory) and a bracket-less multi-colon
+    value is one whole-value host. Userinfo (everything up to the LAST `@`
+    in the authority, urlsplit's own rule) is stripped BEFORE `display_host`
+    is built, on every path -- including the unparseable one, where the
+    predecessor echoed a plaintext password. Two malformed shapes get the
+    same treatment (review finding R1-userinfo-redaction-bypass): a reserved
+    separator smuggled into userinfo ahead of the `@` redacts against the
+    full remainder and classifies non-local, and a non-numeric "port" is
+    never displayed -- it can be a credential pasted without a host.
+
+    The #199 review's deterministic follow-ups tighten the corners
+    (issue #353):
+
+    1. The bracket-less multi-colon whole-value-host treatment applies only
+       to values that plausibly ARE IPv6 literals (contain `::`, or are
+       solely hex segments of at most 4 chars and colons). Anything else
+       (`user:s3cret:extra`) falls through to plain host:port handling,
+       where the non-numeric-port guard drops everything after the host.
+    2. An empty host that came out of an EXPLICIT balanced bracket pair
+       (`[]`, `[]:11434`) is not the local default: non-local, displaying
+       the hostport.
+    3. A value that reduces to an empty host only AFTER userinfo redaction
+       (`@`, `@@@`, `http://user@`) is malformed: non-local, displayed as
+       the `<unparseable>` placeholder (never an empty string). A lone `:`
+       (no `@`) stays the local default like `:11434`.
+    4. When the only `@` sits AFTER the first `/?#` separator, the
+       AUTHORITY decides: a clean host[:numeric-port] authority means the
+       `@` belongs to the path and the authority classifies normally
+       (`http://localhost:11434/v1@x` is local and silent); only a
+       suspicious authority (non-numeric port -- the credential-typo
+       shape) keeps the redact-against-full-remainder treatment, and an
+       empty redacted remainder displays the placeholder."""
+    if raw is None or not raw.strip():
+        return BackendHostLocality(is_local=True, display_host="localhost")
+    rest = raw.strip()
+    if "://" in rest:
+        rest = rest.split("://", 1)[1]
+    authority = rest
+    for separator in "/?#":
+        authority = authority.split(separator, 1)[0]
+    if "@" in rest and "@" not in authority and not _is_clean_hostport(authority):
+        # A reserved separator sits BEFORE the `@` and the authority itself
+        # is suspicious (empty host, or a non-numeric "port" -- the
+        # credential-typo shape): the authority cut went through userinfo
+        # and discarded the `@host` remainder, which is how the
+        # R1-userinfo-redaction-bypass leaked a credential as the "host".
+        # The value is malformed, so redact against the full remainder and
+        # classify non-local outright. When the authority is instead a
+        # CLEAN host[:numeric-port], the `@` belongs to the PATH
+        # (`http://localhost:11434/v1@x`) and the authority classifies
+        # normally below (issue #353, item 5).
+        hostport = rest.rpartition("@")[2]
+        for separator in "/?#":
+            hostport = hostport.split(separator, 1)[0]
+        return BackendHostLocality(
+            is_local=False, display_host=hostport or _UNPARSEABLE_DISPLAY
+        )
+    # Redact userinfo FIRST: everything below sees only the host[:port]
+    # remainder, so no later branch -- parseable or not -- can leak it.
+    had_userinfo = "@" in authority
+    hostport = authority.rpartition("@")[2]
+    if hostport.startswith("["):
+        closing = hostport.find("]")
+        if closing == -1:
+            # Unmatched bracket: unparseable. Degrade to non-local rather
+            # than raise -- this runs inside fail-open paths after ingest
+            # has already committed.
+            return BackendHostLocality(is_local=False, display_host=hostport)
+        host = hostport[1:closing]
+        tail = hostport[closing + 1 :]
+        if tail.startswith(":") and not tail[1:].isdigit():
+            # A non-numeric "port" is not a port; it can be a pasted
+            # credential. Never display it.
+            hostport = hostport[: closing + 1]
+        if not host:
+            # An EXPLICIT balanced-but-empty bracket pair (`[]`,
+            # `[]:11434`) is not the unset local default: someone
+            # configured it, and it names no local literal (issue #353,
+            # item 2).
+            return BackendHostLocality(is_local=False, display_host=hostport)
+    elif hostport.count(":") > 1 and _plausible_bracketless_ipv6(hostport):
+        # Bracket-less IPv6 literal: the whole value is the host; splitting
+        # at the first colon would invent a host nobody configured. Only a
+        # PLAUSIBLE IPv6 literal earns this -- `user:s3cret:extra` would
+        # put a pasted credential on stderr (issue #353, item 1).
+        host = hostport
+    else:
+        host, colon, port = hostport.partition(":")
+        if colon and not port.isdigit():
+            # Same rule as the bracketed branch: a non-numeric "port" may
+            # be a credential (`user:s3cret` pasted bare, `s3cret:extra`
+            # after a multi-colon fallthrough). Display only the host part
+            # that precedes it -- EVERYTHING after the first colon drops.
+            hostport = host
+    if not host:
+        if had_userinfo:
+            # The host is empty only AFTER userinfo redaction (`@`, `@@@`,
+            # `http://user@`): malformed, not the local default. The
+            # remainder may be empty, and an empty display reads like a
+            # bug, so fall back to the placeholder (issue #353, item 3).
+            return BackendHostLocality(
+                is_local=False, display_host=hostport or _UNPARSEABLE_DISPLAY
+            )
+        return BackendHostLocality(is_local=True, display_host=hostport or "localhost")
+    normalized = host.lower().removesuffix(".")
+    is_local = normalized in _LOCAL_HOST_LITERALS or _is_loopback_ipv4_literal(
+        normalized
+    )
+    return BackendHostLocality(is_local=is_local, display_host=hostport)
+
+
+def measured_counters(
+    prompt_tokens: object, generated: object
+) -> tuple[int, int] | None:
+    """Both token counters, iff BOTH are trustworthy -- else `None`.
+
+    `bool` is a subclass of `int`, so an `isinstance(x, int)` pair alone
+    would accept `true`/`false` as counters and build a message out of 1
+    and 0. Excluded explicitly: a counter this code cannot trust must fall
+    through to the unmeasured account, not produce a confident wrong one.
+
+    ONE spelling, shared by the ceiling and no-ceiling branches of the
+    `done_reason == "length"` handling (#849): the same predicate written
+    twice is how the two drift, and returning the narrowed pair is what
+    lets both branches do arithmetic without `type: ignore`.
+
+    Moved here from `ollama._measured_counters` (issue #1057 Phase 1,
+    Decision 1) and renamed public: it is a pure, backend-agnostic check,
+    and the OpenAI-compatible client's `usage.prompt_tokens`/
+    `usage.completion_tokens` need the same trustworthy-pair discipline
+    Ollama's `prompt_eval_count`/`eval_count` already gets.
+    `ollama._measured_counters` keeps this exact object as a private alias
+    so every existing internal call site in `ollama.py` keeps working
+    unchanged."""
+    if (
+        isinstance(prompt_tokens, int)
+        and not isinstance(prompt_tokens, bool)
+        and isinstance(generated, int)
+        and not isinstance(generated, bool)
+    ):
+        return prompt_tokens, generated
+    return None
+
+
+def is_timeout_failure(exc: BaseException) -> bool:
+    """Whether `exc` is a request that ran out of TIME, rather than one that
+    failed for any other reason (issue #746).
+
+    The distinction matters because #744's `concurrent_extraction` inflates
+    per-call wall time when the server is not configured to run requests in
+    parallel: each request's own timeout keeps running while it waits its
+    turn. A caller can only offer that explanation for a failure that is
+    actually a deadline. Attaching it to a refused connection would send an
+    operator after a concurrency setting when their server is simply not
+    running, which is worse than saying nothing.
+
+    Widened from `OllamaUnavailable` to the backend-agnostic
+    `BackendUnavailable` (issue #1057 Phase 1, Decision 3): any backend's
+    own "unreachable" exception subclasses `BackendUnavailable` (mirroring
+    `OllamaUnavailable`), so this predicate keeps working for a second
+    backend without a duplicate. Both shapes `urlopen(..., timeout=...)`
+    produces are accepted: a bare `TimeoutError` (the read phase, and
+    `socket.timeout` since Python 3.10) and a `URLError` wrapping one (the
+    connect phase).
+
+    Never raises, including on an exception with no cause at all: it runs on
+    a degrade path that is already handling a failure, and a predicate that
+    could fail there would replace a handled error with an unhandled one."""
+    if not isinstance(exc, BackendUnavailable):
+        return False
+    cause = exc.__cause__
+    if isinstance(cause, TimeoutError):
+        return True
+    return isinstance(cause, urllib.error.URLError) and isinstance(
+        cause.reason, TimeoutError
+    )

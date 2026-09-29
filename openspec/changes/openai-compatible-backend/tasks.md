@@ -155,14 +155,14 @@ No gaps identified against the ten specs read for this phase.
 
 Design Decision 1. Pure relocation with re-exports; no behavior change.
 
-- [ ] **1.1** [TEST] `tests/unit/llm/test_backend_host.py` (extend) — add
+- [x] **1.1** [TEST] `tests/unit/llm/test_backend_host.py` (extend) — add
   `test_classify_backend_host_importable_from_base`: `from openkos.llm.base
   import classify_backend_host` succeeds, and the existing table-driven
   cases run against this import path too (parametrize by importing the same
   table fixture the existing `ollama`-path test uses, not a duplicated
   literal table). **RED today**: `ImportError` — `llm/base.py` has no
   `classify_backend_host`.
-- [ ] **1.2** [IMPL] `src/openkos/llm/base.py`: move `classify_backend_host`
+- [x] **1.2** [IMPL] `src/openkos/llm/base.py`: move `classify_backend_host`
   and its private helpers (`_LOCAL_HOST_LITERALS`, `_UNPARSEABLE_DISPLAY`,
   `_HEX_DIGITS`, `_plausible_bracketless_ipv6`, `_is_clean_hostport`,
   `_is_loopback_ipv4_literal`) from `llm/ollama.py`, verbatim body.
@@ -170,27 +170,27 @@ Design Decision 1. Pure relocation with re-exports; no behavior change.
   import classify_backend_host as classify_backend_host`, etc.) so every
   existing `from openkos.llm.ollama import classify_backend_host` call site
   keeps working unchanged. Makes 1.1 GREEN.
-- [ ] **1.3** [TEST] same file — add
+- [x] **1.3** [TEST] same file — add
   `test_ollama_reexports_are_the_same_object`: `ollama.classify_backend_host
   is base.classify_backend_host`, and the same identity check for each of
   the six private helpers (e.g. `ollama._plausible_bracketless_ipv6 is
   base._plausible_bracketless_ipv6`). **RED today**: `AttributeError` on
   `base` before 1.2 lands; after 1.2 this becomes a real identity pin against
   accidental duplication instead of re-export.
-- [ ] **1.4** [TEST] `tests/unit/llm/test_ollama.py` (extend) — add
+- [x] **1.4** [TEST] `tests/unit/llm/test_ollama.py` (extend) — add
   `test_measured_counters_public_name_on_base`: `from openkos.llm.base import
   measured_counters` behaves identically to the existing `_measured_counters`
   parametrized table (reuse the existing cases, do not duplicate the table).
   **RED today**: `ImportError`.
-- [ ] **1.5** [IMPL] `src/openkos/llm/base.py`: add public `measured_counters`
+- [x] **1.5** [IMPL] `src/openkos/llm/base.py`: add public `measured_counters`
   (moved + renamed from `ollama._measured_counters`, verbatim logic);
   `src/openkos/llm/ollama.py` keeps `_measured_counters = measured_counters`
   as a private alias so every existing internal call site in `ollama.py`
   keeps working unchanged. Makes 1.4 GREEN.
-- [ ] **1.6** [TEST] same file — add
+- [x] **1.6** [TEST] same file — add
   `test_ollama_private_alias_is_the_public_function`: `ollama._measured_counters
   is base.measured_counters`. **RED today**: distinct objects before 1.5.
-- [ ] **1.7** [TEST] `tests/unit/llm/test_ollama.py` (extend the existing
+- [x] **1.7** [TEST] `tests/unit/llm/test_ollama.py` (extend the existing
   `is_timeout_failure` test) — add
   `test_is_timeout_failure_widens_to_backend_unavailable`: a bare
   `BackendUnavailable("x")` instance (not an `OllamaUnavailable`) returns
@@ -199,30 +199,30 @@ Design Decision 1. Pure relocation with re-exports; no behavior change.
   `http.client`/`urllib.error` types, so a bare `BackendUnavailable` returns
   `False`. Kills a narrowing that would silently stop widening if
   `is_timeout_failure` is later re-narrowed to `OllamaUnavailable`.
-- [ ] **1.8** [IMPL] `src/openkos/llm/base.py`: move `is_timeout_failure` from
+- [x] **1.8** [IMPL] `src/openkos/llm/base.py`: move `is_timeout_failure` from
   `ollama.py`, widen its `isinstance` check from `OllamaUnavailable` to
   `BackendUnavailable`; `ollama.py` re-exports it. Makes 1.7 GREEN; every
   existing Ollama-specific case still passes because `OllamaUnavailable` IS a
   `BackendUnavailable`.
-- [ ] **1.9** [IMPL] `src/openkos/llm/base.py`: rewrite the module docstring's
+- [x] **1.9** [IMPL] `src/openkos/llm/base.py`: rewrite the module docstring's
   sentence stating `classify_backend_host` and the Ollama-specific
   host/family classification logic "stayed in `ollama.py`" — the move
   reverses that; also adjust `ollama.py`'s own docstring/comments that cited
   the classifier as locally defined.
-- [ ] **1.10** [DOC] `AGENTS.md`: add `llm` to the Conventional Commits scope
+- [x] **1.10** [DOC] `AGENTS.md`: add `llm` to the Conventional Commits scope
   list (proposal decision 5).
-- [ ] **1.11** Confirm `docs/adr/0031-openai-compatible-backend.md` exists,
+- [x] **1.11** Confirm `docs/adr/0031-openai-compatible-backend.md` exists,
   status `Proposed`, and `docs/adr/README.md` carries its index row (already
   written per session note). No edit expected; correct only if drifted.
 
 ### Phase 1 verification
 
-- [ ] **1.12** Run `uv run ruff check . && uv run ruff format --check . &&
+- [x] **1.12** Run `uv run ruff check . && uv run ruff format --check . &&
   uv run mypy .` — must be green.
-- [ ] **1.13** Run `uv run pytest tests/unit/llm/test_backend_host.py
+- [x] **1.13** Run `uv run pytest tests/unit/llm/test_backend_host.py
   tests/unit/llm/test_ollama.py` focused, then `uv run pytest --cov`
   (unpiped) full suite — must be green, 90% branch gate held.
-- [ ] **1.14** Run `uv run python evals/run_self_tests.py` — must be green
+- [x] **1.14** Run `uv run python evals/run_self_tests.py` — must be green
   with `OLLAMA_HOST` poisoned.
 - [ ] **1.15** Commit as one or more work-unit commits, scope `llm` (first
   use of the new scope). Open PR 1 targeting `main`.
