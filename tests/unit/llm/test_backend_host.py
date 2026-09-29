@@ -34,73 +34,99 @@ import pytest
 
 from openkos.llm.ollama import BackendHostLocality, classify_backend_host
 
+_LOCAL_FORMS: list[str | None] = [
+    None,
+    "",
+    "   ",
+    "localhost",
+    "LOCALHOST",
+    "localhost.",
+    "LocalHost.",
+    "localhost:11434",
+    "localhost.:11434",
+    "http://localhost:11434",
+    "https://localhost:11434",
+    "http://Localhost.:11434",
+    "127.0.0.1",
+    "127.0.0.1:11434",
+    "http://127.0.0.1:11434",
+    "127.255.255.254",
+    "127.0.0.1.",
+    "::1",
+    "[::1]",
+    "[::1]:11434",
+    "http://[::1]:11434",
+    "http://::1",
+    ":11434",
+]
+"""Every literal loopback form: `localhost` (any case, one optional trailing
+root dot), `127.0.0.0/8` literals, `::1` bracketed or not, with or without
+scheme/port. An empty/unset value means the default local host, and a
+port-only value overrides only the port -- both local, no warning.
 
-@pytest.mark.parametrize(
-    "raw",
-    [
-        None,
-        "",
-        "   ",
-        "localhost",
-        "LOCALHOST",
-        "localhost.",
-        "LocalHost.",
-        "localhost:11434",
-        "localhost.:11434",
-        "http://localhost:11434",
-        "https://localhost:11434",
-        "http://Localhost.:11434",
-        "127.0.0.1",
-        "127.0.0.1:11434",
-        "http://127.0.0.1:11434",
-        "127.255.255.254",
-        "127.0.0.1.",
-        "::1",
-        "[::1]",
-        "[::1]:11434",
-        "http://[::1]:11434",
-        "http://::1",
-        ":11434",
-    ],
-)
+Shared with `test_classify_backend_host_importable_from_base` (issue #1057
+Phase 1) so the import-path pin runs the SAME cases, never a duplicated
+literal table."""
+
+_NONLOCAL_FORMS: list[str] = [
+    "example.com",
+    "example.com:11434",
+    "http://example.com:11434",
+    "https://example.com:11434",
+    "128.0.0.1",
+    "1270.0.0.1",
+    "127.0.0.256",
+    "127.0.0",
+    "12.7.0.1",
+    "fe80::1234:5678",
+    "[fe80::1]:11434",
+    "[::1:11434",
+    "http://[::1:11434",
+    "localhost..",
+    "0:0:0:0:0:0:0:1",
+    "localhost.example.com",
+]
+"""Anything that is not a literal loopback form: real hostnames, near-miss
+IPv4 (`128.0.0.1`, out-of-range or short octets), link-local IPv6,
+unparseable values (unmatched bracket), a double trailing dot (only ONE root
+dot is normalized), and the expanded-zeros IPv6 loopback spelling (LITERAL
+check, not address equivalence -- over-warning is the accepted direction).
+
+Shared with `test_classify_backend_host_importable_from_base` (issue #1057
+Phase 1) -- see `_LOCAL_FORMS`."""
+
+
+@pytest.mark.parametrize("raw", _LOCAL_FORMS)
 def test_local_forms_classify_as_local(raw: str | None) -> None:
-    """Every literal loopback form is local: `localhost` (any case, one
-    optional trailing root dot), `127.0.0.0/8` literals, `::1` bracketed or
-    not, with or without scheme/port. An empty/unset value means the
-    default local host, and a port-only value overrides only the port --
-    both local, no warning."""
+    """Every literal loopback form is local -- see `_LOCAL_FORMS`."""
     assert classify_backend_host(raw).is_local is True
 
 
-@pytest.mark.parametrize(
-    "raw",
-    [
-        "example.com",
-        "example.com:11434",
-        "http://example.com:11434",
-        "https://example.com:11434",
-        "128.0.0.1",
-        "1270.0.0.1",
-        "127.0.0.256",
-        "127.0.0",
-        "12.7.0.1",
-        "fe80::1234:5678",
-        "[fe80::1]:11434",
-        "[::1:11434",
-        "http://[::1:11434",
-        "localhost..",
-        "0:0:0:0:0:0:0:1",
-        "localhost.example.com",
-    ],
-)
+@pytest.mark.parametrize("raw", _NONLOCAL_FORMS)
 def test_nonlocal_forms_classify_as_nonlocal(raw: str) -> None:
-    """Anything that is not a literal loopback form is non-local: real
-    hostnames, near-miss IPv4 (`128.0.0.1`, out-of-range or short octets),
-    link-local IPv6, unparseable values (unmatched bracket), a double
-    trailing dot (only ONE root dot is normalized), and the expanded-zeros
-    IPv6 loopback spelling (LITERAL check, not address equivalence --
-    over-warning is the accepted direction)."""
+    """Anything that is not a literal loopback form is non-local -- see
+    `_NONLOCAL_FORMS`."""
     assert classify_backend_host(raw).is_local is False
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected_local"),
+    [(raw, True) for raw in _LOCAL_FORMS] + [(raw, False) for raw in _NONLOCAL_FORMS],
+)
+def test_classify_backend_host_importable_from_base(
+    raw: str | None, expected_local: bool
+) -> None:
+    """`classify_backend_host` (issue #1057 Phase 1, Decision 1) must also be
+    importable directly from `openkos.llm.base` -- the leaf module every
+    `application/*` consumer and the future `OpenAICompatibleClient` are
+    scoped to -- and must classify every existing local/non-local case
+    identically through that import path. The import happens inside the
+    test body, not at module scope, so a failure here is an isolated
+    `ImportError` for this test rather than a collection error for the
+    whole file."""
+    from openkos.llm.base import classify_backend_host as base_classify_backend_host
+
+    assert base_classify_backend_host(raw).is_local is expected_local
 
 
 def test_unmatched_bracket_never_raises() -> None:

@@ -22,7 +22,9 @@ from typing import Any, cast
 import pytest
 
 from openkos import prompt_budget
-from openkos.llm.base import EMBED_DIM, Embedder, Message
+from openkos.llm import base as llm_base
+from openkos.llm import ollama as llm_ollama
+from openkos.llm.base import EMBED_DIM, BackendUnavailable, Embedder, Message
 from openkos.llm.ollama import (
     DEFAULT_TIMEOUT,
     InstalledModel,
@@ -2391,6 +2393,23 @@ def test_is_timeout_failure_says_no_to_what_a_refused_connection_raises() -> Non
     assert not is_timeout_failure(caught.value)
 
 
+def test_is_timeout_failure_widens_to_backend_unavailable() -> None:
+    """`is_timeout_failure` (issue #1057 Phase 1, Decision 3) widens its
+    `isinstance` check from `OllamaUnavailable` to the backend-agnostic
+    `BackendUnavailable`, so a bare `BackendUnavailable` -- not just
+    Ollama's own subclass -- is recognised as a timeout when its cause says
+    so. A second backend's own "unreachable" exception subclasses
+    `BackendUnavailable` too (mirroring `OllamaUnavailable`), so this is the
+    check that must widen for #746's advisory to keep working there.
+
+    **RED today**: `AssertionError` -- today's check narrows to
+    `OllamaUnavailable`/`http.client`/`urllib.error` types, so a bare
+    `BackendUnavailable` returns `False`."""
+    exc = _chained(BackendUnavailable("not reachable"), TimeoutError("timed out"))
+
+    assert is_timeout_failure(exc)
+
+
 def _capped_body(*, prompt_tokens: int, generated: int) -> bytes:
     """A `done_reason == "length"` body carrying Ollama's own counters.
 
@@ -2777,3 +2796,77 @@ def test_prompt_budget_reads_BOTH_pins_off_a_configured_client() -> None:
         "prompt room; a zero budget drops every retrieved block"
     )
     assert all(prompt_budget.fair_shares([9644, 7696, 213], budget=budget))
+
+
+# --- issue #1057 Phase 1: shared helpers move to llm/base.py ------------------
+
+
+def test_ollama_reexports_are_the_same_object() -> None:
+    """`classify_backend_host` and its six private helpers (issue #1057
+    Phase 1, Decision 1) moved to `llm/base.py`; `ollama.py` must
+    RE-EXPORT the exact same objects, not redefine equivalents that could
+    silently drift apart.
+
+    **RED today**: `AttributeError` on `llm_base.classify_backend_host` (and
+    each helper) before the move lands; after the move, this becomes a real
+    identity pin against accidental duplication instead of re-export."""
+    assert llm_ollama.classify_backend_host is llm_base.classify_backend_host
+    for name in (
+        "_LOCAL_HOST_LITERALS",
+        "_UNPARSEABLE_DISPLAY",
+        "_HEX_DIGITS",
+        "_plausible_bracketless_ipv6",
+        "_is_clean_hostport",
+        "_is_loopback_ipv4_literal",
+    ):
+        assert getattr(llm_ollama, name) is getattr(llm_base, name), name
+
+
+_MEASURED_COUNTERS_CASES: list[tuple[object, object, tuple[int, int] | None]] = [
+    (5398, 6900, (5398, 6900)),
+    (0, 0, (0, 0)),
+    (True, 10, None),
+    (10, False, None),
+    ("5", 10, None),
+    (10, None, None),
+    (None, None, None),
+]
+"""No isolated unit-level table for `_measured_counters` existed before
+issue #1057 Phase 1 -- its trustworthy-pair contract (docstring in
+`llm/ollama.py`/`llm/base.py`) was pinned only indirectly, through
+`OllamaClient.chat`'s generation-capped message branching (e.g.
+`test_generation_capped_ignores_boolean_counters`). This table is the
+isolated pin, covering the documented contract: both counters trustworthy
+ints returns the pair; a `bool` on either side (a subclass of `int`) or any
+other non-`int` returns `None`. Shared by both
+`test_measured_counters_public_name_on_base` (direct behavior) and the
+production code's own contract, so there is exactly one table to keep in
+sync, never two hand-written literals that could drift."""
+
+
+@pytest.mark.parametrize(
+    ("prompt_tokens", "generated", "expected"), _MEASURED_COUNTERS_CASES
+)
+def test_measured_counters_public_name_on_base(
+    prompt_tokens: object, generated: object, expected: tuple[int, int] | None
+) -> None:
+    """`measured_counters` (issue #1057 Phase 1, Decision 1) is the moved,
+    public name for the trustworthy-pair check `ollama._measured_counters`
+    used privately; behaves identically through the new import path.
+
+    **RED today**: `ImportError` -- `llm/base.py` has no `measured_counters`."""
+    from openkos.llm.base import measured_counters
+
+    assert measured_counters(prompt_tokens, generated) == expected
+
+
+def test_ollama_private_alias_is_the_public_function() -> None:
+    """`ollama._measured_counters` (issue #1057 Phase 1, Decision 1) must be
+    the SAME object as `base.measured_counters` -- a private alias kept so
+    every existing internal call site in `ollama.py` keeps working
+    unchanged, never a re-implementation that could silently drift.
+
+    **RED today**: `AttributeError` on `llm_base.measured_counters` before
+    the move lands; distinct objects would be the failure once both exist
+    without the alias wired correctly."""
+    assert llm_ollama._measured_counters is llm_base.measured_counters
