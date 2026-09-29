@@ -63,6 +63,66 @@ value in as `api_key` -- this is a string literal used ONLY for message
 text, so the leaf constraint above still holds."""
 
 
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Refuses to follow ANY HTTP redirect, for every status and method
+    (security fix, issue #1057 Phase 4).
+
+    `HTTPRedirectHandler.redirect_request`'s default implementation
+    copies every non-content-* header -- including `Authorization` --
+    onto the redirected request, and for 301/302/303 silently turns a
+    POST into a GET. Following a redirect would therefore forward this
+    client's bearer key to whatever host a 3xx `Location` header names.
+    The `openai-compatible-client` spec requires the key never be
+    redirected to another host.
+
+    Returning `None` here does NOT hand back a normal response to
+    inspect: `urllib.request.OpenerDirector._call_chain` treats a `None`
+    result as "no handler answered" and falls through to
+    `http_error_default`, which RAISES `urllib.error.HTTPError` carrying
+    the original 3xx status and headers. Every refused redirect therefore
+    surfaces through `chat()`'s existing `except urllib.error.HTTPError`
+    branch, mapped by `_map_redirect` below -- never silently followed,
+    and never returned as if it were a normal reply."""
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> None:
+        """Never redirect -- see the class docstring."""
+        return None
+
+
+_NO_REDIRECT_OPENER = urllib.request.build_opener(_NoRedirectHandler)
+"""Built once, at import time: `build_opener` detects that `_NoRedirectHandler`
+subclasses the default `HTTPRedirectHandler` and therefore installs it
+INSTEAD of (not alongside) the normal, redirect-following default --
+`urllib.request.build_opener`'s own documented behavior. Every other
+default handler (proxy, HTTP, HTTPS, ...) is unaffected.
+
+`OpenAICompatibleClient.__init__`'s `urlopen` default is this opener's
+`.open` method, not `urllib.request.urlopen` -- so a caller who never
+overrides `urlopen` gets the redirect refusal automatically, and the
+injectable `urlopen` parameter still lets a test (or `embed`/
+`list_models`, once they land) inject a fake transport exactly as
+before."""
+
+
+def _redact_location_query(location: str) -> str:
+    """Strip the query string and fragment from a `Location` header value
+    before it is ever interpolated into a message this client produces
+    (security fix, issue #1057 Phase 4): a server could otherwise smuggle
+    a token or other secret into the query string of its own redirect
+    target, and this client would echo it straight back into its own
+    diagnostic text."""
+    without_fragment = location.split("#", 1)[0]
+    return without_fragment.split("?", 1)[0]
+
+
 class OpenAICompatibleError(BackendError):
     """Base error for any OpenAI-compatible chat/embed/diagnostics failure;
     also raised directly for non-404/400-marker HTTP errors and
@@ -126,7 +186,7 @@ class OpenAICompatibleClient:
         seed: int | None = None,
         context_window: int | None = None,
         api_key: str | None = None,
-        urlopen: Callable[..., Any] = urllib.request.urlopen,
+        urlopen: Callable[..., Any] = _NO_REDIRECT_OPENER.open,
         embed_retry_attempts: int = DEFAULT_EMBED_RETRY_ATTEMPTS,
         embed_retry_backoff_base: float = DEFAULT_EMBED_RETRY_BACKOFF_BASE,
         sleep: Callable[[float], None] = time.sleep,
@@ -156,7 +216,13 @@ class OpenAICompatibleClient:
         `urlopen`/`embed_retry_attempts`/`embed_retry_backoff_base`/`sleep`
         mirror `OllamaClient`'s injection points exactly, for the same
         testability reason (no live server needed) and the same retry
-        contract once `embed()` lands (Phase 6)."""
+        contract once `embed()` lands (Phase 6).
+
+        `urlopen` defaults to `_NO_REDIRECT_OPENER.open`, NOT
+        `urllib.request.urlopen` (security fix, issue #1057 Phase 4): see
+        `_NoRedirectHandler`'s docstring for why the plain default would
+        forward the `Authorization` header to whatever host a 3xx
+        `Location` names."""
         self._model = model
         self._base_url = base_url
         self._timeout = timeout
@@ -222,6 +288,11 @@ class OpenAICompatibleClient:
         try:
             response = self._urlopen(request, timeout=self._timeout)
         except urllib.error.HTTPError as exc:
+            if 300 <= exc.code < 400:
+                # A refused redirect (security fix, issue #1057 Phase 4):
+                # `_NoRedirectHandler` never returns a `Request`, so ANY
+                # 3xx surfaces here rather than being silently followed.
+                raise self._map_redirect(exc) from exc
             raise self._map_http_error(exc) from exc
         except (urllib.error.URLError, TimeoutError) as exc:
             raise self._unavailable(exc) from exc
@@ -328,6 +399,29 @@ class OpenAICompatibleClient:
             )
         return OpenAICompatibleError(
             f"OpenAI-compatible request failed ({exc.code}): {detail}"
+        )
+
+    def _map_redirect(self, exc: urllib.error.HTTPError) -> OpenAICompatibleError:
+        """Build the error for a refused HTTP redirect (security fix,
+        issue #1057 Phase 4): `_NoRedirectHandler` never follows one, so
+        this is the only place a 3xx ever surfaces from `chat()`.
+
+        Never reads `self._api_key` (so it cannot leak it, mirroring
+        `_map_http_error`'s discipline), and strips the `Location`
+        header's query string/fragment via `_redact_location_query`
+        before interpolating it -- a server could otherwise smuggle a
+        token into its own redirect target and have this client echo it
+        straight back into a diagnostic."""
+        location = exc.headers.get("Location")
+        target = (
+            _redact_location_query(location) if location else "<no Location header>"
+        )
+        return OpenAICompatibleError(
+            f"OpenAI-compatible server responded with a redirect "
+            f"({exc.code}) to {target}; this client never follows "
+            "redirects, because doing so could forward the Authorization "
+            "header to a different host. Set base_url directly to the "
+            "server's final URL."
         )
 
     def _unavailable(self, exc: BaseException) -> OpenAICompatibleUnavailable:

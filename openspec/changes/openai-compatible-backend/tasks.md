@@ -708,8 +708,92 @@ requirements.
   cut from `main` after PR #1096/#1097) — no push, no PR opened per the
   apply run's instructions; PR creation is left to the maintainer.
 
+### Phase 4 security fix (post-review, before PR): never follow redirects
+
+Coordinator-identified gap, fixed on the same branch as a follow-up
+commit (not a numbered task above): `urllib.request.HTTPRedirectHandler.
+redirect_request`'s default implementation copies every non-content
+header — including `Authorization` — onto a redirected request, and for
+301/302/303 on POST silently converts it to GET while still forwarding
+that header. The `openai-compatible-client` spec already required the key
+never be redirected to another host; the shipped Phase 4 code did not yet
+enforce it.
+
+- [x] Added `_NoRedirectHandler` (a `urllib.request.HTTPRedirectHandler`
+  subclass whose `redirect_request` always returns `None`) and
+  `_NO_REDIRECT_OPENER = urllib.request.build_opener(_NoRedirectHandler)`;
+  `OpenAICompatibleClient.__init__`'s `urlopen` default is now
+  `_NO_REDIRECT_OPENER.open`, not `urllib.request.urlopen`. The injectable
+  `urlopen` parameter is unchanged.
+- [x] `chat()`'s `except urllib.error.HTTPError` branch now checks
+  `300 <= exc.code < 400` first and routes to a new `_map_redirect(exc)`
+  method — discovered mechanically (not assumed) that a refused redirect
+  surfaces as `HTTPError`, never as a normal response with a 3xx status:
+  `OpenerDirector._call_chain` treats `redirect_request`'s `None` as "no
+  handler answered" and falls through to `http_error_default`, which
+  raises. `_map_redirect` never reads `self._api_key` and strips the
+  `Location` header's query string/fragment (`_redact_location_query`)
+  before interpolating it into the message.
+- [x] [TEST] `tests/unit/llm/test_openai_compatible_redirect.py` (new, 9
+  tests): `test_any_3xx_response_raises_mapped_error` (parametrized over
+  307/301/302/303/308, with/without a `Location` header);
+  `test_redirect_error_message_never_contains_configured_key` and
+  `test_redirect_message_does_not_echo_location_query_string` (fake
+  `urlopen` raising a real `HTTPError`, precondition-checked that the key
+  really was sent on the pre-redirect request);
+  `test_default_urlopen_is_the_no_redirect_opener` (structural identity
+  pin); `test_redirect_is_never_followed_and_key_never_forwarded` — a REAL
+  integration test, two local `http.server` instances on `127.0.0.1`
+  (marked `@pytest.mark.live_backend` to lift the unit suite's fail-closed
+  socket guard for its loopback `connect()` calls, per that fixture's own
+  documented escape hatch), a 303 (not 307 — a 307/308 POST redirect is
+  already refused by stock `urllib.request.urlopen` for an unrelated RFC
+  2616-consent reason and would not have exercised this fix) from server A
+  to server B; asserts server B never receives any request.
+- [x] **RED confirmed** before implementing: 6 of the module's tests
+  failed for the right reason (5 fake-based tests asserting the specific
+  redirect message/status, plus the real end-to-end test — `Failed: DID
+  NOT RAISE OpenAICompatibleError`, proving the live vulnerability); 2
+  fake-based tests (key-never-appears, query-not-echoed) passed vacuously
+  on first run because the pre-fix code's generic error-fallback message
+  happened not to contain either — both are mutation-proved below instead
+  of trusted at face value.
+- [x] **Mutation proof 1** (redirect actually followed): temporarily
+  reverted `urlopen`'s default back to `urllib.request.urlopen`; 2 tests
+  failed (`test_default_urlopen_is_the_no_redirect_opener`,
+  `test_redirect_is_never_followed_and_key_never_forwarded`). Reverted
+  with the exact inverse edit.
+- [x] **Mutation proof 2** (key/query leaked into the message): temporarily
+  edited `_map_redirect` to interpolate `self._api_key` and to use the raw
+  (un-redacted) `Location` value; 3 tests failed
+  (`test_redirect_error_message_never_contains_configured_key`,
+  `test_redirect_message_does_not_echo_location_query_string`,
+  `test_redirect_is_never_followed_and_key_never_forwarded`). Reverted
+  with the exact inverse edit. Purged `__pycache__` after both proofs.
+- [x] Design/spec updated: one sentence added to `design.md`'s Decision 2
+  (HTTP error mapping paragraph) recording the no-redirect policy and why;
+  a new scenario ("A redirect response is refused, never forwarding the
+  key") added under `specs/openai-compatible-client/spec.md`'s "An
+  Optional Bearer Key..." requirement (plain new-domain spec, no
+  ADDED/MODIFIED delta headers existed in this file to preserve).
+- [x] Re-ran all five verification commands unpiped after the fix: `ruff
+  check .` clean; `ruff format --check .` reformatted 2 files, reconfirmed
+  clean (374 files); `mypy .` found one `redundant-expr` (an always-true
+  `is not None` check against `HTTPError.headers`, which typeshed types as
+  non-Optional), removed the redundant check, reconfirmed clean (374
+  source files); `uv run pytest --cov` (unpiped, backgrounded — 444.30s
+  wall time) → **7276 passed, 0 failed, 2 skipped**, 96.93% branch
+  coverage (>= 90% gate held); `llm/openai_compatible.py`: 104 statements,
+  2 missed, 98%. `evals/run_self_tests.py`: 44/44 green.
+- [ ] Commit as a separate follow-up commit (not squashed into 4.26's),
+  scope `llm`. No push, no PR — left to the maintainer, same as 4.26.
+
 **Rollback boundary**: delete `llm/openai_compatible.py`; nothing else
-references it yet.
+references it yet. The redirect-refusal fix is independently revertable:
+drop `_NoRedirectHandler`/`_NO_REDIRECT_OPENER`/`_map_redirect`/
+`_redact_location_query`, restore `urlopen`'s default to
+`urllib.request.urlopen`, and remove the `300 <= exc.code < 400` branch in
+`chat()` — the rest of Phase 4 keeps working unchanged.
 
 ---
 

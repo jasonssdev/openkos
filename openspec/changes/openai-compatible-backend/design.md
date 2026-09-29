@@ -101,7 +101,12 @@ HTTP error mapping (`_map_http_error`): 404, or 400 whose body carries
 `OPENKOS_OPENAI_API_KEY` (never its value); everything else →
 `OpenAICompatibleError` with the status and the server's detail. Transport
 failures → `OpenAICompatibleUnavailable`, naming `locality.display_host`
-only (the #355 rule).
+only (the #355 rule). The client's default transport never follows an HTTP
+redirect (any status, any method) and instead raises a typed
+`OpenAICompatibleError` naming the status and the redirect target with its
+query string stripped, because `urllib`'s default redirect handling copies
+the `Authorization` header onto the redirected request regardless of
+destination host.
 
 Generation-capped messages keep Ollama's three-way "which bound actually bound"
 branching (#440/#829) but name the server's own context size, not
