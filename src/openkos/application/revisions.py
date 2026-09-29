@@ -17,10 +17,16 @@ Candidate generation itself (`plan_revision_candidates`) and the judge
 reimplement them (ADR-0018: narrow synchronous use-case services under
 `application/`, no `engine.py`).
 
-Later Phase B slices (P5b, P6) extend this same module with input-digest
-freshness checking, candidate planning, and judging; they are out of scope
-for this file as it stands after P5a."""
+This slice (P5b) extends it with `revision_input_digests` (design.md
+Decision 2's input-digest table), `is_fresh` (Decision 2's strict
+freshness rule -- deliberately NOT `findings._is_stale`'s lenient
+`None`-means-unchanged rule, because a revision finding can lead to a
+bundle write), and `plan_revisions` (the zero-LLM served/to_judge split,
+"Phase B re-plan" Data flow). P6 still owes `judge_revisions` and
+`actionable_revision_findings`."""
 
+import hashlib
+import sqlite3
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
@@ -30,8 +36,9 @@ from openkos import config, lifecycle, sensitivity
 from openkos.bundle import provenance as bundle_provenance
 from openkos.model import okf
 from openkos.model.relations import RESOLUTION_RELATION_TYPES
+from openkos.resolution import decision_revision
 from openkos.resolution.decision_revision import DecisionDate
-from openkos.state import reindex
+from openkos.state import derived, reindex, revision_findings
 from openkos.state.vectorstore import (
     VecUnavailable,
     content_hash,
@@ -154,12 +161,33 @@ def resolve_decision_dates(
        dates: `"multiple"`.
     4. Otherwise: `"dated"`, with the single agreed value.
 
-    Builds its own `files` snapshot the same way `list_service.
-    list_provenance_sources` does (one `okf.iter_bundle_markdown` walk, an
-    unreadable file simply contributing no entry) -- a Source with no file
-    behind it is then indistinguishable, at the lookup below, from a
-    dangling reference the walk never reached, which is exactly case 2's
-    "no file" branch."""
+    Builds its `files` snapshot via `_bundle_text_snapshot` (one
+    `okf.iter_bundle_markdown` walk, an unreadable file simply contributing
+    no entry) -- a Source with no file behind it is then indistinguishable,
+    at the lookup below, from a dangling reference the walk never reached,
+    which is exactly case 2's "no file" branch."""
+    files = _bundle_text_snapshot(layout)
+    ancestors_by_id = bundle_provenance.provenance_source_ancestors_many(
+        files, object_ids=decision_ids
+    )
+    return {
+        decision_id: _resolve_one_decision_date(files, ancestors_by_id[decision_id])
+        for decision_id in decision_ids
+    }
+
+
+def _bundle_text_snapshot(layout: config.WorkspaceLayout) -> dict[str, str]:
+    """One whole-bundle read of every markdown file's decoded text, keyed by
+    bundle-relative POSIX path (INCLUDING the `.md` suffix) -- the
+    `Mapping[str, str]` shape `bundle_provenance.provenance_source_ancestors_many`/
+    `_parse_provenance_by_id` expect. Extracted from `resolve_decision_dates`'s
+    original inline block (P5a) so `resolve_decision_dates`,
+    `revision_input_digests`'s callers, and `is_fresh` share ONE reader
+    instead of three separate walks (P5b). An unreadable file (bad encoding,
+    a race with a concurrent delete) simply contributes no entry -- the same
+    degrade-not-crash posture `list_service.list_provenance_sources` and
+    this function's prior inline form both took; behavior is unchanged by
+    the extraction."""
     files: dict[str, str] = {}
     for path in okf.iter_bundle_markdown(layout.bundle_dir):
         if path.name in okf.RESERVED_FILENAMES:
@@ -169,14 +197,7 @@ def resolve_decision_dates(
             files[rel] = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
-
-    ancestors_by_id = bundle_provenance.provenance_source_ancestors_many(
-        files, object_ids=decision_ids
-    )
-    return {
-        decision_id: _resolve_one_decision_date(files, ancestors_by_id[decision_id])
-        for decision_id in decision_ids
-    }
+    return files
 
 
 def _resolve_one_decision_date(
@@ -304,4 +325,266 @@ def read_decision_vectors(
         vectors=vectors,
         missing=frozenset(missing),
         stale=frozenset(stale),
+    )
+
+
+_SOURCES_OF_PREFIX = "sources-of:"
+"""Duplicated verbatim from `state.revision_findings._SOURCES_OF_PREFIX`
+(kept private there): this module builds the `input_ref` strings that
+module's own sweep matches against, so the literal must agree exactly.
+There is no shared public constant to import instead without widening that
+already-shipped module's API outside this slice's scope (design.md
+Decision 2)."""
+
+
+def revision_input_digests(
+    layout: config.WorkspaceLayout,
+    files: Mapping[str, str],
+    pair_ids: tuple[str, str],
+) -> tuple[revision_findings.InputDigest, ...]:
+    """design.md Decision 2's input-digest table for one candidate pair, in
+    the documented ordinal order:
+
+    1, 2. `pair_ids` sorted (so the row order is always
+       `(smaller_id, larger_id)`, matching `state.revision_findings`'
+       `pair_id_0 < pair_id_1` invariant) -- `content_hash` of each
+       Decision's raw file bytes, read fresh from disk (as
+       `cli.curate.finding_input_digests` does; NOT decoded through `files`,
+       so this row is byte-exact even if `files` was built with universal
+       newline translation).
+    3, 4. `sources-of:<id>` for each side -- sha256 of the `"\\n"`-joined
+       SORTED reached-Source id list, over the id list itself (never over
+       file bytes), so this row moves when provenance PATH changes even if
+       every file it currently names is unreadable.
+    5+. every reached Source id of EITHER side, sorted and deduped --
+       `content_hash` of that Source's raw file bytes. A dangling
+       reference (no file behind it) contributes NO row here at all, so a
+       stored tuple computed while that file existed is a different LENGTH
+       from a freshly-recomputed one after it is deleted -- exactly the
+       "an unreadable input must never count as unchanged" property
+       `is_fresh`'s strict equality depends on.
+
+    `files` is used ONLY for the provenance walk
+    (`bundle_provenance.provenance_source_ancestors_many`) -- the
+    bundle-relative-path-keyed `Mapping[str, str]` snapshot
+    `_bundle_text_snapshot` builds, reusable across many calls (one per
+    candidate pair) without re-walking the bundle each time."""
+    id_0, id_1 = sorted(pair_ids)
+    ancestors_by_id = bundle_provenance.provenance_source_ancestors_many(
+        files, object_ids=(id_0, id_1)
+    )
+
+    digests: list[revision_findings.InputDigest] = []
+    for decision_id in (id_0, id_1):
+        try:
+            raw_bytes = okf.concept_path_for(
+                decision_id, layout.bundle_dir
+            ).read_bytes()
+        except OSError:
+            continue
+        digests.append(
+            revision_findings.InputDigest(decision_id, content_hash(raw_bytes))
+        )
+
+    reached_by_id = {
+        decision_id: ancestors_by_id.get(decision_id, [])
+        for decision_id in (id_0, id_1)
+    }
+    for decision_id in (id_0, id_1):
+        joined = "\n".join(sorted(reached_by_id[decision_id]))
+        digests.append(
+            revision_findings.InputDigest(
+                f"{_SOURCES_OF_PREFIX}{decision_id}",
+                hashlib.sha256(joined.encode("utf-8")).hexdigest(),
+            )
+        )
+
+    all_reached = sorted(set(reached_by_id[id_0]) | set(reached_by_id[id_1]))
+    for source_id in all_reached:
+        try:
+            raw_bytes = okf.concept_path_for(source_id, layout.bundle_dir).read_bytes()
+        except OSError:
+            continue
+        digests.append(
+            revision_findings.InputDigest(source_id, content_hash(raw_bytes))
+        )
+
+    return tuple(digests)
+
+
+def is_fresh(
+    layout: config.WorkspaceLayout,
+    finding: revision_findings.RevisionFinding,
+    *,
+    effective_confidential: bool | None = None,
+) -> bool:
+    """design.md Decision 2's strict freshness rule, checked in order --
+    ALL four must hold, never the lenient `None`-means-unchanged rule
+    `findings._is_stale` uses elsewhere in this codebase (a revision finding
+    can lead to a bundle write via `reconcile --from-findings`, so an input
+    that cannot currently be read must never count as unchanged):
+
+    1. `finding` IS the pair's CURRENT row -- re-read from
+       `.openkos/findings.db` and compared by full equality, so a caller's
+       stale in-memory copy of a row `record_revision_findings` has since
+       REPLACEd is correctly rejected, never trusted just because it was
+       handed in.
+    2. `finding.prompt_version == decision_revision.JUDGE_PROMPT_VERSION`.
+    3. `finding.include_confidential == effective_confidential`, UNLESS
+       `effective_confidential` is `None` -- the caller's explicit
+       opt-out of this one dimension (every real `plan_revisions` call
+       passes its own resolved `--include-confidential OR local_exemption`
+       value here).
+    4. The recomputed current digest tuple
+       (`revision_input_digests`, over a fresh `_bundle_text_snapshot`)
+       equals `finding.input_digests` EXACTLY -- strict tuple equality, so
+       one fewer current row (an input that became unreadable) can never
+       tie with a shorter stored tuple by coincidence.
+
+    An absent `.openkos/findings.db`, or a present-but-unreadable one,
+    degrades to `False` (nothing to compare against, or a corrupt store --
+    fail toward re-judging, never toward silently serving a stale verdict),
+    mirroring `_partition_persisted_serves`'s fail-open-to-judging posture
+    (`main.py:13333-13353`) and never CREATING the store as a side effect of
+    this read (`derived.open_derived_connection` is only reached once
+    `findings_db_path.exists()` is already true)."""
+    if not layout.findings_db_path.exists():
+        return False
+    try:
+        conn = derived.open_derived_connection(layout.findings_db_path)
+        try:
+            persisted = revision_findings.open_revision_findings(conn)
+        finally:
+            conn.close()
+    except (OSError, sqlite3.Error):
+        return False
+
+    latest_by_pair: dict[tuple[str, str], revision_findings.RevisionFinding] = {}
+    for row in persisted:
+        latest_by_pair[row.pair_ids] = row
+    current = latest_by_pair.get(finding.pair_ids)
+    if current != finding:
+        return False
+    if current.prompt_version != decision_revision.JUDGE_PROMPT_VERSION:
+        return False
+    if (
+        effective_confidential is not None
+        and current.include_confidential != effective_confidential
+    ):
+        return False
+
+    files = _bundle_text_snapshot(layout)
+    recomputed = revision_input_digests(layout, files, finding.pair_ids)
+    return recomputed == current.input_digests
+
+
+@dataclass(frozen=True)
+class RevisionPlan:
+    """One `plan_revisions` run's result (design.md's Phase B re-plan
+    Interfaces: "`RevisionPlan` carries coverage, candidate plan, served
+    findings, to_judge")."""
+
+    coverage: VectorCoverage
+    candidate_plan: decision_revision.RevisionCandidatePlan
+    served: tuple[revision_findings.RevisionFinding, ...]
+    """Persisted findings whose pair is still a candidate AND still fresh --
+    P6's report renders these directly, with no further judging."""
+    to_judge: tuple[decision_revision.RevisionCandidate, ...]
+    """Candidates needing a judge call: no persisted finding at all, a
+    stale one, or every candidate when `fresh=True`."""
+
+
+def plan_revisions(
+    layout: config.WorkspaceLayout,
+    decisions: DecisionSet,
+    *,
+    embedding_model: str,
+    effective_confidential: bool,
+    fresh: bool,
+) -> RevisionPlan:
+    """The zero-LLM, zero-embed planning step (design.md's Phase B re-plan
+    Data flow): reads current vectors (`read_decision_vectors`), builds each
+    surviving Decision's `DecisionInput` (subject always `None` -- design.md
+    Decision B3 dropped the production subject pass), calls the Phase A leaf
+    `decision_revision.plan_revision_candidates`, then partitions the
+    result into `served`/`to_judge` via `is_fresh` against
+    `.openkos/findings.db`'s persisted rows -- UNLESS `fresh=True`, which
+    sends every candidate straight to `to_judge` with `served=()`.
+
+    Reads `.openkos/findings.db` at most once here to build the
+    pair-keyed lookup driving which findings even get an `is_fresh` check;
+    `is_fresh` itself independently re-reads the store per finding to
+    confirm it is still the CURRENT row (its own condition 1) -- one
+    intentional redundant read per served candidate, accepted for this
+    slice rather than widening `is_fresh`'s signature with a pre-fetched
+    cache parameter the design does not name."""
+    decision_ids = [decision.concept_id for decision in decisions.decisions]
+
+    current_bytes: dict[str, bytes] = {}
+    for concept_id in decision_ids:
+        try:
+            current_bytes[concept_id] = okf.concept_path_for(
+                concept_id, layout.bundle_dir
+            ).read_bytes()
+        except OSError:
+            continue
+
+    coverage = read_decision_vectors(
+        layout, decision_ids, current_bytes, embedding_model=embedding_model
+    )
+
+    files = _bundle_text_snapshot(layout)
+    ancestors_by_id = bundle_provenance.provenance_source_ancestors_many(
+        files, object_ids=decision_ids
+    )
+    decision_inputs = [
+        decision_revision.DecisionInput(
+            concept_id=decision.concept_id,
+            subject=None,
+            source_ids=frozenset(ancestors_by_id.get(decision.concept_id, [])),
+            resolved_with=decision.resolved_with,
+        )
+        for decision in decisions.decisions
+    ]
+    candidate_plan = decision_revision.plan_revision_candidates(
+        decision_inputs, coverage.vectors
+    )
+
+    if fresh:
+        return RevisionPlan(
+            coverage=coverage,
+            candidate_plan=candidate_plan,
+            served=(),
+            to_judge=candidate_plan.candidates,
+        )
+
+    persisted_by_pair: dict[tuple[str, str], revision_findings.RevisionFinding] = {}
+    if layout.findings_db_path.exists():
+        try:
+            conn = derived.open_derived_connection(layout.findings_db_path)
+            try:
+                persisted = revision_findings.open_revision_findings(conn)
+            finally:
+                conn.close()
+            for row in persisted:
+                persisted_by_pair[row.pair_ids] = row
+        except (OSError, sqlite3.Error):
+            persisted_by_pair = {}
+
+    served: list[revision_findings.RevisionFinding] = []
+    to_judge: list[decision_revision.RevisionCandidate] = []
+    for candidate in candidate_plan.candidates:
+        finding = persisted_by_pair.get(candidate.pair_ids)
+        if finding is not None and is_fresh(
+            layout, finding, effective_confidential=effective_confidential
+        ):
+            served.append(finding)
+        else:
+            to_judge.append(candidate)
+
+    return RevisionPlan(
+        coverage=coverage,
+        candidate_plan=candidate_plan,
+        served=tuple(served),
+        to_judge=tuple(to_judge),
     )
