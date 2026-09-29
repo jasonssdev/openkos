@@ -1692,3 +1692,123 @@ slice's recommendation.
   type" reconcile prompt helper, and the `reconcile --from-findings`
   revision walk) remain, in that chain order, each as its own PR, per
   tasks.md's "Phase B: tasks (2026-09-28 re-plan)" section.
+
+---
+
+## Phase B — Slice P8a (PR 13): the combined "who is later, which type" prompt
+
+Scope for this batch: tasks.md's "Slice P8a (PR 13): the combined 'who is
+later, which type' prompt" — `P8a.1`–`P8a.6`. No upstream Phase B
+dependency (design.md notes P3, P4, and P8a are pure leaves that may be
+reordered earlier). Basis: design.md's "Phase B re-plan (2026-09-28)"
+section, Decision 9 ("`reconcile --from-findings` revision walk"), step
+7 specifically — the combined "which Decision is later, which relation
+type" prompt an undirected REVERSES/REFINES finding routes to. Branch
+`feat/1014-phase-b-p8a-prompt` (checked out ON TOP of the P7b branch, PR
+#1067, not yet merged, at `e8a0dce`). No caller wired yet — P8b's
+`reconcile --from-findings` revision walk (next slice) is the first
+consumer.
+
+### Files changed
+
+| File | Action |
+|---|---|
+| `src/openkos/cli/main.py` | Modified — new `_ask_later_decision_and_type` helper, no new caller |
+| `tests/unit/cli/test_reconcile.py` | Modified — two new test functions (one parametrized ×4) |
+
+### TDD Cycle Evidence
+
+| Task(s) | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|---|---|
+| P8a.1–P8a.3 | `test_reconcile.py` | Unit (direct function call, `typer.prompt` scripted via monkeypatch, mirroring `test_curate.py`'s `_script_prompts`) | ✅ 74/74 passing before any edit (`uv run pytest tests/unit/cli/test_reconcile.py -q`) | ✅ genuinely observed: ran the 5 new tests against the pre-implementation tree — all 5 failed with `AttributeError: module 'openkos.cli.main' has no attribute '_ask_later_decision_and_type'`, exactly as tasks.md's own P8a.1/P8a.2 predict | ✅ 5/5 passed on the first run after implementing `_ask_later_decision_and_type` as one cohesive unit (design.md Decision 9 step 7 fully specifies the four-way mapping and the skip/re-ask loop) | ✅ the parametrized test already covers all 4 numbered choices plus skip (`s`), empty, and re-ask (`x`) as one designed set — see Mutation-Kill Verification below for behavioral proof beyond "does it exist" | ➖ None needed — one small function, no duplication to extract |
+
+**Note on RED granularity**: same posture as every prior Phase A/B slice —
+a genuine RED was captured for real (ran the tests against the
+pre-implementation tree, not merely asserted) before any production code
+existed. Given the fully-specified four-way mapping and skip/re-ask
+contract in design.md Decision 9 step 7, the function was implemented as
+one cohesive unit and verified GREEN as a whole (5/5). Correctness beyond
+mere existence is proven by the two mutation-kill runs below.
+
+### Mutation-Kill Verification (mandatory per apply instructions)
+
+Each mutation was applied, verified to make the targeted test FAIL,
+`__pycache__` purged (`find . -name __pycache__ -prune -exec rm -rf {}
++`), then reverted with the exact inverse edit (never `git checkout --`),
+and the focused test re-verified GREEN before moving to the next mutation.
+
+| # | Mutation | File / line | Test that must fail | Result |
+|---|---|---|---|---|
+| 1 | Choice `1` swapped holder/target (`return (b, a, "supersedes")` → `return (a, b, "supersedes")`) | `main.py`, `_ask_later_decision_and_type`, the `choice == "1"` branch | `test_ask_later_decision_and_type_maps_each_numbered_choice[1-expected0]` | ✅ FAILED as expected: `AssertionError: assert ('earlier-a', 'later-b', 'supersedes') == ('later-b', 'earlier-a', 'supersedes')` — proving the test discriminates holder-vs-target order, not merely "returns a tuple". Reverted. |
+| 2 | The re-ask loop's `else` branch changed from re-prompting to silently returning `None` (an unrecognized answer treated as skip) | `main.py`, `_ask_later_decision_and_type`, the trailing `typer.echo(...)` re-ask branch | `test_ask_later_decision_and_type_skip_and_reask` | ✅ FAILED as expected: `AssertionError: assert None == ('later-b', 'earlier-a', 'revises')` on the `["x", "2"]` script — proving the test discriminates "loops past an unrecognized answer" from "treats it as a skip", not merely that skip/choice values are distinguishable elsewhere. Reverted. |
+
+Both mutations killed by the tests named above. `find . -name __pycache__
+-prune -exec rm -rf {} +` was run before every GREEN/RED verdict, and
+every revert used the exact inverse edit — never `git checkout --`.
+
+A third, non-mutation finding: the first `ruff check .` run after
+implementation flagged `S105` (bandit's hardcoded-password heuristic) four
+times, all on `token == "1"`/`"2"`/`"3"`/`"4"` equality comparisons — the
+literal variable name `token` compared against a short string literal
+trips this rule, unlike `_confirm`'s own `token in {"y", "yes"}`
+membership check. Fixed by renaming the local variable to `choice`; no
+behavior change, re-verified GREEN (5/5) after the rename.
+
+### Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `uv run pytest tests/unit/cli/test_reconcile.py -k ask_later_decision_and_type -v` → **5 passed**; full file `uv run pytest tests/unit/cli/test_reconcile.py -q` → **79 passed** |
+| Runtime harness command/scenario and exact result | N/A, as tasks.md's own Suggested-Work-Units row for P8a states — "a prompt-loop helper with no caller yet"; there is no runtime/CLI boundary to exercise until P8b wires it into `_run_reconcile_from_findings` |
+| Rollback boundary | Revert the new `_ask_later_decision_and_type` function in `src/openkos/cli/main.py` and the two new test functions (`test_ask_later_decision_and_type_maps_each_numbered_choice`, `test_ask_later_decision_and_type_skip_and_reask`) plus the shared `_script_prompts` helper in `tests/unit/cli/test_reconcile.py`; nothing else in the codebase calls this function yet, so the revert is fully isolated |
+
+### Full Verification (this work unit)
+
+| Command | Result |
+|---|---|
+| `uv run ruff check .` | Found 4 (`S105` false positives on the `token` variable name) → renamed to `choice` → **All checks passed!** |
+| `uv run ruff format --check .` | **356 files already formatted** |
+| `uv run mypy .` | Success: no issues found in 356 source files |
+| `uv run pytest --cov` (full, unpiped) | **6891 passed, 2 skipped** in 426.32s (0:07:06), exit 0 (up from the P7b baseline of 6886 passed + this slice's 5 new tests); coverage 96.98%, gate 90% reached |
+| `uv run python evals/run_self_tests.py` (`OLLAMA_HOST` poisoned) | **43 of 43 harness self-test(s) run, 0 failing** |
+
+`git diff --shortstat e8a0dce..HEAD` (implementation commit only, before
+this section's own final `docs(sdd)` commit): `2 files changed, 111
+insertions(+)` — well under the 400-line review budget, no
+`size:exception` needed for this slice (unlike P3/P6/P7b/P8b's
+over-budget forecasts).
+
+### Commit
+
+`8450945` — `feat(cli): add the combined later-decision-and-relation-type
+prompt (#1014)` (scope `cli`, per AGENTS.md: "a verb/CLI change is scoped
+`cli`", consistent with P7b's own precedent for a reconcile-prompt
+helper). 2 files changed, 111 insertions(+) (`src/openkos/cli/main.py`
++38, `tests/unit/cli/test_reconcile.py` +73). Staged explicitly by path
+(`src/openkos/cli/main.py`, `tests/unit/cli/test_reconcile.py`) —
+`openspec/` is left for this section's own final `docs(sdd)` commit, same
+posture as every prior Phase B slice. Not pushed, no branch switch, no
+rebase (per this batch's explicit instruction to stay on the branch).
+Branched from the P7b branch (PR #1067, not yet merged) at `e8a0dce` on
+`feat/1014-phase-b-p8a-prompt`.
+
+**Budget**: 111 authored changed lines — well under the 400-line review
+budget. No `size:exception` needed.
+
+### Design deviations
+
+None — `_ask_later_decision_and_type`'s signature, prompt string, the
+four-way `(holder, target, edge_type)` mapping, and the skip/re-ask loop
+match design.md Decision 9 step 7 exactly. The `_ask_later_decision`
+two-question sketch design.md mentions as superseded was never
+implemented in `main.py`, so there was nothing to remove.
+
+### Remaining Tasks (after Slice P8a)
+
+- Slice P8a (`P8a.1`–`P8a.6`) is complete. PR 13 (targeting the P7b
+  branch, per `stacked-to-main`'s chain order ... → P7b → P8a → P8b) is
+  ready to open on `feat/1014-phase-b-p8a-prompt`.
+- Slice P8b (`P8b.*` — the `reconcile --from-findings` revision walk,
+  final Phase B slice) remains, per tasks.md's "Phase B: tasks
+  (2026-09-28 re-plan)" section. It is the first caller of
+  `_ask_later_decision_and_type`.
