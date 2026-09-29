@@ -15,7 +15,7 @@ stacked-to-main, 8 PRs (`tasks.md` "Review Workload Forecast").
 | 3b | Ledger migration | PR 5 → `main` | **Done** — commit `363107e` |
 | 3c | `repair` verb | PR 6 → `main` | **Done** — commit `42459a5` |
 | 4a | Fixture (Phase 7) | PR 7 → `main` | **Done** — commit `a3cb43f` |
-| 4b | Docs + renumbering (Phase 8) | PR 8 → `main` | Not started |
+| 4b | Docs + renumbering (Phase 8) | PR 8 → `main` | **Done** — commit `72aa477` |
 
 ## Slice 1 (Phase 1, PR 1) — Done
 
@@ -1224,11 +1224,185 @@ lines**, within design.md's ~150-290 forecast for this slice (4a). This
 `apply-progress.md` update and `tasks.md`'s checkbox updates land in the
 separate `docs(sdd)` commit that follows.
 
+## Slice 8 (Phase 8, PR 8) — Done
+
+**Branch**: `feat/1064-okf-v02-p4b-docs`, stacked on `8ad3a6b` (Phase 7,
+PR #1083, not yet merged to `main`).
+**Commit**: `72aa477` —
+`docs: adopt OKF v0.2 field set and section numbering across docs, the
+template, and code comments (#1064)`.
+**Mode**: N/A (prose-only slice; no behavioral test, per tasks.md's own
+"Threat Matrix: N/A" framing for this phase). Structural readback
+(grep before/after) plus the full suite is the proportional check.
+**Tasks**: 8.1–8.13, all `[x]` in `tasks.md`; 8.14 (commit) done via this
+commit, PR not yet opened by this agent (delivery — push/PR — stays the
+user's decision per repository policy, consistent with every prior slice's
+own commits). 8.9 is an explicit no-op by design: the two living-spec
+passages (`## OKF §9 Conformance Rules 1-3` in `openspec/specs/ingestion/
+spec.md`, and the `## Non-Goals` §9 mention in `openspec/specs/lint/
+spec.md`) are edited at `sdd-archive` time, not in this PR — confirmed
+untouched.
+
+### OKF v0.1 → v0.2 section-number mapping used (fetched from the live
+spec — GitHub's `main` branch now serves v0.2; the true v0.1 text was
+recovered from an earlier commit, `ee67a5c`, since `main` no longer serves
+it)
+
+| v0.1 section | v0.2 section | Topic |
+|---|---|---|
+| §2 (Terminology, Concept ID) | §2 (unchanged) | Identity |
+| §4.1 (Frontmatter extensions) | §4.1 (unchanged) | Extension keys |
+| §4.2 (Body headings, incl. `# Citations`) | §4.2 (unchanged number; table content differs — `# Citations` removed, `# Computation` added) | Conventional headings |
+| §5.1/§5.2/§5.3 (Cross-linking: absolute links, relative links, link semantics) | §6.1 (Links between concepts — all three folded into one subsection) | Links |
+| §6 (Index Files) | §8 (Index files) | Reserved file |
+| §7 (Log Files) | §9 (Log files) | Reserved file |
+| §8 (Citations) | Retired — superseded by frontmatter `sources`, §5.1, and the footnote convention, §13.1 | Citations |
+| §9 (Conformance) | §11 (Conformance) | The three rules |
+| §10 (Relationship to other formats) | Retired — no v0.2 equivalent | — |
+| §11 (Versioning) | §12 (Versioning) | Root `okf_version` exception |
+| — (new) | §5 (Provenance, trust, lifecycle: §5.1 `sources`, §5.2 `generated`/`verified`, §5.3 trust tiers, §5.4 `status`, §5.5 `stale_after`) | New frontmatter families |
+| — (new) | §6.2 (path-valued fields), §6.3 (`references/` convention) | New link subsections |
+| — (new) | §7 (Actor convention) | `generated.by` shape |
+| — (new) | §10 (Attested computations) | Out of scope for this change |
+| — (new) | §13 (Changes from v0.1: §13.1 breaking, §13.2 additive) | Migration notes |
+
+This table is the load-bearing fact this slice depends on and is recorded
+here since no design.md/proposal.md passage stated it exhaustively — those
+documents named only the handful of mappings their own decisions needed
+(§9→§11, §11→§12, §6/§7→§8/§9, §8 retired). The link-section mapping
+(old §5.1/§5.3 → new §6.1) and the "§10 has no successor" fact were
+derived directly from the fetched spec text, not from any prior SDD
+artifact.
+
+### Design/implementation deviations (owner pre-authorized: take the
+recommended option, report it)
+
+- **AGENTS.md's "Adopt OKF" bullet (line 21) was rewritten beyond task
+  8.4's literal two named sentences.** Task 8.4 names only the two `§9`/
+  `§11`-bearing sentences at (then-)lines 23 and 42; the session's own
+  instructions separately named the `§2, §5.1, §5.3, §8, §9, §4.1, §6/§7`
+  bullet at line 21 as in-scope (with `§9→§11`, `§6/§7→§8/§9`, `§8→§5.1`
+  given explicitly). Both sources agree in substance; the session
+  instructions were followed as the more complete and explicit of the two,
+  since leaving line 21's stale `§5.1, §5.3` citation for LINKS unedited
+  would have left it pointing at v0.2's `sources` field instead — a
+  worse defect than under-scoping task 8.4.
+- **The `# Citations` heading described in `docs/knowledge-object-model.md`'s
+  worked example was NOT rewritten.** Per the session's explicit
+  instruction ("copy from the example, do not hand-write"), the Stoicism/
+  Maria-Salazar frontmatter and body were copied byte-for-byte from the
+  regenerated `examples/good-life-demo/bundle/**` (Phase 7's `repair`
+  output) — confirmed identical by direct file comparison. That fixture's
+  `# Citations` section is genuinely still present (a pre-migration,
+  hand-authored-style section `repair` correctly preserved rather than
+  converted, per design.md Decision 8's R4 rule), so the doc's prose was
+  rewritten to explain that correctly instead of hiding or editing it out.
+- **`docs/architecture.md`'s citation-pattern paragraph (line 162) was
+  rephrased, not just renumbered.** The old text quoted OKF's Citations
+  heading (`OKF §8 ... "a subdirectory that mirrors external material..."`)
+  to justify OpenKOS's Source-concept bridging pattern. Since v0.2 retired
+  that heading, the same rationale now maps to v0.2 §6.3 (the `references/`
+  convention) — the quote was updated to the v0.2 text and the sentence
+  extended to also name `sources` as the mechanism that now carries this
+  lineage externally.
+- **`docs/cli.md`'s `merge` section (line 548) needed a substantive fix,
+  not just a citation renumber.** Its prose said `freshness`+`timestamp`
+  "are taken together from whichever side has the strictly more recent
+  `timestamp`" — stale since Phase 2 (`build_merged_document`'s generation
+  rule reads `generation_time()`, which prefers `generated.at` with a
+  legacy `timestamp` fallback, and writes `generated`, never a bare
+  `timestamp`). Corrected to describe the actual current rule, and added
+  the `sources`-regenerated-from-unioned-`provenance` fact `merge` also
+  performs but the doc never mentioned.
+- **`docs/okf-alignment.md`'s field-list bullet (was line 36) dropped
+  `timestamp` from OKF's own generic field description**, since v0.2's
+  real §4.1 table no longer lists it as an optional field at all (`generated`
+  supersedes it) — confirmed against the fetched spec text, not assumed.
+- **`docs/roadmap.md`'s MVP 1 deliverables bullets were updated**, not left
+  as historical narration: MVP 1's own field list/`# Citations`/`okf_version`
+  mentions describe what `ingest` currently outputs (a living roadmap, per
+  AGENTS.md's "docs describe the shape" rule), not a fixed historical
+  snapshot — distinguished from an ADR's append-only Context section, which
+  legitimately keeps `OKF v0.1 §4.1`-style citations describing the state at
+  the time a past decision was made.
+- **Two docs sections were left deliberately untouched** despite matching
+  the `§[0-9]` grep pattern: `okf.py`'s `check_conformance` docstring
+  (line 2859) and `cli/main.py`'s `next` docstring (line 10718) both quote
+  the LIVING spec's own not-yet-renamed requirement-heading text
+  (`"OKF §9 Conformance -- ..."` / `"Needs-Attention via §9 Conformance"`).
+  Renumbering the code comment while the actual `openspec/specs/{ingestion,
+  status}/spec.md` heading still reads `§9` (deferred to archive, task 8.9)
+  would create a code-vs-spec-heading mismatch; left as-is on purpose.
+- **`openspec/specs/status/spec.md`'s "Needs-Attention via §9 Conformance"
+  requirement heading was NOT renamed**, despite `tasks.md`'s own
+  Scenario/Requirement Coverage table describing it as "title-only
+  renumber, covered by 8.x." The session's explicit scope boundary
+  ("Do NOT edit `openspec/specs/` living specs") was followed as the
+  controlling instruction: only `sdd-archive`'s delta-merge step is
+  expected to touch any file under `openspec/specs/`, matching how task
+  8.9 treats the two named ingestion/lint passages. If this reading is
+  wrong, `status/spec.md` (and any sibling living spec whose only Phase-8-
+  relevant change is a bare `§9`→`§11` title renumber with no behavior
+  change) still needs that one-line heading edit before or during archive.
+
+### Verification (this session, unpiped, foreground/background as noted)
+
+- `grep -rn '§[0-9]' AGENTS.md docs/ src/openkos/templates examples/
+  good-life-demo/AGENTS.md | head -60` — run before (baseline: `§9`/`§6`/
+  `§7`/`§11`(versioning)/`§5.1,§5.3`(links)/`§8`(citations) scattered
+  across all touched files) and after (59 remaining `§N` hits, all either
+  already-correct v0.2 numbers this slice set, the two intentionally
+  deferred living-spec-heading quotes, or accepted/append-only ADRs
+  0002/0004/0023/0026/0029 correctly left alone per AGENTS.md's ADR
+  policy) — confirmed clean by manual per-file review, not just count.
+- `uv run pytest tests/unit/test_canonical_example.py -k agents_md`:
+  **1 passed** (task 8.2's regression confirmation — the template/example
+  `AGENTS.md` stayed byte-identical to a fresh `init` after 8.1/8.3).
+- `uv run ruff check .`: **All checks passed!**
+- `uv run ruff format --check .`: **364 files already formatted** (no
+  reformatting needed — prose-only edits, no code style drift).
+- `uv run mypy .`: **Success: no issues found in 364 source files**.
+- `uv run pytest --cov` (unpiped, background, ~7 min): **7032 passed, 2
+  skipped in 409.64s (0:06:49)**. Coverage 96.92% total (line+branch),
+  90.0% branch gate held (`Required test coverage of 90.0% reached`) — no
+  coverage regression, as tasks.md anticipated (only 8.2's existing
+  regression check touches covered production code).
+- `uv run python evals/run_self_tests.py`: **44 of 44 harness self-test(s)
+  run, 0 failing.**
+
+### Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command | `uv run pytest tests/unit/test_canonical_example.py -k agents_md` → 1 passed |
+| Runtime harness | N/A — prose-only change, no executable behavior; structural readback (the grep above) is the proportional check, per tasks.md's own framing for this phase |
+| Rollback boundary | Revert each doc/template/comment file independently (`git revert` of commit `72aa477`, or a per-file `git checkout 8ad3a6b -- <path>`); no executable behavior depends on this slice, so a partial revert is always safe |
+
+### Deviations from design/tasks
+
+None beyond the "Design/implementation deviations" recorded above (all
+either confirmed-correct fixes to text that was already stale for reasons
+beyond a bare citation renumber, or documented scope-boundary judgment
+calls where two instructions could be read two ways) — every genuinely
+new prose change matches `tasks.md` 8.1–8.14 and design.md's "Goldens and
+fixtures" / proposal.md scope item 5 exactly.
+
+### Git
+
+`git diff --shortstat 8ad3a6b..HEAD` (after commit `72aa477`, before the
+following `docs(sdd)` commit): `15 files changed, 103 insertions(+), 92
+deletions(-)` — well under the ~150-290 authored-line forecast and the
+400-line review budget. This `apply-progress.md` update and `tasks.md`'s
+checkbox updates land in the separate `docs(sdd)` commit that follows.
+
 ## Next
 
-Phase 8 (Slice 4b, PR 8 → `main`, after PR 3 merges, parallel-eligible
-with Phases 4-6 — all now landed): docs, repository `AGENTS.md`,
-`templates/agents.md.template`, example `AGENTS.md`, ~37 OKF section
-citations in `src/`, numbered-citation drift fix, and recording the two
-living-spec archive-time notes (task 8.9). This is the LAST phase before
-`sdd-archive`. Requires a fresh `sdd-apply` dispatch scoped to Phase 8.
+All 8 phases are now complete (Phase 1 through Phase 8, PRs 1-8, one
+commit each). `okf-v02-migration` is ready for `sdd-archive`: verify the
+full chain (all 8 branches/commits), merge deltas from `openspec/changes/
+okf-v02-migration/specs/` into the corresponding `openspec/specs/{domain}/
+spec.md` files (including the two passages task 8.9 deferred — the
+ingestion `## OKF §9 Conformance Rules 1-3` heading and the lint
+`## Non-Goals` §9 mention, both renumbered to `§11` at archive time), and
+archive the change. PR opening/merging for PRs 1-8 remains a user/
+repository-policy decision outside apply's scope.
