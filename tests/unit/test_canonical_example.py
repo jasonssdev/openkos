@@ -19,14 +19,35 @@ This is the same failure shipped templates have had before: a default taught for
 a whole release because no test reads a file that only humans read.
 """
 
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
+from typer.testing import CliRunner
 
 from openkos import config
+from openkos.cli.main import app
 from openkos.model import okf
+from tests.unit.vcs.conftest import isolate_git_identity
 
 _EXAMPLE = Path(__file__).resolve().parents[2] / "examples" / "good-life-demo"
+_V01_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "good_life_demo_v01"
+
+runner = CliRunner()
+
+
+def _run_git(args: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
+    """Run a real, fixed-argv `git` command against `cwd` -- mirrors
+    `tests/unit/cli/test_repair.py`'s own `_git` helper (no shell, `git`
+    always on `PATH` in this project's dev/CI environments)."""
+    return subprocess.run(  # noqa: S603
+        ["git", *args],  # noqa: S607
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
 
 
 def test_the_example_exists() -> None:
@@ -132,3 +153,99 @@ def test_source_concepts_are_the_only_bridge_to_raw() -> None:
             reaching_out[doc.name] = resource
 
     assert reaching_out == {}
+
+
+# --- okf-v02-migration Phase 7: the example is `repair`'s own output -----
+
+
+def test_v01_fixture_exists() -> None:
+    """Guards the two tests below from passing vacuously if the frozen v0.1
+    fixture (okf-v02-migration task 7.1) moves or is deleted."""
+    assert (_V01_FIXTURE / "bundle" / "index.md").is_file()
+    assert (_V01_FIXTURE / "openkos.yaml").is_file()
+
+
+def test_good_life_demo_bundle_equals_repair_of_frozen_v01_fixture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Task 7.3: the committed `examples/good-life-demo/bundle/**` is
+    exactly what `openkos repair` produces from the frozen v0.1 fixture
+    (task 7.1) -- the product migrating its own canonical example, per
+    design.md's "Goldens and fixtures" section. Regenerating the fixture by
+    hand (rather than running `repair` on a scratch copy) would drift from
+    this test the moment `migrate_document`/`apply_repair` next change.
+    """
+    workspace = tmp_path / "workspace"
+    shutil.copytree(_V01_FIXTURE, workspace)
+
+    isolate_git_identity(
+        monkeypatch, tmp_path, name="OpenKOS Test", email="test@openkos.invalid"
+    )
+    _run_git(["init", "-q"], cwd=workspace)
+    _run_git(["add", "-A"], cwd=workspace)
+    _run_git(["commit", "-q", "-m", "baseline: frozen v0.1 fixture"], cwd=workspace)
+
+    monkeypatch.chdir(workspace)
+    result = runner.invoke(app, ["repair"])
+
+    assert result.exit_code == 0, result.output
+
+    repaired_bundle = workspace / "bundle"
+    example_bundle = _EXAMPLE / "bundle"
+    repaired_files = {
+        path.relative_to(repaired_bundle) for path in repaired_bundle.rglob("*.md")
+    }
+    example_files = {
+        path.relative_to(example_bundle) for path in example_bundle.rglob("*.md")
+    }
+    assert repaired_files == example_files
+
+    for rel in sorted(repaired_files):
+        repaired_text = (repaired_bundle / rel).read_bytes()
+        example_text = (example_bundle / rel).read_bytes()
+        assert repaired_text == example_text, (
+            f"{rel}: `openkos repair` of the frozen v0.1 fixture diverges "
+            "from the committed example -- regenerate it by running repair "
+            "on a scratch copy, never by hand-editing the migrated document"
+        )
+
+
+def test_good_life_demo_bundle_has_no_v01_shaped_frontmatter() -> None:
+    """Task 7.4: `examples/good-life-demo/` is v0.2-shaped -- the root
+    `index.md` declares OKF 0.2, and no concept document carries a bare
+    `timestamp` key or `status: active`, the exact v0.1 shapes `repair`
+    migrates away. Covers the success criterion "examples/good-life-demo/
+    is v0.2-shaped and passes the product's own lint and status"."""
+    index_metadata, _ = okf.load_frontmatter(
+        (_EXAMPLE / "bundle" / "index.md").read_text(encoding="utf-8")
+    )
+    assert index_metadata.get("okf_version") == "0.2"
+
+    for doc in _concept_docs():
+        metadata, _ = okf.load_frontmatter(doc.read_text(encoding="utf-8"))
+        assert "timestamp" not in metadata, (
+            f"{doc.name}: still carries a bare `timestamp` key"
+        )
+        assert metadata.get("status") != "active", (
+            f"{doc.name}: still carries `status: active`"
+        )
+
+
+def test_good_life_demo_passes_lint_and_status_clean(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Task 7.5: `openkos lint` and `openkos status` both exit 0 against the
+    reference bundle, with no v0.1-shape-related finding. Run against a
+    COPY of the example, never the committed tree itself, so this test's
+    own engine cache (`.openkos/`) never lands inside `examples/`."""
+    workspace = tmp_path / "workspace"
+    shutil.copytree(_EXAMPLE, workspace)
+    monkeypatch.chdir(workspace)
+
+    lint_result = runner.invoke(app, ["lint"])
+    status_result = runner.invoke(app, ["status"])
+
+    assert lint_result.exit_code == 0, lint_result.output
+    assert status_result.exit_code == 0, status_result.output
+    assert "0.1" not in lint_result.output
+    assert "0.1" not in status_result.output

@@ -1,18 +1,14 @@
 ---
-description: First pass through Epictetus's Enchiridion and its introduction.
-freshness: snapshot
-generated:
-  at: '2026-07-05T20:00:00Z'
-  by: openkos/legacy
-resource: raw/notes-on-the-enchiridion-2026-07-05.txt
-sensitivity: private
-status: stable
-tags:
-- reading-notes
-- philosophy
-title: Reading notes — Enchiridion, 2026-07-05
 type: Source
+title: Reading notes — Enchiridion, 2026-07-05
+description: First pass through Epictetus's Enchiridion and its introduction.
+resource: raw/notes-on-the-enchiridion-2026-07-05.txt
+tags: [reading-notes, philosophy]
+timestamp: 2026-07-05T20:00:00Z
+status: active
 version: 1
+freshness: snapshot
+sensitivity: private
 ---
 
 # Reading notes — Enchiridion, 2026-07-05

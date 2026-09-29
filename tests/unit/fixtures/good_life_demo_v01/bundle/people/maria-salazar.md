@@ -1,23 +1,16 @@
 ---
-description: Friend who studies Hellenistic ethics; corrected the apatheia reading.
-freshness: pointer
-generated:
-  at: '2026-07-14T18:30:00Z'
-  by: openkos/legacy
-provenance:
-- sources/call-with-maria-2026-07-14
-resource: https://example.edu/faculty/m-salazar
-sensitivity: confidential
-sources:
-- id: sources/call-with-maria-2026-07-14
-  resource: /sources/call-with-maria-2026-07-14.md
-status: stable
-tags:
-- philosophy
-- friends
-title: Maria Salazar
 type: Person
+title: Maria Salazar
+description: Friend who studies Hellenistic ethics; corrected the apatheia reading.
+resource: https://example.edu/faculty/m-salazar
+tags: [philosophy, friends]
+timestamp: 2026-07-14T18:30:00Z
+status: active
 version: 1
+freshness: pointer
+sensitivity: confidential
+provenance:
+  - sources/call-with-maria-2026-07-14
 ---
 
 # Maria Salazar

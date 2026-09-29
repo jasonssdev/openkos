@@ -1,25 +1,16 @@
 ---
-description: Hellenistic school holding that the good is pleasure, understood as freedom
-  from disturbance.
-freshness: timeless
-generated:
-  at: '2026-07-05T20:00:00Z'
-  by: openkos/legacy
-provenance:
-- sources/notes-on-the-enchiridion-2026-07-05
-resource: https://plato.stanford.edu/entries/epicurus/
-sensitivity: private
-sources:
-- id: sources/notes-on-the-enchiridion-2026-07-05
-  resource: /sources/notes-on-the-enchiridion-2026-07-05.md
-status: stable
-tags:
-- philosophy
-- hellenistic
-- ethics
-title: Epicureanism
 type: Concept
+title: Epicureanism
+description: Hellenistic school holding that the good is pleasure, understood as freedom from disturbance.
+resource: https://plato.stanford.edu/entries/epicurus/
+tags: [philosophy, hellenistic, ethics]
+timestamp: 2026-07-05T20:00:00Z
+status: active
 version: 1
+freshness: timeless
+sensitivity: private
+provenance:
+  - sources/notes-on-the-enchiridion-2026-07-05
 ---
 
 # Epicureanism

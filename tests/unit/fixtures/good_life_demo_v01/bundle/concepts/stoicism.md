@@ -1,28 +1,17 @@
 ---
-description: Hellenistic school holding that virtue is the only good, and that freedom
-  comes from knowing what is up to us.
-freshness: timeless
-generated:
-  at: '2026-07-14T18:30:00Z'
-  by: openkos/legacy
-provenance:
-- sources/notes-on-the-enchiridion-2026-07-05
-- sources/call-with-maria-2026-07-14
-resource: https://plato.stanford.edu/entries/stoicism/
-sensitivity: confidential
-sources:
-- id: sources/notes-on-the-enchiridion-2026-07-05
-  resource: /sources/notes-on-the-enchiridion-2026-07-05.md
-- id: sources/call-with-maria-2026-07-14
-  resource: /sources/call-with-maria-2026-07-14.md
-status: stable
-tags:
-- philosophy
-- hellenistic
-- ethics
-title: Stoicism
 type: Concept
+title: Stoicism
+description: Hellenistic school holding that virtue is the only good, and that freedom comes from knowing what is up to us.
+resource: https://plato.stanford.edu/entries/stoicism/
+tags: [philosophy, hellenistic, ethics]
+timestamp: 2026-07-14T18:30:00Z
+status: active
 version: 2
+freshness: timeless
+sensitivity: confidential
+provenance:
+  - sources/notes-on-the-enchiridion-2026-07-05
+  - sources/call-with-maria-2026-07-14
 ---
 
 # Stoicism

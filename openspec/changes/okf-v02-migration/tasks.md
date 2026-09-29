@@ -1134,14 +1134,14 @@ stays migrated (per-bundle rollback is `git revert` of that bundle's own
 Design.md "Goldens and fixtures" (fixture half) and Decision 9's product-
 dogfooding requirement.
 
-- [ ] **7.1** [IMPL] Create a frozen copy of the CURRENT (v0.1-shaped)
+- [x] **7.1** [IMPL] Create a frozen copy of the CURRENT (v0.1-shaped)
   `examples/good-life-demo/` fixture as a test input — e.g.
   `tests/unit/fixtures/good_life_demo_v01/` or an equivalent location
   consistent with `tests/unit/test_canonical_example.py`'s existing fixture
   conventions (confirm the exact convention during implementation) — so the
   example stays pinned to `repair(v0.1 fixture)` and is reproducible from a
   known input.
-- [ ] **7.2** [IMPL] Regenerate `examples/good-life-demo/bundle/**` by
+- [x] **7.2** [IMPL] Regenerate `examples/good-life-demo/bundle/**` by
   running `openkos repair` on a SCRATCH copy of the frozen v0.1 fixture
   (7.1) in a throwaway directory, then copying the migrated result over the
   live `examples/good-life-demo/bundle/` tree and committing it — the
@@ -1149,7 +1149,7 @@ dogfooding requirement.
   `concepts/stoicism.md` keeps its hand-written, non-empty `# Citations`
   list untouched (the pinned case for owner decision C), and that the
   migration report's `legacy_citations` line names it.
-- [ ] **7.3** [TEST] `tests/unit/test_canonical_example.py` — extend the
+- [x] **7.3** [TEST] `tests/unit/test_canonical_example.py` — extend the
   existing byte-identity/conformance assertions with
   `test_good_life_demo_bundle_equals_repair_of_frozen_v01_fixture`:
   running `repair` fresh on a scratch copy of the frozen v0.1 fixture (7.1)
@@ -1157,7 +1157,7 @@ dogfooding requirement.
   bundle/**`. **RED today**: `AssertionError`/fixture missing — this test
   is written before 7.2's regeneration lands, observed RED against the
   still-v0.1 committed fixture, then GREEN once 7.2 lands.
-- [ ] **7.4** [TEST] Same file — extend the existing conformance test
+- [x] **7.4** [TEST] Same file — extend the existing conformance test
   (design.md's "Reference Bundle Full §11 Conformance" requirement,
   already spec-covered by the `ingestion` delta) to additionally assert
   `okf_version: "0.2"` on the root `index.md` and that no concept document
@@ -1165,7 +1165,7 @@ dogfooding requirement.
   the success-criterion "`examples/good-life-demo/` is v0.2-shaped and
   passes the product's own lint and `status`". **RED today**: `AssertionError`
   against the pre-7.2 fixture.
-- [ ] **7.5** [TEST] Same file — add
+- [x] **7.5** [TEST] Same file — add
   `test_good_life_demo_passes_lint_and_status_clean`: run `openkos lint`
   and `openkos status` against `examples/good-life-demo` (as a workspace
   root, matching the existing test's harness) and assert both exit 0 with
@@ -1173,7 +1173,7 @@ dogfooding requirement.
   regeneration; before it, either fails or is meaningless against v0.1
   content — write it now, observe RED/misleading-pass explicitly noted,
   confirm real GREEN only after 7.2.
-- [ ] **7.6** [IMPL] If 7.3-7.5 surface any drift between `repair`'s output
+- [x] **7.6** [IMPL] If 7.3-7.5 surface any drift between `repair`'s output
   and the committed fixture (for example a non-deterministic actor string,
   since `repair`'s `generated.by` is always `openkos/legacy` and thus
   deterministic — confirm no other source of nondeterminism exists, such as
@@ -1182,13 +1182,13 @@ dogfooding requirement.
 
 ### Phase 7 verification
 
-- [ ] **7.7** Run `uv run ruff check . && uv run ruff format --check . &&
+- [x] **7.7** Run `uv run ruff check . && uv run ruff format --check . &&
   uv run mypy .` — must be green.
-- [ ] **7.8** Run `uv run pytest tests/unit/test_canonical_example.py`
+- [x] **7.8** Run `uv run pytest tests/unit/test_canonical_example.py`
   focused, then `uv run pytest --cov` (unpiped) full suite — must be green,
   90% branch gate held.
-- [ ] **7.9** Run `uv run python evals/run_self_tests.py` — must be green.
-- [ ] **7.10** Commit as one or more work-unit commits, scope `docs` (the
+- [x] **7.9** Run `uv run python evals/run_self_tests.py` — must be green.
+- [x] **7.10** Commit as one or more work-unit commits, scope `docs` (the
   fixture is documentation/example content, matching the project's existing
   scope convention for `examples/**` changes — confirm against a prior
   commit touching `examples/good-life-demo/` before finalizing the scope).

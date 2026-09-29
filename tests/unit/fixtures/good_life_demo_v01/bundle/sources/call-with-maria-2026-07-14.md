@@ -1,19 +1,14 @@
 ---
-description: Private call correcting the apatheia reading and suggesting the essay's
-  frame.
-freshness: snapshot
-generated:
-  at: '2026-07-14T18:30:00Z'
-  by: openkos/legacy
-resource: raw/call-with-maria-2026-07-14.txt
-sensitivity: confidential
-status: stable
-tags:
-- call
-- philosophy
-title: Call with Maria Salazar — 2026-07-14
 type: Source
+title: Call with Maria Salazar — 2026-07-14
+description: Private call correcting the apatheia reading and suggesting the essay's frame.
+resource: raw/call-with-maria-2026-07-14.txt
+tags: [call, philosophy]
+timestamp: 2026-07-14T18:30:00Z
+status: active
 version: 1
+freshness: snapshot
+sensitivity: confidential
 ---
 
 # Call with Maria Salazar — 2026-07-14
