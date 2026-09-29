@@ -260,7 +260,7 @@ measured curve says so.
 
 ### Write cost of the append-only log
 
-OKF §7 orders `log.md` newest-first, so every new entry is a prepend and
+OKF §9 orders `log.md` newest-first, so every new entry is a prepend and
 therefore a full-file rewrite. Each ingest writes one entry per derived object,
 and each rewrite is a whole-file diff in git.
 

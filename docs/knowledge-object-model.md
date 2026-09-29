@@ -59,7 +59,7 @@ The frontmatter defines identity and lifecycle. The body carries the knowledge a
 
 ## Core metadata
 
-OpenKOS uses the OKF v0.1 field set as its base, so its documents are interoperable by construction:
+OpenKOS uses the OKF v0.2 field set as its base, so its documents are interoperable by construction:
 
 ```yaml
 type:        # required by OKF — what kind of object this is
@@ -67,13 +67,14 @@ title:       # human-readable name
 description: # one-line summary, used for progressive disclosure
 resource:    # canonical link to the underlying resource, if any
 tags:        # free-form labels
-timestamp:   # last meaningful update (ISO 8601)
+generated:   # { by, at } — who/what produced the content, and when (see Trust)
+status:      # draft | stable | deprecated  (see Lifecycle; absent means stable)
+sources:     # generated projection of `provenance` (see Provenance)
 ```
 
 OpenKOS then adds a small recommended set for engine features:
 
 ```yaml
-status:      # draft | active | deprecated
 version:     # monotonic revision counter
 freshness:   # timeless | snapshot | pointer  (see Freshness)
 sensitivity: # public | private | confidential  (see Sensitivity; default private)
@@ -82,30 +83,40 @@ provenance:  # list of source references this object was derived from
 
 Additional fields may be introduced by specialized object types without breaking OKF conformance: OKF §4.1 states that producers MAY include any additional keys, and that consumers SHOULD preserve unknown keys when round-tripping and SHOULD NOT reject documents carrying them.
 
-**Identity is the path.** OKF §2 already defines a concept's identity: the **Concept ID** is the file's path within the bundle with the `.md` suffix removed — `concepts/stoicism.md` is `concepts/stoicism`. OpenKOS adopts that definition rather than adding an `id` field of its own. Inventing a second identifier would give every object two competing IDs, and no other OKF consumer would understand ours. The trade-off is accepted deliberately: moving a file changes its ID, but git records the rename and OKF explicitly tolerates links whose target has moved (§5.3).
+**Identity is the path.** OKF §2 already defines a concept's identity: the **Concept ID** is the file's path within the bundle with the `.md` suffix removed — `concepts/stoicism.md` is `concepts/stoicism`. OpenKOS adopts that definition rather than adding an `id` field of its own. Inventing a second identifier would give every object two competing IDs, and no other OKF consumer would understand ours. The trade-off is accepted deliberately: moving a file changes its ID, but git records the rename and OKF explicitly tolerates links whose target has moved (§6.1).
 
 ---
 
 ## A worked example
 
-A complete Knowledge Object — OKF concept document plus the OpenKOS layer — looks like this. It is taken verbatim from [`examples/good-life-demo/`](../examples/good-life-demo/), where someone reading philosophy took notes on Epictetus, then had one of their readings corrected by a friend on a call. Its two-source `provenance` is not a single compile: each source first produced its own `Stoicism` concept, and entity resolution's exact-title match reached a `SAME` verdict that merged the two, unioning their provenance:
+A complete Knowledge Object — OKF concept document plus the OpenKOS layer — looks like this. It is taken verbatim from [`examples/good-life-demo/`](../examples/good-life-demo/), where someone reading philosophy took notes on Epictetus, then had one of their readings corrected by a friend on a call. Its two-source `provenance` is not a single compile: each source first produced its own `Stoicism` concept, and entity resolution's exact-title match reached a `SAME` verdict that merged the two, unioning their provenance. The example predates OKF v0.2 and was migrated in place by `openkos repair` — which is why `generated.by` reads `openkos/legacy` and the body still carries its original, hand-authored-style `# Citations` section, preserved verbatim rather than converted:
 
 ```markdown
 ---
-type: Concept
-title: Stoicism
-description: Hellenistic school holding that virtue is the only good, and that
-  freedom comes from knowing what is up to us.
-resource: https://plato.stanford.edu/entries/stoicism/
-tags: [philosophy, hellenistic, ethics]
-timestamp: 2026-07-14T18:30:00Z
-status: active
-version: 2
+description: Hellenistic school holding that virtue is the only good, and that freedom
+  comes from knowing what is up to us.
 freshness: timeless
-sensitivity: confidential
+generated:
+  at: '2026-07-14T18:30:00Z'
+  by: openkos/legacy
 provenance:
-  - raw/notes-on-the-enchiridion-2026-07-05.txt
-  - raw/call-with-maria-2026-07-14.txt
+- sources/notes-on-the-enchiridion-2026-07-05
+- sources/call-with-maria-2026-07-14
+resource: https://plato.stanford.edu/entries/stoicism/
+sensitivity: confidential
+sources:
+- id: sources/notes-on-the-enchiridion-2026-07-05
+  resource: /sources/notes-on-the-enchiridion-2026-07-05.md
+- id: sources/call-with-maria-2026-07-14
+  resource: /sources/call-with-maria-2026-07-14.md
+status: stable
+tags:
+- philosophy
+- hellenistic
+- ethics
+title: Stoicism
+type: Concept
+version: 2
 ---
 
 # Stoicism
@@ -128,7 +139,7 @@ The term is commonly misread as "indifference to emotion", by analogy with the E
 [2] [Call with Maria Salazar — 2026-07-14](/sources/call-with-maria-2026-07-14.md)
 ```
 
-Reading it against the model: its Concept ID is its path, `concepts/stoicism` — there is no `id` field. The top block is the OKF field set (`type`…`timestamp`) plus the OpenKOS layer (`status`, `version`, `freshness`, `sensitivity`, `provenance`). The body is human-readable markdown. The links are bundle-relative — the form OKF §5.1 recommends, because it survives a document moving within its subdirectory — and each asserts a relationship whose *kind* is carried by the surrounding prose, not by the link.
+Reading it against the model: its Concept ID is its path, `concepts/stoicism` — there is no `id` field. The top block is the OKF field set (`type`, `title`, `description`, `resource`, `tags`, `generated`, `status`, `sources`) plus the OpenKOS layer (`version`, `freshness`, `sensitivity`, `provenance`). The body is human-readable markdown. The links are bundle-relative — the form OKF §6.1 recommends, because it survives a document moving within its subdirectory — and each asserts a relationship whose *kind* is carried by the surrounding prose, not by the link.
 
 Three fields repay a closer look, because each shows a different part of the model working.
 
@@ -136,7 +147,7 @@ Three fields repay a closer look, because each shows a different part of the mod
 
 **`sensitivity: confidential`, on public knowledge.** At v1 this object was `private`, compiled only from private reading notes. Then a confidential source touched it, and the high-water-mark rule raised it. Stoicism is public knowledge; this page about it is not — because of *where the reader learned it*, not what it says. The rule over-classifies rather than leak, and a human can downgrade it after verifying the claim against a public source.
 
-**`provenance` points out of the bundle; `# Citations` points inside it.** Provenance lists the two immutable originals as paths from the workspace root — `raw/` sits beside the bundle, not inside it, because sources are input material rather than concepts. The `# Citations` section (OKF §8) mirrors that lineage into the body, but points at the **Source concepts** representing those originals rather than at the raw files. That indirection is deliberate: every link in the bundle resolves within the bundle, and only a Source concept's `resource` reaches outside it.
+**`provenance` points out of the bundle; `sources` points inside it.** Provenance lists the two immutable originals as Concept IDs of the Source documents that carry them. `sources` is a generated, one-way projection of `provenance` (OKF §5.1) — the engine writes it, nothing reads it back — and it points at those **Source concepts** rather than at the raw files. That indirection is deliberate: every link in the bundle resolves within the bundle, and only a Source concept's `resource` reaches outside it. This particular document predates OKF v0.2: its body still carries the hand-authored, pre-migration `# Citations` section, preserved verbatim by `repair` rather than converted, since converting hand-authored prose into `sources` entries is not something any migration attempts.
 
 The `as of` stamp does not appear here, and that is the point — a timeless fact needs none. It appears where volatile facts actually live, as in the `Person` object from the same bundle:
 
@@ -222,9 +233,9 @@ The canonical core is the recommended vocabulary for **knowledge compiled from a
 
 ## Relationships
 
-Objects connect through ordinary markdown links, which form a graph richer than the folder hierarchy. Links use the bundle-relative form (`/concepts/epicureanism.md`) that OKF §5.1 recommends, because it stays valid when a document moves within its subdirectory.
+Objects connect through ordinary markdown links, which form a graph richer than the folder hierarchy. Links use the bundle-relative form (`/concepts/epicureanism.md`) that OKF §6.1 recommends, because it stays valid when a document moves within its subdirectory.
 
-**OKF links are untyped, and that is the baseline we build on.** §5.3 is explicit: a link from A to B asserts *that* a relationship exists, but the kind of relationship — depends-on, joins-with, part-of — "is conveyed by the surrounding prose, not by the link itself," and a consumer building a graph view "typically treat[s] all links as directed edges of an untyped relationship." OpenKOS does not fight this. The prose next to a link is where the meaning lives, which is why the `## Related` sections in a bundle read `- [Epicureanism](/concepts/epicureanism.md) — contrasted with`.
+**OKF links are untyped, and that is the baseline we build on.** §6.1 is explicit: a link from A to B asserts *that* a relationship exists, but the kind of relationship — depends-on, joins-with, part-of — "is conveyed by the surrounding prose, not by the link itself," and a consumer building a graph view "typically treat[s] all links as directed edges of an untyped relationship." OpenKOS does not fight this. The prose next to a link is where the meaning lives, which is why the `## Related` sections in a bundle read `- [Epicureanism](/concepts/epicureanism.md) — contrasted with`.
 
 On top of that baseline, OpenKOS **layers** a recommended relation vocabulary that its own graph and retrieval can traverse:
 
@@ -361,7 +372,7 @@ Because OpenKOS accumulates knowledge and preserves history, removal is delibera
 
 The `forget`/`purge` flow shows inbound references and (with `--scope source`) derived descendants before acting, defaults to the least destructive scope, and requires explicit confirmation — a typed phrase for a purge.
 
-Note that "deleted", "forgotten", and "purged" are lifecycle *events*, recorded as tombstones in `log.md` and in git history — **not** values of the `status` field, which stays `draft | active | deprecated`. Retrieval keys deprecation off `status: deprecated` (plus `supersedes` edges from `reconcile`); a `forget`/`purge`, by contrast, removes the document outright rather than changing its status.
+Note that "deleted", "forgotten", and "purged" are lifecycle *events*, recorded as tombstones in `log.md` and in git history — **not** values of the `status` field, which stays `draft | stable | deprecated` (OKF §5.4). Retrieval keys deprecation off `status: deprecated` (plus `supersedes` edges from `reconcile`); a `forget`/`purge`, by contrast, removes the document outright rather than changing its status.
 
 ---
 
@@ -377,7 +388,7 @@ The Knowledge Object is the load-bearing abstraction of OpenKOS: the graph, memo
 
 **4. Justifying the added structure.** Karpathy's pattern works with flat markdown pages and no formal object model. A fair skeptic will ask why the extra structure is worth it. *Stance:* the structure must pay for itself through capabilities plain pages cannot offer — enforceable provenance, schema-level freshness, portability via OKF, and a substrate for the graph and memory layers. Where a piece of structure is not earning its keep, that is a signal of over-engineering to remove, not defend.
 
-**5. Standard drift.** OKF is minimally opinionated (it requires only `type`); the OpenKOS layer adds more. If our vocabulary diverges too far, interoperability — our core differentiator — erodes. The sharper edge of this risk is that OKF is published as **v0.1, Draft**, and its §11 reserves the right for a major version to rename required fields or change reserved filenames: we are building on a young spec, not a settled one. *Stance:* everything we add lives as ordinary frontmatter and links so a bundle always degrades to conformant OKF; we adopt OKF's own definitions instead of restating them (identity is the path, citations are `# Citations`, links are untyped) so there is less surface to drift; bundles declare `okf_version`; the format lives behind a single adapter module so a spec revision is a contained change; and conformance is a tested, ongoing commitment rather than an aspiration. We track the standard rather than fork it — and because the canonical layer is plain markdown plus git, even a worst-case drift leaves the user's knowledge readable without us. See [`okf-alignment.md`](okf-alignment.md).
+**5. Standard drift.** OKF is minimally opinionated (it requires only `type`); the OpenKOS layer adds more. If our vocabulary diverges too far, interoperability — our core differentiator — erodes. The sharper edge of this risk is that OKF is published as **v0.2, Draft**, and its §12 reserves the right for a major version to rename required fields or change reserved filenames — the exact move v0.2 already made once, retiring `timestamp` and `# Citations` (§13.1): we are building on a young spec, not a settled one. *Stance:* everything we add lives as ordinary frontmatter and links so a bundle always degrades to conformant OKF; we adopt OKF's own definitions instead of restating them (identity is the path, provenance is `sources`, links are untyped) so there is less surface to drift; bundles declare `okf_version`; the format lives behind a single adapter module so a spec revision is a contained change; and conformance is a tested, ongoing commitment rather than an aspiration. We track the standard rather than fork it — and because the canonical layer is plain markdown plus git, even a worst-case drift leaves the user's knowledge readable without us. See [`okf-alignment.md`](okf-alignment.md).
 
 The throughline: the same concept that repeatedly failed when humans had to maintain it may now work because the LLM maintains it. Our job is to keep the model loose enough for that bet to pay off.
 

@@ -1212,13 +1212,13 @@ passive documentation-only edit.
 
 ### `src/openkos/templates/agents.md.template`
 
-- [ ] **8.1** [IMPL] Update `src/openkos/templates/agents.md.template` to
+- [x] **8.1** [IMPL] Update `src/openkos/templates/agents.md.template` to
   describe the v0.2 field set (`generated`, `status: stable|draft|deprecated`,
   `sources`) instead of `timestamp`/`status: active`, and remove any
   `# Citations` convention it documents. Cross-check against
   `build_source_concept`/`build_concept`'s actual v0.2 output (Phase 2/3)
   so the template never claims a shape the engine does not produce.
-- [ ] **8.2** [TEST] `tests/unit/test_canonical_example.py` (or wherever the
+- [x] **8.2** [TEST] `tests/unit/test_canonical_example.py` (or wherever the
   existing "`AGENTS.md` stays byte-identical to a fresh `init`" test lives —
   confirm exact location) — confirm this EXISTING test still passes after
   8.1 (a fresh `init`'s rendered `AGENTS.md` must still equal the template
@@ -1227,7 +1227,7 @@ passive documentation-only edit.
 
 ### `examples/good-life-demo/AGENTS.md`
 
-- [ ] **8.3** [IMPL] Update `examples/good-life-demo/AGENTS.md` to match
+- [x] **8.3** [IMPL] Update `examples/good-life-demo/AGENTS.md` to match
   8.1's regenerated template output exactly (the existing byte-identity test
   from 8.2 covers a FRESH `init`'s `AGENTS.md`; this file is the example's
   own committed copy and must match by the same rule the example's test
@@ -1237,14 +1237,14 @@ passive documentation-only edit.
 
 ### Repository `AGENTS.md`, `docs/*.md`, code comments and messages
 
-- [ ] **8.4** [IMPL] Update the repository root `AGENTS.md` (the file these
+- [x] **8.4** [IMPL] Update the repository root `AGENTS.md` (the file these
   very sdd-tasks instructions operate under): both `§9`-referencing
   sentences ("§9 conformance hold *by construction*" and "OKF is a v0.1
   draft whose §11 permits breaking major bumps") — renumber §9→§11
   (conformance) and correct "v0.1" to "v0.2", with versioning now living at
   §12 rather than §11 (confirm both renumbered references land on the
   correct new section per OKF v0.2's table of contents before writing).
-- [ ] **8.5** [IMPL] Update `docs/okf-alignment.md`: renumber every OKF
+- [x] **8.5** [IMPL] Update `docs/okf-alignment.md`: renumber every OKF
   section reference per the v0.1→v0.2 table (§9→§11 conformance, §11→§12
   versioning, §6→§8 index files, §7→§9 log files — confirm the complete
   mapping against OKF v0.2's spec before editing), AND fix the pre-existing
@@ -1252,12 +1252,12 @@ passive documentation-only edit.
   a `# Citations` heading (proposal.md decision c: no code path does this;
   describe the actual mechanism — frontmatter `sources`/`provenance`, `##
   Related` for attribution — instead).
-- [ ] **8.6** [IMPL] Update `docs/knowledge-object-model.md`: the data-model
+- [x] **8.6** [IMPL] Update `docs/knowledge-object-model.md`: the data-model
   description of a concept's frontmatter fields — `timestamp` → `generated:
   {by, at}`, `status: active` → `status: stable` (and the full `draft |
   stable | deprecated` vocabulary), `sources` as a generated projection of
   `provenance`, no `# Citations` body convention.
-- [ ] **8.7** [IMPL] Update `docs/architecture.md`, `docs/cli.md`,
+- [x] **8.7** [IMPL] Update `docs/architecture.md`, `docs/cli.md`,
   `docs/glossary.md`, `docs/tech_stack.md`, `docs/roadmap.md`,
   `docs/ideas.md`: grep each for `timestamp`, `status: active`, `# Citations`,
   `§9`, `§6`, `§7`, `§11` (versioning sense) and update every hit found to
@@ -1265,21 +1265,21 @@ passive documentation-only edit.
   behavior in a clearly historical/dated context unchanged (docs describe
   the shape, not the diff — no "since #1064" markers per AGENTS.md's own
   rule).
-- [ ] **8.8** [IMPL] Grep `src/` for the remaining OKF section citations in
+- [x] **8.8** [IMPL] Grep `src/` for the remaining OKF section citations in
   code comments and user-visible CLI/error messages (design.md estimates
   ~37 total across `docs/`+`src/`+`AGENTS.md`; Phase 1's `ingestion`/
   `workspace-init`/`status`/`next-action-pointer` delta specs already cover
   the SPEC-level renumbering — this task covers the remaining SOURCE-level
   comments/messages the deltas don't reach): `grep -rn '§9\|§6\b\|§7\b'
   src/openkos/` and update each hit to its v0.2 number.
-- [ ] **8.9** [IMPL] Living-spec passages a delta cannot reach — edit these
+- [x] **8.9** [IMPL] Living-spec passages a delta cannot reach — edit these
   TWO at archive time, in the archive commit, not in this PR, and record
   that decision here so it is not lost: the `## OKF §9 Conformance Rules
   1-3` heading in `openspec/specs/ingestion/spec.md`, and the `## Non-Goals`
   §9 mention in `openspec/specs/lint/spec.md`. No task in this PR touches
   either file — `sdd-archive` does, when it merges this change's deltas
   into the main specs.
-- [ ] **8.10** [TEST] Structural readback: run `grep -rln '§9\|OKF v0\.1'
+- [x] **8.10** [TEST] Structural readback: run `grep -rln '§9\|OKF v0\.1'
   docs/ src/openkos/ AGENTS.md` and confirm zero matches remain outside
   historical ADRs (`docs/adr/000*`, `docs/adr/002*` and others that
   deliberately cite v0.1 sections and are append-only, per AGENTS.md's ADR
@@ -1289,14 +1289,14 @@ passive documentation-only edit.
 
 ### Phase 8 verification
 
-- [ ] **8.11** Run `uv run ruff check . && uv run ruff format --check .` —
+- [x] **8.11** Run `uv run ruff check . && uv run ruff format --check .` —
   must be green (docs-only changes should not affect `mypy`, but run it
   too for safety: `uv run mypy .`).
-- [ ] **8.12** Run `uv run pytest --cov` (unpiped) full suite — must be
+- [x] **8.12** Run `uv run pytest --cov` (unpiped) full suite — must be
   green; this slice should touch zero test-covered production code paths
   other than the template-render regression check in 8.2, so no coverage
   regression is expected.
-- [ ] **8.13** Run `uv run python evals/run_self_tests.py` — must be green.
+- [x] **8.13** Run `uv run python evals/run_self_tests.py` — must be green.
 - [ ] **8.14** Commit as one or more work-unit commits, scope `docs` (e.g.
   `docs: adopt OKF v0.2 field set and section numbering across docs, the
   template, and code comments`). Open PR 8 (Phase 8: docs + template +

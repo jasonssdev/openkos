@@ -1,13 +1,13 @@
 """OKF (Open Knowledge Format) adapter.
 
-The one seam that knows the on-disk shape of OKF v0.1: frontmatter framing,
-reserved filenames, and the conformance rules of §9. Nothing outside this
+The one seam that knows the on-disk shape of OKF v0.2: frontmatter framing,
+reserved filenames, and the conformance rules of §11. Nothing outside this
 module parses or emits frontmatter, or reasons about reserved files
 (AGENTS.md:41, docs/architecture.md:113).
 
-All three §9 rules are implemented here: rules 1-2 walk every non-reserved
+All three §11 rules are implemented here: rules 1-2 walk every non-reserved
 `.md` file (`_iter_docs`), and rule 3 walks the reserved files themselves
-(`index.md`/`log.md`) to check their fixed structure per §6/§7/§11.
+(`index.md`/`log.md`) to check their fixed structure per §8/§9/§12.
 """
 
 import hashlib
@@ -65,7 +65,7 @@ def engine_actor() -> str:
 
 
 RESERVED_FILENAMES: Final[frozenset[str]] = frozenset({"index.md", "log.md"})
-"""§6/§7 give these a fixed structure; §9 rule 1 exempts them from frontmatter."""
+"""§8/§9 give these a fixed structure; §11 rule 1 exempts them from frontmatter."""
 
 STATE_DIRNAME: Final = ".state"
 """The bundle-relative directory holding derived, non-`.md` runtime state --
@@ -79,11 +79,11 @@ either ground; `lint` separately flags any `.md` file that turns up here as
 a structural-exclusion regression."""
 
 _LOG_HEADING_RE: Final = re.compile(r"^## (.+)$", re.MULTILINE)
-"""Every level-2 heading in a `log.md`, per §7. `### ` cannot false-match:
+"""Every level-2 heading in a `log.md`, per §9. `### ` cannot false-match:
 `^## ` requires a space in the 3rd position."""
 
 _ISO_DATE_RE: Final = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-"""§7's date-heading format, checked for shape only -- not calendar-validated
+"""§9's date-heading format, checked for shape only -- not calendar-validated
 (e.g. `2026-13-45` matches)."""
 
 SENSITIVITY_ORDER: Final[tuple[str, str, str]] = ("public", "private", "confidential")
@@ -288,7 +288,7 @@ def read_event_date(metadata: Mapping[str, object]) -> StoredEventDate:
     and silently drop its time component instead of being reported as
     malformed.
 
-    Reuses `_ISO_DATE_RE` (this module's §7 date-heading shape check) plus
+    Reuses `_ISO_DATE_RE` (this module's §9 date-heading shape check) plus
     a calendar-validity check via `date.fromisoformat` -- a deliberate,
     documented narrow twin of `source_date.parse_event_date`, kept inside
     this seam rather than importing that module (design.md Decision 2)."""
@@ -726,7 +726,7 @@ def build_source_concept(
     fail-closed gate for exactly that), and `dump_frontmatter` goes through
     `frontmatter.dumps`, which quotes and folds correctly -- so any byte
     sequence round-trips byte-exact through `load_frontmatter`.
-    `check_conformance` (§9 rules 1-2: parseable frontmatter, non-empty
+    `check_conformance` (§11 rules 1-2: parseable frontmatter, non-empty
     `type`) is therefore the only gate this slice needs.
 
     THE SOURCE'S FILENAME IS NOT A TRUSTED INPUT (issue #285). It is
@@ -2113,7 +2113,7 @@ def build_merged_document(
 
 
 _CITATIONS_HEADING: Final = "# Citations"
-"""The exact, bare OKF §8 reserved heading `build_source_concept` used to
+"""The exact, bare OKF v0.1 §8 reserved heading `build_source_concept` used to
 write at the end of every Source's body (before this change removed the
 append -- design.md Decision 3). `migrate_document`'s R4 rule looks for
 this EXACT line, nothing looser (a `## Citations` or `# Citations Notes`
@@ -2701,7 +2701,7 @@ def _iter_docs(bundle_dir: Path) -> Iterator[DocScan]:
 
 @dataclass(frozen=True)
 class BundleSurvey:
-    """Counts and §9 findings for one `_iter_docs` pass over a bundle (Phase 2/D2).
+    """Counts and §11 findings for one `_iter_docs` pass over a bundle (Phase 2/D2).
 
     `findings` is a SUPERSET of `check_conformance`'s violations: it adds a
     per-file "unreadable" line for a `read_error` (D3), which
@@ -2743,7 +2743,7 @@ def _walk_errors(bundle_dir: Path) -> list[OSError]:
 
 
 def survey_bundle(bundle_dir: Path) -> BundleSurvey:
-    """Survey `bundle_dir` for source/concept counts and §9-shaped findings (D2/D3).
+    """Survey `bundle_dir` for source/concept counts and §11-shaped findings (D2/D3).
 
     Consumes the SAME `_iter_docs` walk `check_conformance` uses, in one
     pass: `type == "Source"` counts as a source, any other non-empty `type`
@@ -2792,7 +2792,7 @@ def _has_frontmatter_fence(text: str) -> bool:
     has a later closing `---` line.
 
     Deliberately does NOT reuse `_iter_docs`'s `frontmatter.loads` check
-    (rule 1's "parseable frontmatter" mechanism): §6 forbids a nested
+    (rule 1's "parseable frontmatter" mechanism): §8 forbids a nested
     `index.md` from carrying frontmatter AT ALL, so a malformed `---` block
     that fails to parse as YAML is still a frontmatter block for this rule,
     and must still be flagged.
@@ -2809,7 +2809,7 @@ def _iter_reserved(bundle_dir: Path) -> Iterator[Path]:
     filtering IN `RESERVED_FILENAMES` instead of excluding them. Shares
     `_iter_docs`'s dot-directory exclusion via `iter_bundle_markdown`
     (#984): a reserved-named file sitting under a dot-directory (e.g.
-    `bundle/.obsidian/index.md`) is not a nested `index.md` §6 should ever
+    `bundle/.obsidian/index.md`) is not a nested `index.md` §8 should ever
     check."""
     for path in iter_bundle_markdown(bundle_dir):
         if path.name in RESERVED_FILENAMES:
@@ -2817,13 +2817,13 @@ def _iter_reserved(bundle_dir: Path) -> Iterator[Path]:
 
 
 def _check_reserved_structure(bundle_dir: Path) -> list[str]:
-    """§9 rule 3: check the fixed structure of every reserved file.
+    """§11 rule 3: check the fixed structure of every reserved file.
 
-    `index.md` (§6 + §11 root exception): any `index.md` other than the
+    `index.md` (§8 + §12 root exception): any `index.md` other than the
     bundle-root one (`path.parent == bundle_dir`) MUST NOT carry a
     frontmatter block, detected by `_has_frontmatter_fence`.
 
-    `log.md` (§7): every `## ` heading MUST match `_ISO_DATE_RE`
+    `log.md` (§9): every `## ` heading MUST match `_ISO_DATE_RE`
     (`YYYY-MM-DD`, format only -- not calendar-validated).
 
     Reads via `path.read_text(encoding="utf-8")`, so an unreadable or
@@ -2847,12 +2847,12 @@ def _check_reserved_structure(bundle_dir: Path) -> list[str]:
 
 
 def check_conformance(bundle_dir: Path) -> list[str]:
-    """Check §9 rules 1-3 against `bundle_dir`.
+    """Check §11 rules 1-3 against `bundle_dir`.
 
     Rules 1-2 walk every non-reserved `.md` file (`_iter_docs`), checking for
     parseable frontmatter with a non-empty `type`. Rule 3 additively walks
     the reserved files themselves (`_check_reserved_structure`), checking
-    `index.md`'s frontmatter ban (with the §11 bundle-root exception) and
+    `index.md`'s frontmatter ban (with the §12 bundle-root exception) and
     `log.md`'s ISO-8601 date headings; its violations are appended after
     rules 1-2's.
 

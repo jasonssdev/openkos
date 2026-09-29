@@ -101,7 +101,7 @@ class StatusOverview:
     in place."""
 
     survey: okf.BundleSurvey
-    """Source/concept counts and §9 conformance findings from ONE
+    """Source/concept counts and §11 conformance findings from ONE
     `okf.survey_bundle` walk -- unrelated to the eight lint checks
     `build_status_report` runs, which walk `lint.collect_docs` separately
     (#141/#187: lint findings are knowledge-health vocabulary, never OKF

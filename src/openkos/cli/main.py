@@ -10689,7 +10689,7 @@ def status() -> None:
     `typer.echo` and exit codes -- it takes no flags. Note that the reads
     across both calls perform FIVE independent `bundle/**/*.md` walks, not
     one:
-    `okf.survey_bundle` (source/concept counts and §9 findings, D2) --
+    `okf.survey_bundle` (source/concept counts and §11 findings, D2) --
     counts always reflect the disk scan, never `index.md` alone, so catalog
     drift after an interrupted `ingest` is still visible;
     `lint_check.collect_docs` (dangling-reference AND unextracted-source

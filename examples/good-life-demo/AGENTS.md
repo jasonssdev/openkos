@@ -7,7 +7,7 @@ This is an OpenKOS workspace. If you are an AI agent working on it, follow these
 A workspace holds two things that are deliberately kept apart:
 
 - **`raw/`** — the immutable original sources. Materia prima, not knowledge.
-- **`bundle/`** — the compiled knowledge: an Open Knowledge Format (OKF v0.1) bundle. `bundle/` is the OKF **bundle root**, and it is the unit you share or publish.
+- **`bundle/`** — the compiled knowledge: an Open Knowledge Format (OKF v0.2) bundle. `bundle/` is the OKF **bundle root**, and it is the unit you share or publish.
 
 Everything else at this level (`openkos.yaml`, this file, `.openkos/`) belongs to the engine, not to the format. That separation is the point: `bundle/` contains concept documents and nothing else, so it is conformant by construction and portable to any OKF tool. Nothing you put in `raw/` can ever break it.
 
@@ -40,7 +40,7 @@ into it. `.state/` holds no concepts at all: it carries the merge ledger and the
 operator's curation verdicts. Those verdicts are **not** `Decision` concepts —
 a `Decision` in `decisions/` is knowledge compiled from a source, while a
 sidecar here records what you answered when the engine asked you something.
-Nothing under `.state/` is named `*.md`, which is what keeps it outside OKF §9
+Nothing under `.state/` is named `*.md`, which is what keeps it outside OKF §11
 and invisible to every `*.md` walk. Treat both as engine-owned — read them, do
 not hand-author them.
 
@@ -52,11 +52,11 @@ not hand-author them.
 - **Every raw original gets a Source concept** in `bundle/sources/`, whose `resource` points back at the original. That document is the bridge between the bundle and `raw/` — it is the *only* place the bundle reaches outside itself. A Source carries no `provenance`: it is not derived from anything, it *is* the original's representation, and its `resource` already says so.
 - **Reuse before creating.** Check `index.md` and update an existing concept rather than duplicating it. Prefer a specific type over `Entity`.
 - **Stamp volatile facts.** Counts, versions, latencies, and statuses need an `(as of YYYY-MM-DD)` stamp. Timeless facts need none.
-- **Preserve provenance.** Every derived object lists its originals in `provenance` (paths relative to the workspace root) and cites the corresponding Source concepts under a `# Citations` heading. Derived knowledge never replaces its source.
+- **Preserve provenance.** Every derived object lists its originals in `provenance` (paths relative to the workspace root); `sources` is a generated, one-way projection of `provenance` onto the corresponding Source concepts — never edit it by hand. Derived knowledge never replaces its source.
 - **Respect sensitivity.** The workspace floor is `private`, and it is a floor rather than a flat rule: `type_sensitivity_defaults` in `openkos.yaml` maps a type to **how many levels above that floor** it is born, on the `public` → `private` → `confidential` ladder. It ships EMPTY, so every type is born at the floor; `Person: 1` is the recommended setting for a workspace holding material about other people, and with it a person page is born one level up, at `confidential`, while the concepts beside it stay `private`. `confidential` objects must never be sent to a cloud model or included in an export. A derived object is at least as sensitive as its most sensitive source.
 - **Link by bundle-relative path.** Connect objects with links like `[Epicureanism](/concepts/epicureanism.md)`, resolved from the bundle root. The link asserts a relationship; the *kind* of relationship is carried by the surrounding prose, not by the link.
 - **An object's identity is its path** within the bundle, with `.md` removed (`concepts/stoicism.md` → `concepts/stoicism`). There is no separate `id` field.
-- **Stay OKF-conformant.** Every concept document needs parseable YAML frontmatter with a non-empty `type`. Beyond that, frontmatter uses the OKF field set (`title`, `description`, `resource`, `tags`, `timestamp`) plus the OpenKOS layer (`status`, `version`, `freshness`, `sensitivity`, `provenance`).
+- **Stay OKF-conformant.** Every concept document needs parseable YAML frontmatter with a non-empty `type`. Beyond that, frontmatter uses the OKF field set (`title`, `description`, `resource`, `tags`, `generated`, `status`, `sources`) plus the OpenKOS layer (`version`, `freshness`, `sensitivity`, `provenance`).
 
 ## After changes
 
