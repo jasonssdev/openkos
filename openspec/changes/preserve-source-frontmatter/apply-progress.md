@@ -573,3 +573,139 @@ All Phase 4 tasks complete. `next_recommended: sdd-archive` (verification
 optional per the SDD contract) or `sdd-apply` again for Phase 5 (derived
 tag propagation, after PR 3 merges) or Phase 6 (docs, after PR 2 merges,
 parallel-eligible with Phases 3-5).
+
+## Slice 5 (PR 5 → `main`, after PR 3 merges): Phase 5 — derived tag propagation
+
+**Status**: COMPLETE — 10/10 tasks done (5.1-5.10). Strict TDD mode, runner
+`uv run pytest`. Branch `feat/1062-frontmatter-p5`, stacked on the
+not-yet-merged slice-4 branch (PR #1091, not yet merged; slice 3 with the
+tag lift is already on `main`).
+
+**Scope**: `okf.build_concept(tags=)` (byte-identical default),
+`stage_derived_objects(source_tags=)`, the CLI threading
+`source_plan.tags` into the `stage_derived_objects` call, and a merge-union
+regression pin (design.md Decision 6).
+
+### Completed Tasks
+
+- [x] 5.1 `test_build_concept_default_tags_byte_identical` — PRECONDITION
+      golden reused verbatim from
+      `test_build_concept_output_byte_identical_regression`; confirmed
+      GREEN before 5.3 (nothing to diverge from yet, no `tags` parameter
+      existed) and confirmed it STAYED GREEN after 5.3 landed
+- [x] 5.2 `test_build_concept_emits_given_tags`
+- [x] 5.3 `okf.build_concept` gains `tags: Sequence[str] = ()`; the
+      hard-coded `"tags": []` metadata literal becomes
+      `"tags": list(tags)`; both existing production callers
+      (`application/ingest.py`'s pre-Phase-5 call, `application/query.py`'s
+      `stage_filed_answer`) confirmed to pass no `tags=` argument and so
+      keep emitting `[]` unchanged (`query --save`'s output is untouched by
+      this change)
+- [x] 5.4 `test_stage_derived_objects_threads_source_tags_to_every_build_concept_call`
+      — two DISTINCT candidates (`_fake_extractor([first, second])`, so
+      both stage), asserting `tags: [alpha, beta]` on BOTH staged plans'
+      rendered content
+- [x] 5.5 `test_stage_derived_objects_carried_path_ignores_source_tags` —
+      PRECONDITION: `carried` genuinely set (a real `ConvergedReingest`);
+      the pre-extraction short-circuit returns before `source_tags` is
+      ever consulted
+- [x] 5.6 `stage_derived_objects` gains `source_tags: tuple[str, ...] = ()`;
+      `tags=source_tags` threaded into the `okf.build_concept` call inside
+      the staging loop, beside the existing `sensitivity=resolved_sensitivity`
+      argument
+- [x] 5.7 `test_derived_object_created_in_run_inherits_sources_tags` — a
+      fresh ingest with `tags: [alpha, beta]` incoming frontmatter; the
+      written derived object's `tags` include the Source's resolved
+      (unioned) tags
+- [x] 5.8 `test_existing_derived_object_unaffected_by_later_source_tag_change`
+      — PRECONDITION: the existing derived object's bytes captured before
+      the re-ingest (and its pre-run `tags == []` confirmed); a re-ingest
+      that lifts a NEW tag onto the Source leaves the existing derived
+      object's file byte-unchanged (create-only reconciliation);
+      passed vacuously before 5.9 (create-only reconciliation already
+      applies to every field), confirmed as a regression pin
+- [x] 5.9 `cli/main.py`'s `stage_derived_objects` call gains
+      `source_tags=source_plan.tags`, beside
+      `stamp_sensitivity=source_plan.source_sensitivity`
+- [x] 5.10 `test_build_merged_document_tags_generic_union_unaffected` — a
+      survivor `tags: [alpha]` and an absorbed `tags: [beta]` merge to
+      `tags: [alpha, beta]`; passed vacuously (the existing generic
+      list-union already covers `tags`, which is not in `_SPECIAL_KEYS`) —
+      pure regression pin, no `[IMPL]` task paired, per design.md Decision 6
+- [x] 5.11 `ruff check` / `ruff format --check` / `mypy .` — green (one
+      `ruff format` pass needed on the new CLI tests)
+- [x] 5.12 focused command
+      (`tests/unit/model/test_okf.py tests/unit/application/test_ingest.py
+      tests/unit/cli/test_ingest.py`) green — 712 passed; full
+      `uv run pytest --cov` green — 7176 passed, 2 skipped, 96.92% coverage
+      (gate 90%)
+- [x] 5.13 `evals/run_self_tests.py` — 44/44 green
+- [x] 5.14 committed — see Commits
+
+### Files Changed
+
+| File | Action | What |
+|---|---|---|
+| `src/openkos/model/okf.py` | Modified | `build_concept` gains `tags: Sequence[str] = ()`; `"tags": []` literal becomes `"tags": list(tags)`; docstring updated |
+| `src/openkos/application/ingest.py` | Modified | `stage_derived_objects` gains `source_tags: tuple[str, ...] = ()`; `tags=source_tags` threaded into the staging loop's `okf.build_concept` call; docstring note |
+| `src/openkos/cli/main.py` | Modified | `stage_derived_objects` call site gains `source_tags=source_plan.tags` |
+| `tests/unit/model/test_okf.py` | Modified | 5.1, 5.2, 5.10 tests |
+| `tests/unit/application/test_ingest.py` | Modified | 5.4, 5.5 tests |
+| `tests/unit/cli/test_ingest.py` | Modified | 5.7, 5.8 tests |
+| `openspec/changes/preserve-source-frontmatter/tasks.md` | Modified | 5.1-5.10 marked `[x]` |
+| `openspec/changes/preserve-source-frontmatter/apply-progress.md` | Modified | this section |
+
+### TDD Cycle Evidence
+
+| Task(s) | Test file | RED (observed) | GREEN | Mutation |
+|---|---|---|---|---|
+| 5.1 | `test_okf.py` | passed vacuously (predicted — no `tags` parameter exists yet, nothing to diverge from) | stayed GREEN after 5.3 | N/A (no mutation task assigned) |
+| 5.2 | `test_okf.py` | `TypeError: build_concept() got an unexpected keyword argument 'tags'` | GREEN after 5.3 | changed `"tags": list(tags)` back to `"tags": []`; `test_build_concept_emits_given_tags` flipped to `AssertionError: assert [] == ['alpha', 'beta']`; reverted with the exact inverse edit, `__pycache__` purged before and after |
+| 5.4 | `test_ingest.py` (application) | `TypeError: stage_derived_objects() got an unexpected keyword argument 'source_tags'` | GREEN after 5.6 | N/A (no mutation task assigned) |
+| 5.5 | `test_ingest.py` (application) | `TypeError: stage_derived_objects() got an unexpected keyword argument 'source_tags'` | GREEN after 5.6 | N/A (no mutation task assigned; regression pin) |
+| 5.7 | `test_ingest.py` (cli) | `AssertionError: assert [] == ['alpha', 'beta']` — the derived object's `tags` were empty before the CLI threaded `source_plan.tags` through | GREEN after 5.9 | N/A (no mutation task assigned) |
+| 5.8 | `test_ingest.py` (cli) | passed vacuously (predicted — create-only reconciliation already protects every field) | stayed GREEN after 5.9 | N/A (no mutation task assigned; regression pin) |
+| 5.10 | `test_okf.py` | passed vacuously (predicted — the generic list union already covers `tags`) | N/A — no `[IMPL]` task pairs with this one | N/A (no mutation task assigned; regression pin) |
+
+All `__pycache__` purged before each verdict; every mutation reverted with
+the exact inverse edit.
+
+### Deviations from Design
+
+None — implementation matches design.md Decision 6 exactly: `build_concept`
+gains a `tags` parameter defaulting to byte-identical `[]` output;
+`stage_derived_objects` threads the Source's resolved (union) tags, never
+just the freshly lifted subset, into every staged `build_concept` call;
+the `carried=` short-circuit and pre-extraction returns never see
+`source_tags`, since they create no derived object; the merge-time union
+needed no code change, only a regression pin, since `tags` was never added
+to `build_merged_document`'s `_SPECIAL_KEYS`.
+
+### Issues Found
+
+None.
+
+### Review Workload / Size
+
+Actual authored changed lines for this work unit: **221 insertions + 2
+deletions across 6 files** (`git diff --shortstat` of commit `df660c6`,
+excluding the second, docs-only commit) — well within the review budget
+(400) and design.md's own forecast for Slice 5 (unspecified in the Review
+Workload Forecast table's per-slice column, but well under the general
+~1,450-2,300 total across 6 slices). No `size:exception` needed for this
+slice.
+
+### Commits
+
+1. `df660c6` — `feat(ingest): propagate a Source's resolved tags onto derived objects created in the same run (#1062)`
+   (code + all tests; 221 insertions, 2 deletions, 6 files)
+2. (this commit) — `docs(sdd): record frontmatter slice 5 progress (#1062)`
+   (`tasks.md` checkbox updates + this file)
+
+### Next
+
+All Phase 5 tasks complete. `next_recommended: sdd-archive` (verification
+optional per the SDD contract) or `sdd-apply` again for Phase 6 (docs,
+after PR 2 merges, parallel-eligible with Phases 3-5 — Phase 3 and Phase 5
+are both already on `main`/merged-pending, so Phase 6 has no remaining
+blocking dependency once PR 2 has merged, which it already has).

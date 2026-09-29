@@ -1075,7 +1075,7 @@ Design.md Decision 6.
 
 ### `model/okf.py` — `build_concept(tags=)`
 
-- [ ] **5.1** [TEST] `tests/unit/model/test_okf.py` — add
+- [x] **5.1** [TEST] `tests/unit/model/test_okf.py` — add
   `test_build_concept_default_tags_byte_identical`: calling `build_concept`
   with NO `tags` argument produces a document byte-identical to today's
   golden output for the same other arguments (`tags: []` in the rendered
@@ -1087,11 +1087,11 @@ Design.md Decision 6.
   parameter exists, so there is nothing to diverge from yet), then confirm
   it STAYS GREEN after 5.2 lands with the default in place; if it is ever
   RED after 5.2, the default broke byte-identity.
-- [ ] **5.2** [TEST] Same file — add
+- [x] **5.2** [TEST] Same file — add
   `test_build_concept_emits_given_tags`: `build_concept(..., tags=["alpha",
   "beta"])` emits `tags: [alpha, beta]` in place of the default `[]`. **RED
   today**: `TypeError` — no `tags` parameter exists.
-- [ ] **5.3** [IMPL] `src/openkos/model/okf.py`: add `tags: Sequence[str] =
+- [x] **5.3** [IMPL] `src/openkos/model/okf.py`: add `tags: Sequence[str] =
   ()` to `build_concept`'s signature; change the hard-coded
   `metadata["tags"] = []` (currently emitted unconditionally in the
   metadata dict literal at line ~950) to `metadata["tags"] = list(tags)`.
@@ -1104,7 +1104,7 @@ Design.md Decision 6.
 
 ### `application/ingest.py` — `stage_derived_objects(source_tags=)`, CLI threading
 
-- [ ] **5.4** [TEST] `tests/unit/application/test_ingest.py` — add
+- [x] **5.4** [TEST] `tests/unit/application/test_ingest.py` — add
   `test_stage_derived_objects_threads_source_tags_to_every_build_concept_call`:
   a fake LLM returns two candidates; `stage_derived_objects(...,
   source_tags=("alpha", "beta"))` stages BOTH candidates' plans with
@@ -1112,7 +1112,7 @@ Design.md Decision 6.
   the staged plan's rendered document, or a spy on `build_concept`). **RED
   today**: `TypeError` — `stage_derived_objects` has no `source_tags`
   parameter.
-- [ ] **5.5** [TEST] Same file — add
+- [x] **5.5** [TEST] Same file — add
   `test_stage_derived_objects_carried_path_ignores_source_tags`: the
   `carried=` short-circuit (pre-extraction return, `stage_derived_objects`
   lines 352-360) returns immediately regardless of `source_tags`, staging
@@ -1123,13 +1123,13 @@ Design.md Decision 6.
   already returns before any staging logic runs) — confirm as a regression
   pin once `source_tags` exists, so a future refactor cannot accidentally
   route it through the carried path.
-- [ ] **5.6** [IMPL] `src/openkos/application/ingest.py`: add
+- [x] **5.6** [IMPL] `src/openkos/application/ingest.py`: add
   `source_tags: tuple[str, ...] = ()` to `stage_derived_objects`'s
   signature; pass `tags=source_tags` into every `build_concept` call inside
   the staging loop, beside the existing `sensitivity=resolved_sensitivity`
   argument (the exact shape sensitivity inheritance already uses). Makes
   5.4-5.5 GREEN.
-- [ ] **5.7** [TEST] `tests/unit/cli/test_ingest.py` — add
+- [x] **5.7** [TEST] `tests/unit/cli/test_ingest.py` — add
   `test_derived_object_created_in_run_inherits_sources_tags`: a source
   whose incoming frontmatter lifts tags onto the Source, ingested with a
   fake LLM returning one candidate — the WRITTEN derived object's `tags`
@@ -1137,7 +1137,7 @@ Design.md Decision 6.
   "A derived object created in the run inherits the Source's tags". **RED
   today**: `AssertionError` — the CLI does not pass `source_plan.tags`
   through yet.
-- [ ] **5.8** [TEST] Same file — add
+- [x] **5.8** [TEST] Same file — add
   `test_existing_derived_object_unaffected_by_later_source_tag_change`: a
   Source with ONE existing derived object on disk, re-ingested with
   incoming frontmatter that lifts a NEW tag not previously on the Source —
@@ -1147,14 +1147,14 @@ Design.md Decision 6.
   object's tags are unaffected by a later Source tag change". **RED
   today**: passes vacuously today (create-only reconciliation already
   applies to every field) — confirm as a regression pin.
-- [ ] **5.9** [IMPL] `src/openkos/cli/main.py`: pass `source_tags=
+- [x] **5.9** [IMPL] `src/openkos/cli/main.py`: pass `source_tags=
   source_plan.tags` into the `stage_derived_objects` call
   (`cli/main.py:5446-5460`), beside `stamp_sensitivity=source_plan.
   source_sensitivity`. Makes 5.7-5.8 GREEN.
 
 ### Merge-union pin (no code change expected)
 
-- [ ] **5.10** [TEST] `tests/unit/model/test_okf.py` — add
+- [x] **5.10** [TEST] `tests/unit/model/test_okf.py` — add
   `test_build_merged_document_tags_generic_union_unaffected`: a survivor
   with `tags: [alpha]` and an absorbed object with `tags: [beta]` merge to
   `tags: [alpha, beta]` — `tags` is NOT in `_SPECIAL_KEYS`, so the EXISTING
