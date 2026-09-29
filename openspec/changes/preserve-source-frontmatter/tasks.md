@@ -135,7 +135,7 @@ bundle byte.
 
 ### `model/okf.py` / `source_title.py` — shared boundary rule (Decision 10)
 
-- [ ] **1.1** [TEST] `tests/unit/test_source_title.py` (existing file) — add
+- [x] **1.1** [TEST] `tests/unit/test_source_title.py` (existing file) — add
   `test_frontmatter_end_moved_to_okf_module`: import
   `okf.frontmatter_block_end` and assert
   `source_title._frontmatter_end is okf.frontmatter_block_end` (the module
@@ -144,7 +144,7 @@ bundle byte.
   guessed name). **RED today**: `AttributeError` — `okf.frontmatter_block_end`
   does not exist and `source_title._frontmatter_end` is still its own
   function.
-- [ ] **1.2** [TEST] Same file — add
+- [x] **1.2** [TEST] Same file — add
   `test_frontmatter_block_end_parity_table`, parametrized over the edge
   table design.md Decision 10 names: no fence; an unterminated fence; an
   empty block (`---\n---`); `---` appearing inside a fenced code block
@@ -162,7 +162,7 @@ bundle byte.
   **RED today**: `AttributeError` — same missing function. **MUTATION**:
   change one boundary condition (e.g. `lines[0] != "---"` to
   `lines[0].strip() != "---"`) and confirm the BOM/trailing-space rows flip.
-- [ ] **1.3** [IMPL] `src/openkos/model/okf.py`: add
+- [x] **1.3** [IMPL] `src/openkos/model/okf.py`: add
   `frontmatter_block_end(lines: Sequence[str]) -> int`, moved verbatim from
   `source_title._frontmatter_end` (identical logic: `lines[0] == "---"` and
   the first later line equal to `"---"`; `0` otherwise). `src/openkos/
@@ -176,7 +176,7 @@ bundle byte.
 
 ### `model/okf.py` — `parse_incoming_frontmatter`, the fail-closed status table (Decision 1)
 
-- [ ] **1.4** [TEST] `tests/unit/model/test_okf_incoming_frontmatter.py`
+- [x] **1.4** [TEST] `tests/unit/model/test_okf_incoming_frontmatter.py`
   (new file) — add `test_parse_absent_cases`, parametrized: no leading
   `---`; an unterminated leading `---` (no closing fence anywhere); a
   leading UTF-8 BOM before `---`; a leading `+++` (TOML) fence; a leading
@@ -185,18 +185,18 @@ bundle byte.
   auto-detected" and the `absent` row of design.md Decision 1's table.
   **RED today**: `AttributeError` — `okf.parse_incoming_frontmatter` and
   `okf.IncomingFrontmatter` do not exist.
-- [ ] **1.5** [TEST] Same file — add `test_parse_empty_cases`, parametrized:
+- [x] **1.5** [TEST] Same file — add `test_parse_empty_cases`, parametrized:
   `---\n---` (nothing between the fences); a block containing only YAML
   comments; a block that parses to `{}`. Every case returns
   `status="empty"`. **RED today**: same `AttributeError`.
-- [ ] **1.6** [TEST] Same file — add `test_parse_too_large_boundary`: a
+- [x] **1.6** [TEST] Same file — add `test_parse_too_large_boundary`: a
   block whose UTF-8 byte length is exactly `INCOMING_FRONTMATTER_MAX_BYTES`
   (65,536) parses successfully (`status="parsed"`); a block one byte over
   that limit returns `status="too-large"`. Covers ingestion scenario "An
   oversized block lifts nothing". **RED today**: same `AttributeError`.
   **MUTATION**: change the byte-cap comparison from `>` to `>=` and confirm
   the exact-limit row flips to `too-large`.
-- [ ] **1.7** [TEST] Same file — add `test_parse_alias_cases`, parametrized:
+- [x] **1.7** [TEST] Same file — add `test_parse_alias_cases`, parametrized:
   a "billion laughs" alias-amplification block; a single anchor with no
   alias referencing it (must NOT be rejected — only an actual `AliasEvent`
   or a non-`None` `anchor` on an event triggers this); a self-referencing
@@ -208,22 +208,22 @@ bundle byte.
   entirely and confirm the billion-laughs row no longer returns `"alias"`
   (it must not hang or exhaust memory either, but the status assertion
   alone proves the guard fired).
-- [ ] **1.8** [TEST] Same file — add `test_parse_too_deep_boundary`: a
+- [x] **1.8** [TEST] Same file — add `test_parse_too_deep_boundary`: a
   block with nested-collection depth exactly
   `INCOMING_FRONTMATTER_MAX_DEPTH` (32) parses (`status="parsed"`); depth
   33 returns `status="too-deep"`. **RED today**: same `AttributeError`.
-- [ ] **1.9** [TEST] Same file — add `test_parse_malformed_cases`,
+- [x] **1.9** [TEST] Same file — add `test_parse_malformed_cases`,
   parametrized: bad YAML indentation; `!!python/object/apply:os.system`
   (a Python-object tag `SafeLoader` refuses); an unknown custom `!tag`; two
   YAML documents separated by `...` inside the same block (more than one
   `DocumentStartEvent`). Every case returns `status="malformed"`. **RED
   today**: same `AttributeError`. Kills a parser that silently accepts a
   `!!python/*` tag instead of refusing it.
-- [ ] **1.10** [TEST] Same file — add `test_parse_not_a_mapping_cases`,
+- [x] **1.10** [TEST] Same file — add `test_parse_not_a_mapping_cases`,
   parametrized: a YAML list root; a bare scalar root (a string, an int).
   Both return `status="not-a-mapping"`. Covers ingestion scenario "A
   non-mapping root lifts nothing". **RED today**: same `AttributeError`.
-- [ ] **1.11** [IMPL] `src/openkos/model/okf.py`: add
+- [x] **1.11** [IMPL] `src/openkos/model/okf.py`: add
   `SOURCE_FRONTMATTER_KEY: Final = "source_frontmatter"`,
   `INCOMING_FRONTMATTER_MAX_BYTES: Final = 64 * 1024`,
   `INCOMING_FRONTMATTER_MAX_DEPTH: Final = 32`,
@@ -247,7 +247,7 @@ bundle byte.
 
 ### `model/okf.py` — plain-data domain + round-trip gate (Decision 2)
 
-- [ ] **1.12** [TEST] Same file — add `test_parse_unsupported_value_cases`,
+- [x] **1.12** [TEST] Same file — add `test_parse_unsupported_value_cases`,
   parametrized: `!!binary` (bytes); `!!set`; a non-`str` key at the top
   level; a non-`str` key nested inside a value; `.nan`; `.inf`. Every case
   returns `status="unsupported-value"` for the WHOLE block, not a
@@ -255,7 +255,7 @@ bundle byte.
   check. **RED today**: `AttributeError` — the domain check does not exist
   yet (naive parse would currently succeed with these values embedded,
   since 1.11 stops at `not-a-mapping`).
-- [ ] **1.13** [TEST] Same file — add
+- [x] **1.13** [TEST] Same file — add
   `test_parse_round_trip_gate_rejects_nan_accepts_dates`: a mapping
   containing `.nan` is caught by the DOMAIN check (1.12) before the
   round-trip gate is even reached — confirm this ordering explicitly by
@@ -268,7 +268,7 @@ bundle byte.
   a monkeypatched `dump_frontmatter` that corrupts a key) still reports
   `"parsed"` instead of `"unsupported-value"` — proving the gate, not just
   the domain check, is load-bearing.
-- [ ] **1.14** [IMPL] Same module: add a private `_is_plain_data(value:
+- [x] **1.14** [IMPL] Same module: add a private `_is_plain_data(value:
   object) -> bool` recursive domain check (`str`, `bool`, `int`, finite
   `float`, `None`, `date`, `datetime`, `list` of domain values, `dict` with
   `str` keys and domain values), and wire checks 9-10 into
@@ -278,7 +278,7 @@ bundle byte.
   `load_frontmatter(dump_frontmatter({SOURCE_FRONTMATTER_KEY: mapping}))
   [0][SOURCE_FRONTMATTER_KEY] != mapping`. Only a mapping passing BOTH gates
   reaches `status="parsed"`. Makes 1.12-1.13 GREEN.
-- [ ] **1.15** [TEST] Same file — add
+- [x] **1.15** [TEST] Same file — add
   `test_parse_never_raises_on_non_utf8_or_binary_garbage`: feed
   `parse_incoming_frontmatter` a handful of adversarial strings (a lone
   surrogate escape decoded leniently upstream, a string with embedded NUL
@@ -290,7 +290,7 @@ bundle byte.
 
 ### Non-UTF-8 / blank guard (never parsed at all)
 
-- [ ] **1.16** [TEST] Same file — add
+- [x] **1.16** [TEST] Same file — add
   `test_parse_is_never_called_for_non_utf8_or_blank_sources`: this is a
   CALL-SITE contract, not a `parse_incoming_frontmatter` behavior — spy
   (`unittest.mock.patch`) on `okf.parse_incoming_frontmatter` and assert it
@@ -306,7 +306,7 @@ bundle byte.
   Phase 2")` until then, or defer this specific test to Phase 2 — implementer
   chooses whichever keeps Phase 1 self-contained; if deferred, note it
   explicitly in the Phase 2 section instead of silently dropping it.
-- [ ] **1.17** [DOC] No implementation task here — 1.16's guard is
+- [x] **1.17** [DOC] No implementation task here — 1.16's guard is
   satisfied by REUSING `compose_source_document`'s existing `raw_content
   is None or not raw_content.strip()` check (Phase 2 wires the new call
   behind the SAME guard, not a second one). Tracked here as a checklist
@@ -314,7 +314,7 @@ bundle byte.
 
 ### ADR-0030
 
-- [ ] **1.18** [DOC] Create `docs/adr/0030-untrusted-incoming-frontmatter.md`
+- [x] **1.18** [DOC] Create `docs/adr/0030-untrusted-incoming-frontmatter.md`
   from `docs/adr/template.md`: Context (this is the first time the engine
   parses YAML it did not write), Decision (adopt a fail-closed, bounded,
   YAML-only parser with a closed per-key lift allow-list; store the whole
@@ -326,20 +326,20 @@ bundle byte.
   frontmatter`'s auto-detecting handler, a deny-list instead of an
   allow-list, byte-verbatim storage, comma-splitting tags). Status
   `Proposed`, dated today.
-- [ ] **1.19** [DOC] `docs/adr/README.md`: add the ADR-0030 index row in
+- [x] **1.19** [DOC] `docs/adr/README.md`: add the ADR-0030 index row in
   numeric order.
 
 ### Phase 1 verification
 
-- [ ] **1.20** Run `uv run ruff check . && uv run ruff format --check . &&
+- [x] **1.20** Run `uv run ruff check . && uv run ruff format --check . &&
   uv run mypy .` — must be green.
-- [ ] **1.21** Run `uv run pytest tests/unit/model/test_okf_incoming_frontmatter.py
+- [x] **1.21** Run `uv run pytest tests/unit/model/test_okf_incoming_frontmatter.py
   tests/unit/test_source_title.py` focused, then `uv run pytest --cov`
   (unpiped) full suite — must be green, 90% branch gate held.
-- [ ] **1.22** Run `uv run python evals/run_self_tests.py` — must be green
+- [x] **1.22** Run `uv run python evals/run_self_tests.py` — must be green
   (no eval harness touches frontmatter parsing, but the sweep must still
   pass with `OLLAMA_HOST` poisoned).
-- [ ] **1.23** Commit as one or more work-unit commits, scope `okf` (e.g.
+- [x] **1.23** Commit as one or more work-unit commits, scope `okf` (e.g.
   `feat(okf): parse and validate incoming source frontmatter, fail-closed`),
   staging ADR-0030 and its README index row in the same commit set. Open
   PR 1 (Phase 1: parse seam + ADR-0030) targeting `main`.
@@ -359,6 +359,21 @@ Design.md Decisions 1's boundary consumer, Decision 2's storage rule,
 Decision 7 (Source-only rewrite, frontmatter delta only), Decision 8
 (`_SPECIAL_KEYS`), and Decision 9's `migrate_document` pin. No tag or
 sensitivity lift yet — that is Phase 3.
+
+> **Task 1.16 deferral (Phase 1 implementer decision).** Task 1.16's
+> call-site contract test (`okf.parse_incoming_frontmatter` is never invoked
+> when `raw_content is None` or blank) was DEFERRED here rather than written
+> as an `xfail` in Phase 1, since the call site this test spies on
+> (`compose_source_document`'s call to `okf.parse_incoming_frontmatter`)
+> does not exist until this phase wires it. When implementing 2.5-2.8,
+> add `test_compose_source_document_never_parses_frontmatter_for_non_utf8_or_blank_sources`
+> to `tests/unit/application/test_ingest.py`: spy
+> (`unittest.mock.patch`) on `okf.parse_incoming_frontmatter` and assert it
+> is never invoked when `raw_content is None` (non-UTF-8/binary source) or
+> `raw_content` is blank/whitespace-only, reusing the SAME guard
+> `compose_source_document` already applies before calling
+> `source_title.derive_source_title` (`application/ingest.py:966-969`) —
+> per task 1.17, do not add a second guard.
 
 ### `model/okf.py` — `build_source_concept(source_frontmatter=...)`
 
