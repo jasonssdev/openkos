@@ -1761,7 +1761,7 @@ Depends on nothing new inside Phase B (a pure CLI helper) — may be
 reordered earlier per design.md. Files: `src/openkos/cli/main.py`. Tests:
 `tests/unit/cli/test_reconcile.py`.
 
-- [ ] **P8a.1** [TEST] `tests/unit/cli/test_reconcile.py` — add
+- [x] **P8a.1** [TEST] `tests/unit/cli/test_reconcile.py` — add
   `test_ask_later_decision_and_type_maps_each_numbered_choice`,
   parametrized over `1`-`4`: `[1]` -> `(holder=b, target=a,
   edge_type="supersedes")`; `[2]` -> `(holder=b, target=a,
@@ -1769,12 +1769,12 @@ reordered earlier per design.md. Files: `src/openkos/cli/main.py`. Tests:
   edge_type="supersedes")`; `[4]` -> `(holder=a, target=b,
   edge_type="revises")`. **RED today**: `AttributeError` —
   `_ask_later_decision_and_type` does not exist.
-- [ ] **P8a.2** [TEST] Same file — add
+- [x] **P8a.2** [TEST] Same file — add
   `test_ask_later_decision_and_type_skip_and_reask`: `s` and empty input
   BOTH return a skip sentinel (writes nothing, no further consent
   prompt); an unrecognized answer (e.g. `x`) re-asks, mirroring
   `_confirm`'s own loop (`cli/curate.py:690-713`). **RED today**: same.
-- [ ] **P8a.3** [IMPL] `src/openkos/cli/main.py`: add
+- [x] **P8a.3** [IMPL] `src/openkos/cli/main.py`: add
   `_ask_later_decision_and_type(a, b) -> tuple[str, str, str] | None` —
   the combined `[1] <b> replaces <a>  [2] <b> adjusts <a>  [3] <a>
   replaces <b>  [4] <a> adjusts <b>  [s] skip (Enter = s)` prompt
@@ -1783,12 +1783,12 @@ reordered earlier per design.md. Files: `src/openkos/cli/main.py`. Tests:
 
 ### Slice P8a verification
 
-- [ ] **P8a.4** Run `uv run ruff check . && uv run ruff format --check . &&
+- [x] **P8a.4** Run `uv run ruff check . && uv run ruff format --check . &&
   uv run mypy .` — must be green.
-- [ ] **P8a.5** Run `uv run pytest tests/unit/cli/test_reconcile.py -k
+- [x] **P8a.5** Run `uv run pytest tests/unit/cli/test_reconcile.py -k
   ask_later_decision_and_type` focused, then `uv run pytest` (unpiped)
   full suite — must be green.
-- [ ] **P8a.6** Commit as one or more work-unit commits (e.g. `feat(cli):
+- [x] **P8a.6** Commit as one or more work-unit commits (e.g. `feat(cli):
   add the combined later-decision-and-relation-type prompt`). Open PR 13
   (Slice P8a) targeting PR 12's branch (or `main`/tracker directly, since
   P8a has no upstream Phase B dependency).

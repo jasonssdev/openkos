@@ -10211,6 +10211,44 @@ def _reconcile_pair(
     return changed
 
 
+def _ask_later_decision_and_type(a: str, b: str) -> tuple[str, str, str] | None:
+    """The combined "which Decision is later, which relation type" prompt
+    an UNDIRECTED REVERSES/REFINES finding routes to (design.md Decision 9,
+    step 7; #1014 Plan 2) -- there is no separate y/N consent step here,
+    unlike the directed case: the human's single keystroke IS the consent,
+    since they are choosing the exact edge to write rather than confirming
+    one the engine already picked.
+
+    Returns `(holder, target, edge_type)` for one of the four numbered
+    choices: `[1]` -> `(b, a, "supersedes")`; `[2]` -> `(b, a, "revises")`;
+    `[3]` -> `(a, b, "supersedes")`; `[4]` -> `(a, b, "revises")`. `s` or
+    empty input (the prompt's own `Enter = s` default) returns `None` --
+    the skip sentinel, writing nothing. Loops on anything else, mirroring
+    `_confirm`'s own loop (`curate.py:690-713`), instead of silently
+    treating an unrecognized answer as a skip or a choice."""
+    prompt_text = (
+        f"[1] {b} replaces {a}  [2] {b} adjusts {a}  "
+        f"[3] {a} replaces {b}  [4] {a} adjusts {b}  [s] skip (Enter = s)"
+    )
+    while True:
+        answer = typer.prompt(prompt_text, default="s", show_default=False)
+        choice = answer.strip().lower()
+        if choice in {"s", ""}:
+            return None
+        if choice == "1":
+            return (b, a, "supersedes")
+        if choice == "2":
+            return (b, a, "revises")
+        if choice == "3":
+            return (a, b, "supersedes")
+        if choice == "4":
+            return (a, b, "revises")
+        typer.echo(
+            f"Unrecognized answer '{answer.strip()}' -- expected 1-4 or s "
+            "(Enter = s). Asking again."
+        )
+
+
 def _run_reconcile_from_findings(
     root: Path, layout: config.WorkspaceLayout, log_path: Path
 ) -> None:

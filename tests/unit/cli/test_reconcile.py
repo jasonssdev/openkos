@@ -1509,3 +1509,76 @@ def test_revises_edge_leaves_both_concepts_active_end_to_end(
     rows = {row.concept_id: row for row in listing.list_objects(layout.bundle_dir)}
     assert rows[a_id].status == "active"
     assert rows[b_id].status == "active"
+
+
+# ---------------------------------------------------------------------------
+# #1014 Plan 2 -- Slice P8a: `_ask_later_decision_and_type`, the combined
+# "who is later, which relation type" prompt an undirected REVERSES/REFINES
+# finding routes to (design.md Decision 9, step 7). No caller yet -- P8b's
+# revision walk is the first caller.
+# ---------------------------------------------------------------------------
+
+
+def _script_prompts(monkeypatch: pytest.MonkeyPatch, answers: list[str]) -> list[str]:
+    """Route `typer.prompt` through a scripted answer list and record every
+    prompt text, mirroring `test_curate.py`'s `_script_prompts` (#398):
+    empty scripted input returns `default`, exactly as pressing Enter
+    would -- so the "empty keeps the default" behavior under test is the
+    one a user actually gets."""
+    prompts: list[str] = []
+    remaining = list(answers)
+
+    def _prompt(text: str, default: str = "N", show_default: bool = False) -> str:
+        prompts.append(text)
+        raw = remaining.pop(0)
+        return default if raw == "" else raw
+
+    monkeypatch.setattr("typer.prompt", _prompt)
+    return prompts
+
+
+@pytest.mark.parametrize(
+    ("answer", "expected"),
+    [
+        ("1", ("later-b", "earlier-a", "supersedes")),
+        ("2", ("later-b", "earlier-a", "revises")),
+        ("3", ("earlier-a", "later-b", "supersedes")),
+        ("4", ("earlier-a", "later-b", "revises")),
+    ],
+)
+def test_ask_later_decision_and_type_maps_each_numbered_choice(
+    monkeypatch: pytest.MonkeyPatch,
+    answer: str,
+    expected: tuple[str, str, str],
+) -> None:
+    """Each of the four numbered answers names BOTH `holder`/`target` and
+    `edge_type` in one keystroke (design.md Decision 9, step 7): `[1]` ->
+    `b` replaces `a` (holder=b, target=a, supersedes); `[2]` -> `b` adjusts
+    `a` (holder=b, target=a, revises); `[3]`/`[4]` mirror those with `a`
+    as holder."""
+    _script_prompts(monkeypatch, [answer])
+
+    result = main._ask_later_decision_and_type("earlier-a", "later-b")
+
+    assert result == expected
+
+
+def test_ask_later_decision_and_type_skip_and_reask(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`s` and empty input (the prompt's own `Enter = s` default) BOTH
+    return the skip sentinel `None` -- writing nothing, with no further
+    consent prompt, exactly as a decline does today. An unrecognized
+    answer re-asks instead of being silently treated as a skip or a
+    choice, mirroring `_confirm`'s own loop (`curate.py:690-713`)."""
+    _script_prompts(monkeypatch, ["s"])
+    assert main._ask_later_decision_and_type("earlier-a", "later-b") is None
+
+    _script_prompts(monkeypatch, [""])
+    assert main._ask_later_decision_and_type("earlier-a", "later-b") is None
+
+    prompts = _script_prompts(monkeypatch, ["x", "2"])
+    result = main._ask_later_decision_and_type("earlier-a", "later-b")
+    assert result == ("later-b", "earlier-a", "revises")
+    assert len(prompts) == 2
+    assert prompts[0] == prompts[1]
