@@ -1,7 +1,7 @@
 # Tasks: decision-revision-detector — find decisions that were later reversed, refined or reaffirmed
 
 Refs #1014 piece (a), sub-change 2 of 3. Design: `design.md`. Proposal:
-`proposal.md`. ADR-0025 (`docs/adr/0025-llm-derived-attributes-live-in-a-cache.md`)
+`proposal.md`. ADR-0025 (`docs/adr/0025-temporal-direction-never-comes-from-the-model.md`) (renamed from `0025-llm-derived-attributes-live-in-a-cache.md` by Phase B P3)
 is already written, status `Proposed`, with its `docs/adr/README.md` index
 row already present — per design.md's own "Migration / Rollout" section, it
 **does not ship with Phase A**. It records a decision (LLM-derived per-concept
