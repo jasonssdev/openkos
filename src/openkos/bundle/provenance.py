@@ -176,33 +176,63 @@ def provenance_reachable(
     return sorted(reachable)
 
 
+def normalize_provenance_id(raw_id: str) -> str:
+    """Public alias of `_normalize_id`, for a caller OUTSIDE this module
+    building its own `id -> provenance` index one document at a time
+    (`application/list_service.list_provenance_sources`, issue #1012)
+    rather than through `_parse_provenance_by_id`'s whole-bundle `files`
+    loop -- so both paths key their maps with the EXACT same `.md`-
+    stripping rule and stay interchangeable with `source_ancestors_over`'s
+    lookups regardless of which path built the index."""
+    return _normalize_id(raw_id)
+
+
+def parse_provenance_entry(text: str) -> frozenset[str] | None:
+    """Parse ONE already-read document's `provenance` frontmatter list into
+    a normalized (`.md`-stripped) id `frozenset`, or return `None` to
+    signal the document should be SKIPPED entirely -- unparseable
+    frontmatter, or a `provenance` field that is not a list.
+
+    This is `_parse_provenance_by_id`'s per-file body, extracted (issue
+    #1012) so a caller can build the same `id -> provenance` index one
+    document at a time -- read, parse, discard the full text, move on --
+    without ever holding a whole-bundle `files: Mapping[str, str]`
+    snapshot in memory first. `_parse_provenance_by_id` itself now calls
+    this per file, so the whole-bundle and streaming paths apply the exact
+    same parse and skip rule, with no behavior drift between them. Skip
+    semantics, and their fail-safe rationale, are unchanged -- see
+    `_parse_provenance_by_id`'s docstring."""
+    metadata: dict[str, object] | None
+    try:
+        metadata, _ = okf.load_frontmatter(text)
+    except Exception:  # broad: malformed frontmatter is preserved
+        # rather than swallowed into the purge set, see
+        # `provenance_closure`'s "critical over-deletion barrier"
+        metadata = None
+    if metadata is None:
+        return None
+    raw_provenance = metadata.get("provenance")
+    if not isinstance(raw_provenance, list):
+        return None
+    return frozenset(_normalize_id(str(entry)) for entry in raw_provenance)
+
+
 def _parse_provenance_by_id(files: Mapping[str, str]) -> dict[str, frozenset[str]]:
     """Parse every file's `provenance` frontmatter list ONCE into
-    `id -> frozenset(...)` (canonical, `.md`-stripped ids on both sides); a
-    file whose frontmatter fails to parse, or whose `provenance` is not a
-    list, is SKIPPED -- it can then never join a `provenance_closure` purge
-    set, which is fail-safe against over-deletion (mirroring
+    `id -> frozenset(...)` (canonical, `.md`-stripped ids on both sides), by
+    delegating each file's parse to `parse_provenance_entry`; a file whose
+    frontmatter fails to parse, or whose `provenance` is not a list, is
+    SKIPPED -- it can then never join a `provenance_closure` purge set,
+    which is fail-safe against over-deletion (mirroring
     `bundle/references.py`'s "malformed file is skipped rather than
     surfaced" contract, here applied to preservation instead of
     detection)."""
     provenance_by_id: dict[str, frozenset[str]] = {}
     for path, text in files.items():
-        concept_id = _normalize_id(path)
-        metadata: dict[str, object] | None
-        try:
-            metadata, _ = okf.load_frontmatter(text)
-        except Exception:  # broad: malformed frontmatter is preserved
-            # rather than swallowed into the purge set, see
-            # `provenance_closure`'s "critical over-deletion barrier"
-            metadata = None
-        if metadata is None:
+        parsed = parse_provenance_entry(text)
+        if parsed is None:
             continue
-        raw_provenance = metadata.get("provenance")
-        if not isinstance(raw_provenance, list):
-            continue
-        provenance_by_id[concept_id] = frozenset(
-            _normalize_id(str(entry)) for entry in raw_provenance
-        )
+        provenance_by_id[_normalize_id(path)] = parsed
     return provenance_by_id
 
 
@@ -267,6 +297,23 @@ def _source_ancestors_over(
                     next_frontier.add(parent)
         frontier = next_frontier
     return sorted(ancestor for ancestor in ancestors if ancestor.startswith("sources/"))
+
+
+def source_ancestors_over(
+    provenance_by_id: Mapping[str, frozenset[str]], *, object_id: str
+) -> list[str]:
+    """Public entry point for `_source_ancestors_over`'s shared upward walk
+    (issue #1012), for a caller OUTSIDE this module that builds its own
+    `id -> provenance` index -- one document at a time, via
+    `parse_provenance_entry`/`normalize_provenance_id`, discarding each
+    document's full text as it goes -- rather than ever holding a
+    whole-bundle `files: Mapping[str, str]` snapshot (`application/
+    list_service.list_provenance_sources`'s `list --sources` path). See
+    `_source_ancestors_over`'s docstring for the walk itself, the
+    dangling-Source inclusion rule, termination, and determinism --
+    unchanged; this is a public naming wrapper only, not a
+    reimplementation."""
+    return _source_ancestors_over(provenance_by_id, object_id=object_id)
 
 
 def provenance_source_ancestors(
