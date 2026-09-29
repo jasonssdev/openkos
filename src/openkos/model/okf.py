@@ -622,6 +622,87 @@ def split_frontmatter_verbatim(text: str, *, label: str) -> tuple[str, str]:
     return match.group(0), text[match.end() :]
 
 
+SOURCES_KEY: Final = "sources"
+"""The optional frontmatter key holding a document's OKF §5.1 `sources`
+list -- a one-way, GENERATED projection of `provenance` (okf-v02-migration,
+issue #1064, design.md Decision 3). `provenance` remains the sole internal
+source of truth for trust, sensitivity, and merge decisions; nothing outside
+`project_sources`/`refresh_sources` (and `migrate_document`, Phase 4) may
+read this key back as an input to those decisions -- enforced by
+`tests/unit/test_sources_key_guard.py`'s AST guard, not by convention alone."""
+
+
+def project_sources(provenance: object) -> list[dict[str, str]] | None:
+    """The `SOURCES_KEY` value for a document whose `provenance` is
+    `provenance` -- a PURE function of that value alone (design.md Decision
+    3), never of anything read from disk.
+
+    Per `provenance` entry:
+    - a workspace path under `raw/` (a Source's own provenance) is never
+      projected;
+    - anything else that is not a non-empty string makes the WHOLE
+      projection `None` -- fails closed rather than silently dropping one
+      bad entry and projecting the rest;
+    - any other (non-empty, non-`raw/`) string is a Concept ID, normalized
+      by stripping ONE leading `/` and ONE trailing `.md`, and projected to
+      `{"id": <normalized id>, "resource": "/<normalized id>.md"}` -- `id`
+      first, then `resource`, the OKF §5.1 example's own key order.
+
+    Order is `provenance` order, first-occurrence-wins on a duplicate
+    normalized id (a plain `dict` keyed by normalized id preserves
+    insertion order, so no separate ordering pass is needed).
+
+    Returns `None` -- never `[]` -- when `provenance` is absent, not a
+    list, an empty list, or when no entry survives projection (only
+    `raw/` entries, or nothing at all): the builder must be able to tell
+    "no `sources` key at all" from "an explicit empty list" by testing
+    this return value alone."""
+    if not isinstance(provenance, list) or not provenance:
+        return None
+
+    projected: dict[str, dict[str, str]] = {}
+    for entry in provenance:
+        if not isinstance(entry, str) or not entry:
+            return None
+        if entry.startswith("raw/"):
+            continue
+        normalized = entry
+        if normalized.startswith("/"):
+            normalized = normalized[1:]
+        if normalized.endswith(".md"):
+            normalized = normalized[: -len(".md")]
+        if normalized not in projected:
+            projected[normalized] = {"id": normalized, "resource": f"/{normalized}.md"}
+
+    if not projected:
+        return None
+    return list(projected.values())
+
+
+def refresh_sources(metadata: dict[str, object]) -> dict[str, object]:
+    """The MAINTENANCE form of `project_sources`, for the one non-builder
+    writer that touches an existing document's `provenance`
+    (`bundle/provenance.py::apply_provenance_rewrites`, design.md Decision
+    4): when `SOURCES_KEY` is absent, `metadata` is returned unchanged --
+    no key is ever inserted here, only a builder introduces one. When
+    present, it is replaced in place (at its existing key position) with
+    the fresh projection, or removed entirely when the projection is
+    `None`.
+
+    Always returns a COPY -- never mutates `metadata` in place -- so a
+    caller holding the original dict never observes this function's
+    effect on it."""
+    updated = dict(metadata)
+    if SOURCES_KEY not in updated:
+        return updated
+    projected = project_sources(updated.get("provenance"))
+    if projected is None:
+        updated.pop(SOURCES_KEY, None)
+    else:
+        updated[SOURCES_KEY] = projected
+    return updated
+
+
 def build_source_concept(
     *,
     title: str,
@@ -726,6 +807,10 @@ def build_source_concept(
         "sensitivity": sensitivity,
         "provenance": provenance,
     }
+    # No `project_sources` call here, deliberately (design.md Decision 3): a
+    # Source's only `provenance` is its own `raw/` original, which
+    # `project_sources` never projects, so the result is always `None` -- "a
+    # Source document therefore gets no `sources`". Do not add one.
     if extraction_status is not None:
         metadata[EXTRACTION_STATUS_KEY] = extraction_status
     if extraction_notice:
@@ -869,6 +954,13 @@ def build_concept(
         "sensitivity": sensitivity,
         "provenance": provenance,
     }
+    sources = project_sources(provenance)
+    if sources is not None:
+        # Inserted immediately after `provenance` (design.md Decision 3's
+        # key-placement rule) -- `dump_frontmatter`'s YAML emission re-sorts
+        # keys alphabetically regardless, but this dict's own insertion
+        # order still documents intent for a reader of this source file.
+        metadata[SOURCES_KEY] = sources
     if type_alternative is not None:
         # Set only when present, so a document with no near-boundary call
         # stays byte-identical to what this builder emitted before #401.
@@ -1977,6 +2069,17 @@ def build_merged_document(
         elif key not in merged:
             merged[key] = absorbed_value
         # else: a scalar already present on the survivor wins -- no-op.
+
+    # `sources` is (re)introduced for the merged survivor over the
+    # ALREADY-UNIONED `provenance` above (design.md Decision 3/4) --  never
+    # copied from either side's own `sources`, which the `dict(survivor_
+    # metadata)` copy at the top of this function may still be carrying
+    # stale from before this merge.
+    merged_sources = project_sources(merged.get("provenance"))
+    if merged_sources is not None:
+        merged[SOURCES_KEY] = merged_sources
+    else:
+        merged.pop(SOURCES_KEY, None)
 
     if merged.get("status") == "active":
         merged["status"] = "stable"
