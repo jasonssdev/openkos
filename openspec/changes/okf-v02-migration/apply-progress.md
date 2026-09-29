@@ -12,7 +12,7 @@ stacked-to-main, 8 PRs (`tasks.md` "Review Workload Forecast").
 | 2a | Writers: generated + status | PR 2 → `main` | **Done** — commit `c7ed0c7` |
 | 2b | Writers: sources | PR 3 → `main` | **Done** — commit `c0e0cdb` |
 | 3a | Migration function | PR 4 → `main` | **Done** — commit `0edb102` |
-| 3b | Ledger migration | PR 5 → `main` | Not started |
+| 3b | Ledger migration | PR 5 → `main` | **Done** — pending commit |
 | 3c | `repair` verb | PR 6 → `main` | Not started |
 | 4a | Fixture + template | PR 7 → `main` | Not started |
 | 4b | Docs + renumbering | PR 8 → `main` | Not started |
@@ -650,11 +650,188 @@ unsplittable slice, the same authorization Slices 2a/2b used. This
 `apply-progress.md` update and `tasks.md`'s checkbox updates land in the
 separate `docs(sdd)` commit that follows.
 
+## Slice 3b (Phase 5, PR 5) — Done
+
+**Branch**: `feat/1064-okf-v02-p3b-ledger`, stacked on `8a6b73f` (Phase 4,
+PR #1080/#1079, not yet merged to `main`).
+**Mode**: Strict TDD (`uv run pytest`).
+**Tasks**: 5.1-5.18, all `[x]` in `tasks.md`.
+
+### TDD Cycle Evidence
+
+| Task(s) | Test file | RED reason (observed) | GREEN |
+|---|---|---|---|
+| 5.1-5.9 (real tests, run) | `tests/unit/bundle/test_ledger_okf_migration.py` (new file) | `AttributeError: module 'openkos.bundle.ledger' has no attribute 'migrate_sidecars_to_okf_v02'` (all 11 real tests, collected before any implementation existed) | pass after adding `migrate_sidecars_to_okf_v02` + its helpers (`_apply_migrate_document`, `_migrate_whole_document_snapshot`, `_needs_okf_version_flip`/`_flip_index_okf_version`, `_body_start`, `_build_snapshot_index`, `_resolve_post_merge_text`, `_shift_link_rewrites`, `_migrate_entry`) in one implementation pass |
+| 5.10-5.14 (round-trip, skipped) | same file | `ModuleNotFoundError` on `from openkos.application import repair` (verified: the deferred import inside each test body references a module that does not exist until Phase 6) | intentionally left `pytest.mark.skip(reason="okf-v02-migration Phase 6 not yet landed")`; collected (5 items), not executed; unskip is Phase 6's own task (6.16 references back) |
+
+Triangulation: 5.4's `index_before` flip test is parametrized over all four
+V1-V4 schema constants (one shared body, four cases); 5.7/5.8 cover the
+two `_resolve_post_merge_text` branches (current text vs. a real later
+snapshot) with a decisive, non-coincidental construction (see deviations);
+5.6 additionally proves the recursive/top-level treatment MUST share
+`snapshot_events`/`current_texts` context (see deviations).
+
+Fixtures throughout are built with the REAL merge core
+(`application.lifecycle.prepare_merge`/`merge_core` -- the same two
+functions `openkos merge` itself calls) in `tmp_path`, never a hand-faked
+ledger; an older schema version is reached by `dataclasses.replace`
+-downgrading a REAL V5 entry a real merge produced (mirrors
+`test_unmerge.py::test_unmerge_snapshot_entry_still_warns_on_interleaved_drift`'s
+own established technique), never inventing a fictional schema shape.
+
+### Mutation-proof checks (this session, `__pycache__` purged before each
+verdict)
+
+1. **The below-body-start offset guard**: changed `if shift != 0 and
+   rewrite.offset >= old_body_start:` to `if shift != 0:` in
+   `_shift_link_rewrites`. Confirmed
+   `test_migrate_sidecars_leaves_an_offset_below_body_start_unshifted`
+   fails (`27 == 0` — offset shifted when it should have stayed at the
+   `0` sentinel below the OLD body start). Reverted with the exact
+   inverse edit.
+2. **The "later snapshot over current text" priority**: changed `if
+   candidates:` to `if False:` in `_resolve_post_merge_text`, forcing
+   every lookup to fall through to `current_texts`. Confirmed
+   `test_migrate_sidecars_shifts_link_rewrite_offsets_from_a_later_snapshot`
+   fails (`109 == 109 + 27` — the shift silently became `0`, since the
+   forced-current-text path is already v0.2-shaped after the real
+   merge's own v0.2-emitting write, per design.md's own generation
+   rule). Reverted.
+3. **The recursive-entry migration's fidelity**: made
+   `_migrate_whole_document_snapshot` return immediately after the
+   top-level `okf.migrate_document` call, skipping the embedded-
+   `merged_from` recursion entirely. Confirmed BOTH
+   `test_migrate_sidecars_recurses_into_embedded_merged_from_snapshots`
+   AND `test_migrate_sidecars_check_b_still_passes_after_migration` fail
+   (the latter: `scan_nesting_violations` reports a fresh
+   `[('concepts/z', 1)]` violation post-migration that did not exist
+   pre-migration) -- proving the recursion is load-bearing for Check B's
+   own nested-prefix equality, not merely for the embedded snapshot's own
+   bytes. Reverted.
+
+All three reverted with the exact inverse edit; `find . -name __pycache__
+-exec rm -rf {} +` run before each verdict per project practice.
+
+### Design/implementation deviations (owner pre-authorized: take the
+design's recommended option, report it)
+
+- **Recursion threads the FULL `_migrate_entry` pipeline into an embedded,
+  pre-relocation `merged_from` list, not just its snapshot fields.**
+  Task 5.3's own IMPL wording ("migrate its own snapshot fields the same
+  way") reads narrower than what turned out to be REQUIRED: task 5.6
+  (Check B still passes) needs an embedded historical entry's
+  `index_before` flip AND `link_rewrites` offset shift to end up IDENTICAL
+  to the equivalent top-level entry's, because Check B compares whole
+  `MergeLedgerEntry` equality (every field), not just the four snapshot
+  strings. `_migrate_whole_document_snapshot` therefore calls back into
+  `_migrate_entry` itself (the SAME function applied to a sidecar's
+  top-level entries), threading the identical `snapshot_events`/
+  `current_texts` context, rather than a narrower snapshot-only helper --
+  confirmed load-bearing by mutation-proof check 3 above. No task's
+  coverage was skipped; this is a widening of 5.3's own recursion, not a
+  narrowing.
+- **Test 5.8's original "hand-edit the current file" construction was
+  replaced with a decisive, real-merge-only construction.** The first
+  draft manually appended an extra frontmatter field to "concepts/
+  other.md" after a second real merge, to make "current text" and "the
+  later snapshot" differ -- but the SECOND real merge's OWN write already
+  emits v0.2 shape for its result (Phase 2's `build_merged_document`
+  generation rule, shipped in an earlier slice, applies regardless of
+  whether the merge's two inputs were v0.1), so the hand-edited current
+  text turned out to be a `migrate_document` no-op (`Unchanged`) on its
+  own, invalidating the intended non-zero-vs-non-zero comparison. Fixed
+  by using that fact directly instead of fighting it: the test now asserts
+  the CURRENT text is `Unchanged` (shift 0) while the real LATER snapshot
+  (captured before that merge wrote anything) is still genuinely v0.1
+  (a non-zero shift), making "which source was used" observable from a
+  single non-zero-vs-zero comparison. Documented inline in the test's own
+  comment.
+- **`migrate_sidecars_to_okf_v02` raises `ValueError` on an `okf.Refused`
+  whole-document snapshot or a missing `okf_version` field**, rather than
+  returning a three-way result type. Design.md's own Interfaces/Contracts
+  section lists only `list[tuple[Path, str, list[MergeLedgerEntry]]]` as
+  the return type (no `Refused` variant), and this function is a pure
+  library with no caller until Phase 6 wires `repair`'s apply phase, which
+  is documented (design.md Decision 9) as the layer that turns a
+  migration refusal into a whole-run refusal -- "never guess," matching
+  `migrate_document`'s own posture. Not separately tested in this slice
+  (no task in 5.1-5.18 names it); Phase 6's `plan_repair` is expected to
+  catch it.
+- **V1-V4's `index_before`/`log_before`/`carried_content_ids`/
+  `index_restores` downgrade needed no per-schema conditionals** in the
+  test fixtures: the two-concept merge fixture used for the parametrized
+  `index_before` flip test never produces relation/provenance rewrites or
+  a second absorption, so `relation_rewrites=[]`, `provenance_rewrites=[]`,
+  and `carried_content_ids=[]` are already valid for every one of V1-V4's
+  encode-time guards (`okf.encode_merge_ledger_entry`) without branching
+  by schema.
+
+### Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command | `uv run pytest tests/unit/bundle/test_ledger_okf_migration.py` -> 11 passed, 5 skipped |
+| Runtime harness | N/A -- a pure library with no caller until Phase 6 wires `repair`'s apply phase (tasks.md's own Suggested Work Units table for this unit says the same); the 5 round-trip tests (5.10-5.14) are the closest thing to an integration check this slice has, and stay `pytest.mark.skip`-marked exactly as tasks.md specifies until Phase 6 lands `application/repair.py` |
+| Rollback boundary | Revert `migrate_sidecars_to_okf_v02` and its private helpers in `src/openkos/bundle/ledger.py`, plus the new test file. No ledger sidecar has been rewritten by anything in production -- this slice adds a pure function with no caller yet. |
+
+### Full verification (this session, unpiped, foreground/background as noted)
+
+- `uv run ruff check .`: **All checks passed!** (after `--fix` resolved an
+  unused `# noqa: F401` and an import-sort/wrap normalization in the new
+  test file's five deferred `application.repair` imports).
+- `uv run ruff format --check .`: 2 files needed reformatting
+  (`src/openkos/bundle/ledger.py`, `tests/unit/bundle/test_ledger_okf_migration.py`)
+  -- applied via `uv run ruff format`, then re-verified clean.
+- `uv run mypy .`: 5 errors on first run, all in the new test file's
+  deferred `from openkos.application import repair` imports (`Module
+  "openkos.application" has no attribute "repair"` -- expected, Phase 6
+  has not landed) -- fixed with `# type: ignore[attr-defined]` on the
+  `from ... import (` line (where mypy attributes the error for a
+  parenthesized multi-line import) -> **Success: no issues found in 362
+  source files**.
+- `uv run pytest --cov` (unpiped, background, ~7 min): **7010 passed, 7
+  skipped in 426.85s (0:07:06)**. Coverage 96.93% total (line+branch),
+  90.0% branch gate held (`Required test coverage of 90.0% reached`).
+  7 skipped = the 2 pre-existing (Phase 4) plus this slice's 5 new
+  round-trip stubs (5.10-5.14), each collected and skip-marked with a
+  reason naming Phase 6. `src/openkos/bundle/ledger.py` itself: covered by
+  the 11 real tests above; no new uncovered branch introduced (the module's
+  overall coverage was already 100% pre-slice per its own file listing in
+  the coverage report).
+- `uv run python evals/run_self_tests.py`: **44 of 44 harness self-test(s)
+  run, 0 failing.**
+- Targeted regression check (pre-existing suites this change could affect):
+  `uv run pytest tests/unit/bundle/test_ledger.py
+  tests/unit/bundle/test_ledger_crash_injection.py
+  tests/unit/bundle/test_ledger_walk_exclusion.py tests/unit/cli/test_merge.py
+  tests/unit/cli/test_unmerge.py` -> **176 passed** (zero regressions in the
+  code this slice's function reads from and reuses).
+
+### Git
+
+`git diff --shortstat` for this slice (working tree, pre-commit):
+`src/openkos/bundle/ledger.py` +298 lines (production, the new function
+and its 9 private helpers); `tests/unit/bundle/test_ledger_okf_migration.py`
++982 lines (new file: 11 real tests + 5 skip-marked round-trip stubs +
+shared fixture helpers); `openspec/changes/okf-v02-migration/tasks.md`
+18 lines flipped `[ ]` -> `[x]`. This exceeds the ~good-practice budget
+for a single PR -- reported per the owner's pre-approved `size:exception`
+for an unsplittable slice (same authorization Slices 2a/2b/3a used): the
+snapshot migration (5.1-5.3), the `index_before` flip (5.4-5.5), the
+link-offset shift (5.7-5.9), and the Check B-preserving recursion (5.2/5.6)
+all share ONE `_migrate_entry` function and ONE threaded
+`snapshot_events`/`current_texts` context -- confirmed load-bearing by
+mutation-proof check 3 above -- so landing them across separate commits
+would mean an intermediate commit whose recursion is provably wrong
+(exactly what check 3 caught). The test file's size is dominated by
+building each fixture from REAL merge code (per this session's own
+instructions, never hand-faked) rather than lighter mocked inputs.
+
 ## Next
 
-Slice 3b (Phase 5, PR 5 → `main`, after PR 4 merges): the ledger
-migration, `migrate_sidecars_to_okf_v02` -- snapshot/recursive/
-`index_before`/offset-shift migration of merge-ledger sidecars, with
-Check B (nested-prefix equality) preserved. A library with no caller
-until Phase 6 wires `repair`'s apply phase. Requires a fresh `sdd-apply`
-dispatch scoped to Phase 5.
+Slice 3c (Phase 6, PR 6 → `main`, after PR 5 merges): `application/
+repair.py` (`plan_repair`/`apply_repair`), CLI wiring, report/help/commit
+text, the scoped Gate 2, idempotency, crash-order, and the
+merge->repair->unmerge round trip across all five ledger schemas --
+including unskipping this slice's 5 round-trip test stubs (5.10-5.14).
+Requires a fresh `sdd-apply` dispatch scoped to Phase 6.
