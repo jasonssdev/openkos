@@ -20,6 +20,7 @@ that could still fail, so one service call per mode is the faithful shape
 here (the same conclusion `application/lint.py`'s own module docstring
 recorded for `lint`, on the same kind of read-top-to-bottom evidence)."""
 
+import weakref
 from pathlib import Path
 
 import pytest
@@ -27,6 +28,7 @@ import pytest
 from openkos import config
 from openkos.application import list_service
 from openkos.bundle import listing
+from openkos.bundle import provenance as bundle_provenance
 
 
 def _workspace(tmp_path: Path) -> config.WorkspaceLayout:
@@ -618,3 +620,87 @@ def test_list_provenance_sources_excludes_dot_directory_sources(
 
     assert "sources/real" in result.ancestors
     assert "sources/behind-the-stray" not in result.ancestors
+
+
+class _TrackedText(str):
+    """A `str` subclass whose instances support weak references (a plain
+    `str` cannot be weakly referenced), so the test below can observe how
+    many decoded documents are alive AT ONCE during
+    `list_provenance_sources`, with no instrumentation of the production
+    code itself."""
+
+
+def test_list_provenance_sources_never_holds_more_than_one_document_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1012: peak memory must not grow with the bundle's total text size --
+    only each document's `provenance:` field is ever used, so at most ONE
+    document's full text may be alive at a time while the `id ->
+    provenance` index is built; a whole-bundle `files: Mapping[str, str]`
+    buffer (the pre-#1012 shape) would keep every document's text alive
+    simultaneously instead.
+
+    Proven deterministically, not by inspecting internals: every
+    `Path.read_text` result is wrapped in `_TrackedText`, and a weak
+    reference to it is recorded keyed by `id(text)` (NOT stored in a
+    `set`/`WeakSet` keyed by value -- these fixture documents are largely
+    identical stub text, and a value-keyed container would silently
+    collapse equal-content documents into one entry, undercounting
+    survivors regardless of whether the production code retains them --
+    CPython refcounting frees a non-cyclic object the instant its last
+    strong reference drops, with no `gc.collect()` needed).
+    `bundle_provenance.parse_provenance_entry` is the ONE production call
+    site that runs once per document's already-read text; at the moment
+    each such call is MADE, the caller's own local `text` binding has
+    already been reassigned to the current document (its previous
+    iteration's binding already dropped) and nothing else may still be
+    holding an earlier document's text -- so sampling the number of still-
+    live weak references at each call gives the exact number of documents
+    alive at once. A whole-bundle buffer keeps growing that count across
+    the run; a true one-at-a-time streaming build never exceeds 1.
+
+    The target (`concepts/target`, no `provenance` of its own) has no
+    reaching Source, so `ancestors` is empty and `listing.list_objects`'s
+    second read pass never runs -- keeping this test to exactly the one
+    read-parse-discard loop under test."""
+    layout = _workspace(tmp_path)
+    for i in range(20):
+        _write_doc(
+            layout.bundle_dir / "concepts" / f"concept_{i:02d}.md",
+            title=f"Concept {i}",
+            provenance=["sources/good"] if i == 0 else None,
+        )
+    _write_doc(layout.bundle_dir / "sources" / "good.md", type_="Source", title="Good")
+    _write_doc(layout.bundle_dir / "concepts" / "target.md", title="Target")
+
+    live_refs: dict[int, weakref.ReferenceType[_TrackedText]] = {}
+    original_read_text = Path.read_text
+
+    def _tracked_read_text(
+        self: Path, encoding: str | None = None, errors: str | None = None
+    ) -> str:
+        text = _TrackedText(original_read_text(self, encoding, errors))
+        live_refs[id(text)] = weakref.ref(text)
+        return text
+
+    monkeypatch.setattr(Path, "read_text", _tracked_read_text)
+
+    def _live_count() -> int:
+        return sum(1 for ref in live_refs.values() if ref() is not None)
+
+    samples: list[int] = []
+    original_parse_entry = bundle_provenance.parse_provenance_entry
+
+    def _sampling_parse_entry(text: str) -> frozenset[str] | None:
+        samples.append(_live_count())
+        return original_parse_entry(text)
+
+    monkeypatch.setattr(
+        bundle_provenance, "parse_provenance_entry", _sampling_parse_entry
+    )
+
+    result = list_service.list_provenance_sources(layout, "concepts/target")
+
+    assert result.ancestors == ()  # confirms the cheap, single-pass path ran
+    assert len(samples) == 22  # every document actually went through the hook
+    assert max(samples) == 1

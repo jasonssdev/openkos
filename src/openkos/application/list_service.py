@@ -282,19 +282,29 @@ def list_provenance_sources(
     unchanged -- but the skip now lands in the returned `not_run`, so "no
     Source reaches this object" and "the document that proves one does
     could not be read" are distinguishable outcomes instead of one silent
-    false negative. Out of scope here (recorded as a follow-up, see the
-    feature document): `files` still buffers every decoded document in
-    memory rather than streaming, because streaming would change
-    `bundle_provenance.provenance_source_ancestors`'s signature and its
-    other callers -- a separate change."""
-    files: dict[str, str] = {}
+    false negative.
+
+    #1012: unlike the pre-#1012 body, this no longer buffers every
+    decoded document's full text in a `files: Mapping[str, str]` before
+    parsing -- peak memory used to grow with the bundle's total text size
+    even though only each document's `provenance:` field is ever read.
+    Each document is now read, parsed into `provenance_by_id` via
+    `bundle_provenance.parse_provenance_entry`, and dropped BEFORE the
+    next one is read, so no document's full text outlives its own parse;
+    only the small `id -> frozenset(provenance ids)` index survives the
+    loop. The upward walk itself is unchanged
+    (`bundle_provenance.source_ancestors_over`, the same shared walk
+    `provenance_source_ancestors` runs) and every skip rule (reserved
+    filenames, unreadable files, malformed frontmatter, a non-list
+    `provenance`) is preserved exactly."""
+    provenance_by_id: dict[str, frozenset[str]] = {}
     not_run: list[read_outcome.NotRun] = []
     for path in okf.iter_bundle_markdown(layout.bundle_dir):
         if path.name in okf.RESERVED_FILENAMES:
             continue
         rel = path.relative_to(layout.bundle_dir).as_posix()
         try:
-            files[rel] = path.read_text(encoding="utf-8")
+            text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as exc:
             # An unreadable doc still contributes no provenance edges
             # (mirrors `_parse_provenance_by_id`'s skip-not-crash
@@ -302,9 +312,16 @@ def list_provenance_sources(
             # instead of silently vanishing.
             not_run.append(read_outcome.NotRun(label=rel, reason=str(exc)))
             continue
+        parsed = bundle_provenance.parse_provenance_entry(text)
+        if parsed is not None:
+            provenance_by_id[bundle_provenance.normalize_provenance_id(rel)] = parsed
+        # `text` (and `parsed`'s source) go out of scope here -- nothing
+        # keeps this document's full body alive past this iteration.
 
     ancestors = tuple(
-        bundle_provenance.provenance_source_ancestors(files, object_id=canonical_id)
+        bundle_provenance.source_ancestors_over(
+            provenance_by_id, object_id=canonical_id
+        )
     )
     rows: tuple[listing.BundleObject, ...] = ()
     if ancestors:
