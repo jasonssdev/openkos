@@ -113,17 +113,17 @@ and rewrites no bundle byte.
 
 ### `model/okf.py` — `generation_time` / `_parse_instant` (Decision 6)
 
-- [ ] **1.1** [TEST] `tests/unit/model/test_okf_v02_readers.py` (new file) —
+- [x] **1.1** [TEST] `tests/unit/model/test_okf_v02_readers.py` (new file) —
   add `test_generation_time_resolves_generated_at_when_present`: a mapping
   `{"generated": {"at": "<T>"}}` (no `timestamp`) resolves to `<T>`. Covers
   okf-format-migration scenario "A v0.2 concept resolves via `generated.at`".
   **RED today**: `AttributeError` — `okf.generation_time` does not exist.
-- [ ] **1.2** [TEST] Same file — add
+- [x] **1.2** [TEST] Same file — add
   `test_generation_time_falls_back_to_legacy_timestamp_when_generated_absent`:
   a mapping with only `timestamp: "<T>"` resolves to `<T>`; a mapping with
   neither key resolves to `None`. Covers scenario "A legacy concept resolves
   via `timestamp`". **RED today**: same `AttributeError`.
-- [ ] **1.3** [TEST] Same file — add
+- [x] **1.3** [TEST] Same file — add
   `test_generation_time_generated_present_never_falls_back`: a mapping
   carrying BOTH `generated: {at: "<T1>"}` and `timestamp: "<T2>"` (`T1 !=
   T2`) resolves to `<T1>`; a mapping where `generated` is present but
@@ -132,7 +132,7 @@ and rewrites no bundle byte.
   Covers scenario "`generated.at` takes precedence when both are present".
   **RED today**: same `AttributeError`. Kills a fallback that fires whenever
   `generated.at` fails to parse instead of only when `generated` is absent.
-- [ ] **1.4** [TEST] Same file — add
+- [x] **1.4** [TEST] Same file — add
   `test_parse_instant_accepts_datetime_str_and_rejects_the_rest`,
   parametrized: an unquoted YAML-resolved `datetime` object passes through
   unchanged; an ISO-8601 string parses via `fromisoformat`; a bare `date`
@@ -141,7 +141,7 @@ and rewrites no bundle byte.
   `_parse_timestamp` rejects a `datetime`). **RED today**: `AttributeError`
   — `_parse_instant` does not exist (private, imported for this pin only).
   Kills a `datetime` value rejected identically to today's `_parse_timestamp`.
-- [ ] **1.5** [IMPL] `src/openkos/model/okf.py`: add `_parse_instant(value:
+- [x] **1.5** [IMPL] `src/openkos/model/okf.py`: add `_parse_instant(value:
   object) -> datetime | None` (accepts `datetime` as-is; `str` via
   `datetime.fromisoformat`, else `None`; anything else `None`) and
   `generation_time(metadata: Mapping[str, object]) -> datetime | None` per
@@ -151,7 +151,7 @@ and rewrites no bundle byte.
 
 ### `model/okf.py` — `declares_deprecated` (Decision 6)
 
-- [ ] **1.6** [TEST] Same file — add
+- [x] **1.6** [TEST] Same file — add
   `test_declares_deprecated_status_value_table`, parametrized over
   `status`: `"deprecated"` -> `True`; `"active"`, `"stable"`, `"draft"`,
   absent key, and an arbitrary unknown string -> `False`. Covers
@@ -160,13 +160,13 @@ and rewrites no bundle byte.
   not deprecated". **RED today**: `AttributeError` —
   `okf.declares_deprecated` does not exist. Kills any value other than the
   exact literal `"deprecated"` marking a concept deprecated.
-- [ ] **1.7** [IMPL] Same module: add `declares_deprecated(metadata:
+- [x] **1.7** [IMPL] Same module: add `declares_deprecated(metadata:
   Mapping[str, object]) -> bool` = `metadata.get("status") ==
   "deprecated"`. Makes 1.6 GREEN.
 
 ### `lifecycle.py` / `bundle/listing.py` read through the two accessors
 
-- [ ] **1.8** [TEST] `tests/unit/test_lifecycle.py` — extend the existing
+- [x] **1.8** [TEST] `tests/unit/test_lifecycle.py` — extend the existing
   `deprecated_concept_ids` test(s) with a case: a concept with `status:
   active` (legacy) and no inbound `supersedes` edge is NOT in the returned
   set, alongside the existing `deprecated`/`supersedes`-cycle cases (regression
@@ -177,45 +177,45 @@ and rewrites no bundle byte.
   (via a `unittest.mock.patch` spy) so a future inline reimplementation of
   the comparison is caught — **RED today**: `AssertionError`, the spy is
   never called because `lifecycle.py` still compares `status` inline.
-- [ ] **1.9** [IMPL] `src/openkos/lifecycle.py`: replace the inline
+- [x] **1.9** [IMPL] `src/openkos/lifecycle.py`: replace the inline
   `metadata.get("status") == "deprecated"` comparison in
   `deprecated_concept_ids` with a call to `okf.declares_deprecated(metadata)`.
   Makes 1.8 GREEN; behavior is unchanged by construction (identical
   comparison, now centralized).
-- [ ] **1.10** [TEST] `tests/unit/bundle/test_listing.py` — add
+- [x] **1.10** [TEST] `tests/unit/bundle/test_listing.py` — add
   `test_bundle_object_status_reads_through_declares_deprecated`: same spy
   pattern as 1.8 against `bundle/listing.py`'s computed-status path.
   **RED today**: spy never called.
-- [ ] **1.11** [IMPL] `src/openkos/bundle/listing.py`: route the deprecated
+- [x] **1.11** [IMPL] `src/openkos/bundle/listing.py`: route the deprecated
   check through `okf.declares_deprecated`. Makes 1.10 GREEN.
 
 ### Display vocabulary `active` → `stable` (Decision 7 / owner decision B)
 
-- [ ] **1.12** [TEST] `tests/unit/bundle/test_listing.py` — add
+- [x] **1.12** [TEST] `tests/unit/bundle/test_listing.py` — add
   `test_bundle_object_status_reports_stable_not_active`: a live (non-
   deprecated) concept's `BundleObject.status` reads `"stable"`, never
   `"active"`. Covers status-aware-retrieval scenario "A revises edge
   deprecates neither end, in retrieval or in list STATUS" (the `stable`
   half). **RED today**: `AssertionError` — currently reports `"active"`.
-- [ ] **1.13** [IMPL] `src/openkos/bundle/listing.py`: change the computed
+- [x] **1.13** [IMPL] `src/openkos/bundle/listing.py`: change the computed
   live-status literal from `"active"` to `"stable"`. Makes 1.12 GREEN.
-- [ ] **1.14** [TEST] `tests/unit/application/test_concept_read.py` — add
+- [x] **1.14** [TEST] `tests/unit/application/test_concept_read.py` — add
   `test_concept_record_status_is_stable_not_active`, same assertion against
   `ConceptRecord.status`. **RED today**: `AssertionError`.
-- [ ] **1.15** [IMPL] `src/openkos/application/concept_read.py`: change
+- [x] **1.15** [IMPL] `src/openkos/application/concept_read.py`: change
   `ConceptRecord.status`'s `Literal` type from `Literal["active",
   "deprecated"]` to `Literal["stable", "deprecated"]` and the computed
   literal from `"active"` to `"stable"`. Makes 1.14 GREEN.
-- [ ] **1.16** [TEST] `tests/unit/mcp/test_gate.py` — add
+- [x] **1.16** [TEST] `tests/unit/mcp/test_gate.py` — add
   `test_mcp_concept_payload_status_is_stable_not_active`: the MCP concept
   payload's `status` field reads `"stable"` for a live concept. **RED
   today**: `AssertionError`.
-- [ ] **1.17** [IMPL] `src/openkos/mcp/gate.py`: no logic change needed if
+- [x] **1.17** [IMPL] `src/openkos/mcp/gate.py`: no logic change needed if
   `mcp/gate.py` already reads `ConceptRecord.status` verbatim (per design.md
   "Modified (conditional)"); confirm during implementation whether a literal
   string is duplicated locally and remove the duplication if so, sourcing
   the value from `ConceptRecord.status` exclusively. Makes 1.16 GREEN.
-- [ ] **1.18** [DOC] `CHANGELOG.md`: add an entry noting the computed
+- [x] **1.18** [DOC] `CHANGELOG.md`: add an entry noting the computed
   `active` → `stable` display-vocabulary change in `list`'s STATUS column,
   `concept_read`, and the MCP concept payload, with a one-line rationale
   (frontmatter lifecycle vocabulary per OKF v0.2 §5.4) — user-visible for
@@ -223,31 +223,38 @@ and rewrites no bundle byte.
 
 ### ADR-0029 staged, index row confirmed
 
-- [ ] **1.19** Confirm `docs/adr/0029-adopt-okf-v02-frontmatter.md` (already
+- [x] **1.19** Confirm `docs/adr/0029-adopt-okf-v02-frontmatter.md` (already
   on disk, untracked) states status `Proposed`, records decisions 1-4 and a-e
   from `proposal.md`'s Decisions table, and the ledger-vs-migration choice
   from design.md Decision 1. No edit expected; if any decision drifted from
   the final proposal/design text during earlier phases, correct it now.
-- [ ] **1.20** Confirm `docs/adr/README.md` (already modified on disk) carries
+- [x] **1.20** Confirm `docs/adr/README.md` (already modified on disk) carries
   the ADR-0029 index row in the correct position. No edit expected.
 
 ### Phase 1 verification
 
-- [ ] **1.21** Run `uv run ruff check . && uv run ruff format --check . &&
+- [x] **1.21** Run `uv run ruff check . && uv run ruff format --check . &&
   uv run mypy .` — must be green.
-- [ ] **1.22** Run `uv run pytest tests/unit/model/test_okf_v02_readers.py
+- [x] **1.22** Run `uv run pytest tests/unit/model/test_okf_v02_readers.py
   tests/unit/test_lifecycle.py tests/unit/bundle/test_listing.py
   tests/unit/application/test_concept_read.py tests/unit/mcp/test_gate.py`
   focused, then `uv run pytest --cov` (unpiped) full suite — must be green,
   90% branch gate held.
-- [ ] **1.23** Run `uv run python evals/run_self_tests.py` — must be green
+- [x] **1.23** Run `uv run python evals/run_self_tests.py` — must be green
   (no eval harness touches status/generation-time reading paths, but the
   sweep must still pass with `OLLAMA_HOST` poisoned).
-- [ ] **1.24** Commit as one or more work-unit commits, scope `model` (e.g.
+- [x] **1.24** Commit as one or more work-unit commits, scope `model` (e.g.
   `feat(model): add the OKF v0.2 dual-reader accessors and stable display
   vocabulary`), staging `docs/adr/0029-adopt-okf-v02-frontmatter.md` and
   `docs/adr/README.md` in the same commit set. Open PR 1 (Phase 1: readers +
   display + ADR) targeting `main`.
+
+  Done as commit `6849b36` (`feat(model): add the OKF v0.2 dual-reader
+  accessors and stable display vocabulary (#1064)`) on
+  `feat/1064-okf-v02-p1-readers`, stacked on `f360390`, which already
+  carries ADR-0029 and its `docs/adr/README.md` index row committed. PR
+  opening is a user/repository-policy decision outside apply's scope; the
+  branch is ready to open as PR 1 targeting `main`.
 
 **Rollback boundary**: revert `generation_time`/`_parse_instant`/
 `declares_deprecated`, the four call-site edits, the display-literal
