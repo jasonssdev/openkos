@@ -10626,3 +10626,68 @@ def test_source_only_rewrite_event_date_only_prints_neither_new_line(
     assert "event date" in result.stdout
     assert "source frontmatter recorded" not in result.stdout
     assert "tags added" not in result.stdout
+
+
+# -- Phase 5 (preserve-source-frontmatter, issue #1062): derived tag
+# propagation -- `source_plan.tags` reaches every derived object created in
+# THIS run (design.md Decision 6) --
+
+
+def test_derived_object_created_in_run_inherits_sources_tags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ingestion: "A derived object created in the run inherits the
+    Source's tags" (task 5.7). A source whose incoming frontmatter lifts
+    tags onto the Source, ingested with a fake LLM returning one candidate
+    -- the WRITTEN derived object's `tags` include the Source's resolved
+    (unioned) tags."""
+    _init_workspace(tmp_path, monkeypatch)
+    with_tags = f"---\ntags: [alpha, beta]\n---\n{_GROUNDED_NOTES}"
+    source = tmp_path / "notes.txt"
+    source.write_text(with_tags, encoding="utf-8")
+    _patch_llm(monkeypatch, _concept_reply())
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    source_metadata, _ = okf.load_frontmatter(
+        (tmp_path / "bundle" / "sources" / "notes.md").read_text(encoding="utf-8")
+    )
+    assert source_metadata["tags"] == ["alpha", "beta"]
+    derived_path = tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
+    derived_metadata, _ = okf.load_frontmatter(derived_path.read_text(encoding="utf-8"))
+    assert derived_metadata["tags"] == ["alpha", "beta"]
+
+
+def test_existing_derived_object_unaffected_by_later_source_tag_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ingestion: "An existing derived object's tags are unaffected by a
+    later Source tag change" (task 5.8). A Source with ONE existing derived
+    object on disk, re-ingested with incoming frontmatter that lifts a NEW
+    tag not previously on the Source -- the EXISTING derived object's file
+    is byte-unchanged (create-only reconciliation). PRECONDITION: the
+    existing derived object's bytes are captured before the re-ingest and
+    compared after."""
+    concept_path = _reingested_converged_source(
+        tmp_path, monkeypatch, first_raw=_GROUNDED_NOTES
+    )
+    derived_path = tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
+    assert derived_path.exists()  # precondition: the derived object exists
+    before = derived_path.read_bytes()
+    derived_metadata_before, _ = okf.load_frontmatter(before.decode("utf-8"))
+    assert derived_metadata_before["tags"] == []
+
+    with_tags = f"---\ntags: [gamma]\n---\n{_GROUNDED_NOTES}"
+    (tmp_path / "notes.txt").write_text(with_tags, encoding="utf-8")
+    (tmp_path / "raw" / "notes.txt").write_text(with_tags, encoding="utf-8")
+
+    fake = _patch_llm(monkeypatch, raises=AssertionError("must not be called"))
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert fake.calls == []
+    source_metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert source_metadata["tags"] == ["gamma"]
+    after = derived_path.read_bytes()
+    assert after == before

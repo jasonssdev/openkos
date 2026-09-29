@@ -279,6 +279,7 @@ def stage_derived_objects(
     union_judge: bool = False,
     on_progress: ProgressHook | None = None,
     carried: ConvergedReingest | None = None,
+    source_tags: tuple[str, ...] = (),
 ) -> StagedDerivedObjects:
     """Attempt LLM extraction of zero or more distinct derived objects from
     the source's decoded text, and stage each validated candidate for Phase
@@ -348,6 +349,14 @@ def stage_derived_objects(
     change is a resolved `event_date` has nothing new to extract, so
     carrying the PRIOR run's markers forward is the honest answer -- they
     describe derived objects that are still exactly as they were.
+
+    `source_tags` (preserve-source-frontmatter, issue #1062, design.md
+    Decision 6) is the Source's resolved (unioned) `tags` for THIS run,
+    reaching every staged `okf.build_concept` call beside
+    `sensitivity=resolved_sensitivity` -- the same shape sensitivity
+    inheritance already uses. It is never consulted on the `carried` or
+    pre-extraction-return paths above: a Source-only rewrite creates no
+    derived object, so there is nothing to tag.
     """
     if carried is not None:
         return StagedDerivedObjects(
@@ -491,6 +500,7 @@ def stage_derived_objects(
                 sensitivity=resolved_sensitivity,
                 generated=okf.Generated(by=okf.engine_actor(), at=timestamp),
                 type_alternative=extraction.type_alternative,
+                tags=source_tags,
             )
         except ValueError as exc:
             drops.append(
