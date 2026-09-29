@@ -17,7 +17,7 @@ scope — `freshness` stays a binary snapshot/non-snapshot skip flag,
 orthogonal to volatility; volatility classification is instead read from
 the concept's `volatility` field and per-type registry default (see
 `concept-volatility`), applied only to resolve each concept's stale-stamp
-window; conformance checking (`check_conformance` / OKF §9 stays a
+window; conformance checking (`check_conformance` / OKF §11 stays a
 separate vocabulary).
 
 ## Requirements

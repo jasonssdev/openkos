@@ -612,7 +612,7 @@ Design.md "Technical Approach" layer 2 (second half) and Decisions 3-4.
   tests/unit/model/test_okf.py` focused, then `uv run pytest --cov`
   (unpiped) full suite — must be green, 90% branch gate held.
 - [x] **3.25** Run `uv run python evals/run_self_tests.py` — must be green.
-- [ ] **3.26** Commit as one or more work-unit commits, scope `model` (e.g.
+- [x] **3.26** Commit as one or more work-unit commits, scope `model` (e.g.
   `feat(model): project sources from provenance at every write point`).
   Open PR 3 (Phase 3: writers — sources) targeting `main`, branched from
   `main` after PR 2 merges.
@@ -631,6 +631,7 @@ library with no production caller until Phase 6.
 
 ### `migrate_document` — R1 (`generated`) and unquoted-timestamp preservation
 
+  - Done at archive: the work-unit commits landed in PR #1079 (squash-merged to main).
 - [x] **4.1** [TEST] `tests/unit/model/test_okf_migrate_document.py` (new
   file) — add `test_migrate_document_r1_generated_from_scalar_timestamp`: a
   frontmatter block with `timestamp: '2026-07-14T09:00:00Z'` (quoted
@@ -1297,7 +1298,7 @@ passive documentation-only edit.
   other than the template-render regression check in 8.2, so no coverage
   regression is expected.
 - [x] **8.13** Run `uv run python evals/run_self_tests.py` — must be green.
-- [ ] **8.14** Commit as one or more work-unit commits, scope `docs` (e.g.
+- [x] **8.14** Commit as one or more work-unit commits, scope `docs` (e.g.
   `docs: adopt OKF v0.2 field set and section numbering across docs, the
   template, and code comments`). Open PR 8 (Phase 8: docs + template +
   renumbering) targeting `main`, branched from `main` after PR 3 merges
@@ -1349,3 +1350,5 @@ verification task above:
    written under `entity-resolution-merge`, so Phase 6's task list treats it
    as spec-covered rather than an open decision needing a tasks-phase
    judgment call.
+
+  - Done at archive: the work-unit commits landed in PR #1084 (squash-merged to main).

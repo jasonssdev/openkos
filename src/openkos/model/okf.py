@@ -2856,7 +2856,7 @@ def check_conformance(bundle_dir: Path) -> list[str]:
     `log.md`'s ISO-8601 date headings; its violations are appended after
     rules 1-2's.
 
-    An additive `relations:` shape rule (spec: "OKF §9 Conformance --
+    An additive `relations:` shape rule (spec: "OKF §11 Conformance --
     `relations:` Field Shape") runs alongside rules 1-2, gated on
     `scan.metadata` containing a `relations` key: a malformed shape (per
     `decode_relations`) is appended as a violation in the SAME

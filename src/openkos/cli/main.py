@@ -10715,7 +10715,7 @@ def status() -> None:
     activity is the one nice-to-have `status` exists to show, not the
     counts or the conformance findings. `survey_bundle`'s findings
     (missing/unparseable frontmatter, unreadable files) are informational:
-    their presence never changes the exit code (spec: Needs-Attention via §9
+    their presence never changes the exit code (spec: Needs-Attention via §11
     Conformance).
 
     No file under the workspace is ever created, modified, or deleted, and

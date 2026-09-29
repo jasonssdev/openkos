@@ -128,7 +128,9 @@ updating files that already exist, separate from `write_exclusive`.
 `openkos ingest <path>` MUST copy the raw source into the bundle's raw
 storage as an exclusive (create-only) binary write and generate exactly one
 OKF Source concept with frontmatter `type`, `title`, `description`,
-`resource`, `tags`, `timestamp`, plus OpenKOS-layer `status`, `version`,
+`resource`, `tags`, `generated: { by: openkos/<version>, at: <ISO-8601 Z> }`,
+`status: stable`, and `sources` (see "`sources` Is A Generated, One-Way
+Projection Of `provenance`" above), plus OpenKOS-layer `version`,
 `freshness`, `sensitivity`, and `provenance`. In addition, `ingest` MUST
 attempt LLM-driven extraction of a **bounded list** of derived objects —
 zero up to a post-judge backstop cap of 12 — each of a type in the 9-type
@@ -143,15 +145,16 @@ no valid surviving object, `ingest` MUST degrade to Source-only behavior —
 write only the Source concept, emit an explanatory note to stderr, and exit 0
 (no crash). Extraction always runs regardless of `--auto`; `--auto` only
 skips the confirmation prompt. WHEN the source decodes as UTF-8 text, the
-Source concept's BODY MUST embed that text verbatim under a labeled section,
-followed by `# Citations`. WHEN the source is not valid UTF-8 text, the body
-MUST instead contain a short, honest note that the content could not be
-embedded as text (no crash), followed by `# Citations`. An empty source MUST
-render a body distinct from both the verbatim and undecodable cases. The
-generated Source concept MUST pass `check_conformance`. The `description`
-MUST remain a single line (no newlines) and MUST state that the raw source's
-content was embedded verbatim, and MUST NOT claim extraction or splitting
-into derived concepts.
+Source concept's BODY MUST embed that text verbatim under a labeled section.
+WHEN the source is not valid UTF-8 text, the body MUST instead contain a
+short, honest note that the content could not be embedded as text (no
+crash). Neither case MUST append a `# Citations` heading; the Source's
+provenance is carried entirely in frontmatter (`sources`, `provenance`), per
+OKF v0.2 §5.1/§13.1. An empty source MUST render a body distinct from both
+the verbatim and undecodable cases. The generated Source concept MUST pass
+`check_conformance`. The `description` MUST remain a single line (no
+newlines) and MUST state that the raw source's content was embedded
+verbatim, and MUST NOT claim extraction or splitting into derived concepts.
 
 `ingest` MUST derive `title` from the decoded raw content, in this
 precedence, and MUST use the same derived value for the frontmatter `title`,
@@ -212,6 +215,10 @@ recognize setext headings, and does NOT backfill already-ingested Sources.
 
 (Previously: `title` was always `_titleize(src.stem)`, with no content-derived
 candidate or fallback chain.)
+(Previously: frontmatter carried `timestamp` and `status: active`, and both
+the verbatim and undecodable body cases ended with a bare `# Citations`
+heading; OKF v0.2 supersedes both with `generated`/`status: stable`/
+`sources`, and the heading is no longer written.)
 
 #### Scenario: Successful ingest embeds verbatim text
 
@@ -219,9 +226,9 @@ candidate or fallback chain.)
   `<path>`
 - WHEN `openkos ingest <path>` completes (confirmed or `--auto`)
 - THEN the raw source is copied, one Source concept exists whose body
-  contains that source's text verbatim under a labeled section followed by
-  `# Citations`, `check_conformance` reports no violations, and
-  `index.md`/`log.md` reflect the new entry
+  contains that source's text verbatim under a labeled section with no
+  trailing `# Citations` heading, `check_conformance` reports no
+  violations, and `index.md`/`log.md` reflect the new entry
 
 #### Scenario: Path does not exist
 
@@ -1537,21 +1544,24 @@ graph-connected, to contradiction detection.
 - THEN it reports a candidate group containing both concepts, rather than "No
   candidates found"
 
-## OKF §9 Conformance Rules 1-3
+## OKF §11 Conformance Rules 1-3
 
-The bundle MUST conform to all three rules of OKF §9 (Open Knowledge Format v0.1 schema). Rules 1-2 govern the frontmatter shape of every `.md` file in the bundle; rule 3 governs the fixed structure of reserved files. The conformance check is implemented in `okf.check_conformance`, which walks the bundle once and returns an empty list when all three rules are satisfied.
+The bundle MUST conform to all three rules of OKF §11 (Open Knowledge Format v0.2). Rules 1-2 govern the frontmatter shape of every `.md` file in the bundle; rule 3 governs the fixed structure of reserved files. The conformance check is implemented in `okf.check_conformance`, which walks the bundle once and returns an empty list when all three rules are satisfied.
 
-### Requirement: OKF §9 Conformance — Reserved File Structure (Rule 3)
+### Requirement: OKF §11 Conformance — Reserved File Structure (Rule 3)
 
-`check_conformance` MUST enforce OKF §9 rule 3 (reserved-file structure) in
+`check_conformance` MUST enforce OKF §11 rule 3 (reserved-file structure) in
 addition to rules 1-2, via an additive walk over `index.md` and `log.md`
 files that MUST NOT alter the existing rule 1-2 walk (`_iter_docs`) or its
 output. `check_conformance` MUST continue to return `list[str]` violation
 messages in the existing `f"{path}: {message}"` shape; rule-3 violations
 MUST be appended to the same list as rules 1-2. Rule 3 covers exactly the two
 structural checks below; validating an `index.md`'s body shape
-(heading/bullet structure per §6) is explicitly OUT OF SCOPE for this
+(heading/bullet structure per §8) is explicitly OUT OF SCOPE for this
 requirement, as is any change to the freshness/orphan lint.
+(Previously: this requirement cited OKF §9, the v0.1 conformance section
+number, and §6 for index-file body shape; OKF v0.2 renumbers these to §11
+and §8 respectively, with no change in behavior.)
 
 #### Scenario: Reserved-file walk does not perturb rules 1-2
 
@@ -1560,17 +1570,22 @@ requirement, as is any change to the freshness/orphan lint.
 - THEN the rule 1-2 portion of the violation list is byte-identical to
   before
 
-### Requirement: index.md Frontmatter Conformance (§6 + §11 Root Exception)
+### Requirement: index.md Frontmatter Conformance (§8 + §12 Root Exception)
 
 For every `index.md` in the bundle tree, `check_conformance` MUST treat a
 frontmatter FENCE (opening `---` delimiter with a closing `---`, whether or
 not its YAML parses) as a violation UNLESS the file is the bundle-root
-`index.md` (`path.parent == bundle_dir`), where §11 permits an `okf_version:
-"0.1"` frontmatter block as the sole exception.
+`index.md` (`path.parent == bundle_dir`), where §12 permits an `okf_version:
+"0.2"` frontmatter block as the sole exception.
+(Previously: titled "index.md Frontmatter Conformance (§6 + §11 Root
+Exception)", citing OKF v0.1's §6 (index files) and §11 (versioning), and
+the permitted root-exception value was `okf_version: "0.1"`; OKF v0.2
+renumbers these sections to §8 and §12 respectively, and the exception
+value is now `"0.2"`.)
 
 #### Scenario: Root index.md with okf_version frontmatter passes
 
-- GIVEN a bundle-root `index.md` containing `okf_version: "0.1"`
+- GIVEN a bundle-root `index.md` containing `okf_version: "0.2"`
   frontmatter
 - WHEN `check_conformance` runs
 - THEN no violation is reported for that file
@@ -1582,7 +1597,7 @@ not its YAML parses) as a violation UNLESS the file is the bundle-root
 - WHEN `check_conformance` runs
 - THEN a violation naming that file's path is reported
 
-### Requirement: log.md ISO-8601 Date Heading Conformance (§7)
+### Requirement: log.md ISO-8601 Date Heading Conformance (§9)
 
 For every `log.md` in the bundle tree, `check_conformance` MUST treat every
 `## ` heading whose text does not match `^\\d{4}-\\d{2}-\\d{2}$` as a
@@ -1602,7 +1617,7 @@ violation.
 - THEN a violation naming that file's path and the offending heading is
   reported
 
-### Requirement: OKF §9 Conformance — `relations:` Field Shape
+### Requirement: OKF §11 Conformance — `relations:` Field Shape
 
 `check_conformance` MUST validate the `relations:` frontmatter field when
 present on any document: it MUST be a list of mappings, each containing a
@@ -1632,12 +1647,15 @@ byte-identical to before this rule was added.
 - WHEN `check_conformance` runs
 - THEN no violation is reported for that document's `relations:` field
 
-### Requirement: Reference Bundle Full §9 Conformance
+### Requirement: Reference Bundle Full §11 Conformance
 
 The reference bundle at `examples/good-life-demo/bundle` MUST pass
-`check_conformance` with an empty violation list under all three §9 rules,
+`check_conformance` with an empty violation list under all three §11 rules,
 asserted by a test that runs in CI's existing `test` job with no CI
 configuration changes required.
+(Previously: titled "Reference Bundle Full §9 Conformance", citing OKF v0.1's
+§9 conformance section number; OKF v0.2 renumbers conformance to §11 with no
+change in the checked behavior.)
 
 #### Scenario: Reference bundle passes all three rules
 
@@ -2290,17 +2308,22 @@ line, with no article that a count above one contradicts.
 
 `ingest` MUST support an optional Source frontmatter key, `event_date`,
 holding a strict `YYYY-MM-DD` calendar date naming when the recorded event
-happened — distinct from `timestamp`, which continues to record ingest time
-unconditionally. `event_date` is an OKF §4.1 extension key: `ingest` MUST
-emit it on the generated Source concept ONLY when a value is available
-(from the `--event-date` flag, file-name inference, or carry-forward on
-re-ingest); a Source ingested with no such evidence MUST omit the key
-entirely, producing output byte-identical to `ingest`'s behavior before
-this key existed. `event_date` MUST NEVER be defaulted to ingest time or
-any other derived value — "no evidence" and "unknown" MUST be represented
-by the key's absence, never by a stand-in value. WHEN `ingest` writes the
-key, it MUST emit a quoted ISO-8601 date string (`event_date:
+happened — distinct from `generated.at` (or a legacy `timestamp` on a
+pre-v0.2 or unmigrated document), which continues to record when the
+Source's content was last generated, unconditionally set at ingest time.
+`event_date` is an OKF §4.1 extension key: `ingest` MUST emit it on the
+generated Source concept ONLY when a value is available (from the
+`--event-date` flag, file-name inference, or carry-forward on re-ingest); a
+Source ingested with no such evidence MUST omit the key entirely, producing
+output byte-identical to `ingest`'s behavior before this key existed.
+`event_date` MUST NEVER be defaulted to ingest time or any other derived
+value — "no evidence" and "unknown" MUST be represented by the key's
+absence, never by a stand-in value. WHEN `ingest` writes the key, it MUST
+emit a quoted ISO-8601 date string (`event_date:
 '2026-07-14'`), never a bare, unquoted date scalar.
+(Previously: contrasted `event_date` with `timestamp` alone; OKF v0.2
+supersedes `timestamp` with `generated.at` for fresh writes, with legacy
+`timestamp` still read on unmigrated documents.)
 
 #### Scenario: No flag and no dated file name omits the key
 
@@ -2316,7 +2339,7 @@ key, it MUST emit a quoted ISO-8601 date string (`event_date:
 - GIVEN a source ingested with no `--event-date` flag and no dated file
   name
 - WHEN the generated Source concept's frontmatter is inspected
-- THEN its `timestamp` reflects the ingest time as before, and no
+- THEN its `generated.at` reflects the ingest time as before, and no
   `event_date` key exists carrying that same or any other derived value
 
 #### Scenario: Derived objects never carry an event date
@@ -2327,7 +2350,6 @@ key, it MUST emit a quoted ISO-8601 date string (`event_date:
 - THEN none of them carry an `event_date` key; the value exists only on
   the Source concept, reachable from a derived object through its
   `provenance`
-
 ### Requirement: Explicit `--event-date` Ingest Flag
 
 `openkos ingest <path>` MUST accept an optional `--event-date YYYY-MM-DD`
@@ -2723,3 +2745,29 @@ judge-degrade `extraction_notice` tokens), even without `--re-extract`.
   without `--re-extract`
 - THEN extraction runs again (the byte-identical convergence skip does
   NOT apply), exactly as it already does for the two judge-degrade tokens
+### Requirement: `sources` Is A Generated, One-Way Projection Of `provenance`
+
+At the single frontmatter write point in `model/okf.py`, every written
+Source and derived concept's `sources` frontmatter list MUST be generated
+from that concept's `provenance` list at write time — one `sources` entry
+per `provenance` path, with `resource` set to the bundle-relative Source
+path and `id`/`title` populated where known. `provenance` MUST remain the
+sole internal source of truth for trust, sensitivity, and merge decisions;
+no engine code outside this single projection point MUST read the
+`sources` key back as an input to any of those decisions.
+
+#### Scenario: `sources` matches the projection of `provenance`
+
+- GIVEN any concept written by `ingest`
+- WHEN its frontmatter is inspected
+- THEN its `sources` list is exactly the projection of its `provenance`
+  list, one entry per provenance path
+
+#### Scenario: No module outside the projection reads `sources` back
+
+- GIVEN the `openkos` source tree
+- WHEN every module outside `model/okf.py`'s projection point is inspected
+  for reads of the `sources` frontmatter key
+- THEN none of them read `sources` as an input to sensitivity, trust, or
+  merge logic
+

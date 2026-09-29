@@ -41,6 +41,11 @@ across every consumer of the shared effective-status predicate, including
 `supersedes` only, with no explicit statement about `revises`; this adds
 the explicit non-deprecation guarantee for `revises` as a tested
 requirement, since `reconcile --revision` newly writes that edge type.)
+(Previously: the scenarios below and the `list` STATUS column example used
+the OKF v0.1 status value `active`; OKF v0.2 writers now emit `stable`, and
+every reader treats a legacy `active` identically to `stable` — neither is
+deprecated. See `okf-format-migration`'s "Legacy Lifecycle Values Are Not
+Deprecated" for the general dual-reader guarantee.)
 
 #### Scenario: status field alone marks deprecated
 - GIVEN a concept with `status: deprecated` and no supersedes edges
@@ -49,7 +54,8 @@ requirement, since `reconcile --revision` newly writes that edge type.)
 
 #### Scenario: superseded concept is deprecated regardless of its own status
 - GIVEN concept A has an outbound `supersedes` edge targeting concept B,
-  and B's own `status` is `"active"`
+  and B's own `status` is `"stable"` (or a legacy `"active"`, `"draft"`, or
+  absent altogether)
 - WHEN B's effective status is resolved
 - THEN B is deprecated; A remains live
 
@@ -69,7 +75,7 @@ requirement, since `reconcile --revision` newly writes that edge type.)
 - WHEN the effective status of A and B is resolved by
   `lifecycle.deprecated_concept_ids` and by the `list` STATUS column
 - THEN neither A nor B appears in `deprecated_concept_ids`, and `list`
-  reports both as `active`
+  reports both as `stable`
 ### Requirement: Deprecated Concepts Excluded By Default
 
 By default, retrieval and candidate-generation paths MUST NOT return, rank,
