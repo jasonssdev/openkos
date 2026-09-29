@@ -12,8 +12,8 @@ stacked-to-main, 8 PRs (`tasks.md` "Review Workload Forecast").
 | 2a | Writers: generated + status | PR 2 → `main` | **Done** — commit `c7ed0c7` |
 | 2b | Writers: sources | PR 3 → `main` | **Done** — commit `c0e0cdb` |
 | 3a | Migration function | PR 4 → `main` | **Done** — commit `0edb102` |
-| 3b | Ledger migration | PR 5 → `main` | **Done** — pending commit |
-| 3c | `repair` verb | PR 6 → `main` | Not started |
+| 3b | Ledger migration | PR 5 → `main` | **Done** — commit `363107e` |
+| 3c | `repair` verb | PR 6 → `main` | **Done** — commit `42459a5` |
 | 4a | Fixture + template | PR 7 → `main` | Not started |
 | 4b | Docs + renumbering | PR 8 → `main` | Not started |
 
@@ -827,11 +827,244 @@ would mean an intermediate commit whose recursion is provably wrong
 building each fixture from REAL merge code (per this session's own
 instructions, never hand-faked) rather than lighter mocked inputs.
 
+## Slice 3c (Phase 6, PR 6) — Done
+
+**Branch**: `feat/1064-okf-v02-p3c-repair`, stacked on `427a515` (Phase 5,
+PR #1081, not yet merged to `main`).
+**Commit**: `42459a5` — `feat(cli): migrate an OKF v0.1 bundle to v0.2 via
+repair (#1064)`.
+**Mode**: Strict TDD (`uv run pytest`).
+**Tasks**: 6.1-6.20, all `[x]` in `tasks.md`.
+
+### TDD Cycle Evidence
+
+| Task(s) | Test file | RED reason (observed) | GREEN |
+|---|---|---|---|
+| 6.4-6.7 | `tests/unit/application/test_repair.py` (new file) | written and implemented together (see "Deviations" below); `plan_repair`'s 4 tests confirmed by direct execution: pass on first run | 4/4 pass |
+| 6.10-6.11 | same file (relocated from `tests/unit/cli/test_repair.py`, see Deviations) | `apply_repair`'s write-order and crash-injection tests, following `tests/unit/bundle/test_ledger_crash_injection.py`'s direct-monkeypatch-on-the-write-primitive pattern rather than through the CLI | pass on first run; mutation-proof checks below substitute for a literal RED history |
+| 6.1-6.2 | `tests/unit/cli/test_repair.py` | Gate 2 scoping (not evaluated when nothing to extract; still refuses when extraction has pollution risk) | pass on first run against `plan_repair`'s scoped condition |
+| 6.9 | same file | report-line rendering against a fixture exercising ledger extraction + document migration + sidecar migration + index flip + preserved `# Citations` at once | pass after fixing two fixture bugs (see Deviations) |
+| 6.13-6.14 | same file | commit message/one-commit and second-run-no-op, using a real git identity (`isolate_git_identity`) so `_autocommit` genuinely lands | pass after fixing a duplicated `"git"` argv bug in the test's own `_git` helper |
+| 6.15 | `tests/unit/cli/test_unmerge.py` | the `okf_version`-predates-0.2 hint appended to `unmerge`'s existing drift refusal | pass on first run |
+| 5.10-5.14 (unskipped) | `tests/unit/bundle/test_ledger_okf_migration.py` | `ModuleNotFoundError` before this slice (collected, skip-marked); a latent `_workspace()` fixture bug (`root.mkdir` missing for the round-trip tests' separate "merged"/"reference" subdirectories, invisible while skip-marked) fixed as part of unskipping | all 5 (V1-V5 ledger schemas) pass; **0 skipped remain in the file** (16/16 collected and green) |
+
+Per this project's "TDD-cycle-granularity" precedent (Slices 3a/3b): the
+full implementation (Gate 2 scoping, `plan_repair`, `apply_repair`, CLI
+wiring, the `unmerge` hint) was written in one pass rather than four
+separately-observed RED states, because `plan_repair`/`apply_repair`'s
+five-step plan phase and eight-step apply phase share one control-flow
+body — an early partial implementation would not reproduce the SPECIFIC
+RED reason each task's docstring names, only a different symptom. Every
+test does have its own real RED-equivalent evidence: the 4
+`tests/unit/application/test_repair.py` plan-phase tests and the CLI-level
+Gate 2/unmerge-hint tests passed on first execution against the
+already-written implementation (confirmed by reading each test's
+assertions against the code, not assumed); the report-line and
+commit-message tests each failed at least once against real fixture bugs
+before passing (see below) — genuine RED, for a fixture reason rather than
+a missing-implementation reason. The three targeted **mutation-proof
+checks** below are the retroactive substitute for a literal RED-first
+history on the implementation itself.
+
+### Mutation-proof checks (this session, `__pycache__` purged before each
+verdict, each reverted with the exact inverse edit)
+
+1. **Gate 2 scoping condition**: changed `if unmigrated and
+   bundle_ledger.bundle_wide_max_entries(bundle_dir) >= 2:` to `if
+   bundle_ledger.bundle_wide_max_entries(bundle_dir) >= 2:` (dropping the
+   `unmigrated and` scope). Confirmed
+   `test_repair_gate2_not_evaluated_when_nothing_to_extract` fails (exit 1
+   instead of 0 — Gate 2 fires even with nothing to extract). Reverted.
+2. **Bundle-version flip detection**: changed `if
+   index_metadata.get("okf_version") != okf.OKF_VERSION:` to `if False:`.
+   Confirmed `test_plan_repair_detects_bundle_version_flip_needed` fails
+   (`index_new_text` stays `None`). The 16 round-trip/Phase-5 tests in
+   `test_ledger_okf_migration.py` stayed green under this same mutation --
+   a genuine, recorded blind spot, since none of their fixtures hand-edit
+   `index.md` to a stale version (their bundles start and stay v0.2 at the
+   index level; only concept-document and ledger-snapshot shape is under
+   test there). Reverted.
+3. **Refused-document collection**: changed `if isinstance(result,
+   okf.Refused): refused.append((concept_id, result.reason)); continue` to
+   drop the `refused.append(...)` call. Confirmed
+   `test_plan_repair_okf_scan_refuses_whole_run_on_any_refused_document`
+   fails (`plan_repair` silently returns a `RepairPlan` instead of a
+   `RepairRefusal` -- the refused document is dropped from the scan instead
+   of aborting the whole run). Reverted.
+4. **`_reject_drifted_targets`'s new `hint` append**: changed `if hint:` to
+   `if False:`. Confirmed
+   `test_unmerge_refusal_names_repair_on_an_unrepaired_bundle` fails (the
+   drift refusal fires correctly but omits the `openkos repair` sentence).
+   Reverted.
+
+All four reverted with the exact inverse edit; `find . -name __pycache__
+-exec rm -rf {} +` run before each verdict per project practice; full
+`tests/unit/{application,cli}/test_repair.py tests/unit/cli/test_unmerge.py
+tests/unit/bundle/test_ledger_okf_migration.py` suite (100 tests)
+re-confirmed green after every revert.
+
+### Design options taken (owner pre-authorized: take the design's
+recommended option, report it)
+
+- **`plan_repair`/`apply_repair` split the "apply phase" design.md's prose
+  describes as eight steps across TWO layers, matching `application/
+  lifecycle.py`'s own established `prepare_X`/`X_core` pattern exactly.**
+  Design.md's Decision 9 literally lists `apply_repair`'s steps as "1.
+  Reset-point note ... 2. `_reject_drifted_targets` ... 7. one
+  `_autocommit` ... 8. `_refresh_derived_after_write`", but
+  `tests/unit/application/test_layering.py::
+  test_application_modules_never_import_cli_typer_or_rich` and
+  `test_shared_write_helpers_are_never_forked` (ADR-0018) forbid
+  `application/repair.py` from importing `typer`/`openkos.vcs` or defining
+  `_reject_drifted_targets`/`_autocommit`/`_refresh_derived_after_write` --
+  and the Phase 5 round-trip tests call `plan_repair`/`apply_repair`
+  DIRECTLY with no drift check in between, confirming the split is
+  intentional at the interface level even where design.md's prose reads
+  as one function doing all eight steps. Resolution: `apply_repair`
+  performs writes 3-6 (extraction, sidecar migration, documents, index
+  flip); the CLI's thin `repair()` performs steps 1-2 (reset-point note,
+  `_reject_drifted_targets` against `plan.baselines`) before calling
+  `apply_repair`, and steps 7-8 (`_autocommit`, `_refresh_derived_after_
+  write`) after -- the exact shape `merge`/`unmerge`'s own commands already
+  use around `prepare_merge`/`merge_core` and `prepare_unmerge`/
+  `unmerge_core`. No task's coverage was skipped; every one of design.md's
+  eight steps still happens, in the same order, just split across the
+  same two-layer boundary this codebase already established.
+- **`apply_repair(root: Path, plan: RepairPlan)`'s `root` parameter** is
+  used to derive `bundle_dir` via `config.WorkspaceLayout(root).bundle_dir`
+  for building workspace-relative `"bundle/..."` touched-path strings
+  (`RepairOutcome.touched`), mirroring the existing `repair()` command's
+  own `f"bundle/{...relative_to(bundle_dir)...}"` convention -- `plan`
+  itself already carries every absolute `Path` the writes need, so `root`
+  is not otherwise load-bearing for the writes themselves.
+- **`index.md`'s `okf_version` flip re-renders the frontmatter via
+  `okf.load_frontmatter`/`dump_frontmatter` (like `migrate_document`
+  itself), not the surgical regex substitution `bundle_ledger._
+  flip_index_okf_version` (Phase 5, ledger-sidecar-internal, private) uses.**
+  Design.md's own wording for this step is "frontmatter re-rendered ...
+  body kept verbatim via `split_frontmatter_verbatim`" -- re-rendered, not
+  a byte-surgical patch -- matching `load_frontmatter`'s own body-preserving
+  parse/re-dump round trip exactly, and avoiding a second private,
+  ledger-internal helper being imported/duplicated into the application
+  layer for one field.
+- **Extraction survivors always get a drift baseline entry, regardless of
+  whether `migrate_document` also rewrites them.** `plan_repair`'s single
+  `iter_bundle_markdown` scan handles both concerns per document (extraction
+  strip + OKF migration), so a survivor that is ONLY an extraction target
+  (no OKF changes) still needs its baseline recorded for `apply_repair`'s
+  subsequent frontmatter-strip write -- confirmed correct by the existing
+  `test_repair_migrates_a_clean_single_entry_ledger_verbatim` regression
+  test (unchanged, still green).
+
+### Fixture bugs found and fixed during this slice's own test-writing (not
+production defects -- confirmed by direct debugging before attributing)
+
+- **`test_repair_reports_migration_counts_and_legacy_citations`**: its
+  first draft used the shared `_write_v01_concept` helper (deliberately
+  v0.2-ish, no `timestamp`/`status`, used by the Gate 2 tests to prove
+  "nothing to migrate") for the merge pair meant to produce a sidecar
+  needing OKF migration -- so `migrate_sidecars_to_okf_v02` correctly
+  found nothing to migrate and the assertion on "migrated 1 merge-ledger
+  sidecar" failed. Fixed by writing genuinely v0.1-shaped concepts
+  (`timestamp` + `status: active`) for that specific pair.
+- **`test_repair_second_run_reports_nothing_to_migrate_and_writes_nothing`**:
+  its first draft reused the file's pre-existing `_make_entry` helper,
+  whose `absorbed_snapshot`/`survivor_before` are plain placeholder
+  strings (`"absorbed text"`), never valid frontmatter -- harmless for
+  every PRE-EXISTING test (which only exercises Gate 1/Gate 2 refusals
+  before any sidecar dry-run reads that text), but the SECOND `repair` run
+  in this new test's own body calls `migrate_sidecars_to_okf_v02` on the
+  now-relocated sidecar's stored (still-placeholder) snapshot text, which
+  correctly refuses with "cannot be migrated... missing or malformed
+  frontmatter block" -- `plan_repair`'s "repair never guesses" refusal
+  working exactly as designed, against an unrealistic fixture. Fixed by
+  adding `_make_frontmatter_entry` (real, parseable frontmatter snapshots)
+  for this test's own extraction entry.
+- **The commit-message/second-run tests' own new `_git` test helper**
+  double-prepended `"git"` (`_git(["git", "rev-parse", "HEAD"], ...)` where
+  `_git` already prepends `"git"`), caught immediately by a
+  `CalledProcessError: ['git', 'git', 'rev-parse', 'HEAD']`. Fixed by
+  dropping the redundant `"git"` from every call site.
+- **`test_ledger_okf_migration.py`'s pre-existing `_workspace()` helper**
+  (written in Slice 3b, never exercised because the round-trip tests were
+  skip-marked) calls `config.write_config(root)` without first creating
+  `root` -- invisible for the file's 11 already-running Phase 5 tests
+  (which call `_workspace(tmp_path)` directly, and `tmp_path` already
+  exists), but the 5 round-trip tests call `_workspace(tmp_path /
+  "merged")` and `_copy_workspace`'s sibling `_workspace(tmp_path /
+  "reference")`-shaped paths that do NOT exist yet, so unskipping surfaced
+  a genuine `FileNotFoundError`. Fixed with one `root.mkdir(parents=True,
+  exist_ok=True)` line at the top of the shared helper -- backward
+  compatible (a no-op when `root` already exists).
+
+### Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command | `uv run pytest tests/unit/application/test_repair.py tests/unit/cli/test_repair.py tests/unit/bundle/test_ledger_okf_migration.py tests/unit/cli/test_unmerge.py` → **100 passed** |
+| Runtime harness | A real `examples/good-life-demo/` copy in a fresh git repo (scratch workspace): `openkos repair` migrated 6 documents (generated: 6, status: 6, sources: 4, citations removed: 0) and flipped `bundle/index.md`'s `okf_version` `'0.1'` → `'0.2'`, all in exactly ONE commit (`git log` confirmed 1 new commit, 7 files changed); the 4 documents with hand-authored `# Citations` sections (`concepts/epicureanism`, `concepts/stoicism`, `decisions/frame-the-essay-on-the-dichotomy-of-control`, `people/maria-salazar`) were correctly reported as "left in place"; a second `openkos repair` run printed "nothing to migrate", created no new commit (`git rev-parse HEAD` unchanged), and left `git status --porcelain` empty; `openkos lint` (13/13 checks clean) and `openkos status` (clean, no OKF-shape finding) both ran cleanly against the migrated bundle |
+| Rollback boundary | Revert commit `42459a5`: `src/openkos/application/repair.py` (new file, deleted on revert), the `repair()` command body and the `_okf_v02_migration_hint`/`hint=` addition to `_reject_drifted_targets` in `cli/main.py`, the new/extended test files, and `docs/cli.md`'s `repair` section. This is the first slice that mutates a REAL user bundle; per-bundle rollback of an already-migrated bundle is `git revert` of that bundle's own `openkos: repair (...)` commit, independent of this code revert (unchanged from design.md's own stated rollback boundary). |
+
+### Full verification (this session, unpiped, foreground/background as noted)
+
+- `uv run ruff check .`: **All checks passed!**
+- `uv run ruff format --check .`: **364 files already formatted** (after
+  `uv run ruff format` fixed 3 files mid-session: `cli/main.py`, the new
+  `tests/unit/application/test_repair.py`, and the extended
+  `tests/unit/cli/test_repair.py`).
+- `uv run mypy .`: **Success: no issues found in 364 source files** (clean
+  on every run this session, no fixes needed).
+- `uv run pytest --cov` (unpiped, background, ~7 min): **7028 passed, 2
+  skipped in 412.99s (0:06:52)**. Coverage 96.91% total (line+branch),
+  90.0% branch gate held (`Required test coverage of 90.0% reached`). The
+  2 skipped are the pre-existing platform/backend-conditional skips
+  elsewhere in the suite (confirmed by grep -- none belong to this
+  change); **zero skips remain in `test_ledger_okf_migration.py`** (16/16
+  collected and passing, up from 11 real + 5 skip-marked before this
+  slice).
+- `uv run python evals/run_self_tests.py`: **44 of 44 harness self-test(s)
+  run, 0 failing.**
+- Targeted regression check: `tests/unit/cli/test_repair.py`'s 9
+  pre-existing tests (ledger-only migration, both refusal gates, the
+  reset-point note's two branches) all still pass unchanged against the
+  new `plan_repair`/`apply_repair`-backed `repair()` command.
+
+### Deviations from design/tasks
+
+None beyond the "Design options taken" items recorded above (the
+plan/apply-vs-CLI-adapter split for the apply phase's eight steps, the
+`index.md` re-render choice, and the always-baseline-extraction-survivors
+detail) and the fixture bugs found and fixed while writing this slice's
+own tests (none are production defects; each is documented above with its
+root cause). All genuinely new behavior -- the scoped Gate 2,
+`plan_repair`'s five-step refusal-first plan, `apply_repair`'s ordered
+writes, the CLI report/commit-message rendering, and the `unmerge`
+`okf_version` hint -- matches `tasks.md` 6.1-6.20 and design.md Decision 9
+exactly.
+
+### Git
+
+`git diff --shortstat 427a515..HEAD` (after commit `42459a5`, before the
+following `docs(sdd)` commit): `7 files changed, 1198 insertions(+), 128
+deletions(-)`. This exceeds the tasks.md forecast of ~300-400 authored
+lines -- the excess is the full test suite this slice adds across three
+files (`tests/unit/application/test_repair.py` new, `tests/unit/cli/
+test_repair.py` extended with 6 new tests plus a `_git` helper, `tests/
+unit/cli/test_unmerge.py` extended with 1 test) plus `docs/cli.md`'s
+`repair` section rewrite -- reported per the owner's pre-approved
+`size:exception` for an unsplittable slice (same authorization Slices
+2a/2b/3a/3b used): `apply_repair`'s write-order/crash-injection tests, the
+CLI wiring, and the round-trip-unskip closure all depend on the same
+`plan_repair`/`apply_repair` pair landing together, and separating the
+`repair` CLI wiring from the tests that exercise it end-to-end (task
+6.20's own tasks.md rationale) would be the less valuable split. This
+`apply-progress.md` update and `tasks.md`'s checkbox updates land in the
+separate `docs(sdd)` commit that follows.
+
 ## Next
 
-Slice 3c (Phase 6, PR 6 → `main`, after PR 5 merges): `application/
-repair.py` (`plan_repair`/`apply_repair`), CLI wiring, report/help/commit
-text, the scoped Gate 2, idempotency, crash-order, and the
-merge->repair->unmerge round trip across all five ledger schemas --
-including unskipping this slice's 5 round-trip test stubs (5.10-5.14).
-Requires a fresh `sdd-apply` dispatch scoped to Phase 6.
+Phase 7 (Slice 4a, PR 7 → `main`, after PR 6 merges): fixture
+regeneration for `examples/good-life-demo/` (run `openkos repair` on the
+frozen v0.1 copy and commit the result), and the `okf.yaml.template`/other
+shipped-template audit. Requires a fresh `sdd-apply` dispatch scoped to
+Phase 7.
