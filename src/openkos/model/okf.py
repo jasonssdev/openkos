@@ -276,9 +276,13 @@ class StoredEventDate:
     raw: object
 
 
-def read_event_date(metadata: Mapping[str, object]) -> StoredEventDate:
-    """Tolerantly read `EVENT_DATE_KEY` off `metadata` (design.md Decision
-    2's reader-tolerance table).
+def _tolerant_date(raw: object) -> StoredEventDate:
+    """Tolerantly read a single raw value as a date (design.md Decision 2's
+    reader-tolerance table, Decision 5's refactor for Phase 4): the shared
+    body of `read_event_date` (via `EVENT_DATE_KEY`) and `read_incoming_date`
+    (via the incoming `date` key), parameterized on the raw value itself
+    instead of a metadata mapping, so the two readers cannot drift (design.md:
+    "the same tolerant date shape checks... with a separate key").
 
     PyYAML resolves an unquoted `2026-07-14` to a native `datetime.date`,
     exactly as it already does for `timestamp`, so this reader MUST accept
@@ -294,9 +298,6 @@ def read_event_date(metadata: Mapping[str, object]) -> StoredEventDate:
     a calendar-validity check via `date.fromisoformat` -- a deliberate,
     documented narrow twin of `source_date.parse_event_date`, kept inside
     this seam rather than importing that module (design.md Decision 2)."""
-    if EVENT_DATE_KEY not in metadata:
-        return StoredEventDate(value=None, malformed=False, raw=None)
-    raw = metadata[EVENT_DATE_KEY]
     if isinstance(raw, datetime):
         return StoredEventDate(value=None, malformed=True, raw=raw)
     if isinstance(raw, date):
@@ -308,6 +309,30 @@ def read_event_date(metadata: Mapping[str, object]) -> StoredEventDate:
             return StoredEventDate(value=None, malformed=True, raw=raw)
         return StoredEventDate(value=value, malformed=False, raw=raw)
     return StoredEventDate(value=None, malformed=True, raw=raw)
+
+
+def read_event_date(metadata: Mapping[str, object]) -> StoredEventDate:
+    """Tolerantly read `EVENT_DATE_KEY` off `metadata` via `_tolerant_date`
+    (design.md Decision 2's reader-tolerance table). The absent-key case is
+    the one thing `_tolerant_date` itself cannot express, since it has no
+    metadata mapping to check membership against."""
+    if EVENT_DATE_KEY not in metadata:
+        return StoredEventDate(value=None, malformed=False, raw=None)
+    return _tolerant_date(metadata[EVENT_DATE_KEY])
+
+
+def read_incoming_date(mapping: Mapping[str, object]) -> date | None:
+    """Tolerantly read the incoming `date` key via the SAME `_tolerant_date`
+    tolerance rules `read_event_date` uses (design.md Decision 3's `date`
+    row, Decision 5; preserve-source-frontmatter, issue #1062). Returns only
+    `value`, never the malformed/raw detail: an incoming malformed date is
+    silently not lifted -- it is untrusted input, not engine state, so it
+    gets no stderr warning (design.md Decision 5; follow-up F2 covers
+    advisories). An absent `date` key returns `None`, exactly like an
+    absent `EVENT_DATE_KEY` does for `read_event_date`."""
+    if "date" not in mapping:
+        return None
+    return _tolerant_date(mapping["date"]).value
 
 
 EXTRACTION_NOTICE_KEY: Final = "extraction_notice"

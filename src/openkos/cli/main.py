@@ -4302,9 +4302,12 @@ def _echo_event_date_preview_line(
             typer.echo(f"    event date {value} (from --event-date)")
     elif resolution.origin == "file name":
         typer.echo(f"    event date {value} (from the file name)")
+    elif resolution.origin == "frontmatter":
+        typer.echo(f"    event date {value} (from the source's frontmatter date)")
     else:
         # origin == "kept" -- the only remaining non-`None` origin
-        # (`resolve_event_date`'s vocabulary: "flag" | "file name" | "kept").
+        # (`resolve_event_date`'s vocabulary: "flag" | "file name" | "kept"
+        # | "frontmatter", design.md Decision 5).
         typer.echo(f"    event date {value} (kept from the existing Source)")
 
 

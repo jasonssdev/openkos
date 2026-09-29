@@ -451,3 +451,125 @@ All Phase 3 tasks complete. `next_recommended: sdd-archive` (verification
 optional per the SDD contract) or `sdd-apply` again for Phase 4 (date lift,
 independent of Phase 3, after PR 2 merges) or Phase 5 (derived tag
 propagation, after this PR merges).
+
+## Slice 4 (PR 4 → `main`, after PR 2 merges, independent of PR 3): Phase 4 — Source lift: `date:` tier
+
+**Status**: COMPLETE — 16/16 tasks done (4.1-4.16). Strict TDD mode, runner
+`uv run pytest`. Branch `feat/1062-frontmatter-p4`, stacked on the
+not-yet-merged slice-3 branch (PR #1090) at `ffb2df6`.
+
+**Scope**: the `_tolerant_date` refactor of `read_event_date`'s body;
+`okf.read_incoming_date`; `resolve_event_date(incoming=)`, the new
+`"frontmatter"` precedence tier and `EventDateOrigin` literal;
+`compose_source_document` reading `read_incoming_date` directly off the
+already-parsed mapping (tasks-phase decision 2 — independent of
+`lift_incoming_frontmatter`); the CLI's frontmatter origin-disclosure line.
+
+### Completed Tasks
+
+- [x] 4.1 `test_read_event_date_unchanged_after_tolerant_date_refactor` —
+      PRECONDITION pin, passed vacuously as predicted (written before the
+      refactor), stayed GREEN through 4.4
+- [x] 4.2 `test_read_incoming_date_shape_table` (5 cases)
+- [x] 4.3 `test_read_incoming_date_and_read_event_date_share_tolerance_rules`
+      (4 cases) + `test_read_incoming_date_and_read_event_date_agree_on_absent_key`
+      (split into two functions — the absent-key row cannot share one
+      mapping literal with the other rows, since the two readers use
+      different key names)
+- [x] 4.4 `_tolerant_date` extracted from `read_event_date`'s body;
+      `read_event_date` becomes a thin absent-key wrapper around it;
+      `okf.read_incoming_date` added
+- [x] 4.5 `test_resolve_event_date_four_tier_precedence_table` (6 cases,
+      class name differs from the task's literal function name — same
+      splitting/table pattern Phases 1-3 already established)
+- [x] 4.6 `test_resolve_event_date_created_key_never_consulted`
+- [x] 4.7 `resolve_event_date(incoming=...)`; `EventDateOrigin` gains
+      `"frontmatter"`; new precedence branch between `stored` and
+      `inferred`
+- [x] 4.8 `test_compose_source_document_reads_incoming_date_independently_of_lift`
+- [x] 4.9 `compose_source_document` calls `okf.read_incoming_date` on the
+      already-parsed `source_frontmatter` mapping, independently of
+      `lift_incoming_frontmatter`, and passes it to `resolve_event_date`
+- [x] 4.10 `test_event_date_origin_disclosure_line_names_frontmatter`
+- [x] 4.11 `_echo_event_date_preview_line` gains the `"frontmatter"` branch:
+      `event date {value} (from the source's frontmatter date)`
+- [x] 4.12 `ruff check` / `ruff format --check` / `mypy .` — green (one
+      `ruff format` pass needed on the new CLI test)
+- [x] 4.13 focused command green (52 passed, per tasks.md's literal
+      3-file/3-`-k` invocation — pytest applies only the LAST `-k`,
+      `event_date`, across all three paths); full `uv run pytest --cov`
+      green — 7169 passed, 2 skipped, 96.92% coverage (gate 90%)
+- [x] 4.14 confirmed via the EXISTING
+      `test_ingest_converged_reingest_with_differing_flag_rewrites_with_no_extraction`
+      test (already in the suite from an earlier slice): a Source-only
+      rewrite triggered solely by the event-date delta asserts the fake
+      LLM's `chat` is NEVER called and derived concept files stay
+      byte-identical — re-ran and confirmed GREEN; no new test added, per
+      the task's own "confirm (or add if missing)" wording
+- [x] 4.15 `evals/run_self_tests.py` — 44/44 green
+- [x] 4.16 committed — see Commits
+
+### Files Changed
+
+| File | Action | What |
+|---|---|---|
+| `src/openkos/model/okf.py` | Modified | `_tolerant_date` (extracted from `read_event_date`'s body); `read_event_date` reduced to an absent-key wrapper around it; `read_incoming_date` |
+| `src/openkos/application/ingest.py` | Modified | `EventDateOrigin` gains `"frontmatter"`; `resolve_event_date(incoming=...)` and its new precedence branch; `compose_source_document` computes `incoming_event_date` via `okf.read_incoming_date(source_frontmatter)` and passes it into `resolve_event_date` |
+| `src/openkos/cli/main.py` | Modified | `_echo_event_date_preview_line` gains the `"frontmatter"` branch |
+| `tests/unit/model/test_okf.py` | Modified | 4.1-4.3 tests |
+| `tests/unit/application/test_ingest.py` | Modified | 4.5, 4.6, 4.8 tests |
+| `tests/unit/cli/test_ingest.py` | Modified | 4.10 test |
+| `openspec/changes/preserve-source-frontmatter/tasks.md` | Modified | 4.1-4.16 marked `[x]` |
+| `openspec/changes/preserve-source-frontmatter/apply-progress.md` | Modified | this section |
+
+### TDD Cycle Evidence
+
+| Task(s) | Test file | RED (observed) | GREEN | Mutation |
+|---|---|---|---|---|
+| 4.1 | `test_okf.py` | passed vacuously (predicted — PRECONDITION pin, nothing changed yet) | stayed GREEN after 4.4 (27/27 `event_date`/`read_incoming_date` tests) | N/A (precondition pin, no mutation task assigned) |
+| 4.2 | `test_okf.py` | `AttributeError: module 'openkos.model.okf' has no attribute 'read_incoming_date'` (5 cases) | GREEN after 4.4 | N/A (no mutation task assigned to 4.2 itself) |
+| 4.3 | `test_okf.py` | `AttributeError: ... no attribute 'read_incoming_date'` (5 cases: 4 parametrized + 1 absent-key) | GREEN after 4.4 | made `read_incoming_date` accept a `datetime` by dropping its time component (instead of rejecting it): the `datetime` row flipped from `None` to a real `date`, failing the parity assertion (`assert datetime.date(2026, 7, 14) == None`); reverted with the exact inverse edit, `__pycache__` purged before and after |
+| 4.5 | `test_ingest.py` (application) | `TypeError: resolve_event_date() got an unexpected keyword argument 'incoming'` (6 cases) | GREEN after 4.7 | N/A (no mutation task assigned) |
+| 4.6 | `test_ingest.py` (application) | `TypeError: resolve_event_date() got an unexpected keyword argument 'incoming'` | GREEN after 4.7 | N/A |
+| 4.8 | `test_ingest.py` (application) | `AssertionError: assert None == datetime.date(2026, 7, 14)` — `plan.event_date.value` was `None` before the call site existed | GREEN after 4.9 | N/A |
+| 4.10 | `test_ingest.py` (cli) | `AssertionError` — the printed line read "kept from the existing Source" instead of the frontmatter wording, confirming the task's predicted failure mode (the `else` branch was catching the new `"frontmatter"` origin as if it were `"kept"`, not raising) | GREEN after 4.11 | N/A (no mutation task assigned) |
+
+All `__pycache__` purged before each verdict; every mutation reverted with
+the exact inverse edit.
+
+### Deviations from Design
+
+None — implementation matches design.md Decision 5 and this file's
+tasks-phase decision 2 (`compose_source_document` calls `okf.
+read_incoming_date` directly on the already-parsed mapping, never through
+`lift_incoming_frontmatter`, keeping Phases 3 and 4 mergeable in either
+order). Test names differ from tasks.md's literal names in the usual
+places (4.1, 4.3's split, 4.5), following the same splitting pattern
+Phases 1-3 already established and documented — every named scenario is
+still covered.
+
+### Issues Found
+
+None.
+
+### Review Workload / Size
+
+Actual authored changed lines for this work unit: **321 insertions + 28
+deletions across 6 files** (`git diff --shortstat` of commit `3ad9682`,
+excluding the second, docs-only commit) — within the review budget (400)
+and design.md's own forecast for Slice 4 (~250-400). No `size:exception`
+needed for this slice.
+
+### Commits
+
+1. `3ad9682` — `feat(ingest): resolve event_date from incoming frontmatter's date tier (#1062)`
+   (code + all tests; 321 insertions, 28 deletions, 6 files)
+2. (this commit) — `docs(sdd): record frontmatter slice 4 progress (#1062)`
+   (`tasks.md` checkbox updates + this file)
+
+### Next
+
+All Phase 4 tasks complete. `next_recommended: sdd-archive` (verification
+optional per the SDD contract) or `sdd-apply` again for Phase 5 (derived
+tag propagation, after PR 3 merges) or Phase 6 (docs, after PR 2 merges,
+parallel-eligible with Phases 3-5).

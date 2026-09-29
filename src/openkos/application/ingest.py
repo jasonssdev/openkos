@@ -808,12 +808,14 @@ def _read_source_tags(source_display_path: str, text: str) -> tuple[str, ...]:
     return okf.normalize_tags(metadata.get("tags"))
 
 
-EventDateOrigin = Literal["flag", "file name", "kept"]
-"""Where a resolved `event_date` value came from (design.md Decision 4) --
-`None` iff `EventDateResolution.value` is `None` (no evidence). `"kept"`
-names a re-ingest that carried a PRIOR stored value forward unchanged,
-distinct from `"flag"` and `"file name"`, which both name evidence THIS run
-supplied."""
+EventDateOrigin = Literal["flag", "file name", "kept", "frontmatter"]
+"""Where a resolved `event_date` value came from (design.md Decision 4,
+extended by Decision 5's `"frontmatter"` tier for preserve-source-
+frontmatter, issue #1062) -- `None` iff `EventDateResolution.value` is
+`None` (no evidence). `"kept"` names a re-ingest that carried a PRIOR
+stored value forward unchanged, distinct from `"flag"`, `"file name"` and
+`"frontmatter"`, which all name evidence THIS run supplied. `"frontmatter"`
+names a value lifted from the source's own incoming `date:` key."""
 
 
 @dataclass(frozen=True)
@@ -853,20 +855,27 @@ class EventDateResolution:
 
 
 def resolve_event_date(
-    *, flag: date | None, stored: okf.StoredEventDate | None, inferred: date | None
+    *,
+    flag: date | None,
+    stored: okf.StoredEventDate | None,
+    inferred: date | None,
+    incoming: date | None = None,
 ) -> EventDateResolution:
     """The ONE place a Source's `event_date` is resolved (design.md
-    Decision 4), in precedence order: an explicit `--event-date` flag
-    always wins, over a validly-stored prior value, over a file-name
-    inference, over leaving the key unset. A malformed stored value counts
-    as absent -- that is the mechanism by which it is "not carried
-    forward" and can be filled by a flag or the file name.
+    Decision 4, extended by Decision 5), in precedence order: an explicit
+    `--event-date` flag always wins, over a validly-stored prior value,
+    over a `date:` value lifted from the source's own incoming frontmatter,
+    over a file-name inference, over leaving the key unset. A malformed
+    stored value counts as absent -- that is the mechanism by which it is
+    "not carried forward" and can be filled by a flag, an incoming date, or
+    the file name.
 
-    Pure: it reads no disk and parses nothing itself -- `stored` and
-    `inferred` are already-resolved inputs the caller (`compose_source_
-    document`) supplies, matching `stage_derived_objects`' and this
-    module's other composition functions' "renders/resolves nothing of its
-    own" posture."""
+    Pure: it reads no disk and parses nothing itself -- `stored`,
+    `incoming` and `inferred` are already-resolved inputs the caller
+    (`compose_source_document`) supplies (`incoming` via `okf.
+    read_incoming_date`, which never reads `created`), matching `stage_
+    derived_objects`' and this module's other composition functions'
+    "renders/resolves nothing of its own" posture."""
     previous = stored.value if stored is not None and not stored.malformed else None
     stored_malformed = stored.malformed if stored is not None else False
     stored_raw = stored.raw if stored is not None else None
@@ -877,6 +886,9 @@ def resolve_event_date(
     elif previous is not None:
         value = previous
         origin = "kept"
+    elif incoming is not None:
+        value = incoming
+        origin = "frontmatter"
     elif inferred is not None:
         value = inferred
         origin = "file name"
@@ -1102,9 +1114,6 @@ def compose_source_document(
         if source_name is not None
         else None
     )
-    event_date_resolution = resolve_event_date(
-        flag=event_date_flag, stored=stored_event_date, inferred=inferred_event_date
-    )
 
     # preserve-source-frontmatter (issue #1062), design.md Decision 1: the
     # SAME guard that already gates `source_title.derive_source_title`
@@ -1126,6 +1135,25 @@ def compose_source_document(
         if incoming_frontmatter is not None and incoming_frontmatter.status == "parsed"
         else None
     )
+
+    # preserve-source-frontmatter (issue #1062), design.md Decision 5 and
+    # this change's tasks-phase decision 2: `read_incoming_date` reads the
+    # SAME already-parsed mapping as a SEPARATE call, independently of
+    # `lift_incoming_frontmatter` (Phase 3), so Phases 3 and 4 stay
+    # mergeable in either order -- `IncomingLift.event_date` stays `None`
+    # and is never consulted here.
+    incoming_event_date = (
+        okf.read_incoming_date(source_frontmatter)
+        if source_frontmatter is not None
+        else None
+    )
+    event_date_resolution = resolve_event_date(
+        flag=event_date_flag,
+        stored=stored_event_date,
+        incoming=incoming_event_date,
+        inferred=inferred_event_date,
+    )
+
     # preserve-source-frontmatter (issue #1062), design.md Decision 3: fold
     # the closed allow-list of lift candidates onto the pre-lift resolved
     # state. `lift.sensitivity_present` is `False` for both an absent key
