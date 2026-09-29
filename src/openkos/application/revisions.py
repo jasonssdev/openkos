@@ -22,18 +22,29 @@ Decision 2's input-digest table), `is_fresh` (Decision 2's strict
 freshness rule -- deliberately NOT `findings._is_stale`'s lenient
 `None`-means-unchanged rule, because a revision finding can lead to a
 bundle write), and `plan_revisions` (the zero-LLM served/to_judge split,
-"Phase B re-plan" Data flow). P6 still owes `judge_revisions` and
-`actionable_revision_findings`."""
+"Phase B re-plan" Data flow).
+
+This slice (P6) adds `judge_revisions` (judges `plan.to_judge` through the
+Phase A leaf's `judge_pairs`, persisting only non-malformed verdicts) and
+`actionable_revision_findings` (the strict-freshness, actionable-only read
+`reconcile --from-findings`, Phase B S8/S9, will consume). `judge_revisions`
+is also where design.md Decision B2's "the flag releases only the judge's
+chat send, never an embed" rule is enforced: `_load_doc` (a module-local
+copy of `contradiction._load_doc`'s sensitivity re-check, design.md
+Decision 5) re-verifies each Decision's sensitivity independently of
+`load_decisions`'s own upstream exclusion, walk-independent and
+fail-closed, before that body ever reaches `llm.chat`."""
 
 import hashlib
 import sqlite3
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 from typing import Literal
 
 from openkos import config, lifecycle, sensitivity
 from openkos.bundle import provenance as bundle_provenance
+from openkos.llm.base import BackendError, LLMBackend
 from openkos.model import okf
 from openkos.model.relations import RESOLUTION_RELATION_TYPES
 from openkos.resolution import decision_revision
@@ -588,3 +599,216 @@ def plan_revisions(
         served=tuple(served),
         to_judge=tuple(to_judge),
     )
+
+
+def _load_doc(
+    layout: config.WorkspaceLayout,
+    concept_id: str,
+    *,
+    effective_confidential: bool,
+) -> tuple[str, str]:
+    """Module-local copy of `contradiction._load_doc`'s sensitivity
+    re-check (`contradiction.py:428-482`; design.md Decision 5: "The
+    service loads each body with a module-local copy of `_load_doc`'s
+    sensitivity re-check ... walk-independent and fail-closed"), applied
+    here to the judge's own body load. Enforces design.md Decision B2's
+    "the flag releases only the judge's chat send" rule AT THIS LAYER,
+    not only via `load_decisions`'s upstream exclusion: a Decision the
+    upstream `sensitivity.sensitive_concept_ids` walk silently missed (an
+    unlistable subtree) is still degraded to `(concept_id, "")` here and
+    never reaches `llm.chat`.
+
+    `effective_confidential` is passed as `should_block`'s
+    `include_confidential` -- already `--include-confidential OR
+    local_exemption` (this module's single resolved flag, per
+    `plan_revisions`/`is_fresh`), and `should_block` itself treats
+    `include_confidential`/`local_exemption` as a disjunction, so passing
+    the pre-OR'd value through one of the two parameters is equivalent to
+    passing the original two.
+
+    Returns `(title, body)`; an unreadable/unparseable document, or one
+    `sensitivity.should_block` degrades, returns `(concept_id, "")` rather
+    than raising or skipping the pair -- the caller always gets something
+    to build a `JudgeSide` from."""
+    try:
+        text = okf.concept_path_for(concept_id, layout.bundle_dir).read_text(
+            encoding="utf-8"
+        )
+    except (OSError, UnicodeDecodeError):
+        return concept_id, ""
+    try:
+        metadata, body = okf.load_frontmatter(text)
+    except Exception:  # broad: any parse failure degrades this doc, never raises
+        return concept_id, ""
+    if sensitivity.should_block(metadata, include_confidential=effective_confidential):
+        return concept_id, ""
+    title = str(metadata.get("title") or "") or concept_id
+    return title, body
+
+
+@dataclass(frozen=True)
+class RevisionOutcome:
+    """One `judge_revisions` run's result. `results` holds EVERY judged
+    `RevisionVerdict` in `plan.to_judge` order, including a `malformed=True`
+    one (Phase B, S7/S8's `--all` view shows it, counted as "N malformed"
+    -- design.md Decision 6) -- mirroring `decision_revision.RevisionBatch`'s
+    own contract, since `judge_revisions` adds persistence on top of
+    `judge_pairs` rather than replacing its shape. `failure`/`failed_index`
+    surface `RevisionBatch`'s own partial-batch contract unchanged: a raised
+    backend error (`OllamaError` at runtime -- `llm.ollama`'s concrete
+    subclass of this module's own `BackendError`, ADR-0018 D1: an
+    `application/` module imports only `llm.base`, never a concrete backend
+    module) stops judging and is carried here instead of propagating, the
+    same "already-paid-for prefix survives" guarantee `judge_pairs` already
+    gives, so a caller inspecting `RevisionOutcome` sees exactly what
+    `judge_pairs` would have told it directly."""
+
+    results: tuple[decision_revision.RevisionVerdict, ...]
+    failure: BackendError | None = None
+    failed_index: int | None = None
+
+
+def _revision_finding_from_verdict(
+    layout: config.WorkspaceLayout,
+    files: Mapping[str, str],
+    verdict: decision_revision.RevisionVerdict,
+    *,
+    effective_confidential: bool,
+) -> revision_findings.RevisionFinding:
+    """One judged (non-malformed) `RevisionVerdict`'s durable shape, ready
+    for `record_revision_findings` -- design.md Decision 2's persisted
+    columns. `verdict.pair_ids`/`verdict.dates` are already aligned (sorted
+    `concept_id` order, `_sorted_pair`'s contract in the Phase A leaf), so
+    no re-sorting happens here; `record_revision_findings` itself sorts
+    defensively regardless."""
+    date_0, date_1 = verdict.dates
+    dates: tuple[str | None, str | None] = (
+        date_0.value.isoformat() if date_0.value is not None else None,
+        date_1.value.isoformat() if date_1.value is not None else None,
+    )
+    date_states = (date_0.state, date_1.state)
+    return revision_findings.RevisionFinding(
+        pair_ids=verdict.pair_ids,
+        verdict=verdict.verdict.value,
+        confidence=verdict.confidence,
+        rationale=verdict.rationale,
+        quotes=verdict.quotes,
+        dates=dates,
+        date_states=date_states,
+        include_confidential=effective_confidential,
+        prompt_version=decision_revision.JUDGE_PROMPT_VERSION,
+        input_digests=revision_input_digests(layout, files, verdict.pair_ids),
+    )
+
+
+def judge_revisions(
+    layout: config.WorkspaceLayout,
+    plan: RevisionPlan,
+    *,
+    llm: LLMBackend,
+    effective_confidential: bool,
+    on_progress: Callable[[int, int, decision_revision.RevisionVerdict], None]
+    | None = None,
+) -> RevisionOutcome:
+    """Judge every `plan.to_judge` candidate through the Phase A leaf's
+    `judge_pairs` (design.md's Phase B re-plan Data flow: "judge_revisions
+    -> pair_direction -> build_judge_messages -> llm.chat -> parse ->
+    persist"), then persist every non-malformed `RevisionVerdict` via
+    `record_revision_findings` (P3.4) -- a malformed verdict is never
+    persisted, so it is re-judged next run (design.md Decision 6).
+
+    `judge_pairs` never raises: a mid-batch `OllamaError` stops the loop and
+    returns the completed prefix in `RevisionBatch.results` instead of
+    propagating (its own documented contract). Because of that, persisting
+    once, after `judge_pairs` returns, over whatever `results` it produced
+    already gives the "already-judged pairs survive a later failure"
+    property design.md asks for -- there is no separate result the caller
+    could lose by not persisting incrementally mid-loop; `record_revision_
+    findings` itself commits once per call regardless.
+
+    Builds each `JudgeSide` from `resolve_decision_dates` (P5a.4, the same
+    `DecisionDate`s `plan_revisions` already resolved once) and `_load_doc`
+    (this module's own sensitivity re-check) over the concept ids named by
+    `plan.to_judge` -- never over `plan.served`'s pairs, which need no
+    judge call at all."""
+    decision_ids = sorted(
+        {concept_id for candidate in plan.to_judge for concept_id in candidate.pair_ids}
+    )
+    dates = resolve_decision_dates(layout, decision_ids)
+    sides: dict[str, decision_revision.JudgeSide] = {}
+    for concept_id in decision_ids:
+        title, body = _load_doc(
+            layout, concept_id, effective_confidential=effective_confidential
+        )
+        sides[concept_id] = decision_revision.JudgeSide(
+            concept_id=concept_id, title=title, body=body, date=dates[concept_id]
+        )
+
+    pairs = [
+        (sides[id_a], sides[id_b])
+        for id_a, id_b in (candidate.pair_ids for candidate in plan.to_judge)
+    ]
+    batch = decision_revision.judge_pairs(pairs, llm=llm, on_progress=on_progress)
+
+    files = _bundle_text_snapshot(layout)
+    to_persist = [
+        _revision_finding_from_verdict(
+            layout, files, verdict, effective_confidential=effective_confidential
+        )
+        for verdict in batch.results
+        if not verdict.malformed
+    ]
+    if to_persist:
+        conn = derived.open_derived_connection(layout.findings_db_path)
+        try:
+            revision_findings.record_revision_findings(conn, to_persist)
+        finally:
+            conn.close()
+
+    return RevisionOutcome(
+        results=tuple(batch.results),
+        failure=batch.failure,
+        failed_index=batch.failed_index,
+    )
+
+
+def actionable_revision_findings(
+    layout: config.WorkspaceLayout,
+) -> tuple[revision_findings.RevisionFinding, ...]:
+    """The latest persisted row per pair, kept only when it is BOTH still
+    fresh (`is_fresh`, with `effective_confidential=None` -- this reader has
+    no per-call confidential flag of its own, so it opts out of that one
+    freshness dimension, `is_fresh`'s own documented escape) and actionable
+    (`decision_revision.is_actionable_revision`, Phase A leaf) -- the read
+    `reconcile --from-findings` (Phase B, S8/S9) will drive its walk from.
+
+    An absent `.openkos/findings.db`, or a present-but-unreadable one,
+    degrades to `()` -- nothing to read, not an error -- mirroring
+    `is_fresh`'s own degrade-to-`False`-never-raise posture for the same
+    store. Results are sorted by `pair_ids` for a deterministic order; the
+    underlying store carries no ordering a caller should rely on beyond
+    that."""
+    if not layout.findings_db_path.exists():
+        return ()
+    try:
+        conn = derived.open_derived_connection(layout.findings_db_path)
+        try:
+            persisted = revision_findings.open_revision_findings(conn)
+        finally:
+            conn.close()
+    except (OSError, sqlite3.Error):
+        return ()
+
+    latest_by_pair: dict[tuple[str, str], revision_findings.RevisionFinding] = {}
+    for row in persisted:
+        latest_by_pair[row.pair_ids] = row
+
+    results = [
+        finding
+        for finding in latest_by_pair.values()
+        if is_fresh(layout, finding)
+        and decision_revision.is_actionable_revision(
+            finding.verdict, finding.confidence, finding.quotes[0], finding.quotes[1]
+        )
+    ]
+    return tuple(sorted(results, key=lambda finding: finding.pair_ids))
