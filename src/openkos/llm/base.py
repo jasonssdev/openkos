@@ -157,6 +157,36 @@ class BackendUnavailable(BackendError):
     `openkos.llm.ollama`."""
 
 
+class BackendModelNotFound(BackendError):
+    """Raised when a capability-scoped backend reports the configured model
+    is not installed/pulled -- distinct from a generic `BackendError`
+    (issue #1057 Phase 2a, Decision 3). A concrete backend's own
+    "model not found" exception (e.g. `ollama.OllamaModelNotFound`)
+    subclasses both this and its own error base, so `application/doctor.py`
+    and every other caller scoped to this leaf module can tell "the model
+    is missing" apart from any other backend failure without importing a
+    concrete backend module."""
+
+
+class BackendGenerationCapped(BackendError):
+    """Raised when a capability-scoped backend's reply was cut off before
+    it finished generating -- the model's own length ceiling, or a
+    configured one, was reached (issue #1057 Phase 2a, Decision 3). A
+    concrete backend's own "generation capped" exception (e.g.
+    `ollama.OllamaGenerationCapped`) subclasses both this and its own
+    error base."""
+
+
+class BackendEmbeddingDimensionMismatch(BackendError):
+    """Raised when a capability-scoped backend's embedding response has a
+    length other than the expected `EMBED_DIM` -- a PERMANENT,
+    non-healing misconfiguration, distinct from a generic transient
+    `BackendError` (issue #1057 Phase 2a, Decision 3). A concrete
+    backend's own "wrong dimension" exception (e.g.
+    `ollama.OllamaEmbeddingDimensionMismatch`) subclasses both this and its
+    own error base."""
+
+
 class BackendDiagnostics(Protocol):
     """A capability-scoped backend-introspection seam: enumerate installed
     models and report host locality, without sending a chat or embedding

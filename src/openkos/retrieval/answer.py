@@ -24,15 +24,15 @@ there is no more per-query build, the empty-query short-circuit now touches
 ZERO injected handles at all (not even a call to open one) -- provable via
 spies on all three (follow-up #1).
 
-Typed exceptions (the `OllamaError` family, or any exception a caller's
+Typed exceptions (the `BackendError` family, or any exception a caller's
 `fts_index.search`/`vector_store.query` implementation might itself raise
 OUTSIDE its own documented degrade cases) propagate unswallowed to the
 caller -- the exception-vs-degrade boundary lives ONLY at the handle's
 OWN documented failure modes (dense: `VecUnavailable`/read-path
-`sqlite3.Error`, plus the GENERIC transient `OllamaError` from the question
-embed), never at a broader catch-all here. The three FATAL `OllamaError`
-subclasses -- `OllamaUnavailable`, `OllamaModelNotFound`, and
-`OllamaEmbeddingDimensionMismatch` (issue #209) -- are on the propagating
+`sqlite3.Error`, plus the GENERIC transient `BackendError` from the question
+embed), never at a broader catch-all here. The three FATAL `BackendError`
+subclasses -- `BackendUnavailable`, `BackendModelNotFound`, and
+`BackendEmbeddingDimensionMismatch` (issue #209) -- are on the propagating
 side of that split, never the degrading one: each names a permanent
 environment or configuration fault that no re-run can heal.
 `fts_index.search` itself is documented as never raising (mirrors
@@ -77,12 +77,14 @@ from typing import Final, Literal
 
 from openkos import event_dates, lifecycle, prompt_budget, sensitivity
 from openkos.extraction.concept import LANGUAGE_FUNCTION_WORDS
-from openkos.llm.base import Embedder, LLMBackend, Message
-from openkos.llm.ollama import (
-    OllamaEmbeddingDimensionMismatch,
-    OllamaError,
-    OllamaModelNotFound,
-    OllamaUnavailable,
+from openkos.llm.base import (
+    BackendEmbeddingDimensionMismatch,
+    BackendError,
+    BackendModelNotFound,
+    BackendUnavailable,
+    Embedder,
+    LLMBackend,
+    Message,
 )
 from openkos.model import okf
 from openkos.model.types import INSIGHT_TYPE as _INSIGHT_TYPE
@@ -498,11 +500,11 @@ class AnswerResult:
     dense_degraded: bool = False
     """`True` when dense retrieval could not proceed this call (absent
     `vector_store`, `VecUnavailable`, a read-path `sqlite3.Error`, or the
-    GENERIC transient `OllamaError` from the question embed) and FTS-only
+    GENERIC transient `BackendError` from the question embed) and FTS-only
     fusion was used instead; `False` when dense retrieval ran normally
     (additive). NEVER set for a FATAL question-embed subclass
-    (`OllamaUnavailable`, `OllamaModelNotFound`,
-    `OllamaEmbeddingDimensionMismatch`) -- those propagate instead, so no
+    (`BackendUnavailable`, `BackendModelNotFound`,
+    `BackendEmbeddingDimensionMismatch`) -- those propagate instead, so no
     `AnswerResult` is produced at all (issue #209)."""
     history_truncated_titles: list[str] = field(default_factory=list)
     """Titles of every retrieved successor whose OWN attached-history chain
@@ -1110,7 +1112,7 @@ def _context_holds_the_answer(llm: LLMBackend, user_content: str) -> tuple[bool,
     reasons. The shipped `USED:` attribution (#753) still strips the
     citations off an ungrounded answer, so the backstop that makes this check
     optional at all is exactly what covers its failure. The three FATAL
-    `OllamaError` subclasses propagate untouched (issue #209): "the server is
+    `BackendError` subclasses propagate untouched (issue #209): "the server is
     down" must not become "the bundle answered your question".
 
     A reply is a refusal only when it IS the sentinel, modulo whitespace,
@@ -1131,12 +1133,12 @@ def _context_holds_the_answer(llm: LLMBackend, user_content: str) -> tuple[bool,
             ]
         )
     except (
-        OllamaUnavailable,
-        OllamaModelNotFound,
-        OllamaEmbeddingDimensionMismatch,
+        BackendUnavailable,
+        BackendModelNotFound,
+        BackendEmbeddingDimensionMismatch,
     ):
         raise
-    except OllamaError:
+    except BackendError:
         return True, True
     return reply.strip().strip("\"'`*. \t\n").upper() != _SUFFICIENCY_NONE, False
 
@@ -1251,26 +1253,26 @@ def _dense_search(
     whenever dense retrieval cannot proceed this call: `embedder` or
     `vector_store` absent (e.g. a cold store the CLI passes as `None`), a
     `VecUnavailable`/read-path `sqlite3.Error` raised by `vector_store.query`,
-    OR a generic (non-fatal) `OllamaError` raised while embedding the
+    OR a generic (non-fatal) `BackendError` raised while embedding the
     question (`embedder.embed([question])`) -- reindex-embedding-resilience:
     a flaky embedding path degrades the QUESTION embed the same way a flaky
     vector read already degrades, rather than aborting the whole `query`
-    call (D4). The three FATAL `OllamaError` subclasses, `OllamaUnavailable`
-    (down server), `OllamaModelNotFound` (missing model), and
-    `OllamaEmbeddingDimensionMismatch` (the configured embedding model does
+    call (D4). The three FATAL `BackendError` subclasses, `BackendUnavailable`
+    (down server), `BackendModelNotFound` (missing model), and
+    `BackendEmbeddingDimensionMismatch` (the configured embedding model does
     not emit `EMBED_DIM`-dimensional vectors), are explicitly EXCLUDED from
     this degrade and re-raised instead -- they propagate to `query`'s fatal
     exit-1 ladder, mirroring the same fatal/transient split already applied
     on the reindex side (review correction, CRITICAL finding: the first two
-    subclasses were previously swallowed by the broad `OllamaError` catch
-    below). `OllamaEmbeddingDimensionMismatch` joins them because a wrong
+    subclasses were previously swallowed by the broad `BackendError` catch
+    below). `BackendEmbeddingDimensionMismatch` joins them because a wrong
     dimension is a PERMANENT, non-healing misconfiguration -- no retry and
     no re-run can fix it, so dense retrieval is structurally impossible
     rather than merely unhelpful this call, unlike a generic transient
-    `OllamaError` whose next attempt may well succeed; degrading it silently
+    `BackendError` whose next attempt may well succeed; degrading it silently
     handed the user an FTS-only answer at exit 0 with no indication that
     semantic retrieval could never have run (issue #209). Never raises for a
-    transient generic `OllamaError`; only ever called with a
+    transient generic `BackendError`; only ever called with a
     non-empty/whitespace `question`.
     """
     if embedder is None or vector_store is None:
@@ -1279,12 +1281,12 @@ def _dense_search(
         embedding = embedder.embed([question])[0]
         return vector_store.query(embedding, k=pool_limit), False
     except (
-        OllamaUnavailable,
-        OllamaModelNotFound,
-        OllamaEmbeddingDimensionMismatch,
+        BackendUnavailable,
+        BackendModelNotFound,
+        BackendEmbeddingDimensionMismatch,
     ):
         raise
-    except (VecUnavailable, sqlite3.Error, OllamaError):
+    except (VecUnavailable, sqlite3.Error, BackendError):
         return [], True
 
 

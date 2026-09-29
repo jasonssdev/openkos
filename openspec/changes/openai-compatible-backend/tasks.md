@@ -224,8 +224,9 @@ Design Decision 1. Pure relocation with re-exports; no behavior change.
   (unpiped) full suite — must be green, 90% branch gate held.
 - [x] **1.14** Run `uv run python evals/run_self_tests.py` — must be green
   with `OLLAMA_HOST` poisoned.
-- [ ] **1.15** Commit as one or more work-unit commits, scope `llm` (first
-  use of the new scope). Open PR 1 targeting `main`.
+- [x] **1.15** Commit as one or more work-unit commits, scope `llm` (first
+  use of the new scope). Open PR 1 targeting `main`. (PR 1 opened and merged
+  as #1096.)
 
 **Rollback boundary**: revert the moved definitions back into `ollama.py`;
 drop the `base.py` additions and the re-exports; revert the `AGENTS.md` line.
@@ -238,14 +239,14 @@ later slice depends on its presence.
 
 Design Decision 3.
 
-- [ ] **2.1** [TEST] `tests/unit/llm/test_neutral_bases.py` (new) — add
+- [x] **2.1** [TEST] `tests/unit/llm/test_neutral_bases.py` (new) — add
   `test_neutral_bases_subclass_backend_error`: `BackendModelNotFound`,
   `BackendGenerationCapped`, `BackendEmbeddingDimensionMismatch` each
   subclass `BackendError`. **RED today**: `AttributeError` — classes don't
   exist.
-- [ ] **2.2** [IMPL] `src/openkos/llm/base.py`: add the three neutral
+- [x] **2.2** [IMPL] `src/openkos/llm/base.py`: add the three neutral
   mid-level error classes. Makes 2.1 GREEN.
-- [ ] **2.3** [TEST] `tests/unit/llm/test_ollama.py` (extend) — add
+- [x] **2.3** [TEST] `tests/unit/llm/test_ollama.py` (extend) — add
   `test_ollama_concrete_classes_are_also_neutral_subclasses` (an
   `issubclass` table): `OllamaModelNotFound` subclasses
   `BackendModelNotFound`; `OllamaGenerationCapped` subclasses
@@ -253,13 +254,13 @@ Design Decision 3.
   `BackendEmbeddingDimensionMismatch`; `OllamaUnavailable` subclasses
   `BackendUnavailable` (regression pin, pre-existing). **RED today**:
   `AssertionError` — Ollama's classes have only their single existing base.
-- [ ] **2.4** [IMPL] `src/openkos/llm/ollama.py`: give
+- [x] **2.4** [IMPL] `src/openkos/llm/ollama.py`: give
   `OllamaModelNotFound`, `OllamaGenerationCapped`,
   `OllamaEmbeddingDimensionMismatch` each a second base (the matching
   neutral class), exactly as `OllamaUnavailable` already has
   `BackendUnavailable`. Makes 2.3 GREEN; MRO stays consistent (single root
   `BackendError`).
-- [ ] **2.5** [TEST] `tests/unit/llm/test_neutral_catch_sites.py` (new) —
+- [x] **2.5** [TEST] `tests/unit/llm/test_neutral_catch_sites.py` (new) —
   add `test_no_concrete_backend_class_named_outside_client_modules`: an AST
   walk of every `.py` under `src/openkos/` EXCEPT `llm/ollama.py` and
   `llm/openai_compatible.py` (forward reference — allowed in the exclusion
@@ -273,7 +274,7 @@ Design Decision 3.
   `resolution/*.py`, `state/reindex.py`, `retrieval/answer.py`,
   `extraction/judge.py`, `extraction/concept.py`, `application/query.py`,
   `application/ingest.py`, `cli/main.py`, `cli/curate.py`, `mcp/server.py`.
-- [ ] **2.6** [IMPL] migrate every concrete-class `except`/`isinstance` in
+- [x] **2.6** [IMPL] migrate every concrete-class `except`/`isinstance` in
   the NON-CLI modules to its neutral equivalent, preserving each ladder's
   subclass-first ORDER exactly (`OllamaUnavailable`→`BackendUnavailable`,
   `OllamaModelNotFound`→`BackendModelNotFound`,
@@ -288,7 +289,7 @@ Design Decision 3.
   `openkos.llm.base` instead of (or alongside, where it needs a concrete
   type for another reason) `openkos.llm.ollama`. Narrows 2.5's failing set to
   the CLI/curate/MCP sites only, closed in Phase 2b.
-- [ ] **2.7** [TEST] same file — mutation-proof: temporarily reintroduce one
+- [x] **2.7** [TEST] same file — mutation-proof: temporarily reintroduce one
   concrete `except OllamaError` into a scratch copy of one already-migrated
   module the guard scans (or a planted violation fixture under `tmp_path`),
   confirm the guard fails, then remove it. Record the mutation and result
@@ -296,45 +297,92 @@ Design Decision 3.
 
 ### Phase 2a verification
 
-- [ ] **2.8** Run `uv run ruff check . && uv run ruff format --check . &&
+- [x] **2.8** Run `uv run ruff check . && uv run ruff format --check . &&
   uv run mypy .` — must be green.
-- [ ] **2.9** Run `uv run pytest tests/unit/llm/test_neutral_bases.py
+- [x] **2.9** Run `uv run pytest tests/unit/llm/test_neutral_bases.py
   tests/unit/llm/test_neutral_catch_sites.py tests/unit/resolution/
   tests/unit/state/test_reindex.py tests/unit/retrieval/test_answer.py
   tests/unit/extraction/ tests/unit/application/test_query.py
   tests/unit/application/test_ingest.py` focused, then `uv run pytest --cov`
   full suite; then `uv run python evals/run_self_tests.py`.
+
+  **Observed**: `tests/unit/application/test_query.py` does not exist under
+  that name (the suite splits it as `test_query_filing.py`/
+  `test_query_service.py`); ran those two instead. Focused run: 1459
+  passed, 1 failed (`test_no_concrete_backend_class_named_outside_client_modules`,
+  narrowed to exactly `cli/main.py`, `cli/curate.py`, `mcp/server.py` — the
+  documented interim state this task's own text predicts, closed by task
+  2.11 in Phase 2b, not before). Full suite (`uv run pytest --cov`): 7230
+  passed, 1 failed (the same guard test), 2 skipped, coverage 96.92%
+  (>= 90% gate held). `uv run python evals/run_self_tests.py`: 44/44 green
+  with `OLLAMA_HOST` poisoned. `ruff check .`, `ruff format --check .`,
+  `mypy .`: all clean.
 - [ ] **2.10** Commit, scope `llm` (or the touched module's own listed scope
   where more specific). Open PR 2a targeting `main`, after PR 1 merges.
+
+  **Observed**: committed on the current branch (no push, no PR opened per
+  the apply run's instructions — PR creation is left to the maintainer).
 
 ---
 
 ## Phase 2b (PR 2b → `main`, after PR 2a): CLI/curate/MCP catch sites
 
-- [ ] **2.11** [IMPL] same migration as 2.6 for `src/openkos/cli/main.py`,
+- [x] **2.11** [IMPL] same migration as 2.6 for `src/openkos/cli/main.py`,
   `src/openkos/cli/curate.py`, `src/openkos/mcp/server.py`. Closes the
   remainder of 2.5's failing set — every module outside `llm/ollama.py`/
   `llm/openai_compatible.py` is now clean.
-- [ ] **2.12** [TEST] `tests/unit/llm/test_neutral_catch_sites.py` —
+- [x] **2.12** [TEST] `tests/unit/llm/test_neutral_catch_sites.py` —
   mutation-proof pass over a CLI-module violation specifically: reintroduce
   a concrete catch in a scratch copy of `cli/main.py`'s scan target,
   confirm the guard fails, then remove it.
-- [ ] **2.13** [TEST] `tests/unit/cli/test_query.py`,
+- [x] **2.13** [TEST] `tests/unit/cli/test_query.py`,
   `tests/unit/cli/test_curate.py`, `tests/unit/mcp/test_server.py` — regression
   pin: every existing test asserting on Ollama-specific remediation wording
   still passes unchanged (byte-identity on the default `ollama` path),
   confirming the rename changed no observable behavior. **RED only if** the
   rename accidentally altered a message.
 
+  **Observed**: `cli/main.py` migration touched 32 sites (import block +
+  the four-class ladder used across the adjudicate/query/reindex/curate
+  handlers); `cli/curate.py` 11 sites; `mcp/server.py` 4 sites (the
+  `_TOOL_ERROR_TABLE` tuple values, not a literal `except`/`isinstance`
+  clause — see the guard's own widened-detection rationale in
+  `test_neutral_catch_sites.py`'s module docstring). Mutation-proof (2.12):
+  reintroduced `except OllamaError as exc:` into `cli/main.py`, guard
+  reported exactly `{'cli/main.py': ['OllamaError (line 5475)']}`, reverted,
+  `__pycache__` purged, reconfirmed GREEN; separately reintroduced a
+  concrete `OllamaUnavailable` into `mcp/server.py`'s table, guard reported
+  exactly `{'mcp/server.py': ['OllamaUnavailable (line 69)']}`, reverted,
+  reconfirmed GREEN. Regression pin (2.13):
+  `tests/unit/cli/test_query.py tests/unit/cli/test_curate.py
+  tests/unit/mcp/test_server.py` → 252 passed, byte-identical wording
+  confirmed (no wording changed — that stays Phase 13b's job).
+
 ### Phase 2b verification
 
-- [ ] **2.14** Run `uv run ruff check . && uv run ruff format --check . &&
+- [x] **2.14** Run `uv run ruff check . && uv run ruff format --check . &&
   uv run mypy .` — must be green.
-- [ ] **2.15** Run `uv run pytest tests/unit/cli/ tests/unit/mcp/
+- [x] **2.15** Run `uv run pytest tests/unit/cli/ tests/unit/mcp/
   tests/unit/llm/test_neutral_catch_sites.py` focused, then `uv run pytest
   --cov` full suite; then `uv run python evals/run_self_tests.py`.
+
+  **Observed**: `ruff check .` / `ruff format --check .` / `mypy .`: all
+  clean (367 files). Focused: `pytest tests/unit/cli/ tests/unit/mcp/
+  tests/unit/llm/test_neutral_catch_sites.py` → 2607 passed, 1 skipped —
+  `test_no_concrete_backend_class_named_outside_client_modules` now GREEN
+  unconditionally (no offenders anywhere). Full `pytest --cov` (unpiped):
+  **7231 passed, 0 failed, 2 skipped**, 96.92% branch coverage (>=90% gate
+  held) — the one Phase-2a-documented interim failure is now closed.
+  `evals/run_self_tests.py`: 44/44 green, `OLLAMA_HOST` poisoned.
 - [ ] **2.16** Commit, scope `cli`/`mcp` as appropriate. Open PR 2b targeting
   `main`, after PR 2a merges.
+
+  **Observed**: committed together with Phase 2a's work on the current
+  branch (coordinator decision: Phase 2a and 2b ship as ONE PR, since this
+  repo never merges red CI and Phase 2a alone left the guard test red). No
+  push, no PR opened — left for the maintainer. Scope `llm` (spans both
+  the Phase 2a neutral-bases work and the Phase 2b CLI/curate/MCP
+  migration under one cohesive commit).
 
 **Rollback boundary (2a+2b)**: revert the three neutral bases, the Ollama
 second-base additions, and every catch-site rename per module (2a and 2b

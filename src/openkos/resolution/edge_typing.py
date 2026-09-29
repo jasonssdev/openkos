@@ -17,12 +17,14 @@ accepted pair forever.
 Config-free leaf (mirrors `adjudication.py`, `extraction/concept.py`, and
 `retrieval/answer.py`): this module never imports `openkos.config`; the
 caller supplies an `LLMBackend`, never an `OllamaClient` constructed here.
-Importing the `OllamaError` TYPE from `openkos.llm.ollama` keeps that
-discipline intact: `ollama.py` is itself a config-free stdlib leaf, and the
-error family is the failure contract every `LLMBackend` caller already
-speaks.
+Importing the `BackendError` TYPE from `openkos.llm.base` (issue #1057
+Phase 2a, Decision 3) keeps that discipline intact: `base.py` is itself a
+config-free stdlib leaf, and the error family is the failure contract
+every `LLMBackend` caller already speaks -- backend-agnostic, so this
+module never needs a concrete backend's own module to catch its own
+`llm.chat`'s failure.
 
-An `OllamaError`-family exception raised by `llm.chat` mid-loop STOPS the
+A `BackendError`-family exception raised by `llm.chat` mid-loop STOPS the
 loop but never discards paid-for work (issue #441): each completed edge
 cost one real LLM call, so `suggest_edge_types` returns an
 `EdgeSuggestionBatch` carrying every completed `EdgeSuggestion` (input
@@ -55,8 +57,7 @@ from openkos import sensitivity
 from openkos.graph.base import Edge, GraphStore
 from openkos.graph.sqlite_graph import CandidateReport, CandidateSource, build_graph
 from openkos.llm import parsing, prompting
-from openkos.llm.base import LLMBackend, Message
-from openkos.llm.ollama import OllamaError
+from openkos.llm.base import BackendError, LLMBackend, Message
 from openkos.model import okf
 from openkos.model.relations import (
     ENGINE_OWNED_RELATION_TYPES,
@@ -306,8 +307,8 @@ class EdgeSuggestionBatch:
     results: list[EdgeSuggestion]
     """Every completed suggestion, in input order -- each one was fully
     paid for (its `llm.chat` call succeeded) before the loop stopped."""
-    failure: OllamaError | None = None
-    """The `OllamaError`-family exception that stopped the loop, or `None`
+    failure: BackendError | None = None
+    """The `BackendError`-family exception that stopped the loop, or `None`
     for a complete run."""
     failed_index: int | None = None
     """1-based index of the edge whose `llm.chat` raised `failure`; `None`
@@ -874,7 +875,7 @@ def suggest_edge_types(
     endpoints' OKF object types, language-independent) -- see the latter's
     docstring for why that order and not the reverse.
 
-    An `OllamaError`-family exception raised by `llm.chat` stops the loop
+    A `BackendError`-family exception raised by `llm.chat` stops the loop
     and comes back IN the batch (`failure` set, `failed_index` naming the
     1-based edge whose chat raised) rather than propagating (issue #441):
     propagation made the caller pay for every completed call and then
@@ -940,7 +941,7 @@ def suggest_edge_types(
         # progress failures keep their own existing contracts untouched.
         try:
             reply = llm.chat(messages)
-        except OllamaError as exc:
+        except BackendError as exc:
             return EdgeSuggestionBatch(results=results, failure=exc, failed_index=index)
         suggested_type, rationale = _parse_reply(reply)
         suggested_type, rationale = _withdraw_contradicted_direction(
