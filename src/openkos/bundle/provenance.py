@@ -243,6 +243,32 @@ def _reachable_ids(
     )
 
 
+def _source_ancestors_over(
+    provenance_by_id: Mapping[str, frozenset[str]], *, object_id: str
+) -> list[str]:
+    """The shared upward walk `provenance_source_ancestors` and
+    `provenance_source_ancestors_many` both run, extracted so the many-id
+    caller can parse `files` ONCE and reuse this exact walk per id (Phase B
+    design.md Decision B4, "shared-walk refactor" -- O(1) parses instead of
+    O(D) for D requested ids). Operates on an ALREADY-PARSED `id ->
+    frozenset(provenance ids)` map; see `provenance_source_ancestors`'s
+    docstring for the algorithm, the dangling-Source inclusion rule,
+    termination, and determinism guarantees -- all unchanged by this
+    extraction, and reproduced there rather than here so callers reading
+    the public function see the contract without following an indirection."""
+    ancestors: set[str] = set()
+    frontier = {_normalize_id(object_id)}
+    while frontier:
+        next_frontier: set[str] = set()
+        for concept_id in frontier:
+            for parent in provenance_by_id.get(concept_id, frozenset()):
+                if parent not in ancestors:
+                    ancestors.add(parent)
+                    next_frontier.add(parent)
+        frontier = next_frontier
+    return sorted(ancestor for ancestor in ancestors if ancestor.startswith("sources/"))
+
+
 def provenance_source_ancestors(
     files: Mapping[str, str], *, object_id: str
 ) -> list[str]:
@@ -268,19 +294,40 @@ def provenance_source_ancestors(
     and is bounded by the finite id universe, so a provenance cycle
     terminates and the object citing itself never re-enters the frontier.
     The returned list is `sorted()` -- deterministic regardless of `files`
-    iteration order."""
+    iteration order.
+
+    Delegates the walk itself to `_source_ancestors_over`, parsing `files`
+    once for this single id (Phase B design.md Decision B4); behavior is
+    unchanged for every existing caller."""
     provenance_by_id = _parse_provenance_by_id(files)
-    ancestors: set[str] = set()
-    frontier = {_normalize_id(object_id)}
-    while frontier:
-        next_frontier: set[str] = set()
-        for concept_id in frontier:
-            for parent in provenance_by_id.get(concept_id, frozenset()):
-                if parent not in ancestors:
-                    ancestors.add(parent)
-                    next_frontier.add(parent)
-        frontier = next_frontier
-    return sorted(ancestor for ancestor in ancestors if ancestor.startswith("sources/"))
+    return _source_ancestors_over(provenance_by_id, object_id=object_id)
+
+
+def provenance_source_ancestors_many(
+    files: Mapping[str, str], *, object_ids: Collection[str]
+) -> dict[str, list[str]]:
+    """The same answer `provenance_source_ancestors` would give for EACH id
+    in `object_ids`, but parsing every file's `provenance` frontmatter only
+    ONCE regardless of how many ids are requested -- O(1) parses instead of
+    O(D) for D ids (Phase B design.md Decision B4, "shared-walk refactor").
+    Phase B's revision-candidate scan needs source ancestors for every
+    Decision in the bundle; re-parsing the whole bundle's frontmatter once
+    per Decision would make that scan quadratic in bundle size.
+
+    Returns a dict keyed by the EXACT strings in `object_ids` (not
+    normalized) -- a caller passing a `.md`-suffixed id back gets its
+    result keyed the same way it asked, and two different spellings of the
+    same id (with/without `.md`) are computed and reported independently,
+    matching how calling `provenance_source_ancestors` once per spelling
+    would behave. Each value is the same sorted `sources/`-prefixed
+    ancestor list `provenance_source_ancestors(files, object_id=that_id)`
+    returns; see its docstring for the walk, the dangling-Source inclusion
+    rule, termination, and determinism guarantees, all unchanged here."""
+    provenance_by_id = _parse_provenance_by_id(files)
+    return {
+        object_id: _source_ancestors_over(provenance_by_id, object_id=object_id)
+        for object_id in object_ids
+    }
 
 
 def resolve_source_raises(
