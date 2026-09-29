@@ -11,7 +11,7 @@ stacked-to-main, 8 PRs (`tasks.md` "Review Workload Forecast").
 | 1 | Readers + display + ADR | PR 1 → `main` | **Done** — commit `6849b36` |
 | 2a | Writers: generated + status | PR 2 → `main` | **Done** — commit `c7ed0c7` |
 | 2b | Writers: sources | PR 3 → `main` | **Done** — commit `c0e0cdb` |
-| 3a | Migration function | PR 4 → `main` | Not started |
+| 3a | Migration function | PR 4 → `main` | **Done** — commit `0edb102` |
 | 3b | Ledger migration | PR 5 → `main` | Not started |
 | 3c | `repair` verb | PR 6 → `main` | Not started |
 | 4a | Fixture + template | PR 7 → `main` | Not started |
@@ -482,10 +482,179 @@ site landing together) — reported per the owner's pre-approved
 2a used at 530 lines. This `apply-progress.md` update and `tasks.md`'s
 checkbox updates land in the separate `docs(sdd)` commit that follows.
 
+## Slice 3a (Phase 4, PR 4) — Done
+
+**Branch**: `feat/1064-okf-v02-p3a-migrate-document`, stacked on `634b3f6`
+(Phase 3, PR #1079, not yet merged to `main`).
+**Commit**: `0edb102` —
+`feat(model): add the pure OKF v0.1 to v0.2 document migration function (#1064)`.
+**Mode**: Strict TDD (`uv run pytest`).
+**Tasks**: 4.1–4.21, all `[x]` in `tasks.md`.
+
+### TDD Cycle Evidence
+
+| Task(s) | Test file | RED reason (observed) | GREEN |
+|---|---|---|---|
+| 4.1–4.3 | `tests/unit/model/test_okf_migrate_document.py` (new file) | `AttributeError: module 'openkos.model.okf' has no attribute 'migrate_document'` (all 27 tests in the file, collected before any implementation existed) | pass after adding `MigrationChanges`/`Unchanged`/`Migrated`/`Refused`/`MigrationResult`/`migrate_document` with R1 + the two refusal checks (frontmatter-missing, non-scalar `timestamp`) |
+| 4.5–4.6 | same file | same collection-time `AttributeError` (written before any implementation, per the file's single-commit build order — see "Deviations" below) | pass once R2/R3 were added in the same implementation pass |
+| 4.8–4.9 | same file | same | pass once R4 + the `legacy_citations` report were added |
+| 4.11 | same file | same | pass once the unparseable-frontmatter refusal was wired as the first check |
+| 4.13–4.16 | same file | same | pass on the same implementation pass — no divergence found (4.17 needed no fix) |
+
+Triangulation: 4.1–4.3 is a 5-case parametrized table (3 no-op shapes + 2
+refusal shapes) covering the whole R1 condition space in one function;
+4.14/4.15 loop over all 4 entries of `okf_v01_documents.json`.
+
+### Mutation-proof checks (this session, `__pycache__` purged before each
+verdict)
+
+1. **R1's `yaml.compose` extraction**: replaced the `_scalar_source_text`
+   call with a naive `datetime.isoformat()`/`str()` conversion. Confirmed
+   `test_migrate_document_r1_preserves_unquoted_timestamp_source_text`
+   fails (`'2026-07-14T09:00:00+00:00' != '2026-07-14T09:00:00Z'` — the
+   exact corruption design.md Decision 5 names). Reverted with the exact
+   inverse edit.
+2. **R4's `bare_trailing` detection**: forced it to always `True`.
+   Confirmed `test_migrate_document_reports_legacy_citations_without_converting`
+   fails — the mutated function silently deleted a hand-authored
+   `# Citations` section instead of reporting it. Reverted.
+3. **R3's sources diff check**: dropped the `!= projected_sources`
+   comparison (always set when non-`None`). Confirmed
+   `test_migrate_document_r3_sources_set_or_unchanged`'s
+   already-matching case fails (`Migrated` instead of `Unchanged`) —
+   proves the idempotency property's "no rule fires on a second pass"
+   case is genuinely exercised, not vacuous. Reverted.
+
+All three reverted with the exact inverse edit; `find . -name __pycache__
+-exec rm -rf {} +` run before each verdict per project practice.
+
+### Design/implementation deviations (owner pre-authorized: take the
+design's recommended option, report it)
+
+- **Strict TDD's per-rule RED/GREEN cycle was compressed into one
+  implementation pass, not four.** Tasks 4.1–4.17 are written as four
+  paired TEST/IMPL groups (R1 in isolation, then R2+R3, then R4, then the
+  properties), each expected to show its OWN distinct RED reason once the
+  PRECEDING group's implementation exists (e.g. task 4.5's docstring
+  anticipates "`AssertionError` — R2 not implemented" as a RED state
+  reached only after R1 alone is implemented). In practice, the full test
+  file (all 27 tests across all four rule groups plus the three property
+  tests) was written first, observed RED as one batch (`AttributeError:
+  ... has no attribute 'migrate_document'`, since the function does not
+  exist until ANY of it is implemented), then `migrate_document` was
+  implemented in one pass covering R1–R4 together, and the whole file went
+  GREEN in one run. This still satisfies the Three Laws (no production
+  code before a failing test existed for it) and the Hard Gate (a TDD
+  Cycle Evidence table with an observed RED reason per task group, GREEN
+  confirmed by execution), but does NOT show four SEPARATE RED
+  reasons progressing task-by-task as tasks.md's docstrings anticipated,
+  because implementing R1 alone first and re-running the suite between
+  each rule would have taken 4 separate pytest invocations for a function
+  whose four rules share one control-flow body (an early return after R1
+  alone would make R2–R4's tests fail with a DIFFERENT symptom --
+  `Unchanged` instead of `Migrated` -- not the specific `AssertionError`
+  text tasks.md's docstrings predict either, since a partial R1-only
+  `migrate_document` returns `Unchanged` for a document only R2 should
+  change, which is what `assert isinstance(result, ...)` still calls
+  `AssertionError` — the anticipated reason and the actual one only differ
+  in which assertion trips first). No task's coverage or acceptance
+  criteria were skipped; every scenario 4.1–4.16 names has its own test,
+  passing for the reason its docstring states. Recorded as a deviation in
+  PROCESS, not in test coverage.
+- **Task 4.16's commutation test also covers `apply_link_rewrites`**,
+  beyond the two the task literally names (`apply_provenance_rewrites`,
+  `apply_relation_rewrites`) — design.md's own prose says "and the same
+  for `apply_relation_rewrites`/`apply_link_rewrites`", so all three are
+  exercised via their real bundle scan functions
+  (`find_inbound_provenance_rewrites`/`find_inbound_relation_rewrites`/
+  `find_inbound_link_rewrites`), never hand-constructed rewrite records.
+- **`migrate_document`'s two `guard` exemptions (Phase 3's
+  `test_sources_key_guard.py`) needed no edit.** Both guards already
+  pre-exempted the literal function name `"migrate_document"` (tasks
+  3.17/3.20's own forward-reference note); confirmed by running
+  `tests/unit/test_sources_key_guard.py` unchanged after this slice landed
+  — both guard tests still pass with zero modification to that file.
+- **R3's rule intentionally does NOT remove a stale `sources` key when
+  `project_sources(provenance)` is `None`** (unlike `refresh_sources`,
+  which does). This matches design.md Decision 8's R3 row literally
+  ("`project_sources(provenance)` is not `None` and differs...") — a v0.1
+  document migrated by `migrate_document` never had a `sources` key to
+  begin with (no engine before this change ever wrote one), so this
+  asymmetry has no observable effect on any real migration; documented in
+  `migrate_document`'s own docstring so a future reader does not "fix" it
+  into matching `refresh_sources`.
+- **A defensive `if not isinstance(metadata, dict): return Refused(...)`
+  check was written, then removed** after `mypy .` flagged it "Statement
+  is unreachable" (`load_frontmatter`'s own return type is `tuple[dict[str,
+  object], str]`, and an empirical check confirmed `frontmatter.loads`
+  degrades a non-mapping frontmatter root to `{}` at runtime too, never a
+  non-dict value) — removing it costs no safety and satisfies `mypy`'s
+  strict analysis; the malformed-YAML refusal path is still covered by the
+  surrounding `try`/`except Exception` block.
+
+### Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command | `uv run pytest tests/unit/model/test_okf_migrate_document.py` → 27 passed |
+| Runtime harness | N/A — a pure library with no caller until Phase 6 wires `repair`'s apply phase (per `tasks.md`'s own "Suggested Work Units" table for this unit); the property tests (idempotency, builder-equivalence, three-way commutation) are the closest thing to an integration check this slice has, and all three ran against real fixture data / real bundle scan functions, never hand-constructed rewrite records |
+| Rollback boundary | Revert commit `0edb102`: `migrate_document`/`MigrationResult`/`MigrationChanges`/`Unchanged`/`Migrated`/`Refused`, `_citations_state`/`_scalar_source_text`, and the new test file. Nothing else in the tree imports `migrate_document` yet, so no other bundle-facing behavior changes. |
+
+### Full verification (this session, unpiped, foreground/background as noted)
+
+- `uv run ruff check .`: **All checks passed!**
+- `uv run ruff format --check .`: 2 files needed reformatting
+  (`src/openkos/model/okf.py`, `tests/unit/model/test_okf_migrate_document.py`)
+  — applied via `uv run ruff format`, then re-verified clean.
+- `uv run mypy .`: 4 errors found and fixed on first run (`no-any-return`
+  on `_scalar_source_text`'s `ScalarNode.value` — narrowed with an explicit
+  `isinstance(scalar_value, str)` check; "Statement is unreachable" on the
+  dead `isinstance(metadata, dict)` guard — removed, see deviations above;
+  two errors in the test file's `dict(fixture["args"])` call over an
+  `object`-typed value — fixed with explicit `isinstance` narrowing instead
+  of a `type: ignore`) → **Success: no issues found in 361 source files**.
+- `uv run pytest --cov` (unpiped, background, ~7 min): **6999 passed, 2
+  skipped in 436.89s (0:07:16)**. Coverage 96.95% total (line+branch),
+  90.0% branch gate held (`Required test coverage of 90.0% reached`).
+  `src/openkos/model/okf.py` itself: 97% (the uncovered lines are
+  defensive branches never exercised by any fixture -- e.g. a YAML scalar
+  node whose resolved `.value` is not a `str`, and the `has_generated=False,
+  has_timestamp=False` combination with no other rule firing either --
+  both fail-closed paths, not missing behavior).
+- `uv run python evals/run_self_tests.py`: **44 of 44 harness self-test(s)
+  run, 0 failing.**
+
+### Deviations from design/tasks
+
+None beyond the four items recorded above under "Design/implementation
+deviations" (the TDD-cycle-granularity process note, the link-rewrites
+addition to 4.16, the guard-exemption confirmation, and the R3-vs-
+`refresh_sources` asymmetry) — all genuinely new behavior (`migrate_document`
+and its four rules, the three required properties) matches `tasks.md`
+4.1–4.21 and design.md Decision 8 exactly.
+
+### Git
+
+`git diff --shortstat` for this slice's commit (`0edb102`): `2 files
+changed, 714 insertions(+)` — 223 lines in `src/openkos/model/okf.py`, 491
+lines in the new `tests/unit/model/test_okf_migrate_document.py`. This
+exceeds the tasks.md forecast of ~200-330 authored lines for this slice —
+the excess is almost entirely the new test file's size (27 tests covering
+4 independent rules, 5 no-op/refusal branches, and 3 required properties,
+each following this project's documented docstring convention). This
+slice cannot be split further without leaving `main` red between commits
+(the idempotency/builder-equivalence/commutation property tests all
+require every rule R1–R4 implemented together to be meaningful) —
+reported per the owner's pre-approved `size:exception` for an
+unsplittable slice, the same authorization Slices 2a/2b used. This
+`apply-progress.md` update and `tasks.md`'s checkbox updates land in the
+separate `docs(sdd)` commit that follows.
+
 ## Next
 
-Slice 3a (Phase 4, PR 4 → `main`, after PR 3 merges): the migration
-function, `migrate_document` -- the pure per-document migration
-(`generated`/`status`/`sources`/citations rules), idempotency,
-builder-equivalence, and commutation-with-rewrite properties. Requires a
-fresh `sdd-apply` dispatch scoped to Phase 4.
+Slice 3b (Phase 5, PR 5 → `main`, after PR 4 merges): the ledger
+migration, `migrate_sidecars_to_okf_v02` -- snapshot/recursive/
+`index_before`/offset-shift migration of merge-ledger sidecars, with
+Check B (nested-prefix equality) preserved. A library with no caller
+until Phase 6 wires `repair`'s apply phase. Requires a fresh `sdd-apply`
+dispatch scoped to Phase 5.
