@@ -32,6 +32,15 @@ operator step against a real Ollama), `P2.6`, and `P2.7` are intentionally
 NOT done — see the "Phase B — Slice P2" section below for the exact
 command and why.
 
+**Phase B, Slice P3 (`P3.1`–`P3.19`, 19/19) complete** — this batch, on
+`feat/1014-phase-b-p3-findings-store` (checked out off `main` at `c59124a`,
+which already contains P1/P2 via #1055/#1058). PR 6 boundary: adds
+`src/openkos/state/revision_findings.py` (the fourth `findings.db` tenant),
+joins it to `cli.main._sweep_findings_for_ids`, pins the sibling-table
+isolation, and narrows ADR-0025. `size:exception` was pre-approved by the
+owner (2026-09-29) for this slice because design.md forbids splitting the
+table from its sweep; see "Budget" below for the actual count.
+
 ---
 
 ## Slice 1 (PR 1 → `main`, merged): the subject-pass leaf,
@@ -566,4 +575,137 @@ the docstring commit = 251 total), well under the 400-line review budget
   batch (or the same one, resumed) to finish `P2.6`/`P2.7` from its
   output and commit the result under `evals/decision_revisions/results/`.
 - Slices P3 through P8b remain, in chain order, each as its own PR, per
+  tasks.md's "Phase B: tasks (2026-09-28 re-plan)" section.
+
+---
+
+## Slice P3 (PR 6): revision findings store, sweep join, forget tests,
+ADR-0025 narrowing
+
+Branch `feat/1014-phase-b-p3-findings-store`, off `main` @ `c59124a`
+(P1 #1055, P2 #1058 already merged). Strict TDD throughout.
+
+## Files changed
+
+| File | Action |
+|---|---|
+| `src/openkos/state/revision_findings.py` | Created |
+| `tests/unit/state/test_revision_findings.py` | Created |
+| `src/openkos/cli/main.py` | Modified (`_sweep_findings_for_ids` sweep join + import) |
+| `tests/unit/cli/test_forget.py` | Modified (2 tests: scrub-and-preserve, widened warning wording) |
+| `tests/unit/cli/test_contradictions.py` | Modified (1 test: sibling-table regression pin) |
+| `docs/adr/0025-llm-derived-attributes-live-in-a-cache.md` | Renamed + rewritten → `docs/adr/0025-temporal-direction-never-comes-from-the-model.md` |
+| `docs/adr/README.md` | Modified (ADR-0025 index row) |
+
+## TDD Cycle Evidence
+
+| Task(s) | Test file | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|---|---|
+| P3.1–P3.3 (schema, REPLACE, round trip) | `test_revision_findings.py` | Unit | N/A (new module) | ✅ `ImportError: cannot import name 'revision_findings' from 'openkos.state'` (module temporarily moved aside to force the real absent-module failure) | ✅ 8/8 file passed after restoring the implementation | ✅ sorted-pair REPLACE (incl. a reversed-order input), NULL-column round trip, empty-store case | ➖ None needed |
+| P3.4 (dataclasses + `record`/`open`) | `test_revision_findings.py` | Unit | (as above) | (as above) | ✅ 8/8 | ✅ (as above) | ➖ None needed |
+| P3.5–P3.9 (four-arm sweep + checked erasure) | `test_revision_findings.py` | Unit | ✅ 8/8 (batch A, unchanged) | Covered by the same module-absent RED above, then confirmed by 4 targeted mutations (see table below) | ✅ 8/8 after each revert | ✅ each arm isolated by a digest/pair-id fixture designed so only that arm can fire (see mutation notes — the first draft of the pair-id tests was NOT isolated and had to be fixed) | ➖ None needed |
+| P3.10 (`delete_revision_findings_referencing`) | `test_revision_findings.py` | Unit | (as above) | (as above) | ✅ 8/8 | (as above) | ➖ None needed |
+| P3.11–P3.12 (forget scrub-and-preserve, widened warning) | `test_forget.py` | Unit + CLI integration | ✅ 99/99 baseline before edits | ✅ `AssertionError` — targeted quote survived (P3.11); `AssertionError` — "revision finding" absent from stderr (P3.12) | ✅ 2/2 new, 99/99 file total | ✅ two independent findings (target pair vs. unrelated pair) in the same test | ➖ None needed |
+| P3.13 (`_sweep_findings_for_ids` sweep join) | `test_forget.py` | Unit | (as above) | (as above) | ✅ 99/99 | ➖ Single (one call site) | ➖ None needed |
+| P3.14 (sibling-table regression pin) | `test_contradictions.py` | CLI integration | ✅ 69/69 baseline (module already existed by this point in this batch's sequencing — see note) | See note below | ✅ 1/1 new, 69/69 file total | ➖ Single (one shared before/after fixture covering all three verbs) | ➖ None needed |
+| P3.15–P3.16 (ADR-0025 rename + narrowing) | `tests/unit/test_adr_index.py` (pre-existing gate) | Doc consistency | ✅ 59/59 before and after | N/A — doc-only change checked by an existing structural gate, not a new test | ✅ 59/59 | ➖ N/A | ➖ None needed |
+
+**Note on P3.14's RED ordering**: this batch built the whole
+`revision_findings.py` module (P3.1–P3.10) in one continuous pass before
+writing `test_forget.py`/`test_contradictions.py`'s CLI-level tests, so
+P3.14 could not be re-observed as a fresh `ModuleNotFoundError` at the
+exact sequencing tasks.md describes ("RED before P3.4"). The genuine,
+whole-module RED *was* observed once, directly, before any of P3.1–P3.14
+existed (the mutation-testing note above: `ImportError` with the module
+moved aside) — P3.14 shares that same RED evidence rather than a second,
+redundant one. Once written, P3.14 passed immediately (as its own
+description predicts: "zero additional production code"), confirming the
+sibling-table isolation claim.
+
+### Mutation Testing (state/revision_findings.py sweep predicates)
+
+Design's instruction: "mutate the exact line each new test must catch."
+Each mutation was applied, the targeted test's failure observed, then
+reverted with the exact inverse edit; `find . -name __pycache__ -prune
+-exec rm -rf {} +` was run before every verdict.
+
+| # | Mutation | Line | Test(s) that must fail | Result |
+|---|---|---|---|---|
+| 1 | `pair_id_0 in purge_ids or pair_id_1 in purge_ids` → `pair_id_1 in purge_ids` | `revision_findings.py`, `delete_revision_findings_referencing` | `test_delete_revision_findings_referencing_matches_pair_id_0` | ✅ FAILED as expected (`assert 0 == 1`) — and only that test; the first draft of this test was NOT isolated (its digests happened to also satisfy the exact-`input_ref` arm) and had to be corrected before the mutation was meaningful — see note below. Reverted. |
+| 2 | same line → `pair_id_0 in purge_ids` | `revision_findings.py`, `delete_revision_findings_referencing` | `test_delete_revision_findings_referencing_matches_pair_id_1` | ✅ FAILED as expected (also collaterally failed the checked-erasure test, which purges a `pair_id_1` value by coincidence of sort order — an accepted side effect, not a test defect). Reverted. |
+| 3 | Removed the exact `input_ref in purge_ids` arm entirely | `revision_findings.py`, `delete_revision_findings_referencing` | `test_delete_revision_findings_referencing_matches_an_input_ref_source_id` | ✅ FAILED as expected (`assert 0 == 1`), no collateral failures. Reverted. |
+| 4 | `input_ref[len(_SOURCES_OF_PREFIX):] in purge_ids` → `input_ref in purge_ids` (requires the FULL `"sources-of:<id>"` string to equal the purge id, which no purge id ever does) | `revision_findings.py`, `delete_revision_findings_referencing` | `test_delete_revision_findings_referencing_matches_sources_of_prefix_suffix` | ✅ FAILED as expected (`assert 0 == 1`), no collateral failures. Reverted. |
+
+**Self-correction found mid-mutation-testing**: mutation #1's first run did
+NOT fail any test, which meant `test_delete_revision_findings_referencing_
+matches_pair_id_0`'s fixture was confounded — its finding's default digest
+rows happened to include `"concepts/a"` as an `input_ref`, so the
+untouched exact-match arm caught the row even with the `pair_id_0` column
+check removed. Both the `pair_id_0` and `pair_id_1` tests were rewritten to
+override `digests` with values that name neither the purge id nor its
+`sources-of:` form, isolating each arm before re-running the mutation.
+This is exactly the failure mode `test-that-passes-first-try`/
+`mutation-must-target-the-exact-line` warn about, caught here by actually
+running the mutation rather than trusting the test's intent.
+
+### Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `uv run pytest tests/unit/state/test_revision_findings.py tests/unit/cli/test_forget.py tests/unit/cli/test_contradictions.py tests/unit/test_adr_index.py -q` → **235 passed** |
+| Runtime harness command/scenario and exact result | `uv run python evals/run_self_tests.py` under `OLLAMA_HOST=http://127.0.0.1:1` → **43 of 43 harness self-test(s) run, 0 failing** (no runtime boundary of its own for a pure state-store/CLI-sweep slice; this is the project's standing zero-live-model regression gate, unaffected by this slice) |
+| Rollback boundary | Revert `src/openkos/state/revision_findings.py` and its test file (both new, nothing else imports them yet); revert the 3-line import + sweep-call + widened-warning-text edit in `cli/main.py`; revert the 2 added tests in `test_forget.py` and the 1 added test in `test_contradictions.py`; revert the ADR-0025 rename/rewrite and its README row. Each piece reverts independently without touching unrelated Phase A/B1/B2 work |
+
+### Full Verification (this work unit)
+
+| Command | Result |
+|---|---|
+| `uv run ruff check .` | All checks passed! |
+| `uv run ruff format --check .` | Failed once (`test_contradictions.py` needed reformatting after the new test) → ran `uv run ruff format` on that file → re-verified `--check .`: **351 files already formatted** |
+| `uv run mypy .` | Success: no issues found in 351 source files |
+| `uv run pytest --cov` (full, unpiped) | **6833 passed, 2 skipped** in 428.28s, exit 0 (Slice P2 baseline was 6823 passed — this slice adds 11 new tests: 8 in `test_revision_findings.py`, 2 in `test_forget.py`, 1 in `test_contradictions.py`); coverage 97.08%, gate 90% reached; `state/revision_findings.py` itself is 98% covered (the two uncovered branches are `revision_finding_input_digests` absent-table guards inside `open_revision_findings`/`delete_revision_findings_referencing`, unreachable once `record_revision_findings` always creates both tables together) |
+| `uv run python evals/run_self_tests.py` (`OLLAMA_HOST` poisoned) | **43 of 43 harness self-test(s) run, 0 failing** |
+
+### Commits
+
+`4344a6a` — `feat(state): add the revision-findings store and join it to
+the forget sweep (#1014)`. 6 files changed, 844 insertions(+), 3
+deletions(-) (includes the bare `git mv` of the ADR file, 0 content
+change). Staged explicitly by path (`state/revision_findings.py`,
+`tests/unit/state/test_revision_findings.py`, `cli/main.py`,
+`tests/unit/cli/test_forget.py`, `tests/unit/cli/test_contradictions.py`).
+
+`0c55a31` — `docs(adr): narrow ADR-0025 to temporal direction, defer the
+subject cache (#1014)`. 2 files changed, 10 insertions(+), 27
+deletions(-). Staged explicitly by path (the renamed ADR file's content,
+`docs/adr/README.md`).
+
+Both on branch `feat/1014-phase-b-p3-findings-store`. Not pushed. No PR
+opened. `openspec/` task-list ticks and this section are recorded in the
+separate, final `docs(sdd)` commit, per the executor's own instructions.
+
+**Scope**: `state` was confirmed as a real, previously-used project scope
+(`git log --oneline --diff-filter=A -- 'src/openkos/state/*.py'` shows
+`feat(state): persist contradiction findings with per-input staleness
+(#556)` and `feat(state): add in-memory FTS5 lexical index (#23)`), so the
+sweep-wiring half used `feat(state)` rather than falling back to
+`lint`/`cli`. The ADR-only commit used `docs(adr)`, the established
+standalone-ADR scope (`docs(adr): settle the two ADRs MVP 3 is gated on
+(#1004)`, `docs(adr): ADR-0015 per-type default sensitivity...(#682)`),
+distinct from the `docs(sdd)` scope archive uses when a change's own
+delta specs merge and accept an ADR.
+
+**Budget**: `git diff --shortstat c59124a..HEAD` (both commits, before the
+final `docs(sdd)` commit) = **900 insertions(+), 76 deletions(-)**, 8
+files changed — well over the ~550-line forecast, consistent with Phase
+A's own observed "~1.95x actual-vs-forecast" pattern the design already
+named. The owner's `size:exception` (2026-09-29) was granted precisely
+because design.md forbids splitting this table from its sweep and sweep
+tests; no attempt was made to shrink the diff by cutting tests, docs, or
+comments to chase a number.
+
+### Remaining Tasks (Phase B)
+
+- Slice P3's 19/19 tasks are complete.
+- Slices P4 through P8b remain, in chain order, each as its own PR, per
   tasks.md's "Phase B: tasks (2026-09-28 re-plan)" section.

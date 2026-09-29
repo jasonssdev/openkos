@@ -118,6 +118,7 @@ from openkos.state import adjudications as adjudications_store
 from openkos.state import derived, findings
 from openkos.state import edge_suggestions as edge_suggestions_store
 from openkos.state import reindex as reindex_module
+from openkos.state import revision_findings as revision_findings_store
 from openkos.state.fts import FtsUnavailable
 from openkos.state.vectorstore import VecUnavailable, open_vector_store
 from openkos.vcs import git as vcs_git
@@ -941,14 +942,23 @@ def _sweep_findings_for_ids(
             edge_suggestions_store.delete_edge_suggestions_referencing(
                 conn, set(purge_ids)
             )
+            # #1014 Phase B P3: the revision_findings tables are the same
+            # file's FOURTH tenant, and a finding's rationale/quotes can
+            # embed verbatim text from either Decision's body (or a Source
+            # either reaches) -- same sweep, same erasure discipline, same
+            # connection.
+            revision_findings_store.delete_revision_findings_referencing(
+                conn, set(purge_ids)
+            )
         finally:
             conn.close()
     except (OSError, sqlite3.Error) as exc:
         typer.echo(
             "openkos forget: warning -- failed to sweep persisted findings/"
-            f"adjudications/edge suggestions ({exc}); '.openkos/findings.db' "
+            "adjudications/edge suggestions/revision findings "
+            f"({exc}); '.openkos/findings.db' "
             "may still quote the forgotten concept(s). Delete the file to "
-            "clear the residue (all three stores are recomputable at LLM "
+            "clear the residue (all four stores are recomputable at LLM "
             "cost).",
             err=True,
         )

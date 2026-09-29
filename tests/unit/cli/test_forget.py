@@ -2688,7 +2688,10 @@ def test_forget_findings_sweep_failure_warns_and_does_not_abort(
     """A corrupt `.openkos/findings.db` must not abort a forget whose
     bundle writes already landed -- the sweep degrades to one LOUD stderr
     warning naming the residue (a privacy scrub that silently failed would
-    be worse than one that failed out loud)."""
+    be worse than one that failed out loud). The warning text names
+    "revision finding" as one of the swept stores (forget-command spec:
+    "A corrupt findings store warns instead of aborting"; #1014's sweep
+    widens the same wording)."""
     _init_workspace(tmp_path, monkeypatch)
     _write_plain_concept(tmp_path, "concepts/target", title="Target")
     db_path = tmp_path / ".openkos" / "findings.db"
@@ -2700,6 +2703,87 @@ def test_forget_findings_sweep_failure_warns_and_does_not_abort(
     assert result.exit_code == 0, result.output
     assert not (tmp_path / "bundle" / "concepts" / "target.md").exists()
     assert "failed to sweep persisted findings" in result.stderr
+    assert "revision finding" in result.stderr
+
+
+def _seed_revision_finding(
+    tmp_path: Path,
+    pair_ids: tuple[str, str],
+    *,
+    quote: str = "SECRET-REVISION-QUOTE-TEXT quoted from a body",
+) -> Path:
+    from openkos.state import derived, revision_findings
+
+    db_path = tmp_path / ".openkos" / "findings.db"
+    conn = derived.open_derived_connection(db_path)
+    try:
+        revision_findings.record_revision_findings(
+            conn,
+            [
+                revision_findings.RevisionFinding(
+                    pair_ids=pair_ids,
+                    verdict="reverses",
+                    confidence=0.9,
+                    rationale="rationale",
+                    quotes=(quote, None),
+                    dates=("2026-01-01", None),
+                    date_states=("dated", "missing"),
+                    include_confidential=False,
+                    prompt_version="v1",
+                    input_digests=(
+                        revision_findings.InputDigest(pair_ids[0], "sha-0"),
+                        revision_findings.InputDigest(pair_ids[1], "sha-1"),
+                    ),
+                )
+            ],
+        )
+    finally:
+        conn.close()
+    return db_path
+
+
+def test_forget_scrubs_a_revision_finding_referencing_the_purged_concept_and_preserves_an_unrelated_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """forget-command spec: "Forgetting a concept scrubs its persisted
+    revision finding" and "An unrelated revision finding is preserved"
+    (#1014 Phase B P3) -- a revision finding's stored rationale and quotes
+    can embed verbatim text from either Decision's body, so forgetting one
+    of the pair must scrub it, the same class of leak the findings/
+    adjudication/edge-suggestion sweeps already close, one tenant over."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_plain_concept(tmp_path, "concepts/target", title="Target")
+    _write_plain_concept(tmp_path, "concepts/other", title="Other")
+    db_path = _seed_revision_finding(tmp_path, ("concepts/target", "concepts/other"))
+    _seed_revision_finding(
+        tmp_path,
+        ("concepts/unrelated-a", "concepts/unrelated-b"),
+        quote="unrelated quote survives",
+    )
+    wal_path = db_path.with_name(db_path.name + "-wal")
+
+    def _on_disk_bytes() -> bytes:
+        # A WAL-mode write may live only in the `-wal` side file until a
+        # checkpoint, so both files together are what "on disk" means.
+        wal = wal_path.read_bytes() if wal_path.is_file() else b""
+        return db_path.read_bytes() + wal
+
+    # Precondition: without it the absence check below could pass vacuously.
+    assert b"SECRET-REVISION-QUOTE-TEXT" in _on_disk_bytes()
+
+    result = runner.invoke(app, ["forget", "concepts/target", "--auto"])
+
+    assert result.exit_code == 0, result.output
+    assert b"SECRET-REVISION-QUOTE-TEXT" not in _on_disk_bytes()
+    from openkos.state import derived, revision_findings
+
+    conn = derived.open_derived_connection(db_path)
+    try:
+        (survivor,) = revision_findings.open_revision_findings(conn)
+    finally:
+        conn.close()
+    assert survivor.pair_ids == ("concepts/unrelated-a", "concepts/unrelated-b")
+    assert survivor.quotes == ("unrelated quote survives", None)
 
 
 def test_forget_without_a_findings_store_creates_none(

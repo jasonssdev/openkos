@@ -4,7 +4,7 @@ Refs #1014 piece (a), sub-change 2 of 3. Proposal: `proposal.md`, including
 "Human confirmation (2026-09-25)": the detector ships only as the experimental
 `openkos revisions` verb, with no `curate` stage. Umbrella:
 `openspec/changes/decision-revision-detection/exploration.md`. Decision record:
-ADR-0025 (`docs/adr/0025-llm-derived-attributes-live-in-a-cache.md`).
+ADR-0025 (`docs/adr/0025-temporal-direction-never-comes-from-the-model.md`).
 
 > **Phase B re-plan (2026-09-28).** Phase A (S1, S3, S4) shipped as written
 > below, and candidate blocking moved to embeddings (Decision 4, "Update").
