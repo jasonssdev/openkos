@@ -709,3 +709,96 @@ optional per the SDD contract) or `sdd-apply` again for Phase 6 (docs,
 after PR 2 merges, parallel-eligible with Phases 3-5 — Phase 3 and Phase 5
 are both already on `main`/merged-pending, so Phase 6 has no remaining
 blocking dependency once PR 2 has merged, which it already has).
+
+---
+
+## Slice 6 (PR 6 → `main`): Phase 6 — Docs + follow-up issue
+
+**Status**: 4/5 tasks done (6.1, 6.3, 6.4, 6.5). Task 6.2 (open follow-up
+issue F1) is deliberately left to the orchestrator — this run's session
+instructions explicitly excluded creating the GitHub issue from
+`sdd-apply`'s scope. Prose-only slice; Strict TDD's RED/GREEN/REFACTOR
+evidence table does not apply (design.md's threat matrix marks this change
+N/A for routing/shell/subprocess, and this slice adds no code); verification
+is structural readback plus the full suite.
+
+**Scope**: one short docs note describing `source_frontmatter` as an OKF
+extension key on a Source concept, per design.md's Migration/Rollout table
+and proposal.md's follow-up list.
+
+### Completed Tasks
+
+- [x] 6.1 Added a paragraph to `docs/knowledge-object-model.md`'s
+      `## Provenance` section, immediately after the existing paragraph on
+      a Source's own provenance exemption. States that `source_frontmatter`
+      is an OpenKOS extension key (legal under OKF §4.1) preserving an
+      ingested file's own YAML frontmatter verbatim on its Source; that a
+      closed, engine-decided subset (tags, sensitivity, event date) is
+      additionally lifted, tags unioning rather than replacing and
+      sensitivity only ever raising; that every other incoming key stays
+      inert inside `source_frontmatter`; that a re-ingest whose lifted
+      values changed rewrites the Source even when nothing else did; and
+      that a derived object already extracted keeps its creation-time tags
+      (tag propagation runs once, not as a standing sync). Points to
+      ADR-0030 for the trust-boundary rationale rather than restating it.
+      No counts stated, per AGENTS.md's "docs describe the shape, not the
+      diff". `docs/okf-alignment.md` left unchanged — it already points to
+      `knowledge-object-model.md` as the detailed OKF/OpenKOS field mapping,
+      so design's "and/or" is satisfied by the one file.
+- [ ] 6.2 Follow-up issue F1 (re-sync tags onto existing derived concepts)
+      — NOT opened by this run; orchestrator's action per explicit session
+      instruction.
+- [x] 6.3 `ruff check .` / `ruff format --check .` / `mypy .` — all green
+- [x] 6.4 `uv run pytest --cov` (unpiped, full suite) — green
+- [x] 6.5 Committed — see Commits
+
+### Files Changed
+
+| File | Action | What |
+|---|---|---|
+| `docs/knowledge-object-model.md` | Modified | one paragraph in `## Provenance` describing `source_frontmatter` as an OKF extension key, its lift rules, and a pointer to ADR-0030 |
+| `openspec/changes/preserve-source-frontmatter/tasks.md` | Modified | 6.1, 6.3, 6.4, 6.5 marked `[x]`; 6.2 annotated as deliberately deferred to the orchestrator |
+| `openspec/changes/preserve-source-frontmatter/apply-progress.md` | Modified | this section |
+
+### Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | N/A — prose-only change, per design.md's threat matrix and this file's own Suggested Work Units table (`N/A — structural readback is the proportional check`); structural readback: the new paragraph reads correctly in context, uses no stale counts, and its claims (tag union, sensitivity raise-only, re-ingest rewrite, no standing tag re-sync) match Phases 2-5's already-shipped, already-tested behavior |
+| Runtime harness command/scenario and exact result | N/A — no runtime boundary; docs-only |
+| Rollback boundary | Revert the one paragraph added to `docs/knowledge-object-model.md`'s `## Provenance` section; no code behavior depends on this slice |
+
+### Deviations from Design
+
+None — implementation matches design.md's Migration/Rollout table (a short
+shape note, no count-bearing prose, pointing to ADR-0030 rather than
+restating it) and proposal.md's follow-up list. Task 6.2 (opening the F1
+issue) is intentionally not executed by this run per explicit session
+scope, not a design deviation.
+
+### Issues Found
+
+None.
+
+### Review Workload / Size
+
+Actual authored changed lines for this slice: **2 insertions, 0 deletions,
+1 file** (the docs commit) — well within the review budget (400) and
+design.md's own forecast for Slice 6 (~50-150). No `size:exception` needed.
+
+### Commits
+
+1. `f4e2b07` — `docs: describe source_frontmatter as an OKF extension key (#1062)`
+   (`docs/knowledge-object-model.md`; 2 insertions, 0 deletions, 1 file)
+2. (this commit) — `docs(sdd): record frontmatter slice 6 progress (#1062)`
+   (`tasks.md` checkbox updates + this file)
+
+### Next
+
+Phase 6 is complete except for task 6.2 (follow-up issue F1), which the
+orchestrator opens per this run's session instructions. All six phases of
+`preserve-source-frontmatter` (#1062) are now implemented and committed on
+their respective branches/PRs. `next_recommended: sdd-archive` once PR 6
+lands (verification remains optional per the SDD contract) — or the
+orchestrator opens follow-up issue F1 first, per proposal.md's follow-up
+list, as this change's last outstanding item before archive.

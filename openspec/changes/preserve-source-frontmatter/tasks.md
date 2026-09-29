@@ -1190,7 +1190,7 @@ unchanged, and `query --save`'s output stays byte-identical throughout.
 
 Design.md "Migration / Rollout" and proposal.md's follow-up list.
 
-- [ ] **6.1** [DOC] `docs/knowledge-object-model.md` and/or
+- [x] **6.1** [DOC] `docs/knowledge-object-model.md` and/or
   `docs/okf-alignment.md`: add one short note (no counts, per AGENTS.md's
   "docs describe the shape, not the diff") stating that `source_frontmatter`
   is a frontmatter extension key on a Source concept, holding the incoming
@@ -1198,6 +1198,14 @@ Design.md "Migration / Rollout" and proposal.md's follow-up list.
   (`tags`, `sensitivity`, `date`) is additionally lifted onto the Source
   under documented merge rules — pointing to ADR-0030 for the trust-
   boundary rationale rather than restating it.
+  - Landed in `docs/knowledge-object-model.md`'s `## Provenance` section,
+    directly after the existing paragraph on a Source's own provenance
+    exemption — the section already discussed Source-specific metadata
+    treatment, so the new paragraph reads as a natural continuation rather
+    than a bolted-on aside. `docs/okf-alignment.md` was left unchanged
+    (design's "and/or" is satisfied by one file), since it already
+    cross-references `knowledge-object-model.md` as the place the
+    OKF/OpenKOS field mapping is specified in detail.
 - [ ] **6.2** [PROCESS] Open follow-up issue **F1: Re-sync tags onto
   existing derived concepts**, per proposal.md's follow-up list: when a
   Source's incoming tags change on re-ingest, existing derived concepts
@@ -1206,14 +1214,25 @@ Design.md "Migration / Rollout" and proposal.md's follow-up list.
   provenance descendants, modeled on `set-sensitivity` (ADR-0009). Record
   the issue number here once opened. (F2 and F3 from proposal.md are
   explicitly optional/deferred — not required to be filed in this change.)
-- [ ] **6.3** Run `uv run ruff check . && uv run ruff format --check . &&
+  - Deliberately left unopened by `sdd-apply` per explicit orchestrator
+    instruction for this slice: the orchestrator opens this follow-up
+    issue itself. Not a deviation from design — a routing decision for
+    this run.
+- [x] **6.3** Run `uv run ruff check . && uv run ruff format --check . &&
   uv run mypy .` — must be green (docs-only change; confirms no code was
   accidentally touched).
-- [ ] **6.4** Run `uv run pytest --cov` (unpiped) full suite — must be
+  - `ruff check .`: All checks passed! `ruff format --check .`: 365 files
+    already formatted. `mypy .`: Success: no issues found in 365 source
+    files.
+- [x] **6.4** Run `uv run pytest --cov` (unpiped) full suite — must be
   green; docs-only change should need no test changes.
-- [ ] **6.5** Commit as one work-unit commit, scope `docs` (e.g. `docs:
+  - 7176 passed, 2 skipped, 96.92% coverage (90% gate held). No test files
+    were touched by this slice, as expected for a docs-only change.
+- [x] **6.5** Commit as one work-unit commit, scope `docs` (e.g. `docs:
   describe source_frontmatter as an OKF extension key`). Open PR 6 (Phase
   6: docs) targeting `main`, branched from `main` after PR 2 merges.
+  - Committed on this branch per session instructions (no push/PR from this
+    executor — branch/PR delivery is the orchestrator's/user's action).
 
 **Rollback boundary**: revert the docs edit file-by-file; no code behavior
 depends on this slice. Closing follow-up issue F1 is independent of any
