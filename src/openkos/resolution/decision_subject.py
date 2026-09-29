@@ -15,12 +15,20 @@ test file, never by a cross-import of that private name.
 
 `SUBJECT_PROMPT_VERSION` is derived from `_SUBJECT_SYSTEM_PROMPT` itself
 (`hashlib.sha256(...).hexdigest()[:16]`), so editing the prompt cannot
-forget to bump the cache key that consumes this constant (Phase B, S2).
+forget to bump the version a future cache key would consume.
 
 `derive_subjects`'s batch loop is copied from `contradiction.find_contradictions`
 (`contradiction.py:1175-1231`): only `llm.chat` sits inside the `OllamaError`
 guard, and a raised error returns the completed prefix rather than
 propagating (issue #441's contract, reapplied here).
+
+As of the Phase B re-plan (design.md Decision B3), this module has NO
+production caller: the production subject pass was dropped entirely
+(`load_decisions`/`plan_revisions` never call `derive_subjects`), the judge
+in `resolution/decision_revision.py` imports only `quoted_verbatim` from
+this module, and the harness (`evals/decision_revisions/`) runs
+`derive_subjects` as its own subject-pass diagnostic, never as production
+behavior.
 """
 
 import hashlib

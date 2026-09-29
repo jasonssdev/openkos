@@ -14,6 +14,8 @@ uv run python evals/decision_revisions/run_decision_revisions_eval.py --runs 15
 uv run python evals/decision_revisions/run_decision_revisions_eval.py \
     --runs 15 --model qwen3:8b --temperature 0.0 --seed 7
 uv run python evals/decision_revisions/run_decision_revisions_eval.py \
+    --runs 15 --vector-source reindex
+uv run python evals/decision_revisions/run_decision_revisions_eval.py \
     --rescore evals/decision_revisions/results/runs-20260928T103525Z-qwen3-8b.json
 ```
 
@@ -279,6 +281,40 @@ at different `--runs` counts, on different fixture contents, or under
 different client settings (mirrors `evals/contradictions/README.md`'s own
 warning) -- and never compare a run against T1's synthetic placeholder to a
 run against T2's real fixture; they are not the same measurement.
+
+## `--vector-source {text,reindex}`: which shape the embedder measures
+
+Phase B's re-plan (design.md Decision B5, "Keep 0.65, cite the
+production-shape measurement, and make that measurement reproducible") adds
+a second arm, so `EMBEDDING_SIMILARITY_THRESHOLD`'s docstring can cite a
+committed, re-runnable measurement instead of an un-reproducible scratchpad
+probe:
+
+- **`text`** (default, unchanged): `embed_text` composes `title\n\nbody`
+  directly and hands the WHOLE fixture to `embedder.embed()` in one batched
+  call -- SHORT text, not a full OKF document. This is the shape the
+  original offline calibration probe used.
+- **`reindex`**: writes every fixture Decision as a real OKF `Decision`
+  concept into a throw-away temporary bundle (`okf.dump_frontmatter`, never
+  an f-string), runs the REAL `state.reindex.reindex` over it with the
+  configured embedder, and reads the resulting vectors back through
+  `VectorStoreDB.document_vectors` (Phase B, slice P1) -- the exact seam
+  `application/revisions.py` uses in production (slice P5a). This measures
+  the title+description+tags header plus CHUNKED body shape
+  `EMBED_COMPOSITION_TAG` records, not the harness's own short string.
+
+`embed_via_reindex` raises `VectorSourceMismatch` (never silently returns
+fewer vectors) if the read-back count does not equal the number of
+Decisions written -- a lost chunk must fail loudly, not score as a real
+0/N recall miss. `--self-test` exercises both the happy path and this
+checked-mismatch path with a model-free `_ReindexFakeEmbedder`, so the
+poisoned-`OLLAMA_HOST` self-test sweep (`evals/run_self_tests.py`) stays
+honest for this arm too.
+
+Per Decision B5, the one committed live run `EMBEDDING_SIMILARITY_THRESHOLD`'s
+docstring is meant to cite uses `--vector-source reindex`. That operator step
+(requires a running local Ollama) has not been run as of this slice; the
+docstring still cites only the title+body offline probe until it is.
 
 ## Pass/fail bars (stated before the first live run)
 
