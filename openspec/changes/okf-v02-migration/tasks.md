@@ -436,7 +436,7 @@ Design.md "Technical Approach" layer 2 (second half) and Decisions 3-4.
 
 ### `model/okf.py` — `project_sources` (Decision 3)
 
-- [ ] **3.1** [TEST] `tests/unit/model/test_okf_sources_projection.py` (new
+- [x] **3.1** [TEST] `tests/unit/model/test_okf_sources_projection.py` (new
   file) — add `test_project_sources_normalizes_concept_id_entries`,
   parametrized over a `provenance` entry shape: `sources/foo` (bare),
   `/sources/foo` (leading slash), `sources/foo.md` (trailing `.md`),
@@ -444,14 +444,14 @@ Design.md "Technical Approach" layer 2 (second half) and Decisions 3-4.
   "sources/foo", "resource": "/sources/foo.md"}`. Covers ingestion scenario
   "`sources` matches the projection of `provenance`" (normalization half).
   **RED today**: `AttributeError` — `project_sources` does not exist.
-- [ ] **3.2** [TEST] Same file — add
+- [x] **3.2** [TEST] Same file — add
   `test_project_sources_skips_raw_entries_and_dedupes_and_orders`: a
   `provenance` list mixing a `raw/<name>` workspace path (skipped, not
   projected) with two Concept-ID entries, one repeated (first occurrence
   wins, order preserved) — the projected list has exactly the two distinct
   Concept-ID entries in first-occurrence `provenance` order. **RED today**:
   same `AttributeError`.
-- [ ] **3.3** [TEST] Same file — add
+- [x] **3.3** [TEST] Same file — add
   `test_project_sources_none_cases`, parametrized: `provenance` absent; a
   non-list value; a list containing only non-string/empty entries; an empty
   list; a list with only `raw/` entries — every case yields `project_sources(...)
@@ -460,11 +460,11 @@ Design.md "Technical Approach" layer 2 (second half) and Decisions 3-4.
   today**: same `AttributeError`. Kills a `None` case that instead returns
   `[]`, which would make the builder insert an empty `sources: []` key
   rather than omitting it.
-- [ ] **3.4** [TEST] Same file — add
+- [x] **3.4** [TEST] Same file — add
   `test_project_sources_key_order_is_id_then_resource`: the returned dict's
   `list(entry.keys()) == ["id", "resource"]` for every entry (insertion
   order, per §5.1's own example). **RED today**: same `AttributeError`.
-- [ ] **3.5** [IMPL] `src/openkos/model/okf.py`: add `SOURCES_KEY: Final =
+- [x] **3.5** [IMPL] `src/openkos/model/okf.py`: add `SOURCES_KEY: Final =
   "sources"` and `project_sources(provenance: object) -> list[dict[str,
   str]] | None` implementing design.md Decision 3's table exactly (skip
   `raw/`-prefixed entries; normalize a Concept-ID entry by stripping one
@@ -473,26 +473,26 @@ Design.md "Technical Approach" layer 2 (second half) and Decisions 3-4.
 
 ### `model/okf.py` — `refresh_sources` (Decision 3-4)
 
-- [ ] **3.6** [TEST] Same file — add `test_refresh_sources_maintenance_rules`,
+- [x] **3.6** [TEST] Same file — add `test_refresh_sources_maintenance_rules`,
   parametrized: `sources` present + projection non-`None` -> replaced in
   place at its existing key position; `sources` present + projection
   `None` -> key removed; `sources` absent -> metadata returned unchanged
   (no key inserted). **RED today**: `AttributeError` — `refresh_sources`
   does not exist.
-- [ ] **3.7** [IMPL] Same module: add `refresh_sources(metadata: dict[str,
+- [x] **3.7** [IMPL] Same module: add `refresh_sources(metadata: dict[str,
   object]) -> dict[str, object]` (returns a copy) per 3.6's table. Makes 3.6
   GREEN.
 
 ### Builders + merge introduce `sources`; provenance retarget maintains it
 
-- [ ] **3.8** [TEST] `tests/unit/model/test_okf.py` — add
+- [x] **3.8** [TEST] `tests/unit/model/test_okf.py` — add
   `test_build_concept_sources_matches_provenance_projection`: for a
   `build_concept` call with a Concept-ID `provenance` list, the returned
   document's `sources` equals `project_sources(provenance)`; key placement
   is immediately after `provenance`. Covers ingestion's parity scenario at
   the single-document level. **RED today**: `AssertionError` — no `sources`
   key written.
-- [ ] **3.9** [TEST] Same file — add
+- [x] **3.9** [TEST] Same file — add
   `test_build_source_concept_never_writes_sources`: a `build_source_concept`
   call (whose only provenance is its `raw/` original) never writes a
   `sources` key. **RED today**: passes vacuously today (no `sources` logic
@@ -500,22 +500,22 @@ Design.md "Technical Approach" layer 2 (second half) and Decisions 3-4.
   wires the projection call, so this stays a real regression pin once 3.10
   lands; write it as `assert "sources" not in metadata` before 3.10 to
   confirm it is genuinely exercised.
-- [ ] **3.10** [IMPL] `src/openkos/model/okf.py`: call `project_sources`
+- [x] **3.10** [IMPL] `src/openkos/model/okf.py`: call `project_sources`
   inside `build_concept` (introduces `sources` when non-`None`, inserted
   immediately after `provenance`) and inside `build_source_concept`
   (always `None` for the OpenKOS shape today, so no key is ever written —
   no call needed, but add a one-line comment citing design.md Decision 3's
   "a Source document therefore gets no `sources`" rule so a future reader
   does not add one accidentally). Makes 3.8-3.9 GREEN.
-- [ ] **3.11** [TEST] Same file — add
+- [x] **3.11** [TEST] Same file — add
   `test_build_merged_document_sources_matches_unioned_provenance`: the
   merged document's `sources` equals `project_sources` of the UNIONED
   `provenance` list (both sides combined per the existing merge rule).
   **RED today**: `AssertionError`.
-- [ ] **3.12** [IMPL] Same module: call `project_sources` inside
+- [x] **3.12** [IMPL] Same module: call `project_sources` inside
   `build_merged_document` over the already-unioned `provenance` value,
   introducing/replacing `sources` on the merged survivor. Makes 3.11 GREEN.
-- [ ] **3.13** [TEST] `tests/unit/bundle/test_provenance.py` — add
+- [x] **3.13** [TEST] `tests/unit/bundle/test_provenance.py` — add
   `test_apply_provenance_rewrites_refreshes_sources`: a document with an
   existing `sources` key, after a provenance retarget rewrite, has `sources`
   updated via `refresh_sources` to match the new `provenance`; a document
@@ -523,13 +523,13 @@ Design.md "Technical Approach" layer 2 (second half) and Decisions 3-4.
   document pre-`repair` stays byte-identical, per design.md Decision 4's
   rationale). **RED today**: `AssertionError` — `apply_provenance_rewrites`
   does not touch `sources` today.
-- [ ] **3.14** [IMPL] `src/openkos/bundle/provenance.py`: call
+- [x] **3.14** [IMPL] `src/openkos/bundle/provenance.py`: call
   `okf.refresh_sources(metadata)` inside `apply_provenance_rewrites` after
   the `provenance` list is rewritten. Makes 3.13 GREEN.
 
 ### Source body: no trailing `# Citations`
 
-- [ ] **3.15** [TEST] `tests/unit/model/test_okf.py` — extend/confirm the
+- [x] **3.15** [TEST] `tests/unit/model/test_okf.py` — extend/confirm the
   test from 2.6 (already covers the no-Citations body shape for both
   verbatim and undecodable cases) additionally checks the empty-source case
   from ingestion's "Empty source renders a distinct body" scenario also
@@ -540,7 +540,7 @@ Design.md "Technical Approach" layer 2 (second half) and Decisions 3-4.
 
 ### Parity test (bundle-wide, across ingest→merge)
 
-- [ ] **3.16** [TEST] `tests/unit/model/test_okf_sources_projection.py` —
+- [x] **3.16** [TEST] `tests/unit/model/test_okf_sources_projection.py` —
   add `assert_sources_parity(bundle_dir)` helper (design.md's Testing
   Strategy table) plus `test_sources_parity_after_ingest_and_merge`: run a
   real `ingest` then a real `merge` in `tmp_path` via the application layer
@@ -559,7 +559,7 @@ Design.md "Technical Approach" layer 2 (second half) and Decisions 3-4.
 
 ### AST guard 1 — no read of `sources` outside the projection
 
-- [ ] **3.17** [TEST] `tests/unit/test_sources_key_guard.py` (new file) —
+- [x] **3.17** [TEST] `tests/unit/test_sources_key_guard.py` (new file) —
   add `test_no_module_outside_projection_reads_sources_key`: an AST walk of
   every `.py` file under `src/openkos/` that rejects any `ast.Subscript`
   load, `.get("sources")`/`.get(okf.SOURCES_KEY)` call, or `"sources" in
@@ -570,10 +570,10 @@ Design.md "Technical Approach" layer 2 (second half) and Decisions 3-4.
   scenario "No module outside the projection reads `sources` back". **RED
   today**: `ModuleNotFoundError`/`AttributeError` — the test file and its
   scanner do not exist.
-- [ ] **3.18** [IMPL] `src/openkos/model/okf.py` + guard test: implement the
+- [x] **3.18** [IMPL] `src/openkos/model/okf.py` + guard test: implement the
   AST scanner inside the test file itself (test-only code, no production
   change beyond what 3.5/3.7 already added). Makes 3.17 GREEN.
-- [ ] **3.19** [TEST, mutation-proof] In `test_sources_key_guard.py`,
+- [x] **3.19** [TEST, mutation-proof] In `test_sources_key_guard.py`,
   temporarily add a forbidden read (e.g. `_ = metadata.get("sources")`
   inside an unrelated function in a scratch module the test scans, or
   monkeypatch the scan target list to include a deliberately-planted
@@ -584,7 +584,7 @@ Design.md "Technical Approach" layer 2 (second half) and Decisions 3-4.
 
 ### AST guard 2 — only builders + retarget store `provenance`
 
-- [ ] **3.20** [TEST] Same file — add
+- [x] **3.20** [TEST] Same file — add
   `test_provenance_key_writers_are_pinned_to_builders_and_retarget`: an AST
   walk pinning the exact set of functions across `src/openkos/` that assign
   into a `provenance`/`okf.PROVENANCE_KEY`-equivalent dict key (or the
@@ -594,9 +594,9 @@ Design.md "Technical Approach" layer 2 (second half) and Decisions 3-4.
   `model/okf.py` uses for the `provenance` key name during implementation
   and pin that name, not a guessed one). **RED today**:
   `ModuleNotFoundError`/`AttributeError`.
-- [ ] **3.21** [IMPL] Implement the second scanner in the same test file.
+- [x] **3.21** [IMPL] Implement the second scanner in the same test file.
   Makes 3.20 GREEN.
-- [ ] **3.22** [TEST, mutation-proof] Same file — remove the
+- [x] **3.22** [TEST, mutation-proof] Same file — remove the
   `okf.refresh_sources` call added in 3.14 from a scratch copy of
   `apply_provenance_rewrites` used only inside this mutation test (or
   monkeypatch a stand-in), and confirm 3.13's parity assertion (or 3.16's
@@ -605,13 +605,13 @@ Design.md "Technical Approach" layer 2 (second half) and Decisions 3-4.
 
 ### Phase 3 verification
 
-- [ ] **3.23** Run `uv run ruff check . && uv run ruff format --check . &&
+- [x] **3.23** Run `uv run ruff check . && uv run ruff format --check . &&
   uv run mypy .` — must be green.
-- [ ] **3.24** Run `uv run pytest tests/unit/model/test_okf_sources_projection.py
+- [x] **3.24** Run `uv run pytest tests/unit/model/test_okf_sources_projection.py
   tests/unit/test_sources_key_guard.py tests/unit/bundle/test_provenance.py
   tests/unit/model/test_okf.py` focused, then `uv run pytest --cov`
   (unpiped) full suite — must be green, 90% branch gate held.
-- [ ] **3.25** Run `uv run python evals/run_self_tests.py` — must be green.
+- [x] **3.25** Run `uv run python evals/run_self_tests.py` — must be green.
 - [ ] **3.26** Commit as one or more work-unit commits, scope `model` (e.g.
   `feat(model): project sources from provenance at every write point`).
   Open PR 3 (Phase 3: writers — sources) targeting `main`, branched from
