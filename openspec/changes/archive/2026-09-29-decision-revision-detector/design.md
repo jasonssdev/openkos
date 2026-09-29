@@ -593,6 +593,8 @@ in `@_guard_workspace_lock("revisions")`, as `contradictions` is.
 > longer exist in production and vector coverage is new. Grouping, line
 > shapes and the default filter are unchanged. See "Phase B re-plan",
 > Decision B4.
+>
+> **Superseded in part at archive (2026-09-29):** stdout items 1 (workspace root) and 2 (served/judged summary) in the design below were not implemented — no spec requirement was ever written for them and no task was created. The remaining stdout items (counts line, truncation notice, Decision groups) were built as designed.
 
 **Choice**:
 - **Help text** (`@app.command(help=...)`, `rich_help_panel="Explore"`):

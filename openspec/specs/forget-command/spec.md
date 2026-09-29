@@ -208,11 +208,21 @@ sweeps already close. The SAME sweep MUST also delete every persisted
 ADJUDICATION (issue #779: the `adjudications` tables are the same file's
 second tenant) whose member set names a purge-set member -- an
 adjudication's `rationale` can quote the member's body verbatim -- under
-the same erasure discipline. The deletion MUST be an erasure (no
-freelist-recoverable pages, no residual WAL images), not a row-level
+the same erasure discipline. The SAME sweep MUST ALSO delete, under the
+same erasure discipline, every persisted REVISION FINDING (the
+`decision-revision-detection` capability's sibling tables, `findings.db`'s
+third tenant) whose Decision pair names a purge-set member -- a revision
+finding's stored rationale and per-side quotes can embed verbatim text
+from either Decision's body. The deletion MUST be an erasure
+(no freelist-recoverable pages, no residual WAL images), not a row-level
 tombstone. A missing store is a no-op and is never created by the sweep; a
 corrupt or unreadable store degrades to a stderr warning naming the
 residue and remedy, never an aborted forget.
+(Previously: this requirement covered only the `findings` and
+`adjudications` tenants of `.openkos/findings.db`. This widens the SAME
+sweep, under the same erasure discipline, to also cover
+`decision-revision-detection`'s revision-finding tables -- `findings.db`'s
+third tenant.)
 
 #### Scenario: Forgetting a concept scrubs its persisted finding claims
 
@@ -236,6 +246,20 @@ residue and remedy, never an aborted forget.
 - THEN the forget succeeds and one stderr warning names the possible
   residue and the remedy
 
+#### Scenario: Forgetting a concept scrubs its persisted revision finding
+
+- GIVEN `.openkos/findings.db` holds a revision finding whose Decision pair
+  names concept id `<id>`, with a verbatim quote from `<id>`'s body
+- WHEN `openkos forget <id>` completes Phase B successfully
+- THEN that revision finding is deleted, and the quoted text is not
+  recoverable from the database file's bytes
+
+#### Scenario: An unrelated revision finding is preserved
+
+- GIVEN a persisted revision finding that references only a concept outside
+  the purge set
+- WHEN `openkos forget <id>` completes
+- THEN that revision finding is left unchanged
 ### Requirement: Inbound Reference Detection
 
 `openkos forget` MUST enumerate every inbound markdown link and inbound

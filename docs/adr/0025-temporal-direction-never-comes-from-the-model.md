@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0025: Temporal direction between two concepts never comes from a model"
 description: The order between two Decisions is taken only from the event dates their provenance reaches; a judge's reply schema has no field that can express order, and the stored finding keeps the dates, never a holder.
-status: Proposed
+status: Accepted
 date: 2026-09-25
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0025: Temporal direction between two concepts never comes from a model
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-09-25
 
 ## Context
