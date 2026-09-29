@@ -324,8 +324,9 @@ def test_successful_ingest_of_valid_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A valid `ingest --auto` copies the raw source, writes one conformant
-    Source concept with provenance + `# Citations`, and updates
-    `index.md`/`log.md` (scenario: successful ingest of a valid path)."""
+    Source concept with provenance and `generated`/`status: stable` (no
+    `# Citations`), and updates `index.md`/`log.md` (scenario: successful
+    ingest of a valid path)."""
     _init_workspace(tmp_path, monkeypatch)
     source = tmp_path / "notes.txt"
     source.write_text("Some raw notes.", encoding="utf-8")
@@ -343,8 +344,11 @@ def test_successful_ingest_of_valid_path(
     assert metadata["provenance"] == ["raw/notes.txt"]
     assert "## Source content" in body
     assert "Some raw notes." in body
-    assert body.index("## Source content") < body.index("# Citations")
-    assert "# Citations" in body
+    assert "# Citations" not in body
+    assert metadata["status"] == "stable"
+    assert isinstance(metadata["generated"], dict)
+    assert metadata["generated"]["by"] == okf.engine_actor()
+    assert "timestamp" not in metadata
     assert okf.check_conformance(tmp_path / "bundle") == []
     index_text = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
     assert "sources/notes.md" in index_text
@@ -3545,10 +3549,11 @@ def test_reingest_raises_when_workspace_default_exceeds_on_disk(
 def test_reingest_still_refreshes_timestamp_and_description(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Only `sensitivity` carries across a re-ingest's merge; `timestamp`
-    keeps refreshing to the current build's clock value exactly as before
-    this change -- a merge into the freshly built metadata, never a
-    restore of the prior document (design: "Refresh semantics")."""
+    """Only `sensitivity` carries across a re-ingest's merge; `generated.at`
+    keeps refreshing to the current build's clock value exactly as
+    `timestamp` did before this change -- a merge into the freshly built
+    metadata, never a restore of the prior document (design: "Refresh
+    semantics")."""
     _init_workspace(tmp_path, monkeypatch)
     source = tmp_path / "notes.txt"
     source.write_text("Some raw notes about self-control.", encoding="utf-8")
@@ -3556,7 +3561,7 @@ def test_reingest_still_refreshes_timestamp_and_description(
     assert first.exit_code == 0
     concept_path = tmp_path / "bundle" / "sources" / "notes.md"
     first_metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
-    first_timestamp = first_metadata["timestamp"]
+    first_generated_at = first_metadata["generated"]["at"]  # type: ignore[index]
     _set_source_sensitivity(tmp_path, "notes", "confidential")
 
     class _FixedClock:
@@ -3571,8 +3576,9 @@ def test_reingest_still_refreshes_timestamp_and_description(
     assert result.exit_code == 0
     metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
     assert metadata["sensitivity"] == "confidential"
-    assert metadata["timestamp"] != first_timestamp
-    assert metadata["timestamp"] == "2099-01-01T00:00:00Z"
+    assert metadata["generated"]["at"] != first_generated_at  # type: ignore[index]
+    assert metadata["generated"]["at"] == "2099-01-01T00:00:00Z"  # type: ignore[index]
+    assert "timestamp" not in metadata
 
 
 def test_reingest_with_equal_values_writes_byte_identical_output(
@@ -3580,10 +3586,10 @@ def test_reingest_with_equal_values_writes_byte_identical_output(
 ) -> None:
     """When the on-disk `sensitivity` already equals `cfg.default_sensitivity`
     the resolved value is unchanged, and every OTHER line of the rewritten
-    Source is unchanged too except the always-refreshing `timestamp` --
-    byte-identical to the pre-existing regenerate behavior for the
-    `sensitivity` field (spec: "Re-ingest with equal values is
-    byte-identical to today")."""
+    Source is unchanged too except the always-refreshing `generated.at`
+    (`timestamp` before okf-v02-migration, issue #1064) -- byte-identical
+    to the pre-existing regenerate behavior for the `sensitivity` field
+    (spec: "Re-ingest with equal values is byte-identical to today")."""
     _init_workspace(tmp_path, monkeypatch)
     source = tmp_path / "notes.txt"
     source.write_text("Some raw notes about self-control.", encoding="utf-8")
@@ -3609,7 +3615,7 @@ def test_reingest_with_equal_values_writes_byte_identical_output(
     after_lines = after.splitlines()
     changed = [(b, a) for b, a in zip(before_lines, after_lines, strict=True) if b != a]
     assert changed
-    assert all("timestamp" in b for b, _ in changed)
+    assert all(b.strip().startswith("at:") for b, _ in changed)
 
 
 def test_reingest_leaves_existing_derived_objects_byte_untouched(
@@ -5602,8 +5608,8 @@ def test_reingest_of_identical_bytes_writes_a_byte_identical_source_document(
     byte-identical raw file produces a byte-identical Source document,
     including its derived `title` (spec: "Idempotent Title Derivation" /
     "Byte-identical re-ingest yields a byte-identical Source"). Reuses the
-    `_FixedClock` monkeypatch pattern (`:2385-2390`) because `timestamp` is
-    refreshed on every re-ingest, and reuses the assertion shape of
+    `_FixedClock` monkeypatch pattern (`:2385-2390`) because `generated.at`
+    is refreshed on every re-ingest, and reuses the assertion shape of
     `test_reingest_with_equal_values_writes_byte_identical_output`
     (`:2401`) so the diff is limited to the always-refreshing field."""
     _init_workspace(tmp_path, monkeypatch)
@@ -5631,7 +5637,7 @@ def test_reingest_of_identical_bytes_writes_a_byte_identical_source_document(
     after_lines = after.splitlines()
     changed = [(b, a) for b, a in zip(before_lines, after_lines, strict=True) if b != a]
     assert changed
-    assert all("timestamp" in b for b, _ in changed)
+    assert all(b.strip().startswith("at:") for b, _ in changed)
 
 
 def test_stage_derived_objects_receives_the_final_derived_title(
@@ -6125,7 +6131,7 @@ def _stage_ingested_raw(tmp_path: Path, name: str, content: str, origin: Path) -
             description=f"Raw source imported from '{origin}' as raw/{name}.",
             resource=f"raw/{name}",
             tags=[],
-            timestamp="2026-08-12T00:00:00Z",
+            generated=okf.Generated(by="openkos/test", at="2026-08-12T00:00:00Z"),
             sensitivity="private",
             provenance=[f"raw/{name}"],
             raw_content=content,

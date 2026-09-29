@@ -62,7 +62,7 @@ def _write_source(
         description="A backfill test fixture.",
         resource=resource,
         tags=[],
-        timestamp="2024-01-01T00:00:00Z",
+        generated=okf.Generated(by="openkos/test", at="2024-01-01T00:00:00Z"),
         sensitivity="public",
         provenance=provenance or [],
         raw_content=raw,

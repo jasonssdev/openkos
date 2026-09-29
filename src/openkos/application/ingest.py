@@ -489,7 +489,7 @@ def stage_derived_objects(
                 body=extraction.body,
                 provenance=[f"sources/{source_slug}"],
                 sensitivity=resolved_sensitivity,
-                timestamp=timestamp,
+                generated=okf.Generated(by=okf.engine_actor(), at=timestamp),
                 type_alternative=extraction.type_alternative,
             )
         except ValueError as exc:
@@ -1019,7 +1019,7 @@ def compose_source_document(
         description=description,
         resource=resource,
         tags=[],
-        timestamp=timestamp,
+        generated=okf.Generated(by=okf.engine_actor(), at=timestamp),
         sensitivity=resolved_sensitivity,
         provenance=[resource],
         raw_content=raw_content,
@@ -1104,7 +1104,7 @@ def compose_catalog_update(
             description=source.description,
             resource=resource,
             tags=[],
-            timestamp=timestamp,
+            generated=okf.Generated(by=okf.engine_actor(), at=timestamp),
             sensitivity=source.resolved_sensitivity,
             provenance=[resource],
             raw_content=source.raw_content,

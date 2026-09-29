@@ -11,6 +11,7 @@ import stat
 import unicodedata
 from collections.abc import Callable, Iterator
 from datetime import UTC, date, datetime
+from importlib.metadata import PackageNotFoundError
 from pathlib import Path
 
 import pytest
@@ -20,9 +21,10 @@ from openkos.model import okf
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
-def test_okf_version_is_0_1() -> None:
-    """The engine targets OKF v0.1, per docs/okf-alignment.md:65."""
-    assert okf.OKF_VERSION == "0.1"
+def test_okf_version_is_0_2() -> None:
+    """The engine targets OKF v0.2 (okf-v02-migration, issue #1064): fresh
+    writers emit v0.2 shape and `repair` migrates existing v0.1 bundles."""
+    assert okf.OKF_VERSION == "0.2"
 
 
 def test_reserved_filenames() -> None:
@@ -36,7 +38,7 @@ def test_frontmatter_round_trip() -> None:
 
     metadata, body = okf.load_frontmatter(text)
 
-    assert metadata == {"okf_version": "0.1"}
+    assert metadata == {"okf_version": "0.2"}
     assert body == ""
 
 
@@ -642,6 +644,38 @@ def test_survey_bundle_skips_reserved_filenames(tmp_path: Path) -> None:
     assert okf.survey_bundle(tmp_path) == okf.BundleSurvey(0, 0, [])
 
 
+def test_engine_actor_reads_installed_distribution_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`engine_actor()` reads the installed `openkos` distribution version,
+    formatted as an OKF §7 actor (design.md Decision 5), mirroring
+    `mcp/server.py::_server_version`'s existing degrade pattern exactly."""
+    monkeypatch.setattr(okf, "_pkg_version", lambda name: "9.9.9")
+
+    assert okf.engine_actor() == "openkos/9.9.9"
+
+
+def test_engine_actor_degrades_when_distribution_metadata_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A `PackageNotFoundError` (a raw `sys.path` run with no install step)
+    degrades to `openkos/0+unknown`, the exact fallback string
+    `mcp/server.py::_server_version` already uses."""
+
+    def _raise(name: str) -> str:
+        raise PackageNotFoundError(name)
+
+    monkeypatch.setattr(okf, "_pkg_version", _raise)
+
+    assert okf.engine_actor() == "openkos/0+unknown"
+
+
+_TEST_GENERATED = okf.Generated(by="openkos/test", at="2026-07-14T18:30:00Z")
+"""A fixed `Generated` actor/instant for builder tests (design.md Decision
+5's "keeps goldens deterministic" rationale) -- every test that needs a
+distinct instant overrides `generated=` explicitly."""
+
+
 def _build_call_source(**overrides: object) -> str:
     """Build a Source concept with realistic defaults, letting tests override
     individual keyword arguments."""
@@ -653,7 +687,7 @@ def _build_call_source(**overrides: object) -> str:
         ),
         "resource": "raw/call-with-maria.txt",
         "tags": ["call", "philosophy"],
-        "timestamp": "2026-07-14T18:30:00Z",
+        "generated": _TEST_GENERATED,
         "sensitivity": "private",
         "provenance": ["raw/call-with-maria.txt"],
     }
@@ -662,8 +696,9 @@ def _build_call_source(**overrides: object) -> str:
 
 
 def test_build_source_concept_emits_required_frontmatter_fields() -> None:
-    """`build_source_concept` emits every field the spec requires, plus a
-    `# Citations` body (scenario: successful ingest, all required fields)."""
+    """`build_source_concept` emits every field the spec requires -- no
+    `# Citations` body (scenario: successful ingest, all required fields;
+    ingestion's v0.2 field-set clause)."""
     text = _build_call_source()
 
     metadata, body = okf.load_frontmatter(text)
@@ -676,13 +711,50 @@ def test_build_source_concept_emits_required_frontmatter_fields() -> None:
     )
     assert metadata["resource"] == "raw/call-with-maria.txt"
     assert metadata["tags"] == ["call", "philosophy"]
-    assert metadata["timestamp"] == "2026-07-14T18:30:00Z"
-    assert metadata["status"] == "active"
+    assert metadata["generated"] == {"by": "openkos/test", "at": "2026-07-14T18:30:00Z"}
+    assert metadata["status"] == "stable"
+    assert "timestamp" not in metadata
     assert metadata["version"] == 1
     assert metadata["freshness"] == "snapshot"
     assert metadata["sensitivity"] == "private"
     assert metadata["provenance"] == ["raw/call-with-maria.txt"]
-    assert "# Citations" in body
+    assert "# Citations" not in body
+
+
+def test_build_source_concept_emits_generated_and_stable_status() -> None:
+    """Task 2.5: calling `build_source_concept` with `generated=` (dropping
+    the old `timestamp=` keyword) yields `generated: {by, at}`, `status:
+    stable`, and no `timestamp` key."""
+    text = _build_call_source(
+        generated=okf.Generated(by="openkos/test", at="2026-01-01T00:00:00Z")
+    )
+
+    metadata, _ = okf.load_frontmatter(text)
+
+    assert metadata["generated"] == {"by": "openkos/test", "at": "2026-01-01T00:00:00Z"}
+    assert metadata["status"] == "stable"
+    assert "timestamp" not in metadata
+
+
+def test_build_source_concept_body_has_no_trailing_citations_heading() -> None:
+    """The built Source's body, for both the verbatim-embed and
+    undecodable-fallback cases, carries no `# Citations` heading and ends
+    with exactly one trailing `\\n` in the RAW built text (ingestion:
+    "Successful ingest embeds verbatim text", no-Citations clause). Checked
+    against the raw dump, not the `load_frontmatter` round-trip, because
+    `python-frontmatter`'s own reader strips a body's trailing newline on
+    load -- a pre-existing round-trip property unrelated to this change."""
+    embedded = _build_call_source(raw_content="hello")
+    _, embedded_body = okf.load_frontmatter(embedded)
+    assert "# Citations" not in embedded_body
+    assert embedded.endswith("hello\n")
+    assert not embedded.endswith("hello\n\n")
+
+    fallback = _build_call_source(raw_content=None)
+    _, fallback_body = okf.load_frontmatter(fallback)
+    assert "# Citations" not in fallback_body
+    assert fallback.endswith("resource._\n")
+    assert not fallback.endswith("resource._\n\n")
 
 
 def test_build_source_concept_emits_no_volatility_key() -> None:
@@ -835,16 +907,15 @@ def test_build_source_concept_sensitivity_equals_passed_value() -> None:
 
 def test_build_source_concept_embeds_text_content() -> None:
     """`raw_content` text is embedded verbatim under `## Source content`,
-    positioned before `# Citations` (D1/D3, scenario: successful ingest
-    embeds verbatim text)."""
+    with no trailing `# Citations` heading (D1/D3, ingestion's v0.2 body
+    shape, scenario: successful ingest embeds verbatim text)."""
     text = _build_call_source(raw_content="hello")
 
     _, body = okf.load_frontmatter(text)
 
     assert "## Source content" in body
     assert "hello" in body
-    assert body.index("## Source content") < body.index("# Citations")
-    assert body.index("hello") < body.index("# Citations")
+    assert "# Citations" not in body
 
 
 def test_build_source_concept_binary_fallback_note() -> None:
@@ -1005,7 +1076,7 @@ def _build_call_concept(**overrides: object) -> str:
         "body": "The dichotomy of control separates what is up to us from what is not.",
         "provenance": ["sources/call-with-maria-salazar"],
         "sensitivity": "confidential",
-        "timestamp": "2026-07-14T18:30:00Z",
+        "generated": _TEST_GENERATED,
     }
     kwargs.update(overrides)
     return okf.build_concept(**kwargs)  # type: ignore[arg-type]
@@ -1017,7 +1088,9 @@ def test_build_concept_output_byte_identical_regression() -> None:
     full output text is pinned byte-for-byte. This slice's `relations:`
     codec/§9 rule additions must never cause `build_concept` (or, by
     extension, the ingest/extraction pipeline built on it) to emit a
-    `relations:` key or otherwise change a single byte of its output."""
+    `relations:` key or otherwise change a single byte of its output (this
+    pin was updated for OKF v0.2's `generated`/`status: stable` shape,
+    okf-v02-migration/#1064)."""
     text = _build_call_concept()
 
     assert text == (
@@ -1025,12 +1098,14 @@ def test_build_concept_output_byte_identical_regression() -> None:
         "description: Hellenistic school holding that virtue is the only good, and that freedom\n"
         "  comes from knowing what is up to us.\n"
         "freshness: snapshot\n"
+        "generated:\n"
+        "  at: '2026-07-14T18:30:00Z'\n"
+        "  by: openkos/test\n"
         "provenance:\n"
         "- sources/call-with-maria-salazar\n"
         "sensitivity: confidential\n"
-        "status: active\n"
+        "status: stable\n"
         "tags: []\n"
-        "timestamp: '2026-07-14T18:30:00Z'\n"
         "title: Stoicism\n"
         "type: Concept\n"
         "version: 1\n"
@@ -1082,12 +1157,14 @@ def test_build_concept_related_notes() -> None:
         "description: Hellenistic school holding that virtue is the only good, and that freedom\n"
         "  comes from knowing what is up to us.\n"
         "freshness: snapshot\n"
+        "generated:\n"
+        "  at: '2026-07-14T18:30:00Z'\n"
+        "  by: openkos/test\n"
         "provenance:\n"
         "- sources/call-with-maria-salazar\n"
         "sensitivity: confidential\n"
-        "status: active\n"
+        "status: stable\n"
         "tags: []\n"
-        "timestamp: '2026-07-14T18:30:00Z'\n"
         "title: Stoicism\n"
         "type: Concept\n"
         "version: 1\n"
@@ -1155,12 +1232,27 @@ def test_build_concept_emits_required_frontmatter_fields() -> None:
         "that freedom comes from knowing what is up to us."
     )
     assert metadata["tags"] == []
-    assert metadata["timestamp"] == "2026-07-14T18:30:00Z"
-    assert metadata["status"] == "active"
+    assert metadata["generated"] == {"by": "openkos/test", "at": "2026-07-14T18:30:00Z"}
+    assert metadata["status"] == "stable"
+    assert "timestamp" not in metadata
     assert metadata["version"] == 1
     assert metadata["freshness"] == "snapshot"
     assert metadata["sensitivity"] == "confidential"
     assert metadata["provenance"] == ["sources/call-with-maria-salazar"]
+
+
+def test_build_concept_emits_generated_and_stable_status() -> None:
+    """Task 2.8: same shape as `build_source_concept`'s `generated`/`status:
+    stable` emission (design.md Decision 5)."""
+    text = _build_call_concept(
+        generated=okf.Generated(by="openkos/test", at="2026-01-01T00:00:00Z")
+    )
+
+    metadata, _ = okf.load_frontmatter(text)
+
+    assert metadata["generated"] == {"by": "openkos/test", "at": "2026-01-01T00:00:00Z"}
+    assert metadata["status"] == "stable"
+    assert "timestamp" not in metadata
 
 
 def test_build_concept_accepts_entity_type() -> None:
@@ -1527,7 +1619,7 @@ def test_build_merged_document_scalar_fields_survivor_wins() -> None:
 
     assert merged["title"] == "Stoicism"
     assert merged["description"] == "Survivor description."
-    assert merged["status"] == "active"
+    assert merged["status"] == "stable"
     assert merged["version"] == 1
 
 
@@ -1587,8 +1679,11 @@ def test_build_merged_document_list_fields_union_deduped_order_preserving() -> N
 
 
 def test_build_merged_document_freshness_and_timestamp_from_most_recent() -> None:
-    """`freshness`+`timestamp` are taken TOGETHER from whichever side has the
-    more recent `timestamp` -- here the absorbed side."""
+    """`freshness`+generation are taken TOGETHER from whichever side has the
+    more recent generation time -- here the absorbed side. Both sides are
+    legacy-`timestamp`-only, so the merged document's generation is written
+    as v0.2: `generated: {by: openkos/legacy, at: <the winner's timestamp>}`,
+    never a bare `timestamp` key (design.md Decision 6)."""
     merged, _ = okf.build_merged_document(
         _survivor_metadata(timestamp="2026-07-10T09:00:00Z", freshness="snapshot"),
         "Survivor body.",
@@ -1598,12 +1693,13 @@ def test_build_merged_document_freshness_and_timestamp_from_most_recent() -> Non
         "survivor-id",
     )
 
-    assert merged["timestamp"] == "2026-07-14T09:00:00Z"
+    assert merged["generated"] == {"by": okf.LEGACY_ACTOR, "at": "2026-07-14T09:00:00Z"}
+    assert "timestamp" not in merged
     assert merged["freshness"] == "verified"
 
 
 def test_build_merged_document_freshness_survivor_wins_when_more_recent() -> None:
-    """The survivor's own `freshness`/`timestamp` is kept when it is the more
+    """The survivor's own `freshness`/generation is kept when it is the more
     recent of the two."""
     merged, _ = okf.build_merged_document(
         _survivor_metadata(timestamp="2026-07-20T09:00:00Z", freshness="verified"),
@@ -1614,7 +1710,8 @@ def test_build_merged_document_freshness_survivor_wins_when_more_recent() -> Non
         "survivor-id",
     )
 
-    assert merged["timestamp"] == "2026-07-20T09:00:00Z"
+    assert merged["generated"] == {"by": okf.LEGACY_ACTOR, "at": "2026-07-20T09:00:00Z"}
+    assert "timestamp" not in merged
     assert merged["freshness"] == "verified"
 
 
@@ -1632,7 +1729,8 @@ def test_build_merged_document_freshness_falls_back_to_survivor_on_malformed_tim
         "survivor-id",
     )
 
-    assert merged["timestamp"] == "not-a-timestamp"
+    assert merged["generated"] == {"by": okf.LEGACY_ACTOR, "at": "not-a-timestamp"}
+    assert "timestamp" not in merged
     assert merged["freshness"] == "snapshot"
 
 
@@ -1650,8 +1748,119 @@ def test_build_merged_document_freshness_falls_back_to_survivor_on_non_string_ti
         "survivor-id",
     )
 
-    assert merged["timestamp"] == "2026-07-10T09:00:00Z"
+    assert merged["generated"] == {"by": okf.LEGACY_ACTOR, "at": "2026-07-10T09:00:00Z"}
+    assert "timestamp" not in merged
     assert merged["freshness"] == "snapshot"
+
+
+def test_build_merged_document_generation_rule_table() -> None:
+    """Task 2.15, design.md Decision 5/6's four generation-time cases: the
+    merged document's `generated` is the winner's OWN `generated` mapping
+    verbatim when the winner already has one, or `{by: openkos/legacy, at:
+    <winner's timestamp>}` when the winner is legacy-shaped -- regardless of
+    which side originally carried the value in which field. The merged
+    document NEVER carries a bare `timestamp` key, and `freshness` still
+    travels with the winner unchanged."""
+    # Case 1: v0.2 survivor (more recent) absorbs a legacy-timestamped object.
+    survivor = _survivor_metadata(freshness="snapshot")
+    del survivor["timestamp"]
+    survivor["generated"] = {"by": "openkos/test", "at": "2026-07-20T09:00:00Z"}
+    absorbed = _absorbed_metadata(
+        timestamp="2026-07-10T09:00:00Z", freshness="verified"
+    )
+
+    merged, _ = okf.build_merged_document(
+        survivor, "S.", absorbed, "A.", "absorbed-id", "survivor-id"
+    )
+
+    assert merged["generated"] == {"by": "openkos/test", "at": "2026-07-20T09:00:00Z"}
+    assert "timestamp" not in merged
+    assert merged["freshness"] == "snapshot"
+
+    # Case 2: legacy-timestamped survivor absorbs a more recent v0.2 object.
+    survivor = _survivor_metadata(
+        timestamp="2026-07-01T09:00:00Z", freshness="snapshot"
+    )
+    absorbed = _absorbed_metadata(freshness="verified")
+    del absorbed["timestamp"]
+    absorbed["generated"] = {"by": "openkos/test", "at": "2026-07-20T09:00:00Z"}
+
+    merged, _ = okf.build_merged_document(
+        survivor, "S.", absorbed, "A.", "absorbed-id", "survivor-id"
+    )
+
+    assert merged["generated"] == {"by": "openkos/test", "at": "2026-07-20T09:00:00Z"}
+    assert "timestamp" not in merged
+    assert merged["freshness"] == "verified"
+
+    # Case 3: both v0.2 -- absorbed is more recent.
+    survivor = _survivor_metadata(freshness="snapshot")
+    del survivor["timestamp"]
+    survivor["generated"] = {"by": "openkos/test", "at": "2026-07-01T09:00:00Z"}
+    absorbed = _absorbed_metadata(freshness="verified")
+    del absorbed["timestamp"]
+    absorbed["generated"] = {"by": "openkos/test", "at": "2026-07-20T09:00:00Z"}
+
+    merged, _ = okf.build_merged_document(
+        survivor, "S.", absorbed, "A.", "absorbed-id", "survivor-id"
+    )
+
+    assert merged["generated"] == {"by": "openkos/test", "at": "2026-07-20T09:00:00Z"}
+    assert "timestamp" not in merged
+    assert merged["freshness"] == "verified"
+
+    # Case 4: both legacy -- survivor is more recent (also regression-pinned
+    # by test_build_merged_document_freshness_survivor_wins_when_more_recent;
+    # confirmed again here as part of the same design.md table).
+    survivor = _survivor_metadata(
+        timestamp="2026-07-20T09:00:00Z", freshness="verified"
+    )
+    absorbed = _absorbed_metadata(
+        timestamp="2026-07-01T09:00:00Z", freshness="snapshot"
+    )
+
+    merged, _ = okf.build_merged_document(
+        survivor, "S.", absorbed, "A.", "absorbed-id", "survivor-id"
+    )
+
+    assert merged["generated"] == {"by": okf.LEGACY_ACTOR, "at": "2026-07-20T09:00:00Z"}
+    assert "timestamp" not in merged
+    assert merged["freshness"] == "verified"
+
+
+@pytest.mark.parametrize(
+    ("survivor_status", "absorbed_status", "expected"),
+    [
+        ("active", "draft", "stable"),
+        ("draft", "draft", "draft"),
+        ("deprecated", "draft", "deprecated"),
+        (None, "active", "stable"),
+    ],
+)
+def test_build_merged_document_status_active_to_stable(
+    survivor_status: str | None, absorbed_status: str, expected: str
+) -> None:
+    """Task 2.16: a survivor or absorbed side carrying `status: active`
+    yields a merged document with `status: stable`; a side carrying
+    `status: draft` or `status: deprecated` is left untouched (survivor-wins
+    default applies as today, design.md Decision 6)."""
+    survivor = _survivor_metadata()
+    if survivor_status is None:
+        del survivor["status"]
+    else:
+        survivor["status"] = survivor_status
+    absorbed = _absorbed_metadata(status=absorbed_status)
+
+    merged, _ = okf.build_merged_document(
+        survivor,
+        "Survivor body.",
+        absorbed,
+        "Absorbed body.",
+        "absorbed-id",
+        "survivor-id",
+    )
+
+    assert merged["status"] == expected
 
 
 def test_build_merged_document_sensitivity_recomputed_via_combine_sensitivity() -> None:
@@ -2050,7 +2259,8 @@ def test_build_merged_document_freshness_fails_closed_on_mixed_aware_naive_times
         "survivor-id",
     )
 
-    assert merged["timestamp"] == "2026-07-10T09:00:00"
+    assert merged["generated"] == {"by": okf.LEGACY_ACTOR, "at": "2026-07-10T09:00:00"}
+    assert "timestamp" not in merged
     assert merged["freshness"] == "snapshot"
 
 
@@ -2924,7 +3134,7 @@ def test_build_concept_omits_type_alternative_when_absent() -> None:
         body="",
         provenance=["sources/notes"],
         sensitivity="private",
-        timestamp="2026-08-05T00:00:00Z",
+        generated=okf.Generated(by="openkos/test", at="2026-08-05T00:00:00Z"),
     )
 
     metadata, _ = okf.load_frontmatter(text)
@@ -2946,7 +3156,7 @@ def test_build_concept_records_a_type_alternative() -> None:
         body="",
         provenance=["sources/call-with-maria"],
         sensitivity="private",
-        timestamp="2026-08-05T00:00:00Z",
+        generated=okf.Generated(by="openkos/test", at="2026-08-05T00:00:00Z"),
         type_alternative="Project",
     )
 
@@ -2974,7 +3184,7 @@ def test_build_concept_rejects_a_type_alternative_outside_the_vocabulary() -> No
             body="",
             provenance=["sources/call-with-maria"],
             sensitivity="private",
-            timestamp="2026-08-05T00:00:00Z",
+            generated=okf.Generated(by="openkos/test", at="2026-08-05T00:00:00Z"),
             type_alternative="Sandwich",
         )
 
@@ -2996,7 +3206,7 @@ def test_build_concept_rejects_a_type_alternative_equal_to_the_type() -> None:
             body="",
             provenance=["sources/call-with-maria"],
             sensitivity="private",
-            timestamp="2026-08-05T00:00:00Z",
+            generated=okf.Generated(by="openkos/test", at="2026-08-05T00:00:00Z"),
             type_alternative="Event",
         )
 
@@ -3028,7 +3238,7 @@ def test_type_alternative_keeps_the_bundle_conformant(tmp_path: Path) -> None:
             body="",
             provenance=["sources/call-with-maria"],
             sensitivity="private",
-            timestamp="2026-08-05T00:00:00Z",
+            generated=okf.Generated(by="openkos/test", at="2026-08-05T00:00:00Z"),
             type_alternative="Project",
         ),
         encoding="utf-8",

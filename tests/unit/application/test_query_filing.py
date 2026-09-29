@@ -27,6 +27,7 @@ from openkos.application import query as query_service
 from openkos.bundle import index as bundle_index
 from openkos.bundle.index import render_index
 from openkos.bundle.log import render_log
+from openkos.model import okf
 from openkos.retrieval.answer import AnswerResult, Citation
 
 
@@ -186,6 +187,34 @@ def test_stage_filed_answer_builds_a_plan_from_a_readable_citation(
     assert plan.sensitivity == "private"
     assert "provenance:\n- concepts/stoicism\n" in plan.content
     assert plan.type_floor_raised is False
+
+
+def test_stage_filed_answer_emits_generated_and_stable_status(tmp_path: Path) -> None:
+    """Task 2.12: same `generated`/`status: stable` pattern as the ingest
+    write path (design.md Decision 5's `query --save` row), with no
+    `timestamp` key."""
+    layout, cfg = _workspace(tmp_path)
+    _write_concept(layout.bundle_dir, "concepts", "stoicism", title="Stoicism")
+    citations = [_citation("concepts/stoicism")]
+
+    plan = query_service.stage_filed_answer(
+        question="what is stoicism?",
+        answer_text="Stoicism teaches the dichotomy of control.",
+        citations=citations,
+        bundle_dir=layout.bundle_dir,
+        default_sensitivity="private",
+        timestamp="2026-07-23T00:00:00Z",
+        cfg=cfg,
+    )
+
+    metadata, _ = okf.load_frontmatter(plan.content)
+
+    assert metadata["generated"] == {
+        "by": okf.engine_actor(),
+        "at": "2026-07-23T00:00:00Z",
+    }
+    assert metadata["status"] == "stable"
+    assert "timestamp" not in metadata
 
 
 def test_stage_filed_answer_marks_history_citations(tmp_path: Path) -> None:
