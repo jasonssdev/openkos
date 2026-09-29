@@ -1574,29 +1574,29 @@ types, so it is unit-testable without a CLI context, the same reasoning
 ADR-0018 already applies to `application/revisions.py` itself). Tests:
 `tests/unit/application/test_revisions_report.py` (new).
 
-- [ ] **P7a.1** [TEST] `tests/unit/application/test_revisions_report.py`
+- [x] **P7a.1** [TEST] `tests/unit/application/test_revisions_report.py`
   (new file) — add `test_counts_line_omits_zero_valued_clauses`,
   parametrized over: `missing` alone, `stale` alone, `excluded` alone, all
   three non-zero, and all three zero (the WHOLE counts line is omitted).
   **RED today**: `ModuleNotFoundError` — the module does not exist.
-- [ ] **P7a.2** [TEST] Same file — add
+- [x] **P7a.2** [TEST] Same file — add
   `test_remedy_clause_only_when_missing_or_stale_is_nonzero`: the
   `"Run 'openkos reindex' to include them."` clause appears only when
   `missing + stale > 0`; a run with only `excluded > 0` prints the counts
   line WITHOUT the remedy clause. Kills a remedy printed with nothing to
   remedy. **RED today**: same.
-- [ ] **P7a.3** [TEST] Same file — add
+- [x] **P7a.3** [TEST] Same file — add
   `test_groups_by_earlier_decision_for_known_direction_with_verdict_ordering`:
   two findings for the same earlier Decision group under its id, ordered
   REVERSES, REFINES, REAFFIRMS (UNRELATED only under `--all`), confidence
   descending within a verdict. **RED today**: same.
-- [ ] **P7a.4** [TEST] Same file — add
+- [x] **P7a.4** [TEST] Same file — add
   `test_groups_by_pair_id_0_for_unknown_direction_with_state_wording`: an
   unknown-direction finding groups under `pair_id_0` and renders
   `[direction unknown: <id>: <state>]` with all four exact phrasings
   (`no event_date`, `2+ distinct event_dates`, `no Source reached`, `same
   event_date`). **RED today**: same.
-- [ ] **P7a.5** [TEST] Same file — add
+- [x] **P7a.5** [TEST] Same file — add
   `test_reaffirms_line_renders_under_the_reaffirmed_decisions_group`: a
   REAFFIRMS finding renders `"reaffirmed by <id> on <date>"` under the
   reaffirmed Decision's group. Covers "A REAFFIRMS finding appears under
@@ -1604,24 +1604,24 @@ ADR-0018 already applies to `application/revisions.py` itself). Tests:
   the renderer over the SAME persisted finding with zero fresh judging)
   "Re-running after serving still renders REAFFIRMS from persisted
   findings". **RED today**: same.
-- [ ] **P7a.6** [TEST] Same file — add
+- [x] **P7a.6** [TEST] Same file — add
   `test_unverified_quote_renders_placeholder_and_not_actionable_tag`: a
   REVERSES/REFINES finding with one unverified quote renders
   `"(no verbatim quote from <id>)"` for that side, is tagged
   `[not actionable: unquoted]`, and STILL appears in the default
   (non-`--all`) view. **RED today**: same.
-- [ ] **P7a.7** [TEST] Same file — add
+- [x] **P7a.7** [TEST] Same file — add
   `test_default_filter_versus_all_flag`: the default view shows
   `is_reportable_revision` results plus any unquoted REVERSES/REFINES;
   `--all` additionally shows UNRELATED, low-confidence, and malformed
   results. **RED today**: same.
-- [ ] **P7a.8** [TEST] Same file — add
+- [x] **P7a.8** [TEST] Same file — add
   `test_empty_result_messages`: zero findings judged or served ->
   `"No decision revisions found."`; zero candidate PAIRS at all ->
   `"No candidate Decision pairs found (need two Decisions from different
   Sources with similar embeddings)."` (Decision B4's revised wording, NOT
   the Phase A "similar subjects" wording). **RED today**: same.
-- [ ] **P7a.9** [IMPL] `src/openkos/application/revisions_report.py` (new
+- [x] **P7a.9** [IMPL] `src/openkos/application/revisions_report.py` (new
   module): the pure renderer over `RevisionPlan`/`RevisionOutcome`-shaped
   inputs, implementing design.md Decision 8 as revised by Decision B4 —
   counts-line clause logic, remedy-clause gate, grouping, line shapes,
@@ -1631,11 +1631,11 @@ ADR-0018 already applies to `application/revisions.py` itself). Tests:
 
 ### Slice P7a verification
 
-- [ ] **P7a.10** Run `uv run ruff check . && uv run ruff format --check . &&
+- [x] **P7a.10** Run `uv run ruff check . && uv run ruff format --check . &&
   uv run mypy .` — must be green.
-- [ ] **P7a.11** Run `uv run pytest tests/unit/application/test_revisions_report.py`
+- [x] **P7a.11** Run `uv run pytest tests/unit/application/test_revisions_report.py`
   focused, then `uv run pytest` (unpiped) full suite — must be green.
-- [ ] **P7a.12** Commit as one or more work-unit commits (e.g. `feat(cli):
+- [x] **P7a.12** Commit as one or more work-unit commits (e.g. `feat(cli):
   add the pure revisions report renderer`). Open PR 11 (Slice P7a)
   targeting PR 10's branch.
 

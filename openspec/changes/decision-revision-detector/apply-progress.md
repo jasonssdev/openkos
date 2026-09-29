@@ -72,6 +72,23 @@ plus 12 new tests in `tests/unit/application/test_revisions_service.py`
 `size:exception`, consistent with every prior oversized Phase A/B slice;
 see "Budget" below for the full accounting.
 
+**Phase B, Slice P3 (`P3.1`–`P3.19`, 19/19), P4 (`P4.1`–`P4.5`, 5/5), and P6
+(`P6.1`–`P6.8`, 8/8) are also complete** (their own "## Slice PX" sections,
+further below, are the record — this top summary block was not kept in
+sync with every slice by prior batches; see each section's own heading for
+its PR boundary and commit).
+
+**Phase B, Slice P7a (`P7a.1`–`P7a.12`, 12/12) complete** — this batch, on
+`feat/1014-phase-b-p7a-report` (checked out ON TOP of the P6 branch, PR
+#1065, not yet merged, at `708f10a`). PR 11 boundary: new module
+`src/openkos/application/revisions_report.py` (the pure `revisions` report
+renderer) and new test file
+`tests/unit/application/test_revisions_report.py` (11 test cases, 8 task
+IDs, one parametrized 4 ways). 707 authored changed lines, above both the
+~300-line forecast and the 400-line review budget — recommend
+`size:exception`, consistent with every prior oversized Phase A/B slice;
+see the "Budget" note in the Slice P7a section below.
+
 ---
 
 ## Slice 1 (PR 1 → `main`, merged): the subject-pass leaf,
@@ -1322,3 +1339,198 @@ test, docstring, or blank line was shortened to chase the 400-line number.
 This is already the smallest cohesive unit the design assigns (P6's own
 judging half) — recommend `size:exception` for this slice, consistent with
 every prior Phase A/B slice's recommendation.
+
+---
+
+## Phase B — Slice P7a (PR 11): the pure report renderer
+
+Branch `feat/1014-phase-b-p7a-report`, checked out ON TOP of the P6 branch
+(PR #1065, not yet merged at the time of this batch) @ `708f10a`
+(`docs(sdd): record Phase B slice P6 progress (#1014)`). Strict TDD
+throughout. Basis: tasks.md's "Slice P7a (PR 11): the pure report
+renderer" section, design.md Decision 8 as revised by Decision B4 (the
+"Phase B re-plan" section), and the two REAFFIRMS scenarios in
+`specs/decision-revision-detection/spec.md`'s "Revisions Report Groups
+Findings Per Decision, Including REAFFIRMS" requirement. Depends on P6
+(`RevisionPlan`/`RevisionOutcome`/`RevisionFinding`, already merged into
+this branch's history via the P5a/P5b/P6 commits already on the branch it
+was checked out from).
+
+### Design choices made (owner authorized autonomous work — reported here)
+
+design.md states the renderer takes "`RevisionPlan`/`RevisionOutcome`-shaped
+inputs" but does not pin its exact call signature (unlike, e.g., the
+`Interfaces (Phase B, current)` code block, which stops at
+`actionable_revision_findings`). Two choices were made and are reported
+per this batch's own instruction ("take the design's recommended option on
+any open choice"):
+
+1. **`excluded` is a separate keyword argument, not a `RevisionPlan`
+   field.** The counts line's third clause ("N excluded (unreadable
+   relations)") is `DecisionSet.bad_relations`, computed one step upstream
+   by `load_decisions` — it is not part of `RevisionPlan`/`RevisionOutcome`
+   at all (confirmed by reading `application/revisions.py`'s actual
+   `RevisionPlan`/`RevisionOutcome` dataclasses directly, not by assuming
+   design.md's Interfaces code block was exhaustive). Threading it through
+   as `revisions_report(plan, outcome, *, excluded: int = 0, show_all:
+   bool = False) -> str` keeps the renderer pure without inventing a new
+   field on a dataclass Slice P5a/P5b/P6 already shipped and tests already
+   cover.
+2. **Scope of what P7a renders.** Decision 8's stdout sequence has 5 items:
+   (1) workspace-root line, (2) served/judged summary line, (3) counts
+   line, (4) truncation notice, (5) the groups. Items 1-2 need the
+   workspace root, which is not an input to a pure renderer and is not
+   exercised by any P7a.1-P7a.8 test; item 4 is already
+   `decision_revision.revision_truncation_notice`, an existing Phase A leaf
+   function with its own tests. `revisions_report` therefore renders items
+   3 and 5 plus the two empty-result messages — exactly what P7a.1-P7a.8
+   test — and P7b (the verb) is expected to print items 1, 2, and 4
+   itself, around a call to `revisions_report` for the rest. This is
+   recorded here so P7b's own apply batch does not have to re-derive it.
+3. **The `[direction unknown: <id>: <state>]` id.** Neither design.md's
+   illustrative line-shape example nor P7a.4's task text pins WHICH of the
+   two pair ids appears in the bracket when direction is unknown (the
+   `Direction.reason`/`pair_direction`'s "first non-dated side" checked in
+   id order does not identify a specific side either — see
+   `pair_direction`'s own docstring). Chosen: the id already named in the
+   line's main clause (`"with <id>"`) — i.e. `pair_id_1`, the partner of
+   the `pair_id_0` group key — consistently for every reason value,
+   including `"equal"` (which is not really "caused" by either side, but a
+   property of the pair). This matches design.md Decision 8's own
+   illustrative example, where the bracketed id and the "with" id are the
+   same (`"[REFINES] with decisions/billing-scope ... [direction unknown:
+   decisions/billing-scope: no event_date]"`).
+4. **Group header format.** Decision 8's illustrative example shows the
+   group header suffixed with the group Decision's own resolved date (e.g.
+   `"decisions/use-postgres (2026-03-04)"`); no P7a.1-P7a.8 task requires
+   this, and reconstructing "the group key's own date" would require a
+   4th lookup path (the group key is sometimes `pair_id_0`, which may
+   itself be undated). The renderer prints the bare group id as the header
+   line; P7a.3/P7a.4's tests confirm the header line via `report.
+   splitlines()` membership on the bare id, and no test asserts a trailing
+   date. Flagged here as a literal deviation from the design's ASCII
+   diagram, not from any pinned task/spec text.
+5. **Commit scope: `revisions`, not `cli`.** P7a.12's own task text
+   suggests `feat(cli): add the pure revisions report renderer` as an
+   example. Checked against `git log --oneline --all | grep revisions`
+   (the same "confirm against a sibling module" discipline task 1.22/P2.12
+   already established): every merged/in-flight commit touching
+   `application/revisions.py` uses scope `revisions`
+   (`feat(revisions): load decisions...`, `feat(revisions): input
+   digests...`, `feat(revisions): judge pending pairs...`), and the P5a/
+   P5b/P6 apply-progress sections above explicitly record `revisions` as
+   "P5a/P5b's own established precedent for this module's commits." Since
+   `revisions_report.py` lives in the same `application/` package as the
+   feature those commits named, `revisions` is the closer-fitting,
+   established scope — used instead of the task text's own `cli` example,
+   per the same correction posture P2.12 already used once for `sdd` vs.
+   `eval(decision-revisions)`.
+
+### Files changed
+
+| File | Action |
+|---|---|
+| `src/openkos/application/revisions_report.py` | Created |
+| `tests/unit/application/test_revisions_report.py` | Created |
+
+### TDD Cycle Evidence
+
+| Task(s) | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|---|---|
+| P7a.1–P7a.2 (`_counts_line`, remedy clause) | `test_revisions_report.py` | Unit | ✅ 319/319 (`tests/unit/application/`, genuinely run before any edit) | ✅ `ImportError: cannot import name 'revisions_report' from 'openkos.application'` (genuinely observed: the full 8-test file was written and run against the pre-implementation package before any production code existed) | ✅ 11/11 passed (full file, after P7a.9) | ✅ 4 single/combined-clause cases + all-zero (`None`) + 3 remedy-presence cases | ➖ None needed |
+| P7a.3–P7a.4 (grouping: earlier-Decision / `pair_id_0`, verdict ordering, state wording) | `test_revisions_report.py` | Unit | ✅ (as above) | ✅ (same whole-module `ImportError`) | ✅ 11/11 passed | ✅ 5-verdict ordering fixture (2 REVERSES at different confidence + REFINES + REAFFIRMS + UNRELATED) + 4-case `Direction.reason` parametrization (`missing`/`multiple`/`none-reached`/`equal`) | ➖ None needed |
+| P7a.5 (REAFFIRMS line, re-run from persisted) | `test_revisions_report.py` | Unit | ✅ (as above) | ✅ (same) | ✅ 11/11 passed | ✅ combined assertion: freshly-judged `RevisionVerdict` AND a persisted `RevisionFinding` for the SAME pair render the identical `"reaffirmed by decisions/beta on 2026-04-01"` line | ➖ None needed |
+| P7a.6–P7a.8 (unquoted placeholder/tag, default vs. `--all` filter, empty-result messages) | `test_revisions_report.py` | Unit | ✅ (as above) | ✅ (same) | ✅ 11/11 passed | ✅ unquoted-REVERSES case + 4-verdict filter fixture (reportable/low-confidence/UNRELATED/malformed) + 2 empty-result cases (zero candidates vs. zero findings with candidates present) | ➖ None needed |
+| P7a.9 (`revisions_report.py` IMPL) | `revisions_report.py` | — | — | — | ✅ makes P7a.1-P7a.8 GREEN on the FIRST implementation pass (all 11 test cases passed without a fix-up iteration) | — | ➖ None needed — see Mutation-Kill Verification below for correctness proof beyond "it imports and runs" |
+
+**Note on RED granularity** (same posture as every prior Phase A/B slice):
+a genuine whole-module RED was observed — `ImportError: cannot import name
+'revisions_report' from 'openkos.application'`, collected against the
+complete 8-task test file before `src/openkos/application/
+revisions_report.py` existed at all, exactly the `ModuleNotFoundError`-
+family failure P7a.1 predicts. The module was then implemented as one
+cohesive unit against design.md Decision 8/B4's fully-specified wording
+(plus the three open-choice decisions recorded above), and verified GREEN
+as a whole (11/11) on the first pass. Correctness of each behavioral claim
+is proven by the three mutation-kill runs below, which is the check that
+would have caught a wrong implementation regardless of cycle granularity.
+
+### Mutation-Kill Verification (mandatory per apply instructions)
+
+Each mutation was applied, verified to make the targeted test(s) FAIL,
+`__pycache__` purged (`find . -name __pycache__ -prune -exec rm -rf {} +`),
+then reverted with the exact inverse edit (never `git checkout --`), and
+the full test file re-verified GREEN (11/11) before moving to the next
+mutation.
+
+| # | Mutation | File / line | Test(s) that must fail | Result |
+|---|---|---|---|---|
+| 1 | The remedy gate widened to fire unconditionally (`if missing + stale > 0:` → `if True:`) — the exact mutation design.md's own Testing table names for this slice ("A remedy printed with nothing to remedy") | `revisions_report.py`, `_counts_line` | `test_counts_line_omits_zero_valued_clauses`, `test_remedy_clause_only_when_missing_or_stale_is_nonzero` | ✅ FAILED as expected (2 tests): the `excluded`-only case gained an unwanted `"Run 'openkos reindex' to include them."` suffix. Reverted. |
+| 2 | Group key/partner swapped for the KNOWN-direction branch (`return cast(str, view.direction.earlier), view.direction.holder` → `return view.direction.holder, cast(str, view.direction.earlier)`) | `revisions_report.py`, `_group_key_and_partner` | `test_groups_by_earlier_decision_for_known_direction_with_verdict_ordering`, `test_reaffirms_line_renders_under_the_reaffirmed_decisions_group`, `test_default_filter_versus_all_flag` | ✅ FAILED as expected (3 tests): the REAFFIRMS line rendered `"reaffirmed by decisions/alpha"` (the group key named as its own partner) instead of `"reaffirmed by decisions/beta"` — proving the tests exercise which id is the group key vs. the partner, not merely that SOME grouping happened. Reverted. |
+| 3 | The unquoted-carve-out predicate narrowed from `or` to `and` (`quotes[0] is None or quotes[1] is None` → `quotes[0] is None and quotes[1] is None`) | `revisions_report.py`, `_has_unverified_quote` | `test_unverified_quote_renders_placeholder_and_not_actionable_tag` | ✅ FAILED as expected: the one-quote-missing REVERSES finding vanished entirely (`"No decision revisions found."`) instead of appearing with the placeholder and tag — proving the default-view carve-out is exercised by a genuinely ONE-sided failure, not a both-sides one. Reverted. |
+
+All three mutations killed by the existing tests (no additional test was
+needed). `find . -name __pycache__ -prune -exec rm -rf {} +` was run
+before every GREEN/RED verdict, and every revert used the exact inverse
+edit — never `git checkout --`.
+
+### Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `uv run pytest tests/unit/application/test_revisions_report.py -v` → **11 passed** |
+| Runtime harness command/scenario and exact result | N/A — a pure function, not wired into the `revisions` verb yet (tasks.md's own Slice P7a row in "Suggested Work Units (Phase B)": "nothing else imports it yet"); the first runtime consumer is Slice P7b's `revisions` verb |
+| Rollback boundary | Revert `src/openkos/application/revisions_report.py` and `tests/unit/application/test_revisions_report.py` in full; nothing else imports `revisions_report` yet, so this reverts the whole slice with no unrelated work removed |
+
+### Full Verification (this work unit)
+
+| Command | Result |
+|---|---|
+| `uv run ruff check .` | Found 1 (`RUF023`, `_FindingView.__slots__` not sorted) → sorted alphabetically → **All checks passed!** |
+| `uv run ruff format --check .` | Failed once (`revisions_report.py`, `test_revisions_report.py` needed reformatting) → ran `uv run ruff format` on both files → re-verified `--check .`: **355 files already formatted** |
+| `uv run mypy .` | Found 2 (`arg-type` on `DecisionDate(state=...)` in the test file's original for-loop form, where `state`/`state_b` were plain `str`) → converted the loop to `@pytest.mark.parametrize` with literal `DecisionDate` fixture values (typed, no runtime behavior change) → **Success: no issues found in 355 source files** |
+| `uv run pytest --cov` (full, unpiped) | **6872 passed, 2 skipped** in 434.44s (0:07:14), exit 0 (up from the P6 baseline + this slice's 11 new tests); coverage 96.99%, gate 90% reached |
+| `uv run python evals/run_self_tests.py` | **43 of 43 harness self-test(s) run, 0 failing** |
+
+### Commit
+
+`a7f9da3` — `feat(revisions): add the pure revisions report renderer
+(#1014)` (scope `revisions` — see "Design choices made", item 5, for the
+scope-precedent check). 2 files changed, 707 insertions(+). Staged
+explicitly by path (`src/openkos/application/revisions_report.py`,
+`tests/unit/application/test_revisions_report.py`) — `openspec/` is left
+for this section's own final `docs(sdd)` commit, same posture as every
+prior Phase B slice. Not pushed. No PR opened (per this batch's explicit
+instruction to stay on the branch, not switch/rebase/push). Branched from
+the P6 branch (PR #1065, not yet merged) @ `708f10a` on
+`feat/1014-phase-b-p7a-report`.
+
+**Budget**: 707 authored changed lines (321 production + 386 test; `git
+diff --stat` on the commit), above both the ~300-line forecast (design.md's
+Phase B re-plan slice table, "Low" 400-line risk) and the 400-line review
+budget — consistent with every prior oversized Phase A/B slice's own
+"~1.95x actual-vs-forecast" pattern design.md names explicitly. The
+overage is dense docstrings matching this repo's established convention
+(every new public symbol carries a design.md-cross-referenced docstring,
+including the 3 open-choice decisions this slice had to make and document
+inline) plus 4 test fixtures (verdict ordering, state wording x4, default
+filter x4, empty-result x2) needed to exercise every branch design.md's
+own Testing table names for P7a. No test, docstring, or blank line was
+shortened to chase the 400-line number, per the work-unit-commits skill's
+"budget is not code-golf" rule. This is already the smallest cohesive unit
+the design assigns (the pure renderer, as one PR, on top of the judging
+PR that already merged into this branch's history) — recommend
+`size:exception` for this slice, consistent with every prior Phase A/B
+slice's recommendation.
+
+### Remaining Tasks (after Slice P7a)
+
+- Slice P7a (`P7a.1`–`P7a.12`) is complete. PR 11 (targeting the P6
+  branch, per `stacked-to-main`'s chain order P1 → ... → P6 → P7a → P7b →
+  ...) is ready to open on `feat/1014-phase-b-p7a-report`.
+- Slices P7b through P8b (`P7b.*`–`P8b.*` — the `openkos revisions` verb,
+  the combined judge prompt helper, and the `reconcile --from-findings`
+  revision walk) remain, in that chain order, each as its own PR per
+  tasks.md's "Phase B: tasks (2026-09-28 re-plan)" section. P7b depends on
+  this slice's `revisions_report` function per its own task text
+  ("render via `revisions_report` (P7a.9)").
