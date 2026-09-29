@@ -1298,7 +1298,7 @@ alongside it — no direct symbol dependency yet), P4
 
 ### `application/revisions.py` — `load_decisions` (design.md Interfaces, Decision 4 exclusions)
 
-- [ ] **P5a.1** [TEST] `tests/unit/application/test_revisions_service.py`
+- [x] **P5a.1** [TEST] `tests/unit/application/test_revisions_service.py`
   (new file) — add
   `test_load_decisions_excludes_deprecated_confidential_and_bad_relations`:
   three Decisions — one deprecated, one confidential, one with
@@ -1311,14 +1311,14 @@ alongside it — no direct symbol dependency yet), P4
   releases it; the bad-relations one is counted in a dedicated
   `DecisionSet` field. **RED today**: `ModuleNotFoundError` —
   `application/revisions.py` does not exist.
-- [ ] **P5a.2** [IMPL] `src/openkos/application/revisions.py` (new module):
+- [x] **P5a.2** [IMPL] `src/openkos/application/revisions.py` (new module):
   `DecisionSet` dataclass and `load_decisions(layout, *,
   include_confidential, local_exemption)` — deprecated exclusion via
   `lifecycle.deprecated_concept_ids` (always), confidential exclusion via
   `sensitivity.sensitive_concept_ids(..., include_confidential,
   local_exemption)`, bad-relations exclusion + count via
   `okf.decode_relations` fail-closed. Makes P5a.1 GREEN.
-- [ ] **P5a.3** [TEST] Same file — add
+- [x] **P5a.3** [TEST] Same file — add
   `test_load_decisions_builds_resolved_with_from_relation_frontmatter`,
   parametrized over each of `model.relations.RESOLUTION_RELATION_TYPES`
   (`supersedes`, `reconciled_with`, `revises`): a Decision whose
@@ -1327,7 +1327,7 @@ alongside it — no direct symbol dependency yet), P4
   target id; a relation type OUTSIDE that set does not. **RED today**:
   `AttributeError`/`TypeError` — `DecisionSet`'s per-Decision
   `resolved_with` does not exist yet.
-- [ ] **P5a.4** [IMPL] Same module: extend `load_decisions` to build each
+- [x] **P5a.4** [IMPL] Same module: extend `load_decisions` to build each
   surviving Decision's `resolved_with` from `okf.decode_relations`,
   filtered to `model.relations.RESOLUTION_RELATION_TYPES` — the input the
   Phase A leaf's `plan_revision_candidates` already takes as a given
@@ -1335,7 +1335,7 @@ alongside it — no direct symbol dependency yet), P4
 
 ### `application/revisions.py` — Decision event-date resolution (design.md Decision 3)
 
-- [ ] **P5a.5** [TEST] Same file — add
+- [x] **P5a.5** [TEST] Same file — add
   `test_resolve_decision_dates_covers_the_date_state_table`, parametrized
   over: `none-reached` (no Source reached); `missing` (an absent
   `event_date`, a malformed one, and a reached Source whose file is
@@ -1343,7 +1343,7 @@ alongside it — no direct symbol dependency yet), P4
   reached); `dated` (a single valid date, INCLUDING through an
   intermediate concept, not just a direct Source). **RED today**:
   `AttributeError` — the date-resolution function does not exist.
-- [ ] **P5a.6** [IMPL] Same module: build one `files` snapshot (mirrors
+- [x] **P5a.6** [IMPL] Same module: build one `files` snapshot (mirrors
   `list_service.list_provenance_sources`), resolve each Decision's
   `DecisionDate` via `bundle.provenance.provenance_source_ancestors_many`
   (P4.2) + `okf.read_event_date`, applying design.md Decision 3's
@@ -1352,7 +1352,7 @@ alongside it — no direct symbol dependency yet), P4
 
 ### `application/revisions.py` — `read_decision_vectors` (design.md Decision B1, Interfaces)
 
-- [ ] **P5a.7** [TEST] Same file — add
+- [x] **P5a.7** [TEST] Same file — add
   `test_read_decision_vectors_store_absent_yields_absent_and_creates_no_vectors_db`:
   an absent `.openkos/vectors.db` -> `VectorCoverage(store="absent", ...)`,
   AND a filesystem assertion confirms `.openkos/vectors.db` was NOT
@@ -1360,23 +1360,23 @@ alongside it — no direct symbol dependency yet), P4
   lazily creates the file, being called BEFORE the `vector_store_is_empty`
   probe). **RED today**: `AttributeError` — `read_decision_vectors`/
   `VectorCoverage` do not exist.
-- [ ] **P5a.8** [TEST] Same file — add
+- [x] **P5a.8** [TEST] Same file — add
   `test_read_decision_vectors_sqlite_vec_unavailable_yields_absent`: a
   stubbed/unloadable `sqlite-vec` extension also yields `store="absent"`.
   **RED today**: same `AttributeError`.
-- [ ] **P5a.9** [TEST] Same file — add
+- [x] **P5a.9** [TEST] Same file — add
   `test_read_decision_vectors_model_tag_mismatch_or_missing_yields_model_mismatch`,
   parametrized: a stored tag of `None`, and a stored tag that differs from
   `embedding_tag(cfg.embedding_model)` (P1.8) — both yield
   `store="model-mismatch"`. **RED today**: same. Kills the tag compared
   without its `#chunk-v1` composition suffix.
-- [ ] **P5a.10** [TEST] Same file — add
+- [x] **P5a.10** [TEST] Same file — add
   `test_read_decision_vectors_per_decision_missing_and_stale`: a Decision
   with no `doc_vectors` row is in `coverage.missing`; a Decision whose
   stored `content_hash` differs from `content_hash(current file bytes)`
   is in `coverage.stale`; both are ABSENT from `coverage.vectors`. **RED
   today**: same. Kills `==` swapped to `!=` on the hash comparison.
-- [ ] **P5a.11** [TEST] Same file — add
+- [x] **P5a.11** [TEST] Same file — add
   `test_read_decision_vectors_confidential_interaction`: a confidential
   Decision excluded by `load_decisions` (no flag) never reaches
   `read_decision_vectors`'s input set at all; the SAME Decision made
@@ -1386,7 +1386,7 @@ alongside it — no direct symbol dependency yet), P4
   paired). Covers decision-revision-detection's "An included confidential
   Decision without a stored vector is counted, not embedded". **RED
   today**: same (also exercises P5a.2/P5a.4).
-- [ ] **P5a.12** [IMPL] Same module: `VectorCoverage` dataclass (`store:
+- [x] **P5a.12** [IMPL] Same module: `VectorCoverage` dataclass (`store:
   VectorStoreState`, `vectors`, `missing`, `stale`) and
   `read_decision_vectors(layout, decision_ids, files, *, embedding_model)`
   — probe with `vector_store_is_empty` BEFORE `open_vector_store` (the
@@ -1397,12 +1397,12 @@ alongside it — no direct symbol dependency yet), P4
 
 ### Slice P5a verification
 
-- [ ] **P5a.13** Run `uv run ruff check . && uv run ruff format --check . &&
+- [x] **P5a.13** Run `uv run ruff check . && uv run ruff format --check . &&
   uv run mypy .` — must be green.
-- [ ] **P5a.14** Run `uv run pytest tests/unit/application/test_revisions_service.py
+- [x] **P5a.14** Run `uv run pytest tests/unit/application/test_revisions_service.py
   -k "load_decisions or resolve_decision_dates or read_decision_vectors"`
   focused, then `uv run pytest` (unpiped) full suite — must be green.
-- [ ] **P5a.15** Commit as one or more work-unit commits, scope
+- [x] **P5a.15** Commit as one or more work-unit commits, scope
   `application`-adjacent per this project's scope list (confirm the closest
   existing scope, likely `graph` or a bare subsystem term used for prior
   `application/*.py` work, before finalizing — e.g. `feat(cli): add the
