@@ -1621,6 +1621,54 @@ def merge_relations(
     return merged, dropped_self_loops, deduped_collisions
 
 
+def _parse_instant(value: object) -> datetime | None:
+    """Parse `value` as an OKF v0.2 `generated.at` instant, returning `None`
+    on anything unparseable rather than raising (okf-v02-migration design.md
+    Decision 6).
+
+    Widens `_parse_timestamp`: a `datetime` (as YAML resolves an unquoted
+    `at:`/`timestamp:` scalar) passes through unchanged, a `str` parses via
+    `datetime.fromisoformat`, and a bare `date`, any other type, or an
+    unparseable string all yield `None`."""
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    return None
+
+
+def generation_time(metadata: Mapping[str, object]) -> datetime | None:
+    """Resolve a concept's generation time (okf-v02-migration design.md
+    Decision 6): `generated.at` when the `generated` key is present --
+    authoritative, with NO fallback even when it fails to parse -- else the
+    legacy `timestamp` value (OKF v0.2 §13.1's compatibility fallback).
+
+    This is the ONE shared helper every reader that needs a concept's
+    generation time MUST use (okf-format-migration spec) -- no reader
+    outside this function reads `generated.at` or `timestamp` directly for
+    this purpose.
+    """
+    if "generated" in metadata:
+        generated = metadata["generated"]
+        if not isinstance(generated, Mapping):
+            return None
+        return _parse_instant(generated.get("at"))
+    return _parse_instant(metadata.get("timestamp"))
+
+
+def declares_deprecated(metadata: Mapping[str, object]) -> bool:
+    """`True` only when `metadata`'s own `status` field is the exact literal
+    `"deprecated"` (okf-v02-migration design.md Decision 6) -- the same
+    comparison `lifecycle.py` and `bundle/listing.py` made inline before
+    this helper existed, now centralized in the one OKF seam. `"active"`,
+    `"stable"`, `"draft"`, an absent key, and any other value are NOT
+    deprecating (OKF v0.2 §5.4: absent means `stable`)."""
+    return metadata.get("status") == "deprecated"
+
+
 def _parse_timestamp(value: object) -> datetime | None:
     """Parse `value` as an ISO-8601 timestamp, returning `None` on anything
     unparseable (missing, non-string, or malformed) rather than raising --

@@ -10,8 +10,10 @@ is the generic `.concept_id` filter helper reused at every seam.
 
 from dataclasses import dataclass
 from pathlib import Path
+from unittest.mock import patch
 
 from openkos import lifecycle
+from openkos.model import okf
 
 
 def _write_doc(
@@ -228,6 +230,29 @@ def test_all_live_bundle_returns_empty_frozenset(tmp_path: Path) -> None:
     deprecated = lifecycle.deprecated_concept_ids(bundle_dir)
 
     assert deprecated == frozenset()
+
+
+def test_legacy_active_status_is_not_deprecated_and_reads_through_declares_deprecated(
+    tmp_path: Path,
+) -> None:
+    """A concept with a legacy `status: active` and no inbound `supersedes`
+    edge is NOT deprecated (okf-format-migration: "A legacy `active` concept
+    is not deprecated"), and `deprecated_concept_ids` resolves it by calling
+    `okf.declares_deprecated` -- a spy pin so a future inline
+    reimplementation of the `status == "deprecated"` comparison is caught."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "a.md", status="active")
+
+    with patch(
+        "openkos.lifecycle.okf.declares_deprecated",
+        wraps=okf.declares_deprecated,
+    ) as spy:
+        deprecated = lifecycle.deprecated_concept_ids(bundle_dir)
+
+    assert deprecated == frozenset()
+    spy.assert_called_once_with(
+        {"type": "Concept", "title": "Stub", "status": "active"}
+    )
 
 
 def test_revises_edge_does_not_deprecate_either_end(tmp_path: Path) -> None:

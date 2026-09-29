@@ -1488,11 +1488,11 @@ def test_revision_holder_may_be_either_pair_member(
     assert _relations_of(tmp_path, a_id) == []
 
 
-def test_revises_edge_leaves_both_concepts_active_end_to_end(
+def test_revises_edge_leaves_both_concepts_stable_end_to_end(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Hides-nothing, exercised through the verb: after `--revision`, both
-    concepts stay `active` in `list`'s STATUS column and neither appears in
+    concepts stay `stable` in `list`'s STATUS column and neither appears in
     `lifecycle.deprecated_concept_ids` (spec: "A revises edge deprecates
     neither end")."""
     from openkos import config as config_mod
@@ -1512,8 +1512,8 @@ def test_revises_edge_leaves_both_concepts_active_end_to_end(
     assert b_id not in deprecated
 
     rows = {row.concept_id: row for row in listing.list_objects(layout.bundle_dir)}
-    assert rows[a_id].status == "active"
-    assert rows[b_id].status == "active"
+    assert rows[a_id].status == "stable"
+    assert rows[b_id].status == "stable"
 
 
 # ---------------------------------------------------------------------------

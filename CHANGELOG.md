@@ -16,6 +16,16 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Changed
 
+- The computed `STATUS` column `list` prints, the `status` field
+  `concept_read` returns, and the MCP concept payload's `status` field now
+  report `stable` instead of `active` for a live (non-deprecated) concept
+  ([#1064](https://github.com/jasonssdev/openkos/issues/1064)). This follows
+  OKF v0.2's fixed lifecycle vocabulary (`draft | stable | deprecated`,
+  §5.4); a legacy `status: active` in frontmatter still reads as not
+  deprecated, so nothing needs to change on disk. Scripts or agents that
+  match the old `active` string against `list`, `concept_read`, or the MCP
+  payload need to match `stable` instead.
+
 - A `.md` file placed under a dot-directory inside `bundle/` (an editor's
   `.obsidian/` folder, say — the rule applies to any dot-directory, not just
   that one) is no longer part of the bundle
