@@ -251,24 +251,32 @@ EMBEDDING_SIMILARITY_THRESHOLD: Final[float] = 0.65
 `plan_revision_candidates` only when `cosine_similarity` of its two
 Decisions' vectors is at or above this value.
 
-Calibrated with `bge-m3`, ON THE LIBRARY FIXTURE ITSELF
-(`evals/decision_revisions/revision_fixture_library.py`), embedding each
-Decision's `title + "\\n\\n" + body` -- SHORT text, not a full OKF
-document: 0.65 -> 19 of 24 true pairs on the `original` split (10 of 10 on
-`confirmation`), 46 pre-cap candidates; 0.70 -> 16 of 24 (29 candidates);
-0.60 -> 22 of 24 (92 candidates). The two classes overlap at every measured
-value -- true-pair cosines as low as 0.507, non-true-pair cosines as high
-as 0.744 -- so no threshold in this range cleanly separates them; 0.65 was
-picked as the value that clears the harness's own bar B2 (>= 18 of 24), not
-as a clean cut.
+Calibrated with `bge-m3` ON THE LIBRARY FIXTURE ITSELF
+(`evals/decision_revisions/revision_fixture_library.py`), in two text
+shapes:
 
-Two risks this leaf cannot resolve on its own, so both are named here
-rather than assumed away: it is calibrated ON THE SAME EVAL SET IT IS
-MEASURED AGAINST (an overfitting risk), and it is calibrated on SHORT TEXT.
-It MUST be re-measured on the production text shape -- full OKF documents,
-the same shape `graph/proximity.py`'s own `CANDIDATE_SIMILARITY_THRESHOLD`
-is calibrated on, per that module's docstring -- before Phase B wiring
-adopts it."""
+- `title + "\\n\\n" + body` (the harness's `--vector-source text`): 0.65 ->
+  19 of 24 true pairs on the `original` split (10 of 10 on `confirmation`),
+  46 pre-cap candidates; 0.70 -> 16 of 24 (29 candidates); 0.60 -> 22 of 24
+  (92 candidates).
+- The production shape, the document vectors `openkos reindex` stores in
+  `vectors.db` (`--vector-source reindex`; embed text per
+  `state/reindex.py`'s `_compose_header` + body chunks under
+  `EMBED_COMPOSITION_TAG`, never the frontmatter): 0.65 -> 19 of 24
+  (10 of 10 on `confirmation`), 46 pre-cap candidates, with bars B1-B8 all
+  passing in the committed live run
+  `evals/decision_revisions/results/decision-revisions-20260929T011322Z-qwen3-8b.md`.
+
+The margin is thin: an offline sweep put the tightest value still clearing
+18 of 24 at 0.66-0.68, so there are 0-1 pairs of headroom over the
+harness's bar B2 (>= 18 of 24). The two classes overlap in every shape
+measured -- true-pair cosines as low as 0.507, non-true-pair cosines as
+high as 0.744 -- so 0.65 is the value that clears B2, not a clean cut.
+
+It is calibrated ON THE SAME EVAL SET IT IS MEASURED AGAINST, an overfitting
+risk this leaf cannot resolve on its own; re-measure it (same harness,
+`--vector-source reindex`) before changing the embedding model or the embed
+composition."""
 
 
 @dataclass(frozen=True)
