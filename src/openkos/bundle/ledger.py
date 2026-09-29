@@ -34,7 +34,11 @@ literal ASCII suffix, never a canonical equivalence -- a direct
 `os.replace` is a real rename on every volume.
 """
 
+import dataclasses
 import hashlib
+import re
+from collections.abc import Mapping
+from datetime import datetime
 from pathlib import Path
 from typing import Final, Literal
 
@@ -439,6 +443,300 @@ def bundle_wide_max_entries(bundle_dir: Path) -> int:
     for concept_id, entries in scan_unmigrated(bundle_dir):
         counts[concept_id] = counts.get(concept_id, 0) + len(entries)
     return max(counts.values(), default=0)
+
+
+def _apply_migrate_document(text: str) -> str:
+    """Run `okf.migrate_document` once over `text` and return its resulting
+    bytes: `Migrated.text` when a rule fired, `text` itself (untouched, no
+    re-serialization) when `Unchanged`. Raises `ValueError` on `Refused` --
+    the same "never guess" posture `migrate_document` itself documents
+    (okf-v02-migration design.md Decision 9); the caller (Phase 6's
+    `repair`) is expected to turn this into a whole-run refusal, never a
+    partial migration."""
+    result = okf.migrate_document(text)
+    if isinstance(result, okf.Migrated):
+        return result.text
+    if isinstance(result, okf.Unchanged):
+        return text
+    raise ValueError(
+        "migrate_sidecars_to_okf_v02: cannot migrate a whole-document "
+        f"snapshot: {result.reason}"
+    )
+
+
+def _migrate_whole_document_snapshot(
+    text: str,
+    snapshot_events: dict[str, list[tuple[datetime, str]]],
+    current_texts: Mapping[str, str],
+) -> str:
+    """Migrate one whole-document snapshot (`absorbed_snapshot`,
+    `survivor_before`, or a `relation_rewrites`/`provenance_rewrites`
+    entry's `snapshot`) via `okf.migrate_document`, then recurse into any
+    embedded, pre-relocation `merged_from` list the snapshot itself carries
+    (okf-v02-migration design.md Decision 1) -- a migration-era snapshot
+    that still embeds ledger history has that history's OWN whole-document
+    fields migrated the SAME way, by calling `_migrate_entry` (the
+    identical function this module applies to a sidecar's own top-level
+    entries), so `doctor`'s Check B (nested-prefix equality,
+    `scan_nesting_violations`) keeps holding: equal inputs map to equal
+    outputs regardless of nesting depth."""
+    migrated = _apply_migrate_document(text)
+    metadata, body = okf.load_frontmatter(migrated)
+    if okf.MERGED_FROM_KEY not in metadata:
+        return migrated
+    embedded_entries = okf.decode_merged_from(metadata)
+    migrated_embedded = [
+        _migrate_entry(entry, snapshot_events, current_texts)
+        for entry in embedded_entries
+    ]
+    if migrated_embedded == embedded_entries:
+        return migrated
+    new_metadata = dict(metadata)
+    new_metadata[okf.MERGED_FROM_KEY] = okf.encode_merged_from(migrated_embedded)
+    return okf.dump_frontmatter(new_metadata, body)
+
+
+_OKF_VERSION_LINE_RE: Final = re.compile(r"(?m)^(okf_version:)[ \t]*(?:.*)$")
+"""Matches a whole `okf_version: ...` frontmatter line -- the ONE targeted
+substitution `_flip_index_okf_version` performs, never a `dump_frontmatter`
+re-dump of the whole snapshot (task 5.4/design.md Decision 1: "its body is
+untouched")."""
+
+
+def _needs_okf_version_flip(index_text: str) -> bool:
+    """`True` when `index_text` (a whole-`index.md` snapshot) declares an
+    `okf_version` other than `okf.OKF_VERSION` -- the V1-V4 `index_before`
+    flip's own precondition (design.md Decision 1: "when the snapshot's
+    declared `okf_version` differs")."""
+    metadata, _ = okf.load_frontmatter(index_text)
+    return metadata.get("okf_version") != okf.OKF_VERSION
+
+
+def _flip_index_okf_version(index_text: str) -> str:
+    """Flip a V1-V4 `index_before` whole-`index.md` snapshot's declared
+    `okf_version` to `okf.OKF_VERSION`, in place -- a targeted regex
+    substitution over the raw frontmatter block only, never a
+    `dump_frontmatter` re-dump of the whole document, so every OTHER
+    frontmatter field's quoting and the body are left byte-for-byte
+    untouched. Matches `dump_frontmatter`'s own single-quoted emission
+    style for a version string, so a second run over an already-flipped
+    snapshot is a byte-identical no-op."""
+    block, body = okf.split_frontmatter_verbatim(
+        index_text, label="migrate_sidecars_to_okf_v02"
+    )
+    new_block, count = _OKF_VERSION_LINE_RE.subn(
+        rf"\1 '{okf.OKF_VERSION}'", block, count=1
+    )
+    if count == 0:
+        raise ValueError(
+            "migrate_sidecars_to_okf_v02: index_before snapshot has no "
+            "okf_version field to flip"
+        )
+    return new_block + body
+
+
+def _body_start(text: str) -> int:
+    """The character offset at which `text`'s body begins -- the length of
+    its verbatim frontmatter block, measured on the ACTUAL text (never
+    assumed from YAML length, design.md Decision 1's own warning: a re-dump
+    may normalize the whitespace between the closing `---` and the body)."""
+    block, _ = okf.split_frontmatter_verbatim(text, label="migrate_sidecars_to_okf_v02")
+    return len(block)
+
+
+def _build_snapshot_index(
+    sidecars: list[tuple[Path, str, list[okf.MergeLedgerEntry]]],
+) -> dict[str, list[tuple[datetime, str]]]:
+    """One pass over every sidecar's PRE-migration entries (`file ->
+    [(merged_at, snapshot_text), ...]`), built once across the whole bundle
+    (design.md Decision 1: "the index of snapshots is built once, from the
+    pre-migration ledger state, across all sidecars"). Each entry
+    contributes its survivor's own pre-THIS-merge bytes (`survivor_before`,
+    keyed by the sidecar's `survivor_id`), the absorbed object's pre-merge
+    bytes (`absorbed_snapshot`, keyed by `entry.absorbed_id`), and every
+    third-party whole-file snapshot its `relation_rewrites`/
+    `provenance_rewrites` recorded -- exactly the four snapshot kinds
+    `_resolve_post_merge_text` searches for the EARLIEST later event.
+    `link_rewrites` never contributes an event: a link rewrite only ever
+    touches the BODY, never the frontmatter, so it can never change where a
+    later snapshot's body begins."""
+    events: dict[str, list[tuple[datetime, str]]] = {}
+    for _, survivor_id, entries in sidecars:
+        for entry in entries:
+            when = datetime.fromisoformat(entry.merged_at)
+            events.setdefault(f"{survivor_id}.md", []).append(
+                (when, entry.survivor_before)
+            )
+            events.setdefault(f"{entry.absorbed_id}.md", []).append(
+                (when, entry.absorbed_snapshot)
+            )
+            for relation_rewrite in entry.relation_rewrites:
+                events.setdefault(relation_rewrite.file, []).append(
+                    (when, relation_rewrite.snapshot)
+                )
+            for provenance_rewrite in entry.provenance_rewrites:
+                events.setdefault(provenance_rewrite.file, []).append(
+                    (when, provenance_rewrite.snapshot)
+                )
+    return events
+
+
+def _resolve_post_merge_text(
+    file: str,
+    merged_at: str,
+    snapshot_events: dict[str, list[tuple[datetime, str]]],
+    current_texts: Mapping[str, str],
+) -> str:
+    """`file`'s frontmatter as it stood right after the merge recorded at
+    `merged_at` (design.md Decision 1's "Link-offset shift"): the EARLIEST
+    later snapshot event recorded for `file` (any sidecar, `merged_at`
+    strictly greater), or `file`'s CURRENT text when no later event exists.
+    `current_texts` MUST be keyed the same way `LinkRewrite.file` is
+    (bundle-relative path, `.md` suffix included)."""
+    merged_at_instant = datetime.fromisoformat(merged_at)
+    candidates = [
+        (when, text)
+        for when, text in snapshot_events.get(file, [])
+        if when > merged_at_instant
+    ]
+    if candidates:
+        _, text = min(candidates, key=lambda candidate: candidate[0])
+        return text
+    return current_texts[file]
+
+
+def _shift_link_rewrites(
+    link_rewrites: list[okf.LinkRewrite],
+    merged_at: str,
+    snapshot_events: dict[str, list[tuple[datetime, str]]],
+    current_texts: Mapping[str, str],
+) -> list[okf.LinkRewrite]:
+    """Shift every `link_rewrites[].offset` by the change in body-start
+    position its target file's frontmatter undergoes when migrated
+    (design.md Decision 1's "Link-offset shift"): `body_start(migrate_
+    document(x)) - body_start(x)` for `x = _resolve_post_merge_text(...)`,
+    applied only to offsets AT OR ABOVE the OLD body start -- an offset
+    inside the body is never touched. Each distinct `file` is resolved and
+    shifted at most once per call, since every rewrite for the same file
+    shares the same `x` and the same shift."""
+    shifted: list[okf.LinkRewrite] = []
+    shift_cache: dict[str, tuple[int, int]] = {}
+    for rewrite in link_rewrites:
+        if rewrite.file not in shift_cache:
+            old_text = _resolve_post_merge_text(
+                rewrite.file, merged_at, snapshot_events, current_texts
+            )
+            old_body_start = _body_start(old_text)
+            new_body_start = _body_start(_apply_migrate_document(old_text))
+            shift_cache[rewrite.file] = (
+                new_body_start - old_body_start,
+                old_body_start,
+            )
+        shift, old_body_start = shift_cache[rewrite.file]
+        if shift != 0 and rewrite.offset >= old_body_start:
+            shifted.append(dataclasses.replace(rewrite, offset=rewrite.offset + shift))
+        else:
+            shifted.append(rewrite)
+    return shifted
+
+
+def _migrate_entry(
+    entry: okf.MergeLedgerEntry,
+    snapshot_events: dict[str, list[tuple[datetime, str]]],
+    current_texts: Mapping[str, str],
+) -> okf.MergeLedgerEntry:
+    """Migrate ONE `MergeLedgerEntry` to OKF v0.2 (design.md Decision 1):
+    every whole-document snapshot through `_migrate_whole_document_snapshot`
+    (recursively covering any embedded pre-relocation `merged_from`), a
+    V1-V4 `index_before` catalog snapshot's `okf_version` flipped in place
+    (V5's is already `""` -- nothing to flip), and every `link_rewrites[].
+    offset` shifted for its target file's frontmatter move. The SAME
+    function migrates both a sidecar's own top-level entries and any
+    embedded historical entry a snapshot carries (called back from
+    `_migrate_whole_document_snapshot`), so Check B's nested-prefix
+    equality is preserved by construction: identical inputs receive
+    identical treatment regardless of nesting depth."""
+    new_index_before = entry.index_before
+    if entry.index_before and _needs_okf_version_flip(entry.index_before):
+        new_index_before = _flip_index_okf_version(entry.index_before)
+    return dataclasses.replace(
+        entry,
+        absorbed_snapshot=_migrate_whole_document_snapshot(
+            entry.absorbed_snapshot, snapshot_events, current_texts
+        ),
+        survivor_before=_migrate_whole_document_snapshot(
+            entry.survivor_before, snapshot_events, current_texts
+        ),
+        index_before=new_index_before,
+        link_rewrites=_shift_link_rewrites(
+            entry.link_rewrites, entry.merged_at, snapshot_events, current_texts
+        ),
+        relation_rewrites=[
+            dataclasses.replace(
+                relation_rewrite,
+                snapshot=_migrate_whole_document_snapshot(
+                    relation_rewrite.snapshot, snapshot_events, current_texts
+                ),
+            )
+            for relation_rewrite in entry.relation_rewrites
+        ],
+        provenance_rewrites=[
+            dataclasses.replace(
+                provenance_rewrite,
+                snapshot=_migrate_whole_document_snapshot(
+                    provenance_rewrite.snapshot, snapshot_events, current_texts
+                ),
+            )
+            for provenance_rewrite in entry.provenance_rewrites
+        ],
+    )
+
+
+def migrate_sidecars_to_okf_v02(
+    bundle_dir: Path, *, current_texts: Mapping[str, str]
+) -> list[tuple[Path, str, list[okf.MergeLedgerEntry]]]:
+    """Migrate every committed merge-ledger sidecar under `bundle_dir` to
+    OKF v0.2 shape (okf-v02-migration design.md Decision 1) -- the ledger
+    holds bundle documents, so a whole-bundle format migration must include
+    it. Pure: never reads a concept file from disk beyond what
+    `current_texts` already supplies, and never writes anything -- the
+    caller (Phase 6's `repair`) decides how and when to commit the result.
+
+    `current_texts` maps every bundle-relative concept path (`.md` suffix
+    included, matching `okf.LinkRewrite.file`) to its CURRENT full text; it
+    is consulted only for a `link_rewrites` target file with no later
+    ledger snapshot recording its post-merge frontmatter.
+
+    Returns one `(sidecar_path, survivor_id, migrated_entries)` triple per
+    sidecar whose migrated entries differ from what is on disk -- a
+    sidecar already fully v0.2-shaped (a second run, or a bundle with no
+    v0.1 history) is silently omitted, so "does this bundle need `repair`"
+    is exactly "is this list non-empty" (mirrors `okf.migrate_document`'s
+    own `Unchanged`-means-no-op contract).
+
+    Raises `ValueError` if any whole-document snapshot cannot be migrated
+    deterministically (`okf.migrate_document` refuses) or if an
+    `index_before` snapshot has no `okf_version` field -- the same "never
+    guess" posture `migrate_document` documents (design.md Decision 9): the
+    caller refuses the WHOLE run rather than partially migrating a bundle.
+    """
+    sidecars: list[tuple[Path, str, list[okf.MergeLedgerEntry]]] = []
+    for ledger_path in iter_ledgers(bundle_dir):
+        metadata, _ = okf.load_frontmatter(ledger_path.read_text(encoding="utf-8"))
+        survivor_id = str(metadata["survivor_id"])
+        entries = okf.decode_merged_from(metadata)
+        sidecars.append((ledger_path, survivor_id, entries))
+
+    snapshot_events = _build_snapshot_index(sidecars)
+
+    changed: list[tuple[Path, str, list[okf.MergeLedgerEntry]]] = []
+    for ledger_path, survivor_id, entries in sidecars:
+        migrated_entries = [
+            _migrate_entry(entry, snapshot_events, current_texts) for entry in entries
+        ]
+        if migrated_entries != entries:
+            changed.append((ledger_path, survivor_id, migrated_entries))
+    return changed
 
 
 def recover(concept_id: str, bundle_dir: Path) -> RecoveryVerdict:
