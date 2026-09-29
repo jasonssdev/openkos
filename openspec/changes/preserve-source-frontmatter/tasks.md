@@ -922,7 +922,7 @@ shape); does not depend on Phase 3, per this file's tasks-phase decision 2.
 
 ### `model/okf.py` — `_tolerant_date` refactor, `read_incoming_date`
 
-- [ ] **4.1** [TEST] `tests/unit/model/test_okf.py` — add
+- [x] **4.1** [TEST] `tests/unit/model/test_okf.py` — add
   `test_read_event_date_unchanged_after_tolerant_date_refactor`: run the
   FULL existing `read_event_date` test suite's assertions again (or import
   and re-run them) against the refactored implementation — a `datetime`
@@ -935,7 +935,7 @@ shape); does not depend on Phase 3, per this file's tasks-phase decision 2.
   test's role is to stay GREEN through 4.4's refactor, not to start RED;
   if it goes RED after 4.4, the refactor broke something and must be fixed
   before continuing.
-- [ ] **4.2** [TEST] Same file — add
+- [x] **4.2** [TEST] Same file — add
   `test_read_incoming_date_shape_table`, parametrized per design.md
   Decision 3's date row: a bare (unquoted) `date` value → that date; a
   quoted `YYYY-MM-DD` string that is a real calendar date → that date; a
@@ -945,7 +945,7 @@ shape); does not depend on Phase 3, per this file's tasks-phase decision 2.
   Covers the `date` row of design.md Decision 3's lift table and ingestion's
   event-date scenarios' data-shape half. **RED today**: `AttributeError`
   — `okf.read_incoming_date` does not exist.
-- [ ] **4.3** [TEST] Same file — add
+- [x] **4.3** [TEST] Same file — add
   `test_read_incoming_date_and_read_event_date_share_tolerance_rules`: for
   a representative set of raw values (valid string, valid bare date,
   malformed string, `datetime`, absent), assert
@@ -956,7 +956,7 @@ shape); does not depend on Phase 3, per this file's tasks-phase decision 2.
   `AttributeError`. **MUTATION**: after 4.4, make `read_incoming_date`
   accept a `datetime` value as its date part (dropping the time) instead of
   rejecting it, and confirm this parity test fails.
-- [ ] **4.4** [IMPL] `src/openkos/model/okf.py`: extract `read_event_date`'s
+- [x] **4.4** [IMPL] `src/openkos/model/okf.py`: extract `read_event_date`'s
   body into a private `_tolerant_date(raw: object) -> StoredEventDate`
   (identical logic, parameterized on the raw value instead of a metadata
   mapping); `read_event_date(metadata)` becomes a one-line wrapper:
@@ -971,7 +971,7 @@ shape); does not depend on Phase 3, per this file's tasks-phase decision 2.
 
 ### `application/ingest.py` — `resolve_event_date(incoming=)`, origin tier
 
-- [ ] **4.5** [TEST] `tests/unit/application/test_ingest.py` — add
+- [x] **4.5** [TEST] `tests/unit/application/test_ingest.py` — add
   `test_resolve_event_date_four_tier_precedence_table`, parametrized over
   every combination design.md Decision 5 and the ingestion spec name: flag
   set → `flag` wins over stored/incoming/inferred; flag absent, stored
@@ -985,7 +985,7 @@ shape); does not depend on Phase 3, per this file's tasks-phase decision 2.
   stored value wins over a frontmatter date", "A frontmatter date fills a
   Source with no stored value, ahead of the file name". **RED today**:
   `TypeError` — `resolve_event_date` has no `incoming` parameter.
-- [ ] **4.6** [TEST] Same file — add
+- [x] **4.6** [TEST] Same file — add
   `test_resolve_event_date_created_key_never_consulted`: a mapping's
   incoming frontmatter carries `created: 2026-01-01` and no `date:` key —
   `resolve_event_date`'s `incoming` argument (computed by the CALLER via
@@ -997,14 +997,14 @@ shape); does not depend on Phase 3, per this file's tasks-phase decision 2.
   covered by 4.2's absent-key row) PLUS this function's plumbing — write it
   here as an end-to-end confirmation at the `resolve_event_date` call
   boundary; RED until 4.7 threads the value through.
-- [ ] **4.7** [IMPL] `src/openkos/application/ingest.py`: add `incoming:
+- [x] **4.7** [IMPL] `src/openkos/application/ingest.py`: add `incoming:
   date | None = None` to `resolve_event_date`'s signature; insert it into
   the existing precedence chain between `previous` (stored) and `inferred`
   (file name): `elif incoming is not None: value = incoming; origin =
   "frontmatter"`. Change `EventDateOrigin` from `Literal["flag", "file
   name", "kept"]` to `Literal["flag", "file name", "kept", "frontmatter"]`.
   Makes 4.5-4.6 GREEN.
-- [ ] **4.8** [TEST] Same file — add
+- [x] **4.8** [TEST] Same file — add
   `test_compose_source_document_reads_incoming_date_independently_of_lift`:
   a fixture with incoming frontmatter carrying ONLY `date: 2026-07-14` (no
   `tags`, no `sensitivity`) still resolves `event_date` to `2026-07-14` —
@@ -1014,7 +1014,7 @@ shape); does not depend on Phase 3, per this file's tasks-phase decision 2.
   if Phase 3 has not merged — simulate that by NOT importing anything
   Phase-3-specific in this test). **RED today**: `AssertionError` — no call
   site exists yet.
-- [ ] **4.9** [IMPL] `src/openkos/application/ingest.py`: inside
+- [x] **4.9** [IMPL] `src/openkos/application/ingest.py`: inside
   `compose_source_document`, after `parse_incoming_frontmatter` (2.8), call
   `okf.read_incoming_date(result.mapping) if result.status == "parsed" else
   None` and pass it as `resolve_event_date`'s new `incoming=` argument,
@@ -1023,7 +1023,7 @@ shape); does not depend on Phase 3, per this file's tasks-phase decision 2.
 
 ### Origin-disclosure line
 
-- [ ] **4.10** [TEST] `tests/unit/cli/test_ingest.py` — add
+- [x] **4.10** [TEST] `tests/unit/cli/test_ingest.py` — add
   `test_event_date_origin_disclosure_line_names_frontmatter`: a fresh
   ingest with no flag, no dated file name, and incoming frontmatter
   carrying `date: 2026-07-14` prints exactly one line naming `2026-07-14`
@@ -1032,7 +1032,7 @@ shape); does not depend on Phase 3, per this file's tasks-phase decision 2.
   failure in `_echo_event_date_preview_line`, which currently has no
   `"frontmatter"` branch and would raise/fall through unexpectedly for that
   origin value).
-- [ ] **4.11** [IMPL] `src/openkos/cli/main.py`: in
+- [x] **4.11** [IMPL] `src/openkos/cli/main.py`: in
   `_echo_event_date_preview_line` (line 4278), add an `elif
   resolution.origin == "frontmatter":` branch printing
   `f"    event date {value} (from the source's frontmatter date)"`.
@@ -1040,13 +1040,13 @@ shape); does not depend on Phase 3, per this file's tasks-phase decision 2.
 
 ### Phase 4 verification
 
-- [ ] **4.12** Run `uv run ruff check . && uv run ruff format --check . &&
+- [x] **4.12** Run `uv run ruff check . && uv run ruff format --check . &&
   uv run mypy .` — must be green.
-- [ ] **4.13** Run `uv run pytest tests/unit/model/test_okf.py
+- [x] **4.13** Run `uv run pytest tests/unit/model/test_okf.py
   tests/unit/application/test_ingest.py tests/unit/cli/test_ingest.py`
   focused, then `uv run pytest --cov` (unpiped) full suite — must be
   green, 90% branch gate held.
-- [ ] **4.14** [TEST, regression] `tests/unit/cli/test_ingest.py` — confirm
+- [x] **4.14** [TEST, regression] `tests/unit/cli/test_ingest.py` — confirm
   (or add if missing) a test that a Source-only rewrite triggered SOLELY by
   the (pre-existing) event-date delta still short-circuits before any LLM
   call and creates/modifies/removes no derived object — the "Converged
@@ -1054,8 +1054,8 @@ shape); does not depend on Phase 3, per this file's tasks-phase decision 2.
   now exercised alongside Phase 2/3's two new deltas. Must stay GREEN;
   this task exists to make the coverage table's "4.14" cell concrete, not
   to introduce new behavior.
-- [ ] **4.15** Run `uv run python evals/run_self_tests.py` — must be green.
-- [ ] **4.16** Commit as one or more work-unit commits, scope `ingest` (e.g.
+- [x] **4.15** Run `uv run python evals/run_self_tests.py` — must be green.
+- [x] **4.16** Commit as one or more work-unit commits, scope `ingest` (e.g.
   `feat(ingest): resolve event_date from incoming frontmatter's date tier`).
   Open PR 4 (Phase 4: date lift) targeting `main`, branched from `main`
   after PR 2 merges (independent of PR 3 — either may merge first).
