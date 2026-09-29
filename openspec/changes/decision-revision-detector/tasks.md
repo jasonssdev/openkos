@@ -1647,49 +1647,59 @@ Depends on P5a/P5b/P6 (the service) and P7a (the renderer). Files:
 `src/openkos/cli/main.py` (new `revisions` command), `docs/cli.md`. Tests:
 `tests/unit/cli/test_revisions.py` (new).
 
-- [ ] **P7b.1** [TEST] `tests/unit/cli/test_revisions.py` (new file) — add
+- [x] **P7b.1** [TEST] `tests/unit/cli/test_revisions.py` (new file) — add
   `test_help_labels_the_verb_experimental`: `openkos revisions --help`
   output contains `[experimental]`. **RED today**: `openkos revisions`
   does not exist — Typer reports "No such command".
-- [ ] **P7b.2** [TEST] Same file — add
+- [x] **P7b.2** [TEST] Same file — add
   `test_every_run_prints_the_unmeasured_quality_notice_on_stderr`: any
   invocation's stderr includes the Decision B4 experimental-notice line
   verbatim. **RED today**: same.
-- [ ] **P7b.3** [TEST] Same file — add
+- [x] **P7b.3** [TEST] Same file — add
   `test_no_decisions_found_exits_zero_with_message`: an empty bundle ->
   `"No Decision objects found."`, exit 0, zero LLM calls. **RED today**:
   same.
-- [ ] **P7b.4** [TEST] Same file — add
+- [x] **P7b.4** [TEST] Same file — add
   `test_vector_store_absent_or_model_mismatch_exits_zero_with_remedy_and_zero_calls`,
   parametrized over BOTH Decision B1 cases (store absent/empty/`sqlite-vec`
   unavailable; stored tag mismatch or absent) — exit 0, the exact remedy
   message naming `openkos reindex`, ZERO LLM calls AND zero embedding
   calls (inject a raising `Embedder`/embed-hook stub at the one seam the
   verb could reach and assert it is never called). **RED today**: same.
-- [ ] **P7b.5** [TEST] Same file — add
+  Applied as TWO separate tests instead of one parametrized test
+  (`test_vector_store_absent_exits_zero_with_remedy_and_zero_calls`,
+  `test_vector_store_model_mismatch_exits_zero_with_remedy_and_zero_calls`)
+  — same coverage, clearer failure attribution; the zero-embedding-call
+  assertion is `_ScriptedLLM.embed` raising `AssertionError` if ever
+  invoked, shared by every test in the file.
+- [x] **P7b.5** [TEST] Same file — add
   `test_the_one_gate_count_matches_the_stub_llm_call_count`: a
   `_ScriptedLLM` counting calls — the printed gate count equals
   `_ScriptedLLM.calls` after `--auto`-driven completion; a truncation
-  notice, when present, prints BEFORE the gate line. **RED today**: same.
-  Kills a gate printing a pre-exclusion count.
-- [ ] **P7b.6** [TEST] Same file — add
+  notice, when present, prints BEFORE the gate line (split into its own
+  `test_truncation_notice_prints_before_the_gate_line`, which forces the
+  notice via a monkeypatch on `revision_truncation_notice` rather than a
+  200+-pair fixture — a pure ordering check, not a re-test of the
+  Phase-A leaf function itself). **RED today**: same. Kills a gate
+  printing a pre-exclusion count — MUTATION-KILLED (see apply-progress).
+- [x] **P7b.6** [TEST] Same file — add
   `test_gate_never_fires_when_to_judge_is_zero`: a fully-served re-run
   (empty `to_judge`) prints no gate line, asks nothing, and makes zero
   LLM calls. Covers "Declining the pair-judgment gate makes no judge
   call" jointly with P7b.8. **RED today**: same. Kills a gate that fires
-  at zero.
-- [ ] **P7b.7** [TEST] Same file — add
+  at zero — MUTATION-KILLED (see apply-progress).
+- [x] **P7b.7** [TEST] Same file — add
   `test_non_tty_without_auto_refuses`: non-TTY stdin without `--auto` ->
   exit 1, the exact refusal text, zero LLM calls. **RED today**: same.
-- [ ] **P7b.8** [TEST] Same file — add
+- [x] **P7b.8** [TEST] Same file — add
   `test_tty_decline_exits_zero_with_no_calls`: a simulated TTY that
   declines the gate prompt -> `"Aborted -- no revisions judged."`, exit
   0, zero LLM calls, and no revision finding persisted for this run's
   candidates. **RED today**: same.
-- [ ] **P7b.9** [TEST] Same file — add
+- [x] **P7b.9** [TEST] Same file — add
   `test_auto_runs_unattended_on_non_tty`: `--auto` on non-TTY stdin
   proceeds without prompting. **RED today**: same.
-- [ ] **P7b.10** [TEST] Same file — add
+- [x] **P7b.10** [TEST] Same file — add
   `test_full_run_writes_no_bundle_file_and_no_other_derived_store_content`:
   a content snapshot of every file under `bundle/` and of
   `.openkos/vectors.db`'s ROW CONTENT (not raw file bytes — WAL side
@@ -1698,38 +1708,48 @@ Depends on P5a/P5b/P6 (the service) and P7a (the renderer). Files:
   `.openkos/findings.db`. Covers "A full run changes no bundle file and
   no other derived store", "REAFFIRMS and UNRELATED cause no bundle
   write" (the verb never writes bundle at all), and "The verb makes no
-  embedding call". **RED today**: same. Kills a bundle write.
-- [ ] **P7b.11** [TEST] Same file — add
+  embedding call". **RED today**: same. Kills a bundle write —
+  MUTATION-KILLED (see apply-progress).
+- [x] **P7b.11** [TEST] Same file — add
   `test_partial_batch_renders_completed_then_exits_one`: a raising LLM
   stub partway through `to_judge` -> completed verdicts render, THEN the
   failure line with `"{completed} of {to_judge}"`, exit 1. **RED today**:
   same.
-- [ ] **P7b.12** [TEST] Same file — add
+- [x] **P7b.12** [TEST] Same file — add
   `test_include_confidential_reduces_excluded_count_and_releases_the_judge_send`:
   without the flag, a confidential-eligible pair is excluded from the
   printed count; with the flag AND a current stored vector, it is
   counted eligible and its body reaches the judge (the send is
   released). Covers design.md Decision B2. **RED today**: same.
-- [ ] **P7b.13** [IMPL] `src/openkos/cli/main.py`: add the `revisions`
+- [x] **P7b.13** [IMPL] `src/openkos/cli/main.py`: add the `revisions`
   Typer command — `@_guard_workspace_lock("revisions")`,
   `rich_help_panel="Explore"`, `--auto`/`--include-confidential`/
   `--fresh`/`--all` flags, the Decision B4 sequence (workspace gate,
   `read_config`, experimental notice, `_chat_client`,
   `_resolve_local_exemption`, `service.load_decisions`,
   `service.plan_revisions`, the one gate, `service.judge_revisions`,
-  render via `revisions_report` (P7a.9)). Makes P7b.1-P7b.12 GREEN.
-- [ ] **P7b.14** `docs/cli.md`: add the `revisions` section — experimental
+  render via `revisions_report` (P7a.9)). Makes P7b.1-P7b.12 GREEN. The
+  `help=` string escapes the leading `[experimental]` as `\[experimental]`
+  — `typer.Typer()` here runs with `rich_markup_mode="rich"`, and an
+  unescaped `[experimental]` is swallowed as (invalid, unclosed) Rich
+  console markup rather than rendered literally. Item 1 (workspace-root
+  line) and item 2 (served/judged summary line) from design.md Decision
+  8's original "Stdout, in order" listing are deliberately NOT printed —
+  neither is named in this task's own IMPL step list above, and no
+  P7b.1-P7b.12 [TEST] pins either one, so adding them would be untested
+  behavior this task list never asked for.
+- [x] **P7b.14** `docs/cli.md`: add the `revisions` section — experimental
   label, flags, the one gate, that it READS `.openkos/vectors.db` and
   makes NO embedding call, the `openkos reindex` remedy, and that it
   writes only `.openkos/findings.db`.
 
 ### Slice P7b verification
 
-- [ ] **P7b.15** Run `uv run ruff check . && uv run ruff format --check . &&
+- [x] **P7b.15** Run `uv run ruff check . && uv run ruff format --check . &&
   uv run mypy .` — must be green.
-- [ ] **P7b.16** Run `uv run pytest tests/unit/cli/test_revisions.py`
+- [x] **P7b.16** Run `uv run pytest tests/unit/cli/test_revisions.py`
   focused, then `uv run pytest` (unpiped) full suite — must be green.
-- [ ] **P7b.17** Commit as one or more work-unit commits (e.g. `feat(cli):
+- [x] **P7b.17** Commit as one or more work-unit commits (e.g. `feat(cli):
   add the openkos revisions verb`). Open PR 12 (Slice P7b) targeting PR
   11's branch.
 
