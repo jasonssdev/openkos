@@ -1103,24 +1103,24 @@ for this PR rather than splitting the table from its sweep.
 
 ### `state/revision_findings.py` — schema and REPLACE-per-pair (design.md Decision 2)
 
-- [ ] **P3.1** [TEST] `tests/unit/state/test_revision_findings.py` (new
+- [x] **P3.1** [TEST] `tests/unit/state/test_revision_findings.py` (new
   file) — add `test_record_revision_findings_replaces_per_sorted_pair_key`:
   recording two `RevisionFinding`s for the SAME sorted pair keeps only the
   latest (REPLACE semantics); recording findings for two DIFFERENT pairs
   keeps both; `open_revision_findings` returns rows in insertion order.
   **RED today**: `ModuleNotFoundError` — the module does not exist.
-- [ ] **P3.2** [TEST] Same file — add
+- [x] **P3.2** [TEST] Same file — add
   `test_record_revision_findings_round_trips_every_column_including_nulls`:
   a finding with `quotes=(None, "verbatim text")` and `dates=(None,
   "2026-03-04")` round-trips through `record_revision_findings`/
   `open_revision_findings` with every column preserved, NULLs included.
   **RED today**: same `ModuleNotFoundError`.
-- [ ] **P3.3** [TEST] Same file — add
+- [x] **P3.3** [TEST] Same file — add
   `test_open_revision_findings_on_a_fresh_connection_returns_empty_tuple`:
   a connection with no prior write returns `()`, not an error (the `CREATE
   TABLE IF NOT EXISTS`-on-every-write pattern from `state/edge_suggestions.py`).
   **RED today**: same `ModuleNotFoundError`.
-- [ ] **P3.4** [IMPL] `src/openkos/state/revision_findings.py` (new module):
+- [x] **P3.4** [IMPL] `src/openkos/state/revision_findings.py` (new module):
   `InputDigest(input_ref, digest)` and `RevisionFinding(pair_ids, verdict,
   confidence, rationale, quotes, dates, date_states, include_confidential,
   prompt_version, input_digests)` (frozen dataclasses, per design.md
@@ -1132,36 +1132,36 @@ for this PR rather than splitting the table from its sweep.
 
 ### `state/revision_findings.py` — checked-erasure sweep (design.md Decision 2, privacy sweep)
 
-- [ ] **P3.5** [TEST] Same file — add
+- [x] **P3.5** [TEST] Same file — add
   `test_delete_revision_findings_referencing_matches_pair_id_0`: a finding
   whose `pair_id_0` is a purge-set member is deleted, along with its
   `revision_finding_input_digests` child rows; an unrelated finding
   survives. **RED today**: `AttributeError` —
   `delete_revision_findings_referencing` does not exist.
-- [ ] **P3.6** [TEST] Same file — add
+- [x] **P3.6** [TEST] Same file — add
   `test_delete_revision_findings_referencing_matches_pair_id_1`: same,
   keyed on `pair_id_1` alone (kills an `OR` narrowed to only `pair_id_0`).
   **RED today**: same.
-- [ ] **P3.7** [TEST] Same file — add
+- [x] **P3.7** [TEST] Same file — add
   `test_delete_revision_findings_referencing_matches_an_input_ref_source_id`:
   a finding whose `revision_finding_input_digests.input_ref` names a
   purge-set member Source id (a `sources/...` id, neither Decision in the
   pair) is deleted. Covers forget-command's "Forgetting a concept scrubs
   its persisted revision finding" at the Source-provenance level. **RED
   today**: same.
-- [ ] **P3.8** [TEST] Same file — add
+- [x] **P3.8** [TEST] Same file — add
   `test_delete_revision_findings_referencing_matches_sources_of_prefix_suffix`:
   a finding whose `input_ref` reads `"sources-of:<purge-id>"` is deleted
   when `<purge-id>` is in the purge set, matched on the SUFFIX (kills an
   exact-match-only comparison that misses the `sources-of:` prefix form).
   **RED today**: same.
-- [ ] **P3.9** [TEST] Same file — add
+- [x] **P3.9** [TEST] Same file — add
   `test_delete_revision_findings_referencing_runs_vacuum_and_checked_checkpoint`:
   after a deletion, VACUUM ran and a subsequent `wal_checkpoint(TRUNCATE)`
   returned a checked non-`busy` row; a stubbed `busy` checkpoint result
   RAISES instead of returning silently (the `edge_suggestions.py:237-299`
   checked-erasure precedent). **RED today**: same `AttributeError`.
-- [ ] **P3.10** [IMPL] Same module: add `delete_revision_findings_referencing(
+- [x] **P3.10** [IMPL] Same module: add `delete_revision_findings_referencing(
   conn, purge_ids) -> int` — the four-arm `OR` delete (`pair_id_0`,
   `pair_id_1`, exact `input_ref` match, `input_ref` `sources-of:<id>` suffix
   match) plus its child `revision_finding_input_digests` rows, then the
@@ -1170,7 +1170,7 @@ for this PR rather than splitting the table from its sweep.
 
 ### `cli/main.py` — sweep join and forget integration
 
-- [ ] **P3.11** [TEST] `tests/unit/cli/test_forget.py` — add
+- [x] **P3.11** [TEST] `tests/unit/cli/test_forget.py` — add
   `test_forget_scrubs_a_revision_finding_referencing_the_purged_concept_and_preserves_an_unrelated_one`:
   seed one revision finding whose pair (or Source input digest) names the
   concept `forget` is about to purge, with a verbatim quote from its body,
@@ -1182,14 +1182,14 @@ for this PR rather than splitting the table from its sweep.
   persisted revision finding" and "An unrelated revision finding is
   preserved". **RED today**: `_sweep_findings_for_ids` does not call
   `delete_revision_findings_referencing` yet — the targeted row survives.
-- [ ] **P3.12** [TEST] Same file — add (or extend the existing corrupt-store
+- [x] **P3.12** [TEST] Same file — add (or extend the existing corrupt-store
   warning test with) an assertion that the stderr warning text names
   "revision finding(s)" as one of the residue stores, alongside the
   existing findings/adjudications/edge-suggestions wording. Covers
   forget-command's "A corrupt findings store warns instead of aborting"
   (pre-existing behavior; wording widens). **RED today**: the current
   warning text lists only findings/adjudications/edge suggestions.
-- [ ] **P3.13** [IMPL] `src/openkos/cli/main.py`: `_sweep_findings_for_ids`
+- [x] **P3.13** [IMPL] `src/openkos/cli/main.py`: `_sweep_findings_for_ids`
   gains a call to `revision_findings_store.delete_revision_findings_referencing(
   conn, set(purge_ids))` on the SAME connection, after the existing
   `delete_edge_suggestions_referencing` call; its stderr warning text widens
@@ -1198,7 +1198,7 @@ for this PR rather than splitting the table from its sweep.
 
 ### Sibling-table regression pin (proposal's "verified hazard", spec: Revision Findings Persist In Sibling Tables)
 
-- [ ] **P3.14** [TEST, no paired IMPL] Add
+- [x] **P3.14** [TEST, no paired IMPL] Add
   `test_revision_findings_do_not_affect_contradiction_status_or_next`
   (in `tests/unit/cli/test_contradictions.py`, or split across
   `test_status.py`/`test_next.py` if that fixture shape is easier — decide
@@ -1219,7 +1219,7 @@ for this PR rather than splitting the table from its sweep.
 
 ### ADR-0025 narrowing (design.md Decision B6, ships with P3 — owner accepted B3 2026-09-28)
 
-- [ ] **P3.15** [DOC] Rename `docs/adr/0025-llm-derived-attributes-live-in-a-cache.md`
+- [x] **P3.15** [DOC] Rename `docs/adr/0025-llm-derived-attributes-live-in-a-cache.md`
   to `docs/adr/0025-temporal-direction-never-comes-from-the-model.md`.
   Retitle it "Temporal direction between two concepts never comes from a
   model"; move the per-concept-attribute cache rule (subject/value/evidence
@@ -1229,18 +1229,18 @@ for this PR rather than splitting the table from its sweep.
   `Proposed` (archive still flips it to `Accepted` when this change
   archives, since P3 is the slice that realizes the ADR's now-narrower
   claim — the schema stores dates and no holder).
-- [ ] **P3.16** [DOC] `docs/adr/README.md`: update the ADR-0025 index row's
+- [x] **P3.16** [DOC] `docs/adr/README.md`: update the ADR-0025 index row's
   title and filename to match P3.15's rename.
 
 ### Slice P3 verification
 
-- [ ] **P3.17** Run `uv run ruff check . && uv run ruff format --check . &&
+- [x] **P3.17** Run `uv run ruff check . && uv run ruff format --check . &&
   uv run mypy .` — must be green.
-- [ ] **P3.18** Run `uv run pytest tests/unit/state/test_revision_findings.py
+- [x] **P3.18** Run `uv run pytest tests/unit/state/test_revision_findings.py
   tests/unit/cli/test_forget.py` focused, then the sibling-table regression
   file from P3.14, then `uv run pytest` (unpiped) full suite — must be
   green.
-- [ ] **P3.19** Commit as one or more work-unit commits, scope `state` if
+- [x] **P3.19** Commit as one or more work-unit commits, scope `state` if
   it exists as a project scope, else `lint`/`cli` for the sweep-wiring
   half and a bare doc-only commit for the ADR rename (confirm against
   `AGENTS.md`'s scope list and the most recent commit touching
