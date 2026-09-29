@@ -2531,3 +2531,89 @@ def test_contradictions_discloses_unjudged_source_withholding(
     assert "1 candidate edge(s) withheld" in result.stdout
     assert "sources/s" in result.stdout
     assert "re-ingest" in result.stdout
+
+
+# --- #1014 Phase B P3: revision findings are a sibling table, unread by ----
+# --- contradiction serving, status, or next -------------------------------
+
+
+def test_revision_findings_do_not_affect_contradiction_status_or_next(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """spec: "Revision Findings Persist In Sibling Tables" -- a persisted
+    revision finding for the SAME pair a persisted contradiction finding
+    already covers must not change `openkos contradictions`, `openkos
+    status`, or `openkos next`'s output at all: nothing in contradiction
+    serving, `status`, `next`, or pending-work code reads
+    `revision_findings` (it lives in its own module and its own tables).
+    Both runs below keep the SAME persisted contradiction finding; only
+    the second run additionally seeds a revision-finding row, so any
+    output difference could only come from that added row."""
+    from openkos.state import revision_findings
+
+    _init_workspace(tmp_path, monkeypatch)
+    conn = derived.open_derived_connection(tmp_path / ".openkos" / "findings.db")
+    try:
+        findings.record_findings(
+            conn,
+            [
+                findings.Finding(
+                    pair_ids=("concepts/a", "concepts/b"),
+                    merged_absorbed_id=None,
+                    verdict="contradicts",
+                    confidence=0.9,
+                    rationale="pinned contradiction",
+                    input_digests=(),
+                )
+            ],
+        )
+    finally:
+        conn.close()
+
+    before = {
+        verb: runner.invoke(app, [verb])
+        for verb in ("contradictions", "status", "next")
+    }
+    for verb, result in before.items():
+        assert result.exit_code == 0, f"{verb}: {result.stderr}"
+
+    conn = derived.open_derived_connection(tmp_path / ".openkos" / "findings.db")
+    try:
+        revision_findings.record_revision_findings(
+            conn,
+            [
+                revision_findings.RevisionFinding(
+                    pair_ids=("concepts/a", "concepts/b"),
+                    verdict="reverses",
+                    confidence=0.95,
+                    rationale="a revision finding for the same pair",
+                    quotes=("quote a", "quote b"),
+                    dates=("2026-01-01", "2026-02-01"),
+                    date_states=("dated", "dated"),
+                    include_confidential=False,
+                    prompt_version="v1",
+                    input_digests=(
+                        revision_findings.InputDigest("concepts/a", "sha-a"),
+                        revision_findings.InputDigest("concepts/b", "sha-b"),
+                    ),
+                )
+            ],
+        )
+    finally:
+        conn.close()
+
+    after = {
+        verb: runner.invoke(app, [verb])
+        for verb in ("contradictions", "status", "next")
+    }
+
+    for verb in ("contradictions", "status", "next"):
+        assert after[verb].stdout == before[verb].stdout, (
+            f"{verb} stdout changed after seeding an unrelated-table "
+            "revision finding for the same pair"
+        )
+        assert after[verb].stderr == before[verb].stderr, (
+            f"{verb} stderr changed after seeding an unrelated-table "
+            "revision finding for the same pair"
+        )
+        assert after[verb].exit_code == before[verb].exit_code
