@@ -17,7 +17,7 @@ from datetime import UTC, date, datetime
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 from pathlib import Path, PurePosixPath
-from typing import Final, Literal, NamedTuple, TypedDict, TypeVar
+from typing import Final, Literal, NamedTuple, TypedDict, TypeVar, cast
 
 import typer
 from rich.console import Console
@@ -99,7 +99,13 @@ from openkos.resolution.contradiction import (
     vacuous_coverage_notice,
 )
 from openkos.resolution.contradiction import Verdict as ContradictionVerdictValue
-from openkos.resolution.decision_revision import revision_truncation_notice
+from openkos.resolution.decision_revision import (
+    DecisionDate,
+    RevisionVerdict,
+    RevisionVerdictValue,
+    relation_for,
+    revision_truncation_notice,
+)
 from openkos.resolution.edge_typing import (
     LEAST_SPECIFIC_RELATION_TYPE,
     EdgeSuggestion,
@@ -9690,7 +9696,11 @@ def reconcile(
         help="Walk the persisted open contradiction findings with a per-item "
         "[y/N] consent prompt, writing each accepted pair's symmetric "
         "reconciliation through the same write path -- no ids to transcribe "
-        "(#567).",
+        "(#567). Also walks fresh, actionable revision findings from "
+        "'openkos revisions': a directed REVERSES/REFINES offers a "
+        "supersedes/revises edge held by the later Decision, an undirected "
+        "one asks once which Decision is later and which relation type to "
+        "record (#1014).",
     ),
 ) -> None:
     """Record a human's resolution of a contradiction between two concepts:
@@ -10249,6 +10259,33 @@ def _ask_later_decision_and_type(a: str, b: str) -> tuple[str, str, str] | None:
         )
 
 
+def _revision_verdict_from_finding(
+    finding: revision_findings_store.RevisionFinding,
+) -> RevisionVerdict:
+    """Reconstruct a `RevisionVerdict` from a persisted `RevisionFinding` so
+    `reconcile --from-findings` (design.md Decision 9, #1014 Plan 2) reads
+    `.direction`/`relation_for` off the SAME single authority
+    (`pair_direction`, ADR-0025) `revisions_report._view_from_finding`
+    already uses to render the `revisions` verb's own report -- never a
+    second, independently-typed direction check."""
+    date_0 = DecisionDate(
+        value=date.fromisoformat(finding.dates[0]) if finding.dates[0] else None,
+        state=finding.date_states[0],  # type: ignore[arg-type]
+    )
+    date_1 = DecisionDate(
+        value=date.fromisoformat(finding.dates[1]) if finding.dates[1] else None,
+        state=finding.date_states[1],  # type: ignore[arg-type]
+    )
+    return RevisionVerdict(
+        pair_ids=finding.pair_ids,
+        verdict=RevisionVerdictValue(finding.verdict),
+        confidence=finding.confidence,
+        rationale=finding.rationale,
+        quotes=finding.quotes,
+        dates=(date_0, date_1),
+    )
+
+
 def _run_reconcile_from_findings(
     root: Path, layout: config.WorkspaceLayout, log_path: Path
 ) -> None:
@@ -10267,7 +10304,26 @@ def _run_reconcile_from_findings(
     reconciled differently -- the at-most-one-resolution gate) is counted
     as skipped and the walk continues; post-consent target drift (exit 3)
     still refuses the whole run, exactly as everywhere else in the
-    #306/#313/#319 arc."""
+    #306/#313/#319 arc.
+
+    A SECOND walk follows (design.md Decision 9, #1014 Plan 2): fresh,
+    actionable revision findings (`decision-revision-detection`), read via
+    `revisions_service.actionable_revision_findings`. It shares this
+    function's `applied`/`skipped`/`declined`/`changed_pairs` counters and
+    its final summary/refresh with the contradiction walk above, which
+    itself runs first and is otherwise unaffected -- only its own early
+    `return` on an empty list became "print the line, then continue" so
+    execution can reach the second walk. A DIRECTED finding (known
+    direction) is offered as a `[y/N]` consent naming the exact directional
+    edge (`supersedes` for REVERSES, `revises` for REFINES) held by the
+    LATER Decision; an UNDIRECTED finding (`RevisionVerdict.is_untyped_
+    change`) routes instead to `_ask_later_decision_and_type`'s combined
+    "which is later, which relation type" prompt, with no separate y/N
+    step. Each item's freshness is re-checked immediately (`is_fresh`) --
+    an earlier item in EITHER walk may have rewritten one of its
+    Decisions -- and a stale finding is skipped without a prompt.
+    REAFFIRMS/UNRELATED findings never reach this walk at all
+    (`is_actionable_revision`, Phase A leaf, is `False` for both)."""
     try:
         cfg = config.read_config(root)
     except (OSError, ValueError) as exc:
@@ -10310,18 +10366,18 @@ def _run_reconcile_from_findings(
 
     typer.echo(f"openkos reconcile --from-findings: workspace at {root}")
     typer.echo()
+
+    applied = 0
+    changed_pairs = 0
+    skipped = 0
+    declined: list[str] = []
+
     if not actionable:
         typer.echo(
             "No open contradiction findings to reconcile. Findings are "
             "recorded by `openkos curate` (Contradictions stage) and "
             "`openkos contradictions`."
         )
-        return
-
-    applied = 0
-    changed_pairs = 0
-    skipped = 0
-    declined: list[str] = []
     for finding in actionable:
         finding_a, finding_b = finding.pair_ids
         try:
@@ -10368,6 +10424,126 @@ def _run_reconcile_from_findings(
                 raise
             # The transaction already printed its refusal (e.g. the pair is
             # reconciled differently); one bad pair never ends the walk.
+            skipped += 1
+            continue
+        applied += 1
+        if pair_changed:
+            changed_pairs += 1
+
+    # design.md Decision 9: the second walk, over fresh/actionable revision
+    # findings (decision-revision-detection). Shares this function's
+    # `applied`/`skipped`/`declined`/`changed_pairs` counters -- the summary
+    # and end-of-run refresh below count BOTH walks together.
+    revision_actionable = revisions_service.actionable_revision_findings(layout)
+    if not revision_actionable:
+        typer.echo(
+            "No open revision findings to apply. Findings are recorded by "
+            "`openkos revisions`."
+        )
+    for revision_finding in revision_actionable:
+        finding_a, finding_b = revision_finding.pair_ids
+        # Step 4: re-check freshness immediately before any prompt -- an
+        # earlier item in EITHER walk may have rewritten one of this
+        # finding's Decisions.
+        if not revisions_service.is_fresh(layout, revision_finding):
+            typer.echo(
+                f"  skipping {finding_a} <-> {finding_b} -- changed since "
+                "it was judged."
+            )
+            skipped += 1
+            continue
+
+        try:
+            path_a, canonical_a = application_lifecycle.resolve_concept_path(
+                layout.bundle_dir, finding_a
+            )
+            path_b, canonical_b = application_lifecycle.resolve_concept_path(
+                layout.bundle_dir, finding_b
+            )
+        except (OSError, ValueError) as exc:
+            typer.echo(f"  skipping {finding_a} <-> {finding_b} -- {exc}.")
+            skipped += 1
+            continue
+
+        verdict = _revision_verdict_from_finding(revision_finding)
+        typer.echo(f"{canonical_a} <-> {canonical_b}")
+        typer.echo(
+            f"  verdict: {revision_finding.verdict} "
+            f"(confidence: {revision_finding.confidence:.2f})"
+        )
+        typer.echo(
+            f"  {canonical_a} ({revision_finding.dates[0] or 'unknown date'}): "
+            f"{revision_finding.quotes[0]}"
+        )
+        typer.echo(
+            f"  {canonical_b} ({revision_finding.dates[1] or 'unknown date'}): "
+            f"{revision_finding.quotes[1]}"
+        )
+        typer.echo(f"  rationale: {revision_finding.rationale}")
+
+        edge_type: Literal["supersedes", "revises"]
+        holder: str
+        target: str
+        if verdict.direction.holder is not None:
+            # Step 6: direction known -- holder = later, target = earlier,
+            # edge_type = `relation_for(verdict)` (never overridable here;
+            # a human who disagrees with the detected kind must skip and
+            # use `reconcile --winner`/`--revision` by hand).
+            later = (
+                canonical_a if verdict.direction.holder == finding_a else canonical_b
+            )
+            earlier = canonical_b if later == canonical_a else canonical_a
+            edge_type = cast(Literal["supersedes", "revises"], relation_for(verdict))
+            if edge_type == "supersedes":
+                prompt_text = (
+                    f"Record {later} supersedes {earlier} (reversal; "
+                    f"{earlier} is hidden as current)? [y/N]"
+                )
+            else:
+                prompt_text = (
+                    f"Record {later} revises {earlier} (refinement; both "
+                    "remain current)? [y/N]"
+                )
+            if not curate_module._confirm(prompt_text):
+                declined.append(f"{later} {edge_type} {earlier}")
+                continue
+            holder, target = later, earlier
+        else:
+            # Step 7: direction unknown (an untyped change) -- the combined
+            # prompt supplies BOTH holder/target and edge_type in one
+            # answer; there is no separate y/N step after it.
+            choice = _ask_later_decision_and_type(canonical_a, canonical_b)
+            if choice is None:
+                declined.append(
+                    f"{canonical_a} <-> {canonical_b} (revision, order not chosen)"
+                )
+                continue
+            raw_holder, raw_target, raw_edge_type = choice
+            holder, target = raw_holder, raw_target
+            edge_type = cast(Literal["supersedes", "revises"], raw_edge_type)
+
+        try:
+            pair_changed = _reconcile_pair(
+                root,
+                layout,
+                log_path,
+                cfg,
+                path_a,
+                canonical_a,
+                path_b,
+                canonical_b,
+                holder,
+                target,
+                auto=True,
+                announce_preview=False,
+                edge_type=edge_type,
+            )
+        except typer.Exit as exc:
+            if exc.exit_code == 3:
+                raise
+            # Step 9: the at-most-one-resolution gate is the authority; a
+            # pair already resolved differently refuses there, and one bad
+            # pair never ends the walk.
             skipped += 1
             continue
         applied += 1
