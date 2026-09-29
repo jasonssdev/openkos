@@ -872,6 +872,64 @@ def test_read_event_date(
     assert okf.read_event_date(metadata) == expected
 
 
+def test_build_source_concept_emits_source_frontmatter_when_given() -> None:
+    """design.md Decision 2 / task 2.1: `source_frontmatter` reaches the
+    built document's frontmatter equal to the given mapping, and the
+    builder deep-copies it -- mutating the caller's dict after the call
+    does not change the built document (preserve-source-frontmatter,
+    ingestion: "Valid frontmatter is preserved verbatim under
+    source_frontmatter")."""
+    given: dict[str, object] = {"tags": ["alpha"], "author": "A"}
+    text = _build_call_source(source_frontmatter=given)
+
+    metadata, _ = okf.load_frontmatter(text)
+    assert metadata[okf.SOURCE_FRONTMATTER_KEY] == {"tags": ["alpha"], "author": "A"}
+
+    given["author"] = "MUTATED"
+    metadata_after, _ = okf.load_frontmatter(text)
+    assert metadata_after[okf.SOURCE_FRONTMATTER_KEY] == {
+        "tags": ["alpha"],
+        "author": "A",
+    }
+
+
+def test_build_source_concept_omits_source_frontmatter_when_none() -> None:
+    """design.md Decision 2 / task 2.2: an explicit `source_frontmatter=None`
+    produces a document byte-identical to omitting the argument entirely --
+    neither carries the key, not even a `None`-valued one
+    (preserve-source-frontmatter, ingestion: "No incoming frontmatter means
+    no source_frontmatter key"; ingest-application-service: "Absent
+    frontmatter parameters produce a byte-identical Source", builder half).
+    Calling with the keyword at all is what makes this RED before 2.4 adds
+    the parameter."""
+    omitted = _build_call_source()
+    explicit_none = _build_call_source(source_frontmatter=None)
+
+    assert omitted == explicit_none
+    assert okf.SOURCE_FRONTMATTER_KEY not in omitted
+    metadata, _ = okf.load_frontmatter(omitted)
+    assert okf.SOURCE_FRONTMATTER_KEY not in metadata
+
+
+def test_build_source_concept_no_anchor_or_alias_when_tags_share_values_with_source_frontmatter() -> (
+    None
+):
+    """design.md Decision 2 / task 2.3: `tags` and `source_frontmatter["tags"]`
+    referencing the SAME list object at the call site must not make
+    `SafeDumper` write a `&`/`*` anchor-alias pair into the Source -- this
+    engine's own parser would reject that on the next read. Proven
+    mutation-sensitive by temporarily removing the `copy.deepcopy` call in
+    `build_source_concept` and confirming this test then fails (recorded in
+    apply-progress, not repeated here as a runtime toggle)."""
+    shared_tags = ["alpha", "beta"]
+    text = _build_call_source(
+        tags=shared_tags, source_frontmatter={"tags": shared_tags}
+    )
+
+    assert "&" not in text
+    assert "*" not in text
+
+
 def test_build_source_concept_passes_check_conformance(tmp_path: Path) -> None:
     """The generated concept passes `check_conformance` (§9 rules 1-2)."""
     text = _build_call_source()
@@ -2035,6 +2093,40 @@ def test_build_merged_document_keeps_survivors_own_event_date() -> None:
     )
 
     assert merged[okf.EVENT_DATE_KEY] == "2026-07-14"
+
+
+def test_build_merged_document_source_frontmatter_survivor_only() -> None:
+    """entity-resolution-merge: "The absorbed source_frontmatter does not
+    cross the merge" (design.md Decision 8). Task 2.16. **RED today**: the
+    generic fill-the-gap branch currently imports it from the absorbed
+    side, since `source_frontmatter` is not yet in `_SPECIAL_KEYS`."""
+    merged, _ = okf.build_merged_document(
+        _survivor_metadata(),
+        "Survivor body.",
+        _absorbed_metadata(source_frontmatter={"tags": ["alpha"]}),
+        "Absorbed body.",
+        "concepts/absorbed-id",
+        "concepts/survivor-id",
+    )
+
+    assert okf.SOURCE_FRONTMATTER_KEY not in merged
+
+
+def test_build_merged_document_source_frontmatter_survivor_wins() -> None:
+    """entity-resolution-merge: "The survivor keeps its own
+    source_frontmatter". Task 2.17: a regression pin once
+    `SOURCE_FRONTMATTER_KEY` is added to `_SPECIAL_KEYS` -- the exclusion
+    changes WHICH branch handles it, not just the gap-fill case."""
+    merged, _ = okf.build_merged_document(
+        _survivor_metadata(source_frontmatter={"tags": ["alpha"]}),
+        "Survivor body.",
+        _absorbed_metadata(source_frontmatter={"tags": ["beta"]}),
+        "Absorbed body.",
+        "concepts/absorbed-id",
+        "concepts/survivor-id",
+    )
+
+    assert merged[okf.SOURCE_FRONTMATTER_KEY] == {"tags": ["alpha"]}
 
 
 def test_build_merged_document_type_alternative_cannot_equal_merged_type() -> None:
