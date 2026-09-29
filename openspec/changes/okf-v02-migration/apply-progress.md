@@ -10,7 +10,7 @@ stacked-to-main, 8 PRs (`tasks.md` "Review Workload Forecast").
 |---|---|---|---|
 | 1 | Readers + display + ADR | PR 1 → `main` | **Done** — commit `6849b36` |
 | 2a | Writers: generated + status | PR 2 → `main` | **Done** — commit `c7ed0c7` |
-| 2b | Writers: sources | PR 3 → `main` | Not started |
+| 2b | Writers: sources | PR 3 → `main` | **Done** — commit `c0e0cdb` |
 | 3a | Migration function | PR 4 → `main` | Not started |
 | 3b | Ledger migration | PR 5 → `main` | Not started |
 | 3c | `repair` verb | PR 6 → `main` | Not started |
@@ -293,12 +293,199 @@ change without leaving `main` red between commits. This `apply-progress.md`
 and `tasks.md`'s checkbox updates land in the separate `docs(sdd)` commit
 that follows.
 
+## Slice 2b (Phase 3, PR 3) — Done
+
+**Branch**: `feat/1064-okf-v02-p2b-sources`, stacked on `a86e79b` (Phase 2,
+PR #1078, not yet merged to `main`).
+**Commit**: `c0e0cdb` —
+`feat(model): project sources from provenance at every write point (#1064)`.
+**Mode**: Strict TDD (`uv run pytest`).
+**Tasks**: 3.1–3.25, all `[x]` in `tasks.md`; 3.26 (commit/PR) done via this
+commit, PR not yet opened by this agent (see Rules/scope: apply implements
+and commits, delivery — push/PR — stays the user's decision per repository
+policy, consistent with Slices 1/2a/2a's own commits).
+
+### TDD Cycle Evidence
+
+| Task(s) | Test file | RED reason (observed) | GREEN |
+|---|---|---|---|
+| 3.1–3.4 | `tests/unit/model/test_okf_sources_projection.py` | `AttributeError: module 'openkos.model.okf' has no attribute 'project_sources'` | pass after adding `SOURCES_KEY`/`project_sources` |
+| 3.6 | same file | `AttributeError: ... has no attribute 'refresh_sources'` | pass after adding `refresh_sources` |
+| 3.8 | `tests/unit/model/test_okf.py` | `KeyError: 'sources'` | pass after wiring `project_sources` into `build_concept` |
+| 3.9 | same file | vacuous pre-3.10 pass (no `sources` logic existed); re-confirmed genuinely exercised post-3.10 | still passes — `build_source_concept` never calls `project_sources` (comment-only, per Decision 3) |
+| 3.11 | same file | `KeyError: 'sources'` | pass after wiring `project_sources` (over the UNIONED `provenance`) into `build_merged_document` |
+| 3.13 | `tests/unit/bundle/test_provenance.py` | `AssertionError` — stale `sources` unchanged by a retarget | pass after adding the `okf.refresh_sources(metadata)` call in `apply_provenance_rewrites` |
+| 3.15 | `tests/unit/model/test_okf.py` | extended (not new-RED) — `test_build_source_concept_empty_source_note` gained a `"# Citations" not in body` assertion, confirmed already-GREEN (Phase 2's removal covers the empty-source path too) |
+| 3.16 | `tests/unit/model/test_okf_sources_projection.py` | full e2e (real `compose_source_document`+`stage_derived_objects`+`plan_merge`, offline `_FakeLLM`, no CLI subprocess, no Ollama) RED with `AttributeError: ... 'SOURCES_KEY'` before 3.5, then RED with `AssertionError: assert_sources_parity found no document carrying a \`sources\` key` after 3.5 alone (vacuous-precondition RED, exactly as tasks.md anticipated), GREEN once 3.10/3.12/3.14 landed |
+| 3.17, 3.20 | `tests/unit/test_sources_key_guard.py` (new file) | file did not exist; both scanner+test pairs written together (test-only code, no separate IMPL step beyond the scanners themselves) | both green on first run against the real tree |
+
+Triangulation: 3.1 parametrizes all four Concept-ID shapes in one loop;
+3.3 parametrizes 7 distinct `None`-yielding cases; 3.6 covers all three
+`refresh_sources` branches (replace/remove/unchanged) in one test.
+
+### Mutation-proof checks (this session, `__pycache__` purged before each verdict)
+
+1. **`project_sources` `.md`-normalization** (task 3.16's suggested
+   mutation): replaced `if normalized.endswith(".md"): normalized =
+   normalized[:-len(".md")]` with `if False: ...`. Confirmed
+   `test_project_sources_normalizes_concept_id_entries` fails (`sources/
+   foo.md` no longer normalizes). The bundle-wide parity test
+   (`test_sources_parity_after_ingest_and_merge`) did NOT fail under this
+   same mutation — its fixture provenance entries have no `.md` suffix, so
+   this mutation was invisible to it. Reverted with the exact inverse edit.
+2. **`project_sources` id/resource swap** (task 3.16's alternative
+   suggested mutation): swapped `{"id": normalized, "resource": f"/
+   {normalized}.md"}` to `{"resource": normalized, "id": f"/{normalized}.md"}`.
+   **Confirmed this does NOT fail `assert_sources_parity`** at all (task
+   3.16 anticipated it would) — the parity check compares
+   `metadata["sources"] == project_sources(metadata["provenance"])`, and
+   both sides call the SAME (mutated) `project_sources`, so they still
+   agree with each other. This is a genuine, recorded blind spot of any
+   self-referential parity check: only the direct unit tests
+   (`test_project_sources_normalizes_concept_id_entries`,
+   `test_project_sources_key_order_is_id_then_resource`), which compare
+   against a HARD-CODED literal, actually catch this class of bug. Reverted.
+3. **`build_merged_document`'s union call** (task 3.16, to genuinely
+   exercise the parity e2e test itself): temporarily changed `merged_sources
+   = project_sources(merged.get("provenance"))` to `project_sources
+   (survivor_metadata.get("provenance"))` (survivor-only instead of
+   unioned). Confirmed **first PASSED VACUOUSLY** against the original
+   single-shared-source e2e fixture (survivor and absorbed both cited the
+   same one source, so "unioned" and "survivor-only" produced identical
+   results) — the fixture was rewritten to derive the survivor and
+   absorbed concepts from two DISTINCT sources so their provenance
+   genuinely differs, and the mutation then correctly failed
+   `test_sources_parity_after_ingest_and_merge` with a real `AssertionError`
+   naming the missing second source. Reverted with the exact inverse edit;
+   re-run confirmed green. (Both this and finding 2 above are instances of
+   "a test that passes the first mutation check may still be vacuous" —
+   recorded per project practice rather than silently accepted.)
+4. **Guard 1 (`find_sources_key_reads`)**: a planted fixture file (`def
+   not_exempt(metadata): return metadata.get("sources")`) confirmed
+   REPORTED by the scanner when passed via `paths=`; a structurally
+   identical fixture inside a function named `refresh_sources` confirmed
+   NOT reported (proves the exemption gate, not just the detector). Both
+   are permanent tests using `tmp_path`, not a temporary production edit.
+5. **Guard 2 (`find_provenance_key_writers`)**: a planted fixture function
+   (`def rogue_writer(metadata): metadata["provenance"] = [...]`) confirmed
+   DETECTED and confirmed to fail `writers <= _ALLOWED_PROVENANCE_WRITERS`
+   if it were part of the real scan. Separately, `apply_provenance_rewrites`
+   monkeypatched with a no-op `okf.refresh_sources` stand-in (task 3.22)
+   confirmed a document's stale `sources` key survives a retarget
+   unchanged, no longer matching `project_sources(provenance)` — proving
+   the real call added in 3.14 is load-bearing. Both are permanent tests
+   (`tmp_path` fixture / `monkeypatch`), not temporary production edits.
+
+### Design/implementation deviations (owner pre-authorized: take the
+design's recommended option, report it)
+
+- **Guard 2 scoped to `model/okf.py` + `bundle/provenance.py`, not the
+  whole `src/openkos/` tree.** Task 3.20 describes an AST walk "across
+  `src/openkos/`". A whole-tree literal scan was tried first and produces
+  a genuine false positive: `mcp/gate.py::disclose_get` builds an
+  UNRELATED MCP disclosure payload dict that also happens to have a
+  `"provenance"` key (a filtered echo of a concept's provenance ids for
+  API disclosure, never a document's frontmatter). Design.md Decision 4
+  itself names the exact file scope ("the projection is applied in
+  exactly these functions, all in `model/okf.py` except the last...
+  `bundle/provenance.apply_provenance_rewrites`"), so the guard is scoped
+  to test THAT claim precisely, avoiding the false positive without
+  weakening the safety property (an unauthorized bypass added to either
+  of those two files is still caught; a hypothetical bypass added
+  elsewhere in the tree, outside those two files, was never something a
+  literal-string scan could reliably distinguish from an unrelated
+  same-named key anyway).
+- **Guard 2 is a subset check (`writers <= allowed`), not equality.**
+  `build_merged_document`'s pre-existing generic per-key union loop
+  propagates `provenance` through a DYNAMIC subscript key
+  (`merged[key] = ...` inside `for key, value in absorbed_metadata.
+  items()`), never a literal `"provenance"` string in source, so it is
+  structurally undetectable by literal AST matching — and `migrate_document`
+  (Phase 4) does not exist yet. Neither gap weakens the guard's actual
+  safety property (catching an unauthorized NEW literal writer); the guard
+  additionally asserts POSITIVE coverage of the two writers it CAN see
+  (`build_concept`, `build_source_concept`, `apply_provenance_rewrites`),
+  so it is not vacuously satisfied by an empty detected set either.
+- **`test_build_concept_sources_matches_provenance_projection` drops the
+  "key placement immediately after `provenance`" assertion task 3.8
+  describes.** `build_concept`'s dict LITERAL does insert `"sources"`
+  immediately after `"provenance"` (implemented exactly that way, with a
+  comment), but `dump_frontmatter`'s YAML emission always re-sorts keys
+  alphabetically (this module's own documented behavior), so a round trip
+  through `load_frontmatter` always yields alphabetical key order
+  regardless of the builder's insertion order -- the property is real in
+  the source code but not observable from the returned STRING a black-box
+  test can inspect. Value equality is the only black-box-observable
+  contract; documented inline in the test.
+
+### Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command | `uv run pytest tests/unit/model/test_okf_sources_projection.py tests/unit/test_sources_key_guard.py tests/unit/bundle/test_provenance.py tests/unit/model/test_okf.py` → 310 passed |
+| Runtime harness | `test_sources_parity_after_ingest_and_merge`: a real `application.ingest.compose_source_document` + `stage_derived_objects` (offline `_FakeLLM`, structural `LLMBackend`) ingest of TWO sources, followed by a real `bundle.merge.plan_merge` fusing their two derived concepts, all written to a `tmp_path` bundle, then `assert_sources_parity(bundle_dir)` walks every document via `okf.iter_bundle_markdown` — the merged survivor's `sources` matches `project_sources` of its UNIONED `provenance` |
+| Rollback boundary | Revert commit `c0e0cdb`: `SOURCES_KEY`/`project_sources`/`refresh_sources`, the four call sites (`build_concept`, `build_source_concept`'s comment-only no-op, `build_merged_document`, `apply_provenance_rewrites`), and the two new test files. Phase 2's `generated`/`status: stable` output is untouched; Phase 1's readers keep working; no existing document's `provenance` semantics changed. |
+
+### Full verification (this session, unpiped, foreground/background as noted)
+
+- `uv run ruff check .`: **All checks passed!**
+- `uv run ruff format --check .`: 3 test files needed reformatting after
+  first draft (`tests/unit/bundle/test_provenance.py`,
+  `tests/unit/model/test_okf_sources_projection.py`,
+  `tests/unit/test_sources_key_guard.py`) — applied via `uv run ruff format`,
+  then re-verified clean.
+- `uv run mypy .`: **Success: no issues found in 360 source files** (clean
+  on first run, no fixes needed).
+- `uv run pytest --cov` (unpiped, background, ~7 min): **6972 passed, 2
+  skipped in 419.49s (0:06:59)**. Coverage 96.98% total (line+branch),
+  90.0% branch gate held (`Required test coverage of 90.0% reached`).
+- `uv run python evals/run_self_tests.py`: **44 of 44 harness self-test(s)
+  run, 0 failing.**
+
+### Collateral test fixes (pre-existing byte-pinned goldens, updated
+because a Concept-ID-shaped `provenance` fixture now legitimately gains a
+`sources` key — anticipated and pre-authorized as "legitimate collateral"
+in this session's own instructions)
+
+- `tests/unit/model/test_okf.py`:
+  `test_build_concept_output_byte_identical_regression` and
+  `test_build_concept_related_notes` (the same shared golden string) both
+  gained a `sources:\n- id: sources/call-with-maria-salazar\n  resource:
+  /sources/call-with-maria-salazar.md\n` block between `sensitivity:` and
+  `status:` (alphabetical YAML key order) — the fixture's own
+  `provenance` (`["sources/call-with-maria-salazar"]`) is a genuine
+  Concept ID, not a `raw/` path, so `project_sources` now legitimately
+  returns a non-`None` projection for it. Both docstrings updated to note
+  the re-update.
+
+### Deviations from design/tasks
+
+None beyond the "Design/implementation deviations" recorded above — all
+genuinely new behavior (`SOURCES_KEY`, `project_sources`, `refresh_sources`,
+the four call-site wirings, both AST guards, the parity helper/e2e test)
+matches `tasks.md` 3.1–3.25 and design.md Decisions 3/4 exactly.
+
+### Git
+
+`git diff --shortstat a86e79b..HEAD` (after commit `c0e0cdb`, before the
+following `docs(sdd)` commit): `6 files changed, 890 insertions(+), 2
+deletions(-)`. This exceeds the tasks.md forecast of "under or near 400"
+per slice — the excess is almost entirely the two NEW test files
+(`test_okf_sources_projection.py` 310 lines,
+`test_sources_key_guard.py` 353 lines: two independent AST scanners plus
+their own mutation-proof tests, an e2e ingest→merge fixture, and this
+project's established heavily-documented docstring convention). This
+slice cannot be split further without leaving `main` red between commits
+(the parity e2e test and both guards depend on every builder/retarget call
+site landing together) — reported per the owner's pre-approved
+`size:exception` for an unsplittable slice, the same authorization Slice
+2a used at 530 lines. This `apply-progress.md` update and `tasks.md`'s
+checkbox updates land in the separate `docs(sdd)` commit that follows.
+
 ## Next
 
-Slice 2b (Phase 3, PR 3 → `main`, after PR 2 merges): writers — `sources`
-projection. `project_sources`/`refresh_sources`; builders and merge
-introduce `sources`; `apply_provenance_rewrites` maintains it; Source body
-without `# Citations` (already done in Phase 2, confirmed by 3.15); parity
-tests; both AST guards (no read of `sources` outside the projection; only
-builders + retarget store `provenance`). Requires a fresh `sdd-apply`
-dispatch scoped to Phase 3.
+Slice 3a (Phase 4, PR 4 → `main`, after PR 3 merges): the migration
+function, `migrate_document` -- the pure per-document migration
+(`generated`/`status`/`sources`/citations rules), idempotency,
+builder-equivalence, and commutation-with-rewrite properties. Requires a
+fresh `sdd-apply` dispatch scoped to Phase 4.

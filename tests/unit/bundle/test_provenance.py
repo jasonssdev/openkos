@@ -607,6 +607,56 @@ def test_apply_provenance_rewrites_retained_entries_keep_original_string_form() 
     assert metadata["provenance"] == ["sources/survivor", "sources/other.md"]
 
 
+def test_apply_provenance_rewrites_refreshes_sources() -> None:
+    """okf-v02-migration Phase 3, task 3.13: a document that already
+    carries a `sources` key gets it refreshed via `okf.refresh_sources` to
+    match its REWRITTEN `provenance` (design.md Decision 4: the retarget
+    MAINTAINS `sources`, it does not introduce one). A document with NO
+    `sources` key is left with none after the same rewrite -- a v0.1
+    document pre-`repair` stays byte-identical (design.md Decision 4's
+    rationale)."""
+    with_sources_text = _doc(
+        {
+            "provenance": ["sources/absorbed", "sources/other"],
+            "sources": [
+                {"id": "sources/absorbed", "resource": "/sources/absorbed.md"},
+                {"id": "sources/other", "resource": "/sources/other.md"},
+            ],
+        }
+    )
+    rewrite = okf.ProvenanceRewrite(
+        file="concepts/other.md", snapshot=with_sources_text
+    )
+
+    result = provenance.apply_provenance_rewrites(
+        with_sources_text,
+        file="concepts/other.md",
+        survivor_id="sources/survivor",
+        absorbed_id="sources/absorbed",
+        rewrites=[rewrite],
+    )
+
+    metadata, _ = okf.load_frontmatter(result)
+    assert metadata["provenance"] == ["sources/survivor", "sources/other"]
+    assert metadata["sources"] == okf.project_sources(metadata["provenance"])
+
+    without_sources_text = _make_provenance_doc(["sources/absorbed", "sources/other"])
+    legacy_rewrite = okf.ProvenanceRewrite(
+        file="concepts/legacy.md", snapshot=without_sources_text
+    )
+
+    legacy_result = provenance.apply_provenance_rewrites(
+        without_sources_text,
+        file="concepts/legacy.md",
+        survivor_id="sources/survivor",
+        absorbed_id="sources/absorbed",
+        rewrites=[legacy_rewrite],
+    )
+
+    legacy_metadata, _ = okf.load_frontmatter(legacy_result)
+    assert "sources" not in legacy_metadata
+
+
 # -- reverse_provenance_rewrites (tasks 2.8-2.9) -----------------------------
 
 

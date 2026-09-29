@@ -894,6 +894,7 @@ def apply_provenance_rewrites(
         merged.append(retargeted)
 
     metadata["provenance"] = merged
+    metadata = okf.refresh_sources(metadata)
     return okf.dump_frontmatter(metadata, body)
 
 

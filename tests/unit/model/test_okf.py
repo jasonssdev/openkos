@@ -933,7 +933,10 @@ def test_build_source_concept_binary_fallback_note() -> None:
 def test_build_source_concept_empty_source_note() -> None:
     """`raw_content=""`/whitespace renders a distinct "source is empty" note
     -- different from both the embedded-text and binary-fallback cases (D3,
-    scenario: empty source renders a distinct body)."""
+    scenario: empty source renders a distinct body). okf-v02-migration Phase
+    3, task 3.15: this body also carries no trailing `# Citations` heading,
+    same as the embedded/fallback cases (regression confirmation for
+    Phase 2's removal)."""
     text = _build_call_source(raw_content="   \n  ")
 
     _, body = okf.load_frontmatter(text)
@@ -941,6 +944,7 @@ def test_build_source_concept_empty_source_note() -> None:
     assert "file is empty" in body
     assert "## Source content" not in body
     assert "could not be embedded as text" not in body
+    assert "# Citations" not in body
 
 
 def test_extraction_status_vocabulary_constants() -> None:
@@ -1090,7 +1094,9 @@ def test_build_concept_output_byte_identical_regression() -> None:
     extension, the ingest/extraction pipeline built on it) to emit a
     `relations:` key or otherwise change a single byte of its output (this
     pin was updated for OKF v0.2's `generated`/`status: stable` shape,
-    okf-v02-migration/#1064)."""
+    okf-v02-migration/#1064; re-updated in the same change's Phase 3 for the
+    `sources` projection, since this fixture's `provenance` is a Concept ID,
+    not a `raw/` path)."""
     text = _build_call_concept()
 
     assert text == (
@@ -1104,6 +1110,9 @@ def test_build_concept_output_byte_identical_regression() -> None:
         "provenance:\n"
         "- sources/call-with-maria-salazar\n"
         "sensitivity: confidential\n"
+        "sources:\n"
+        "- id: sources/call-with-maria-salazar\n"
+        "  resource: /sources/call-with-maria-salazar.md\n"
         "status: stable\n"
         "tags: []\n"
         "title: Stoicism\n"
@@ -1163,6 +1172,9 @@ def test_build_concept_related_notes() -> None:
         "provenance:\n"
         "- sources/call-with-maria-salazar\n"
         "sensitivity: confidential\n"
+        "sources:\n"
+        "- id: sources/call-with-maria-salazar\n"
+        "  resource: /sources/call-with-maria-salazar.md\n"
         "status: stable\n"
         "tags: []\n"
         "title: Stoicism\n"
@@ -1490,6 +1502,45 @@ def test_build_concept_backlinks_every_provenance_entry() -> None:
     assert first < second
 
 
+def test_build_concept_sources_matches_provenance_projection() -> None:
+    """okf-v02-migration Phase 3, task 3.8: `build_concept`'s `sources`
+    equals `project_sources` of the SAME `provenance` it was called with
+    (ingestion: "`sources` matches the projection of `provenance`").
+
+    `build_concept`'s own metadata DICT LITERAL inserts `sources`
+    immediately after `provenance` (design.md Decision 3's placement
+    rule), but that insertion order is not independently observable here:
+    `dump_frontmatter`'s YAML emission always re-sorts keys alphabetically
+    (module docstring), so a round trip through `load_frontmatter` always
+    yields alphabetical key order regardless of the builder's own
+    insertion order -- value equality is the only black-box-observable
+    contract."""
+    text = _build_call_concept(
+        provenance=["sources/first-source", "sources/second-source"]
+    )
+
+    metadata, _ = okf.load_frontmatter(text)
+
+    assert metadata["sources"] == okf.project_sources(
+        ["sources/first-source", "sources/second-source"]
+    )
+
+
+def test_build_source_concept_never_writes_sources() -> None:
+    """okf-v02-migration Phase 3, task 3.9: `build_source_concept`'s only
+    `provenance` is its own `raw/` original, which `project_sources` never
+    projects -- so `sources` is never written for a Source document
+    (design.md Decision 3: "A Source document therefore gets no
+    `sources`"). Asserted explicitly against the LOADED metadata, so this
+    stays a genuine regression pin once 3.10 wires the projection call in,
+    not a vacuous pre-3.10 pass."""
+    text = _build_call_source()
+
+    metadata, _ = okf.load_frontmatter(text)
+
+    assert "sources" not in metadata
+
+
 def test_sensitivity_order_pins_the_adr_0003_ordering() -> None:
     """`SENSITIVITY_ORDER` is the canonical least-to-most-restrictive
     ordering ADR-0003 pins; `combine_sensitivity` ranks against this exact
@@ -1676,6 +1727,26 @@ def test_build_merged_document_list_fields_union_deduped_order_preserving() -> N
 
     assert merged["tags"] == ["philosophy", "stoicism", "ethics"]
     assert merged["provenance"] == ["sources/call-a", "sources/call-b"]
+
+
+def test_build_merged_document_sources_matches_unioned_provenance() -> None:
+    """okf-v02-migration Phase 3, task 3.11: the merged document's
+    `sources` equals `project_sources` of the UNIONED `provenance` (both
+    sides combined, per the existing merge rule) -- never of either side's
+    own `provenance` alone."""
+    merged, _ = okf.build_merged_document(
+        _survivor_metadata(provenance=["sources/call-a"]),
+        "Survivor body.",
+        _absorbed_metadata(provenance=["sources/call-b"]),
+        "Absorbed body.",
+        "absorbed-id",
+        "survivor-id",
+    )
+
+    assert merged["provenance"] == ["sources/call-a", "sources/call-b"]
+    assert merged["sources"] == okf.project_sources(
+        ["sources/call-a", "sources/call-b"]
+    )
 
 
 def test_build_merged_document_freshness_and_timestamp_from_most_recent() -> None:
