@@ -41,6 +41,14 @@ isolation, and narrows ADR-0025. `size:exception` was pre-approved by the
 owner (2026-09-29) for this slice because design.md forbids splitting the
 table from its sweep; see "Budget" below for the actual count.
 
+**Phase B, Slice P4 (`P4.1`–`P4.5`, 5/5) complete** — this batch, on
+`feat/1014-phase-b-p4-provenance-many` (checked out off `main` at
+`f44131e`, which already contains P1/P2/P3 via #1055/#1058/#1059). PR 7
+boundary: `provenance_source_ancestors_many` in
+`src/openkos/bundle/provenance.py`, a pure shared-walk refactor with no
+upstream Phase B dependency, well under the review budget (119 authored
+changed lines) — no `size:exception` needed.
+
 ---
 
 ## Slice 1 (PR 1 → `main`, merged): the subject-pass leaf,
@@ -709,3 +717,102 @@ comments to chase a number.
 - Slice P3's 19/19 tasks are complete.
 - Slices P4 through P8b remain, in chain order, each as its own PR, per
   tasks.md's "Phase B: tasks (2026-09-28 re-plan)" section.
+
+---
+
+## Slice P4 (PR 7): `provenance_source_ancestors_many`
+
+Branch `feat/1014-phase-b-p4-provenance-many`, off `main` @ `f44131e`
+(P1 #1055, P2 #1058, P3 #1059 already merged). Strict TDD throughout.
+Per tasks.md, P4 has no upstream Phase B dependency and "may be reordered
+earlier per design.md" — implemented here in its listed chain position
+(after P3).
+
+### Files changed
+
+| File | Action |
+|---|---|
+| `src/openkos/bundle/provenance.py` | Modified — extracted a shared helper, added `provenance_source_ancestors_many` |
+| `tests/unit/bundle/test_provenance.py` | Modified — added the parity test |
+
+### TDD Cycle Evidence
+
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|------|-----------|-------|------------|-----|-------|-------------|----------|
+| P4.1 (`test_provenance_source_ancestors_many_matches_the_single_id_function`) | `test_provenance.py` | Unit | ✅ 44/44 (pre-existing `test_provenance.py`, genuinely run before any edit) | ✅ `AttributeError: module 'openkos.bundle.provenance' has no attribute 'provenance_source_ancestors_many'` (genuinely observed: the new test run against the pre-edit module before any production code was written) | ✅ 45/45 passed (`test_provenance.py` alone, after P4.2) | ➖ Single — the task names ONE fixture combining an intermediate concept, a provenance cycle, and a dangling Source, parity-checked over EVERY id in that fixture (7 ids) plus 4 pinned absolute-value assertions, matching tasks.md's own P4.1 description exactly; no second fixture is named | ➖ None needed — the extraction is already the minimal correct refactor |
+| P4.2 (`_source_ancestors_over` extraction + `provenance_source_ancestors_many` IMPL) | `provenance.py` | — | — | — | ✅ makes P4.1 GREEN, and keeps all 4 pre-existing `test_source_ancestors_*` tests green (delegation preserves behavior) | — | ➖ None needed |
+
+**Fixture note**: the single new test's fixture deliberately reuses and
+combines the THREE separate edge cases the pre-existing single-id tests
+already cover individually (`test_source_ancestors_walks_through_
+intermediate_concepts`'s intermediate-concept shape, `test_source_ancestors_
+empty_for_an_object_with_no_provenance`'s cycle, and `test_source_ancestors_
+includes_a_dangling_source_entry`'s dangling Source) into one fixture, per
+tasks.md's own P4.1 wording ("on a fixture with an intermediate concept, a
+provenance cycle, and a dangling Source reference") — so a many-id walk
+that handles each case correctly in isolation but corrupts state when
+processing several ids together (e.g. a shared mutable accumulator) cannot
+hide behind three separate single-case fixtures.
+
+### Mutation-Kill Verification (mandatory per apply instructions)
+
+Each mutation was applied, verified to make the targeted test(s) FAIL,
+`__pycache__` purged (`find . -name __pycache__ -prune -exec rm -rf {} +`),
+then reverted with the exact inverse edit (never `git checkout --`), and
+the full `test_provenance.py` file re-verified GREEN before moving to the
+next mutation.
+
+| # | Mutation | File / line | Test(s) that must fail | Result |
+|---|---|---|---|---|
+| 1 | `provenance_source_ancestors_many`'s dict comprehension collapsed to always walk the FIRST requested id (`object_id=only_first_id` for every entry, instead of `object_id=object_id`) | `provenance.py`, `provenance_source_ancestors_many` | `test_provenance_source_ancestors_many_matches_the_single_id_function` | ✅ FAILED as expected: `AssertionError: assert ['sources/deep'] == []` — `many_result["concepts/mid"]` (walked as if it were `"decisions/d"`, the first id in the fixture's id list) diverged from `provenance_source_ancestors(files, object_id="concepts/mid")`. Proves the parity loop genuinely walks each requested id independently, not a tautology that would pass even if every entry shared one answer. Reverted. |
+| 2 | `provenance_source_ancestors`'s delegation corrupted (`object_id=_normalize_id(object_id) + "-mutated"` instead of `object_id=object_id`) | `provenance.py`, `provenance_source_ancestors` | `test_provenance_source_ancestors_many_matches_the_single_id_function` | ✅ FAILED as expected: same `assert ['sources/deep'] == []` shape — `provenance_source_ancestors_many` stayed correct while the single-id function was corrupted, and the parity test caught the resulting divergence on the FIRST id it iterates. Proves the test compares two independently-computed sides, not one side against itself. Reverted. |
+| 3 | The shared helper's `sources/`-prefix filter narrowed (`ancestor.startswith("sources/")` → `ancestor.startswith("source/")`, missing the `s`) | `provenance.py`, `_source_ancestors_over` | `test_provenance_source_ancestors_many_matches_the_single_id_function` AND all 3 non-empty pre-existing `test_source_ancestors_*` tests | ✅ FAILED as expected (4 tests): `assert [] == ['sources/deep']` and equivalents — every `sources/`-prefixed ancestor was filtered out by both functions equally, proving the pinned absolute-value assertions (not just the parity comparison, which would still hold if both sides broke identically) actually exercise the shared walk's real filtering logic. Reverted. |
+
+All three mutations killed. `find . -name __pycache__ -prune -exec rm -rf
+{} +` was run before every GREEN/RED verdict, and every revert used the
+exact inverse edit — never `git checkout --`.
+
+### Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `uv run pytest tests/unit/bundle/test_provenance.py -v` → **45 passed** (up from the pre-slice baseline of 44; 1 new test) |
+| Runtime harness command/scenario and exact result | N/A — a pure canonical-layer refactor with no CLI/state/graph wiring yet (tasks.md's own Slice P4 row in "Suggested Work Units (Phase B)": "N/A — pure parity refactor"); the first runtime consumer is Slice P5a's `application/revisions.py` service layer, not yet implemented |
+| Rollback boundary | Revert the new `_source_ancestors_over` helper and `provenance_source_ancestors_many` function, and their test, in `provenance.py`/`test_provenance.py`; `provenance_source_ancestors` reverts to its own inline walk (behavior identical either way — confirmed by all 4 pre-existing single-id tests staying green throughout). `git revert 7d46cd5` cleanly isolates this; no other module imports `provenance_source_ancestors_many` yet |
+
+### Full Verification (this work unit)
+
+| Command | Result |
+|---|---|
+| `uv run ruff check .` | All checks passed! |
+| `uv run ruff format --check .` | 351 files already formatted |
+| `uv run mypy .` | Success: no issues found in 351 source files |
+| `uv run pytest --cov` (full, unpiped) | **6834 passed, 2 skipped** in 426.91s, exit 0 (Slice P3 baseline was 6833 passed — this slice adds 1 new test); coverage 97.08%, gate 90% reached; `bundle/provenance.py` itself is 96% covered |
+| `uv run python evals/run_self_tests.py` (`OLLAMA_HOST` poisoned) | **43 of 43 harness self-test(s) run, 0 failing** |
+
+### Commit
+
+`7d46cd5` — `perf(bundle): parse provenance once for many-id ancestor
+lookups (#1014)` (scope `bundle`, matching tasks.md's own suggested
+example verbatim). 2 files changed, 107 insertions(+), 12 deletions(-).
+Staged explicitly by path (`src/openkos/bundle/provenance.py`,
+`tests/unit/bundle/test_provenance.py`) — `openspec/` was left uncommitted
+in the working tree until this section's own final `docs(sdd)` commit,
+same posture as every prior Phase B slice. Not pushed. No PR opened.
+Branched from `main` @ `f44131e` on `feat/1014-phase-b-p4-provenance-many`
+(which already contains P1 + P2 + P3 via #1055/#1058/#1059).
+
+**Budget**: 119 authored changed lines (`git diff --shortstat` for the
+commit: 107 insertions + 12 deletions across the 2 staged files), well
+under both the ~200-line forecast (design.md's Phase B re-plan slice
+table) and the 400-line review budget — no `size:exception` needed for
+this slice.
+
+### Remaining Tasks (Phase B)
+
+- Slice P4's 5/5 tasks are complete.
+- Slices P5a through P8b remain, in chain order, each as its own PR, per
+  tasks.md's "Phase B: tasks (2026-09-28 re-plan)" section. P5a depends on
+  P1 (`document_vectors`, `embedding_tag`), P3 (`revision_findings` module
+  exists), and P4 (`provenance_source_ancestors_many`, now available) — all
+  three of P5a's stated dependencies are now merged/committed.

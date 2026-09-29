@@ -828,3 +828,51 @@ def test_source_ancestors_includes_a_dangling_source_entry() -> None:
     assert provenance.provenance_source_ancestors(files, object_id="people/jane") == [
         "sources/gone"
     ]
+
+
+def test_provenance_source_ancestors_many_matches_the_single_id_function() -> None:
+    """Phase B P4 (design.md Decision B4, "shared-walk refactor"): the
+    many-id function must answer EXACTLY what calling
+    `provenance_source_ancestors` once per id would answer, for every id in
+    a fixture that combines an intermediate concept (a Source reached only
+    THROUGH a derived concept), a provenance CYCLE, and a dangling `sources/`
+    entry -- the three edge cases the single-id function's own docstring
+    names, now exercised together so a divergent many-id walk cannot hide
+    behind only testing the easy cases."""
+    files = {
+        # intermediate concept: decisions/d -> concepts/mid -> sources/deep
+        "decisions/d.md": _prov_doc(provenance=["concepts/mid"]),
+        "concepts/mid.md": _prov_doc(provenance=["sources/deep"]),
+        "sources/deep.md": _prov_doc(type_="Source", provenance=["raw.txt"]),
+        # provenance cycle: concepts/a <-> concepts/b, no Source reachable
+        "concepts/a.md": _prov_doc(provenance=["concepts/b"]),
+        "concepts/b.md": _prov_doc(provenance=["concepts/a"]),
+        # dangling Source: no file behind sources/gone
+        "people/jane.md": _prov_doc(provenance=["sources/gone"]),
+        # no provenance at all
+        "concepts/orphan.md": _prov_doc(),
+    }
+    ids = [
+        "decisions/d",
+        "concepts/mid",
+        "sources/deep",
+        "concepts/a",
+        "concepts/b",
+        "people/jane",
+        "concepts/orphan",
+    ]
+
+    many_result = provenance.provenance_source_ancestors_many(files, object_ids=ids)
+
+    assert set(many_result) == set(ids)
+    for object_id in ids:
+        assert many_result[object_id] == provenance.provenance_source_ancestors(
+            files, object_id=object_id
+        )
+    # Pin the actual values too, so a walk that agrees on shape but drifts on
+    # content (e.g. both sides silently returning `[]`) cannot pass by
+    # vacuous parity alone.
+    assert many_result["decisions/d"] == ["sources/deep"]
+    assert many_result["concepts/a"] == []
+    assert many_result["people/jane"] == ["sources/gone"]
+    assert many_result["concepts/orphan"] == []
