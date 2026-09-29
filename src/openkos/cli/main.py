@@ -34,6 +34,7 @@ from openkos.application import list_service as application_list
 from openkos.application import next_action as next_action_module
 from openkos.application import pending as application_pending
 from openkos.application import query as application_query
+from openkos.application import repair as application_repair
 from openkos.application import revisions as revisions_service
 from openkos.application import status as application_status
 from openkos.application.revisions_report import revisions_report
@@ -1059,6 +1060,24 @@ def _sweep_decisions_for_ids(bundle_dir: Path, purge_ids: Iterable[str]) -> list
     return touched
 
 
+def _okf_v02_migration_hint(index_path: Path) -> str | None:
+    """`None` unless `index_path` exists and declares an `okf_version`
+    other than `okf.OKF_VERSION` -- the one-sentence hint `unmerge`'s drift
+    refusal appends (okf-v02-migration Phase 6, `okf-format-migration`
+    spec): a bundle that predates `repair`'s OKF migration is a fact the
+    operator can act on regardless of what caused this particular refusal.
+    A missing `index.md` is tolerated (OKF §11) and reads as "nothing to
+    hint about" here, mirroring `plan_repair`'s own no-flip-needed rule for
+    an absent index."""
+    try:
+        metadata, _ = okf.load_frontmatter(index_path.read_text(encoding="utf-8"))
+    except OSError:
+        return None
+    if metadata.get("okf_version") == okf.OKF_VERSION:
+        return None
+    return "this bundle predates OKF 0.2; run `openkos repair` first."
+
+
 def _reject_drifted_targets(
     layout: config.WorkspaceLayout,
     expected: Mapping[Path, bytes],
@@ -1066,6 +1085,7 @@ def _reject_drifted_targets(
     *,
     deletes: AbstractSet[Path] = frozenset(),
     remedy: str | None = None,
+    hint: str | None = None,
 ) -> None:
     """Refuse the whole run (exit 3, nothing written, nothing deleted) when
     any target this run intends to WRITE or UNLINK changed on disk after
@@ -1168,6 +1188,15 @@ def _reject_drifted_targets(
     and both kinds named in the message, "drifted targets" already covers
     writes and unlinks alike, and a rename would churn every call site for
     no contract gain.
+
+    `hint` appends one EXTRA sentence after everything else, unconditionally,
+    whenever this call refuses (okf-v02-migration Phase 6): `unmerge`'s own
+    drift refusal uses it to name `openkos repair` when the bundle's
+    `index.md` still declares a pre-0.2 `okf_version` -- the drift itself
+    may be unrelated to the migration, but an unrepaired bundle is the more
+    actionable fact for the operator to fix first. Unlike `remedy`, this
+    is a pure addition, never a substitution, so it composes with every
+    bucket's own advice rather than replacing any of it.
 
     `remedy` replaces the DEFAULT advice -- the changed bucket's re-run
     sentence -- when a verb's re-run is NOT a safe recovery: `unmerge`
@@ -1285,10 +1314,12 @@ def _reject_drifted_targets(
         )
     remedy = " ".join(advice)
 
-    typer.echo(
-        f"openkos {verb}: refusing to write -- {'; '.join(clauses)}. {footer} {remedy}",
-        err=True,
+    message = (
+        f"openkos {verb}: refusing to write -- {'; '.join(clauses)}. {footer} {remedy}"
     )
+    if hint:
+        message = f"{message} {hint}"
+    typer.echo(message, err=True)
     # Exit 3 is the drift-refusal contract (#319): the one failure code a
     # script may treat as retryable when the message says so. Everything
     # else in this module exits 1.
@@ -9467,6 +9498,11 @@ def _run_single_unmerge(
             "the survivor (overwriting the edit), and keeps refusing on an "
             "edited rewrite file until that edit is reverted."
         ),
+        # okf-v02-migration Phase 6: an unrepaired bundle's own drift refusal
+        # gets one extra actionable sentence naming `repair` -- the drift
+        # itself may be unrelated to the migration, but the operator can fix
+        # this first regardless of what caused the refusal.
+        hint=_okf_v02_migration_hint(index_path),
     )
 
     # Phase B (issue #918 Slice S2b): both Phase A and Phase B now go
@@ -15860,23 +15896,31 @@ def doctor() -> None:
 @app.command(
     help=(
         "Migrate legacy, frontmatter-embedded merge ledgers into "
-        "bundle/.state/ledger/, refusing on any sign of a torn write or "
-        "cross-survivor pollution risk."
+        "bundle/.state/ledger/, and an OKF v0.1 bundle to v0.2 shape, "
+        "refusing on any sign of a torn write, cross-survivor pollution "
+        "risk, or a document that cannot be migrated deterministically."
     ),
     rich_help_panel="Maintain",
 )
 @_guard_workspace_lock("repair")
 def repair() -> None:
-    """Read-write migration verb (durable-derived-state slice 1b): extracts
-    every survivor's OWN frontmatter-embedded `merged_from` ledger (pre-
-    relocation, unmigrated) into its `bundle/.state/ledger/` sidecar,
-    VERBATIM, and strips the `merged_from` key from the survivor's own
-    frontmatter -- nothing else about the survivor changes.
+    """Read-write migration verb, thin over `application.repair` (ADR-0018,
+    okf-v02-migration Phase 6): extracts every survivor's OWN frontmatter-
+    embedded `merged_from` ledger (pre-relocation, unmigrated) into its
+    `bundle/.state/ledger/` sidecar, VERBATIM, strips the `merged_from` key
+    from the survivor's own frontmatter, and migrates every OKF v0.1-shaped
+    concept document and merge-ledger sidecar to v0.2 shape (legacy
+    `timestamp` -> `generated`, `status: active` -> `stable`, `sources`
+    (re)generated from `provenance`, a bare empty `# Citations` heading
+    removed) -- flipping `bundle/index.md`'s `okf_version` to `"0.2"` in the
+    SAME commit as every rewritten concept, never a separate later step.
 
-    TWO refusal gates, BOTH with NO override flag at all (unlike `merge`'s
-    `--force`): migrating a corrupted ledger verbatim would convert a
-    git-revertible bug into a permanent durable fact, so this verb is
-    deliberately MORE conservative than `merge`/`unmerge`'s own refusals.
+    Every refusal happens in `application.repair.plan_repair`, before any
+    write, with NO override flag at all (unlike `merge`'s `--force`):
+    migrating a corrupted ledger or an ambiguous document verbatim would
+    convert a git-revertible bug into a permanent durable fact, so this
+    verb is deliberately MORE conservative than `merge`/`unmerge`'s own
+    refusals.
 
     Gate 1 (Check A, torn write): any `.pending` marker anywhere in the
     bundle refuses the WHOLE run -- `openkos doctor` names the affected
@@ -15884,19 +15928,30 @@ def repair() -> None:
     (`bundle_ledger.recover` does, on the NEXT `merge`/`unmerge` that
     touches that survivor).
 
-    Gate 2 (cross-survivor-pollution gate, design Decision 5): refuses the
-    WHOLE run whenever ANY survivor bundle-wide -- migrated OR unmigrated
-    -- carries 2 or more entries, regardless of what Check B's per-ledger
-    nested-prefix check would have found on its own. Deliberately coarser
-    than Check B: a merge of X into Y can rewrite bytes inside a THIRD
-    survivor Z's embedded snapshot (`merge_core`'s `other_files`,
-    `cli/main.py:6542`), a corruption Check B cannot see at every index.
+    Gate 2 (cross-survivor-pollution gate, design Decision 5, scoped by the
+    `entity-resolution-merge` delta's Decision 2): refuses the WHOLE run
+    whenever ANY survivor bundle-wide -- migrated OR unmigrated -- carries
+    2 or more entries, regardless of what Check B's per-ledger nested-
+    prefix check would have found on its own, but ONLY when this run has
+    at least one pre-relocation, frontmatter-embedded ledger left to
+    extract. A bundle whose ledgers are already relocated to sidecars can
+    still be OKF-migrated even if a twice-merged survivor's sidecar carries
+    2+ entries. Deliberately coarser than Check B: a merge of X into Y can
+    rewrite bytes inside a THIRD survivor Z's embedded snapshot
+    (`merge_core`'s `other_files`, `cli/main.py:6542`), a corruption Check
+    B cannot see at every index.
 
     Before writing, reports whether this run's own effect is undoable via
     `git reset --hard` (`vcs_git.has_reset_point`, the same gap-fix probe
     `doctor` uses): `_autocommit` is best-effort and silently no-ops with
     no repo, no configured git identity, or any `GitError`/`OSError`, so a
     workspace that never committed has no safety net for THIS run either.
+
+    Writes, in order (torn-write safety, design.md Decision 9): ledger
+    extraction -> sidecar OKF migrations -> concept documents ->
+    `index.md`'s `okf_version` flip LAST, so a crash never leaves a bundle
+    claiming v0.2 while holding v0.1 documents; each artifact is idempotent,
+    so a re-run completes an interrupted migration.
     """
     root = Path.cwd()
     workspace_reason = config.require_workspace(root)
@@ -15907,36 +15962,15 @@ def repair() -> None:
     layout = config.WorkspaceLayout(root)
     bundle_dir = layout.bundle_dir
 
-    torn = bundle_ledger.scan_torn_writes(bundle_dir)
-    if torn:
-        typer.echo(
-            f"openkos repair: refusing to run -- {len(torn)} pending "
-            "marker(s) found (a prior merge crashed mid-commit); this "
-            "refusal has no override. Run `openkos doctor` to inspect, or "
-            "`openkos merge`/`openkos unmerge` on the affected survivor to "
-            "trigger recovery.",
-            err=True,
-        )
+    plan = application_repair.plan_repair(bundle_dir)
+    if isinstance(plan, application_repair.RepairRefusal):
+        typer.echo(plan.message, err=True)
         raise typer.Exit(code=1)
 
-    if bundle_ledger.bundle_wide_max_entries(bundle_dir) >= 2:
+    if not plan.has_work:
         typer.echo(
-            "openkos repair: refusing to run -- at least one survivor in "
-            "this bundle carries 2 or more merge-ledger entries. Migrating "
-            "a possibly-corrupted ledger verbatim would convert a "
-            "git-revertible bug into a permanent durable fact, so this "
-            "refusal has NO override. The only path forward is `git reset "
-            "--hard <first-merge>~1` followed by `openkos reindex`; "
-            "reversibility of merges made before this fix is not "
-            "guaranteed. Run `openkos doctor` to inspect.",
-            err=True,
-        )
-        raise typer.Exit(code=1)
-
-    unmigrated = bundle_ledger.scan_unmigrated(bundle_dir)
-    if not unmigrated:
-        typer.echo(
-            "openkos repair: nothing to migrate -- no unmigrated merge ledger found."
+            "openkos repair: nothing to migrate -- no unmigrated merge "
+            "ledger and no OKF 0.1 content found."
         )
         return
 
@@ -15955,31 +15989,73 @@ def repair() -> None:
             err=True,
         )
 
-    touched: list[str] = []
-    for concept_id, entries in unmigrated:
-        bundle_ledger.write_entries(
-            concept_id, bundle_dir, survivor_id=concept_id, entries=entries
+    # Issue #313's precedent: every byte in `plan.baselines` was computed
+    # from `plan_repair`'s own reads, so re-validate each target now --
+    # before the first write -- exactly like every other mutating verb.
+    _reject_drifted_targets(layout, plan.baselines, "repair")
+
+    try:
+        outcome = application_repair.apply_repair(root, plan)
+    except (OSError, ValueError) as exc:
+        typer.echo(
+            f"openkos repair: failed while writing the migration -- {exc}.", err=True
         )
-        sidecar_path = bundle_ledger.ledger_path_for(concept_id, bundle_dir)
-        touched.append(f"bundle/{sidecar_path.relative_to(bundle_dir).as_posix()}")
+        raise typer.Exit(code=1) from exc
 
-        survivor_path = okf.concept_path_for(concept_id, bundle_dir)
-        metadata, body = okf.load_frontmatter(survivor_path.read_text(encoding="utf-8"))
-        metadata.pop(okf.MERGED_FROM_KEY, None)
-        fsio.write_atomic(survivor_path, okf.dump_frontmatter(metadata, body))
-        touched.append(f"bundle/{survivor_path.relative_to(bundle_dir).as_posix()}")
+    if plan.extraction:
+        n = len(plan.extraction)
+        typer.echo(
+            f"openkos repair: migrated {n} ledger{'s' if n != 1 else ''} to "
+            "bundle/.state/ledger/."
+        )
+    if plan.document_rewrites:
+        n = len(plan.document_rewrites)
+        generated = sum(rewrite.changes.generated for rewrite in plan.document_rewrites)
+        status = sum(rewrite.changes.status for rewrite in plan.document_rewrites)
+        sources = sum(rewrite.changes.sources for rewrite in plan.document_rewrites)
+        citations_removed = sum(
+            rewrite.changes.citations_removed for rewrite in plan.document_rewrites
+        )
+        typer.echo(
+            f"openkos repair: migrated {n} document{'s' if n != 1 else ''} to "
+            f"OKF 0.2 (generated: {generated}, status: {status}, sources: "
+            f"{sources}, empty # Citations removed: {citations_removed})."
+        )
+    if plan.sidecar_rewrites:
+        n = len(plan.sidecar_rewrites)
+        typer.echo(
+            f"openkos repair: migrated {n} merge-ledger sidecar"
+            f"{'s' if n != 1 else ''} to OKF 0.2."
+        )
+    if plan.index_new_text is not None:
+        typer.echo("openkos repair: okf_version 0.1 -> 0.2 in bundle/index.md.")
+    if plan.legacy_citations_ids:
+        n = len(plan.legacy_citations_ids)
+        noun = "document" if n == 1 else "documents"
+        verb = "keeps" if n == 1 else "keep"
+        typer.echo(
+            f"openkos repair: left in place -- {n} {noun} {verb} a "
+            "hand-written # Citations list (legacy, OKF 0.2 section 13.1): "
+            f"{', '.join(plan.legacy_citations_ids)}"
+        )
 
-    typer.echo(
-        f"openkos repair: migrated {len(unmigrated)} ledger"
-        f"{'s' if len(unmigrated) != 1 else ''} to bundle/.state/ledger/."
-    )
+    parts: list[str] = []
+    if plan.extraction:
+        parts.append(
+            f"migrate {len(plan.extraction)} ledger(s) to bundle/.state/ledger/"
+        )
+    if (
+        plan.document_rewrites
+        or plan.sidecar_rewrites
+        or plan.index_new_text is not None
+    ):
+        parts.append(
+            f"migrate {len(plan.document_rewrites)} document(s) and "
+            f"{len(plan.sidecar_rewrites)} ledger sidecar(s) to OKF 0.2"
+        )
 
-    _autocommit(
-        root,
-        touched,
-        f"openkos: repair (migrate {len(unmigrated)} ledger(s) to "
-        "bundle/.state/ledger/)",
-    )
+    _autocommit(root, outcome.touched, f"openkos: repair ({'; '.join(parts)})")
+    _refresh_derived_after_write(layout, None, verb="repair")
 
 
 @app.command(

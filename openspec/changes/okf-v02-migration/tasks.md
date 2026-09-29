@@ -957,7 +957,7 @@ Design.md Decision 9-10 and the entity-resolution-merge delta's scoped Gate
 
 ### Scoped Gate 2 (entity-resolution-merge delta)
 
-- [ ] **6.1** [TEST] `tests/unit/cli/test_repair.py` — add
+- [x] **6.1** [TEST] `tests/unit/cli/test_repair.py` — add
   `test_repair_gate2_not_evaluated_when_nothing_to_extract`: a bundle with
   no pre-relocation, frontmatter-embedded `merged_from` history to extract
   (`scan_unmigrated` returns `[]`), but a survivor whose ALREADY-RELOCATED
@@ -966,7 +966,7 @@ Design.md Decision 9-10 and the entity-resolution-merge delta's scoped Gate
   "A sidecar-only bundle with 2 or more entries proceeds to OKF migration".
   **RED today**: `AssertionError` — Gate 2 is evaluated unconditionally
   today.
-- [ ] **6.2** [TEST] Same file — add
+- [x] **6.2** [TEST] Same file — add
   `test_repair_gate2_still_refuses_whole_run_when_extraction_has_pollution_risk`:
   a bundle WITH pre-relocation ledgers to extract AND a survivor (migrated
   or not) carrying 2+ entries — `repair` refuses the WHOLE run (OKF
@@ -977,7 +977,7 @@ Design.md Decision 9-10 and the entity-resolution-merge delta's scoped Gate
   explicit regression pin before touching the gate's evaluation condition in
   6.3, so a later change to the condition is caught if it silently narrows
   the refusal.
-- [ ] **6.3** [IMPL] `src/openkos/cli/main.py` (or wherever `repair`'s Gate
+- [x] **6.3** [IMPL] `src/openkos/cli/main.py` (or wherever `repair`'s Gate
   2 check currently lives — confirm exact location during implementation):
   wrap the `bundle_ledger.bundle_wide_max_entries(...) >= 2` check with `if
   bundle_ledger.scan_unmigrated(bundle_dir):` so it is evaluated only when
@@ -986,33 +986,33 @@ Design.md Decision 9-10 and the entity-resolution-merge delta's scoped Gate
 
 ### `application/repair.py` — plan phase
 
-- [ ] **6.4** [TEST] `tests/unit/application/test_repair.py` (new file,
+- [x] **6.4** [TEST] `tests/unit/application/test_repair.py` (new file,
   mirroring `application/repair.py`'s pure-function boundary — CLI-level
   behavior stays in `tests/unit/cli/test_repair.py`) — add
   `test_plan_repair_gate1_pending_marker_refuses_unconditionally`: a
   `.pending` marker anywhere refuses the whole plan (unchanged text),
   regardless of OKF or ledger state. **RED today**:
   `ModuleNotFoundError` — `application/repair.py` does not exist.
-- [ ] **6.5** [TEST] Same file — add
+- [x] **6.5** [TEST] Same file — add
   `test_plan_repair_okf_scan_refuses_whole_run_on_any_refused_document`: one
   document that `migrate_document` refuses (e.g. a non-scalar `timestamp`)
   makes `plan_repair` return a `RepairRefusal` naming that concept's id and
   the refusal reason, for the WHOLE bundle — no partial plan, no override.
   **RED today**: same `ModuleNotFoundError`.
-- [ ] **6.6** [TEST] Same file — add
+- [x] **6.6** [TEST] Same file — add
   `test_plan_repair_detects_bundle_version_flip_needed`: a bundle whose
   `index.md` declares `okf_version` other than `"0.2"` (including a bundle
   with NO `index.md` at all, per OKF §11's tolerance) is correctly reflected
   in the plan's flip-needed flag; a bundle with no `index.md` plans no flip.
   **RED today**: same.
-- [ ] **6.7** [TEST] Same file — add
+- [x] **6.7** [TEST] Same file — add
   `test_plan_repair_nothing_to_migrate_when_bundle_is_fully_v2`: a bundle
   where every document is already v0.2-shaped, no ledger extraction needed,
   and `okf_version` already `"0.2"` yields the "nothing to migrate" refusal-
   shaped result (not a hard error — exit 0), writing nothing. Covers
   okf-format-migration scenario "A bundle with no v0.1-shaped concept
   refuses with nothing to migrate". **RED today**: same.
-- [ ] **6.8** [IMPL] `src/openkos/application/repair.py` (new file): add
+- [x] **6.8** [IMPL] `src/openkos/application/repair.py` (new file): add
   `RepairPlan` (frozen dataclass: extraction list, document rewrites,
   sidecar rewrites, index flip flag, drift baselines, report counts),
   `RepairRefusal` (frozen dataclass: `message: str`), and `plan_repair
@@ -1027,7 +1027,7 @@ Design.md Decision 9-10 and the entity-resolution-merge delta's scoped Gate
 
 ### `application/repair.py` — apply phase, write ordering
 
-- [ ] **6.9** [TEST] `tests/unit/cli/test_repair.py` — add
+- [x] **6.9** [TEST] `tests/unit/cli/test_repair.py` — add
   `test_repair_reports_migration_counts_and_legacy_citations`: the printed
   report lines match design.md's exact shape (one line per applicable
   category: ledger, documents with per-field counts, sidecars,
@@ -1035,14 +1035,14 @@ Design.md Decision 9-10 and the entity-resolution-merge delta's scoped Gate
   concept id) against a fixture bundle exercising every category at once.
   **RED today**: `AttributeError`/`AssertionError` — `apply_repair` does not
   exist.
-- [ ] **6.10** [TEST] Same file — add
+- [x] **6.10** [TEST] Same file — add
   `test_repair_writes_in_order_sidecars_then_documents_then_index_last`: a
   monkeypatched write-order spy (patching `fsio.write_atomic` to append to
   an ordered list) over a fixture bundle with pending sidecar and document
   rewrites, plus an `okf_version` flip, asserts the observed write order is
   exactly: ledger extraction writes (if any) → sidecar OKF migrations →
   concept documents → `index.md` flip LAST. **RED today**: same.
-- [ ] **6.11** [TEST] Same file — add
+- [x] **6.11** [TEST] Same file — add
   `test_repair_crash_before_index_flip_leaves_okf_version_0_1_and_reruns_clean`:
   inject a failure (monkeypatch to raise) immediately before the
   `index.md` write step, confirm the bundle is left with `okf_version:
@@ -1051,7 +1051,7 @@ Design.md Decision 9-10 and the entity-resolution-merge delta's scoped Gate
   for real and confirm it completes cleanly (idempotent per-artifact
   detection picks up exactly the unfinished work). Covers design.md's torn-
   write safety guarantee. **RED today**: same.
-- [ ] **6.12** [IMPL] Same module: add `RepairOutcome` and `apply_repair
+- [x] **6.12** [IMPL] Same module: add `RepairOutcome` and `apply_repair
   (root: Path, plan: RepairPlan) -> RepairOutcome` implementing design.md
   Decision 9's eight-step apply phase: reset-point note → `_reject_drifted_
   targets` against the plan's baselines → ledger extraction writes (existing
@@ -1065,7 +1065,7 @@ Design.md Decision 9-10 and the entity-resolution-merge delta's scoped Gate
 
 ### `openkos repair` CLI wiring, commit message, `unmerge` hint
 
-- [ ] **6.13** [TEST] `tests/unit/cli/test_repair.py` — add
+- [x] **6.13** [TEST] `tests/unit/cli/test_repair.py` — add
   `test_repair_commit_message_and_exactly_one_commit`: after a mixed
   extraction+OKF-migration run, exactly ONE commit exists whose message
   matches `openkos: repair (<parts>)` joining the applicable clause(s) with
@@ -1073,7 +1073,7 @@ Design.md Decision 9-10 and the entity-resolution-merge delta's scoped Gate
   plan's full touched set (sidecars + documents + `index.md`). **RED
   today**: `AttributeError` — `repair` is not yet wired to
   `application/repair.py`.
-- [ ] **6.14** [TEST] Same file — add
+- [x] **6.14** [TEST] Same file — add
   `test_repair_second_run_reports_nothing_to_migrate_and_writes_nothing`:
   after a successful migration, a second `repair` invocation prints the
   "nothing to migrate" line (extended to also cover OKF content, not only
@@ -1081,13 +1081,13 @@ Design.md Decision 9-10 and the entity-resolution-merge delta's scoped Gate
   git status show zero changes. Covers okf-format-migration scenario
   "Re-running repair after a successful migration is a no-op". **RED
   today**: same.
-- [ ] **6.15** [TEST] Same file — add
+- [x] **6.15** [TEST] Same file — add
   `test_unmerge_refusal_names_repair_on_an_unrepaired_bundle`: `unmerge`'s
   existing drift refusal, when the bundle's `index.md` declares an
   `okf_version` other than `okf.OKF_VERSION`, appends the exact sentence
   "this bundle predates OKF 0.2; run `openkos repair` first". **RED today**:
   `AssertionError` — the hint does not exist yet.
-- [ ] **6.16** [IMPL] `src/openkos/cli/main.py`: rewrite the `repair`
+- [x] **6.16** [IMPL] `src/openkos/cli/main.py`: rewrite the `repair`
   command to call `plan_repair`/`apply_repair`, keeping only CLI parsing,
   printing, and exit codes; update `help=`/docstring text to describe both
   migrations (merge-ledger relocation and OKF v0.1→v0.2); append the
@@ -1101,15 +1101,15 @@ Design.md Decision 9-10 and the entity-resolution-merge delta's scoped Gate
 
 ### Phase 6 verification
 
-- [ ] **6.17** Run `uv run ruff check . && uv run ruff format --check . &&
+- [x] **6.17** Run `uv run ruff check . && uv run ruff format --check . &&
   uv run mypy .` — must be green.
-- [ ] **6.18** Run `uv run pytest tests/unit/application/test_repair.py
+- [x] **6.18** Run `uv run pytest tests/unit/application/test_repair.py
   tests/unit/cli/test_repair.py tests/unit/bundle/test_ledger_okf_migration.py`
   focused (confirm zero `SKIPPED` remain in the round-trip suite), then `uv
   run pytest --cov` (unpiped) full suite — must be green, 90% branch gate
   held.
-- [ ] **6.19** Run `uv run python evals/run_self_tests.py` — must be green.
-- [ ] **6.20** Commit as one or more work-unit commits, scope `cli` (e.g.
+- [x] **6.19** Run `uv run python evals/run_self_tests.py` — must be green.
+- [x] **6.20** Commit as one or more work-unit commits, scope `cli` (e.g.
   `feat(cli): migrate an OKF v0.1 bundle to v0.2 via repair`). If the slice
   exceeds ~400 authored lines even after the plan/apply split, invoke the
   owner's pre-approved `size:exception` for this PR rather than fragmenting
