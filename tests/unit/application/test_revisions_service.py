@@ -1,18 +1,23 @@
 """Unit tests for `openkos.application.revisions` (#1014 piece (a), Phase B
-re-plan, Slice P5a): `load_decisions` (+ `resolved_with`), event-date
-resolution (`resolve_decision_dates`), and vector coverage
-(`read_decision_vectors`).
+re-plan): `load_decisions` (+ `resolved_with`), event-date resolution
+(`resolve_decision_dates`), and vector coverage (`read_decision_vectors`)
+(Slice P5a); `revision_input_digests`, `is_fresh`, `plan_revisions` (Slice
+P5b); `judge_revisions` and `actionable_revision_findings` (Slice P6).
 
 Exercises the service functions directly against a real (tmp-path)
 workspace, mirroring `test_list_service.py`'s posture -- no CLI invocation,
-no LLM, no embedder. `read_decision_vectors`'s tests build a REAL
+no real LLM, no embedder. `read_decision_vectors`'s tests build a REAL
 `.openkos/vectors.db` via `vectorstore.open_vector_store`/`upsert`/
 `write_model_tag`, the same fixture-building shape
 `tests/unit/state/test_vectorstore.py` already uses for `document_vectors`,
 rather than a hand-rolled fake -- this is a read seam over that exact
-schema, and a fake risks drifting from it."""
+schema, and a fake risks drifting from it. Slice P6's judge tests use a
+module-local `_ScriptedLLM`/`_RaisingLLM` double (byte-identical shape to
+`test_decision_revision.py`'s) -- zero network, zero real Ollama process."""
 
 import hashlib
+import json
+from collections.abc import Sequence
 from datetime import date
 from pathlib import Path
 
@@ -20,7 +25,8 @@ import pytest
 
 from openkos import config
 from openkos.application import revisions
-from openkos.llm.base import EMBED_DIM
+from openkos.llm.base import EMBED_DIM, Message
+from openkos.llm.ollama import OllamaUnavailable
 from openkos.model import okf
 from openkos.model.relations import RESOLUTION_RELATION_TYPES
 from openkos.resolution import decision_revision
@@ -923,5 +929,271 @@ def test_plan_revisions_fresh_flag_bypasses_serving(tmp_path: Path) -> None:
 
     assert plan.served == ()
     assert {candidate.pair_ids for candidate in plan.to_judge} == {
+        ("decisions/a", "decisions/b")
+    }
+
+
+# ---------------------------------------------------------------------------
+# judge_revisions / actionable_revision_findings (Slice P6)
+# ---------------------------------------------------------------------------
+
+_EMPTY_COVERAGE = revisions.VectorCoverage(
+    store="ok", vectors={}, missing=frozenset(), stale=frozenset()
+)
+_EMPTY_CANDIDATE_PLAN = decision_revision.RevisionCandidatePlan(
+    candidates=(), total=0, without_vector=0
+)
+
+
+class _ScriptedLLM:
+    """A structural `LLMBackend`: returns queued replies in call order,
+    recording every call's messages. Byte-identical shape to
+    `test_decision_revision.py`'s double."""
+
+    def __init__(self, replies: Sequence[str]) -> None:
+        self._replies = list(replies)
+        self.calls: list[list[Message]] = []
+
+    def chat(self, messages: Sequence[Message]) -> str:
+        self.calls.append(list(messages))
+        return self._replies.pop(0)
+
+
+class _RaisingLLM:
+    """A structural `LLMBackend`: raises `error` on its `error_at`-th
+    (1-based) call, otherwise returns the next queued reply."""
+
+    def __init__(
+        self,
+        replies: Sequence[str],
+        *,
+        error: BaseException,
+        error_at: int,
+    ) -> None:
+        self._replies = list(replies)
+        self.error = error
+        self.error_at = error_at
+        self.calls: list[list[Message]] = []
+
+    def chat(self, messages: Sequence[Message]) -> str:
+        self.calls.append(list(messages))
+        if len(self.calls) == self.error_at:
+            raise self.error
+        return self._replies.pop(0)
+
+
+def _plan_with_to_judge(
+    pairs: Sequence[tuple[str, str]],
+) -> revisions.RevisionPlan:
+    """A `RevisionPlan` whose `to_judge` is exactly `pairs`, in order --
+    `judge_revisions` reads only `plan.to_judge`, so `coverage`/
+    `candidate_plan` are neutral stand-ins here rather than a full
+    `plan_revisions` fixture."""
+    return revisions.RevisionPlan(
+        coverage=_EMPTY_COVERAGE,
+        candidate_plan=_EMPTY_CANDIDATE_PLAN,
+        served=(),
+        to_judge=tuple(
+            decision_revision.RevisionCandidate(pair_ids=pair, score=1.0)
+            for pair in pairs
+        ),
+    )
+
+
+def _open_persisted(
+    layout: config.WorkspaceLayout,
+) -> tuple[revision_findings.RevisionFinding, ...]:
+    conn = derived.open_derived_connection(layout.findings_db_path)
+    try:
+        return revision_findings.open_revision_findings(conn)
+    finally:
+        conn.close()
+
+
+def test_judge_revisions_send_rule_degrades_a_confidential_body_independently(
+    tmp_path: Path,
+) -> None:
+    """design.md Decision B2's "the flag releases only the judge's chat
+    send" rule, enforced by `judge_revisions` itself (`_load_doc`'s
+    walk-independent re-check), NOT only by `load_decisions`'s upstream
+    exclusion: a confidential Decision that somehow still reaches
+    `plan.to_judge` (simulating an upstream walk miss) never has its body
+    sent to `llm.chat` without the flag, and DOES have it sent with the
+    flag -- the same disjunction `sensitivity.should_block` applies
+    everywhere else."""
+    layout = _workspace(tmp_path)
+    _write_doc(
+        layout.bundle_dir / "decisions" / "a.md",
+        sensitivity="confidential",
+        body="Confidential body A.",
+    )
+    _write_doc(layout.bundle_dir / "decisions" / "b.md", body="Body B.")
+    plan = _plan_with_to_judge([("decisions/a", "decisions/b")])
+    reply = json.dumps({"verdict": "unrelated", "confidence": 0.1})
+
+    without_flag = _ScriptedLLM([reply])
+    revisions.judge_revisions(
+        layout, plan, llm=without_flag, effective_confidential=False
+    )
+    sent_content = without_flag.calls[0][1]["content"]
+    assert "Confidential body A." not in sent_content
+    assert "Body B." in sent_content
+
+    with_flag = _ScriptedLLM([reply])
+    revisions.judge_revisions(layout, plan, llm=with_flag, effective_confidential=True)
+    sent_content_with_flag = with_flag.calls[0][1]["content"]
+    assert "Confidential body A." in sent_content_with_flag
+
+
+def test_judge_revisions_persists_only_non_malformed_verdicts(
+    tmp_path: Path,
+) -> None:
+    """A `_ScriptedLLM` returning one malformed reply and one well-formed
+    reply across a two-pair `to_judge` list: after `judge_revisions`,
+    `open_revision_findings` holds EXACTLY the well-formed pair -- the
+    malformed pair is never persisted, so it is re-judged next run."""
+    layout = _workspace(tmp_path)
+    _write_doc(layout.bundle_dir / "decisions" / "a.md", body="Body A.")
+    _write_doc(layout.bundle_dir / "decisions" / "b.md", body="Body B.")
+    _write_doc(layout.bundle_dir / "decisions" / "c.md", body="Body C.")
+    _write_doc(layout.bundle_dir / "decisions" / "d.md", body="Body D.")
+    plan = _plan_with_to_judge(
+        [("decisions/a", "decisions/b"), ("decisions/c", "decisions/d")]
+    )
+    malformed_reply = "not json"
+    well_formed_reply = json.dumps(
+        {
+            "verdict": "refines",
+            "confidence": 0.8,
+            "rationale": "C narrows D.",
+            "quote_first": "Body C.",
+            "quote_second": "Body D.",
+        }
+    )
+    llm = _ScriptedLLM([malformed_reply, well_formed_reply])
+
+    revisions.judge_revisions(layout, plan, llm=llm, effective_confidential=False)
+
+    persisted = _open_persisted(layout)
+    assert {finding.pair_ids for finding in persisted} == {
+        ("decisions/c", "decisions/d")
+    }
+
+
+def test_judge_revisions_partial_batch_persists_the_completed_prefix(
+    tmp_path: Path,
+) -> None:
+    """A `_RaisingLLM` failing on its 2nd of 3 `to_judge` pairs: the FIRST,
+    already-judged pair IS persisted before the failure propagates, and
+    `judge_revisions` surfaces the same `failure`/`failed_index` contract
+    `judge_pairs` (Phase A leaf) returns."""
+    layout = _workspace(tmp_path)
+    for concept_id, body in (
+        ("decisions/a", "Body A."),
+        ("decisions/b", "Body B."),
+        ("decisions/c", "Body C."),
+        ("decisions/d", "Body D."),
+        ("decisions/e", "Body E."),
+        ("decisions/f", "Body F."),
+    ):
+        _write_doc(layout.bundle_dir / f"{concept_id}.md", body=body)
+    plan = _plan_with_to_judge(
+        [
+            ("decisions/a", "decisions/b"),
+            ("decisions/c", "decisions/d"),
+            ("decisions/e", "decisions/f"),
+        ]
+    )
+    well_formed_reply = json.dumps(
+        {
+            "verdict": "reverses",
+            "confidence": 0.9,
+            "rationale": "A overturns B.",
+            "quote_first": "Body A.",
+            "quote_second": "Body B.",
+        }
+    )
+    error = OllamaUnavailable("backend down")
+    llm = _RaisingLLM([well_formed_reply], error=error, error_at=2)
+
+    outcome = revisions.judge_revisions(
+        layout, plan, llm=llm, effective_confidential=False
+    )
+
+    assert outcome.failure is error
+    assert outcome.failed_index == 2
+    persisted = _open_persisted(layout)
+    assert {finding.pair_ids for finding in persisted} == {
+        ("decisions/a", "decisions/b")
+    }
+
+
+def _stub_finding(
+    layout: config.WorkspaceLayout,
+    files: dict[str, str],
+    pair_ids: tuple[str, str],
+    *,
+    verdict: str,
+    fresh: bool = True,
+) -> revision_findings.RevisionFinding:
+    """One persistable `RevisionFinding`, `fresh` computing its digests
+    against the CURRENT bundle state (via `revision_input_digests`) and
+    `not fresh` using an empty digest tuple, which can never equal a
+    non-empty recomputed one -- the `is_fresh` strict-equality condition 4
+    this test needs to force STALE without touching the files
+    `judge_revisions`'s own `to_judge` walk would otherwise re-judge."""
+    return revision_findings.RevisionFinding(
+        pair_ids=pair_ids,
+        verdict=verdict,
+        confidence=0.9,
+        rationale="stub rationale",
+        quotes=("Quote one.", "Quote two."),
+        dates=(None, None),
+        date_states=("none-reached", "none-reached"),
+        include_confidential=False,
+        prompt_version=decision_revision.JUDGE_PROMPT_VERSION,
+        input_digests=(
+            revisions.revision_input_digests(layout, files, pair_ids) if fresh else ()
+        ),
+    )
+
+
+def test_actionable_revision_findings_strict_freshness_and_actionability(
+    tmp_path: Path,
+) -> None:
+    """Of three persisted findings -- one fresh AND actionable (REVERSES,
+    confidence >= 0.7, both quotes verified), one fresh but REAFFIRMS
+    (never actionable), one actionable-SHAPED but STALE (digest mismatch)
+    -- `actionable_revision_findings` returns ONLY the first."""
+    layout = _workspace(tmp_path)
+    for concept_id in (
+        "decisions/a",
+        "decisions/b",
+        "decisions/c",
+        "decisions/d",
+        "decisions/e",
+        "decisions/f",
+    ):
+        _write_doc(layout.bundle_dir / f"{concept_id}.md")
+    files = _bundle_snapshot(layout)
+
+    fresh_actionable = _stub_finding(
+        layout, files, ("decisions/a", "decisions/b"), verdict="reverses"
+    )
+    fresh_reaffirms = _stub_finding(
+        layout, files, ("decisions/c", "decisions/d"), verdict="reaffirms"
+    )
+    stale_actionable_shaped = _stub_finding(
+        layout,
+        files,
+        ("decisions/e", "decisions/f"),
+        verdict="reverses",
+        fresh=False,
+    )
+    _record(layout, [fresh_actionable, fresh_reaffirms, stale_actionable_shaped])
+
+    actionable = revisions.actionable_revision_findings(layout)
+
+    assert {finding.pair_ids for finding in actionable} == {
         ("decisions/a", "decisions/b")
     }
