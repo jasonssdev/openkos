@@ -1802,42 +1802,42 @@ Depends on P6 (`actionable_revision_findings`, `is_fresh`) and P8a
 (`_run_reconcile_from_findings`), `docs/cli.md`. Tests:
 `tests/unit/cli/test_reconcile.py`.
 
-- [ ] **P8b.1** [TEST] `tests/unit/cli/test_reconcile.py` — add
+- [x] **P8b.1** [TEST] `tests/unit/cli/test_reconcile.py` — add
   `test_reverses_known_direction_offers_supersedes_held_by_the_later_decision`:
   a fresh, actionable, DIRECTED REVERSES finding -> the walk's consent
   prompt reads `"Record <later> supersedes <earlier> (reversal; <earlier>
   is hidden as current)? [y/N]"`; accepting writes `supersedes` held by
   the later Decision via `_reconcile_pair`. **RED today**: the second
   walk does not exist yet — the finding is never offered.
-- [ ] **P8b.2** [TEST] Same file — add
+- [x] **P8b.2** [TEST] Same file — add
   `test_refines_known_direction_offers_revises_held_by_the_later_decision`:
   same shape for REFINES -> `"Record <later> revises <earlier>
   (refinement; both remain current)? [y/N]"`. **RED today**: same.
-- [ ] **P8b.3** [TEST] Same file — add
+- [x] **P8b.3** [TEST] Same file — add
   `test_unknown_direction_routes_to_the_combined_prompt`: an undirected
   (untyped-change) finding routes to `_ask_later_decision_and_type`
   (P8a.3) INSTEAD of the y/N consent P8b.1/P8b.2 use; each of the four
   numbered answers writes the matching relation with no further y/N
   step; `s`/empty writes nothing. **RED today**: same.
-- [ ] **P8b.4** [TEST] Same file — add
+- [x] **P8b.4** [TEST] Same file — add
   `test_reaffirms_and_unrelated_are_never_offered`: persisted REAFFIRMS
   and (separately) UNRELATED findings never appear in the walk's item
   list at all. Covers "REAFFIRMS and UNRELATED cause no bundle write"
   jointly with P7b.10. **RED today**: same.
-- [ ] **P8b.5** [TEST] Same file — add
+- [x] **P8b.5** [TEST] Same file — add
   `test_per_item_freshness_recheck_skips_a_finding_staled_mid_walk`: two
   findings sharing a Decision — accepting the FIRST (which rewrites that
   Decision) makes the SECOND item's immediate re-check
   (`service.is_fresh`) fail, printing `"  skipping <a> <-> <b> --
   changed since it was judged."` and counting it as skipped. **RED
   today**: same. Kills a missing per-item re-check.
-- [ ] **P8b.6** [TEST] Same file — add
+- [x] **P8b.6** [TEST] Same file — add
   `test_already_resolved_pair_interplay`: a pair already resolved
   DIFFERENTLY refuses at `_reconcile_pair`'s at-most-one gate, is
   counted skipped, and the walk CONTINUES to the next item; a pair
   already resolved THE SAME WAY is an idempotent no-op counted as
   applied with no change. **RED today**: same.
-- [ ] **P8b.7** [TEST] Same file — add
+- [x] **P8b.7** [TEST] Same file — add
   `test_contradiction_walk_output_is_byte_identical_when_no_revision_findings_exist`:
   a regression guard — `reconcile --from-findings` output is
   byte-identical to pre-change behavior when no revision findings are
@@ -1848,17 +1848,17 @@ Depends on P6 (`actionable_revision_findings`, `is_fresh`) and P8a
   findings alongside the new walk does not exist until this slice adds
   it), then confirm it stays GREEN through the rest of this slice's
   IMPL.
-- [ ] **P8b.8** [TEST] Same file — add
+- [x] **P8b.8** [TEST] Same file — add
   `test_non_tty_refusal_precedes_both_walks`: the existing non-TTY
   refusal still fires before either walk runs. **RED today**: regression
   guard, written alongside P8b.7.
-- [ ] **P8b.9** [TEST] Same file — add
+- [x] **P8b.9** [TEST] Same file — add
   `test_summary_counts_both_walks_and_lists_revision_declines`: the
   closing `"applied {n}, skipped {n}, declined {n}."` line sums BOTH
   walks; a declined revision item lists as `"  declined: <later>
   supersedes <earlier>"` (directed) or `"<a> <-> <b> (revision, order
   not chosen)"` (undirected skip). **RED today**: same.
-- [ ] **P8b.10** [IMPL] `src/openkos/cli/main.py`: inside
+- [x] **P8b.10** [IMPL] `src/openkos/cli/main.py`: inside
   `_run_reconcile_from_findings` (`main.py:10269-10406`), change the
   early `return` after the contradiction walk (`main.py:10330-10336`) to
   "print the existing line, then continue"; add the second walk over
@@ -1870,17 +1870,17 @@ Depends on P6 (`actionable_revision_findings`, `is_fresh`) and P8a
   a resolution failure counted as skipped per `main.py:10344-10354`), the
   at-most-one-gate interplay (`main.py:10383-10389`), and shared
   counters/summary line. Makes P8b.1-P8b.9 GREEN.
-- [ ] **P8b.11** `docs/cli.md`: the `--from-findings` help text and the
+- [x] **P8b.11** `docs/cli.md`: the `--from-findings` help text and the
   `reconcile` section gain the revision-findings sentence (per design.md
   File changes, P8b).
 
 ### Slice P8b verification
 
-- [ ] **P8b.12** Run `uv run ruff check . && uv run ruff format --check . &&
+- [x] **P8b.12** Run `uv run ruff check . && uv run ruff format --check . &&
   uv run mypy .` — must be green.
-- [ ] **P8b.13** Run `uv run pytest tests/unit/cli/test_reconcile.py` (the
+- [x] **P8b.13** Run `uv run pytest tests/unit/cli/test_reconcile.py` (the
   full file), then `uv run pytest` (unpiped) full suite — must be green.
-- [ ] **P8b.14** Commit as one or more work-unit commits (e.g. `feat(cli):
+- [x] **P8b.14** Commit as one or more work-unit commits (e.g. `feat(cli):
   add the reconcile --from-findings revision walk`). Open PR 14 (Slice
   P8b, the final Phase B slice) targeting PR 13's branch.
 

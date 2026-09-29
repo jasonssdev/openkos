@@ -78,6 +78,14 @@ further below, are the record — this top summary block was not kept in
 sync with every slice by prior batches; see each section's own heading for
 its PR boundary and commit).
 
+**Phase B, Slice P8b (`P8b.1`–`P8b.14`, 14/14) complete — ALL Phase B
+slices (P1-P8b) are now done.** PR 14 (final), on
+`feat/1014-phase-b-p8b-reconcile-walk` (checked out on top of the P8a
+branch, PR #1068, not yet merged, at `7179d6b`), commit `66eb7e8`. Adds
+the second (revision-findings) walk to `reconcile --from-findings` in
+`src/openkos/cli/main.py`. See "Phase B — Slice P8b" below for the full
+record.
+
 **Phase B, Slice P7a (`P7a.1`–`P7a.12`, 12/12) complete** — this batch, on
 `feat/1014-phase-b-p7a-report` (checked out ON TOP of the P6 branch, PR
 #1065, not yet merged, at `708f10a`). PR 11 boundary: new module
@@ -1812,3 +1820,126 @@ implemented in `main.py`, so there was nothing to remove.
   final Phase B slice) remains, per tasks.md's "Phase B: tasks
   (2026-09-28 re-plan)" section. It is the first caller of
   `_ask_later_decision_and_type`.
+
+## Phase B — Slice P8b (PR 14, final): the `reconcile --from-findings` revision walk
+
+**14/14 tasks complete (`P8b.1`–`P8b.14`)** — this batch, on
+`feat/1014-phase-b-p8b-reconcile-walk` (checked out ON TOP of the P8a
+branch, PR #1068, not yet merged, at `7179d6b`). This is the LAST Phase B
+slice (chain order P1 → P2 → P3 → P4 → P5a → P5b → P6 → P7a → P7b → P8a →
+P8b). Basis: design.md's "Phase B re-plan (2026-09-28)" section, Decision
+9 steps 1-11.
+
+### Files changed
+
+| File | Action |
+|---|---|
+| `src/openkos/cli/main.py` | Modified — `_run_reconcile_from_findings`'s early `return` on an empty contradiction list became "print, then continue"; new `_revision_verdict_from_finding` helper; the second (revision) walk added between the contradiction loop and the shared summary; `--from-findings`'s help text gained a sentence |
+| `tests/unit/cli/test_reconcile.py` | Modified — 3 new fixture helpers (`_write_decision`, `_bundle_snapshot`, `_seed_revision_finding`) and 10 new test functions (13 test cases; one function parametrized ×4) |
+| `docs/cli.md` | Modified — the `reconcile` section gained a paragraph describing the revision-findings walk; the `--from-findings` flag row updated |
+| `openspec/changes/decision-revision-detector/tasks.md` | Modified — `P8b.1`–`P8b.14` marked `[x]` |
+
+### Design deviations
+
+None. `_reconcile_pair`'s signature, `_ask_later_decision_and_type`'s
+contract, and every literal prompt/decline/skip string were taken
+verbatim from design.md Decision 9 and the `reconcile-command` delta
+spec, re-verified against the spec text on disk (not design.md's
+paraphrase) before writing each test. One implementation choice design.md
+left open was resolved autonomously, as authorized: direction/edge-type
+is reconstructed from a persisted `RevisionFinding` by building a full
+`RevisionVerdict` (`_revision_verdict_from_finding`) and reading its
+`.direction`/`relation_for(verdict)` properties — the SAME reconstruction
+`revisions_report._view_from_finding` already performs for the
+`revisions` verb's own report — rather than hand-rolling a second,
+independently-typed direction check inline in the walk. This keeps
+`pair_direction` (ADR-0025) as the one authority both call sites read,
+at the cost of one small helper function design.md's prose did not name
+explicitly (it only said "`RevisionVerdict.is_untyped_change`"/
+"`relation_for(finding)`", treating the persisted finding and the
+in-memory verdict as interchangeable).
+
+### TDD Cycle Evidence
+
+| Task(s) | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|---|---|
+| P8b.1–P8b.9 | `test_reconcile.py` | Unit (CLI, `CliRunner.invoke` over a real `tmp_path` workspace, revision findings seeded directly into `.openkos/findings.db` with real input digests via `revisions_service.revision_input_digests`) | ✅ 92/92 passing before this batch's edits (`uv run pytest tests/unit/cli/test_reconcile.py -q`, post-P8a baseline) | ✅ genuinely observed: ran all 13 new test cases (10 functions, one parametrized ×4) against the pre-implementation tree — 12 failed (the second walk did not exist: `"No open revision findings..."`/prompt text/relation-write assertions all failed), 1 passed trivially as a pre-existing regression guard (`test_non_tty_refusal_precedes_both_walks`, unaffected by this slice by construction — see note below) | ✅ all 13 cases passed on the first run after implementing the second walk as one cohesive unit (design.md Decision 9's steps are fully specified — freshness re-check, directed consent text, the undirected combined-prompt routing, the at-most-one-gate interplay, and the shared summary) | ✅ the REVERSES/REFINES pair, the four-way undirected parametrization, and the two shared-Decision-staleness/already-resolved scenarios already exercise the directed/undirected/fresh/stale/skip/decline/idempotent state space as one designed matrix | ➖ None needed beyond `ruff format`'s own line-wrap pass (see Full Verification) |
+
+**Note on the one test that was RED-by-absence, not RED-by-failure**:
+`test_contradiction_walk_output_is_byte_identical_when_no_revision_findings_exist`
+(P8b.7) could not fail against the pre-P8b tree in the usual sense — the
+contradiction-only fragments it checks were already true before this
+slice touched anything (the regression it guards did not yet exist to
+break). Written exactly as tasks.md's own P8b.7 instructs: "write it
+RED-by-absence first ... then confirm it stays GREEN through the rest of
+this slice's IMPL" — verified GREEN once P8b.10 landed, including its own
+`no_revisions_line` assertion which WAS genuinely RED before the IMPL
+(`assert 0 == 1`, since the new line did not exist yet).
+
+### Mutation-Kill Verification (mandatory per apply instructions)
+
+Each mutation was applied to the exact production line the paired test
+must catch, verified to make that test FAIL, `__pycache__` purged
+(`find . -name __pycache__ -exec rm -rf {} +`), then reverted with the
+exact inverse edit (never `git checkout --`), and the focused test
+re-verified GREEN before moving to the next mutation.
+
+| # | Mutation | File / line | Test(s) that must fail | Result |
+|---|---|---|---|---|
+| 1 | `later`/`earlier` swapped for the directed branch (`canonical_a if ... else canonical_b` → `canonical_b if ... else canonical_a`) | `main.py`, the directed `if verdict.direction.holder is not None:` branch | `test_reverses_known_direction_offers_supersedes_held_by_the_later_decision`, `test_refines_known_direction_offers_revises_held_by_the_later_decision` | ✅ Both FAILED as expected: the exact `"Record decisions/beta ... decisions/alpha"` prompt text never appeared (the mutated code emitted the reversed pair instead). Reverted. |
+| 2 | Freshness re-check negated (`if not revisions_service.is_fresh(...)` → `if revisions_service.is_fresh(...)`) | `main.py`, the per-item freshness gate at the top of the revision loop | `test_per_item_freshness_recheck_skips_a_finding_staled_mid_walk` | ✅ FAILED as expected: `applied 0, skipped 2, declined 0.` instead of `applied 1, skipped 1, declined 0.` — proving the test discriminates "the SECOND item is skipped for staleness" from "nothing gets processed at all", not merely that some skip happens. Reverted. |
+| 3 | The at-most-one-gate `except typer.Exit` handler counted a refused pair as `applied` instead of `skipped` | `main.py`, the revision walk's `except typer.Exit as exc:` handler | `test_already_resolved_pair_interplay` | ✅ FAILED as expected: `applied 2, skipped 0, declined 0.` instead of `applied 1, skipped 1, declined 0.` — proving the test discriminates a refused-and-skipped pair from a silently-counted-as-applied one. Reverted. |
+| 4 | The undirected branch's holder/target assignment swapped (`holder, target = raw_holder, raw_target` → `raw_target, raw_holder`) | `main.py`, the `else:` (undirected) branch after `_ask_later_decision_and_type` | `test_unknown_direction_routes_to_the_combined_prompt` (all 4 parametrized cases) | ✅ All 4 FAILED as expected: the written relation's `target`/`type` never matched any of the four expected `(holder, target, type)` combinations. Reverted. |
+
+All four mutations killed by the tests named above. `find . -name
+__pycache__ -exec rm -rf {} +` was run before every GREEN/RED verdict,
+and every revert used the exact inverse edit (confirmed via a clean
+`git diff` after each revert) — never `git checkout --`.
+
+### Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `uv run pytest tests/unit/cli/test_reconcile.py -q` → **92 passed** (post-P8a baseline was 79; this batch added 13 test cases across 10 functions, one parametrized ×4) |
+| Runtime harness command/scenario and exact result | `uv run openkos reconcile --from-findings` was NOT exercised against a real `openkos revisions --auto` run (no live Ollama in this sandbox, per the session's model-free constraint); the CLI-level `CliRunner.invoke` tests exercise the full `openkos reconcile --from-findings` command path (Typer app dispatch, workspace read, both walks, `_reconcile_pair`'s real Phase A/B write transaction, `log.md` append, autocommit) over a real `tmp_path` bundle with revision findings seeded directly into `.openkos/findings.db` with digests computed by the real `revisions_service.revision_input_digests` — the same store and freshness check a real `openkos revisions --auto` run would populate |
+| Rollback boundary | Revert the second walk block inside `_run_reconcile_from_findings` (between the contradiction loop and the shared summary echo), the `_revision_verdict_from_finding` helper, the `--from-findings` help-text sentence, and the new imports (`DecisionDate`, `RevisionVerdict`, `RevisionVerdictValue`, `relation_for`, `cast`) in `src/openkos/cli/main.py`; the 10 new test functions and 3 new fixture helpers in `tests/unit/cli/test_reconcile.py`; the new paragraph and flag-row wording in `docs/cli.md`. The contradiction walk (unchanged) keeps working — confirmed by P8b.7/P8b.8's own regression guards. |
+
+### Full Verification (this work unit)
+
+| Command | Result |
+|---|---|
+| `uv run ruff check .` | **All checks passed!** |
+| `uv run ruff format --check .` | Found 2 files needing reformatting (`src/openkos/cli/main.py`, `tests/unit/cli/test_reconcile.py`) → ran `uv run ruff format` on both → **356 files already formatted** on re-check |
+| `uv run mypy .` | Success: no issues found in 356 source files |
+| `uv run pytest tests/unit/cli/test_reconcile.py -q` (focused, post-format) | **92 passed** |
+| `uv run pytest --cov` (full, unpiped) | **6904 passed, 2 skipped** in 426.71s (0:07:06), exit 0 (up from the P8a baseline of 6891 passed + this slice's 13 new tests); coverage 96.96%, gate 90% reached |
+| `uv run python evals/run_self_tests.py` (`OLLAMA_HOST` poisoned) | **43 of 43 harness self-test(s) run, 0 failing** |
+
+`git diff --shortstat HEAD -- src/openkos/cli/main.py tests/unit/cli/test_reconcile.py docs/cli.md`:
+**3 files changed, 711 insertions(+), 11 deletions(-)** — well above the
+~400-450 line forecast tasks.md's own Review Workload Forecast named for
+P8b, consistent with every prior Phase A/B slice's actual-vs-forecast
+multiplier (the forecast itself flagged `400-line budget risk: High` and
+`Chained PRs recommended: Yes`, already resolved session-wide by
+`auto-chain`/`stacked-to-main`, this slice being PR 14, the final link in
+that pre-decided chain) — `size:exception` recommended for this slice,
+consistent with P3/P5a/P5b/P6/P7b's own precedent.
+
+### Commit
+
+`66eb7e8` — `feat(cli): add the reconcile --from-findings revision walk
+(#1014)` (scope `cli`, per AGENTS.md). 3 files changed, 711
+insertions(+), 11 deletions(-) (`src/openkos/cli/main.py`,
+`tests/unit/cli/test_reconcile.py`, `docs/cli.md`). Staged explicitly by
+path — `openspec/` is left for this section's own final `docs(sdd)`
+commit, same posture as every prior Phase B slice. Not pushed, no branch
+switch, no rebase.
+
+### Remaining Tasks (after Slice P8b)
+
+None inside this task list's scope. Phase B (P1-P8b) is now fully
+complete — `tasks.md`'s entire "Phase B: tasks (2026-09-28 re-plan)"
+section is `[x]`. `sdd-verify`/`sdd-archive` are the next applicable
+phases; per this batch's instructions, verification is optional and PR
+14 (this branch, `feat/1014-phase-b-p8b-reconcile-walk`, targeting PR
+13's branch) is ready to open once the parent PRs merge in chain order.
