@@ -7062,8 +7062,9 @@ def test_batch_notice_pointer_names_what_lint_actually_reports(
     was that one would have taken the old wording to mean `lint` had
     nothing for them, which is precisely backwards.
 
-    The sole-object disclosure remains the one token no `lint` section
-    names, which is what the summary term is still wider than."""
+    The sole-object disclosure and #1053's chunk-partial disclosure remain
+    the two tokens no `lint` section names, which is what the summary term
+    is still wider than."""
     _init_workspace(tmp_path, monkeypatch)
     run = _multi_object_reply(_ungrounded_decision_reply(), _grounded_decision_reply())
     _patch_sequenced_llm(
@@ -7088,7 +7089,10 @@ def test_batch_notice_pointer_names_what_lint_actually_reports(
     assert result.exit_code == 0
     assert "1 with extraction notice(s)." in result.stdout
     assert "Their Sources carry `extraction_notice`" in result.stdout
-    assert "`openkos lint` names all but the sole-object disclosure." in result.stdout
+    assert (
+        "`openkos lint` names all but the sole-object and chunk-partial "
+        "disclosures." in result.stdout
+    )
 
 
 def test_batch_commits_per_file_not_per_batch(
@@ -8656,6 +8660,47 @@ def test_participant_unreadmitted_notice_is_silent_when_the_gate_discarded_none(
     assert main._participant_unreadmitted_notice(report) is None
 
 
+def test_chunk_skip_notice_is_silent_when_nothing_was_skipped() -> None:
+    """The common case, and the only one reachable before #1053 -- a
+    chunked (or single-call) extraction where every window answered."""
+    report = concept_mod.ExtractionReport(produced=3, retained=3, chunks=5)
+
+    assert main._chunk_skip_notice(report) is None
+
+
+def test_chunk_skip_notice_names_the_skipped_chunk_and_the_total() -> None:
+    """#1053: the notice names the exact lost chunk ("chunk N of M"), the
+    Source-marking outcome, and the token it stamps -- an operator reading
+    this line on stderr must be able to tell WHICH part of a long source is
+    missing without opening the document."""
+    report = concept_mod.ExtractionReport(
+        produced=7, retained=7, chunks=12, skipped_chunks=(3,)
+    )
+
+    notice = main._chunk_skip_notice(report)
+
+    assert notice is not None
+    assert "1 of 12 chunk(s)" in notice
+    assert "chunk 3 of 12" in notice
+    assert "objects from every other chunk were kept" in notice
+    assert f"extraction_notice: {okf.EXTRACTION_NOTICE_CHUNK_PARTIAL}" in notice
+
+
+def test_chunk_skip_notice_names_every_skipped_chunk() -> None:
+    """Triangulation: more than one skipped chunk in the same run, each
+    named -- the count and the list must agree."""
+    report = concept_mod.ExtractionReport(
+        produced=4, retained=4, chunks=10, skipped_chunks=(2, 7)
+    )
+
+    notice = main._chunk_skip_notice(report)
+
+    assert notice is not None
+    assert "2 of 10 chunk(s)" in notice
+    assert "chunk 2 of 10" in notice
+    assert "chunk 7 of 10" in notice
+
+
 def test_unevidenced_notice_truncates_past_the_title_limit() -> None:
     """The `(+N more)` branch of #801's notice, which every other test of
     it leaves unexecuted.
@@ -9025,6 +9070,170 @@ def test_ingest_degrades_when_a_concurrent_window_fails(
     metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
     assert metadata["extraction_status"] == "failed"
     assert "extraction_notice" not in metadata
+
+
+# --- per-chunk failure isolation, end-to-end (#1053) -------------------------
+
+
+_CHUNK_FIXTURE_LINE_0 = "A: line 0000 " + "x" * 30
+"""The FIRST line of the `700`-line chunked fixture text every test below
+builds -- a real line of the SOURCE, quoted verbatim in every scripted
+reply's `body` below so the grounding check (#801's `objects-without-
+evidence`) never fires here and pollutes an assertion this file's tests
+are not about. Grounding is checked against the WHOLE source, not the
+window that produced the object, so any one real line works for every
+chunk."""
+
+
+def _chunk_object_reply(title: str) -> str:
+    """A well-formed `extract_concept` JSON reply for one synthetic chunk
+    object, grounded by `_CHUNK_FIXTURE_LINE_0` so #801's evidence check
+    never adds an unrelated `extraction_notice` to these tests."""
+    return json.dumps(
+        {
+            "extract": True,
+            "type": "Concept",
+            "title": title,
+            "description": "A synthetic per-chunk object for the #1053 fixture.",
+            "body": _CHUNK_FIXTURE_LINE_0,
+        }
+    )
+
+
+class _ScriptedCallsLLM:
+    """A structural `LLMBackend` whose reply is chosen by absolute call
+    count -- `replies[i]` answers the (i+1)-th `chat` call, an `Exception`
+    instance raises instead. The serial (default, non-concurrent) fan-out
+    calls chunks strictly in window order, so this gives a real `openkos
+    ingest` invocation the same per-call control `_SequencedLLM` gives the
+    module-level tests."""
+
+    locality = LOCAL_BACKEND_LOCALITY
+
+    def __init__(self, replies: Sequence[str | Exception]) -> None:
+        self._replies = list(replies)
+        self.calls = 0
+
+    def chat(self, messages: Sequence[Message]) -> str:
+        reply = self._replies[self.calls]
+        self.calls += 1
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+    def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        return [[0.0] * EMBED_DIM for _ in texts]
+
+
+def test_ingest_recovers_a_failed_chunk_via_retry_with_no_notice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A chunk that fails once and succeeds on its ONE retry (#1053) costs
+    nothing observable: every chunk's object is written, the run reports no
+    degrade, and the Source carries no `extraction_notice` -- the retry is
+    invisible from the outside except for the extra call it spent."""
+    _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(tmp_path, "# union_judge: true", "union_judge: false")
+    # 420 lines -> 5 windows, comfortably under `_MAX_OBJECTS_PER_SOURCE`
+    # (6) so every surviving chunk's object is staged, none cut by the cap.
+    text = "\n".join(f"A: line {i:04d} " + "x" * 30 for i in range(420))
+    windows = concept_mod._chunk_lines(text)
+    assert len(windows) == 5
+    replies: list[str | Exception] = [
+        _chunk_object_reply(f"Chunk {i}") for i in range(1, 6)
+    ]
+    replies[1] = OllamaGenerationCapped("hit the ceiling")
+    replies.insert(2, _chunk_object_reply("Chunk 2"))
+    llm = _ScriptedCallsLLM(replies)
+    monkeypatch.setattr("openkos.cli.main.OllamaClient", lambda *a, **kw: llm)
+    source = tmp_path / "notes.txt"
+    source.write_text(text, encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert "keeping the Source only" not in result.stderr
+    assert "chunk(s) failed extraction" not in result.stderr
+    assert llm.calls == 6
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert "extraction_notice" not in metadata
+    for i in range(1, 6):
+        assert (tmp_path / "bundle" / "concepts" / f"chunk-{i}.md").exists()
+
+
+def test_ingest_keeps_other_chunks_and_marks_notice_when_one_chunk_is_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The issue's headline scenario: one chunk whose retry ALSO fails is
+    skipped, but every other chunk's derived object is still written, the
+    loss is named on stderr ("chunk N of M"), and the Source's
+    `extraction_notice` records `chunk-extraction-partial` -- the loss
+    stays visible on BOTH surfaces (#1053)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(tmp_path, "# union_judge: true", "union_judge: false")
+    # 420 lines -> 5 windows; 4 surviving objects stay under the 6-object
+    # cap, so the cap never interferes with this test's assertions.
+    text = "\n".join(f"A: line {i:04d} " + "x" * 30 for i in range(420))
+    windows = concept_mod._chunk_lines(text)
+    assert len(windows) == 5
+    replies: list[str | Exception] = [
+        _chunk_object_reply(f"Chunk {i}") for i in range(1, 6)
+    ]
+    replies[1] = OllamaGenerationCapped("hit the ceiling")
+    replies.insert(2, OllamaGenerationCapped("hit the ceiling again"))
+    llm = _ScriptedCallsLLM(replies)
+    monkeypatch.setattr("openkos.cli.main.OllamaClient", lambda *a, **kw: llm)
+    source = tmp_path / "notes.txt"
+    source.write_text(text, encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert "keeping the Source only" not in result.stderr
+    assert "1 of 5 chunk(s) failed extraction after one retry" in result.stderr
+    assert "chunk 2 of 5" in result.stderr
+    assert "objects from every other chunk were kept" in result.stderr
+    assert llm.calls == 6
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["extraction_notice"] == okf.EXTRACTION_NOTICE_CHUNK_PARTIAL
+    assert "extraction_status" not in metadata
+    assert not (tmp_path / "bundle" / "concepts" / "chunk-2.md").exists()
+    for i in [1, 3, 4, 5]:
+        assert (tmp_path / "bundle" / "concepts" / f"chunk-{i}.md").exists()
+
+
+def test_ingest_still_degrades_to_source_only_when_every_chunk_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When NO chunk survives even its retry, behavior is byte-identical to
+    before #1053: Source only, the same "keeping the Source only" stderr
+    line, `extraction_status: failed`, and no `extraction_notice`."""
+    _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(tmp_path, "# union_judge: true", "union_judge: false")
+    text = "\n".join(f"A: line {i:04d} " + "x" * 30 for i in range(420))
+    windows = concept_mod._chunk_lines(text)
+    assert len(windows) == 5
+    replies: list[str | Exception] = []
+    for i in range(1, 6):
+        replies.append(OllamaGenerationCapped(f"chunk {i} capped"))
+        replies.append(OllamaGenerationCapped(f"chunk {i} retry capped"))
+    llm = _ScriptedCallsLLM(replies)
+    monkeypatch.setattr("openkos.cli.main.OllamaClient", lambda *a, **kw: llm)
+    source = tmp_path / "notes.txt"
+    source.write_text(text, encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert "keeping the Source only" in result.stderr
+    assert llm.calls == 10
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["extraction_status"] == "failed"
+    assert "extraction_notice" not in metadata
+    assert not (tmp_path / "bundle" / "concepts").exists()
 
 
 # --- a timeout on the concurrent path names the queuing risk (#746) ----------

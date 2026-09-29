@@ -2320,6 +2320,234 @@ def test_large_source_makes_one_chat_call_per_chunk() -> None:
         assert "Field Notes" in user
 
 
+# --- Per-chunk failure isolation (#1053) -------------------------------------
+
+
+def _succeeding_replies(chunk_count: int) -> list[str | Exception]:
+    """One distinctly-titled successful reply per chunk, in chunk order."""
+    return [_array(_titled_item(f"Chunk {i}")) for i in range(1, chunk_count + 1)]
+
+
+def _replies_with_one_failing_chunk(
+    chunk_count: int, *, failing_index: int, retry_succeeds: bool
+) -> list[str | Exception]:
+    """A `_SequencedLLM` replies list for `chunk_count` SERIAL chunks where
+    `failing_index` (1-indexed) raises once, then either succeeds or raises
+    again on its one retry -- every other chunk succeeds on its first
+    attempt. Calibrated for the serial path, where call order is chunk
+    order, so `failing_index` names both a chunk and a position."""
+    replies: list[str | Exception] = []
+    for i in range(1, chunk_count + 1):
+        if i == failing_index:
+            replies.append(OllamaGenerationCapped(f"chunk {i} capped"))
+            replies.append(
+                _array(_titled_item(f"Chunk {i} (retry)"))
+                if retry_succeeds
+                else OllamaGenerationCapped(f"chunk {i} retry capped")
+            )
+        else:
+            replies.append(_array(_titled_item(f"Chunk {i}")))
+    return replies
+
+
+def _replies_with_every_chunk_failing(chunk_count: int) -> list[str | Exception]:
+    """Every chunk raises on its ordinary attempt AND its retry -- the
+    all-or-nothing degrade case."""
+    replies: list[str | Exception] = []
+    for i in range(1, chunk_count + 1):
+        replies.append(OllamaGenerationCapped(f"chunk {i} capped"))
+        replies.append(OllamaGenerationCapped(f"chunk {i} retry capped"))
+    return replies
+
+
+def test_extract_concept_retries_a_failed_chunk_and_keeps_it_on_success() -> None:
+    """A chunk whose FIRST attempt raises an `OllamaError`-family error is
+    retried once; a successful retry is kept exactly like any other
+    chunk's objects, and `report.skipped_chunks` stays empty -- nothing was
+    lost."""
+    # 420 lines -> comfortably under `_MAX_OBJECTS_PER_SOURCE` (6) chunks,
+    # so the unrelated cap never truncates this test's object count.
+    text = _long_text(lines=420)
+    windows = concept_mod._chunk_lines(text)
+    chunk_count = len(windows)
+    assert 2 < chunk_count <= 6, (
+        "fixture must have a middle chunk and stay under the cap"
+    )
+    failing_index = chunk_count // 2
+    llm = _SequencedLLM(
+        _replies_with_one_failing_chunk(
+            chunk_count, failing_index=failing_index, retry_succeeds=True
+        )
+    )
+
+    outcome = concept_mod.extract_concept(text, source_title="Field Notes", llm=llm)
+
+    assert len(llm.calls) == chunk_count + 1
+    assert outcome.report.chunks == chunk_count
+    assert outcome.report.skipped_chunks == ()
+    assert f"Chunk {failing_index} (retry)" in [r.title for r in outcome.objects]
+    assert len(outcome.objects) == chunk_count
+
+
+def test_extract_concept_skips_a_chunk_that_still_fails_after_retry() -> None:
+    """A chunk whose retry ALSO raises is skipped -- its slot contributes no
+    objects, `report.skipped_chunks` names its 1-indexed position, and
+    every OTHER chunk's objects are still kept (the issue's headline
+    scenario: one bad chunk must not cost the other good ones)."""
+    text = _long_text(lines=420)
+    windows = concept_mod._chunk_lines(text)
+    chunk_count = len(windows)
+    assert 2 < chunk_count <= 6, (
+        "fixture must have a middle chunk and stay under the cap"
+    )
+    failing_index = chunk_count // 2
+    llm = _SequencedLLM(
+        _replies_with_one_failing_chunk(
+            chunk_count, failing_index=failing_index, retry_succeeds=False
+        )
+    )
+
+    outcome = concept_mod.extract_concept(text, source_title="Field Notes", llm=llm)
+
+    assert len(llm.calls) == chunk_count + 1
+    assert outcome.report.chunks == chunk_count
+    assert outcome.report.skipped_chunks == (failing_index,)
+    kept_titles = [r.title for r in outcome.objects]
+    assert f"Chunk {failing_index}" not in kept_titles
+    assert len(kept_titles) == chunk_count - 1
+    for i in range(1, chunk_count + 1):
+        if i != failing_index:
+            assert f"Chunk {i}" in kept_titles
+
+
+def test_extract_concept_raises_when_every_chunk_fails_even_after_retry() -> None:
+    """The module's original all-or-nothing contract holds when NOTHING
+    survives: rather than silently return zero objects, the LAST chunk's
+    exception propagates unswallowed, so the caller's existing
+    Source-only degrade fires exactly as it did before #1053."""
+    text = _long_text()
+    windows = concept_mod._chunk_lines(text)
+    chunk_count = len(windows)
+    replies = _replies_with_every_chunk_failing(chunk_count)
+    last = replies[-1]
+    assert isinstance(last, OllamaGenerationCapped)
+    llm = _SequencedLLM(replies)
+
+    with pytest.raises(OllamaGenerationCapped) as excinfo:
+        concept_mod.extract_concept(text, source_title="Field Notes", llm=llm)
+
+    assert excinfo.value is last
+    assert len(llm.calls) == chunk_count * 2
+
+
+def test_extract_concept_never_retries_a_non_backend_error() -> None:
+    """Only the `BackendError` family is retried -- an unrelated exception
+    (a bug, not a backend failure) propagates on its FIRST occurrence, with
+    no retry attempt spent on it."""
+    text = _long_text()
+    windows = concept_mod._chunk_lines(text)
+    chunk_count = len(windows)
+    replies = _succeeding_replies(chunk_count)
+    replies[1] = ValueError("not a backend failure")
+    llm = _SequencedLLM(replies)
+
+    with pytest.raises(ValueError, match="not a backend failure"):
+        concept_mod.extract_concept(text, source_title="Field Notes", llm=llm)
+
+    assert len(llm.calls) == 2
+
+
+def test_extract_concept_never_retries_ollama_unavailable() -> None:
+    """`OllamaUnavailable` (the backend could not be reached at all) is
+    NEVER retried and never merely skips its chunk: a down server will not
+    answer the next window either, so #1053 keeps this propagating on the
+    FIRST failure -- the pre-#1053 behavior for an unreachable backend is
+    unchanged, and remaining chunks are never even attempted."""
+    text = _long_text()
+    windows = concept_mod._chunk_lines(text)
+    chunk_count = len(windows)
+    assert chunk_count > 2, "fixture must have a chunk after the failure"
+    replies = _succeeding_replies(chunk_count)
+    replies[1] = OllamaUnavailable("backend down")
+    llm = _SequencedLLM(replies)
+
+    with pytest.raises(OllamaUnavailable):
+        concept_mod.extract_concept(text, source_title="Field Notes", llm=llm)
+
+    # Exactly 2 calls: chunk 1 (succeeded), chunk 2's ONE attempt (failed).
+    # No retry on chunk 2, and no later chunk is ever reached.
+    assert len(llm.calls) == 2
+
+
+def test_extract_concept_stops_retrying_if_the_backend_goes_unavailable_mid_retry() -> (
+    None
+):
+    """Triangulation: the backend can go from "erroring" to "unreachable"
+    BETWEEN a chunk's ordinary attempt and its retry -- a transient
+    `OllamaGenerationCapped` followed by an `OllamaUnavailable` on the
+    retry itself. That retry-side `OllamaUnavailable` must still propagate
+    immediately rather than being treated as "the retry also failed, skip
+    this chunk", which would misreport an unreachable backend as one
+    merely-degraded chunk."""
+    text = _long_text()
+    windows = concept_mod._chunk_lines(text)
+    chunk_count = len(windows)
+    assert chunk_count > 2, "fixture must have a chunk after the failure"
+    replies: list[str | Exception] = _succeeding_replies(chunk_count)
+    replies[1] = OllamaGenerationCapped("hit the ceiling")
+    replies.insert(2, OllamaUnavailable("backend went down mid-retry"))
+    llm = _SequencedLLM(replies)
+
+    with pytest.raises(OllamaUnavailable):
+        concept_mod.extract_concept(text, source_title="Field Notes", llm=llm)
+
+    # chunk 1 (succeeded), chunk 2's first attempt (capped), chunk 2's
+    # retry (unavailable) -- 3 calls, no later chunk ever reached.
+    assert len(llm.calls) == 3
+
+
+def test_union_chunked_extraction_skips_a_chunk_after_retry_fails() -> None:
+    """`extract_concept_union`'s chunked (judge-only) branch gets the SAME
+    per-chunk isolation through the shared `_fan_out_window_lists` seam."""
+    text = _long_text()
+    windows = concept_mod._chunk_lines(text)
+    chunk_count = len(windows)
+    failing_index = chunk_count // 2
+    replies = _replies_with_one_failing_chunk(
+        chunk_count, failing_index=failing_index, retry_succeeds=False
+    )
+    surviving_titles = [
+        f"Chunk {i}" for i in range(1, chunk_count + 1) if i != failing_index
+    ]
+    replies.append(json.dumps({"keep": surviving_titles}))
+    llm = _SequencedLLM(replies)
+
+    outcome = concept_mod.extract_concept_union(
+        text, source_title="Field Notes", llm=llm
+    )
+
+    assert outcome.report.chunks == chunk_count
+    assert outcome.report.skipped_chunks == (failing_index,)
+    assert sorted(r.title for r in outcome.objects) == sorted(surviving_titles)
+
+
+def test_union_chunked_extraction_raises_when_every_chunk_fails() -> None:
+    """Mirrors the single-run test: the union path's chunked branch also
+    preserves the all-or-nothing contract when nothing survives."""
+    text = _long_text()
+    windows = concept_mod._chunk_lines(text)
+    chunk_count = len(windows)
+    replies = _replies_with_every_chunk_failing(chunk_count)
+    last = replies[-1]
+    assert isinstance(last, OllamaGenerationCapped)
+    llm = _SequencedLLM(replies)
+
+    with pytest.raises(OllamaGenerationCapped) as excinfo:
+        concept_mod.extract_concept_union(text, source_title="Field Notes", llm=llm)
+
+    assert excinfo.value is last
+
+
 def test_chunk_target_is_read_at_call_time_not_bound_at_definition(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -6300,6 +6528,29 @@ def test_concurrent_fan_out_dedup_keeps_the_earlier_WINDOW_not_the_earlier_reply
 
     assert [r.title for r in outcome.objects] == ["Stoicism"]
     assert outcome.objects[0].description == "The earlier window."
+
+
+def test_concurrent_fan_out_skips_a_window_that_fails_after_retry() -> None:
+    """The retry-then-skip isolation (#1053) applies identically under
+    `concurrent=True`: `_WindowKeyedLLM` raises on EVERY call for the doomed
+    window (its retry included), so this proves the skip survives the pool
+    path, not only the serial one."""
+    text = _long_text()
+    windows = concept_mod._chunk_lines(text)
+    assert len(windows) > 2
+
+    llm = _WindowKeyedLLM(windows, {1: OllamaGenerationCapped("hit the ceiling")})
+
+    outcome = concept_mod.extract_concept(
+        text, source_title="Field Notes", llm=llm, concurrent=True
+    )
+
+    assert outcome.report.skipped_chunks == (2,)  # window index 1 -> chunk 2
+    assert outcome.report.chunks == len(windows)
+    # Every window except the doomed one answered "[]" (the `_WindowKeyedLLM`
+    # default), so no objects survive -- the assertion that matters here is
+    # that the run COMPLETED rather than raising.
+    assert outcome.objects == []
 
 
 def test_concurrent_fan_out_reports_progress_only_from_the_calling_thread() -> None:

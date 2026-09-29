@@ -35,6 +35,21 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   (`docs/user-journey.md#reading-the-bundle-in-an-editor`) for users who want
   one.
 
+### Fixed
+
+- A single failed chunk no longer discards a whole source's extraction
+  ([#1053](https://github.com/jasonssdev/openkos/issues/1053)). Above the
+  chunking threshold, a window whose extraction call raises a backend error
+  is retried once; if the retry also fails, only that window is skipped —
+  every other window's objects are still merged, judged, and stored,
+  instead of the whole source degrading to Source-only over one capped or
+  otherwise-erroring window. The loss stays visible: `ingest` names the
+  exact skipped chunk on stderr and stamps `extraction_notice:
+  chunk-extraction-partial` on the Source, and a plain re-ingest
+  automatically retries extraction to recover it. An unreachable backend,
+  or every chunk failing even after its retry, still degrades the whole
+  source exactly as before.
+
 ## [0.2.14] - 2026-09-11
 
 Thirty-seven commits closing twenty-two issues, and the release has two

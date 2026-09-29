@@ -296,6 +296,7 @@ ExtractionNotice = Literal[
     "judge-selection-empty",
     "objects-without-evidence",
     "candidates-dropped-in-staging",
+    "chunk-extraction-partial",
 ]
 """The closed vocabulary for `EXTRACTION_NOTICE_KEY`.
 
@@ -337,7 +338,23 @@ the drop reaches disk. The create-only skip is deliberately NOT one of its
 causes -- the slug this same source already owns is on disk, put there by
 an earlier run, so no content was lost. `lint.check_staging_dropped`
 reads it, under its own section and its own finding kind, again for the
-different-question-different-repair reason above."""
+different-question-different-repair reason above.
+
+The sixth token is #1053's: at least one, but not every, `_chunk_lines`
+window failed extraction -- a `BackendError`-family exception survived one
+retry -- and was skipped, while every OTHER window's candidates were kept.
+Before this token existed a single capped or otherwise-erroring window
+discarded the whole source's extraction, not only that window's share of
+it; this token is the disclosure that the isolation happened and exactly
+where. Unlike the staging-drop token above, this one IS retryable debt
+(`application.ingest.extraction_retry_due` reads it that way): the failure
+is a transient backend condition, not a deterministic property of the
+bytes, so a plain re-ingest genuinely can answer differently. Named
+`chunk-extraction-partial` rather than folded into any sibling because it
+answers yet another different question -- not "was this set quality
+selected" (the judge pair), not "did the stored text quote its source"
+(#801), not "did staging lose a candidate extraction already produced"
+(#843), but "did extraction itself see the whole source"."""
 
 EXTRACTION_NOTICE_VALUES: Final[tuple[ExtractionNotice, ...]] = get_args(
     ExtractionNotice
@@ -432,6 +449,19 @@ after the terminal has scrolled. NOT retryable debt (`objects-without-
 evidence`'s grounds exactly): a plain re-ingest re-runs the same prompt
 over the same bytes and is promised to fix nothing about the sample that
 failed staging, so the named redo is `--re-extract`."""
+
+EXTRACTION_NOTICE_CHUNK_PARTIAL: Final[ExtractionNotice] = "chunk-extraction-partial"
+"""#1053's disclosure token: at least one `_chunk_lines` window's
+extraction call raised a `BackendError`-family exception TWICE (its
+ordinary attempt and its one retry) and was skipped, while every OTHER
+window's candidates were kept
+(`extraction.concept.ExtractionReport.skipped_chunks` names the lost
+window positions). IS retryable debt (`application.ingest.
+extraction_retry_due` reads it, alongside the two judge tokens): the
+failure is a transient backend condition rather than a deterministic
+property of the source's bytes, so a plain re-ingest -- not only
+`--re-extract` -- automatically re-attempts extraction and can genuinely
+recover the lost window this time."""
 
 EXTRACTION_STATUS_FAILED: Final[ExtractionStatus] = "failed"
 """The one `EXTRACTION_STATUS_VALUES` member that represents retryable
