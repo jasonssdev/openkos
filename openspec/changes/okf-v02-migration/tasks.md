@@ -631,7 +631,7 @@ library with no production caller until Phase 6.
 
 ### `migrate_document` — R1 (`generated`) and unquoted-timestamp preservation
 
-- [ ] **4.1** [TEST] `tests/unit/model/test_okf_migrate_document.py` (new
+- [x] **4.1** [TEST] `tests/unit/model/test_okf_migrate_document.py` (new
   file) — add `test_migrate_document_r1_generated_from_scalar_timestamp`: a
   frontmatter block with `timestamp: '2026-07-14T09:00:00Z'` (quoted
   scalar) and no `generated` key migrates to
@@ -639,7 +639,7 @@ library with no production caller until Phase 6.
   `timestamp` removed. Covers okf-format-migration scenario "A v0.1 concept
   is rewritten to v0.2 shape" (the `generated` half). **RED today**:
   `ModuleNotFoundError` — the module does not exist.
-- [ ] **4.2** [TEST] Same file — add
+- [x] **4.2** [TEST] Same file — add
   `test_migrate_document_r1_preserves_unquoted_timestamp_source_text`: a
   frontmatter block with a BARE, UNQUOTED `timestamp: 2026-07-14T09:00:00Z`
   (which PyYAML resolves to a `datetime` on load) migrates so that
@@ -653,13 +653,13 @@ library with no production caller until Phase 6.
   **RED reason after 4.3 lands naively**: `AssertionError` — a naive
   `str(parsed_datetime)` would emit `2026-07-14 09:00:00+00:00`, not the
   original `Z`-suffixed text.
-- [ ] **4.3** [TEST] Same file — add
+- [x] **4.3** [TEST] Same file — add
   `test_migrate_document_r1_noop_and_refusal_cases`, parametrized: `generated`
   present (with or without a leftover `timestamp`, which stays as an unknown
   key) -> no `generated`-related rewrite; neither key present -> no rewrite;
   `timestamp` present as a YAML mapping or list (not a scalar) -> `Refused
   ("timestamp is not a scalar")`. **RED today**: same `ModuleNotFoundError`.
-- [ ] **4.4** [IMPL] `src/openkos/model/okf.py`: add `MigrationChanges`
+- [x] **4.4** [IMPL] `src/openkos/model/okf.py`: add `MigrationChanges`
   (frozen dataclass: `generated: bool, status: bool, sources: bool,
   citations_removed: bool, legacy_citations: bool`), `Unchanged` (frozen
   dataclass: `legacy_citations: bool`), `Migrated` (frozen dataclass: `text:
@@ -674,11 +674,11 @@ library with no production caller until Phase 6.
 
 ### `migrate_document` — R2 (`status`), R3 (`sources`)
 
-- [ ] **4.5** [TEST] Same file — add `test_migrate_document_r2_status_active_to_stable`:
+- [x] **4.5** [TEST] Same file — add `test_migrate_document_r2_status_active_to_stable`:
   `status: active` -> `status: stable` in place; every other value
   (`stable`, `draft`, `deprecated`, an unknown string, absent) is left
   untouched. **RED today**: `AssertionError` — R2 not implemented.
-- [ ] **4.6** [TEST] Same file — add
+- [x] **4.6** [TEST] Same file — add
   `test_migrate_document_r3_sources_set_or_unchanged`: a document whose
   `project_sources(provenance)` differs from its current `sources` (or
   whose `sources` is absent but the projection is non-`None`) gets `sources`
@@ -686,21 +686,21 @@ library with no production caller until Phase 6.
   matches the projection is left byte-unchanged by R3 (though R1/R2/R4 may
   still fire independently). **RED today**: `AssertionError` — R3 not
   implemented.
-- [ ] **4.7** [IMPL] Same module: add R2 (exact-match `active` -> `stable`
+- [x] **4.7** [IMPL] Same module: add R2 (exact-match `active` -> `stable`
   rewrite) and R3 (call `project_sources`/insertion-or-replacement per
   Decision 3's key-placement rule; no-op when already equal) to
   `migrate_document`. Makes 4.5-4.6 GREEN.
 
 ### `migrate_document` — R4 (`# Citations`) and the legacy-citations report
 
-- [ ] **4.8** [TEST] Same file — add
+- [x] **4.8** [TEST] Same file — add
   `test_migrate_document_r4_removes_bare_trailing_citations_heading`: a
   `type: Source` document whose body ends with a bare `# Citations` heading
   (only whitespace after it) has that heading and the blank line before it
   removed, body ending in exactly one `\n`. Covers okf-format-migration
   scenario "A bare empty Citations heading is removed". **RED today**:
   `AssertionError` — R4 not implemented.
-- [ ] **4.9** [TEST] Same file — add
+- [x] **4.9** [TEST] Same file — add
   `test_migrate_document_reports_legacy_citations_without_converting`: a
   document whose `# Citations` section carries non-empty hand-authored
   content anywhere in the body — including a NON-trailing bare heading (per
@@ -709,22 +709,22 @@ library with no production caller until Phase 6.
   (`Migrated.changes.legacy_citations` or `Unchanged.legacy_citations`) is
   `True`. Covers okf-format-migration scenario "A non-empty Citations
   section survives migration". **RED today**: `AssertionError`.
-- [ ] **4.10** [IMPL] Same module: add R4 (type == `"Source"` AND body ends
+- [x] **4.10** [IMPL] Same module: add R4 (type == `"Source"` AND body ends
   in a bare trailing `# Citations` heading -> remove it) and the
   `legacy_citations` detection (any non-empty `# Citations` section, or a
   bare one that is not trailing) to `migrate_document`, threading the flag
   through both `Unchanged` and `Migrated`. Makes 4.8-4.9 GREEN.
-- [ ] **4.11** [TEST] Same file — add
+- [x] **4.11** [TEST] Same file — add
   `test_migrate_document_unparseable_or_missing_frontmatter_refuses`: text
   with no frontmatter block, or a frontmatter block whose YAML fails to
   parse, yields `Refused("unparseable frontmatter")`. **RED today**:
   `AssertionError`.
-- [ ] **4.12** [IMPL] Same module: wire the unparseable-frontmatter refusal
+- [x] **4.12** [IMPL] Same module: wire the unparseable-frontmatter refusal
   as `migrate_document`'s first check, before any rule. Makes 4.11 GREEN.
 
 ### Properties: idempotency, unchanged-returns-identical-bytes, builder-equivalence, commutation
 
-- [ ] **4.13** [TEST] Same file — add
+- [x] **4.13** [TEST] Same file — add
   `test_migrate_document_unchanged_returns_input_bytes_untouched`: when no
   rule fires, `Unchanged`'s implicit text (the caller's own input, since
   `Unchanged` carries no `text` field per the Interfaces/Contracts table —
@@ -734,7 +734,7 @@ library with no production caller until Phase 6.
   re-serialized; detection is exactly "would migration change the bytes".
   **RED today**: `AssertionError` if any rule's no-op branch accidentally
   re-serializes via `dump_frontmatter`.
-- [ ] **4.14** [TEST] Same file — add `test_migrate_document_is_idempotent`,
+- [x] **4.14** [TEST] Same file — add `test_migrate_document_is_idempotent`,
   property-style over every entry of
   `tests/unit/model/fixtures/okf_v01_documents.json` (2.18): for each fixture
   text `x`, migrating twice equals migrating once — `migrate(migrate(x)) ==
@@ -743,7 +743,7 @@ library with no production caller until Phase 6.
   per-document level (the whole-`repair`-run idempotency is Phase 6). **RED
   today**: `AssertionError` if any rule is not stably idempotent (e.g. a
   timestamp re-quoted differently on a second pass).
-- [ ] **4.15** [TEST] Same file — add
+- [x] **4.15** [TEST] Same file — add
   `test_migrate_document_equivalent_to_new_builders`, looping over every
   fixture in `okf_v01_documents.json` alongside the exact builder arguments
   that produced it (fixture format from 2.18 must carry both): asserts
@@ -752,7 +752,7 @@ library with no production caller until Phase 6.
   timestamp>))` for every fixture. **RED today**: `AssertionError` on any
   fixture where migration and the new builder diverge (e.g. key order,
   quoting style).
-- [ ] **4.16** [TEST] Same file — add
+- [x] **4.16** [TEST] Same file — add
   `test_migrate_document_commutes_with_provenance_and_relation_rewrites`:
   for a representative v0.1 document `s`, `migrate_document(apply_provenance_
   rewrites_text(s)) == apply_provenance_rewrites_text(migrate_document(s))`,
@@ -761,23 +761,30 @@ library with no production caller until Phase 6.
   hand-constructed text. Covers design.md's commutation property, load-
   bearing for Phase 5's link-offset math. **RED today**: `AssertionError` if
   key placement/ordering between migration and a rewrite pass disagree.
-- [ ] **4.17** [IMPL] Fix any divergence 4.13-4.16 expose in
+- [x] **4.17** [IMPL] Fix any divergence 4.13-4.16 expose in
   `migrate_document`, `project_sources`, or `dump_frontmatter`'s key-
   ordering behavior until all four properties hold. No new production
   surface — this task closes gaps the property tests found.
 
 ### Phase 4 verification
 
-- [ ] **4.18** Run `uv run ruff check . && uv run ruff format --check . &&
+- [x] **4.18** Run `uv run ruff check . && uv run ruff format --check . &&
   uv run mypy .` — must be green.
-- [ ] **4.19** Run `uv run pytest tests/unit/model/test_okf_migrate_document.py`
+- [x] **4.19** Run `uv run pytest tests/unit/model/test_okf_migrate_document.py`
   focused, then `uv run pytest --cov` (unpiped) full suite — must be green,
   90% branch gate held.
-- [ ] **4.20** Run `uv run python evals/run_self_tests.py` — must be green.
-- [ ] **4.21** Commit as one or more work-unit commits, scope `model` (e.g.
+- [x] **4.20** Run `uv run python evals/run_self_tests.py` — must be green.
+- [x] **4.21** Commit as one or more work-unit commits, scope `model` (e.g.
   `feat(model): add the pure OKF v0.1 to v0.2 document migration function`).
   Open PR 4 (Phase 4: migration function) targeting `main`, branched from
   `main` after PR 3 merges.
+
+  Done as commit `0edb102` (`feat(model): add the pure OKF v0.1 to v0.2
+  document migration function (#1064)`) on
+  `feat/1064-okf-v02-p3a-migrate-document`, stacked on `634b3f6` (Phase
+  3/PR 3, not yet merged to `main`). PR opening is a user/repository-policy
+  decision outside apply's scope; the branch is ready to open as PR 4
+  targeting `main`.
 
 **Rollback boundary**: revert `migrate_document`/`MigrationResult`/
 `MigrationChanges`/`Unchanged`/`Migrated`/`Refused` and the new test file.
