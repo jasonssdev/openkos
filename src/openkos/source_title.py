@@ -1,8 +1,12 @@
 """Derive a Source's `title` from its decoded raw content (issue #248).
 
 `derive_source_title` is PURE and IDEMPOTENT: it depends only on its
-`raw_content` argument -- no clock, no filesystem, no locale, no randomness,
-no `openkos` imports. This is what lets a byte-identical re-ingest of the
+`raw_content` argument -- no clock, no filesystem, no locale, no randomness.
+Its only `openkos` import is the pure `okf.frontmatter_block_end`
+(design.md Decision 10, preserve-source-frontmatter, issue #1062): the
+leading `---` block-boundary rule this module and the incoming-frontmatter
+parser both need, kept as one function so the two consumers cannot disagree
+about where the block ends. This is what lets a byte-identical re-ingest of the
 same raw file produce a byte-identical Source document, including its
 derived `title` (see `tests/unit/cli/test_ingest.py`'s idempotence pin).
 
@@ -51,6 +55,15 @@ for its OUTCOME (a title), not for the ATX-heading mechanism alone.
 
 import re
 from typing import Final
+
+from openkos.model.okf import frontmatter_block_end
+
+_frontmatter_end = frontmatter_block_end
+"""Rebound (not redefined) to `okf.frontmatter_block_end` (design.md
+Decision 10; preserve-source-frontmatter, issue #1062): a plain assignment,
+not an aliased import, so mypy's strict-mode implicit-reexport check does
+not treat this name as private to this module -- `test_source_title.py`
+asserts `source_title._frontmatter_end is okf.frontmatter_block_end`."""
 
 _ATX_H1_RE: Final = re.compile(r"^# (.*)$")
 """Matches an ATX H1 line: a single leading `# ` followed by the heading
@@ -235,26 +248,6 @@ this predicate never actually performs."""
 _TERMINAL_PUNCTUATION: Final = (".", ",", ";", ":")
 """Trailing punctuation that disqualifies a rule-2 plain line: it reads as
 the end of a sentence within a paragraph, not a standalone title."""
-
-
-def _frontmatter_end(lines: list[str]) -> int:
-    """Return the index of the first line AFTER a leading YAML frontmatter
-    block, or `0` if there is none.
-
-    A bounded probe, not a fold into the main walk: it only ever matters for
-    a PREFIX of the document (`lines[0] == "---"`), so giving the main loop
-    a "still in frontmatter" mode flag -- one that can only ever be true at
-    the very start -- would be strictly less readable than this one named
-    call. Skipped as frontmatter ONLY when a closing `---` line exists LATER
-    in the file; otherwise `lines[0]` is ordinary content and this returns
-    `0`, letting the main walk evaluate it like any other line.
-    """
-    if not lines or lines[0] != "---":
-        return 0
-    for index in range(1, len(lines)):
-        if lines[index] == "---":
-            return index + 1
-    return 0
 
 
 def _is_title_plausible(text: str, next_line: str | None) -> bool:

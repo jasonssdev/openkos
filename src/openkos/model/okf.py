@@ -11,10 +11,11 @@ All three §11 rules are implemented here: rules 1-2 walk every non-reserved
 """
 
 import hashlib
+import math
 import os
 import re
 import unicodedata
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from importlib.metadata import PackageNotFoundError
@@ -597,6 +598,209 @@ def load_frontmatter(text: str) -> tuple[dict[str, object], str]:
     """Parse the frontmatter block and body out of `text`, per §4.1."""
     post = frontmatter.loads(text)
     return post.metadata, post.content
+
+
+def frontmatter_block_end(lines: Sequence[str]) -> int:
+    """Return the index of the first line AFTER a leading `---`-delimited
+    block in `lines`, or `0` if there is none (design.md Decision 10;
+    preserve-source-frontmatter, issue #1062).
+
+    Moved verbatim from `source_title._frontmatter_end`, which now imports
+    and rebinds this function rather than defining its own copy -- both
+    `source_title.derive_source_title`'s title-skip boundary and
+    `parse_incoming_frontmatter`'s block extraction MUST agree on where the
+    block ends, and giving them the same function is what makes that
+    structural rather than a maintained invariant.
+
+    A leading `lines[0] == "---"` counts as opening a block ONLY when a
+    later line equal to `"---"` closes it; otherwise `lines[0]` is ordinary
+    content and this returns `0`. FENCE-BLIND by design (matches
+    `python-frontmatter`'s own behavior): a `---` line inside a markdown
+    fenced code block within the scan can close the block early. This is a
+    named, accepted inaccuracy carried over unchanged from
+    `source_title._frontmatter_end`, not a new behavior.
+    """
+    if not lines or lines[0] != "---":
+        return 0
+    for index in range(1, len(lines)):
+        if lines[index] == "---":
+            return index + 1
+    return 0
+
+
+SOURCE_FRONTMATTER_KEY: Final = "source_frontmatter"
+"""The extension key (OKF §4.1) that preserves a Source's own incoming
+frontmatter mapping, whole and unmodified in meaning (design.md Decision 2;
+preserve-source-frontmatter, issue #1062). Populated in Phase 2 -- this
+phase only builds the parser that produces the value it will carry."""
+
+INCOMING_FRONTMATTER_MAX_BYTES: Final = 64 * 1024
+"""The UTF-8 byte-size cap on an incoming frontmatter block's TEXT (the
+content between the fences, not the whole file), checked before any YAML
+parsing runs (design.md Decision 1, check 2)."""
+
+INCOMING_FRONTMATTER_MAX_DEPTH: Final = 32
+"""The nested-collection depth cap enforced during the event pre-scan
+(design.md Decision 1, check 4), counting the root mapping itself as depth
+1: a block whose deepest collection nests 32 levels parses; 33 does not."""
+
+IncomingFrontmatterStatus = Literal[
+    "absent",
+    "empty",
+    "parsed",
+    "too-large",
+    "alias",
+    "too-deep",
+    "malformed",
+    "not-a-mapping",
+    "unsupported-value",
+]
+"""The closed fail-closed vocabulary `parse_incoming_frontmatter` returns
+(design.md Decision 1). Every hostile input resolves to a NAMED reason, not
+a bare `None` -- a function that mapped every failure to the same falsy
+result could not be tested per cause."""
+
+
+@dataclass(frozen=True)
+class IncomingFrontmatter:
+    """The result of `parse_incoming_frontmatter` (design.md Decision 1).
+    `mapping` is not `None` if and only if `status == "parsed"`."""
+
+    status: IncomingFrontmatterStatus
+    mapping: Mapping[str, object] | None
+
+
+def _incoming_frontmatter_block(text: str) -> str | None:
+    """Extract the leading `---`-delimited block's TEXT from `text` using
+    the shared `frontmatter_block_end` boundary rule, or `None` if there is
+    none (design.md Decision 1, check 1)."""
+    lines = text.split("\n")
+    end = frontmatter_block_end(lines)
+    if end == 0:
+        return None
+    return "\n".join(lines[1 : end - 1])
+
+
+def _incoming_frontmatter_prescan(
+    block: str,
+) -> IncomingFrontmatterStatus | None:
+    """One pass over the YAML event stream (design.md Decision 1, checks
+    3-5): reject an actual alias REFERENCE (an `AliasEvent`) -- not a bare,
+    unreferenced anchor definition, which is harmless on its own and must
+    still parse -- reject nesting deeper than
+    `INCOMING_FRONTMATTER_MAX_DEPTH` (root mapping counts as depth 1), and
+    reject more than one `DocumentStartEvent`. That last branch is
+    defensive: given `_incoming_frontmatter_block`'s own boundary rule (any
+    inner line equal to `"---"` closes the block first), a genuine second
+    document inside one already-extracted block is not reachable without
+    PyYAML itself raising first (confirmed during implementation) -- in
+    practice that case is caught by the broad `except Exception` below, not
+    this counter. Kept for design fidelity and as a guard should the
+    boundary rule ever change.
+
+    Returns the failing status, or `None` when the pre-scan finds nothing
+    to reject (the block may still fail a later check). Any exception
+    raised while iterating the event stream -- a genuine syntax error, not
+    one of the three named hazards -- is caught here and mapped to
+    `"malformed"`, matching this module's #942 lesson that `yaml.YAMLError`
+    is not a `ValueError`."""
+    depth = 0
+    max_depth = 0
+    document_starts = 0
+    try:
+        for event in yaml.parse(block, Loader=yaml.SafeLoader):
+            if isinstance(event, yaml.AliasEvent):
+                return "alias"
+            if isinstance(event, yaml.DocumentStartEvent):
+                document_starts += 1
+                if document_starts > 1:
+                    return "malformed"
+            if isinstance(event, (yaml.MappingStartEvent, yaml.SequenceStartEvent)):
+                depth += 1
+                max_depth = max(max_depth, depth)
+                if max_depth > INCOMING_FRONTMATTER_MAX_DEPTH:
+                    return "too-deep"
+            elif isinstance(event, (yaml.MappingEndEvent, yaml.SequenceEndEvent)):
+                depth -= 1
+    except Exception:  # broad: yaml.YAMLError is not a ValueError (#942)
+        return "malformed"
+    return None
+
+
+def parse_incoming_frontmatter(text: str) -> IncomingFrontmatter:
+    """Fail-closed, bounded parse of `text`'s leading incoming frontmatter
+    block (design.md Decision 1's ordered ten-check table;
+    preserve-source-frontmatter, issue #1062).
+
+    YAML only -- there is no TOML/JSON auto-detection, and the block is
+    extracted with the SAME `frontmatter_block_end` rule title derivation
+    uses, never through `load_frontmatter`/`python-frontmatter`'s own
+    handler-detecting boundary. This function NEVER raises: every exception
+    from the two PyYAML calls below is caught and mapped to a status."""
+    block = _incoming_frontmatter_block(text)
+    if block is None:
+        return IncomingFrontmatter(status="absent", mapping=None)
+
+    try:
+        block_byte_length = len(block.encode("utf-8"))
+    except UnicodeEncodeError:
+        # A lone surrogate (decoded leniently upstream) cannot be
+        # re-encoded -- not one of the ten named checks, but this function
+        # must never raise either (task 1.15's regression pin).
+        return IncomingFrontmatter(status="malformed", mapping=None)
+    if block_byte_length > INCOMING_FRONTMATTER_MAX_BYTES:
+        return IncomingFrontmatter(status="too-large", mapping=None)
+
+    prescan_status = _incoming_frontmatter_prescan(block)
+    if prescan_status is not None:
+        return IncomingFrontmatter(status=prescan_status, mapping=None)
+
+    try:
+        loaded = yaml.load(block, Loader=yaml.SafeLoader)
+    except Exception:  # broad: yaml.YAMLError is not a ValueError (#942)
+        return IncomingFrontmatter(status="malformed", mapping=None)
+
+    if loaded is None or loaded == {}:
+        return IncomingFrontmatter(status="empty", mapping=None)
+    if not isinstance(loaded, dict):
+        return IncomingFrontmatter(status="not-a-mapping", mapping=None)
+
+    if not _is_plain_data(loaded):
+        return IncomingFrontmatter(status="unsupported-value", mapping=None)
+
+    try:
+        round_tripped, _ = load_frontmatter(
+            dump_frontmatter({SOURCE_FRONTMATTER_KEY: loaded})
+        )
+        survives_round_trip = round_tripped.get(SOURCE_FRONTMATTER_KEY) == loaded
+    except Exception:  # broad: storage path must never raise here either
+        survives_round_trip = False
+    if not survives_round_trip:
+        return IncomingFrontmatter(status="unsupported-value", mapping=None)
+
+    return IncomingFrontmatter(status="parsed", mapping=loaded)
+
+
+def _is_plain_data(value: object) -> bool:
+    """Recursive plain-data domain check (design.md Decision 2): `str`,
+    `bool`, `int`, a FINITE `float` (`nan`/`inf` are excluded), `None`,
+    `date`, `datetime`, a `list` of domain values, or a `dict` whose keys
+    are all `str` and whose values are domain values. `bool` is checked
+    before `int` only for clarity -- `bool` is an `int` subclass in Python,
+    but every `bool` already satisfies the `int` branch, so the explicit
+    check changes no outcome, it only documents the domain includes
+    booleans by name."""
+    if value is None or isinstance(value, (str, bool, int, date, datetime)):
+        return True
+    if isinstance(value, float):
+        return math.isfinite(value)
+    if isinstance(value, list):
+        return all(_is_plain_data(item) for item in value)
+    if isinstance(value, dict):
+        return all(
+            isinstance(key, str) and _is_plain_data(item) for key, item in value.items()
+        )
+    return False
 
 
 _FRONTMATTER_RE: Final = re.compile(r"\A---\n.*?\n---\n", re.DOTALL)
