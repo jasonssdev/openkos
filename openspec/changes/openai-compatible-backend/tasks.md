@@ -394,57 +394,57 @@ independently revertable); no new client exists yet to be affected.
 
 Design Decision 6. `openai-compatible` stays refused until Phase 14.
 
-- [ ] **3.1** [TEST] `tests/unit/test_config.py` — add
+- [x] **3.1** [TEST] `tests/unit/test_config.py` — add
   `test_config_backend_defaults_to_ollama`: an existing minimal `Config(...)`
   construction has `.backend == "ollama"`. **RED today**: `AttributeError` —
   `Config` has no `backend` field.
-- [ ] **3.2** [IMPL] `src/openkos/config.py`: add `backend: str = "ollama"`,
+- [x] **3.2** [IMPL] `src/openkos/config.py`: add `backend: str = "ollama"`,
   `base_url: str | None = None`, `embedding_base_url: str | None = None`
   fields to `Config`, plus `DEFAULT_BACKEND: Final = "ollama"` and
   `SELECTABLE_BACKENDS: Final = frozenset({"ollama"})` module constants
   (`openai-compatible` added only in Phase 14). Makes 3.1 GREEN; every
   existing `Config(...)` test construction keeps compiling.
-- [ ] **3.3** [TEST] same file — add `test_read_config_backend_key`,
+- [x] **3.3** [TEST] same file — add `test_read_config_backend_key`,
   parametrized: absent key -> `"ollama"`; `backend: ollama` explicit ->
   `"ollama"`; `backend: openai-compatible` -> raises, message states it is
   "not available in this version; supported: ollama"; `backend:
   something-else` -> raises naming the bad value and the accepted set.
   **RED today**: `read_config` doesn't read/validate `backend`.
-- [ ] **3.4** [IMPL] `config.py::read_config`: validate `backend` against
+- [x] **3.4** [IMPL] `config.py::read_config`: validate `backend` against
   `SELECTABLE_BACKENDS`, defaulting absent/`None` to `DEFAULT_BACKEND`;
   raise naming the invalid value and the accepted set, with the
   "not available in this version" wording for `openai-compatible`
   specifically. Makes 3.3 GREEN.
-- [ ] **3.5** [TEST] same file — add `test_read_config_base_url_validation`,
+- [x] **3.5** [TEST] same file — add `test_read_config_base_url_validation`,
   parametrized: `http://127.0.0.1:8080` accepted, trailing `/` stripped;
   `https://` accepted; missing scheme rejected; empty host rejected;
   whitespace rejected; userinfo (`user@`, `user:pw@`) rejected with a
   message naming `OPENKOS_OPENAI_API_KEY`; query string or fragment
   rejected. Same table for `embedding_base_url`. **RED today**: fields not
   validated.
-- [ ] **3.6** [IMPL] `config.py`: add the `base_url`/`embedding_base_url`
+- [x] **3.6** [IMPL] `config.py`: add the `base_url`/`embedding_base_url`
   shape validator (scheme, host, no userinfo, no query/fragment, no
   whitespace, trailing `/` stripped) applied to both keys. Makes 3.5 GREEN.
-- [ ] **3.7** [TEST] same file — add
+- [x] **3.7** [TEST] same file — add
   `test_backend_openai_compatible_without_base_url_message`: a workspace
   setting BOTH `backend: openai-compatible` and no `base_url` currently
   surfaces 3.4's pre-enable refusal (confirm the exact message/ordering
   during implementation — 3.4's "not available" check fires before any
   base_url-required check can). This test is superseded by 14.3 once the
   backend value is accepted for real.
-- [ ] **3.8** [TEST] same file — add
+- [x] **3.8** [TEST] same file — add
   `test_read_config_refuses_api_key_in_yaml`, parametrized over `api_key`,
   `openai_api_key`, `OPENKOS_OPENAI_API_KEY` as top-level `openkos.yaml`
   keys: each raises, message states the key is read only from the
   environment and names `OPENKOS_OPENAI_API_KEY`. **RED today**:
   `read_config` reads by `raw.get` and ignores unknown top-level keys.
-- [ ] **3.9** [IMPL] `config.py`: add the misplaced-API-key refusal for the
+- [x] **3.9** [IMPL] `config.py`: add the misplaced-API-key refusal for the
   three named keys. Makes 3.8 GREEN.
-- [ ] **3.10** [TEST] same file — add
+- [x] **3.10** [TEST] same file — add
   `test_unknown_top_level_keys_still_ignored`: a genuinely unrelated unknown
   top-level key is still silently ignored (rollback-story regression pin).
   **RED only if** 3.9 over-broadened to reject every unknown key.
-- [ ] **3.11** [TEST] same file — add
+- [x] **3.11** [TEST] same file — add
   `test_ollama_default_path_config_is_byte_identical`: a workspace with none
   of the three new keys set produces `.backend/.base_url/.embedding_base_url
   == "ollama"/None/None`, and no other `Config` field's resolution changed
@@ -453,13 +453,17 @@ Design Decision 6. `openai-compatible` stays refused until Phase 14.
 
 ### Phase 3 verification
 
-- [ ] **3.12** Run `uv run ruff check . && uv run ruff format --check . &&
+- [x] **3.12** Run `uv run ruff check . && uv run ruff format --check . &&
   uv run mypy .` — must be green.
-- [ ] **3.13** Run `uv run pytest tests/unit/test_config.py` focused, then
+- [x] **3.13** Run `uv run pytest tests/unit/test_config.py` focused, then
   `uv run pytest --cov` full suite; then `uv run python
   evals/run_self_tests.py`.
 - [ ] **3.14** Commit, scope `config`. Open PR 3 targeting `main`, after PR
   1 merges (independent of PR 2a/2b).
+  Observed: commit half done (scope `config`, on branch `feat/1057-openai-p3`);
+  "Open PR 3" half intentionally left for the orchestrator/maintainer per
+  apply-phase instructions (no push, no PR from this session) — left
+  unticked.
 
 **Rollback boundary**: revert the three `Config` fields,
 `DEFAULT_BACKEND`/`SELECTABLE_BACKENDS`, and every `read_config` validation
