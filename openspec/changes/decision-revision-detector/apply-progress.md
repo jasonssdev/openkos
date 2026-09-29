@@ -41,13 +41,24 @@ isolation, and narrows ADR-0025. `size:exception` was pre-approved by the
 owner (2026-09-29) for this slice because design.md forbids splitting the
 table from its sweep; see "Budget" below for the actual count.
 
-**Phase B, Slice P4 (`P4.1`–`P4.5`, 5/5) complete** — this batch, on
+**Phase B, Slice P4 (`P4.1`–`P4.5`, 5/5) complete** — on
 `feat/1014-phase-b-p4-provenance-many` (checked out off `main` at
 `f44131e`, which already contains P1/P2/P3 via #1055/#1058/#1059). PR 7
 boundary: `provenance_source_ancestors_many` in
 `src/openkos/bundle/provenance.py`, a pure shared-walk refactor with no
 upstream Phase B dependency, well under the review budget (119 authored
 changed lines) — no `size:exception` needed.
+
+**Phase B, Slice P5a (`P5a.1`–`P5a.15`, 15/15) complete** — this batch, on
+`feat/1014-phase-b-p5a-service-load` (checked out off `main` at `617fdba`,
+which already contains P1/P2/P3/P4 via #1055/#1058/#1059/`7d46cd5`). PR 8
+boundary: `src/openkos/application/revisions.py` (new module) —
+`load_decisions`/`Decision`/`DecisionSet` (+ `resolved_with`),
+`resolve_decision_dates`, and `read_decision_vectors`/`VectorCoverage`,
+plus `tests/unit/application/test_revisions_service.py` (new file, 11
+tests). 690 authored changed lines, above the ~300-line forecast for a
+split P5 half — recommend `size:exception`, consistent with every prior
+oversized Phase A/B slice; see "Budget" below for the full accounting.
 
 ---
 
@@ -808,7 +819,7 @@ under both the ~200-line forecast (design.md's Phase B re-plan slice
 table) and the 400-line review budget — no `size:exception` needed for
 this slice.
 
-### Remaining Tasks (Phase B)
+### Remaining Tasks (Phase B, as of the P4 batch)
 
 - Slice P4's 5/5 tasks are complete.
 - Slices P5a through P8b remain, in chain order, each as its own PR, per
@@ -816,3 +827,161 @@ this slice.
   P1 (`document_vectors`, `embedding_tag`), P3 (`revision_findings` module
   exists), and P4 (`provenance_source_ancestors_many`, now available) — all
   three of P5a's stated dependencies are now merged/committed.
+
+---
+
+## Phase B — Slice P5a (PR 8): service — decision loading, dates, vector
+coverage
+
+Branch `feat/1014-phase-b-p5a-service-load`, checked out off `main` @
+`617fdba` (P1/P2/P3/P4 already on `main` via #1055/#1058/#1059/P4's commit
+`7d46cd5`; P4's own `docs(sdd)` progress commit `617fdba` is the branch
+point). Strict TDD throughout. Basis: design.md's "Phase B re-plan
+(2026-09-28)" Decisions B1-B4, and the "Interfaces (Phase B, current)"
+snippet, which fixes `load_decisions`/`read_decision_vectors`'s exact
+signatures verbatim.
+
+### Files changed
+
+| File | Action |
+|---|---|
+| `src/openkos/application/revisions.py` | Created |
+| `tests/unit/application/test_revisions_service.py` | Created |
+
+### TDD Cycle Evidence
+
+| Task(s) | Test file | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|---|---|
+| P5a.1-P5a.4 (`load_decisions`, `Decision`, `DecisionSet`, `resolved_with`) | `test_revisions_service.py` | Unit | N/A (new) | ✅ genuinely observed: the whole implementation file was moved aside (`mv src/openkos/application/revisions.py /tmp/...`), `__pycache__` purged, and the full test file run against the pre-existing `openkos.application` package — `ImportError: cannot import name 'revisions' from 'openkos.application'`, exactly the `ModuleNotFoundError`-family failure tasks.md's P5a.1 predicts | ✅ 11/11 passed (full file, after restoring the implementation) | ✅ deprecated (unconditional)/confidential (flag- and exemption-released)/bad-relations (counted) in one shared-bundle test; `resolved_with` parametrized over all 3 `RESOLUTION_RELATION_TYPES` members, each case also proving an out-of-set `related_to` relation is excluded | ➖ None needed |
+| P5a.5-P5a.6 (`resolve_decision_dates`) | `test_revisions_service.py` | Unit | ✅ (as above) | ✅ (same whole-module RED) | ✅ 11/11 passed | ✅ one shared 7-Decision bundle fixture covering all 4 `DateState` cases, including the 3 `missing` sub-cases (absent `event_date`, malformed `event_date`, a dangling `sources/gone` reference with no file at all) and `dated` reached both directly and through an intermediate `concepts/mid` document | ➖ None needed |
+| P5a.7-P5a.12 (`read_decision_vectors`, `VectorCoverage`) | `test_revisions_service.py` | Unit | ✅ (as above) | ✅ (same whole-module RED) | ✅ 11/11 passed (after two bugs this batch's own tests caught and fixed — see "Issues Found") | ✅ absent-store (+ no-file-created assertion), `sqlite-vec`-unavailable (via a `monkeypatch` on `open_vector_store` after seeding a real non-empty store), model-tag mismatch parametrized over `None`/a differing tag, per-decision missing/stale partition, and the full confidential interaction (excluded -> eligible-but-missing -> eligible-and-paired) | ➖ None needed |
+
+**Note on RED granularity** (same posture as every prior slice in this
+list): genuine whole-module RED was captured for real this batch, not
+merely asserted — before writing any test, the freshly-written
+`revisions.py` was moved out of the tree, `__pycache__` purged, and
+`uv run pytest tests/unit/application/test_revisions_service.py -v` run
+against the resulting import gap. It failed exactly as predicted. The
+implementation was then restored and all 11 tests verified GREEN as a
+whole. Correctness of each behavioral claim is proven by the five required
+mutation-kill runs below, PLUS two real bugs this batch's own test-writing
+caught before any mutation was needed (see "Issues Found").
+
+### Mutation-Kill Verification (mandatory per apply instructions)
+
+Each mutation was applied, verified to make the targeted test(s) FAIL,
+`__pycache__` purged (`find . -name __pycache__ -prune -exec rm -rf {} +`),
+then reverted with the exact inverse edit (never `git checkout --`), and
+the full `test_revisions_service.py` file re-verified GREEN (11/11) before
+moving to the next mutation.
+
+| # | Mutation | File / line | Test(s) that must fail | Result |
+|---|---|---|---|---|
+| 1 | The deprecated/confidential exclusion's `or` weakened to `and` (`if concept_id in deprecated and concept_id in confidential:`) | `revisions.py`, `load_decisions` | `test_load_decisions_excludes_deprecated_confidential_and_bad_relations` | ✅ FAILED as expected: the deprecated-only and confidential-only Decisions were both wrongly admitted (`assert default.decisions == ()` failed, showing both survivors). Reverted. |
+| 2 | `resolved_with`'s relation-type filter inverted (`if relation.type in RESOLUTION_RELATION_TYPES` → `not in`) | `revisions.py`, `load_decisions` | `test_load_decisions_builds_resolved_with_from_relation_frontmatter` (all 3 parametrized cases) | ✅ FAILED as expected (3 of 3): `resolved_with` held the OUT-of-set target (`decisions/c`) instead of the in-set one (`decisions/b`) in every case. Reverted. |
+| 3 | The `event_date` validity check dropped in `_resolve_one_decision_date` (a `None`/malformed value silently skipped instead of forcing `"missing"`) | `revisions.py`, `_resolve_one_decision_date` | `test_resolve_decision_dates_covers_the_date_state_table` | ✅ FAILED as expected: `ValueError: not enough values to unpack (expected 1, got 0)` — with every reached Source's date silently dropped, the `missing-absent`/`missing-malformed`/`missing-dangling` cases fell through to the final `(only,) = values` unpack with an EMPTY set, crashing rather than misclassifying — an even stronger kill than a wrong state. Reverted. |
+| 4 | The content-hash freshness compare inverted (`!=` → `==`) | `revisions.py`, `read_decision_vectors` | `test_read_decision_vectors_per_decision_missing_and_stale` | ✅ FAILED as expected: `coverage.vectors` held `decisions/stale` (whose hash does NOT match) instead of `decisions/fresh` (whose hash DOES) — exactly the mutation tasks.md's own P5a.10 names ("Kills `==` swapped to `!=`"). Reverted. |
+| 5 | The `vector_store_is_empty` probe reordered to run AFTER `open_vector_store` | `revisions.py`, `read_decision_vectors` | `test_read_decision_vectors_store_absent_yields_absent_and_creates_no_vectors_db` | ✅ FAILED as expected: `assert not layout.vectors_db_path.exists()` failed — `open_vector_store` had already lazily created `.openkos/vectors.db` before the emptiness check ran, exactly the ordering defect tasks.md's own P5a.7 names. Reverted. |
+
+All five mutations killed. `find . -name __pycache__ -prune -exec rm -rf
+{} +` was run before every GREEN/RED verdict, and every revert used the
+exact inverse edit — never `git checkout --`.
+
+### Issues Found (caught by this batch's own tests, before any mutation)
+
+Two real bugs surfaced while getting the freshly-written test file GREEN
+for the first time — both are reported here as TDD evidence, not swept
+into the mutation table, because no deliberate mutation was needed to find
+them:
+
+1. **A single shared `_EMPTY_COVERAGE` singleton was returned for BOTH the
+   "store absent" and the "model-tag mismatch" degrade branches.**
+   `test_read_decision_vectors_model_tag_mismatch_or_missing_yields_model_mismatch`
+   failed with `assert 'absent' == 'model-mismatch'` on first run against
+   the real implementation. Fixed by splitting it into
+   `_ABSENT_COVERAGE`/`_MODEL_MISMATCH_COVERAGE`, one literal `VectorCoverage`
+   per distinct `store` value.
+2. **A test-writing mistake, not a production bug, but worth recording**:
+   the confidential-interaction test's `_write_doc` helper defaulted
+   `sensitivity` to `None` (no frontmatter field at all), and
+   `sensitivity.sensitive_concept_ids`/`blocks_llm_send` fail CLOSED on an
+   ABSENT `sensitivity` field — treating it as the most restrictive level,
+   per `sensitivity.py`'s own documented contract. Every test fixture
+   Decision was therefore silently excluded as "confidential" by default.
+   Fixed by defaulting the test helper's `sensitivity` parameter to
+   `"private"` instead of `None`. Recorded because it is exactly the kind
+   of fixture gotcha a future test file in this codebase will hit again.
+
+### Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `uv run pytest tests/unit/application/test_revisions_service.py -v` → **11 passed**; `uv run pytest tests/unit/application/test_revisions_service.py -k "load_decisions or resolve_decision_dates or read_decision_vectors"` (the exact P5a.14 filter) → **11 passed** (every test in the file matches the filter) |
+| Runtime harness command/scenario and exact result | N/A — a service-layer read seam with no CLI wiring yet (tasks.md's own Slice P5a row in "Suggested Work Units (Phase B)": "N/A — service functions, no verb yet"); the first runtime consumer is Slice P7b's `openkos revisions` verb, not yet implemented |
+| Rollback boundary | Revert `src/openkos/application/revisions.py` and `tests/unit/application/test_revisions_service.py` in full — this is the module's FIRST commit, so no unrelated prior work is touched. `git revert 769843f` cleanly isolates this; no other module imports `openkos.application.revisions` yet |
+
+### Full Verification (this work unit)
+
+| Command | Result |
+|---|---|
+| `uv run ruff check .` | All checks passed! |
+| `uv run ruff format --check .` | Failed once (`test_revisions_service.py` needed reformatting) → ran `uv run ruff format tests/unit/application/test_revisions_service.py` → re-verified `--check .`: **353 files already formatted** |
+| `uv run mypy .` | Success: no issues found in 353 source files |
+| `uv run pytest --cov` (full, unpiped) | **6845 passed, 2 skipped** in 415.85s, exit 0 (up from Slice P4's 6834 baseline + this slice's 11 new tests); coverage 97.05%, gate 90% reached |
+| `uv run python evals/run_self_tests.py` (`OLLAMA_HOST` poisoned) | **43 of 43 harness self-test(s) run, 0 failing** |
+
+### Commit
+
+`769843f` — `feat(revisions): add the revisions service's decision
+loading, date resolution, and vector coverage (#1014)`. 2 files changed,
+690 insertions(+). Staged explicitly by path
+(`src/openkos/application/revisions.py`,
+`tests/unit/application/test_revisions_service.py`) — `openspec/` was left
+uncommitted in the working tree until this section's own final
+`docs(sdd)` commit, same posture as every prior Phase B slice. Not pushed.
+No PR opened. Branched from `main` @ `617fdba` on
+`feat/1014-phase-b-p5a-service-load`.
+
+**Scope note**: tasks.md's own P5a.15 text asked to confirm the closest
+existing scope before finalizing, suggesting `feat(cli)` as one example but
+flagging it as unconfirmed. `git log --oneline -- src/openkos/application/*.py`
+shows every prior brand-NEW `application/` module (not an extraction of
+existing `cli.main` code) was scoped after its OWN domain name at its very
+first commit — `application/lifecycle.py`'s first commit was
+`feat(lifecycle): seed the application service with ConfirmationRequest
+and the merge core (#946)`, not `feat(cli)` or `feat(application)`. This is
+the closer precedent than the `cli`-scoped commits (which are all
+EXTRACTIONS of a pre-existing verb's read core, e.g. `list`/`status`/
+`doctor`), because the `revisions` verb does not exist yet (it ships in
+P7b) — there is no pre-existing CLI behavior to extract from. Used scope
+`revisions`, matching the `lifecycle` precedent, and recorded the reasoning
+here per the correction posture every prior Phase B slice has followed.
+
+**Budget**: 690 authored changed lines (`git diff --shortstat 617fdba..HEAD`
+= 690 insertions, 0 deletions, across the 2 new files), above both the
+~300-line forecast for a split P5 half (design.md's Phase B re-plan slice
+table) and the 400-line review budget. Consistent with every Phase A slice
+and Slice P3's own recorded pattern, the overage is dense docstrings
+matching this repo's established convention (every new public symbol
+carries a design.md-cross-referenced docstring) plus the fixture-heavy
+tests the design's own testing table (P5 row) names — the 7-Decision
+date-state fixture and the 5 distinct `read_decision_vectors` scenarios,
+each needing a real on-disk `.openkos/vectors.db` built through
+`vectorstore.open_vector_store`/`upsert`/`write_model_tag` rather than a
+hand-rolled fake, per this file's own module docstring reasoning ("a fake
+risks drifting from it"). No test, docstring, or blank line was shortened
+to chase the 400-line number, per the work-unit-commits skill's "budget is
+not code-golf" rule. This is already the smallest cohesive unit the design
+assigns (P5's own planning half, already split from P5b's serving half) —
+recommend `size:exception` for this slice, consistent with every prior
+oversized Phase A/B slice's recommendation.
+
+### Remaining Tasks (Phase B, as of the P5a batch)
+
+- Slice P5a's 15/15 tasks are complete.
+- Slices P5b through P8b remain, in chain order, each as its own PR, per
+  tasks.md's "Phase B: tasks (2026-09-28 re-plan)" section. P5b depends on
+  P5a (`load_decisions`, `resolve_decision_dates`, `read_decision_vectors`,
+  all now available), P3 (`state.revision_findings.open_revision_findings`,
+  already merged), and Phase A's `plan_revision_candidates`/
+  `revision_truncation_notice` leaf (already shipped).
