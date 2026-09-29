@@ -48,7 +48,7 @@ class ConceptRecord:
     type: str | None
     title: str
     description: str
-    status: Literal["active", "deprecated"]
+    status: Literal["stable", "deprecated"]
     body: str
     relations: tuple[okf.Relation, ...]
     provenance: tuple[str, ...]
@@ -116,8 +116,8 @@ def read_concept(
 
     raw_type = metadata.get("type")
     deprecated = lifecycle.deprecated_concept_ids(layout.bundle_dir)
-    status: Literal["active", "deprecated"] = (
-        "deprecated" if canonical_id in deprecated else "active"
+    status: Literal["stable", "deprecated"] = (
+        "deprecated" if canonical_id in deprecated else "stable"
     )
 
     return ConceptRecord(

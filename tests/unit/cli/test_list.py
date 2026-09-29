@@ -366,7 +366,7 @@ def test_list_column_layout_is_id_type_sensitivity_status_title_in_order(
     assert header.index("STATUS") < header.index("TITLE")
     row_line = next(line for line in lines if line.startswith("people/jane"))
     assert "public" in row_line
-    assert "active" in row_line
+    assert "stable" in row_line
     assert "Jane Doe" in row_line
 
 

@@ -8,6 +8,7 @@ command and its own tests are PR2.
 
 from collections.abc import Iterator
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -247,6 +248,39 @@ def test_own_status_deprecated_marks_row_deprecated(tmp_path: Path) -> None:
     assert rows[0].status == "deprecated"
 
 
+def test_bundle_object_status_reads_through_declares_deprecated(
+    tmp_path: Path,
+) -> None:
+    """`list_objects`'s own-status derivation resolves through
+    `okf.declares_deprecated` -- a spy pin (same pattern as
+    `tests/unit/test_lifecycle.py`'s) so a future inline reimplementation of
+    the `status == "deprecated"` comparison is caught."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "a.md", status="deprecated")
+
+    with patch(
+        "openkos.bundle.listing.okf.declares_deprecated",
+        wraps=okf.declares_deprecated,
+    ) as spy:
+        rows = listing.list_objects(bundle_dir)
+
+    assert rows[0].status == "deprecated"
+    spy.assert_called_once()
+
+
+def test_bundle_object_status_reports_stable_not_active(tmp_path: Path) -> None:
+    """A live (non-deprecated) concept's `BundleObject.status` reads
+    `"stable"`, never `"active"` (status-aware-retrieval: "A revises edge
+    deprecates neither end, in retrieval or in list STATUS" -- the `stable`
+    half; okf-v02-migration design.md Decision 7)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "a.md", status="active")
+
+    rows = listing.list_objects(bundle_dir)
+
+    assert rows[0].status == "stable"
+
+
 def test_superseded_target_marked_deprecated_regardless_of_own_status(
     tmp_path: Path,
 ) -> None:
@@ -260,11 +294,11 @@ def test_superseded_target_marked_deprecated_regardless_of_own_status(
 
     rows = {row.concept_id: row for row in listing.list_objects(bundle_dir)}
 
-    assert rows["concepts/a"].status == "active"
+    assert rows["concepts/a"].status == "stable"
     assert rows["concepts/b"].status == "deprecated"
 
 
-def test_self_superseding_edge_is_dropped_and_stays_active(tmp_path: Path) -> None:
+def test_self_superseding_edge_is_dropped_and_stays_stable(tmp_path: Path) -> None:
     bundle_dir = tmp_path / "bundle"
     _write_doc(
         bundle_dir / "concepts" / "a.md",
@@ -274,7 +308,7 @@ def test_self_superseding_edge_is_dropped_and_stays_active(tmp_path: Path) -> No
 
     rows = listing.list_objects(bundle_dir)
 
-    assert rows[0].status == "active"
+    assert rows[0].status == "stable"
 
 
 def test_supersedes_cycle_marks_all_members_deprecated(tmp_path: Path) -> None:
@@ -295,9 +329,9 @@ def test_supersedes_cycle_marks_all_members_deprecated(tmp_path: Path) -> None:
     assert {row.status for row in rows} == {"deprecated"}
 
 
-def test_revises_edge_leaves_both_rows_active(tmp_path: Path) -> None:
+def test_revises_edge_leaves_both_rows_stable(tmp_path: Path) -> None:
     """A `revises` edge (revises-relation change) leaves both rows
-    `"active"`: this predicate special-cases only the literal string
+    `"stable"`: this predicate special-cases only the literal string
     `"supersedes"` and is deliberately NOT modified by that change
     (status-aware-retrieval spec: "A revises edge deprecates neither end, in
     retrieval or in list STATUS")."""
@@ -311,8 +345,8 @@ def test_revises_edge_leaves_both_rows_active(tmp_path: Path) -> None:
 
     rows = {row.concept_id: row for row in listing.list_objects(bundle_dir)}
 
-    assert rows["concepts/a"].status == "active"
-    assert rows["concepts/b"].status == "active"
+    assert rows["concepts/a"].status == "stable"
+    assert rows["concepts/b"].status == "stable"
 
 
 def test_malformed_relations_contributes_no_edges_and_does_not_crash(
@@ -328,7 +362,7 @@ def test_malformed_relations_contributes_no_edges_and_does_not_crash(
 
     rows = {row.concept_id: row for row in listing.list_objects(bundle_dir)}
 
-    assert rows["concepts/broken"].status == "active"
+    assert rows["concepts/broken"].status == "stable"
     assert rows["concepts/fine"].status == "deprecated"
 
 

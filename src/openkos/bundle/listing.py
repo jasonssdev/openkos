@@ -56,7 +56,9 @@ class BundleObject:
     """`"deprecated"` when the document's own `status` field says so, or
     when its id is the target of any other document's `supersedes` edge
     (design D4, replicating `lifecycle`'s pinned R2 fail-safe rule, no
-    cycle-detection exemption); `"active"` otherwise."""
+    cycle-detection exemption); `"stable"` otherwise (okf-v02-migration
+    design.md Decision 7: the computed display vocabulary is
+    `stable | deprecated`)."""
 
     readable: bool
     """`False` when the underlying `DocScan` carried a `read_error` or
@@ -81,7 +83,7 @@ def list_objects(bundle_dir: Path) -> list[BundleObject]:
     and dropped -- no crash, no edges for that document) are collected
     while walking; a row's final `status` is `"deprecated"` when its own
     frontmatter `status` was `"deprecated"` OR its id is the target of any
-    non-self `supersedes` edge, else `"active"`. This intentionally
+    non-self `supersedes` edge, else `"stable"`. This intentionally
     replicates `lifecycle.deprecated_concept_ids`'s R2 fail-safe rule
     verbatim, including its no-cycle-detection exemption, rather than
     calling it -- calling it would be a second bundle walk.
@@ -110,7 +112,7 @@ def list_objects(bundle_dir: Path) -> list[BundleObject]:
                 link_dir=link_dir,
                 title="",
                 sensitivity="unknown",
-                status="active",  # placeholder, resolved after the loop
+                status="stable",  # placeholder, resolved after the loop
                 readable=False,
             )
             continue
@@ -125,13 +127,13 @@ def list_objects(bundle_dir: Path) -> list[BundleObject]:
             raw_sensitivity if raw_sensitivity in okf.SENSITIVITY_ORDER else "unknown"
         )
 
-        own_status[concept_id] = str(meta.get("status") or "")
+        own_status[concept_id] = "deprecated" if okf.declares_deprecated(meta) else ""
         rows_without_status[concept_id] = BundleObject(
             concept_id=concept_id,
             link_dir=link_dir,
             title=title,
             sensitivity=sensitivity,
-            status="active",  # placeholder, resolved after the loop
+            status="stable",  # placeholder, resolved after the loop
             readable=True,
         )
 
@@ -160,7 +162,7 @@ def list_objects(bundle_dir: Path) -> list[BundleObject]:
                     "deprecated"
                     if own_status.get(concept_id) == "deprecated"
                     or concept_id in superseded
-                    else "active"
+                    else "stable"
                 ),
             )
             for concept_id, row in rows_without_status.items()

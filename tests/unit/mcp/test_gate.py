@@ -53,7 +53,7 @@ def _record(
         type="Concept",
         title="Target",
         description="",
-        status="active",
+        status="stable",
         body="Body text.",
         relations=relations,
         provenance=provenance,
@@ -191,6 +191,24 @@ def test_disclose_get_table_disclosable_record() -> None:
             "sensitivity": "private",
         }
     ]
+
+
+def test_mcp_concept_payload_status_is_stable_not_active() -> None:
+    """The MCP concept payload's `status` field reads `"stable"` for a live
+    concept (okf-v02-migration design.md Decision 7): `disclose_get` reads
+    `record.status` verbatim, so the payload carries whatever
+    `ConceptRecord.status` carries -- no local duplication of the display
+    vocabulary."""
+    raw = gate.GetRaw(
+        target_id="concepts/target",
+        record=_record(sensitivity="public"),
+        sources=_sources(),
+    )
+
+    result = gate.disclose_get(raw, _snapshot(frozenset({"concepts/target"})))
+
+    concept = _concept(result)
+    assert concept["status"] == "stable"
 
 
 # ---------------------------------------------------------------------------

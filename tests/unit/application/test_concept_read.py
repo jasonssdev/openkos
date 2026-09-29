@@ -80,9 +80,32 @@ def test_read_concept_curated_fields_only(tmp_path: Path) -> None:
     assert record.description == "A one-line summary."
     assert record.type == "Concept"
     assert record.sensitivity == "public"
-    assert record.status == "active"
+    assert record.status == "stable"
     assert "concepts/hidden-secret" in record.body
     assert record.not_run == ()
+
+
+def test_concept_record_status_is_stable_not_active(tmp_path: Path) -> None:
+    """A live (non-deprecated) concept's `ConceptRecord.status` reads
+    `"stable"`, never `"active"` (okf-v02-migration design.md Decision 7,
+    same display-vocabulary switch as `bundle/listing.py`)."""
+    layout = _workspace(tmp_path)
+    _write_doc(
+        layout.bundle_dir / "concepts" / "pub.md",
+        frontmatter_lines=[
+            "type: Concept",
+            "title: Public Note",
+            "description: A one-line summary.",
+            "sensitivity: public",
+            "status: active",
+        ],
+        body="Body text.\n",
+    )
+
+    record = concept_read.read_concept(layout, "concepts/pub")
+
+    assert isinstance(record, concept_read.ConceptRecord)
+    assert record.status == "stable"
 
 
 # ---------------------------------------------------------------------------

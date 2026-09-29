@@ -69,7 +69,7 @@ def deprecated_concept_ids(bundle_dir: Path) -> frozenset[str]:
             continue
         cid = okf.concept_id_for(scan.path, bundle_dir)
         meta = scan.metadata or {}
-        status_by_id[cid] = str(meta.get("status") or "")
+        status_by_id[cid] = "deprecated" if okf.declares_deprecated(meta) else ""
         try:
             relations = okf.decode_relations(meta)
         except ValueError:
