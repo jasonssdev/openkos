@@ -790,6 +790,24 @@ def _read_source_frontmatter(
     return stored if isinstance(stored, Mapping) else None
 
 
+def _read_source_tags(source_display_path: str, text: str) -> tuple[str, ...]:
+    """Raw `tags` from an EXISTING Source concept, normalized through the
+    SAME `okf.normalize_tags` the incoming lift uses (design.md Decision 3;
+    preserve-source-frontmatter, issue #1062) -- mirrors
+    `_read_source_sensitivity`'s shape exactly, for `tags`. A hand-written
+    on-disk value outside `normalize_tags`'s accepted shape reads as no
+    tags, which is still strictly better than today, where a full re-ingest
+    always wrote `tags: []` and discarded whatever was there."""
+    try:
+        metadata, _ = okf.load_frontmatter(text)
+    except Exception as exc:
+        raise ValueError(
+            f"refusing to ingest -- '{source_display_path}' frontmatter "
+            f"could not be parsed to resolve its existing tags: {exc}"
+        ) from exc
+    return okf.normalize_tags(metadata.get("tags"))
+
+
 EventDateOrigin = Literal["flag", "file name", "kept"]
 """Where a resolved `event_date` value came from (design.md Decision 4) --
 `None` iff `EventDateResolution.value` is `None` (no evidence). `"kept"`
@@ -949,6 +967,37 @@ class SourceDocumentPlan:
     requires this to be `False` (task 2.13), generalizing the date-only
     rewrite into a Source-only rewrite."""
 
+    tags: tuple[str, ...] = ()
+    """This run's FULL resolved tag list (design.md Decision 3;
+    preserve-source-frontmatter, issue #1062): the on-disk Source's own
+    tags, unioned with any tags lifted from this run's incoming frontmatter
+    (`okf.union_tags`), or exactly the lifted tags on a fresh ingest with no
+    prior Source to union against. Carried so Phase 5's derived-object
+    propagation and `compose_catalog_update`'s conditional rebuild (which
+    otherwise hard-codes `tags=[]`) both reach the SAME resolved list."""
+
+    frontmatter_changed: bool = False
+    """Whether THIS run's `source_frontmatter` delta (design.md Decision 7's
+    table, first row) is the SPECIFIC delta that fired -- exposed
+    separately from the OR'd `lift_changed` so the CLI's `source frontmatter
+    recorded` preview line prints only when this exact delta fired, never
+    merely because SOME delta fired (preserve-source-frontmatter, issue
+    #1062, task 3.18)."""
+
+    tags_added: tuple[str, ...] = ()
+    """The tags THIS run's union added beyond what was already on disk, in
+    lift order -- empty when the tags delta did not fire. Exposed so the
+    CLI's `tags added: {a}, {b}` preview line can name exactly what changed
+    without re-deriving the set difference itself."""
+
+    sensitivity_changed: bool = False
+    """Whether THIS run's sensitivity delta (design.md Decision 7's table,
+    third row) is the SPECIFIC delta that fired -- `True` only when an
+    incoming lift was present AND it actually raised the resolved value
+    above the pre-lift fold, never merely because
+    `cfg.default_sensitivity` changed on its own. Gates the CLI's
+    `set-sensitivity` stderr advisory."""
+
 
 def compose_source_document(
     *,
@@ -1029,7 +1078,7 @@ def compose_source_document(
         on_disk_sensitivity = _read_source_sensitivity(
             source_document_display_path, concept_text
         )
-        resolved_sensitivity = okf.combine_sensitivity(
+        pre_lift_resolved_sensitivity = okf.combine_sensitivity(
             on_disk_sensitivity, cfg.default_sensitivity
         )
         on_disk_title = _read_source_title(source_document_display_path, concept_text)
@@ -1039,12 +1088,14 @@ def compose_source_document(
         stored_source_frontmatter = _read_source_frontmatter(
             source_document_display_path, concept_text
         )
+        stored_tags = _read_source_tags(source_document_display_path, concept_text)
     else:
         on_disk_sensitivity = None
-        resolved_sensitivity = cfg.default_sensitivity
+        pre_lift_resolved_sensitivity = cfg.default_sensitivity
         on_disk_title = None
         stored_event_date = None
         stored_source_frontmatter = None
+        stored_tags = ()
 
     inferred_event_date = (
         source_date.event_date_from_name(source_name)
@@ -1075,17 +1126,44 @@ def compose_source_document(
         if incoming_frontmatter is not None and incoming_frontmatter.status == "parsed"
         else None
     )
-    # design.md Decision 7 (this slice's one delta): a frontmatter-free
-    # source whose Source has no key compares `None == None` -> `False`,
-    # matching the "never fires for" column -- the general OR of the tags/
-    # sensitivity deltas lands in Phase 3.
-    lift_changed = stored_source_frontmatter != source_frontmatter
+    # preserve-source-frontmatter (issue #1062), design.md Decision 3: fold
+    # the closed allow-list of lift candidates onto the pre-lift resolved
+    # state. `lift.sensitivity_present` is `False` for both an absent key
+    # and an explicit YAML `null` -- `None` must never reach
+    # `combine_sensitivity` as a real value, or a `public` workspace would
+    # be wrongly floored to `private` (`_rank(None)`). Tags always go
+    # through `union_tags`: on a fresh ingest `stored_tags` is `()`, so the
+    # union is exactly the lifted tags, deduplicated and order-preserving.
+    lift = okf.lift_incoming_frontmatter(source_frontmatter)
+    tags = okf.union_tags(stored_tags, lift.tags)
+    resolved_sensitivity = (
+        okf.combine_sensitivity(pre_lift_resolved_sensitivity, lift.sensitivity)
+        if lift.sensitivity_present
+        else pre_lift_resolved_sensitivity
+    )
+
+    # design.md Decision 7: the OR of three deltas, each attributable to
+    # the lift alone. Frontmatter: a frontmatter-free source whose Source
+    # has no key compares `None == None` -> `False`, matching the "never
+    # fires for" column. Tags: some lifted tag is not already in the
+    # on-disk tags. Sensitivity: the lift is present AND it actually raised
+    # the resolved value above the pre-lift fold -- a `default_sensitivity`
+    # config change on its own never sets this, since it is already folded
+    # into BOTH `pre_lift_resolved_sensitivity` and (when the lift is
+    # absent) `resolved_sensitivity` identically.
+    frontmatter_changed = stored_source_frontmatter != source_frontmatter
+    tags_added = tuple(tag for tag in lift.tags if tag not in stored_tags)
+    sensitivity_changed = (
+        lift.sensitivity_present
+        and resolved_sensitivity != pre_lift_resolved_sensitivity
+    )
+    lift_changed = frontmatter_changed or bool(tags_added) or sensitivity_changed
 
     content = okf.build_source_concept(
         title=title,
         description=description,
         resource=resource,
-        tags=[],
+        tags=tags,
         generated=okf.Generated(by=okf.engine_actor(), at=timestamp),
         sensitivity=resolved_sensitivity,
         provenance=[resource],
@@ -1112,6 +1190,10 @@ def compose_source_document(
         event_date=event_date_resolution,
         source_frontmatter=source_frontmatter,
         lift_changed=lift_changed,
+        tags=tuple(tags),
+        frontmatter_changed=frontmatter_changed,
+        tags_added=tags_added,
+        sensitivity_changed=sensitivity_changed,
     )
 
 
@@ -1173,7 +1255,7 @@ def compose_catalog_update(
             title=source.title,
             description=source.description,
             resource=resource,
-            tags=[],
+            tags=list(source.tags),
             generated=okf.Generated(by=okf.engine_actor(), at=timestamp),
             sensitivity=source.resolved_sensitivity,
             provenance=[resource],

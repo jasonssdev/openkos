@@ -1209,6 +1209,112 @@ def test_compose_catalog_update_second_build_carries_source_frontmatter() -> Non
     assert rebuilt_metadata.get(okf.SOURCE_FRONTMATTER_KEY) == {"author": "Jane"}
 
 
+# -- Phase 3 (preserve-source-frontmatter, issue #1062): tag lift and
+# sensitivity fold (design.md Decision 3, Decision 7) --
+
+
+def test_compose_source_document_fresh_ingest_tags_are_exactly_lifted() -> None:
+    """ingestion: "No incoming tags key leaves the Source's tags unaffected"
+    (fresh half) and "A YAML list of tag strings lifts each tag". Task 3.6.
+    **RED today**: no tag lift is wired yet -- `plan.tags` does not exist."""
+    plan = _source_plan(
+        raw_content="---\ntags: [alpha, beta]\n---\nSome raw notes.",
+        concept_text=None,
+    )
+    assert plan.tags == ("alpha", "beta")
+
+    plan_no_tags = _source_plan(
+        raw_content="Some raw notes about self-control.", concept_text=None
+    )
+    assert plan_no_tags.tags == ()
+
+
+def test_compose_source_document_reingest_tags_are_union() -> None:
+    """ingestion: "Re-ingest unions lifted tags with on-disk tags". Task
+    3.7."""
+    prior = _prior_concept_text(tags=["alpha"])
+    plan = _source_plan(
+        raw_content="---\ntags: [beta]\n---\nSome raw notes.",
+        concept_text=prior,
+    )
+    assert plan.tags == ("alpha", "beta")
+
+
+def test_compose_source_document_hand_added_tag_survives_reingest() -> None:
+    """ingestion: "A hand-added tag survives re-ingest even when the
+    incoming file's tags changed". Task 3.8."""
+    prior = _prior_concept_text(tags=["alpha", "hand-added"])
+    plan = _source_plan(
+        raw_content="---\ntags: [beta]\n---\nSome raw notes.",
+        concept_text=prior,
+    )
+    assert plan.tags == ("alpha", "hand-added", "beta")
+
+
+class TestSensitivityFoldRaiseOnly:
+    """Task 3.9: `test_compose_source_document_sensitivity_fold_raise_only`,
+    covering design.md Decision 3's fold order -- an incoming sensitivity
+    only ever RAISES the resolved value, never lowers it."""
+
+    def test_incoming_sensitivity_raises_above_on_disk_and_config(self) -> None:
+        prior = _prior_concept_text(sensitivity="private")
+        plan = _source_plan(
+            raw_content="---\nsensitivity: confidential\n---\nSome raw notes.",
+            concept_text=prior,
+            cfg=_default_cfg(default_sensitivity="private"),
+        )
+        assert plan.resolved_sensitivity == "confidential"
+
+    def test_lower_incoming_sensitivity_never_lowers_the_resolved_value(self) -> None:
+        prior = _prior_concept_text(sensitivity="confidential")
+        plan = _source_plan(
+            raw_content="---\nsensitivity: public\n---\nSome raw notes.",
+            concept_text=prior,
+            cfg=_default_cfg(default_sensitivity="private"),
+        )
+        assert plan.resolved_sensitivity == "confidential"
+
+    def test_absent_incoming_sensitivity_is_byte_identical_to_pre_phase_3_fold(
+        self,
+    ) -> None:
+        """PRECONDITION-style byte-identity: compute the pre-lift fold
+        directly (on-disk + config only, no incoming frontmatter at all),
+        and confirm a run with an incoming frontmatter block that carries NO
+        `sensitivity` key resolves to the exact same value."""
+        prior = _prior_concept_text(sensitivity="private")
+        baseline_plan = _source_plan(
+            raw_content="Some raw notes about self-control.",
+            concept_text=prior,
+            cfg=_default_cfg(default_sensitivity="confidential"),
+        )
+        plan = _source_plan(
+            raw_content="---\nauthor: Jane\n---\nSome raw notes.",
+            concept_text=prior,
+            cfg=_default_cfg(default_sensitivity="confidential"),
+        )
+        assert plan.resolved_sensitivity == baseline_plan.resolved_sensitivity
+
+    def test_explicit_null_incoming_sensitivity_is_also_byte_identical(self) -> None:
+        """The null-vs-absent rule (design.md Decision 3): an explicit YAML
+        `null` must not be folded as `None`, which would wrongly floor a
+        `public` workspace to `private` (`_rank(None)`) -- the MUTATION this
+        task targets."""
+        prior = _prior_concept_text(sensitivity="public")
+        baseline_plan = _source_plan(
+            raw_content="Some raw notes about self-control.",
+            concept_text=prior,
+            cfg=_default_cfg(default_sensitivity="public"),
+        )
+        plan = _source_plan(
+            raw_content="---\nsensitivity: null\n---\nSome raw notes.",
+            concept_text=prior,
+            cfg=_default_cfg(default_sensitivity="public"),
+        )
+        assert (
+            plan.resolved_sensitivity == baseline_plan.resolved_sensitivity == "public"
+        )
+
+
 # -- Slice 2 (issue #1014c / ADR-0023): `resolve_event_date`, stored
 # read-back, `compose_source_document`/`compose_catalog_update` threading,
 # and the carried-marker short-circuit (design.md Decisions 4, 3, 6) --

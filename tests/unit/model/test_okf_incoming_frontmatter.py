@@ -315,3 +315,157 @@ class TestParseNeverRaises:
         result = okf.parse_incoming_frontmatter(text)
 
         assert result.status in get_args(okf.IncomingFrontmatterStatus)
+
+
+# --- Phase 3 (preserve-source-frontmatter, issue #1062): tag/sensitivity
+# lift -- `normalize_tags`, `union_tags`, `IncomingLift`,
+# `lift_incoming_frontmatter` (design.md Decision 3, Decision E) ----------
+
+
+class TestNormalizeTagsShapeTable:
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            pytest.param(["alpha", "beta"], ("alpha", "beta"), id="list_of_strings"),
+            pytest.param(
+                [" alpha ", "beta", "", "  ", "alpha"],
+                ("alpha", "beta"),
+                id="list_stripped_deduped_empties_dropped",
+            ),
+            pytest.param("solo", ("solo",), id="bare_string_lifts_one_tag"),
+            pytest.param("  solo  ", ("solo",), id="bare_string_is_stripped"),
+            pytest.param("a, b", ("a, b",), id="comma_string_never_split"),
+            pytest.param(
+                ["alpha", 3], (), id="list_with_non_string_item_lifts_nothing"
+            ),
+            pytest.param({"a": 1}, (), id="mapping_lifts_nothing"),
+            pytest.param(3, (), id="number_lifts_nothing"),
+            pytest.param(True, (), id="boolean_lifts_nothing"),
+            pytest.param(None, (), id="none_lifts_nothing"),
+            pytest.param("   ", (), id="blank_string_trims_to_empty"),
+            pytest.param([], (), id="empty_list_lifts_nothing"),
+        ],
+    )
+    def test_normalize_tags_shape_table(
+        self, raw: object, expected: tuple[str, ...]
+    ) -> None:
+        assert okf.normalize_tags(raw) == expected
+
+    def test_normalize_tags_mixed_list_lifts_none_not_a_partial_list(self) -> None:
+        """MUTATION target (task 3.1): a naive implementation might skip just
+        the bad item instead of rejecting the whole list -- assert the WHOLE
+        list is dropped, not `("alpha",)`."""
+        assert okf.normalize_tags(["alpha", 3, "beta"]) == ()
+
+
+class TestUnionTagsOrderPreserving:
+    def test_union_tags_appends_new_lifted_tags(self) -> None:
+        assert okf.union_tags(["alpha"], ["beta"]) == ["alpha", "beta"]
+
+    def test_union_tags_preserves_on_disk_order_and_hand_added_tags(self) -> None:
+        assert okf.union_tags(["alpha", "hand-added"], ["beta"]) == [
+            "alpha",
+            "hand-added",
+            "beta",
+        ]
+
+    def test_union_tags_dedupes(self) -> None:
+        assert okf.union_tags(["alpha"], ["alpha"]) == ["alpha"]
+
+    def test_union_tags_swapped_order_mutation(self) -> None:
+        """MUTATION target (task 3.2): existing-first, lifted-second is
+        load-bearing -- a swapped implementation would produce
+        `["beta", "alpha"]` here."""
+        assert okf.union_tags(["alpha"], ["beta"]) != ["beta", "alpha"]
+
+
+class TestLiftIncomingFrontmatter:
+    def test_lift_tags_only(self) -> None:
+        result = okf.lift_incoming_frontmatter({"tags": ["alpha", "beta"]})
+
+        assert result == okf.IncomingLift(
+            tags=("alpha", "beta"),
+            sensitivity_present=False,
+            sensitivity=None,
+            event_date=None,
+        )
+
+    def test_lift_sensitivity_only(self) -> None:
+        result = okf.lift_incoming_frontmatter({"sensitivity": "confidential"})
+
+        assert result == okf.IncomingLift(
+            tags=(),
+            sensitivity_present=True,
+            sensitivity="confidential",
+            event_date=None,
+        )
+
+    def test_lift_explicit_null_sensitivity_means_not_present(self) -> None:
+        """Decision 3: key absent or YAML `null` -> no fold."""
+        result = okf.lift_incoming_frontmatter({"sensitivity": None})
+
+        assert result.sensitivity_present is False
+
+    def test_lift_neither_key_returns_no_lift_sentinel(self) -> None:
+        result = okf.lift_incoming_frontmatter({"author": "Jane"})
+
+        assert result == okf.NO_LIFT
+
+    def test_lift_none_mapping_returns_no_lift_sentinel(self) -> None:
+        """`mapping=None` (no parsed frontmatter) returns `NO_LIFT`."""
+        assert okf.lift_incoming_frontmatter(None) == okf.NO_LIFT
+
+    def test_lift_event_date_is_always_none_this_slice(self) -> None:
+        """Tasks-phase decision 2: `event_date` stays unset until Phase 4;
+        `lift_incoming_frontmatter` never sets it, even when a `date` key is
+        present."""
+        result = okf.lift_incoming_frontmatter(
+            {"tags": ["alpha"], "sensitivity": "public", "date": "2026-07-14"}
+        )
+
+        assert result.event_date is None
+
+    def test_lift_both_tags_and_sensitivity_together(self) -> None:
+        result = okf.lift_incoming_frontmatter(
+            {"tags": "solo", "sensitivity": "public"}
+        )
+
+        assert result.tags == ("solo",)
+        assert result.sensitivity_present is True
+        assert result.sensitivity == "public"
+
+
+class TestNeverLiftedKeysLeaveNoLift:
+    """Task 3.15: ingestion's "Never-Lifted Incoming Frontmatter Keys"
+    requirement (design.md Decision 4's exact list) -- a regression-proof
+    fixture guarding against any FUTURE accidental lift. GREEN by
+    construction of 3.5's closed allow-list (only `tags`/`sensitivity` are
+    read); a RED result here would mean the allow-list leaked."""
+
+    @pytest.mark.parametrize(
+        "key",
+        [
+            "status",
+            "type",
+            "provenance",
+            "version",
+            "timestamp",
+            "generated",
+            "verified",
+            "sources",
+            "author",
+            "updated",
+            "created",
+        ],
+    )
+    def test_never_lifted_keys_leave_sources_own_values_unchanged(
+        self, key: str
+    ) -> None:
+        value: object = (
+            ["would-change-provenance"]
+            if key in {"provenance", "sources"}
+            else "2099-01-01"
+        )
+        result = okf.lift_incoming_frontmatter({key: value})
+
+        assert result == okf.NO_LIFT

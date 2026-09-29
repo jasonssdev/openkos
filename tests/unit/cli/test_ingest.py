@@ -10326,3 +10326,279 @@ def test_source_only_rewrite_preview_names_recorded_frontmatter(
     assert result.exit_code == 0
     assert fake.calls == []
     assert "source frontmatter recorded (3 key(s))" in result.stdout
+
+
+# --- preserve-source-frontmatter (issue #1062), Decision 4: the lifted
+# sensitivity also floors THIS run's LLM-send gate (test-only confirmation,
+# post-#1087 rebase -- tasks-phase decision 1; no new production code) ----
+
+
+def test_incoming_confidential_declaration_blocks_this_runs_extraction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ingestion: "An incoming confidential declaration blocks this run's
+    extraction call". Task 3.11. PRECONDITION: the SAME fixture without the
+    incoming `sensitivity: confidential` key DOES call the fake LLM, so the
+    blocking claim is provably caused by the incoming declaration."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+    fake_precondition = _patch_llm(monkeypatch, _concept_reply())
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert result.exit_code == 0
+    assert len(fake_precondition.calls) == 2
+
+    other = tmp_path / "confidential-notes.txt"
+    other.write_text(
+        "---\nsensitivity: confidential\n---\nSome raw notes about self-control.",
+        encoding="utf-8",
+    )
+    fake = _patch_llm(monkeypatch, _concept_reply())
+    result = runner.invoke(app, ["ingest", "confidential-notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert fake.calls == []
+    concept_path = tmp_path / "bundle" / "sources" / "confidential-notes.md"
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["extraction_status"] == "blocked-by-sensitivity"
+
+
+def test_include_confidential_still_allows_send_past_frontmatter_raised_floor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ingestion: "--include-confidential still allows the send past a
+    frontmatter-raised floor". Task 3.12."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text(
+        "---\nsensitivity: confidential\n---\nSome raw notes about self-control.",
+        encoding="utf-8",
+    )
+    fake = _patch_llm(monkeypatch, _concept_reply())
+
+    result = runner.invoke(
+        app, ["ingest", "notes.txt", "--auto", "--include-confidential"]
+    )
+
+    assert result.exit_code == 0
+    assert len(fake.calls) == 2
+    concept_path = tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
+    assert concept_path.is_file()
+
+
+def test_lower_incoming_sensitivity_does_not_lower_extraction_floor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ingestion: "A lower incoming sensitivity does not lower the
+    extraction floor". Task 3.12."""
+    _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(
+        tmp_path, "default_sensitivity: private", "default_sensitivity: confidential"
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text(
+        "---\nsensitivity: public\n---\nSome raw notes about self-control.",
+        encoding="utf-8",
+    )
+    fake = _patch_llm(monkeypatch, _concept_reply())
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert fake.calls == []
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["extraction_status"] == "blocked-by-sensitivity"
+
+
+def _reingested_converged_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, first_raw: str
+) -> Path:
+    """Ingest `first_raw` once and return the Source concept path, already
+    extracted and converged (origin_key set) -- the shared precondition for
+    every Source-only-rewrite preview test below."""
+    _init_workspace(tmp_path, monkeypatch)
+    run1 = _concept_reply(title="Stoic Dichotomy Of Control")
+    run2 = _concept_reply(title="Negative Visualization")
+    _patch_sequenced_llm(
+        monkeypatch,
+        [
+            run1,
+            run2,
+            '{"keep": ["Stoic Dichotomy Of Control", "Negative Visualization"]}',
+        ],
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text(first_raw, encoding="utf-8")
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert result.exit_code == 0
+    return tmp_path / "bundle" / "sources" / "notes.md"
+
+
+def test_unrecognized_incoming_sensitivity_also_raises_extraction_floor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ingestion: "An unrecognized incoming sensitivity also raises the
+    extraction floor". Task 3.13: a value not in `SENSITIVITY_ORDER` (e.g.
+    `banana`) also raises the gate to block, exactly as `confidential`
+    does (`_rank`'s existing unrecognized-value fallback)."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text(
+        "---\nsensitivity: banana\n---\nSome raw notes about self-control.",
+        encoding="utf-8",
+    )
+    fake = _patch_llm(monkeypatch, _concept_reply())
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert fake.calls == []
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["extraction_status"] == "blocked-by-sensitivity"
+
+
+# --- preserve-source-frontmatter (issue #1062): preview lines and the
+# raise advisory, Decision 7's remaining deltas (task 3.16-3.17) ----------
+
+
+def test_source_only_rewrite_preview_names_tags_added(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ingestion: "The preview names the added tags when that delta fires".
+    Isolates the TAGS delta from the FRONTMATTER delta: the incoming
+    frontmatter mapping stays byte-identical across both runs (so the
+    frontmatter delta is `False`), but the Source's own on-disk `tags` field
+    is hand-edited back down to `[]` between runs, so the union recomputes
+    the SAME lifted tags and the tags delta alone fires."""
+    concept_path = _reingested_converged_source(
+        tmp_path,
+        monkeypatch,
+        first_raw=f"---\ntags: [alpha, beta]\n---\n{_GROUNDED_NOTES}",
+    )
+    metadata, body = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["tags"] == ["alpha", "beta"]
+    metadata["tags"] = []
+    concept_path.write_text(okf.dump_frontmatter(metadata, body), encoding="utf-8")
+
+    fake = _patch_llm(monkeypatch, raises=AssertionError("must not be called"))
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert fake.calls == []
+    assert "tags added: alpha, beta" in result.stdout
+    assert "source frontmatter recorded" not in result.stdout
+    rewritten, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert rewritten["tags"] == ["alpha", "beta"]
+
+
+def test_source_only_rewrite_preview_names_both_frontmatter_and_tags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ingestion: "A rewrite triggered by several deltas prints each fired
+    delta's line" -- a newly-present incoming frontmatter carrying `tags`
+    fires BOTH the frontmatter delta and the tags delta in the same run."""
+    concept_path = _reingested_converged_source(
+        tmp_path, monkeypatch, first_raw=_GROUNDED_NOTES
+    )
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert okf.SOURCE_FRONTMATTER_KEY not in metadata
+    assert metadata["tags"] == []
+
+    with_frontmatter = f"---\ntags: [alpha, beta]\n---\n{_GROUNDED_NOTES}"
+    (tmp_path / "notes.txt").write_text(with_frontmatter, encoding="utf-8")
+    (tmp_path / "raw" / "notes.txt").write_text(with_frontmatter, encoding="utf-8")
+
+    fake = _patch_llm(monkeypatch, raises=AssertionError("must not be called"))
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert fake.calls == []
+    assert "source frontmatter recorded (1 key(s))" in result.stdout
+    assert "tags added: alpha, beta" in result.stdout
+
+
+def test_source_only_rewrite_raised_sensitivity_advises_set_sensitivity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ingestion: "A raised sensitivity on the Source-only rewrite advises
+    set-sensitivity"."""
+    concept_path = _reingested_converged_source(
+        tmp_path, monkeypatch, first_raw=_GROUNDED_NOTES
+    )
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["sensitivity"] == "private"
+
+    with_sensitivity = f"---\nsensitivity: confidential\n---\n{_GROUNDED_NOTES}"
+    (tmp_path / "notes.txt").write_text(with_sensitivity, encoding="utf-8")
+    (tmp_path / "raw" / "notes.txt").write_text(with_sensitivity, encoding="utf-8")
+
+    fake = _patch_llm(monkeypatch, raises=AssertionError("must not be called"))
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert fake.calls == []
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["sensitivity"] == "confidential"
+    assert "openkos set-sensitivity" in result.stderr
+
+
+def test_source_only_rewrite_that_does_not_raise_sensitivity_prints_no_advisory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ingestion: "A rewrite that does not raise sensitivity prints no
+    advisory" -- triggered only by the frontmatter/tag-union deltas, with no
+    sensitivity delta firing."""
+    concept_path = _reingested_converged_source(
+        tmp_path, monkeypatch, first_raw=_GROUNDED_NOTES
+    )
+
+    with_frontmatter = f"---\nauthor: Jane\n---\n{_GROUNDED_NOTES}"
+    (tmp_path / "notes.txt").write_text(with_frontmatter, encoding="utf-8")
+    (tmp_path / "raw" / "notes.txt").write_text(with_frontmatter, encoding="utf-8")
+
+    fake = _patch_llm(monkeypatch, raises=AssertionError("must not be called"))
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert fake.calls == []
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata[okf.SOURCE_FRONTMATTER_KEY] == {"author": "Jane"}
+    assert "openkos set-sensitivity" not in result.stderr
+
+
+def test_source_only_rewrite_event_date_only_prints_neither_new_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ingestion: "A rewrite triggered only by the event-date delta prints
+    neither new line" -- a regression pin protecting Phase 2/3's additions
+    from over-firing on the pre-existing event-date delta. Task 3.17."""
+    _init_workspace(tmp_path, monkeypatch)
+    run1 = _concept_reply(title="Stoic Dichotomy Of Control")
+    run2 = _concept_reply(title="Negative Visualization")
+    _patch_sequenced_llm(
+        monkeypatch,
+        [
+            run1,
+            run2,
+            '{"keep": ["Stoic Dichotomy Of Control", "Negative Visualization"]}',
+        ],
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text(_GROUNDED_NOTES, encoding="utf-8")
+    result = runner.invoke(
+        app, ["ingest", "notes.txt", "--event-date", "2026-07-10", "--auto"]
+    )
+    assert result.exit_code == 0
+
+    fake = _patch_llm(monkeypatch, raises=AssertionError("must not be called"))
+    result = runner.invoke(
+        app, ["ingest", "notes.txt", "--event-date", "2026-07-14", "--auto"]
+    )
+
+    assert result.exit_code == 0
+    assert fake.calls == []
+    assert "event date" in result.stdout
+    assert "source frontmatter recorded" not in result.stdout
+    assert "tags added" not in result.stdout

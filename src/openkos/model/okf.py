@@ -808,6 +808,107 @@ def _is_plain_data(value: object) -> bool:
     return False
 
 
+def normalize_tags(raw: object) -> tuple[str, ...]:
+    """Normalize an incoming `tags` value into a lifted tag tuple (design.md
+    Decision 3, decision E; preserve-source-frontmatter, issue #1062): a
+    YAML list whose every element is a `str` lifts each stripped, non-empty,
+    element, deduplicated in first-occurrence order; a bare `str` lifts as
+    ONE tag, stripped (so `tags: a, b` lifts the single tag `"a, b"`, never
+    two tags `"a"` and `"b"` -- comma splitting would invent structure the
+    input did not state). Any other shape -- a list containing a non-`str`
+    item, a mapping, a number, a boolean, `None`, or a result that trims to
+    empty -- lifts NO tags at all: a partially-valid list is not partially
+    lifted (fail-closed, whole-value, matching `parse_incoming_frontmatter`'s
+    own posture)."""
+    if isinstance(raw, str):
+        stripped = raw.strip()
+        return (stripped,) if stripped else ()
+    if isinstance(raw, list) and all(isinstance(item, str) for item in raw):
+        result: list[str] = []
+        for item in raw:
+            candidate = item.strip()
+            if candidate and candidate not in result:
+                result.append(candidate)
+        return tuple(result)
+    return ()
+
+
+def union_tags(existing: Sequence[str], lifted: Sequence[str]) -> list[str]:
+    """Order-preserving union of a Source's on-disk `tags` with newly lifted
+    tags (design.md Decision 3, "Tag union order"; preserve-source-
+    frontmatter, issue #1062): every tag already on disk comes first, in its
+    stored order, and any lifted tag not already present follows, in lift
+    order. Matches `build_merged_document`'s survivor-first `_union_dedup`,
+    so a re-ingest never reorders what a human arranged and never drops a
+    hand-added tag."""
+    result = list(existing)
+    for tag in lifted:
+        if tag not in result:
+            result.append(tag)
+    return result
+
+
+@dataclass(frozen=True)
+class IncomingLift:
+    """The three candidates `lift_incoming_frontmatter` reads from an
+    incoming mapping (design.md Decision 3; preserve-source-frontmatter,
+    issue #1062)."""
+
+    tags: tuple[str, ...]
+    sensitivity_present: bool
+    """`False` when the `sensitivity` key is absent OR its value is an
+    explicit YAML `null` -- both mean "no fold" (design.md Decision 3):
+    `None` must never reach `combine_sensitivity` as if it were a real
+    value, or a `public` workspace would be wrongly floored to `private`
+    (`_rank(None)`)."""
+    sensitivity: object
+    """The raw, unranked incoming value -- meaningful only when
+    `sensitivity_present` is `True`. Ranking and fail-closed handling of an
+    unrecognized value happen in `combine_sensitivity`/`_rank`, not here."""
+    event_date: date | None
+    """Always `None` in this slice (tasks-phase decision 2): `date:` is read
+    directly via `read_incoming_date` in Phase 4, independently of this
+    function, so Phases 3 and 4 stay mergeable in either order."""
+
+
+NO_LIFT: Final = IncomingLift(
+    tags=(), sensitivity_present=False, sensitivity=None, event_date=None
+)
+"""The result for a mapping carrying neither `tags` nor `sensitivity`, and
+for `mapping=None` (no parsed incoming frontmatter at all)."""
+
+
+def lift_incoming_frontmatter(
+    mapping: Mapping[str, object] | None,
+) -> IncomingLift:
+    """Read the closed allow-list of lift candidates from a PARSED incoming
+    frontmatter mapping (design.md Decision 3; preserve-source-frontmatter,
+    issue #1062): `tags` (via `normalize_tags`) and `sensitivity`
+    (present/value, per the null-vs-absent rule above). Reads NOTHING else
+    -- every other key, including the engine-owned ones, is protected by
+    this function's shape, not by a deny-list. `event_date` is always
+    `None` here; see `IncomingLift.event_date`'s docstring.
+
+    `mapping=None` (no parsed frontmatter for this run) returns `NO_LIFT`
+    directly, with no attribute access."""
+    if mapping is None:
+        return NO_LIFT
+
+    tags = normalize_tags(mapping.get("tags"))
+
+    sensitivity_present = (
+        "sensitivity" in mapping and mapping["sensitivity"] is not None
+    )
+    sensitivity = mapping.get("sensitivity") if sensitivity_present else None
+
+    return IncomingLift(
+        tags=tags,
+        sensitivity_present=sensitivity_present,
+        sensitivity=sensitivity,
+        event_date=None,
+    )
+
+
 _FRONTMATTER_RE: Final = re.compile(r"\A---\n.*?\n---\n", re.DOTALL)
 
 
