@@ -658,7 +658,7 @@ new field), and Decision 7's remaining two deltas.
 
 ### 3.0 — Precondition: rebase onto #1087
 
-- [ ] **3.0** [PRECONDITION] Before starting 3.11-3.14 (the Decision 4
+- [x] **3.0** [PRECONDITION] Before starting 3.11-3.14 (the Decision 4
   gate-confirmation tasks), confirm PR #1087 (issue #1086,
   `fix/1086-reextract-send-gate`) has merged to `main`, and rebase this
   slice's branch onto the resulting `main` so
@@ -673,7 +673,7 @@ new field), and Decision 7's remaining two deltas.
 
 ### `model/okf.py` — `normalize_tags`, `union_tags` (Decision 3, Decision E)
 
-- [ ] **3.1** [TEST] `tests/unit/model/test_okf_incoming_frontmatter.py` —
+- [x] **3.1** [TEST] `tests/unit/model/test_okf_incoming_frontmatter.py` —
   add `test_normalize_tags_shape_table`, parametrized per decision E: a
   YAML list of strings → each stripped, non-empty, deduped, order-
   preserving; a bare string → one tag, stripped (`"solo"` → `("solo",)`);
@@ -688,7 +688,7 @@ new field), and Decision 7's remaining two deltas.
   just that item instead of rejecting the whole list, and confirm the
   mixed-list row fails (proves "any other shape lifts NO tags at all", not
   a partial lift).
-- [ ] **3.2** [TEST] Same file — add `test_union_tags_order_preserving`:
+- [x] **3.2** [TEST] Same file — add `test_union_tags_order_preserving`:
   `union_tags(["alpha"], ["beta"])` → `["alpha", "beta"]`;
   `union_tags(["alpha", "hand-added"], ["beta"])` →
   `["alpha", "hand-added", "beta"]` (on-disk order preserved, lifted tags
@@ -696,7 +696,7 @@ new field), and Decision 7's remaining two deltas.
   → `["alpha"]` (no duplicate). **RED today**: `AttributeError`.
   **MUTATION**: swap the union order (lifted-first, on-disk-second) and
   confirm this test fails.
-- [ ] **3.3** [IMPL] `src/openkos/model/okf.py`: add
+- [x] **3.3** [IMPL] `src/openkos/model/okf.py`: add
   `normalize_tags(raw: object) -> tuple[str, ...]` and
   `union_tags(existing: Sequence[str], lifted: Sequence[str]) -> list[str]`
   per design.md Decision 3's table and the "Tag union order" note
@@ -705,7 +705,7 @@ new field), and Decision 7's remaining two deltas.
 
 ### `model/okf.py` — `IncomingLift`, `lift_incoming_frontmatter` (tags + sensitivity halves)
 
-- [ ] **3.4** [TEST] Same file — add `test_lift_tags_and_sensitivity_shapes`,
+- [x] **3.4** [TEST] Same file — add `test_lift_tags_and_sensitivity_shapes`,
   parametrized: `{"tags": ["alpha", "beta"]}` → `IncomingLift(tags=
   ("alpha", "beta"), sensitivity_present=False, sensitivity=None,
   event_date=None)`; `{"sensitivity": "confidential"}` → `sensitivity_
@@ -717,7 +717,7 @@ new field), and Decision 7's remaining two deltas.
   independently in Phase 4). **RED today**: `AttributeError` —
   `okf.IncomingLift`/`okf.lift_incoming_frontmatter`/`okf.NO_LIFT` do not
   exist.
-- [ ] **3.5** [IMPL] Same module: add
+- [x] **3.5** [IMPL] Same module: add
   `@dataclass(frozen=True) class IncomingLift: tags: tuple[str, ...];
   sensitivity_present: bool; sensitivity: object; event_date: date | None`,
   `NO_LIFT: Final = IncomingLift(tags=(), sensitivity_present=False,
@@ -731,7 +731,7 @@ new field), and Decision 7's remaining two deltas.
 
 ### Stored-tag read, tag union wiring, sensitivity fold (`application/ingest.py`)
 
-- [ ] **3.6** [TEST] `tests/unit/application/test_ingest.py` — add
+- [x] **3.6** [TEST] `tests/unit/application/test_ingest.py` — add
   `test_compose_source_document_fresh_ingest_tags_are_exactly_lifted`: no
   prior Source (`concept_text is None`), incoming frontmatter carries
   `tags: [alpha, beta]` → the plan's resolved `tags` are exactly `(alpha,
@@ -739,13 +739,13 @@ new field), and Decision 7's remaining two deltas.
   Covers "No incoming tags key leaves the Source's tags unaffected" (fresh
   half). **RED today**: `AttributeError`/`AssertionError` — no tag lift is
   wired yet.
-- [ ] **3.7** [TEST] Same file — add
+- [x] **3.7** [TEST] Same file — add
   `test_compose_source_document_reingest_tags_are_union`: an existing
   on-disk Source with `tags: [alpha]`, re-ingested with incoming
   frontmatter `tags: [beta]` → resolved `tags` are `[alpha, beta]`.
   Covers "Re-ingest unions lifted tags with on-disk tags". **RED today**:
   `AssertionError`.
-- [ ] **3.8** [TEST] Same file — add
+- [x] **3.8** [TEST] Same file — add
   `test_compose_source_document_hand_added_tag_survives_reingest`: an
   existing on-disk Source with `tags: [alpha, hand-added]` where
   `hand-added` never appeared in any incoming frontmatter, re-ingested with
@@ -753,7 +753,7 @@ new field), and Decision 7's remaining two deltas.
   include `hand-added`, `alpha`, and `beta`; nothing on disk is removed.
   Covers "A hand-added tag survives re-ingest even when the incoming
   file's tags changed". **RED today**: `AssertionError`.
-- [ ] **3.9** [TEST] Same file — add
+- [x] **3.9** [TEST] Same file — add
   `test_compose_source_document_sensitivity_fold_raise_only`,
   parametrized: on-disk/config resolve to `private`, incoming
   `sensitivity: confidential` → resolved `confidential`; on-disk/config
@@ -771,7 +771,7 @@ new field), and Decision 7's remaining two deltas.
   present` is `False`, and confirm a `public` workspace does NOT get
   wrongly floored to `private` (this is the exact `_rank(None)` hazard
   design.md's fold-order note calls out).
-- [ ] **3.10** [IMPL] `src/openkos/application/ingest.py`: inside
+- [x] **3.10** [IMPL] `src/openkos/application/ingest.py`: inside
   `compose_source_document`, after computing `parse_incoming_frontmatter`'s
   result (2.8), call `okf.lift_incoming_frontmatter(result.mapping if
   result.status == "parsed" else None)`. Read the on-disk Source's stored
@@ -793,7 +793,7 @@ new field), and Decision 7's remaining two deltas.
 
 ### Decision 4 — LLM-send floor, test-only confirmation (post-#1087)
 
-- [ ] **3.11** [TEST] `tests/unit/cli/test_ingest.py` — add
+- [x] **3.11** [TEST] `tests/unit/cli/test_ingest.py` — add
   `test_incoming_confidential_declaration_blocks_this_runs_extraction`: a
   workspace with `default_sensitivity: private`, a source whose incoming
   frontmatter carries `sensitivity: confidential`, ingested WITHOUT
@@ -810,7 +810,7 @@ new field), and Decision 7's remaining two deltas.
   RED reason, and only mark it GREEN, after the #1087 rebase — before that,
   this row would need the `llm_send_floor` field design.md originally
   specified, which this file's tasks-phase decision 1 replaces.
-- [ ] **3.12** [TEST] Same file — add
+- [x] **3.12** [TEST] Same file — add
   `test_include_confidential_still_allows_send_past_frontmatter_raised_floor`
   and `test_lower_incoming_sensitivity_does_not_lower_extraction_floor`:
   the `--include-confidential` override still allows the call through past
@@ -818,13 +818,13 @@ new field), and Decision 7's remaining two deltas.
   confidential` with incoming `sensitivity: public` still blocks (the
   floor is never lowered). Covers both matching ingestion scenarios.
   **RED today, PRE-#1087**: same underlying cause as 3.11.
-- [ ] **3.13** [TEST] Same file — add
+- [x] **3.13** [TEST] Same file — add
   `test_unrecognized_incoming_sensitivity_also_raises_extraction_floor`: an
   incoming `sensitivity` value not in `SENSITIVITY_ORDER` (e.g. `sensitivity:
   banana`) also raises the gate to block, exactly as `confidential` does
   (`_rank`'s existing unrecognized-value fallback). **RED today,
   PRE-#1087**: same underlying cause.
-- [ ] **3.14** [IMPL] No new production code for the gate itself — per this
+- [x] **3.14** [IMPL] No new production code for the gate itself — per this
   file's tasks-phase decision 1, `source_plan.source_sensitivity` already
   carries the raised value once 3.10's sensitivity fold lands AND #1087's
   `workspace_floor=source_plan.source_sensitivity` call-site change is on
@@ -838,7 +838,7 @@ new field), and Decision 7's remaining two deltas.
 
 ### Preview lines and the raise advisory (Decision 7, remaining deltas)
 
-- [ ] **3.15** [TEST] `tests/unit/model/test_okf_incoming_frontmatter.py`
+- [x] **3.15** [TEST] `tests/unit/model/test_okf_incoming_frontmatter.py`
   — add `test_never_lifted_keys_leave_sources_own_values_unchanged`,
   parametrized over `status`, `type`, `provenance`, `version`, `timestamp`,
   `generated`, `verified`, `sources`, `author`, `updated`, `created`
@@ -855,7 +855,7 @@ new field), and Decision 7's remaining two deltas.
   accidental lift — it should already be GREEN by construction of 3.5's
   closed allow-list (only `tags`/`sensitivity` are read), so treat a RED
   result here as evidence the allow-list leaked.
-- [ ] **3.16** [TEST] `tests/unit/cli/test_ingest.py` — add
+- [x] **3.16** [TEST] `tests/unit/cli/test_ingest.py` — add
   `test_source_only_rewrite_preview_names_tags_added_and_advisory`,
   covering three preview scenarios in one parametrized test: (a) a rewrite
   triggered solely by a tag-union delta adding `alpha`/`beta` prints
@@ -870,7 +870,7 @@ new field), and Decision 7's remaining two deltas.
   "A rewrite that does not raise sensitivity prints no advisory". **RED
   today**: `AssertionError` — none of these lines exist yet (2.15 only
   added the frontmatter-recorded line).
-- [ ] **3.17** [TEST] Same file — add
+- [x] **3.17** [TEST] Same file — add
   `test_source_only_rewrite_event_date_only_prints_neither_new_line`: a
   rewrite triggered SOLELY by the (already-existing) event-date delta
   prints the existing origin-disclosure line and NEITHER of Phase 2/3's new
@@ -879,7 +879,7 @@ new field), and Decision 7's remaining two deltas.
   from over-firing on the pre-existing delta. **RED today**: passes
   vacuously until 3.18 exists; confirm GREEN after, as a genuine regression
   pin.
-- [ ] **3.18** [IMPL] `src/openkos/application/ingest.py`: extend
+- [x] **3.18** [IMPL] `src/openkos/application/ingest.py`: extend
   `SourceDocumentPlan.lift_changed`'s computation (2.13) with the two
   remaining deltas from design.md Decision 7's table: a tags delta (some
   lifted tag is not already in the on-disk tags, via `okf.normalize_tags`)
@@ -893,14 +893,14 @@ new field), and Decision 7's remaining two deltas.
 
 ### Phase 3 verification
 
-- [ ] **3.19** Run `uv run ruff check . && uv run ruff format --check . &&
+- [x] **3.19** Run `uv run ruff check . && uv run ruff format --check . &&
   uv run mypy .` — must be green.
-- [ ] **3.20** Run `uv run pytest tests/unit/model/test_okf_incoming_frontmatter.py
+- [x] **3.20** Run `uv run pytest tests/unit/model/test_okf_incoming_frontmatter.py
   tests/unit/application/test_ingest.py tests/unit/cli/test_ingest.py`
   focused, then `uv run pytest --cov` (unpiped) full suite — must be
   green, 90% branch gate held.
-- [ ] **3.21** Run `uv run python evals/run_self_tests.py` — must be green.
-- [ ] **3.22** Commit as one or more work-unit commits, scope `ingest` (e.g.
+- [x] **3.21** Run `uv run python evals/run_self_tests.py` — must be green.
+- [x] **3.22** Commit as one or more work-unit commits, scope `ingest` (e.g.
   `feat(ingest): lift incoming tags and sensitivity onto the Source`). Open
   PR 3 (Phase 3: tag + sensitivity lift) targeting `main`, branched from
   `main` after PR 2 merges.

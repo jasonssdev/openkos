@@ -296,3 +296,158 @@ All Phase 2 tasks complete. `next_recommended: sdd-archive` (verification
 optional per the SDD contract) or `sdd-apply` again for Phase 3 (Source
 lift: tags + sensitivity, PR 3 → `main`, after this PR merges) or Phase 4
 (date lift, independent of Phase 3, also after this PR merges).
+
+## Slice 3 (PR 3 → `main`, after PR 2 merges): Phase 3 — Source lift: tags + sensitivity
+
+**Status**: COMPLETE — 23/23 tasks done (3.0-3.22). Strict TDD mode, runner
+`uv run pytest`. Branch `feat/1062-frontmatter-p3`, stacked on the
+not-yet-merged slice-2 branch (PR #1089) at `a3aa483`.
+
+**Scope**: `okf.normalize_tags`/`union_tags`/`IncomingLift`/`NO_LIFT`/
+`lift_incoming_frontmatter` (tags + sensitivity halves); stored-tag read
+and tag-union wiring; sensitivity fold (raise-only) in
+`compose_source_document`; `SourceDocumentPlan.tags`/`frontmatter_changed`/
+`tags_added`/`sensitivity_changed`; the `tags added:` preview line and the
+`set-sensitivity` raise advisory; the never-lifted-keys regression fixture;
+the Decision 4 LLM-send-floor gate confirmation (test-only, post-#1087).
+
+### 3.0 Precondition
+
+PR #1087 (issue #1086) was ALREADY on this branch's history at session
+start (commit `77b9643`, confirmed by `git log`), and
+`src/openkos/cli/main.py:5458` already reads
+`workspace_floor=source_plan.source_sensitivity` (confirmed by direct
+`grep`). No rebase was needed; 3.11-3.14 proceeded directly.
+
+### Completed Tasks
+
+- [x] 3.0 precondition confirmed (see above) — no rebase needed
+- [x] 3.1-3.3 `TestNormalizeTagsShapeTable`, `TestUnionTagsOrderPreserving`
+      (test class names differ from the task's literal
+      `test_normalize_tags_shape_table`/`test_union_tags_order_preserving`
+      — split into parametrized classes matching Phase 1/2's established
+      pattern); `okf.normalize_tags`, `okf.union_tags`
+- [x] 3.4-3.5 `TestLiftIncomingFrontmatter` (7 tests, split rather than one
+      `test_lift_tags_and_sensitivity_shapes`); `okf.IncomingLift`,
+      `okf.NO_LIFT`, `okf.lift_incoming_frontmatter`
+- [x] 3.6-3.10 `test_compose_source_document_fresh_ingest_tags_are_exactly_lifted`,
+      `..._reingest_tags_are_union`, `..._hand_added_tag_survives_reingest`,
+      `TestSensitivityFoldRaiseOnly` (4 tests, split rather than one
+      parametrized test); `_read_source_tags` helper; `compose_source_document`
+      now folds `lift.tags`/`lift.sensitivity` onto the pre-lift resolved
+      state; `SourceDocumentPlan.tags`; `compose_catalog_update`'s second
+      build now passes `tags=list(source.tags)` (removes the `tags=[]`
+      hard-code Phase 2 deliberately left in place)
+- [x] 3.11-3.14 `test_incoming_confidential_declaration_blocks_this_runs_extraction`,
+      `test_include_confidential_still_allows_send_past_frontmatter_raised_floor`,
+      `test_lower_incoming_sensitivity_does_not_lower_extraction_floor`,
+      `test_unrecognized_incoming_sensitivity_also_raises_extraction_floor`
+      — ALL 4 passed on FIRST run, confirming tasks-phase decision 1's
+      analysis: no gate-specific code change was needed
+- [x] 3.15 `TestNeverLiftedKeysLeaveNoLift` (11 keys parametrized) — passed
+      on first run, confirming 3.5's closed allow-list does not leak
+- [x] 3.16-3.18 4 preview/advisory tests (`preview_names_tags_added`,
+      `preview_names_both_frontmatter_and_tags`,
+      `raised_sensitivity_advises_set_sensitivity`,
+      `that_does_not_raise_sensitivity_prints_no_advisory`) + 3.17's
+      regression pin (`event_date_only_prints_neither_new_line`);
+      `SourceDocumentPlan` gains `frontmatter_changed`/`tags_added`/
+      `sensitivity_changed` (a DEVIATION from design's Interfaces/Contracts
+      list — see below); CLI preview gains the `tags added:` line and the
+      stderr `set-sensitivity` advisory
+- [x] 3.19 `ruff check` / `ruff format --check` / `mypy .` — green (ruff
+      format needed one pass on 4 files after the edits)
+- [x] 3.20 focused command green (497 passed); full `pytest --cov` green —
+      7149 passed, 2 skipped, 96.92% coverage (gate 90%)
+- [x] 3.21 `evals/run_self_tests.py` — 44/44 green
+- [x] 3.22 committed — see Commits
+
+### Files Changed
+
+| File | Action | What |
+|---|---|---|
+| `src/openkos/model/okf.py` | Modified | `normalize_tags`, `union_tags`, `IncomingLift`, `NO_LIFT`, `lift_incoming_frontmatter` |
+| `src/openkos/application/ingest.py` | Modified | `_read_source_tags` helper; `compose_source_document` folds tags (union) and sensitivity (raise-only) from the lift; `SourceDocumentPlan` gains `tags`, `frontmatter_changed`, `tags_added`, `sensitivity_changed`; `compose_catalog_update`'s second build passes `tags=list(source.tags)` |
+| `src/openkos/cli/main.py` | Modified | preview gains `tags added: {a}, {b}` line, gated on `tags_added`; stderr `set-sensitivity` advisory, gated on `sensitivity_changed`; the existing `source frontmatter recorded` line is now gated on `frontmatter_changed` instead of the OR'd `lift_changed` |
+| `tests/unit/model/test_okf_incoming_frontmatter.py` | Modified | 3.1-3.5, 3.15 tests |
+| `tests/unit/application/test_ingest.py` | Modified | 3.6-3.9 tests |
+| `tests/unit/cli/test_ingest.py` | Modified | 3.11-3.13, 3.16-3.17 tests |
+| `openspec/changes/preserve-source-frontmatter/tasks.md` | Modified | 3.0-3.22 marked `[x]` |
+| `openspec/changes/preserve-source-frontmatter/apply-progress.md` | Modified | this section |
+
+### TDD Cycle Evidence
+
+| Task(s) | Test file | RED (observed) | GREEN | Mutation |
+|---|---|---|---|---|
+| 3.1-3.2 | `test_okf_incoming_frontmatter.py` | `AttributeError: ... no attribute 'normalize_tags'`/`'union_tags'` (17 tests) | 17/17 after 3.3 | `normalize_tags`: changed the non-string-item check to skip just that item — mixed-list row flipped from `()` to `('alpha','beta')`; `union_tags`: swapped union order — 3 tests flipped |
+| 3.4 | `test_okf_incoming_frontmatter.py` | `AttributeError: ... no attribute 'lift_incoming_frontmatter'` (7 tests) | 7/7 after 3.5 | N/A (no mutation task assigned to 3.4) |
+| 3.6-3.8 | `test_ingest.py` (application) | `plan.tags`: `AttributeError` (3.6); `AssertionError` on the union value (3.7-3.8) | 3/3 after 3.10 | N/A (no mutation task assigned) |
+| 3.9 | `test_ingest.py` (application) | 1/4 failed for the wrong reason initially (byte-identity sub-cases passed vacuously, as predicted in the task text); the 2 RAISE cases failed as `AssertionError` before 3.10 | 4/4 after 3.10 | passing `lift.sensitivity` to `combine_sensitivity` unconditionally (never skipping the fold when absent) flipped the explicit-null case from `'public'` to `'private'` — the exact `_rank(None)` hazard design.md's fold-order note calls out; restored with the exact inverse edit |
+| 3.11-3.13 | `test_ingest.py` (cli) | GREEN on first run (no RED — confirms tasks-phase decision 1: the gate was already floored correctly through #1087 + 3.10's fold, once `source_plan.source_sensitivity` reads back the raised value) | N/A | N/A |
+| 3.15 | `test_okf_incoming_frontmatter.py` | GREEN on first run (regression pin, confirms 3.5's allow-list does not leak) | N/A | N/A |
+| 3.16 (a) tags-only | `test_ingest.py` (cli) | `AssertionError: 'tags added: alpha, beta' in ''` | GREEN after 3.18 | N/A |
+| 3.16 (b) both deltas | `test_ingest.py` (cli) | `AssertionError` — `tags added:` line missing | GREEN after 3.18 | N/A |
+| 3.16 (c) advisory present | `test_ingest.py` (cli) | `AssertionError: 'openkos set-sensitivity' in <unrelated stderr>` | GREEN after 3.18 | N/A |
+| 3.16 (d) advisory absent | `test_ingest.py` (cli) | passed vacuously (predicted — no advisory code existed yet) | stayed GREEN after 3.18 | N/A |
+| 3.17 | `test_ingest.py` (cli) | passed vacuously (predicted — no new lines existed yet) | stayed GREEN after 3.18 | N/A |
+
+All `__pycache__` purged before each verdict; every mutation reverted with
+the exact inverse edit.
+
+### Deviations from Design
+
+1. **`SourceDocumentPlan` gains three fields design.md's Interfaces/
+   Contracts section does not list**: `frontmatter_changed: bool = False`,
+   `tags_added: tuple[str, ...] = ()`, `sensitivity_changed: bool = False`.
+   Design's contract only lists `lift_changed: bool = False` (the OR of all
+   three deltas). Once `lift_changed` became a genuine OR across three
+   independent deltas (task 3.18), the CLI's per-delta preview lines could
+   no longer reuse it directly the way task 2.15 did in Phase 2 (where
+   `lift_changed` WAS exactly the frontmatter delta) — reusing the OR'd
+   flag for the frontmatter-only line would have printed "source
+   frontmatter recorded" whenever ANY delta fired, including a tags-only or
+   sensitivity-only rewrite, which the tests (3.16 case a, 3.17) explicitly
+   forbid. Exposing the three specific deltas is the minimal, mechanical
+   fix that keeps "the printed line and the skip decision provably in
+   agreement" (tasks.md's own stated principle for task 2.15, extended
+   here to 3.18). Same shape as the existing `lift_changed`/`tags`/
+   `source_frontmatter` fields; no public interface beyond `SourceDocumentPlan`
+   itself is affected.
+2. **Test names differ from tasks.md's literal names in several places**
+   (3.1/3.2/3.4/3.6-3.9), following the SAME splitting pattern Phase 1/2
+   already established and documented: a single parametrized test named in
+   tasks.md was split into a test class or several focused test functions
+   for clarity, with every named scenario still covered. No coverage gap.
+
+### Issues Found
+
+None.
+
+### Review Workload / Size
+
+Actual authored changed lines for this work unit: **744 insertions + 16
+deletions across 6 files** (`git diff --shortstat` of commit `6615f4a`,
+excluding the second, docs-only commit). This exceeds the review budget
+(400) and design.md's own forecast for Slice 3 (~300-450). Phase 3 is
+defined as one indivisible PR in `tasks.md`'s Suggested Work Units table
+(PR 3 = Phase 3 in full): splitting further would separate a `[TEST]`/
+`[IMPL]` pair across PR boundaries (e.g. the tag-union tests from the fold
+they pin), or separate the Decision 4 gate-confirmation tests from the
+sensitivity-fold implementation they confirm. Per session config,
+`size:exception` is invoked for this slice (owner pre-approved this
+outcome for unsplittable slices); no attempt was made to shrink the diff by
+cutting tests, comments, or docstrings to fit the number.
+
+### Commits
+
+1. `6615f4a` — `feat(ingest): lift incoming tags and sensitivity onto the Source (#1062)`
+   (code + all tests; 744 insertions, 16 deletions, 6 files)
+2. (this commit) — `docs(sdd): record frontmatter slice 3 progress (#1062)`
+   (`tasks.md` checkbox updates + this file)
+
+### Next
+
+All Phase 3 tasks complete. `next_recommended: sdd-archive` (verification
+optional per the SDD contract) or `sdd-apply` again for Phase 4 (date lift,
+independent of Phase 3, after PR 2 merges) or Phase 5 (derived tag
+propagation, after this PR merges).
