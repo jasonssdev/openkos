@@ -1272,24 +1272,31 @@ resolved value MUST be both written to `concept_path` and passed as
 `stamp_sensitivity` to derived-object staging, so re-ingest can only raise
 or preserve a Source's sensitivity, never lower it. The only sanctioned
 downgrade path remains `set-sensitivity --allow-downgrade`. The extraction
-gate's `workspace_floor` parameter MUST keep tracking `cfg.default_sensitivity`
-literally, unrelated to the resolved or on-disk value (`sensitivity-aware-llm`
-Requirement 4 is unaffected). An on-disk `sensitivity` value that is
-unrecognized or non-string MUST rank as `confidential` under the existing
-`_rank` fallback, so resolution fails closed toward the MORE restrictive
-level rather than escalating silently; a missing key or a blank/whitespace-only
-string instead ranks as `private` -- the config default floor -- per `_rank`'s
-existing behavior, never `confidential`. `timestamp`,
-`description`, `resource`, `provenance`, and the body MUST continue to
-refresh exactly as before this change; only the `sensitivity` field is
-carried forward, as a merge into the freshly built metadata, never a
-restore of the prior document. WHEN a regenerated Source's resolved
-`sensitivity` exceeds `cfg.default_sensitivity`, the re-ingest preview line
-for that Source MUST name the preserved level.
+gate's `workspace_floor` parameter MUST track this SAME resolved value —
+the more restrictive of `cfg.default_sensitivity` and the on-disk value —
+never `cfg.default_sensitivity` alone, so a re-extract of a Source raised
+above the config default is gated at the RAISED level (`sensitivity-aware-llm`
+Requirement "Extract Gates on the Workspace Sensitivity Floor" is updated
+accordingly). An on-disk `sensitivity` value that is unrecognized or
+non-string MUST rank as `confidential` under the existing `_rank` fallback,
+so resolution fails closed toward the MORE restrictive level rather than
+escalating silently; a missing key or a blank/whitespace-only string instead
+ranks as `private` -- the config default floor -- per `_rank`'s existing
+behavior, never `confidential`. `timestamp`, `description`, `resource`,
+`provenance`, and the body MUST continue to refresh exactly as before this
+change; only the `sensitivity` field is carried forward, as a merge into the
+freshly built metadata, never a restore of the prior document. WHEN a
+regenerated Source's resolved `sensitivity` exceeds `cfg.default_sensitivity`,
+the re-ingest preview line for that Source MUST name the preserved level.
 (Previously: stated unconditionally that the Source's `sensitivity` equals
 `cfg.default_sensitivity`, with no distinction between a fresh ingest and a
 re-ingest, so a re-ingest silently reset any level a human had raised via
 `set-sensitivity`.)
+(Previously: the extraction gate's `workspace_floor` parameter was stated to
+keep tracking `cfg.default_sensitivity` literally, unrelated to the resolved
+or on-disk value — so a re-extract of a Source already raised to
+`confidential` sent its text to the extraction LLM whenever the workspace
+default alone was lower, without `--include-confidential` (issue #1086).)
 
 #### Scenario: Fresh ingest still stamps the config default
 
@@ -1356,14 +1363,14 @@ re-ingest, so a re-ingest silently reset any level a human had raised via
 - THEN the resolved `sensitivity` ranks as `confidential` under the
   existing `_rank` fallback, and that value is what gets written and staged
 
-#### Scenario: Extraction gate still reads the workspace default, not the resolved value
+#### Scenario: Extraction gate now reads the resolved value, not the workspace default alone
 
 - GIVEN a Source whose resolved `sensitivity` differs from
   `cfg.default_sensitivity` after re-ingest resolution
 - WHEN extraction's LLM-send gate (`blocks_llm_send`) evaluates whether to
   call the LLM
-- THEN it reads `workspace_floor` (`cfg.default_sensitivity`) literally,
-  never the resolved or on-disk value
+- THEN it reads the resolved value (the high-water mark of `on_disk_value`
+  and `cfg.default_sensitivity`), never `cfg.default_sensitivity` alone
 
 #### Scenario: Preview reports a preserved level
 
@@ -1400,7 +1407,6 @@ re-ingest, so a re-ingest silently reset any level a human had raised via
 - THEN the preview line for the regenerated Source states the resolved
   level (`cfg.default_sensitivity`) with the trailing clause "from the
   workspace default"
-
 ### Requirement: Per-Type Derived-Object Tally Summary
 
 After a successful `openkos ingest <path>` run that writes at least one
