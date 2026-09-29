@@ -1419,7 +1419,7 @@ leaf. Same module and test file as P5a.
 
 ### `application/revisions.py` — `revision_input_digests` (design.md Decision 2)
 
-- [ ] **P5b.1** [TEST] `tests/unit/application/test_revisions_service.py`
+- [x] **P5b.1** [TEST] `tests/unit/application/test_revisions_service.py`
   — add
   `test_revision_input_digests_covers_both_decisions_and_their_reached_sources`:
   for a pair, `revision_input_digests(layout, files, pair_ids)` returns
@@ -1431,14 +1431,14 @@ leaf. Same module and test file as P5a.
   NO row for itself (so its tuple differs from a stored tuple that had
   one). **RED today**: `AttributeError` — `revision_input_digests` does
   not exist.
-- [ ] **P5b.2** [IMPL] Same module: add `revision_input_digests(layout,
+- [x] **P5b.2** [IMPL] Same module: add `revision_input_digests(layout,
   files, pair_ids) -> tuple[InputDigest, ...]` per design.md Decision 2's
   table, reusing the same `content_hash`-per-file shape as
   `cli.curate.finding_input_digests`. Makes P5b.1 GREEN.
 
 ### `application/revisions.py` — `is_fresh` (design.md Decision 2, strict rule)
 
-- [ ] **P5b.3** [TEST] Same file — add
+- [x] **P5b.3** [TEST] Same file — add
   `test_is_fresh_applies_the_strict_equality_rule`, parametrized: the
   latest row for a pair with matching `prompt_version`, matching
   `include_confidential` (`--include-confidential OR local_exemption`),
@@ -1450,39 +1450,39 @@ leaf. Same module and test file as P5a.
   `AttributeError` — `is_fresh` does not exist. Kills the lenient
   `None`-means-unchanged rule `findings._is_stale` uses, which must NOT
   apply here (a revision finding can lead to a bundle write).
-- [ ] **P5b.4** [IMPL] Same module: add `is_fresh(layout, finding, *,
+- [x] **P5b.4** [IMPL] Same module: add `is_fresh(layout, finding, *,
   effective_confidential=None) -> bool` implementing design.md Decision
   2's four-condition strict rule exactly. Makes P5b.3 GREEN.
 
 ### `application/revisions.py` — `plan_revisions` (serving split, design.md Data flow)
 
-- [ ] **P5b.5** [TEST] Same file — add
+- [x] **P5b.5** [TEST] Same file — add
   `test_plan_revisions_serves_unchanged_findings_with_zero_llm_calls`: a
   bundle whose Decisions, dates, and vectors are unchanged since the last
   run -> every previously-judged pair appears in `RevisionPlan`'s served
   set and NONE in `to_judge`. **RED today**: `AttributeError` —
   `plan_revisions`/`RevisionPlan` do not exist.
-- [ ] **P5b.6** [TEST] Same file — add
+- [x] **P5b.6** [TEST] Same file — add
   `test_plan_revisions_edited_decision_body_rejudges_only_its_own_pairs`:
   editing one Decision's body moves ONLY pairs containing it from served
   to `to_judge`; every other persisted finding stays served. **RED
   today**: same.
-- [ ] **P5b.7** [TEST] Same file — add
+- [x] **P5b.7** [TEST] Same file — add
   `test_plan_revisions_edited_source_event_date_rejudges_only_affected_pairs`:
   editing one Source's `event_date` moves ONLY pairs whose Decisions
   reach that Source to `to_judge`. **RED today**: same. Kills a missing
   `sources-of:<id>` digest row — exactly the row that catches this edit.
-- [ ] **P5b.8** [TEST] Same file — add
+- [x] **P5b.8** [TEST] Same file — add
   `test_plan_revisions_provenance_path_change_marks_stale`: rewiring an
   intermediate concept so a Decision now reaches a DIFFERENT Source, with
   neither Decision's own body edited, moves the affected pair to
   `to_judge` (caught by the `sources-of:<id>` digest rows 3-4, not by
   rows 1-2). **RED today**: same.
-- [ ] **P5b.9** [TEST] Same file — add
+- [x] **P5b.9** [TEST] Same file — add
   `test_plan_revisions_fresh_flag_bypasses_serving`: `fresh=True` sends
   EVERY eligible candidate to `to_judge` regardless of persisted findings.
   **RED today**: same.
-- [ ] **P5b.10** [IMPL] Same module: `RevisionPlan` dataclass (coverage,
+- [x] **P5b.10** [IMPL] Same module: `RevisionPlan` dataclass (coverage,
   candidate plan, served findings, `to_judge`) and `plan_revisions(
   layout, decisions, *, embedding_model, effective_confidential, fresh)`
   — wires `read_decision_vectors` (P5a.12) into `DecisionInput`s (subject
@@ -1495,13 +1495,13 @@ leaf. Same module and test file as P5a.
 
 ### Slice P5b verification
 
-- [ ] **P5b.11** Run `uv run ruff check . && uv run ruff format --check . &&
+- [x] **P5b.11** Run `uv run ruff check . && uv run ruff format --check . &&
   uv run mypy .` — must be green.
-- [ ] **P5b.12** Run `uv run pytest tests/unit/application/test_revisions_service.py
+- [x] **P5b.12** Run `uv run pytest tests/unit/application/test_revisions_service.py
   -k "digest or is_fresh or plan_revisions"` focused, then the FULL
   `test_revisions_service.py` file (P5a + P5b together), then
   `uv run pytest` (unpiped) full suite — must be green.
-- [ ] **P5b.13** Commit as one or more work-unit commits (e.g. `feat(cli):
+- [x] **P5b.13** Commit as one or more work-unit commits (e.g. `feat(cli):
   add revision input digests, freshness, and candidate planning to the
   revisions service`). Open PR 9 (Slice P5b) targeting PR 8's branch.
 

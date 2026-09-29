@@ -60,6 +60,18 @@ tests). 690 authored changed lines, above the ~300-line forecast for a
 split P5 half — recommend `size:exception`, consistent with every prior
 oversized Phase A/B slice; see "Budget" below for the full accounting.
 
+**Phase B, Slice P5b (`P5b.1`–`P5b.13`, 13/13) complete** — this batch, on
+`feat/1014-phase-b-p5b-service-plan` (checked out off `main` at `932cb51`,
+which already contains P1/P2/P3/P4/P5a). PR 9 boundary: extends
+`src/openkos/application/revisions.py` with `revision_input_digests`,
+`is_fresh`, `RevisionPlan`, and `plan_revisions` (+ a behavior-preserving
+`_bundle_text_snapshot` extraction shared with `resolve_decision_dates`),
+plus 12 new tests in `tests/unit/application/test_revisions_service.py`
+(23 total in the file). 847 authored changed lines, above both the
+~300-line forecast and the 400-line review budget — recommend
+`size:exception`, consistent with every prior oversized Phase A/B slice;
+see "Budget" below for the full accounting.
+
 ---
 
 ## Slice 1 (PR 1 → `main`, merged): the subject-pass leaf,
@@ -985,3 +997,160 @@ oversized Phase A/B slice's recommendation.
   all now available), P3 (`state.revision_findings.open_revision_findings`,
   already merged), and Phase A's `plan_revision_candidates`/
   `revision_truncation_notice` leaf (already shipped).
+
+---
+
+## Phase B — Slice P5b (PR 9): service — input digests, freshness,
+candidate planning
+
+Branch `feat/1014-phase-b-p5b-service-plan`, checked out off `main` @
+`932cb51` (P1/P2/P3/P4/P5a already merged/committed via
+#1055/#1058/#1059/`7d46cd5`/`769843f`). Strict TDD throughout. Basis:
+design.md's "Phase B re-plan (2026-09-28)" Decision 2 (input digests, the
+strict freshness rule) and the "Interfaces (Phase B, current)"/"Data flow
+(current)" sections, which fix `revision_input_digests`/`is_fresh`/
+`plan_revisions`'s exact signatures. Extends the SAME module and test file
+P5a created.
+
+### Files changed
+
+| File | Action |
+|---|---|
+| `src/openkos/application/revisions.py` | Modified — extended |
+| `tests/unit/application/test_revisions_service.py` | Modified — extended |
+
+### TDD Cycle Evidence
+
+| Task(s) | Test file | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|---|---|
+| P5b.1–P5b.2 (`revision_input_digests`) | `test_revisions_service.py` | Unit | ✅ 11/11 (P5a, genuinely run before any edit) | ✅ genuinely observed: both new tests, plus every `is_fresh`/`plan_revisions` test that calls `revision_input_digests` through helper fixtures, run against the pre-edit module — `AttributeError: module 'openkos.application.revisions' has no attribute 'revision_input_digests'` (12 of 12 new tests failed on collection/first-call, 11 pre-existing P5a tests unaffected) | ✅ 23/23 passed (full file, after the whole P5b implementation) | ✅ two tests: the full ordinal-order/dedup/cross-side-union case (a Source reached by BOTH sides, one unique to each side, one dangling with no file) + the missing-source-row-count-differs case (before/after the file is created) | ➖ None needed |
+| P5b.3–P5b.4 (`is_fresh`) | `test_revisions_service.py` | Unit | ✅ (as above) | ✅ (same whole-batch `AttributeError` RED, confirmed via the shared collection failure before implementation) | ✅ 23/23 passed | ✅ 5 discrete tests covering the four-condition rule's cells: all-match->fresh, superseded (non-latest) row->not fresh, `prompt_version` mismatch->not fresh, `include_confidential` mismatch->not fresh (both directions), one-fewer-current-row->not fresh. Written as discrete functions rather than one `pytest.mark.parametrize` (each needs a materially different fixture shape — a second `record_revision_findings` call, a mismatched kwarg, a deleted file — parametrizing would need a mutator callable per case with no real duplication saved); the SAME 5 behavioral cells the task's "parametrized" wording named are all covered | ➖ None needed |
+| P5b.5–P5b.10 (`plan_revisions`, `RevisionPlan`) | `test_revisions_service.py` | Unit | ✅ (as above) | ✅ (same whole-batch RED) | ✅ 23/23 passed | ✅ 5 tests: unchanged->served/zero-to_judge, edited Decision body->only its own pairs stale (3-Decision fixture, all-pairs-candidate), edited Source `event_date`->only affected pairs stale (4-Decision, 2-disjoint-pair-cluster fixture via orthogonal embedding vectors), provenance path rewired through an intermediate concept->stale (Decision's own file/vector untouched), `fresh=True`->bypasses serving entirely | ➖ None needed |
+
+**Note on RED granularity** (same posture as every prior slice): a genuine
+whole-batch RED was captured for real this batch — all 12 new tests were
+written and run against the P5a-only module BEFORE any P5b production
+code existed, and every one failed at the exact predicted
+`AttributeError` (`revision_input_digests` first, since it is the first
+new name every other new test's fixture helper calls transitively). The
+11 pre-existing P5a tests stayed green throughout, confirming the
+`_bundle_text_snapshot` extraction (a behavior-preserving refactor of
+`resolve_decision_dates`'s prior inline block) broke nothing. The
+implementation was then written against design.md's fully-specified
+interfaces and verified GREEN as a whole (23/23). Correctness of each
+behavioral claim is proven by the six required mutation-kill runs below.
+
+**Fixture note on `plan_revisions`'s tests**: `_embed(dim_index)` builds an
+`EMBED_DIM`-length vector with a single `1.0` at `dim_index`; two vectors
+sharing an index have `cosine_similarity` exactly `1.0` (a candidate), two
+with different indices exactly `0.0` (never a candidate) — this lets every
+test control candidate membership deterministically without measuring a
+real embedding. The "edited Decision body" test explicitly re-upserts the
+edited Decision's vector with its NEW content hash after the edit,
+simulating an operator running `openkos reindex` — otherwise the SAME
+`content_hash` mismatch that should only stale the JUDGE FINDING would
+also stale the VECTOR, removing the Decision from candidacy entirely
+(`read_decision_vectors`'s `stale` partition) and hiding the very
+behavior under test (a pair remaining a candidate while its persisted
+finding goes stale).
+
+### Mutation-Kill Verification (mandatory per apply instructions)
+
+Each mutation was applied, verified to make the targeted test(s) FAIL,
+`__pycache__` purged (`find . -name __pycache__ -prune -exec rm -rf {} +`),
+then reverted with the exact inverse edit (never `git checkout --`), and
+the full `test_revisions_service.py` file re-verified GREEN (23/23) before
+moving to the next mutation.
+
+| # | Mutation | File / line | Test(s) that must fail | Result |
+|---|---|---|---|---|
+| 1 | `revision_input_digests`'s ordinal-5+ union narrowed to one side only (`all_reached = sorted(set(reached_by_id[id_0]))`, dropping `id_1`'s reached set) | `revisions.py`, `revision_input_digests` | `test_revision_input_digests_covers_both_decisions_and_their_reached_sources` | ✅ FAILED as expected: the ordinal-order list dropped `sources/only-b` (reached only by `decisions/b`'s side) entirely — proving the union genuinely combines BOTH sides, not a tautology that would pass even reading only one. Reverted. |
+| 2 | `revision_input_digests`'s ordinals 3-4 (`sources-of:<id>`) dropped entirely | `revisions.py`, `revision_input_digests` | `test_revision_input_digests_covers_both_decisions_and_their_reached_sources` | ✅ FAILED as expected: the ordinal-order list started with `sources/only-a` at index 2 instead of `sources-of:decisions/a` — the ID-list digest rows are load-bearing and enumerated by position, not merely present-or-absent. Reverted. |
+| 3 | `is_fresh`'s condition 1 (latest-row check) weakened from full-equality (`current != finding`) to existence-only (`current is None`) | `revisions.py`, `is_fresh` | `test_is_fresh_false_for_a_superseded_non_latest_row` | ✅ FAILED as expected: `assert True is False` — a stale in-memory copy of a REPLACEd row was accepted as fresh purely because SOME row still existed for that pair, exactly the defect condition 1 exists to catch. Reverted. |
+| 4 | `is_fresh`'s strict digest equality (`recomputed == current.input_digests`) weakened to a one-row tolerance (`len(recomputed) >= len(current.input_digests) - 1`) | `revisions.py`, `is_fresh` | `test_is_fresh_false_when_a_stored_input_became_unreadable` | ✅ FAILED as expected: `assert True is False` — a deleted Source file (one fewer current row) was tolerated as still fresh, exactly the lenient `None`-means-unchanged failure mode design.md Decision 2 explicitly forbids. Reverted. |
+| 5 | `plan_revisions`'s `fresh` flag short-circuit disabled (`if fresh:` -> `if False:`) | `revisions.py`, `plan_revisions` | `test_plan_revisions_fresh_flag_bypasses_serving` | ✅ FAILED as expected: `plan.served` held the persisted finding instead of `()` — `fresh=True` no longer bypassed serving. Reverted. |
+| 6 | `plan_revisions`'s `is_fresh` call removed from the served/to_judge partition (any persisted finding served unconditionally) | `revisions.py`, `plan_revisions` | `test_plan_revisions_edited_decision_body_rejudges_only_its_own_pairs`, `test_plan_revisions_edited_source_event_date_rejudges_only_affected_pairs`, `test_plan_revisions_provenance_path_change_marks_stale` | ✅ FAILED as expected, all 3 simultaneously: every previously-judged pair was served even after its inputs changed — `to_judge` came back empty where each test expected the affected pair(s). Reverted. |
+
+All six mutations killed by the existing tests (no additional test was
+needed for this slice). `find . -name __pycache__ -prune -exec rm -rf {} +`
+was run before every GREEN/RED verdict, and every revert used the exact
+inverse edit — never `git checkout --`. Mutation 1 is notable because a
+mutation to `revision_input_digests` that is applied CONSISTENTLY at both
+write-time (via `_record_current_finding`'s helper) and read-time (via
+`is_fresh`'s internal recompute) is self-consistent and invisible to any
+`plan_revisions`-level test — this is why the direct
+`revision_input_digests` unit tests (which independently compute the
+expected sha256 in the test itself, never by calling the production
+function twice) are the only tests that can catch it; this was confirmed
+by first attempting mutation 1 against a `plan_revisions`-level fixture,
+observing it did NOT fail (self-consistency), then re-targeting the direct
+digest test instead.
+
+### Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `uv run pytest tests/unit/application/test_revisions_service.py -k "digest or is_fresh or plan_revisions"` → **12 passed**; full file `uv run pytest tests/unit/application/test_revisions_service.py -v` → **23 passed** |
+| Runtime harness command/scenario and exact result | N/A — a zero-LLM, zero-embed planning seam with no CLI wiring yet (tasks.md's own Slice P5b description: "Same module and test file as P5a"); the first runtime consumer is P6's `judge_revisions` and P7b's `openkos revisions` verb, neither implemented yet |
+| Rollback boundary | Revert the P5b additions to `src/openkos/application/revisions.py` (`revision_input_digests`, `is_fresh`, `RevisionPlan`, `plan_revisions`, `_SOURCES_OF_PREFIX`, and the `_bundle_text_snapshot` extraction) and `tests/unit/application/test_revisions_service.py` (12 new tests); P5a's `load_decisions`/`resolve_decision_dates`/`read_decision_vectors` and their 11 tests are untouched. `git revert 64a6787` cleanly isolates this — no other module imports any P5b name yet |
+
+### Full Verification (this work unit)
+
+| Command | Result |
+|---|---|
+| `uv run ruff check .` | All checks passed! |
+| `uv run ruff format --check .` | Failed once (`revisions.py`, `test_revisions_service.py` needed reformatting after the additions) → ran `uv run ruff format` on both files → re-verified `--check .`: **353 files already formatted** |
+| `uv run mypy .` | Success: no issues found in 353 source files |
+| `uv run pytest --cov` (full, unpiped) | **6857 passed, 2 skipped** in 415.61s, exit 0 (up from Slice P5a's 6845 baseline + this slice's 12 new tests); coverage 97.02%, gate 90% reached |
+| `uv run python evals/run_self_tests.py` | **43 of 43 harness self-test(s) run, 0 failing** |
+
+`git diff --shortstat 932cb51..HEAD` (this slice's one commit) = **847
+insertions(+), 20 deletions(-)**, 2 files changed.
+
+### Commit
+
+`64a6787` — `feat(revisions): add revision input digests, freshness, and
+candidate planning (#1014)` (scope `revisions`, matching P5a's own
+established precedent for this module's first commit). 2 files changed,
+847 insertions(+), 20 deletions(-). Staged explicitly by path
+(`src/openkos/application/revisions.py`,
+`tests/unit/application/test_revisions_service.py`) — `openspec/` was left
+uncommitted in the working tree until this section's own final `docs(sdd)`
+commit, same posture as every prior Phase B slice. Not pushed. No PR
+opened. Branched from `main` @ `932cb51` on
+`feat/1014-phase-b-p5b-service-plan`.
+
+**Scope**: `revisions`, reusing P5a's own scope choice and reasoning
+(`git log --oneline -- src/openkos/application/*.py` shows every new
+`application/` module scoped after its own domain name; this commit
+extends the SAME module P5a already scoped `revisions`, so consistency
+within one module's commit history is the deciding factor over any
+alternative).
+
+**Budget**: 847 authored changed lines (`git diff --shortstat` for the
+commit), above both the ~300-line forecast for a split P5 half (design.md's
+Phase B re-plan slice table) and the 400-line review budget — consistent
+with every prior oversized Phase A/B slice's own recorded "~1.95x
+actual-vs-forecast" pattern (design.md names this explicitly). The overage
+is dense docstrings matching this repo's established convention (every new
+public symbol carries a design.md-cross-referenced docstring) plus the
+fixture-heavy tests design.md's own P5 testing row names: real on-disk
+`.openkos/vectors.db` builds through `vectorstore.open_vector_store`, a
+real `.openkos/findings.db` through `record_revision_findings`, and
+multi-Decision provenance fixtures (3-Decision all-pairs, 4-Decision
+2-cluster) needed to prove ONLY the affected pairs move to `to_judge`. No
+test, docstring, or blank line was shortened to chase the 400-line number,
+per the work-unit-commits skill's "budget is not code-golf" rule. This is
+already the smallest cohesive unit the design assigns (P5's own serving
+half, already split from P5a's planning half) — recommend `size:exception`
+for this slice, consistent with every prior Phase A/B slice's
+recommendation.
+
+### Remaining Tasks (Phase B, as of the P5b batch)
+
+- Slice P5b's 13/13 tasks are complete.
+- Slices P6 through P8b remain, in chain order, each as its own PR, per
+  tasks.md's "Phase B: tasks (2026-09-28 re-plan)" section. P6 depends on
+  P5b (`plan_revisions`, `is_fresh`, both now available), P3
+  (`record_revision_findings`, already merged), and Phase A's
+  `judge_pairs`/`is_actionable_revision` leaf (already shipped).
