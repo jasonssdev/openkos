@@ -378,7 +378,7 @@ sensitivity lift yet — that is Phase 3.
 
 ### `model/okf.py` — `build_source_concept(source_frontmatter=...)`
 
-- [ ] **2.1** [TEST] `tests/unit/model/test_okf.py` — add
+- [x] **2.1** [TEST] `tests/unit/model/test_okf.py` — add
   `test_build_source_concept_emits_source_frontmatter_when_given`: calling
   `build_source_concept(..., source_frontmatter={"tags": ["alpha"], "author":
   "A"})` yields frontmatter carrying `source_frontmatter` equal to that
@@ -387,7 +387,7 @@ sensitivity lift yet — that is Phase 3.
   the input after the call). Covers ingestion scenario "Valid frontmatter is
   preserved verbatim under source_frontmatter". **RED today**: `TypeError`
   — `build_source_concept` has no `source_frontmatter` parameter.
-- [ ] **2.2** [TEST] Same file — add
+- [x] **2.2** [TEST] Same file — add
   `test_build_source_concept_omits_source_frontmatter_when_none`: calling
   `build_source_concept(...)` with no `source_frontmatter` argument (the
   default) produces a document byte-identical to the CURRENT pre-Phase-2
@@ -400,7 +400,7 @@ sensitivity lift yet — that is Phase 3.
   change, not assumed. **MUTATION**: make the new code path always insert
   `source_frontmatter: None` even when absent, and confirm this test
   catches the extra key (a `None`-valued key is not "no key").
-- [ ] **2.3** [TEST] Same file — add
+- [x] **2.3** [TEST] Same file — add
   `test_build_source_concept_no_anchor_or_alias_when_tags_share_values_with_source_frontmatter`:
   build a document where a lifted tag list and `source_frontmatter["tags"]`
   reference the exact SAME list object at the call site, and assert the
@@ -414,7 +414,7 @@ sensitivity lift yet — that is Phase 3.
   first run after 2.4, temporarily remove the `copy.deepcopy` call and
   confirm this test THEN fails, to prove it is exercised (mutation-proof
   per this file's header rule).
-- [ ] **2.4** [IMPL] `src/openkos/model/okf.py`: add `source_frontmatter:
+- [x] **2.4** [IMPL] `src/openkos/model/okf.py`: add `source_frontmatter:
   Mapping[str, object] | None = None` to `build_source_concept`'s
   signature; when not `None`, emit `metadata[SOURCE_FRONTMATTER_KEY] =
   copy.deepcopy(source_frontmatter)` (import `copy` at module top). Makes
@@ -422,7 +422,7 @@ sensitivity lift yet — that is Phase 3.
 
 ### `application/ingest.py` — `compose_source_document` wiring (both builds)
 
-- [ ] **2.5** [TEST] `tests/unit/application/test_ingest.py` — add
+- [x] **2.5** [TEST] `tests/unit/application/test_ingest.py` — add
   `test_compose_source_document_parses_and_forwards_frontmatter`: a fixture
   whose decoded `raw_content` opens with a well-formed YAML frontmatter
   block reaches `compose_source_document`, and the returned
@@ -433,7 +433,7 @@ sensitivity lift yet — that is Phase 3.
   frontmatter yields source_frontmatter and lifted tags" (frontmatter
   half). **RED today**: `AssertionError` — `compose_source_document` does
   not call `parse_incoming_frontmatter` yet.
-- [ ] **2.6** [TEST] Same file — add
+- [x] **2.6** [TEST] Same file — add
   `test_compose_source_document_malformed_frontmatter_lifts_nothing`: a
   fixture whose leading block is malformed YAML still produces a
   successful plan with no `source_frontmatter` key and unchanged
@@ -442,7 +442,7 @@ sensitivity lift yet — that is Phase 3.
   wired naively to propagate an exception — 1.11 already guarantees
   `parse_incoming_frontmatter` never raises, so this test pins the CALL
   SITE also never raises, not just the parser.
-- [ ] **2.7** [TEST] Same file — add
+- [x] **2.7** [TEST] Same file — add
   `test_compose_source_document_frontmatter_free_is_byte_identical`: a
   fixture with NO leading frontmatter block produces a
   `SourceDocumentPlan.content` byte-identical to the plan computed by the
@@ -453,7 +453,7 @@ sensitivity lift yet — that is Phase 3.
   **RED today**: passes vacuously until 2.5 is wired — write it alongside
   2.5/2.6 and confirm it stays GREEN once 2.8 lands (a genuine regression
   pin, not a new behavior).
-- [ ] **2.8** [IMPL] `src/openkos/application/ingest.py`: inside
+- [x] **2.8** [IMPL] `src/openkos/application/ingest.py`: inside
   `compose_source_document`, after the existing `raw_content is None or not
   raw_content.strip()` guard (the SAME guard that already gates
   `derive_source_title`, per 1.16/1.17's plan), call
@@ -464,7 +464,7 @@ sensitivity lift yet — that is Phase 3.
   identically here — Phase 3 differentiates `"parsed"`'s mapping content
   for lifting, but no other status ever reaches the builder). Makes
   2.5-2.7 GREEN.
-- [ ] **2.9** [TEST] `tests/unit/application/test_ingest.py` — add
+- [x] **2.9** [TEST] `tests/unit/application/test_ingest.py` — add
   `test_compose_catalog_update_second_build_carries_source_frontmatter`:
   drive a run where `stage_derived_objects` returns a non-`None`
   `skip_reason` (forcing `compose_catalog_update`'s conditional rebuild
@@ -478,7 +478,7 @@ sensitivity lift yet — that is Phase 3.
   it. **MUTATION**: after fixing, revert only this call site's
   `source_frontmatter=` argument and confirm this test fails (proves the
   test exercises the SECOND build, not the first).
-- [ ] **2.10** [IMPL] `src/openkos/application/ingest.py`: give
+- [x] **2.10** [IMPL] `src/openkos/application/ingest.py`: give
   `SourceDocumentPlan` a `source_frontmatter: Mapping[str, object] | None =
   None` field, set it in `compose_source_document`'s return alongside
   `content`/`event_date` (same mapping value passed to the first
@@ -492,7 +492,7 @@ sensitivity lift yet — that is Phase 3.
 
 ### CLI skip condition — frontmatter delta (Decision 7, part 1 of 3)
 
-- [ ] **2.11** [TEST] `tests/unit/cli/test_ingest.py` — add
+- [x] **2.11** [TEST] `tests/unit/cli/test_ingest.py` — add
   `test_reingest_converged_source_with_new_frontmatter_triggers_rewrite`:
   build a Source via a real ingest with NO frontmatter, confirm it
   converges to a no-op on a plain re-ingest (existing behavior, asserted as
@@ -508,7 +508,7 @@ sensitivity lift yet — that is Phase 3.
   changed`, `cli/main.py:5388`) fires regardless of a new
   `source_frontmatter`, so the run wrongly reports "skipping extraction"
   with nothing rewritten.
-- [ ] **2.12** [TEST] Same file — add
+- [x] **2.12** [TEST] Same file — add
   `test_reingest_converged_source_with_unchanged_frontmatter_stays_converged`:
   the PRECONDITION-then-check pair for the opposite case — a Source already
   carrying `source_frontmatter` equal to what THIS run would parse converges
@@ -518,7 +518,7 @@ sensitivity lift yet — that is Phase 3.
   today**: passes vacuously (no `lift_changed` exists yet, so nothing new
   could fire) — write it now as a regression pin so 2.13's new condition
   cannot accidentally widen the skip.
-- [ ] **2.13** [IMPL] `src/openkos/application/ingest.py`: add a
+- [x] **2.13** [IMPL] `src/openkos/application/ingest.py`: add a
   `lift_changed: bool = False` field to `SourceDocumentPlan`, computed in
   `compose_source_document` as (for THIS slice) exactly one delta: the
   freshly parsed `source_frontmatter` (from 2.8, `None` unless status is
@@ -531,14 +531,14 @@ sensitivity lift yet — that is Phase 3.
   from `if converged is not None and not source_plan.event_date.changed:`
   to `if converged is not None and not source_plan.event_date.changed and
   not source_plan.lift_changed:`. Makes 2.11-2.12 GREEN.
-- [ ] **2.14** [TEST] `tests/unit/cli/test_ingest.py` — add
+- [x] **2.14** [TEST] `tests/unit/cli/test_ingest.py` — add
   `test_source_only_rewrite_preview_names_recorded_frontmatter`: the
   Source-only rewrite triggered SOLELY by a newly-parsed
   `source_frontmatter` mapping holding 3 top-level keys prints, before
   Phase B writes, a line reading exactly `source frontmatter recorded (3
   key(s))`. Covers "The preview names the recorded frontmatter when that
   delta fires". **RED today**: `AssertionError` — no such line is printed.
-- [ ] **2.15** [IMPL] `src/openkos/cli/main.py`: inside the
+- [x] **2.15** [IMPL] `src/openkos/cli/main.py`: inside the
   Source-only-rewrite branch (the `else` that falls through past the
   updated skip condition, before/alongside `_echo_event_date_preview_line`
   at lines 5600/5609), print `f"    source frontmatter recorded ({len(
@@ -552,7 +552,7 @@ sensitivity lift yet — that is Phase 3.
 
 ### `_SPECIAL_KEYS` and merge exclusion (Decision 8)
 
-- [ ] **2.16** [TEST] `tests/unit/model/test_okf.py` — add
+- [x] **2.16** [TEST] `tests/unit/model/test_okf.py` — add
   `test_build_merged_document_source_frontmatter_survivor_only`: a survivor
   with no `source_frontmatter` and an absorbed object declaring
   `source_frontmatter: {tags: [alpha]}` merges to a document with NO
@@ -561,7 +561,7 @@ sensitivity lift yet — that is Phase 3.
   `AssertionError` — the generic fill-the-gap branch currently imports it
   from the absorbed side, since `source_frontmatter` is not yet in
   `_SPECIAL_KEYS`.
-- [ ] **2.17** [TEST] Same file — add
+- [x] **2.17** [TEST] Same file — add
   `test_build_merged_document_source_frontmatter_survivor_wins`: both sides
   declaring a DIFFERENT `source_frontmatter` merges to the SURVIVOR's own
   value, unaffected by the absorbed side's. Covers "The survivor keeps its
@@ -571,11 +571,11 @@ sensitivity lift yet — that is Phase 3.
   a regression pin once `SOURCE_FRONTMATTER_KEY` is added to
   `_SPECIAL_KEYS`, since the exclusion changes WHICH branch handles it, not
   just the gap-fill case.
-- [ ] **2.18** [IMPL] `src/openkos/model/okf.py`: add
+- [x] **2.18** [IMPL] `src/openkos/model/okf.py`: add
   `SOURCE_FRONTMATTER_KEY` to `build_merged_document`'s `_SPECIAL_KEYS`
   tuple (`model/okf.py:2052-2061`), beside `EVENT_DATE_KEY`. Makes
   2.16-2.17 GREEN.
-- [ ] **2.19** [TEST] `tests/unit/bundle` (the existing merge/unmerge round-
+- [x] **2.19** [TEST] `tests/unit/bundle` (the existing merge/unmerge round-
   trip test module — confirm exact file name during implementation, likely
   `tests/unit/application/test_merge.py` or `tests/unit/cli/test_merge.py`)
   — add `test_unmerge_restores_absorbed_source_frontmatter`: after a real
@@ -591,7 +591,7 @@ sensitivity lift yet — that is Phase 3.
 
 ### `migrate_document` Unchanged pin (Decision 9)
 
-- [ ] **2.20** [TEST] `tests/unit/model/test_okf_migrate_document.py`
+- [x] **2.20** [TEST] `tests/unit/model/test_okf_migrate_document.py`
   (existing file from the merged okf-v02-migration change) — add
   `test_migrate_document_unchanged_with_nested_engine_owned_keys_in_source_frontmatter`:
   a v0.2 Source document (already carrying `generated`, `status: stable`,
@@ -611,7 +611,7 @@ sensitivity lift yet — that is Phase 3.
 
 ### Regression: MCP `get` discloses no new egress
 
-- [ ] **2.21** [TEST] `tests/unit/mcp/test_gate.py` or `tests/unit/mcp/
+- [x] **2.21** [TEST] `tests/unit/mcp/test_gate.py` or `tests/unit/mcp/
   test_server.py` (confirm the exact existing test module covering the
   concept-payload field set) — add
   `test_mcp_concept_payload_never_discloses_source_frontmatter`: a Source

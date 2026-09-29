@@ -161,3 +161,138 @@ the number.
 All Phase 1 tasks complete. `next_recommended: sdd-archive` (verification
 optional per the SDD contract) or `sdd-apply` again for Phase 2 (Verbatim
 preserve, PR 2 → `main`, after this PR merges).
+
+## Slice 2 (PR 2 → `main`, after PR 1 merges): Phase 2 — Verbatim preserve
+
+**Status**: COMPLETE — 25/25 tasks done (2.1-2.25). Strict TDD mode, runner
+`uv run pytest`. Branch `feat/1062-frontmatter-p2`, stacked on the
+not-yet-merged slice-1 branch (PR #1088) at `3888fb9`.
+
+**Scope**: `source_frontmatter` emission in `build_source_concept`;
+`compose_source_document` wiring for BOTH `build_source_concept` call sites
+(the fresh build and `compose_catalog_update`'s conditional rebuild);
+`source_frontmatter` in `build_merged_document`'s `_SPECIAL_KEYS`;
+`lift_changed` (frontmatter delta only) gating the CLI's #773 convergence
+skip; the Source-only-rewrite preview line; the `migrate_document`
+`Unchanged` pin; task 1.16's deferred call-site contract test.
+
+### Completed Tasks
+
+- [x] 2.1-2.3 `test_build_source_concept_emits_source_frontmatter_when_given`,
+      `..._omits_source_frontmatter_when_none`,
+      `..._no_anchor_or_alias_when_tags_share_values_with_source_frontmatter`
+- [x] 2.4 `build_source_concept(source_frontmatter=...)`, `copy.deepcopy`d
+- [x] 2.5-2.7 `test_compose_source_document_parses_and_forwards_frontmatter`,
+      `..._malformed_frontmatter_lifts_nothing`,
+      `..._frontmatter_free_is_byte_identical`
+- [x] 2.8 `compose_source_document` calls `okf.parse_incoming_frontmatter`
+      behind the SAME guard as `derive_source_title` (task 1.16's deferred
+      test added here, per the Phase 1 deferral note)
+- [x] 2.9 `test_compose_catalog_update_second_build_carries_source_frontmatter`
+- [x] 2.10 `SourceDocumentPlan.source_frontmatter`; `compose_catalog_update`'s
+      conditional rebuild passes `source_frontmatter=source.source_frontmatter`
+- [x] 2.11-2.12 `test_reingest_converged_source_with_new_frontmatter_triggers_rewrite`,
+      `..._with_unchanged_frontmatter_stays_converged`
+- [x] 2.13 `SourceDocumentPlan.lift_changed` (frontmatter delta this slice);
+      CLI skip condition gains `and not source_plan.lift_changed`
+- [x] 2.14 `test_source_only_rewrite_preview_names_recorded_frontmatter`
+- [x] 2.15 `source frontmatter recorded ({n} key(s))` preview line, guarded
+      on `converged is not None and source_plan.lift_changed`
+- [x] 2.16-2.17 `test_build_merged_document_source_frontmatter_survivor_only`,
+      `..._survivor_wins` (2.17 passed vacuously — regression pin)
+- [x] 2.18 `SOURCE_FRONTMATTER_KEY` added to `build_merged_document`'s
+      `_SPECIAL_KEYS`
+- [x] 2.19 `test_unmerge_restores_absorbed_source_frontmatter` — passed on
+      first run (unmerge restores from the full-document `merged_from`
+      ledger snapshot, not field-by-field reconstruction — confirmed the
+      case task 2.19 flagged as possible; test kept as the regression pin)
+- [x] 2.20 `test_migrate_document_unchanged_with_nested_engine_owned_keys_in_source_frontmatter`
+      — passed on first run (`migrate_document`'s rules already read only
+      top-level keys; test-only, no implementation change)
+- [x] 2.21 `test_read_concept_never_discloses_source_frontmatter` — passed
+      on first run (`ConceptRecord`'s curated field set already excludes
+      `source_frontmatter`; test-only, no implementation change)
+- [x] 2.22 `ruff check` / `ruff format --check` / `mypy` — green (one mypy
+      fix needed in the new migrate_document test: `isinstance(nested, dict)`
+      narrowing before subscripting an `object`-typed value)
+- [x] 2.23 focused command green (702 passed); full `pytest --cov` green —
+      7098 passed, 2 skipped, 96.92% coverage (gate 90%)
+- [x] 2.24 `evals/run_self_tests.py` — 44/44 green
+- [x] 2.25 committed — see Commits
+
+### Files Changed
+
+| File | Action | What |
+|---|---|---|
+| `src/openkos/model/okf.py` | Modified | `import copy`; `build_source_concept(source_frontmatter=...)`, `copy.deepcopy`d emission; `SOURCE_FRONTMATTER_KEY` added to `build_merged_document`'s `_SPECIAL_KEYS` |
+| `src/openkos/application/ingest.py` | Modified | `_read_source_frontmatter` helper; `compose_source_document` parses incoming frontmatter behind the existing blank/non-UTF-8 guard, computes `source_frontmatter`/`lift_changed`, forwards `source_frontmatter` to `build_source_concept`; `SourceDocumentPlan` gains `source_frontmatter`/`lift_changed`; `compose_catalog_update`'s conditional rebuild call carries `source_frontmatter=` |
+| `src/openkos/cli/main.py` | Modified | #773 skip condition gains `and not source_plan.lift_changed`; Source-only-rewrite preview gains the `source frontmatter recorded (N key(s))` line |
+| `tests/unit/model/test_okf.py` | Modified | 2.1-2.3, 2.16-2.17 tests |
+| `tests/unit/application/test_ingest.py` | Modified | 2.5-2.7, 2.9, and the deferred-1.16 call-site-contract test |
+| `tests/unit/cli/test_ingest.py` | Modified | 2.11-2.12, 2.14 tests |
+| `tests/unit/cli/test_merge_roundtrip.py` | Modified | 2.19 unmerge round-trip test |
+| `tests/unit/model/test_okf_migrate_document.py` | Modified | 2.20 `Unchanged` pin |
+| `tests/unit/application/test_concept_read.py` | Modified | 2.21 MCP non-disclosure regression pin |
+| `openspec/changes/preserve-source-frontmatter/tasks.md` | Modified | 2.1-2.25 marked `[x]` |
+| `openspec/changes/preserve-source-frontmatter/apply-progress.md` | Modified | this section |
+
+### TDD Cycle Evidence
+
+| Task(s) | Test file | RED (observed) | GREEN | Mutation |
+|---|---|---|---|---|
+| 2.1-2.3 | `test_okf.py` | `TypeError: build_source_concept() got an unexpected keyword argument 'source_frontmatter'` (2.1, 2.3); 2.2 written to fail via explicit `source_frontmatter=None` for the same reason | 3/3 after 2.4 | removing `copy.deepcopy` (kept plain assignment) flipped 2.3's anchor test to fail with a literal `&id001`/`*id001` pair in the dumped text; restored with the exact inverse edit |
+| 2.5-2.7 | `test_ingest.py` (application) | 2.5: `KeyError: 'source_frontmatter'`; 2.6/2.7 passed vacuously (predicted — no call site existed yet) | 2.5-2.7 GREEN after 2.8 | N/A (no mutation task assigned to 2.5-2.7) |
+| deferred 1.16 | `test_ingest.py` (application) | `assert 0 == 1` on the PRECONDITION (spy never fired for ordinary content, since the call site didn't exist) | GREEN after 2.8 | N/A |
+| 2.9 | `test_ingest.py` (application) | `KeyError: 'source_frontmatter'` on `source.content` itself (before 2.10 even the first build lacked the field access path); after 2.8 alone, RED became the rebuild's frontmatter staying absent | GREEN after 2.10 | reverting only the second call site's `source_frontmatter=` argument reproduced `assert None == {'author': 'Jane'}`; restored with the exact inverse edit |
+| 2.11 | `test_ingest.py` (cli) | precondition passed (plain re-ingest converges); final assertion `KeyError: 'source_frontmatter'` before 2.13 | GREEN after 2.13 | N/A (no mutation task assigned) |
+| 2.12 | `test_ingest.py` (cli) | passed vacuously (predicted) | stayed GREEN after 2.13 | N/A |
+| 2.14 | `test_ingest.py` (cli) | `AssertionError: assert 'source frontmatter recorded (3 key(s))' in ''` | GREEN after 2.15 | N/A |
+| 2.16 | `test_okf.py` | `AssertionError: assert 'source_frontmatter' not in {...}` (absorbed value crossed the merge) | GREEN after 2.18 | N/A |
+| 2.17 | `test_okf.py` | passed vacuously (predicted) | stayed GREEN after 2.18 | N/A |
+| 2.19 | `test_merge_roundtrip.py` | passed on first run (regression pin — full-snapshot restore) | N/A | N/A |
+| 2.20 | `test_okf_migrate_document.py` | passed on first run (regression pin) | N/A | N/A |
+| 2.21 | `test_concept_read.py` | passed on first run (regression pin) | N/A | N/A |
+
+All `__pycache__` purged before each verdict; every mutation reverted with
+the exact inverse edit.
+
+### Deviations from Design
+
+None — implementation matches design.md Decisions 1, 2, 7, 8, 9. Three
+tasks (2.19, 2.20, 2.21) landed as pure regression pins with no production
+code change, exactly the outcome design.md's own text anticipated for each
+("this may already pass", "confirm this and record it as a regression
+pin", "confirm this explicitly").
+
+### Issues Found
+
+None.
+
+### Review Workload / Size
+
+Actual authored changed lines for this work unit: **672 insertions + 12
+deletions across 9 files** (`git diff --shortstat 3888fb9..470db03`,
+excluding the second, docs-only commit). This exceeds the review budget
+(400) and
+design.md's own forecast for Slice 2 (~300-450). Phase 2 is defined as one
+indivisible PR in `tasks.md`'s Suggested Work Units table (PR 2 = Phase 2
+in full): splitting further would separate a `[TEST]`/`[IMPL]` pair across
+PR boundaries, or separate `_SPECIAL_KEYS`'s merge exclusion from the
+builder change it depends on. Per session config, `size:exception` is
+invoked for this slice (owner pre-approved this outcome for unsplittable
+slices); no attempt was made to shrink the diff by cutting tests, comments,
+or docstrings to fit the number.
+
+### Commits
+
+1. `470db03` — `feat(ingest): preserve incoming frontmatter verbatim under source_frontmatter (#1062)`
+   (code + all tests; 672 insertions, 12 deletions, 9 files)
+2. (this commit) — `docs(sdd): record frontmatter slice 2 progress (#1062)`
+   (`tasks.md` checkbox updates + this file)
+
+### Next
+
+All Phase 2 tasks complete. `next_recommended: sdd-archive` (verification
+optional per the SDD contract) or `sdd-apply` again for Phase 3 (Source
+lift: tags + sensitivity, PR 3 → `main`, after this PR merges) or Phase 4
+(date lift, independent of Phase 3, also after this PR merges).
