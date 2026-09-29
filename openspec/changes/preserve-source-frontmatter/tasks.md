@@ -626,17 +626,17 @@ sensitivity lift yet — that is Phase 3.
 
 ### Phase 2 verification
 
-- [ ] **2.22** Run `uv run ruff check . && uv run ruff format --check . &&
+- [x] **2.22** Run `uv run ruff check . && uv run ruff format --check . &&
   uv run mypy .` — must be green.
-- [ ] **2.23** Run `uv run pytest tests/unit/model/test_okf.py
+- [x] **2.23** Run `uv run pytest tests/unit/model/test_okf.py
   tests/unit/application/test_ingest.py tests/unit/cli/test_ingest.py
   tests/unit/model/test_okf_migrate_document.py tests/unit/test_sources_key_guard.py`
   focused, then `uv run pytest --cov` (unpiped) full suite — must be
   green, 90% branch gate held. `test_sources_key_guard.py` runs UNMODIFIED
   and must stay green — this slice reads no `"sources"` literal and writes
   no new `"provenance"` key.
-- [ ] **2.24** Run `uv run python evals/run_self_tests.py` — must be green.
-- [ ] **2.25** Commit as one or more work-unit commits, scope `okf`/`ingest`
+- [x] **2.24** Run `uv run python evals/run_self_tests.py` — must be green.
+- [x] **2.25** Commit as one or more work-unit commits, scope `okf`/`ingest`
   (e.g. `feat(ingest): preserve incoming frontmatter verbatim under
   source_frontmatter`). Open PR 2 (Phase 2: verbatim preserve) targeting
   `main`, branched from `main` after PR 1 merges.
