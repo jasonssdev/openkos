@@ -18,7 +18,7 @@ test file, never by a cross-import of that private name.
 forget to bump the version a future cache key would consume.
 
 `derive_subjects`'s batch loop is copied from `contradiction.find_contradictions`
-(`contradiction.py:1175-1231`): only `llm.chat` sits inside the `OllamaError`
+(`contradiction.py:1175-1231`): only `llm.chat` sits inside the `BackendError`
 guard, and a raised error returns the completed prefix rather than
 propagating (issue #441's contract, reapplied here).
 
@@ -37,8 +37,7 @@ from dataclasses import dataclass, field
 from typing import Final
 
 from openkos.llm import parsing
-from openkos.llm.base import LLMBackend, Message
-from openkos.llm.ollama import OllamaError
+from openkos.llm.base import BackendError, LLMBackend, Message
 
 _MAX_SUBJECT_CHARS: Final = 200
 """Upper length bound on the `subject` field. A Decision's subject is a
@@ -192,14 +191,14 @@ class SubjectBatch:
     """The result of one `derive_subjects` run: `results` holds
     `(concept_id, DecisionSubject | None)` in request order -- `None`
     marks a malformed reply for that Decision, never an aborted run. A
-    raised `OllamaError` mid-loop stops the batch and is carried in
+    raised `BackendError` mid-loop stops the batch and is carried in
     `failure`/`failed_index` (the 1-based index of the request whose
     `chat` raised) rather than propagating, so every already-paid-for
     result in `results` survives (issue #441's contract). A complete run
     returns `failure=None, failed_index=None`."""
 
     results: list[tuple[str, DecisionSubject | None]] = field(default_factory=list)
-    failure: OllamaError | None = None
+    failure: BackendError | None = None
     failed_index: int | None = None
 
 
@@ -212,7 +211,7 @@ def derive_subjects(
     """Run the subject pass for every `requests` entry, one `llm.chat` call
     each, in order.
 
-    Only `llm.chat` sits inside the `OllamaError` guard: a raised error
+    Only `llm.chat` sits inside the `BackendError` guard: a raised error
     stops the loop and returns the completed prefix (`failure`/
     `failed_index` set), never discarding results already paid for. A
     parse failure for one request degrades that entry to `(concept_id,
@@ -232,7 +231,7 @@ def derive_subjects(
         )
         try:
             reply = llm.chat(messages)
-        except OllamaError as exc:
+        except BackendError as exc:
             return SubjectBatch(results=results, failure=exc, failed_index=index)
         subject = parse_subject_reply(reply, request.body)
         results.append((request.concept_id, subject))

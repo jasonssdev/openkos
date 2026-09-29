@@ -69,8 +69,7 @@ from typing import Final, Literal, cast
 
 from openkos import event_dates
 from openkos.llm import parsing
-from openkos.llm.base import LLMBackend, Message
-from openkos.llm.ollama import OllamaError
+from openkos.llm.base import BackendError, LLMBackend, Message
 from openkos.resolution import similarity
 from openkos.resolution.decision_subject import quoted_verbatim
 from openkos.resolution.normalize import normalize_key
@@ -787,13 +786,13 @@ class RevisionBatch:
     """The result of one `judge_pairs` run -- the same partial-batch
     contract as `decision_subject.SubjectBatch`/`find_contradictions`
     (issue #441): `results` holds every completed `RevisionVerdict` in
-    request order; a raised `OllamaError` mid-loop stops the batch and is
+    request order; a raised `BackendError` mid-loop stops the batch and is
     carried in `failure`/`failed_index` (1-based) rather than propagating,
     so every already-paid-for result survives. A complete run returns
     `failure=None, failed_index=None`."""
 
     results: list[RevisionVerdict] = field(default_factory=list)
-    failure: OllamaError | None = None
+    failure: BackendError | None = None
     failed_index: int | None = None
 
 
@@ -931,7 +930,7 @@ def judge_pairs(
     (design.md Decision 6) -- the same loop shape as
     `decision_subject.derive_subjects`/`find_contradictions`.
 
-    Only `llm.chat` sits inside the `OllamaError` guard: a raised error
+    Only `llm.chat` sits inside the `BackendError` guard: a raised error
     stops the loop and returns the completed prefix (`failure`/
     `failed_index` set), never discarding results already paid for. A
     reply that fails to parse (`parse_judge_reply` returns `None`)
@@ -950,7 +949,7 @@ def judge_pairs(
         messages = build_judge_messages(a, b)
         try:
             reply = llm.chat(messages)
-        except OllamaError as exc:
+        except BackendError as exc:
             return RevisionBatch(results=results, failure=exc, failed_index=index)
 
         pair_ids, dates = _sorted_pair(a, b)

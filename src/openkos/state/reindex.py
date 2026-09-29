@@ -21,11 +21,11 @@ docs genuinely gone from the bundle; a doc that exists on disk but failed to
 read/parse/decode is counted as `skipped` (PERMANENT), never pruned,
 mirroring `fts.build_index`'s degrade-not-crash posture for a transient
 per-doc failure. A doc that reads/parses fine but whose embed call
-transiently fails (the generic `OllamaError` EOF class, after the client-
+transiently fails (the generic `BackendError` EOF class, after the client-
 layer retry budget is exhausted) is counted separately as `embed_failed`
 (TRANSIENT) -- also never pruned, but distinct from `skipped` since a re-run
-gives it another chance. `OllamaUnavailable`/`OllamaModelNotFound`/
-`OllamaEmbeddingDimensionMismatch` mid-loop are NOT per-doc failures at all:
+gives it another chance. `BackendUnavailable`/`BackendModelNotFound`/
+`BackendEmbeddingDimensionMismatch` mid-loop are NOT per-doc failures at all:
 they re-raise immediately, propagating out of this function
 (reindex-embedding-resilience: Per-Doc Embed Failure Is Isolated, Not
 Fatal). WHEN `okf._walk_errors(bundle_dir)` reports one or
@@ -62,12 +62,12 @@ from typing import Final
 
 from openkos import sensitivity as sensitivity_policy
 from openkos.extraction.concept import _chunk_lines
-from openkos.llm.base import Embedder
-from openkos.llm.ollama import (
-    OllamaEmbeddingDimensionMismatch,
-    OllamaError,
-    OllamaModelNotFound,
-    OllamaUnavailable,
+from openkos.llm.base import (
+    BackendEmbeddingDimensionMismatch,
+    BackendError,
+    BackendModelNotFound,
+    BackendUnavailable,
+    Embedder,
 )
 from openkos.model import okf
 from openkos.state import derived, fts
@@ -183,7 +183,7 @@ class ReindexReport:
     file still exists; only THIS run's read/parse attempt failed)."""
     embed_failed: int = 0
     """Discovered, readable docs whose individual `embedder.embed([text])`
-    call raised the generic transient `OllamaError` (HTTP-400 EOF class)
+    call raised the generic transient `BackendError` (HTTP-400 EOF class)
     after the client-layer retry budget was exhausted -- TRANSIENT and
     DISTINCT from `skipped`: never embedded or pruned THIS run, but a re-run
     WILL give it another chance once Ollama recovers (reindex-embedding-
@@ -282,11 +282,11 @@ def reindex(
     DOES exist, it just could not be processed this run). reindex-embedding-
     resilience: every queued doc is embedded in its OWN `embedder.embed([text])`
     call (per-doc grain, replacing the earlier single whole-batch call) --
-    `OllamaUnavailable`/`OllamaModelNotFound` re-raise immediately (checked
-    FIRST: both subclass the generic `OllamaError`, so this order is
-    safety-critical -- a bare `except OllamaError` would silently swallow a
+    `BackendUnavailable`/`BackendModelNotFound` re-raise immediately (checked
+    FIRST: both subclass the generic `BackendError`, so this order is
+    safety-critical -- a bare `except BackendError` would silently swallow a
     fatal condition as "every doc skipped, exit 0"), while the generic
-    transient `OllamaError` (retry budget already exhausted at the
+    transient `BackendError` (retry budget already exhausted at the
     `OllamaClient` layer) increments `embed_failed` and continues to the
     next doc. Every successfully embedded doc is `upsert`ed together in one
     `db.upsert_many` call. The second pass prunes any `concept_id`
@@ -343,7 +343,7 @@ def reindex(
     contract), if given, is called once per QUEUED doc -- a doc that
     reached its own individual `embedder.embed([text])` call -- in walk
     order, AFTER that call resolves non-fatally (a successful embed OR the
-    isolated transient `OllamaError` counted as `embed_failed`; the
+    isolated transient `BackendError` counted as `embed_failed`; the
     attempt is what takes the time, so a poison doc must not silently
     stall the counter). It carries `(index, total, concept_id)` where
     `index` is 1-based over the queue and `total` is the number of docs
@@ -463,9 +463,9 @@ def reindex(
                     embed_calls += 1
                     chunk_vectors.append(embedder.embed([chunk_text])[0])
             except (
-                OllamaUnavailable,
-                OllamaModelNotFound,
-                OllamaEmbeddingDimensionMismatch,
+                BackendUnavailable,
+                BackendModelNotFound,
+                BackendEmbeddingDimensionMismatch,
             ):
                 # FATAL, not a per-doc skip (design D6-D8): an unreachable
                 # server, a missing model, or a permanent wrong-dimension
@@ -474,15 +474,15 @@ def reindex(
                 # further queued docs are processed, and nothing from this
                 # interrupted run is committed (the loop never reaches
                 # `db.upsert_many`/`commit()` below). MUST be checked BEFORE
-                # the generic `OllamaError` catch, inside the CHUNK loop:
-                # all three subclass it, and a bare `except OllamaError`
+                # the generic `BackendError` catch, inside the CHUNK loop:
+                # all three subclass it, and a bare `except BackendError`
                 # here would silently swallow a fatal condition as "every
                 # doc skipped, exit 0" -- the exact misclassification this
                 # branch closes for a dimension mismatch raised on any
                 # chunk, not only a document's first (reindex-command:
                 # Per-Doc Embed Failure Is Isolated, Not Fatal).
                 raise
-            except OllamaError:
+            except BackendError:
                 # Generic transient failure (the HTTP-400 EOF class) with
                 # the client-layer retry budget (llm/ollama.py) already
                 # exhausted, raised while embedding ANY of this document's

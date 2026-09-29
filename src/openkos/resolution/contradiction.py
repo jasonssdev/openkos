@@ -15,12 +15,14 @@ review only -- this module never writes, merges, or reconciles.
 Config-free leaf (mirrors `adjudication.py`, `edge_typing.py`,
 `extraction/concept.py`, and `retrieval/answer.py`): this module never
 imports `openkos.config`; the caller supplies an `LLMBackend`, never an
-`OllamaClient` constructed here. Importing the `OllamaError` TYPE from
-`openkos.llm.ollama` keeps that discipline intact: `ollama.py` is itself a
-config-free stdlib leaf, and the error family is the failure contract every
-`LLMBackend` caller already speaks.
+`OllamaClient` constructed here. Importing the `BackendError` TYPE from
+`openkos.llm.base` (issue #1057 Phase 2a, Decision 3) keeps that
+discipline intact: `base.py` is itself a config-free stdlib leaf, and the
+error family is the failure contract every `LLMBackend` caller already
+speaks -- backend-agnostic, so this module never needs a concrete
+backend's own module to catch its own `llm.chat`'s failure.
 
-An `OllamaError`-family exception raised by `llm.chat` mid-loop STOPS the
+A `BackendError`-family exception raised by `llm.chat` mid-loop STOPS the
 loop but never discards paid-for work (issue #441): each judged candidate
 cost one real LLM call, so `find_contradictions` returns a
 `ContradictionBatch` carrying every completed `ContradictionVerdict` (input
@@ -86,8 +88,7 @@ from openkos import lifecycle, sensitivity
 from openkos.graph.base import GraphStore
 from openkos.graph.sqlite_graph import CandidateSource, build_graph
 from openkos.llm import parsing
-from openkos.llm.base import LLMBackend, Message
-from openkos.llm.ollama import OllamaError
+from openkos.llm.base import BackendError, LLMBackend, Message
 from openkos.model import okf
 from openkos.model.relations import RESOLUTION_RELATION_TYPES
 
@@ -269,8 +270,8 @@ class ContradictionBatch:
     results: list[ContradictionVerdict]
     """Every completed verdict, in input order -- each one was fully paid
     for (its `llm.chat` call succeeded) before the loop stopped."""
-    failure: OllamaError | None = None
-    """The `OllamaError`-family exception that stopped the loop, or `None`
+    failure: BackendError | None = None
+    """The `BackendError`-family exception that stopped the loop, or `None`
     for a complete run."""
     failed_index: int | None = None
     """1-based index of the candidate whose `llm.chat` raised `failure`;
@@ -1102,7 +1103,7 @@ def find_contradictions(
     `(ContradictionBatch(results=[]), total)` WITHOUT calling `llm.chat` --
     there is nothing to judge.
 
-    An `OllamaError`-family exception raised by `llm.chat` stops the loop
+    A `BackendError`-family exception raised by `llm.chat` stops the loop
     and comes back IN the batch (`failure` set, `failed_index` naming the
     1-based candidate whose chat raised) rather than propagating (issue
     #441): propagation made the caller pay for every judged call and then
@@ -1211,7 +1212,7 @@ def find_contradictions(
         # failures keep their own existing contracts untouched.
         try:
             reply = llm.chat(messages)
-        except OllamaError as exc:
+        except BackendError as exc:
             return (
                 ContradictionBatch(results=verdicts, failure=exc, failed_index=index),
                 total_count,

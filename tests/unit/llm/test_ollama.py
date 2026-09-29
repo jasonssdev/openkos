@@ -2870,3 +2870,28 @@ def test_ollama_private_alias_is_the_public_function() -> None:
     the move lands; distinct objects would be the failure once both exist
     without the alias wired correctly."""
     assert llm_ollama._measured_counters is llm_base.measured_counters
+
+
+def test_ollama_concrete_classes_are_also_neutral_subclasses() -> None:
+    """Ollama's four concrete error classes each gain the matching neutral
+    base from `llm.base` as a SECOND base (issue #1057 Phase 2a, Decision
+    3), exactly as `OllamaUnavailable` already subclasses
+    `BackendUnavailable` (issue #995): `OllamaModelNotFound` subclasses
+    `BackendModelNotFound`; `OllamaGenerationCapped` subclasses
+    `BackendGenerationCapped`; `OllamaEmbeddingDimensionMismatch`
+    subclasses `BackendEmbeddingDimensionMismatch`. `OllamaUnavailable`
+    subclassing `BackendUnavailable` is a regression pin, pre-existing
+    since #995.
+
+    **RED today**: `AssertionError` -- Ollama's classes have only their
+    single existing `OllamaError` base; the three neutral classes are not
+    yet wired in as second bases."""
+    assert issubclass(llm_ollama.OllamaModelNotFound, llm_base.BackendModelNotFound)
+    assert issubclass(
+        llm_ollama.OllamaGenerationCapped, llm_base.BackendGenerationCapped
+    )
+    assert issubclass(
+        llm_ollama.OllamaEmbeddingDimensionMismatch,
+        llm_base.BackendEmbeddingDimensionMismatch,
+    )
+    assert issubclass(llm_ollama.OllamaUnavailable, llm_base.BackendUnavailable)

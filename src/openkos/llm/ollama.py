@@ -38,7 +38,10 @@ from openkos.llm.base import (
 )
 from openkos.llm.base import (
     EMBED_DIM,
+    BackendEmbeddingDimensionMismatch,
     BackendError,
+    BackendGenerationCapped,
+    BackendModelNotFound,
     BackendUnavailable,
     Message,
 )
@@ -124,11 +127,17 @@ class OllamaUnavailable(OllamaError, BackendUnavailable):
     catches it unchanged."""
 
 
-class OllamaModelNotFound(OllamaError):
-    """Raised on a 404 response whose body reports the model tag as not found (D4)."""
+class OllamaModelNotFound(OllamaError, BackendModelNotFound):
+    """Raised on a 404 response whose body reports the model tag as not found (D4).
+
+    Also subclasses `BackendModelNotFound` (issue #1057 Phase 2a, Decision
+    3), alongside its existing `OllamaError` base, exactly as
+    `OllamaUnavailable` subclasses `BackendUnavailable`: every existing
+    `except OllamaError`/`except OllamaModelNotFound` handler still catches
+    it unchanged."""
 
 
-class OllamaGenerationCapped(OllamaError):
+class OllamaGenerationCapped(OllamaError, BackendGenerationCapped):
     """Raised when `chat()`'s response reports `done_reason == "length"`
     (issue #422): generation stopped for length before it finished, so the
     reply was cut off mid-generation and is unusable.
@@ -146,10 +155,12 @@ class OllamaGenerationCapped(OllamaError):
     nothing to salvage. Subclasses `OllamaError` so it propagates through
     every existing `except OllamaError` handler unmodified (D4), landing in
     exactly the same handling a hung call gets today: loud, per-source
-    failure, never a silent empty result."""
+    failure, never a silent empty result. Also subclasses
+    `BackendGenerationCapped` (issue #1057 Phase 2a, Decision 3), alongside
+    its existing `OllamaError` base."""
 
 
-class OllamaEmbeddingDimensionMismatch(OllamaError):
+class OllamaEmbeddingDimensionMismatch(OllamaError, BackendEmbeddingDimensionMismatch):
     """Raised when an `/api/embed` response row has a length other than
     `EMBED_DIM` (D7): a PERMANENT, non-healing misconfiguration -- the
     configured embedding model itself does not emit `EMBED_DIM`-dimensional
@@ -159,7 +170,9 @@ class OllamaEmbeddingDimensionMismatch(OllamaError):
     it, but MUST be checked ahead of that bare clause at any call site that
     needs to treat it as fatal rather than transient (mirrors the existing
     `OllamaModelNotFound` ordering discipline). Never retried by `embed()`'s
-    retry-with-backoff loop (D8): a wrong dimension cannot heal by retry."""
+    retry-with-backoff loop (D8): a wrong dimension cannot heal by retry.
+    Also subclasses `BackendEmbeddingDimensionMismatch` (issue #1057 Phase
+    2a, Decision 3), alongside its existing `OllamaError` base."""
 
 
 _EMBEDDING_FAMILIES = frozenset({"bert", "nomic-bert"})
