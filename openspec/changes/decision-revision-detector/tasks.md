@@ -1006,7 +1006,7 @@ list.
 
 ### One committed live measurement (design.md Decision B5 — operator step, not TDD)
 
-- [ ] **P2.5** **Operator step, requires a running local Ollama** (per
+- [x] **P2.5** **Operator step, requires a running local Ollama** (per
   project memory: Ollama is startable locally, models already pulled). Run
   `uv run python evals/decision_revisions/run_decision_revisions_eval.py
   --vector-source reindex --runs 15` (flags per the harness's own `--help`;
@@ -1017,7 +1017,8 @@ list.
   directory does not exist yet — create it in this commit). **This is the
   measurement design.md Decision B5 requires before the threshold can be
   cited as reproducible** — do not skip it and do not fabricate a result.
-- [ ] **P2.6** Compare the committed run's recall against 18/24 at
+  - Done 2026-09-29: `results/decision-revisions-20260929T011322Z-qwen3-8b.md` (+ `runs-...json`), `--vector-source reindex --runs 15`. B1-B8 all pass.
+- [x] **P2.6** Compare the committed run's recall against 18/24 at
   `EMBEDDING_SIMILARITY_THRESHOLD = 0.65` (the bar design.md Decision B5
   sets). If it clears the bar, no threshold change is needed (P2.7 cites the
   committed run as-is). If it falls below 18/24, change
@@ -1025,7 +1026,8 @@ list.
   per Decision B5's own instruction — do not defer a threshold change past
   this slice. **This step gates P2.7's exact numbers and may gate whether
   P5/P6/P7b need a different constant than the one currently in `src/`.**
-- [ ] **P2.7** [DOC] `src/openkos/resolution/decision_revision.py`: rewrite
+  - Done: B2 19 of 24 at 0.65 (confirmation 10 of 10), 46 pre-cap candidates (not the 55 the offline probe predicted; that probe synthesized a `description` the harness does not write). No threshold change.
+- [x] **P2.7** [DOC] `src/openkos/resolution/decision_revision.py`: rewrite
   `EMBEDDING_SIMILARITY_THRESHOLD`'s docstring to cite BOTH measurements
   (title+body shape: 19/24 at 46 candidates; reindex `doc_vectors` shape:
   the committed run's numbers from P2.5/P2.6, expected 19/24, 10/10
@@ -1037,6 +1039,7 @@ list.
   `state/reindex.py`'s `_compose_header`/`EMBED_COMPOSITION_TAG` (per
   Decision B7 — this change only stops CITING the stale docstring; fixing it
   is a separate follow-up, not a task here).
+  - Done: docstring cites both shapes, the committed run, the 0-1 pair margin and `_compose_header`/`EMBED_COMPOSITION_TAG`; the `graph/proximity.py` pointer is removed (stale docstring filed as #1052).
 - [x] **P2.8** [DOC] `src/openkos/resolution/decision_revision.py`:
   `DecisionInput.subject`'s docstring currently says the field is "kept for
   the service layer's own use (e.g. a future report)" — correct it to say
