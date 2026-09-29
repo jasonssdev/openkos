@@ -799,7 +799,7 @@ caller until Phase 6 wires `repair`'s apply phase.
 
 ### Snapshot migration — whole-document fields
 
-- [ ] **5.1** [TEST] `tests/unit/bundle/test_ledger_okf_migration.py` (new
+- [x] **5.1** [TEST] `tests/unit/bundle/test_ledger_okf_migration.py` (new
   file) — add `test_migrate_sidecars_migrates_every_whole_document_snapshot`:
   build a real V3-or-later sidecar (via a real `merge` call in `tmp_path`,
   so `relation_rewrites`/`provenance_rewrites` are populated) whose
@@ -809,7 +809,7 @@ caller until Phase 6 wires `repair`'s apply phase.
   categories is now `migrate_document`'s output for its original bytes.
   **RED today**: `AttributeError` — `migrate_sidecars_to_okf_v02` does not
   exist.
-- [ ] **5.2** [TEST] Same file — add
+- [x] **5.2** [TEST] Same file — add
   `test_migrate_sidecars_recurses_into_embedded_merged_from_snapshots`: a
   `survivor_before` snapshot that itself embeds a pre-relocation
   `merged_from` list (a nested nested-prefix case, per ADR-0002/#758) has
@@ -817,7 +817,7 @@ caller until Phase 6 wires `repair`'s apply phase.
   the same function — so `scan_nesting_violations`'s (Check B) nested-prefix
   equality still holds after migration (equal inputs map to equal outputs).
   **RED today**: same `AttributeError`.
-- [ ] **5.3** [IMPL] `src/openkos/bundle/ledger.py`: add
+- [x] **5.3** [IMPL] `src/openkos/bundle/ledger.py`: add
   `migrate_sidecars_to_okf_v02(bundle_dir: Path, *, current_texts:
   Mapping[str, str]) -> list[tuple[Path, str, list[okf.MergeLedgerEntry]]]`
   covering: iterate every sidecar via the existing scan/read path, call
@@ -830,7 +830,7 @@ caller until Phase 6 wires `repair`'s apply phase.
 
 ### `index_before` flip (V1-V4 only)
 
-- [ ] **5.4** [TEST] Same file — add
+- [x] **5.4** [TEST] Same file — add
   `test_migrate_sidecars_flips_index_before_okf_version_v1_through_v4`,
   parametrized over `MERGE_LEDGER_SCHEMA_V1`..`V4` fixtures (built by real
   merges under monkeypatched schema constants if needed, or hand-constructed
@@ -843,14 +843,14 @@ caller until Phase 6 wires `repair`'s apply phase.
   see `MERGE_LEDGER_SCHEMA_V5`'s replacement mechanism) is skipped by this
   rule entirely (nothing to flip). **RED today**: `AssertionError`/
   `AttributeError`.
-- [ ] **5.5** [IMPL] `src/openkos/bundle/ledger.py`: extend
+- [x] **5.5** [IMPL] `src/openkos/bundle/ledger.py`: extend
   `migrate_sidecars_to_okf_v02` to flip each V1-V4 entry's `index_before`
   `okf_version` frontmatter value via `split_frontmatter_verbatim` +
   `dump_frontmatter` (or a targeted regex/YAML-node rewrite that preserves
   quoting, matching how `repair`'s own bundle-root flip will work in Phase
   6) when the snapshot's declared `okf_version` differs from `"0.2"`. Makes
   5.4 GREEN.
-- [ ] **5.6** [TEST] Same file — add
+- [x] **5.6** [TEST] Same file — add
   `test_migrate_sidecars_check_b_still_passes_after_migration`: after
   migrating a fixture with an embedded nested `merged_from` history,
   `bundle/ledger.scan_nesting_violations` reports the same (zero, in a clean
@@ -861,7 +861,7 @@ caller until Phase 6 wires `repair`'s apply phase.
 
 ### Link-offset shift
 
-- [ ] **5.7** [TEST] Same file — add
+- [x] **5.7** [TEST] Same file — add
   `test_migrate_sidecars_shifts_link_rewrite_offsets_from_current_text`: a
   sidecar whose file `f` has no LATER ledger snapshot recorded (so its
   frontmatter "right after" the merge is `f`'s CURRENT text) — each
@@ -870,7 +870,7 @@ caller until Phase 6 wires `repair`'s apply phase.
   the ACTUAL texts (never assumed from YAML length). An offset below the OLD
   body start is left unshifted. **RED today**: `AttributeError`/
   `AssertionError`.
-- [ ] **5.8** [TEST] Same file — add
+- [x] **5.8** [TEST] Same file — add
   `test_migrate_sidecars_shifts_link_rewrite_offsets_from_a_later_snapshot`:
   a sidecar whose file `f` DOES have a later ledger entry (any sidecar) with
   `merged_at > this entry's merged_at` recording a snapshot of `f`
@@ -879,7 +879,7 @@ caller until Phase 6 wires `repair`'s apply phase.
   snapshot's frontmatter, not the current text, built from an index of
   snapshots constructed once across all sidecars from the pre-migration
   ledger state. **RED today**: same.
-- [ ] **5.9** [IMPL] `src/openkos/bundle/ledger.py`: add the cross-sidecar
+- [x] **5.9** [IMPL] `src/openkos/bundle/ledger.py`: add the cross-sidecar
   snapshot-index builder (one pass over every sidecar's pre-migration state,
   keyed by file path, tracking the earliest snapshot with `merged_at >
   entry.merged_at` for each `link_rewrites` target file) and the offset-
@@ -897,7 +897,7 @@ with a tracked reason, never silently passed) until Phase 6's PR, then
 confirm GREEN as part of Phase 6 verification (6.16 references back to this
 task).
 
-- [ ] **5.10** [TEST] `tests/unit/bundle/test_ledger_okf_migration.py` — add
+- [x] **5.10** [TEST] `tests/unit/bundle/test_ledger_okf_migration.py` — add
   `test_merge_repair_unmerge_round_trip_v1_schema`: using real `init` +
   `ingest` (x2) + `merge` calls in `tmp_path` with the ledger schema
   constant monkeypatched to force a V1 write (or a fixture pre-built to V1
@@ -910,18 +910,18 @@ task).
   — `application/repair.py` (Phase 6) does not exist yet; mark this test
   `pytest.mark.skip(reason="okf-v02-migration Phase 6 not yet landed")`
   in Phase 5's PR and remove the skip mark in Phase 6.
-- [ ] **5.11** [TEST] Same file — add
+- [x] **5.11** [TEST] Same file — add
   `test_merge_repair_unmerge_round_trip_v2_schema`, same shape, forcing a V2
   ledger entry (`relation_rewrites` populated, `provenance_rewrites` empty).
   Same skip-until-Phase-6 treatment.
-- [ ] **5.12** [TEST] Same file — add
+- [x] **5.12** [TEST] Same file — add
   `test_merge_repair_unmerge_round_trip_v3_schema`, forcing V3
   (`provenance_rewrites` populated too). Same skip-until-Phase-6 treatment.
-- [ ] **5.13** [TEST] Same file — add
+- [x] **5.13** [TEST] Same file — add
   `test_merge_repair_unmerge_round_trip_v4_schema`, forcing V4
   (`carried_content_ids` populated via a second merge onto the same
   survivor). Same skip-until-Phase-6 treatment.
-- [ ] **5.14** [TEST] Same file — add
+- [x] **5.14** [TEST] Same file — add
   `test_merge_repair_unmerge_round_trip_v5_schema`, using an UNFORCED (i.e.
   current-default) real merge, which per `MERGE_LEDGER_SCHEMA_V5` writes
   `index_restores` instead of `index_before`/`log_before` — assert the same
@@ -932,14 +932,14 @@ task).
 
 ### Phase 5 verification
 
-- [ ] **5.15** Run `uv run ruff check . && uv run ruff format --check . &&
+- [x] **5.15** Run `uv run ruff check . && uv run ruff format --check . &&
   uv run mypy .` — must be green.
-- [ ] **5.16** Run `uv run pytest tests/unit/bundle/test_ledger_okf_migration.py`
+- [x] **5.16** Run `uv run pytest tests/unit/bundle/test_ledger_okf_migration.py`
   focused (5.10-5.14 expected `SKIPPED`, not failed, with the recorded
   reason), then `uv run pytest --cov` (unpiped) full suite — must be green,
   90% branch gate held.
-- [ ] **5.17** Run `uv run python evals/run_self_tests.py` — must be green.
-- [ ] **5.18** Commit as one or more work-unit commits, scope `bundle` (e.g.
+- [x] **5.17** Run `uv run python evals/run_self_tests.py` — must be green.
+- [x] **5.18** Commit as one or more work-unit commits, scope `bundle` (e.g.
   `feat(bundle): migrate merge-ledger sidecars to OKF v0.2 snapshots`). Open
   PR 5 (Phase 5: ledger migration) targeting `main`, branched from `main`
   after PR 4 merges.
