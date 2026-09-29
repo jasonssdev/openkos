@@ -5607,16 +5607,25 @@ def _ingest_single(
         )
         _echo_event_date_preview_line(source_plan.event_date)
         # preserve-source-frontmatter (issue #1062), design.md Decision 7:
-        # printed only when this Source-only rewrite's frontmatter delta is
-        # the one that fired -- `lift_changed` IS exactly that delta in
-        # this slice (Phase 3 ORs in tags/sensitivity), so it is reused
-        # directly rather than re-derived, keeping the printed line and the
-        # skip decision provably in agreement (task 2.13/2.15). The `tags
-        # added:` line and the sensitivity-raise advisory are Phase 3's.
-        if converged is not None and source_plan.lift_changed:
+        # each line prints only when its OWN specific delta fired --
+        # `frontmatter_changed`/`tags_added`/`sensitivity_changed` are
+        # exposed separately from the OR'd `lift_changed` for exactly this
+        # reason (task 2.13/2.15/3.18): a rewrite triggered by only one
+        # delta must print only that delta's line(s), never another's.
+        if converged is not None and source_plan.frontmatter_changed:
             frontmatter = source_plan.source_frontmatter
             key_count = len(frontmatter) if frontmatter is not None else 0
             typer.echo(f"    source frontmatter recorded ({key_count} key(s))")
+        if converged is not None and source_plan.tags_added:
+            typer.echo(f"    tags added: {', '.join(source_plan.tags_added)}")
+        if converged is not None and source_plan.sensitivity_changed:
+            typer.echo(
+                "openkos ingest: this Source-only rewrite raised the "
+                "Source's sensitivity -- existing derived objects keep "
+                "their own already-stamped sensitivity; run 'openkos "
+                "set-sensitivity' to raise them explicitly.",
+                err=True,
+            )
         for plan in derived_plans:
             typer.echo(f"  + bundle/{plan.link_dir}/{plan.slug}.md")
         typer.echo(f"  ~ {index_path.name} (Source entry refreshed)")
