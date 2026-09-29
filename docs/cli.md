@@ -372,6 +372,27 @@ When the cap does truncate, the notice now names **which kind** went unjudged �
 
 **A pair a human already resolved is never a candidate.** Once two concepts are joined, in either direction, by a `supersedes`, `reconciled_with`, or `revises` edge — the three relation types `reconcile` (below) writes — that pair is excluded from candidates entirely, before the count and the cap, including under `--include-deprecated`. It is not re-judged even after a later edit to either concept; removing the resolution edge is what makes the pair a candidate again.
 
+### `openkos revisions` [experimental]
+
+**Bundle-read-only; detection quality is UNMEASURED on real bundles.** LLM-detects Decisions that a later Decision reverses, refines, or reaffirms — every invocation prints a stderr notice saying so, and every finding should be reviewed before it is applied. `--help` labels the command experimental too.
+
+Candidate pairs are blocked by the cosine similarity of each eligible Decision's document vector. That vector is read directly from `.openkos/vectors.db`, as written by `openkos reindex` — **this verb makes no embedding call, ever.** When the vector store is absent or empty, or its stored embedding-model tag does not match the workspace's currently configured `embedding_model`, the run prints one remedy line naming `openkos reindex` and exits 0 — nothing failed; the store is simply not built for the current model. A Decision with no current stored vector (never embedded, or edited since the last reindex) forms no candidate and is counted, not embedded on its behalf.
+
+Judged verdicts are persisted to `.openkos/findings.db`, keyed by digests over both Decisions' bodies and their reached Sources; a later run serves a pair from that store with no model call when its digests are unchanged, and re-judges only what changed. `--fresh` bypasses the serve and re-judges every candidate pair.
+
+**The one cost gate.** Candidate generation, vector lookup, and the served/to-judge split all run with zero LLM calls and zero embedding calls before anything is priced, so the gate's printed count — `N candidate pair(s), M served -> K LLM call(s) to judge` — is exact. The gate fires only when there is at least one pair left to judge: `--auto` skips the prompt outright; on a TTY, declining prints `Aborted -- no revisions judged.` and exits 0 (nothing was written); without a TTY and without `--auto`, the run refuses (exit 1) rather than spend model calls without consent.
+
+`revisions` writes **only** `.openkos/findings.db` — never a file under `bundle/`, and never any other derived store. A `REAFFIRMS` or `UNRELATED` verdict is persisted as a finding but writes no relation to either Decision; applying an actionable finding is a separate step, not yet built.
+
+A partial batch (a mid-run model failure) renders every verdict judged so far exactly as a complete run over that list would, then reports the failure and exits 1 — already-judged, non-malformed verdicts are persisted regardless.
+
+| Flag | Meaning |
+| --- | --- |
+| `--auto` | Skip the cost-gate confirmation prompt. |
+| `--include-confidential` | Include confidential Decisions (excluded by default). Releases the judge's chat send only — it never authorizes an embedding call, which this verb never makes at all. See [Sensitivity and the local backend](#sensitivity-and-the-local-backend). |
+| `--fresh` | Bypass the persisted-findings serve and re-judge every candidate pair with the model. |
+| `--all` | Display-only filter: reveal every verdict, including `REAFFIRMS`/`UNRELATED`, low-confidence, and malformed results. It never changes which pairs are judged. |
+
 ### `openkos reconcile <id-a> <id-b>`
 
 Records a human's resolution of a contradiction between two concepts — the write counterpart to `contradictions`, which only reports. **No LLM in the write path**: `<id-a>`, `<id-b>`, `--winner`, and `--revision` are plain concept-id arguments; `reconcile` never invokes contradiction detection. Both ids resolve exactly as `relate`'s do, and must be two distinct existing concepts.

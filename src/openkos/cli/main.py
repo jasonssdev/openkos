@@ -34,7 +34,9 @@ from openkos.application import list_service as application_list
 from openkos.application import next_action as next_action_module
 from openkos.application import pending as application_pending
 from openkos.application import query as application_query
+from openkos.application import revisions as revisions_service
 from openkos.application import status as application_status
+from openkos.application.revisions_report import revisions_report
 from openkos.bundle import bundle, listing, source_titles
 from openkos.bundle import decisions as bundle_decisions
 from openkos.bundle import index as bundle_index
@@ -97,6 +99,7 @@ from openkos.resolution.contradiction import (
     vacuous_coverage_notice,
 )
 from openkos.resolution.contradiction import Verdict as ContradictionVerdictValue
+from openkos.resolution.decision_revision import revision_truncation_notice
 from openkos.resolution.edge_typing import (
     LEAST_SPECIFIC_RELATION_TYPE,
     EdgeSuggestion,
@@ -13997,6 +14000,251 @@ def contradictions(
             batch, total=judged_plan.llm_calls, model=cfg.model
         )
         raise typer.Exit(code=1) from batch.failure
+
+
+_REVISIONS_EXPERIMENTAL_NOTICE = (
+    "openkos revisions: experimental -- detection quality is unmeasured on "
+    "real bundles; review every finding before applying it with 'openkos "
+    "reconcile --from-findings'."
+)
+"""design.md's Phase B re-plan, Decision B4: printed once, on stderr, on
+every non-refused invocation -- the whole point is that this detector has
+only been measured against a synthetic harness fixture
+(`evals/decision_revisions/`), never against a real bundle."""
+
+_REVISIONS_NO_VECTORS_MESSAGE = (
+    "openkos revisions: no document embeddings found -- run 'openkos reindex' first."
+)
+_REVISIONS_MODEL_MISMATCH_MESSAGE = (
+    "openkos revisions: vectors.db was embedded with a different embedding "
+    "model or scheme than 'embedding_model' -- run 'openkos reindex' first."
+)
+"""design.md Decision B1's two whole-run vector-store degrade messages:
+`revisions` never embeds, so a Decision's document vector comes ONLY from
+`.openkos/vectors.db` as written by `openkos reindex`. Both cases make zero
+LLM calls, print their remedy, and exit 0 -- nothing failed; the store is
+simply not built for the currently configured model."""
+
+
+def _echo_revisions_batch_failure(
+    outcome: revisions_service.RevisionOutcome, *, total: int, model: str
+) -> None:
+    """One stderr line for a partial `RevisionOutcome` (#441 precedent,
+    byte-identical shape to `_echo_contradictions_batch_failure`): the same
+    3-tier cause-specific wording, prefixed with how much paid-for judging
+    survived. `total` is `len(plan.to_judge)` -- the judged-pair budget this
+    run actually paid for, never the full candidate plan (served pairs cost
+    nothing and cannot fail)."""
+    failure = outcome.failure
+    context = (
+        f"openkos revisions: failed after judging {len(outcome.results)} "
+        f"of {total} planned pair(s)"
+    )
+    if isinstance(failure, OllamaUnavailable):
+        typer.echo(
+            f"{context} -- {failure}. Start it with `ollama serve`, then "
+            f"try again.{_DOCTOR_HINT}",
+            err=True,
+        )
+    elif isinstance(failure, OllamaModelNotFound):
+        typer.echo(
+            f"{context} -- model '{model}' is not installed. Pull it with "
+            f"`ollama pull {model}`, then try again.",
+            err=True,
+        )
+    else:
+        typer.echo(f"{context} -- {failure}.", err=True)
+
+
+@app.command(
+    help=(
+        "\\[experimental] Find Decisions that a later Decision reverses, "
+        "refines or reaffirms. Suggestions only; writes nothing to the "
+        "bundle."
+    ),
+    rich_help_panel="Explore",
+)
+@_guard_workspace_lock("revisions")
+def revisions(
+    auto: bool = typer.Option(
+        False,
+        "--auto",
+        help="Skip the pair-judgment confirmation prompt.",
+    ),
+    include_confidential: bool = typer.Option(
+        False,
+        "--include-confidential",
+        help="Include confidential Decisions (excluded by default). "
+        "Releases the judge's chat send only, never an embedding call.",
+    ),
+    fresh: bool = typer.Option(
+        False,
+        "--fresh",
+        help="Re-judge every candidate pair with the model, bypassing "
+        "persisted findings.",
+    ),
+    show_all: bool = typer.Option(
+        False,
+        "--all",
+        help="Show every verdict, including REAFFIRMS/UNRELATED, "
+        "low-confidence, and malformed results.",
+    ),
+) -> None:
+    """[EXPERIMENTAL] LLM-detect Decisions that a later Decision reverses,
+    refines, or reaffirms (#1014 piece (a), Phase B re-plan): read-only over
+    the bundle, like `contradictions`/`suggest-relations`.
+
+    Candidate pairs are blocked by embedding similarity over each eligible
+    Decision's document vector, read directly from `.openkos/vectors.db`
+    (`application.revisions.read_decision_vectors`) -- this verb makes NO
+    embedding call, ever (design.md Decision B1). A whole-run degrade (the
+    store is absent or empty, or its stored embedding-model tag does not
+    match the currently configured one) prints one remedy line naming
+    `openkos reindex` and exits 0 -- nothing failed; the store is simply
+    not built for the current model.
+
+    Persisted revision findings are served from `.openkos/findings.db`
+    (design.md Decision 2) with no judge call when a candidate pair's input
+    digests -- both Decisions' bodies and their reached Sources -- are
+    unchanged since it was last judged; `--fresh` bypasses that serve and
+    re-judges everything. The ONE remaining cost gate (design.md's Phase B
+    re-plan, Decision B4 -- the original subject-derivation pass and its own
+    gate were dropped entirely, Decision B3) fires only when there is at
+    least one candidate pair left to judge, prints the exact judge-call
+    count computed with zero LLM calls and zero embedding calls, and has
+    the same three branches every other cost gate in this CLI has:
+    `--auto` proceeds, a TTY asks and a decline exits 0 with nothing
+    judged, and non-TTY stdin without `--auto` refuses (exit 1).
+
+    `revisions` writes ONLY `.openkos/findings.db` -- never a file under
+    `bundle/`, and never any other derived store. A `REAFFIRMS` or
+    `UNRELATED` verdict is persisted as a finding but writes no relation to
+    either Decision's document; only `openkos reconcile --from-findings`
+    (a later slice) ever writes a relation from a revision finding.
+
+    A partial batch (a mid-run `OllamaError`) renders every verdict judged
+    so far exactly as a complete run over that list would, then reports the
+    failure and exits 1 -- the same #441 posture `contradictions`/
+    `suggest-relations` already follow; already-judged, non-malformed
+    verdicts are persisted regardless of the failure.
+
+    Detection quality is UNMEASURED on real bundles -- only a synthetic
+    harness fixture has been measured (`evals/decision_revisions/`) -- so
+    one stderr line says so on every invocation, and every finding should
+    be reviewed before it is applied.
+    """
+    root = Path.cwd()
+    reason = config.require_workspace(root)
+    if reason is not None:
+        typer.echo(f"openkos revisions: refusing to run -- {reason}.", err=True)
+        raise typer.Exit(code=1)
+
+    layout = config.WorkspaceLayout(root)
+
+    try:
+        cfg = config.read_config(root)
+    except (OSError, ValueError) as exc:
+        typer.echo(
+            f"openkos revisions: failed while reading the workspace -- {exc}.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(_REVISIONS_EXPERIMENTAL_NOTICE, err=True)
+
+    llm = _chat_client(cfg)
+    local_exemption = _resolve_local_exemption(llm, cfg)
+    # design.md Decision B2: the flag (or the local exemption) releases only
+    # the judge's `llm.chat` send of a confidential Decision's body -- it
+    # never authorizes an embedding call, which this verb never makes at
+    # all (Decision B1).
+    effective_confidential = include_confidential or local_exemption
+
+    decisions = revisions_service.load_decisions(
+        layout,
+        include_confidential=effective_confidential,
+        local_exemption=local_exemption,
+    )
+    if not decisions.decisions:
+        typer.echo("No Decision objects found.")
+        return
+
+    plan = revisions_service.plan_revisions(
+        layout,
+        decisions,
+        embedding_model=cfg.embedding_model,
+        effective_confidential=effective_confidential,
+        fresh=fresh,
+    )
+
+    # design.md Decision B1's table: a whole-run vector-store degrade makes
+    # zero LLM calls and exits 0 -- there is no candidate plan worth
+    # judging, so neither the gate nor the judge is ever reached.
+    if plan.coverage.store == "absent":
+        typer.echo(_REVISIONS_NO_VECTORS_MESSAGE, err=True)
+        return
+    if plan.coverage.store == "model-mismatch":
+        typer.echo(_REVISIONS_MODEL_MISMATCH_MESSAGE, err=True)
+        return
+
+    # #378 precedent (`curate.py:1660-1663`, mirrored by `contradictions`'
+    # own truncation notice): printed BEFORE the gate line, so an operator
+    # learns candidates were dropped before consenting to the spend.
+    notice = revision_truncation_notice(plan.candidate_plan)
+    if notice is not None:
+        typer.echo(notice, err=True)
+
+    # design.md's Phase B re-plan, Decision B4: the one remaining cost gate,
+    # printed (unconditionally, even under `--auto`) whenever there is at
+    # least one pair left to judge -- a gate whose count is zero prints
+    # nothing and asks nothing (spec: Zero-LLM Probe Precedes The Cost
+    # Gate / One Exact Cost Gate Before Pair Judgment).
+    if plan.to_judge:
+        typer.echo(
+            f"{len(plan.candidate_plan.candidates)} candidate pair(s), "
+            f"{len(plan.served)} served -> {len(plan.to_judge)} LLM "
+            "call(s) to judge (this can take a while). Pass --auto to "
+            "skip this prompt.",
+            err=True,
+        )
+        if not auto:
+            if sys.stdin.isatty():
+                if not typer.confirm("Proceed?"):
+                    typer.echo("Aborted -- no revisions judged.")
+                    return
+            else:
+                typer.echo(
+                    "openkos revisions: refusing to spend model calls "
+                    "without confirmation -- stdin is not a TTY; re-run "
+                    "with --auto.",
+                    err=True,
+                )
+                raise typer.Exit(code=1)
+
+    outcome = revisions_service.judge_revisions(
+        layout,
+        plan,
+        llm=llm,
+        effective_confidential=effective_confidential,
+        on_progress=observability.progress_callback("revisions", "judging pair"),
+    )
+
+    typer.echo(
+        revisions_report(
+            plan, outcome, excluded=decisions.bad_relations, show_all=show_all
+        )
+    )
+
+    if outcome.failure is not None:
+        # Partial batch (#441 posture, mirrored from `contradictions`): the
+        # report above already rendered every verdict judged so far exactly
+        # as a complete run over that list would -- the paid-for work is
+        # never discarded -- so all that remains is the one stderr failure
+        # line and the OllamaError-family exit code.
+        _echo_revisions_batch_failure(
+            outcome, total=len(plan.to_judge), model=cfg.model
+        )
+        raise typer.Exit(code=1) from outcome.failure
 
 
 def _no_match_message(cause: NoMatchCause, fts_hit_count: int) -> str:
