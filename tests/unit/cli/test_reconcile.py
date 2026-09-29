@@ -13,10 +13,15 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner, _NamedTextIOWrapper
 
+from openkos import config as config_module
+from openkos.application import revisions as revisions_service
 from openkos.cli import main
 from openkos.cli.main import app
 from openkos.model import okf
 from openkos.model.relations import RESOLUTION_RELATION_TYPES
+from openkos.resolution import decision_revision
+from openkos.state import derived as derived_module
+from openkos.state import revision_findings as revision_findings_store
 from tests.unit.cli.conftest import (
     changed_paths,
     confirm_after,
@@ -1582,3 +1587,520 @@ def test_ask_later_decision_and_type_skip_and_reask(
     assert result == ("later-b", "earlier-a", "revises")
     assert len(prompts) == 2
     assert prompts[0] == prompts[1]
+
+
+# ---------------------------------------------------------------------------
+# #1014 Plan 2 -- Slice P8b: the `reconcile --from-findings` REVISION walk
+# (design.md Decision 9). The existing contradiction walk above stays
+# unchanged; these tests cover the second walk added alongside it.
+# ---------------------------------------------------------------------------
+
+
+def _write_decision(tmp_path: Path, concept_id: str, *, body: str = "Body.") -> None:
+    """Write a minimal Decision `.md` file directly under `bundle/` --
+    these tests seed `RevisionFinding` rows by hand (never via a real
+    `openkos revisions` judge run), so all a fixture Decision needs to
+    exist for is `resolve_concept_path` and the digest/content-hash the
+    freshness check reads."""
+    path = tmp_path / "bundle" / f"{concept_id}.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"---\ntype: Decision\ntitle: Stub\nsensitivity: private\n---\n{body}\n",
+        encoding="utf-8",
+    )
+
+
+def _bundle_snapshot(tmp_path: Path) -> dict[str, str]:
+    """Test-local reimplementation of the service's own whole-bundle text
+    snapshot -- byte-identical shape to
+    `test_revisions_service.py::_bundle_snapshot`."""
+    layout = config_module.WorkspaceLayout(tmp_path)
+    files: dict[str, str] = {}
+    for path in okf.iter_bundle_markdown(layout.bundle_dir):
+        if path.name in okf.RESERVED_FILENAMES:
+            continue
+        files[path.relative_to(layout.bundle_dir).as_posix()] = path.read_text(
+            encoding="utf-8"
+        )
+    return files
+
+
+def _seed_revision_finding(
+    tmp_path: Path,
+    pair: tuple[str, str],
+    *,
+    verdict: str = "reverses",
+    confidence: float = 0.9,
+    quotes: tuple[str | None, str | None] = ("earlier quote.", "later quote."),
+    dates: tuple[str | None, str | None] = (None, None),
+    date_states: tuple[str, str] = ("missing", "missing"),
+    include_confidential: bool = False,
+    rationale: str = "the second overturns the first.",
+) -> tuple[str, str]:
+    """Persist one revision finding straight into `.openkos/findings.db`
+    (the same store `openkos revisions` writes), with real input digests
+    computed over the CURRENT bundle content -- `is_fresh`'s strict
+    equality check (design.md Decision 2) rejects a finding whose digests
+    don't match, unlike the contradiction store's lenient empty-tuple
+    escape `_seed_finding` relies on.
+
+    `pair`/`quotes`/`dates`/`date_states` are positionally aligned AS
+    GIVEN (index 0 with index 0, naming whichever concept the caller wrote
+    first); this helper re-sorts to the stored `pair_id_0 < pair_id_1`
+    invariant and realigns the other three tuples to match, mirroring
+    `record_revision_findings`'s own defensive sort -- so a caller may
+    pass either pair member first and the persisted row is still correct.
+    Returns the sorted `pair_ids` actually stored."""
+    first, second = pair
+    if first <= second:
+        pair_ids: tuple[str, str] = (first, second)
+        aligned_quotes, aligned_dates, aligned_states = quotes, dates, date_states
+    else:
+        pair_ids = (second, first)
+        aligned_quotes = (quotes[1], quotes[0])
+        aligned_dates = (dates[1], dates[0])
+        aligned_states = (date_states[1], date_states[0])
+
+    layout = config_module.WorkspaceLayout(tmp_path)
+    files = _bundle_snapshot(tmp_path)
+    digests = revisions_service.revision_input_digests(layout, files, pair_ids)
+    conn = derived_module.open_derived_connection(layout.findings_db_path)
+    try:
+        revision_findings_store.record_revision_findings(
+            conn,
+            [
+                revision_findings_store.RevisionFinding(
+                    pair_ids=pair_ids,
+                    verdict=verdict,
+                    confidence=confidence,
+                    rationale=rationale,
+                    quotes=aligned_quotes,
+                    dates=aligned_dates,
+                    date_states=aligned_states,
+                    include_confidential=include_confidential,
+                    prompt_version=decision_revision.JUDGE_PROMPT_VERSION,
+                    input_digests=digests,
+                )
+            ],
+        )
+    finally:
+        conn.close()
+    return pair_ids
+
+
+def test_reverses_known_direction_offers_supersedes_held_by_the_later_decision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fresh, actionable, DIRECTED REVERSES finding is offered as a
+    directional `supersedes` held by the LATER Decision (design.md
+    Decision 9, step 6) -- accepting writes it via the same
+    `_reconcile_pair` transaction the two-id `--winner` form uses."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_decision(tmp_path, "decisions/alpha")
+    _write_decision(tmp_path, "decisions/beta")
+    _seed_revision_finding(
+        tmp_path,
+        ("decisions/alpha", "decisions/beta"),
+        verdict="reverses",
+        dates=("2026-01-01", "2026-02-01"),
+        date_states=("dated", "dated"),
+    )
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["reconcile", "--from-findings"], input="y\n")
+
+    assert result.exit_code == 0
+    assert (
+        "Record decisions/beta supersedes decisions/alpha (reversal; "
+        "decisions/alpha is hidden as current)? [y/N]" in result.output
+    )
+    assert any(
+        rel.target == "decisions/alpha" and rel.type == "supersedes"
+        for rel in _relations_of(tmp_path, "decisions/beta")
+    )
+    assert _relations_of(tmp_path, "decisions/alpha") == []
+    assert "applied 1, skipped 0, declined 0." in result.output
+
+
+def test_refines_known_direction_offers_revises_held_by_the_later_decision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same shape as the REVERSES case, for REFINES -> a directional
+    `revises` held by the later Decision (design.md Decision 9, step 6);
+    both concepts stay active."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_decision(tmp_path, "decisions/alpha")
+    _write_decision(tmp_path, "decisions/beta")
+    _seed_revision_finding(
+        tmp_path,
+        ("decisions/alpha", "decisions/beta"),
+        verdict="refines",
+        dates=("2026-01-01", "2026-02-01"),
+        date_states=("dated", "dated"),
+    )
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["reconcile", "--from-findings"], input="y\n")
+
+    assert result.exit_code == 0
+    assert (
+        "Record decisions/beta revises decisions/alpha (refinement; both "
+        "remain current)? [y/N]" in result.output
+    )
+    assert any(
+        rel.target == "decisions/alpha" and rel.type == "revises"
+        for rel in _relations_of(tmp_path, "decisions/beta")
+    )
+    assert "applied 1, skipped 0, declined 0." in result.output
+
+
+@pytest.mark.parametrize(
+    ("answer", "expected_holder", "expected_target", "expected_type"),
+    [
+        ("1", "decisions/beta", "decisions/alpha", "supersedes"),
+        ("2", "decisions/beta", "decisions/alpha", "revises"),
+        ("3", "decisions/alpha", "decisions/beta", "supersedes"),
+        ("4", "decisions/alpha", "decisions/beta", "revises"),
+    ],
+)
+def test_unknown_direction_routes_to_the_combined_prompt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    answer: str,
+    expected_holder: str,
+    expected_target: str,
+    expected_type: str,
+) -> None:
+    """An undirected (untyped-change) finding routes to
+    `_ask_later_decision_and_type` INSTEAD of the y/N consent the directed
+    case uses (design.md Decision 9, step 7); each of the four numbered
+    answers writes the matching relation with no further y/N step."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_decision(tmp_path, "decisions/alpha")
+    _write_decision(tmp_path, "decisions/beta")
+    _seed_revision_finding(
+        tmp_path, ("decisions/alpha", "decisions/beta"), verdict="reverses"
+    )
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["reconcile", "--from-findings"], input=f"{answer}\n")
+
+    assert result.exit_code == 0
+    assert (
+        "[1] decisions/beta replaces decisions/alpha  "
+        "[2] decisions/beta adjusts decisions/alpha  "
+        "[3] decisions/alpha replaces decisions/beta  "
+        "[4] decisions/alpha adjusts decisions/beta  [s] skip (Enter = s)"
+    ) in result.output
+    assert any(
+        rel.target == expected_target and rel.type == expected_type
+        for rel in _relations_of(tmp_path, expected_holder)
+    )
+
+
+def test_unknown_direction_skip_writes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Skipping the combined prompt (`s` or empty) writes nothing and the
+    walk continues -- counted as a decline, listed as `(revision, order
+    not chosen)` since no relation type was ever chosen (design.md
+    Decision 9, steps 7/10)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_decision(tmp_path, "decisions/alpha")
+    _write_decision(tmp_path, "decisions/beta")
+    _seed_revision_finding(
+        tmp_path, ("decisions/alpha", "decisions/beta"), verdict="refines"
+    )
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["reconcile", "--from-findings"], input="s\n")
+
+    assert result.exit_code == 0
+    assert _relations_of(tmp_path, "decisions/alpha") == []
+    assert _relations_of(tmp_path, "decisions/beta") == []
+    assert "applied 0, skipped 0, declined 1." in result.output
+    assert (
+        "  declined: decisions/alpha <-> decisions/beta "
+        "(revision, order not chosen)" in result.output
+    )
+
+
+def test_reaffirms_and_unrelated_are_never_offered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A persisted REAFFIRMS verdict and a persisted UNRELATED verdict
+    never appear in the walk's item list at all -- `is_actionable_revision`
+    (Phase A leaf) is `False` for both regardless of confidence or quotes
+    (design.md Decision 9)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_decision(tmp_path, "decisions/alpha")
+    _write_decision(tmp_path, "decisions/beta")
+    _write_decision(tmp_path, "decisions/gamma")
+    _write_decision(tmp_path, "decisions/delta")
+    _seed_revision_finding(
+        tmp_path, ("decisions/alpha", "decisions/beta"), verdict="reaffirms"
+    )
+    _seed_revision_finding(
+        tmp_path, ("decisions/gamma", "decisions/delta"), verdict="unrelated"
+    )
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["reconcile", "--from-findings"])
+
+    assert result.exit_code == 0
+    assert (
+        "No open revision findings to apply. Findings are recorded by "
+        "`openkos revisions`." in result.output
+    )
+    assert _relations_of(tmp_path, "decisions/alpha") == []
+    assert _relations_of(tmp_path, "decisions/gamma") == []
+
+
+def test_per_item_freshness_recheck_skips_a_finding_staled_mid_walk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two findings sharing a Decision (`decisions/alpha`): accepting the
+    FIRST rewrites that Decision's document, so the SECOND item's
+    immediate `is_fresh` re-check (design.md Decision 9, step 4) fails --
+    printed and counted as skipped, never offered a prompt."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_decision(tmp_path, "decisions/alpha")
+    _write_decision(tmp_path, "decisions/beta")
+    _write_decision(tmp_path, "decisions/gamma")
+    _seed_revision_finding(
+        tmp_path,
+        ("decisions/alpha", "decisions/beta"),
+        verdict="reverses",
+        dates=("2026-01-01", "2026-02-01"),
+        date_states=("dated", "dated"),
+    )
+    _seed_revision_finding(
+        tmp_path,
+        ("decisions/alpha", "decisions/gamma"),
+        verdict="reverses",
+        dates=("2026-01-01", "2026-03-01"),
+        date_states=("dated", "dated"),
+    )
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["reconcile", "--from-findings"], input="y\n")
+
+    assert result.exit_code == 0
+    assert (
+        "  skipping decisions/alpha <-> decisions/gamma -- changed since "
+        "it was judged." in result.output
+    )
+    assert "applied 1, skipped 1, declined 0." in result.output
+
+
+def test_already_resolved_pair_interplay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_reconcile_pair`'s at-most-one-resolution gate is the authority
+    inside the revision walk too (design.md Decision 9, step 9): a pair
+    already resolved DIFFERENTLY refuses there, is counted skipped, and
+    the walk CONTINUES to the next item; a pair already resolved the SAME
+    way is an idempotent no-op counted as applied."""
+    _init_workspace(tmp_path, monkeypatch)
+    for concept_id in (
+        "decisions/alpha",
+        "decisions/beta",
+        "decisions/gamma",
+        "decisions/delta",
+    ):
+        _write_decision(tmp_path, concept_id)
+    _simulate_tty(monkeypatch)
+
+    # alpha<->beta: pre-resolve as alpha REVISES beta by hand -- the
+    # opposite mode/direction the seeded 'reverses' finding below implies.
+    pre_different = runner.invoke(
+        app,
+        [
+            "reconcile",
+            "decisions/alpha",
+            "decisions/beta",
+            "--revision",
+            "decisions/alpha",
+            "--auto",
+        ],
+    )
+    assert pre_different.exit_code == 0
+    # gamma<->delta: pre-resolve EXACTLY as the seeded finding below will
+    # ask for (delta supersedes gamma).
+    pre_same = runner.invoke(
+        app,
+        [
+            "reconcile",
+            "decisions/gamma",
+            "decisions/delta",
+            "--winner",
+            "decisions/delta",
+            "--auto",
+        ],
+    )
+    assert pre_same.exit_code == 0
+
+    _seed_revision_finding(
+        tmp_path,
+        ("decisions/alpha", "decisions/beta"),
+        verdict="reverses",
+        dates=("2026-01-01", "2026-02-01"),
+        date_states=("dated", "dated"),
+    )
+    _seed_revision_finding(
+        tmp_path,
+        ("decisions/gamma", "decisions/delta"),
+        verdict="reverses",
+        dates=("2026-01-01", "2026-02-01"),
+        date_states=("dated", "dated"),
+    )
+
+    result = runner.invoke(app, ["reconcile", "--from-findings"], input="y\ny\n")
+
+    assert result.exit_code == 0
+    assert "applied 1, skipped 1, declined 0." in result.output
+
+
+def test_contradiction_walk_output_is_byte_identical_when_no_revision_findings_exist(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression guard (design.md Decision 9, step 1: the existing walk
+    "runs first and unchanged"). With actionable contradiction findings
+    and ZERO revision findings persisted, every line the pre-P8b
+    contradiction walk already produced -- the workspace line, the
+    per-item verdict/rationale, the accept/decline outcome, and the
+    shared summary/declined lines -- appears verbatim and in the same
+    order; the ONLY new content is the single `No open revision findings`
+    line inserted between the contradiction section and the summary."""
+    _init_workspace(tmp_path, monkeypatch)
+    a = _ingest_source(tmp_path, "alpha.md")
+    b = _ingest_source(tmp_path, "beta.md")
+    c = _ingest_source(tmp_path, "gamma.md")
+    d = _ingest_source(tmp_path, "delta.md")
+    _seed_finding(tmp_path, (a, b))
+    _seed_finding(tmp_path, (c, d))
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["reconcile", "--from-findings"], input="y\nn\n")
+
+    assert result.exit_code == 0
+    no_revisions_line = (
+        "No open revision findings to apply. Findings are recorded by "
+        "`openkos revisions`."
+    )
+    assert result.output.count(no_revisions_line) == 1
+    # Every fragment the ORIGINAL (pre-P8b) contradiction-only test already
+    # asserted is still present, unmodified, in the same relative order.
+    contradiction_fragments = [
+        f"openkos reconcile --from-findings: workspace at {tmp_path}",
+        f"{a} <-> {b}",
+        "  verdict: contradicts (confidence: 0.90)",
+        "  rationale: they disagree",
+        f"{c} <-> {d}",
+    ]
+    summary_fragments = [
+        "applied 1, skipped 0, declined 1.",
+        f"  declined: {c} <-> {d}",
+    ]
+    positions = [
+        result.output.index(fragment)
+        for fragment in contradiction_fragments + summary_fragments
+    ]
+    assert positions == sorted(positions)  # strictly the original order
+    # The new line sits AFTER the whole contradiction section and BEFORE
+    # the shared summary line -- never interleaved inside either.
+    last_contradiction_position = result.output.index(contradiction_fragments[-1])
+    first_summary_position = result.output.index(summary_fragments[0])
+    assert (
+        last_contradiction_position
+        < result.output.index(no_revisions_line)
+        < first_summary_position
+    )
+    assert any(
+        rel.target == b and rel.type == "reconciled_with"
+        for rel in _relations_of(tmp_path, a)
+    )
+    assert _relations_of(tmp_path, c) == []
+
+
+def test_non_tty_refusal_precedes_both_walks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The existing non-TTY refusal fires before either walk runs, even
+    when the ONLY open item is a revision finding (no contradiction
+    findings at all) -- there is still no unattended bulk path for a
+    revision write."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_decision(tmp_path, "decisions/alpha")
+    _write_decision(tmp_path, "decisions/beta")
+    _seed_revision_finding(
+        tmp_path,
+        ("decisions/alpha", "decisions/beta"),
+        verdict="reverses",
+        dates=("2026-01-01", "2026-02-01"),
+        date_states=("dated", "dated"),
+    )
+
+    result = runner.invoke(app, ["reconcile", "--from-findings"])
+
+    assert result.exit_code == 1
+    assert "non-interactive write consent unavailable" in result.stderr
+    assert _relations_of(tmp_path, "decisions/alpha") == []
+    assert _relations_of(tmp_path, "decisions/beta") == []
+
+
+def test_summary_counts_both_walks_and_lists_revision_declines(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The closing summary sums BOTH walks (design.md Decision 9, step
+    10): one accepted contradiction, one accepted DIRECTED revision, one
+    declined DIRECTED revision (listed as `<later> <type> <earlier>`),
+    and one declined UNDIRECTED revision (listed with the `(revision,
+    order not chosen)` suffix)."""
+    _init_workspace(tmp_path, monkeypatch)
+    a = _ingest_source(tmp_path, "alpha.md")
+    b = _ingest_source(tmp_path, "beta.md")
+    for concept_id in (
+        "decisions/w",
+        "decisions/x",
+        "decisions/y",
+        "decisions/z",
+    ):
+        _write_decision(tmp_path, concept_id)
+    _seed_finding(tmp_path, (a, b))
+    _seed_revision_finding(
+        tmp_path,
+        ("decisions/w", "decisions/x"),
+        verdict="reverses",
+        dates=("2026-01-01", "2026-02-01"),
+        date_states=("dated", "dated"),
+    )
+    _seed_revision_finding(
+        tmp_path,
+        ("decisions/y", "decisions/z"),
+        verdict="refines",
+        dates=("2026-01-01", "2026-02-01"),
+        date_states=("dated", "dated"),
+    )
+    _write_decision(tmp_path, "decisions/p")
+    _write_decision(tmp_path, "decisions/q")
+    _seed_revision_finding(tmp_path, ("decisions/p", "decisions/q"), verdict="reverses")
+    _simulate_tty(monkeypatch)
+
+    # Revision items are walked in `pair_ids` sorted order: decisions/p<->q
+    # (undirected) sorts before decisions/w<->x sorts before decisions/y<->z.
+    # Contradiction (y), decisions/p<->q UNDIRECTED (s = skip),
+    # decisions/w<->x REVERSES (y), decisions/y<->z REFINES (n).
+    result = runner.invoke(app, ["reconcile", "--from-findings"], input="y\ns\ny\nn\n")
+
+    assert result.exit_code == 0
+    assert "applied 2, skipped 0, declined 2." in result.output
+    assert "  declined: decisions/z revises decisions/y" in result.output
+    assert (
+        "  declined: decisions/p <-> decisions/q (revision, order not chosen)"
+        in result.output
+    )
+    assert any(
+        rel.target == "decisions/w" and rel.type == "supersedes"
+        for rel in _relations_of(tmp_path, "decisions/x")
+    )
