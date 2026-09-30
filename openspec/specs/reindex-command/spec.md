@@ -772,3 +772,38 @@ requirement, not this one — see `privacy-purge`'s
 - WHEN the `query` command runs
 - THEN its observable behavior does not depend on `reindex`'s backend-change
   disclosure
+
+### Requirement: Reindex Is An Application Service
+
+The rebuild of the three derived stores MUST be callable without the CLI, as
+`application/reindex_service.reindex_workspace(root, *, force, ports,
+observer)`. It MUST take the workspace root explicitly and never read the
+current directory; return a typed `ReindexOutcome` (the `ReindexReport` and the
+model tag stored before the run); raise a typed `ReindexRefused` subclass for
+every refusal, each carrying the complete user-facing message text; take its
+effects (embedding client, vector-store opener, proximity-source opener,
+local-exemption resolution) through `ReindexPorts` and its progress through a
+`ReindexObserver`; and never prompt, render, import `typer`, `rich` or
+`openkos.vcs`, or raise `typer.Exit`. The CLI verb MUST remain an adapter:
+it supplies the root and the effects, renders the observer's calls, prints a
+refusal's message on stderr and exits 1.
+
+The service MUST hand the vectors/FTS summary to the observer before it writes
+`graph.db`, so a graph failure never hides work already committed; a
+lock-contention failure at any of the three stores MUST surface as the same
+`LockContention` refusal, and a non-lock `sqlite3.OperationalError` from the
+vectors/FTS pass MUST propagate unchanged.
+
+#### Scenario: A graph failure still leaves the summary delivered
+
+- GIVEN the vectors/FTS pass succeeded and the graph write then fails
+- WHEN `reindex_workspace` runs
+- THEN the observer received the report before the `GraphWriteFailed` refusal
+  was raised
+
+#### Scenario: A locked store is one refusal whichever store is locked
+
+- GIVEN a concurrent process holds the write lock of `vectors.db`, `fts.db` or
+  `graph.db`
+- WHEN `reindex_workspace` runs
+- THEN it raises `LockContention` carrying the uniform retry message
