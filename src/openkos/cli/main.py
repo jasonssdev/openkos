@@ -27,10 +27,15 @@ from openkos import config, fsio, lock, read_outcome, source_date, source_title
 from openkos import lint as lint_check
 from openkos.application import backends as application_backends
 from openkos.application import consent as application_consent
+from openkos.application import (
+    contradictions_service,
+    duplicates_service,
+    ingest_service,
+    reindex_service,
+)
 from openkos.application import doctor as application_doctor
 from openkos.application import drift as application_drift
 from openkos.application import ingest as application_ingest
-from openkos.application import ingest_service, reindex_service
 from openkos.application import lifecycle as application_lifecycle
 from openkos.application import lint as application_lint
 from openkos.application import list_service as application_list
@@ -100,17 +105,12 @@ from openkos.resolution.candidates import (
     candidate_group_truncation_notice,
 )
 from openkos.resolution.contradiction import (
-    CandidatePlan,
     ContradictionBatch,
     ContradictionVerdict,
-    contradiction_truncation_notice,
     find_contradictions,
-    is_high_confidence_contradiction,
     is_high_confidence_finding,
     plan_candidates,
-    vacuous_coverage_notice,
 )
-from openkos.resolution.contradiction import Verdict as ContradictionVerdictValue
 from openkos.resolution.decision_revision import (
     DecisionDate,
     RevisionVerdict,
@@ -121,8 +121,6 @@ from openkos.resolution.decision_revision import (
 from openkos.resolution.edge_typing import (
     EdgeSuggestion,
     candidate_edges,
-    candidate_truncation_notice,
-    quarantined_candidate_notice,
     suggest_edge_types,
 )
 from openkos.resolution.reconciliation import reconcile_merged_body
@@ -11159,61 +11157,72 @@ def duplicates(
     flag for consistency.
     """
     root = Path.cwd()
-    reason = config.require_workspace(root)
-    if reason is not None:
-        typer.echo(f"openkos duplicates: refusing to run -- {reason}.", err=True)
-        raise typer.Exit(code=1)
+    try:
+        # #797: the three decision verbs short-circuit BEFORE the whole-bundle
+        # walk, mirroring `contradictions --decline/--reopen/--declined`. A human
+        # ruling must be recordable on a workspace whose candidate set is
+        # expensive to compute, or slow to write is slow to use.
+        if keep_distinct:
+            ruling = duplicates_service.record_identity_ruling(
+                root,
+                keep_distinct,
+                flag="--keep-distinct",
+                target_state="declined",
+                on_warning=_echo_warning,
+            )
+            typer.echo(
+                f"openkos duplicates: keeping distinct {' + '.join(ruling.members)}."
+            )
+            _autocommit(
+                root,
+                [ruling.rel_path],
+                f"openkos: keep distinct {'/'.join(ruling.members)}",
+            )
+            return
+        if reopen:
+            ruling = duplicates_service.record_identity_ruling(
+                root,
+                reopen,
+                flag="--reopen",
+                target_state="open",
+                on_warning=_echo_warning,
+            )
+            typer.echo(f"openkos duplicates: reopened {' + '.join(ruling.members)}.")
+            _autocommit(
+                root,
+                [ruling.rel_path],
+                f"openkos: reopen identity {'/'.join(ruling.members)}",
+            )
+            return
+        if kept_distinct:
+            _duplicates_kept_distinct_view(root)
+            return
 
-    layout = config.WorkspaceLayout(root)
-
-    # #797: the three decision verbs short-circuit BEFORE the whole-bundle
-    # walk, mirroring `contradictions --decline/--reopen/--declined`. A
-    # human ruling must be recordable on a workspace whose candidate set is
-    # expensive to compute, or slow to write is slow to use.
-    if keep_distinct:
-        members = _validated_identity_members(keep_distinct, "--keep-distinct")
-        rel_path = _apply_identity_decision(layout, members, target_state="declined")
-        typer.echo(f"openkos duplicates: keeping distinct {' + '.join(members)}.")
-        _autocommit(root, [rel_path], f"openkos: keep distinct {'/'.join(members)}")
-        return
-    if reopen:
-        members = _validated_identity_members(reopen, "--reopen")
-        rel_path = _apply_identity_decision(layout, members, target_state="open")
-        typer.echo(f"openkos duplicates: reopened {' + '.join(members)}.")
-        _autocommit(root, [rel_path], f"openkos: reopen identity {'/'.join(members)}")
-        return
-    if kept_distinct:
-        _duplicates_kept_distinct_view(root, layout)
-        return
-
-    report = find_candidates_report(
-        layout.bundle_dir, include_deprecated=include_deprecated
-    )
-    # The suppression runs AFTER the walk, never inside it: the cap and its
-    # truncation notice describe what the corpus PRODUCED, and filtering
-    # before them would let a ruled-distinct group silently consume a cap
-    # slot's worth of accounting.
-    note = _echo_warning_once()
-    groups = [
-        group
-        for group in report.groups
-        if not application_pending.is_group_kept_distinct(
-            layout, group.member_ids, on_warning=note
+        report = duplicates_service.report_duplicates(
+            root,
+            include_deprecated=include_deprecated,
+            find_candidates_report=find_candidates_report,
+            on_warning=_echo_warning_once(),
         )
-    ]
-    suppressed = len(report.groups) - len(groups)
-    notice = candidate_group_truncation_notice(report)
-    if notice is not None:
-        typer.echo(notice, err=True)
+    except duplicates_service.InvalidMembers as exc:
+        typer.echo(exc.message, err=True)
+        raise typer.Exit(code=2) from exc
+    except duplicates_service.DuplicatesRefused as exc:
+        typer.echo(exc.message, err=True)
+        raise typer.Exit(code=1) from exc
+
+    if report.truncation_notice is not None:
+        typer.echo(report.truncation_notice, err=True)
 
     typer.echo(f"openkos duplicates: workspace at {root}")
     typer.echo()
-    if suppressed:
+    if report.suppressed:
         typer.echo(
-            f"Hiding {suppressed} group{_plural(suppressed)} you ruled "
-            "distinct (`openkos duplicates --kept-distinct` lists them)."
+            f"Hiding {report.suppressed} group{_plural(report.suppressed)} you "
+            "ruled distinct (`openkos duplicates --kept-distinct` lists them)."
         )
         typer.echo()
+    groups = report.groups
     if not groups:
         typer.echo("No candidates found.")
         return
@@ -11236,6 +11245,22 @@ def duplicates(
             typer.echo(f"  - {member_id}")
         typer.echo()
     typer.echo("Next: openkos merge <survivor> <absorbed>")
+
+
+def _duplicates_kept_distinct_view(root: Path) -> None:
+    """`--kept-distinct`: every group a human ruled distinct, so the ruling is
+    visible and reversible rather than an invisible suppression (#797)."""
+    records = duplicates_service.list_kept_distinct(root, on_warning=_echo_warning)
+    typer.echo(f"openkos duplicates --kept-distinct: workspace at {root}")
+    typer.echo()
+    if not records:
+        typer.echo("No groups kept distinct.")
+        return
+    for record in records:
+        typer.echo(f"[KEPT DISTINCT] {' + '.join(record.member_ids)}")
+        typer.echo(f"  decided: {record.decided_at}")
+        typer.echo()
+    typer.echo("Reopen one with: openkos duplicates --reopen <id> --reopen <id>")
 
 
 @app.command(
@@ -12291,55 +12316,6 @@ def suggest_volatility_cmd(
         raise typer.Exit(code=1) from outcome.failure
 
 
-def _sorted_decision_pair(pair: tuple[str, str]) -> tuple[str, str]:
-    """Canonicalize an operator-supplied `--decline`/`--reopen` pair into
-    `decision_key_for`'s expected order (design Decision 3: "sorted
-    pair_ids"). The CLI accepts either order, but the identity -- and the
-    decisions sidecar it is stored under (`pair_ids[0]`'s own file) -- must
-    be stable regardless of which order the operator typed the two ids
-    in."""
-    pair_a, pair_b = sorted(pair)
-    return pair_a, pair_b
-
-
-def _apply_contradiction_decision(
-    layout: config.WorkspaceLayout,
-    pair: tuple[str, str],
-    merged_absorbed_id: str | None,
-    *,
-    target_state: bundle_decisions.DecisionState,
-) -> str:
-    """Write (or update in place) the single decision record identified by
-    `pair`/`merged_absorbed_id` to `target_state`, returning the
-    workspace-relative decision path for the caller's `_autocommit` list
-    (design Decision 5, mirrors `MergeResult.ledger_sidecar_path`).
-
-    Never opens `.openkos/findings.db`: decline/reopen never read the
-    findings store as a precondition (design Decision 7 corollary) -- a
-    matching findings row is not required either way. Any existing record
-    for the SAME `decision_key` is replaced in place (idempotent re-
-    decline/re-reopen); every OTHER record already in the owning sidecar is
-    preserved, mirroring `write_decisions`'s full-replace contract."""
-    pair_ids = _sorted_decision_pair(pair)
-    key = bundle_decisions.decision_key_for(pair_ids, merged_absorbed_id)
-    owner_id = pair_ids[0]
-    existing = bundle_decisions.read_decisions(owner_id, layout.bundle_dir)
-    records = [record for record in existing if record.decision_key != key]
-    records.append(
-        bundle_decisions.DecisionRecord(
-            decision_key=key,
-            pair_ids=pair_ids,
-            merged_absorbed_id=merged_absorbed_id,
-            state=target_state,
-            decided_at=datetime.now(UTC).isoformat(),
-        )
-    )
-    path = bundle_decisions.write_decisions(
-        owner_id, layout.bundle_dir, records=records, on_warning=_echo_warning
-    )
-    return f"bundle/{path.relative_to(layout.bundle_dir).as_posix()}"
-
-
 def _record_identity_decline_from_walk(
     root: Path,
     layout: config.WorkspaceLayout,
@@ -12369,118 +12345,19 @@ def _record_identity_decline_from_walk(
         )
 
 
-def _validated_identity_members(
-    raw_members: Sequence[str], flag: str
-) -> tuple[str, ...]:
-    """Canonicalize operator-supplied member ids for an identity ruling
-    (#797): deduped and sorted, so either typing order reaches the same
-    record and the same owning sidecar.
-
-    Every id goes through `_canonicalize_concept_id` FIRST -- the documented
-    path-safety gate `forget`/`merge` apply. These ids reach
-    `bundle_decisions.decisions_path_for`, which joins them onto the
-    decisions root, so an absolute id or a `..` segment would otherwise
-    write a sidecar OUTSIDE the bundle. It also collapses `./` and repeated
-    slashes, so two spellings of one id cannot key two rulings. Existence is
-    NOT required (the `unmerge` variant): a ruling may name a concept absent
-    right now, and demanding a live file would make the human's answer
-    depend on the machine's state -- the dependency this feature removes.
-
-    Refuses (exit 2) below two DISTINCT members. A one-member "group" is
-    not a duplicate ruling at all, and a repeated id silently collapsing to
-    one would write a record no candidate group can ever match -- a ruling
-    that appears to have been recorded and suppresses nothing is worse than
-    a refusal."""
-    canonical: set[str] = set()
-    for member in raw_members:
-        stripped = member.strip()
-        if not stripped:
-            continue
-        try:
-            canonical.add(application_lifecycle.canonicalize_concept_id(stripped))
-        except ValueError as exc:
-            typer.echo(
-                f"openkos duplicates: refusing to run -- {flag} {exc}.", err=True
-            )
-            raise typer.Exit(code=2) from exc
-    members = tuple(sorted(canonical))
-    if len(members) < 2:
-        typer.echo(
-            f"openkos duplicates: refusing to run -- {flag} needs at least two "
-            "distinct concept ids; repeat the flag once per member.",
-            err=True,
-        )
-        raise typer.Exit(code=2)
-    return members
-
-
-def _duplicates_kept_distinct_view(root: Path, layout: config.WorkspaceLayout) -> None:
-    """`--kept-distinct`: every group a human ruled distinct, so the ruling
-    is visible and reversible rather than an invisible suppression (#797).
-
-    Reads the WALKED sidecar path, never one rebuilt from a sidecar's own
-    `concept_id` frontmatter field -- the same traversal guard
-    `_contradictions_declined_view` applies."""
-    typer.echo(f"openkos duplicates --kept-distinct: workspace at {root}")
-    typer.echo()
-    records: list[bundle_decisions.IdentityDecisionRecord] = []
-    for decisions_path in bundle_decisions.iter_decisions(layout.bundle_dir):
-        records.extend(
-            record
-            for record in bundle_decisions.read_identity_decisions_at(
-                decisions_path, on_warning=_echo_warning
-            )
-            if record.state == "declined"
-        )
-    if not records:
-        typer.echo("No groups kept distinct.")
-        return
-    for record in sorted(records, key=lambda item: item.decision_key):
-        typer.echo(f"[KEPT DISTINCT] {' + '.join(record.member_ids)}")
-        typer.echo(f"  decided: {record.decided_at}")
-        typer.echo()
-    typer.echo("Reopen one with: openkos duplicates --reopen <id> --reopen <id>")
-
-
 def _apply_identity_decision(
     layout: config.WorkspaceLayout,
     member_ids: tuple[str, ...],
     *,
     target_state: bundle_decisions.DecisionState,
 ) -> str:
-    """Write (or update in place) the single identity ruling for
-    `member_ids` to `target_state` (#797), returning the workspace-relative
-    path for the caller's `_autocommit` list -- the identity twin of
-    `_apply_contradiction_decision`, same posture throughout.
-
-    Never opens `.openkos/findings.db`. A keep-distinct ruling must be
-    writable with NO adjudication row behind it: the human may be
-    overruling a verdict the model has not produced yet, or one that was
-    recomputed away. Requiring a matching row would make the human's answer
-    depend on the machine's, which is the dependency this issue removes.
-
-    Members are sorted before keying AND before choosing the owning
-    sidecar, so an operator typing the two ids in either order reaches the
-    same record."""
-    members = tuple(sorted(member_ids))
-    key = bundle_decisions.identity_decision_key_for(members)
-    owner_id = members[0]
-    existing = bundle_decisions.read_identity_decisions(
-        owner_id, layout.bundle_dir, on_warning=_echo_warning
+    """Write (or update in place) the single identity ruling for `member_ids`
+    (#797), returning the workspace-relative path for the caller's
+    `_autocommit` list. The write lives in `application/duplicates_service.py`;
+    this adapter only chooses how the notes it reads are shown."""
+    return duplicates_service.apply_identity_decision(
+        layout, member_ids, target_state=target_state, on_warning=_echo_warning
     )
-    records = [record for record in existing if record.decision_key != key]
-    records.append(
-        bundle_decisions.IdentityDecisionRecord(
-            decision_key=key,
-            member_ids=members,
-            state=target_state,
-            decided_at=datetime.now(UTC).isoformat(),
-        )
-    )
-    path = bundle_decisions.write_identity_decisions(
-        owner_id, layout.bundle_dir, records=records
-    )
-    return f"bundle/{path.relative_to(layout.bundle_dir).as_posix()}"
 
 
 class AdjudicationServes(NamedTuple):
@@ -12784,116 +12661,6 @@ def _persist_adjudications(
         )
 
 
-def _contradiction_spec_key(spec: object) -> tuple[tuple[str, str], str | None]:
-    """The `(pair_ids, merged_absorbed_id)` identity of one candidate spec
-    -- the SAME identity `bundle.decisions.decision_key_for` and the
-    findings store key on (design Decision 3), spelled as a plain tuple so
-    specs and persisted rows can be joined without hashing the (unhashable,
-    ledger-entry-carrying) spec itself. `spec` is typed loosely because
-    `_CandidateSpec` is `resolution.contradiction`'s own private shape;
-    only its two identity attributes are read here."""
-    merge_entry = getattr(spec, "merge_entry", None)
-    absorbed = merge_entry.absorbed_id if merge_entry is not None else None
-    return (spec.pair_ids, absorbed)  # type: ignore[attr-defined]
-
-
-def _partition_persisted_serves(
-    layout: config.WorkspaceLayout, plan: CandidatePlan
-) -> tuple[
-    dict[tuple[tuple[str, str], str | None], ContradictionVerdict], CandidatePlan
-]:
-    """Split `plan` into verdicts servable from `.openkos/findings.db` and
-    the candidates that still need a model call (#653).
-
-    A candidate is SERVED iff its latest persisted finding's stored digest
-    rows are exactly the rows `cli.curate.finding_input_digests` computes
-    for the pair's CURRENT bytes -- the same function that recorded them,
-    so equality means "nothing this verdict was computed from has changed".
-    Everything else re-judges, conservatively: no persisted row, any digest
-    drift, an unreadable input (fewer current rows than stored), a
-    stored verdict value outside the enum -- or a present-but-corrupt
-    store, which degrades to one stderr advisory and a full fresh judge
-    (#685 item 4) rather than crashing before any model spend. `consistent`
-    rows serve exactly
-    like `contradicts` rows -- they are what proves a pair needs no
-    re-judging (the display filter, not this partition, decides what is
-    shown).
-
-    Returns `(served_by_key, judged_plan)`: the served verdicts keyed by
-    `_contradiction_spec_key`, and a copy of `plan` whose `specs` are only
-    the candidates to judge -- totals untouched, so the truncation notice
-    keeps describing the ORIGINAL plan."""
-    if not layout.findings_db_path.exists():
-        return {}, plan
-    # Fail OPEN to judging on a present-but-corrupt store (#685 item 4,
-    # mirroring the persist path's #684 posture): this read runs BEFORE any
-    # model spend, so a crash here would cost the whole run to protect a
-    # cache -- one stderr advisory and a full fresh judge is strictly
-    # better. `sqlite3.Error` covers a non-database file; `OSError` an
-    # unreadable one.
-    try:
-        conn = derived.open_derived_connection(layout.findings_db_path)
-        try:
-            persisted = findings.open_findings(conn)
-        finally:
-            conn.close()
-    except (OSError, sqlite3.Error) as exc:
-        typer.echo(
-            "openkos contradictions: warning -- failed to read persisted "
-            f"findings ({exc}); judging every candidate fresh.",
-            err=True,
-        )
-        return {}, plan
-    # Insertion order is `record_findings` order: iterating forward and
-    # overwriting leaves the LATEST row for each identity -- a pair curate
-    # judged twice serves its newest verdict, never a superseded one.
-    latest: dict[tuple[tuple[str, str], str | None], findings.PersistedFinding] = {}
-    for pf in persisted:
-        latest[(pf.pair_ids, pf.merged_absorbed_id)] = pf
-
-    served: dict[tuple[tuple[str, str], str | None], ContradictionVerdict] = {}
-    to_judge = []
-    for spec in plan.specs:
-        key = _contradiction_spec_key(spec)
-        row = latest.get(key)
-        # Row lookup FIRST (#685 item 4): a candidate with no persisted
-        # finding is judged without paying the per-pair digest I/O -- the
-        # hashes exist only to compare against a stored row.
-        if row is None:
-            to_judge.append(spec)
-            continue
-        current = curate_module.finding_input_digests(layout.bundle_dir, spec)
-        if not current or tuple(row.input_digests) != current:
-            to_judge.append(spec)
-            continue
-        try:
-            verdict_value = ContradictionVerdictValue(row.verdict)
-        except ValueError:
-            to_judge.append(spec)
-            continue
-        served[key] = ContradictionVerdict(
-            pair_ids=row.pair_ids,
-            verdict=verdict_value,
-            confidence=row.confidence,
-            rationale=row.rationale,
-            conflicting_claims=row.conflicting_claims,
-            merged_absorbed_id=row.merged_absorbed_id,
-        )
-    return served, dataclasses.replace(plan, specs=tuple(to_judge))
-
-
-def _open_findings_by_decision_key(
-    layout: config.WorkspaceLayout,
-) -> dict[str, findings.PersistedFinding]:
-    """Every persisted finding, keyed by the SAME `decision_key_for`
-    identity a decision record is keyed on (design Decision 7's read-time
-    join) -- used ONLY by the `--declined` view's stale-label lookup."""
-    return {
-        bundle_decisions.decision_key_for(pf.pair_ids, pf.merged_absorbed_id): pf
-        for pf in application_pending.persisted_findings(layout)
-    }
-
-
 # `_contradiction_finding_counts` moved verbatim into `application/status.py`
 # as the public `contradiction_finding_counts` (issue #995, PR 3); `status`
 # is its only caller, via `application_status.contradiction_finding_counts`.
@@ -12986,36 +12753,202 @@ def render_contradiction_header(result: ContradictionVerdict) -> None:
         )
 
 
-def _contradictions_declined_view(root: Path, layout: config.WorkspaceLayout) -> None:
-    """`contradictions --declined` (pending-work spec: "The declined-
-    listing view surfaces it", design Decision 3's "explicit listing
-    view"). Short-circuits before the graph build and LLM client (design
-    File changes table): every declined record comes from
-    `bundle.decisions.iter_decisions`'s INCLUDE walk, never from a fresh
-    LLM judgment."""
+class _CliContradictionsObserver(contradictions_service.ContradictionsObserver):
+    """Renders the advisories a `contradictions` run raises before any verdict
+    exists; everything the report shows comes back in the outcome."""
+
+    def __init__(
+        self,
+        layout: config.WorkspaceLayout,
+        *,
+        include_confidential: bool,
+    ) -> None:
+        self._layout = layout
+        self._include_confidential = include_confidential
+
+    def exemption_resolved(self, local_exemption: bool) -> None:
+        observability.warn_if_walk_incomplete(
+            self._layout.bundle_dir,
+            include_confidential=self._include_confidential,
+            local_exemption=local_exemption,
+        )
+
+    def vacuous_coverage(self, notice: str) -> None:
+        typer.echo(f"openkos contradictions: {notice}", err=True)
+
+    def persisted_findings_unreadable(self, error: Exception) -> None:
+        typer.echo(
+            "openkos contradictions: warning -- failed to read persisted "
+            f"findings ({error}); judging every candidate fresh.",
+            err=True,
+        )
+
+    def progress_callback(self) -> Callable[[int, int, object], None] | None:
+        # TTY-gated per-pair progress on stderr; `None` (silent) when output is
+        # piped (issue #190, mirrors `suggest-relations`' #134 per-edge line).
+        return observability.progress_callback("contradictions", "checking pair")
+
+    def persist_failed(self, error: Exception) -> None:
+        typer.echo(
+            "openkos contradictions: warning -- failed to persist "
+            f"findings ({error}); this run's verdicts are shown below "
+            "but will not be served from the store on a later run.",
+            err=True,
+        )
+
+
+def _record_contradiction_decision(
+    root: Path,
+    pair: tuple[str, str],
+    merged_absorbed_id: str | None,
+    *,
+    target_state: bundle_decisions.DecisionState,
+) -> None:
+    """`contradictions --decline`/`--reopen`: persist one decision through the
+    service, say so, then stage ONLY its sidecar."""
+    ruling = contradictions_service.record_contradiction_decision(
+        root,
+        pair,
+        merged_absorbed_id,
+        target_state=target_state,
+        on_warning=_echo_warning,
+    )
+    pair_a, pair_b = ruling.pair
+    verb, label = (
+        ("declined", "decline")
+        if target_state == "declined"
+        else ("reopened", "reopen")
+    )
+    typer.echo(
+        f"openkos contradictions: {verb} {pair_a} <-> {pair_b}"
+        + (
+            f" (merged content, absorbed {merged_absorbed_id})"
+            if merged_absorbed_id is not None
+            else ""
+        )
+        + "."
+    )
+    _autocommit(
+        root,
+        [ruling.rel_path],
+        f"openkos: {label} contradiction {pair_a}/{pair_b}",
+    )
+
+
+def _contradictions_declined_view(root: Path) -> None:
+    """`contradictions --declined`: every declined record, joined to its
+    persisted finding. Short-circuits before the graph build and the LLM client
+    -- every record comes from the decisions sidecars, never from a fresh
+    judgment."""
+    entries = contradictions_service.list_declined(root)
     typer.echo(f"openkos contradictions --declined: workspace at {root}")
     typer.echo()
-
-    declined_records: list[bundle_decisions.DecisionRecord] = []
-    for decisions_path in bundle_decisions.iter_decisions(layout.bundle_dir):
-        metadata, _ = okf.load_frontmatter(decisions_path.read_text(encoding="utf-8"))
-        concept_id = metadata.get("concept_id")
-        if not isinstance(concept_id, str):
-            continue
-        # Read the WALKED path, not a path rebuilt from the sidecar's own
-        # `concept_id` content (F1b read-side traversal).
-        for record in bundle_decisions.read_decisions_at(decisions_path):
-            if record.state == "declined":
-                declined_records.append(record)
-
-    if not declined_records:
+    if not entries:
         typer.echo("No declined findings.")
         return
+    for entry in entries:
+        _echo_declined_finding(entry.record, entry.finding)
 
-    findings_by_key = _open_findings_by_decision_key(layout)
-    declined_records.sort(key=lambda record: record.decision_key)
-    for record in declined_records:
-        _echo_declined_finding(record, findings_by_key.get(record.decision_key))
+
+def _run_contradictions_report(
+    root: Path, options: contradictions_service.ContradictionsOptions
+) -> None:
+    """The judged `contradictions` run: call the service, then render its
+    outcome (and the partial-batch failure, which is the only non-zero exit
+    that still prints a report)."""
+    layout = config.WorkspaceLayout(root)
+    ports = contradictions_service.ContradictionsPorts(
+        chat_client=lambda cfg: _chat_client(cfg, task="contradiction"),
+        local_exemption=_resolve_local_exemption,
+        open_proximity=_open_proximity_or_degrade,
+        build_graph=build_graph,
+        plan_candidates=plan_candidates,
+        find_contradictions=find_contradictions,
+        persist_findings=curate_module.persist_findings,
+        finding_input_digests=curate_module.finding_input_digests,
+        zero_state_message=lambda ws_layout, store, embeddings_missing: (
+            _zero_edge_state_message(
+                ws_layout,
+                store=store,
+                use_typed_count=True,
+                embeddings_missing=embeddings_missing,
+                none_survived=(
+                    "{count} typed relation(s); none are contradiction candidates."
+                ),
+            )
+        ),
+    )
+    outcome = contradictions_service.run_contradictions(
+        root,
+        options=options,
+        ports=ports,
+        observer=_CliContradictionsObserver(
+            layout, include_confidential=options.include_confidential
+        ),
+    )
+
+    typer.echo(f"openkos contradictions: workspace at {root}")
+    typer.echo()
+    if not options.fresh and outcome.plan.specs:
+        # #685 item 6: the judged-fresh count is what actually HAPPENED
+        # (`batch.results`), never the planned `judged_plan.specs` -- on a
+        # partial batch the two differ, and printing the plan here overstated
+        # the spend the stderr epilogue then contradicted.
+        typer.echo(
+            f"{outcome.served_count} of {len(outcome.plan.specs)} candidate(s) "
+            "served from persisted findings; "
+            f"{outcome.fresh_count} judged fresh."
+        )
+        typer.echo()
+    if outcome.candidate_notice is not None:
+        typer.echo(outcome.candidate_notice)
+        typer.echo()
+    if outcome.quarantine_notice is not None:
+        typer.echo(outcome.quarantine_notice)
+        typer.echo()
+    if outcome.zero_state is not None:
+        typer.echo(outcome.zero_state)
+        return
+
+    if outcome.truncation_notice is not None:
+        typer.echo(outcome.truncation_notice)
+        typer.echo()
+    if not outcome.displayed:
+        # No early return (#441): the partial-batch failure epilogue below must
+        # run after every display path, exactly as in `adjudicate`.
+        # Vacuous-coverage guard (#557): a clean line over a run that judged
+        # zero typed-edge pairs must not read as an all-clear -- stderr may be
+        # discarded (piped runs), so the qualification rides the stdout line
+        # itself.
+        if outcome.vacuous_notice is not None:
+            typer.echo(
+                "No high-confidence contradictions found -- NOT an "
+                "all-clear: zero typed-edge pairs were judged (the graph "
+                "has no applied relations)."
+            )
+        else:
+            typer.echo("No high-confidence contradictions found.")
+
+    for result in outcome.displayed:
+        render_contradiction_header(result)
+        for claim in result.conflicting_claims:
+            typer.echo(f"  - {claim}")
+        typer.echo(f"  rationale: {result.rationale}")
+        typer.echo()
+
+    if outcome.batch.failure is not None:
+        # Partial batch (#441): the report above already rendered the completed
+        # verdicts exactly as a complete run over that list -- the paid-for work
+        # is never discarded -- so all that remains is the one stderr failure
+        # line and the BackendError-family exit code. #653: the
+        # completed-of-total counts describe what was actually SENT to the model
+        # this run -- the judged subset, not the full plan.
+        _echo_contradictions_batch_failure(
+            outcome.batch,
+            total=outcome.judged_plan.llm_calls,
+            model=outcome.model,
+        )
+        raise typer.Exit(code=1) from outcome.batch.failure
 
 
 @app.command(
@@ -13172,326 +13105,32 @@ def contradictions(
     Default").
     """
     root = Path.cwd()
-    reason = config.require_workspace(root)
-    if reason is not None:
-        typer.echo(f"openkos contradictions: refusing to run -- {reason}.", err=True)
-        raise typer.Exit(code=1)
-
-    layout = config.WorkspaceLayout(root)
-
-    if decline is not None:
-        rel_path = _apply_contradiction_decision(
-            layout, decline, merged_absorbed_id, target_state="declined"
-        )
-        pair_a, pair_b = _sorted_decision_pair(decline)
-        typer.echo(
-            f"openkos contradictions: declined {pair_a} <-> {pair_b}"
-            + (
-                f" (merged content, absorbed {merged_absorbed_id})"
-                if merged_absorbed_id is not None
-                else ""
-            )
-            + "."
-        )
-        _autocommit(
-            root,
-            [rel_path],
-            f"openkos: decline contradiction {pair_a}/{pair_b}",
-        )
-        return
-
-    if reopen is not None:
-        rel_path = _apply_contradiction_decision(
-            layout, reopen, merged_absorbed_id, target_state="open"
-        )
-        pair_a, pair_b = _sorted_decision_pair(reopen)
-        typer.echo(
-            f"openkos contradictions: reopened {pair_a} <-> {pair_b}"
-            + (
-                f" (merged content, absorbed {merged_absorbed_id})"
-                if merged_absorbed_id is not None
-                else ""
-            )
-            + "."
-        )
-        _autocommit(
-            root,
-            [rel_path],
-            f"openkos: reopen contradiction {pair_a}/{pair_b}",
-        )
-        return
-
-    if declined:
-        _contradictions_declined_view(root, layout)
-        return
-
     try:
-        cfg = config.read_config(root)
-    except (OSError, ValueError) as exc:
-        typer.echo(
-            f"openkos contradictions: failed while reading the workspace -- {exc}.",
-            err=True,
-        )
-        raise typer.Exit(code=1) from exc
-
-    llm = _chat_client(cfg, task="contradiction")
-    local_exemption = _resolve_local_exemption(
-        cast(application_backends.HasLocality, llm), cfg
-    )
-    observability.warn_if_walk_incomplete(
-        layout.bundle_dir,
-        include_confidential=include_confidential,
-        local_exemption=local_exemption,
-    )
-    # graph-projection-reuse (#196): source-then-build prologue, mirroring
-    # `suggest_relations_cmd` -- the proximity source is closed as early as
-    # possible, right after `build_graph` consumes it. Unlike
-    # `suggest-relations`, the LLM loop runs INSIDE `find_contradictions`, so
-    # the store stays open across it (design §4): splitting this block would
-    # require two builds, which is exactly what #196 removes.
-    source = _open_proximity_or_degrade(layout.vectors_db_path)
-    embeddings_missing = source is None
-    try:
-        graph = build_graph(layout.bundle_dir, candidates=source)
-    finally:
-        if source is not None:
-            source.close()
-
-    with graph as store:
-        # Built here, not inside `find_contradictions`, because the cap-reached
-        # line below has to name WHICH KIND was truncated (#444) -- and passing
-        # it in means that line describes the exact list that was judged.
-        plan = plan_candidates(
-            layout.bundle_dir,
-            store=store,
-            include_deprecated=include_deprecated,
-            include_confidential=include_confidential,
-            local_exemption=local_exemption,
-        )
-        # Vacuous-coverage guard (#557): warn BEFORE the judging loop, not
-        # after -- the run costs one LLM call per candidate, and an operator
-        # who only needed typed-edge coverage can abort instead of paying
-        # for a check that cannot answer their question.
-        vacuous = vacuous_coverage_notice(plan)
-        if vacuous is not None:
-            typer.echo(f"openkos contradictions: {vacuous}", err=True)
-        # #653: serve persisted, digest-fresh findings instead of re-billing
-        # the model for verdicts the store already holds. `--fresh` bypasses
-        # the store; the truncation/vacuous notices above keep describing
-        # the ORIGINAL plan either way.
-        served_by_key: dict[
-            tuple[tuple[str, str], str | None], ContradictionVerdict
-        ] = {}
-        judged_plan = plan
-        if not fresh:
-            served_by_key, judged_plan = _partition_persisted_serves(layout, plan)
-        try:
-            batch, _total_pairs = find_contradictions(
-                layout.bundle_dir,
-                llm=llm,
-                include_deprecated=include_deprecated,
-                include_confidential=include_confidential,
-                local_exemption=local_exemption,
-                store=store,
-                plan=judged_plan,
-                # TTY-gated per-pair progress on stderr; `None` (silent)
-                # when output is piped (issue #190, mirrors
-                # `suggest-relations`' #134 per-edge line).
-                on_progress=observability.progress_callback(
-                    "contradictions", "checking pair"
-                ),
-            )
-        except BackendUnavailable as exc:
-            typer.echo(
-                f"openkos contradictions: failed -- {exc}. Start it with "
-                f"`ollama serve`, then try again.{_DOCTOR_HINT}",
-                err=True,
-            )
-            raise typer.Exit(code=1) from exc
-        except BackendModelNotFound as exc:
-            typer.echo(
-                f"openkos contradictions: failed -- model '{cfg.model}' is not "
-                f"installed. Pull it with `ollama pull {cfg.model}`, then try "
-                "again.",
-                err=True,
-            )
-            raise typer.Exit(code=1) from exc
-        # The two specific handlers above MUST precede this generic handler:
-        # both `BackendUnavailable` and `BackendModelNotFound` subclass
-        # `BackendError`, so reordering would silently funnel them into this
-        # fallback and lose their actionable remediation messages (mirrors
-        # `suggest-relations`'s ordering).
-        except BackendError as exc:
-            typer.echo(f"openkos contradictions: failed -- {exc}.", err=True)
-            raise typer.Exit(code=1) from exc
-
-        # #653: freshly judged verdicts persist through curate's EXACT write
-        # path (`persist_findings`), so the next default run serves them --
-        # `.openkos/` derived state only, never a bundle write. Partial
-        # batches persist their completed prefix (`zip` inside stops there).
-        # Fail-open (review R4-persist-on-critical-path, lineage
-        # review-f5e797b9b50625cd): this write runs AFTER the paid model
-        # calls and BEFORE any verdict is displayed -- a locked or corrupt
-        # findings.db degrades to one stderr advisory, never a crash that
-        # discards the paid-for verdicts (#441's posture).
-        fresh_verdicts = list(batch.results)
-        if fresh_verdicts:
-            try:
-                curate_module.persist_findings(layout, judged_plan, fresh_verdicts)
-            except (OSError, sqlite3.Error) as exc:
-                typer.echo(
-                    "openkos contradictions: warning -- failed to persist "
-                    f"findings ({exc}); this run's verdicts are shown below "
-                    "but will not be served from the store on a later run.",
-                    err=True,
-                )
-
-        # Reassemble in the ORIGINAL plan order: a served verdict and a
-        # fresh one must interleave exactly where their candidates sat, or
-        # the display order would depend on what happened to be cached.
-        fresh_by_key = {
-            _contradiction_spec_key(spec): verdict
-            for spec, verdict in zip(judged_plan.specs, fresh_verdicts, strict=False)
-        }
-        verdicts = []
-        placed: set[int] = set()
-        for spec in plan.specs:
-            key = _contradiction_spec_key(spec)
-            if key in served_by_key:
-                verdicts.append(served_by_key[key])
-            elif key in fresh_by_key:
-                verdicts.append(fresh_by_key[key])
-                placed.add(id(fresh_by_key[key]))
-        # #441 posture: a judged result that maps onto no plan spec (an
-        # injected finder in tests, or a future planner/finder drift) is
-        # paid-for work -- appended after the plan-ordered ones rather than
-        # silently dropped. In production every result maps, so this is a
-        # provable no-op there.
-        verdicts.extend(v for v in fresh_verdicts if id(v) not in placed)
-        typer.echo(f"openkos contradictions: workspace at {root}")
-        typer.echo()
-        if not fresh and plan.specs:
-            # #685 item 6: the judged-fresh count is what actually HAPPENED
-            # (`batch.results`), never the planned `judged_plan.specs` -- on
-            # a partial batch the two differ, and printing the plan here
-            # overstated the spend the stderr epilogue then contradicted.
-            typer.echo(
-                f"{len(served_by_key)} of {len(plan.specs)} candidate(s) "
-                "served from persisted findings; "
-                f"{len(fresh_verdicts)} judged fresh."
-            )
-            typer.echo()
-        # #378 slice 2 (post-review correction): pass 3's candidate-edge cap
-        # truncation, never silent -- distinct from
-        # `contradiction_truncation_notice(plan)` below, which reports the
-        # contradiction-engine's OWN candidate cap. Read here, INSIDE the
-        # `with` block, since `store` closes below.
-        #
-        # The two lines count genuinely different things -- the plan's totals
-        # come from `plan_candidates`, which is deprecation-filtered, this
-        # one from pass 3's own seeding -- but BOTH must now respect the
-        # sensitivity-fail-closed-filter before being printed:
-        # `candidate_truncation_notice` re-derives its counts from
-        # `store.candidate_report.pairs` (RAW, unfiltered by pass 3 itself)
-        # through `sensitivity.sensitive_concept_ids`, so this line never
-        # discloses a pre-cap volume that includes a confidential endpoint
-        # `find_contradictions` above already excluded from its own results.
-        notice = candidate_truncation_notice(
-            store.candidate_report,
-            layout.bundle_dir,
-            include_confidential=include_confidential,
-            local_exemption=local_exemption,
-        )
-        if notice is not None:
-            typer.echo(notice)
-            typer.echo()
-        # #841: the unjudged-source withholding, disclosed here too -- the
-        # contradiction engine reads the same candidate projection, so its
-        # queue is also smaller than the bundle could produce.
-        quarantine_notice = quarantined_candidate_notice(
-            store.candidate_report,
-            layout.bundle_dir,
-            include_confidential=include_confidential,
-            local_exemption=local_exemption,
-        )
-        if quarantine_notice is not None:
-            typer.echo(quarantine_notice)
-            typer.echo()
-        if not verdicts and batch.failure is None:
-            # Guarded on a clean run only (#441): a first-candidate failure
-            # also carries zero verdicts, and the zero-candidates state
-            # message would then claim an empty graph the failure, not the
-            # projection, produced.
-            typer.echo(
-                _zero_edge_state_message(
-                    layout,
-                    store=store,
-                    use_typed_count=True,
-                    embeddings_missing=embeddings_missing,
-                    none_survived=(
-                        "{count} typed relation(s); none are contradiction candidates."
-                    ),
-                )
+        if decline is not None:
+            _record_contradiction_decision(
+                root, decline, merged_absorbed_id, target_state="declined"
             )
             return
-
-    truncation = contradiction_truncation_notice(plan)
-    if truncation is not None:
-        typer.echo(truncation)
-        typer.echo()
-
-    displayed = (
-        verdicts
-        if show_all
-        else [v for v in verdicts if is_high_confidence_contradiction(v)]
-    )
-    # pending-work spec ("Declined Findings Are Hidden By Default"): a
-    # verdict whose decision_key already carries a `declined` decision is
-    # dropped from the DISPLAY list only -- it still counts in `verdicts`
-    # for the zero-edge/truncation/partial-failure reporting above, which
-    # describe what was JUDGED, not what was declined.
-    displayed = [
-        v
-        for v in displayed
-        if not application_pending.is_contradiction_declined(
-            layout, v.pair_ids, v.merged_absorbed_id
-        )
-    ]
-    if not displayed:
-        # No early return (#441): the partial-batch failure epilogue below
-        # must run after every display path, exactly as in `adjudicate`.
-        # Vacuous-coverage guard (#557): a clean line over a run that judged
-        # zero typed-edge pairs must not read as an all-clear -- stderr may
-        # be discarded (piped runs), so the qualification rides the stdout
-        # line itself.
-        if vacuous is not None:
-            typer.echo(
-                "No high-confidence contradictions found -- NOT an "
-                "all-clear: zero typed-edge pairs were judged (the graph "
-                "has no applied relations)."
+        if reopen is not None:
+            _record_contradiction_decision(
+                root, reopen, merged_absorbed_id, target_state="open"
             )
-        else:
-            typer.echo("No high-confidence contradictions found.")
-
-    for result in displayed:
-        render_contradiction_header(result)
-        for claim in result.conflicting_claims:
-            typer.echo(f"  - {claim}")
-        typer.echo(f"  rationale: {result.rationale}")
-        typer.echo()
-
-    if batch.failure is not None:
-        # Partial batch (#441): the report above already rendered the
-        # completed verdicts exactly as a complete run over that list -- the
-        # paid-for work is never discarded -- so all that remains is the one
-        # stderr failure line and the BackendError-family exit code.
-        # #653: the completed-of-total counts describe what was actually
-        # SENT to the model this run -- the judged subset, not the full
-        # plan, since served candidates cost nothing and cannot fail.
-        _echo_contradictions_batch_failure(
-            batch, total=judged_plan.llm_calls, model=cfg.model
+            return
+        if declined:
+            _contradictions_declined_view(root)
+            return
+        _run_contradictions_report(
+            root,
+            contradictions_service.ContradictionsOptions(
+                show_all=show_all,
+                include_deprecated=include_deprecated,
+                include_confidential=include_confidential,
+                fresh=fresh,
+            ),
         )
-        raise typer.Exit(code=1) from batch.failure
+    except contradictions_service.ContradictionsRefused as exc:
+        typer.echo(exc.message, err=True)
+        raise typer.Exit(code=1) from exc
 
 
 class _RevisionsObserver:

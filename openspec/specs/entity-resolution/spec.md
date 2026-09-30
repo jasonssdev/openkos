@@ -679,3 +679,39 @@ under, or double-counted against, a different tier.
 - WHEN `find_candidates` runs
 - THEN that pair appears in the result at most once, under `Tier.ACRONYM`,
   exactly as it would with the cap absent
+
+### Requirement: Duplicates Is An Application Service
+
+The candidate-duplicate report and the keep-distinct ruling operations MUST be
+callable without the CLI, as `application/duplicates_service`:
+`report_duplicates(root, *, include_deprecated, find_candidates_report, ...)`,
+`record_identity_ruling(root, raw_members, *, flag, target_state, ...)` and
+`list_kept_distinct(root, ...)`. Each MUST take the workspace root explicitly
+and never read the current directory; return a typed outcome
+(`DuplicatesReport`, `IdentityRuling`, the decision records); raise a typed
+`DuplicatesRefused` subclass for every refusal, each carrying the complete
+user-facing message text (`InvalidMembers` for member ids that cannot name a
+ruling); receive the notes the `bundle` readers produce through an
+`on_warning` callback; and never prompt, render, commit, import `typer`, `rich`
+or `openkos.vcs`, or raise `typer.Exit`. The CLI verb MUST remain an adapter:
+it renders the report, stages a ruling's sidecar, prints a refusal's message on
+stderr and exits 1 (2 for `InvalidMembers`).
+
+The report MUST remove every group a human ruled distinct AFTER the
+whole-bundle pass, count the removals, and compute the truncation notice from
+what the pass produced, never from what was hidden afterwards.
+
+#### Scenario: A ruled group is hidden but the cap accounting is unchanged
+
+- GIVEN the candidate pass produced 9 groups, retained 2, and one retained
+  group was ruled distinct
+- WHEN `report_duplicates` runs
+- THEN the report holds one group, reports one suppressed, and its truncation
+  notice still reads "2 of 9 candidate group(s) shown (cap reached)"
+
+#### Scenario: A ruling is keyed by its sorted members
+
+- GIVEN `record_identity_ruling` is handed the same members in two orders
+- WHEN both run
+- THEN exactly one record exists, owned by the sidecar of the first sorted
+  member

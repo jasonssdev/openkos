@@ -549,7 +549,7 @@ def test_the_chat_client_ast_guard_still_sees_every_construction() -> None:
 _EXPECTED_VERB_TASKS = {
     "_ingest_single": "extraction",
     "adjudicate": "adjudication",
-    "contradictions": "contradiction",
+    "_run_contradictions_report": "contradiction",
 }
 """Which `main.py` function must resolve which task's model (#515).
 

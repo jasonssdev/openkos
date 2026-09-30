@@ -362,3 +362,50 @@ unaffected by the relocation for any fixed bundle state.
 - WHEN `_merged_body_candidates` reads it from `bundle/.state/ledger/`
 - THEN it is still excluded from the judged candidate set, identically to
   the pre-relocation behavior
+
+### Requirement: Contradictions Is An Application Service
+
+The contradiction check and its decline/reopen/listing operations MUST be
+callable without the CLI, as `application/contradictions_service`:
+`run_contradictions(root, *, options, ports, observer)`,
+`record_contradiction_decision(root, pair, merged_absorbed_id, *, target_state,
+...)` and `list_declined(root)`. Each MUST take the workspace root explicitly
+and never read the current directory; return a typed outcome
+(`ContradictionsOutcome`, `ContradictionRuling`, `DeclinedFinding`); raise a
+typed `ContradictionsRefused` subclass for every refusal, each carrying the
+complete user-facing message text; take its effects (chat client, local-exemption
+resolution, proximity-source opener, graph builder, planner, judge, findings
+persistence, input digests) through `ContradictionsPorts` and its mid-run
+advisories and progress through a `ContradictionsObserver`; and never prompt,
+render, commit, import `typer`, `rich` or `openkos.vcs`, or raise `typer.Exit`.
+The CLI verb MUST remain an adapter: it supplies the root and the effects,
+renders the outcome, stages a decision's sidecar, prints a refusal's message on
+stderr and exits 1.
+
+The outcome MUST carry the verdicts in plan order with served and freshly
+judged verdicts interleaved where their candidates sat, the served and fresh
+counts, the notices computed while the graph store was open, and, when nothing
+was judged on a clean run, the zero-candidate state message instead of a
+report. A partial batch MUST be returned, not raised, so the completed verdicts
+are rendered before the failure is reported.
+
+#### Scenario: A digest-fresh persisted verdict is served without a model call
+
+- GIVEN `.openkos/findings.db` holds a verdict whose stored input digests equal
+  the digests of the pair's current bytes
+- WHEN `run_contradictions` runs without `fresh`
+- THEN the judge receives a plan with no candidates and the outcome reports
+  that verdict as served
+
+#### Scenario: A persistence failure never discards judged verdicts
+
+- GIVEN persisting the fresh verdicts raises `OSError` or `sqlite3.Error`
+- WHEN `run_contradictions` runs
+- THEN the observer is told, and the outcome still carries the verdicts
+
+#### Scenario: A decision never reads the findings store
+
+- GIVEN a workspace with no `.openkos/findings.db`
+- WHEN `record_contradiction_decision` runs
+- THEN the decision record is written under `bundle/.state/decisions/` and no
+  findings store is created
