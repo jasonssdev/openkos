@@ -28,10 +28,9 @@ from pathlib import Path, PurePosixPath
 # The exact bytes to write to a fresh workspace's `.gitignore` (Slice 1,
 # git-lifecycle): an openkos-specific header ignoring `.openkos/` (derived
 # stores), followed VERBATIM by the standard toptal windows/linux/macos/
-# python template. Copied byte-for-byte from the source-of-truth reference
-# `openspec/changes/git-lifecycle/gitignore.reference` -- see
-# `test_gitignore_template_matches_reference_file_verbatim` for the parity
-# guard. None of the template's broad ignores (`build/`, `var/`, `lib/`,
+# python template. Copied byte-for-byte from the reference kept at
+# `openspec/changes/archive/2026-07-24-git-lifecycle/gitignore.reference`; no
+# test compares the two, so a change to either is a change to both. None of the template's broad ignores (`build/`, `var/`, `lib/`,
 # `dist/`, `db.sqlite3`, `*.log`) collide with openkos canonical paths
 # (`bundle/**`, `raw/**`, `openkos.yaml`, `AGENTS.md`; the bundle uses
 # `log.md`, not `.log`), so no canonical content is ever ignored.

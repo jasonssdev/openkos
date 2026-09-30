@@ -14,19 +14,6 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
-### Fixed
-
-- A concept id containing a backslash or a colon (`..\..\x`, `C:\x`,
-  `a:b`) is now refused by every id-taking verb and tool, and `slugify` no
-  longer emits a reserved Windows device name (`con`, `prn`, `aux`, `nul`,
-  `com1`-`com9`, `lpt1`-`lpt9`) as a whole slug: it appends `-doc`, so a
-  source titled `CON` files as `sources/con-doc.md`
-  ([#1131](https://github.com/jasonssdev/openkos/issues/1131)). On Windows the
-  old ids could traverse out of the bundle or replace its base path, and the
-  old slugs named files Windows cannot create. A workspace that already holds
-  `sources/con.md` and re-ingests a `con.*` file gets a second source at
-  `con-doc.md`; delete the old one.
-
 ### Changed
 
 - The computed `STATUS` column `list` prints, the `status` field
@@ -60,6 +47,17 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Fixed
 
+- A concept id containing a backslash or a colon (`..\..\x`, `C:\x`,
+  `a:b`) is now refused by every id-taking verb and tool, and `slugify` no
+  longer emits a reserved Windows device name (`con`, `prn`, `aux`, `nul`,
+  `com1`-`com9`, `lpt1`-`lpt9`) as a whole slug: it appends `-doc`, so a
+  source titled `CON` files as `sources/con-doc.md`
+  ([#1131](https://github.com/jasonssdev/openkos/issues/1131)). On Windows the
+  old ids could traverse out of the bundle or replace its base path, and the
+  old slugs named files Windows cannot create. A workspace that already holds
+  `sources/con.md` and re-ingests a `con.*` file gets a second source at
+  `con-doc.md`; delete the old one.
+
 - `status` and `next` no longer report freshly rebuilt derived stores as stale
   when the workspace path contains `#`, `?` or `%`
   ([#1132](https://github.com/jasonssdev/openkos/issues/1132)). Every
@@ -68,6 +66,14 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   exits 1 with the same retry message instead of a traceback
   ([#1143](https://github.com/jasonssdev/openkos/issues/1143), lock half; the
   per-document FTS/graph rebuild half is deferred to MVP 4).
+
+- The `AGENTS.md` that `init` writes into every workspace now says `provenance`
+  lists Concept IDs of Source documents (the `sources/<id>` form) instead of
+  "paths relative to the workspace root"
+  ([#1147](https://github.com/jasonssdev/openkos/issues/1147)). The old
+  sentence contradicted the ingestion spec, `lint`, and the canonical example,
+  and taught an agent operating a bundle the wrong shape for the field.
+
 - `unmerge` no longer silently overwrites a survivor edited after its merge
   ([#1110](https://github.com/jasonssdev/openkos/issues/1110)). It restored
   the survivor from the ledger's pre-merge snapshot unconditionally, with no

@@ -37,7 +37,9 @@ body:
       options:
         - "MVP 1 — The Compiler"
         - "MVP 2 — The Graph and Memory"
-        - "MVP 3 — The Runtime and Interoperability"
+        - "MVP 3 — The Ask Surface"
+        - "MVP 4 — The Unattended Engine"
+        - "MVP 5 — Interoperability"
         - "Horizon (later / not yet committed)"
         - "Not sure"
     validations:

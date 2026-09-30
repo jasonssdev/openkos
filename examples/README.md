@@ -8,7 +8,7 @@ The scenario is deliberately ordinary: someone reading philosophy to write an es
 
 ```
 good-life-demo/
-├── openkos.yaml        # engine config, including the layout
+├── openkos.yaml        # engine config (the layout is fixed)
 ├── AGENTS.md           # operating manual
 ├── raw/                # two immutable sources — outside the bundle
 │   ├── notes-on-the-enchiridion-2026-07-05.txt
