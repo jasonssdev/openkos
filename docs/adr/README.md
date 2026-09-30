@@ -73,4 +73,4 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 | [0032](0032-deprecated-status-is-an-export-of-computed-supersession.md) | Frontmatter `status: deprecated` is a marked export of computed supersession, never read back | Accepted | 2026-09-29 |
 | [0033](0033-source-tag-sync-is-union-only.md) | Source tag sync is union-only and never tags below the Source's sensitivity | Accepted | 2026-09-30 |
 | [0034](0034-identity-auto-merge-only-for-a-measured-class.md) | Identity merges apply without prior consent only for an opt-in class that passed a pre-registered measurement | Accepted | 2026-09-30 |
-| [0035](0035-a-pending-marker-makes-an-interrupted-ingest-completable.md) | A pending marker on the Source makes an interrupted ingest completable | Proposed | 2026-09-30 |
+| [0035](0035-a-pending-marker-makes-an-interrupted-ingest-completable.md) | A pending marker on the Source makes an interrupted ingest completable | Accepted | 2026-09-30 |
