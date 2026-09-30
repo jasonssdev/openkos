@@ -125,6 +125,16 @@ guarantees.
 
 Any consumer of the persisted FTS or graph index (namely `query`/`answer()`)
 MUST open it read-only and MUST NEVER write to it; only `reindex` writes.
+Every read-only open of a derived store MUST go through one opener that
+percent-encodes the store path before building the `mode=ro` URI, so a
+workspace path containing `#`, `?` or `%` opens the same file it names (and the
+staleness probe reports a freshly rebuilt store as fresh there).
+
+#### Scenario: A store under a URI-special path reads as fresh
+
+- GIVEN a store rebuilt under a directory named `a#b`, `a?b` or `a%20b`
+- WHEN the staleness probe or any read-only opener opens it
+- THEN it reads the store's stored manifest hash and reports it fresh
 
 #### Scenario: Query process never writes to the derived index
 
