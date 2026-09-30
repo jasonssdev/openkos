@@ -9,7 +9,7 @@ intuition — which this project has already paid for once.
 This harness is that gate.
 
 ```bash
-python evals/edge_typing/run_edge_typing_eval.py --arm baseline --runs 5
+uv run python -u evals/edge_typing/run_edge_typing_eval.py --arm baseline --runs 5
 ```
 
 ## What it measures
@@ -73,8 +73,8 @@ opt-in half of #812: with the key unset, `curate` sends the system prompt
 remains the baseline and nothing below is re-based by this change.
 
 ```bash
-python evals/edge_typing/run_edge_typing_eval.py --arm baseline --runs 5
-python evals/edge_typing/run_edge_typing_eval.py --arm es --runs 5 \
+uv run python -u evals/edge_typing/run_edge_typing_eval.py --arm baseline --runs 5
+uv run python -u evals/edge_typing/run_edge_typing_eval.py --arm es --runs 5 \
     --rationale-language Spanish
 ```
 

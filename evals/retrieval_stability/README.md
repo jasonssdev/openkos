@@ -14,8 +14,10 @@ sqlite-vec stores, `bge-m3` embeddings), and runs the production
 are the measurement) over paraphrase FAMILIES of the same question.
 
 ```bash
-python evals/retrieval_stability/run_retrieval_stability_probe.py
+uv run python -u evals/retrieval_stability/run_retrieval_stability_probe.py
 ```
+
+`--self-test` runs the harness's synthetic checks with no model (`uv run python -u evals/retrieval_stability/run_retrieval_stability_probe.py --self-test`).
 
 Requires a local Ollama serving `bge-m3`. Zero chat-model calls; a full run
 is under a minute.

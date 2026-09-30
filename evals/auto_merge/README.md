@@ -3,9 +3,18 @@
 Measures whether a confidence threshold exists under which the
 entity-resolution adjudicator's `SAME` verdicts on one narrow eligible class
 never auto-merge two different concepts. This is the STOP-gate harness for
-`auto-merge-safe-class` (`openspec/changes/auto-merge-safe-class/`,
-ADR-0034) -- `curate --auto-merge` does not exist yet, and is built only if
-this harness's pre-registered rule PASSes.
+`auto-merge-safe-class`
+(`openspec/changes/archive/2026-09-30-auto-merge-safe-class/`, ADR-0034) --
+`curate --auto-merge` is built only if this harness's pre-registered rule
+PASSes.
+
+**Verdict: FAIL.** No calibration positive exceeds the highest negative
+`same` confidence (0.9500), so no separating threshold exists (`t*`
+undefined) and auto-apply was not built; see
+[ADR-0034](../../docs/adr/0034-identity-auto-merge-only-for-a-measured-class.md).
+The canonical verdict file is
+[`results/auto-merge-verdict-20260930T071242Z-qwen3-8b.md`](results/auto-merge-verdict-20260930T071242Z-qwen3-8b.md);
+the other two verdict files there are near-identical duplicates of it.
 
 ## Why this harness exists
 
@@ -74,7 +83,7 @@ and has no place in a fixture meant to prove structural eligibility.
 
 ## The decision rule (frozen)
 
-Written in `openspec/changes/auto-merge-safe-class/design.md`
+Written in `openspec/changes/archive/2026-09-30-auto-merge-safe-class/design.md`
 §"Decision rule", in the planning commit (`525393d`), before any live run.
 It MUST NOT be edited after the first live number is seen; a later change
 that wants a different rule records it as a new, separately pre-registered

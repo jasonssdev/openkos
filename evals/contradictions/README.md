@@ -14,9 +14,11 @@ the field. Its fix was measured here, adopted, and took the #558 residual
 with it.
 
 ```bash
-python evals/contradictions/run_contradictions_eval.py --arm baseline --runs 15
-python evals/contradictions/run_contradictions_eval.py --arm treatment --runs 15
+uv run python -u evals/contradictions/run_contradictions_eval.py --arm baseline --runs 15
+uv run python -u evals/contradictions/run_contradictions_eval.py --arm treatment --runs 15
 ```
+
+`--self-test` runs the harness's synthetic checks with no model (`uv run python -u evals/contradictions/run_contradictions_eval.py --self-test`).
 
 `baseline` always runs the LIVE production prompt; `treatment` swaps in
 `contradiction_prompts.TREATMENT_SYSTEM_PROMPT`. The runner drives the real

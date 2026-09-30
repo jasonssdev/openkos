@@ -1,11 +1,13 @@
-# `decision_revisions` — measuring the decision-revision-detector's Phase A leaves before Phase B is built (#1014)
+# `decision_revisions` — measuring the decision-revision-detector's Phase A leaves (#1014)
 
-Issue #1014's own order: measure the already-merged Phase A leaves --
+Issue #1014's own order was to measure the Phase A leaves --
 `resolution/decision_subject.py`'s subject pass, and
 `resolution/decision_revision.py`'s direction rule, candidate generation and
 judge -- **before** any Phase B plumbing (caching, the service, the CLI
-surface) gets built on top of them. Phase B starts only after the owner
-reads the numbers this harness produces.
+surface) was built on top of them. This harness gated that step: Phase B
+started only after the owner read its numbers, and has since shipped
+(`application/revisions.py`, `state/revision_findings.py`, the `revisions`
+verb).
 
 ```bash
 uv run python evals/decision_revisions/run_decision_revisions_eval.py --self-test
@@ -284,7 +286,7 @@ run against T2's real fixture; they are not the same measurement.
 
 ## `--vector-source {text,reindex}`: which shape the embedder measures
 
-Phase B's re-plan (design.md Decision B5, "Keep 0.65, cite the
+Phase B's re-plan (`openspec/changes/archive/2026-09-29-decision-revision-detector/design.md` Decision B5, "Keep 0.65, cite the
 production-shape measurement, and make that measurement reproducible") adds
 a second arm, so `EMBEDDING_SIMILARITY_THRESHOLD`'s docstring can cite a
 committed, re-runnable measurement instead of an un-reproducible scratchpad
@@ -392,7 +394,7 @@ CHANGE.** The engine (`resolution/decision_revision.py`'s
 `RevisionVerdict.is_untyped_change` / `relation_for`) never infers a relation
 type from it. Detection stays fully automatic; the person picks both the
 later side and the relation type together, in one combined keystroke, during
-`reconcile`'s per-item walk (`openspec/changes/decision-revision-detector/design.md`
+`reconcile`'s per-item walk (`openspec/changes/archive/2026-09-29-decision-revision-detector/design.md`
 step 7 is updated to describe that prompt). The judge PROMPT itself is
 UNCHANGED by this decision -- it is a scoring-and-consumption rule over the
 judge's existing four-value vocabulary, not a fifth verdict and not a new

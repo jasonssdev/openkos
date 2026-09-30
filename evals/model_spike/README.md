@@ -6,7 +6,8 @@ for choosing the default model (`config.DEFAULT_MODEL`).
 
 This is a **spike**, not a test. It is NOT pytest, NOT wired into CI, and NOT
 part of the shipped `openkos` package. It lives under `evals/` (sibling to
-`examples/`, `tests/`, `src/`) precisely because AGENTS.md sec. 46 says to
+`examples/`, `tests/`, `src/`) precisely because the "Quality gates" section of
+AGENTS.md says to
 "spike-then-test the fuzzy extraction parts": extraction quality is
 non-deterministic model behavior, so we sample and score it here rather than
 asserting on it in the deterministic test suite.

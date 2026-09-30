@@ -1,6 +1,6 @@
 # `proximity_threshold` — calibrating the candidate-edge floor (#1052)
 
-`graph/proximity.py`'s `CANDIDATE_SIMILARITY_THRESHOLD = 0.70` decides which
+`graph/proximity.py`'s `CANDIDATE_SIMILARITY_THRESHOLD` (0.59) decides which
 concept pairs are nominated as untyped candidate edges, and those candidates
 are the only concept-to-concept input `suggest-relations` and
 `contradictions` get before a human runs `relate`. The floor was calibrated
@@ -48,7 +48,19 @@ floor grid, every pair's cosine with its label and reason, and the verdict.
 `results/proximity-threshold-20260929T120502Z-bge-m3.*` is the smoke run;
 it predates per-pair output, so `--rescore` refuses it.
 
+## Result
+
+The calibration run
+`results/proximity-threshold-20260930T065305Z-bge-m3.md` (bge-m3) reached
+the verdict `MOVE -- lower to 0.59`: recall 0.317 -> 0.707, with the two
+classes overlapping (weakest related 0.4238, strongest unrelated 0.5827).
+The floor was moved to 0.59 in its own reviewed change.
+
 ## Decision rule
+
+The rule below is frozen as pre-registered and is reproduced verbatim;
+the `0.70` it names is the pre-move floor the calibration was run against,
+not the shipped value.
 
 <!-- rule:begin -->
 **Pre-registered decision rule (#1052).** Frozen before the first live run
