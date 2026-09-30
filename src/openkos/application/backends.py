@@ -47,6 +47,10 @@ from openkos.llm.base import (
     classify_backend_host,
 )
 
+DOCTOR_HINT = " Or run `openkos doctor` to diagnose the environment."
+"""The remediation clause appended to a `BackendUnavailable` refusal, so an
+unreachable backend always points at `openkos doctor`."""
+
 BACKEND_OLLAMA: Literal["ollama"] = "ollama"
 """The `cfg.backend` value naming the Ollama family, mirroring
 `config.DEFAULT_BACKEND` -- kept as its own constant here (rather than
