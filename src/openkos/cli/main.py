@@ -10,8 +10,9 @@ import sqlite3
 import sys
 import unicodedata
 from collections import Counter
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from collections.abc import Set as AbstractSet
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from importlib.metadata import PackageNotFoundError
@@ -27,7 +28,9 @@ from openkos import lint as lint_check
 from openkos.application import backends as application_backends
 from openkos.application import consent as application_consent
 from openkos.application import doctor as application_doctor
+from openkos.application import drift as application_drift
 from openkos.application import ingest as application_ingest
+from openkos.application import ingest_service
 from openkos.application import lifecycle as application_lifecycle
 from openkos.application import lint as application_lint
 from openkos.application import list_service as application_list
@@ -49,10 +52,8 @@ from openkos.cli import curate as curate_module
 from openkos.cli import observability
 from openkos.extraction import judge as judge_mod
 from openkos.extraction.concept import (
-    FAN_OUT_CONCURRENCY,
     ExtractionReport,
     estimate_extraction_calls,
-    fans_out,
 )
 from openkos.graph import proximity, sqlite_graph
 from openkos.graph.base import Edge, GraphStore
@@ -72,7 +73,6 @@ from openkos.llm.ollama import (
     InstalledModel,
     OllamaClient,
     is_embedding_model,
-    is_timeout_failure,
     model_tag_matches,
 )
 from openkos.llm.openai_compatible import OpenAICompatibleClient
@@ -1226,238 +1226,21 @@ def _reject_drifted_targets(
     any target this run intends to WRITE or UNLINK changed on disk after
     the plan was computed from it (issues #306, #313, #319, #329).
 
-    Every caller shares one shape: Phase A reads a snapshot, computes the
-    ENTIRE plan from it -- each document's new bytes, plus the new
-    `log.md` text in all of them, the new `index.md` text in the title
-    backfill, and for the delete verbs WHICH files to unlink -- and only
-    then prompts. Nothing re-read anything at write time, so an edit
-    landing while the prompt waited was overwritten IN FULL by
-    `fsio.write_atomic` -- or, on a delete target, destroyed outright by
-    `fsio.remove_file`, which is strictly worse since nothing survives to
-    recover from -- with no error, no signal that a newer version existed,
-    and an `_autocommit` that then committed the result. Every caller
-    therefore invokes this strictly AFTER its confirm gate and strictly
-    BEFORE its first write -- and unconditionally, outside the gate's own
-    `if`, because `--auto` and `review: false` skip the prompt but not the
-    window: nothing pauses for a human there, which makes those runs the
-    likeliest to race a second writer, not the least.
-
-    Every mutating verb now calls this (#313's rollout is complete). A
-    reader arriving from one call site does not need the roster --
-    `grep _reject_drifted_targets` is exact and never goes stale -- only
-    the assurance that every caller satisfies the same contract below. An
-    enumeration here would be a second place to forget to update, which is
-    how a previous version of this paragraph came to claim three callers
-    while five existed.
-
-    `expected` maps the ABSOLUTE `Path` a verb will actually hand to
-    `fsio.write_atomic` (or delete) to the RAW BYTES that path held when
-    Phase A read it, and the comparison is bytes-to-bytes. `Path` keys, not
-    workspace-relative strings, are the point (issue #325): a string key is
-    a SECOND construction of the target's identity, rebuilt by
-    interpolation at each call site, and it protects the write only while
-    the two constructions happen to agree -- a drive-anchored concept-id or
-    an absolute `rel` out of an unmerge ledger made them diverge, and the
-    guard then validated a path the verb was not going to write. Passing
-    the one `Path` object both phases share leaves nothing to diverge.
-    The workspace-relative POSIX spelling still appears in the refusal
-    message, derived here via `relative_to(layout.root)`; a key that
-    escapes the workspace entirely (`relative_to` raises) is drift BY
-    DEFINITION, named by its raw path and refused before any byte of it is
-    read -- an out-of-tree target is one the operator was never shown, so
-    even byte-identical content must fail closed, explicitly rather than
-    by accident of an unreadable join as before.
-
-    Both sides MUST come from the same single observation: every caller
-    obtains its snapshot bytes from the `_snapshot_read` call whose decoded
-    text fed the plan, which is precisely what closes the #318 window (two
-    reads made an edit landing between them the guard's own baseline).
-    That helper returning BYTES for this guard alongside the text is not
-    convenience but correctness, in both directions: comparing decoded
-    text to decoded text misses a CRLF-only rewrite landing during the
-    prompt, because universal-newline translation makes it equal its own
-    LF snapshot, while `fsio.write_atomic` (opening with `newline=""`)
-    then writes the LF plan over it; comparing raw bytes to a translated
-    snapshot is worse, because a file that was ALREADY CRLF at rest,
-    untouched by anyone, compares unequal on every run, so the verb
-    refuses forever with a message naming a cause that never happened and
-    a re-run that cannot clear it. Bytes on both sides is the only pairing
-    with neither failure.
-
-    Drift is not one situation but THREE, and the refusal reports them
-    separately because each demands a different next step (#319; flattening
-    them into one "changed on disk" sentence sent operators in circles):
-
-    - CHANGED: the bytes differ. The benign bucket -- a plain re-run
-      recomputes the plan over the current state and succeeds, so the
-      default advice is exactly that re-run.
-    - VANISHED: the read raised `OSError` (deleted, or unreadable).
-      Re-creating or overwriting a file whose current state the operator
-      can no longer be shown is the same silent revert, so it still
-      refuses -- and a vanished DELETE target is not the run's own intent
-      honored early (#329): the run promised to unlink exactly the bytes
-      the operator previewed, and a path someone ELSE removed no longer
-      supports that claim any more than a changed one does. A plain re-run
-      reads the same missing path and -- for the delete verbs -- fails in
-      Phase A before any prompt, so the advice must say the path has to be
-      restored first, and ONLY that: the old "or confirm the deletion is
-      intended" clause was a dead end (R4 wave 4), since no re-run reaches
-      a confirmation while the path stays missing. Advising a bare re-run
-      here was the #319 loop.
-    - OUT-OF-TREE: the key escapes the workspace (`relative_to` raises).
-      Nothing "changed" and nothing "vanished" -- the same inputs produce
-      this refusal on EVERY run, deterministically, so a re-run cannot
-      clear it and the message says so (this is also the wave-2 R4 fix:
-      the flattened sentence blamed an edit that never happened).
-
-    `deletes` names the subset of `expected`'s keys the verb will UNLINK
-    rather than write -- `forget`'s purge set, `purge`'s root-plus-cascade,
-    `merge`'s absorbed file. The distinction is reporting, not detection:
-    every bucket applies to both kinds, but "refusing to write" on a path
-    the verb was about to DESTROY understates what the operator just
-    avoided, so each path is labeled a "write target" or a "delete target"
-    by what Phase B would actually have done to it, and the fail-closed
-    footer extends to "nothing was deleted" exactly when the plan had a
-    delete half to fail closed on. The function's NAME stays
-    target-kind-neutral on purpose (#329): with `deletes` in the signature
-    and both kinds named in the message, "drifted targets" already covers
-    writes and unlinks alike, and a rename would churn every call site for
-    no contract gain.
-
-    `hint` appends one EXTRA sentence after everything else, unconditionally,
-    whenever this call refuses (okf-v02-migration Phase 6): `unmerge`'s own
-    drift refusal uses it to name `openkos repair` when the bundle's
-    `index.md` still declares a pre-0.2 `okf_version` -- the drift itself
-    may be unrelated to the migration, but an unrepaired bundle is the more
-    actionable fact for the operator to fix first. Unlike `remedy`, this
-    is a pure addition, never a substitution, so it composes with every
-    bucket's own advice rather than replacing any of it.
-
-    `remedy` replaces the DEFAULT advice -- the changed bucket's re-run
-    sentence -- when a verb's re-run is NOT a safe recovery: `unmerge`
-    (#328), whose re-run would overwrite the very edit the guard just
-    protected. Replacement is scoped to that one sentence, not wholesale
-    (R3+R4 wave 5): the vanished and out-of-tree sentences are advisory
-    FACTS about the refusal, not recovery advice a verb can substitute --
-    a vanished target still has to be restored before anything proceeds,
-    and an out-of-tree refusal is still deterministic -- so each is
-    appended after whatever remedy is in effect whenever its bucket is
-    non-empty. Under wholesale replacement, unmerge's copy-your-edit
-    remedy talked about copying an edit that, for a vanished target, does
-    not exist, and silently dropped the restore-first instruction.
-
-    Exit code 3, and only here (#319): a drift refusal is the ONE failure a
-    script may safely retry -- nothing was written, and when the message
-    carries the re-run advice a retry genuinely recovers -- while every
-    other failure keeps exit 1 and stays not-obviously-retryable. Scripts
-    can now branch on `$? -eq 3` instead of parsing stderr; fail-closed
-    semantics are unchanged (still non-zero, still before the first
-    write). The retry contract is "safe WHEN the message says so": a
-    vanished or out-of-tree refusal also exits 3, and its message is what
-    tells the script's operator that a bare retry will not clear it.
-
-    Refusal is whole-run, never per-path, because the plan is a unit. The
-    title backfill's new `index.md` already encodes a relabel for every
-    staged Source and its new `log.md` already names them, so skipping one
-    drifted document would leave `index.md` asserting a relabel that never
-    happened; `reconcile` shows the same thing on a smaller plan, where
-    honouring one side of a symmetric pair while skipping the other leaves
-    the two concepts disagreeing about their own resolution -- the one state
-    its refuse-on-conflict gate exists to prevent. Neither case is special:
-    every caller computes its plan as a whole from one snapshot, so a
-    partial application asserts something that snapshot no longer supports.
-    Recomputing after the prompt merely re-opens the same window.
-    Refusing before the first write is the only fail-closed option, and it
-    costs the operator one cheap re-run over fresh state.
-    """
-    changed: dict[bool, list[str]] = {False: [], True: []}
-    vanished: dict[bool, list[str]] = {False: [], True: []}
-    out_of_tree: dict[bool, list[str]] = {False: [], True: []}
-    for path in expected:
-        is_delete = path in deletes
-        try:
-            rel_path = path.relative_to(layout.root).as_posix()
-        except ValueError:
-            # Out-of-tree target: no workspace-relative spelling exists, so
-            # the raw path is the entry, and no read is attempted -- see the
-            # docstring for why matching bytes must not rescue it (#325).
-            out_of_tree[is_delete].append(str(path))
-            continue
-        try:
-            current = path.read_bytes()
-        except OSError:
-            vanished[is_delete].append(rel_path)
-            continue
-        if current != expected[path]:
-            changed[is_delete].append(rel_path)
-    if (
-        not any(changed.values())
-        and not any(vanished.values())
-        and not any(out_of_tree.values())
-    ):
+    The decision -- and the full account of the three drift buckets, the
+    snapshot-bytes pairing, `deletes`, `remedy` and `hint` -- lives in
+    `application.drift.describe_drift`; this wrapper only prints its
+    message and exits. Exit code 3, and only here (#319): a drift refusal
+    is the ONE failure a script may safely retry when the message says so,
+    while every other failure keeps exit 1. Every caller invokes this
+    strictly AFTER its confirm gate and strictly BEFORE its first write,
+    unconditionally -- `--auto` and `review: false` skip the prompt but not
+    the window it stood in."""
+    message = application_drift.describe_drift(
+        layout, expected, verb, deletes=deletes, remedy=remedy, hint=hint
+    )
+    if message is None:
         return
-
-    # One clause per non-empty (bucket, kind) pair, bucket-major, writes
-    # before deletes -- so every path is named under the verb's ACTUAL
-    # intent for it and under the ACTUAL observation that refused it.
-    clauses: list[str] = []
-    bucket_specs = [
-        (changed, "changed on disk after this run computed its plan"),
-        (vanished, "vanished from disk (deleted or unreadable)"),
-        (out_of_tree, "resolve outside the workspace"),
-    ]
-    for bucket, cause in bucket_specs:
-        for is_delete in (False, True):
-            paths = sorted(bucket[is_delete])
-            if not paths:
-                continue
-            kind = "delete target(s)" if is_delete else "write target(s)"
-            clauses.append(f"{len(paths)} {kind} {cause}: {', '.join(paths)}")
-
-    # Deliberately NOT Phase B's "No path was written." sentence: that one
-    # reports a write that already began, this one reports a run that never
-    # started writing, and #234 pinned that two messages a bug report might
-    # quote must never read alike. The delete half appears exactly when the
-    # plan HAD a delete half (`deletes` non-empty) -- claiming "nothing was
-    # deleted" for a verb that deletes nothing would be noise.
-    footer = (
-        "Nothing was written, nothing was deleted."
-        if deletes
-        else "Nothing was written."
-    )
-
-    # A custom `remedy` replaces only the DEFAULT re-run advice (the
-    # changed bucket's); the vanished/out-of-tree sentences are advisory
-    # facts about the refusal itself and follow whichever remedy is in
-    # effect, each scoped to its own bucket ("the vanished target(s)",
-    # "the out-of-tree refusal") so a mixed refusal reads as a checklist,
-    # not a contradiction -- see the docstring (R3+R4 wave 5).
-    advice: list[str] = []
-    if remedy is not None:
-        advice.append(remedy)
-    elif any(changed.values()):
-        advice.append("Re-run to recompute over the current bundle.")
-    if any(vanished.values()):
-        advice.append(
-            "A plain re-run will refuse again on the vanished target(s): "
-            "restore them first."
-        )
-    if any(out_of_tree.values()):
-        advice.append(
-            "The out-of-tree refusal is deterministic -- the same inputs "
-            "reproduce it on every run, and a re-run cannot clear it."
-        )
-    remedy = " ".join(advice)
-
-    message = (
-        f"openkos {verb}: refusing to write -- {'; '.join(clauses)}. {footer} {remedy}"
-    )
-    if hint:
-        message = f"{message} {hint}"
     typer.echo(message, err=True)
-    # Exit 3 is the drift-refusal contract (#319): the one failure code a
-    # script may treat as retryable when the message says so. Everything
-    # else in this module exits 1.
     raise typer.Exit(code=3)
 
 
@@ -3112,193 +2895,6 @@ def _titleize(stem: str) -> str:
 # subdirectory (design: Path/Catalog).
 
 
-def _raw_collision_family(raw_dir: Path, name: str) -> list[Path]:
-    """Every file in `raw_dir` belonging to `name`'s collision family --
-    `<stem><ext>` itself and every `<stem>-N<ext>` (N a positive integer) --
-    sorted ascending by `N`, the bare name first (#552).
-
-    The raw-layer sibling of `_collision_family`, deliberately a separate
-    function rather than a generalization of it. That one globs `*.md` and
-    matches on the STEM alone, which is right for a bundle link dir where
-    every file is a `.md` document and the stem IS the identity. `raw/`
-    holds arbitrary user files, so the extension is part of the name and
-    must be matched exactly: `notes.txt` and `notes.md` are two different
-    basenames that never collided in `raw/` and must not start now.
-
-    Anchored regex on the stem, never a glob, for `_collision_family`'s
-    reason: an unrelated `<stem>-draft<ext>` must not join the family. Both
-    sides NFC-normalized for the same macOS reason (#414) -- HFS+ rewrites a
-    filename to NFD on write, so the on-disk spelling of a name openkos
-    created in NFC can legitimately come back decomposed, and matching raw
-    bytes would read an EMPTY family and disambiguate forever.
-    """
-    if not raw_dir.is_dir():
-        return []
-    named = PurePosixPath(name)
-    base = unicodedata.normalize("NFC", named.stem)
-    normalized_ext = unicodedata.normalize("NFC", named.suffix)
-    pattern = re.compile(rf"^{re.escape(base)}(?:-(\d+))?$")
-    members: list[tuple[int, Path]] = []
-    for path in raw_dir.iterdir():
-        if not path.is_file():
-            continue
-        member = PurePosixPath(path.name)
-        if unicodedata.normalize("NFC", member.suffix) != normalized_ext:
-            continue
-        match = pattern.match(unicodedata.normalize("NFC", member.stem))
-        if match is None:
-            continue
-        members.append((int(match.group(1)) if match.group(1) else 0, path))
-    members.sort(key=lambda item: item[0])
-    return [path for _, path in members]
-
-
-def _first_free_raw_name(family: list[Path], name: str) -> str:
-    """First free `<stem>-N<ext>` (N from 2) not already on disk in
-    `family` -- `_first_free_disambiguated_slug`'s raw-layer sibling (#552),
-    same ascending deterministic scan and the same NFC comparison."""
-    named = PurePosixPath(name)
-    stem, ext = named.stem, named.suffix
-    taken = {unicodedata.normalize("NFC", path.name) for path in family}
-    n = 2
-    while unicodedata.normalize("NFC", f"{stem}-{n}{ext}") in taken:
-        n += 1
-    return f"{stem}-{n}{ext}"
-
-
-def _member_source_exists(bundle_dir: Path, member: Path) -> bool:
-    """Whether raw file `member` has an owning Source document at all
-    (#865). Distinguishes the two cases `_raw_member_origin_key` folds into
-    `None`: a Source that records no key (legacy, identity = its absence,
-    preserved by a same-path re-ingest) versus NO Source (a file placed in
-    `raw/` by hand, whose fresh ingest must stamp the computed digest)."""
-    slug = _slugify(Path(member.name).stem)
-    if not slug:
-        return False
-    return okf.concept_path_for(f"sources/{slug}", bundle_dir).exists()
-
-
-def _raw_member_origin_key(bundle_dir: Path, member: Path) -> str | None:
-    """The `origin_key` recorded by the Source owning raw file `member`, or
-    `None` when it has none or cannot be read (#552).
-
-    `None` means "unknown origin", never "no match": a Source written before
-    `origin_key` existed, or one whose document is unreadable/malformed. The
-    caller degrades that case to the byte comparison, which is exactly
-    today's predicate -- so an unreadable neighbour can never escalate into
-    a refusal or a spurious new copy. Mirrors `_family_owns_source`'s
-    per-member parse tolerance.
-    """
-    slug = _slugify(Path(member.name).stem)
-    if not slug:
-        return None
-    concept_path = okf.concept_path_for(f"sources/{slug}", bundle_dir)
-    try:
-        metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, okf.FrontmatterError):
-        return None  # unreadable or malformed frontmatter degrades to unknown
-    value = metadata.get(okf.ORIGIN_KEY_KEY)
-    return value if isinstance(value, str) and value else None
-
-
-@dataclass(frozen=True)
-class _RawDestination:
-    """Where this ingest's raw copy goes, and how it got there (#552)."""
-
-    name: str
-    regenerate: bool
-    """Whether an existing raw copy was matched -- an idempotent re-ingest."""
-    disambiguated_from: str | None
-    """The basename that was already taken, `None` when none was."""
-    origin_key: str | None
-    """The `origin_key` the rebuilt Source records (#865). The candidate
-    path's own digest on every branch EXCEPT the same-PATH match on a
-    member with an owning Source, where it is that Source's recorded value
-    instead (possibly `None`, and then preserved as absent): the
-    workspace's `raw/` copy is not a new origin, and stamping its digest
-    would orphan the original external path's identity -- so the NEXT
-    external re-ingest would mismatch on the key and spawn exactly the
-    duplicate Source #865 reports. A same-path member with NO owning
-    Source has no identity to preserve, so its fresh ingest stamps the
-    computed digest like any other."""
-
-
-def _resolve_raw_destination(
-    src: Path, layout: config.WorkspaceLayout, origin_key: str
-) -> _RawDestination:
-    """Resolve `src` to its `raw/` destination, disambiguating a basename
-    already held by a DIFFERENT file (#552).
-
-    `raw/` is a flat namespace derived from `Path(src).name` -- the
-    path-traversal defence, which is correct and is not weakened here: every
-    name this returns is still a bare basename under `raw/`. What changes is
-    that a taken basename no longer forces one of two bad outcomes (refuse a
-    legitimate file, or silently absorb it into the incumbent's Source).
-
-    Identity is the ORIGIN, never the content. Two empty `__init__.py` files
-    from two packages are two sources; the byte check passed on them, which
-    is precisely how one silently inherited the other's provenance.
-
-    The matrix, in family order:
-
-    - a member whose recorded `origin_key` EQUALS `origin_key` is the same
-      file -> re-ingest it (the caller still applies raw immutability to its
-      bytes). Checked first because it is a string comparison, no extra
-      filesystem contact;
-    - a member whose file IS `src` -- same resolved PATH -- is the
-      workspace's own `raw/` copy (#865). A recorded key digests the
-      ORIGINAL external path, so the raw copy's own digest can never equal
-      it, and before #865 the retry command `lint`/`status` print
-      (`openkos ingest raw/<name>`) fell through to disambiguation and
-      duplicated the source it meant to repair. Re-ingest it, preserving
-      an owning Source's recorded identity; a member with NO owning Source
-      at all (a file placed in `raw/` by hand, ingested for the first
-      time) stamps the computed digest instead (see
-      `_RawDestination.origin_key`);
-    - a member with a recorded but DIFFERENT `origin_key` is a different
-      file -> keep scanning;
-    - a member with NO recorded origin is a pre-#552 Source. Match it on
-      identical bytes, which is exactly today's predicate, so a legacy
-      workspace stays idempotent and backfills its key on this run.
-
-    Nothing matched -> the first free `<stem>-N<ext>`.
-
-    **Immutability is scoped to a file we KNOW is the same one.** That is
-    the whole of the change, stated at its sharpest: a legacy member with
-    differing bytes cannot be PROVEN to be the candidate, and #552 asks for
-    disambiguation "when the basename exists with different content".
-    Refusing there is the harm it was filed for -- real content turned away.
-    No existing byte is ever rewritten either way, so the immutability
-    guarantee itself is untouched; only the set of files it claims to cover
-    is now the set it can actually identify.
-    """
-    family = _raw_collision_family(layout.raw_dir, src.name)
-    if not family:
-        return _RawDestination(src.name, False, None, origin_key=origin_key)
-    resolved_src = src.resolve(strict=False)
-    src_bytes = src.read_bytes()
-    for member in family:
-        member_origin = _raw_member_origin_key(layout.bundle_dir, member)
-        if member_origin is not None and member_origin == origin_key:
-            return _RawDestination(member.name, True, None, origin_key=origin_key)
-        if member.resolve(strict=False) == resolved_src:
-            return _RawDestination(
-                member.name,
-                True,
-                None,
-                origin_key=member_origin
-                if _member_source_exists(layout.bundle_dir, member)
-                else origin_key,
-            )
-        if member_origin is not None:
-            continue
-        if member.read_bytes() == src_bytes:
-            return _RawDestination(member.name, True, None, origin_key=origin_key)
-    return _RawDestination(
-        _first_free_raw_name(family, src.name), False, src.name, origin_key=origin_key
-    )
-
-
 _CAP_NOTICE_TITLE_LIMIT = 3
 """How many discarded titles the cap notice names before counting the rest.
 A source that proposed 61 objects would otherwise dump 56 titles into the
@@ -4385,73 +3981,6 @@ def _refresh_derived_after_write(
     return True
 
 
-@dataclass(frozen=True)
-class _SingleIngestOutcome:
-    """What one `_ingest_single` run did, for `_ingest_batch`'s per-file
-    outcome lines and aggregate tally (issue #267): `regenerated` is the
-    run's own D1 flag (`True` on a byte-identical re-ingest, `False` on a
-    fresh ingest), and `extraction_degraded` is `True` exactly when
-    `application_ingest.stage_derived_objects` returned a non-`None` `skip_reason` -- the
-    same Source-only degrade taxonomy `docs/cli.md` documents
-    (no-extractable-text / blocked-by-sensitivity / failed /
-    no-concepts-found). A refusal never constructs this: `_ingest_single`
-    raises `typer.Exit` before its single `return`."""
-
-    regenerated: bool
-    extraction_degraded: bool
-    derived_count: int = 0
-    """How many derived objects this run staged (the aggregate line's
-    denominator, #566)."""
-
-    extraction_skipped: bool = False
-    """`True` exactly when #773's convergence short-circuit fired: a
-    byte-identical re-ingest of a source whose previous extraction
-    succeeded spent no model call and wrote nothing. Always `False` on a
-    fresh ingest, on `--re-extract`, and on the retryable-debt paths
-    (`extraction_status: failed`, judge-degrade `extraction_notice`)."""
-    alternative_pairs: tuple[tuple[str, str], ...] = ()
-    """One `(type, type_alternative)` pair per staged object whose
-    classification the model reported as torn (#401) -- the callers
-    (`ingest`'s single path and `_ingest_batch`) aggregate these into ONE
-    summary line per run instead of the retired per-object echo (#566)."""
-
-    type_floor_pairs: tuple[tuple[str, str], ...] = ()
-    """One `(type, resolved_level)` pair per staged object whose
-    `_DerivedPlan.type_floor_raised` was `True` (issue #669, design D3) --
-    built the same way `alternative_pairs` is, so the callers aggregate
-    these into ONE run-summary advisory line via
-    `_echo_type_floor_summary`, mirroring the `alternative_pairs`/
-    `_echo_type_alternative_summary` precedent exactly."""
-
-    extraction_notice: tuple[okf.ExtractionNotice, ...] = ()
-    """Every `extraction_notice` token the Source CARRIES now that this run
-    has finished, or `None` -- carried so `_ingest_batch`'s summary can
-    tally it (issue #805, item 1).
-
-    `application_ingest.stage_derived_objects` already computed this to re-render the Source
-    document, and it died there: the batch summary, deliberately the run's
-    LAST word (#349), had no field for it while the per-file notices went
-    to stderr partway through what can be a seventeen-minute run.
-
-    The token this run STAMPED is the same thing on every path that
-    re-renders the Source, but not on #773's convergence short-circuit,
-    which stamps nothing and leaves a document that may still carry the
-    prior run's marker -- reachably #585's `sole-object-restates-source`.
-    That path reads the carried token back out of `prior_metadata`
-    (`application_ingest.carried_extraction_notice`), because a summary term reading "N with
-    an extraction notice" answers what is on disk when the run ends, and
-    "stamped this run" would silently under-count every converged
-    re-ingest. `None` therefore means the Source carries no token this
-    build can spell: a fresh or re-extracted run that produced no notice, a
-    converged re-ingest of a clean Source, or a refusal (which raises
-    rather than returning).
-
-    The TOKEN rather than a bool, because the vocabulary is closed
-    (`okf.ExtractionNotice`) and the three values do not mean the same
-    thing -- a later term that wants to split judge debt from #585's
-    disclosure can read this field instead of re-deriving it."""
-
-
 def _echo_event_date_preview_line(
     resolution: application_ingest.EventDateResolution,
 ) -> None:
@@ -4674,7 +4203,9 @@ def _reingest_will_skip(src: Path, layout: config.WorkspaceLayout) -> bool:
     the authoritative decision stays inside `_ingest_single`."""
     try:
         origin_key = okf.origin_key_for(src)
-        destination = _resolve_raw_destination(src, layout, origin_key)
+        destination = application_ingest.resolve_raw_destination(
+            src, layout, origin_key
+        )
         if not destination.regenerate:
             return False
         slug = _slugify(Path(destination.name).stem)
@@ -5227,16 +4758,121 @@ def ingest(
     )
 
 
-def _refuse_symlinked_destinations(root: Path, destinations: Sequence[Path]) -> None:
-    """Refuse `ingest` when any destination path passes through a symlinked
-    segment below the workspace root (#1126), with the shared D1-shaped reason
-    `require_workspace` uses and exit code 1. Runs before any write, so a
-    refusal leaves the workspace exactly as it was found."""
-    for destination in destinations:
-        reason = config.symlink_boundary_reason(destination, root)
-        if reason is not None:
-            typer.echo(f"openkos ingest: refusing to ingest -- {reason}.", err=True)
-            raise typer.Exit(code=1)
+class _CliIngestObserver(ingest_service.IngestObserver):
+    """Renders what `ingest_source` reports: advisory lines to stderr, the
+    preview and the import summary to stdout, the extraction wait as a
+    spinner on a TTY."""
+
+    def notice(self, message: str) -> None:
+        typer.echo(message, err=True)
+
+    def extraction_starting(self) -> None:
+        # ONE TTY-gated stage notice before the single long extraction call
+        # (issue #190) -- `ingest` has no per-item loop to hook, so
+        # `stage_notice` is the single-call sibling of `progress_callback`.
+        observability.stage_notice(
+            "ingest", "extracting derived objects (waiting on the LLM)..."
+        )
+
+    @contextmanager
+    def extraction_progress(self) -> Iterator[ingest_service.PhaseHook | None]:
+        with Console(stderr=True).status(
+            "openkos ingest: extracting concepts…"
+        ) as status:
+            yield observability.phase_callback("ingest", status.update)
+
+    def staged(self, staged: application_ingest.StagedDerivedObjects) -> None:
+        _render_staged_derived_objects(staged)
+
+    def preview(self, preview: ingest_service.IngestPreview) -> None:
+        _echo_ingest_preview(preview)
+
+    def imported(self, summary: ingest_service.ImportedSummary) -> None:
+        typer.echo(
+            f"openkos ingest: imported '{summary.source}' -> "
+            f"{', '.join(summary.imported_paths)} "
+            f"({summary.index_name}, {summary.log_name} updated)."
+        )
+        if summary.type_counts:
+            typer.echo(_format_type_tally(summary.type_counts))
+
+
+def _echo_ingest_preview(preview: ingest_service.IngestPreview) -> None:
+    """Print the proposed changes before the confirmation gate."""
+    name, slug = preview.name, preview.slug
+    if preview.regenerate:
+        typer.echo(
+            "openkos ingest: proposed changes (re-ingest -- identical source "
+            "already present):"
+        )
+        typer.echo(f"  ~ raw/{name} (existing copy reused -- not rewritten)")
+        typer.echo(
+            f"  ~ bundle/sources/{slug}.md (regenerated -- sensitivity "
+            f"{preview.resolved_sensitivity} {preview.sensitivity_clause}"
+            f"{preview.title_clause})"
+        )
+        _echo_event_date_preview_line(preview.event_date)
+        # Each line prints only when its OWN specific delta fired on a
+        # Source-only rewrite (design.md Decision 7).
+        if preview.frontmatter_key_count is not None:
+            typer.echo(
+                f"    source frontmatter recorded ({preview.frontmatter_key_count} "
+                "key(s))"
+            )
+        if preview.tags_added:
+            typer.echo(f"    tags added: {', '.join(preview.tags_added)}")
+        if preview.sensitivity_raised:
+            typer.echo(
+                "openkos ingest: this Source-only rewrite raised the "
+                "Source's sensitivity -- existing derived objects keep "
+                "their own already-stamped sensitivity; run 'openkos "
+                "set-sensitivity' to raise them explicitly.",
+                err=True,
+            )
+        # source-tag-sync (#1093), ADR-0033: existing derived objects keep the
+        # tags they were created with (this rewrite never re-tags them), so a
+        # tag-union delta needs its own advisory naming the verb that closes
+        # the gap. Fires independently of the sensitivity advisory above.
+        if preview.tags_added:
+            typer.echo(
+                "openkos ingest: this Source-only rewrite added tags to "
+                "the Source -- existing derived objects keep the tags "
+                f"they were created with; run 'openkos sync-tags "
+                f"sources/{slug}' to add the Source's current tags to them.",
+                err=True,
+            )
+        for plan in preview.derived:
+            typer.echo(f"  + bundle/{plan.link_dir}/{plan.slug}.md")
+        for obj in preview.adopted:
+            typer.echo(
+                f"  ~ bundle/{obj.link_dir}/{obj.slug}.md "
+                "(written by an interrupted ingest -- now catalogued)"
+            )
+        typer.echo(f"  ~ {preview.index_name} (Source entry refreshed)")
+        typer.echo(f"  ~ {preview.log_name} (new dated entry)")
+    else:
+        typer.echo("openkos ingest: proposed changes:")
+        typer.echo(f"  + raw/{name}")
+        typer.echo(f"  + bundle/sources/{slug}.md")
+        _echo_event_date_preview_line(preview.event_date)
+        for plan in preview.derived:
+            typer.echo(f"  + bundle/{plan.link_dir}/{plan.slug}.md")
+        typer.echo(f"  ~ {preview.index_name} (new Source entry)")
+        typer.echo(f"  ~ {preview.log_name} (new dated entry)")
+
+
+def _confirm_ingest(
+    _preview: ingest_service.IngestPreview,
+) -> ingest_service.ConfirmationAnswer:
+    """The confirmation question, asked only on a TTY: decline is a no;
+    without a TTY the question cannot be asked."""
+    if not sys.stdin.isatty():
+        return "unavailable"
+    try:
+        typer.confirm("Proceed with these changes?", abort=True)
+    except typer.Abort:
+        return "declined"
+    return "proceed"
 
 
 def _ingest_single(
@@ -5247,768 +4883,77 @@ def _ingest_single(
     warn_nonlocal_embed_host: bool = True,
     re_extract: bool = False,
     event_date: date | None = None,
-) -> _SingleIngestOutcome:
-    """Copy `src` into `raw/`, generate one OKF Source concept, and attempt
-    LLM extraction of zero or more distinct derived objects, up to
-    `extraction.concept._MAX_OBJECTS_PER_SOURCE` (multi-object-extraction,
-    PR 2; D5).
+) -> ingest_service.IngestOutcome:
+    """The `ingest` verb's single-file adapter over
+    `application.ingest_service.ingest_source` (issue #1138; the full Phase
+    A / confirm / drift-guard / Phase B contract is documented there).
 
-    Beyond the MVP-1 "null compiler" (exactly one `Source` concept per
-    invocation, with an honest description stating the source was imported),
-    this now also attempts ONE LLM-driven extraction step -- one call to
-    `extract_concept` per ingest, which itself returns a bounded LIST: an
-    injected `OllamaClient` classifies the source's decoded text against the
-    full classifiable vocabulary (`openkos.model.types.CLASSIFIABLE_TYPES`)
-    and proposes zero, one, or several distinct objects. Any candidate that
-    fails validation, collides with an earlier candidate's slug in the same
-    batch, or already exists on disk is dropped individually, never the
-    whole batch; if the LLM call itself fails or nothing survives at all,
-    this degrades to the exact same Source-only result MVP-1 always
-    produced, with a short note on stderr and exit 0. A successful
-    extraction ADDS zero or more additional, create-only derived documents
-    -- one file per validated, staged candidate, under `bundle/concepts/`,
-    `bundle/entities/`, `bundle/people/`, `bundle/organizations/`,
-    `bundle/places/`, `bundle/events/`, `bundle/procedures/`,
-    `bundle/decisions/`, or `bundle/projects/` -- alongside the Source,
-    never replacing it. See `application_ingest.stage_derived_objects` for the full staging,
-    degrade, and reconciliation matrix.
+    Resolves the workspace root from the current directory, builds the
+    effect ports from this module's own seams (so a patched
+    `OllamaClient`, `_autocommit`, `_embed_client` or `datetime` still
+    intercepts), asks the confirmation question when a TTY is present, and
+    maps each typed refusal to its exit code: 3 for drift (the one failure a
+    script may retry, #319), 1 for everything else, and Typer's own abort
+    for a declined prompt. `_ingest_batch` calls it once per matched file
+    and catches the `typer.Exit` to skip that file; `ingest` ignores the
+    outcome for a single file."""
 
-    Phase A (pure, no writes) validates and builds the entire result in
-    memory, in order: `src` must be an existing, readable file, or this
-    refuses; the current directory must already be a workspace (both
-    `bundle/index.md` and `bundle/log.md` present), or this refuses; the
-    destination name and concept slug are derived ONLY from `src`'s
-    basename (`Path(src).name`/`.stem` -- directory components, including
-    traversal segments like `../../evil.txt`, are always stripped, so the
-    raw copy and concept document can never land outside `raw/` or
-    `bundle/sources/`). When `raw/<name>` already exists, `src`'s bytes are
-    compared against it (full-byte, before any write): identical bytes make
-    this an idempotent re-ingest -- `raw/<name>` is reused untouched and only
-    the Source concept plus `index.md`/`log.md` are regenerated, regardless
-    of whether the concept already exists (closes the `forget`-then-`ingest`
-    trap) -- while differing bytes refuse (raw sources are immutable). When
-    `raw/<name>` is absent but `bundle/sources/<slug>.md` exists, this
-    refuses as an inconsistent workspace (no raw bytes to compare against).
-    Otherwise `read_config` resolves `default_sensitivity`, the Source
-    concept is computed in memory, extraction is attempted (always, even
-    under `--auto` -- only the confirmation PROMPT is skipped), the derived
-    objects (zero or more -- `application_ingest.stage_derived_objects`' already-reconciled,
-    deduped result) are staged, the new `index.md`/`log.md` bytes are
-    computed to cover the Source and every staged derived object, and a
-    preview of the proposed changes -- listing the Source and every staged
-    derived object -- is printed.
+    def _after_commit(layout: config.WorkspaceLayout, cfg: config.Config) -> None:
+        embedder = _embed_client(cfg)
+        _embed_after_ingest(
+            layout,
+            embedder,
+            cfg=cfg,
+            model_tag=cfg.embedding_model,
+            embedding_backend=cfg.backend,
+            warn_nonlocal_host=warn_nonlocal_embed_host,
+            # Resolved from the client that will do the sending, beside the cfg
+            # that carries the workspace's opt-out (#922) -- the same two terms
+            # `_resolve_local_exemption` ANDs for the five chat seams.
+            local_exemption=_resolve_local_exemption(
+                cast(BackendDiagnostics, embedder), cfg
+            ),
+        )
 
-    Unless `--include-confidential` is passed, extraction gates on the
-    WORKSPACE `default_sensitivity` floor (sensitivity-fail-closed-filter,
-    S3b): when the floor is `confidential`, `application_ingest.stage_derived_objects` returns
-    `[]` WITHOUT calling `extract_concept`/`llm.chat` at all, and this
-    ingest degrades to a Source-only result -- a raw source has no per-doc
-    `sensitivity` value of its own yet, so this is the one `llm.chat` seam
-    gated on the workspace floor rather than a per-concept predicate.
-
-    Confirm gate, checked in order: `--auto` skips the prompt outright;
-    otherwise config `review: false` skips the prompt the same way;
-    otherwise, if stdin is a TTY, `typer.confirm` asks and aborts (exit 1)
-    on decline; otherwise (non-TTY, `review: true`, no `--auto`) this
-    refuses to write (exit 1) rather than defaulting silently, telling the
-    user to re-run with `--auto` -- this intentionally diverges from
-    `init`'s silent-on-non-TTY behavior, because `ingest` honors "review
-    before save".
-
-    Past that gate -- and on the runs that skip it, since `--auto` and
-    `review: false` skip the prompt but not the window it stood in --
-    `_reject_drifted_targets` re-reads `index.md`, `log.md`, and the
-    existing concept on a re-ingest, and refuses the WHOLE run (exit 3,
-    nothing written) if any changed or vanished since Phase A read it
-    (issues #306, #313, #319). The create-only writes below are excluded
-    deliberately: `copy_exclusive`/`write_exclusive` already fail closed on
-    a concurrent create, and a fresh ingest has no snapshot of a concept
-    that did not exist. The two mechanisms tile the whole space by
-    construction (#322): every target that EXISTED at Phase A is in the
-    guard's mapping, and every target that did NOT exist -- including the
-    concept on a post-`forget` regenerate -- is written create-only, so a
-    file created at any write target during the prompt window is always
-    refused, never silently overwritten.
-
-    Phase B (after confirm) writes, in order: `bundle/sources/` (created if
-    absent), the raw copy (`copy_exclusive`, create-only) and the concept
-    document (`write_exclusive`, create-only) on a fresh ingest -- or, on a
-    byte-identical re-ingest (D2), the raw copy step is SKIPPED entirely and
-    the concept is written via non-exclusive `write_atomic` ONLY when it
-    existed at Phase A (the drift guard holds its snapshot); a post-`forget`
-    regenerate, whose concept was absent at Phase A, writes it create-only
-    (`write_exclusive`) like a fresh ingest, since the guard has no bytes to
-    defend it with (#322) -- then, for EACH staged derived object in staging
-    order (zero or more; `application_ingest.stage_derived_objects` already computed and
-    deduped the full write set in Phase A, so this loop does nothing but
-    `mkdir` + `write_exclusive`, with no existence check or dedup left
-    here, design D5), its own directory (`bundle/concepts/`,
-    `bundle/entities/`, `bundle/people/`, `bundle/organizations/`,
-    `bundle/places/`, `bundle/events/`, `bundle/procedures/`,
-    `bundle/decisions/`, or `bundle/projects/`, created if absent) and its
-    document (`write_exclusive`, create-only -- always, regardless of
-    whether the Source itself was fresh or regenerated) -- then `index.md`
-    and `log.md` (`write_atomic`, catalog LAST -- so the catalog never
-    points at a file that does not yet exist, mirroring `init`'s
-    marker-last ordering, D3), extended to cover each staged derived
-    object's own bullet/log entry, in staging order. Every one of these
-    writes is itself create-only or atomic, so none is ever left
-    half-written -- but Phase B as a whole is NOT transactional:
-    there is no rollback across the sequence (`init`'s D3 "no cleanup
-    path" position, retreated to here after an attempt at real rollback
-    proved it could not be made truly atomic across independent filesystem
-    writes). A failure partway through leaves whatever already landed in
-    place -- e.g. a raw copy or concept document written but not yet
-    reflected in `index.md`/`log.md` -- a detectable, recoverable partial
-    result, never silent corruption (content is always written before the
-    catalog, so the catalog never references a file that does not exist).
-    Because the OKF bundle is version-controlled, recovery is `git status`
-    to see the partial result and `git checkout`/`git clean` to restore --
-    not a manual unlink. Any failure -- Phase A or Phase B -- is caught and
-    reported on stderr (exit 1), not a raw traceback; `except (OSError,
-    ValueError)`, matching `init`'s convention.
-
-    This function IS the `ingest` command's original single-file body,
-    extracted verbatim for issue #267 so `_ingest_batch` can reuse it
-    unchanged, once per matched file -- the batch path wraps this, never
-    modifies it. It returns a `_SingleIngestOutcome` (fresh vs re-ingest,
-    and whether extraction degraded to Source-only) purely for the batch
-    summary; the `ingest` command itself ignores the return value, so
-    single-file behavior stays byte-identical. Every refusal still raises
-    `typer.Exit` exactly as before -- the batch catches it to skip that
-    file and continue.
-    """
-    root = Path.cwd()
-    layout = config.WorkspaceLayout(root)
-    index_path = layout.bundle_dir / "index.md"
-    log_path = layout.bundle_dir / "log.md"
-
+    ports = ingest_service.IngestPorts(
+        chat_client=lambda cfg: _chat_client(cfg, task="extraction"),
+        autocommit=lambda root, paths, message: _autocommit(root, paths, message),
+        after_commit=_after_commit,
+        snapshot_read=lambda path: _snapshot_read(path),
+        clock=lambda: datetime.now(UTC),
+    )
+    policy = ingest_service.IngestPolicy(
+        include_confidential=include_confidential,
+        re_extract=re_extract,
+        event_date=event_date,
+        skip_confirmation=auto,
+    )
     try:
-        if not src.is_file():
-            typer.echo(
-                f"openkos ingest: refusing to ingest -- '{src}' does not exist "
-                "or is not a readable file.",
-                err=True,
-            )
-            raise typer.Exit(code=1)
-
-        workspace_reason = config.require_workspace(root)
-        if workspace_reason is not None:
-            typer.echo(
-                f"openkos ingest: refusing to ingest -- {workspace_reason}.",
-                err=True,
-            )
-            raise typer.Exit(code=1)
-
-        # #552: the destination is resolved against the whole collision
-        # FAMILY under `raw/`, not against the bare basename alone -- a name
-        # already held by a different file no longer refuses this one or
-        # absorbs it into the incumbent's Source. Still a bare basename, so
-        # the path-traversal containment is unchanged.
-        origin_key = okf.origin_key_for(src)
-        destination = _resolve_raw_destination(src, layout, origin_key)
-        name = destination.name
-        slug = _slugify(Path(name).stem)
-        if not slug:
-            raise ValueError(f"cannot derive a concept name from '{src}'")
-        raw_dest = layout.raw_dir / name
-        sources_dir = layout.bundle_dir / "sources"
-        concept_path = sources_dir / f"{slug}.md"
-        # Symlink boundary (#1126): `write_exclusive` opens with mode `x`,
-        # which follows a symlinked PARENT, so a linked `bundle/sources`
-        # carried the source text out of the workspace. Refused here, before
-        # the extraction spends a backend call and before anything is written.
-        _refuse_symlinked_destinations(root, [raw_dest, concept_path])
-
-        if destination.disambiguated_from is not None:
-            # A destination the user did not name is never chosen silently.
-            # Printed BEFORE the checks below so it frames any refusal that
-            # follows, rather than being swallowed by the exit.
-            typer.echo(
-                f"openkos ingest: 'raw/{destination.disambiguated_from}' is "
-                f"already held by a different source; copying this one to "
-                f"'raw/{name}' instead.",
-                err=True,
-            )
-
-        regenerate = destination.regenerate
-        if regenerate:
-            if src.read_bytes() != raw_dest.read_bytes():
-                # Same file, changed bytes -> refuse (D4). Reachable now
-                # only when the destination was MATCHED (by recorded origin,
-                # or by a legacy member's identical bytes), so immutability
-                # speaks about a file this run could identify -- never about
-                # an unrelated neighbour that merely shared a basename.
-                typer.echo(
-                    f"openkos ingest: refusing to ingest -- '{src}' differs from "
-                    f"the existing 'raw/{name}' copy; raw sources are "
-                    "immutable. Ingest under a different name, or inspect the "
-                    "existing copy.",
-                    err=True,
-                )
-                raise typer.Exit(code=1)
-        elif concept_path.exists():
-            # raw absent + concept present -> inconsistent workspace (D5)
-            typer.echo(
-                f"openkos ingest: refusing to ingest -- 'bundle/sources/{slug}.md' "
-                f"exists but its raw source 'raw/{name}' is missing; the "
-                "workspace is inconsistent, inspect it before retrying.",
-                err=True,
-            )
-            raise typer.Exit(code=1)
-        # else: raw absent + concept absent -> fresh (regenerate stays False)
-    except (OSError, ValueError) as exc:
+        return ingest_service.ingest_source(
+            Path.cwd(),
+            src,
+            policy,
+            ports=ports,
+            observer=_CliIngestObserver(),
+            confirm=_confirm_ingest,
+        )
+    except ingest_service.ConfirmationDeclined as exc:
+        raise typer.Abort() from exc
+    except ingest_service.ConfirmationUnavailable as exc:
+        # This intentionally diverges from `init`'s silent-on-non-TTY
+        # behavior: `ingest` honors "review before save".
         typer.echo(
-            f"openkos ingest: failed while checking the source or workspace -- {exc}.",
+            "openkos ingest: refusing to write without confirmation -- "
+            "stdin is not a TTY; re-run with --auto.",
             err=True,
         )
         raise typer.Exit(code=1) from exc
-
-    now = datetime.now(UTC)
-    resource = f"raw/{name}"
-
-    try:
-        try:
-            raw_content: str | None = src.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            # `UnicodeDecodeError` subclasses `ValueError`, so it MUST be
-            # caught here first: the outer `except (OSError, ValueError)`
-            # would otherwise swallow a binary/non-text source and fail the
-            # whole ingest, instead of degrading to the binary-fallback body.
-            raw_content = None
-        cfg = config.read_config(root)
-        had_prior_source = regenerate and concept_path.exists()
-        if had_prior_source:
-            # ONE observation of the concept file, taken HERE and not with
-            # `index.md`/`log.md` further down (#313 review, R4 CRITICAL;
-            # single-read shape per #318). Between this point and there sits
-            # `application_ingest.stage_derived_objects`'s `llm.chat` round
-            # trip -- an unbounded network call. Snapshotting after it would
-            # make an edit landing during extraction the guard's OWN
-            # baseline: the comparison would find no drift and
-            # `write_atomic` would then write back the document built from
-            # this text, reverting it. That revert is a sensitivity
-            # DOWNGRADE, since `resolved_sensitivity` is the high-water mark
-            # computed from `on_disk_sensitivity`. Both parses inside
-            # `compose_source_document` below and the guard's bytes derive
-            # from this single read, so there is no second read for an edit
-            # to slip between.
-            try:
-                concept_snapshot: bytes | None
-                concept_snapshot, concept_text = _snapshot_read(concept_path)
-            except (OSError, UnicodeDecodeError) as exc:
-                raise ValueError(
-                    f"refusing to ingest -- '{concept_path}' could not be "
-                    "read to snapshot its current contents (sensitivity, "
-                    f"title, and drift baseline): {exc}"
-                ) from exc
-        else:
-            concept_snapshot = None
-            concept_text = None
-
-        # `title`/`description` derivation (issue #248), the re-ingest
-        # sensitivity high-water mark (issue #229; design: "Resolve before
-        # build, not merge after build"), and the on-disk title read-back
-        # (review finding: name a retitle in the preview, never make it
-        # sticky) all move to `compose_source_document` (issue #918 Slice
-        # 3, design: Interfaces/Contracts) -- `concept_text is None` is
-        # exactly `had_prior_source` being `False`.
-        source_plan = application_ingest.compose_source_document(
-            raw_content=raw_content,
-            source_stem=src.stem,
-            # The raw copy's basename, never the absolute import path: the
-            # description is committed, embedded and served over MCP, and the
-            # original location is not knowledge about the source (#1129).
-            source_display_path=Path(resource).name,
-            # A SECOND path, deliberately. `source_display_path` names the RAW
-            # source and feeds the Source document's description ("Raw source
-            # imported from '<name>'"); the refusal messages must instead name
-            # the SOURCE DOCUMENT, because that is the file whose frontmatter
-            # failed to parse and the one the operator has to open. The
-            # pre-move code used two different values here and collapsing them
-            # into one silently reworded the refusal (#918 Slice 3).
-            source_document_display_path=str(concept_path),
-            resource=resource,
-            origin_key=destination.origin_key,
-            concept_text=concept_text,
-            cfg=cfg,
-            timestamp=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            event_date_flag=event_date,
-            source_name=src.name,
-        )
-        title = source_plan.title
-        resolved_sensitivity = source_plan.resolved_sensitivity
-        on_disk_sensitivity = source_plan.on_disk_sensitivity
-        on_disk_title = source_plan.on_disk_title
-        concept_content = source_plan.content
-        if source_plan.event_date.stored_malformed:
-            # design.md Decision 7's warning: printed right after `compose_
-            # source_document` returns, regardless of whether the run below
-            # converges and leaves the file untouched -- "ignoring", never
-            # "removed", is what stays true either way.
-            typer.echo(
-                "openkos ingest: ignoring the malformed event_date "
-                f"{source_plan.event_date.stored_raw!r} in "
-                f"'bundle/sources/{slug}.md' -- expected YYYY-MM-DD.",
-                err=True,
-            )
-
-        # #773: the convergence short-circuit, decided BEFORE any model
-        # contact and before any write. A byte-identical re-ingest of a
-        # source whose previous extraction ran to its intended conclusion
-        # has nothing to redo: re-running it here is what unioned every
-        # set the model ever produced for one unchanged document (17
-        # objects from an 81-line source), because create-only dedup can
-        # only catch verbatim-reproduced slugs. Writing NOTHING -- not
-        # even a regenerated Source -- is what makes the promised
-        # idempotence true, and it keeps the prior markers (#585's
-        # sole-object disclosure, a deliberate-policy extraction_status)
-        # alive on disk without violating the never-read-back rule: the
-        # document that recorded them is simply left untouched.
-        # `converged_reingest` (issue #918 Slice 3) owns the gate's three
-        # policy decisions -- unparseable frontmatter, a legacy Source with
-        # no `origin_key`, retryable debt (`application_ingest.
-        # extraction_retry_due`, the shared predicate
-        # `_reingest_will_skip` also calls) -- plus `--re-extract`'s
-        # deliberate-redo override.
-        converged = (
-            application_ingest.converged_reingest(concept_text, re_extract=re_extract)
-            if had_prior_source and concept_text is not None
-            else None
-        )
-        # design.md Decision 6/7: convergence skips ONLY when the resolved
-        # `event_date` did not change AND the lifted state (preserve-
-        # source-frontmatter, issue #1062 -- for this slice, the
-        # frontmatter delta alone) did not change either. A converged
-        # Source whose date OR lifted state DID change (an explicit flag,
-        # file-name backfill on a pre-feature Source, or newly-present/
-        # changed incoming frontmatter) falls through to the block below
-        # with `converged` still set -- `stage_derived_objects(carried=
-        # converged)` short-circuits before any LLM call, and `compose_
-        # catalog_update` rebuilds the Source with the carried markers and
-        # the new date/frontmatter -- the "Source-only rewrite". Both
-        # `event_date.changed` and `lift_changed` are always `False` when
-        # `converged is None` (a fresh ingest, or a non-converged
-        # regenerate that already runs the full path), so this condition is
-        # a strict narrowing of the pre-#1014c skip, never a widening of it.
-        if (
-            converged is not None
-            and not source_plan.event_date.changed
-            and not source_plan.lift_changed
-        ):
-            typer.echo(
-                "openkos ingest: source unchanged and already "
-                "extracted; skipping extraction -- existing derived "
-                "objects preserved; pass --re-extract to run "
-                "extraction again.",
-                err=True,
-            )
-            return _SingleIngestOutcome(
-                regenerated=True,
-                extraction_degraded=False,
-                extraction_skipped=True,
-                # This run stamps nothing, but the Source it just left
-                # untouched may STILL carry the prior run's disclosure --
-                # reachably #585's `sole-object-restates-source`, since
-                # `extraction_retry_due` sends the two judge tokens back
-                # through a full extraction. The summary term counts what a
-                # Source CARRIES when the run ends (#805, item 1), so
-                # reporting `None` here would under-count it to zero. This
-                # is NOT a new frontmatter read-back: `converged_reingest`
-                # already performed the one read this needs, and the
-                # never-read-back rule (see the comment block above) governs
-                # WRITES -- nothing here is merged onto disk.
-                extraction_notice=converged.carried_notices,
-            )
-
-        # Extraction runs AFTER the Source concept is built, BEFORE the
-        # preview (design: Technical Approach) -- always attempted, even
-        # under `--auto`; only the confirm PROMPT is skipped by `--auto`.
-        # `derived_plans` is the FULL, already-reconciled Phase A write set
-        # (design D5 pinned ordering) -- zero or more entries, in reply
-        # order. `skip_reason` (issue #187) is `None` on the healthy path.
-        # ONE TTY-gated stage notice before the single long extraction call
-        # (issue #190) -- `ingest` has no per-item loop to hook, so
-        # `stage_notice` is the single-call sibling of `progress_callback`.
-        # Printed even when the confidential-floor short-circuit inside
-        # `application_ingest.stage_derived_objects` skips the LLM: harmless
-        # on a TTY, and the skip itself is reported right after. Guarded by
-        # `converged is None` (design.md Decision 6): a date-only rewrite
-        # extracts nothing, so this wording would misdescribe the run.
-        if converged is None:
-            observability.stage_notice(
-                "ingest", "extracting derived objects (waiting on the LLM)..."
-            )
-        # `_chat_client` is constructed BEFORE the spinner opens (issue #918
-        # Slice 2) -- mirrors the pre-move evaluation order, where it was a
-        # plain call argument to `_stage_derived_objects` and so ran before
-        # that function's own internal `with Console(...).status(...)` did.
-        # Still constructed on the date-only-rewrite path (`converged` set,
-        # `event_date.changed` true): harmless, since `stage_derived_
-        # objects(carried=...)` never calls `llm.chat` on that path (design.md
-        # Decision 6) -- the spinner context below stays as-is too, entered
-        # and left at once, to avoid re-indenting the whole extraction block.
-        extraction_llm = _chat_client(cfg, task="extraction")
-        try:
-            with Console(stderr=True).status(
-                "openkos ingest: extracting concepts…"
-            ) as status:
-                staged = application_ingest.stage_derived_objects(
-                    raw_content=raw_content,
-                    source_title=title,
-                    source_slug=slug,
-                    workspace_floor=source_plan.source_sensitivity,
-                    stamp_sensitivity=source_plan.source_sensitivity,
-                    source_tags=source_plan.tags,
-                    timestamp=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                    bundle_dir=layout.bundle_dir,
-                    llm=extraction_llm,
-                    cfg=cfg,
-                    include_confidential=include_confidential,
-                    union_judge=cfg.union_judge,
-                    on_progress=observability.phase_callback("ingest", status.update),
-                    carried=converged,
-                )
-        except BackendError as exc:
-            typer.echo(
-                f"openkos ingest: concept extraction skipped -- {exc}; "
-                "keeping the Source only.",
-                err=True,
-            )
-            # #746: the engine knows both halves of this and used to say
-            # neither. `concurrent_extraction` inflates PER-CALL wall time
-            # when the server is not running requests in parallel -- each
-            # request's own timeout keeps running while it queues -- so a
-            # deadline failure on that path may be an artifact of the
-            # setting rather than a backend problem.
-            #
-            # All three conditions are required, and the third is the one a
-            # naive check gets wrong: with the flag on but a source below
-            # the chunking threshold there are no windows to overlap, so
-            # concurrency was never involved. Naming a timeout that is
-            # really a refused connection would send the operator after a
-            # setting while their server is not running.
-            if (
-                cfg.concurrent_extraction
-                # `raw_content` is provably non-`None` here (an `BackendError`
-                # can only be raised from inside the extractor call, which
-                # the service never reaches on `None`/blank content) -- the
-                # explicit check is for mypy: the pre-extraction narrowing
-                # that used to prove this now happens INSIDE
-                # `application_ingest.stage_derived_objects`, invisible from
-                # this call site (issue #918 Slice 2).
-                and raw_content is not None
-                and is_timeout_failure(exc)
-                and fans_out(raw_content, source_title=title)
-            ):
-                typer.echo(
-                    "openkos ingest: this run had concurrent_extraction on, "
-                    "and the request ran out of time rather than failing "
-                    "outright. Concurrent windows queue on a server started "
-                    "without OLLAMA_NUM_PARALLEL, and each one's "
-                    "chat_timeout keeps running while it waits -- so this "
-                    "may be the setting, not the backend. Either raise "
-                    "OLLAMA_NUM_PARALLEL to "
-                    f"{FAN_OUT_CONCURRENCY} on the Ollama server, or set "
-                    "concurrent_extraction: false in openkos.yaml.",
-                    err=True,
-                )
-            staged = application_ingest.StagedDerivedObjects(
-                plans=(),
-                skip_reason="failed",
-                notices=(),
-                report=None,
-                drops=(),
-                lost_in_staging=0,
-            )
-        # Guarded like `stage_notice` above (design.md Decision 6): a
-        # date-only rewrite ran no extraction, so none of this render's
-        # wording (degrade notes, per-candidate drops, the report summary)
-        # describes anything that actually happened this run.
-        if converged is None:
-            _render_staged_derived_objects(staged)
-        derived_plans = staged.plans
-        skip_reason = staged.skip_reason
-        # Same boundary for the derived-object directories (`bundle/entities`,
-        # ...), known only once staging has chosen each object's type.
-        _refuse_symlinked_destinations(root, [plan.path for plan in derived_plans])
-        extraction_notice = staged.notices
-        # One `_snapshot_read` observation per target: the decoded text
-        # feeds `compose_catalog_update` below, the raw bytes feed
-        # `_reject_drifted_targets` (issues #306, #313, #318).
-        index_bytes, index_text = _snapshot_read(index_path)
-        log_bytes, log_text = _snapshot_read(log_path)
-        guarded_targets: dict[Path, bytes] = {
-            index_path: index_bytes,
-            log_path: log_bytes,
-        }
-        if concept_snapshot is not None:
-            guarded_targets[concept_path] = concept_snapshot
-        # `compose_catalog_update` (issue #918 Slice 3) owns the conditional
-        # Source re-render (design: "The ordering conflict" -- never patch
-        # the already-built bytes, never read either key off disk), the
-        # dedup-before-insert Source bullet (D3), and the derived-plans
-        # index/log loop (design: one confirm gate, one preview) including
-        # the durable disambiguation audit entry (#131).
-        # #1136: a prior Source still marked `ingest_pending` was left by an
-        # interrupted run; objects that run wrote but never catalogued are
-        # adopted into this run's index/log update (never rewritten).
-        adopted: tuple[application_ingest.AdoptedObject, ...] = (
-            application_ingest.find_uncatalogued_objects(
-                layout.bundle_dir, slug, index_text
-            )
-            if converged is None
-            and had_prior_source
-            and application_ingest.prior_ingest_pending(concept_text)
-            else ()
-        )
-        catalog_update = application_ingest.compose_catalog_update(
-            source=source_plan,
-            staged=staged,
-            slug=slug,
-            resource=resource,
-            index_text=index_text,
-            log_text=log_text,
-            regenerate=regenerate,
-            timestamp=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            entry_date=now.astimezone().date(),
-            adopted=adopted,
-        )
-        concept_content = catalog_update.concept_content
-        new_index_text = catalog_update.new_index_text
-        new_log_text = catalog_update.new_log_text
-    except (OSError, ValueError) as exc:
-        typer.echo(
-            f"openkos ingest: failed while preparing the ingest -- {exc}.", err=True
-        )
+    except ingest_service.DriftDetected as exc:
+        typer.echo(exc.message, err=True)
+        raise typer.Exit(code=3) from exc
+    except ingest_service.IngestRefused as exc:
+        typer.echo(exc.message, err=True)
         raise typer.Exit(code=1) from exc
-
-    if regenerate:
-        typer.echo(
-            "openkos ingest: proposed changes (re-ingest -- identical source "
-            "already present):"
-        )
-        typer.echo(f"  ~ raw/{name} (existing copy reused -- not rewritten)")
-        # The resolved level is always named; the trailing clause
-        # distinguishes the three re-ingest causes, selected with
-        # `okf.sensitivity_direction(on_disk, cfg.default_sensitivity)`
-        # (design: preview wording table). `had_prior_source` is `False`
-        # only for the post-forget case (no prior Source to read), which
-        # reports "from the workspace default" instead.
-        if had_prior_source:
-            direction = okf.sensitivity_direction(
-                on_disk_sensitivity, cfg.default_sensitivity
-            )
-            if direction == "lower":
-                sensitivity_clause = "preserved from the existing Source"
-            elif direction == "raise":
-                sensitivity_clause = "raised by the workspace default"
-            else:
-                sensitivity_clause = "unchanged"
-        else:
-            sensitivity_clause = "from the workspace default"
-        # Review finding: re-ingest recomputes `title` from content every
-        # run (unaffected by this on-disk read -- only the PREVIEW WORDING
-        # depends on it) and previously overwrote a pre-existing Source's
-        # title with no mention in the preview. Name the change ONLY when
-        # `on_disk_title` is known (`had_prior_source`) and actually
-        # differs from the freshly derived `title` -- silence on the
-        # common (unchanged) path is deliberate, matching the sensitivity
-        # clause's own restraint on its "unchanged" branch.
-        title_clause = (
-            f"; title changed from {on_disk_title!r} to {title!r}"
-            if on_disk_title is not None and on_disk_title != title
-            else ""
-        )
-        typer.echo(
-            f"  ~ bundle/sources/{slug}.md (regenerated -- sensitivity "
-            f"{resolved_sensitivity} {sensitivity_clause}{title_clause})"
-        )
-        _echo_event_date_preview_line(source_plan.event_date)
-        # preserve-source-frontmatter (issue #1062), design.md Decision 7:
-        # each line prints only when its OWN specific delta fired --
-        # `frontmatter_changed`/`tags_added`/`sensitivity_changed` are
-        # exposed separately from the OR'd `lift_changed` for exactly this
-        # reason (task 2.13/2.15/3.18): a rewrite triggered by only one
-        # delta must print only that delta's line(s), never another's.
-        if converged is not None and source_plan.frontmatter_changed:
-            frontmatter = source_plan.source_frontmatter
-            key_count = len(frontmatter) if frontmatter is not None else 0
-            typer.echo(f"    source frontmatter recorded ({key_count} key(s))")
-        if converged is not None and source_plan.tags_added:
-            typer.echo(f"    tags added: {', '.join(source_plan.tags_added)}")
-        if converged is not None and source_plan.sensitivity_changed:
-            typer.echo(
-                "openkos ingest: this Source-only rewrite raised the "
-                "Source's sensitivity -- existing derived objects keep "
-                "their own already-stamped sensitivity; run 'openkos "
-                "set-sensitivity' to raise them explicitly.",
-                err=True,
-            )
-        # source-tag-sync (#1093), ADR-0033: existing derived objects keep
-        # the tags they were created with (this rewrite never re-tags
-        # them), so a tag-union delta that fires here needs its own
-        # advisory naming the verb that closes the gap. Fires independently
-        # of the sensitivity advisory above -- a rewrite firing both deltas
-        # prints both. Printed regardless of whether the Source has any
-        # derived object on disk (this rewrite deliberately does not walk
-        # the bundle), so the wording below must not assert one exists.
-        if converged is not None and source_plan.tags_added:
-            typer.echo(
-                "openkos ingest: this Source-only rewrite added tags to "
-                "the Source -- existing derived objects keep the tags "
-                f"they were created with; run 'openkos sync-tags "
-                f"sources/{slug}' to add the Source's current tags to them.",
-                err=True,
-            )
-        for plan in derived_plans:
-            typer.echo(f"  + bundle/{plan.link_dir}/{plan.slug}.md")
-        for obj in adopted:
-            typer.echo(
-                f"  ~ bundle/{obj.link_dir}/{obj.slug}.md "
-                "(written by an interrupted ingest -- now catalogued)"
-            )
-        typer.echo(f"  ~ {index_path.name} (Source entry refreshed)")
-        typer.echo(f"  ~ {log_path.name} (new dated entry)")
-    else:
-        typer.echo("openkos ingest: proposed changes:")
-        typer.echo(f"  + raw/{name}")
-        typer.echo(f"  + bundle/sources/{slug}.md")
-        _echo_event_date_preview_line(source_plan.event_date)
-        for plan in derived_plans:
-            typer.echo(f"  + bundle/{plan.link_dir}/{plan.slug}.md")
-        typer.echo(f"  ~ {index_path.name} (new Source entry)")
-        typer.echo(f"  ~ {log_path.name} (new dated entry)")
-
-    if not auto and cfg.review:
-        if sys.stdin.isatty():
-            typer.confirm("Proceed with these changes?", abort=True)
-        else:
-            typer.echo(
-                "openkos ingest: refusing to write without confirmation -- "
-                "stdin is not a TTY; re-run with --auto.",
-                err=True,
-            )
-            raise typer.Exit(code=1)
-
-    # Issue #313: every byte below was computed from a pre-prompt read, so
-    # re-validate each target now -- after the gate, before the first write.
-    _reject_drifted_targets(layout, guarded_targets, "ingest")
-
-    # #1136: Phase B is a sequence of individually atomic writes with no
-    # transaction around it, so the Source -- the one file the convergence
-    # gate reads -- is written FIRST carrying `ingest_pending` and rewritten
-    # WITHOUT it as the LAST write. A kill anywhere in between leaves a
-    # pending Source, which `converged_reingest` never treats as converged.
-    # A Source-only rewrite (`converged` set) extracts nothing and stays one
-    # atomic write: the marker there would only force a needless re-extract.
-    two_step = converged is None
-    first_content = (
-        okf.mark_ingest_pending(concept_content) if two_step else concept_content
-    )
-    try:
-        sources_dir.mkdir(parents=True, exist_ok=True)
-        if regenerate:
-            # D2: raw copy SKIPPED -- raw/<name> is reused, never rewritten.
-            # The concept's writer is chosen by the SAME `had_prior_source`
-            # condition that gated its guard entry above, so the two
-            # mechanisms are visibly complementary (#322): a concept that
-            # EXISTED at Phase A has a snapshot in `guarded_targets` and is
-            # written with `write_atomic` (create-only would ALWAYS fail
-            # there); a concept ABSENT at Phase A (post-`forget`) left the
-            # guard nothing to compare, so `write_exclusive` fails closed
-            # on a file created during the prompt window instead of
-            # silently overwriting it -- the same create-only protection,
-            # surfacing the same `FileExistsError` through the same error
-            # path, as the fresh-ingest branch below.
-            if had_prior_source:
-                fsio.write_atomic(concept_path, first_content)
-            else:
-                fsio.write_exclusive(concept_path, first_content)
-        else:
-            fsio.copy_exclusive(src, raw_dest)
-            fsio.write_exclusive(concept_path, first_content)
-        # Phase B write loop (design D5): `derived_plans` is the COMPLETE,
-        # already-deduped write set computed by
-        # `application_ingest.stage_derived_objects` in Phase A -- no
-        # existence check, slug work, or dedup happens here,
-        # only `mkdir` + create-only write, per plan, in staging order.
-        for plan in derived_plans:
-            plan.path.parent.mkdir(parents=True, exist_ok=True)
-            fsio.write_exclusive(plan.path, plan.content)
-        fsio.write_atomic(index_path, new_index_text)
-        fsio.write_atomic(log_path, new_log_text)
-        if two_step:
-            fsio.write_atomic(concept_path, concept_content)
-    except (OSError, ValueError) as exc:
-        typer.echo(
-            f"openkos ingest: failed while writing the ingest -- {exc}.", err=True
-        )
-        raise typer.Exit(code=1) from exc
-
-    imported_paths = [f"raw/{name}", f"bundle/sources/{slug}.md"]
-    imported_paths.extend(
-        f"bundle/{plan.link_dir}/{plan.slug}.md" for plan in derived_plans
-    )
-    # Adopted objects were written by the interrupted run and are still
-    # uncommitted; they belong in this run's commit (#1136).
-    committed_paths = [
-        *imported_paths,
-        *(f"bundle/{obj.link_dir}/{obj.slug}.md" for obj in adopted),
-    ]
-    typer.echo(
-        f"openkos ingest: imported '{src}' -> {', '.join(imported_paths)} "
-        f"({index_path.name}, {log_path.name} updated)."
-    )
-    if derived_plans:
-        typer.echo(_format_type_tally(Counter(plan.doc_type for plan in derived_plans)))
-
-    _autocommit(
-        root,
-        [*committed_paths, "bundle/index.md", "bundle/log.md"],
-        f"openkos: ingest {name} (+{len(derived_plans)} concepts)",
-    )
-
-    # AFTER the commit, never before: the ingest is durable by this point,
-    # so a failing embedder degrades to a notice instead of stranding
-    # written-but-uncommitted files (#183).
-    embedder = _embed_client(cfg)
-    _embed_after_ingest(
-        layout,
-        embedder,
-        cfg=cfg,
-        model_tag=cfg.embedding_model,
-        embedding_backend=cfg.backend,
-        warn_nonlocal_host=warn_nonlocal_embed_host,
-        # Resolved from the client that will do the sending, beside the cfg
-        # that carries the workspace's opt-out (#922) -- the same two terms
-        # `_resolve_local_exemption` ANDs for the five chat seams.
-        local_exemption=_resolve_local_exemption(
-            cast(BackendDiagnostics, embedder), cfg
-        ),
-    )
-
-    return _SingleIngestOutcome(
-        regenerated=regenerate,
-        # design.md Decision 6: a date-only rewrite (`converged is not
-        # None`) carries the PRIOR run's `skip_reason` forward unread by any
-        # fresh extraction -- that is not a fresh degrade, so it must not
-        # count as one; `extraction_skipped` reports the carry instead.
-        extraction_degraded=skip_reason is not None and converged is None,
-        extraction_skipped=converged is not None,
-        extraction_notice=extraction_notice,
-        derived_count=len(derived_plans),
-        alternative_pairs=tuple(
-            (plan.doc_type, plan.type_alternative)
-            for plan in derived_plans
-            if plan.type_alternative is not None
-        ),
-        type_floor_pairs=tuple(
-            (plan.doc_type, plan.sensitivity)
-            for plan in derived_plans
-            if plan.type_floor_raised
-        ),
-    )
 
 
 _ForgetScope = Literal["self", "source"]

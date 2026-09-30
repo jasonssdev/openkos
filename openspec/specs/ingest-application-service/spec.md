@@ -12,17 +12,22 @@ binds no concrete backend and performs no filesystem I/O of its own. It is
 the second artifact in the `application/` layer (ADR-0018), following the
 shipped `application/query.py`.
 
+A second module, `application/ingest_service.py`, sequences that core with
+the effects around it — the confirmation gate, the drift guard, the writes,
+the auto-commit and the post-commit derived-index step — into one callable
+that ingests a single source into a workspace named by an explicit root
+(see "Single-Source Ingest Is A Service Over An Explicit Root").
+
 ## Non-Goals
 
 Interactive confirmation and TTY detection; stdout/stderr rendering;
-process exit-code selection; `_snapshot_read`, `guarded_targets`,
-`_reject_drifted_targets`, `_autocommit`, `_refresh_derived_after_write`,
-which the service calls through rather than owns; `_chat_client`/LLM
-backend construction; the `Console(...).status` spinner and
-`observability.phase_callback`; any change to `extract_concept`'s
-contract, the on-disk format, or the CLI surface; `_ingest_batch`,
-`_expand_batch_sources`, the batch cost gate; the `api`/`mcp` adapters
-themselves; the headless-consent protocol.
+process exit-code selection; the `Console(...).status` spinner and
+`observability.phase_callback`; the auto-commit and the derived-index
+refresh implementations; LLM backend construction; any change to
+`extract_concept`'s contract, the on-disk format, or the CLI surface;
+`_ingest_batch`, `_expand_batch_sources`, the batch cost gate and the
+batch's non-TTY `--auto` rule; the `api`/`mcp` adapters themselves; the
+headless-consent protocol.
 
 ## Requirements
 
@@ -119,20 +124,72 @@ line naming `--re-extract`).
 - THEN it returns a typed convergence outcome, and the adapter alone exits
   the command from that outcome
 
-### Requirement: Shared Write Mechanics And Client Construction Stay Adapter-Side
+### Requirement: Shared Write Mechanics And Client Construction Arrive As Ports
 
-The service MUST NOT hold a second definition of `_snapshot_read`,
-`guarded_targets`, `_reject_drifted_targets`, `_autocommit`, or
-`_refresh_derived_after_write`, and MUST NOT construct an LLM backend
-(`_chat_client`/`OllamaClient`); the adapter constructs the backend and
-calls the shared write helpers unchanged.
+The plan-composition core MUST NOT hold a second definition of the
+snapshot read, the drift baseline, the auto-commit or the derived-index
+refresh, and MUST NOT construct an LLM backend. The orchestration service
+MUST receive the chat-client factory, the auto-commit, the post-commit
+derived-index step, the snapshot read and the clock as injected ports, and
+MUST NOT import `openkos.cli`, `typer`, `rich` or `openkos.vcs`. The drift
+decision itself is one pure function (`application/drift.py`) that returns
+the refusal message or nothing; the CLI's drift guard and the service both
+call it.
 
-#### Scenario: Committing a plan uses the existing shared helpers
+#### Scenario: Committing a plan uses the adapter's own helpers
 
-- GIVEN a plan produced by the service
-- WHEN a caller commits it
-- THEN the same shared write helpers used by every other write-capable
-  command run, with no duplicate implementation inside the service
+- GIVEN a run of the orchestration service with an adapter's ports
+- WHEN it reaches the commit and the derived-index step
+- THEN it calls the ports it was given, in that order, and no duplicate
+  implementation of either lives inside the service
+
+#### Scenario: One drift decision serves every caller
+
+- GIVEN a target that changed after its snapshot was read
+- WHEN the CLI drift guard or the orchestration service checks the plan
+- THEN both derive the refusal from the same pure function
+
+### Requirement: Single-Source Ingest Is A Service Over An Explicit Root
+
+The orchestration service MUST expose one synchronous callable that ingests
+one source into the workspace at an explicit `root` and returns a typed
+outcome. It MUST NOT read the current directory, prompt, render output,
+inspect whether stdin is a terminal, or raise `typer.Exit`. Every condition
+that ends a run without a write MUST be a typed refusal carrying the
+user-facing message: an unreadable source, a directory that is not a
+workspace, a raw copy whose bytes differ from a matched source, an
+inconsistent workspace, a failed check, a failed preparation, a failed
+write, post-confirm drift, a declined confirmation, and a confirmation that
+could not be asked. A write MUST NOT begin before the drift guard has
+passed. The convergence short-circuit MUST be a distinct outcome from a
+written run. A confirmation that is required but has no answering callback
+MUST refuse, never proceed.
+
+The confirmation gate applies exactly when the caller has not asked to skip
+it and the workspace configuration says `review: true`; everything the user
+reads is reported through an observer as typed data or as advisory lines,
+so an unattended caller that passes no observer gets silence.
+
+#### Scenario: A non-CLI caller ingests from outside the workspace
+
+- GIVEN a process whose current directory is not the workspace
+- WHEN the service is called with the workspace root and a source
+- THEN the source is copied into that workspace's `raw/`, a Source concept
+  is written, and a written outcome is returned
+
+#### Scenario: A required confirmation with no answer refuses
+
+- GIVEN a workspace whose configuration requires review
+- WHEN the service is called without skipping confirmation and without a
+  callback
+- THEN it raises a confirmation-unavailable refusal and writes nothing
+
+#### Scenario: Drift is refused before any write
+
+- GIVEN a target that changes after the plan read it
+- WHEN the service reaches the guard
+- THEN it raises a drift refusal, writes nothing, and never calls the
+  auto-commit
 
 ### Requirement: The Extraction Preserves Observable CLI Behavior
 
