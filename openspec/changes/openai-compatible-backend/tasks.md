@@ -916,9 +916,10 @@ Design Decision 2's `max_tokens`/`finish_reason`/`usage`/`temperature`/
 - [ ] **5.16** Commit, scope `llm`. Open PR 5 targeting `main`, after PR 4
   merges.
 
-  Commit half done on this apply run (no push, no PR — left to the
-  maintainer, consistent with every earlier phase's own note); "Open PR 5"
-  half left unticked.
+  **Observed**: committed together with Phase 6 and 7 as one combined
+  commit `fe7855c` (scope `llm`) on branch `feat/1057-openai-p5` — see
+  Phase 7's 7.11 for the shared rationale. No push, no PR opened per the
+  apply run's instructions; "Open PR 5" left unticked.
 
 **Rollback boundary**: revert `max_tokens`/capped-branching/usage/
 temperature/seed/`context_window` additions to `chat`; the chat-core shape
@@ -1053,8 +1054,9 @@ Design Decision 2's `/v1/embeddings` mapping; embedding spec requirements.
 - [ ] **6.21** Commit, scope `llm`. Open PR 6 targeting `main`, after PR 4
   merges (independent of PR 5).
 
-  Commit half done on this apply run (no push, no PR — left to the
-  maintainer); "Open PR 6" half left unticked.
+  **Observed**: committed together with Phase 5 and 7 as one combined
+  commit `fe7855c` (scope `llm`) — see Phase 7's 7.11 for the shared
+  rationale. No push, no PR opened; "Open PR 6" left unticked.
 
 **Rollback boundary**: revert `embed`/`_validate_and_normalize_row`/retry
 loop; chat-only client (Phases 4-5) keeps working.
@@ -1158,8 +1160,18 @@ Design Decision 2's `/v1/models` and locality mapping.
 - [ ] **7.11** Commit, scope `llm`. Open PR 7 targeting `main`, after PR 4
   merges (independent of PR 5/6).
 
-  Commit half done on this apply run (no push, no PR — left to the
-  maintainer); "Open PR 7" half left unticked.
+  **Observed**: committed together with Phase 5 and 6 as ONE combined
+  commit `fe7855c` (scope `llm`, message `feat(llm): OpenAICompatibleClient
+  chat bounds, embeddings, diagnostics (#1057)`), deviating from "Commit,
+  scope llm" per-phase — deliberate, for the same reason Phase 2a+2b were
+  combined earlier in this change: `git diff` on
+  `src/openkos/llm/openai_compatible.py` produced the embed (Phase 6) and
+  list_models (Phase 7) method bodies as one contiguous, non-cleanly-
+  splittable hunk (both landed adjacent to `_build_request`), and Phase
+  5's chat-bounds hunks share the same file and the same single
+  verification run recorded above. No push, no PR opened per the apply
+  run's instructions ("Open PR 5/6/7" left unticked in each phase); PR
+  creation and any further slicing is left to the maintainer.
 
 **Rollback boundary**: revert `list_models`/`.locality`; chat+embed-only
 client (Phases 4-6) keeps working.
