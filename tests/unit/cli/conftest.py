@@ -527,6 +527,21 @@ def disable_local_exemption(workspace_root: Path) -> None:
     )
 
 
+@pytest.fixture
+def pinned_git_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin a git identity for a test that compares a mutating verb's WHOLE
+    stderr: a CI runner configures none, so the auto-commit would append its
+    "git identity unset" WARNING and the comparison would hold on a developer
+    machine only. `GIT_CONFIG_COUNT`/`KEY`/`VALUE` is what `git config`
+    reads back (so it satisfies `has_git_identity`); `GIT_AUTHOR_*` does not.
+    Pinning the environment keeps the assertion on the complete stream."""
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "2")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "user.name")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "openkos tests")
+    monkeypatch.setenv("GIT_CONFIG_KEY_1", "user.email")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_1", "tests@openkos.invalid")
+
+
 def corrupt_identity_sidecar(bundle_dir: Path, owner_id: str) -> tuple[Path, str]:
     """Append one malformed identity row to `owner_id`'s decisions sidecar
     and return `(sidecar, warning)`, where `warning` is the exact line the
