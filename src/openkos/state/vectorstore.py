@@ -50,6 +50,7 @@ from urllib.parse import quote
 
 import sqlite_vec
 
+from openkos import fsio
 from openkos.llm.base import EMBED_DIM
 
 _CREATE_VECTORS_TABLE_SQL = f"""
@@ -502,7 +503,8 @@ def open_vector_store(
     db_preexisted = path.exists()
     conn: sqlite3.Connection | None = None
     try:
-        parent.mkdir(parents=True, exist_ok=True)
+        fsio.mkdir_private(parent)
+        fsio.touch_private(path)
         conn = connect(str(path))
         _load_vec_extension(conn)
         conn.execute("PRAGMA journal_mode=WAL")

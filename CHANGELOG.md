@@ -94,6 +94,16 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   (exit `1`, naming the directory and the `chmod 700` / remove fix). Exit `3`
   stays reserved for genuine contention.
 
+- `.openkos/` and `bundle/.state/` are now created with mode `0700`, and every
+  SQLite store under `.openkos/` (with its WAL sidecars) with mode `0600`,
+  whatever the umask ([#1135](https://github.com/jasonssdev/openkos/issues/1135)).
+  The stores hold the full text and embeddings of every document, including
+  `confidential` ones, and were previously readable by every local account on a
+  host with a world-readable home directory. Existing workspaces are not
+  changed automatically: `openkos doctor` now reports an exposed `.openkos/`,
+  store, or `bundle/.state/` with a one-line `chmod go-rwx` fix. `bundle/` and
+  `raw/` are your own files and are left alone.
+
 ## [0.2.14] - 2026-09-11
 
 Thirty-seven commits closing twenty-two issues, and the release has two

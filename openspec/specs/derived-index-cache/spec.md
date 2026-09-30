@@ -40,6 +40,29 @@ written ONLY by `reindex`, surviving across process exit — mirroring
 - WHEN the workspace is inspected
 - THEN no on-disk FTS or graph derived index exists under `.openkos/`
 
+### Requirement: Engine State Is Created Owner-Only
+
+The system MUST create `.openkos/` and `bundle/.state/` (and any directory
+created beneath `bundle/.state/`) with mode `0700`, and every SQLite store under
+`.openkos/` with mode `0600` before its first write, so the store's `-wal` and
+`-shm` sidecars carry the same restriction. The mode MUST NOT depend on the
+process umask being restrictive. `bundle/`, `raw/`, and concept documents are
+the user's own files and MUST NOT have their modes changed. A directory or file
+that already exists MUST be left as found.
+
+#### Scenario: A new store is unreadable by other accounts
+
+- GIVEN a process with a permissive umask and no `.openkos/` directory
+- WHEN a derived store is first opened
+- THEN `.openkos/` has mode `0700`, the store file and its WAL sidecars have
+  mode `0600`, and the workspace root's mode is unchanged
+
+#### Scenario: A sidecar directory is private but the bundle is not touched
+
+- GIVEN a `bundle/` directory with mode `0755`
+- WHEN the first merge ledger or decision sidecar is written
+- THEN `bundle/.state/` has mode `0700` and `bundle/` still has mode `0755`
+
 ### Requirement: Bundle-Manifest-Hash Cache Key
 
 The cache key MUST be a digest computed over the sorted set of

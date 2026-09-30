@@ -27,10 +27,11 @@ stub (D-seam) -- zero network, zero real Ollama process.
 
 import ast
 import inspect
+import os
 import re
 import shutil
 import typing
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any, Literal
 
@@ -61,6 +62,18 @@ from tests.unit.cli.conftest import disable_local_exemption
 from tests.unit.cli.conftest import snapshot_bytes as _snapshot
 
 runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def _private_umask() -> Iterator[None]:
+    """Hand-built `.openkos/` fixtures below get the modes a user with a
+    private umask would have, so the owner-only state check (#1135) stays
+    quiet and the fixed check count these tests pin is unchanged."""
+    old = os.umask(0o077)
+    try:
+        yield
+    finally:
+        os.umask(old)
 
 
 def _init_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

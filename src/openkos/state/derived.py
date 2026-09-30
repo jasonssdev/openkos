@@ -45,6 +45,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Protocol
 
+from openkos import fsio
 from openkos.model import okf
 from openkos.state.vectorstore import content_hash
 
@@ -157,7 +158,8 @@ def open_derived_connection(
     db_preexisted = path.exists()
     conn: sqlite3.Connection | None = None
     try:
-        parent.mkdir(parents=True, exist_ok=True)
+        fsio.mkdir_private(parent)
+        fsio.touch_private(path)
         conn = connect(str(path))
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")

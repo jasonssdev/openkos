@@ -22,7 +22,8 @@ Written BEFORE `openkos.application.doctor` existed (strict TDD)."""
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Callable
+import os
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -38,6 +39,18 @@ from openkos.llm.base import (
     InstalledModel,
 )
 from openkos.model import okf
+
+
+@pytest.fixture(autouse=True)
+def _private_umask() -> Iterator[None]:
+    """Hand-built `.openkos/` fixtures below get the modes a user with a
+    private umask would have, so the owner-only state check (#1135) stays
+    quiet and the fixed check count these tests pin is unchanged."""
+    old = os.umask(0o077)
+    try:
+        yield
+    finally:
+        os.umask(old)
 
 
 def _workspace(

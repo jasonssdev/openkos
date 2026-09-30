@@ -81,6 +81,17 @@ suffix. So nothing under it is a concept document by construction, on
 either ground; `lint` separately flags any `.md` file that turns up here as
 a structural-exclusion regression."""
 
+
+def state_dir_of(path: Path) -> Path:
+    """The `.state` directory `path` lives under (the innermost such ancestor),
+    or `path`'s own parent when it is under none. Lets a sidecar writer that
+    holds only a file path create `bundle/.state/` itself owner-only (#1135)."""
+    for candidate in path.parents:
+        if candidate.name == STATE_DIRNAME:
+            return candidate
+    return path.parent
+
+
 _LOG_HEADING_RE: Final = re.compile(r"^## (.+)$", re.MULTILINE)
 """Every level-2 heading in a `log.md`, per §9. `### ` cannot false-match:
 `^## ` requires a space in the 3rd position."""

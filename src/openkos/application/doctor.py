@@ -135,6 +135,8 @@ from __future__ import annotations
 
 import os
 import shutil
+import stat
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -191,6 +193,50 @@ read/parse sites -- the exact same list `bundle.ledger`'s own private
 importing a private name across the layer boundary (T1.5, declined for this
 change: no test currently references the private name, and the rename is
 unforecast scope left to a reviewer)."""
+
+
+def check_state_permissions(root: Path) -> CheckResult | None:
+    """Report engine-owned state that group or other can read (#1135).
+
+    `.openkos/` (and every file directly in it: the SQLite stores and their WAL
+    sidecars) holds the text and embeddings of every document, and
+    `bundle/.state/` holds decisions. New workspaces create them owner-only; one
+    made by an older release, or copied without its modes, may not be. Returns
+    `None` when nothing is exposed -- and on Windows, where mode bits mean
+    nothing -- so a healthy workspace's check count is unchanged. Purely a
+    read: nothing is chmod-ed here, since the fix is the user's to apply.
+    `bundle/` and `raw/` are the user's own files and are never inspected.
+    """
+    if sys.platform == "win32":
+        return None
+    layout = config.WorkspaceLayout(root)
+    candidates: list[Path] = [layout.openkos_dir, layout.bundle_dir / okf.STATE_DIRNAME]
+    try:
+        if layout.openkos_dir.is_dir():
+            candidates.extend(
+                sorted(p for p in layout.openkos_dir.iterdir() if p.is_file())
+            )
+    except OSError:
+        pass  # unreadable dir: the directory's own mode is still checked below
+    exposed: list[tuple[str, int]] = []
+    for path in candidates:
+        try:
+            info = path.lstat()
+        except OSError:
+            continue  # absent (the common case) or unstattable: nothing to report
+        if info.st_mode & 0o077:
+            exposed.append(
+                (path.relative_to(root).as_posix(), stat.S_IMODE(info.st_mode))
+            )
+    if not exposed:
+        return None
+    return CheckResult(
+        "Engine state is owner-only",
+        "fail",
+        critical=False,
+        detail=", ".join(f"{name} (mode {mode:o})" for name, mode in exposed),
+        remediation="chmod go-rwx " + " ".join(name for name, _ in exposed),
+    )
 
 
 def run_diagnostics(
@@ -993,5 +1039,13 @@ def run_diagnostics(
                 critical=False,
             )
         )
+
+    # 14. engine-state-owner-only (informational, workspace-only). Emitted ONLY
+    # when something is exposed (#1135): a clean workspace adds no line, so the
+    # fixed check count the rest of `doctor` reports is untouched.
+    if in_workspace:
+        exposed_state = check_state_permissions(root)
+        if exposed_state is not None:
+            results.append(exposed_state)
 
     return tuple(results)
