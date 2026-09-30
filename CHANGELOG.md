@@ -60,6 +60,14 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Fixed
 
+- `status` and `next` no longer report freshly rebuilt derived stores as stale
+  when the workspace path contains `#`, `?` or `%`
+  ([#1132](https://github.com/jasonssdev/openkos/issues/1132)). Every
+  read-only store open now goes through one percent-encoding opener. A
+  SQLite "database is locked" from any locked verb (not only `reindex`) now
+  exits 1 with the same retry message instead of a traceback
+  ([#1143](https://github.com/jasonssdev/openkos/issues/1143), lock half; the
+  per-document FTS/graph rebuild half is deferred to MVP 4).
 - `unmerge` no longer silently overwrites a survivor edited after its merge
   ([#1110](https://github.com/jasonssdev/openkos/issues/1110)). It restored
   the survivor from the ledger's pre-merge snapshot unconditionally, with no

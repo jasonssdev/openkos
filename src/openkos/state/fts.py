@@ -43,10 +43,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
 from typing import Protocol
-from urllib.parse import quote
 
 from openkos.model import okf
 from openkos.state import derived
+from openkos.state.readonly import open_read_only
 
 _CREATE_TABLE_SQL = """
 CREATE VIRTUAL TABLE docs USING fts5(
@@ -341,8 +341,7 @@ def open_fts_index_readonly(path: Path) -> "FtsIndex | None":
     """
     if not path.exists():
         return None
-    uri = f"file:{quote(str(path))}?mode=ro"
-    conn = sqlite3.connect(uri, uri=True)
+    conn = open_read_only(path)
     try:
         conn.execute("SELECT 1 FROM docs LIMIT 1")
     except BaseException:
