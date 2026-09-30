@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from openkos.state import derived
+from openkos.state.readonly import open_read_only
 
 
 def _write_doc(
@@ -454,3 +455,36 @@ def test_stale_skips_the_bundle_walk_when_no_store_exists(tmp_path: Path) -> Non
     assert (
         derived.stale_derived_stores(tmp_path / "no-such-bundle", (("fts", db),)) == ()
     )
+
+
+@pytest.mark.parametrize("dirname", ["plain", "a#b", "a?b", "a%20b", "a b"])
+def test_stale_reads_a_fresh_store_under_uri_special_path_characters(
+    tmp_path: Path, dirname: str
+) -> None:
+    """The read-only opener builds a `file:` URI, so a path with `#`, `?` or
+    `%` in a directory name must be percent-encoded or SQLite reads the tail
+    as a fragment/query and the open fails -- which the probe's broad except
+    then reported as "stale" for a store that had just been rebuilt."""
+    bundle = tmp_path / "bundle"
+    _write_doc(bundle / "concepts" / "a.md", title="A", body="one")
+    db = tmp_path / dirname / ".openkos" / "fts.db"
+    _seed_store(db, derived.bundle_manifest_hash(bundle))
+
+    assert derived.stale_derived_stores(bundle, (("fts", db),)) == ()
+
+
+def test_open_read_only_rejects_writes_and_reads_special_paths(
+    tmp_path: Path,
+) -> None:
+    """The one read-only opener returns a connection that can read the meta
+    table under a `#`/`?` path and refuses every write."""
+    db = tmp_path / "a#b?c" / "x.db"
+    _seed_store(db, "digest-1")
+
+    conn = open_read_only(db)
+    try:
+        assert derived.read_manifest_hash(conn) == "digest-1"
+        with pytest.raises(sqlite3.OperationalError):
+            conn.execute("INSERT INTO meta (key, value) VALUES ('k', 'v')")
+    finally:
+        conn.close()

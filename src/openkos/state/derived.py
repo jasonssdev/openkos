@@ -46,6 +46,7 @@ from pathlib import Path
 from typing import Protocol
 
 from openkos.model import okf
+from openkos.state.readonly import open_read_only
 from openkos.state.vectorstore import content_hash
 
 _BUSY_TIMEOUT_MS = 5000
@@ -228,7 +229,7 @@ def stale_derived_stores(
     stale: list[str] = []
     for name, path in present:
         try:
-            conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+            conn = open_read_only(path)
             try:
                 stored = read_manifest_hash(conn)
             finally:

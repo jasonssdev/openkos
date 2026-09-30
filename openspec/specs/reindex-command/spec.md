@@ -299,6 +299,12 @@ uniform "another process holds the workspace lock; wait and retry" message
 for all three stores. A non-lock `OperationalError` MUST NOT be swallowed by
 this catch; it keeps its existing (generic operational-error) handling.
 
+The same refusal is the contract for every other verb that holds the workspace
+lock: a lock-contention `sqlite3.OperationalError` from any derived or findings
+store that no verb-specific handler took MUST surface as the same uniform
+message (naming the verb the user ran) and exit 1, mapped once in the shared
+workspace-lock guard rather than per verb.
+
 #### Scenario: Ollama unreachable exits 1 with a clear message
 
 - GIVEN Ollama is not reachable
@@ -329,6 +335,14 @@ this catch; it keeps its existing (generic operational-error) handling.
   `OperationalError`
 - THEN it prints the uniform lock-contention message to stderr and exits 1,
   with no raw traceback
+
+#### Scenario: Any locked-workspace verb refuses instead of tracing back
+
+- GIVEN a concurrent process holds a write lock on `findings.db` past
+  `busy_timeout`
+- WHEN a locked verb other than `reindex` writes to it
+- THEN it prints the uniform lock-contention message under its own name to
+  stderr and exits 1, with no raw traceback
 
 #### Scenario: Locked graph.db exits 1 with the SAME uniform message
 

@@ -47,6 +47,15 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Fixed
 
+- `status` and `next` no longer report freshly rebuilt derived stores as stale
+  when the workspace path contains `#`, `?` or `%`
+  ([#1132](https://github.com/jasonssdev/openkos/issues/1132)). Every
+  read-only store open now goes through one percent-encoding opener. A
+  SQLite "database is locked" from any locked verb (not only `reindex`) now
+  exits 1 with the same retry message instead of a traceback
+  ([#1143](https://github.com/jasonssdev/openkos/issues/1143), lock half; the
+  per-document FTS/graph rebuild half is deferred to MVP 4).
+
 - A concept id containing a backslash or a colon (`..\..\x`, `C:\x`,
   `a:b`) is now refused by every id-taking verb and tool, and `slugify` no
   longer emits a reserved Windows device name (`con`, `prn`, `aux`, `nul`,
