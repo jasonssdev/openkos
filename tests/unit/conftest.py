@@ -552,6 +552,7 @@ def _offline_ollama_by_default(
     # a test that legitimately triggers it once never leaves it `True` for
     # every later test in the same pytest session.
     monkeypatch.setattr("openkos.cli.main._INSECURE_KEY_WARNING_PRINTED", False)
+    monkeypatch.setattr("openkos.cli.main._REMOTE_KEY_NOTICED", set())
 
 
 def make_locked_error(
