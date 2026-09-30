@@ -94,8 +94,12 @@ It MUST NOT contain a `name` field or any other field derived from the
 current directory; the directory itself remains the single source of truth
 for the workspace's identity, and nothing in `openkos.yaml` duplicates it.
 The packaged template pins `review: true`, `default_sensitivity: private`,
-`freshness_window: 7d`, `raw: raw/`, and `bundle: bundle/` — these MUST
-remain byte-identical to the template regardless of the chosen model(s). The
+`confidential_local_exemption: true`, `freshness_window: 7d`,
+`chat_timeout: 600`, `max_generation_tokens: 8192`, and
+`context_window: 12288` — these MUST remain byte-identical to the template
+regardless of the chosen model(s). The template MUST NOT carry `raw` or
+`bundle` layout keys: the workspace layout is fixed and the engine does not
+read them. The
 packaged template MUST also document `backend`, `base_url`, and
 `embedding_base_url` as commented-out keys with explanatory comments; `init`
 MUST NOT write, substitute, or uncomment any of the three, for either the

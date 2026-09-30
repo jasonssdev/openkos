@@ -7,8 +7,9 @@ Purpose): every concept, regardless of OKF type, is born at
 `Config.default_sensitivity` unless a Source's inherited level is already
 higher. `type-sensitivity-defaults` is the config seam and birth-time
 formula that lets specific OKF types be born a fixed number of levels above
-that workspace floor -- shipping with `Person` only, one level above the
-floor -- without weakening Source inheritance, without touching
+that workspace floor -- shipping empty, so no type is raised unless the
+operator configures it (`Person: 1` is the recommended opt-in) -- without
+weakening Source inheritance, without touching
 `set-sensitivity` or any other post-birth write path, and without migrating
 any concept already on disk.
 
@@ -107,29 +108,29 @@ already-higher inherited value.
 
 #### Scenario: Public floor raises Person to private
 
-- GIVEN a workspace with `default_sensitivity: public` and the shipped
-  `{"Person": 1}` mapping, and a Source resolved at `public`
+- GIVEN a workspace with `default_sensitivity: public` and a
+  configured `{"Person": 1}` mapping, and a Source resolved at `public`
 - WHEN a `Person` concept is born from that Source
 - THEN the `Person` concept's birth sensitivity is `private`
 
 #### Scenario: Private floor raises Person to confidential
 
-- GIVEN a workspace with `default_sensitivity: private` and the shipped
-  `{"Person": 1}` mapping, and a Source resolved at `private`
+- GIVEN a workspace with `default_sensitivity: private` and a
+  configured `{"Person": 1}` mapping, and a Source resolved at `private`
 - WHEN a `Person` concept is born from that Source
 - THEN the `Person` concept's birth sensitivity is `confidential`
 
 #### Scenario: Confidential floor stays confidential (clamped at ceiling)
 
-- GIVEN a workspace with `default_sensitivity: confidential` and the shipped
-  `{"Person": 1}` mapping
+- GIVEN a workspace with `default_sensitivity: confidential` and a
+  configured `{"Person": 1}` mapping
 - WHEN a `Person` concept is born
 - THEN the `Person` concept's birth sensitivity is `confidential`, not an
   out-of-range value
 
 #### Scenario: A higher-resolved Source still wins over the type default
 
-- GIVEN a workspace with `default_sensitivity: public` and the shipped
+- GIVEN a workspace with `default_sensitivity: public` and a configured
   `{"Person": 1}` mapping (which would raise `Person` to `private`), and a
   Source whose own resolved sensitivity is `confidential`
 - WHEN a `Person` concept is born from that Source
@@ -138,7 +139,7 @@ already-higher inherited value.
 
 #### Scenario: A type absent from the mapping is unaffected
 
-- GIVEN a workspace with the shipped `{"Person": 1}` mapping and a Source
+- GIVEN a workspace configured with the `{"Person": 1}` mapping and a Source
   resolved at `public`
 - WHEN a concept of a type other than `Person` (e.g. `Organization`, absent
   from the mapping) is born from that Source
@@ -159,15 +160,15 @@ through the same shared formula.
 
 #### Scenario: Ingest applies the Person default
 
-- GIVEN a workspace with `default_sensitivity: public` and the shipped
-  `{"Person": 1}` mapping
+- GIVEN a workspace with `default_sensitivity: public` and a
+  configured `{"Person": 1}` mapping
 - WHEN `ingest` extracts and stages a `Person` concept from a Source
   resolved at `public`
 - THEN the staged `Person` concept's `sensitivity` is `private`
 
 #### Scenario: `query --save --type Person` applies the same Person default
 
-- GIVEN a workspace with `default_sensitivity: public` and the shipped
+- GIVEN a workspace with `default_sensitivity: public` and a configured
   `{"Person": 1}` mapping, and a `query --save --type Person` invocation
   whose cited-concept high-water-mark is `public`
 - WHEN the filed answer is saved
@@ -252,7 +253,7 @@ capability existed.
 
 #### Scenario: A Source's own sensitivity is untouched by the Person default
 
-- GIVEN a workspace with the shipped `{"Person": 1}` mapping and
+- GIVEN a workspace configured with the `{"Person": 1}` mapping and
   `default_sensitivity: public`
 - WHEN a Source is built during `ingest`
 - THEN the Source's own resolved `sensitivity` is `public`, with no

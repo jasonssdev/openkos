@@ -3,17 +3,16 @@
 ## Purpose
 
 Concept lifecycle state (`status` frontmatter, `supersedes` edges written by
-`reconcile`) currently has no read-side effect: deprecated/superseded
-concepts retrieve exactly like live ones. This spec makes lifecycle state
-govern visibility across every retrieval input (FTS, vector, graph) and
-candidate-load surface (adjudication, contradiction detection), via one
-shared effective-status predicate.
+`reconcile`) governs read-side visibility: deprecated/superseded concepts do
+not retrieve like live ones. This spec makes lifecycle state govern
+visibility across every retrieval input (FTS, vector) and candidate-load
+surface (adjudication, contradiction detection), via one shared
+effective-status predicate.
 
 ## Non-Goals
 
 `forget`/tombstones (S2); sensitivity fail-closed filtering (S3); export
-confidential exclusion (S4); anchor-based reconcile conflict detection
-(#1619, deferred); down-ranking or partial-visibility strategies (exclusion
+confidential exclusion (S4); down-ranking or partial-visibility strategies (exclusion
 only, by product decision); how `status`/`supersedes` are written (a
 marked `status: deprecated` export is defined by `deprecated-status-export`
 and is never read back by this predicate).
@@ -96,7 +95,7 @@ Deprecated" for the general dual-reader guarantee.)
 
 By default, retrieval and candidate-generation paths MUST NOT return, rank,
 or surface any concept whose effective status is deprecated. This applies
-uniformly to FTS hits, vector hits, graph/PPR hits, the fused list feeding
+uniformly to FTS hits, vector hits, the fused list feeding
 `answer`, and candidate pairs loaded for adjudication and contradiction
 detection.
 
@@ -116,7 +115,7 @@ all.)
 - GIVEN a deprecated concept whose content matches a question lexically and
   semantically
 - WHEN `query`/`answer` runs without `--include-deprecated`
-- THEN it is absent from FTS hits, vector hits, graph hits, the fused list,
+- THEN it is absent from FTS hits, vector hits, the fused list,
   and citations
 
 #### Scenario: Superseded concept absent from contradiction candidates
@@ -125,8 +124,8 @@ all.)
 - THEN no candidate pair includes the superseded concept
 
 #### Scenario: Only match is deprecated yields the standard no-match result
-- GIVEN the only concept matching a question anywhere (lexically,
-  semantically, or via graph proximity) is deprecated
+- GIVEN the only concept matching a question anywhere (lexically and
+  semantically) is deprecated
 - WHEN `query`/`answer` runs without `--include-deprecated`
 - THEN the result is the standard no-match outcome, not an error — this is
   documented, expected behavior
@@ -177,21 +176,14 @@ interaction with the flag.)
 
 Exclusion (or inclusion, under the escape flag) MUST be enforced
 identically regardless of which input would surface a deprecated concept —
-lexical, semantic, or structural — so no single input leaks a deprecated
+lexical or semantic — so no single input leaks a deprecated
 concept back into the fused result.
 
 #### Scenario: No leak via any single input
-- GIVEN a deprecated concept that would rank highly in FTS, vector, AND
-  graph retrieval independently
+- GIVEN a deprecated concept that would rank highly in FTS AND vector
+  retrieval independently
 - WHEN `query`/`answer` runs without `--include-deprecated`
 - THEN it is absent from the final fused, limit-truncated result
-
-#### Scenario: Live concept reachable only through a deprecated neighbor
-- GIVEN live concept C is graph-adjacent only to deprecated concept D
-  (D → C)
-- WHEN graph retrieval runs
-- THEN C may still surface in `graph_hits` on its own merits, while D never
-  appears as a hit
 
 ### Requirement: Live Retrieval Behavior Is Unchanged
 
