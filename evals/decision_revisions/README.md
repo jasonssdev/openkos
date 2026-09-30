@@ -184,7 +184,7 @@ requires it.
    - *actionable rate*: of every judged row, how many satisfy
      `is_actionable_revision` -- REVERSES or REFINES, confidence >= 0.7,
      both quotes verified. REAFFIRMS is never actionable by that gate's own
-     contract (design.md Decision 6), so a 100% REAFFIRMS-only fixture would
+     contract ([`design.md`](../../openspec/changes/archive/2026-09-29-decision-revision-detector/design.md) Decision 6), so a 100% REAFFIRMS-only fixture would
      read 0% here and that is correct, not a bug.
 4. **Direction accuracy**: `pair_direction`, over the fixture's OWN resolved
    dates, compared against the fixture's `expected_later_id` -- **never**
@@ -349,7 +349,7 @@ gap named. The thresholds `EMBEDDING_SIMILARITY_THRESHOLD` (0.65, the
 production candidate blocking rule as of #1014 sub-change 3),
 `SUBJECT_OVERLAP_THRESHOLD` (0.5, now a diagnostic only) and
 `_ACTIONABLE_CONFIDENCE` (0.7) are revisited with these numbers before S6,
-as design.md already requires.
+as [`design.md`](../../openspec/changes/archive/2026-09-29-decision-revision-detector/design.md) already requires.
 
 ## First live run against the bars
 

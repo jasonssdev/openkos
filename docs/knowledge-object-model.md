@@ -149,22 +149,47 @@ Three fields repay a closer look, because each shows a different part of the mod
 
 **`provenance` points out of the bundle; `sources` points inside it.** Provenance lists the two immutable originals as Concept IDs of the Source documents that carry them. `sources` is a generated, one-way projection of `provenance` (OKF §5.1) — the engine writes it, nothing reads it back — and it points at those **Source concepts** rather than at the raw files. That indirection is deliberate: every link in the bundle resolves within the bundle, and only a Source concept's `resource` reaches outside it. This particular document predates OKF v0.2: its body still carries the hand-authored, pre-migration `# Citations` section, preserved verbatim by `repair` rather than converted, since converting hand-authored prose into `sources` entries is not something any migration attempts.
 
-The `as of` stamp does not appear here, and that is the point — a timeless fact needs none. It appears where volatile facts actually live, as in the `Person` object from the same bundle:
+The `as of` stamp does not appear here, and that is the point — a timeless fact needs none. It appears where volatile facts actually live, as in the `Person` object from the same bundle (`people/maria-salazar.md`, shown in full; like the Decision above, it keeps its hand-authored `# Citations` section):
 
 ```markdown
 ---
-type: Person
-title: Maria Salazar
-resource: https://example.edu/faculty/m-salazar
+description: Friend who studies Hellenistic ethics; corrected the apatheia reading.
 freshness: pointer
-sensitivity: confidential
+generated:
+  at: '2026-07-14T18:30:00Z'
+  by: openkos/legacy
 provenance:
-  - raw/call-with-maria-2026-07-14.txt
+- sources/call-with-maria-2026-07-14
+resource: https://example.edu/faculty/m-salazar
+sensitivity: confidential
+sources:
+- id: sources/call-with-maria-2026-07-14
+  resource: /sources/call-with-maria-2026-07-14.md
+status: stable
+tags:
+- philosophy
+- friends
+title: Maria Salazar
+type: Person
+version: 1
 ---
 
-Teaches the Hellenistic ethics seminar this term (as of 2026-07-14) — a post is
-a volatile fact, so the faculty page linked in `resource` is the source of truth
-here, not this page [1].
+# Maria Salazar
+
+Studies Hellenistic ethics. Teaches the Hellenistic ethics seminar this term (as of 2026-07-14) — a post is a volatile fact, so the faculty page linked in `resource` is the source of truth here, not this page [1].
+
+Corrected the *apatheia* reading in [Stoicism](/concepts/stoicism.md), and argued for the framing recorded in [Frame the essay on the dichotomy of control](/decisions/frame-the-essay-on-the-dichotomy-of-control.md) [1].
+
+Quietly looking to move departments (as of 2026-07-14); asked that it not be spread [1].
+
+## Related
+
+- [Stoicism](/concepts/stoicism.md) — corrected the apatheia reading in
+- [Frame the essay on the dichotomy of control](/decisions/frame-the-essay-on-the-dichotomy-of-control.md) — argued for
+
+# Citations
+
+[1] [Call with Maria Salazar — 2026-07-14](/sources/call-with-maria-2026-07-14.md)
 ```
 
 A role is the canonical volatile fact: it changes, so it is a `pointer`, it carries a stamp, and the lint flags the stamp once it ages past the configured window.
@@ -200,7 +225,7 @@ A type earns a place in the canonical core only if it passes three tests: it has
 **Provenance (a separate, functional axis)**
 
 - **Source** — an ingested original (article, transcript, paper). Not an ontological category but a bibliographic one: the anchor every derived object points back to.
-- **Insight** — a filed synthesis: an answer a model produced over the bundle's state at answer time, written back by `query --save` (issue #570). Like `Source`, it is a functional category rather than an ontological one, and like `Source` it is **never emitted by the compiler's classifier** — only the engine's explicit save path writes one. The distinction it encodes is truth-decay: an extracted `Concept` depends on an immutable `Source`, so its truth does not decay; an `Insight` depends on the mutable bundle, so every ingest, merge, or correction can invalidate it. It therefore defaults to the `volatile` tier, declares provenance to the concepts it was synthesized from (so the freshness machinery can flag it when they change), is rendered distinctly in `query`'s citation list (`[synthesis]`), and is labeled as model output in the synthesizer's own context. It is also down-weighted in retrieval itself: an `insights/` id's fused score is deterministically halved, so a filed synthesis cannot outrank the source-derived evidence it was built from merely because it is already phrased the way questions are asked. That is a re-rank rather than an exclusion — a genuinely relevant synthesis still beats a barely relevant source, and a bundle holding no insights fuses exactly as plain reciprocal rank fusion would. All of this exists because compounding on sources is the product's thesis, while unmarked compounding on model output is how a knowledge base rots.
+- **Insight** — a filed synthesis: an answer a model produced over the bundle's state at answer time, written back by `query --save`. Like `Source`, it is a functional category rather than an ontological one, and like `Source` it is **never emitted by the compiler's classifier** — only the engine's explicit save path writes one. The distinction it encodes is truth-decay: an extracted `Concept` depends on an immutable `Source`, so its truth does not decay; an `Insight` depends on the mutable bundle, so every ingest, merge, or correction can invalidate it. It therefore defaults to the `volatile` tier, declares provenance to the concepts it was synthesized from (so the freshness machinery can flag it when they change), is rendered distinctly in `query`'s citation list (`[synthesis]`), and is labeled as model output in the synthesizer's own context. It is also down-weighted in retrieval itself: an `insights/` id's fused score is deterministically halved, so a filed synthesis cannot outrank the source-derived evidence it was built from merely because it is already phrased the way questions are asked. That is a re-rank rather than an exclusion — a genuinely relevant synthesis still beats a barely relevant source, and a bundle holding no insights fuses exactly as plain reciprocal rank fusion would. All of this exists because compounding on sources is the product's thesis, while unmarked compounding on model output is how a knowledge base rots.
 
 This is a recommendation, not a constraint, and it is the **stable core (tier 1)**: it changes only rarely and only through an ADR. Two further tiers grow on top without touching it — optional **domain extensions** (tier 2) and **personal, emergent types** (tier 3) coined by a user's own compiler. Because OKF only requires that `type` be present (its value is free), an unknown type is still a valid bundle, so the vocabulary degrades gracefully.
 

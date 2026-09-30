@@ -359,14 +359,14 @@ writing anything.
   content-rich source that yields a single object as a finding worth recording.
 - **`raw/` is immutable.** A byte-identical re-ingest of an already-extracted
   source is idempotent and **skips extraction** — no model call, nothing
-  written, one stderr line saying so ([#773](https://github.com/jasonssdev/openkos/issues/773)).
+  written, one stderr line saying so.
   Extraction re-runs without any flag only when the previous run left
   retryable debt (`extraction_status: failed`, or a judge-degrade
   `extraction_notice` — the transient-LLM-failure recovery); `--re-extract`
   forces a redo on a healthy source. A *different* file under the same
   basename is refused.
 - **Same-slug collisions resolve by origin.** Two sources whose extracted
-  objects produce the same slug now **both survive**: the later one is
+  objects produce the same slug **both survive**: the later one is
   disambiguated to the first free numeric suffix and announces
   `'<slug>' already exists for a different source; disambiguating this candidate
   to '<slug>-2'`, with a durable `**Disambiguation**` bullet written to
@@ -423,8 +423,8 @@ that generic docs will not produce:
   titles** or one is dropped before it can contradict anything. Example that
   works: two files, `# MCP Launch` ("launched 2024-11") and `# MCP Origin`
   ("originated 2004-01").
-- **`suggest-relations`** no longer wastes its LLM calls on provenance mirrors:
-  a body link that merely repeats the source's `provenance:` frontmatter is now
+- **`suggest-relations`** does not spend LLM calls on provenance mirrors:
+  a body link that merely repeats the source's `provenance:` frontmatter is
   typed `derived_from` at projection time, so the command should surface real
   concept↔concept candidates. On an ingest-only corpus it may legitimately find
   nothing — build genuine cross-links (Phase 7.1) if you want candidates to
@@ -441,7 +441,7 @@ git log --oneline        # one auto-commit per successful ingest
 openkos ingest /path/to/an/empty/dir/    # expect refusal — nothing matched
 openkos ingest /nonexistent.md           # expect refusal
 openkos ingest /path/to/some.pdf         # expect exit 0, copied, no extraction
-openkos ingest /path/to/first.md         # identical re-ingest: idempotent, skips extraction (#773)
+openkos ingest /path/to/first.md         # identical re-ingest: idempotent, skips extraction
 ```
 
 A directory with readable text files is **not** a refusal — it is the batch
@@ -586,9 +586,9 @@ openkos contradictions --all
 that is not verifiably on this machine, confidential concepts never reach the
 LLM unless `--include-confidential` is passed. Against a local Ollama — the
 default, and what this manual run uses — the confidential local exemption
-applies and they participate normally (#240). To exercise the blocked path
+applies and they participate normally. To exercise the blocked path
 here, set `confidential_local_exemption: false` in `openkos.yaml` first, and
-confirm `openkos doctor` check 11 reports the exemption inactive.
+confirm the `Backend host locality` check of `openkos doctor` reports the exemption inactive.
 
 Record for each whether it found what you planted. `contradictions` only inspects
 **already-related** concepts, so relate the conflicting pair first (Phase 7.3).
@@ -745,7 +745,7 @@ descendants); `--force` proceeds even when inbound links would dangle (it does
 reflog and runs `git gc`. There is no undo. Preflight:
 
 ```bash
-openkos doctor       # checks 9 and 10 must PASS
+openkos doctor       # the `git available` and `git-filter-repo available` checks must PASS
 git status           # working tree MUST be clean
 git remote -v        # MUST be empty
 ```
@@ -773,7 +773,7 @@ rebuilds **only** FTS and the graph: `vectors.db` is left for a later
 on a running Ollama, which it must never do), `findings.db` is left deleted and
 never rebuilt because regenerating a verdict costs LLM calls, and
 `insight_questions.db` refills itself one save at a time. Each of the three is
-disclosed with its own restore cost (#886). So after a purge, expect
+disclosed with its own restore cost. So after a purge, expect
 `.openkos/` to hold `fts.db` and `graph.db` only, and expect dense retrieval to
 stay dark until you reindex.
 

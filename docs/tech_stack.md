@@ -35,10 +35,10 @@ The practical consequence: **choosing a vector or graph engine is not a lock-in 
 - **Markdown + YAML frontmatter** — the OKF bundle; the canonical form of all knowledge
 - **Immutable source files** — original content, never rewritten
 - **Git** — version history and recoverable revisions, driven through a single `subprocess` adapter (no client library dependency)
-- **SQLite** — operational state: provenance, object registry, configuration, change tracking (public domain; bundled with Python's standard library)
+- **SQLite** — the engine behind every store under `.openkos/`: the lexical index, the vector index, the graph projection, persisted findings, and the small advisory caches. All of them are derived (see below), not canonical: provenance lives in frontmatter and configuration in `openkos.yaml` (public domain; bundled with Python's standard library)
 - **SQLite FTS5** — the engine behind lexical (keyword) retrieval; scales to millions of rows comfortably. The index it builds is itself a derived, rebuildable store (see below) — what is canonical is the text it indexes
 
-This layer alone is the entire storage story for MVP 1.
+The durable content of this layer is plain files and git; SQLite only ever holds caches of it.
 
 ## Derived layer (rebuildable — behind interfaces, swappable)
 
@@ -94,7 +94,7 @@ The MCP server (`openkos mcp`, stdio) ships; it is hand-rolled rather than built
 
 SQLite, FTS5, and everything git-related add nothing: SQLite ships with Python, and git is driven through `subprocess` rather than a client library.
 
-`scipy` was a seventh entry until the pre-release audit removed it. It had **no importer at all** — it was required only by `networkx.pagerank`, and the PageRank retrieval channel was retired in [#434](https://github.com/jasonssdev/openkos/issues/434), leaving every user to download it plus `numpy` for a code path that no longer existed. Dropping it took a clean install from **120 MB to 28 MB**. The lesson generalises: a derived-layer dependency outlives the feature that justified it unless something checks, so re-run that check whenever a retrieval or graph channel is removed.
+`scipy` is not a dependency: it would have been required only by `networkx.pagerank`, and the PageRank retrieval channel is retired, so nothing imports it. The lesson generalises: a derived-layer dependency outlives the feature that justified it unless something checks, so declared dependencies are diffed against actual imports whenever a retrieval or graph channel is removed.
 
 ---
 
@@ -129,7 +129,7 @@ That is the deeper point, and it is deliberate: **OpenKOS does not bless a model
 
 **Recommended default** *(as of 2026-07-22):* `bge-m3` — multilingual (100+ languages), 1024-dim, 8192-token context, measured reliable (0% failure from 8k to 100k characters, truncating past its context rather than crashing). **The default is chosen reliability-first, then quality.** Reliability is a hard, prior filter: a model that crashes the Ollama runner on a realistic corpus is excluded before any retrieval-quality comparison; the quality spike then decides only among candidates that are already reliable. `qwen3-embedding:0.6b` was the original default for its **Matryoshka** truncatable dimensions, but is **discarded for reliability** — it raises non-deterministic EOF crashes with no stable token threshold ([ADR-0006](adr/0006-default-embedding-model.md)) — and is no longer a live default option. First-class alternatives that clear the reliability bar: **multilingual-e5** and larger BGE / qwen-embedding tags if a bigger model is warranted. Because re-embedding is free, being wrong costs a re-index, not data.
 
-**If no model is installed,** `openkos init` guides rather than failing silently: on a TTY it prompts for a model tag (default `qwen3:8b`), resolving the tag by precedence `--model` flag > prompt > default — it does not detect hardware or auto-pull a model. A missing model is then diagnosed by `openkos doctor`, which suggests the `ollama pull <model>` remediation. For non-technical users later, the path is an embedded runtime (no separate install), hardware-aware auto-download with a progress UI, and an optional, explicit cloud fallback — never for `confidential` content — for machines that cannot run a capable local model. There is an honest hardware floor: a weak machine runs a weaker model and leans more on review and lint.
+**If no model is installed,** `openkos init` guides rather than failing silently: on a TTY it offers a numbered selection over the chat models Ollama reports as installed, with the recommended default (`qwen3:8b`) listed first and marked (a typed prompt is the fallback when none is installed), resolving the tag by precedence `--model` flag > selection > default — it does not detect hardware or auto-pull a model. A missing model is then diagnosed by `openkos doctor`, which suggests the `ollama pull <model>` remediation. For non-technical users later, the path is an embedded runtime (no separate install), hardware-aware auto-download with a progress UI, and an optional, explicit cloud fallback — never for `confidential` content — for machines that cannot run a capable local model. There is an honest hardware floor: a weak machine runs a weaker model and leans more on review and lint.
 
 - **Model Context Protocol (MCP)** for exposing the bundle to external agents, served by `openkos mcp` over stdio with a hand-rolled implementation ([ADR-0027](adr/0027-hand-rolled-stdio-mcp-server.md)).
 - **Model licensing note.** Not every "open" model is OSI open source, and the line moves — which is why this document tells you what to check rather than which weights to trust. Read the licence of the release you are about to pull, on the vendor's own terms page.

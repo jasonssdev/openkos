@@ -16,7 +16,7 @@ sensitivity: public
 
 This document maps how OpenKOS is organized — both the engine's source code and the user's knowledge bundle — and how raw source material is stored and versioned.
 
-**What ships and what is planned are kept apart here.** Everything under "Repository structure" describes the code that exists today at v0.2.14; anything not yet built lives in [Target architecture](#target-architecture) or in [`roadmap.md`](roadmap.md), labelled as such. That separation is deliberate: this document previously showed one forward-looking tree with its corrections in footnotes, and a reader could not tell a module that exists from one that does not.
+**What ships and what is planned are kept apart here.** Everything under "Repository structure" describes the code that exists today; anything not yet built lives in [Target architecture](#target-architecture) or in [`roadmap.md`](roadmap.md), labelled as such. That separation is deliberate: this document previously showed one forward-looking tree with its corrections in footnotes, and a reader could not tell a module that exists from one that does not.
 
 Two ideas from elsewhere in the docs anchor everything here: the split between a **durable canonical layer** (files + SQLite + git) and a **rebuildable derived layer** (vectors, graph) from [`tech_stack.md`](tech_stack.md), and the Knowledge Object model from [`knowledge-object-model.md`](knowledge-object-model.md).
 
@@ -36,17 +36,19 @@ openkos/
 │   │   ├── provenance.py  references.py  links.py  relations.py
 │   │   ├── merge.py  ledger.py  decisions.py
 │   │   └── source_titles.py
-│   ├── vcs/git.py                # history, revert, purge's history rewrite
-│   ├── state/                    # SQLite stores under .openkos/ (see State taxonomy)
+│   ├── vcs/git.py                # CANONICAL layer: history, revert, purge's history rewrite
+│   ├── state/                    # DERIVED layer: SQLite stores under .openkos/ (see State taxonomy)
 │   │   ├── derived.py            # the shared opener + manifest-hash gate
 │   │   ├── fts.py  vectorstore.py  reindex.py
 │   │   ├── findings.py  adjudications.py       # same file, two tenants
+│   │   ├── revision_findings.py  # decision-revision verdicts, a further tenant of the same file
 │   │   ├── edge_suggestions.py  question_vectors.py
 │   ├── graph/                    # DERIVED layer
 │   │   ├── base.py  sqlite_graph.py  analysis.py
 │   │   └── proximity.py  summary.py
 │   ├── retrieval/                # DERIVED layer
 │   │   ├── pool.py  fusion.py    # candidate pool, RRF fusion
+│   │   ├── history.py            # bounded revision-history walk over superseded objects
 │   │   └── answer.py             # context assembly, citations, generation
 │   ├── extraction/               # source text → Knowledge Objects
 │   │   ├── concept.py  evidence.py  judge.py
@@ -54,23 +56,33 @@ openkos/
 │   │   ├── candidates.py  similarity.py  normalize.py
 │   │   ├── insight_identity.py  adjudication.py
 │   │   ├── contradiction.py  reconciliation.py
+│   │   ├── decision_subject.py  decision_revision.py   # decision-revision detector
 │   │   └── edge_typing.py  volatility_typing.py
 │   ├── llm/                      # model runtime abstraction
 │   │   ├── base.py  ollama.py  openai_compatible.py  prompting.py  parsing.py
 │   ├── application/              # synchronous use-case services (ADR-0018)
 │   │   ├── query.py  ingest.py  lifecycle.py
+│   │   ├── status.py  list_service.py  lint.py  doctor.py   # read verbs' cores
+│   │   ├── concept_read.py       # `get`'s curated field set
+│   │   ├── pending.py  consistency.py   # pending-work predicates; MCP consistency warnings
+│   │   ├── next_action.py        # `next`'s ranked tier engine
+│   │   ├── repair.py             # OKF v0.2 migration plan/apply
+│   │   ├── revisions.py  revisions_report.py   # decision-revision plan and report
 │   │   ├── backends.py           # the one seam that resolves/constructs an LLM client
 │   │   └── consent.py            # confirmation gates staged as typed data
 │   ├── cli/                      # Typer entry layer
-│   │   ├── main.py  curate.py  next_action.py  observability.py
+│   │   ├── main.py  curate.py  observability.py
 │   ├── mcp/                      # stdio MCP adapter (read-only), async edge over the sync core
 │   │   ├── transport.py  server.py  tools.py  gate.py
 │   ├── config.py                 # openkos.yaml + WorkspaceLayout
 │   ├── lint.py  lifecycle.py  sensitivity.py
+│   ├── event_dates.py  source_date.py  # bounded event-date resolver; a Source's event_date from evidence
+│   ├── read_outcome.py           # shared "a read verb's check could not run" vocabulary
 │   ├── fsio.py  lock.py          # filesystem primitives; interprocess lock
 │   ├── prompt_budget.py  source_title.py
 │   └── py.typed
-├── tests/unit/ · evals/           # integration/e2e arrive when code justifies them
+├── tests/                        # unit/ (incl. unit/e2e) · smoke/ (packaging)
+├── evals/                        # measurement harnesses
 ├── examples/                     # runnable example bundles
 ├── docs/                         # including adr/
 ├── openspec/                     # the spec contract: specs/{domain}/ · changes/ · config.yaml
@@ -81,9 +93,9 @@ openkos/
 The principles that shape it:
 
 - **Each package is a piece of the architecture.** `model` is the Knowledge Object; `bundle` + `vcs` are the durable canonical layer; `state` + `retrieval` + `graph` are the derived layer; `extraction` + `resolution` are the pipeline that turns text into objects and then decides what they mean; `lint`/`lifecycle`/`sensitivity` are the disciplines; `cli` and `mcp` are entry layers, one synchronous over stdin/args, one async over stdio.
-- **The `base.py` files are the seams that exist today.** `graph/base.py` and `llm/base.py` define the shapes their implementations satisfy (`sqlite_graph.py`, `ollama.py`, `openai_compatible.py`). They are internal seams, not a published plugin API: OpenKOS ships no `Producer`/`Consumer` interface and no entry-point group. That extension surface is a roadmap item, not present code — see [`roadmap.md`](roadmap.md).
+- **The Protocol seams that exist today** are `GraphStore` (`graph/base.py`), `VectorStore` (`state/vectorstore.py`), and `LLMBackend` and `Embedder` (`llm/base.py`). They define the shapes their implementations satisfy (`sqlite_graph.py`, the `sqlite-vec` store, `ollama.py`, `openai_compatible.py`). They are internal seams, not a published plugin API: OpenKOS ships no `Producer`/`Consumer` interface and no entry-point group. That extension surface is a roadmap item, not present code — see [`roadmap.md`](roadmap.md).
 - **One resolver seam constructs every LLM client.** `application/backends.py` resolves the configured `backend` (`ollama`, the default, or `openai-compatible`), the effective endpoint, and the environment-only API key, then constructs the matching concrete client — the CLI and MCP adapters call through it rather than importing `OllamaClient`/`OpenAICompatibleClient` directly. Adding a backend widens this one seam; it does not touch the pipeline packages that call `LLMBackend`/`Embedder`.
-- **Use-case services, not one orchestrator.** [ADR-0018](adr/0018-application-layer-for-bounded-context-services.md) chose narrow synchronous services under `application/` over a single `engine.py`, so each use case owns its own composition instead of one module owning all of them. All three have landed — `query.py`, `ingest.py`, `lifecycle.py` — with `consent.py` holding the confirmation contracts as typed data so a non-TTY adapter can answer a gate without re-deriving its prompt ([#918](https://github.com/jasonssdev/openkos/issues/918)). `cli/` keeps parsing, presentation, exit codes, and the shared write mechanics the services call through rather than own.
+- **Use-case services, not one orchestrator.** [ADR-0018](adr/0018-application-layer-for-bounded-context-services.md) chose narrow synchronous services under `application/` over a single `engine.py`, so each use case owns its own composition instead of one module owning all of them. The write use cases are `query.py`, `ingest.py`, and `lifecycle.py`; the read verbs (`status`, `list`, `lint`, `doctor`, `get`) have their own read cores, so an adapter is a thin layer over shared code rather than a second implementation; and `consent.py` holds the confirmation contracts as typed data so a non-TTY adapter can answer a gate without re-deriving its prompt. `cli/` keeps parsing, presentation, exit codes, and the shared write mechanics the services call through rather than own.
 - **The derived layer is reconstructible — but not uniformly, and not for free.** The five SQLite stores under `.openkos/` sit at three different points on that scale. See [State taxonomy](#state-taxonomy) below, which is the one place that distinction is written down.
 
 ## Repository conventions
@@ -91,10 +103,10 @@ The principles that shape it:
 A few conventions keep the repository clean as it grows:
 
 - **A package is created when its code arrives.** The tree above holds no empty scaffolding, and this document does not list folders that do not exist. What is planned is named in [Target architecture](#target-architecture) and dated in [`roadmap.md`](roadmap.md).
-- **`pyproject.toml` is the single source of config** — dependencies, the console entry point (now `openkos = "openkos.cli.main:app"`, since the `cli` package has landed in MVP 1), and the Ruff / MyPy / Pytest settings all live there.
+- **`pyproject.toml` is the single source of config** — dependencies, the console entry point (`openkos = "openkos.cli.main:app"`), and the Ruff / MyPy / Pytest settings all live there.
 - **Specs are the contract, and they live in `openspec/`.** Behavior is agreed before it is built: `openspec/specs/{domain}/spec.md` is the living per-domain contract, and `openspec/changes/{change-name}/` carries a change in flight — proposal, delta specs, design, tasks — until it lands and its deltas merge into the main spec. The directory is tracked and reviewed like any other file, so the contract is readable by contributors rather than private to whoever wrote the code. `openspec/config.yaml` configures that process only; it does not compete with `pyproject.toml`, which remains the single source of config for the toolchain.
 - **Ship types.** Include an empty `src/openkos/py.typed` marker so type information is published to tools and to packages that extend OpenKOS.
-- **Internal seams are `typing.Protocol`.** Structural typing lets an implementation satisfy a seam without importing or subclassing it. Today this is used inside the engine (the graph and LLM backends); publishing any of it as a third-party extension point is a roadmap item and would need its own ADR.
+- **Internal seams are `typing.Protocol`.** Structural typing lets an implementation satisfy a seam without importing or subclassing it. Today this is used inside the engine (the graph, vector, LLM, and embedding seams); publishing any of it as a third-party extension point is a roadmap item and would need its own ADR.
 - **The core is synchronous.** The CLI, the application services, the extraction pipeline, and the stores are plain sync code. The `mcp` adapter is the one async edge over that core today: it owns the only event loop reaching into `mcp/`, and each tool call runs the synchronous application services on its own worker thread (ADR-0021, ADR-0027). A future local API would form its async edge the same way; parallel work such as batch embedding also uses a thread pool from sync code. The core itself is not made async — which is why ADR-0018's services are specified as synchronous.
 - **Layering is a followed convention, not yet an automated guard.** The canonical layer (`model`, `bundle`, `vcs`) does not depend on the derived layer (`state`, `retrieval`, `graph`); derived depends on canonical, never the reverse. `fsio` and `lock` are leaf modules that import nothing from `openkos`, so either layer may use them. A tool such as import-linter would guard these boundaries in CI; it is not wired yet.
 - **The OKF adapter is one seam.** Everything that knows the on-disk shape of the format — parsing and emitting frontmatter, the reserved-file structure, the conformance rules of §11 — lives in `model/okf.py` and nowhere else. The rest of the engine works with Knowledge Objects and never touches the format directly. This is deliberate risk containment: OKF is pre-1.0 (v0.2), and §12 permits a major version to rename required fields or change reserved filenames. Keeping the format behind one module makes a spec revision a contained change to one file instead of a search across the codebase, and it is the reason we can adopt a young standard without betting the engine on it.

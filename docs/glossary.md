@@ -25,9 +25,9 @@ Definitions of the terms that appear throughout OpenKOS. Terms are listed alphab
 
 **Concept ID** — An object's identity, defined by OKF as its file path within the bundle with the `.md` suffix removed: `concepts/stoicism.md` has the concept ID `concepts/stoicism`. OpenKOS adopts this definition rather than adding an identifier of its own — there is no `id` field. Moving a file changes its ID; git records the rename, and OKF tolerates links to a moved target.
 
-**Conformance (OKF)** — The three rules of OKF §11: every non-reserved `.md` file has parseable YAML frontmatter; every frontmatter block has a non-empty `type`; and `index.md` / `log.md` follow their prescribed structure when present. Everything else is soft guidance — consumers must not reject a bundle over unknown types, extra keys, broken links, or a missing index. Distinct from the [Lint](#lint), which is OpenKOS's separate opinion about quality.
-
 **Config (`openkos.yaml`)** — A per-bundle configuration file holding the engine's settings for that bundle: the local chat and embedding models, review mode, default sensitivity, the per-type birth-sensitivity offsets (`type_sensitivity_defaults`), the confidential local exemption, the freshness window, and per-tier/per-type volatility overrides. Structured YAML, owned by the engine and edited by the user. Distinct from the [Operating manual](#operating-manual-agentsmd).
+
+**Conformance (OKF)** — The three rules of OKF §11: every non-reserved `.md` file has parseable YAML frontmatter; every frontmatter block has a non-empty `type`; and `index.md` / `log.md` follow their prescribed structure when present. Everything else is soft guidance — consumers must not reject a bundle over unknown types, extra keys, broken links, or a missing index. Distinct from the [Lint](#lint), which is OpenKOS's separate opinion about quality.
 
 **Consumer** — Any tool that reads and reasons over an OKF bundle (a viewer, a search index, an agent). OpenKOS is both a consumer and a [Producer](#producer).
 
@@ -35,7 +35,11 @@ Definitions of the terms that appear throughout OpenKOS. Terms are listed alphab
 
 **Continuant / occurrent** — The foundational split behind the object types: continuants *persist* through time (Person, Organization, Concept, Entity, Place), while occurrents *happen* in time (Event, Procedure). Borrowed from upper ontologies to ground the type vocabulary.
 
+**Decision sidecar** — A durable record of an operator's ruling on a pending [Finding](#finding) (for example, that two objects are the same, or that a flagged contradiction is not one), stored as `bundle/.state/decisions/<id>.decisions.okf` ([ADR-0014](adr/0014-durable-pending-work-stores.md)). It is irreplaceable human judgment, so it is canonical and versioned with the bundle rather than derived. A finding with no ruling in force is *pending work*.
+
 **Derived layer** — The rebuildable part of an installation: vector indexes and graph projections. Because it can always be reconstructed from the [Canonical layer](#canonical-layer), the engines behind it are swappable and never a lock-in.
+
+**Egress** — Content leaving the machine: sent to an LLM or embedding backend that is not local, or returned through the MCP surface. `confidential` objects are withheld at these boundaries by fail-closed checks (`sensitivity.py`); printing to your own terminal is not egress. See [Sensitivity](#sensitivity).
 
 **Entity resolution** — Deciding when two mentions refer to the same object, and merging duplicates, so the graph stays clean. A hard part of extraction, kept reviewable rather than silently automatic.
 
@@ -43,15 +47,19 @@ Definitions of the terms that appear throughout OpenKOS. Terms are listed alphab
 
 **Filter-first retrieval** — A retrieval strategy where lexical search (FTS5) and the graph narrow the candidate set first, and vector ranking is applied only to that small set — keeping search fast even with millions of vectors.
 
+**Finding** — A machine-computed verdict about the bundle (a suspected contradiction, an identity match, a decision revision) persisted in `.openkos/findings.db` with per-row input digests ([ADR-0014](adr/0014-durable-pending-work-stores.md)). A finding is a verdict rather than an index projection, so recreating one costs model calls; it stays *pending* until an operator rules on it in a [Decision sidecar](#decision-sidecar).
+
 **Freshness** — The temporal validity of a fact: whether it is still true *now*. See [Freshness class](#freshness-class).
 
 **Freshness class** — The category assigned to a fact based on how it behaves over time. Every fact must be one of three: [Timeless](#timeless), [Snapshot](#snapshot), or [Pointer](#pointer). The class determines how tooling (the lint) treats it.
 
 **High-water-mark (sensitivity)** — The rule that a derived object is at least as sensitive as the most sensitive source it was compiled from; sensitivity propagates upward along the provenance chain.
 
+**index.md** — A catalog file that lists the bundle's concepts with short summaries, used for navigation and index-first retrieval. Defined by OKF as an optional, reserved filename.
+
 **Ingest** — The operation of compiling a raw source into the bundle: reading it, writing a Source concept and the derived concepts a selector judge keeps from what extraction proposed, and recording provenance and log entries. (Automatically revising *related, existing* concepts during ingest remains a later capability.)
 
-**index.md** — A catalog file that lists the bundle's concepts with short summaries, used for navigation and index-first retrieval. Defined by OKF as an optional, reserved filename.
+**Insight** — A filed synthesis: an answer a model produced over the bundle at answer time, written back by `query --save`. It depends on the mutable bundle rather than on an immutable source, so it defaults to the volatile tier and is down-weighted in retrieval. See the [Knowledge Object model](knowledge-object-model.md).
 
 **Knowledge graph** — The network formed by concepts and the markdown links between them. Richer than the folder hierarchy; traversed during retrieval. The links themselves are untyped, as OKF defines them — the kind of relationship lives in the prose beside each link. See [Typed relationship](#typed-relationship) for the OpenKOS layer that adds meaning on top, shipped in MVP 2.
 
@@ -59,9 +67,9 @@ Definitions of the terms that appear throughout OpenKOS. Terms are listed alphab
 
 **Lint** — The operation that checks the health of the bundle, mechanically (no LLM): stale `as of` stamps (older than the document's volatility-resolved window, shipped in MVP 2), orphan pages, dangling references and dangling provenance, unextracted sources, and sensitivity-coverage gaps. Contradiction detection is a separate LLM verb (`openkos contradictions`), also shipped in MVP 2. Enforces the freshness discipline automatically. It is **not** a conformance checker: it reports OpenKOS's opinion about knowledge health, never OKF's verdict about validity. See [Conformance](#conformance-okf).
 
-**LLM Wiki pattern** — Andrej Karpathy's idea that a language model should *incrementally build and maintain* a persistent, interlinked knowledge base between you and your sources, rather than re-retrieving raw documents on every query. The pattern OpenKOS implements.
-
 **Living document** — A concept document that is rewritten as new sources arrive. Concepts are living; raw sources are not. History is preserved through git and `log.md`, so "mutable head, immutable history."
+
+**LLM Wiki pattern** — Andrej Karpathy's idea that a language model should *incrementally build and maintain* a persistent, interlinked knowledge base between you and your sources, rather than re-retrieving raw documents on every query. The pattern OpenKOS implements.
 
 **Local-first** — Software that runs on your machine and works offline, keeping your data under your control. The cloud is optional, never required.
 
@@ -69,9 +77,13 @@ Definitions of the terms that appear throughout OpenKOS. Terms are listed alphab
 
 **MCP (Model Context Protocol)** — A standard for exposing tools to AI agents. OpenKOS exposes the bundle through an MCP server (`openkos mcp`) so agents can query and navigate it.
 
-**Operating manual (`AGENTS.md`)** — A per-bundle markdown file, following the vendor-neutral `AGENTS.md` convention, that tells an AI agent how the bundle is organized and what conventions to follow when operating on it (ingesting, querying, maintaining). Prose instructions — the disciplined-maintainer layer of the LLM Wiki pattern. Distinct from the structured [Config](#config-openkosyaml).
+**Merge ledger** — The sidecar at `bundle/.state/ledger/<id>.ledger.okf` recording a merge: the verbatim pre-merge bytes of each absorbed object and the catalog delta, which is what makes every merge reversible ([ADR-0002](adr/0002-reversible-merge-ledger.md), [ADR-0013](adr/0013-relocate-merge-ledger-to-bundle-state.md), [ADR-0017](adr/0017-merge-ledger-stores-the-catalog-delta.md)).
+
+**okf_version** — A frontmatter field declaring the OKF version a bundle targets (OpenKOS writes `"0.2"`). It lives in the bundle-root `index.md` — the one place OKF permits frontmatter in a reserved file — and exists so a future consumer knows exactly which revision of the spec the bundle was written against.
 
 **Open Knowledge Format (OKF)** — A vendor-neutral open specification, published by Google Cloud in June 2026, that formalizes the LLM Wiki pattern into a portable format: a directory of markdown concepts with YAML frontmatter, requiring only a `type` field. OpenKOS adopts OKF as its storage and interchange layer. See [`okf-alignment.md`](okf-alignment.md).
+
+**Operating manual (`AGENTS.md`)** — A per-bundle markdown file, following the vendor-neutral `AGENTS.md` convention, that tells an AI agent how the bundle is organized and what conventions to follow when operating on it (ingesting, querying, maintaining). Prose instructions — the disciplined-maintainer layer of the LLM Wiki pattern. Distinct from the structured [Config](#config-openkosyaml).
 
 **Pointer** — A freshness class for facts whose current value matters and changes fast: instead of the value, store where the truth lives (a link), optionally with the last observed value and a stamp. One of the three legal forms of a fact.
 
@@ -105,8 +117,8 @@ Definitions of the terms that appear throughout OpenKOS. Terms are listed alphab
 
 **Two-output rule** — The practice that a good answer to a query can be filed back into the bundle as a new concept, so that exploration compounds just like ingested sources do.
 
-**Workspace** — The directory a user opens, versioned with git. It holds `raw/` (immutable sources, any extension), `bundle/` (the OKF [Bundle](#bundle-okf-bundle)), `openkos.yaml`, `AGENTS.md`, and the git-ignored `.openkos/`. Sources live *beside* the bundle rather than inside it because they are input material, not concepts — which keeps the bundle conformant by construction and lets sources keep their own filenames. `openkos init` creates the workspace *and* its git repository, `.gitignore`, and first commit, so versioning is never a manual step. By convention the first workspace is `~/knowledge`; one engine installation serves many workspaces.
-
 **Typed relationship** — A link between Knowledge Objects with a declared meaning (for example `depends_on`, `derived_from`, `part_of`). Typed relationships are what the OpenKOS graph and retrieval layers traverse, and they ship with the MVP 2 graph (written by `openkos relate`). They are an **OpenKOS extension, not an OKF feature**: OKF links are untyped, and the kind of relationship is carried by the prose next to the link. The typing is layered on as an extra frontmatter key, so a plain OKF consumer still sees the untyped directed edges the spec promises it and loses nothing structural.
 
-**okf_version** — A frontmatter field declaring the OKF version a bundle targets (OpenKOS writes `"0.2"`). It lives in the bundle-root `index.md` — the one place OKF permits frontmatter in a reserved file — and exists so a future consumer knows exactly which revision of the spec the bundle was written against.
+**Volatility tier** — One of `static`, `slow`, or `volatile`, assigned per object type by default and overridable per document with the optional `volatility` frontmatter key. It sets the stale window the freshness lint applies to that document; `static` is never flagged ([ADR-0007](adr/0007-volatility-taxonomy.md)).
+
+**Workspace** — The directory a user opens, versioned with git. It holds `raw/` (immutable sources, any extension), `bundle/` (the OKF [Bundle](#bundle-okf-bundle)), `openkos.yaml`, `AGENTS.md`, and the git-ignored `.openkos/`. Sources live *beside* the bundle rather than inside it because they are input material, not concepts — which keeps the bundle conformant by construction and lets sources keep their own filenames. `openkos init` creates the workspace *and* its git repository, `.gitignore`, and first commit, so versioning is never a manual step. By convention the first workspace is `~/knowledge`; one engine installation serves many workspaces.

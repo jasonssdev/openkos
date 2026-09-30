@@ -50,7 +50,7 @@ Deliverables:
 
 What a user can do after MVP 1: drop notes and articles into a folder, compile them into a living knowledge base, and get cited answers — entirely offline.
 
-Where the community can contribute: new **producers** (ingesters for additional text-shaped sources) and simple **consumers** (viewers, exporters).
+Where the community can contribute: sample sources and example bundles that serve as fixtures, documentation, and bug reports against the shipped verbs.
 
 ---
 
@@ -72,7 +72,6 @@ Deliverables:
 - Incremental compilation and change tracking
 - Freshness lint v1 — volatility classification with volatility-aware windows (per-type, LLM-suggested), contradiction and staleness detection, and a guided reconcile workflow
 - The full lifecycle and `forget` surface — archive (`status: deprecated`), tombstones, the reference-aware scope/depth flow, and the privacy purge (git-history rewrite + index cleanup)
-- Optional additional producers (PDF, web clip) as the extraction pipeline matures
 
 What a user can do after MVP 2: ask questions that require synthesizing many sources, navigate a real graph of their knowledge, and watch the base get richer and stay honest as they use it.
 
@@ -122,7 +121,7 @@ MVP 3 was originally scoped as *The Runtime and Interoperability*: one arc holdi
 Two measurements set the boundaries, rather than taste:
 
 - **Reading without a terminal was already solved, and cost nothing.** The capability had been claimed in the docs for months and never tested; verifying it took two minutes. That narrows this arc rather than filling it — a "nicer interface" is not a frontend project, because the remaining gap is asking and deciding, not reading.
-- **No thin adapter is possible today.** `openkos.cli.main` is roughly 16,000 lines across 27 commands, against roughly 4,400 lines in `application/`, which covers ingest, query, and lifecycle only. The read verbs — `status`, `list`, navigation — have no application service behind them. An MCP server written against the code as it stands would either reimplement them or import Typer. Extracting them is prerequisite zero, not a cleanup.
+- **No thin adapter was possible at the time.** The command logic lived in `openkos.cli.main`, and `application/` covered ingest, query, and lifecycle only. The read verbs — `status`, `list`, navigation — had no application service behind them, so an MCP server written against the code as it stood would either have reimplemented them or imported Typer. Extracting them was prerequisite zero, not a cleanup.
 
 Three edges of the original arc move out on the same reasoning. A local **REST API** goes to the horizon, because MCP already answers the question REST was there to answer, and a second network surface doubles the trust boundary for no user we can name. **Memory projections** go with it: they are a research direction, not a deliverable with someone waiting on it. A **stable Python API** moves to MVP 5: the application services under `application/` are the surface it would present, but MCP already serves this arc's audience, and declaring those services stable is a compatibility promise with no user waiting on it yet. It belongs with the extension points, where third-party code first needs a surface it can rely on.
 
@@ -185,6 +184,7 @@ Where the community can contribute: interop adapters, producers, and consumers.
 
 These are promising directions we intend to explore *after* the MVPs prove out with real users. They are listed for transparency and to invite discussion, not as promises:
 
+- Optional additional producers (PDF, web clip) as the extraction pipeline matures
 - A local REST API, if a consumer appears that MCP cannot serve
 - Opt-in memory projections over the graph (episodic, semantic, procedural)
 - A desktop application and graphical knowledge explorer

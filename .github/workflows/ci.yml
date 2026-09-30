@@ -1,8 +1,8 @@
 name: CI
 
-# Pull requests into main are the merge gate (AGENTS.md: "nothing merges without
-# green CI + review"); the push trigger keeps main's own history green after a
-# merge or a direct push.
+# Pull requests into main are the merge gate (CONTRIBUTING.md, "What is
+# enforced": green CI on a branch up to date with main); the push trigger keeps
+# main's own history green after a merge or a direct push.
 #
 # Pull requests into a tracker/** branch are gated too. A large change is
 # delivered as a chain of review-sized slices that stack onto a tracker branch,

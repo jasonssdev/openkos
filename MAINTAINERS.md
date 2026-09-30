@@ -37,7 +37,7 @@ Tone: be specific, explain the *why* behind each requested change, and praise go
 
 Anchor decisions in **documented principles and recorded decisions, not personal taste**. "This conflicts with our local-first principle" or "this is outside the current MVP's contribution surface (see the roadmap)" is objective and impersonal. Once the ADR log begins (with the first code-time decision), cite the relevant ADR the same way.
 
-**The safe zone:** OpenKOS ships no plugin surface yet — there is no `Producer`/`Consumer` interface and no entry-point group, and that extension surface is a roadmap item (see [`docs/roadmap.md`](docs/roadmap.md)). Until it exists, the low-risk contributions to prepare `good first issue`s for are documentation, test coverage, and additions behind the seams that do exist (`graph/base.py`, `llm/base.py`), which are internal and isolated from the canonical layer.
+**The safe zone:** OpenKOS ships no plugin surface yet — there is no `Producer`/`Consumer` interface and no entry-point group, and that extension surface is a roadmap item (see [`docs/roadmap.md`](docs/roadmap.md)). Until it exists, the low-risk contributions to prepare `good first issue`s for are documentation, test coverage, and additions behind the seams that do exist (`graph/base.py`, `state/vectorstore.py`, `llm/base.py`), which are internal and isolated from the canonical layer.
 
 ## Saying no well
 
@@ -47,7 +47,7 @@ Thank the contributor, explain the reason tied to something documented, offer an
 
 ## Automation and protection
 
-- Require **green CI** (tests, lint, type check) and a review before any merge; enable branch protection.
+- Require a pull request with **green CI** (tests, lint, type check) and a branch up to date with `main` before any merge; the repository ruleset enforces this (see "What is enforced" in [CONTRIBUTING.md](CONTRIBUTING.md)). Review approval is not required in this solo-maintained project; reviews are welcome.
 - The PR template checklist prompts contributors to self-review.
 - Use labels and `good first issue` to channel help.
 - **Never merge code you don't understand**, especially from unknown forks. Don't run privileged CI on untrusted pull requests. For security reports, follow [SECURITY.md](SECURITY.md).
