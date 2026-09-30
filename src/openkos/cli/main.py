@@ -201,6 +201,20 @@ def _echo_warning(message: str) -> None:
     typer.echo(message, err=True)
 
 
+def _echo_warning_once() -> Callable[[str], None]:
+    """An `_echo_warning` that says each distinct message once per call
+    site: a reader consulted once per candidate group would otherwise repeat
+    the same note for every group."""
+    seen: set[str] = set()
+
+    def _emit(message: str) -> None:
+        if message not in seen:
+            seen.add(message)
+            _echo_warning(message)
+
+    return _emit
+
+
 def _maybe_warn_insecure_key(cfg: config.Config) -> None:
     """Print `application_backends.insecure_key_warning(cfg)` to stderr, at
     most once per process. Called from both `_chat_client` and
@@ -11322,6 +11336,8 @@ def status() -> None:
     # finding R3-needs-attention-header-lost-on-failure).
     typer.echo("Needs attention:")
     report = application_status.build_status_report(layout)
+    for warning in report.warnings:
+        _echo_warning(warning)
 
     needs_attention: list[str] = [*overview.survey.findings]
     needs_attention.extend(
@@ -11488,6 +11504,8 @@ def next_cmd() -> None:
 
     layout = config.WorkspaceLayout(root)
     result = next_action_module.next_action(layout)
+    for warning in result.warnings:
+        _echo_warning(warning)
     for line in next_action_module.render_lines(result):
         typer.echo(line)
 
@@ -12169,10 +12187,13 @@ def duplicates(
     # truncation notice describe what the corpus PRODUCED, and filtering
     # before them would let a ruled-distinct group silently consume a cap
     # slot's worth of accounting.
+    note = _echo_warning_once()
     groups = [
         group
         for group in report.groups
-        if not application_pending.is_group_kept_distinct(layout, group.member_ids)
+        if not application_pending.is_group_kept_distinct(
+            layout, group.member_ids, on_warning=note
+        )
     ]
     suppressed = len(report.groups) - len(groups)
     notice = candidate_group_truncation_notice(report)

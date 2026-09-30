@@ -26,6 +26,7 @@ from openkos.llm.base import EMBED_DIM
 from openkos.resolution import CandidateGroup
 from openkos.resolution import find_exact_title_groups as _real_find_exact_title_groups
 from openkos.state import fts, vectorstore
+from tests.unit.cli.conftest import corrupt_identity_sidecar
 from tests.unit.cli.conftest import snapshot_bytes as _snapshot
 from tests.unit.conftest import LOCAL_BACKEND_LOCALITY
 
@@ -1964,6 +1965,35 @@ def test_reopening_restores_the_next_recommendation(
     after = runner.invoke(app, ["next"])
 
     assert "candidate group with identical titles" in after.stdout
+
+
+def test_next_still_surfaces_a_malformed_identity_row_warning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """The reader used to print this itself; now the service returns it and
+    `next` renders it, so the operator still learns a ruling was dropped."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors_db(tmp_path)
+    _write_doc(tmp_path / "bundle" / "concepts" / "dup-a.md", title="Stoicism")
+    _write_doc(tmp_path / "bundle" / "concepts" / "dup-b.md", title="STOICISM")
+    runner.invoke(
+        app,
+        [
+            "duplicates",
+            "--keep-distinct",
+            "concepts/dup-a",
+            "--keep-distinct",
+            "concepts/dup-b",
+        ],
+    )
+    _, warning = corrupt_identity_sidecar(tmp_path / "bundle", "concepts/dup-a")
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0, result.stderr
+    assert result.stderr.splitlines().count(warning) == 1
 
 
 # --- #868: retryable judge debt has its own tier ---------------------------

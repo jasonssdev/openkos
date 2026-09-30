@@ -525,3 +525,23 @@ def disable_local_exemption(workspace_root: Path) -> None:
         ),
         encoding="utf-8",
     )
+
+
+def corrupt_identity_sidecar(bundle_dir: Path, owner_id: str) -> tuple[Path, str]:
+    """Append one malformed identity row to `owner_id`'s decisions sidecar
+    and return `(sidecar, warning)`, where `warning` is the exact line the
+    reader reports for it. For pinning that a verb still surfaces the note."""
+    from openkos.bundle import decisions as bundle_decisions
+    from openkos.model import okf
+
+    sidecar = bundle_decisions.decisions_path_for(owner_id, bundle_dir)
+    metadata, body = okf.load_frontmatter(sidecar.read_text(encoding="utf-8"))
+    rows = metadata["identity_decisions"]
+    assert isinstance(rows, list)
+    rows.append({"decision_key": "k", "member_ids": ["only-one"]})
+    sidecar.write_text(okf.dump_frontmatter(metadata, body=body), encoding="utf-8")
+    warning = (
+        f"openkos: warning -- 1 malformed identity decision record(s) in "
+        f"{sidecar}; those groups will be offered again."
+    )
+    return sidecar, warning
