@@ -27,42 +27,56 @@ interchangeable via `cosine = 1 - d^2 / 2`. The threshold is declared as a
 SIMILARITY floor because that is the number a human can reason about, and
 converted to a distance ceiling exactly once, here.
 
-`CANDIDATE_SIMILARITY_THRESHOLD = 0.70` was ORIGINALLY calibrated against
+`CANDIDATE_SIMILARITY_THRESHOLD` was ORIGINALLY calibrated at 0.70 against
 `bge-m3` over full OKF concept documents -- whole file text, frontmatter
-included -- the shape `state/reindex.py` embedded before #554. Since #888
-(#889) that is NOT what `reindex()` embeds any more: it composes
-`_compose_header` (title, description, tags -- frontmatter is NEVER
-embedded) with one or more `EMBED_COMPOSITION_TAG = "chunk-v1"` body
-chunks, and a document's stored vector is the chunk mean,
-L2-renormalized -- `normalize(mean(normalize(chunk_i) for every chunk_i))`
--- never a single whole-file embedding.
+included -- the shape `state/reindex.py` embedded before #554. That is NOT
+what `reindex()` embeds today: it composes `_compose_header` (title,
+description, tags -- frontmatter is NEVER embedded) with one or more
+`EMBED_COMPOSITION_TAG = "chunk-v1"` body chunks, and a document's stored
+vector is the chunk mean, L2-renormalized --
+`normalize(mean(normalize(chunk_i) for every chunk_i))` -- never a single
+whole-file embedding (#888, #889).
 
-`evals/proximity_threshold/run_proximity_threshold_probe.py` re-measured
-the floor on THIS current shape (#1052), driving the real `reindex()`
-path end to end (never a reimplementation of `_compose_header` or the
-chunk-mean derivation): an 8-document hand-written fixture (no pre-existing
-labelled set is reproducible from this checkout alone) scored 3 of 3
-related pairs and 6 of 6 unrelated pairs, giving related cosines
-0.5842-0.8043 and unrelated cosines 0.2705-0.3996
-(`evals/proximity_threshold/results/proximity-threshold-20260929T120502Z-bge-m3.json`).
-The two classes still do NOT overlap on this fixture -- no unrelated pair
-came close to 0.70 -- but 0.70 no longer sits strictly between them: the
-weakest related pair (0.5842) falls BELOW it, so the floor is stricter
-than today's separation requires (it will miss some genuinely related
-pairs), even though it produced zero observed false positives here. The
-pre-registered rule this measurement used -- keep 0.70 only if
-`min(related) > 0.70 > max(unrelated)` -- does NOT hold, so this is left
-an OPEN QUESTION rather than silently kept or silently changed. Nine
-scored pairs are a smoke check of the shape, not a calibration: the
-measured gap's midpoint is 0.4919, which is NOT a recommended value, and a
-new floor needs a labelled set large enough to show where the two classes
-actually meet. Moving
-`CANDIDATE_SIMILARITY_THRESHOLD` changes what `suggest-relations` and
-`contradictions` see, which is its own design discussion, not a
-docstring-correction side effect. The anchor pair holding this
-measurement honest is still `Stoicism` / `Stoic Ethics` (related) against
-`Medieval Crop Rotation` (unrelated), mirroring `resolution/similarity.py`'s
-`stoic`/`stoicism` lexical lock one layer down.
+The current value, 0.59, is the pre-registered calibration verdict for
+that `chunk-v1` shape (#1052). The decision rule -- frozen in
+`evals/proximity_threshold/DESIGN.md` before the fixture was scored and
+applied mechanically by
+`evals/proximity_threshold/run_proximity_threshold_probe.py`, which drives
+the real `reindex()` path end to end rather than reimplementing
+`_compose_header` or the chunk-mean derivation -- was run over a 91-pair
+labelled fixture: 41 related pairs (21 hard: cross-lingual, cross-domain,
+or linked by mechanism rather than vocabulary) and 50 unrelated pairs (34
+hard same-domain distractors, 16 easy). The two classes OVERLAP on this
+fixture: the weakest related pair scores 0.4238 and the strongest
+unrelated pair scores 0.5827, so no floor separates them cleanly, and 0.70
+already discarded most of the related signal (recall 0.317 -- 13 of 41
+related pairs nominated). The rule found `t_min = 0.57`, the lowest grid
+floor within the false-nomination budget (at most 1 of the 34 hard
+negatives, `floor(0.05 * 34)`, and zero of the 16 easy negatives), then
+added a 0.02 safety margin -- a hand-written negative set under-samples
+the negative tail -- to land on `t* = 0.59`. At 0.59 the fixture shows
+zero of 34 hard negatives and zero of 16 easy negatives nominated, while
+recall across all 41 related pairs rises to 0.707 (29 of 41). Full
+per-pair cosines and the floor/recall/false-nomination grid are in
+`evals/proximity_threshold/results/proximity-threshold-20260930T065305Z-bge-m3.md`.
+
+This is a trade-off, not a fix: proximity only NOMINATES a pair for a
+human to review through `suggest-relations` / `relate`, so a false
+positive costs review time and an LLM call -- and, because
+`graph/sqlite_graph.py` keeps at most `_MAX_CANDIDATE_EDGES` candidates
+per build ranked by distance, can crowd out a genuine candidate -- while a
+false negative is a suggestion the user never sees, silent but
+recoverable by hand. 0.59 was chosen because it was the floor at which the
+fixture observed zero hard-negative false nominations while more than
+doubling recall over 0.70; it does not claim the two classes are
+separable, only that this floor's error trade is worth making on the
+evidence measured. Moving `CANDIDATE_SIMILARITY_THRESHOLD` changes what
+`suggest-relations` and `contradictions` see, which is its own design
+discussion, not a docstring-correction side effect. The anchor pair
+holding this measurement honest is still `Stoicism` / `Stoic Ethics`
+(related, cosine 0.7997) against `Medieval Crop Rotation` (unrelated,
+cosine 0.3558), mirroring `resolution/similarity.py`'s `stoic`/`stoicism`
+lexical lock one layer down.
 
 If these constants are ever revisited, re-run the harness above rather
 than re-deriving a fixture from scratch -- and re-measure on whatever
@@ -84,7 +98,7 @@ from openkos.state.vectorstore import (
     vector_store_is_empty,
 )
 
-CANDIDATE_SIMILARITY_THRESHOLD: Final[float] = 0.70
+CANDIDATE_SIMILARITY_THRESHOLD: Final[float] = 0.59
 """Cosine floor a pair must reach to be nominated. See the module docstring
 for the calibration that produced it."""
 
