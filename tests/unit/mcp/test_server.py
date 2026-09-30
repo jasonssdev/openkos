@@ -23,6 +23,7 @@ from typing import Any
 import pytest
 
 from openkos import config
+from openkos.application import backends as application_backends
 from openkos.llm.base import Embedder, LLMBackend, Message
 from openkos.llm.ollama import (
     OllamaEmbeddingDimensionMismatch,
@@ -61,6 +62,31 @@ def _ctx() -> tools.ToolContext:
 
 def _msg(**kwargs: object) -> bytes:
     return json.dumps(kwargs, ensure_ascii=False).encode("utf-8") + b"\n"
+
+
+# ---------------------------------------------------------------------------
+# Phase 9 -- resolver seam wiring (issue #1057): `mcp/server.py::
+# _backend_factories()` is the MCP adapter's equivalent of
+# `cli/main.py::_backend_factories()`.
+# ---------------------------------------------------------------------------
+
+
+def test_mcp_backend_factories_shape() -> None:
+    """`mcp/server.py::_backend_factories()` returns the analogous
+    `BackendFactories` built from `mcp.server`'s own globals (task 9.22).
+
+    Reads `server.__dict__` rather than the directly-imported
+    `OllamaClient`/`OpenAICompatibleClient` names: the autouse
+    `_offline_ollama_by_default` fixture patches `mcp.server`'s own copies
+    of both to their offline doubles for every unit test, so this proves
+    `_backend_factories()` reads THIS module's globals at call time --
+    exactly the property the fixture's patch depends on -- rather than
+    binding the real classes at import time."""
+    factories = server._backend_factories()
+
+    assert isinstance(factories, application_backends.BackendFactories)
+    assert factories.ollama is server.__dict__["OllamaClient"]
+    assert factories.openai_compatible is server.__dict__["OpenAICompatibleClient"]
 
 
 def _make_server(
