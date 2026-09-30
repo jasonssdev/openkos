@@ -171,7 +171,11 @@ and no `sources` key (see "OKF-Native Provenance" and "`sources` Is A
 Generated, One-Way Projection Of `provenance`" above): its `resource` field
 already names its one raw original, so neither a `provenance` list nor a
 `sources` projection of it would add anything a reader does not already
-have. WHEN the decoded source's
+have. The Source's `description` and body MUST name the source only by
+the raw copy's basename and its `resource` (`raw/<name>`), and MUST NOT
+contain the absolute path the file was imported from, since that text is
+committed, embedded, and disclosed and would leak the machine's account name
+and directory layout. WHEN the decoded source's
 leading frontmatter parses to a mapping, the generated Source concept's
 frontmatter also carries the extension key `source_frontmatter` holding
 that mapping verbatim (see "The `source_frontmatter` Namespace Preserves
