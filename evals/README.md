@@ -15,6 +15,7 @@ index only points to them.
   logic with no model. `evals/run_self_tests.py` discovers every declared
   `--self-test` and runs them, and CI runs that sweep model-free.
 - Model-backed runs need a local Ollama unless a README says otherwise.
+- `evals/harness_report.py` is the shared report helper: it renders the one line every report carries to name its arm (generation ceiling and context window, plus any harness-specific segments), so a stored run can be told apart from one measured under other settings. It is standard-library only; the rest of each report stays per-harness.
 - Timestamped reports and `runs-*.json` files under a harness's `results/`
   are historical records of what was measured; they are not edited after
   the fact. A later measurement is a new file.

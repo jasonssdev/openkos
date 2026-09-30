@@ -86,7 +86,7 @@ Five brand colors. Dark-first: `Ink` is the default surface.
 - Keep the defined clear space.
 
 **Don't**
-- Re-add rings, orbits, or strata to the mark (earlier drafts had them; they dissolve at small sizes).
+- Re-add rings, orbits, or strata to the mark (they dissolve at small sizes).
 - Recolor the mark arbitrarily, stretch, or rotate it.
 - Use the serif or camelCase wordmark as the logo.
 - Put the two-color wordmark in a monochrome context.

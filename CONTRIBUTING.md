@@ -13,7 +13,7 @@ You do not need to write code to make a real difference right now:
 - **Shape the design.** React to [`docs/vision.md`](docs/vision.md), [`docs/roadmap.md`](docs/roadmap.md), and [`docs/knowledge-object-model.md`](docs/knowledge-object-model.md). Disagreement, edge cases, and prior art are especially valuable.
 - **Improve the docs.** Clarify wording, fix errors, add examples.
 - **Report issues and propose features.** Open an issue describing the problem or idea and the use case behind it.
-- **Contribute code** — see the "community can contribute" notes under the current MVP in the [roadmap](docs/roadmap.md) for the clearest entry points (new producers, consumers, extraction strategies, retrieval rankers).
+- **Contribute code** — see "Where the community can contribute" in the [roadmap](docs/roadmap.md) for the clearest entry points: bug fixes, tests, eval harnesses, docs, and client configurations for the MCP server.
 - **Share example OKF bundles** we can use as fixtures and living documentation.
 
 ---
@@ -51,7 +51,7 @@ Three style rules keep `docs/` low-churn:
 
 **Open an issue before anything larger than a small, obvious fix.** This saves you from building something that cannot be merged. Small changes — typos, doc clarifications, a tightly scoped bug fix — can go straight to a pull request.
 
-For anything that touches the knowledge model, the OKF conformance surface, the ingestion pipeline, or public interfaces (CLI, API, MCP), please discuss the approach in an issue first and reference it in your PR.
+For anything that touches the knowledge model, the OKF conformance surface, the ingestion pipeline, or public interfaces (CLI, MCP), please discuss the approach in an issue first and reference it in your PR.
 
 Those same changes are then specified before they are built. OpenKOS uses [OpenSpec](https://openspec.dev) ([repository](https://github.com/Fission-AI/OpenSpec)) — an open, tool-agnostic format for writing down what a change must do while the code does not exist yet. The artifacts are plain markdown: a change gets a folder under `openspec/changes/` holding a proposal, the delta specs (the behavior contract), a design, and a task list; when the work lands, those deltas merge into the living per-domain contract under `openspec/specs/`. `openspec/` is tracked in the repository and reviewed like any other file, so you can read the current contract before you start, and reviewers can settle *what* is being built before *how*. You do not need a particular editor or AI tool to take part — writing and reviewing these by hand is fine.
 
@@ -116,12 +116,12 @@ Releases are therefore cut as: merge to `main` → wait for `main`'s own CI run 
 Please use [Conventional Commits](https://www.conventionalcommits.org/):
 
 ```
-feat: add markdown ingester for MVP 1
-fix: stamp volatile facts missed by freshness lint
-docs: clarify provenance chain in knowledge-object-model
+feat(ingest): stamp a source date on every compiled object
+fix(lint): stamp volatile facts missed by freshness lint
+docs(model): clarify provenance chain in knowledge-object-model
 ```
 
-Common types: `feat`, `fix`, `docs`, `test`, `refactor`, `chore`.
+Common types: `feat`, `fix`, `docs`, `test`, `refactor`, `chore`. The scope is the subsystem or domain touched (`okf`, `model`, `bundle`, `config`, `ingest`, `extract`, `graph`, `retrieval`, `memory`, `llm`, `lint`, `cli`, `api`, `mcp`, `sdd`, `docs`, `ci`), as listed in [`AGENTS.md`](AGENTS.md).
 
 ---
 

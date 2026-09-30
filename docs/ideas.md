@@ -281,6 +281,12 @@ should make quietly.
 
 These are for the runtime work and should be revisited when it starts.
 
+---
+
+## Agent surface (MCP)
+
+Ideas for the agent-facing surface, the MCP server, rather than for scale. They share one concern, discovery: an agent should be able to find and configure what the server offers without reading a reference. Revisit them when that surface is next extended.
+
 ### A self-configuration prompt
 
 A short block of text in the README that the user pastes into their agent, after
