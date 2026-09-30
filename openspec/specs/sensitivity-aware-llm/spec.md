@@ -72,7 +72,9 @@ way, as a high-water mark over the merge: when the survivor, the absorbed
 concept or the merged survivor resolves to confidential (a missing or blank
 `sensitivity` counting as confidential), no body is sent unless the backend
 qualifies for the local exemption. The pass is then skipped, the stacked body
-is kept, and a notice names the reason on stderr; the merge itself completes.
+is kept, and a stderr notice, worded as a deliberate skip rather than a
+failure, names the confidential concept's id (never its content); the merge
+itself completes.
 These verbs offer no `--include-confidential` flag, so the local exemption is
 the only release.
 

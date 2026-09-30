@@ -2566,31 +2566,39 @@ def reconcile_planned(
     )
 
 
-def reconcile_blocked_by_sensitivity(
+def reconcile_sensitivity_blocker(
     prepared: PreparedMerge, *, local_exemption: bool
-) -> bool:
-    """Whether the #645 reconciliation pass must NOT send `prepared`'s bodies
-    to the chat backend (issue #1124): the same egress rule every other chat
-    seam applies, evaluated as a high-water mark over the merge.
+) -> str | None:
+    """The concept id that forbids sending `prepared`'s bodies to the chat
+    backend for the #645 reconciliation pass (issue #1124), or `None` when
+    the send is allowed. The same egress rule every other chat seam applies,
+    evaluated as a high-water mark over the merge.
 
     Checks each member's ORIGINAL frontmatter (`survivor_bytes`,
     `absorbed_bytes`) and the merged survivor's, all through
     `sensitivity.should_block`, so a missing, blank or unparseable
-    `sensitivity` fails closed exactly as it does for the siblings.
-    `local_exemption` is the caller's verified `client.locality.is_local and
-    cfg.confidential_local_exemption`; `merge` has no `--include-confidential`
-    flag, so it is never an input here."""
-    texts = (
-        prepared.survivor_bytes.decode("utf-8", errors="replace"),
-        prepared.absorbed_bytes.decode("utf-8", errors="replace"),
-        prepared.plan.merged_survivor,
+    `sensitivity` fails closed exactly as it does for the siblings. The
+    merged survivor is attributed to the survivor's id. Only an id is ever
+    returned, never content. `local_exemption` is the caller's verified
+    `client.locality.is_local and cfg.confidential_local_exemption`; `merge`
+    has no `--include-confidential` flag, so it is never an input here."""
+    candidates = (
+        (
+            prepared.survivor_canonical,
+            prepared.survivor_bytes.decode("utf-8", "replace"),
+        ),
+        (
+            prepared.absorbed_canonical,
+            prepared.absorbed_bytes.decode("utf-8", "replace"),
+        ),
+        (prepared.survivor_canonical, prepared.plan.merged_survivor),
     )
-    return any(
-        sensitivity.should_block(
+    for concept_id, text in candidates:
+        if sensitivity.should_block(
             okf.load_frontmatter(text)[0], local_exemption=local_exemption
-        )
-        for text in texts
-    )
+        ):
+            return concept_id
+    return None
 
 
 @dataclass(frozen=True)

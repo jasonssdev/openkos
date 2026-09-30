@@ -260,6 +260,8 @@ def _prepared(
     return cast(
         "application_lifecycle.PreparedMerge",
         SimpleNamespace(
+            survivor_canonical="concepts/survivor",
+            absorbed_canonical="concepts/absorbed",
             survivor_bytes=_doc(survivor),
             absorbed_bytes=_doc(absorbed),
             plan=SimpleNamespace(merged_survivor=merged_text),
@@ -268,38 +270,43 @@ def _prepared(
 
 
 @pytest.mark.parametrize(
-    ("survivor", "absorbed", "merged", "blocked"),
+    ("survivor", "absorbed", "merged", "blocker"),
     [
-        ("private", "private", "private", False),
-        ("public", "private", "private", False),
-        ("confidential", "private", "private", True),
-        ("private", "confidential", "private", True),
-        ("private", "private", "confidential", True),
-        (None, "private", "private", True),
-        ("private", None, "private", True),
-        ("private", "private", None, True),
+        ("private", "private", "private", None),
+        ("public", "private", "private", None),
+        ("confidential", "private", "private", "concepts/survivor"),
+        ("private", "confidential", "private", "concepts/absorbed"),
+        ("private", "private", "confidential", "concepts/survivor"),
+        (None, "private", "private", "concepts/survivor"),
+        ("private", None, "private", "concepts/absorbed"),
+        ("private", "private", None, "concepts/survivor"),
     ],
 )
-def test_reconcile_blocked_by_sensitivity_is_a_fail_closed_high_water_mark(
-    survivor: str | None, absorbed: str | None, merged: str | None, blocked: bool
+def test_reconcile_sensitivity_blocker_is_a_fail_closed_high_water_mark(
+    survivor: str | None, absorbed: str | None, merged: str | None, blocker: str | None
 ) -> None:
-    """#1124: ANY confidential or unlabelled member blocks the send."""
+    """#1124: ANY confidential or unlabelled member blocks the send, and the
+    id returned names the concept that did."""
     prepared = _prepared(survivor, absorbed, merged)
     assert (
-        application_lifecycle.reconcile_blocked_by_sensitivity(
+        application_lifecycle.reconcile_sensitivity_blocker(
             prepared, local_exemption=False
         )
-        is blocked
+        == blocker
     )
 
 
-def test_reconcile_blocked_by_sensitivity_released_only_by_the_local_exemption() -> (
-    None
-):
+def test_reconcile_sensitivity_blocker_released_only_by_the_local_exemption() -> None:
     prepared = _prepared("confidential", "confidential", "confidential")
-    assert application_lifecycle.reconcile_blocked_by_sensitivity(
-        prepared, local_exemption=False
+    assert (
+        application_lifecycle.reconcile_sensitivity_blocker(
+            prepared, local_exemption=False
+        )
+        == "concepts/survivor"
     )
-    assert not application_lifecycle.reconcile_blocked_by_sensitivity(
-        prepared, local_exemption=True
+    assert (
+        application_lifecycle.reconcile_sensitivity_blocker(
+            prepared, local_exemption=True
+        )
+        is None
     )

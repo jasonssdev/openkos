@@ -2125,14 +2125,19 @@ def _seed_confidential_merge(
 
 
 @pytest.mark.parametrize(
-    ("survivor_sensitivity", "absorbed_sensitivity"),
-    [("confidential", "private"), ("private", "confidential")],
+    ("survivor_sensitivity", "absorbed_sensitivity", "blocker"),
+    [
+        ("confidential", "private", "concepts/survivor"),
+        ("private", "confidential", "concepts/absorbed"),
+    ],
 )
+@pytest.mark.usefixtures("pinned_git_identity")
 def test_merge_reconciliation_never_sends_confidential_to_a_remote_backend(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     survivor_sensitivity: str,
     absorbed_sensitivity: str,
+    blocker: str,
 ) -> None:
     """#1124: a merge with a confidential member against a non-local backend
     sends NOTHING -- on either side of the merge (high-water mark) -- keeps
@@ -2151,7 +2156,12 @@ def test_merge_reconciliation_never_sends_confidential_to_a_remote_backend(
 
     assert result.exit_code == 0, result.stderr
     assert backend.sent == []
-    assert "kept the stacked body" in result.stderr
+    assert (
+        "openkos merge: skipped body reconciliation -- "
+        f"{blocker} is confidential and the backend is not local; "
+        "the stacked body was kept."
+    ) in result.stderr.splitlines()
+    assert "reconciliation failed" not in result.stderr
     survivor_text = (tmp_path / "bundle" / "concepts" / "survivor.md").read_text(
         encoding="utf-8"
     )
