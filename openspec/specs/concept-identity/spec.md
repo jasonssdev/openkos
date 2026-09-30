@@ -51,6 +51,36 @@ no I/O, and the path need not exist.
 - WHEN a concept id is derived from it
 - THEN the id is byte-identical to the un-normalized derivation
 
+### Requirement: Concept Ids Are POSIX-Style And Slugs Avoid Windows Device Names
+
+A concept id supplied to any id-taking verb or tool MUST be a POSIX-style
+relative path: an id containing a backslash or a colon MUST be refused
+before any path is built, on every platform, because on Windows those
+characters are a separator and a drive letter or stream marker. A slug
+derived from a title or filename stem MUST NOT equal a reserved Windows
+device name (`con`, `prn`, `aux`, `nul`, `com1`-`com9`, `lpt1`-`lpt9`,
+including the superscript-digit forms): such a slug carries the
+deterministic suffix `-doc` (`CON` -> `con-doc`). A longer word that merely
+begins with one (`console`) is unchanged.
+
+#### Scenario: A backslash or colon id is refused
+
+- GIVEN a concept id `..\..\x`, `C:\x` or `a:b`
+- WHEN it is canonicalized or resolved
+- THEN a refusal is raised and no path is built from it
+
+#### Scenario: A reserved device name is suffixed
+
+- GIVEN a title `CON` or `COM1`
+- WHEN it is slugified
+- THEN the slug is `con-doc` or `com1-doc`
+
+#### Scenario: A near miss is untouched
+
+- GIVEN a title `console`
+- WHEN it is slugified
+- THEN the slug is `console`
+
 ### Requirement: Concept Path Reconstruction Tolerates A Decomposed On-Disk Name
 
 Every site that reconstructs a document path from a concept id MUST resolve it

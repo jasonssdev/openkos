@@ -31,9 +31,10 @@ shapes, not a shared, backend-agnostic value or check.
 """
 
 import urllib.error
-from collections.abc import Sequence
+import urllib.request
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Protocol, TypedDict
+from typing import Any, Protocol, TypedDict
 
 
 class Message(TypedDict):
@@ -415,6 +416,31 @@ def classify_backend_host(raw: str | None) -> BackendHostLocality:
         normalized
     )
     return BackendHostLocality(is_local=is_local, display_host=hostport)
+
+
+def build_backend_opener(
+    locality: BackendHostLocality,
+    *handlers: urllib.request.BaseHandler | type[urllib.request.BaseHandler],
+) -> Callable[..., Any]:
+    """The `urlopen` a backend client sends through, chosen by its locality
+    (issue #1127). The ONE place that decides it, for every client.
+
+    A host classified local is loopback by literal form, but urllib's default
+    `ProxyHandler` reads `http_proxy`/`https_proxy` and its `proxy_bypass`
+    does not exempt loopback names unless `no_proxy` lists them -- so a
+    machine with a system-wide proxy would route a "local" backend's request
+    body and `Authorization` header through that proxy while the confidential
+    local exemption believed nothing left the device. A local host therefore
+    gets `ProxyHandler({})`: the environment is never consulted. A non-local
+    host keeps urllib's default behaviour, environment proxies honoured.
+
+    `handlers` are extra handlers for `build_opener` (the openai-compatible
+    client's no-redirect handler); they compose with, not replace, the proxy
+    decision."""
+    extra: list[Any] = list(handlers)
+    if locality.is_local:
+        extra.insert(0, urllib.request.ProxyHandler({}))
+    return urllib.request.build_opener(*extra).open
 
 
 def measured_counters(
