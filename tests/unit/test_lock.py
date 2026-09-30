@@ -13,8 +13,11 @@ proved only the same-process case would pass just as happily against a
 threading lock that fixes nothing.
 """
 
+import os
+import stat
 import subprocess
 import sys
+import tempfile
 import textwrap
 from pathlib import Path
 
@@ -345,3 +348,136 @@ def test_no_file_descriptor_is_leaked_across_acquires(tmp_path: Path) -> None:
         assert holder.stdin is not None
         holder.stdin.close()
         holder.wait(timeout=60)
+
+
+# --- the lock directory is trusted only when it is ours and owner-only (#1134) ---
+
+_POSIX_ONLY = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="owner/mode/symlink checks on the lock directory are POSIX-only",
+)
+
+
+def _isolated_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Point the lock's temp-dir lookup at a private directory, and return the
+    per-user lock directory path the lock will use inside it."""
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
+    return tmp_path / f"{lock.LOCK_DIR_PREFIX}-{os.geteuid()}"
+
+
+@_POSIX_ONLY
+def test_a_fresh_lock_directory_is_owner_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    expected = _isolated_tmp(tmp_path, monkeypatch)
+    old = os.umask(0o000)  # a permissive umask must not widen the directory
+    try:
+        with lock.workspace_lock(tmp_path):
+            pass
+    finally:
+        os.umask(old)
+
+    assert stat.S_IMODE(expected.stat().st_mode) == 0o700
+
+
+@_POSIX_ONLY
+@pytest.mark.parametrize("mode", [0o755, 0o750, 0o707])
+def test_a_group_or_world_accessible_lock_directory_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: int
+) -> None:
+    directory = _isolated_tmp(tmp_path, monkeypatch)
+    directory.mkdir()
+    directory.chmod(mode)
+
+    with (
+        pytest.raises(lock.WorkspaceLockUnavailableError) as excinfo,
+        lock.workspace_lock(tmp_path),
+    ):
+        pytest.fail("the lock must not be taken in an untrusted directory")
+
+    message = str(excinfo.value)
+    assert str(directory) in message
+    assert f"{mode:o}" in message
+    assert "chmod 700" in message
+
+
+@_POSIX_ONLY
+def test_a_lock_directory_owned_by_someone_else_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Cannot chown in a test, so the process claims to be a different user:
+    # the directory the lock computes is then named for, but not owned by, it.
+    other_uid = os.geteuid() + 1
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(os, "geteuid", lambda: other_uid)
+    directory = tmp_path / f"{lock.LOCK_DIR_PREFIX}-{other_uid}"
+    directory.mkdir(mode=0o700)
+
+    with (
+        pytest.raises(lock.WorkspaceLockUnavailableError) as excinfo,
+        lock.workspace_lock(tmp_path),
+    ):
+        pytest.fail("the lock must not be taken in an untrusted directory")
+
+    assert "not owned by you" in str(excinfo.value)
+    assert str(directory) in str(excinfo.value)
+
+
+@_POSIX_ONLY
+def test_a_symlinked_lock_directory_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory = _isolated_tmp(tmp_path, monkeypatch)
+    target = tmp_path / "elsewhere"
+    target.mkdir(mode=0o700)
+    directory.symlink_to(target)
+
+    with (
+        pytest.raises(lock.WorkspaceLockUnavailableError) as excinfo,
+        lock.workspace_lock(tmp_path),
+    ):
+        pytest.fail("the lock must not be taken through a symlink")
+
+    assert "is a symlink" in str(excinfo.value)
+    assert list(target.iterdir()) == []  # nothing was created through the link
+
+
+@_POSIX_ONLY
+def test_a_lock_file_that_is_a_symlink_is_refused_not_followed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory = _isolated_tmp(tmp_path, monkeypatch)
+    directory.mkdir(mode=0o700)
+    victim = tmp_path / "victim"
+    victim.write_bytes(b"keep")
+    lock_file = lock.lock_path_for(tmp_path)
+    lock_file.symlink_to(victim)
+
+    with (
+        pytest.raises(lock.WorkspaceLockUnavailableError),
+        lock.workspace_lock(tmp_path),
+    ):
+        pytest.fail("the lock must not follow a planted symlink")
+
+    assert victim.read_bytes() == b"keep"
+
+
+@_POSIX_ONLY
+def test_an_unopenable_lock_file_is_a_clean_refusal_not_a_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory = _isolated_tmp(tmp_path, monkeypatch)
+    directory.mkdir(mode=0o700)
+    lock_file = lock.lock_path_for(tmp_path)
+    lock_file.write_bytes(b"")
+    lock_file.chmod(0o000)
+    if os.access(lock_file, os.R_OK):  # running as root: mode bits do not bind
+        pytest.skip("mode 000 does not stop this user from opening the file")
+
+    with (
+        pytest.raises(lock.WorkspaceLockUnavailableError) as excinfo,
+        lock.workspace_lock(tmp_path),
+    ):
+        pytest.fail("unreachable")
+
+    assert str(lock_file) in str(excinfo.value)
