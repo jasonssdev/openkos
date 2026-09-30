@@ -7947,6 +7947,189 @@ def backfill_sensitivity_cmd(
 
 
 @app.command(
+    "sync-tags",
+    help=(
+        "Add a Source's current tags to the derived concepts it grounds. "
+        "Union only -- never removes a tag. No LLM."
+    ),
+    rich_help_panel="Maintain",
+)
+@_guard_workspace_lock("sync-tags")
+def sync_tags_cmd(
+    source_id: str | None = typer.Argument(
+        None,
+        help=(
+            "Bundle-relative Source concept id (path minus '.md') to sync "
+            "tags from. Exactly one of this or --all is required."
+        ),
+    ),
+    all_: bool = typer.Option(
+        False,
+        "--all",
+        help=(
+            "Sync every Source in the bundle in one run. Exactly one of "
+            "the positional <source-id> or this flag is required."
+        ),
+    ),
+    auto: bool = typer.Option(
+        False,
+        "--auto",
+        help="Skip the confirmation prompt and write immediately (unattended).",
+    ),
+) -> None:
+    """Add each Source's current `tags` to the derived concepts its
+    provenance closure grounds (ADR-0033; source-tag-sync design), mirroring
+    `set-sensitivity`'s Source branch and `backfill-sensitivity`'s
+    bundle-wide sweep shape. Closes the drift `ingest` deliberately never
+    repairs on re-ingest (ingestion: "Derived Object Provenance and
+    Sensitivity Inheritance").
+
+    Argument validation runs FIRST, before any bundle read: exactly one of
+    the positional `<source-id>` or `--all` is required -- supplying both,
+    or neither, refuses with exit 1 naming the two accepted forms.
+
+    Phase A delegates entirely to `application.prepare_sync_tags`: it
+    resolves the target Source(s) (a single named Source via the same
+    `resolve_concept_path` id-safety every other write verb uses, or every
+    `type: Source` concept for `--all`), computes the write set as each
+    Source's `bundle.provenance.find_provenance_descendants` closure minus
+    the Source itself and minus any `type: Source` member, and stages a
+    union-only tag write (`okf.union_tags`) for every member whose union
+    adds a tag it does not already carry. A member with a malformed `tags`
+    value, or one ranked strictly below its Source's sensitivity
+    (`okf.sensitivity_direction`), is skipped and reported instead of
+    rewritten; skip lines print on stderr BEFORE the preview, each naming
+    the concept once even when multiple Sources reach it under `--all`.
+
+    An empty result (nothing staged) prints that there is nothing to sync
+    and exits 0 -- no write, no commit. Otherwise the preview lists every
+    staged file as `~ bundle/<id>.md (tags added: <a>, <b>)` in concept-id
+    order, then `~ log.md (new dated entry)`. The confirm gate mirrors
+    every other mutating verb's exact precedence: `--auto` skips it;
+    otherwise config `review: false` skips it; otherwise an interactive TTY
+    prompts via `typer.confirm` and a decline aborts (exit 1) with nothing
+    written; otherwise (non-TTY, no `--auto`) this refuses to write (exit
+    1), naming `--auto`.
+
+    Past that gate -- and on the runs that skip it, since `--auto` and
+    `review: false` skip the prompt but not the window it stood in --
+    `_reject_drifted_targets` re-reads every staged descendant, every root
+    Source that contributed a staged tag, and `log.md`, and refuses the
+    WHOLE run (exit 3, nothing written) if any changed or vanished since
+    Phase A read it (issues #306, #313, #319) -- the Source is a drift
+    baseline even though it is never itself written (design Decision 5).
+
+    Phase B (`application.sync_tags_core`) writes every staged descendant in
+    concept-id order, then `log.md`, then one `_autocommit` covering every
+    changed path with message `openkos: sync-tags <source-id>` or
+    `openkos: sync-tags --all`. Neither the `log.md` entry nor the commit
+    message names any tag value (ADR-0033 Decision 6) -- both name only the
+    Source id (or Source count, for `--all`) and a concept count. There is
+    no cross-file rollback: a mid-way write failure names every path
+    already landed. A successful write refreshes the derived stores once,
+    as every other bundle-writing verb does.
+    """
+    if source_id is not None and all_:
+        typer.echo(
+            "openkos sync-tags: refusing to sync -- supply a <source-id> "
+            "argument or --all, not both.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    if source_id is None and not all_:
+        typer.echo(
+            "openkos sync-tags: refusing to sync -- supply a <source-id> "
+            "argument or --all.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    root = Path.cwd()
+    layout = config.WorkspaceLayout(root)
+    log_path = layout.bundle_dir / "log.md"
+
+    try:
+        workspace_reason = config.require_workspace(root)
+        if workspace_reason is not None:
+            raise ValueError(workspace_reason)
+        cfg = config.read_config(root)
+        prepared = application_lifecycle.prepare_sync_tags(
+            layout, source_id, now=datetime.now(UTC)
+        )
+    except (OSError, ValueError) as exc:
+        typer.echo(f"openkos sync-tags: refusing to sync -- {exc}.", err=True)
+        raise typer.Exit(code=1) from exc
+
+    for skip in prepared.skips:
+        if skip.reason == "malformed-tags":
+            typer.echo(
+                f"openkos sync-tags: WARNING -- 'bundle/{skip.concept_id}.md' "
+                "has a malformed 'tags' value; left unchanged.",
+                err=True,
+            )
+        else:
+            typer.echo(
+                f"openkos sync-tags: note -- 'bundle/{skip.concept_id}.md' is "
+                "below its Source's sensitivity; run 'openkos "
+                "set-sensitivity' (or 'openkos backfill-sensitivity') to "
+                "raise it first.",
+                err=True,
+            )
+
+    if not prepared.additions:
+        typer.echo("openkos sync-tags: nothing to sync.")
+        return
+
+    typer.echo("openkos sync-tags: proposed changes:")
+    for addition in prepared.additions:
+        typer.echo(
+            f"  ~ bundle/{addition.concept_id}.md (tags added: "
+            f"{', '.join(addition.added)})"
+        )
+    typer.echo(f"  ~ {log_path.name} (new dated entry)")
+
+    if not auto and cfg.review:
+        if sys.stdin.isatty():
+            typer.confirm(prepared.confirmation.prompt, abort=True)
+        else:
+            typer.echo(prepared.confirmation.non_tty_refusal, err=True)
+            raise typer.Exit(code=1)
+
+    # Issue #306: every byte below was computed from a pre-prompt read, so
+    # re-validate each target now -- after the gate, before the first write.
+    _reject_drifted_targets(
+        layout,
+        {root / rel: content for rel, content in prepared.baselines.items()},
+        "sync-tags",
+    )
+
+    try:
+        landed = application_lifecycle.sync_tags_core(layout, prepared)
+    except (OSError, ValueError) as exc:
+        typer.echo(
+            f"openkos sync-tags: failed while writing the sync-tags -- {exc}.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(
+        f"openkos sync-tags: added tags to {len(prepared.additions)} "
+        f"concept(s) ({log_path.name} updated)."
+    )
+
+    commit_subject = (
+        f"openkos: sync-tags {prepared.roots[0]}"
+        if source_id is not None
+        else "openkos: sync-tags --all"
+    )
+    _autocommit(root, landed, commit_subject)
+
+    # #640: `cfg` already read above -- a tag write changes the embedding
+    # input (design Decision 7), so this is not suppressed.
+    _refresh_derived_after_write(layout, cfg, verb="sync-tags")
+
+
+@app.command(
     "normalize-names",
     help=(
         "Rename on-disk files and directories whose names are not in "

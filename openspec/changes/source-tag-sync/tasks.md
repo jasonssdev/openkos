@@ -184,51 +184,51 @@ only the verb name and may land after Phase 3 or together with it.
 
 ## Phase 3 (PR 3): CLI verb + docs
 
-- [ ] **3.1** [TEST] `tests/unit/cli/test_sync_tags.py`:
+- [x] **3.1** [TEST] `tests/unit/cli/test_sync_tags.py`:
       `test_both_forms_refuse` and `test_neither_form_refuses` — exit 1,
       stderr names both forms; precondition: bundle bytes hashed before,
       unchanged after.
-- [ ] **3.2** [TEST] `test_non_source_refuses` — exit 1, "takes a Source".
-- [ ] **3.3** [IMPL] `@app.command("sync-tags", rich_help_panel="Maintain")`,
+- [x] **3.2** [TEST] `test_non_source_refuses` — exit 1, "takes a Source".
+- [x] **3.3** [IMPL] `@app.command("sync-tags", rich_help_panel="Maintain")`,
       `@_guard_workspace_lock("sync-tags")`, `sync_tags_cmd(source_id:
       str | None, all_: bool = --all, auto: bool = --auto)`; argument
       validation before any read; `prepare_sync_tags`, catching
       `OSError`/`ValueError` → exit 1. GREEN 3.1-3.2.
-- [ ] **3.4** [TEST] `test_help_lists_sync_tags` in the `Maintain` panel.
-- [ ] **3.5** [TEST] `test_preview_lines` — `~ bundle/concepts/a.md (tags
+- [x] **3.4** [TEST] `test_help_lists_sync_tags` in the `Maintain` panel.
+- [x] **3.5** [TEST] `test_preview_lines` — `~ bundle/concepts/a.md (tags
       added: alpha, beta)` then `~ log.md (new dated entry)`.
-- [ ] **3.6** [TEST] `test_decline_writes_nothing` (TTY forced, input
+- [x] **3.6** [TEST] `test_decline_writes_nothing` (TTY forced, input
       `n`); `test_non_tty_without_auto_refuses` (exit 1, names `--auto`);
       `test_review_false_skips_prompt`.
-- [ ] **3.7** [IMPL] Preview + shared gate driven by
+- [x] **3.7** [IMPL] Preview + shared gate driven by
       `prepared.confirmation`. GREEN 3.5-3.6.
-- [ ] **3.8** [TEST] `test_skip_lines_on_stderr` — malformed WARNING and
+- [x] **3.8** [TEST] `test_skip_lines_on_stderr` — malformed WARNING and
       below-sensitivity note naming `openkos set-sensitivity`, once each.
       [IMPL] render `prepared.skips`.
-- [ ] **3.9** [TEST] `test_nothing_to_sync_exits_zero` — precondition: git
+- [x] **3.9** [TEST] `test_nothing_to_sync_exits_zero` — precondition: git
       commit count read before; after: same count, message printed.
-- [ ] **3.10** [TEST] `test_descendant_drift_exits_3` and
+- [x] **3.10** [TEST] `test_descendant_drift_exits_3` and
       `test_source_drift_exits_3` — edit the file inside a monkeypatched
       `typer.confirm` (assert it was called), then exit 3 and every staged
       file byte-unchanged.
-- [ ] **3.11** [IMPL] `_reject_drifted_targets(layout,
+- [x] **3.11** [IMPL] `_reject_drifted_targets(layout,
       prepared.baselines, "sync-tags")`. GREEN 3.10.
-- [ ] **3.12** [MUT] Drop the Source paths from the baselines → 3.10's
+- [x] **3.12** [MUT] Drop the Source paths from the baselines → 3.10's
       Source case RED; revert.
-- [ ] **3.13** [TEST] `test_one_commit_message_and_refresh` — commit count
+- [x] **3.13** [TEST] `test_one_commit_message_and_refresh` — commit count
       +1, message `openkos: sync-tags sources/notes`, no tag value in it;
       `_refresh_derived_after_write` spy called exactly once with
       `verb="sync-tags"`; `--all` variant message `openkos: sync-tags --all`.
-- [ ] **3.14** [IMPL] `sync_tags_core`, `_autocommit`, refresh; mid-write
+- [x] **3.14** [IMPL] `sync_tags_core`, `_autocommit`, refresh; mid-write
       failure message names landed paths. GREEN 3.13.
-- [ ] **3.15** [DOC] `docs/cli.md`: add `### openkos sync-tags (<source-id>
+- [x] **3.15** [DOC] `docs/cli.md`: add `### openkos sync-tags (<source-id>
       | --all)` after `backfill-sensitivity`, stated timelessly: what it
       adds, that it never removes (link ADR-0033), the closure and its
       multi-Source exclusion, both skip rules, gate/drift/commit shape, and
       that tag values stay out of `log.md` and the commit. No issue
       numbers as "since", no verb counts. Verify every flag named exists in
       `openkos sync-tags --help`.
-- [ ] **3.16** Full gate. Commit `feat(cli): add sync-tags to add a
+- [x] **3.16** Full gate. Commit `feat(cli): add sync-tags to add a
       Source's tags to its derived concepts (#1093)` and `docs(cli): …`.
 
 ## Phase 4 (PR 4): Ingest advisory
