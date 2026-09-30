@@ -120,6 +120,31 @@ def test_reindex_embed_site_uses_the_embed_client_delegator(
     assert len(calls) == 1
 
 
+def test_reindex_passes_embedding_backend_to_state_reindex(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`reindex` passes `embedding_backend=cfg.backend` to
+    `state.reindex.reindex()` (issue #1057 Phase 11, tasks 11.20-11.21).
+    Detected by the KWARG'S PRESENCE, not merely its value -- the default
+    backend is `"ollama"` either way. **RED today**: the call site omits
+    `embedding_backend=` entirely."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_report = ReindexReport(embedded=0, cache_hits=0, pruned=0, skipped=0)
+    calls: list[dict[str, object]] = []
+
+    def _spy(*args: object, **kwargs: object) -> ReindexReport:
+        calls.append(kwargs)
+        return fake_report
+
+    monkeypatch.setattr("openkos.cli.main.reindex_module.reindex", _spy)
+
+    result = runner.invoke(app, ["reindex"])
+
+    assert result.exit_code == 0, result.stdout
+    assert len(calls) == 1
+    assert calls[0].get("embedding_backend") == "ollama"
+
+
 def test_reindex_summary_notes_when_prune_pass_was_skipped(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1140,3 +1165,85 @@ def test_reembed_trigger_wording_handles_a_pre_composition_bare_tag() -> None:
     wording = _reembed_trigger_wording("bge-m3", "qwen3-embedding:0.6b#chunk-v1")
 
     assert wording == "embedding model changed (bge-m3 -> qwen3-embedding:0.6b)"
+
+
+@pytest.mark.parametrize(
+    ("previous_tag", "effective_tag", "expected"),
+    [
+        (
+            None,
+            "bge-m3#chunk-v1",
+            "no embedding-model tag stored (fresh or dropped store)",
+        ),
+        (
+            "bge-m3#chunk-v1",
+            "bge-m3#chunk-v1#backend=openai-compatible",
+            "embedding backend changed (ollama -> openai-compatible)",
+        ),
+        (
+            "bge-m3#chunk-v1",
+            "qwen3-embedding:0.6b#chunk-v1",
+            "embedding model changed (bge-m3 -> qwen3-embedding:0.6b)",
+        ),
+        (
+            "bge-m3#compose-v1",
+            "bge-m3#chunk-v1",
+            "embed text composition changed (compose-v1 -> chunk-v1); "
+            "your embedding model is unchanged (bge-m3)",
+        ),
+    ],
+    ids=["no-tag", "backend-changed", "model-changed", "composition-changed"],
+)
+def test_reembed_trigger_wording_four_mutually_exclusive_branches(
+    previous_tag: str | None, effective_tag: str, expected: str
+) -> None:
+    """The rewritten `_reembed_trigger_wording` (issue #1057 Phase 11, tasks
+    11.10-11.11) parses BOTH tags via `parse_embedding_tag` and checks, in
+    this exact order: no previous tag; backend changed; model changed;
+    composition changed -- EXACTLY one branch fires, with NO appended model
+    clause when both backend and model differ (spec: reindex-command
+    "Reindex Discloses The Real Re-Embed Trigger"). **RED today**: the
+    pre-rewrite implementation has no backend-changed branch at all, so the
+    `backend-changed` case falls through to a false "embedding model
+    changed" claim (the model parts, `bge-m3` == `bge-m3`, are equal, so
+    the OLD bare-string-partition logic would actually mis-route it into
+    the composition branch instead)."""
+    from openkos.cli.main import _reembed_trigger_wording
+
+    wording = _reembed_trigger_wording(previous_tag, effective_tag)
+
+    assert wording == expected
+
+
+def test_reembed_trigger_wording_backend_change_never_appends_a_model_clause() -> None:
+    """When BOTH the backend and the model differ, the backend-changed
+    branch fires ALONE -- no appended model clause (the earlier proposal
+    sketch this supersedes would have appended one)."""
+    from openkos.cli.main import _reembed_trigger_wording
+
+    wording = _reembed_trigger_wording(
+        "bge-m3#chunk-v1", "qwen3-embedding:0.6b#chunk-v1#backend=openai-compatible"
+    )
+
+    assert wording == "embedding backend changed (ollama -> openai-compatible)"
+    assert "model changed" not in wording
+
+
+def test_reembed_trigger_wording_legacy_upgrade_is_never_reported_as_backend_change() -> (
+    None
+):
+    """A legacy, backend-unqualified stored tag is read as `ollama`
+    (`parse_embedding_tag`'s default), so upgrading to a version that emits
+    backend-qualified tags while STAYING on `ollama` is never reported as a
+    backend change (reindex-command: "A legacy tag upgraded to
+    backend-qualified tags is never reported as a backend change")."""
+    from openkos.cli.main import _reembed_trigger_wording
+
+    # Same model, same (implicit) backend -- no genuine trigger at all here;
+    # this direct call proves the WORDING function's own backend-comparison
+    # branch never fires on a legacy-vs-qualified-ollama pair, independent
+    # of whether `reindex()`'s tag GATE would even force a re-embed for it
+    # (state/reindex.py's own test suite pins that half).
+    wording = _reembed_trigger_wording("bge-m3#chunk-v1", "bge-m3#chunk-v1")
+
+    assert "backend changed" not in wording

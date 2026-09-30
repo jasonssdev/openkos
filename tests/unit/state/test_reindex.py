@@ -2123,3 +2123,160 @@ def test_reindex_withholds_the_model_tag_when_a_doc_was_withheld(
 
     assert report.withheld_confidential == 1
     assert report.model_reembedded is True
+
+
+# --- Phase 11 (issue #1057): backend-aware embedding identity --------------
+
+
+def test_embedding_tag_ollama_byte_identical() -> None:
+    """`embedding_tag("bge-m3")` (default backend, `ollama`) is
+    byte-identical to today's hardcoded `f"{model}#{EMBED_COMPOSITION_TAG}"`
+    tag format -- an existing Ollama-only store must not see a spurious tag
+    change from this backend-awareness addition (design Decision 7; spec:
+    reindex-command's tag-gate MODIFIED requirement)."""
+    assert reindex.embedding_tag("bge-m3") == _tagged("bge-m3")
+    assert reindex.embedding_tag("bge-m3", backend="ollama") == _tagged("bge-m3")
+
+
+def test_embedding_tag_openai_compatible_appends_backend_suffix() -> None:
+    """A non-`ollama` backend appends `#backend=<backend>` after the
+    composition suffix (design Decision 7)."""
+    assert (
+        reindex.embedding_tag("bge-m3", backend="openai-compatible")
+        == f"{_tagged('bge-m3')}#backend=openai-compatible"
+    )
+
+
+def test_parse_embedding_tag_round_trip() -> None:
+    """`parse_embedding_tag` splits on `#`: model, composition, then any
+    `key=value` attributes -- only `backend=` read, unknown attributes
+    ignored (forward-compatible). A legacy bare tag (no backend part) parses
+    as backend `ollama`; a pre-composition legacy tag (bare model, no `#`
+    at all) parses with `composition=""` (design Decision 7)."""
+    legacy = reindex.parse_embedding_tag("bge-m3#chunk-v1")
+    assert legacy == reindex.EmbeddingTagParts(
+        model="bge-m3", composition="chunk-v1", backend="ollama"
+    )
+
+    qualified = reindex.parse_embedding_tag("bge-m3#chunk-v1#backend=openai-compatible")
+    assert qualified == reindex.EmbeddingTagParts(
+        model="bge-m3", composition="chunk-v1", backend="openai-compatible"
+    )
+
+    pre_composition = reindex.parse_embedding_tag("bge-m3")
+    assert pre_composition == reindex.EmbeddingTagParts(
+        model="bge-m3", composition="", backend="ollama"
+    )
+
+    forward_compatible = reindex.parse_embedding_tag("bge-m3#chunk-v1#foo=bar")
+    assert forward_compatible == reindex.EmbeddingTagParts(
+        model="bge-m3", composition="chunk-v1", backend="ollama"
+    )
+
+
+def test_embedding_tag_and_parse_are_inverse_for_every_backend() -> None:
+    """`parse_embedding_tag(embedding_tag(model, backend))` recovers both
+    `model` and `backend`, for every `(model, backend)` pair -- paired with
+    the literal expected-value tests above (11.1/11.3), so this property
+    test is not circular on its own. Mutation-proof: mutate
+    `embedding_tag`'s backend-suffix format string, confirm this breaks,
+    then revert."""
+    for model in ("bge-m3", "qwen3-embedding:0.6b"):
+        for backend in ("ollama", "openai-compatible"):
+            tag = reindex.embedding_tag(model, backend=backend)
+            parts = reindex.parse_embedding_tag(tag)
+            assert parts.model == model
+            assert parts.backend == backend
+
+    # Mutation proof (performed live during this apply run): mutated
+    # `embedding_tag`'s backend-suffix format string from
+    # `f"{tag}#backend={backend}"` to `f"{tag}#be={backend}"`. Both this
+    # test AND `test_embedding_tag_openai_compatible_appends_backend_suffix`
+    # (11.3's literal expected-value test) failed -- `parse_embedding_tag`
+    # (which reads only the `backend=` key) read every mutated
+    # `openai-compatible` tag back as backend `"ollama"` (the tag's
+    # no-backend-part default). Reverted with the exact inverse edit,
+    # purged `__pycache__`, reconfirmed all 80 tests in this file green.
+
+
+def test_reindex_accepts_embedding_backend_param_and_forces_reembed_on_switch(
+    tmp_path: Path,
+) -> None:
+    """A stored tag identifying `ollama`+`bge-m3`; `reindex(...,
+    model_tag="bge-m3", embedding_backend="openai-compatible")` forces a
+    full re-embed (reindex-command: "Switching backend with the same model
+    name forces a re-embed"). **RED today**: `reindex()` has no
+    `embedding_backend` parameter."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "a.md", title="A")
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        reindex.reindex(
+            bundle_dir,
+            db,
+            _FakeEmbedder(),
+            model_tag="bge-m3",
+            embedding_backend="ollama",
+        )
+
+        embedder = _FakeEmbedder()
+        report = reindex.reindex(
+            bundle_dir,
+            db,
+            embedder,
+            model_tag="bge-m3",
+            embedding_backend="openai-compatible",
+        )
+        stored_tag = db.read_model_tag()
+
+    assert report.embedded == 1
+    assert report.model_reembedded is True
+    assert stored_tag == reindex.embedding_tag("bge-m3", backend="openai-compatible")
+
+
+def test_reindex_legacy_tag_read_as_ollama_forces_no_reembed(tmp_path: Path) -> None:
+    """A stored tag `bge-m3#chunk-v1` (no backend part, pre-change), with
+    every doc already cached under it; `reindex(..., model_tag="bge-m3",
+    embedding_backend="ollama")` finds NO mismatch and re-embeds nothing
+    (reindex-command: "An existing Ollama-only store forces no re-embed on
+    upgrade")."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "a.md", title="A")
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        # Simulate a store written before this change: a normal reindex
+        # forces (and self-heals) the LEGACY, backend-unqualified tag, with
+        # every doc already cached under it.
+        reindex.reindex(bundle_dir, db, _FakeEmbedder(), model_tag="bge-m3")
+        assert db.read_model_tag() == _tagged("bge-m3")
+
+        embedder = _FakeEmbedder()
+        report = reindex.reindex(
+            bundle_dir,
+            db,
+            embedder,
+            model_tag="bge-m3",
+            embedding_backend="ollama",
+        )
+
+    assert report.model_reembedded is False
+    assert embedder.call_count == 0
+
+
+def test_reindex_embedding_backend_defaults_to_ollama_for_back_compat(
+    tmp_path: Path,
+) -> None:
+    """Omitting `embedding_backend` (the default `config.DEFAULT_BACKEND`,
+    i.e. `"ollama"`) preserves every pre-Phase-11 caller's behavior
+    unchanged -- the effective tag is byte-identical to before this change
+    (design Decision 7)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "a.md", title="A")
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        report = reindex.reindex(bundle_dir, db, _FakeEmbedder(), model_tag="bge-m3")
+
+    assert report.effective_model_tag == _tagged("bge-m3")

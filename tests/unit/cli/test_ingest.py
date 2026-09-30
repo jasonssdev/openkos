@@ -5500,6 +5500,39 @@ def test_single_file_ingest_embed_sites_use_the_embed_client_delegator(
     assert len(calls) == 2
 
 
+def test_single_file_ingest_reindex_calls_pass_embedding_backend(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A single-file `ingest --auto` passes `embedding_backend=cfg.backend`
+    at BOTH its `reindex()` call sites -- `_embed_after_ingest`'s own call
+    and `_refresh_derived_after_write`'s (issue #1057 Phase 11, tasks
+    11.20-11.21). Detected by the KWARG'S PRESENCE, not merely its value:
+    the default backend is `"ollama"` either way, so a value-only
+    assertion could pass vacuously whether or not the site actually passes
+    it. **RED today**: neither call site passes `embedding_backend=` at
+    all."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake = _EmbeddingLLM(_concept_reply())
+    monkeypatch.setattr("openkos.cli.main.OllamaClient", lambda *a, **k: fake)
+    calls: list[dict[str, object]] = []
+    original_reindex = state_reindex.reindex
+
+    def _spy(*args: object, **kwargs: object) -> object:
+        calls.append(kwargs)
+        return original_reindex(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(state_reindex, "reindex", _spy)
+    src = tmp_path / "note.md"
+    src.write_text("# Note\n\nRaw material.\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", str(src), "--auto"])
+
+    assert result.exit_code == 0, result.stdout
+    assert len(calls) == 2
+    for kwargs in calls:
+        assert kwargs.get("embedding_backend") == "ollama"
+
+
 def test_batch_ingest_embed_sites_use_the_embed_client_delegator(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

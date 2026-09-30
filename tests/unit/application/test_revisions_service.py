@@ -311,6 +311,40 @@ def test_read_decision_vectors_model_tag_mismatch_or_missing_yields_model_mismat
     assert coverage.store == "model-mismatch"
 
 
+def test_read_decision_vectors_passes_backend_through_to_embedding_tag(
+    tmp_path: Path,
+) -> None:
+    """`read_decision_vectors` gains a `backend` param (issue #1057 Phase
+    11, tasks 11.18-11.19) passed through to `reindex.embedding_tag(model,
+    backend)` for the stored-tag comparison -- a store whose tag identifies
+    `openai-compatible`+`bge-m3` matches when `backend="openai-compatible"`
+    is passed, but reads as a mismatch under the DEFAULT (`ollama`)
+    backend. **RED today**: `read_decision_vectors` has no `backend`
+    parameter at all, so it always compares against the `ollama`-only
+    `embedding_tag(_MODEL)` form."""
+    layout = _workspace(tmp_path)
+    with vectorstore.open_vector_store(layout.vectors_db_path) as store:
+        store.upsert("decisions/a", [0.1] * EMBED_DIM, "hash-a")
+        store.write_model_tag(
+            reindex.embedding_tag(_MODEL, backend="openai-compatible")
+        )
+        store.commit()
+
+    mismatched = revisions.read_decision_vectors(
+        layout, ["decisions/a"], {}, embedding_model=_MODEL
+    )
+    assert mismatched.store == "model-mismatch"
+
+    matched = revisions.read_decision_vectors(
+        layout,
+        ["decisions/a"],
+        {},
+        embedding_model=_MODEL,
+        backend="openai-compatible",
+    )
+    assert matched.store != "model-mismatch"
+
+
 def test_read_decision_vectors_per_decision_missing_and_stale(tmp_path: Path) -> None:
     """A Decision with no `doc_vectors` row is in `coverage.missing`; a
     Decision whose stored `content_hash` differs from the current file
@@ -760,6 +794,37 @@ def test_plan_revisions_serves_unchanged_findings_with_zero_llm_calls(
         ("decisions/a", "decisions/b")
     }
     assert plan.to_judge == ()
+
+
+def test_plan_revisions_passes_backend_through_to_read_decision_vectors(
+    tmp_path: Path,
+) -> None:
+    """`plan_revisions` gains a `backend` param (issue #1057 Phase 11)
+    forwarded to `read_decision_vectors`: a store seeded under the DEFAULT
+    (`ollama`) tag reads as `model-mismatch` once `backend="openai-compatible"`
+    is passed, collapsing `coverage.vectors` and forcing every candidate to
+    `to_judge` rather than served. **RED today**: `plan_revisions` has no
+    `backend` parameter."""
+    layout = _workspace(tmp_path)
+    _seed_decision_and_vector(layout, "decisions/a", 0)
+    _seed_decision_and_vector(layout, "decisions/b", 0)
+
+    decisions = revisions.load_decisions(
+        layout, include_confidential=False, local_exemption=False
+    )
+    files = _bundle_snapshot(layout)
+    _record_current_finding(layout, files, ("decisions/a", "decisions/b"))
+
+    plan = revisions.plan_revisions(
+        layout,
+        decisions,
+        embedding_model=_MODEL,
+        effective_confidential=False,
+        fresh=False,
+        backend="openai-compatible",
+    )
+
+    assert plan.coverage.store == "model-mismatch"
 
 
 def test_plan_revisions_edited_decision_body_rejudges_only_its_own_pairs(

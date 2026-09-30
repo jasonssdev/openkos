@@ -46,6 +46,7 @@ from array import array
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 
+from openkos import config
 from openkos.state import derived
 
 _CREATE_QUESTION_VECTORS_TABLE_SQL = """
@@ -80,6 +81,16 @@ spare, and the loop it feeds normally runs zero times."""
 
 _TYPECODE = "f"
 """`array` typecode for float32 -- see the module docstring's precision note."""
+
+
+def cache_key(model: str, backend: str) -> str:
+    """The `model_tag` this cache is keyed by (issue #1057 Phase 11, design
+    Decision 7): `model` unchanged for `backend == "ollama"` (existing rows
+    stay valid, byte-identical to before this parameter existed), else
+    `f"{model}#backend={backend}"` -- the same backend-suffix rule
+    `state.reindex.embedding_tag` uses, without the composition part (this
+    cache has no embed-text-composition concept of its own to version)."""
+    return model if backend == config.DEFAULT_BACKEND else f"{model}#backend={backend}"
 
 
 def question_hash(question: str) -> str:

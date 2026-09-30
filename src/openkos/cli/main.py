@@ -1825,28 +1825,37 @@ def _plural(n: int) -> str:
 def _reembed_trigger_wording(
     previous_tag: str | None, effective_tag: str | None
 ) -> str:
-    """Name the REAL trigger for a forced full re-embed (#888; reindex-
-    command: Reindex Discloses The Real Re-Embed Trigger, Not A False
-    Model-Change Claim). Compares `previous_tag` (the PREVIOUSLY stored
-    effective tag) against `effective_tag` (THIS run's `{model}#{composition}`
-    tag) by their two `#`-separated parts -- never against the bare
-    configured model name, which is the retired comparison that reported a
-    false "embedding model changed" on a composition-only bump (e.g. this
-    change's own `compose-v1` -> `chunk-v1`).
+    """Name the REAL trigger for a forced full re-embed (#888, widened by
+    issue #1057 Phase 11; reindex-command: Reindex Discloses The Real
+    Re-Embed Trigger, Not A False Model-Change Claim). Parses BOTH
+    `previous_tag` (the PREVIOUSLY stored effective tag) and `effective_tag`
+    (THIS run's tag) via `state.reindex.parse_embedding_tag` -- never a bare
+    string partition or a comparison against the bare configured model name,
+    either of which can report a false "embedding model changed" on a
+    composition-only bump, or fail to name a genuine backend change at all.
 
-    Three branches, in order: no previous tag at all (fresh store, or one
-    `purge` just dropped) is named explicitly rather than folded into
-    "model changed"; a genuine model-name difference; and a composition-only
-    difference with the SAME model."""
+    Four branches, checked in this exact order, mutually exclusive: no
+    previous tag at all (fresh store, or one `purge` just dropped) is named
+    explicitly rather than folded into "model changed"; a backend-kind
+    difference (a legacy, backend-unqualified stored tag is read as
+    `ollama` by `parse_embedding_tag`, so upgrading to a version that emits
+    backend-qualified tags while staying on `ollama` is never reported as a
+    backend change); a genuine model-name difference (same backend); and a
+    composition-only difference with the SAME backend and model -- the
+    fallback when none of the first three differ. No appended model clause
+    when both backend and model differ; the backend-changed branch fires
+    alone, superseding an earlier proposal sketch."""
     if previous_tag is None:
         return "no embedding-model tag stored (fresh or dropped store)"
-    old_model, _, old_composition = previous_tag.partition("#")
-    new_model, _, new_composition = (effective_tag or "").partition("#")
-    if old_model != new_model:
-        return f"embedding model changed ({old_model} -> {new_model})"
+    old = reindex_module.parse_embedding_tag(previous_tag)
+    new = reindex_module.parse_embedding_tag(effective_tag or "")
+    if old.backend != new.backend:
+        return f"embedding backend changed ({old.backend} -> {new.backend})"
+    if old.model != new.model:
+        return f"embedding model changed ({old.model} -> {new.model})"
     return (
-        f"embed text composition changed ({old_composition} -> {new_composition}); "
-        f"your embedding model is unchanged ({old_model})"
+        f"embed text composition changed ({old.composition} -> {new.composition}); "
+        f"your embedding model is unchanged ({old.model})"
     )
 
 
@@ -4048,6 +4057,7 @@ def _embed_after_ingest(
     embedder: Embedder,
     *,
     model_tag: str,
+    embedding_backend: str = config.DEFAULT_BACKEND,
     warn_nonlocal_host: bool = True,
     local_exemption: bool = False,
 ) -> None:
@@ -4109,6 +4119,7 @@ def _embed_after_ingest(
                 db,
                 embedder,
                 model_tag=model_tag,
+                embedding_backend=embedding_backend,
                 local_exemption=local_exemption,
             )
     except Exception as exc:
@@ -4236,6 +4247,7 @@ def _refresh_derived_after_write(
                 db,
                 embedder,
                 model_tag=cfg.embedding_model,
+                embedding_backend=cfg.backend,
                 on_progress=observability.progress_callback(verb, "embedding doc"),
                 local_exemption=_resolve_local_exemption(embedder_locality, cfg),
             )
@@ -5777,6 +5789,7 @@ def _ingest_single(
         layout,
         embedder,
         model_tag=cfg.embedding_model,
+        embedding_backend=cfg.backend,
         warn_nonlocal_host=warn_nonlocal_embed_host,
         # Resolved from the client that will do the sending, beside the cfg
         # that carries the workspace's opt-out (#922) -- the same two terms
@@ -14560,6 +14573,7 @@ def revisions(
         embedding_model=cfg.embedding_model,
         effective_confidential=effective_confidential,
         fresh=fresh,
+        backend=cfg.backend,
     )
 
     # design.md Decision B1's table: a whole-run vector-store degrade makes
@@ -15592,6 +15606,7 @@ def reindex(
                 force=force,
                 fts_db_path=layout.fts_db_path,
                 model_tag=cfg.embedding_model,
+                embedding_backend=cfg.backend,
                 # TTY-gated per-doc embedding progress on stderr; `None`
                 # (silent) when output is piped (issue #190, mirrors
                 # `suggest-relations`' #134 per-edge line).

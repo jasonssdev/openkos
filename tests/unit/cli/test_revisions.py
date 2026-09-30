@@ -287,6 +287,41 @@ def test_vector_store_absent_exits_zero_with_remedy_and_zero_calls(
     assert fake.calls == []
 
 
+def test_revisions_passes_backend_through_to_plan_revisions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`revisions` passes `backend=cfg.backend` to
+    `revisions_service.plan_revisions` (issue #1057 Phase 11, tasks
+    11.18-11.21). **RED today**: the CLI call site omits `backend=`
+    entirely."""
+    _init_workspace(tmp_path, monkeypatch)
+    layout = config.WorkspaceLayout(tmp_path)
+    _write_doc(layout.bundle_dir / "decisions" / "a.md")
+    _patch_llm(monkeypatch, _ScriptedLLM())
+
+    calls: list[str] = []
+    original_plan_revisions = revisions_service.plan_revisions
+
+    def _spy(*args: object, backend: str, **kwargs: object) -> object:
+        # `backend` has NO default here on purpose: a caller that omits
+        # `backend=` entirely (the pre-Phase-11 CLI site) raises
+        # `TypeError` before this test's own assertion ever runs -- the
+        # test can then never pass vacuously on the default `ollama` path,
+        # unlike a spy with `backend: str = "ollama"` would (which cannot
+        # tell "wired and defaulted to ollama" apart from "never wired at
+        # all", since this workspace's own `cfg.backend` is ollama either
+        # way).
+        calls.append(backend)
+        return original_plan_revisions(*args, backend=backend, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(revisions_service, "plan_revisions", _spy)
+
+    result = runner.invoke(app, ["revisions", "--auto"])
+
+    assert result.exit_code == 0, result.stdout
+    assert calls == ["ollama"]
+
+
 def test_vector_store_model_mismatch_exits_zero_with_remedy_and_zero_calls(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
