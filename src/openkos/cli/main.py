@@ -45,6 +45,8 @@ from openkos.application import query as application_query
 from openkos.application import repair as application_repair
 from openkos.application import revisions as revisions_service
 from openkos.application import status as application_status
+from openkos.application import suggest_relations_service as relations_service
+from openkos.application import suggest_volatility_service as volatility_service
 from openkos.application.revisions_report import revisions_report
 from openkos.bundle import bundle, listing, source_titles
 from openkos.bundle import decisions as bundle_decisions
@@ -83,7 +85,6 @@ from openkos.llm.ollama import (
 from openkos.llm.openai_compatible import OpenAICompatibleClient
 from openkos.model import okf, types
 from openkos.model.relations import (
-    ASYMMETRIC_RELATION_TYPES,
     relation_type_note,
     validate_relation_type,
 )
@@ -118,19 +119,15 @@ from openkos.resolution.decision_revision import (
     revision_truncation_notice,
 )
 from openkos.resolution.edge_typing import (
-    LEAST_SPECIFIC_RELATION_TYPE,
     EdgeSuggestion,
-    EdgeSuggestionBatch,
     candidate_edges,
     candidate_truncation_notice,
-    corrected_edge_from_rationale,
-    next_candidate_offset,
     quarantined_candidate_notice,
     suggest_edge_types,
 )
 from openkos.resolution.reconciliation import reconcile_merged_body
 from openkos.resolution.volatility_typing import (
-    TierSuggestionBatch,
+    TierSuggestion,
     suggest_volatility,
 )
 from openkos.retrieval.answer import NO_MATCH, NoMatchCause
@@ -1986,37 +1983,6 @@ def _echo_adjudicate_batch_failure(
         typer.echo(f"{context} -- {failure}.", err=True)
 
 
-def _echo_suggest_relations_batch_failure(
-    batch: EdgeSuggestionBatch, *, total: int, model: str
-) -> None:
-    """One stderr line for a partial `EdgeSuggestionBatch` (#441): the same
-    3-tier cause-specific wording the raise-path handlers use, prefixed with
-    how much paid-for work survived (mirrors
-    `_echo_adjudicate_batch_failure`). The `isinstance` dispatch mirrors the
-    handlers' ORDER for the same reason they are ordered: both specific
-    classes subclass `BackendError`, so the generic branch must come last or
-    their actionable remediation is lost."""
-    failure = batch.failure
-    context = (
-        f"openkos suggest-relations: failed after suggesting "
-        f"{len(batch.results)} of {total} untyped edge(s)"
-    )
-    if isinstance(failure, BackendUnavailable):
-        typer.echo(
-            f"{context} -- {failure}. Start it with `ollama serve`, then try "
-            f"again.{_DOCTOR_HINT}",
-            err=True,
-        )
-    elif isinstance(failure, BackendModelNotFound):
-        typer.echo(
-            f"{context} -- model '{model}' is not installed. Pull it with "
-            f"`ollama pull {model}`, then try again.",
-            err=True,
-        )
-    else:
-        typer.echo(f"{context} -- {failure}.", err=True)
-
-
 def _echo_contradictions_batch_failure(
     batch: ContradictionBatch, *, total: int, model: str
 ) -> None:
@@ -2034,40 +2000,6 @@ def _echo_contradictions_batch_failure(
     context = (
         f"openkos contradictions: failed after judging {len(batch.results)} "
         f"of {total} planned candidate(s)"
-    )
-    if isinstance(failure, BackendUnavailable):
-        typer.echo(
-            f"{context} -- {failure}. Start it with `ollama serve`, then try "
-            f"again.{_DOCTOR_HINT}",
-            err=True,
-        )
-    elif isinstance(failure, BackendModelNotFound):
-        typer.echo(
-            f"{context} -- model '{model}' is not installed. Pull it with "
-            f"`ollama pull {model}`, then try again.",
-            err=True,
-        )
-    else:
-        typer.echo(f"{context} -- {failure}.", err=True)
-
-
-def _echo_suggest_volatility_batch_failure(
-    batch: TierSuggestionBatch, *, model: str
-) -> None:
-    """One stderr line for a partial `TierSuggestionBatch` (#441): the same
-    3-tier cause-specific wording the raise-path handlers use, prefixed with
-    how much paid-for work survived (mirrors
-    `_echo_adjudicate_batch_failure`). Unlike its three siblings, the count
-    has no of-total: `suggest_volatility` derives its type queue INSIDE the
-    leaf, so the verb holds no pre-flight total and fabricating one would
-    cost a second full bundle walk for an error line. The `isinstance`
-    dispatch mirrors the handlers' ORDER for the same reason they are
-    ordered: both specific classes subclass `BackendError`, so the generic
-    branch must come last or their actionable remediation is lost."""
-    failure = batch.failure
-    context = (
-        f"openkos suggest-volatility: failed after suggesting "
-        f"{len(batch.results)} concept type(s)"
     )
     if isinstance(failure, BackendUnavailable):
         typer.echo(
@@ -11885,174 +11817,175 @@ def _zero_edge_state_message(
     return none_survived.format(count=count)
 
 
-def _suggestion_caveat(suggested_type: str) -> str:
-    """What a suggested type does NOT establish, spelled ONCE (#778).
-
-    Two caveats, one helper, because they are answered at the same moment
-    and by the same three surfaces -- `suggest-relations`' listing, its
-    `--apply` preview and prompt, and `curate`'s Structure stage. #778 was
-    exactly one surface spelling a caveat while another stayed silent, and
-    two helpers would let that happen again one caveat at a time.
-
-    - **Asymmetric types** carry #624's direction caveat. `docs/testing.md`
-      documents this wording as the contract wherever a suggested direction
-      is presented, so it is reproduced byte-for-byte.
-    - **The least-specific type** carries #802's. `related_to` is the
-      rubric's honest answer when no specific type holds -- "the two are
-      connected, and the documents do not support saying how" -- but the
-      operator saw `[related_to]` above a rationale explaining why it is
-      NOT any specific type, and was asked to approve it with nothing
-      saying what approving it asserts. The caveat says what the type
-      itself means, which is also why it is not a warning: the answer is
-      correct, and the graph edge it writes claims less than the reader of
-      a bare type label would assume.
-
-    A single `if/elif` is safe because the two classes are disjoint -- the
-    least-specific type is symmetric -- and a test pins that, so a future
-    asymmetric least-specific type cannot silently take whichever branch
-    happens to be written first.
-    """
-    if suggested_type in ASYMMETRIC_RELATION_TYPES:
-        return " (direction model-suggested, unverified)"
-    if suggested_type == LEAST_SPECIFIC_RELATION_TYPE:
-        return " (connected; the documents do not say how)"
-    return ""
+_suggestion_caveat = relations_service.suggestion_caveat
+"""Re-exported for the callers that reach the caveat through `cli.main`
+(curate's Structure stage). The definition -- what a suggested type does NOT
+establish (#778) -- lives in `application/suggest_relations_service.py`, beside
+the `--apply` walk that renders it."""
 
 
-def _run_suggest_relations_apply(
-    root: Path,
-    layout: config.WorkspaceLayout,
-    results: Sequence[EdgeSuggestion],
-) -> None:
-    """The interactive `suggest-relations --apply` walk (issue #560,
-    mirroring `_run_adjudicate_apply`): per VALID suggestion, render the
-    same `[type] source -> target` + rationale block the read-only report
-    prints, prompt through `curate._confirm` (the one validating per-item
-    write-consent prompt, #398/#483 contract), and on `y` write through the
-    exact `prepare_relate` -> `_reject_drifted_targets` -> `relate_core` ->
-    `_autocommit` sequence curate's Structure stage uses -- reused verbatim
-    so the write paths cannot drift. A degraded suggestion is reported and
-    skipped without a prompt; an already-present relation is reported and
-    skipped without a write; declines are listed after the summary so a
-    typo-free decline set is revisitable. Every byte `relate_core` writes
-    was computed by `prepare_relate` BEFORE the prompt, so each accepted
-    item re-validates its two targets against the prepared baselines
-    strictly after its `y` and strictly before its write (the
-    #306/#313/#319 drift arc); drift refuses with exit 3, prior per-item
-    commits remain intact."""
-    log_path = layout.bundle_dir / "log.md"
-    now = datetime.now(UTC)
-    applied = 0
-    skipped = 0
-    declined: list[str] = []
-
-    for result in results:
-        # `effective_edge`, not `edge` (#991 second review round): this is
-        # the WRITE path, so the direction that reaches `prepare_relate`
-        # (and therefore the bundle) must be the corrected one when the
-        # object-type direction-signature check found one -- `edge` itself
-        # stays the candidate identity, unswapped, for persistence and
-        # reassembly.
-        edge = result.effective_edge
-        if result.suggested_type is None:
-            typer.echo(f"[?] {edge.source_id} -> {edge.target_id}")
-            typer.echo("  note: no valid type suggested")
-            skipped += 1
-            continue
-
-        # #778: the SAME caveat curate's Structure stage spells (#624) --
-        # an asymmetric direction carries no evidence, and the surface
-        # that most invites bulk application must not be the one surface
-        # missing the documented warning. Rendered on the preview line
-        # AND inside the consent prompt, mirroring curate exactly.
-        caveat = _suggestion_caveat(result.suggested_type)
-        typer.echo(
-            f"[{result.suggested_type}] {edge.source_id} -> {edge.target_id}{caveat}"
-        )
-        typer.echo(f"  rationale: {result.rationale}")
-        if not curate_module._confirm(
-            f"Relate {edge.source_id} -> {edge.target_id} "
-            f"[{result.suggested_type}]{caveat}? [y/N]"
-        ):
-            skipped += 1
-            declined.append(
-                f"{edge.source_id} -> {edge.target_id} [{result.suggested_type}]"
-            )
-            continue
-
-        source_path = okf.concept_path_for(edge.source_id, layout.bundle_dir)
-        target_path = okf.concept_path_for(edge.target_id, layout.bundle_dir)
-        try:
-            prepared = application_lifecycle.prepare_relate(
-                source_path,
-                log_path,
-                edge.source_id,
-                edge.target_id,
-                result.suggested_type,
-                root,
-                now=now,
-                target_path=target_path,
-            )
-        except (OSError, ValueError) as exc:
-            typer.echo(
-                "openkos suggest-relations --apply: failed while relating "
-                f"{edge.source_id} -> {edge.target_id} -- {exc}.",
-                err=True,
-            )
-            raise typer.Exit(code=1) from exc
-
-        if prepared.already_present:
-            typer.echo("  note: already present -- nothing to write")
-            skipped += 1
-            continue
-
-        drift_baselines = {
-            source_path: prepared.source_bytes,
-            log_path: prepared.log_bytes,
-        }
-        if prepared.target_bytes is not None:
-            drift_baselines[target_path] = prepared.target_bytes
-        _reject_drifted_targets(
-            layout,
-            drift_baselines,
-            "suggest-relations --apply",
-        )
-
-        try:
-            application_lifecycle.relate_core(
-                source_path, log_path, prepared, target_path=target_path
-            )
-        except (OSError, ValueError) as exc:
-            typer.echo(
-                "openkos suggest-relations --apply: failed while relating "
-                f"{edge.source_id} -> {edge.target_id} -- {exc}.",
-                err=True,
-            )
-            raise typer.Exit(code=1) from exc
-
-        apply_commit_paths = [f"bundle/{edge.source_id}.md", "bundle/log.md"]
-        if prepared.new_target_text is not None:
-            apply_commit_paths.insert(1, f"bundle/{edge.target_id}.md")
-        _autocommit(
-            root,
-            apply_commit_paths,
-            f"openkos: relate {edge.source_id} -> {edge.target_id} "
-            f"({result.suggested_type})",
-        )
-        applied += 1
-
-    prefix = "nothing to apply -- " if applied == 0 and skipped == 0 else ""
-    typer.echo(
-        f"openkos suggest-relations --apply: {prefix}applied {applied}, "
-        f"skipped {skipped} (declined: {len(declined)})"
+def _relations_zero_state_message(
+    layout: config.WorkspaceLayout, store: GraphStore, embeddings_missing: bool
+) -> str:
+    """`suggest-relations`' wording for a zero-candidate outcome, handed to the
+    service as a port because `_zero_edge_state_message` is shared with
+    `contradictions`."""
+    return _zero_edge_state_message(
+        layout,
+        store=store,
+        use_typed_count=False,
+        embeddings_missing=embeddings_missing,
+        none_survived="{count} relation(s) exist; none are untyped.",
+        all_excluded=(
+            "{count} relation(s) exist; {untyped} untyped, but every "
+            "untyped pair is already typed elsewhere or filtered as "
+            "confidential -- nothing left to suggest."
+        ),
     )
-    for item in declined:
-        typer.echo(f"  declined: {item}")
 
-    # #640: once per invocation, only when the walk applied at least one
-    # relation write; an all-declined walk invalidated nothing.
-    if applied:
-        _refresh_derived_after_write(layout, None, verb="suggest-relations")
+
+class _SuggestRelationsObserver:
+    """The CLI's rendering of a `suggest-relations` run (issue #1168): the
+    service hands it typed data and this class owns every word and the cost
+    question."""
+
+    def walk_incomplete(
+        self, bundle_dir: Path, *, include_confidential: bool, local_exemption: bool
+    ) -> None:
+        observability.warn_if_walk_incomplete(
+            bundle_dir,
+            include_confidential=include_confidential,
+            local_exemption=local_exemption,
+        )
+
+    def workspace_header(self, root: Path) -> None:
+        typer.echo(f"openkos suggest-relations: workspace at {root}")
+        typer.echo()
+
+    def empty_window(self, edge_offset: int) -> None:
+        typer.echo(
+            f"no candidate edges at --edge-offset {edge_offset}; "
+            "re-run with a smaller offset."
+        )
+
+    def candidate_notices(self, truncation: str | None, quarantine: str | None) -> None:
+        if truncation is not None:
+            typer.echo(truncation)
+            typer.echo()
+        if quarantine is not None:
+            typer.echo(quarantine)
+            typer.echo()
+
+    def no_candidates(self, message: str) -> None:
+        typer.echo(message)
+
+    def warn(self, message: str) -> None:
+        typer.echo(message, err=True)
+
+    def serve_split(self, served: int, total: int, fresh: int) -> None:
+        typer.echo(
+            f"openkos suggest-relations: {served} of {total} "
+            "candidate edge(s) served from persisted suggestions; "
+            f"{fresh} typed fresh.",
+            err=True,
+        )
+
+    def confirm_cost(self, quote: relations_service.CostQuote) -> bool:
+        served_clause = f", {quote.served} served" if quote.served else ""
+        # #872: the pace clause rides the paid path only -- a fully-served run
+        # makes zero calls, so "one per edge (this can take a while)" would be
+        # false two tokens after the count said so. The `--auto` hint stays
+        # either way: the prompt it names still fires.
+        pace_note = ", one per edge (this can take a while)" if quote.to_type else ""
+        typer.echo(
+            f"{quote.total} untyped edge(s){served_clause} -> {quote.to_type} LLM "
+            f"call(s){pace_note}. Pass --auto to skip this prompt.",
+            err=True,
+        )
+        return typer.confirm("Proceed?")
+
+    def edge_progress(self, index: int, count: int, suggestion: EdgeSuggestion) -> None:
+        """Per-edge progress line to stderr (keeps stdout the clean report).
+
+        `effective_edge`, not `edge` (#991 second review round): this renders
+        the direction the type actually holds in, honoring a correction the
+        same way every other rendering surface does."""
+        edge = suggestion.effective_edge
+        label = suggestion.suggested_type or "?"
+        typer.echo(
+            f"  [{index}/{count}] {edge.source_id} -> {edge.target_id}  [{label}]",
+            err=True,
+        )
+
+
+class _ApplyObserver:
+    """The CLI's rendering of the `suggest-relations --apply` walk: the same
+    `[type] source -> target` + rationale block the read-only report prints,
+    and the one validating per-item consent prompt (`curate._confirm`, the
+    #398/#483 contract)."""
+
+    def degraded(self, edge: Edge) -> None:
+        typer.echo(f"[?] {edge.source_id} -> {edge.target_id}")
+        typer.echo("  note: no valid type suggested")
+
+    def preview(
+        self, edge: Edge, suggested_type: str, caveat: str, rationale: str
+    ) -> None:
+        # #778: the SAME caveat curate's Structure stage spells (#624) -- an
+        # asymmetric direction carries no evidence, and the surface that most
+        # invites bulk application must not be the one surface missing the
+        # documented warning. Rendered on the preview line AND inside the
+        # consent prompt, mirroring curate exactly.
+        typer.echo(f"[{suggested_type}] {edge.source_id} -> {edge.target_id}{caveat}")
+        typer.echo(f"  rationale: {rationale}")
+
+    def confirm_relate(self, edge: Edge, suggested_type: str, caveat: str) -> bool:
+        return curate_module._confirm(
+            f"Relate {edge.source_id} -> {edge.target_id} "
+            f"[{suggested_type}]{caveat}? [y/N]"
+        )
+
+    def already_present(self) -> None:
+        typer.echo("  note: already present -- nothing to write")
+
+    def summary(self, outcome: relations_service.ApplyOutcome) -> None:
+        prefix = "nothing to apply -- " if outcome.nothing_to_apply else ""
+        typer.echo(
+            f"openkos suggest-relations --apply: {prefix}applied {outcome.applied}, "
+            f"skipped {outcome.skipped} (declined: {len(outcome.declined)})"
+        )
+        for item in outcome.declined:
+            typer.echo(f"  declined: {item}")
+
+
+def _suggest_relations_ports() -> relations_service.SuggestRelationsPorts:
+    """The service's effects, each resolved through this module's globals AT
+    CALL TIME (a lambda, not a bound reference) so a test that patches
+    `openkos.cli.main.candidate_edges`, `suggest_edge_types`, `build_graph`,
+    `_open_proximity_or_degrade` or `_chat_client` keeps intercepting."""
+    return relations_service.SuggestRelationsPorts(
+        chat_client=lambda cfg, task: _chat_client(cfg, task=task),
+        zero_state_message=_relations_zero_state_message,
+        autocommit=lambda root, paths, message: _autocommit(root, paths, message),
+        refresh_derived=lambda layout: _refresh_derived_after_write(
+            layout, None, verb="suggest-relations"
+        ),
+        resolve_local_exemption=lambda client, cfg: _resolve_local_exemption(
+            client, cfg
+        ),
+        open_proximity=lambda path: _open_proximity_or_degrade(path),
+        build_graph=lambda *args, **kwargs: build_graph(*args, **kwargs),
+        candidate_edges=lambda *args, **kwargs: candidate_edges(*args, **kwargs),
+        suggest_edge_types=lambda *args, **kwargs: suggest_edge_types(*args, **kwargs),
+    )
+
+
+def _refuse(exc: "relations_service.SuggestionRefused") -> "typer.Exit":
+    """Print a typed suggestion refusal verbatim and map its TYPE to the exit
+    code: 3 for drift (the one failure a script may safely retry, #319), 1 for
+    everything else."""
+    typer.echo(exc.message, err=True)
+    return typer.Exit(code=3 if isinstance(exc, relations_service.DriftDetected) else 1)
 
 
 @app.command(
@@ -12103,24 +12036,11 @@ def suggest_relations_cmd(
     """LLM-suggest a relation `type` for every existing UNTYPED body-link
     edge: read-only, like `adjudicate`.
 
-    A FIFTH read command, mirroring `adjudicate`'s wiring: the shared
-    `config.require_workspace` gate (D1), then a Phase-A `read_config` guard
-    (`except (OSError, ValueError)`, lint parity). It then counts the
-    candidate edges via `resolution.edge_typing.candidate_edges`, which owns
-    the candidate-narrowing logic. This command builds the graph projection
-    ONCE per invocation via `graph.sqlite_graph.build_graph` and threads the
-    open store into every reader it calls, including the zero-result
-    `_zero_edge_state_message` path that used to trigger a second full build
-    (#196). Holding an open `openkos.graph` store here is established
-    practice (`query`, `reindex`); the live layering rule forbids only
-    canonical-layer imports of `openkos.graph` and a `graph` CLI verb. It
-    builds a real `OllamaClient(model=cfg.model)` BEFORE the candidate
-    count is known -- construction performs no I/O, it only resolves and
-    stores the host -- because the confidential local exemption (#240)
-    must be resolved from that SAME client before `candidate_edges` (the
-    pre-flight sensitivity filter) runs; the cost gate on the candidate
-    count still happens first, and only a confirmed run reaches
-    `suggest_edge_types`, which the resolved client is then injected into.
+    A thin adapter over `application.suggest_relations_service` (issue #1168):
+    the service owns the workspace gate, the candidate count, the serve
+    partition, the typing run, the persistence and the `--apply` write
+    sequence; this verb keeps the rendering, the cost question, the per-item
+    consent prompts and the exit-code mapping.
 
     Cost gate (issue #134): each untyped edge costs one LLM inference, run
     sequentially, so a large bundle can take many minutes with the model
@@ -12140,15 +12060,13 @@ def suggest_relations_cmd(
     curate's Structure-stage walk verbatim): each VALID suggestion is
     rendered, then gated behind `curate._confirm`'s validating per-item
     `[y/N]` prompt (#398 contract); an accepted `y` writes through the SAME
-    `prepare_relate` -> `_reject_drifted_targets` -> `relate_core` ->
-    `_autocommit` path the `relate` verb and curate's Structure stage use,
-    so the three write paths cannot drift apart. A degraded suggestion has
-    nothing applicable and is never prompted; an already-present relation
-    is reported and skipped without a write; declines are listed at the end
-    (the #483 revisitable-decline contract). Before #560 the standalone
-    verb spent one LLM call per candidate edge and then offered no way to
-    accept the result except typing one `relate` command per edge by hand
-    -- a dead end that billed the user for nothing.
+    `prepare_relate` -> drift guard -> `relate_core` -> auto-commit path the
+    `relate` verb and curate's Structure stage use, so the three write paths
+    cannot drift apart. A degraded suggestion has nothing applicable and is
+    never prompted; an already-present relation is reported and skipped
+    without a write; declines are listed at the end (the #483
+    revisitable-decline contract). Drift refuses with exit 3, prior per-item
+    commits remain intact.
 
     A degraded suggestion (`suggested_type=None` -- a malformed LLM reply,
     or a suggested type that failed `validate_relation_type`) renders as
@@ -12176,273 +12094,41 @@ def suggest_relations_cmd(
     called for it.
 
     No file under the workspace is ever created, modified, or deleted
-    (spec: Verb performs zero writes).
+    (spec: Verb performs zero writes) -- except `--apply`'s accepted
+    relations, and the persisted suggestions in `.openkos/findings.db`.
     """
     root = Path.cwd()
-    reason = config.require_workspace(root)
-    if reason is not None:
-        typer.echo(f"openkos suggest-relations: refusing to run -- {reason}.", err=True)
-        raise typer.Exit(code=1)
-
-    layout = config.WorkspaceLayout(root)
+    ports = _suggest_relations_ports()
     try:
-        cfg = config.read_config(root)
-    except (OSError, ValueError) as exc:
-        typer.echo(
-            f"openkos suggest-relations: failed while reading the workspace -- {exc}.",
-            err=True,
+        outcome = relations_service.suggest_relations(
+            root,
+            relations_service.SuggestRelationsRequest(
+                include_confidential=include_confidential,
+                fresh=fresh,
+                edge_offset=edge_offset,
+                skip_confirmation=auto,
+            ),
+            ports,
+            _SuggestRelationsObserver(),
         )
-        raise typer.Exit(code=1) from exc
+    except relations_service.SuggestionRefused as exc:
+        raise _refuse(exc) from exc
 
-    # Built here rather than just before the run: `candidate_edges` below
-    # already filters on sensitivity, so the exemption must be resolved from
-    # the SAME client the later `suggest_edge_types` will send through
-    # (issue #240). Construction performs no I/O -- it only resolves and
-    # stores the host -- so nothing is contacted by moving it up.
-    llm = _chat_client(cfg, task="edge_typing")
-    local_exemption = _resolve_local_exemption(
-        cast(application_backends.HasLocality, llm), cfg
-    )
-    observability.warn_if_walk_incomplete(
-        layout.bundle_dir,
-        include_confidential=include_confidential,
-        local_exemption=local_exemption,
-    )
-
-    # Count the candidate edges FIRST, with no LLM call, so the cost of the
-    # one-inference-per-edge run can be previewed and gated before the model
-    # is ever contacted (issue #134).
-    #
-    # graph-projection-reuse (#196): the proximity source is closed as early
-    # as possible -- `build_graph` consumes it eagerly inside
-    # `_populate_graph_tables`, so it is dead the instant `build_graph`
-    # returns. The projection itself is built exactly ONCE per invocation
-    # and threaded, via `store=`, into both `candidate_edges` and the
-    # zero-result `_zero_edge_state_message` path (which used to trigger a
-    # second full build).
-    source = _open_proximity_or_degrade(layout.vectors_db_path)
-    embeddings_missing = source is None
-    try:
-        graph = build_graph(
-            layout.bundle_dir, candidates=source, candidate_offset=edge_offset
-        )
-    finally:
-        if source is not None:
-            source.close()
-
-    with graph as store:
-        edges = candidate_edges(
-            layout.bundle_dir,
-            include_confidential=include_confidential,
-            local_exemption=local_exemption,
-            store=store,
-        )
-
-        typer.echo(f"openkos suggest-relations: workspace at {root}")
-        typer.echo()
-        # #567: an offset at or past the candidate set produced an empty
-        # window on purpose -- say so, instead of the zero-candidate state
-        # message below claiming there is nothing untyped at all.
-        if edge_offset > 0 and not edges:
-            typer.echo(
-                f"no candidate edges at --edge-offset {edge_offset}; "
-                "re-run with a smaller offset."
-            )
-            return
-        # #378 slice 2 (post-review correction): pass 3's candidate-edge cap
-        # truncation, never silent -- but restricted to what THIS caller may
-        # see. Read here, INSIDE the `with` block, since `store` closes
-        # below.
-        #
-        # `store.candidate_report.produced`/`.retained` are RAW counts: pass
-        # 3 has no sensitivity awareness, so they can include pairs with a
-        # confidential endpoint that `candidate_edges` above already
-        # excluded from `edges`. Printing them directly would disclose a
-        # pre-cap volume the edge list below deliberately withholds --
-        # `candidate_truncation_notice` re-derives both counts from
-        # `report.pairs` through the SAME `sensitivity.sensitive_concept_ids`
-        # walk `candidate_edges` just ran, so this line and `total` below
-        # agree on what a caller without `--include-confidential` may see.
-        notice = candidate_truncation_notice(
-            store.candidate_report,
-            layout.bundle_dir,
-            include_confidential=include_confidential,
-            local_exemption=local_exemption,
-        )
-        # #841: the unjudged-source withholding, disclosed beside the cap's
-        # truncation -- both say the queue is smaller than the bundle could
-        # produce, and both re-derive their visible counts through the same
-        # sensitivity walk.
-        quarantine_notice = quarantined_candidate_notice(
-            store.candidate_report,
-            layout.bundle_dir,
-            include_confidential=include_confidential,
-            local_exemption=local_exemption,
-        )
-        # #567: computed inside the `with` block (the report lives on
-        # `store`), printed beside the #560 pointer after the run below.
-        batch_offset = next_candidate_offset(
-            store.candidate_report,
-            layout.bundle_dir,
-            include_confidential=include_confidential,
-            local_exemption=local_exemption,
-        )
-        if notice is not None:
-            typer.echo(notice)
-            typer.echo()
-        if quarantine_notice is not None:
-            typer.echo(quarantine_notice)
-            typer.echo()
-        total = len(edges)
-        if total == 0:
-            typer.echo(
-                _zero_edge_state_message(
-                    layout,
-                    store=store,
-                    use_typed_count=False,
-                    embeddings_missing=embeddings_missing,
-                    none_survived="{count} relation(s) exist; none are untyped.",
-                    all_excluded=(
-                        "{count} relation(s) exist; {untyped} untyped, but every "
-                        "untyped pair is already typed elsewhere or filtered as "
-                        "confidential -- nothing left to suggest."
-                    ),
-                )
-            )
-            return
-
-    # Everything from here on runs OUTSIDE the `with` block: the store is
-    # not needed once `edges` is materialized, so the minutes-long LLM run
-    # and its progress loop stay out of the store's lifetime
-    # (graph-projection-reuse design §4).
-    # #799: the serve partition runs BEFORE the cost gate, so the gate
-    # states the calls this run will ACTUALLY make rather than the worst
-    # case -- announcing 49 and spending 0 is as dishonest as the reverse.
-    # It keys on the EFFECTIVE confidential inclusion (`--include-
-    # confidential` OR the verified local-backend exemption, the same
-    # disjunction `sensitivity.should_block` applies), which is why it runs
-    # after `local_exemption` is resolved above.
-    effective_confidential = include_confidential or local_exemption
-    served_by_key: dict[str, EdgeSuggestion] = {}
-    to_type = edges
-    # The split line is reported when a store was actually READ, not on
-    # every run: a first-ever run has no cache to have missed, and the
-    # cost gate below already states its price. A store that was read and
-    # served nothing IS worth saying out loud -- that is drift, and a
-    # silent re-spend is the #799 complaint.
-    #
-    # READ, not merely PRESENT (#809). The gate used to be file existence,
-    # so an unreadable store printed `0 of N served` directly beneath the
-    # warning saying the read had failed -- a count of zero meaning "could
-    # not look", rendered in the words of a count meaning "looked, found
-    # nothing". `_partition_edge_suggestion_serves` answers the honest
-    # question, and `curate`'s Structure stage gates on the same one.
-    store_read = False
-    if not fresh:
-        served_by_key, to_type, store_read = _partition_edge_suggestion_serves(
-            layout, edges, include_confidential=effective_confidential
-        )
-    if store_read:
-        typer.echo(
-            f"openkos suggest-relations: {len(served_by_key)} of {total} "
-            "candidate edge(s) served from persisted suggestions; "
-            f"{len(to_type)} typed fresh.",
-            err=True,
-        )
-
-    if not auto:
-        served_clause = f", {len(served_by_key)} served" if served_by_key else ""
-        # #872: the pace clause rides the paid path only -- a fully-served
-        # run makes zero calls, so "one per edge (this can take a while)"
-        # would be false two tokens after the count said so. The `--auto`
-        # hint stays either way: the prompt it names still fires.
-        pace_note = ", one per edge (this can take a while)" if to_type else ""
-        typer.echo(
-            f"{total} untyped edge(s){served_clause} -> {len(to_type)} LLM "
-            f"call(s){pace_note}. Pass --auto to skip this prompt.",
-            err=True,
-        )
-        if not typer.confirm("Proceed?"):
-            typer.echo("Aborted -- no suggestions generated.")
-            return
-
-    def _on_progress(index: int, count: int, suggestion: EdgeSuggestion) -> None:
-        """Per-edge progress line to stderr (keeps stdout the clean report).
-
-        `effective_edge`, not `edge` (#991 second review round): this
-        renders the direction the type actually holds in, honoring a
-        correction the same way every other rendering surface does."""
-        edge = suggestion.effective_edge
-        label = suggestion.suggested_type or "?"
-        typer.echo(
-            f"  [{index}/{count}] {edge.source_id} -> {edge.target_id}  [{label}]",
-            err=True,
-        )
-
-    try:
-        # Still called with an empty `to_type` (a fully-served run): zero
-        # edges means zero `llm.chat` calls by construction, and the
-        # pre-#799 seam contract stays byte-identical.
-        batch = suggest_edge_types(
-            to_type,
-            bundle_dir=layout.bundle_dir,
-            llm=llm,
-            include_confidential=include_confidential,
-            local_exemption=local_exemption,
-            # #812: the same workspace key `curate`'s Structure stage
-            # reads, forwarded here for the reason `Config.models`'s
-            # docstring gives for being keyed by TASK and not by verb --
-            # this verb and that stage run one suggester, and a setting
-            # that reached only one of them would print one workspace's
-            # rationales in two languages depending on what was typed.
-            # `None` on a workspace that never set it: the pre-#812 prompt,
-            # byte for byte.
-            rationale_language=cfg.rationale_language,
-            on_progress=_on_progress,
-        )
-    except BackendUnavailable as exc:
-        typer.echo(
-            f"openkos suggest-relations: failed -- {exc}. "
-            f"{application_backends.start_hint(cfg)}, "
-            f"then try again.{_DOCTOR_HINT}",
-            err=True,
-        )
-        raise typer.Exit(code=1) from exc
-    except BackendModelNotFound as exc:
-        typer.echo(
-            f"openkos suggest-relations: failed -- model '{cfg.model}' is "
-            f"not installed. {application_backends.install_hint(cfg, cfg.model)}, "
-            "then try again.",
-            err=True,
-        )
-        raise typer.Exit(code=1) from exc
-    # The two specific handlers above MUST precede this generic handler:
-    # both `BackendUnavailable` and `BackendModelNotFound` subclass
-    # `BackendError`, so reordering would silently funnel them into this
-    # fallback and lose their actionable remediation messages (mirrors
-    # `adjudicate`'s ordering).
-    except BackendError as exc:
-        typer.echo(f"openkos suggest-relations: failed -- {exc}.", err=True)
-        raise typer.Exit(code=1) from exc
-
-    # #799: fresh suggestions persist even on a partial batch (the paid-for
-    # work is kept, mirroring #441's own posture), then the run's results
-    # are rebuilt in CANDIDATE order so a served suggestion and a fresh one
-    # are indistinguishable downstream -- `--apply`, the listing, and
-    # curate all read this one list.
-    _persist_edge_suggestions(
-        layout, batch.results, include_confidential=effective_confidential
-    )
-    results: list[EdgeSuggestion] = (
-        _reassemble_edge_suggestions(edges, served_by_key, batch.results)
-        if served_by_key
-        else list(batch.results)
-    )
+    if outcome.status == "declined":
+        typer.echo("Aborted -- no suggestions generated.")
+        return
+    if outcome.status != "completed":
+        return
 
     if apply:
-        _run_suggest_relations_apply(root, layout, results)
+        try:
+            relations_service.apply_relation_suggestions(
+                root, outcome.results, ports, _ApplyObserver()
+            )
+        except relations_service.SuggestionRefused as exc:
+            raise _refuse(exc) from exc
     else:
-        for result in results:
+        for result in outcome.results:
             # `effective_edge`, not `edge` (#991 second review round): the
             # candidate identity `edge` stays fixed for persistence/
             # reassembly, but this listing must show the direction the
@@ -12467,7 +12153,7 @@ def suggest_relations_cmd(
             "openkos relate <source> <type> <target>"
         )
 
-    if notice is not None:
+    if outcome.truncation_notice is not None:
         # Issue #560: the cap is not a dead end -- an applied/related pair
         # becomes a typed edge and leaves the candidate set, so the next
         # run's cap budget reaches the candidates dropped this time.
@@ -12476,22 +12162,45 @@ def suggest_relations_cmd(
             "(--apply or relate), then re-run suggest-relations to surface "
             "the next batch."
         )
-        if batch_offset is not None:
+        if outcome.next_offset is not None:
             # #567: browsing without typing -- name the exact offset the
             # next ranked batch starts at, gated on a visible pair actually
             # existing beyond this run's window.
             typer.echo(
                 f"Or browse it without typing these: re-run with "
-                f"--edge-offset {batch_offset}."
+                f"--edge-offset {outcome.next_offset}."
             )
 
-    if batch.failure is not None:
+    if outcome.failure is not None and outcome.batch is not None:
         # Partial batch (#441): the report above already rendered the
         # completed suggestions exactly as a complete run over that list --
         # the paid-for work is never discarded -- so all that remains is the
         # one stderr failure line and the BackendError-family exit code.
-        _echo_suggest_relations_batch_failure(batch, total=total, model=cfg.model)
-        raise typer.Exit(code=1) from batch.failure
+        typer.echo(
+            relations_service.relations_batch_failure_message(
+                outcome.batch, total=outcome.total, model=outcome.model
+            ),
+            err=True,
+        )
+        raise typer.Exit(code=1) from outcome.failure
+
+
+class _VolatilityObserver:
+    """The CLI's rendering of a `suggest-volatility` run (issue #1168)."""
+
+    def walk_incomplete(
+        self, bundle_dir: Path, *, include_confidential: bool, local_exemption: bool
+    ) -> None:
+        observability.warn_if_walk_incomplete(
+            bundle_dir,
+            include_confidential=include_confidential,
+            local_exemption=local_exemption,
+        )
+
+    def progress_callback(self) -> Callable[[int, int, TierSuggestion], None] | None:
+        # TTY-gated per-type progress on stderr; `None` (silent) when output is
+        # piped (issue #190, mirrors `suggest-relations`' #134 per-edge line).
+        return observability.progress_callback("suggest-volatility", "suggesting type")
 
 
 @app.command(
@@ -12514,13 +12223,9 @@ def suggest_volatility_cmd(
     """LLM-suggest a volatility `tier` for every concept TYPE present in the
     bundle: read-only, like `suggest-relations`.
 
-    A SIXTH read command, mirroring `suggest-relations`'s wiring exactly:
-    the shared `config.require_workspace` gate (D1), then a Phase-A
-    `read_config` guard (`except (OSError, ValueError)`, lint parity), then
-    a real `OllamaClient(model=cfg.model)` is built and injected -- as the
-    `LLMBackend` -- into `resolution.volatility_typing.suggest_volatility`,
-    the config-free leaf that owns the internal bundle read (via
-    `lint.collect_docs`).
+    A thin adapter over `application.suggest_volatility_service` (issue
+    #1168): the service owns the workspace gate, the client wiring and the
+    typing run; this verb keeps the rendering and the exit-code mapping.
 
     `suggest-volatility` never writes, merges, or decides -- it only prints
     a suggested `tier` + rationale per concept type present for human
@@ -12543,11 +12248,11 @@ def suggest_volatility_cmd(
     and exit 1. The completed suggestions are NEVER discarded: the report
     first renders `batch.results` exactly as a complete run over that list,
     THEN one stderr line reports the failure with the completed count (no
-    of-total -- see `_echo_suggest_volatility_batch_failure` for why this
-    verb cannot state one) and the run exits 1. The raise-path handler
-    ladder is retained around the call itself for an injected backend that
-    raises outside `llm.chat`'s guarded seam -- same wording, no counts,
-    zero writes either way.
+    of-total -- see `volatility_batch_failure_message` for why this verb
+    cannot state one) and the run exits 1. The raise-path handler ladder is
+    retained around the call itself for an injected backend that raises
+    outside `llm.chat`'s guarded seam -- same wording, no counts, zero
+    writes either way.
 
     Unless `--include-confidential` is passed, a confidential concept
     (sensitivity-fail-closed-filter) is excluded from sampling for its type
@@ -12559,83 +12264,36 @@ def suggest_volatility_cmd(
     (spec: Verb performs zero writes).
     """
     root = Path.cwd()
-    reason = config.require_workspace(root)
-    if reason is not None:
-        typer.echo(
-            f"openkos suggest-volatility: refusing to run -- {reason}.", err=True
-        )
-        raise typer.Exit(code=1)
-
-    layout = config.WorkspaceLayout(root)
     try:
-        cfg = config.read_config(root)
-    except (OSError, ValueError) as exc:
-        typer.echo(
-            f"openkos suggest-volatility: failed while reading the workspace -- {exc}.",
-            err=True,
-        )
-        raise typer.Exit(code=1) from exc
-
-    llm = _chat_client(cfg, task="volatility_typing")
-    local_exemption = _resolve_local_exemption(
-        cast(application_backends.HasLocality, llm), cfg
-    )
-    observability.warn_if_walk_incomplete(
-        layout.bundle_dir,
-        include_confidential=include_confidential,
-        local_exemption=local_exemption,
-    )
-    try:
-        batch = suggest_volatility(
-            layout.bundle_dir,
-            llm=llm,
-            include_confidential=include_confidential,
-            local_exemption=local_exemption,
-            # #812, the mirror of `suggest-relations`' own forwarding --
-            # see the note at that call site.
-            rationale_language=cfg.rationale_language,
-            # TTY-gated per-type progress on stderr; `None` (silent) when
-            # output is piped (issue #190, mirrors `suggest-relations`' #134
-            # per-edge line).
-            on_progress=observability.progress_callback(
-                "suggest-volatility", "suggesting type"
+        outcome = volatility_service.suggest_volatility_tiers(
+            root,
+            volatility_service.VolatilityRequest(
+                include_confidential=include_confidential
             ),
+            volatility_service.VolatilityPorts(
+                chat_client=lambda cfg, task: _chat_client(cfg, task=task),
+                resolve_local_exemption=lambda client, cfg: _resolve_local_exemption(
+                    client, cfg
+                ),
+                suggest_volatility=lambda *args, **kwargs: suggest_volatility(
+                    *args, **kwargs
+                ),
+            ),
+            _VolatilityObserver(),
         )
-    except BackendUnavailable as exc:
-        typer.echo(
-            f"openkos suggest-volatility: failed -- {exc}. Start it with "
-            f"`ollama serve`, then try again.{_DOCTOR_HINT}",
-            err=True,
-        )
-        raise typer.Exit(code=1) from exc
-    except BackendModelNotFound as exc:
-        typer.echo(
-            f"openkos suggest-volatility: failed -- model '{cfg.model}' is "
-            f"not installed. Pull it with `ollama pull {cfg.model}`, then "
-            "try again.",
-            err=True,
-        )
-        raise typer.Exit(code=1) from exc
-    # The two specific handlers above MUST precede this generic handler:
-    # both `BackendUnavailable` and `BackendModelNotFound` subclass
-    # `BackendError`, so reordering would silently funnel them into this
-    # fallback and lose their actionable remediation messages (mirrors
-    # `suggest-relations`'s ordering).
-    except BackendError as exc:
-        typer.echo(f"openkos suggest-volatility: failed -- {exc}.", err=True)
-        raise typer.Exit(code=1) from exc
+    except relations_service.SuggestionRefused as exc:
+        raise _refuse(exc) from exc
 
-    results = batch.results
     typer.echo(f"openkos suggest-volatility: workspace at {root}")
     typer.echo()
-    if not results and batch.failure is None:
+    if not outcome.results and outcome.failure is None:
         # Guarded on a clean run only (#441): a first-type failure also
         # carries zero results, and "No concept types found." would then
         # claim an empty bundle the failure, not the walk, produced.
         typer.echo("No concept types found.")
         return
 
-    for result in results:
+    for result in outcome.results:
         if result.suggested_tier is None:
             typer.echo(f"[?] {result.type_name}")
             typer.echo("  note: no valid tier suggested")
@@ -12646,13 +12304,18 @@ def suggest_volatility_cmd(
 
     typer.echo("Next: openkos set-volatility <ConceptType> <tier>")
 
-    if batch.failure is not None:
+    if outcome.failure is not None:
         # Partial batch (#441): the report above already rendered the
         # completed suggestions exactly as a complete run over that list --
         # the paid-for work is never discarded -- so all that remains is the
         # one stderr failure line and the BackendError-family exit code.
-        _echo_suggest_volatility_batch_failure(batch, model=cfg.model)
-        raise typer.Exit(code=1) from batch.failure
+        typer.echo(
+            volatility_service.volatility_batch_failure_message(
+                outcome.batch, model=outcome.model
+            ),
+            err=True,
+        )
+        raise typer.Exit(code=1) from outcome.failure
 
 
 def _record_identity_decline_from_walk(
@@ -12870,21 +12533,10 @@ def _partition_adjudication_serves(
     return AdjudicationServes(served, to_judge, rubric_stale, store_read=True)
 
 
-class EdgeSuggestionServes(NamedTuple):
-    """What `_partition_edge_suggestion_serves` answers (#809).
-
-    `store_read` is the third value because the count alone cannot carry
-    the difference between "looked, found nothing" and "could not look".
-    Both produce an empty `served`, and only one of them is worth
-    reporting as a split -- so every caller that renders that line gates
-    on this flag rather than re-deriving a proxy for it. Two callers
-    previously derived two DIFFERENT proxies (file existence on one
-    surface, a non-empty served map on the other) and disagreed about the
-    same failure as a result."""
-
-    served: "dict[str, EdgeSuggestion]"
-    to_type: "list[Edge]"
-    store_read: bool
+EdgeSuggestionServes = relations_service.EdgeSuggestionServes
+"""Re-exported for the callers that unpack it by name (curate's Structure
+stage). The definition lives in `application/suggest_relations_service.py`,
+beside the partition it answers."""
 
 
 def _reassemble_edge_suggestions(
@@ -12892,43 +12544,11 @@ def _reassemble_edge_suggestions(
     served: "dict[str, EdgeSuggestion]",
     fresh: "Sequence[EdgeSuggestion]",
 ) -> "list[EdgeSuggestion]":
-    """Rebuild a run's suggestions in CANDIDATE order, merging what the
-    store served with what the model just typed (#809).
-
-    Shared by `suggest-relations` and `curate`'s Structure stage, which
-    had a near-verbatim copy each. The helpers immediately beside this one
-    -- `_partition_edge_suggestion_serves` and `_persist_edge_suggestions`
-    -- were already shared, so the duplication was against this seam's own
-    convention, and a later fix to the merge (a key collision, an ordering
-    rule) would have landed in one copy and silently missed the other.
-
-    A served suggestion wins over a fresh one for the same key. That is
-    not arbitrary: a key can only appear in both when the partition served
-    it AND the model typed it anyway, which the caller's own flow makes
-    impossible, so the precedence is a tiebreak that should never fire
-    rather than a policy. Ordering follows `edges` so a served suggestion
-    and a fresh one are indistinguishable downstream.
-
-    Keyed on `result.edge`, deliberately NOT `effective_edge` (#991 second
-    review round): `edges` (this function's other argument, the candidate
-    set) is always in CANDIDATE direction, and a direction-corrected fresh
-    result's `edge` stays the candidate too -- only `corrected_edge`
-    differs -- so this lookup matches. Keying on `effective_edge` instead
-    would silently drop every corrected suggestion: its swapped pair would
-    never match a candidate key in `edges`."""
-    fresh_by_key = {
-        edge_suggestions_store.pair_key_for(
-            result.edge.source_id, result.edge.target_id
-        ): result
-        for result in fresh
-    }
-    rebuilt: list[EdgeSuggestion] = []
-    for edge in edges:
-        key = edge_suggestions_store.pair_key_for(edge.source_id, edge.target_id)
-        found = served.get(key) or fresh_by_key.get(key)
-        if found is not None:
-            rebuilt.append(found)
-    return rebuilt
+    """One-line delegator (issue #1168): the merge lives in
+    `application/suggest_relations_service.py`, shared by `suggest-relations`
+    and `curate`'s Structure stage, and is kept under this name for the
+    callers that reach it through `cli.main`."""
+    return relations_service.reassemble_edge_suggestions(edges, served, fresh)
 
 
 def _partition_edge_suggestion_serves(
@@ -12939,86 +12559,23 @@ def _partition_edge_suggestion_serves(
     warn_on_failure: bool = True,
     surface: str = "suggest-relations",
 ) -> EdgeSuggestionServes:
-    """Split `edges` into suggestions servable from `.openkos/findings.db`
-    and the edges that still need a model call (#799) -- the edge-typing
-    twin of `_partition_adjudication_serves`, same posture throughout.
+    """Delegator to `relations_service.partition_edge_suggestion_serves`
+    (issue #1168), which owns the serve rule (#799, #809). This wrapper only
+    renders the service's advisory, to stderr.
 
-    Also reports whether the store was READ (#809). An absent file and an
-    unreadable one both mean no suggestion can serve, but only the second
-    is a failure, and neither is the same as a store that was read and
-    held nothing for these edges. Answering it HERE is what stops each
-    caller inventing its own proxy.
-
-    An edge is SERVED iff its latest persisted row matches this run's
-    EFFECTIVE `include_confidential` bit (a suggestion computed over a
-    different graph projection must never serve), carries a digest row
-    for BOTH current endpoints and no others, every stored digest equals
-    the endpoint's CURRENT content hash, and the stored type still
-    validates. Everything else re-types, conservatively -- including a
-    present-but-corrupt store, which degrades to one stderr advisory and
-    a full fresh run rather than crashing before any model spend.
-
-    The key is DIRECTED (`edge_suggestions_store.pair_key_for`): half the
-    vocabulary is asymmetric, so `a -> b` and `b -> a` are different
-    questions and one must never answer for the other."""
-    if not layout.findings_db_path.exists():
-        return EdgeSuggestionServes({}, edges, store_read=False)
-    try:
-        conn = derived.open_derived_connection(layout.findings_db_path)
-        try:
-            persisted = edge_suggestions_store.open_edge_suggestions(conn)
-        finally:
-            conn.close()
-    except (OSError, sqlite3.Error) as exc:
-        # `warn_on_failure=False` is curate's pricing probe (#867 review):
-        # the stage RUN rebuilds this partition minutes later and warns
-        # then, so an unreadable store costs one warning per curate run,
-        # not one per read -- the standalone verb partitions once and
-        # always warns. `surface` names the command the user actually ran
-        # (#867 review): a warning during a curate run must not be
-        # attributed to the standalone verb.
-        if warn_on_failure:
-            typer.echo(
-                f"openkos {surface}: warning -- failed to read persisted "
-                f"suggestions ({exc}); typing every edge fresh.",
-                err=True,
-            )
-        return EdgeSuggestionServes({}, edges, store_read=False)
-    latest: dict[str, edge_suggestions_store.PersistedEdgeSuggestion] = {}
-    for row in persisted:
-        latest[edge_suggestions_store.pair_key_for(row.source_id, row.target_id)] = row
-
-    current_digest = application_pending.current_finding_digest(layout.bundle_dir)
-    served: dict[str, EdgeSuggestion] = {}
-    to_type: list[Edge] = []
-    for edge in edges:
-        key = edge_suggestions_store.pair_key_for(edge.source_id, edge.target_id)
-        stored = latest.get(key)
-        if stored is None or stored.include_confidential != include_confidential:
-            to_type.append(edge)
-            continue
-        endpoints = {edge.source_id, edge.target_id}
-        if {digest.input_ref for digest in stored.input_digests} != endpoints or any(
-            current_digest(digest.input_ref) != digest.digest
-            for digest in stored.input_digests
-        ):
-            to_type.append(edge)
-            continue
-        try:
-            validate_relation_type(stored.suggested_type)
-        except ValueError:
-            to_type.append(edge)
-            continue
-        # #991 R4: reconstructed from the PERSISTED rationale, never by
-        # re-reading the bundle -- a re-read can fail transiently and
-        # disagree with the disclosure already frozen at fresh time.
-        served[key] = EdgeSuggestion(
-            edge=edge,
-            suggested_type=stored.suggested_type,
-            rationale=stored.rationale,
-            corrected_edge=corrected_edge_from_rationale(edge, stored.rationale),
-        )
-    return EdgeSuggestionServes(served, to_type, store_read=True)
+    `warn_on_failure=False` is curate's pricing probe (#867 review): the stage
+    RUN rebuilds this partition minutes later and warns then, so an unreadable
+    store costs one warning per curate run, not one per read -- the standalone
+    verb partitions once and always warns. `surface` names the command the user
+    actually ran, so a warning during a curate run is not attributed to the
+    standalone verb."""
+    return relations_service.partition_edge_suggestion_serves(
+        layout,
+        edges,
+        include_confidential=include_confidential,
+        on_warning=_echo_stderr if warn_on_failure else None,
+        surface=surface,
+    )
 
 
 def _persist_edge_suggestions(
@@ -13028,65 +12585,22 @@ def _persist_edge_suggestions(
     include_confidential: bool,
     surface: str = "suggest-relations",
 ) -> None:
-    """Persist freshly computed edge-typing suggestions (#799), fail-open:
-    a failed persist costs one stderr advisory, never the run -- the same
-    posture `_persist_adjudications` takes.
+    """Delegator to `relations_service.persist_edge_suggestions` (issue
+    #1168), which owns the persist rule (#799). This wrapper only renders the
+    service's advisory, to stderr; `surface` names the command the user
+    actually ran (#867 review), since curate's Structure stage persists
+    through this helper too."""
+    relations_service.persist_edge_suggestions(
+        layout,
+        results,
+        include_confidential=include_confidential,
+        on_warning=_echo_stderr,
+        surface=surface,
+    )
 
-    Two results are skipped rather than stored. A `suggested_type` of
-    `None` is the fail-closed degrade (malformed reply, unparseable or
-    invalid type): a FAILURE, not a verdict, and caching it would never
-    retry. An endpoint with no current digest (unreadable) is skipped for
-    the adjudication tenant's reason -- a row whose staleness can never be
-    checked would serve forever."""
-    if not results:
-        return
-    current_digest = application_pending.current_finding_digest(layout.bundle_dir)
-    batch: list[edge_suggestions_store.PersistedEdgeSuggestion] = []
-    for result in results:
-        if result.suggested_type is None:
-            continue
-        # `result.edge`, deliberately NOT `effective_edge` (#991 second
-        # review round): the row is keyed on the CANDIDATE pair -- the
-        # question that was asked -- never on a direction-corrected one, or
-        # a verdict for "b -> a" would be persisted and later served under
-        # "a -> b"'s key (`state.edge_suggestions`'s "Direction is
-        # identity" invariant).
-        edge = result.edge
-        digests: list[edge_suggestions_store.InputDigest] = []
-        for endpoint_id in (edge.source_id, edge.target_id):
-            digest = current_digest(endpoint_id)
-            if digest is None:
-                break
-            digests.append(
-                edge_suggestions_store.InputDigest(input_ref=endpoint_id, digest=digest)
-            )
-        else:
-            batch.append(
-                edge_suggestions_store.PersistedEdgeSuggestion(
-                    source_id=edge.source_id,
-                    target_id=edge.target_id,
-                    suggested_type=result.suggested_type,
-                    rationale=result.rationale,
-                    include_confidential=include_confidential,
-                    input_digests=tuple(digests),
-                )
-            )
-    if not batch:
-        return
-    try:
-        conn = derived.open_derived_connection(layout.findings_db_path)
-        try:
-            edge_suggestions_store.record_edge_suggestions(conn, batch)
-        finally:
-            conn.close()
-    except (OSError, sqlite3.Error) as exc:
-        # `surface` names the command the user actually ran (#867 review):
-        # curate's Structure stage persists through this helper too.
-        typer.echo(
-            f"openkos {surface}: warning -- failed to persist edge "
-            f"suggestions ({exc}); the next run will re-type them.",
-            err=True,
-        )
+
+def _echo_stderr(message: str) -> None:
+    typer.echo(message, err=True)
 
 
 def _persist_adjudications(
@@ -13621,58 +13135,36 @@ def contradictions(
         raise typer.Exit(code=1) from exc
 
 
-_REVISIONS_EXPERIMENTAL_NOTICE = (
-    "openkos revisions: experimental -- detection quality is unmeasured on "
-    "real bundles; review every finding before applying it with 'openkos "
-    "reconcile --from-findings'."
-)
-"""design.md's Phase B re-plan, Decision B4: printed once, on stderr, on
-every non-refused invocation -- the whole point is that this detector has
-only been measured against a synthetic harness fixture
-(`evals/decision_revisions/`), never against a real bundle."""
+class _RevisionsObserver:
+    """The CLI's rendering of a `revisions` run (issue #1168): the service
+    hands it typed data and this class owns every word and the TTY question."""
 
-_REVISIONS_NO_VECTORS_MESSAGE = (
-    "openkos revisions: no document embeddings found -- run 'openkos reindex' first."
-)
-_REVISIONS_MODEL_MISMATCH_MESSAGE = (
-    "openkos revisions: vectors.db was embedded with a different embedding "
-    "model or scheme than 'embedding_model' -- run 'openkos reindex' first."
-)
-"""design.md Decision B1's two whole-run vector-store degrade messages:
-`revisions` never embeds, so a Decision's document vector comes ONLY from
-`.openkos/vectors.db` as written by `openkos reindex`. Both cases make zero
-LLM calls, print their remedy, and exit 0 -- nothing failed; the store is
-simply not built for the currently configured model."""
+    def started(self) -> None:
+        typer.echo(revisions_service.EXPERIMENTAL_NOTICE, err=True)
 
+    def truncation_notice(self, notice: str) -> None:
+        typer.echo(notice, err=True)
 
-def _echo_revisions_batch_failure(
-    outcome: revisions_service.RevisionOutcome, *, total: int, model: str
-) -> None:
-    """One stderr line for a partial `RevisionOutcome` (#441 precedent,
-    byte-identical shape to `_echo_contradictions_batch_failure`): the same
-    3-tier cause-specific wording, prefixed with how much paid-for judging
-    survived. `total` is `len(plan.to_judge)` -- the judged-pair budget this
-    run actually paid for, never the full candidate plan (served pairs cost
-    nothing and cannot fail)."""
-    failure = outcome.failure
-    context = (
-        f"openkos revisions: failed after judging {len(outcome.results)} "
-        f"of {total} planned pair(s)"
-    )
-    if isinstance(failure, BackendUnavailable):
+    def cost_gate(self, plan: revisions_service.RevisionPlan) -> None:
         typer.echo(
-            f"{context} -- {failure}. Start it with `ollama serve`, then "
-            f"try again.{_DOCTOR_HINT}",
+            f"{len(plan.candidate_plan.candidates)} candidate pair(s), "
+            f"{len(plan.served)} served -> {len(plan.to_judge)} LLM "
+            "call(s) to judge (this can take a while). Pass --auto to "
+            "skip this prompt.",
             err=True,
         )
-    elif isinstance(failure, BackendModelNotFound):
-        typer.echo(
-            f"{context} -- model '{model}' is not installed. Pull it with "
-            f"`ollama pull {model}`, then try again.",
-            err=True,
-        )
-    else:
-        typer.echo(f"{context} -- {failure}.", err=True)
+
+    def confirm_judging(self) -> revisions_service.ConfirmationAnswer:
+        # The same three branches every other cost gate in this CLI has:
+        # a TTY asks, and non-TTY stdin without `--auto` cannot ask.
+        if not sys.stdin.isatty():
+            return "unavailable"
+        return "proceed" if typer.confirm("Proceed?") else "declined"
+
+    def progress_callback(
+        self,
+    ) -> Callable[[int, int, RevisionVerdict], None] | None:
+        return observability.progress_callback("revisions", "judging pair")
 
 
 @app.command(
@@ -13713,6 +13205,11 @@ def revisions(
     refines, or reaffirms (#1014 piece (a), Phase B re-plan): read-only over
     the bundle, like `contradictions`/`suggest-relations`.
 
+    A thin adapter over `application.revisions.run_revisions` (issue #1168):
+    the service owns the workspace gate, the planning, the ONE cost gate's
+    WHEN and the judging; this verb keeps the rendering, the TTY question and
+    the exit-code mapping.
+
     Candidate pairs are blocked by embedding similarity over each eligible
     Decision's document vector, read directly from `.openkos/vectors.db`
     (`application.revisions.read_decision_vectors`) -- this verb makes NO
@@ -13752,121 +13249,67 @@ def revisions(
     one stderr line says so on every invocation, and every finding should
     be reviewed before it is applied.
     """
-    root = Path.cwd()
-    reason = config.require_workspace(root)
-    if reason is not None:
-        typer.echo(f"openkos revisions: refusing to run -- {reason}.", err=True)
-        raise typer.Exit(code=1)
-
-    layout = config.WorkspaceLayout(root)
-
     try:
-        cfg = config.read_config(root)
-    except (OSError, ValueError) as exc:
-        typer.echo(
-            f"openkos revisions: failed while reading the workspace -- {exc}.",
-            err=True,
+        run = revisions_service.run_revisions(
+            Path.cwd(),
+            revisions_service.RevisionsRequest(
+                skip_confirmation=auto,
+                include_confidential=include_confidential,
+                fresh=fresh,
+            ),
+            revisions_service.RevisionsPorts(
+                chat_client=lambda cfg, task: _chat_client(cfg, task=task),
+                resolve_local_exemption=lambda client, cfg: _resolve_local_exemption(
+                    client, cfg
+                ),
+                truncation_notice=lambda candidate_plan: revision_truncation_notice(
+                    candidate_plan
+                ),
+            ),
+            _RevisionsObserver(),
         )
+    except revisions_service.RevisionsRefused as exc:
+        typer.echo(exc.message, err=True)
         raise typer.Exit(code=1) from exc
 
-    typer.echo(_REVISIONS_EXPERIMENTAL_NOTICE, err=True)
-
-    llm = _chat_client(cfg)
-    local_exemption = _resolve_local_exemption(
-        cast(application_backends.HasLocality, llm), cfg
-    )
-    # design.md Decision B2: the flag (or the local exemption) releases only
-    # the judge's `llm.chat` send of a confidential Decision's body -- it
-    # never authorizes an embedding call, which this verb never makes at
-    # all (Decision B1).
-    effective_confidential = include_confidential or local_exemption
-
-    decisions = revisions_service.load_decisions(
-        layout,
-        include_confidential=effective_confidential,
-        local_exemption=local_exemption,
-    )
-    if not decisions.decisions:
+    if run.status == "no_decisions":
         typer.echo("No Decision objects found.")
         return
-
-    plan = revisions_service.plan_revisions(
-        layout,
-        decisions,
-        embedding_model=cfg.embedding_model,
-        effective_confidential=effective_confidential,
-        fresh=fresh,
-        backend=cfg.backend,
-    )
-
-    # design.md Decision B1's table: a whole-run vector-store degrade makes
-    # zero LLM calls and exits 0 -- there is no candidate plan worth
-    # judging, so neither the gate nor the judge is ever reached.
-    if plan.coverage.store == "absent":
-        typer.echo(_REVISIONS_NO_VECTORS_MESSAGE, err=True)
+    if run.status == "vectors_absent":
+        typer.echo(revisions_service.NO_VECTORS_MESSAGE, err=True)
         return
-    if plan.coverage.store == "model-mismatch":
-        typer.echo(_REVISIONS_MODEL_MISMATCH_MESSAGE, err=True)
+    if run.status == "model_mismatch":
+        typer.echo(revisions_service.MODEL_MISMATCH_MESSAGE, err=True)
+        return
+    if run.status == "declined":
+        typer.echo("Aborted -- no revisions judged.")
         return
 
-    # #378 precedent (`curate.py:1660-1663`, mirrored by `contradictions`'
-    # own truncation notice): printed BEFORE the gate line, so an operator
-    # learns candidates were dropped before consenting to the spend.
-    notice = revision_truncation_notice(plan.candidate_plan)
-    if notice is not None:
-        typer.echo(notice, err=True)
-
-    # design.md's Phase B re-plan, Decision B4: the one remaining cost gate,
-    # printed (unconditionally, even under `--auto`) whenever there is at
-    # least one pair left to judge -- a gate whose count is zero prints
-    # nothing and asks nothing (spec: Zero-LLM Probe Precedes The Cost
-    # Gate / One Exact Cost Gate Before Pair Judgment).
-    if plan.to_judge:
-        typer.echo(
-            f"{len(plan.candidate_plan.candidates)} candidate pair(s), "
-            f"{len(plan.served)} served -> {len(plan.to_judge)} LLM "
-            "call(s) to judge (this can take a while). Pass --auto to "
-            "skip this prompt.",
-            err=True,
-        )
-        if not auto:
-            if sys.stdin.isatty():
-                if not typer.confirm("Proceed?"):
-                    typer.echo("Aborted -- no revisions judged.")
-                    return
-            else:
-                typer.echo(
-                    "openkos revisions: refusing to spend model calls "
-                    "without confirmation -- stdin is not a TTY; re-run "
-                    "with --auto.",
-                    err=True,
-                )
-                raise typer.Exit(code=1)
-
-    outcome = revisions_service.judge_revisions(
-        layout,
-        plan,
-        llm=llm,
-        effective_confidential=effective_confidential,
-        on_progress=observability.progress_callback("revisions", "judging pair"),
-    )
-
+    report = run.report
+    if report is None:
+        return
     typer.echo(
         revisions_report(
-            plan, outcome, excluded=decisions.bad_relations, show_all=show_all
+            report.plan,
+            report.outcome,
+            excluded=report.decisions.bad_relations,
+            show_all=show_all,
         )
     )
 
-    if outcome.failure is not None:
+    if report.outcome.failure is not None:
         # Partial batch (#441 posture, mirrored from `contradictions`): the
         # report above already rendered every verdict judged so far exactly
         # as a complete run over that list would -- the paid-for work is
         # never discarded -- so all that remains is the one stderr failure
         # line and the BackendError-family exit code.
-        _echo_revisions_batch_failure(
-            outcome, total=len(plan.to_judge), model=cfg.model
+        typer.echo(
+            revisions_service.revisions_batch_failure_message(
+                report.outcome, total=len(report.plan.to_judge), model=run.model
+            ),
+            err=True,
         )
-        raise typer.Exit(code=1) from outcome.failure
+        raise typer.Exit(code=1) from report.outcome.failure
 
 
 def _no_match_message(cause: NoMatchCause, fts_hit_count: int) -> str:

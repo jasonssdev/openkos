@@ -1,0 +1,1742 @@
+{
+  "apply_already_present": {
+    "calls": [
+      {
+        "bundle_dir": "PosixPath('<ROOT>/bundle')",
+        "edges": [
+          [
+            "concepts/a",
+            "concepts/b"
+          ]
+        ],
+        "include_confidential": "False",
+        "llm_type": "OfflineOllama",
+        "local_exemption": "True",
+        "on_progress": "callable",
+        "rationale_language": "None"
+      }
+    ],
+    "exit_code": 0,
+    "extra": {
+      "files": {
+        "concepts/a": "---\ntype: Concept\ntitle: Alpha\nrelations:\n  - target: concepts/b\n    type: references\n---\n# Alpha\n"
+      },
+      "git_subjects": [
+        "seed fixture documents",
+        "seed fixture documents",
+        "seed fixture documents",
+        "seed fixture documents",
+        "chore(openkos): initialize workspace"
+      ]
+    },
+    "rows": [
+      [
+        "concepts/a\nconcepts/b",
+        "references",
+        "concepts/a cites concepts/b",
+        1
+      ]
+    ],
+    "stderr": "  [1/1] concepts/a -> concepts/b  [references]\n",
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\n[references] concepts/a -> concepts/b\n  rationale: concepts/a cites concepts/b\nRelate concepts/a -> concepts/b [references]? [y/N]: y\n  note: already present -- nothing to write\nopenkos suggest-relations --apply: applied 0, skipped 1 (declined: 0)\n"
+  },
+  "apply_corrected": {
+    "calls": [
+      {
+        "bundle_dir": "PosixPath('<ROOT>/bundle')",
+        "edges": [
+          [
+            "concepts/a",
+            "concepts/b"
+          ]
+        ],
+        "include_confidential": "False",
+        "llm_type": "OfflineOllama",
+        "local_exemption": "True",
+        "on_progress": "callable",
+        "rationale_language": "None"
+      }
+    ],
+    "exit_code": 0,
+    "extra": {
+      "files": {
+        "concepts/a": "---\ntype: Concept\ntitle: Alpha\n---\n# Alpha\n",
+        "concepts/b": "---\nrelations:\n- target: concepts/a\n  type: member_of\ntitle: Beta\ntype: Concept\n---\n\n# Beta\n"
+      },
+      "git_subjects": [
+        "openkos: relate concepts/b -> concepts/a (member_of)",
+        "seed fixture documents",
+        "seed fixture documents",
+        "seed fixture documents",
+        "chore(openkos): initialize workspace"
+      ]
+    },
+    "rows": [
+      [
+        "concepts/a\nconcepts/b",
+        "member_of",
+        "corrected",
+        1
+      ]
+    ],
+    "stderr": "  [1/1] concepts/b -> concepts/a  [member_of]\n",
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\n[member_of] concepts/b -> concepts/a (direction model-suggested, unverified)\n  rationale: corrected\nRelate concepts/b -> concepts/a [member_of] (direction model-suggested, unverified)? [y/N]: y\nopenkos suggest-relations --apply: applied 1, skipped 0 (declined: 0)\n"
+  },
+  "apply_drift": {
+    "calls": [],
+    "exit_code": 3,
+    "extra": {
+      "files": {
+        "concepts/a": "---\ntype: Concept\ntitle: Alpha\n---\n# Alpha\nedited behind our back\n"
+      },
+      "git_subjects": [
+        "seed fixture documents",
+        "seed fixture documents",
+        "seed fixture documents",
+        "chore(openkos): initialize workspace"
+      ]
+    },
+    "rows": [
+      [
+        "concepts/a\nconcepts/b",
+        "references",
+        "concepts/a cites concepts/b",
+        1
+      ]
+    ],
+    "stderr": "  [1/1] concepts/a -> concepts/b  [references]\nopenkos suggest-relations --apply: refusing to write -- 1 write target(s) changed on disk after this run computed its plan: bundle/concepts/a.md. Nothing was written. Re-run to recompute over the current bundle.\n",
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\n[references] concepts/a -> concepts/b\n  rationale: concepts/a cites concepts/b\nRelate concepts/a -> concepts/b [references]? [y/N]: y\n"
+  },
+  "apply_empty_results_with_failure": {
+    "calls": [
+      {
+        "bundle_dir": "PosixPath('<ROOT>/bundle')",
+        "edges": [
+          [
+            "concepts/a",
+            "concepts/b"
+          ]
+        ],
+        "include_confidential": "False",
+        "llm_type": "OfflineOllama",
+        "local_exemption": "True",
+        "on_progress": "callable",
+        "rationale_language": "None"
+      }
+    ],
+    "exit_code": 1,
+    "rows": [],
+    "stderr": "openkos suggest-relations: failed after suggesting 0 of 1 untyped edge(s) -- boom.\n",
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\nopenkos suggest-relations --apply: nothing to apply -- applied 0, skipped 0 (declined: 0)\n"
+  },
+  "apply_mixed_walk": {
+    "calls": [
+      {
+        "bundle_dir": "PosixPath('<ROOT>/bundle')",
+        "edges": [
+          [
+            "concepts/a",
+            "concepts/b"
+          ],
+          [
+            "concepts/b",
+            "projects/p"
+          ],
+          [
+            "projects/p",
+            "concepts/a"
+          ],
+          [
+            "concepts/a",
+            "projects/p"
+          ]
+        ],
+        "include_confidential": "False",
+        "llm_type": "OfflineOllama",
+        "local_exemption": "True",
+        "on_progress": "callable",
+        "rationale_language": "None"
+      }
+    ],
+    "exit_code": 0,
+    "extra": {
+      "files": {
+        "concepts/a": "---\nrelations:\n- target: concepts/b\n  type: references\n- target: projects/p\n  type: related_to\ntitle: Alpha\ntype: Concept\n---\n\n# Alpha\n",
+        "concepts/b": "---\ntype: Concept\ntitle: Beta\n---\n# Beta\n",
+        "projects/p": "---\ntype: Project\ntitle: Proj\n---\n# Proj\n"
+      },
+      "git_subjects": [
+        "openkos: relate concepts/a -> projects/p (related_to)",
+        "openkos: relate concepts/a -> concepts/b (references)",
+        "seed fixture documents",
+        "seed fixture documents",
+        "seed fixture documents",
+        "chore(openkos): initialize workspace"
+      ]
+    },
+    "rows": [
+      [
+        "concepts/a\nconcepts/b",
+        "references",
+        "because",
+        1
+      ],
+      [
+        "concepts/a\nprojects/p",
+        "related_to",
+        "because",
+        1
+      ],
+      [
+        "concepts/b\nprojects/p",
+        "produced_by",
+        "because",
+        1
+      ]
+    ],
+    "stderr": "  [1/4] concepts/a -> concepts/b  [references]\n  [2/4] concepts/b -> projects/p  [produced_by]\n  [3/4] projects/p -> concepts/a  [?]\n  [4/4] concepts/a -> projects/p  [related_to]\n",
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\n[references] concepts/a -> concepts/b\n  rationale: because\nRelate concepts/a -> concepts/b [references]? [y/N]: y\n[produced_by] concepts/b -> projects/p (direction model-suggested, unverified)\n  rationale: because\nRelate concepts/b -> projects/p [produced_by] (direction model-suggested, unverified)? [y/N]: n\n[?] projects/p -> concepts/a\n  note: no valid type suggested\n[related_to] concepts/a -> projects/p (connected; the documents do not say how)\n  rationale: because\nRelate concepts/a -> projects/p [related_to] (connected; the documents do not say how)? [y/N]: y\nopenkos suggest-relations --apply: applied 2, skipped 2 (declined: 1)\n  declined: concepts/b -> projects/p [produced_by]\n"
+  },
+  "apply_no_git_identity": {
+    "calls": [
+      {
+        "bundle_dir": "PosixPath('<ROOT>/bundle')",
+        "edges": [
+          [
+            "concepts/a",
+            "concepts/b"
+          ]
+        ],
+        "include_confidential": "False",
+        "llm_type": "OfflineOllama",
+        "local_exemption": "True",
+        "on_progress": "callable",
+        "rationale_language": "None"
+      }
+    ],
+    "exit_code": 0,
+    "extra": {
+      "a": "---\nrelations:\n- target: concepts/b\n  type: references\ntitle: Alpha\ntype: Concept\n---\n\n# Alpha\n"
+    },
+    "rows": [
+      [
+        "concepts/a\nconcepts/b",
+        "references",
+        "concepts/a cites concepts/b",
+        1
+      ]
+    ],
+    "stderr": "  [1/1] concepts/a -> concepts/b  [references]\nopenkos: WARNING -- git identity unset; skipped auto-commit (writes are on disk).\n",
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\n[references] concepts/a -> concepts/b\n  rationale: concepts/a cites concepts/b\nRelate concepts/a -> concepts/b [references]? [y/N]: y\nopenkos suggest-relations --apply: applied 1, skipped 0 (declined: 0)\n"
+  },
+  "apply_only_degrades": {
+    "calls": [
+      {
+        "bundle_dir": "PosixPath('<ROOT>/bundle')",
+        "edges": [
+          [
+            "concepts/a",
+            "concepts/b"
+          ]
+        ],
+        "include_confidential": "False",
+        "llm_type": "OfflineOllama",
+        "local_exemption": "True",
+        "on_progress": "callable",
+        "rationale_language": "None"
+      }
+    ],
+    "exit_code": 0,
+    "rows": [],
+    "stderr": "  [1/1] concepts/a -> concepts/b  [?]\n",
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\n[?] concepts/a -> concepts/b\n  note: no valid type suggested\nopenkos suggest-relations --apply: applied 0, skipped 1 (declined: 0)\n"
+  },
+  "apply_prepare_failure": {
+    "calls": [],
+    "exit_code": 1,
+    "rows": [
+      [
+        "concepts/a\nconcepts/b",
+        "references",
+        "concepts/a cites concepts/b",
+        1
+      ]
+    ],
+    "stderr": "  [1/1] concepts/a -> concepts/b  [references]\nopenkos suggest-relations --apply: failed while relating concepts/a -> concepts/b -- prepare exploded.\n",
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\n[references] concepts/a -> concepts/b\n  rationale: concepts/a cites concepts/b\nRelate concepts/a -> concepts/b [references]? [y/N]: y\n"
+  },
+  "apply_write_failure": {
+    "calls": [],
+    "exit_code": 1,
+    "rows": [
+      [
+        "concepts/a\nconcepts/b",
+        "references",
+        "concepts/a cites concepts/b",
+        1
+      ]
+    ],
+    "stderr": "  [1/1] concepts/a -> concepts/b  [references]\nopenkos suggest-relations --apply: failed while relating concepts/a -> concepts/b -- write exploded.\n",
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\n[references] concepts/a -> concepts/b\n  rationale: concepts/a cites concepts/b\nRelate concepts/a -> concepts/b [references]? [y/N]: y\n"
+  },
+  "capped_run": {
+    "calls": [
+      {
+        "bundle_dir": "PosixPath('<ROOT>/bundle')",
+        "edges": [
+          [
+            "concepts/hub",
+            "concepts/leaf001"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf002"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf003"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf004"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf005"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf006"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf007"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf008"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf009"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf010"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf011"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf012"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf013"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf014"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf015"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf016"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf017"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf018"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf019"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf020"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf021"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf022"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf023"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf024"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf025"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf026"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf027"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf028"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf029"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf030"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf031"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf032"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf033"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf034"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf035"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf036"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf037"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf038"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf039"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf040"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf041"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf042"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf043"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf044"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf045"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf046"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf047"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf048"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf049"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf050"
+          ]
+        ],
+        "include_confidential": "False",
+        "llm_type": "OfflineOllama",
+        "local_exemption": "True",
+        "on_progress": "callable",
+        "rationale_language": "None"
+      }
+    ],
+    "exit_code": 0,
+    "rows": [
+      [
+        "concepts/hub\nconcepts/leaf001",
+        "references",
+        "concepts/hub cites concepts/leaf001",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf002",
+        "references",
+        "concepts/hub cites concepts/leaf002",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf003",
+        "references",
+        "concepts/hub cites concepts/leaf003",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf004",
+        "references",
+        "concepts/hub cites concepts/leaf004",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf005",
+        "references",
+        "concepts/hub cites concepts/leaf005",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf006",
+        "references",
+        "concepts/hub cites concepts/leaf006",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf007",
+        "references",
+        "concepts/hub cites concepts/leaf007",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf008",
+        "references",
+        "concepts/hub cites concepts/leaf008",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf009",
+        "references",
+        "concepts/hub cites concepts/leaf009",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf010",
+        "references",
+        "concepts/hub cites concepts/leaf010",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf011",
+        "references",
+        "concepts/hub cites concepts/leaf011",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf012",
+        "references",
+        "concepts/hub cites concepts/leaf012",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf013",
+        "references",
+        "concepts/hub cites concepts/leaf013",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf014",
+        "references",
+        "concepts/hub cites concepts/leaf014",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf015",
+        "references",
+        "concepts/hub cites concepts/leaf015",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf016",
+        "references",
+        "concepts/hub cites concepts/leaf016",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf017",
+        "references",
+        "concepts/hub cites concepts/leaf017",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf018",
+        "references",
+        "concepts/hub cites concepts/leaf018",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf019",
+        "references",
+        "concepts/hub cites concepts/leaf019",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf020",
+        "references",
+        "concepts/hub cites concepts/leaf020",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf021",
+        "references",
+        "concepts/hub cites concepts/leaf021",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf022",
+        "references",
+        "concepts/hub cites concepts/leaf022",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf023",
+        "references",
+        "concepts/hub cites concepts/leaf023",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf024",
+        "references",
+        "concepts/hub cites concepts/leaf024",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf025",
+        "references",
+        "concepts/hub cites concepts/leaf025",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf026",
+        "references",
+        "concepts/hub cites concepts/leaf026",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf027",
+        "references",
+        "concepts/hub cites concepts/leaf027",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf028",
+        "references",
+        "concepts/hub cites concepts/leaf028",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf029",
+        "references",
+        "concepts/hub cites concepts/leaf029",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf030",
+        "references",
+        "concepts/hub cites concepts/leaf030",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf031",
+        "references",
+        "concepts/hub cites concepts/leaf031",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf032",
+        "references",
+        "concepts/hub cites concepts/leaf032",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf033",
+        "references",
+        "concepts/hub cites concepts/leaf033",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf034",
+        "references",
+        "concepts/hub cites concepts/leaf034",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf035",
+        "references",
+        "concepts/hub cites concepts/leaf035",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf036",
+        "references",
+        "concepts/hub cites concepts/leaf036",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf037",
+        "references",
+        "concepts/hub cites concepts/leaf037",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf038",
+        "references",
+        "concepts/hub cites concepts/leaf038",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf039",
+        "references",
+        "concepts/hub cites concepts/leaf039",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf040",
+        "references",
+        "concepts/hub cites concepts/leaf040",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf041",
+        "references",
+        "concepts/hub cites concepts/leaf041",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf042",
+        "references",
+        "concepts/hub cites concepts/leaf042",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf043",
+        "references",
+        "concepts/hub cites concepts/leaf043",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf044",
+        "references",
+        "concepts/hub cites concepts/leaf044",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf045",
+        "references",
+        "concepts/hub cites concepts/leaf045",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf046",
+        "references",
+        "concepts/hub cites concepts/leaf046",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf047",
+        "references",
+        "concepts/hub cites concepts/leaf047",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf048",
+        "references",
+        "concepts/hub cites concepts/leaf048",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf049",
+        "references",
+        "concepts/hub cites concepts/leaf049",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf050",
+        "references",
+        "concepts/hub cites concepts/leaf050",
+        1
+      ]
+    ],
+    "stderr": "  [1/50] concepts/hub -> concepts/leaf001  [references]\n  [2/50] concepts/hub -> concepts/leaf002  [references]\n  [3/50] concepts/hub -> concepts/leaf003  [references]\n  [4/50] concepts/hub -> concepts/leaf004  [references]\n  [5/50] concepts/hub -> concepts/leaf005  [references]\n  [6/50] concepts/hub -> concepts/leaf006  [references]\n  [7/50] concepts/hub -> concepts/leaf007  [references]\n  [8/50] concepts/hub -> concepts/leaf008  [references]\n  [9/50] concepts/hub -> concepts/leaf009  [references]\n  [10/50] concepts/hub -> concepts/leaf010  [references]\n  [11/50] concepts/hub -> concepts/leaf011  [references]\n  [12/50] concepts/hub -> concepts/leaf012  [references]\n  [13/50] concepts/hub -> concepts/leaf013  [references]\n  [14/50] concepts/hub -> concepts/leaf014  [references]\n  [15/50] concepts/hub -> concepts/leaf015  [references]\n  [16/50] concepts/hub -> concepts/leaf016  [references]\n  [17/50] concepts/hub -> concepts/leaf017  [references]\n  [18/50] concepts/hub -> concepts/leaf018  [references]\n  [19/50] concepts/hub -> concepts/leaf019  [references]\n  [20/50] concepts/hub -> concepts/leaf020  [references]\n  [21/50] concepts/hub -> concepts/leaf021  [references]\n  [22/50] concepts/hub -> concepts/leaf022  [references]\n  [23/50] concepts/hub -> concepts/leaf023  [references]\n  [24/50] concepts/hub -> concepts/leaf024  [references]\n  [25/50] concepts/hub -> concepts/leaf025  [references]\n  [26/50] concepts/hub -> concepts/leaf026  [references]\n  [27/50] concepts/hub -> concepts/leaf027  [references]\n  [28/50] concepts/hub -> concepts/leaf028  [references]\n  [29/50] concepts/hub -> concepts/leaf029  [references]\n  [30/50] concepts/hub -> concepts/leaf030  [references]\n  [31/50] concepts/hub -> concepts/leaf031  [references]\n  [32/50] concepts/hub -> concepts/leaf032  [references]\n  [33/50] concepts/hub -> concepts/leaf033  [references]\n  [34/50] concepts/hub -> concepts/leaf034  [references]\n  [35/50] concepts/hub -> concepts/leaf035  [references]\n  [36/50] concepts/hub -> concepts/leaf036  [references]\n  [37/50] concepts/hub -> concepts/leaf037  [references]\n  [38/50] concepts/hub -> concepts/leaf038  [references]\n  [39/50] concepts/hub -> concepts/leaf039  [references]\n  [40/50] concepts/hub -> concepts/leaf040  [references]\n  [41/50] concepts/hub -> concepts/leaf041  [references]\n  [42/50] concepts/hub -> concepts/leaf042  [references]\n  [43/50] concepts/hub -> concepts/leaf043  [references]\n  [44/50] concepts/hub -> concepts/leaf044  [references]\n  [45/50] concepts/hub -> concepts/leaf045  [references]\n  [46/50] concepts/hub -> concepts/leaf046  [references]\n  [47/50] concepts/hub -> concepts/leaf047  [references]\n  [48/50] concepts/hub -> concepts/leaf048  [references]\n  [49/50] concepts/hub -> concepts/leaf049  [references]\n  [50/50] concepts/hub -> concepts/leaf050  [references]\n",
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\n50 of 60 candidate edge(s) shown (cap reached)\n\n[references] concepts/hub -> concepts/leaf001\n  rationale: concepts/hub cites concepts/leaf001\n\n[references] concepts/hub -> concepts/leaf002\n  rationale: concepts/hub cites concepts/leaf002\n\n[references] concepts/hub -> concepts/leaf003\n  rationale: concepts/hub cites concepts/leaf003\n\n[references] concepts/hub -> concepts/leaf004\n  rationale: concepts/hub cites concepts/leaf004\n\n[references] concepts/hub -> concepts/leaf005\n  rationale: concepts/hub cites concepts/leaf005\n\n[references] concepts/hub -> concepts/leaf006\n  rationale: concepts/hub cites concepts/leaf006\n\n[references] concepts/hub -> concepts/leaf007\n  rationale: concepts/hub cites concepts/leaf007\n\n[references] concepts/hub -> concepts/leaf008\n  rationale: concepts/hub cites concepts/leaf008\n\n[references] concepts/hub -> concepts/leaf009\n  rationale: concepts/hub cites concepts/leaf009\n\n[references] concepts/hub -> concepts/leaf010\n  rationale: concepts/hub cites concepts/leaf010\n\n[references] concepts/hub -> concepts/leaf011\n  rationale: concepts/hub cites concepts/leaf011\n\n[references] concepts/hub -> concepts/leaf012\n  rationale: concepts/hub cites concepts/leaf012\n\n[references] concepts/hub -> concepts/leaf013\n  rationale: concepts/hub cites concepts/leaf013\n\n[references] concepts/hub -> concepts/leaf014\n  rationale: concepts/hub cites concepts/leaf014\n\n[references] concepts/hub -> concepts/leaf015\n  rationale: concepts/hub cites concepts/leaf015\n\n[references] concepts/hub -> concepts/leaf016\n  rationale: concepts/hub cites concepts/leaf016\n\n[references] concepts/hub -> concepts/leaf017\n  rationale: concepts/hub cites concepts/leaf017\n\n[references] concepts/hub -> concepts/leaf018\n  rationale: concepts/hub cites concepts/leaf018\n\n[references] concepts/hub -> concepts/leaf019\n  rationale: concepts/hub cites concepts/leaf019\n\n[references] concepts/hub -> concepts/leaf020\n  rationale: concepts/hub cites concepts/leaf020\n\n[references] concepts/hub -> concepts/leaf021\n  rationale: concepts/hub cites concepts/leaf021\n\n[references] concepts/hub -> concepts/leaf022\n  rationale: concepts/hub cites concepts/leaf022\n\n[references] concepts/hub -> concepts/leaf023\n  rationale: concepts/hub cites concepts/leaf023\n\n[references] concepts/hub -> concepts/leaf024\n  rationale: concepts/hub cites concepts/leaf024\n\n[references] concepts/hub -> concepts/leaf025\n  rationale: concepts/hub cites concepts/leaf025\n\n[references] concepts/hub -> concepts/leaf026\n  rationale: concepts/hub cites concepts/leaf026\n\n[references] concepts/hub -> concepts/leaf027\n  rationale: concepts/hub cites concepts/leaf027\n\n[references] concepts/hub -> concepts/leaf028\n  rationale: concepts/hub cites concepts/leaf028\n\n[references] concepts/hub -> concepts/leaf029\n  rationale: concepts/hub cites concepts/leaf029\n\n[references] concepts/hub -> concepts/leaf030\n  rationale: concepts/hub cites concepts/leaf030\n\n[references] concepts/hub -> concepts/leaf031\n  rationale: concepts/hub cites concepts/leaf031\n\n[references] concepts/hub -> concepts/leaf032\n  rationale: concepts/hub cites concepts/leaf032\n\n[references] concepts/hub -> concepts/leaf033\n  rationale: concepts/hub cites concepts/leaf033\n\n[references] concepts/hub -> concepts/leaf034\n  rationale: concepts/hub cites concepts/leaf034\n\n[references] concepts/hub -> concepts/leaf035\n  rationale: concepts/hub cites concepts/leaf035\n\n[references] concepts/hub -> concepts/leaf036\n  rationale: concepts/hub cites concepts/leaf036\n\n[references] concepts/hub -> concepts/leaf037\n  rationale: concepts/hub cites concepts/leaf037\n\n[references] concepts/hub -> concepts/leaf038\n  rationale: concepts/hub cites concepts/leaf038\n\n[references] concepts/hub -> concepts/leaf039\n  rationale: concepts/hub cites concepts/leaf039\n\n[references] concepts/hub -> concepts/leaf040\n  rationale: concepts/hub cites concepts/leaf040\n\n[references] concepts/hub -> concepts/leaf041\n  rationale: concepts/hub cites concepts/leaf041\n\n[references] concepts/hub -> concepts/leaf042\n  rationale: concepts/hub cites concepts/leaf042\n\n[references] concepts/hub -> concepts/leaf043\n  rationale: concepts/hub cites concepts/leaf043\n\n[references] concepts/hub -> concepts/leaf044\n  rationale: concepts/hub cites concepts/leaf044\n\n[references] concepts/hub -> concepts/leaf045\n  rationale: concepts/hub cites concepts/leaf045\n\n[references] concepts/hub -> concepts/leaf046\n  rationale: concepts/hub cites concepts/leaf046\n\n[references] concepts/hub -> concepts/leaf047\n  rationale: concepts/hub cites concepts/leaf047\n\n[references] concepts/hub -> concepts/leaf048\n  rationale: concepts/hub cites concepts/leaf048\n\n[references] concepts/hub -> concepts/leaf049\n  rationale: concepts/hub cites concepts/leaf049\n\n[references] concepts/hub -> concepts/leaf050\n  rationale: concepts/hub cites concepts/leaf050\n\nNext: openkos suggest-relations --apply (per-item consent), or openkos relate <source> <type> <target>\nCandidates beyond the cap are not lost: type the edges shown (--apply or relate), then re-run suggest-relations to surface the next batch.\nOr browse it without typing these: re-run with --edge-offset 50.\n"
+  },
+  "corrupt_store": {
+    "calls": [
+      {
+        "bundle_dir": "PosixPath('<ROOT>/bundle')",
+        "edges": [
+          [
+            "concepts/a",
+            "concepts/b"
+          ]
+        ],
+        "include_confidential": "False",
+        "llm_type": "OfflineOllama",
+        "local_exemption": "True",
+        "on_progress": "callable",
+        "rationale_language": "None"
+      }
+    ],
+    "exit_code": 0,
+    "rows": [],
+    "stderr": "openkos suggest-relations: warning -- failed to read persisted suggestions (file is not a database); typing every edge fresh.\n1 untyped edge(s) -> 1 LLM call(s), one per edge (this can take a while). Pass --auto to skip this prompt.\n  [1/1] concepts/a -> concepts/b  [references]\nopenkos suggest-relations: warning -- failed to persist edge suggestions (file is not a database); the next run will re-type them.\n",
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\nProceed? [y/N]: y\n[references] concepts/a -> concepts/b\n  rationale: concepts/a cites concepts/b\n\nNext: openkos suggest-relations --apply (per-item consent), or openkos relate <source> <type> <target>\n"
+  },
+  "degrade_first_run": {
+    "calls": [
+      {
+        "bundle_dir": "PosixPath('<ROOT>/bundle')",
+        "edges": [
+          [
+            "concepts/a",
+            "concepts/b"
+          ],
+          [
+            "concepts/c",
+            "concepts/d"
+          ]
+        ],
+        "include_confidential": "False",
+        "llm_type": "OfflineOllama",
+        "local_exemption": "True",
+        "on_progress": "callable",
+        "rationale_language": "None"
+      }
+    ],
+    "exit_code": 0,
+    "rows": [
+      [
+        "concepts/a\nconcepts/b",
+        "references",
+        "stub rationale",
+        1
+      ]
+    ],
+    "stderr": "  [1/2] concepts/a -> concepts/b  [references]\n  [2/2] concepts/c -> concepts/d  [?]\n",
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\n[references] concepts/a -> concepts/b\n  rationale: stub rationale\n\n[?] concepts/c -> concepts/d\n  note: no valid type suggested\n\nNext: openkos suggest-relations --apply (per-item consent), or openkos relate <source> <type> <target>\n"
+  },
+  "degrade_second_run": {
+    "calls": [
+      {
+        "bundle_dir": "PosixPath('<ROOT>/bundle')",
+        "edges": [
+          [
+            "concepts/c",
+            "concepts/d"
+          ]
+        ],
+        "include_confidential": "False",
+        "llm_type": "OfflineOllama",
+        "local_exemption": "True",
+        "on_progress": "callable",
+        "rationale_language": "None"
+      }
+    ],
+    "exit_code": 0,
+    "rows": [
+      [
+        "concepts/a\nconcepts/b",
+        "references",
+        "stub rationale",
+        1
+      ]
+    ],
+    "stderr": "openkos suggest-relations: 1 of 2 candidate edge(s) served from persisted suggestions; 1 typed fresh.\n  [1/1] concepts/c -> concepts/d  [?]\n",
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\n[references] concepts/a -> concepts/b\n  rationale: stub rationale\n\n[?] concepts/c -> concepts/d\n  note: no valid type suggested\n\nNext: openkos suggest-relations --apply (per-item consent), or openkos relate <source> <type> <target>\n"
+  },
+  "edge_offset_50": {
+    "calls": [
+      {
+        "bundle_dir": "PosixPath('<ROOT>/bundle')",
+        "edges": [
+          [
+            "concepts/hub",
+            "concepts/leaf051"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf052"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf053"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf054"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf055"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf056"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf057"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf058"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf059"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf060"
+          ]
+        ],
+        "include_confidential": "False",
+        "llm_type": "OfflineOllama",
+        "local_exemption": "True",
+        "on_progress": "callable",
+        "rationale_language": "None"
+      }
+    ],
+    "exit_code": 0,
+    "rows": [
+      [
+        "concepts/hub\nconcepts/leaf051",
+        "references",
+        "concepts/hub cites concepts/leaf051",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf052",
+        "references",
+        "concepts/hub cites concepts/leaf052",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf053",
+        "references",
+        "concepts/hub cites concepts/leaf053",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf054",
+        "references",
+        "concepts/hub cites concepts/leaf054",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf055",
+        "references",
+        "concepts/hub cites concepts/leaf055",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf056",
+        "references",
+        "concepts/hub cites concepts/leaf056",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf057",
+        "references",
+        "concepts/hub cites concepts/leaf057",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf058",
+        "references",
+        "concepts/hub cites concepts/leaf058",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf059",
+        "references",
+        "concepts/hub cites concepts/leaf059",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf060",
+        "references",
+        "concepts/hub cites concepts/leaf060",
+        1
+      ]
+    ],
+    "stderr": "  [1/10] concepts/hub -> concepts/leaf051  [references]\n  [2/10] concepts/hub -> concepts/leaf052  [references]\n  [3/10] concepts/hub -> concepts/leaf053  [references]\n  [4/10] concepts/hub -> concepts/leaf054  [references]\n  [5/10] concepts/hub -> concepts/leaf055  [references]\n  [6/10] concepts/hub -> concepts/leaf056  [references]\n  [7/10] concepts/hub -> concepts/leaf057  [references]\n  [8/10] concepts/hub -> concepts/leaf058  [references]\n  [9/10] concepts/hub -> concepts/leaf059  [references]\n  [10/10] concepts/hub -> concepts/leaf060  [references]\n",
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\n10 of 60 candidate edge(s) shown (cap reached)\n\n[references] concepts/hub -> concepts/leaf051\n  rationale: concepts/hub cites concepts/leaf051\n\n[references] concepts/hub -> concepts/leaf052\n  rationale: concepts/hub cites concepts/leaf052\n\n[references] concepts/hub -> concepts/leaf053\n  rationale: concepts/hub cites concepts/leaf053\n\n[references] concepts/hub -> concepts/leaf054\n  rationale: concepts/hub cites concepts/leaf054\n\n[references] concepts/hub -> concepts/leaf055\n  rationale: concepts/hub cites concepts/leaf055\n\n[references] concepts/hub -> concepts/leaf056\n  rationale: concepts/hub cites concepts/leaf056\n\n[references] concepts/hub -> concepts/leaf057\n  rationale: concepts/hub cites concepts/leaf057\n\n[references] concepts/hub -> concepts/leaf058\n  rationale: concepts/hub cites concepts/leaf058\n\n[references] concepts/hub -> concepts/leaf059\n  rationale: concepts/hub cites concepts/leaf059\n\n[references] concepts/hub -> concepts/leaf060\n  rationale: concepts/hub cites concepts/leaf060\n\nNext: openkos suggest-relations --apply (per-item consent), or openkos relate <source> <type> <target>\nCandidates beyond the cap are not lost: type the edges shown (--apply or relate), then re-run suggest-relations to surface the next batch.\n"
+  },
+  "edge_offset_beyond": {
+    "calls": [],
+    "exit_code": 0,
+    "rows": [],
+    "stderr": "",
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\nno candidate edges at --edge-offset 60; re-run with a smaller offset.\n"
+  },
+  "gate_confirmed": {
+    "calls": [
+      {
+        "bundle_dir": "PosixPath('<ROOT>/bundle')",
+        "edges": [
+          [
+            "concepts/a",
+            "concepts/b"
+          ],
+          [
+            "concepts/c",
+            "concepts/d"
+          ]
+        ],
+        "include_confidential": "False",
+        "llm_type": "OfflineOllama",
+        "local_exemption": "True",
+        "on_progress": "callable",
+        "rationale_language": "None"
+      }
+    ],
+    "exit_code": 0,
+    "rows": [],
+    "stderr": "2 untyped edge(s) -> 2 LLM call(s), one per edge (this can take a while). Pass --auto to skip this prompt.\n  [1/2] concepts/a -> concepts/b  [references]\n  [2/2] concepts/c -> concepts/d  [references]\n",
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\nProceed? [y/N]: y\n[references] concepts/a -> concepts/b\n  rationale: concepts/a cites concepts/b\n\n[references] concepts/c -> concepts/d\n  rationale: concepts/c cites concepts/d\n\nNext: openkos suggest-relations --apply (per-item consent), or openkos relate <source> <type> <target>\n"
+  },
+  "gate_declined": {
+    "calls": [],
+    "exit_code": 0,
+    "rows": [],
+    "stderr": "2 untyped edge(s) -> 2 LLM call(s), one per edge (this can take a while). Pass --auto to skip this prompt.\n",
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\nProceed? [y/N]: n\nAborted -- no suggestions generated.\n"
+  },
+  "listing_all_shapes": {
+    "calls": [
+      {
+        "bundle_dir": "PosixPath('<ROOT>/bundle')",
+        "edges": [
+          [
+            "concepts/a",
+            "concepts/b"
+          ],
+          [
+            "concepts/c",
+            "concepts/d"
+          ],
+          [
+            "concepts/e",
+            "concepts/f"
+          ],
+          [
+            "concepts/g",
+            "concepts/h"
+          ],
+          [
+            "concepts/i",
+            "concepts/j"
+          ]
+        ],
+        "include_confidential": "False",
+        "llm_type": "OfflineOllama",
+        "local_exemption": "True",
+        "on_progress": "callable",
+        "rationale_language": "None"
+      }
+    ],
+    "exit_code": 0,
+    "rows": [
+      [
+        "concepts/a\nconcepts/b",
+        "references",
+        "because",
+        1
+      ]
+    ],
+    "stderr": "  [1/5] concepts/a -> concepts/b  [references]\n  [2/5] concepts/c -> concepts/d  [caused_by]\n  [3/5] concepts/e -> concepts/f  [related_to]\n  [4/5] concepts/g -> concepts/h  [?]\n  [5/5] concepts/j -> concepts/i  [member_of]\n",
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\n[references] concepts/a -> concepts/b\n  rationale: because\n\n[caused_by] concepts/c -> concepts/d (direction model-suggested, unverified)\n  rationale: because\n\n[related_to] concepts/e -> concepts/f (connected; the documents do not say how)\n  rationale: because\n\n[?] concepts/g -> concepts/h\n  note: no valid type suggested\n\n[member_of] concepts/j -> concepts/i (direction model-suggested, unverified)\n  rationale: because\n\nNext: openkos suggest-relations --apply (per-item consent), or openkos relate <source> <type> <target>\n"
+  },
+  "malformed_config": {
+    "calls": [],
+    "exit_code": 1,
+    "rows": [],
+    "stderr": "openkos suggest-relations: failed while reading the workspace -- openkos.yaml: invalid YAML -- while parsing a flow sequence\n  in \"<unicode string>\", line 1, column 8:\n    model: [unclosed\n           ^\nexpected ',' or ']', but got '<stream end>'\n  in \"<unicode string>\", line 2, column 1:\n    \n    ^.\n",
+    "stdout": ""
+  },
+  "missing_workspace": {
+    "calls": [],
+    "exit_code": 1,
+    "rows": [],
+    "stderr": "openkos suggest-relations: refusing to run -- no OpenKOS workspace found in this directory (run 'openkos init' first).\n",
+    "stdout": ""
+  },
+  "partial_generic": {
+    "calls": [
+      {
+        "bundle_dir": "PosixPath('<ROOT>/bundle')",
+        "edges": [
+          [
+            "concepts/a",
+            "concepts/b"
+          ],
+          [
+            "concepts/c",
+            "concepts/d"
+          ]
+        ],
+        "include_confidential": "False",
+        "llm_type": "OfflineOllama",
+        "local_exemption": "True",
+        "on_progress": "callable",
+        "rationale_language": "None"
+      }
+    ],
+    "exit_code": 1,
+    "rows": [
+      [
+        "concepts/a\nconcepts/b",
+        "references",
+        "concepts/a cites concepts/b",
+        1
+      ]
+    ],
+    "stderr": "  [1/2] concepts/a -> concepts/b  [references]\nopenkos suggest-relations: failed after suggesting 1 of 2 untyped edge(s) -- boom.\n",
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\n[references] concepts/a -> concepts/b\n  rationale: concepts/a cites concepts/b\n\nNext: openkos suggest-relations --apply (per-item consent), or openkos relate <source> <type> <target>\n"
+  },
+  "partial_model_not_found": {
+    "calls": [
+      {
+        "bundle_dir": "PosixPath('<ROOT>/bundle')",
+        "edges": [
+          [
+            "concepts/a",
+            "concepts/b"
+          ],
+          [
+            "concepts/c",
+            "concepts/d"
+          ]
+        ],
+        "include_confidential": "False",
+        "llm_type": "OfflineOllama",
+        "local_exemption": "True",
+        "on_progress": "callable",
+        "rationale_language": "None"
+      }
+    ],
+    "exit_code": 1,
+    "rows": [
+      [
+        "concepts/a\nconcepts/b",
+        "references",
+        "concepts/a cites concepts/b",
+        1
+      ]
+    ],
+    "stderr": "  [1/2] concepts/a -> concepts/b  [references]\nopenkos suggest-relations: failed after suggesting 1 of 2 untyped edge(s) -- model 'qwen3:8b' is not installed. Pull it with `ollama pull qwen3:8b`, then try again.\n",
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\n[references] concepts/a -> concepts/b\n  rationale: concepts/a cites concepts/b\n\nNext: openkos suggest-relations --apply (per-item consent), or openkos relate <source> <type> <target>\n"
+  },
+  "partial_unavailable": {
+    "calls": [
+      {
+        "bundle_dir": "PosixPath('<ROOT>/bundle')",
+        "edges": [
+          [
+            "concepts/a",
+            "concepts/b"
+          ],
+          [
+            "concepts/c",
+            "concepts/d"
+          ]
+        ],
+        "include_confidential": "False",
+        "llm_type": "OfflineOllama",
+        "local_exemption": "True",
+        "on_progress": "callable",
+        "rationale_language": "None"
+      }
+    ],
+    "exit_code": 1,
+    "rows": [
+      [
+        "concepts/a\nconcepts/b",
+        "references",
+        "concepts/a cites concepts/b",
+        1
+      ]
+    ],
+    "stderr": "  [1/2] concepts/a -> concepts/b  [references]\nopenkos suggest-relations: failed after suggesting 1 of 2 untyped edge(s) -- Ollama not reachable at x. Start it with `ollama serve`, then try again. Or run `openkos doctor` to diagnose the environment.\n",
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\n[references] concepts/a -> concepts/b\n  rationale: concepts/a cites concepts/b\n\nNext: openkos suggest-relations --apply (per-item consent), or openkos relate <source> <type> <target>\n"
+  },
+  "partial_with_truncation": {
+    "calls": [
+      {
+        "bundle_dir": "PosixPath('<ROOT>/bundle')",
+        "edges": [
+          [
+            "concepts/hub",
+            "concepts/leaf001"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf002"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf003"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf004"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf005"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf006"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf007"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf008"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf009"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf010"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf011"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf012"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf013"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf014"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf015"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf016"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf017"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf018"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf019"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf020"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf021"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf022"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf023"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf024"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf025"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf026"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf027"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf028"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf029"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf030"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf031"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf032"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf033"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf034"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf035"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf036"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf037"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf038"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf039"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf040"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf041"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf042"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf043"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf044"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf045"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf046"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf047"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf048"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf049"
+          ],
+          [
+            "concepts/hub",
+            "concepts/leaf050"
+          ]
+        ],
+        "include_confidential": "False",
+        "llm_type": "OfflineOllama",
+        "local_exemption": "True",
+        "on_progress": "callable",
+        "rationale_language": "None"
+      }
+    ],
+    "exit_code": 1,
+    "rows": [
+      [
+        "concepts/hub\nconcepts/leaf001",
+        "references",
+        "concepts/hub cites concepts/leaf001",
+        1
+      ],
+      [
+        "concepts/hub\nconcepts/leaf002",
+        "references",
+        "concepts/hub cites concepts/leaf002",
+        1
+      ]
+    ],
+    "stderr": "  [1/50] concepts/hub -> concepts/leaf001  [references]\n  [2/50] concepts/hub -> concepts/leaf002  [references]\nopenkos suggest-relations: failed after suggesting 2 of 50 untyped edge(s) -- boom.\n",
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\n50 of 60 candidate edge(s) shown (cap reached)\n\n[references] concepts/hub -> concepts/leaf001\n  rationale: concepts/hub cites concepts/leaf001\n\n[references] concepts/hub -> concepts/leaf002\n  rationale: concepts/hub cites concepts/leaf002\n\nNext: openkos suggest-relations --apply (per-item consent), or openkos relate <source> <type> <target>\nCandidates beyond the cap are not lost: type the edges shown (--apply or relate), then re-run suggest-relations to surface the next batch.\nOr browse it without typing these: re-run with --edge-offset 50.\n"
+  },
+  "partly_served_gate": {
+    "calls": [
+      {
+        "bundle_dir": "PosixPath('<ROOT>/bundle')",
+        "edges": [
+          [
+            "concepts/c",
+            "concepts/d"
+          ]
+        ],
+        "include_confidential": "False",
+        "llm_type": "OfflineOllama",
+        "local_exemption": "True",
+        "on_progress": "callable",
+        "rationale_language": "None"
+      }
+    ],
+    "exit_code": 0,
+    "rows": [
+      [
+        "concepts/a\nconcepts/b",
+        "references",
+        "concepts/a cites concepts/b",
+        1
+      ],
+      [
+        "concepts/c\nconcepts/d",
+        "references",
+        "concepts/c cites concepts/d",
+        1
+      ]
+    ],
+    "stderr": "openkos suggest-relations: 1 of 2 candidate edge(s) served from persisted suggestions; 1 typed fresh.\n2 untyped edge(s), 1 served -> 1 LLM call(s), one per edge (this can take a while). Pass --auto to skip this prompt.\n  [1/1] concepts/c -> concepts/d  [references]\n",
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\nProceed? [y/N]: y\n[references] concepts/a -> concepts/b\n  rationale: concepts/a cites concepts/b\n\n[references] concepts/c -> concepts/d\n  rationale: concepts/c cites concepts/d\n\nNext: openkos suggest-relations --apply (per-item consent), or openkos relate <source> <type> <target>\n"
+  },
+  "persist_failure": {
+    "calls": [
+      {
+        "bundle_dir": "PosixPath('<ROOT>/bundle')",
+        "edges": [
+          [
+            "concepts/a",
+            "concepts/b"
+          ]
+        ],
+        "include_confidential": "False",
+        "llm_type": "OfflineOllama",
+        "local_exemption": "True",
+        "on_progress": "callable",
+        "rationale_language": "None"
+      }
+    ],
+    "exit_code": 0,
+    "rows": [],
+    "stderr": "  [1/1] concepts/a -> concepts/b  [references]\nopenkos suggest-relations: warning -- failed to persist edge suggestions (disk I/O error); the next run will re-type them.\n",
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\n[references] concepts/a -> concepts/b\n  rationale: concepts/a cites concepts/b\n\nNext: openkos suggest-relations --apply (per-item consent), or openkos relate <source> <type> <target>\n"
+  },
+  "raised_generic": {
+    "calls": [],
+    "exit_code": 1,
+    "rows": [],
+    "stderr": "openkos suggest-relations: failed -- boom.\n",
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\n"
+  },
+  "raised_model_not_found": {
+    "calls": [],
+    "exit_code": 1,
+    "rows": [],
+    "stderr": "openkos suggest-relations: failed -- model 'qwen3:8b' is not installed. Pull it with `ollama pull qwen3:8b`, then try again.\n",
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\n"
+  },
+  "raised_model_not_found_openai_compatible": {
+    "calls": [],
+    "exit_code": 1,
+    "rows": [],
+    "stderr": "openkos suggest-relations: failed -- model 'qwen3:8b' is not installed. Make sure your OpenAI-compatible server serves 'qwen3:8b' (run `openkos doctor` to see the models it reports), then try again.\n",
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\n"
+  },
+  "raised_unavailable": {
+    "calls": [],
+    "exit_code": 1,
+    "rows": [],
+    "stderr": "openkos suggest-relations: failed -- Ollama not reachable at x. Start it with `ollama serve`, then try again. Or run `openkos doctor` to diagnose the environment.\n",
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\n"
+  },
+  "raised_unavailable_openai_compatible": {
+    "calls": [],
+    "exit_code": 1,
+    "rows": [],
+    "stderr": "openkos suggest-relations: failed -- server down. Start your OpenAI-compatible server at 127.0.0.1:1, then try again. Or run `openkos doctor` to diagnose the environment.\n",
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\n"
+  },
+  "rationale_language": {
+    "calls": [
+      {
+        "bundle_dir": "PosixPath('<ROOT>/bundle')",
+        "edges": [
+          [
+            "concepts/a",
+            "concepts/b"
+          ]
+        ],
+        "include_confidential": "False",
+        "llm_type": "OfflineOllama",
+        "local_exemption": "True",
+        "on_progress": "callable",
+        "rationale_language": "'Spanish'"
+      }
+    ],
+    "exit_code": 0,
+    "rows": [],
+    "stderr": "  [1/1] concepts/a -> concepts/b  [references]\n",
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\n[references] concepts/a -> concepts/b\n  rationale: concepts/a cites concepts/b\n\nNext: openkos suggest-relations --apply (per-item consent), or openkos relate <source> <type> <target>\n"
+  },
+  "serve_first_run": {
+    "calls": [
+      {
+        "bundle_dir": "PosixPath('<ROOT>/bundle')",
+        "edges": [
+          [
+            "concepts/a",
+            "concepts/b"
+          ],
+          [
+            "concepts/c",
+            "concepts/d"
+          ]
+        ],
+        "include_confidential": "False",
+        "llm_type": "OfflineOllama",
+        "local_exemption": "True",
+        "on_progress": "callable",
+        "rationale_language": "None"
+      }
+    ],
+    "exit_code": 0,
+    "rows": [
+      [
+        "concepts/a\nconcepts/b",
+        "references",
+        "concepts/a cites concepts/b",
+        1
+      ],
+      [
+        "concepts/c\nconcepts/d",
+        "references",
+        "concepts/c cites concepts/d",
+        1
+      ]
+    ],
+    "stderr": "  [1/2] concepts/a -> concepts/b  [references]\n  [2/2] concepts/c -> concepts/d  [references]\n",
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\n[references] concepts/a -> concepts/b\n  rationale: concepts/a cites concepts/b\n\n[references] concepts/c -> concepts/d\n  rationale: concepts/c cites concepts/d\n\nNext: openkos suggest-relations --apply (per-item consent), or openkos relate <source> <type> <target>\n"
+  },
+  "serve_fresh_bypass": {
+    "calls": [
+      {
+        "bundle_dir": "PosixPath('<ROOT>/bundle')",
+        "edges": [
+          [
+            "concepts/a",
+            "concepts/b"
+          ],
+          [
+            "concepts/c",
+            "concepts/d"
+          ]
+        ],
+        "include_confidential": "False",
+        "llm_type": "OfflineOllama",
+        "local_exemption": "True",
+        "on_progress": "callable",
+        "rationale_language": "None"
+      }
+    ],
+    "exit_code": 0,
+    "rows": [
+      [
+        "concepts/a\nconcepts/b",
+        "references",
+        "concepts/a cites concepts/b",
+        1
+      ],
+      [
+        "concepts/c\nconcepts/d",
+        "references",
+        "concepts/c cites concepts/d",
+        1
+      ]
+    ],
+    "stderr": "  [1/2] concepts/a -> concepts/b  [references]\n  [2/2] concepts/c -> concepts/d  [references]\n",
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\n[references] concepts/a -> concepts/b\n  rationale: concepts/a cites concepts/b\n\n[references] concepts/c -> concepts/d\n  rationale: concepts/c cites concepts/d\n\nNext: openkos suggest-relations --apply (per-item consent), or openkos relate <source> <type> <target>\n"
+  },
+  "serve_gate_fully_served": {
+    "calls": [
+      {
+        "bundle_dir": "PosixPath('<ROOT>/bundle')",
+        "edges": [],
+        "include_confidential": "False",
+        "llm_type": "OfflineOllama",
+        "local_exemption": "True",
+        "on_progress": "callable",
+        "rationale_language": "None"
+      }
+    ],
+    "exit_code": 0,
+    "rows": [
+      [
+        "concepts/a\nconcepts/b",
+        "references",
+        "concepts/a cites concepts/b",
+        1
+      ],
+      [
+        "concepts/c\nconcepts/d",
+        "references",
+        "concepts/c cites concepts/d",
+        1
+      ]
+    ],
+    "stderr": "openkos suggest-relations: 2 of 2 candidate edge(s) served from persisted suggestions; 0 typed fresh.\n2 untyped edge(s), 2 served -> 0 LLM call(s). Pass --auto to skip this prompt.\n",
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\nProceed? [y/N]: y\n[references] concepts/a -> concepts/b\n  rationale: concepts/a cites concepts/b\n\n[references] concepts/c -> concepts/d\n  rationale: concepts/c cites concepts/d\n\nNext: openkos suggest-relations --apply (per-item consent), or openkos relate <source> <type> <target>\n"
+  },
+  "serve_second_run_fully_served": {
+    "calls": [
+      {
+        "bundle_dir": "PosixPath('<ROOT>/bundle')",
+        "edges": [],
+        "include_confidential": "False",
+        "llm_type": "OfflineOllama",
+        "local_exemption": "True",
+        "on_progress": "callable",
+        "rationale_language": "None"
+      }
+    ],
+    "exit_code": 0,
+    "rows": [
+      [
+        "concepts/a\nconcepts/b",
+        "references",
+        "concepts/a cites concepts/b",
+        1
+      ],
+      [
+        "concepts/c\nconcepts/d",
+        "references",
+        "concepts/c cites concepts/d",
+        1
+      ]
+    ],
+    "stderr": "openkos suggest-relations: 2 of 2 candidate edge(s) served from persisted suggestions; 0 typed fresh.\n",
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\n[references] concepts/a -> concepts/b\n  rationale: concepts/a cites concepts/b\n\n[references] concepts/c -> concepts/d\n  rationale: concepts/c cites concepts/d\n\nNext: openkos suggest-relations --apply (per-item consent), or openkos relate <source> <type> <target>\n"
+  },
+  "walk_incomplete_include_confidential": {
+    "calls": [
+      {
+        "bundle_dir": "PosixPath('<ROOT>/bundle')",
+        "edges": [
+          [
+            "concepts/a",
+            "concepts/b"
+          ]
+        ],
+        "include_confidential": "True",
+        "llm_type": "OfflineOllama",
+        "local_exemption": "False",
+        "on_progress": "callable",
+        "rationale_language": "None"
+      }
+    ],
+    "exit_code": 0,
+    "rows": [],
+    "stderr": "openkos: bundle scan was incomplete -- a directory-scan error made part of the bundle unreadable, so this command's inputs are incomplete and its result may be missing content. Fix the directory permissions and re-run, or run 'openkos status' to see which directories could not be read.\n  [1/1] concepts/a -> concepts/b  [references]\n",
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\n[references] concepts/a -> concepts/b\n  rationale: concepts/a cites concepts/b\n\nNext: openkos suggest-relations --apply (per-item consent), or openkos relate <source> <type> <target>\n"
+  },
+  "zero_all_excluded": {
+    "calls": [],
+    "exit_code": 0,
+    "rows": [],
+    "stderr": "",
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\n2 relation(s) exist; 1 untyped, but every untyped pair is already typed elsewhere or filtered as confidential -- nothing left to suggest.\n"
+  },
+  "zero_all_excluded_by_confidentiality": {
+    "calls": [],
+    "exit_code": 0,
+    "rows": [],
+    "stderr": "",
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\n1 relation(s) exist; 1 untyped, but every untyped pair is already typed elsewhere or filtered as confidential -- nothing left to suggest.\n"
+  },
+  "zero_embeddings_missing": {
+    "calls": [],
+    "exit_code": 0,
+    "rows": [],
+    "stderr": "",
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\nCandidate relations unavailable — run `openkos reindex` (vectors.db missing).\n"
+  },
+  "zero_no_relationships": {
+    "calls": [],
+    "exit_code": 0,
+    "rows": [],
+    "stderr": "",
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\nNo concept relationships in the graph yet.\n"
+  },
+  "zero_none_untyped": {
+    "calls": [],
+    "exit_code": 0,
+    "rows": [],
+    "stderr": "",
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\n1 relation(s) exist; none are untyped.\n"
+  }
+}
