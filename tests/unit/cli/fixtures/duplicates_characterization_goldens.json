@@ -1,0 +1,390 @@
+{
+  "deprecated_default_excluded": {
+    "exit_code": 0,
+    "last_commit": {
+      "files": [],
+      "subject": "chore(openkos): initialize workspace"
+    },
+    "state_files": {},
+    "stderr": "",
+    "stdout": "openkos duplicates: workspace at <ROOT>\n\nNo candidates found.\n"
+  },
+  "deprecated_included": {
+    "exit_code": 0,
+    "last_commit": {
+      "files": [],
+      "subject": "chore(openkos): initialize workspace"
+    },
+    "state_files": {},
+    "stderr": "",
+    "stdout": "openkos duplicates: workspace at <ROOT>\n\n1 candidate group (1 exact, 0 acronym, 0 near)\nLegend: [tier] type -- trigger. The tier is the MATCH METHOD, not a strength ranking: HIGH = exact normalized key, ACRONYM = one title's token is the initials of a word run in the other, LOW = weakest per-token match of the smaller title (1.000 = every token matched, NOT identical titles).\n[HIGH] Concept -- stoicism\n  - concepts/a\n  - concepts/b\n\nNext: openkos merge <survivor> <absorbed>\n"
+  },
+  "fresh_bundle": {
+    "exit_code": 0,
+    "last_commit": {
+      "files": [],
+      "subject": "chore(openkos): initialize workspace"
+    },
+    "state_files": {},
+    "stderr": "",
+    "stdout": "openkos duplicates: workspace at <ROOT>\n\nNo candidates found.\n"
+  },
+  "keep_distinct": {
+    "exit_code": 0,
+    "last_commit": {
+      "files": [
+        "bundle/.state/decisions/events/afg-eval.decisions.okf"
+      ],
+      "subject": "openkos: keep distinct events/afg-eval/events/afg-eval-2"
+    },
+    "state_files": {
+      "bundle/.state/decisions/events/afg-eval.decisions.okf": "---\nconcept_id: events/afg-eval\ndecisions: []\nidentity_decisions:\n- decided_at: '<TS>'\n  decision_key: 63daa3c3857293f3bd577b971630f2a3\n  member_ids:\n  - events/afg-eval\n  - events/afg-eval-2\n  state: declined\nschema: openkos.decisions/v2\n---\n"
+    },
+    "stderr": "",
+    "stdout": "openkos duplicates: keeping distinct events/afg-eval + events/afg-eval-2.\n"
+  },
+  "keep_distinct_canonicalized": {
+    "exit_code": 0,
+    "last_commit": {
+      "files": [
+        "bundle/.state/decisions/events/aaa.decisions.okf"
+      ],
+      "subject": "openkos: keep distinct events/aaa/events/afg-eval/events/zzz"
+    },
+    "state_files": {
+      "bundle/.state/decisions/events/aaa.decisions.okf": "---\nconcept_id: events/aaa\ndecisions: []\nidentity_decisions:\n- decided_at: '<TS>'\n  decision_key: 73204cdb4f78d2a8be3e4378e472c0c6\n  member_ids:\n  - events/aaa\n  - events/afg-eval\n  - events/zzz\n  state: declined\nschema: openkos.decisions/v2\n---\n"
+    },
+    "stderr": "",
+    "stdout": "openkos duplicates: keeping distinct events/aaa + events/afg-eval + events/zzz.\n"
+  },
+  "keep_distinct_over_malformed_row": {
+    "exit_code": 0,
+    "last_commit": {
+      "files": [
+        "bundle/.state/decisions/events/afg-eval.decisions.okf"
+      ],
+      "subject": "openkos: keep distinct events/afg-eval/events/afg-eval-3"
+    },
+    "state_files": {
+      "bundle/.state/decisions/events/afg-eval.decisions.okf": "---\nconcept_id: events/afg-eval\ndecisions: []\nidentity_decisions:\n- decided_at: '<TS>'\n  decision_key: 63daa3c3857293f3bd577b971630f2a3\n  member_ids:\n  - events/afg-eval\n  - events/afg-eval-2\n  state: declined\n- decided_at: '<TS>'\n  decision_key: 7c43ffe36e21df375154deceb61f16a3\n  member_ids:\n  - events/afg-eval\n  - events/afg-eval-3\n  state: declined\nschema: openkos.decisions/v2\n---\n"
+    },
+    "stderr": "openkos: warning -- 1 malformed identity decision record(s) in <ROOT>/bundle/.state/decisions/events/afg-eval.decisions.okf; those groups will be offered again.\n",
+    "stdout": "openkos duplicates: keeping distinct events/afg-eval + events/afg-eval-3.\n"
+  },
+  "keep_distinct_precedence": {
+    "exit_code": 0,
+    "last_commit": {
+      "files": [
+        "bundle/.state/decisions/events/a.decisions.okf"
+      ],
+      "subject": "openkos: keep distinct events/a/events/b"
+    },
+    "state_files": {
+      "bundle/.state/decisions/events/a.decisions.okf": "---\nconcept_id: events/a\ndecisions: []\nidentity_decisions:\n- decided_at: '<TS>'\n  decision_key: 6ad7fe80dfb2ba5153d14eb6dd952173\n  member_ids:\n  - events/a\n  - events/b\n  state: declined\nschema: openkos.decisions/v2\n---\n"
+    },
+    "stderr": "",
+    "stdout": "openkos duplicates: keeping distinct events/a + events/b.\n"
+  },
+  "keep_distinct_twice": {
+    "exit_code": 0,
+    "last_commit": {
+      "files": [
+        "bundle/.state/decisions/events/afg-eval.decisions.okf"
+      ],
+      "subject": "openkos: keep distinct events/afg-eval/events/afg-eval-2"
+    },
+    "state_files": {
+      "bundle/.state/decisions/events/afg-eval.decisions.okf": "---\nconcept_id: events/afg-eval\ndecisions: []\nidentity_decisions:\n- decided_at: '<TS>'\n  decision_key: 63daa3c3857293f3bd577b971630f2a3\n  member_ids:\n  - events/afg-eval\n  - events/afg-eval-2\n  state: declined\nschema: openkos.decisions/v2\n---\n"
+    },
+    "stderr": "",
+    "stdout": "openkos duplicates: keeping distinct events/afg-eval + events/afg-eval-2.\n"
+  },
+  "kept_distinct_empty": {
+    "exit_code": 0,
+    "last_commit": {
+      "files": [],
+      "subject": "chore(openkos): initialize workspace"
+    },
+    "state_files": {},
+    "stderr": "",
+    "stdout": "openkos duplicates --kept-distinct: workspace at <ROOT>\n\nNo groups kept distinct.\n"
+  },
+  "kept_distinct_malformed_row": {
+    "exit_code": 0,
+    "last_commit": {
+      "files": [
+        "bundle/.state/decisions/events/afg-eval.decisions.okf"
+      ],
+      "subject": "openkos: keep distinct events/afg-eval/events/afg-eval-2"
+    },
+    "state_files": {
+      "bundle/.state/decisions/events/afg-eval.decisions.okf": "---\nconcept_id: events/afg-eval\ndecisions: []\nidentity_decisions:\n- decided_at: '<TS>'\n  decision_key: 63daa3c3857293f3bd577b971630f2a3\n  member_ids:\n  - events/afg-eval\n  - events/afg-eval-2\n  state: declined\n- decision_key: k\n  member_ids:\n  - only-one\nschema: openkos.decisions/v2\n---\n"
+    },
+    "stderr": "openkos: warning -- 1 malformed identity decision record(s) in <ROOT>/bundle/.state/decisions/events/afg-eval.decisions.okf; those groups will be offered again.\n",
+    "stdout": "openkos duplicates --kept-distinct: workspace at <ROOT>\n\n[KEPT DISTINCT] events/afg-eval + events/afg-eval-2\n  decided: <TS>\n\nReopen one with: openkos duplicates --reopen <id> --reopen <id>\n"
+  },
+  "kept_distinct_populated": {
+    "exit_code": 0,
+    "last_commit": {
+      "files": [
+        "bundle/.state/decisions/events/reopened-a.decisions.okf"
+      ],
+      "subject": "openkos: reopen identity events/reopened-a/events/reopened-b"
+    },
+    "state_files": {
+      "bundle/.state/decisions/concepts/m.decisions.okf": "---\nconcept_id: concepts/m\ndecisions: []\nidentity_decisions:\n- decided_at: '<TS>'\n  decision_key: dfaaa3d3a9b49335f6d0ed829c6f139e\n  member_ids:\n  - concepts/m\n  - concepts/n\n  - concepts/o\n  state: declined\nschema: openkos.decisions/v2\n---\n",
+      "bundle/.state/decisions/events/afg-eval.decisions.okf": "---\nconcept_id: events/afg-eval\ndecisions: []\nidentity_decisions:\n- decided_at: '<TS>'\n  decision_key: 63daa3c3857293f3bd577b971630f2a3\n  member_ids:\n  - events/afg-eval\n  - events/afg-eval-2\n  state: declined\nschema: openkos.decisions/v2\n---\n",
+      "bundle/.state/decisions/events/reopened-a.decisions.okf": "---\nconcept_id: events/reopened-a\ndecisions: []\nidentity_decisions:\n- decided_at: '<TS>'\n  decision_key: 6dd26bb4c4cd7b45c14d64cbd9bce37b\n  member_ids:\n  - events/reopened-a\n  - events/reopened-b\n  state: open\nschema: openkos.decisions/v2\n---\n",
+      "bundle/.state/decisions/events/yankee.decisions.okf": "---\nconcept_id: events/yankee\ndecisions: []\nidentity_decisions:\n- decided_at: '<TS>'\n  decision_key: e39aaab827046d575feb28d635df2701\n  member_ids:\n  - events/yankee\n  - events/zulu\n  state: declined\nschema: openkos.decisions/v2\n---\n"
+    },
+    "stderr": "",
+    "stdout": "openkos duplicates --kept-distinct: workspace at <ROOT>\n\n[KEPT DISTINCT] events/afg-eval + events/afg-eval-2\n  decided: <TS>\n\n[KEPT DISTINCT] concepts/m + concepts/n + concepts/o\n  decided: <TS>\n\n[KEPT DISTINCT] events/yankee + events/zulu\n  decided: <TS>\n\nReopen one with: openkos duplicates --reopen <id> --reopen <id>\n"
+  },
+  "malformed_row_warning_once": {
+    "exit_code": 0,
+    "last_commit": {
+      "files": [
+        "bundle/.state/decisions/events/afg-eval.decisions.okf"
+      ],
+      "subject": "openkos: keep distinct events/afg-eval/events/afg-eval-2"
+    },
+    "state_files": {
+      "bundle/.state/decisions/events/afg-eval.decisions.okf": "---\nconcept_id: events/afg-eval\ndecisions: []\nidentity_decisions:\n- decided_at: '<TS>'\n  decision_key: 63daa3c3857293f3bd577b971630f2a3\n  member_ids:\n  - events/afg-eval\n  - events/afg-eval-2\n  state: declined\n- decision_key: k\n  member_ids:\n  - only-one\nschema: openkos.decisions/v2\n---\n"
+    },
+    "stderr": "openkos: warning -- 1 malformed identity decision record(s) in <ROOT>/bundle/.state/decisions/events/afg-eval.decisions.okf; those groups will be offered again.\n",
+    "stdout": "openkos duplicates: workspace at <ROOT>\n\nHiding 1 group you ruled distinct (`openkos duplicates --kept-distinct` lists them).\n\n2 candidate groups (2 exact, 0 acronym, 0 near)\nLegend: [tier] type -- trigger. The tier is the MATCH METHOD, not a strength ranking: HIGH = exact normalized key, ACRONYM = one title's token is the initials of a word run in the other, LOW = weakest per-token match of the smaller title (1.000 = every token matched, NOT identical titles).\n[HIGH] Event -- second\n  - events/afg-eval\n  - events/afg-eval-3\n\n[HIGH] Event -- third\n  - events/afg-eval\n  - events/afg-eval-4\n\nNext: openkos merge <survivor> <absorbed>\n"
+  },
+  "members_absolute": {
+    "exit_code": 2,
+    "last_commit": {
+      "files": [],
+      "subject": "chore(openkos): initialize workspace"
+    },
+    "state_files": {},
+    "stderr": "openkos duplicates: refusing to run -- --keep-distinct '/etc/passwd' must be a relative concept-id, not absolute.\n",
+    "stdout": ""
+  },
+  "members_blank_ignored": {
+    "exit_code": 2,
+    "last_commit": {
+      "files": [],
+      "subject": "chore(openkos): initialize workspace"
+    },
+    "state_files": {},
+    "stderr": "openkos duplicates: refusing to run -- --keep-distinct needs at least two distinct concept ids; repeat the flag once per member.\n",
+    "stdout": ""
+  },
+  "members_one": {
+    "exit_code": 2,
+    "last_commit": {
+      "files": [],
+      "subject": "chore(openkos): initialize workspace"
+    },
+    "state_files": {},
+    "stderr": "openkos duplicates: refusing to run -- --keep-distinct needs at least two distinct concept ids; repeat the flag once per member.\n",
+    "stdout": ""
+  },
+  "members_repeated": {
+    "exit_code": 2,
+    "last_commit": {
+      "files": [],
+      "subject": "chore(openkos): initialize workspace"
+    },
+    "state_files": {},
+    "stderr": "openkos duplicates: refusing to run -- --keep-distinct needs at least two distinct concept ids; repeat the flag once per member.\n",
+    "stdout": ""
+  },
+  "members_traversal": {
+    "exit_code": 2,
+    "last_commit": {
+      "files": [],
+      "subject": "chore(openkos): initialize workspace"
+    },
+    "state_files": {},
+    "stderr": "openkos duplicates: refusing to run -- --keep-distinct '../../../pwned' must not contain '..' segments.\n",
+    "stdout": ""
+  },
+  "missing_workspace": {
+    "exit_code": 1,
+    "last_commit": null,
+    "state_files": {},
+    "stderr": "openkos duplicates: refusing to run -- no OpenKOS workspace found in this directory (run 'openkos init' first).\n",
+    "stdout": ""
+  },
+  "missing_workspace_keep_distinct": {
+    "exit_code": 1,
+    "last_commit": null,
+    "state_files": {},
+    "stderr": "openkos duplicates: refusing to run -- no OpenKOS workspace found in this directory (run 'openkos init' first).\n",
+    "stdout": ""
+  },
+  "missing_workspace_kept_distinct": {
+    "exit_code": 1,
+    "last_commit": null,
+    "state_files": {},
+    "stderr": "openkos duplicates: refusing to run -- no OpenKOS workspace found in this directory (run 'openkos init' first).\n",
+    "stdout": ""
+  },
+  "missing_workspace_reopen": {
+    "exit_code": 1,
+    "last_commit": null,
+    "state_files": {},
+    "stderr": "openkos duplicates: refusing to run -- no OpenKOS workspace found in this directory (run 'openkos init' first).\n",
+    "stdout": ""
+  },
+  "patched_tiers_and_tally": {
+    "exit_code": 0,
+    "last_commit": {
+      "files": [],
+      "subject": "chore(openkos): initialize workspace"
+    },
+    "state_files": {},
+    "stderr": "",
+    "stdout": "openkos duplicates: workspace at <ROOT>\n\n3 candidate groups (1 exact, 1 acronym, 1 near)\nLegend: [tier] type -- trigger. The tier is the MATCH METHOD, not a strength ranking: HIGH = exact normalized key, ACRONYM = one title's token is the initials of a word run in the other, LOW = weakest per-token match of the smaller title (1.000 = every token matched, NOT identical titles).\n[HIGH] Concept -- h\n  - a\n  - b\n\n[ACRONYM] Concept -- ac\n  - c\n  - d\n\n[LOW] Concept -- 0.875\n  - e\n  - f\n  - g\n\nNext: openkos merge <survivor> <absorbed>\n"
+  },
+  "real_high_group": {
+    "exit_code": 0,
+    "last_commit": {
+      "files": [],
+      "subject": "chore(openkos): initialize workspace"
+    },
+    "state_files": {},
+    "stderr": "",
+    "stdout": "openkos duplicates: workspace at <ROOT>\n\n1 candidate group (1 exact, 0 acronym, 0 near)\nLegend: [tier] type -- trigger. The tier is the MATCH METHOD, not a strength ranking: HIGH = exact normalized key, ACRONYM = one title's token is the initials of a word run in the other, LOW = weakest per-token match of the smaller title (1.000 = every token matched, NOT identical titles).\n[HIGH] Concept -- cafe society\n  - concepts/a\n  - concepts/b\n\nNext: openkos merge <survivor> <absorbed>\n"
+  },
+  "real_low_group": {
+    "exit_code": 0,
+    "last_commit": {
+      "files": [],
+      "subject": "chore(openkos): initialize workspace"
+    },
+    "state_files": {},
+    "stderr": "",
+    "stdout": "openkos duplicates: workspace at <ROOT>\n\n1 candidate group (0 exact, 0 acronym, 1 near)\nLegend: [tier] type -- trigger. The tier is the MATCH METHOD, not a strength ranking: HIGH = exact normalized key, ACRONYM = one title's token is the initials of a word run in the other, LOW = weakest per-token match of the smaller title (1.000 = every token matched, NOT identical titles).\n[LOW] Concept -- 0.769\n  - concepts/a\n  - concepts/b\n\nNext: openkos merge <survivor> <absorbed>\n"
+  },
+  "real_mixed_tiers": {
+    "exit_code": 0,
+    "last_commit": {
+      "files": [],
+      "subject": "chore(openkos): initialize workspace"
+    },
+    "state_files": {},
+    "stderr": "",
+    "stdout": "openkos duplicates: workspace at <ROOT>\n\n4 candidate groups (2 exact, 1 acronym, 1 near)\nLegend: [tier] type -- trigger. The tier is the MATCH METHOD, not a strength ranking: HIGH = exact normalized key, ACRONYM = one title's token is the initials of a word run in the other, LOW = weakest per-token match of the smaller title (1.000 = every token matched, NOT identical titles).\n[HIGH] Concept -- cafe society\n  - concepts/a\n  - concepts/b\n\n[ACRONYM] Concept -- mcp\n  - concepts/mcp\n  - concepts/mcp2\n\n[LOW] Concept -- 0.769\n  - concepts/c\n  - concepts/d\n\n[HIGH] Person -- ada byron\n  - people/p\n  - people/q\n\nNext: openkos merge <survivor> <absorbed>\n"
+  },
+  "reopen": {
+    "exit_code": 0,
+    "last_commit": {
+      "files": [
+        "bundle/.state/decisions/events/afg-eval.decisions.okf"
+      ],
+      "subject": "openkos: reopen identity events/afg-eval/events/afg-eval-2"
+    },
+    "state_files": {
+      "bundle/.state/decisions/events/afg-eval.decisions.okf": "---\nconcept_id: events/afg-eval\ndecisions: []\nidentity_decisions:\n- decided_at: '<TS>'\n  decision_key: 63daa3c3857293f3bd577b971630f2a3\n  member_ids:\n  - events/afg-eval\n  - events/afg-eval-2\n  state: open\nschema: openkos.decisions/v2\n---\n"
+    },
+    "stderr": "",
+    "stdout": "openkos duplicates: reopened events/afg-eval + events/afg-eval-2.\n"
+  },
+  "reopen_members_one": {
+    "exit_code": 2,
+    "last_commit": {
+      "files": [],
+      "subject": "chore(openkos): initialize workspace"
+    },
+    "state_files": {},
+    "stderr": "openkos duplicates: refusing to run -- --reopen needs at least two distinct concept ids; repeat the flag once per member.\n",
+    "stdout": ""
+  },
+  "reopen_members_traversal": {
+    "exit_code": 2,
+    "last_commit": {
+      "files": [],
+      "subject": "chore(openkos): initialize workspace"
+    },
+    "state_files": {},
+    "stderr": "openkos duplicates: refusing to run -- --reopen '../x' must not contain '..' segments.\n",
+    "stdout": ""
+  },
+  "reopen_no_prior": {
+    "exit_code": 0,
+    "last_commit": {
+      "files": [
+        "bundle/.state/decisions/events/x.decisions.okf"
+      ],
+      "subject": "openkos: reopen identity events/x/events/y"
+    },
+    "state_files": {
+      "bundle/.state/decisions/events/x.decisions.okf": "---\nconcept_id: events/x\ndecisions: []\nidentity_decisions:\n- decided_at: '<TS>'\n  decision_key: 6355494597ea422ecd0274bfbf536ff7\n  member_ids:\n  - events/x\n  - events/y\n  state: open\nschema: openkos.decisions/v2\n---\n"
+    },
+    "stderr": "",
+    "stdout": "openkos duplicates: reopened events/x + events/y.\n"
+  },
+  "reopen_precedence": {
+    "exit_code": 0,
+    "last_commit": {
+      "files": [
+        "bundle/.state/decisions/events/c.decisions.okf"
+      ],
+      "subject": "openkos: reopen identity events/c/events/d"
+    },
+    "state_files": {
+      "bundle/.state/decisions/events/c.decisions.okf": "---\nconcept_id: events/c\ndecisions: []\nidentity_decisions:\n- decided_at: '<TS>'\n  decision_key: d474eb416380db9351355ee1560730be\n  member_ids:\n  - events/c\n  - events/d\n  state: open\nschema: openkos.decisions/v2\n---\n"
+    },
+    "stderr": "",
+    "stdout": "openkos duplicates: reopened events/c + events/d.\n"
+  },
+  "reopened_group_returns": {
+    "exit_code": 0,
+    "last_commit": {
+      "files": [
+        "bundle/.state/decisions/events/afg-eval.decisions.okf"
+      ],
+      "subject": "openkos: reopen identity events/afg-eval/events/afg-eval-2"
+    },
+    "state_files": {
+      "bundle/.state/decisions/events/afg-eval.decisions.okf": "---\nconcept_id: events/afg-eval\ndecisions: []\nidentity_decisions:\n- decided_at: '<TS>'\n  decision_key: 63daa3c3857293f3bd577b971630f2a3\n  member_ids:\n  - events/afg-eval\n  - events/afg-eval-2\n  state: open\nschema: openkos.decisions/v2\n---\n"
+    },
+    "stderr": "",
+    "stdout": "openkos duplicates: workspace at <ROOT>\n\n1 candidate group (1 exact, 0 acronym, 0 near)\nLegend: [tier] type -- trigger. The tier is the MATCH METHOD, not a strength ranking: HIGH = exact normalized key, ACRONYM = one title's token is the initials of a word run in the other, LOW = weakest per-token match of the smaller title (1.000 = every token matched, NOT identical titles).\n[HIGH] Event -- afg eval\n  - events/afg-eval\n  - events/afg-eval-2\n\nNext: openkos merge <survivor> <absorbed>\n"
+  },
+  "ruled_group_hidden": {
+    "exit_code": 0,
+    "last_commit": {
+      "files": [
+        "bundle/.state/decisions/events/afg-eval.decisions.okf"
+      ],
+      "subject": "openkos: keep distinct events/afg-eval/events/afg-eval-2"
+    },
+    "state_files": {
+      "bundle/.state/decisions/events/afg-eval.decisions.okf": "---\nconcept_id: events/afg-eval\ndecisions: []\nidentity_decisions:\n- decided_at: '<TS>'\n  decision_key: 63daa3c3857293f3bd577b971630f2a3\n  member_ids:\n  - events/afg-eval\n  - events/afg-eval-2\n  state: declined\nschema: openkos.decisions/v2\n---\n"
+    },
+    "stderr": "",
+    "stdout": "openkos duplicates: workspace at <ROOT>\n\nHiding 1 group you ruled distinct (`openkos duplicates --kept-distinct` lists them).\n\nNo candidates found.\n"
+  },
+  "ruled_groups_hidden_beside_visible": {
+    "exit_code": 0,
+    "last_commit": {
+      "files": [
+        "bundle/.state/decisions/events/third.decisions.okf"
+      ],
+      "subject": "openkos: keep distinct events/third/events/third-2"
+    },
+    "state_files": {
+      "bundle/.state/decisions/events/afg-eval.decisions.okf": "---\nconcept_id: events/afg-eval\ndecisions: []\nidentity_decisions:\n- decided_at: '<TS>'\n  decision_key: 63daa3c3857293f3bd577b971630f2a3\n  member_ids:\n  - events/afg-eval\n  - events/afg-eval-2\n  state: declined\nschema: openkos.decisions/v2\n---\n",
+      "bundle/.state/decisions/events/third.decisions.okf": "---\nconcept_id: events/third\ndecisions: []\nidentity_decisions:\n- decided_at: '<TS>'\n  decision_key: 8344a85ef0a45d82b5337599fa7989cc\n  member_ids:\n  - events/third\n  - events/third-2\n  state: declined\nschema: openkos.decisions/v2\n---\n"
+    },
+    "stderr": "",
+    "stdout": "openkos duplicates: workspace at <ROOT>\n\nHiding 2 groups you ruled distinct (`openkos duplicates --kept-distinct` lists them).\n\n1 candidate group (1 exact, 0 acronym, 0 near)\nLegend: [tier] type -- trigger. The tier is the MATCH METHOD, not a strength ranking: HIGH = exact normalized key, ACRONYM = one title's token is the initials of a word run in the other, LOW = weakest per-token match of the smaller title (1.000 = every token matched, NOT identical titles).\n[HIGH] Event -- other\n  - events/other\n  - events/other-2\n\nNext: openkos merge <survivor> <absorbed>\n"
+  },
+  "truncation_notice": {
+    "exit_code": 0,
+    "last_commit": {
+      "files": [],
+      "subject": "chore(openkos): initialize workspace"
+    },
+    "state_files": {},
+    "stderr": "50 of 80 candidate group(s) shown (cap reached)\n",
+    "stdout": "openkos duplicates: workspace at <ROOT>\n\n50 candidate groups (50 exact, 0 acronym, 0 near)\nLegend: [tier] type -- trigger. The tier is the MATCH METHOD, not a strength ranking: HIGH = exact normalized key, ACRONYM = one title's token is the initials of a word run in the other, LOW = weakest per-token match of the smaller title (1.000 = every token matched, NOT identical titles).\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\n[HIGH] Concept -- stub\n  - a\n  - b\n\nNext: openkos merge <survivor> <absorbed>\n"
+  }
+}
