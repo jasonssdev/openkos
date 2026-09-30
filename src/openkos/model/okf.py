@@ -28,6 +28,7 @@ from typing import Final, Literal, get_args
 import frontmatter
 import yaml
 
+from openkos import fsio
 from openkos.model.types import BUILDABLE_TYPES as _CONCEPT_TYPES
 
 OKF_VERSION: Final = "0.2"
@@ -3243,8 +3244,46 @@ def _bundle_markdown_candidates(bundle_dir: Path) -> Iterator[Path]:
     account of what the first one dropped. A copy of this glob in each
     would let the halves stop partitioning the same set -- widen it here
     (a second suffix, a different pattern) and both move together or
-    neither does."""
-    yield from sorted(bundle_dir.rglob("*.md"))
+    neither does.
+
+    A path with a symlinked segment below `bundle_dir` is NOT a candidate
+    (#1126): the link can point outside the workspace, so its bytes (and any
+    `sensitivity: public` they carry) are not this bundle's knowledge. Dropping
+    it here, at the enumeration, keeps the walk and its dot-directory
+    complement one partition; `scan_symlinked_bundle_entries` is the separate,
+    reported account of what was dropped, and `lint` surfaces it."""
+    for path in sorted(bundle_dir.rglob("*.md")):
+        if fsio.symlinked_segment(path, bundle_dir) is None:
+            yield path
+
+
+def scan_symlinked_bundle_entries(bundle_dir: Path) -> list[Path]:
+    """Every symlink under `bundle_dir` the bundle walk refuses to read
+    through (#1126): a `.md` leaf link, or a directory link (which is never
+    descended). Names only -- nothing is opened or resolved.
+
+    The complement `lint.check_symlinked_markdown` reports, so an excluded
+    link is surfaced rather than silently absent. Dot-directories are skipped:
+    the walk already excludes them wholesale and `dot-dir-markdown` reports
+    them. Sorted, so the report is stable."""
+    found: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(bundle_dir, followlinks=False):
+        here = Path(dirpath)
+        kept: list[str] = []
+        for name in dirnames:
+            if name.startswith("."):
+                continue
+            if (here / name).is_symlink():
+                found.append(here / name)
+            else:
+                kept.append(name)
+        dirnames[:] = kept
+        found.extend(
+            here / name
+            for name in filenames
+            if name.endswith(".md") and (here / name).is_symlink()
+        )
+    return sorted(found)
 
 
 def iter_bundle_markdown(bundle_dir: Path) -> Iterator[Path]:
