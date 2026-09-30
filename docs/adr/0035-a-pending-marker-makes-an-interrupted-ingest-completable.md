@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0035: A pending marker on the Source makes an interrupted ingest completable"
 description: Ingest writes the Source first carrying `ingest_pending: true` and rewrites it without the key as the last write, so a kill between the Source and the rest of Phase B can never be read as a converged Source (#1136).
-status: Proposed
+status: Accepted
 date: 2026-09-30
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0035: A pending marker on the Source makes an interrupted ingest completable
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-09-30
 
 ## Context
