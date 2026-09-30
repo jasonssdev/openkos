@@ -395,11 +395,17 @@ disclosure MUST NOT alter the `cost_line` literal itself, so a workspace
 that names no per-task model produces byte-identical gate output (see
 "Below-Cap Cost-Line Output Is Byte-Identical To Pre-Change Behavior").
 
-WHEN a named model is not installed, ONLY the stage that named it MUST
-fail, and its remediation MUST name that model rather than the global
-default. Falling back to the global model MUST NOT happen: the operator
-would keep writing relation types believing they came from the model they
-named.
+WHEN a named model is not installed (for the `ollama` backend) or not
+available on the configured server (for the `openai-compatible` backend),
+ONLY the stage that named it MUST fail, and its remediation MUST name that
+model rather than the global default, worded per the configured backend —
+an `ollama pull` command for `ollama`, or advice to make the model available
+on the configured server for `openai-compatible`, with no `ollama pull`
+reference in that case. Falling back to the global model MUST NOT happen:
+the operator would keep writing relation types believing they came from the
+model they named.
+(Previously: the missing-model remediation was worded only as
+`ollama pull`, because only the `ollama` backend existed.)
 
 #### Scenario: A stage runs on its own task model
 
@@ -438,14 +444,26 @@ named.
 
 #### Scenario: A missing task model fails only its own stage
 
-- GIVEN `models.edge_typing` names a model that is not installed
+- GIVEN `cfg.backend == "ollama"` and `models.edge_typing` names a model
+  that is not installed
 - WHEN `curate` runs
 - THEN Structure reports unavailable with an `ollama pull` remediation
   naming THAT model, and Metadata and Contradictions still run
 
+#### Scenario: A missing task model on the openai-compatible backend fails only its own stage
+
+- GIVEN `cfg.backend == "openai-compatible"` and `models.edge_typing` names
+  a model that is not available on the configured server
+- WHEN `curate` runs
+- THEN Structure reports unavailable with a remediation naming THAT model
+  and advising the operator to make it available on the configured server,
+  with no `ollama pull` reference, and Metadata and Contradictions still run
+
 ### Requirement: Availability Is Tracked Per Model, Not Per Run
 
-An availability failure (`OllamaUnavailable` or `OllamaModelNotFound`) MUST
+An availability failure — `OllamaUnavailable`/`OllamaModelNotFound` for the
+`ollama` backend, or `OpenAICompatibleUnavailable`/
+`OpenAICompatibleModelNotFound` for the `openai-compatible` backend — MUST
 skip only the later `needs_llm` stages that resolve the SAME model. A stage
 resolving a different model MUST still be attempted (#515).
 
@@ -455,6 +473,8 @@ genuinely dead server is contacted once per DISTINCT model rather than once
 per run; clients MUST be cached by model so stages sharing a tag share one
 connection. In a workspace with no `models:` override every stage resolves
 the same tag, so the observable behavior is unchanged.
+(Previously: only `OllamaUnavailable`/`OllamaModelNotFound` were named,
+because only the `ollama` backend existed.)
 
 #### Scenario: Failure on one model does not skip a stage on another
 
@@ -469,7 +489,6 @@ the same tag, so the observable behavior is unchanged.
   early stage fails with an availability error
 - WHEN `curate` continues
 - THEN every later `needs_llm` stage is skipped as unavailable
-
 ### Requirement: Exit Codes Match Existing Verb Conventions
 
 `curate` MUST exit 0 on a completed or declined run (including a

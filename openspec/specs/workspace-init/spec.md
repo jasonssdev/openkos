@@ -95,8 +95,13 @@ current directory; the directory itself remains the single source of truth
 for the workspace's identity, and nothing in `openkos.yaml` duplicates it.
 The packaged template pins `review: true`, `default_sensitivity: private`,
 `freshness_window: 7d`, `raw: raw/`, and `bundle: bundle/` — these MUST
-remain byte-identical to the template regardless of the chosen model(s).
-The `model:` value MUST resolve with precedence flag > interactive
+remain byte-identical to the template regardless of the chosen model(s). The
+packaged template MUST also document `backend`, `base_url`, and
+`embedding_base_url` as commented-out keys with explanatory comments; `init`
+MUST NOT write, substitute, or uncomment any of the three, for either the
+default flow or any flag/picker path — a fresh workspace is always written
+with `backend` absent, which resolves to `ollama` by `backend-selection`'s
+default. The `model:` value MUST resolve with precedence flag > interactive
 selection > default, default `qwen3:8b`, and MUST be written into the
 template via constrained plain-text token replacement of a single
 placeholder, never a YAML dumper or serializer. The `embedding_model:`
@@ -125,6 +130,10 @@ off-allowlist value passed via `--embedding-model` MUST still pass this
 YAML-safety check and MUST be written, with a warning (see Off-Allowlist
 Embedding Model Flag Is Warned, Not Blocked), never silently coerced to
 the default.
+(Previously: the template had no `backend`, `base_url`, or
+`embedding_base_url` keys at all, because no second backend existed; a
+workspace's endpoint was entirely `OLLAMA_HOST`-environment-driven and
+undocumented in the shipped config.)
 
 #### Scenario: Byte-identical template except model, default path
 
@@ -197,6 +206,20 @@ the default.
 - THEN the corresponding validator raises `ValueError`, init exits
   non-zero, and `openkos.yaml` does not exist
 
+#### Scenario: The template documents the new backend keys as comments
+
+- GIVEN the packaged `openkos.yaml.template`
+- WHEN it is inspected
+- THEN it contains `backend`, `base_url`, and `embedding_base_url` each as a
+  commented-out line with an explanatory comment, none of them active
+
+#### Scenario: A fresh init never writes backend, base_url, or embedding_base_url
+
+- GIVEN a successful `openkos init` with no special flags
+- WHEN the generated `openkos.yaml` is inspected
+- THEN it contains no active `backend:`, `base_url:`, or
+  `embedding_base_url:` line — only `model:` and `embedding_model:` were
+  substituted, and the new keys remain commented exactly as in the template
 ### Requirement: Vetted 1024-Dim Embedding Model Allowlist
 
 The system MUST expose a static, code-level allowlist of embedding model

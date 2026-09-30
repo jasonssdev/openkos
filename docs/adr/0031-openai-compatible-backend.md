@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0031: A second, OpenAI-compatible local backend beside the Ollama default"
 description: OpenKOS gains an OpenAI-compatible chat and embedding client selected by a backend key, with one shared endpoint key, an optional environment-only API key, client-side L2 normalization of embeddings, neutral error bases every consumer catches, and the backend kind recorded in the embedding tag; Ollama on loopback stays the default and its bytes stay unchanged.
-status: Proposed
+status: Accepted
 date: 2026-09-29
 tags:
   - openkos
@@ -15,7 +15,7 @@ sensitivity: public
 
 # ADR-0031: A second, OpenAI-compatible local backend beside the Ollama default
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-09-29
 
 ## Context
