@@ -55,13 +55,14 @@ layering invariant, `tests/unit/application/test_layering.py`) -- every
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Literal
 
-from openkos import config, fsio
+from openkos import config, fsio, lifecycle
 from openkos.application.consent import (
     BooleanConfirmation,
     TypedChallengeConfirmation,
@@ -297,6 +298,12 @@ class PreparedMerge:
     contracts expressed as data" #918 names `merge` for by name. The
     adapter still decides WHETHER to ask (`review`, `--auto`, TTY); this
     only says what is asked."""
+    status_outcome: okf.ExportOutcome | None
+    """The deprecated-status export change (`deprecated-status-export`,
+    issue #1075) applied to the survivor over its post-merge superseded
+    state, or `None` when the projection outcome was `UNCHANGED` (nothing
+    to disclose). The change itself is already folded into
+    `plan.merged_survivor`; this field exists only for the preview."""
 
 
 @dataclass(frozen=True)
@@ -426,6 +433,68 @@ def prepare_merge(
         absorbed_id=absorbed_canonical,
     )
 
+    # deprecated-status-export (issue #1075, design Decision 6): project
+    # the merged survivor's status over its POST-merge superseded state --
+    # only the survivor's superseded-ness can change from a merge (an
+    # inbound retarget can newly supersede it; a dropped self-loop can
+    # un-supersede it). `plan.merged_survivor` is mutated in place here
+    # (never a separate field): the ledger's `survivor_sha256` binding,
+    # the eventual disk write, and `_reconcile_merged_survivor`'s
+    # body-only rebuild (which re-extracts metadata from this exact text)
+    # all stay consistent for free.
+    survivor_merged_metadata, survivor_merged_body = okf.load_frontmatter(
+        plan.merged_survivor
+    )
+    post_merge_metadata: dict[str, Mapping[str, object] | None] = {
+        survivor_canonical: survivor_merged_metadata
+    }
+    relation_rewrite_files = {rewrite.file for rewrite in relation_rewrites}
+    for rel, text in other_files.items():
+        if not rel.endswith(".md"):
+            continue
+        cid = rel[: -len(".md")]
+        if cid == absorbed_canonical:
+            continue  # disappears after this merge
+        source_text = text
+        if rel in relation_rewrite_files:
+            source_text = bundle_relations.apply_relation_rewrites(
+                text,
+                file=rel,
+                survivor_id=survivor_canonical,
+                absorbed_id=absorbed_canonical,
+                rewrites=relation_rewrites,
+            )
+        try:
+            meta, _ = okf.load_frontmatter(source_text)
+        except Exception:  # broad: malformed frontmatter -- unreadable
+            meta = None
+        post_merge_metadata[cid] = meta
+
+    superseded_post = lifecycle.superseded_from_metadata(post_merge_metadata)
+    status_decision: okf.ExportDecision | None = None
+    if survivor_canonical in superseded_post.ids:
+        status_decision = okf.project_deprecation_export(
+            survivor_merged_metadata, superseded=True
+        )
+    elif superseded_post.complete:
+        status_decision = okf.project_deprecation_export(
+            survivor_merged_metadata, superseded=False
+        )
+    # else: incomplete walk and not provably superseded -- skip, same
+    # fail-safe as `forget`/`purge` ("Withdrawal Requires A Complete Edge
+    # Walk").
+    status_outcome: okf.ExportOutcome | None = None
+    if status_decision is not None and status_decision.outcome is not (
+        okf.ExportOutcome.UNCHANGED
+    ):
+        status_outcome = status_decision.outcome
+        plan = dataclasses.replace(
+            plan,
+            merged_survivor=okf.dump_frontmatter(
+                status_decision.metadata, survivor_merged_body
+            ),
+        )
+
     # Body-stacking report (issue #409, report half): `build_merged_document`
     # stays pure and returns bytes only (design decision -- see
     # `StackedBodyReport`'s docstring), so this recomputes the signal from
@@ -498,6 +567,7 @@ def prepare_merge(
         survivor_bytes=survivor_bytes,
         absorbed_bytes=absorbed_bytes,
         touched_bytes=touched_bytes,
+        status_outcome=status_outcome,
     )
 
 
@@ -646,6 +716,14 @@ class PreparedUnmerge:
 
     plan: bundle_merge.UnmergePlan
     new_log_text: str
+    survivor_status_outcome: okf.ExportOutcome | None
+    absorbed_status_outcome: okf.ExportOutcome | None
+    """The deprecated-status export change (`deprecated-status-export`,
+    issue #1075) applied to the restored survivor/absorbed document over
+    the post-unmerge superseded state, or `None` when the outcome was
+    `UNCHANGED` (nothing to disclose). Already folded into
+    `plan.restored_survivor`/`plan.restored_absorbed`; these fields exist
+    only for the preview."""
     link_reversed_texts: dict[str, str]
     relation_reversed_texts: dict[str, str]
     provenance_restored_texts: dict[str, str]
@@ -897,6 +975,77 @@ def prepare_unmerge(
         for rel in relation_rewrite_files
     }
 
+    # deprecated-status-export (issue #1075, `entity-resolution-merge` spec:
+    # "Unmerge Achieves Round-Trip Parity"): after restoring, evaluate the
+    # export projection for the restored survivor AND the restored absorbed
+    # document over the POST-unmerge bundle. Unlike `prepare_merge`, this
+    # verb holds no in-memory whole-bundle snapshot of its own (it only
+    # ever read the files it must reverse), so this is a genuinely
+    # additional walk -- `okf._iter_docs` gives the CURRENT (pre-Phase-B)
+    # bundle state, which this overrides at exactly the three places
+    # Phase B is about to change: the survivor (restored, not merged), the
+    # absorbed document (restored, doesn't exist on disk yet), and every
+    # relation-retargeted third party (reversed, not merged-ward).
+    restored_survivor_metadata, restored_survivor_body = okf.load_frontmatter(
+        plan.restored_survivor
+    )
+    restored_absorbed_metadata, restored_absorbed_body = okf.load_frontmatter(
+        plan.restored_absorbed
+    )
+    post_unmerge_metadata: dict[str, Mapping[str, object] | None] = {}
+    for scan in okf._iter_docs(layout.bundle_dir):
+        cid = okf.concept_id_for(scan.path, layout.bundle_dir)
+        if scan.read_error is not None or scan.parse_error is not None:
+            post_unmerge_metadata[cid] = None
+        else:
+            post_unmerge_metadata[cid] = scan.metadata or {}
+    post_unmerge_metadata[survivor_canonical] = restored_survivor_metadata
+    post_unmerge_metadata[absorbed_canonical] = restored_absorbed_metadata
+    for rel in relation_rewrite_files:
+        cid = rel[: -len(".md")] if rel.endswith(".md") else rel
+        try:
+            meta, _ = okf.load_frontmatter(relation_reversed_texts[rel])
+        except Exception:  # broad: malformed frontmatter -- unreadable
+            meta = None
+        post_unmerge_metadata[cid] = meta
+
+    superseded_post = lifecycle.superseded_from_metadata(post_unmerge_metadata)
+
+    def _project(
+        concept_id: str, metadata: Mapping[str, object]
+    ) -> okf.ExportDecision | None:
+        if concept_id in superseded_post.ids:
+            return okf.project_deprecation_export(metadata, superseded=True)
+        if superseded_post.complete:
+            return okf.project_deprecation_export(metadata, superseded=False)
+        return None  # incomplete walk, not provably superseded -- skip
+
+    survivor_decision = _project(survivor_canonical, restored_survivor_metadata)
+    absorbed_decision = _project(absorbed_canonical, restored_absorbed_metadata)
+
+    survivor_status_outcome: okf.ExportOutcome | None = None
+    if survivor_decision is not None and survivor_decision.outcome is not (
+        okf.ExportOutcome.UNCHANGED
+    ):
+        survivor_status_outcome = survivor_decision.outcome
+        plan = dataclasses.replace(
+            plan,
+            restored_survivor=okf.dump_frontmatter(
+                survivor_decision.metadata, restored_survivor_body
+            ),
+        )
+    absorbed_status_outcome: okf.ExportOutcome | None = None
+    if absorbed_decision is not None and absorbed_decision.outcome is not (
+        okf.ExportOutcome.UNCHANGED
+    ):
+        absorbed_status_outcome = absorbed_decision.outcome
+        plan = dataclasses.replace(
+            plan,
+            restored_absorbed=okf.dump_frontmatter(
+                absorbed_decision.metadata, restored_absorbed_body
+            ),
+        )
+
     new_log_text = bundle_log.insert_log_entry(
         plan.restored_log,
         now.astimezone().date(),
@@ -908,6 +1057,8 @@ def prepare_unmerge(
         confirmation=boolean_confirmation("unmerge"),
         plan=plan,
         new_log_text=new_log_text,
+        survivor_status_outcome=survivor_status_outcome,
+        absorbed_status_outcome=absorbed_status_outcome,
         link_reversed_texts=reversed_texts,
         relation_reversed_texts=relation_reversed_texts,
         provenance_restored_texts=provenance_reversed_texts,
@@ -1169,6 +1320,35 @@ class ForgetPlan:
     log_bytes: bytes
     concept_bytes: bytes
     other_bytes: dict[str, bytes]
+    status_withdrawals: tuple[StatusWithdrawal, ...]
+    """The deprecated-status export changes (`deprecated-status-export`,
+    issue #1075) `forget_core`/`purge` must write for every resurrection
+    target whose superseded-ness actually flips from True to False once
+    this purge set's edges are gone -- WITHDRAW or DROP-MARKER only, never
+    a target still superseded by a surviving concept (design Decision 5's
+    forget sequence)."""
+    skipped_withdrawal_ids: tuple[str, ...]
+    """Resurrection targets whose withdrawal was SKIPPED because the
+    post-forget edge walk was incomplete (spec: 'Withdrawal Requires A
+    Complete Edge Walk') -- an unreadable document may hold the only edge
+    that still supersedes one of these, so nothing is written for them."""
+    incomplete_walk_unreadable: tuple[str, ...]
+    """The unreadable/malformed document id(s) that made the post-forget
+    edge walk incomplete, for the skip report -- empty when the walk was
+    complete or no resurrection target needed it."""
+
+
+@dataclass(frozen=True)
+class StatusWithdrawal:
+    """One deprecated-status export change `forget`/`purge` applies to a
+    resurrected target OUTSIDE the purge set (deprecated-status-export,
+    issue #1075): `target`'s own concept id, the `okf.ExportOutcome`
+    (`WITHDRAW` or `DROP_MARKER` only -- callers never store an `UNCHANGED`
+    result here), and the new document text to write."""
+
+    target: str
+    outcome: okf.ExportOutcome
+    new_text: str
 
 
 class PartialForgetWrite(OSError):
@@ -1264,11 +1444,15 @@ def prepare_forget(
     # per-member titles/tombstones -- no extra bundle scan, for either
     # scope.
     #
-    # `other_bytes` shadows it for the guard -- and ONLY on `--scope
-    # source` (#326): on the default `self` scope the guard's member
-    # comprehension is empty by construction (`purge_ids` is statically
-    # `[concept_id]`), so retaining the whole bundle's raw bytes there
-    # would double Phase A's peak memory for nothing.
+    # `other_bytes` shadows it for the guard, ALWAYS (#326 originally
+    # scoped this to `--scope source` only, since on the default `self`
+    # scope the PURGE-MEMBER guard comprehension is empty by construction;
+    # deprecated-status-export, issue #1075, needs a resurrection target's
+    # baseline on EITHER scope -- a target outside the purge set can exist
+    # regardless of how the purge set itself was resolved -- so the raw
+    # bytes are retained unconditionally rather than re-reading a target
+    # a second time later, which the #306/#313/#318 one-read-per-target
+    # invariant forbids).
     other_files: dict[str, str] = {}
     other_bytes: dict[str, bytes] = {}
     for path in okf.iter_bundle_markdown(layout.bundle_dir):
@@ -1277,9 +1461,7 @@ def prepare_forget(
         if path == concept_path:
             continue
         rel = path.relative_to(layout.bundle_dir).as_posix()
-        raw, other_files[rel] = fsio.snapshot_read(path)
-        if scope == "source":
-            other_bytes[rel] = raw
+        other_bytes[rel], other_files[rel] = fsio.snapshot_read(path)
 
     # Unified Phase-A data path (design decision 6): `--scope self`
     # collapses to a single-member purge set, reproducing S2a byte-for-
@@ -1319,6 +1501,57 @@ def prepare_forget(
         },
         key=lambda pair: (pair[1], pair[0]),
     )
+
+    # deprecated-status-export (issue #1075, design Decision 5's forget
+    # sequence): for every DISTINCT resurrection target whose
+    # superseded-ness actually flips from True to False once this purge
+    # set's edges are gone, withdraw its export over the POST-FORGET
+    # bundle view -- every non-purged document's metadata, reused from
+    # `other_files` (already held in memory, no second walk). A target
+    # still superseded by a surviving concept is left untouched entirely
+    # (not even re-evaluated), matching the spec's "whose superseded-ness
+    # changes" scope.
+    status_withdrawals: list[StatusWithdrawal] = []
+    skipped_withdrawal_ids: list[str] = []
+    incomplete_walk_unreadable: tuple[str, ...] = ()
+    distinct_targets = sorted({target for _, target in resurrection_pairs})
+    if distinct_targets:
+        post_forget_metadata: dict[str, Mapping[str, object] | None] = {}
+        for rel, text in other_files.items():
+            if not rel.endswith(".md"):
+                continue
+            cid = rel[: -len(".md")]
+            if cid in purge_ids_set:
+                continue
+            try:
+                meta, _ = okf.load_frontmatter(text)
+            except Exception:  # broad: malformed frontmatter -- unreadable
+                post_forget_metadata[cid] = None
+                continue
+            post_forget_metadata[cid] = meta
+        superseded_post = lifecycle.superseded_from_metadata(post_forget_metadata)
+        for target in distinct_targets:
+            if target in superseded_post.ids:
+                continue  # still superseded by a surviving concept
+            if not superseded_post.complete:
+                skipped_withdrawal_ids.append(target)
+                incomplete_walk_unreadable = superseded_post.unreadable
+                continue
+            target_text = other_files[f"{target}.md"]
+            decision, new_target_text = okf.apply_deprecation_export(
+                target_text, superseded=False
+            )
+            if decision.outcome in (
+                okf.ExportOutcome.WITHDRAW,
+                okf.ExportOutcome.DROP_MARKER,
+            ):
+                status_withdrawals.append(
+                    StatusWithdrawal(
+                        target=target,
+                        outcome=decision.outcome,
+                        new_text=new_target_text,
+                    )
+                )
 
     # Set-difference inbound-reference detection (design decision 2):
     # `find_inbound_references` is called once PER purge-set member over
@@ -1424,26 +1657,32 @@ def prepare_forget(
         log_bytes=log_bytes,
         concept_bytes=concept_bytes,
         other_bytes=other_bytes,
+        status_withdrawals=tuple(status_withdrawals),
+        skipped_withdrawal_ids=tuple(skipped_withdrawal_ids),
+        incomplete_walk_unreadable=incomplete_walk_unreadable,
     )
 
 
 def forget_core(layout: config.WorkspaceLayout, plan: ForgetPlan) -> ForgetResult:
     """Phase B (after both gates): writes `index.md` then `log.md`
-    (`write_atomic`, catalog FIRST, covering every purge-set member) and
+    (`write_atomic`, catalog FIRST, covering every purge-set member), then
+    every resurrection target's deprecated-status export withdrawal
+    (`plan.status_withdrawals`, issue #1075, sorted by concept id), and
     deletes each member's concept file (`fsio.remove_file`) LAST, in
     deterministic `sorted(purge_ids)` order (design decision 5) -- so
-    `index.md`/`log.md` never reference a file that does not exist
-    (extracted verbatim from `forget`'s former inline body, design:
-    Interfaces/Contracts "S3 -- forget"). Non-interactive; raises
-    `OSError`/`ValueError`. Performs NO VCS side effect and no ledger/
-    decision/findings sweep -- `_sweep_ledger_sidecars_for_ids`,
-    `_sweep_decisions_for_ids`, and `_sweep_findings_for_ids` stay adapter-
-    side (they are shared with `purge`'s own Phase B, which calls the same
-    three helpers, and this module must stay siblings-only under ADR-0018
-    rather than import another verb's helpers), called by the command
-    immediately after this, inside the SAME try/except so a mid-sweep
-    failure reports the identical K-of-N recovery message a mid-unlink
-    failure would.
+    `index.md`/`log.md` never reference a file that does not exist, and a
+    failure between the export rewrites and the deletes leaves only export
+    drift, never a dangling catalog entry (extracted verbatim from
+    `forget`'s former inline body, design: Interfaces/Contracts "S3 --
+    forget"). Non-interactive; raises `OSError`/`ValueError`. Performs NO
+    VCS side effect and no ledger/decision/findings sweep --
+    `_sweep_ledger_sidecars_for_ids`, `_sweep_decisions_for_ids`, and
+    `_sweep_findings_for_ids` stay adapter-side (they are shared with
+    `purge`'s own Phase B, which calls the same three helpers, and this
+    module must stay siblings-only under ADR-0018 rather than import
+    another verb's helpers), called by the command immediately after this,
+    inside the SAME try/except so a mid-sweep failure reports the identical
+    K-of-N recovery message a mid-unlink failure would.
 
     This is NOT transactional as a whole: a failure partway through the N
     unlinks leaves a benign, git-recoverable partial result -- the catalog
@@ -1453,6 +1692,10 @@ def forget_core(layout: config.WorkspaceLayout, plan: ForgetPlan) -> ForgetResul
     try:
         fsio.write_atomic(layout.bundle_dir / "index.md", plan.new_index_text)
         fsio.write_atomic(layout.bundle_dir / "log.md", plan.new_log_text)
+        for withdrawal in sorted(plan.status_withdrawals, key=lambda w: w.target):
+            fsio.write_atomic(
+                layout.bundle_dir / f"{withdrawal.target}.md", withdrawal.new_text
+            )
         # N-delete, LAST, in deterministic sorted order (design decision 5)
         # -- the catalog already reflects every removal before any unlink,
         # so a failure partway through leaves a benign, git-recoverable
@@ -1611,6 +1854,12 @@ class PurgePlan:
     unverifiable_refs: int
     confirmation: TypedChallengeConfirmation
     drift_targets: dict[Path, bytes]
+    status_withdrawals: tuple[StatusWithdrawal, ...]
+    """The same deprecated-status export withdrawals `forget` computes for
+    its resurrection targets (`deprecated-status-export`, issue #1075,
+    `privacy-purge` spec: 'Purge Withdraws The Deprecated-Status Export Of
+    Resurrected Targets') -- WITHDRAW or DROP-MARKER only, never a target
+    still superseded by a surviving concept."""
 
 
 def purge_confirm_phrase(
@@ -1720,6 +1969,58 @@ def prepare_purge(
     member_metadata: dict[str, dict[str, object]] = {
         member: okf.load_frontmatter(text)[0] for member, text in member_texts.items()
     }
+
+    # deprecated-status-export (issue #1075, `privacy-purge` spec): the
+    # SAME resurrection-target withdrawal `forget`'s Phase A computes,
+    # since `purge` resolves the identical purge set over the identical
+    # bundle snapshot. See `prepare_forget`'s own comment for the full
+    # rationale; duplicated here rather than shared because `prepare_purge`
+    # already duplicates the rest of `forget`'s Phase A computation
+    # (`purge_ids`, `member_metadata`, reference detection) as its own
+    # independent pass, not a literal call into `prepare_forget`.
+    resurrection_pairs = {
+        (member, relation.target)
+        for member in purge_ids
+        for relation in okf.decode_relations(member_metadata[member])
+        if relation.type == "supersedes" and relation.target not in purge_ids_set
+    }
+    status_withdrawals: list[StatusWithdrawal] = []
+    distinct_targets = sorted({target for _, target in resurrection_pairs})
+    if distinct_targets:
+        post_purge_metadata: dict[str, Mapping[str, object] | None] = {}
+        for rel, text in other_files.items():
+            if not rel.endswith(".md"):
+                continue
+            cid = rel[: -len(".md")]
+            if cid in purge_ids_set:
+                continue
+            try:
+                meta, _ = okf.load_frontmatter(text)
+            except Exception:  # broad: malformed frontmatter -- unreadable
+                post_purge_metadata[cid] = None
+                continue
+            post_purge_metadata[cid] = meta
+        superseded_post = lifecycle.superseded_from_metadata(post_purge_metadata)
+        for target in distinct_targets:
+            if target in superseded_post.ids:
+                continue  # still superseded by a surviving concept
+            if not superseded_post.complete:
+                continue  # incomplete walk: skip, same fail-safe as forget
+            target_text = other_files[f"{target}.md"]
+            decision, new_target_text = okf.apply_deprecation_export(
+                target_text, superseded=False
+            )
+            if decision.outcome in (
+                okf.ExportOutcome.WITHDRAW,
+                okf.ExportOutcome.DROP_MARKER,
+            ):
+                status_withdrawals.append(
+                    StatusWithdrawal(
+                        target=target,
+                        outcome=decision.outcome,
+                        new_text=new_target_text,
+                    )
+                )
 
     # Reference-aware detection (rail 1's data), identical set-difference
     # gate to `forget`'s.
@@ -1867,6 +2168,7 @@ def prepare_purge(
         unverifiable_refs=len(unverifiable_refs),
         confirmation=confirmation,
         drift_targets=drift_targets,
+        status_withdrawals=tuple(status_withdrawals),
     )
 
 
@@ -2483,6 +2785,16 @@ class PreparedRelate:
     can learn what the gate asks and which flag bypasses it. The adapter
     still decides WHETHER to ask (`review`, `--auto`, TTY); this only says
     what is asked."""
+    new_target_text: str | None
+    target_bytes: bytes | None
+    status_outcome: okf.ExportOutcome | None
+    """The deprecated-status export (`deprecated-status-export`, issue
+    #1075): non-`None` only when `rel_type == "supersedes"` ADDED a new
+    edge (`not already_present`). `new_target_text`/`target_bytes` are the
+    target's projected text and its Phase-A snapshot baseline -- `None`
+    for every other relation type or an idempotent re-run, so the caller
+    writes and drift-guards the target ONLY when there is something to
+    write."""
 
 
 def prepare_relate(
@@ -2494,6 +2806,7 @@ def prepare_relate(
     root: Path,
     *,
     now: datetime,
+    target_path: Path,
 ) -> PreparedRelate:
     """Phase A (pure, no writes): read config + the two texts, compute the
     updated `relations:` list and the `log.md` entry -- extracted verbatim
@@ -2541,6 +2854,22 @@ def prepare_relate(
         log_text, now.astimezone().date(), log_line
     )
 
+    # deprecated-status-export (issue #1075, design Decision 5's `relate`
+    # sequence): an ADDED `supersedes` edge exports the target's status in
+    # this SAME Phase A build, so `relate_core` writes it alongside the
+    # source in one Phase B. An idempotent re-run (`already_present`) or
+    # any other relation type leaves both `None` -- nothing new to write,
+    # pre-existing drift stays `repair`'s concern.
+    new_target_text: str | None = None
+    target_bytes: bytes | None = None
+    status_outcome: okf.ExportOutcome | None = None
+    if rel_type == "supersedes" and not already_present:
+        target_bytes, target_text = fsio.snapshot_read(target_path)
+        decision, new_target_text = okf.apply_deprecation_export(
+            target_text, superseded=True
+        )
+        status_outcome = decision.outcome
+
     return PreparedRelate(
         source_canonical=source_canonical,
         target_canonical=target_canonical,
@@ -2554,16 +2883,25 @@ def prepare_relate(
         source_bytes=source_bytes,
         log_bytes=log_bytes,
         confirmation=boolean_confirmation("relate"),
+        new_target_text=new_target_text,
+        target_bytes=target_bytes,
+        status_outcome=status_outcome,
     )
 
 
-def relate_core(source_path: Path, log_path: Path, prepared: PreparedRelate) -> None:
-    """Phase B (after confirm): write the source concept file then
-    `log.md` -- extracted verbatim from `relate`'s former inline body
-    (`main.py:3800-3801` pre-extraction, design D5). Non-interactive;
-    raises `OSError`/`ValueError`. Performs NO VCS side effect --
-    `_autocommit` stays the caller's responsibility."""
+def relate_core(
+    source_path: Path, log_path: Path, prepared: PreparedRelate, *, target_path: Path
+) -> None:
+    """Phase B (after confirm): write the source concept file, then the
+    target's deprecated-status export when one was projected
+    (`prepared.new_target_text`, issue #1075), then `log.md` -- extracted
+    verbatim from `relate`'s former inline body (`main.py:3800-3801`
+    pre-extraction, design D5). Non-interactive; raises `OSError`/
+    `ValueError`. Performs NO VCS side effect -- `_autocommit` stays the
+    caller's responsibility."""
     fsio.write_atomic(source_path, prepared.new_source_text)
+    if prepared.new_target_text is not None:
+        fsio.write_atomic(target_path, prepared.new_target_text)
     fsio.write_atomic(log_path, prepared.new_log_text)
 
 

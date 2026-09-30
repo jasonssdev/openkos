@@ -2353,6 +2353,69 @@ def test_build_merged_document_type_alternative_cannot_equal_merged_type() -> No
     assert okf.TYPE_ALTERNATIVE_KEY not in merged
 
 
+def test_build_merged_document_absorbed_marker_never_crosses() -> None:
+    """deprecated-status-export (issue #1075, Phase 5, task 5.2): the
+    absorbed side's `status_derived_from` marker must NEVER cross to the
+    survivor, even when the survivor has no `status` key at all -- it is
+    added to `_SPECIAL_KEYS`, exactly like `type_alternative`/`event_date`."""
+    survivor = _survivor_metadata()
+    del survivor["status"]
+    merged, _ = okf.build_merged_document(
+        survivor,
+        "Survivor body.",
+        _absorbed_metadata(
+            status="deprecated", **{okf.STATUS_DERIVED_FROM_KEY: "supersedes"}
+        ),
+        "Absorbed body.",
+        "concepts/absorbed-id",
+        "concepts/survivor-id",
+    )
+
+    assert okf.STATUS_DERIVED_FROM_KEY not in merged
+
+
+def test_build_merged_document_absorbed_exported_deprecation_never_fills_a_gap() -> (
+    None
+):
+    """spec: 'An absorbed export does not cross the merge' -- when the
+    absorbed side's `status: deprecated` carries a VALID export marker, it
+    describes the ABSORBED concept's OWN supersession, which the merge's
+    relation rewiring changes -- so it must never fill a survivor gap
+    either, unlike a human-authored value."""
+    survivor = _survivor_metadata()
+    del survivor["status"]
+    merged, _ = okf.build_merged_document(
+        survivor,
+        "Survivor body.",
+        _absorbed_metadata(
+            status="deprecated", **{okf.STATUS_DERIVED_FROM_KEY: "supersedes"}
+        ),
+        "Absorbed body.",
+        "concepts/absorbed-id",
+        "concepts/survivor-id",
+    )
+
+    assert "status" not in merged
+
+
+def test_build_merged_document_absorbed_human_draft_still_fills_the_gap() -> None:
+    """spec: 'A human-authored absorbed status (no valid marker) still
+    follows the generic scalar rule, unchanged' -- an absorbed `draft` (no
+    marker) still fills a survivor's gap, exactly as before this change."""
+    survivor = _survivor_metadata()
+    del survivor["status"]
+    merged, _ = okf.build_merged_document(
+        survivor,
+        "Survivor body.",
+        _absorbed_metadata(status="draft"),
+        "Absorbed body.",
+        "concepts/absorbed-id",
+        "concepts/survivor-id",
+    )
+
+    assert merged["status"] == "draft"
+
+
 def test_build_merged_document_demotes_the_absorbed_leading_heading() -> None:
     """#803: the stacked form must not produce a second DOCUMENT ROOT.
 

@@ -160,6 +160,22 @@ one, unchanged.
 (Previously: `source_frontmatter` did not exist; this exclusion did not
 apply to it.)
 
+`status_derived_from` (the deprecated-status export marker,
+`deprecated-status-export`) is EXCLUDED from the generic fill-the-gap
+branch, and so is the absorbed side's `status` whenever it carries a valid
+marker: an export describes the ABSORBED concept's supersession, which the
+merge's relation rewiring changes, so it never crosses to the survivor.
+After relations are rewired, the merged survivor's `status` and marker MUST
+be decided by the export projection over the survivor's post-merge
+superseded state — the survivor is the only concept whose superseded-ness a
+merge can change (an inbound retarget can newly supersede it; a dropped
+self-loop can un-supersede it) — and any resulting status change MUST
+appear in the Phase A preview. A human-authored absorbed `status` (no valid
+marker) still follows the generic scalar rule, unchanged. `unmerge`
+restores the absorbed document's own `status` and marker unchanged.
+(Previously: `status_derived_from` did not exist, and the absorbed side's `status` always followed the generic scalar rule.)
+
+
 #### Scenario: Conflicting fields resolved and surfaced
 - GIVEN differing scalar and list-field values on both sides
 - WHEN `merge` runs
@@ -221,6 +237,25 @@ apply to it.)
 - WHEN `merge <survivor> <absorbed>` is confirmed
 - THEN the merged document's `source_frontmatter` is the survivor's own
   `{tags: [alpha]}`, unaffected by the absorbed value
+
+#### Scenario: An absorbed export does not cross the merge
+
+- GIVEN a survivor with no `status` key, and an absorbed object carrying
+  `status: deprecated` and `status_derived_from: supersedes`
+- WHEN `merge <survivor> <absorbed>` is confirmed and no `supersedes` edge
+  targets the survivor afterwards
+- THEN the merged document carries neither `status: deprecated` nor
+  `status_derived_from`
+
+#### Scenario: A survivor newly superseded by the merge is exported
+
+- GIVEN a third-party concept holds a `supersedes` edge to the absorbed
+  object, and the survivor carries `status: stable`
+- WHEN `merge <survivor> <absorbed>` is confirmed and that edge is
+  retargeted to the survivor
+- THEN the merged survivor carries `status: deprecated` and
+  `status_derived_from: supersedes`, and the preview named that change
+
 ### Requirement: Sensitivity High-Water-Mark Recomputation
 
 Sensitivity MUST be RECOMPUTED via `combine_sensitivity`, never copied,
@@ -554,6 +589,22 @@ but which some OTHER survivor's ledger records absorbing MUST be refused
 with an error naming that absorber and the exact unmerge command to run
 first (an absorbed ex-survivor's own sidecar survives its absorption).
 
+After restoring, `unmerge` MUST evaluate the deprecated-status export
+projection (`deprecated-status-export`) for the restored survivor and the
+restored absorbed document over the post-unmerge bundle, and write any
+resulting change in the same Phase B, named in the preview. On a bundle
+whose pre-merge state was export-consistent for those two documents and
+whose `supersedes` edges touching them are unchanged since the merge, the
+projection is the identity, so byte-for-byte parity holds exactly as
+stated above. Only when those preconditions fail — the pre-merge state
+already carried export drift on either document, or a later write changed
+a `supersedes` edge touching them — MAY either document's `status` and
+`status_derived_from` differ from its snapshot, and then only as the
+projection dictates. This is the only permitted deviation from
+byte-for-byte parity.
+(Previously: `unmerge` restored snapshots only; no export existed that could disagree with the restored edges.)
+
+
 #### Scenario: Merge then unmerge restores the pre-merge bundle byte-for-byte
 - GIVEN a merge including a rewritten inbound link
 - WHEN `unmerge <survivor> <absorbed>` is confirmed
@@ -626,6 +677,25 @@ first (an absorbed ex-survivor's own sidecar survives its absorption).
   NOT rolled back — each intermediate state is a consistent,
   git-recoverable bundle
 
+#### Scenario: Unmerge parity holds on an export-consistent bundle
+
+- GIVEN an export-consistent bundle where a third-party concept supersedes
+  the absorbed object, which carries a valid export
+- WHEN `merge <survivor> <absorbed>` then `unmerge <survivor> <absorbed>`
+  are confirmed with no write in between
+- THEN every bundle file, including both documents' `status` and
+  `status_derived_from`, is byte-for-byte identical to its pre-merge state
+
+#### Scenario: Unmerge exports a restored document whose pre-merge state had drift
+
+- GIVEN, before the merge, a third-party concept held a hand-written
+  `supersedes` edge to the absorbed object, which carried `status: stable`
+  (export drift)
+- WHEN `merge <survivor> <absorbed>` then `unmerge <survivor> <absorbed>`
+  are confirmed
+- THEN the restored absorbed document carries `status: deprecated` and
+  `status_derived_from: supersedes`, the preview named that change, and
+  every other restored byte matches its snapshot
 ### Requirement: Reversible Typed-Relation Rewiring
 
 `merge` MUST succeed regardless of typed relations on the absorbed object —

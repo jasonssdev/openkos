@@ -1333,6 +1333,7 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
             continue
 
         source_path = okf.concept_path_for(edge.source_id, layout.bundle_dir)
+        target_path = okf.concept_path_for(edge.target_id, layout.bundle_dir)
         try:
             prepared = application_lifecycle.prepare_relate(
                 source_path,
@@ -1342,6 +1343,7 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
                 suggestion.suggested_type,
                 ctx.root,
                 now=now,
+                target_path=target_path,
             )
         except (OSError, ValueError) as exc:
             typer.echo(
@@ -1351,14 +1353,18 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
             )
             raise typer.Exit(code=1) from exc
 
-        cli_main._reject_drifted_targets(
-            layout,
-            {source_path: prepared.source_bytes, log_path: prepared.log_bytes},
-            "curate",
-        )
+        drift_baselines = {
+            source_path: prepared.source_bytes,
+            log_path: prepared.log_bytes,
+        }
+        if prepared.target_bytes is not None:
+            drift_baselines[target_path] = prepared.target_bytes
+        cli_main._reject_drifted_targets(layout, drift_baselines, "curate")
 
         try:
-            application_lifecycle.relate_core(source_path, log_path, prepared)
+            application_lifecycle.relate_core(
+                source_path, log_path, prepared, target_path=target_path
+            )
         except (OSError, ValueError) as exc:
             typer.echo(
                 "openkos curate: Structure: failed while relating "
@@ -1367,9 +1373,12 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
             )
             raise typer.Exit(code=1) from exc
 
+        relate_commit_paths = [f"bundle/{edge.source_id}.md", "bundle/log.md"]
+        if prepared.new_target_text is not None:
+            relate_commit_paths.insert(1, f"bundle/{edge.target_id}.md")
         relate_sha = cli_main._autocommit(
             ctx.root,
-            [f"bundle/{edge.source_id}.md", "bundle/log.md"],
+            relate_commit_paths,
             f"openkos: relate {edge.source_id} -> {edge.target_id} "
             f"({suggestion.suggested_type})",
         )

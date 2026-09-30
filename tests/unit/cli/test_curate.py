@@ -2583,6 +2583,7 @@ def test_prepare_relate_returns_snapshot_baseline_and_writes_nothing(
         "references",
         tmp_path,
         now=datetime.now(UTC),
+        target_path=tmp_path / "bundle" / "b.md",
     )
 
     assert isinstance(prepared, PreparedRelate)
@@ -2599,8 +2600,16 @@ def test_relate_core_performs_only_write_atomic_twice_and_propagates_errors(
 
     source_path = tmp_path / "bundle" / "a.md"
     log_path = tmp_path / "bundle" / "log.md"
+    target_path = tmp_path / "bundle" / "b.md"
     prepared = application_lifecycle.prepare_relate(
-        source_path, log_path, "a", "b", "references", tmp_path, now=datetime.now(UTC)
+        source_path,
+        log_path,
+        "a",
+        "b",
+        "references",
+        tmp_path,
+        now=datetime.now(UTC),
+        target_path=target_path,
     )
 
     calls: list[Path] = []
@@ -2613,7 +2622,9 @@ def test_relate_core_performs_only_write_atomic_twice_and_propagates_errors(
         real_write_atomic(path, text)
 
     monkeypatch.setattr(fsio_module, "write_atomic", _spy)
-    application_lifecycle.relate_core(source_path, log_path, prepared)
+    application_lifecycle.relate_core(
+        source_path, log_path, prepared, target_path=target_path
+    )
     assert calls == [source_path, log_path]
 
     def _raise(path: Path, text: str) -> None:
@@ -2621,7 +2632,9 @@ def test_relate_core_performs_only_write_atomic_twice_and_propagates_errors(
 
     monkeypatch.setattr(fsio_module, "write_atomic", _raise)
     with pytest.raises(OSError, match="disk full"):
-        application_lifecycle.relate_core(source_path, log_path, prepared)
+        application_lifecycle.relate_core(
+            source_path, log_path, prepared, target_path=target_path
+        )
 
 
 def test_relate_test_suite_regression_unedited() -> None:

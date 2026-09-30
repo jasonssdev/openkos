@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0032: Frontmatter `status: deprecated` is a marked export of computed supersession, never read back"
 description: When a concept is superseded, the engine writes status deprecated plus a status_derived_from marker so OKF v0.2 consumers see it; supersedes edges stay the only authority, the engine ignores marked values, a human-authored status other than stable is never overwritten, every relation-changing verb applies one projection, and repair fixes drift from any state. Amends ADR-0029 Decision 5.
-status: Proposed
+status: Accepted
 date: 2026-09-29
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0032: Frontmatter `status: deprecated` is a marked export of computed supersession, never read back
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-09-29
 - **Amends:** [ADR-0029](0029-adopt-okf-v02-frontmatter.md) (Decision 5 only)
 
