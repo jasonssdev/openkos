@@ -16,6 +16,7 @@ Everything here is stdlib only: `asyncio`, `json`, `logging`, `os`,
 """
 
 import asyncio
+import concurrent.futures
 import json
 import logging
 import os
@@ -23,7 +24,7 @@ import sys
 import threading
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
-from typing import BinaryIO, NamedTuple
+from typing import BinaryIO, Final, NamedTuple
 
 logger = logging.getLogger(__name__)
 
@@ -73,40 +74,91 @@ def claim_stdio() -> Iterator[StdioStreams]:
         sys.stdout = original_stdout
 
 
+MAX_LINE_BYTES: Final = 8 * 1024 * 1024
+"""Longest stdin line (terminator included) the reader will buffer.
+
+Stdin is a blocking `BufferedReader`, not an asyncio `StreamReader`, so no
+default limit applies: a peer that never sends `\\n` would otherwise grow
+memory without bound. 8 MiB is generous for JSON-RPC here -- the largest
+legitimate inbound frame is a `tools/call` whose arguments are a query or a
+concept id, i.e. kilobytes -- while keeping the worst case one bounded
+buffer, not the whole address space."""
+
+INBOUND_QUEUE_MAX: Final = 64
+"""Capacity of the inbound line queue `serve_streams` builds. The reader
+thread blocks when it is full (backpressure), so a client that floods
+frames faster than the server dispatches them waits on the pipe instead of
+growing memory: the worst case is this many lines of at most
+`MAX_LINE_BYTES` each."""
+
+OVERSIZED_FRAME: Final = b"oversized frame\n"
+"""Stand-in posted on the queue for a line that exceeded `MAX_LINE_BYTES`.
+Not valid JSON by construction, so `decode_line` rejects it with
+`ParseError` and the server answers the dropped message with the same
+`-32700` reply it gives any other unparseable line, without ever holding
+the over-long bytes."""
+
+
 def start_reader(
     reader: BinaryIO,
     loop: asyncio.AbstractEventLoop,
     queue: "asyncio.Queue[bytes | None]",
+    *,
+    max_line_bytes: int = MAX_LINE_BYTES,
 ) -> threading.Thread:
     """Start a daemon thread that reads lines from `reader` and posts them
     onto `queue`, one at a time, in order.
 
-    Each line is posted with `loop.call_soon_threadsafe(queue.put_nowait,
-    line)`. On end of input (`readline()` returns `b""`) or a read error,
-    the thread posts `None` as the end-of-input sentinel and returns. A
-    `RuntimeError` raised because `loop` is already closed -- which can
-    happen if the loop is torn down while this thread is still running --
-    is swallowed rather than propagated, so a slow reader thread can never
+    Each read is `readline(max_line_bytes)`, so no more than that many
+    bytes are ever buffered for one line. A chunk that fills the limit
+    without ending in a newline is an over-long line: the rest of it is
+    read and discarded (in bounded chunks), and `OVERSIZED_FRAME` is posted
+    in its place. Posting blocks while `queue` is full, which is the
+    backpressure that bounds the queue -- this is a dedicated thread, so
+    blocking it stalls only the pipe read. On end of input (`readline()`
+    returns `b""`) or a read error, the thread posts `None` as the
+    end-of-input sentinel and returns. A closed or stopped `loop` -- which
+    can happen if it is torn down while this thread is still running -- is
+    swallowed rather than propagated, so a slow reader thread can never
     crash the process on its way out.
     """
 
     def _post(item: bytes | None) -> bool:
+        put = queue.put(item)
         try:
-            loop.call_soon_threadsafe(queue.put_nowait, item)
-        except RuntimeError:
+            asyncio.run_coroutine_threadsafe(put, loop).result()
+        except RuntimeError:  # the loop is closed: the coroutine never ran
+            put.close()
+            return False
+        except concurrent.futures.CancelledError:  # the loop shut down mid-put
             return False
         return True
+
+    def _discard_rest_of_line() -> None:
+        while True:
+            chunk = reader.readline(max_line_bytes)
+            if not chunk or chunk.endswith(b"\n"):
+                return
 
     def _run() -> None:
         try:
             while True:
                 try:
-                    line = reader.readline()
+                    line = reader.readline(max_line_bytes)
+                    oversized = len(line) >= max_line_bytes and not line.endswith(b"\n")
+                    if oversized:
+                        _discard_rest_of_line()
                 except OSError as exc:
                     logger.error("stdin read failed: %s", exc)
                     line = b""
+                    oversized = False
                 if not line:
                     return
+                if oversized:
+                    logger.warning(
+                        "dropped a stdin line longer than %d bytes", max_line_bytes
+                    )
+                    line = OVERSIZED_FRAME
                 if not _post(line):
                     return
         finally:
