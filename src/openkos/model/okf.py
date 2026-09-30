@@ -621,10 +621,108 @@ def dump_frontmatter(
     return frontmatter.dumps(post, width=width) + "\n"
 
 
+class FrontmatterError(ValueError):
+    """`text`'s frontmatter block could not be parsed.
+
+    The one typed failure of this module's YAML parse, so every caller
+    outside the seam catches THIS instead of a blanket `Exception` (AGENTS.md:
+    the format's failure modes live in `model/okf.py` and nowhere else). It
+    subclasses `ValueError` so a site that already caught `ValueError` keeps
+    working; `yaml.YAMLError` itself is NOT a `ValueError` (#942), which is
+    what made each caller hand-roll a broad catch. The message is the
+    parser's own, and the parser's exception is chained as `__cause__`.
+    """
+
+
+_PARSE_ERRORS: Final = (
+    yaml.YAMLError,
+    ValueError,  # e.g. an impossible calendar date in a timestamp scalar
+    TypeError,
+    OverflowError,
+    RecursionError,  # a pathologically nested block
+)
+"""What the YAML stack raises on a block it cannot parse -- the open set
+`FrontmatterError` closes."""
+
+
+def _parse_post(text: str) -> frontmatter.Post:
+    """`frontmatter.loads` with every parse failure translated to
+    `FrontmatterError`."""
+    try:
+        return frontmatter.loads(text)
+    except _PARSE_ERRORS as exc:
+        raise FrontmatterError(str(exc)) from exc
+
+
 def load_frontmatter(text: str) -> tuple[dict[str, object], str]:
-    """Parse the frontmatter block and body out of `text`, per §4.1."""
-    post = frontmatter.loads(text)
+    """Parse the frontmatter block and body out of `text`, per §4.1.
+
+    Raises `FrontmatterError` when the block is present but unparseable. A
+    block the library does not treat as a mapping (an unterminated block, a
+    scalar or a list) yields empty metadata rather than an error.
+    """
+    post = _parse_post(text)
     return post.metadata, post.content
+
+
+def try_load_frontmatter(text: str) -> tuple[dict[str, object], str] | None:
+    """`load_frontmatter`, or `None` when `text`'s frontmatter is
+    unparseable -- for the callers whose policy for a bad file is to skip
+    it."""
+    try:
+        return load_frontmatter(text)
+    except FrontmatterError:
+        return None
+
+
+def parse_frontmatter_fragment(text: str) -> object:
+    """Parse a fragment of a frontmatter block (for example one `key: value`
+    line) with the same safe loader the codec uses.
+
+    Raises `FrontmatterError` on invalid YAML.
+    """
+    try:
+        return yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        raise FrontmatterError(str(exc)) from exc
+
+
+OKF_VERSION_KEY: Final = "okf_version"
+"""The frontmatter key in `index.md` that declares the OKF version (§8)."""
+
+_OKF_VERSION_LINE_RE: Final = re.compile(rf"(?m)^({OKF_VERSION_KEY}:)[ \t]*(?:.*)$")
+"""Matches a whole `okf_version: ...` frontmatter line -- the ONE targeted
+substitution `rewrite_okf_version` performs, never a `dump_frontmatter`
+re-dump of the whole snapshot (its body and every other field stay
+untouched)."""
+
+
+def okf_version_is_current(metadata: Mapping[str, object]) -> bool:
+    """`True` when `metadata` declares the `OKF_VERSION` this engine emits."""
+    return metadata.get(OKF_VERSION_KEY) == OKF_VERSION
+
+
+def rewrite_okf_version(text: str, *, label: str) -> str:
+    """Set the declared `okf_version` of a whole-`index.md` snapshot to
+    `OKF_VERSION`, in place.
+
+    A targeted substitution over the raw frontmatter block only, never a
+    `dump_frontmatter` re-dump, so every other field's quoting and the body
+    are left byte-for-byte untouched. The emitted line matches
+    `dump_frontmatter`'s own single-quoted style for a version string, so a
+    second run over an already-rewritten snapshot is a byte-identical no-op.
+
+    `label` prefixes the refusal, as in `split_frontmatter_verbatim`. Raises
+    `ValueError` when `text` has no frontmatter block or the block declares
+    no `okf_version`.
+    """
+    block, body = split_frontmatter_verbatim(text, label=label)
+    new_block, count = _OKF_VERSION_LINE_RE.subn(
+        rf"\1 '{OKF_VERSION}'", block, count=1
+    )
+    if count == 0:
+        raise ValueError(f"{label}: snapshot has no {OKF_VERSION_KEY} field to rewrite")
+    return new_block + body
 
 
 def frontmatter_block_end(lines: Sequence[str]) -> int:
@@ -723,7 +821,7 @@ def _incoming_frontmatter_prescan(
     inner line equal to `"---"` closes the block first), a genuine second
     document inside one already-extracted block is not reachable without
     PyYAML itself raising first (confirmed during implementation) -- in
-    practice that case is caught by the broad `except Exception` below, not
+    practice that case is caught by the `_PARSE_ERRORS` catch below, not
     this counter. Kept for design fidelity and as a guard should the
     boundary rule ever change.
 
@@ -753,7 +851,7 @@ def _incoming_frontmatter_prescan(
                     return "too-deep"
             elif isinstance(event, (yaml.MappingEndEvent, yaml.SequenceEndEvent)):
                 depth -= 1
-    except Exception:  # broad: yaml.YAMLError is not a ValueError (#942)
+    except _PARSE_ERRORS:
         return "malformed"
     return None
 
@@ -788,7 +886,7 @@ def parse_incoming_frontmatter(text: str) -> IncomingFrontmatter:
 
     try:
         loaded = yaml.load(block, Loader=yaml.SafeLoader)
-    except Exception:  # broad: yaml.YAMLError is not a ValueError (#942)
+    except _PARSE_ERRORS:
         return IncomingFrontmatter(status="malformed", mapping=None)
 
     if loaded is None or loaded == {}:
@@ -804,7 +902,7 @@ def parse_incoming_frontmatter(text: str) -> IncomingFrontmatter:
             dump_frontmatter({SOURCE_FRONTMATTER_KEY: loaded})
         )
         survives_round_trip = round_tripped.get(SOURCE_FRONTMATTER_KEY) == loaded
-    except Exception:  # broad: storage path must never raise here either
+    except (FrontmatterError, yaml.YAMLError):  # storage must never raise here
         survives_round_trip = False
     if not survives_round_trip:
         return IncomingFrontmatter(status="unsupported-value", mapping=None)
@@ -2892,7 +2990,7 @@ def migrate_document(text: str) -> MigrationResult:
         return Refused("unparseable frontmatter")
     try:
         metadata, body = load_frontmatter(text)
-    except Exception:  # broad: any malformed YAML must refuse, not crash
+    except FrontmatterError:
         return Refused("unparseable frontmatter")
 
     has_generated = "generated" in metadata
@@ -3303,8 +3401,8 @@ def _iter_docs(bundle_dir: Path) -> Iterator[DocScan]:
             yield DocScan(path, None, exc, None)
             continue
         try:
-            post = frontmatter.loads(text)
-        except Exception as exc:  # broad: any parse failure is a rule-1 violation
+            post = _parse_post(text)
+        except FrontmatterError as exc:
             yield DocScan(path, None, None, f"no parseable frontmatter ({exc})")
             continue
         if post.handler is None:
