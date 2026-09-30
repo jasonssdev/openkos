@@ -492,3 +492,59 @@ def insecure_key_warning(
         f"({locality.display_host}) over plain HTTP -- consider using "
         "https:// or a loopback endpoint"
     )
+
+
+def key_destinations(
+    cfg: config.Config, *, environ: Mapping[str, str] = os.environ
+) -> tuple[str, ...]:
+    """Every distinct origin (`scheme://host[:port]`, never the path, query
+    or userinfo) the `openai-compatible` API key would be sent to: the
+    resolved chat endpoint, then the embedding endpoint when it differs.
+    Empty for `backend == "ollama"` (no key exists there), when no key is
+    set, and for an endpoint that resolves to no URL. Pure: the key's VALUE
+    is never read into the result, only its presence."""
+    if cfg.backend != BACKEND_OPENAI_COMPATIBLE:
+        return ()
+    if _read_api_key(environ) is None:
+        return ()
+    origins: list[str] = []
+    for purpose in ("chat", "embed"):
+        url = resolve_endpoint(cfg, purpose=purpose).url
+        if not url:
+            continue
+        scheme = "https" if url.lower().startswith("https://") else "http"
+        origin = f"{scheme}://{classify_backend_host(url).display_host}"
+        if origin not in origins:
+            origins.append(origin)
+    return tuple(origins)
+
+
+def remote_key_notices(
+    cfg: config.Config, *, environ: Mapping[str, str] = os.environ
+) -> tuple[tuple[str, str], ...]:
+    """`(origin, message)` for each distinct non-local origin the API key is
+    about to be sent to, so a workspace `openkos.yaml` cloned from elsewhere
+    cannot redirect the user's key silently. Local origins produce nothing,
+    and neither does the chat origin `insecure_key_warning` already covers
+    (its plain-`http://` warning supersedes: one line per host). Advisory
+    only; the message names the origin and never the key or the URL path.
+    Callers own printing each origin at most once per process."""
+    superseded = insecure_key_warning(cfg, environ=environ) is not None
+    chat_url = resolve_endpoint(cfg, purpose="chat").url or ""
+    chat_origin = (
+        f"http://{classify_backend_host(chat_url).display_host}" if superseded else None
+    )
+    notices: list[tuple[str, str]] = []
+    for origin in key_destinations(cfg, environ=environ):
+        if origin == chat_origin:
+            continue
+        if classify_backend_host(origin).is_local:
+            continue
+        notices.append(
+            (
+                origin,
+                "notice: OPENKOS_OPENAI_API_KEY is being sent to a non-local "
+                f"server ({origin}) -- check that this host is trusted",
+            )
+        )
+    return tuple(notices)

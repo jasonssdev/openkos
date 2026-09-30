@@ -101,7 +101,7 @@ def _by_label(
 # --- shape: fifteen checks, in order, compute-then-render ---
 
 
-def test_run_diagnostics_returns_exactly_fifteen_checks(tmp_path: Path) -> None:
+def test_run_diagnostics_returns_exactly_sixteen_checks(tmp_path: Path) -> None:
     """Thirteen numbered checks plus two lettered sub-checks (5b, 7b) = 15
     -- the pre-extraction docstring's "twelve" was already stale before
     this extraction (`tests/unit/cli/test_doctor.py` already asserted 15
@@ -128,7 +128,7 @@ def test_run_diagnostics_returns_exactly_fifteen_checks(tmp_path: Path) -> None:
         filter_repo_available=True,
         reset_point_available=lambda: True,
     )
-    assert len(results) == 15
+    assert len(results) == 16
     assert [r.label for r in results] == [
         "Workspace initialized",
         "Config valid",
@@ -143,6 +143,7 @@ def test_run_diagnostics_returns_exactly_fifteen_checks(tmp_path: Path) -> None:
         "git available",
         "git-filter-repo available",
         "Backend host locality",
+        "API key destination",
         "Merge ledger torn writes",
         "Merge ledger entries free of post-merge mutation",
     ]
@@ -195,7 +196,7 @@ def test_run_diagnostics_never_raises_outside_a_workspace_with_unreachable_backe
         filter_repo_available=False,
         reset_point_available=lambda: False,
     )
-    assert len(results) == 15
+    assert len(results) == 16
 
 
 # --- item B (#1002): one config read, and the client is built from it ---
@@ -333,7 +334,7 @@ def test_run_diagnostics_reports_not_run_when_survey_bundle_scan_torn_writes_or_
         reset_point_available=lambda: True,
     )
 
-    assert len(results) == 15
+    assert len(results) == 16
     not_run = [r for r in results if r.status == read_outcome.NOT_RUN]
     assert len(not_run) == 1
     assert not_run[0].label == label
@@ -372,7 +373,7 @@ def test_run_diagnostics_reports_the_integrity_check_as_not_run_when_reset_point
         reset_point_available=_raise,
     )
 
-    assert len(results) == 15
+    assert len(results) == 16
     check = _by_label(results, "Merge ledger entries free of post-merge mutation")
     assert check.status == read_outcome.NOT_RUN
     assert check.detail is not None
@@ -1365,3 +1366,74 @@ def test_doctor_openai_compatible_task_models_missing_no_ollama_pull(
     assert check.remediation is not None
     assert "ollama pull" not in check.remediation
     assert "missing-task-model" in check.remediation
+
+
+def _key_destination_detail(results: tuple[doctor_service.CheckResult, ...]) -> str:
+    check = _by_label(results, "API key destination")
+    assert check.status == "pass"
+    assert check.critical is False
+    assert check.detail is not None
+    return check.detail
+
+
+def _run(layout: config.WorkspaceLayout) -> tuple[doctor_service.CheckResult, ...]:
+    return doctor_service.run_diagnostics(
+        layout.root,
+        build_client=lambda _cfg, _model: _FakeBackend(tags=[config.DEFAULT_MODEL]),
+        git_available=True,
+        filter_repo_available=True,
+        reset_point_available=lambda: True,
+    )
+
+
+def test_api_key_destination_names_the_remote_origin_without_the_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    layout = _openai_compatible_cfg(
+        tmp_path, monkeypatch, base_url="https://api.example.com:8443/v1?q=1"
+    )
+    monkeypatch.setenv("OPENKOS_OPENAI_API_KEY", "sk-super-secret-sentinel")
+
+    detail = _key_destination_detail(_run(layout))
+
+    assert "https://api.example.com:8443" in detail
+    assert "not this machine" in detail
+    assert "sk-super-secret-sentinel" not in detail
+    assert "q=1" not in detail
+
+
+def test_api_key_destination_marks_a_loopback_host_as_this_machine(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    layout = _openai_compatible_cfg(
+        tmp_path, monkeypatch, base_url="http://127.0.0.1:8000"
+    )
+    monkeypatch.setenv("OPENKOS_OPENAI_API_KEY", "secret")
+
+    detail = _key_destination_detail(_run(layout))
+
+    assert "http://127.0.0.1:8000" in detail
+    assert "this machine" in detail
+    assert "not this machine" not in detail
+
+
+def test_api_key_destination_reports_no_key_set(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    layout = _openai_compatible_cfg(
+        tmp_path, monkeypatch, base_url="https://api.example.com/v1"
+    )
+
+    detail = _key_destination_detail(_run(layout))
+
+    assert "no API key set" in detail
+    assert "api.example.com" not in detail
+
+
+def test_api_key_destination_reports_ollama_sends_no_key(tmp_path: Path) -> None:
+    layout = _workspace(tmp_path)
+
+    detail = _key_destination_detail(_run(layout))
+
+    assert "ollama" in detail
+    assert "no API key" in detail

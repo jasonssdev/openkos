@@ -189,19 +189,30 @@ fixture resets this to `False` before every test, so it never leaks across
 the test suite the way a bare process-lifetime flag normally would."""
 
 
+_REMOTE_KEY_NOTICED: set[str] = set()
+"""Origins whose non-local API-key notice was already printed this process:
+one line per distinct host, however many clients are built. Reset by
+`tests/unit/conftest.py` alongside `_INSECURE_KEY_WARNING_PRINTED`."""
+
+
 def _maybe_warn_insecure_key(cfg: config.Config) -> None:
     """Print `application_backends.insecure_key_warning(cfg)` to stderr, at
-    most once per process. Called from both `_chat_client` and
+    most once per process, and one `remote_key_notices` line per distinct
+    non-local origin the key is about to be sent to (an `http://` chat host
+    gets only the stronger warning). Called from both `_chat_client` and
     `_embed_client` so every construction site is covered without each one
     remembering to call it itself."""
     global _INSECURE_KEY_WARNING_PRINTED
-    if _INSECURE_KEY_WARNING_PRINTED:
-        return
-    warning = application_backends.insecure_key_warning(cfg)
-    if warning is None:
-        return
-    _INSECURE_KEY_WARNING_PRINTED = True
-    typer.echo(f"openkos: {warning}", err=True)
+    if not _INSECURE_KEY_WARNING_PRINTED:
+        warning = application_backends.insecure_key_warning(cfg)
+        if warning is not None:
+            _INSECURE_KEY_WARNING_PRINTED = True
+            typer.echo(f"openkos: {warning}", err=True)
+    for origin, message in application_backends.remote_key_notices(cfg):
+        if origin in _REMOTE_KEY_NOTICED:
+            continue
+        _REMOTE_KEY_NOTICED.add(origin)
+        typer.echo(f"openkos: {message}", err=True)
 
 
 def _chat_client(cfg: config.Config, *, task: str | None = None) -> LLMBackend:
