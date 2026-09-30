@@ -47,6 +47,14 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Fixed
 
+- `ingest` no longer writes the absolute local path of the source into the
+  Source concept's `description` and body
+  ([#1129](https://github.com/jasonssdev/openkos/issues/1129)). The path leaked
+  the account name and directory layout into git history, embeddings, and MCP
+  replies; the Source now names the raw copy's basename and its `raw/<name>`
+  resource. Existing workspaces keep their old text (no migration is run);
+  edit a Source by hand to drop the path from it.
+
 - `unmerge` no longer silently overwrites a survivor edited after its merge
   ([#1110](https://github.com/jasonssdev/openkos/issues/1110)). It restored
   the survivor from the ledger's pre-merge snapshot unconditionally, with no

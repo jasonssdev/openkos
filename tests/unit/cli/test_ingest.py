@@ -360,6 +360,31 @@ def test_successful_ingest_of_valid_path(
     assert "notes.md" in log_text
 
 
+def test_source_concept_never_carries_the_absolute_import_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Source's description and body name the raw copy, never the
+    absolute path the file was imported from: that path leaks the account
+    name and directory layout into git, embeddings and MCP replies."""
+    _init_workspace(tmp_path, monkeypatch)
+    private_dir = tmp_path / "account-name-private-dir"
+    private_dir.mkdir()
+    source = private_dir / "notes.txt"
+    source.write_text("content", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", str(source), "--auto"])
+
+    assert result.exit_code == 0
+    concept_text = (tmp_path / "bundle" / "sources" / "notes.md").read_text(
+        encoding="utf-8"
+    )
+    metadata, body = okf.load_frontmatter(concept_text)
+    assert "account-name-private-dir" not in concept_text
+    assert str(tmp_path) not in concept_text
+    assert "imported from 'notes.txt' as raw/notes.txt" in str(metadata["description"])
+    assert "imported from 'notes.txt' as raw/notes.txt" in body
+
+
 def test_description_is_honest_no_extraction_claim(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
