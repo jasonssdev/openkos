@@ -943,6 +943,30 @@ that default-path output.
 - THEN the reachable check's detail is byte-identical to its pre-existing
   default-path wording, and no endpoint-and-source line is printed
 
+### Requirement: Doctor States Where The API Key Will Be Sent
+
+`doctor` MUST print an informational `API key destination` line that is
+always `[PASS]`. For `backend: openai-compatible` with `OPENKOS_OPENAI_API_KEY`
+set it MUST name each origin the key will be sent to (`scheme://host[:port]`,
+no path, query or userinfo) and whether that origin is this machine; with no
+key set it MUST say no key is sent; for `backend: ollama` it MUST say no key
+is sent. It MUST NOT print the key's value.
+
+#### Scenario: A remote destination is named
+
+- GIVEN `backend: openai-compatible`, `base_url: https://api.example.com/v1`
+  and `OPENKOS_OPENAI_API_KEY` set
+- WHEN `openkos doctor` runs
+- THEN the `API key destination` line names `https://api.example.com` as not
+  this machine and the key value appears nowhere
+
+#### Scenario: No key or an ollama backend
+
+- GIVEN no key is set, or `backend: ollama`
+- WHEN `openkos doctor` runs
+- THEN the `API key destination` line is `[PASS]` and states that no key is
+  sent
+
 ### Requirement: The API Key Is Never Printed By Doctor
 
 WHEN `OPENKOS_OPENAI_API_KEY` is set, `doctor` MUST NOT print its value on
