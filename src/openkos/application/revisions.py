@@ -227,7 +227,7 @@ def _resolve_one_decision_date(
             return DecisionDate(value=None, state="missing")
         try:
             metadata, _ = okf.load_frontmatter(text)
-        except Exception:  # broad: any parse failure makes this Source unusable
+        except okf.FrontmatterError:  # any parse failure makes this Source unusable
             return DecisionDate(value=None, state="missing")
         stored = okf.read_event_date(metadata)
         if stored.value is None:
@@ -654,7 +654,7 @@ def _load_doc(
         return concept_id, ""
     try:
         metadata, body = okf.load_frontmatter(text)
-    except Exception:  # broad: any parse failure degrades this doc, never raises
+    except okf.FrontmatterError:  # any parse failure degrades this doc, never raises
         return concept_id, ""
     if sensitivity.should_block(metadata, include_confidential=effective_confidential):
         return concept_id, ""

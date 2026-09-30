@@ -70,7 +70,7 @@ def test_rewrite_okf_version_flips_only_the_version_line() -> None:
 
 
 def test_rewrite_okf_version_refuses_without_the_field() -> None:
-    with pytest.raises(ValueError, match="t: .*no okf_version"):
+    with pytest.raises(ValueError, match=r"t: .*no okf_version"):
         okf.rewrite_okf_version("---\ntype: Index\n---\nb", label="t")
 
 

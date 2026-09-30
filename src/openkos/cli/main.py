@@ -387,7 +387,7 @@ def _probe_installed_models() -> list[InstalledModel]:
             factories=_backend_factories(),
         )
         return probe.list_models()
-    except Exception:
+    except Exception:  # noqa: BLE001 -- an unreachable or misbehaving probe means no models, never a crash
         return []
 
 
@@ -1144,7 +1144,7 @@ def _okf_v02_migration_hint(index_path: Path) -> str | None:
         metadata, _ = okf.load_frontmatter(index_path.read_text(encoding="utf-8"))
     except OSError:
         return None
-    if metadata.get("okf_version") == okf.OKF_VERSION:
+    if okf.okf_version_is_current(metadata):
         return None
     return "this bundle predates OKF 0.2; run `openkos repair` first."
 
@@ -1823,7 +1823,7 @@ def init(
             factories=_backend_factories(),
         )
         ready = model_tag_matches(resolved_model, [m.tag for m in probe.list_models()])
-    except Exception:
+    except Exception:  # noqa: BLE001 -- an unreachable or misbehaving probe means not ready; init notes it below
         ready = False
     if not ready:
         typer.echo(
@@ -3126,10 +3126,8 @@ def _raw_member_origin_key(bundle_dir: Path, member: Path) -> str | None:
     concept_path = okf.concept_path_for(f"sources/{slug}", bundle_dir)
     try:
         metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError):
-        return None
-    except Exception:  # broad: malformed frontmatter degrades to unknown
-        return None
+    except (OSError, UnicodeDecodeError, okf.FrontmatterError):
+        return None  # unreadable or malformed frontmatter degrades to unknown
     value = metadata.get(okf.ORIGIN_KEY_KEY)
     return value if isinstance(value, str) and value else None
 
@@ -4166,7 +4164,7 @@ def _embed_after_ingest(
                 embedding_backend=embedding_backend,
                 local_exemption=local_exemption,
             )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 -- a failed embedding refresh degrades to a notice, never aborts the ingest
         typer.echo(
             f"openkos ingest: embeddings not updated -- {exc}; candidate "
             "relations unavailable until `openkos reindex` succeeds.",
@@ -4250,7 +4248,7 @@ def _refresh_derived_after_write(
 
     try:
         reindex_module._reindex_fts(layout.bundle_dir, layout.fts_db_path, force=False)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 -- a failed FTS refresh is collected into the degrade summary
         failures.append(f"fts: {exc}")
 
     try:
@@ -4265,7 +4263,7 @@ def _refresh_derived_after_write(
         finally:
             if with_candidates is not None:
                 with_candidates.close()
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 -- a failed graph refresh is collected into the degrade summary
         failures.append(f"graph: {exc}")
 
     try:
@@ -4305,7 +4303,7 @@ def _refresh_derived_after_write(
                 f"vectors: {report.embed_failed} doc"
                 f"{_plural(report.embed_failed)} could not be embedded"
             )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 -- a failed vector refresh is collected into the degrade summary
         failures.append(f"vectors: {exc}")
 
     if failures:

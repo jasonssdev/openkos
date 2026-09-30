@@ -88,7 +88,7 @@ def _guarded_read(
         return None
     try:
         metadata, _ = okf.load_frontmatter(text)
-    except Exception:  # broad: any parse failure makes this read unusable
+    except okf.FrontmatterError:  # any parse failure makes this read unusable
         return None
     if admit is not None and admit(concept_id, metadata) is False:
         return None

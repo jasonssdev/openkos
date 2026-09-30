@@ -187,7 +187,9 @@ def _reread_sensitivity_blocked(
         return True
     try:
         metadata, _body = okf.load_frontmatter(text)
-    except Exception:  # broad: any parse failure fails closed (return, not continue)
+    except (
+        okf.FrontmatterError
+    ):  # any parse failure fails closed (return, not continue)
         return True
     return sensitivity.should_block(
         metadata,

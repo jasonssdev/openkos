@@ -473,7 +473,7 @@ def prepare_merge(
             )
         try:
             meta, _ = okf.load_frontmatter(source_text)
-        except Exception:  # broad: malformed frontmatter -- unreadable
+        except okf.FrontmatterError:  # malformed frontmatter -- unreadable
             meta = None
         post_merge_metadata[cid] = meta
 
@@ -1113,7 +1113,7 @@ def prepare_unmerge(
         cid = rel[: -len(".md")] if rel.endswith(".md") else rel
         try:
             meta, _ = okf.load_frontmatter(relation_reversed_texts[rel])
-        except Exception:  # broad: malformed frontmatter -- unreadable
+        except okf.FrontmatterError:  # malformed frontmatter -- unreadable
             meta = None
         post_unmerge_metadata[cid] = meta
 
@@ -1635,7 +1635,7 @@ def prepare_forget(
                 continue
             try:
                 meta, _ = okf.load_frontmatter(text)
-            except Exception:  # broad: malformed frontmatter -- unreadable
+            except okf.FrontmatterError:  # malformed frontmatter -- unreadable
                 post_forget_metadata[cid] = None
                 continue
             post_forget_metadata[cid] = meta
@@ -2106,7 +2106,7 @@ def prepare_purge(
                 continue
             try:
                 meta, _ = okf.load_frontmatter(text)
-            except Exception:  # broad: malformed frontmatter -- unreadable
+            except okf.FrontmatterError:  # malformed frontmatter -- unreadable
                 post_purge_metadata[cid] = None
                 continue
             post_purge_metadata[cid] = meta

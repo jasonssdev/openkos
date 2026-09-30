@@ -233,7 +233,7 @@ def stale_derived_stores(
                 stored = read_manifest_hash(conn)
             finally:
                 conn.close()
-        except Exception:  # broad: any unreadable store degrades to "stale"
+        except Exception:  # noqa: BLE001 -- any unreadable store degrades to "stale"
             stale.append(name)
             continue
         if stored != current:

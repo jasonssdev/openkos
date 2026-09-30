@@ -570,10 +570,10 @@ def stage_filed_answer(
                 encoding="utf-8"
             )
             metadata, _ = okf.load_frontmatter(text)
-        except Exception:  # broad: any read/parse failure
+        except (OSError, ValueError):  # a read/decode/parse failure
             # fails CLOSED to "confidential" (cannot verify -> most
-            # restrictive), mirroring `_assemble_context`'s broad
-            # `except Exception` in retrieval/answer.py.
+            # restrictive); `okf.FrontmatterError` and
+            # `UnicodeDecodeError` are both `ValueError`s.
             cited_high_water_mark = okf.combine_sensitivity(
                 cited_high_water_mark, "confidential"
             )
@@ -786,7 +786,7 @@ def scan_for_duplicates(
             question_cache_conn,
             question_vectors.cache_key(cfg.embedding_model, cfg.backend),
         )
-    except Exception:  # advisory: a cache that will not open never blocks a save
+    except Exception:  # noqa: BLE001 -- advisory: a cache that will not open never blocks a save
         question_cache = None
     try:
         return insight_identity.near_duplicate_insights(

@@ -184,7 +184,7 @@ def _filed_questions(bundle_dir: Path) -> list[_FiledInsight]:
             continue
         try:
             metadata, _ = okf.load_frontmatter(text)
-        except Exception:  # noqa: S112 -- any parse failure skips this file
+        except okf.FrontmatterError:
             continue
         if metadata.get("type") != INSIGHT_TYPE:
             continue
@@ -300,7 +300,7 @@ def near_duplicate_insights(
         # Its vector would otherwise disclose a duplicate whose document the
         # operator cannot open.
         cache.prune_missing(set(wanted))
-    except Exception:  # advisory: a cache failure never blocks a save
+    except Exception:  # noqa: BLE001 -- advisory: a cache failure never blocks a save
         return DuplicateScan([], unavailable=True)
     if not filed:
         return DuplicateScan([])
@@ -308,11 +308,11 @@ def near_duplicate_insights(
         digests = {
             insight.concept_id: cache.digest(insight.question) for insight in filed
         }
-    except Exception:
+    except Exception:  # noqa: BLE001 -- advisory: a cache failure never blocks a save
         return DuplicateScan([], unavailable=True)
     try:
         cached = cache.hashes()
-    except Exception:
+    except Exception:  # noqa: BLE001 -- advisory: a cache failure never blocks a save
         return DuplicateScan([], unavailable=True)
     # A STALE hash is a miss, not a hit: the cached vector describes the old
     # question, so serving it would compare against text no longer on disk
@@ -324,7 +324,7 @@ def near_duplicate_insights(
     ]
     try:
         vectors = embedder.embed([question, *(miss.question for miss in misses)])
-    except Exception:  # advisory: any backend failure degrades to no candidates
+    except Exception:  # noqa: BLE001 -- advisory: any backend failure degrades to no candidates
         return DuplicateScan([], unavailable=True)
     if len(vectors) != len(misses) + 1:
         return DuplicateScan([], unavailable=True)
@@ -364,7 +364,7 @@ def near_duplicate_insights(
                         similarity=similarity,
                     )
                 )
-    except Exception:
+    except Exception:  # noqa: BLE001 -- advisory: a cache failure never blocks a save
         return DuplicateScan([], unavailable=True)
     if compared != set(wanted):
         # The cache did not yield a usable vector for every insight on disk,

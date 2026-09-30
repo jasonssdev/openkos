@@ -20,7 +20,6 @@ from datetime import date
 from pathlib import Path
 
 import pytest
-import yaml
 
 from openkos import config
 from openkos.application import ingest as ingest_service
@@ -652,14 +651,14 @@ def test_converged_reingest_falls_through_on_absent_frontmatter() -> None:
 
 def test_converged_reingest_falls_through_on_malformed_frontmatter_yaml() -> None:
     """#942: the parse guard has to catch what `frontmatter.loads` actually
-    raises. Malformed YAML surfaces as `yaml.parser.ParserError`, which is
-    NOT a `ValueError`, so an `except ValueError` guard here documents a
-    fall-through it cannot deliver and lets the error escape instead.
+    raises. Malformed YAML surfaces from `okf.load_frontmatter` as the typed
+    `okf.FrontmatterError`, so the guard catches that and delivers the
+    documented fall-through instead of letting the error escape.
 
     `title: [unclosed` is a genuinely malformed mapping value -- distinct
     from a merely absent block, which `frontmatter.loads` tolerates."""
     malformed = "---\ntitle: [unclosed\norigin_key: deadbeef\n---\n\nBody.\n"
-    with pytest.raises(yaml.YAMLError):
+    with pytest.raises(okf.FrontmatterError):
         okf.load_frontmatter(malformed)
     assert ingest_service.converged_reingest(malformed, re_extract=False) is None
 
@@ -837,7 +836,7 @@ def test_compose_source_document_reads_back_on_disk_title() -> None:
 def test_compose_source_document_raises_on_malformed_prior_frontmatter() -> None:
     """Triangulation: a DIFFERENT code path -- genuinely malformed YAML (not
     merely a missing `---` block, which `frontmatter.loads` tolerates as
-    empty metadata) makes `okf.load_frontmatter` raise `yaml.YAMLError`,
+    empty metadata) makes `okf.load_frontmatter` raise `okf.FrontmatterError`,
     which `_read_source_sensitivity` translates to `ValueError` (design:
     "Where the on-disk read happens, and how it fails") -- a re-ingest MUST
     NOT degrade an unreadable classification to the config default."""

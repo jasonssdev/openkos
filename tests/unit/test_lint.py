@@ -227,15 +227,14 @@ def test_collect_docs_skips_body_reread_parse_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A TOCTOU re-read whose frontmatter no longer parses is skipped with a
-    notice, not raised. `okf.load_frontmatter` can raise an exception that is
-    neither `OSError` nor `UnicodeDecodeError` if a concurrent edit corrupts
-    the file between `_iter_docs`'s parse and this re-read, so the guard must
-    be broad."""
+    notice, not raised. `okf.load_frontmatter` can raise `okf.FrontmatterError`
+    if a concurrent edit corrupts the file between `_iter_docs`'s parse and
+    this re-read, so the guard must catch it."""
     bundle_dir = tmp_path / "bundle"
     _write_doc(bundle_dir / "concepts" / "racy.md")
 
     def raise_parse_error(text: str) -> tuple[dict[str, object], str]:
-        raise RuntimeError("simulated frontmatter parse failure")
+        raise okf.FrontmatterError("simulated frontmatter parse failure")
 
     monkeypatch.setattr(okf, "load_frontmatter", raise_parse_error)
 

@@ -299,7 +299,7 @@ def test_build_index_skips_doc_whose_second_parse_fails(
 
     def flaky_load_frontmatter(text: str) -> tuple[dict[str, object], str]:
         if "flakyzzy" in text:
-            raise ValueError("simulated corrupted frontmatter on re-read")
+            raise okf.FrontmatterError("simulated corrupted frontmatter on re-read")
         return original_load_frontmatter(text)
 
     monkeypatch.setattr(okf, "load_frontmatter", flaky_load_frontmatter)

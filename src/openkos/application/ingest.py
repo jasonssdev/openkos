@@ -154,9 +154,11 @@ def family_owns_source(family: list[Path], source_slug: str) -> bool:
         try:
             text = path.read_text(encoding="utf-8")
             metadata, _ = okf.load_frontmatter(text)
-        except (OSError, UnicodeDecodeError):
-            continue
-        except Exception:  # noqa: S112 -- broad: malformed frontmatter degrades, never crashes
+        except (
+            OSError,
+            UnicodeDecodeError,
+            okf.FrontmatterError,
+        ):
             continue
         provenance = metadata.get("provenance")
         if isinstance(provenance, list) and provenance_key in provenance:
@@ -689,9 +691,8 @@ def converged_reingest(
 
     1. `re_extract` -- the deliberate redo always runs extraction again.
     2. Unparseable frontmatter proves nothing about the previous
-       extraction (`okf.load_frontmatter` raises -- `yaml.YAMLError` for
-       malformed YAML, which is why the guard catches `Exception` rather
-       than `ValueError`, see #942).
+       extraction (`okf.load_frontmatter` raises `okf.FrontmatterError`
+       for malformed YAML, see #942).
     3. A pre-#552 legacy Source records no `origin_key` -- the full
        regenerate path is what backfills it (the no-verb self-migration),
        so such a Source takes that path ONCE and every later re-ingest of
@@ -708,18 +709,13 @@ def converged_reingest(
         return None
     try:
         prior_metadata, _ = okf.load_frontmatter(concept_text)
-    except Exception:
+    except okf.FrontmatterError:
         # An unparseable prior Source proves nothing about the previous
         # extraction -- fall through to the full run, which is the
-        # pre-#773 behavior for every re-ingest.
-        #
-        # Bare `Exception`, matching `_read_source_sensitivity` and
-        # `_read_source_title` below (#942): `frontmatter.loads` raises
-        # `yaml.YAMLError` on malformed YAML, which is NOT a `ValueError`,
-        # so the narrower guard this replaced could never deliver the
-        # fall-through it documented. Falling through is the fail-safe
-        # direction -- the full run rewrites the Source either way, so no
-        # observation is lost by declining to trust an unreadable one.
+        # pre-#773 behavior for every re-ingest. Falling through is the
+        # fail-safe direction -- the full run rewrites the Source either
+        # way, so no observation is lost by declining to trust an
+        # unreadable one.
         return None
     if prior_metadata.get(okf.ORIGIN_KEY_KEY) is None:
         return None
@@ -748,10 +744,8 @@ def _read_source_sensitivity(source_display_path: str, text: str) -> object:
     identifier in place of the original's `Path`."""
     try:
         metadata, _ = okf.load_frontmatter(text)
-    except Exception as exc:
-        # `frontmatter.loads` raises `yaml.YAMLError` on malformed YAML,
-        # which is neither `OSError` nor `ValueError` -- translate rather
-        # than degrade.
+    except okf.FrontmatterError as exc:
+        # Translate rather than degrade: a refusal that names the file.
         raise ValueError(
             f"refusing to ingest -- '{source_display_path}' frontmatter "
             "could not be parsed to resolve the sensitivity from its "
@@ -771,7 +765,7 @@ def _read_source_title(source_display_path: str, text: str) -> object:
     3)."""
     try:
         metadata, _ = okf.load_frontmatter(text)
-    except Exception as exc:
+    except okf.FrontmatterError as exc:
         raise ValueError(
             f"refusing to ingest -- '{source_display_path}' frontmatter "
             f"could not be parsed to resolve its existing title: {exc}"
@@ -790,7 +784,7 @@ def _read_source_frontmatter(
     this module reads back."""
     try:
         metadata, _ = okf.load_frontmatter(text)
-    except Exception as exc:
+    except okf.FrontmatterError as exc:
         raise ValueError(
             f"refusing to ingest -- '{source_display_path}' frontmatter "
             "could not be parsed to resolve its existing "
@@ -810,7 +804,7 @@ def _read_source_tags(source_display_path: str, text: str) -> tuple[str, ...]:
     always wrote `tags: []` and discarded whatever was there."""
     try:
         metadata, _ = okf.load_frontmatter(text)
-    except Exception as exc:
+    except okf.FrontmatterError as exc:
         raise ValueError(
             f"refusing to ingest -- '{source_display_path}' frontmatter "
             f"could not be parsed to resolve its existing tags: {exc}"
@@ -925,7 +919,7 @@ def _read_source_event_date(
     the caller passes the result to `resolve_event_date`."""
     try:
         metadata, _ = okf.load_frontmatter(text)
-    except Exception as exc:
+    except okf.FrontmatterError as exc:
         raise ValueError(
             f"refusing to ingest -- '{source_document_display_path}' frontmatter "
             f"could not be parsed to resolve its existing event_date: {exc}"

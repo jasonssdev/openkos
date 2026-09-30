@@ -471,7 +471,7 @@ def _load_doc(
         return concept_id, ""
     try:
         metadata, body = okf.load_frontmatter(text)
-    except Exception:  # broad: any parse failure degrades this doc, never raises
+    except okf.FrontmatterError:  # any parse failure degrades this doc, never raises
         return concept_id, ""
     if sensitivity.should_block(
         metadata,
@@ -577,7 +577,7 @@ def _merged_body_candidates(
             continue
         try:
             entries = _read_ledger_entries(survivor_id, bundle_dir)
-        except Exception:  # noqa: S112 -- broad: a corrupt ledger degrades this doc only
+        except (OSError, ValueError):
             continue
         for entry in entries:
             candidates.append(
@@ -669,7 +669,7 @@ def _load_ledger_bodies(
         return (survivor_id, ""), (entry.absorbed_id, "")
     try:
         current_metadata, _ = okf.load_frontmatter(current_text)
-    except Exception:  # broad: any parse failure degrades this candidate
+    except okf.FrontmatterError:  # any parse failure degrades this candidate
         return (survivor_id, ""), (entry.absorbed_id, "")
 
     if sensitivity.merged_content_blocked(
@@ -682,14 +682,14 @@ def _load_ledger_bodies(
 
     try:
         before_metadata, before_body = okf.load_frontmatter(entry.survivor_before)
-    except Exception:  # broad: any parse failure degrades this side only
+    except okf.FrontmatterError:  # any parse failure degrades this side only
         before_metadata, before_body = {}, ""
     before_body = _own_body_before_merge(before_body)
     before_title = str(before_metadata.get("title") or "") or survivor_id
 
     try:
         absorbed_metadata, absorbed_body = okf.load_frontmatter(entry.absorbed_snapshot)
-    except Exception:  # broad: any parse failure degrades this side only
+    except okf.FrontmatterError:  # any parse failure degrades this side only
         absorbed_metadata, absorbed_body = {}, ""
     absorbed_title = str(absorbed_metadata.get("title") or "") or entry.absorbed_id
 

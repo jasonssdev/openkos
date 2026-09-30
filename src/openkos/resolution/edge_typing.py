@@ -398,7 +398,7 @@ def _load_doc(
         return concept_id, ""
     try:
         metadata, body = okf.load_frontmatter(text)
-    except Exception:  # broad: any parse failure degrades this doc, never raises
+    except okf.FrontmatterError:  # any parse failure degrades this doc, never raises
         return concept_id, ""
     if sensitivity.should_block(
         metadata,
@@ -731,7 +731,7 @@ def _object_type(bundle_dir: Path, concept_id: str) -> str | None:
         return None
     try:
         metadata, _ = okf.load_frontmatter(text)
-    except Exception:  # broad: any parse failure -> unknown type, never raises
+    except okf.FrontmatterError:  # any parse failure -> unknown type, never raises
         return None
     type_value = metadata.get("type")
     return type_value if isinstance(type_value, str) and type_value else None

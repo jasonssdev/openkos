@@ -224,7 +224,7 @@ def _populate_docs_table(conn: sqlite3.Connection, bundle_dir: Path) -> list[str
             continue
         try:
             metadata, body = okf.load_frontmatter(text)
-        except Exception:  # broad: a concurrent edit can corrupt frontmatter
+        except okf.FrontmatterError:  # a concurrent edit can corrupt frontmatter
             skipped.append(_skip_note(concept_id, reason="unparseable frontmatter"))
             continue
         title = str(metadata.get("title") or "")

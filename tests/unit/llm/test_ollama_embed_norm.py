@@ -55,7 +55,7 @@ def probe_embed_backend() -> bool:
         with urllib.request.urlopen(f"{_HOST}/api/tags", timeout=5) as resp:  # noqa: S310
             payload = json.load(resp)
         names = {m.get("model", "") for m in payload.get("models", [])}
-    except Exception:
+    except Exception:  # noqa: BLE001 -- any failure to reach Ollama means not available
         return False
     return any(n.split(":")[0] == DEFAULT_EMBEDDING_MODEL for n in names)
 

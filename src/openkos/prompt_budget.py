@@ -79,7 +79,7 @@ def planning_window(llm: object) -> int:
     the read closes both."""
     try:
         window = getattr(llm, "context_window", None)
-    except Exception:
+    except Exception:  # noqa: BLE001 -- a throwing duck-typed backend property degrades to the default
         return PLANNING_CONTEXT_WINDOW
     if isinstance(window, bool) or not isinstance(window, int) or window <= 0:
         return PLANNING_CONTEXT_WINDOW
@@ -98,7 +98,7 @@ def reply_reserve(llm: object) -> int:
     that cannot use it."""
     try:
         reserve = getattr(llm, "max_generation_tokens", None)
-    except Exception:
+    except Exception:  # noqa: BLE001 -- a throwing duck-typed backend property degrades to the default
         return REPLY_RESERVE
     if isinstance(reserve, bool) or not isinstance(reserve, int) or reserve <= 0:
         return REPLY_RESERVE

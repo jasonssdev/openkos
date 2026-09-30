@@ -372,7 +372,7 @@ def probe_vec_loadable() -> bool:
     try:
         try:
             _guarded_vec_load(conn)
-        except Exception:
+        except Exception:  # noqa: BLE001 -- any failure to load the extension means not loadable
             return False
         return True
     finally:

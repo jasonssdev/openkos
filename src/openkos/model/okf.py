@@ -717,9 +717,7 @@ def rewrite_okf_version(text: str, *, label: str) -> str:
     no `okf_version`.
     """
     block, body = split_frontmatter_verbatim(text, label=label)
-    new_block, count = _OKF_VERSION_LINE_RE.subn(
-        rf"\1 '{OKF_VERSION}'", block, count=1
-    )
+    new_block, count = _OKF_VERSION_LINE_RE.subn(rf"\1 '{OKF_VERSION}'", block, count=1)
     if count == 0:
         raise ValueError(f"{label}: snapshot has no {OKF_VERSION_KEY} field to rewrite")
     return new_block + body

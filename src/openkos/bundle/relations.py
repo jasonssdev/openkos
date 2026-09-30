@@ -82,7 +82,7 @@ def find_inbound_relation_rewrites(
     itself is malformed (fails `okf.decode_relations`) -- a hand-edited,
     unrelated file -- is SKIPPED rather than surfaced as a fail-closed
     refusal, mirroring the deleted `find_relation_conflicts`'s identical
-    broad `except Exception` around the same `load_frontmatter`/
+    `ValueError` catch around the same `load_frontmatter`/
     `decode_relations` calls (PR1's `bundle/merge.py`; same
     "a concurrent/hand edit can corrupt frontmatter mid-scan" rationale).
     `files` iteration order determines result order.
@@ -96,7 +96,7 @@ def find_inbound_relation_rewrites(
         try:
             metadata, _ = okf.load_frontmatter(text)
             file_relations = okf.decode_relations(metadata)
-        except Exception:  # broad: an unrelated file's corrupt frontmatter
+        except ValueError:  # an unrelated file's corrupt frontmatter
             # or relations shape must never crash or block an otherwise-
             # unrelated merge scan (mirrors the deleted
             # `find_relation_conflicts`'s identical broad-except skip).

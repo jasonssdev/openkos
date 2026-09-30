@@ -273,7 +273,7 @@ async def run_in_worker[T](fn: Callable[[], T]) -> T:
     def _run() -> None:
         try:
             result = fn()
-        except Exception as exc:  # forwarded to the awaiting caller
+        except Exception as exc:  # noqa: BLE001 -- forwarded to the awaiting caller via the future
             _post(_resolve_exception, exc)
         else:
             _post(_resolve_result, result)
