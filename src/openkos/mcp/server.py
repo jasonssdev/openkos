@@ -64,6 +64,35 @@ _METHOD_NOT_FOUND: Final = -32601
 _INVALID_PARAMS: Final = -32602
 _INTERNAL_ERROR: Final = -32603
 _INTERNAL_ERROR_MESSAGE: Final = "internal error"
+_DEADLINE_EXCEEDED: Final = -32001
+_DEADLINE_EXCEEDED_MESSAGE: Final = "tool call exceeded its deadline"
+
+MAX_CONCURRENT_TOOL_CALLS: Final = 4
+"""Most `tools/call` worker threads running at once. A tool call is one
+synchronous service call (SQLite reads, at most one chat call), and a
+single client has no use for dozens in parallel -- a default Ollama
+serializes generation anyway. The cap turns a burst of calls into a wait
+instead of a thread per call. A call beyond the cap waits for a slot; the
+per-call deadline below still bounds that wait."""
+
+TOOL_DEADLINE_HEADROOM_SECONDS: Final = 300.0
+"""Added to the configured `chat_timeout` to get the per-call deadline. A
+tool call may make an LLM call that legitimately runs for `chat_timeout`;
+a deadline at or below that would preempt a slow-but-live answer. The
+headroom covers retrieval, embedding and disclosure work around the chat
+call."""
+
+DEFAULT_TOOL_DEADLINE_SECONDS: Final = (
+    config.DEFAULT_CHAT_TIMEOUT + TOOL_DEADLINE_HEADROOM_SECONDS
+)
+"""The per-call deadline when `openkos.yaml` cannot be read at startup:
+the packaged default `chat_timeout` plus the headroom."""
+
+
+class ToolDeadlineExceeded(Exception):
+    """A tool call outlived its deadline (or waited that long for a
+    worker slot). Its worker thread is not stopped -- see `run_in_worker`."""
+
 
 _TOOL_ERROR_TABLE: Final[tuple[tuple[type[BaseException], str, bool, str], ...]] = (
     (
@@ -242,18 +271,36 @@ def _build_context(root: Path, *, expose_confidential: bool) -> mcp_tools.ToolCo
     )
 
 
-async def run_in_worker[T](fn: Callable[[], T]) -> T:
+async def run_in_worker[T](
+    fn: Callable[[], T],
+    *,
+    slots: asyncio.Semaphore | None = None,
+    deadline: float | None = None,
+) -> T:
     """Run `fn` on its own daemon worker thread and await its result on the
     calling loop (design Decision 13: one worker thread per tool call).
 
     Daemon, and never joined: on end of input the process must be able to
     exit without waiting for an abandoned read to finish (ADR-0027 -- safe
     only because every tool here is read-only). If the awaiting future is
-    already resolved -- because the task awaiting it was cancelled -- the
-    thread's eventual result or exception is dropped instead of raising
-    `InvalidStateError`, and a closed loop's `RuntimeError` from
-    `call_soon_threadsafe` is swallowed the same way `transport.
-    start_reader` swallows it.
+    already resolved -- because the task awaiting it was cancelled, or
+    because `deadline` expired -- the thread's eventual result or exception
+    is dropped instead of raising `InvalidStateError`, and a closed loop's
+    `RuntimeError` from `call_soon_threadsafe` is swallowed the same way
+    `transport.start_reader` swallows it.
+
+    `slots` caps how many workers run at once: a call waits for a slot
+    before its thread starts. The slot is released by the WORKER, when its
+    thread actually finishes, not when the awaiter gives up -- a thread
+    cannot be killed, so releasing on timeout or cancellation would let
+    runaway threads pile up past the cap and make it fake. The cost is
+    that a hung tool holds its slot for as long as it hangs; with the
+    deadline, later calls then fail fast instead of piling up.
+
+    `deadline` (seconds) bounds the whole call, slot wait included; on
+    expiry `ToolDeadlineExceeded` is raised. The abandoned thread keeps
+    running, and its late result is discarded (the future is already
+    cancelled), so nothing can be written for a request that was answered.
     """
     loop = asyncio.get_running_loop()
     future: asyncio.Future[T] = loop.create_future()
@@ -272,14 +319,28 @@ async def run_in_worker[T](fn: Callable[[], T]) -> T:
 
     def _run() -> None:
         try:
-            result = fn()
-        except Exception as exc:  # noqa: BLE001 -- forwarded to the awaiting caller via the future
-            _post(_resolve_exception, exc)
-        else:
-            _post(_resolve_result, result)
+            try:
+                result = fn()
+            except Exception as exc:  # noqa: BLE001 -- forwarded to the awaiting caller via the future
+                _post(_resolve_exception, exc)
+            else:
+                _post(_resolve_result, result)
+        finally:
+            if slots is not None:
+                _post(slots.release)
 
-    threading.Thread(target=_run, daemon=True, name="mcp-tool-worker").start()
-    return await future
+    async def _start_and_wait() -> T:
+        if slots is not None:
+            await slots.acquire()
+        # No await between the acquire and the start: a cancellation cannot
+        # strand a slot that no thread will ever release.
+        threading.Thread(target=_run, daemon=True, name="mcp-tool-worker").start()
+        return await future
+
+    try:
+        return await asyncio.wait_for(_start_and_wait(), timeout=deadline)
+    except TimeoutError as exc:
+        raise ToolDeadlineExceeded from exc
 
 
 def _tool_call_result(
@@ -306,10 +367,15 @@ class Server:
         registry: Mapping[str, mcp_tools.Tool],
         ctx: mcp_tools.ToolContext,
         writer: transport.MessageWriter,
+        *,
+        max_concurrent_calls: int = MAX_CONCURRENT_TOOL_CALLS,
+        call_deadline: float = DEFAULT_TOOL_DEADLINE_SECONDS,
     ) -> None:
         self._registry = registry
         self._ctx = ctx
         self._writer = writer
+        self._slots = asyncio.Semaphore(max_concurrent_calls)
+        self._call_deadline = call_deadline
         self._initialize_seen = False
         self._initialized = False
         self._inflight: dict[RequestKey, InFlight] = {}
@@ -548,8 +614,19 @@ class Server:
     ) -> None:
         try:
             is_error, structured_content = await run_in_worker(
-                lambda: mcp_tools.execute(tool, arguments, self._ctx, progress)
+                lambda: mcp_tools.execute(tool, arguments, self._ctx, progress),
+                slots=self._slots,
+                deadline=self._call_deadline,
             )
+        except ToolDeadlineExceeded:
+            logger.warning(
+                "request %r exceeded its %gs deadline; its worker was abandoned",
+                request_id,
+                self._call_deadline,
+            )
+            self._finish_inflight(key)
+            self._send_error(request_id, _DEADLINE_EXCEEDED, _DEADLINE_EXCEEDED_MESSAGE)
+            return
         except asyncio.CancelledError:
             logger.info("request %r cancelled; its worker was abandoned", request_id)
             self._finish_inflight(key)
@@ -635,6 +712,9 @@ async def serve_streams(
     streams: transport.StdioStreams,
     registry: Mapping[str, mcp_tools.Tool],
     ctx: mcp_tools.ToolContext,
+    *,
+    call_deadline: float = DEFAULT_TOOL_DEADLINE_SECONDS,
+    max_line_bytes: int = transport.MAX_LINE_BYTES,
 ) -> int:
     """Drive one session to completion over `streams`.
 
@@ -645,9 +725,16 @@ async def serve_streams(
     lifecycle and cancellation tests drive directly.
     """
     loop = asyncio.get_running_loop()
-    queue: asyncio.Queue[bytes | None] = asyncio.Queue()
-    server = Server(registry, ctx, transport.MessageWriter(streams.writer))
-    transport.start_reader(streams.reader, loop, queue)
+    queue: asyncio.Queue[bytes | None] = asyncio.Queue(
+        maxsize=transport.INBOUND_QUEUE_MAX
+    )
+    server = Server(
+        registry,
+        ctx,
+        transport.MessageWriter(streams.writer),
+        call_deadline=call_deadline,
+    )
+    transport.start_reader(streams.reader, loop, queue, max_line_bytes=max_line_bytes)
 
     while True:
         line = await queue.get()
@@ -680,6 +767,19 @@ def _warn_insecure_key_at_startup(root: Path) -> None:
         logger.warning("%s", message)
 
 
+def _tool_deadline_for(root: Path) -> float:
+    """The per-call deadline for this workspace: its `chat_timeout` plus
+    `TOOL_DEADLINE_HEADROOM_SECONDS`, so a slow-but-live chat call is never
+    preempted. Best-effort like the startup key warning: an unreadable
+    config falls back to the packaged default, and every tool call already
+    surfaces a broken `openkos.yaml` on its own."""
+    try:
+        cfg = config.read_config(root)
+    except (OSError, ValueError):
+        return DEFAULT_TOOL_DEADLINE_SECONDS
+    return cfg.chat_timeout + TOOL_DEADLINE_HEADROOM_SECONDS
+
+
 def serve(root: Path, *, expose_confidential: bool) -> int:
     """Serve `root` over stdio until end of input or `KeyboardInterrupt`
     (design Decisions 12-14).
@@ -689,6 +789,7 @@ def serve(root: Path, *, expose_confidential: bool) -> int:
     re-validate it.
     """
     ctx = _build_context(root, expose_confidential=expose_confidential)
+    call_deadline = _tool_deadline_for(root)
     handler = logging.StreamHandler(sys.stderr)
     logger.setLevel(logging.INFO)
     logger.addHandler(handler)
@@ -700,7 +801,11 @@ def serve(root: Path, *, expose_confidential: bool) -> int:
     logger.propagate = False
     try:
         with transport.claim_stdio() as streams:
-            return asyncio.run(serve_streams(streams, mcp_tools.REGISTRY, ctx))
+            return asyncio.run(
+                serve_streams(
+                    streams, mcp_tools.REGISTRY, ctx, call_deadline=call_deadline
+                )
+            )
     except KeyboardInterrupt:
         return 130
     finally:
