@@ -47,6 +47,15 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Fixed
 
+- The MCP server no longer lets one peer grow its memory or thread count
+  without bound ([#1133](https://github.com/jasonssdev/openkos/issues/1133)).
+  A stdin line over 8 MiB is now dropped and answered with `-32700` instead of
+  being buffered whole, the inbound queue is bounded (the reader blocks when it
+  is full), tool calls run at most four at a time, and every `tools/call` has a
+  deadline of the configured `chat_timeout` plus five minutes, after which it
+  is answered with error `-32001` and any late result is discarded. A hung tool
+  keeps its slot until its thread actually ends, so the cap holds.
+
 - `unmerge` no longer silently overwrites a survivor edited after its merge
   ([#1110](https://github.com/jasonssdev/openkos/issues/1110)). It restored
   the survivor from the ledger's pre-merge snapshot unconditionally, with no
