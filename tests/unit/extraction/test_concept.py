@@ -17,7 +17,6 @@ import dataclasses
 import hashlib
 import json
 import threading
-import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
@@ -6655,31 +6654,58 @@ def test_concurrent_fan_out_drains_in_flight_windows_before_it_raises() -> None:
     Executor threads are not daemons, so leaving one in flight does not skip
     the wait -- it moves it to interpreter exit, where the CLI has already
     printed "keeping the Source only" and the command appears to hang for up
-    to one `chat_timeout`. Window 0 fails instantly while window 1 is still
-    inside its call; the flag can only be set if the fan-out drained it
-    before propagating.
+    to one `chat_timeout`. Window 0 fails only once window 1 is provably
+    inside its call, and window 1 stays there until the test releases it, so
+    the fan-out cannot return or raise while it is in flight unless it drained
+    it. Ordering comes from events, never from the scheduler or a sleep.
     """
     text = _long_text()
     windows = concept_mod._chunk_lines(text)
-    drained = threading.Event()
+    in_flight = threading.Event()  # window 1 is inside its call
+    release = threading.Event()  # the test lets window 1 finish
+    drained = threading.Event()  # window 1 ran to completion
+    outcome: list[BaseException] = []
 
-    def _slow_second(index: int) -> None:
-        if index == 1:
-            time.sleep(0.3)
+    def _coordinate(index: int) -> None:
+        if index == 0:
+            assert in_flight.wait(timeout=10)
+        elif index == 1:
+            in_flight.set()
+            assert release.wait(timeout=10)
             drained.set()
 
     llm = _WindowKeyedLLM(
         windows,
         {0: OllamaUnavailable("backend down")},
-        on_call=_slow_second,
+        on_call=_coordinate,
     )
 
-    with pytest.raises(OllamaUnavailable):
-        concept_mod.extract_concept(
-            text, source_title="Field Notes", llm=llm, concurrent=True
-        )
+    def _run() -> None:
+        try:
+            concept_mod.extract_concept(
+                text, source_title="Field Notes", llm=llm, concurrent=True
+            )
+        except BaseException as exc:  # handed to the test thread
+            outcome.append(exc)
 
+    runner = threading.Thread(target=_run)
+    runner.start()
+    try:
+        assert in_flight.wait(timeout=10)
+        # Window 0 is now free to fail while window 1 is blocked. A fan-out
+        # that drains must still be waiting on window 1; one that does not
+        # has already raised. The bounded join only bounds the failing case.
+        runner.join(timeout=0.5)
+        assert runner.is_alive(), "fan-out returned with a window in flight"
+        assert not drained.is_set()
+    finally:
+        release.set()
+        runner.join(timeout=10)
+
+    assert not runner.is_alive()
     assert drained.is_set()
+    assert len(outcome) == 1
+    assert isinstance(outcome[0], OllamaUnavailable)
 
 
 def test_concurrent_fan_out_reports_before_the_first_window_returns() -> None:
