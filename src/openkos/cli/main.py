@@ -77,7 +77,11 @@ from openkos.llm.ollama import (
 )
 from openkos.llm.openai_compatible import OpenAICompatibleClient
 from openkos.model import okf, types
-from openkos.model.relations import ASYMMETRIC_RELATION_TYPES, validate_relation_type
+from openkos.model.relations import (
+    ASYMMETRIC_RELATION_TYPES,
+    relation_type_note,
+    validate_relation_type,
+)
 from openkos.model.types import INSIGHT_TYPE as _INSIGHT_TYPE
 from openkos.model.types import TYPE_TO_SECTION as _TYPE_TO_SECTION
 from openkos.resolution import find_candidates_report
@@ -187,6 +191,14 @@ process, and printing `insecure_key_warning`'s advisory on every one would
 drown it out. `tests/unit/conftest.py`'s autouse `_offline_ollama_by_default`
 fixture resets this to `False` before every test, so it never leaks across
 the test suite the way a bare process-lifetime flag normally would."""
+
+
+def _echo_warning(message: str) -> None:
+    """Render a warning a library function returned to us, on stderr -- the
+    one place the CLI decides how those notes look. Passed as the
+    `on_warning` callback of the `bundle` readers/writers, which never write
+    to a stream themselves."""
+    typer.echo(message, err=True)
 
 
 def _maybe_warn_insecure_key(cfg: config.Config) -> None:
@@ -1111,7 +1123,9 @@ def _sweep_decisions_for_ids(bundle_dir: Path, purge_ids: Iterable[str]) -> list
         # #797: the identity list is swept on its own terms -- a
         # keep-distinct ruling names EVERY member, so any member landing in
         # the purge set drops the whole record.
-        identity_records = bundle_decisions.read_identity_decisions_at(decisions_path)
+        identity_records = bundle_decisions.read_identity_decisions_at(
+            decisions_path, on_warning=_echo_warning
+        )
         identity_remaining = [
             record
             for record in identity_records
@@ -7273,6 +7287,9 @@ def relate(
     except (OSError, ValueError) as exc:
         typer.echo(f"openkos relate: refusing to relate -- {exc}.", err=True)
         raise typer.Exit(code=1) from exc
+    rel_note = relation_type_note(rel_type)
+    if rel_note is not None:
+        typer.echo(rel_note, err=True)
 
     now = datetime.now(UTC)
 
@@ -13560,7 +13577,7 @@ def _apply_contradiction_decision(
         )
     )
     path = bundle_decisions.write_decisions(
-        owner_id, layout.bundle_dir, records=records
+        owner_id, layout.bundle_dir, records=records, on_warning=_echo_warning
     )
     return f"bundle/{path.relative_to(layout.bundle_dir).as_posix()}"
 
@@ -13652,7 +13669,9 @@ def _duplicates_kept_distinct_view(root: Path, layout: config.WorkspaceLayout) -
     for decisions_path in bundle_decisions.iter_decisions(layout.bundle_dir):
         records.extend(
             record
-            for record in bundle_decisions.read_identity_decisions_at(decisions_path)
+            for record in bundle_decisions.read_identity_decisions_at(
+                decisions_path, on_warning=_echo_warning
+            )
             if record.state == "declined"
         )
     if not records:
@@ -13688,7 +13707,9 @@ def _apply_identity_decision(
     members = tuple(sorted(member_ids))
     key = bundle_decisions.identity_decision_key_for(members)
     owner_id = members[0]
-    existing = bundle_decisions.read_identity_decisions(owner_id, layout.bundle_dir)
+    existing = bundle_decisions.read_identity_decisions(
+        owner_id, layout.bundle_dir, on_warning=_echo_warning
+    )
     records = [record for record in existing if record.decision_key != key]
     records.append(
         bundle_decisions.IdentityDecisionRecord(

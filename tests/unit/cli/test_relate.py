@@ -12,7 +12,7 @@ from typer.testing import CliRunner, _NamedTextIOWrapper
 
 from openkos import fsio
 from openkos.cli.main import app
-from openkos.model import okf
+from openkos.model import okf, relations
 from tests.unit.cli.conftest import (
     changed_paths,
     confirm_after,
@@ -182,8 +182,11 @@ def test_unknown_relation_type_accepted_with_warn(
     )
 
     assert result.exit_code == 0
-    assert "note" in result.stderr.lower()
-    assert "custom_relation" in result.stderr
+    known = ", ".join(sorted(relations.SEEDED_RELATION_TYPES))
+    assert result.stderr == (
+        f"openkos: note -- 'custom_relation' is not a seeded relation type "
+        f"(known: {known})\n"
+    )
     assert _relations_of(tmp_path, source_id) == [
         okf.Relation(target=target_id, type="custom_relation")
     ]

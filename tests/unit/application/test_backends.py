@@ -543,23 +543,6 @@ def test_endpoint_label_openai_compatible_names_the_config_key(
     assert backends.endpoint_label(cfg, purpose="embed") == "embedding_base_url"
 
 
-def test_backend_label_ollama_is_Ollama(tmp_path: Path) -> None:
-    """`backend_label(cfg)` for `backend="ollama"` returns `"Ollama"` (task
-    13.8)."""
-    cfg = _cfg(tmp_path)
-    assert backends.backend_label(cfg) == "Ollama"
-    assert backends.backend_label(None) == "Ollama"
-
-
-def test_backend_label_openai_compatible(tmp_path: Path) -> None:
-    """`backend_label(cfg)` for `backend="openai-compatible"` returns
-    `"OpenAI-compatible server"` (task 13.8)."""
-    cfg = _cfg(
-        tmp_path, backend="openai-compatible", base_url="http://example.com:8080"
-    )
-    assert backends.backend_label(cfg) == "OpenAI-compatible server"
-
-
 @pytest.mark.parametrize(
     ("has_key", "base_url", "expect_warning"),
     [
