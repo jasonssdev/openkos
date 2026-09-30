@@ -1047,7 +1047,7 @@ def build_source_concept(
     tags: list[str],
     generated: Generated,
     sensitivity: str,
-    provenance: list[str],
+    provenance: list[str] | None = None,
     raw_content: str | None = None,
     extraction_status: ExtractionStatus | None = None,
     extraction_notice: ExtractionNotice | tuple[ExtractionNotice, ...] | None = None,
@@ -1067,13 +1067,15 @@ def build_source_concept(
 
     THE SOURCE'S FILENAME IS NOT A TRUSTED INPUT (issue #285). It is
     unconstrained, user-chosen text, and `ingest` carries it unsanitised
-    into FOUR of these values, plus `index.md` and `log.md`. State them
-    precisely, because they do not all carry the same thing: `resource` and
-    `provenance` are the raw basename verbatim under a `raw/` prefix;
-    `description` interpolates `resource` AND the source path exactly as the
-    caller typed it, so it carries MORE than the basename; `title` is
-    `_titleize`d, which maps `-`/`_` to spaces and strips, and is cosmetic
-    rather than sanitising -- every other character survives it.
+    into THREE of these values, plus `index.md` and `log.md`. State them
+    precisely, because they do not all carry the same thing: `resource` is
+    the raw basename verbatim under a `raw/` prefix (issue #1076: `ingest`
+    no longer ALSO writes this same value under `provenance` -- see that
+    parameter's own docstring below); `description` interpolates `resource`
+    AND the source path exactly as the caller typed it, so it carries MORE
+    than the basename; `title` is `_titleize`d, which maps `-`/`_` to spaces
+    and strips, and is cosmetic rather than sanitising -- every other
+    character survives it.
 
     `_slugify` sanitises only the document's OWN filename (the file
     `openkos` creates). `resource` is deliberately left alone: it must keep
@@ -1098,6 +1100,22 @@ def build_source_concept(
     honest description of the source's embedding state (embedded verbatim,
     or could not be embedded), never claiming extraction/compilation
     occurred, matching this slice's scope.
+
+    `provenance` (issue #1076) is OPTIONAL, `None` by default, and emitted
+    as `PROVENANCE_KEY`-equivalent frontmatter ONLY when a caller passes a
+    non-empty list -- an empty list is treated exactly like `None`. `ingest`
+    no longer passes one: a Source's `resource` already names its one raw
+    original, so a `provenance` entry repeating that same path added a
+    second name for the same fact, was never projected into `sources`
+    (`project_sources` skips a `raw/`-prefixed entry by design -- see
+    below), and read as exactly the raw-path provenance shape
+    `tests/unit/test_canonical_example.py`'s
+    `test_provenance_names_concept_ids_not_raw_paths` forbids on every
+    other concept. The parameter stays accepted, never required, so a
+    fixture modeling a pre-existing, legacy-shaped Source (written before
+    this change) can still round-trip its on-disk `provenance` value
+    verbatim; no caller in this codebase's own `ingest`/`compose_*` path
+    passes it any more.
 
     `raw_content` (ingest-source-body D1/D3) renders one of three body
     shapes, each honest about what happened: `raw_content` holding
@@ -1152,8 +1170,24 @@ def build_source_concept(
         "version": 1,
         "freshness": "snapshot",
         "sensitivity": sensitivity,
-        "provenance": provenance,
     }
+    if provenance:
+        # Issue #1076: a Source's `resource` already names its one raw
+        # original, so `ingest` no longer passes this at all (`None`, the
+        # default) -- a Source's own `provenance: [raw/<file>]` duplicated
+        # `resource`, was never projected into `sources` (see below), and
+        # read as exactly the raw-path provenance shape
+        # `tests/unit/test_canonical_example.py`'s
+        # `test_provenance_names_concept_ids_not_raw_paths` forbids on
+        # every other concept. Kept as an accepted kwarg -- never emitted
+        # unless a caller passes a NON-EMPTY list -- solely so a fixture
+        # modeling a pre-existing, legacy-shaped Source (built by an older
+        # `openkos`) can still round-trip one; `lint.check_dangling_
+        # provenance`'s `doc.resource == entry` exclusion, and
+        # `bundle.provenance.find_unresolvable_provenance`'s equivalent
+        # handling, both stay in place to keep such a document from being
+        # newly flagged -- no migration of already-ingested Sources runs.
+        metadata["provenance"] = provenance
     # No `project_sources` call here, deliberately (design.md Decision 3): a
     # Source's only `provenance` is its own `raw/` original, which
     # `project_sources` never projects, so the result is always `None` -- "a
