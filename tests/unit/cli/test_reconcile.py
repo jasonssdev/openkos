@@ -14,6 +14,7 @@ import pytest
 from typer.testing import CliRunner, _NamedTextIOWrapper
 
 from openkos import config as config_module
+from openkos.application import reconcile_service
 from openkos.application import revisions as revisions_service
 from openkos.cli import main
 from openkos.cli.main import app
@@ -1166,12 +1167,14 @@ def test_two_id_form_still_requires_both_ids(
 
 
 def test_mode_and_role_tables_cover_every_resolution_type() -> None:
-    """`_MODE_BY_RESOLUTION_TYPE` and `_DIRECTED_ROLES` are keyed by
+    """`MODE_BY_RESOLUTION_TYPE` and `DIRECTED_ROLES` are keyed by
     `RESOLUTION_RELATION_TYPES` -- a fourth resolution type added to one
     table but not the other becomes a failing test here instead of a silent
     `KeyError` at classify time (design Decision 2)."""
-    assert set(main._MODE_BY_RESOLUTION_TYPE) == RESOLUTION_RELATION_TYPES
-    assert set(main._DIRECTED_ROLES) == RESOLUTION_RELATION_TYPES - {"reconciled_with"}
+    assert set(reconcile_service.MODE_BY_RESOLUTION_TYPE) == RESOLUTION_RELATION_TYPES
+    assert set(reconcile_service.DIRECTED_ROLES) == RESOLUTION_RELATION_TYPES - {
+        "reconciled_with"
+    }
 
 
 _TRANSITION_TABLE: dict[tuple[str, str], str] = {

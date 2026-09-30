@@ -352,11 +352,11 @@ such an edge exists (written by this walk or by hand), that finding MUST
 NOT be offered again. For each such finding:
 
 - A `REVERSES` verdict, WHEN direction is known, MUST be offered as a
-  directional `supersedes` edge, written by `_reconcile_pair`'s `--winner`
-  mode, held by the LATER Decision (the loser is the earlier Decision).
+  directional `supersedes` edge, written by the reconcile pair transaction's
+  `--winner` mode, held by the LATER Decision (the loser is the earlier Decision).
 - A `REFINES` verdict, WHEN direction is known, MUST be offered as a
-  directional `revises` edge, written by `_reconcile_pair`'s `--revision`
-  mode, held by the LATER Decision.
+  directional `revises` edge, written by the reconcile pair transaction's
+  `--revision` mode, held by the LATER Decision.
 - WHEN the finding's direction is unknown (an untyped change, per the
   `decision-revision-detection` capability's own requirement), the walk
   MUST ask the human ONCE, in a single combined choice, both which of the

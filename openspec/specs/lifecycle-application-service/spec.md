@@ -188,11 +188,75 @@ must be able to drive any pair in here without importing `openkos.cli`,
 - THEN the TTY detection and the refusal's exit code are decided in the CLI
   adapter, not inside the service
 
+### Requirement: Merge, Unmerge And Reconcile Are Services Over An Explicit Root
+
+The write cores of `merge`, `unmerge` (both the single-step form and the
+`--to` unwind) and `reconcile` MUST each be one synchronous callable in the
+application layer that operates on the workspace at an explicit `root` and
+returns a typed outcome. None MUST read the current directory, prompt,
+render output, inspect whether stdin is a terminal, or raise `typer.Exit`.
+Every condition that ends a run without a write MUST be a typed refusal
+carrying the complete user-facing message: a refusal (exit 1 at the
+adapter), post-confirm drift (exit 3), a declined confirmation, and a
+confirmation that could not be asked. A write MUST NOT begin before the drift
+guard has passed, and the drift guard MUST run on every path that skips the
+confirmation question.
+
+The confirmation question is asked through a callback; a required
+confirmation with no callback MUST refuse, never proceed. Everything the user
+reads MUST be reported to an observer as typed data, so an unattended caller
+that passes none gets silence. The auto-commit, the reset-point probe and the
+model-backed reconciliation pass MUST arrive as ports, because the layer may
+not import the VCS layer or bind a backend. The post-write derived-index
+refresh MUST stay with the adapter, which places it once per invocation.
+
+`reconcile`'s pair transaction MUST be one callable shared by the two-id form
+and every walk over persisted findings, so there is exactly one write path
+for a reconciliation. The shared per-pair merge write (`merge_core` plus the
+auto-commit) MUST be one callable that `merge`, `adjudicate --apply` and
+`curate`'s Identity stage all use.
+
+An unwind that stops at a failing step MUST raise a typed error carrying that
+step's own refusal, so the adapter can report it and keep its exit code (a
+drift refusal stays retryable mid-chain); steps that already completed are
+not rolled back.
+
+#### Scenario: A non-CLI caller merges from outside the workspace
+
+- GIVEN a process whose current directory is not the workspace
+- WHEN the merge service is called with the workspace root and two concept ids
+- THEN the absorbed concept is fused into the survivor, the ledger is
+  written, the auto-commit port receives the workspace-relative paths, and a
+  typed outcome carrying the commit sha is returned, with nothing printed
+
+#### Scenario: A required confirmation with no answer refuses
+
+- GIVEN a workspace whose configuration requires review
+- WHEN any of the three services is called without skipping confirmation and
+  without a callback
+- THEN it raises a confirmation-unavailable refusal carrying the exact text
+  the CLI prints, and writes nothing
+
+#### Scenario: Drift is refused before any write
+
+- GIVEN a target that changes while the confirmation question is pending
+- WHEN the service reaches the guard
+- THEN it raises a drift refusal, writes nothing, and never calls the
+  auto-commit
+
+#### Scenario: A failing unwind step reports itself and the chain position
+
+- GIVEN a `--to` unwind whose second step fails
+- WHEN the service runs it
+- THEN it raises the stopped-unwind error carrying the second step's own
+  refusal, the step number and the total, and the first step's commit stays
+
 ### Requirement: The Extraction Preserves Observable CLI Behavior
 
 For every input covered by the existing CLI/unit test suites for `merge`,
-`unmerge`, `forget`, `purge`, `adjudicate --apply`/`--apply-same`, and —
-since their pairs were relocated — `relate` and `set-volatility`, each
+`unmerge`, `forget`, `purge`, `adjudicate --apply`/`--apply-same`,
+`reconcile`, and — since their pairs were relocated — `relate` and
+`set-volatility`, each
 command MUST produce the same exit code, stdout, and stderr — including the
 non-TTY refusal path — through the service as through the direct CLI implementation.
 
