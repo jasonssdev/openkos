@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0034: Identity merges apply without prior consent only for an opt-in class that passed a pre-registered measurement"
 description: Revises the reading of "reviewable" for one narrow class of Identity merges -- 2-member SAME, same OKF type, no cross-type concern, confidence at or above a threshold measured before shipping -- to mean announced, committed, logged and reversible after the fact; off by default; every other merge keeps per-item consent (#702).
-status: Proposed
+status: Accepted
 date: 2026-09-30
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0034: Identity merges apply without prior consent only for an opt-in class that passed a pre-registered measurement
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-09-30
 
 ## Context
@@ -79,6 +79,8 @@ other merge it still means confirmed before.
   requires re-running the harness before the constants move.
 - The measurement is on constructed, de-identified labels and one model;
   its limits are carried in the verdict file, not only here.
+
+**Outcome of the first measurement.** The pre-registered harness (`evals/auto_merge/`) ran with `qwen3:8b` and returned FAIL (`evals/auto_merge/results/auto-merge-verdict-20260930-qwen3-8b.md`). The adjudicator reports confidence 0.95 on every `same` verdict, right or wrong, so no threshold separates true duplicates from its false `same` calls, which include two different meetings a week apart. No class qualifies, so `curate --auto-merge` is not built and every Identity merge keeps per-item consent. A different signal can qualify a class later only through its own pre-registered measurement under this ADR.
 
 ## Alternatives considered
 

@@ -123,24 +123,24 @@ evals/run_self_tests.py` — each run directly, unpiped.
 
 ## Phase 2 — Run it and record the verdict (the STOP gate)
 
-- [ ] 2.1 [PRE] Ollama is up with `qwen3:8b` pulled (`ollama list`); start it
+- [x] 2.1 [PRE] Ollama is up with `qwen3:8b` pulled (`ollama list`); start it
   locally if down — never record the eval as blocked on it. Record
   `git rev-parse HEAD` and confirm `design.md` §"Decision rule" is
   byte-identical to the planning commit (`git diff <planning-sha> --
   openspec/changes/auto-merge-safe-class/design.md` is empty for that
   section).
-- [ ] 2.2 [RUN] `--arm calibration --runs 15`. Unpiped. Commit the JSON and
+- [x] 2.2 [RUN] `--arm calibration --runs 15`. Unpiped. Commit the JSON and
   report as soon as it lands; persist verdicts only, never a private
   corpus object.
-- [ ] 2.3 [RUN] `--arm confirmation --runs 15` as a SEPARATE invocation
+- [x] 2.3 [RUN] `--arm confirmation --runs 15` as a SEPARATE invocation
   (never a split of 2.2's runs). Commit the JSON and report.
-- [ ] 2.4 [RUN] `--decide` over 2.2 and 2.3; commit the verdict file. If
+- [x] 2.4 [RUN] `--decide` over 2.2 and 2.3; commit the verdict file. If
   `INVALID`, re-run only the invalid arm (R0 names why) and repeat 2.4.
-- [ ] 2.5 [CHECK] Read the verdict file against the raw JSON by hand for
+- [x] 2.5 [CHECK] Read the verdict file against the raw JSON by hand for
   R2/R3: list every negative trial with `same`, its confidence, and `t*`,
   and confirm the counts (print `n of TOTAL`, never a filtered count).
   Report `B`, `t*`, and exposure in the PR body.
-- [ ] 2.6 [GATE] **If the verdict is `FAIL`: STOP. Do not build the
+- [x] 2.6 [GATE] **If the verdict is `FAIL`: STOP. Do not build the
   auto-apply.** Post the verdict, the failed bars, the per-class table and
   the secondary (cross-source-excluded) result as a comment on #1054; mark
   Phases 3-6 below `[-] skipped: pre-registered rule failed (<verdict file>)`;
@@ -151,70 +151,73 @@ evals/run_self_tests.py` — each run directly, unpiped.
   **Only if the verdict is `PASS`** continue to Phase 3, carrying `t*` and
   the model from the verdict file.
 
+
+**Observed (2026-09-30):** HEAD a2f7024; calibration and confirmation arms, 15 runs each over 26 pairs (390 trials per arm), `qwen3:8b`. Verdict **FAIL** (`evals/auto_merge/results/auto-merge-verdict-20260930-qwen3-8b.md`): `B` = 0.95 and `t*` undefined. Checked by hand against the raw JSON: the adjudicator reports confidence 0.95 on every `same`. Right: 163 of 165 positives in each arm. Wrong: 20 of 225 negatives (calibration) and 21 of 225 (confirmation), mostly `asym-recurrence` (18/19) but also `week-apart` (2 per arm), the owner's named negative. Confidence carries no signal, so no threshold separates the classes. The cross-source-excluded secondary result also FAILs. STOP.
+
 ## Phase 3 — Constants, model provenance, eligibility plan (PASS only)
 
-- [ ] 3.1 [TEST] `state.adjudications`: a fresh persisted row records
+- [-] skipped: pre-registered rule failed (auto-merge-verdict-20260930-qwen3-8b.md) — 3.1 [TEST] `state.adjudications`: a fresh persisted row records
   `model`; an old-shape store reads `model` as `NULL` without raising;
   serving is unchanged (entity-resolution-adjudication ADDED requirement).
-- [ ] 3.2 [IMPL] Nullable `model` column, migration mirroring #838's
+- [-] skipped: pre-registered rule failed (auto-merge-verdict-20260930-qwen3-8b.md) — 3.2 [IMPL] Nullable `model` column, migration mirroring #838's
   `rubric_digest`; thread the task model into the persist call in
   `adjudicate` and curate's Identity.
-- [ ] 3.3 [TEST] `lifecycle.auto_merge_plan(...)`: one test per eligibility
+- [-] skipped: pre-registered rule failed (auto-merge-verdict-20260930-qwen3-8b.md) — 3.3 [TEST] `lifecycle.auto_merge_plan(...)`: one test per eligibility
   step 1-7 (curate-command "Automatic Merge Eligibility Is Fail-Closed"),
   each asserting the recorded deferral reason; (A,B)+(B,C) admits exactly
   one; survivor pinned from `ordered_merge_pair`.
-- [ ] 3.4 [IMPL] `AUTO_MERGE_THRESHOLD = <t* from the verdict file>` and
+- [-] skipped: pre-registered rule failed (auto-merge-verdict-20260930-qwen3-8b.md) — 3.4 [IMPL] `AUTO_MERGE_THRESHOLD = <t* from the verdict file>` and
   `AUTO_MERGE_MEASURED_MODELS = frozenset({"<model>"})` in
   `application/lifecycle.py` with a docstring citing the verdict file;
   `auto_merge_plan` as a pure function beside `preview_apply_same`.
-- [ ] 3.5 [MUT] Flip `>=` to `>` on the threshold check; and drop step 6;
+- [-] skipped: pre-registered rule failed (auto-merge-verdict-20260930-qwen3-8b.md) — 3.5 [MUT] Flip `>=` to `>` on the threshold check; and drop step 6;
   each goes RED on its own test. Revert, purge `__pycache__`.
 
 ## Phase 4 — `curate --auto-merge` (PASS only)
 
-- [ ] 4.1 [TEST] Flag surface: off by default is byte-identical to today;
+- [-] skipped: pre-registered rule failed (auto-merge-verdict-20260930-qwen3-8b.md) — 4.1 [TEST] Flag surface: off by default is byte-identical to today;
   `--auto-merge --reconcile` and `--auto-merge --accept identity` exit 2
   before the workspace gate; unmeasured model applies nothing and prints
   the notice; `review: false` does not enable it.
-- [ ] 4.2 [TEST] Automatic pass on a pipe merges an eligible pair with no
+- [-] skipped: pre-registered rule failed (auto-merge-verdict-20260930-qwen3-8b.md) — 4.2 [TEST] Automatic pass on a pipe merges an eligible pair with no
   prompt; deferred and ineligible pairs take the existing walk/hint; the
   pass never plans reconciliation (`reconcile_planned(..., no_reconcile=True)`).
-- [ ] 4.3 [TEST] One commit per run: two eligible pairs → exactly one new
+- [-] skipped: pre-registered rule failed (auto-merge-verdict-20260930-qwen3-8b.md) — 4.3 [TEST] One commit per run: two eligible pairs → exactly one new
   commit containing both merges and one `**Auto-merge**` bullet; each
   merge's own `**Merge**` bullet present; zero eligible → no bullet, no
   commit.
-- [ ] 4.4 [IMPL] The automatic pass in `cli/curate.py`'s Identity stage via
+- [-] skipped: pre-registered rule failed (auto-merge-verdict-20260930-qwen3-8b.md) — 4.4 [IMPL] The automatic pass in `cli/curate.py`'s Identity stage via
   the lifecycle service (prepare with pinned pair, drift check,
   `merge_core`), then the run bullet and one `_autocommit`; mid-run failure
   stops, writes the bullet for applied merges, commits them.
-- [ ] 4.5 [MUT] Move `_autocommit` inside the loop; 4.3 goes RED. Revert.
+- [-] skipped: pre-registered rule failed (auto-merge-verdict-20260930-qwen3-8b.md) — 4.5 [MUT] Move `_autocommit` inside the loop; 4.3 goes RED. Revert.
 
 ## Phase 5 — Disclosure and reversibility (PASS only)
 
-- [ ] 5.1 [TEST] stderr summary line (including zero), per-merge lines with
+- [-] skipped: pre-registered rule failed (auto-merge-verdict-20260930-qwen3-8b.md) — 5.1 [TEST] stderr summary line (including zero), per-merge lines with
   confidence and the exact `openkos unmerge` command; run summary counts
   automatic merges separately; failed-pass disclosure.
-- [ ] 5.2 [TEST] Round trip: snapshot → auto merge (S, A) → `unmerge S A` →
+- [-] skipped: pre-registered rule failed (auto-merge-verdict-20260930-qwen3-8b.md) — 5.2 [TEST] Round trip: snapshot → auto merge (S, A) → `unmerge S A` →
   concept files, `index.md`, ledger byte-identical; `log.md` differs only by
   the run bullet and the unmerge audit line. Same pair via manual
   `merge --no-reconcile` reaches the same post-unmerge bytes.
-- [ ] 5.3 [TEST] The `**Auto-merge**` bullet contains no
+- [-] skipped: pre-registered rule failed (auto-merge-verdict-20260930-qwen3-8b.md) — 5.3 [TEST] The `**Auto-merge**` bullet contains no
   `merge_log_entry(...)` substring for any pair it lists; `unmerge` of one
   of two auto merges keeps the other's bullet and the run bullet.
-- [ ] 5.4 [IMPL] Disclosure through the shared commit-line helper and one
+- [-] skipped: pre-registered rule failed (auto-merge-verdict-20260930-qwen3-8b.md) — 5.4 [IMPL] Disclosure through the shared commit-line helper and one
   new stderr formatter.
-- [ ] 5.5 [MUT] Make the run bullet reuse `merge_log_entry` text; 5.3 goes
+- [-] skipped: pre-registered rule failed (auto-merge-verdict-20260930-qwen3-8b.md) — 5.5 [MUT] Make the run bullet reuse `merge_log_entry` text; 5.3 goes
   RED (and `unmerge` refuses). Revert.
 
 ## Phase 6 — Docs and archive preparation (PASS only)
 
-- [ ] 6.1 [DOC] `docs/cli.md` curate entry: `--auto-merge`, what it merges,
+- [-] skipped: pre-registered rule failed (auto-merge-verdict-20260930-qwen3-8b.md) — 6.1 [DOC] `docs/cli.md` curate entry: `--auto-merge`, what it merges,
   how to undo. `docs/knowledge-object-model.md` Merge section: one sentence
   that the measured class may be applied after-the-fact reviewable
   (ADR-0034). No counts, no "since #NNN".
-- [ ] 6.2 [CHECK] `openkos curate --help` matches `docs/cli.md`; run
+- [-] skipped: pre-registered rule failed (auto-merge-verdict-20260930-qwen3-8b.md) — 6.2 [CHECK] `openkos curate --help` matches `docs/cli.md`; run
   `lint` and `status` on `examples/good-life-demo/` unchanged.
-- [ ] 6.3 [ARCHIVE-NOTE] At archive: flip ADR-0034 to Accepted in both
+- [-] skipped: pre-registered rule failed (auto-merge-verdict-20260930-qwen3-8b.md) — 6.3 [ARCHIVE-NOTE] At archive: flip ADR-0034 to Accepted in both
   places and its README row; reword entity-resolution-merge Non-Goals
   "automatic no-confirm merge" (see that delta's header note); name-match
   every MODIFIED heading against the canonical spec before merging.

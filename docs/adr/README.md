@@ -69,4 +69,4 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 | [0031](0031-openai-compatible-backend.md) | A second, OpenAI-compatible local backend beside the Ollama default | Accepted | 2026-09-29 |
 | [0032](0032-deprecated-status-is-an-export-of-computed-supersession.md) | Frontmatter `status: deprecated` is a marked export of computed supersession, never read back | Accepted | 2026-09-29 |
 | [0033](0033-source-tag-sync-is-union-only.md) | Source tag sync is union-only and never tags below the Source's sensitivity | Accepted | 2026-09-30 |
-| [0034](0034-identity-auto-merge-only-for-a-measured-class.md) | Identity merges apply without prior consent only for an opt-in class that passed a pre-registered measurement | Proposed | 2026-09-30 |
+| [0034](0034-identity-auto-merge-only-for-a-measured-class.md) | Identity merges apply without prior consent only for an opt-in class that passed a pre-registered measurement | Accepted | 2026-09-30 |
