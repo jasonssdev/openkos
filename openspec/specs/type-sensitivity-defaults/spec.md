@@ -17,8 +17,8 @@ any concept already on disk.
 
 ### Requirement: Per-Type Offset Config Shape
 
-The system MUST accept a workspace config field mapping an OKF type name to
-a non-negative integer offset above the workspace's `default_sensitivity`
+The system MUST accept a workspace config field, `type_sensitivity_defaults`,
+mapping an OKF type name to a non-negative integer offset above the workspace's `default_sensitivity`
 floor. WHEN the field is absent from config, the system MUST behave as
 though it were set to `{}` — the PACKAGED policy is "none". WHEN the
 field is present and empty (`{}`), the system MUST likewise apply no

@@ -1,7 +1,7 @@
 """Layering-boundary guard for `openkos.resolution`.
 
 Mirrors `tests/unit/graph/test_base.py`'s AST-based canonical-import guard:
-the canonical layer (`model`/`bundle`/`state`) MUST NOT import
+the canonical layer (`model`/`bundle`/`vcs`) MUST NOT import
 `openkos.resolution` (design.md's Layering section). `resolution` itself
 may import `openkos.model.okf` read-only (the reverse direction), which is
 asserted separately below.
