@@ -32,17 +32,23 @@ import shutil
 import typing
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 from typer.testing import CliRunner
 
 from openkos import read_outcome
+from openkos.application import backends as application_backends
 from openkos.application import doctor as application_doctor
 from openkos.bundle import ledger as bundle_ledger
 from openkos.cli import main
 from openkos.cli.main import app
-from openkos.config import DEFAULT_EMBEDDING_MODEL, DEFAULT_MODEL, WorkspaceLayout
+from openkos.config import (
+    DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_MODEL,
+    Config,
+    WorkspaceLayout,
+)
 from openkos.llm.ollama import (
     BackendHostLocality,
     InstalledModel,
@@ -441,6 +447,50 @@ def test_doctor_builds_reachability_client_with_short_timeout(
     assert result.exit_code == 0
     assert len(calls) == 1
     assert calls[0]["timeout"] == 5.0
+
+
+def test_doctor_build_client_uses_the_diagnostics_client_resolver(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`doctor`'s `_build_client(model)` closure builds its probe through
+    `application_backends.diagnostics_client(cfg, model=model,
+    timeout=_PREFLIGHT_TIMEOUT, factories=_backend_factories())` (issue
+    #1057 Phase 10, tasks 10.17-10.18), never a direct
+    `OllamaClient(model=model, timeout=...)` construction. `cfg` is the
+    SAME `config.Config` check 2 (`Config valid`) already read -- never a
+    second, independent read (issue #1002 item B). **RED today**:
+    `_build_client` still constructs `OllamaClient` directly."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(installed=[DEFAULT_MODEL]),
+    )
+    calls: list[tuple[Config | None, str, float]] = []
+    original_diagnostics_client = application_backends.diagnostics_client
+
+    def _spy(
+        cfg: Config | None,
+        *,
+        model: str,
+        timeout: float,
+        factories: application_backends.BackendFactories,
+        purpose: Literal["chat", "embed"] = "chat",
+    ) -> object:
+        calls.append((cfg, model, timeout))
+        return original_diagnostics_client(
+            cfg, model=model, timeout=timeout, factories=factories, purpose=purpose
+        )
+
+    monkeypatch.setattr(application_backends, "diagnostics_client", _spy)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert len(calls) == 1
+    called_cfg, called_model, called_timeout = calls[0]
+    assert called_cfg is not None
+    assert called_model == DEFAULT_MODEL
+    assert called_timeout == 5.0
 
 
 def test_doctor_model_installed_honors_latest_normalization(

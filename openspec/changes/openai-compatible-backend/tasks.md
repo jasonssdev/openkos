@@ -1676,75 +1676,181 @@ config keys, the new client) are all inert without this wiring.
 Closes the ten `_PENDING_SITES` entries Phase 9's guard allowlisted, per the
 "Construction sites routed through the resolver" table in design.md.
 
-- [ ] **10.1** [TEST] `tests/unit/cli/test_backends_delegation.py` — add
+- [x] **10.1** [TEST] `tests/unit/cli/test_backends_delegation.py` — add
   `test_embed_client_delegator_shape`: `cli/main.py::_embed_client(cfg)` is
   a new one-line delegator mirroring `_chat_client`, calling
   `application_backends.embed_client(cfg, factories=_backend_factories())`.
   **RED today**: `_embed_client` doesn't exist.
-- [ ] **10.2** [IMPL] add `_embed_client(cfg)` to `cli/main.py`. Makes 10.1
+
+  **Observed**: RED confirmed (`AttributeError: module 'openkos.cli.main'
+  has no attribute '_embed_client'`). Also extended
+  `test_delegators_are_single_line_and_singly_defined`'s existing
+  parametrized tuple with `("_embed_client", "embed_client")`, reusing that
+  structural pin rather than duplicating it.
+- [x] **10.2** [IMPL] add `_embed_client(cfg)` to `cli/main.py`. Makes 10.1
   GREEN.
-- [ ] **10.3** [TEST] `tests/unit/cli/test_ingest.py` — extend the existing
+- [x] **10.3** [TEST] `tests/unit/cli/test_ingest.py` — extend the existing
   embed-construction assertions at `_refresh_derived_after_write`
   (`main.py:4166`) and `_ingest_single` (`main.py:5720`) to confirm both
   call `_embed_client(cfg)` rather than constructing
   `OllamaClient(model=cfg.embedding_model)` directly (spy on
   `_embed_client`).
-- [ ] **10.4** [IMPL] migrate both sites to `_embed_client(cfg)`. Makes 10.3
+
+  **Observed**: actual current lines (post-Phase-9 drift) were 4206/5760.
+  Added `test_single_file_ingest_embed_sites_use_the_embed_client_delegator`
+  (single-file `ingest --auto` exercises both `_ingest_single`'s own embed
+  AND the end-of-run `_refresh_derived_after_write` call — 2 `_embed_client`
+  calls total) and a companion batch-mode test (10.5). RED confirmed first
+  (0 calls recorded).
+- [x] **10.4** [IMPL] migrate both sites to `_embed_client(cfg)`. Makes 10.3
   GREEN. Shrink the Phase-9 guard's `_PENDING_SITES` by these two entries.
-- [ ] **10.5** [TEST] same file — extend the ingest-batch embed-host
+- [x] **10.5** [TEST] same file — extend the ingest-batch embed-host
   advisory site (`main.py:4734`) to confirm it also constructs via
   `_embed_client(cfg)` (used solely for `.locality` at this phase; the
   `endpoint_label` wording is Phase 13).
-- [ ] **10.6** [IMPL] migrate the advisory site. Makes 10.5 GREEN. Shrink
+
+  **Observed**: actual current line 4762 (drift). Added
+  `test_batch_ingest_embed_sites_use_the_embed_client_delegator` — a
+  1-file batch run exercises the advisory (once) + `_ingest_single`'s
+  per-file embed (once) + the batch's own end-of-run
+  `_refresh_derived_after_write` call (once) = 3 total, not 2 as first
+  assumed; corrected after observing the real call-stack traceback
+  (`_ingest_batch:4847` → `_refresh_derived_after_write:4206`), a site
+  this task's own text did not separately name.
+- [x] **10.6** [IMPL] migrate the advisory site. Makes 10.5 GREEN. Shrink
   the allowlist.
-- [ ] **10.7** [TEST] `tests/unit/cli/test_query.py` — extend `query`'s
+- [x] **10.7** [TEST] `tests/unit/cli/test_query.py` — extend `query`'s
   embed-construction assertion (`main.py:14793`) to confirm `_embed_client(cfg)`.
-- [ ] **10.8** [IMPL] migrate. Makes 10.7 GREEN. Shrink the allowlist.
-- [ ] **10.9** [TEST] `tests/unit/cli/test_reindex.py` — extend `reindex`'s
+
+  **Observed**: actual current line 14843 (drift). Added
+  `test_query_embed_site_uses_the_embed_client_delegator`. RED confirmed
+  (0 calls), then GREEN after 10.8; full file (63 tests) green.
+- [x] **10.8** [IMPL] migrate. Makes 10.7 GREEN. Shrink the allowlist.
+- [x] **10.9** [TEST] `tests/unit/cli/test_reindex.py` — extend `reindex`'s
   CLI wiring (`main.py:15508`) to confirm `_embed_client(cfg)`.
-- [ ] **10.10** [IMPL] migrate. Makes 10.9 GREEN. Shrink the allowlist.
-- [ ] **10.11** [TEST] `tests/unit/cli/test_mcp_cmd.py` (or the equivalent
+
+  **Observed**: actual test file is `tests/unit/cli/test_reindex_cmd.py`
+  (no `tests/unit/cli/test_reindex.py` exists — same name-drift pattern
+  prior phases' `test_reindex_cmd.py`/`test_doctor_service.py` observed
+  notes already documented). Actual current line 15560 (drift). Added
+  `test_reindex_embed_site_uses_the_embed_client_delegator`; RED confirmed,
+  GREEN after 10.10; full file (41 tests) green.
+- [x] **10.10** [IMPL] migrate. Makes 10.9 GREEN. Shrink the allowlist.
+- [x] **10.11** [TEST] `tests/unit/cli/test_mcp_cmd.py` (or the equivalent
   existing test module) — extend `mcp_cmd`'s embed construction
   (`main.py:16339`) to confirm `_embed_client(cfg)`.
-- [ ] **10.12** [IMPL] migrate. Makes 10.11 GREEN. Shrink the allowlist (all
+
+  **Observed**: actual current line 16394 (drift). Added
+  `test_mcp_cmd_embed_site_uses_the_embed_client_delegator`; RED confirmed,
+  GREEN after 10.12; full file (5 tests) green.
+- [x] **10.12** [IMPL] migrate. Makes 10.11 GREEN. Shrink the allowlist (all
   seven embed sites now clear).
-- [ ] **10.13** [TEST] `tests/unit/mcp/test_server.py` — extend
+- [x] **10.13** [TEST] `tests/unit/mcp/test_server.py` — extend
   `_make_embedder` (`server.py:196`) to confirm `embed_client(cfg,
   factories=_backend_factories())`.
-- [ ] **10.14** [IMPL] migrate. Makes 10.13 GREEN. Shrink the allowlist.
-- [ ] **10.15** [TEST] `tests/unit/cli/test_init.py` — extend the init
+
+  **Observed**: added `test_make_embedder_uses_the_embed_client_resolver`,
+  spying on `application_backends.embed_client` directly (mirrors
+  `test_mcp_backend_factories_shape`'s pattern). RED confirmed, GREEN after
+  10.14; full file (23 tests) green.
+- [x] **10.14** [IMPL] migrate. Makes 10.13 GREEN. Shrink the allowlist.
+- [x] **10.15** [TEST] `tests/unit/cli/test_init.py` — extend the init
   picker (`_probe_installed_models`, `main.py:317`) and init preflight
   (`main.py:1748`) assertions to confirm both call `diagnostics_client(None,
   model=<resolved default>, timeout=_PREFLIGHT_TIMEOUT,
   factories=_backend_factories())` — Ollama-default per O1, since `init`
   runs before any `backend` key exists.
-- [ ] **10.16** [IMPL] migrate both init sites through `diagnostics_client(...)`.
+
+  **Observed**: actual current lines 351/1782 (drift). Added
+  `test_picker_and_preflight_probes_use_the_diagnostics_client_resolver`,
+  spying on `application_backends.diagnostics_client`; needed `_simulate_tty`
+  + scripted input (`"\n\n"`) to make the picker probe actually run (a
+  non-TTY `init` skips it entirely per its own existing `sys.stdin.isatty()`
+  gate) — confirmed exactly 2 calls, both `cfg=None`, `timeout=5.0`, first
+  one's `model == DEFAULT_MODEL`. RED confirmed (0 calls), GREEN after
+  10.16; full file (91 tests) green.
+- [x] **10.16** [IMPL] migrate both init sites through `diagnostics_client(...)`.
   Makes 10.15 GREEN. Shrink the allowlist.
-- [ ] **10.17** [TEST] `tests/unit/cli/test_doctor.py` — extend doctor's
+- [x] **10.17** [TEST] `tests/unit/cli/test_doctor.py` — extend doctor's
   `_build_client` (`main.py:15890`) to confirm `lambda cfg, model:
   diagnostics_client(cfg, model=model, timeout=_PREFLIGHT_TIMEOUT,
   factories=_backend_factories())`.
-- [ ] **10.18** [IMPL] migrate. Makes 10.17 GREEN. Allowlist now EMPTY.
-- [ ] **10.19** [TEST] `tests/unit/test_backend_construction_guard.py` —
+
+  **Observed**: actual current line 15942 (drift). This also required
+  widening `application/doctor.py::run_diagnostics`'s `build_client`
+  parameter type from `Callable[[str], BackendDiagnostics]` to
+  `Callable[[config.Config | None, str], BackendDiagnostics]` and its call
+  site from `build_client(model)` to `build_client(cfg, model)` — `cfg` was
+  already a local `config.Config | None` in scope there (check 2's own
+  read), so no new read was introduced. Added
+  `test_doctor_build_client_uses_the_diagnostics_client_resolver`
+  (`tests/unit/cli/test_doctor.py`), spying on
+  `application_backends.diagnostics_client`; RED confirmed, GREEN after
+  10.18. This signature widening broke ~25 pre-existing
+  `build_client=lambda _model: ...` fixtures across
+  `tests/unit/application/test_doctor_service.py` (the actual file for the
+  task text's `tests/unit/application/test_doctor.py` — same drift
+  pattern), mechanically updated to `lambda _cfg, _model: ...` (and the two
+  named-function factories to `(cfg, model)`); that file's 30 tests and
+  `test_doctor.py`'s 62 tests both green.
+- [x] **10.18** [IMPL] migrate. Makes 10.17 GREEN. Allowlist now EMPTY.
+- [x] **10.19** [TEST] `tests/unit/test_backend_construction_guard.py` —
   replace the allowlisted variant with the FINAL, unconditional guard (no
   allowlist parameter): confirm it is green with zero exceptions across the
   whole `src/openkos/` tree outside `llm/`/`BackendFactories(...)`. Closes
   backend-selection's "no test that selects either backend can reach the
   network" contract for real.
-- [ ] **10.20** [TEST] same file — mutation-proof: reintroduce one direct
+
+  **Observed**: confirmed via the full-suite run that `_PENDING_SITES`'s
+  ten entries were all stale (every site migrated) before rewriting;
+  rewrote `test_no_direct_client_construction_outside_llm_and_factories` to
+  the unconditional form (dropped the allowlist parameter and the
+  stale-entry check, now vestigial with an empty set).
+- [x] **10.20** [TEST] same file — mutation-proof: reintroduce one direct
   construction at a random one of the ten migrated sites (scratch copy or
   planted fixture), confirm the now-unconditional guard fails, then remove
   it.
 
+  **Observed**: the PERSISTED test
+  (`test_mutation_proof_a_migrated_embed_site_reintroducing_direct_construction_fails`)
+  uses a synthetic source fixture (task text explicitly permits "scratch
+  copy or planted fixture"). ADDITIONALLY confirmed against the REAL, live
+  file during this apply run: temporarily replaced `cli/main.py::
+  _embed_client`'s delegating `return application_backends.embed_client(...)`
+  body with `return OllamaClient(model=cfg.embedding_model)`; the guard
+  failed, reporting exactly `{'cli/main.py': [206]}`. Reverted with the
+  exact inverse edit, purged `__pycache__`, reconfirmed GREEN (2 tests in
+  this file).
+
 ### Phase 10 verification
 
-- [ ] **10.21** Run `uv run ruff check . && uv run ruff format --check . &&
+- [x] **10.21** Run `uv run ruff check . && uv run ruff format --check . &&
   uv run mypy .` — must be green.
-- [ ] **10.22** Run `uv run pytest tests/unit/cli/ tests/unit/mcp/
+
+  **Observed**: all three clean (378 source files).
+- [x] **10.22** Run `uv run pytest tests/unit/cli/ tests/unit/mcp/
   tests/unit/test_backend_construction_guard.py` focused, then `uv run
   pytest --cov` full suite; then `uv run python evals/run_self_tests.py`.
+
+  **Observed**: focused run (unpiped) → **2648 passed, 1 skipped**. A
+  `--cov` full-suite run launched immediately after this focused run
+  overlapped with the start of Phase 11's own source edits in the same
+  working tree (a background-job timing artifact of this apply session,
+  not a code defect) and produced a corrupted per-file coverage number for
+  `state/reindex.py` specifically (32%, while every other module measured
+  normally); that result is disclosed here and disregarded. The final,
+  uncorrupted full-suite run — covering BOTH Phase 10 and Phase 11 together
+  (this apply session's two phases share one commit-adjacent verification
+  pass, run once source was stable) — is recorded under Phase 11's 11.23
+  below: **7413 passed, 0 failed, 2 skipped**, 96.85% branch coverage, and
+  `evals/run_self_tests.py` 44/44 green.
 - [ ] **10.23** Commit, scope `cli`/`mcp` as appropriate. Open PR 10
   targeting `main`, after PR 9 merges.
+
+  **Observed**: commit(s) to be made on the current branch
+  (`feat/1057-openai-p10`); "Open PR 10" left unticked per apply-phase
+  instructions (no push, no PR from this session — left for the
+  maintainer).
 
 **Rollback boundary**: revert `_embed_client`, the ten migrated call sites
 back to direct construction, and the guard back to its Phase-9 allowlisted
@@ -1759,22 +1865,29 @@ requirements; `query-command`'s question-vector cache key requirement.
 
 ### `embedding_tag` / `parse_embedding_tag`
 
-- [ ] **11.1** [TEST] `tests/unit/state/test_reindex.py` — add
+- [x] **11.1** [TEST] `tests/unit/state/test_reindex.py` — add
   `test_embedding_tag_ollama_byte_identical`: `embedding_tag("bge-m3")`
   (default backend) == `"bge-m3#chunk-v1"`, byte-identical to today's
   hardcoded tag format (confirm the exact current inline format string
   during implementation). **RED today**: `embedding_tag` doesn't exist as a
   standalone function yet.
-- [ ] **11.2** [IMPL] `state/reindex.py`: add `embedding_tag(model,
+
+  **Observed**: `embedding_tag` already existed (added in the #554
+  migration) but with a `(model: str)`-only signature; RED was
+  `TypeError: embedding_tag() got an unexpected keyword argument 'backend'`
+  once the new signature's test was written, not `AttributeError` — the
+  function itself already existed, only the `backend=` parameter was
+  missing.
+- [x] **11.2** [IMPL] `state/reindex.py`: add `embedding_tag(model,
   backend=config.DEFAULT_BACKEND) -> str` implementing
   `f"{model}#{EMBED_COMPOSITION_TAG}"` for `ollama`, `f"{tag}#backend={backend}"`
   otherwise. Makes 11.1 GREEN; replace the existing inline tag-construction
   call site with this function (byte-identical output for `ollama`).
-- [ ] **11.3** [TEST] same — add
+- [x] **11.3** [TEST] same — add
   `test_embedding_tag_openai_compatible_appends_backend_suffix`:
   `embedding_tag("bge-m3", backend="openai-compatible") ==
   "bge-m3#chunk-v1#backend=openai-compatible"`.
-- [ ] **11.4** [TEST] same — add `test_parse_embedding_tag_round_trip`,
+- [x] **11.4** [TEST] same — add `test_parse_embedding_tag_round_trip`,
   parametrized: a legacy bare tag `bge-m3#chunk-v1` (no backend part)
   parses to `EmbeddingTagParts(model="bge-m3", composition="chunk-v1",
   backend="ollama")`; a backend-qualified tag parses correctly; a
@@ -1782,10 +1895,13 @@ requirements; `query-command`'s question-vector cache key requirement.
   `composition=""`; an unknown trailing attribute (`#foo=bar`) is ignored,
   forward-compatible. **RED today**: `parse_embedding_tag`/
   `EmbeddingTagParts` don't exist.
-- [ ] **11.5** [IMPL] add `EmbeddingTagParts` (frozen dataclass) and
+
+  **Observed**: RED confirmed (`AttributeError: module
+  'openkos.state.reindex' has no attribute 'parse_embedding_tag'`).
+- [x] **11.5** [IMPL] add `EmbeddingTagParts` (frozen dataclass) and
   `parse_embedding_tag(tag) -> EmbeddingTagParts` per Decision 7's exact
   splitting rule. Makes 11.4 GREEN.
-- [ ] **11.6** [TEST] same — add
+- [x] **11.6** [TEST] same — add
   `test_embedding_tag_and_parse_are_inverse_for_every_backend`,
   property-style over every `(model, backend)` pair in `{"ollama",
   "openai-compatible"} x {"bge-m3", "qwen3-embedding:0.6b"}`:
@@ -1795,21 +1911,40 @@ requirements; `query-command`'s question-vector cache key requirement.
   `embedding_tag`'s backend-suffix format string, confirm this breaks, then
   revert.
 
+  **Observed mutation proof**: changed `embedding_tag`'s backend-suffix
+  format string from `f"{tag}#backend={backend}"` to `f"{tag}#be={backend}"`;
+  BOTH this test and 11.3's literal test failed (`parse_embedding_tag`,
+  which reads only the `backend=` key, read every mutated
+  `openai-compatible` tag back as backend `"ollama"`). Reverted with the
+  exact inverse edit, purged `__pycache__`, reconfirmed all 80 tests in
+  `test_reindex.py` green.
+
 ### `reindex()` accepts `embedding_backend`
 
-- [ ] **11.7** [TEST] same file — add
+- [x] **11.7** [TEST] same file — add
   `test_reindex_accepts_embedding_backend_param_and_forces_reembed_on_switch`:
   a stored tag identifying `ollama`+`bge-m3`; `reindex(..., model_tag="bge-m3",
   embedding_backend="openai-compatible")` forces a full re-embed. Covers
   reindex-command's "Switching backend with the same model name forces a
   re-embed". **RED today**: `reindex()` has no `embedding_backend`
   parameter.
-- [ ] **11.8** [TEST] same — add
+
+  **Observed**: RED confirmed (`TypeError: reindex() got an unexpected
+  keyword argument 'embedding_backend'`).
+- [x] **11.8** [TEST] same — add
   `test_reindex_legacy_tag_read_as_ollama_forces_no_reembed`: a stored tag
   `bge-m3#chunk-v1` (no backend part, pre-change); `reindex(...,
   model_tag="bge-m3", embedding_backend="ollama")` finds NO mismatch.
   Covers "An existing Ollama-only store forces no re-embed on upgrade".
-- [ ] **11.9** [IMPL] `state/reindex.py::reindex(...)`: add
+
+  **Observed**: first draft seeded the legacy tag with NO prior cache-hit
+  pass, so the doc's absent `content_hash` row forced one embed
+  independent of the tag gate (`model_reembedded=False` but
+  `embedder.call_count==1`, not `0`) — corrected the fixture to run a
+  normal `reindex()` first (self-healing the legacy tag with every doc
+  cached), matching the real-world "already-upgraded store" shape the
+  scenario describes.
+- [x] **11.9** [IMPL] `state/reindex.py::reindex(...)`: add
   `embedding_backend: str = config.DEFAULT_BACKEND` param;
   `_effective_model_tag(model_tag, backend)` delegates to `embedding_tag`;
   the stored-vs-effective comparison reads the stored tag through
@@ -1819,9 +1954,12 @@ requirements; `query-command`'s question-vector cache key requirement.
   scenario (absent tag, partial-failure withholding, self-heal) still
   passes unchanged.
 
+  **Observed**: full `test_reindex.py` — 80 passed (72 pre-existing + 8
+  new Phase-11 tests), all unchanged.
+
 ### Disclosure rewrite
 
-- [ ] **11.10** [TEST] `tests/unit/cli/test_reindex.py` — add
+- [x] **11.10** [TEST] `tests/unit/cli/test_reindex.py` — add
   `test_reembed_trigger_wording_four_mutually_exclusive_branches`,
   parametrized over the reindex-command delta spec's four scenarios (order
   checked): no-previous-tag; backend-changed (`ollama -> openai-compatible`,
@@ -1833,67 +1971,188 @@ requirements; `query-command`'s question-vector cache key requirement.
   "A genuine backend change reports a backend change, not a model change"
   and "A legacy tag upgraded to backend-qualified tags is never reported as
   a backend change".
-- [ ] **11.11** [IMPL] `cli/main.py::_reembed_trigger_wording`: rewrite to
+
+  **Observed**: actual file is `tests/unit/cli/test_reindex_cmd.py` (same
+  name drift already documented in Phase 10's 10.9). RED confirmed by
+  temporarily reverting to the pre-rewrite 3-branch implementation: the
+  `backend-changed` case failed exactly as predicted (fell through to a
+  false "embed text composition changed" claim, since the OLD bare-string
+  comparison sees equal model parts and never checks backend at all), and
+  the companion "no appended model clause" test also failed (fell through
+  to "embedding model changed" instead). Restored the rewrite, purged
+  `__pycache__`, reconfirmed all 47 tests in the file green.
+- [x] **11.11** [IMPL] `cli/main.py::_reembed_trigger_wording`: rewrite to
   parse BOTH tags via `parse_embedding_tag` and branch in the spec's exact
   order (no tag -> backend differs -> model differs -> composition
   differs), removing the old model-name-only string comparison entirely.
   Makes 11.10 GREEN.
-- [ ] **11.12** [TEST] same — add
+- [x] **11.12** [TEST] same — add
   `test_composition_only_bump_still_reports_composition_not_model`:
   regression pin for the PRE-EXISTING composition-changed disclosure
   (stored `bge-m3#compose-v1` vs current `bge-m3#chunk-v1`, both `ollama`)
   — confirms the rewrite didn't regress this already-shipped scenario.
 
+  **Observed**: this exact scenario was already pinned by the pre-existing
+  `test_reembed_trigger_wording_names_a_composition_only_change`; no new
+  test needed beyond confirming it stayed green after the rewrite (it
+  did) — added
+  `test_reembed_trigger_wording_legacy_upgrade_is_never_reported_as_backend_change`
+  instead, covering the ADDITIONAL scenario this task's own text names
+  ("never reported as a backend change") that the pre-existing test does
+  not.
+
 ### Question-vector cache key
 
-- [ ] **11.13** [TEST] `tests/unit/state/test_question_vectors.py` — add
+- [x] **11.13** [TEST] `tests/unit/state/test_question_vectors.py` — add
   `test_cache_key_ollama_is_bare_model_name`: `cache_key("bge-m3",
   "ollama") == "bge-m3"` (existing rows stay valid — byte-identity pin).
   **RED today**: `cache_key` doesn't exist.
-- [ ] **11.14** [TEST] same — add
+
+  **Observed**: RED confirmed (`AttributeError: module
+  'openkos.state.question_vectors' has no attribute 'cache_key'`).
+- [x] **11.14** [TEST] same — add
   `test_cache_key_openai_compatible_appends_backend_suffix`:
   `cache_key("bge-m3", "openai-compatible") ==
   "bge-m3#backend=openai-compatible"` (same suffix rule as `embedding_tag`,
   without the composition part).
-- [ ] **11.15** [IMPL] `state/question_vectors.py`: add `cache_key(model,
+- [x] **11.15** [IMPL] `state/question_vectors.py`: add `cache_key(model,
   backend) -> str` per 11.13-11.14. Makes both GREEN.
-- [ ] **11.16** [TEST] `tests/unit/application/test_query.py` — extend the
+- [x] **11.16** [TEST] `tests/unit/application/test_query.py` — extend the
   existing question-vector cache-key assertion at `application/query.py:786`
   to confirm it now calls `question_vectors.cache_key(cfg.embedding_model,
   cfg.backend)` rather than the bare `cfg.embedding_model`. Covers
   query-command's "A backend switch does not reuse a cached question
   vector" and "An ollama-backend cache key stays bare". **RED today**:
   still bare.
-- [ ] **11.17** [IMPL] wire the call site. Makes 11.16 GREEN.
+
+  **Observed**: actual file is `tests/unit/application/test_query_filing.py`
+  (no `test_query.py` exists — same drift pattern; the real call site is
+  `scan_for_duplicates`, at line 785, not literally 786). Added
+  `test_scan_for_duplicates_uses_the_backend_aware_cache_key`, spying on
+  `question_vectors.QuestionVectorStore.__init__`. First draft used a
+  default `ollama`-backend `cfg` and passed VACUOUSLY (`cache_key(model,
+  "ollama") == model`, byte-identical to the bare pre-change value,
+  regardless of whether the wiring existed) — corrected by constructing
+  the test `cfg` with `dataclasses.replace(cfg, backend="openai-compatible")`,
+  which DOES discriminate; RED confirmed (`['bge-m3'] !=
+  ['bge-m3#backend=openai-compatible']`).
+- [x] **11.17** [IMPL] wire the call site. Makes 11.16 GREEN.
 
 ### `application/revisions.py` and remaining `reindex()` callers
 
-- [ ] **11.18** [TEST] `tests/unit/application/test_revisions.py` — extend
+- [x] **11.18** [TEST] `tests/unit/application/test_revisions.py` — extend
   the existing `embedding_tag`-construction assertion at
   `application/revisions.py:314` to confirm it now passes `cfg.backend`
   through to `embedding_tag(model, backend)` rather than the old
   bare-model call.
-- [ ] **11.19** [IMPL] wire `application/revisions.py:314`. Makes 11.18
+
+  **Observed**: actual file is `tests/unit/application/test_revisions_service.py`
+  (same drift pattern). `read_decision_vectors` (the function at line 314,
+  not literally `application/revisions.py` at the module level) had no
+  `cfg`/`backend` parameter of any kind — added `backend:
+  str = config.DEFAULT_BACKEND`. Added
+  `test_read_decision_vectors_passes_backend_through_to_embedding_tag`
+  AND `test_plan_revisions_passes_backend_through_to_read_decision_vectors`
+  (the caller one layer up also needed the same param, threaded through —
+  design's own text only named `revisions.py:314` but `plan_revisions`
+  sits between it and the CLI, so both needed the parameter to reach the
+  CLI's `cfg.backend`). RED confirmed for both (`TypeError: ... got an
+  unexpected keyword argument 'backend'`).
+- [x] **11.19** [IMPL] wire `application/revisions.py:314`. Makes 11.18
   GREEN.
-- [ ] **11.20** [TEST] `tests/unit/cli/test_ingest.py`,
+
+  **Observed**: also added `backend: str = config.DEFAULT_BACKEND` to
+  `plan_revisions` (forwarded to `read_decision_vectors`) and wired the
+  CLI's `revisions` command call site with `backend=cfg.backend` — none of
+  this task's own text named `plan_revisions` or the CLI site, but the
+  chain from `application/revisions.py:314` to `cfg.backend` passes
+  through both. Added
+  `test_revisions_passes_backend_through_to_plan_revisions`
+  (`tests/unit/cli/test_revisions.py`) for the CLI wiring specifically,
+  using a spy with NO default on its own `backend` keyword parameter (a
+  spy defaulting to `"ollama"` would pass vacuously here too, for the same
+  reason 11.16 above did) — RED confirmed (`TypeError: ... missing 1
+  required keyword-only argument: 'backend'`), GREEN after wiring; full
+  file (15 tests) plus `test_revisions_service.py` (29 tests) both green.
+- [x] **11.20** [TEST] `tests/unit/cli/test_ingest.py`,
   `tests/unit/cli/test_reindex.py` — extend every `reindex(model_tag=...)`
   caller design.md names (`_embed_after_ingest` at `main.py:4058`, its
   callers at `main.py:4184`/`5724`, `reindex` at `main.py:15523`) to
   confirm each now also passes `embedding_backend=cfg.backend`.
-- [ ] **11.21** [IMPL] wire all four caller sites. Makes 11.20 GREEN.
+
+  **Observed**: design.md's "callers at `main.py:4184`/`5724`" text was
+  itself stale even at Phase-9 time — only ONE actual caller of
+  `_embed_after_ingest` exists in the shipped code (`_ingest_single`, one
+  call site), not two; the two line numbers instead named
+  `_refresh_derived_after_write`'s OWN separate, direct `reindex()` call
+  (a distinct third call site the design text folded into the wrong
+  bucket). The real three `reindex_module.reindex(...)` call sites in
+  `cli/main.py` are: inside `_embed_after_ingest` itself; inside
+  `_refresh_derived_after_write`; inside the `reindex` command. Added
+  `test_single_file_ingest_reindex_calls_pass_embedding_backend`
+  (`tests/unit/cli/test_ingest.py`, covering the first two via one
+  single-file `ingest --auto` run — 2 calls) and
+  `test_reindex_passes_embedding_backend_to_state_reindex`
+  (`tests/unit/cli/test_reindex_cmd.py`, the actual file — same drift as
+  10.9 — covering the third). Both detect the KWARG'S PRESENCE via
+  `kwargs.get("embedding_backend")`, not merely its value equalling
+  `"ollama"`, since the default is `"ollama"` either way. RED confirmed
+  for both (`kwargs.get("embedding_backend")` was `None`).
+- [x] **11.21** [IMPL] wire all four caller sites. Makes 11.20 GREEN.
+
+  **Observed**: three call sites wired (per the corrected count above):
+  `_embed_after_ingest` (gained an `embedding_backend` param, forwarded
+  from its one caller `_ingest_single` as `embedding_backend=cfg.backend`),
+  `_refresh_derived_after_write`'s own direct call, and the `reindex`
+  command's own direct call.
 
 ### Phase 11 verification
 
-- [ ] **11.22** Run `uv run ruff check . && uv run ruff format --check . &&
+- [x] **11.22** Run `uv run ruff check . && uv run ruff format --check . &&
   uv run mypy .` — must be green.
-- [ ] **11.23** Run `uv run pytest tests/unit/state/test_reindex.py
+
+  **Observed**: all three clean (378 source files).
+- [x] **11.23** Run `uv run pytest tests/unit/state/test_reindex.py
   tests/unit/state/test_question_vectors.py tests/unit/application/test_query.py
   tests/unit/application/test_revisions.py tests/unit/cli/test_reindex.py
   tests/unit/cli/test_ingest.py` focused, then `uv run pytest --cov` full
   suite; then `uv run python evals/run_self_tests.py`.
+
+  **Observed**: actual files (drift, per 11.16/11.18/11.20's notes):
+  `test_reindex.py`, `test_question_vectors.py`, `test_query_filing.py` +
+  `test_query_service.py`, `test_revisions_service.py`, `test_reindex_cmd.py`,
+  `test_ingest.py` → focused run **597 passed**. Full `uv run pytest --cov`,
+  `uv run python evals/run_self_tests.py`, and the repo-wide quality gates
+  ran ONCE, combined, covering both Phase 10 and Phase 11 together at the
+  end of this apply batch (mirrors Phase 2a+2b's precedent of a shared
+  verification pass when two phases ship in one apply session), run only
+  after both phases' source edits were complete and stable — an earlier
+  `--cov` run launched right after Phase 10 alone overlapped with the start
+  of Phase 11's own source edits and produced a corrupted, disregarded
+  result for `state/reindex.py`'s coverage specifically (see 10.22's note).
+  Results: `uv run ruff check .` — All checks passed! (378 files); `uv run
+  ruff format --check .` — 378 files already formatted; `uv run mypy .` —
+  Success, no issues found in 378 source files; `uv run pytest --cov`
+  (unpiped, 422.02s wall time) — **7413 passed, 0 failed, 2 skipped**,
+  96.85% branch coverage (>= 90% gate held; `state/reindex.py` itself: 163
+  statements, 9 missed, 96%, all pre-existing partial-failure fold-in
+  branches unrelated to this change; `state/question_vectors.py`: 65
+  statements, 3 missed, 96%); `uv run python evals/run_self_tests.py`
+  (`OLLAMA_HOST` poisoned to `http://127.0.0.1:1`) — **44 of 44 harness
+  self-test(s) run, 0 failing**. All five commands green; re-ran the three
+  quality gates a second time after this note itself was written
+  (tasks.md-only edit, no source touched) to confirm nothing drifted —
+  still clean.
 - [ ] **11.24** Commit, scope `state` (or the nearest AGENTS.md-listed scope
   if `state` is not on the list at commit time — e.g. `memory`). Open PR 11
   targeting `main`, after PR 9 merges.
+
+  **Observed**: commit(s) to be made on the current branch
+  (`feat/1057-openai-p10`, same branch as Phase 10 per this apply run's own
+  instructions — "Phase 10 then 11, separate commits per phase" on ONE
+  branch, not a fresh `feat/1057-openai-p11` branch); "Open PR 11" left
+  unticked per apply-phase instructions (no push, no PR from this session
+  — left for the maintainer).
 
 **Rollback boundary**: revert `embedding_tag`/`parse_embedding_tag`/
 `EmbeddingTagParts`, the `reindex()` `embedding_backend` param,

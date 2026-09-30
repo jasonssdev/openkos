@@ -285,6 +285,7 @@ def read_decision_vectors(
     files: Mapping[str, bytes],
     *,
     embedding_model: str,
+    backend: str = config.DEFAULT_BACKEND,
 ) -> VectorCoverage:
     """Read each eligible Decision's document vector from `.openkos/
     vectors.db`'s `doc_vectors` table -- this function never embeds
@@ -296,6 +297,13 @@ def read_decision_vectors(
     absent from `files` (its file could not be read) is treated the same as
     a hash mismatch -- `stale`, never silently `vectors` -- because
     freshness cannot be confirmed either way.
+
+    `backend` (issue #1057 Phase 11) defaults to `config.DEFAULT_BACKEND`
+    (`"ollama"`), preserving every pre-Phase-11 caller's behavior
+    byte-identically; it is passed straight through to
+    `reindex.embedding_tag(embedding_model, backend)` for the stored-tag
+    comparison, so a backend switch reads as a `model-mismatch` exactly
+    like a model-name change would.
 
     Probes with `vector_store_is_empty` BEFORE ever calling
     `open_vector_store`: that probe reads over a plain read-only
@@ -311,7 +319,7 @@ def read_decision_vectors(
         return _ABSENT_COVERAGE
 
     try:
-        if store.read_model_tag() != reindex.embedding_tag(embedding_model):
+        if store.read_model_tag() != reindex.embedding_tag(embedding_model, backend):
             return _MODEL_MISMATCH_COVERAGE
         stored = store.document_vectors(decision_ids)
     finally:
@@ -512,6 +520,7 @@ def plan_revisions(
     embedding_model: str,
     effective_confidential: bool,
     fresh: bool,
+    backend: str = config.DEFAULT_BACKEND,
 ) -> RevisionPlan:
     """The zero-LLM, zero-embed planning step (design.md's Phase B re-plan
     Data flow): reads current vectors (`read_decision_vectors`), builds each
@@ -528,7 +537,10 @@ def plan_revisions(
     confirm it is still the CURRENT row (its own condition 1) -- one
     intentional redundant read per served candidate, accepted for this
     slice rather than widening `is_fresh`'s signature with a pre-fetched
-    cache parameter the design does not name."""
+    cache parameter the design does not name.
+
+    `backend` (issue #1057 Phase 11) defaults to `config.DEFAULT_BACKEND`,
+    forwarded straight through to `read_decision_vectors`."""
     decision_ids = [decision.concept_id for decision in decisions.decisions]
 
     current_bytes: dict[str, bytes] = {}
@@ -541,7 +553,11 @@ def plan_revisions(
             continue
 
     coverage = read_decision_vectors(
-        layout, decision_ids, current_bytes, embedding_model=embedding_model
+        layout,
+        decision_ids,
+        current_bytes,
+        embedding_model=embedding_model,
+        backend=backend,
     )
 
     files = _bundle_text_snapshot(layout)

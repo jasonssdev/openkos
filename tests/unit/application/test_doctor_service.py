@@ -121,7 +121,7 @@ def test_run_diagnostics_returns_exactly_fifteen_checks(tmp_path: Path) -> None:
     layout = _workspace(tmp_path)
     results = doctor_service.run_diagnostics(
         layout.root,
-        build_client=lambda _model: _FakeBackend(
+        build_client=lambda _cfg, _model: _FakeBackend(
             tags=[config.DEFAULT_MODEL, config.DEFAULT_EMBEDDING_MODEL]
         ),
         git_available=True,
@@ -188,7 +188,7 @@ def test_run_diagnostics_never_raises_outside_a_workspace_with_unreachable_backe
     everything-unreachable case those four never touch."""
     results = doctor_service.run_diagnostics(
         tmp_path,
-        build_client=lambda _model: _FakeBackend(
+        build_client=lambda _cfg, _model: _FakeBackend(
             error=_CustomBackendUnavailable("down")
         ),
         git_available=False,
@@ -226,7 +226,8 @@ def test_build_client_gets_the_same_model_check_2_reports_even_when_config_drift
 
     built_with: list[str] = []
 
-    def _build_client(model: str) -> _FakeBackend:
+    def _build_client(cfg: config.Config | None, model: str) -> _FakeBackend:
+        del cfg
         built_with.append(model)
         return _FakeBackend(tags=[model])
 
@@ -272,7 +273,7 @@ def test_run_diagnostics_lets_a_bundle_dot_directory_value_error_propagate_uncau
     with pytest.raises(ValueError, match="path outside the bundle"):
         doctor_service.run_diagnostics(
             layout.root,
-            build_client=lambda _model: _FakeBackend(
+            build_client=lambda _cfg, _model: _FakeBackend(
                 tags=[config.DEFAULT_MODEL, config.DEFAULT_EMBEDDING_MODEL]
             ),
             git_available=True,
@@ -324,7 +325,7 @@ def test_run_diagnostics_reports_not_run_when_survey_bundle_scan_torn_writes_or_
 
     results = doctor_service.run_diagnostics(
         layout.root,
-        build_client=lambda _model: _FakeBackend(
+        build_client=lambda _cfg, _model: _FakeBackend(
             tags=[config.DEFAULT_MODEL, config.DEFAULT_EMBEDDING_MODEL]
         ),
         git_available=True,
@@ -363,7 +364,7 @@ def test_run_diagnostics_reports_the_integrity_check_as_not_run_when_reset_point
 
     results = doctor_service.run_diagnostics(
         layout.root,
-        build_client=lambda _model: _FakeBackend(
+        build_client=lambda _cfg, _model: _FakeBackend(
             tags=[config.DEFAULT_MODEL, config.DEFAULT_EMBEDDING_MODEL]
         ),
         git_available=True,
@@ -400,7 +401,7 @@ def test_run_diagnostics_lets_an_unrelated_reset_point_available_exception_propa
     with pytest.raises(RuntimeError, match="bug in the thunk itself"):
         doctor_service.run_diagnostics(
             layout.root,
-            build_client=lambda _model: _FakeBackend(
+            build_client=lambda _cfg, _model: _FakeBackend(
                 tags=[config.DEFAULT_MODEL, config.DEFAULT_EMBEDDING_MODEL]
             ),
             git_available=True,
@@ -427,7 +428,7 @@ def test_run_diagnostics_reports_the_index_checks_as_not_run_when_bundle_readabl
 
     results = doctor_service.run_diagnostics(
         layout.root,
-        build_client=lambda _model: _FakeBackend(
+        build_client=lambda _cfg, _model: _FakeBackend(
             tags=[config.DEFAULT_MODEL, config.DEFAULT_EMBEDDING_MODEL]
         ),
         git_available=True,
@@ -455,7 +456,7 @@ def test_outside_workspace_workspace_check_fails_and_config_check_skips(
 ) -> None:
     results = doctor_service.run_diagnostics(
         tmp_path,
-        build_client=lambda _model: _FakeBackend(tags=[config.DEFAULT_MODEL]),
+        build_client=lambda _cfg, _model: _FakeBackend(tags=[config.DEFAULT_MODEL]),
         git_available=True,
         filter_repo_available=True,
         reset_point_available=lambda: False,
@@ -473,7 +474,7 @@ def test_outside_workspace_workspace_check_fails_and_config_check_skips(
 def test_outside_workspace_workspace_only_checks_all_skip(tmp_path: Path) -> None:
     results = doctor_service.run_diagnostics(
         tmp_path,
-        build_client=lambda _model: _FakeBackend(
+        build_client=lambda _cfg, _model: _FakeBackend(
             tags=[config.DEFAULT_MODEL, config.DEFAULT_EMBEDDING_MODEL]
         ),
         git_available=True,
@@ -498,7 +499,7 @@ def test_outside_workspace_backend_checks_still_run_against_default_model(
     `config.DEFAULT_EMBEDDING_MODEL`."""
     results = doctor_service.run_diagnostics(
         tmp_path,
-        build_client=lambda _model: _FakeBackend(
+        build_client=lambda _cfg, _model: _FakeBackend(
             tags=[config.DEFAULT_MODEL, config.DEFAULT_EMBEDDING_MODEL]
         ),
         git_available=True,
@@ -529,7 +530,7 @@ def test_critical_flag_matches_spec_per_check(tmp_path: Path) -> None:
     layout = _workspace(tmp_path)
     results = doctor_service.run_diagnostics(
         layout.root,
-        build_client=lambda _model: _FakeBackend(
+        build_client=lambda _cfg, _model: _FakeBackend(
             tags=[config.DEFAULT_MODEL, config.DEFAULT_EMBEDDING_MODEL]
         ),
         git_available=True,
@@ -568,7 +569,7 @@ def test_critical_check_failure_is_distinguishable_from_noncritical_failure(
 
     results = doctor_service.run_diagnostics(
         layout.root,
-        build_client=lambda _model: _FakeBackend(tags=[config.DEFAULT_MODEL]),
+        build_client=lambda _cfg, _model: _FakeBackend(tags=[config.DEFAULT_MODEL]),
         git_available=True,
         filter_repo_available=True,
         reset_point_available=lambda: False,
@@ -596,7 +597,7 @@ def test_backend_unavailable_uses_the_generic_base_type_not_a_concrete_ollama_ty
     monkeypatch.setattr(shutil, "which", lambda _name: "/usr/local/bin/ollama")
     results = doctor_service.run_diagnostics(
         tmp_path,
-        build_client=lambda _model: _FakeBackend(
+        build_client=lambda _cfg, _model: _FakeBackend(
             error=_CustomBackendUnavailable("connection refused")
         ),
         git_available=True,
@@ -618,7 +619,7 @@ def test_backend_unavailable_names_the_missing_binary_when_ollama_is_not_on_path
     monkeypatch.setattr(shutil, "which", lambda _name: None)
     results = doctor_service.run_diagnostics(
         tmp_path,
-        build_client=lambda _model: _FakeBackend(
+        build_client=lambda _cfg, _model: _FakeBackend(
             error=_CustomBackendUnavailable("connection refused")
         ),
         git_available=True,
@@ -638,7 +639,7 @@ def test_backend_error_that_is_not_unavailable_fails_with_no_remediation(
     remediation -- only a transport failure does."""
     results = doctor_service.run_diagnostics(
         tmp_path,
-        build_client=lambda _model: _FakeBackend(
+        build_client=lambda _cfg, _model: _FakeBackend(
             error=_CustomBackendError("Ollama request failed (500)")
         ),
         git_available=True,
@@ -660,7 +661,7 @@ def test_unreachable_backend_blocks_model_and_embedding_checks_with_skip(
     them rather than reporting a second, redundant `fail`."""
     results = doctor_service.run_diagnostics(
         tmp_path,
-        build_client=lambda _model: _FakeBackend(
+        build_client=lambda _cfg, _model: _FakeBackend(
             error=_CustomBackendUnavailable("down")
         ),
         git_available=True,
@@ -685,7 +686,7 @@ def test_model_tag_matches_bare_configured_against_latest_installed(
     layout = _workspace(tmp_path, model="customtag")
     results = doctor_service.run_diagnostics(
         layout.root,
-        build_client=lambda _model: _FakeBackend(tags=["customtag:latest"]),
+        build_client=lambda _cfg, _model: _FakeBackend(tags=["customtag:latest"]),
         git_available=True,
         filter_repo_available=True,
         reset_point_available=lambda: True,
@@ -699,7 +700,7 @@ def test_model_tag_matches_bare_configured_against_latest_installed(
 def test_git_available_boolean_is_injected_verbatim(tmp_path: Path) -> None:
     results_true = doctor_service.run_diagnostics(
         tmp_path,
-        build_client=lambda _model: _FakeBackend(tags=[config.DEFAULT_MODEL]),
+        build_client=lambda _cfg, _model: _FakeBackend(tags=[config.DEFAULT_MODEL]),
         git_available=True,
         filter_repo_available=True,
         reset_point_available=lambda: False,
@@ -708,7 +709,7 @@ def test_git_available_boolean_is_injected_verbatim(tmp_path: Path) -> None:
 
     results_false = doctor_service.run_diagnostics(
         tmp_path,
-        build_client=lambda _model: _FakeBackend(tags=[config.DEFAULT_MODEL]),
+        build_client=lambda _cfg, _model: _FakeBackend(tags=[config.DEFAULT_MODEL]),
         git_available=False,
         filter_repo_available=True,
         reset_point_available=lambda: False,
@@ -722,7 +723,7 @@ def test_git_available_boolean_is_injected_verbatim(tmp_path: Path) -> None:
 def test_filter_repo_available_boolean_is_injected_verbatim(tmp_path: Path) -> None:
     results = doctor_service.run_diagnostics(
         tmp_path,
-        build_client=lambda _model: _FakeBackend(tags=[config.DEFAULT_MODEL]),
+        build_client=lambda _cfg, _model: _FakeBackend(tags=[config.DEFAULT_MODEL]),
         git_available=True,
         filter_repo_available=False,
         reset_point_available=lambda: False,
@@ -792,7 +793,7 @@ def test_reset_point_available_true_names_the_git_reset_remedy(tmp_path: Path) -
 
     results = doctor_service.run_diagnostics(
         layout.root,
-        build_client=lambda _model: _FakeBackend(tags=[config.DEFAULT_MODEL]),
+        build_client=lambda _cfg, _model: _FakeBackend(tags=[config.DEFAULT_MODEL]),
         git_available=True,
         filter_repo_available=True,
         reset_point_available=lambda: True,
@@ -813,7 +814,7 @@ def test_reset_point_available_false_names_no_reset_remedy(tmp_path: Path) -> No
 
     results = doctor_service.run_diagnostics(
         layout.root,
-        build_client=lambda _model: _FakeBackend(tags=[config.DEFAULT_MODEL]),
+        build_client=lambda _cfg, _model: _FakeBackend(tags=[config.DEFAULT_MODEL]),
         git_available=True,
         filter_repo_available=True,
         reset_point_available=lambda: False,
@@ -831,8 +832,9 @@ def test_reset_point_available_false_names_no_reset_remedy(tmp_path: Path) -> No
 
 def _recording_build_client(
     built_with: list[str],
-) -> Callable[[str], _FakeBackend]:
-    def _build(model: str) -> _FakeBackend:
+) -> Callable[[config.Config | None, str], _FakeBackend]:
+    def _build(cfg: config.Config | None, model: str) -> _FakeBackend:
+        del cfg
         built_with.append(model)
         return _FakeBackend()
 
@@ -895,7 +897,7 @@ def test_backend_host_locality_reads_from_the_same_client_check_3_used(
     )
     results = doctor_service.run_diagnostics(
         tmp_path,
-        build_client=lambda _model: _FakeBackend(
+        build_client=lambda _cfg, _model: _FakeBackend(
             tags=[config.DEFAULT_MODEL], locality=remote_locality
         ),
         git_available=True,
@@ -914,7 +916,7 @@ def test_backend_host_locality_skips_but_still_reports_when_unreachable(
 ) -> None:
     results = doctor_service.run_diagnostics(
         tmp_path,
-        build_client=lambda _model: _FakeBackend(
+        build_client=lambda _cfg, _model: _FakeBackend(
             error=_CustomBackendUnavailable("down")
         ),
         git_available=True,
@@ -955,7 +957,7 @@ def test_reset_point_thunk_is_not_called_without_a_nesting_violation(
 
     doctor_service.run_diagnostics(
         layout.root,
-        build_client=lambda _model: _FakeBackend(
+        build_client=lambda _cfg, _model: _FakeBackend(
             tags=[config.DEFAULT_MODEL, config.DEFAULT_EMBEDDING_MODEL]
         ),
         git_available=True,

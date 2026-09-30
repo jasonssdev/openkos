@@ -112,6 +112,30 @@ def test_flags_reach_serve_and_command_metadata(
     assert commands["mcp_cmd"].rich_help_panel == "Explore"
 
 
+def test_mcp_cmd_embed_site_uses_the_embed_client_delegator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`mcp`'s embedding-host advisory client is built through
+    `cli_main._embed_client(cfg)` (issue #1057 Phase 10, task 10.11-10.12),
+    not a direct `OllamaClient(model=cfg.embedding_model)` construction.
+    **RED today**: `mcp_cmd` still constructs `OllamaClient` directly."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_serve(monkeypatch)
+    calls: list[object] = []
+    original_embed_client = cli_main._embed_client
+
+    def _spy(cfg: object) -> object:
+        calls.append(cfg)
+        return original_embed_client(cfg)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(cli_main, "_embed_client", _spy)
+
+    result = runner.invoke(app, ["mcp", "--workspace", str(tmp_path)])
+
+    assert result.exit_code == 0, result.stdout
+    assert len(calls) == 1
+
+
 def test_mcp_module_not_imported_at_cli_startup() -> None:
     """`openkos.mcp` is absent from `sys.modules` after a fresh `import
     openkos.cli.main` -- the lazy-import half of "The CLI imports mcp

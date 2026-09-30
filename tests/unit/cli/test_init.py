@@ -21,13 +21,14 @@ import time
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 import pytest
 from typer.testing import CliRunner, _NamedTextIOWrapper
 
 from openkos import config
+from openkos.application import backends as application_backends
 from openkos.cli.main import app
 from openkos.config import DEFAULT_MODEL
 from openkos.llm.ollama import InstalledModel, OllamaUnavailable
@@ -1036,6 +1037,47 @@ def test_embedding_picker_reuses_shared_probe_no_second_reachability_request(
 
     assert result.exit_code == 0
     assert call_count == 2
+
+
+def test_picker_and_preflight_probes_use_the_diagnostics_client_resolver(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both of `init`'s liveness probes -- the Phase A picker probe
+    (`_probe_installed_models`) and the post-success preflight probe --
+    build their client through `application_backends.diagnostics_client(
+    None, model=..., timeout=_PREFLIGHT_TIMEOUT, factories=...)` (issue
+    #1057 Phase 10, tasks 10.15-10.16), never a direct
+    `OllamaClient(model=..., timeout=...)` construction. `cfg=None` on
+    both, per O1: `init` runs before any workspace config exists. **RED
+    today**: both sites still construct `OllamaClient` directly."""
+    monkeypatch.chdir(tmp_path)
+    _simulate_tty(monkeypatch)
+    calls: list[tuple[config.Config | None, str, float]] = []
+    original_diagnostics_client = application_backends.diagnostics_client
+
+    def _spy(
+        cfg: config.Config | None,
+        *,
+        model: str,
+        timeout: float,
+        factories: application_backends.BackendFactories,
+        purpose: Literal["chat", "embed"] = "chat",
+    ) -> object:
+        calls.append((cfg, model, timeout))
+        return original_diagnostics_client(
+            cfg, model=model, timeout=timeout, factories=factories, purpose=purpose
+        )
+
+    monkeypatch.setattr(application_backends, "diagnostics_client", _spy)
+
+    result = runner.invoke(app, ["init"], input="\n\n")
+
+    assert result.exit_code == 0
+    assert len(calls) == 2
+    for cfg, _model, timeout in calls:
+        assert cfg is None
+        assert timeout == 5.0
+    assert calls[0][1] == DEFAULT_MODEL
 
 
 def test_sticky_reembed_warning_prints_on_every_successful_init_tty(

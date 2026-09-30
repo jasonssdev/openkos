@@ -209,7 +209,7 @@ def _make_llm(cfg: config.Config) -> LLMBackend:
 
 
 def _make_embedder(cfg: config.Config) -> Embedder:
-    return OllamaClient(model=cfg.embedding_model)
+    return application_backends.embed_client(cfg, factories=_backend_factories())
 
 
 def _local_exemption_for(client: LLMBackend, cfg: config.Config) -> bool:

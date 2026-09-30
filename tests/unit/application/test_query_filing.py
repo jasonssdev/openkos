@@ -553,6 +553,52 @@ def test_scan_for_duplicates_finds_a_positive_match(tmp_path: Path) -> None:
     assert [c.concept_id for c in scan.candidates] == ["insights/why-stoicism"]
 
 
+def test_scan_for_duplicates_uses_the_backend_aware_cache_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`scan_for_duplicates` opens the question-vector cache with
+    `question_vectors.cache_key(cfg.embedding_model, cfg.backend)` rather
+    than the bare `cfg.embedding_model` (issue #1057 Phase 11, tasks
+    11.16-11.17; query-command: "A backend switch does not reuse a cached
+    question vector", "An ollama-backend cache key stays bare"). Uses a
+    NON-`ollama` backend precisely because `cache_key(model, "ollama") ==
+    model` -- the ollama path alone cannot distinguish "wired through
+    cache_key" from "still bare `cfg.embedding_model`" (both produce the
+    identical string). **RED today**: still bare `cfg.embedding_model`, so
+    the `openai-compatible` case's `model_tag` never carries the
+    `#backend=` suffix."""
+    import dataclasses
+
+    from openkos.state import question_vectors
+
+    layout, cfg = _workspace(tmp_path)
+    cfg = dataclasses.replace(cfg, backend="openai-compatible")
+    _write_insight(layout.bundle_dir, "filed", description="a filed question?")
+
+    calls: list[str] = []
+    original_init = question_vectors.QuestionVectorStore.__init__
+
+    def _spy_init(
+        self: question_vectors.QuestionVectorStore,
+        conn: object,
+        model_tag: str,
+    ) -> None:
+        calls.append(model_tag)
+        original_init(self, conn, model_tag)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(question_vectors.QuestionVectorStore, "__init__", _spy_init)
+
+    query_service.scan_for_duplicates(
+        "a new question?",
+        layout=layout,
+        cfg=cfg,
+        embedder=_RaisingEmbedder(),
+    )
+
+    assert calls == [question_vectors.cache_key(cfg.embedding_model, cfg.backend)]
+    assert calls == [f"{cfg.embedding_model}#backend=openai-compatible"]
+
+
 def _plan() -> query_service.FiledAnswerPlan:
     return query_service.FiledAnswerPlan(
         link_dir="insights",

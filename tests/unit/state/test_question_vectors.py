@@ -198,3 +198,26 @@ def test_pruning_deletes_more_rows_than_sqlite_binds(
     question_vectors.prune_missing(conn, set())
 
     assert list(question_vectors.iter_vectors(conn, "bge-m3")) == []
+
+
+# --- Phase 11 (issue #1057): backend-aware cache key ------------------------
+
+
+def test_cache_key_ollama_is_bare_model_name() -> None:
+    """`cache_key("bge-m3", "ollama") == "bge-m3"` -- byte-identical to the
+    bare model name a caller used as the `model_tag` before this change, so
+    existing cached rows stay valid (query-command: "An ollama-backend
+    cache key stays bare, so existing rows remain valid"). **RED today**:
+    `cache_key` doesn't exist."""
+    assert question_vectors.cache_key("bge-m3", "ollama") == "bge-m3"
+
+
+def test_cache_key_openai_compatible_appends_backend_suffix() -> None:
+    """A non-`ollama` backend appends the same `#backend=<backend>` suffix
+    rule `state.reindex.embedding_tag` uses, without the composition part
+    (query-command: "A backend switch does not reuse a cached question
+    vector")."""
+    assert (
+        question_vectors.cache_key("bge-m3", "openai-compatible")
+        == "bge-m3#backend=openai-compatible"
+    )

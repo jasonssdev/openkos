@@ -60,6 +60,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
+from openkos import config
 from openkos import sensitivity as sensitivity_policy
 from openkos.extraction.concept import _chunk_lines
 from openkos.llm.base import (
@@ -101,25 +102,74 @@ window that never truncates, since a wider window keeps more intra-document
 context in one vector."""
 
 
-def embedding_tag(model: str) -> str:
+def embedding_tag(model: str, backend: str = config.DEFAULT_BACKEND) -> str:
     """Compose `model` with `EMBED_COMPOSITION_TAG` (design.md Decision B1,
     "Candidate Vectors Come From The Reindexed Vector Store"): the stored
     `embedding_model` tag format a reader compares against to decide
     whether `vectors.db`'s vectors match the currently configured embedding
     model. Public so a caller outside this module (`application/
     revisions.py`) can compute the SAME tag without duplicating the
-    composition -- find it and use it, do not invent a parallel one."""
-    return f"{model}#{EMBED_COMPOSITION_TAG}"
+    composition -- find it and use it, do not invent a parallel one.
+
+    `backend` (issue #1057 Phase 11, design Decision 7) additionally
+    identifies the backend kind for a non-`ollama` backend: the tag gains a
+    trailing `#backend=<backend>` attribute, byte-identical to before this
+    parameter existed for `backend == config.DEFAULT_BACKEND` (`"ollama"`).
+    `#`/`=` cannot occur inside a validated model token
+    (`config._MODEL_TOKEN_RE` allows only `[A-Za-z0-9._:/-]`), so this
+    encoding never collides with a model name that itself contains `:`/`/`.
+    """
+    tag = f"{model}#{EMBED_COMPOSITION_TAG}"
+    return tag if backend == config.DEFAULT_BACKEND else f"{tag}#backend={backend}"
 
 
-def _effective_model_tag(model_tag: str | None) -> str | None:
-    """Compose `model_tag` with `EMBED_COMPOSITION_TAG` for the tag-gate
-    comparison and persistence -- `None` stays `None` (the tag gate's
-    pure-no-op default, unaffected by the composition scheme). Delegates to
-    `embedding_tag` for the non-`None` case so the two never drift apart."""
+@dataclass(frozen=True, slots=True)
+class EmbeddingTagParts:
+    """A stored or effective embedding tag, split into its named parts
+    (issue #1057 Phase 11, design Decision 7)."""
+
+    model: str
+    """The bare model name -- the tag's first `#`-separated field."""
+    composition: str
+    """The embed-text composition scheme (`EMBED_COMPOSITION_TAG`) -- the
+    tag's second `#`-separated field, `""` for a PRE-COMPOSITION legacy tag
+    (a bare model name with no `#` at all)."""
+    backend: str
+    """The backend kind the tag identifies -- `config.DEFAULT_BACKEND`
+    (`"ollama"`) when the tag carries no `backend=` attribute at all, so a
+    legacy, backend-unqualified tag written before this change is always
+    read as `ollama` (reindex-command: "An existing Ollama-only store
+    forces no re-embed on upgrade")."""
+
+
+def parse_embedding_tag(tag: str) -> EmbeddingTagParts:
+    """Split `tag` into `EmbeddingTagParts` (design Decision 7): the first
+    `#`-separated field is the model, the second the composition, and each
+    further `key=value` field is an attribute -- only `backend=` is read,
+    and any other/unknown attribute is silently ignored (forward-compatible
+    with a future attribute this version does not understand)."""
+    fields = tag.split("#")
+    model = fields[0]
+    composition = fields[1] if len(fields) > 1 else ""
+    backend = config.DEFAULT_BACKEND
+    for field in fields[2:]:
+        key, _, value = field.partition("=")
+        if key == "backend":
+            backend = value
+    return EmbeddingTagParts(model=model, composition=composition, backend=backend)
+
+
+def _effective_model_tag(
+    model_tag: str | None, backend: str = config.DEFAULT_BACKEND
+) -> str | None:
+    """Compose `model_tag` with `EMBED_COMPOSITION_TAG` (and `backend`, per
+    `embedding_tag`) for the tag-gate comparison and persistence -- `None`
+    stays `None` (the tag gate's pure-no-op default, unaffected by the
+    composition scheme or the backend kind). Delegates to `embedding_tag`
+    for the non-`None` case so the two never drift apart."""
     if model_tag is None:
         return None
-    return embedding_tag(model_tag)
+    return embedding_tag(model_tag, backend)
 
 
 def _compose_header(metadata: dict[str, object]) -> str:
@@ -266,6 +316,7 @@ def reindex(
     force: bool = False,
     fts_db_path: Path | None = None,
     model_tag: str | None = None,
+    embedding_backend: str = config.DEFAULT_BACKEND,
     on_progress: Callable[[int, int, str], None] | None = None,
     local_exemption: bool = False,
 ) -> ReindexReport:
@@ -339,6 +390,19 @@ def reindex(
     makes both the heavy re-embed AND a persistently unhealed doc visible to
     a caller instead of leaving them silent.
 
+    `embedding_backend` (issue #1057 Phase 11, design Decision 7) defaults
+    to `config.DEFAULT_BACKEND` (`"ollama"`), preserving every
+    pre-Phase-11 caller's behavior byte-identically. It is folded into
+    `model_tag` via `embedding_tag`/`_effective_model_tag`, and the
+    stored-vs-effective comparison below reads BOTH tags through
+    `parse_embedding_tag` (comparing `(model, backend)` pairs) instead of a
+    bare string compare -- a stored tag with no backend part is read as
+    `ollama` (an existing Ollama-only store forces no re-embed purely from
+    upgrading to a version that understands backend-qualified tags), and
+    switching `backend` while keeping the same model name IS itself a
+    mismatch (reindex-command: "Switching backend with the same model name
+    forces a re-embed").
+
     `on_progress` (issue #190, mirroring `suggest_edge_types`'s #134
     contract), if given, is called once per QUEUED doc -- a doc that
     reached its own individual `embedder.embed([text])` call -- in walk
@@ -387,9 +451,11 @@ def reindex(
     """
     cached_hashes = db.meta_hashes()
     stored_model_tag = db.read_model_tag()
-    effective_model_tag = _effective_model_tag(model_tag)
-    model_changed = (
-        effective_model_tag is not None and stored_model_tag != effective_model_tag
+    effective_model_tag = _effective_model_tag(model_tag, embedding_backend)
+    model_changed = effective_model_tag is not None and (
+        stored_model_tag is None
+        or parse_embedding_tag(stored_model_tag)
+        != parse_embedding_tag(effective_model_tag)
     )
     seen: set[str] = set()
     cache_hits = 0

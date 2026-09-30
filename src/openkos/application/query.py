@@ -783,7 +783,8 @@ def scan_for_duplicates(
             layout.insight_questions_db_path
         )
         question_cache = question_vectors.QuestionVectorStore(
-            question_cache_conn, cfg.embedding_model
+            question_cache_conn,
+            question_vectors.cache_key(cfg.embedding_model, cfg.backend),
         )
     except Exception:  # advisory: a cache that will not open never blocks a save
         question_cache = None

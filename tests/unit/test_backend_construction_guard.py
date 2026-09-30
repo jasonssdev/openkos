@@ -3,20 +3,19 @@
 `llm/` must go through the resolver seam (`application/backends.py`'s
 `chat_client`/`embed_client`/`diagnostics_client`) instead -- except inside
 a `BackendFactories(...)` expression, which IS the one legitimate place a
-concrete class reference is handed to the resolver (issue #1057 Phase 9,
+concrete class reference is handed to the resolver (issue #1057 Phase 9-10,
 design Decision 4; backend-selection spec "One Resolver Seam Constructs
 Every Chat And Embed Client").
 
-**Construction-guard ratchet** (tasks-phase decision 1, tasks.md): Phase 9
-migrates exactly the three CHAT sites -- `cli/main.py::_chat_client`,
-`cli/curate.py`'s stage loop, `mcp/server.py::_make_llm` -- none of which
-construct a client directly any more (they all call
-`application_backends.chat_client(...)`), so none needs an allowlist entry.
-Ten sites (seven embed constructions plus three diagnostics/probe sites,
-the "Construction sites routed through the resolver" table) still
-construct directly; Phase 10 migrates them and shrinks `_PENDING_SITES` to
-empty, at which point this guard's final test asserts the unconditional
-form (no allowlist at all).
+**Construction-guard ratchet, closed** (tasks-phase decision 1, tasks.md):
+Phase 9 migrated the three CHAT sites -- `cli/main.py::_chat_client`,
+`cli/curate.py`'s stage loop, `mcp/server.py::_make_llm` -- carrying an
+explicit `_PENDING_SITES` allowlist naming the seven embed constructions
+plus three diagnostics/probe sites Phase 9 left direct. Phase 10 migrated
+all ten (`cli/main.py::_embed_client`/`application_backends.diagnostics_client`
+at every remaining site, `mcp/server.py::_make_embedder`), so the allowlist
+is now EMPTY and this guard asserts the UNCONDITIONAL form: zero direct
+constructions anywhere outside `llm/`/`BackendFactories(...)`.
 
 Walks the AST rather than the raw text on purpose: several docstrings in
 `application/backends.py`/`cli/main.py` quote `OllamaClient(model=cfg.model)`
@@ -34,27 +33,6 @@ _SRC = _REPO_ROOT / "src" / "openkos"
 _LLM_DIR = _SRC / "llm"
 
 _CONCRETE_CLASS_NAMES = frozenset({"OllamaClient", "OpenAICompatibleClient"})
-
-_PENDING_SITES: frozenset[tuple[str, int]] = frozenset(
-    {
-        ("cli/main.py", 339),  # init picker probe (_probe_installed_models)
-        ("cli/main.py", 1770),  # init preflight
-        ("cli/main.py", 4194),  # _refresh_derived_after_write
-        ("cli/main.py", 4762),  # _ingest_batch's embed-host advisory
-        ("cli/main.py", 5748),  # _ingest_single
-        ("cli/main.py", 14831),  # query
-        ("cli/main.py", 15548),  # reindex
-        ("cli/main.py", 15930),  # doctor's _build_client
-        ("cli/main.py", 16382),  # mcp_cmd
-        ("mcp/server.py", 212),  # _make_embedder
-    }
-)
-"""Exactly the ten sites Phase 10 migrates (tasks-phase decision 1): seven
-embed-site constructions plus the three diagnostics/probe sites. A stale
-entry -- one that no longer points at an ACTUAL direct construction -- is
-itself a guard failure (`test_no_direct_client_construction_outside_llm_and_factories`'s
-second assertion), so the list cannot rot silently as Phase 10 migrates
-sites out from under it."""
 
 
 def _src_modules() -> list[Path]:
@@ -104,15 +82,14 @@ def _direct_construction_sites(tree: ast.Module) -> list[tuple[ast.Call, bool]]:
 def test_no_direct_client_construction_outside_llm_and_factories() -> None:
     """An AST walk of every `.py` under `src/openkos/` EXCEPT `llm/` rejects
     a bare `OllamaClient(`/`OpenAICompatibleClient(` call EXCEPT inside a
-    `BackendFactories(...)` expression, carrying the `_PENDING_SITES`
-    allowlist above (task 9.27). Also asserts every allowlisted entry still
-    points at an ACTUAL direct construction -- a stale entry is itself a
-    guard failure. **RED today (pre-Phase-9)**: the three chat sites this
-    change migrates were also direct constructions before Phase 9 landed;
-    **GREEN as shipped**: exactly the ten `_PENDING_SITES` entries remain,
-    all real."""
+    `BackendFactories(...)` expression -- the FINAL, unconditional form
+    (task 10.19): no allowlist parameter at all. **RED at Phase 9**: ten
+    sites (seven embed constructions plus three diagnostics/probe sites)
+    were still direct; **GREEN as shipped (Phase 10 complete)**: zero
+    exceptions anywhere outside `llm/`/`BackendFactories(...)`. Closes
+    backend-selection's "no test that selects either backend can reach the
+    network" contract for real."""
     offenders: dict[str, list[int]] = {}
-    matched_pending: set[tuple[str, int]] = set()
 
     for path in _src_modules():
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -120,29 +97,52 @@ def test_no_direct_client_construction_outside_llm_and_factories() -> None:
         for node, exempt in _direct_construction_sites(tree):
             if exempt:
                 continue
-            key = (rel, node.lineno)
-            if key in _PENDING_SITES:
-                matched_pending.add(key)
-                continue
             offenders.setdefault(rel, []).append(node.lineno)
 
     assert offenders == {}, (
         "direct OllamaClient(...)/OpenAICompatibleClient(...) construction "
-        f"found outside llm/, BackendFactories(...), and _PENDING_SITES: "
-        f"{offenders} -- route it through application_backends.chat_client/"
-        "embed_client/diagnostics_client instead"
-    )
-
-    stale = sorted(
-        f"{path}:{line}" for (path, line) in _PENDING_SITES - matched_pending
-    )
-    assert stale == [], (
-        f"_PENDING_SITES entries that no longer point at a real direct "
-        f"construction (stale allowlist -- narrow it): {stale}"
+        f"found outside llm/ and BackendFactories(...): {offenders} -- route "
+        "it through application_backends.chat_client/embed_client/"
+        "diagnostics_client instead"
     )
 
 
-# Mutation-proof (task 9.29): temporarily added
+def test_mutation_proof_a_migrated_embed_site_reintroducing_direct_construction_fails() -> (
+    None
+):
+    """Mutation-proof (task 10.20): a SYNTHETIC source fixture, shaped like
+    one of the ten sites Phase 10 migrated off the `_PENDING_SITES`
+    allowlist (`cli/main.py::_embed_client`), with a direct
+    `OllamaClient(model=cfg.embedding_model)` construction reintroduced in
+    place of the delegating `application_backends.embed_client(...)` call,
+    is flagged as an offender by the now-unconditional guard (mirrors
+    `test_neutral_catch_sites.py`'s synthetic-fixture mutation-proof
+    precedent rather than live-editing the real, currently-migrated
+    source). Proves the guard can still fail after the allowlist was
+    removed, rather than having quietly gone vacuous."""
+    mutated_source = (
+        "from openkos import config\n"
+        "from openkos.llm.ollama import OllamaClient\n"
+        "\n"
+        "\n"
+        "def _embed_client(cfg: config.Config) -> object:\n"
+        "    return OllamaClient(model=cfg.embedding_model)\n"
+    )
+    mutated_tree = ast.parse(mutated_source)
+
+    offenders: dict[str, list[int]] = {}
+    for node, exempt in _direct_construction_sites(mutated_tree):
+        if exempt:
+            continue
+        offenders.setdefault("cli/main.py", []).append(node.lineno)
+
+    assert offenders != {}, (
+        "the guard failed to catch a reintroduced direct OllamaClient(...) "
+        "construction at a migrated site -- it has gone vacuous"
+    )
+
+
+# Mutation-proof (task 9.29, Phase 9): temporarily added
 # `OllamaClient(model="mutation-probe")` as an extra statement inside
 # `application/backends.py::chat_client`'s Ollama branch (one of the three
 # MIGRATED chat sites' real construction point, since `_chat_client`/
@@ -151,3 +151,15 @@ def test_no_direct_client_construction_outside_llm_and_factories() -> None:
 # reporting exactly `{'application/backends.py': [281]}` under `offenders`
 # (not `_PENDING_SITES`, since that site is not allowlisted). Reverted with
 # the exact inverse edit, purged `__pycache__`, reconfirmed GREEN.
+#
+# Mutation-proof (task 10.20, Phase 10): the PERSISTED test above uses a
+# synthetic source fixture (task text explicitly permits "scratch copy or
+# planted fixture") since the real `cli/main.py::_embed_client` must stay
+# migrated at rest. Additionally confirmed against the REAL, live file
+# during this apply run: temporarily replaced `_embed_client`'s
+# `return application_backends.embed_client(cfg, factories=_backend_factories())`
+# body with `return OllamaClient(model=cfg.embedding_model)` (one of the ten
+# Phase-10-migrated sites); `test_no_direct_client_construction_outside_llm_and_factories`
+# failed, reporting exactly `{'cli/main.py': [206]}` under `offenders`.
+# Reverted with the exact inverse edit, purged `__pycache__`, reconfirmed
+# GREEN.
