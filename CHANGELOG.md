@@ -47,6 +47,13 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Fixed
 
+- The `AGENTS.md` that `init` writes into every workspace now says `provenance`
+  lists Concept IDs of Source documents (the `sources/<id>` form) instead of
+  "paths relative to the workspace root"
+  ([#1147](https://github.com/jasonssdev/openkos/issues/1147)). The old
+  sentence contradicted the ingestion spec, `lint`, and the canonical example,
+  and taught an agent operating a bundle the wrong shape for the field.
+
 - `unmerge` no longer silently overwrites a survivor edited after its merge
   ([#1110](https://github.com/jasonssdev/openkos/issues/1110)). It restored
   the survivor from the ledger's pre-merge snapshot unconditionally, with no
