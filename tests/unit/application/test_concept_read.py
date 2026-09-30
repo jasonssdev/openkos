@@ -154,6 +154,9 @@ def test_concept_record_status_is_stable_not_active(tmp_path: Path) -> None:
         "/etc/passwd",
         "index",
         "area/secret",
+        "..\\..\\x",
+        "C:\\x",
+        "a:b",
     ],
 )
 def test_read_concept_path_traversal_refusals(
