@@ -37,6 +37,7 @@ read anything, so nothing was written and a later re-run is exactly equivalent.
 import contextlib
 import hashlib
 import os
+import stat
 import sys
 import tempfile
 from collections.abc import Iterator
@@ -74,6 +75,16 @@ class WorkspaceBusyError(RuntimeError):
 
     Carries the operator-facing sentence directly, so every call site reports
     the same wording without formatting one of its own.
+    """
+
+
+class WorkspaceLockUnavailableError(RuntimeError):
+    """The lock directory or file cannot be trusted or opened (#1134).
+
+    Distinct from `WorkspaceBusyError` on purpose: busy is transient and
+    retry-safe, while this persists until the operator fixes the directory, so
+    the CLI reports it as a plain refusal rather than the retryable exit 3.
+    Carries the operator-facing sentence, including the fix.
     """
 
 
@@ -121,8 +132,53 @@ def _lock_dir() -> Path:
     geteuid = getattr(os, "geteuid", None)
     suffix = "" if geteuid is None else f"-{geteuid()}"
     directory = Path(tempfile.gettempdir()) / f"{LOCK_DIR_PREFIX}{suffix}"
-    directory.mkdir(mode=0o700, exist_ok=True)
+    try:
+        directory.mkdir(mode=0o700, exist_ok=True)
+    except OSError as exc:
+        raise WorkspaceLockUnavailableError(
+            f"cannot create the lock directory {directory} ({exc.strerror or exc}); "
+            f"nothing was read or written by this run -- remove or fix "
+            f"{directory} and try again"
+        ) from exc
+    if geteuid is not None:
+        _verify_lock_dir(directory, geteuid())
     return directory
+
+
+def _verify_lock_dir(directory: Path, euid: int) -> None:
+    """Refuse a lock directory that is not ours, not a real directory, or open
+    to group/other (#1134). `mkdir(exist_ok=True)` accepts whatever already sits
+    at the path, and the name is guessable from the uid, so another local user
+    can pre-create it. POSIX-only: Windows has no uid and its temp directory is
+    already per-user."""
+    fix = (
+        f"nothing was read or written by this run -- remove {directory} "
+        f"(or, if it is yours, `chmod 700 {directory}`) and try again"
+    )
+    try:
+        info = os.lstat(directory)
+    except OSError as exc:
+        raise WorkspaceLockUnavailableError(
+            f"cannot inspect the lock directory {directory} "
+            f"({exc.strerror or exc}); {fix}"
+        ) from exc
+    if stat.S_ISLNK(info.st_mode):
+        raise WorkspaceLockUnavailableError(
+            f"the lock directory {directory} is a symlink; {fix}"
+        )
+    if not stat.S_ISDIR(info.st_mode):
+        raise WorkspaceLockUnavailableError(
+            f"the lock directory {directory} is not a directory; {fix}"
+        )
+    if info.st_uid != euid:
+        raise WorkspaceLockUnavailableError(
+            f"the lock directory {directory} is not owned by you; {fix}"
+        )
+    if info.st_mode & 0o077:
+        raise WorkspaceLockUnavailableError(
+            f"the lock directory {directory} is accessible to other users "
+            f"(mode {stat.S_IMODE(info.st_mode):o}); {fix}"
+        )
 
 
 def lock_path_for(root: Path) -> Path:
@@ -154,7 +210,17 @@ def workspace_lock(root: Path) -> Iterator[Path]:
     contents are irrelevant and stay empty.
     """
     path = lock_path_for(root)
-    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fd = os.open(
+            path,
+            os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+    except OSError as exc:
+        raise WorkspaceLockUnavailableError(
+            f"cannot open the lock file {path} ({exc.strerror or exc}); nothing "
+            f"was read or written by this run -- remove {path} and try again"
+        ) from exc
     try:
         try:
             _acquire_exclusive_nonblocking(fd)

@@ -402,6 +402,14 @@ def _guard_workspace_lock(
                     err=True,
                 )
                 raise typer.Exit(code=3) from exc
+            except lock.WorkspaceLockUnavailableError as exc:
+                # Exit 1, not 3: a re-run refuses again until the directory is
+                # fixed, so the retry-safe code would be a false promise.
+                typer.echo(
+                    f"openkos {command_name}: refusing to run -- {exc}.",
+                    err=True,
+                )
+                raise typer.Exit(code=1) from exc
             except sqlite3.OperationalError as exc:
                 # The one place a derived store's lock contention (a writer or
                 # opener still blocked after `busy_timeout`) becomes a

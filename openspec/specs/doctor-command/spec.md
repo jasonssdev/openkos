@@ -881,6 +881,28 @@ advises.
 - WHEN `openkos doctor` runs
 - THEN no file in the workspace is created, modified, or deleted, and no
   fix command is executed by `doctor` itself
+### Requirement: Doctor Reports Group- Or World-Accessible Engine State
+
+In a workspace, `doctor` MUST report an informational, non-critical `[FAIL]`
+naming every existing `.openkos/` directory, file directly inside it, and
+`bundle/.state/` directory that group or other can access, with its mode and a
+one-line `chmod go-rwx <paths>` remediation. When nothing is exposed (and on
+platforms without POSIX modes) it MUST add no line, so the fixed check count is
+unchanged. `bundle/` and `raw/` MUST NOT be inspected for this check.
+
+#### Scenario: A world-readable store is named with the fix
+
+- GIVEN `.openkos/` has mode `0755` and `.openkos/fts.db` has mode `0644`
+- WHEN `openkos doctor` runs
+- THEN one non-critical `[FAIL]` names both paths with their modes and the
+  remediation is `chmod go-rwx .openkos .openkos/fts.db`
+
+#### Scenario: A private workspace adds no line
+
+- GIVEN `.openkos/` is `0700` and its files are `0600`
+- WHEN `openkos doctor` runs
+- THEN no engine-state line is printed
+
 ### Requirement: Not-Run Is Structured Data On The Returned CheckResult
 
 `run_diagnostics`'s returned `CheckResult` MUST carry `not-run` as a

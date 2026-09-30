@@ -380,7 +380,7 @@ def rewrite_both_at(
         if path.is_file():
             path.unlink()
         return path
-    path.parent.mkdir(parents=True, exist_ok=True)
+    fsio.mkdir_private(path.parent, top=okf.state_dir_of(path))
     container = _encode_container(concept_id, records, identity_records)
     fsio.write_atomic(path, okf.dump_frontmatter(container, body=""))
     return path
