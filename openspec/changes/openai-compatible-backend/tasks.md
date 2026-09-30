@@ -1180,42 +1180,120 @@ client (Phases 4-6) keeps working.
 
 ## Phase 8 (PR 8 → `main`, after PR 4, 5, 6, 7): Offline double + network guard
 
-- [ ] **8.1** [TEST] `tests/unit/test_network_guard.py` (extend) — add the
+- [x] **8.1** [TEST] `tests/unit/test_network_guard.py` (extend) — add the
   second parametrization entry `(OpenAICompatibleClient,
   OfflineOpenAICompatible)` alongside the existing `(OllamaClient,
   OfflineOllama)` pair. **RED today**: `ImportError` — `OfflineOpenAICompatible`
   doesn't exist.
-- [ ] **8.2** [IMPL] `tests/unit/conftest.py`: add `OfflineOpenAICompatible`,
+
+  **Observed**: RED confirmed —
+  `ImportError: cannot import name 'OfflineOpenAICompatible' from
+  'tests.unit.conftest'` on collection. Implemented as a module-level
+  `_NETWORK_GUARD_PAIRS` list plus `@pytest.mark.parametrize` on the
+  existing coverage test (see 8.6) rather than a literal second inline
+  entry, since the source test had no parametrization to extend into.
+- [x] **8.2** [IMPL] `tests/unit/conftest.py`: add `OfflineOpenAICompatible`,
   an in-memory test double implementing `LLMBackend`/`Embedder`/
   `BackendDiagnostics` with the same fixed-response, no-network shape as
   the existing `OfflineOllama` (read `OfflineOllama`'s current definition
   and mirror it one-to-one for the new client's method surface). Makes
   8.1's import succeed.
-- [ ] **8.3** [TEST] same — add `test_offline_double_never_reaches_network`:
+
+  **Observed**: `chat` returns `'{"extract": false}'`, `embed` returns a
+  fixed unit vector per input, `list_models` raises
+  `OpenAICompatibleUnavailable` — one-to-one mirror of `OfflineOllama`.
+  GREEN after this: `uv run pytest tests/unit/test_network_guard.py` → 20
+  passed (was 17 before Phase 8).
+- [x] **8.3** [TEST] same — add `test_offline_double_never_reaches_network`:
   the double's `chat`/`embed`/`list_models` calls never invoke a real
   socket connection (patch `socket.socket.connect` to raise if called,
   mirroring the existing Ollama guard technique).
-- [ ] **8.4** [IMPL] finish `OfflineOpenAICompatible`'s method surface until
+
+  **Observed**: passed on first run once 8.2 landed (no separate RED —
+  the double already had every method by 8.2).
+- [x] **8.4** [IMPL] finish `OfflineOpenAICompatible`'s method surface until
   8.3 is GREEN.
-- [ ] **8.5** [TEST] `tests/unit/test_network_guard.py` — add
+
+  **Observed**: no additional edit needed — 8.2's implementation already
+  covered `chat`/`embed`/`list_models` fully; 8.3 was GREEN immediately.
+- [x] **8.5** [TEST] `tests/unit/test_network_guard.py` — add
   `test_source_derived_coverage_includes_openai_compatible`: the guard's
   derivation walks `OpenAICompatibleClient`'s public method surface
   (chat/embed/list_models/locality/context_window/max_generation_tokens)
   and confirms `OfflineOpenAICompatible` implements every one — the SAME
   derivation technique already applied to `(OllamaClient, OfflineOllama)`,
   now parametrized over both pairs.
-- [ ] **8.6** [IMPL] wire the second parametrization entry into the existing
+
+  **Observed**: the derivation technique (a two-level closure over
+  `self._urlopen(`) only classifies NETWORK-reaching methods, exactly as
+  it already did for `OllamaClient` — `locality`/`context_window` are
+  pure properties with no I/O and `max_generation_tokens` is a
+  constructor-stored value, none of which call `self._urlopen`, so none
+  are in the derived set for either backend (matches `OfflineOllama`'s own
+  precedent, which likewise does not override `locality`). Implemented as
+  a literal-value pin (`_derive_network_methods(OpenAICompatibleClient) ==
+  {"chat", "embed", "list_models"}`), per the tasks-phase guidance that a
+  derived-vs-derived comparison needs a literal alongside it to avoid
+  circularity. Also asserts `(OpenAICompatibleClient,
+  OfflineOpenAICompatible) in _NETWORK_GUARD_PAIRS`.
+- [x] **8.6** [IMPL] wire the second parametrization entry into the existing
   derivation loop. Makes 8.5 GREEN and 8.1 fully green.
+
+  **Observed**: refactored `test_offline_stub_covers_every_network_method`
+  into `@pytest.mark.parametrize(("real_cls", "stub_cls"),
+  _NETWORK_GUARD_PAIRS, ids=["ollama", "openai_compatible"])`, with the
+  derivation extracted into a shared `_derive_network_methods(real_cls)`
+  helper. Both parametrize instances pass.
+
+  **Mutation-proof 1** (coverage guard, `openai_compatible` id): removed
+  `OfflineOpenAICompatible.list_models`'s override — test failed with
+  `the offline stub does not override ['list_models']`. Reverted with the
+  exact inverse edit, purged `__pycache__`, reconfirmed 20 passed.
+
+  **Mutation-proof 2** (`test_offline_double_never_reaches_network`):
+  changed the fixed embed vector's first element from `1.0` to `0.0` —
+  test failed on `assert vectors[0][0] == pytest.approx(1.0)`. Reverted,
+  purged `__pycache__`, reconfirmed green.
+
+  **Mutation-proof 3** (`test_source_derived_coverage_includes_openai_compatible`
+  and the `openai_compatible` parametrize id together): in
+  `src/openkos/llm/openai_compatible.py::chat`, temporarily hoisted
+  `self._urlopen` into a local (`_uo = self._urlopen; response =
+  _uo(...)`) so the literal `self._urlopen(` substring left `chat`'s
+  source — both tests failed (`the stub overrides ['chat'] but the
+  derivation no longer classifies them as network methods`, and the
+  literal-value pin's exact-set assertion). Reverted with the exact
+  inverse edit, purged `__pycache__`, reconfirmed both green.
 
 ### Phase 8 verification
 
-- [ ] **8.7** Run `uv run ruff check . && uv run ruff format --check . &&
+- [x] **8.7** Run `uv run ruff check . && uv run ruff format --check . &&
   uv run mypy .` — must be green.
-- [ ] **8.8** Run `uv run pytest tests/unit/test_network_guard.py` focused,
+
+  **Observed**: `ruff check .` initially flagged an unsorted import (fixed
+  with `ruff check --fix`) and a `PT006` tuple-vs-string parametrize id
+  (fixed manually: `("real_cls", "stub_cls")`); reconfirmed clean.
+  `ruff format --check .` flagged `tests/unit/conftest.py` and
+  `tests/unit/test_network_guard.py`; reformatted with `ruff format`,
+  reconfirmed clean (377 files). `mypy .`: clean, no issues in 377 source
+  files.
+- [x] **8.8** Run `uv run pytest tests/unit/test_network_guard.py` focused,
   then `uv run pytest --cov` full suite; then `uv run python
   evals/run_self_tests.py`.
+
+  **Observed**: focused → 20 passed (0.38s). Full `pytest --cov` (unpiped,
+  backgrounded — 434.36s wall time) → **7353 passed, 0 failed, 2 skipped**,
+  96.84% branch coverage (>= 90% gate held, `openai_compatible.py` itself
+  unaffected by this phase — no production code changed, only test
+  infrastructure). `evals/run_self_tests.py` (with `OLLAMA_HOST` poisoned):
+  44/44 green.
 - [ ] **8.9** Commit, scope `llm`. Open PR 8 targeting `main`, after PR 4,
   5, 6, 7 merge.
+
+  **Observed**: commit half done, scope `llm`, on branch
+  `feat/1057-openai-p8`; "Open PR 8" half intentionally left for the
+  orchestrator/maintainer per apply-phase instructions (no push, no PR
+  from this session) — left unticked.
 
 **Rollback boundary**: revert `OfflineOpenAICompatible` and the guard
 parametrization; the existing Ollama-only guard keeps working.

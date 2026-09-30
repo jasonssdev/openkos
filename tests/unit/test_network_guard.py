@@ -50,13 +50,30 @@ from typing import ClassVar
 import pytest
 
 from openkos.llm.ollama import OllamaClient
+from openkos.llm.openai_compatible import (
+    OpenAICompatibleClient,
+    OpenAICompatibleUnavailable,
+)
 from tests.unit.conftest import (
     BLOCKED_SOCKET_FUNCTIONS,
     BLOCKED_SOCKET_METHODS,
     GUARD_ATTRIBUTE,
     OfflineOllama,
+    OfflineOpenAICompatible,
     UnitSuiteNetworkAccessError,
 )
+
+_NETWORK_GUARD_PAIRS: list[tuple[type, type]] = [
+    (OllamaClient, OfflineOllama),
+    (OpenAICompatibleClient, OfflineOpenAICompatible),
+]
+"""Every (real client, offline double) pair the network guard must cover
+(issue #1057 Phase 8). `OllamaClient`/`OfflineOllama` is the pre-existing
+pair; `OpenAICompatibleClient`/`OfflineOpenAICompatible` is added here so
+the derivation-coverage check (`test_offline_stub_covers_every_network_method`)
+and its literal-value pin (`test_source_derived_coverage_includes_openai_compatible`)
+both run against both backends from the start, per the tasks-phase decision
+that a blanket construction guard is not required until Phase 9."""
 
 _UNROUTABLE = ("192.0.2.1", 11434)
 """TEST-NET-1 (RFC 5737): reserved for documentation and never routed.
@@ -256,6 +273,32 @@ def test_gethostbyname_refusal_names_a_keyword_hostname() -> None:
         socket.gethostbyname(hostname=_HOSTNAME)  # type: ignore[call-arg]
 
     assert _HOSTNAME in str(excinfo.value)
+
+
+def test_offline_double_never_reaches_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`OfflineOpenAICompatible`'s `chat`/`embed`/`list_models` never open a
+    real socket, proven independently of the ambient autouse guard (issue
+    #1057 Phase 8): patches `socket.socket.connect` to raise unconditionally,
+    then drives every network method and confirms none of them trip it.
+
+    Mirrors the technique `test_outbound_connect_is_refused` above uses to
+    prove the socket guard itself, applied here to prove the SEAM (the
+    double) rather than the backstop.
+    """
+
+    def _raise_if_called(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("socket.socket.connect was called")
+
+    monkeypatch.setattr(socket.socket, "connect", _raise_if_called)
+
+    double = OfflineOpenAICompatible(model="m", base_url="http://127.0.0.1:11434")
+
+    assert double.chat([{"role": "user", "content": "hi"}]) == '{"extract": false}'
+    vectors = double.embed(["a", "b"])
+    assert len(vectors) == 2
+    assert vectors[0][0] == pytest.approx(1.0)
+    with pytest.raises(OpenAICompatibleUnavailable):
+        double.list_models()
 
 
 def test_stub_coverage_reads_public_callables_only() -> None:
@@ -460,7 +503,38 @@ def _overridden_network_overrides(stub: type) -> set[str]:
     }
 
 
-def test_offline_stub_covers_every_network_method() -> None:
+def _derive_network_methods(real_cls: type) -> set[str]:
+    """The real client's own public network-method surface, derived from
+    its source rather than hardcoded (shared by both the parametrized
+    coverage check and its literal-value pin below).
+
+    The derivation is a two-level closure over `self._urlopen(` -- a CALL, so
+    the constructor's `self._urlopen = urlopen` assignment is correctly
+    excluded. One level is not enough: `chat` and `list_models` open the
+    connection themselves, but `embed` delegates to a private helper that
+    does, so a direct-callers-only rule would miss it and silently narrow
+    what this test protects.
+    """
+    sources = {
+        name: inspect.getsource(member)
+        for name, member in inspect.getmembers(real_cls, inspect.isfunction)
+    }
+    direct = {name for name, src in sources.items() if "self._urlopen(" in src}
+    private_direct = {name for name in direct if name.startswith("_")}
+    return {name for name in direct if not name.startswith("_")} | {
+        name
+        for name, src in sources.items()
+        if not name.startswith("_")
+        and any(f"self.{helper}(" in src for helper in private_direct)
+    }
+
+
+@pytest.mark.parametrize(
+    ("real_cls", "stub_cls"), _NETWORK_GUARD_PAIRS, ids=["ollama", "openai_compatible"]
+)
+def test_offline_stub_covers_every_network_method(
+    real_cls: type, stub_cls: type
+) -> None:
     """The offline stub must override EVERY network method of the real client.
 
     This is the regression test for #217's actual root cause. The previous
@@ -474,27 +548,13 @@ def test_offline_stub_covers_every_network_method() -> None:
     until the stub covers it. A hardcoded list would have to be remembered,
     which is exactly what went wrong the first time.
 
-    The derivation is a two-level closure over `self._urlopen(` -- a CALL, so
-    the constructor's `self._urlopen = urlopen` assignment is correctly
-    excluded. One level is not enough: `chat` and `list_models` open the
-    connection themselves, but `embed` delegates to a private helper that
-    does, so a direct-callers-only rule would miss it and silently narrow
-    what this test protects.
+    Parametrized over every `_NETWORK_GUARD_PAIRS` entry (issue #1057 Phase
+    8): the same #217 omission is exactly as possible for
+    `OpenAICompatibleClient`/`OfflineOpenAICompatible` as it was for Ollama,
+    so both backends run this check from the day the second one exists.
     """
-    sources = {
-        name: inspect.getsource(member)
-        for name, member in inspect.getmembers(OllamaClient, inspect.isfunction)
-    }
-    direct = {name for name, src in sources.items() if "self._urlopen(" in src}
-    private_direct = {name for name in direct if name.startswith("_")}
-    network_methods = {name for name in direct if not name.startswith("_")} | {
-        name
-        for name, src in sources.items()
-        if not name.startswith("_")
-        and any(f"self.{helper}(" in src for helper in private_direct)
-    }
-
-    overridden = _overridden_network_overrides(OfflineOllama)
+    network_methods = _derive_network_methods(real_cls)
+    overridden = _overridden_network_overrides(stub_cls)
 
     # Non-emptiness alone is too weak a vacuity check: it still passes if the
     # derivation silently loses ONE method -- say `embed`'s transport moves a
@@ -518,3 +578,24 @@ def test_offline_stub_covers_every_network_method() -> None:
         "the real network in every unit test that calls them -- this is exactly "
         "the #217 defect"
     )
+
+
+def test_source_derived_coverage_includes_openai_compatible() -> None:
+    """Literal-value pin, paired with the derived check above.
+
+    `test_offline_stub_covers_every_network_method` is a property test whose
+    two sides (`_derive_network_methods` and `_overridden_network_overrides`)
+    both walk source/`__dict__` -- circular on its own, per the tasks-phase
+    guidance that a derived-vs-derived comparison needs a literal expected
+    value alongside it. This pins the concrete, hand-checked set for
+    `OpenAICompatibleClient` (`chat`, `embed` via its `_embed_once` transport
+    helper, `list_models`) and confirms `_NETWORK_GUARD_PAIRS` actually
+    carries the OpenAI-compatible pair, so a future edit that drops the
+    parametrize entry (rather than merely emptying it) is caught here too.
+    """
+    assert (OpenAICompatibleClient, OfflineOpenAICompatible) in _NETWORK_GUARD_PAIRS
+    assert _derive_network_methods(OpenAICompatibleClient) == {
+        "chat",
+        "embed",
+        "list_models",
+    }

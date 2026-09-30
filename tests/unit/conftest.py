@@ -121,6 +121,10 @@ from openkos.llm.ollama import (
     OllamaClient,
     OllamaUnavailable,
 )
+from openkos.llm.openai_compatible import (
+    OpenAICompatibleClient,
+    OpenAICompatibleUnavailable,
+)
 
 
 class UnitSuiteNetworkAccessError(RuntimeError):
@@ -418,6 +422,40 @@ class OfflineOllama(OllamaClient):
     def list_models(self) -> list[InstalledModel]:
         raise OllamaUnavailable(
             "offline test default: no Ollama server (tests/unit/conftest.py)"
+        )
+
+
+class OfflineOpenAICompatible(OpenAICompatibleClient):
+    """A real `OpenAICompatibleClient` with EVERY network method stubbed.
+
+    Mirrors `OfflineOllama` one-to-one (issue #1057 Phase 8, task 8.2): a
+    SUBCLASS rather than a structural stand-in, for the same reason -- any
+    future test that legitimately asserts a genuine `OpenAICompatibleClient`
+    was constructed (`isinstance(..., OpenAICompatibleClient)`) keeps
+    working. Has no production caller yet: the resolver seam that would
+    inject it in place of a real client does not exist until Phase 9, so
+    this class exists now purely so `tests/unit/test_network_guard.py` can
+    parametrize its derivation/coverage checks over both backends from the
+    start (issue #1057 tasks-phase decision).
+
+    `chat` declines extraction and `embed` returns a fixed unit vector --
+    the same deliberately-uninteresting values `OfflineOllama` returns, for
+    the same reason: no test should accidentally depend on them.
+
+    `list_models` RAISES `OpenAICompatibleUnavailable`, mirroring
+    `OfflineOllama.list_models`'s no-server reproduction rather than
+    returning a populated list.
+    """
+
+    def chat(self, messages: Sequence[object]) -> str:
+        return '{"extract": false}'
+
+    def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        return [[1.0] + [0.0] * (EMBED_DIM - 1) for _ in texts]
+
+    def list_models(self) -> list[InstalledModel]:
+        raise OpenAICompatibleUnavailable(
+            "offline test default: no OpenAI-compatible server (tests/unit/conftest.py)"
         )
 
 
