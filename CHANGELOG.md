@@ -160,6 +160,16 @@ move rather than by inspection after it.
 
 ### Security
 
+- A workspace `openkos.yaml` that points the `openai-compatible` backend at
+  a remote host no longer receives your `OPENKOS_OPENAI_API_KEY`
+  silently ([#1130](https://github.com/jasonssdev/openkos/issues/1130)).
+  Whenever the key is about to go to a non-local host, one stderr notice
+  names that host (scheme, host and port; never the key or the path), once
+  per process for each distinct chat or embedding host, and the MCP server
+  logs it to stderr rather than stdout. A plain-`http://` host keeps its
+  stronger existing warning alone. `openkos doctor` gains an `API key
+  destination` line stating where the key will be sent.
+
 - Embedding was not gated on sensitivity, so `confidential` text reached a
   remote backend ([#922](https://github.com/jasonssdev/openkos/issues/922)).
   `sensitivity` governs egress, and an embed call against a backend that is

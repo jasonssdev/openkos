@@ -603,6 +603,126 @@ def test_insecure_key_warning_never_includes_the_key_value(tmp_path: Path) -> No
     assert "sk-super-secret-sentinel" not in warning
 
 
+_KEY_ENV = {"OPENKOS_OPENAI_API_KEY": "secret"}
+
+
+@pytest.mark.parametrize(
+    ("environ", "base_url", "embedding_base_url", "expected_origins"),
+    [
+        (_KEY_ENV, "https://api.example.com/v1", None, ["https://api.example.com"]),
+        (
+            _KEY_ENV,
+            "https://api.example.com:8443/v1?x=1",
+            None,
+            ["https://api.example.com:8443"],
+        ),
+        (
+            _KEY_ENV,
+            "https://api.example.com/v1",
+            "https://embed.example.org/v1",
+            ["https://api.example.com", "https://embed.example.org"],
+        ),
+        (_KEY_ENV, "http://127.0.0.1:8080", None, []),
+        (_KEY_ENV, "https://localhost:8080/v1", None, []),
+        ({}, "https://api.example.com/v1", None, []),
+        # plain http to a non-local host: the stronger warning owns that host.
+        (_KEY_ENV, "http://example.com:8080", None, []),
+        (
+            _KEY_ENV,
+            "http://example.com:8080",
+            "https://embed.example.org",
+            ["https://embed.example.org"],
+        ),
+    ],
+    ids=[
+        "https_remote",
+        "port_kept_path_query_dropped",
+        "chat_and_embed_differ",
+        "loopback_ip",
+        "localhost",
+        "no_key",
+        "http_remote_superseded",
+        "http_chat_https_embed",
+    ],
+)
+def test_remote_key_notices_matrix(
+    tmp_path: Path,
+    environ: dict[str, str],
+    base_url: str,
+    embedding_base_url: str | None,
+    expected_origins: list[str],
+) -> None:
+    cfg = _cfg(
+        tmp_path,
+        backend="openai-compatible",
+        base_url=base_url,
+        embedding_base_url=embedding_base_url,
+    )
+
+    notices = backends.remote_key_notices(cfg, environ=environ)
+
+    assert [origin for origin, _ in notices] == expected_origins
+    for origin, message in notices:
+        assert origin in message
+        assert "secret" not in message
+        assert "?" not in message
+        assert "/v1" not in message
+
+
+def test_remote_key_notices_absent_for_ollama(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path, base_url="https://api.example.com/v1")
+
+    assert backends.remote_key_notices(cfg, environ=_KEY_ENV) == ()
+
+
+def test_remote_key_notices_dedupe_identical_chat_and_embed_origin(
+    tmp_path: Path,
+) -> None:
+    cfg = _cfg(
+        tmp_path,
+        backend="openai-compatible",
+        base_url="https://api.example.com/v1",
+        embedding_base_url="https://api.example.com/embed",
+    )
+
+    notices = backends.remote_key_notices(cfg, environ=_KEY_ENV)
+
+    assert [origin for origin, _ in notices] == ["https://api.example.com"]
+
+
+@pytest.mark.parametrize(
+    ("backend", "base_url", "environ", "expected"),
+    [
+        ("ollama", None, _KEY_ENV, None),
+        ("openai-compatible", "https://api.example.com/v1", {}, None),
+        (
+            "openai-compatible",
+            "https://api.example.com:8443/v1?q=1",
+            _KEY_ENV,
+            "https://api.example.com:8443",
+        ),
+        (
+            "openai-compatible",
+            "http://127.0.0.1:8080",
+            _KEY_ENV,
+            "http://127.0.0.1:8080",
+        ),
+    ],
+)
+def test_key_destination(
+    tmp_path: Path,
+    backend: str,
+    base_url: str | None,
+    environ: dict[str, str],
+    expected: str | None,
+) -> None:
+    cfg = _cfg(tmp_path, backend=backend, base_url=base_url)
+
+    assert backends.key_destinations(cfg, environ=environ) == (
+        () if expected is None else (expected,)
+    )
+
+
 def test_openai_api_key_without_prefix_is_never_read(tmp_path: Path) -> None:
     """`OPENAI_API_KEY` (no prefix) set, `OPENKOS_OPENAI_API_KEY` unset;
     `chat_client`/`embed_client` construct the `openai-compatible` factory
