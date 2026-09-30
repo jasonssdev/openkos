@@ -1,0 +1,856 @@
+{
+  "model": "bge-m3",
+  "current_threshold": 0.7,
+  "pairs": [
+    {
+      "a": "concepts/stoicism",
+      "b": "concepts/stoic-ethics",
+      "label": "related",
+      "hard": false,
+      "reason": "the ethics is a part of the school",
+      "origin": "smoke-v1",
+      "cosine": 0.799743435838405
+    },
+    {
+      "a": "concepts/existentialism",
+      "b": "concepts/existentialist-ethics",
+      "label": "related",
+      "hard": false,
+      "reason": "the ethics is a part of the movement",
+      "origin": "smoke-v1",
+      "cosine": 0.8042940059632986
+    },
+    {
+      "a": "concepts/medieval-crop-rotation",
+      "b": "concepts/modern-crop-irrigation",
+      "label": "related",
+      "hard": true,
+      "reason": "both manage field-crop inputs; the weakest original positive",
+      "origin": "smoke-v1",
+      "cosine": 0.5841525381166839
+    },
+    {
+      "a": "concepts/stoicism",
+      "b": "concepts/medieval-crop-rotation",
+      "label": "unrelated",
+      "hard": false,
+      "reason": "the original calibration's unrelated anchor",
+      "origin": "smoke-v1",
+      "cosine": 0.3557523629130145
+    },
+    {
+      "a": "concepts/stoicism",
+      "b": "concepts/sourdough-bread-baking",
+      "label": "unrelated",
+      "hard": false,
+      "reason": "philosophy vs baking",
+      "origin": "smoke-v1",
+      "cosine": 0.38773940325287126
+    },
+    {
+      "a": "concepts/existentialism",
+      "b": "concepts/byzantine-naval-architecture",
+      "label": "unrelated",
+      "hard": false,
+      "reason": "philosophy vs naval history",
+      "origin": "smoke-v1",
+      "cosine": 0.27735285291507283
+    },
+    {
+      "a": "concepts/stoic-ethics",
+      "b": "concepts/modern-crop-irrigation",
+      "label": "unrelated",
+      "hard": false,
+      "reason": "philosophy vs irrigation",
+      "origin": "smoke-v1",
+      "cosine": 0.27053981214515577
+    },
+    {
+      "a": "concepts/existentialist-ethics",
+      "b": "concepts/sourdough-bread-baking",
+      "label": "unrelated",
+      "hard": false,
+      "reason": "philosophy vs baking",
+      "origin": "smoke-v1",
+      "cosine": 0.39105023046016524
+    },
+    {
+      "a": "concepts/medieval-crop-rotation",
+      "b": "concepts/byzantine-naval-architecture",
+      "label": "unrelated",
+      "hard": false,
+      "reason": "farming vs shipbuilding",
+      "origin": "smoke-v1",
+      "cosine": 0.39962639699932806
+    },
+    {
+      "a": "concepts/stoicism",
+      "b": "concepts/marcus-aurelius-meditations",
+      "label": "related",
+      "hard": true,
+      "reason": "the canonical Stoic text; never names the school",
+      "origin": "calibration-v1",
+      "cosine": 0.43891855906989824
+    },
+    {
+      "a": "concepts/stoic-ethics",
+      "b": "concepts/marcus-aurelius-meditations",
+      "label": "related",
+      "hard": true,
+      "reason": "applied Stoic ethics in diary form",
+      "origin": "calibration-v1",
+      "cosine": 0.42377043836282335
+    },
+    {
+      "a": "concepts/stoicism",
+      "b": "concepts/estoicismo",
+      "label": "related",
+      "hard": true,
+      "reason": "the same concept in Spanish",
+      "origin": "calibration-v1",
+      "cosine": 0.8361771115222988
+    },
+    {
+      "a": "concepts/stoic-ethics",
+      "b": "concepts/estoicismo",
+      "label": "related",
+      "hard": true,
+      "reason": "Spanish account of the same virtue ethics",
+      "origin": "calibration-v1",
+      "cosine": 0.7355863757212242
+    },
+    {
+      "a": "concepts/existentialism",
+      "b": "concepts/bad-faith",
+      "label": "related",
+      "hard": false,
+      "reason": "a core concept of the movement",
+      "origin": "calibration-v1",
+      "cosine": 0.5877323450377846
+    },
+    {
+      "a": "concepts/existentialist-ethics",
+      "b": "concepts/bad-faith",
+      "label": "related",
+      "hard": false,
+      "reason": "bad faith is its central failure",
+      "origin": "calibration-v1",
+      "cosine": 0.5313042736379762
+    },
+    {
+      "a": "concepts/medieval-crop-rotation",
+      "b": "concepts/cover-cropping",
+      "label": "related",
+      "hard": false,
+      "reason": "both restore soil fertility with legumes",
+      "origin": "calibration-v1",
+      "cosine": 0.5932781707968814
+    },
+    {
+      "a": "concepts/modern-crop-irrigation",
+      "b": "concepts/riego-por-goteo",
+      "label": "related",
+      "hard": true,
+      "reason": "drip irrigation described in Spanish",
+      "origin": "calibration-v1",
+      "cosine": 0.7029058912645011
+    },
+    {
+      "a": "concepts/cover-cropping",
+      "b": "concepts/mycorrhizal-networks",
+      "label": "related",
+      "hard": true,
+      "reason": "living roots feed soil fungi; mycology vocabulary, no shared tags",
+      "origin": "calibration-v1",
+      "cosine": 0.5516236318239152
+    },
+    {
+      "a": "concepts/sourdough-bread-baking",
+      "b": "concepts/masa-madre",
+      "label": "related",
+      "hard": true,
+      "reason": "the same practice in Spanish",
+      "origin": "calibration-v1",
+      "cosine": 0.6453973561922322
+    },
+    {
+      "a": "concepts/sourdough-bread-baking",
+      "b": "concepts/lacto-fermented-vegetables",
+      "label": "related",
+      "hard": true,
+      "reason": "same lactobacilli fermentation, different food",
+      "origin": "calibration-v1",
+      "cosine": 0.5798766634457483
+    },
+    {
+      "a": "concepts/byzantine-naval-architecture",
+      "b": "concepts/greek-fire",
+      "label": "related",
+      "hard": false,
+      "reason": "the weapon the dromons carried",
+      "origin": "calibration-v1",
+      "cosine": 0.612193635496051
+    },
+    {
+      "a": "concepts/tcp-congestion-control",
+      "b": "concepts/bufferbloat",
+      "label": "related",
+      "hard": true,
+      "reason": "oversized queues hide the loss signal senders rely on",
+      "origin": "calibration-v1",
+      "cosine": 0.649402835667976
+    },
+    {
+      "a": "concepts/tcp-congestion-control",
+      "b": "concepts/control-de-congestion-tcp",
+      "label": "related",
+      "hard": true,
+      "reason": "the same concept in Spanish",
+      "origin": "calibration-v1",
+      "cosine": 0.8984022842116396
+    },
+    {
+      "a": "concepts/bufferbloat",
+      "b": "concepts/control-de-congestion-tcp",
+      "label": "related",
+      "hard": true,
+      "reason": "cross-lingual, and linked by mechanism",
+      "origin": "calibration-v1",
+      "cosine": 0.6110505110459833
+    },
+    {
+      "a": "concepts/css-grid-layout",
+      "b": "concepts/flexbox",
+      "label": "related",
+      "hard": false,
+      "reason": "the two CSS layout models",
+      "origin": "calibration-v1",
+      "cosine": 0.7492138581404688
+    },
+    {
+      "a": "concepts/css-grid-layout",
+      "b": "concepts/responsive-web-design",
+      "label": "related",
+      "hard": false,
+      "reason": "grid is a main responsive layout tool",
+      "origin": "calibration-v1",
+      "cosine": 0.5446489604091402
+    },
+    {
+      "a": "concepts/flexbox",
+      "b": "concepts/responsive-web-design",
+      "label": "related",
+      "hard": false,
+      "reason": "flexbox is a responsive layout tool",
+      "origin": "calibration-v1",
+      "cosine": 0.5940512816835094
+    },
+    {
+      "a": "concepts/git-rebase-workflow",
+      "b": "concepts/git-merge-strategies",
+      "label": "related",
+      "hard": false,
+      "reason": "the two ways to integrate a branch",
+      "origin": "calibration-v1",
+      "cosine": 0.6349692555269494
+    },
+    {
+      "a": "concepts/git-merge-strategies",
+      "b": "concepts/merge-conflict-resolution",
+      "label": "related",
+      "hard": false,
+      "reason": "conflicts arise from merges",
+      "origin": "calibration-v1",
+      "cosine": 0.684771875711885
+    },
+    {
+      "a": "concepts/git-rebase-workflow",
+      "b": "concepts/merge-conflict-resolution",
+      "label": "related",
+      "hard": false,
+      "reason": "conflicts arise during rebases",
+      "origin": "calibration-v1",
+      "cosine": 0.6341109860515721
+    },
+    {
+      "a": "concepts/type-2-diabetes",
+      "b": "concepts/insulin-resistance",
+      "label": "related",
+      "hard": false,
+      "reason": "the disease's underlying mechanism",
+      "origin": "calibration-v1",
+      "cosine": 0.7237608066260266
+    },
+    {
+      "a": "concepts/type-2-diabetes",
+      "b": "concepts/metformin",
+      "label": "related",
+      "hard": false,
+      "reason": "the first-line drug for the disease",
+      "origin": "calibration-v1",
+      "cosine": 0.6654456786876681
+    },
+    {
+      "a": "concepts/insulin-resistance",
+      "b": "concepts/metformin",
+      "label": "related",
+      "hard": true,
+      "reason": "the drug improves insulin sensitivity; no shared tags",
+      "origin": "calibration-v1",
+      "cosine": 0.6424380381443325
+    },
+    {
+      "a": "concepts/type-2-diabetes",
+      "b": "concepts/diabetes-tipo-2",
+      "label": "related",
+      "hard": true,
+      "reason": "the same disease in Spanish",
+      "origin": "calibration-v1",
+      "cosine": 0.9473478805845399
+    },
+    {
+      "a": "concepts/diabetes-tipo-2",
+      "b": "concepts/metformin",
+      "label": "related",
+      "hard": true,
+      "reason": "cross-lingual disease and its drug",
+      "origin": "calibration-v1",
+      "cosine": 0.6219442682673134
+    },
+    {
+      "a": "concepts/compound-interest",
+      "b": "concepts/index-fund-investing",
+      "label": "related",
+      "hard": true,
+      "reason": "long-horizon compounding is the index case; different vocabulary",
+      "origin": "calibration-v1",
+      "cosine": 0.5743199883880019
+    },
+    {
+      "a": "concepts/index-fund-investing",
+      "b": "concepts/dollar-cost-averaging",
+      "label": "related",
+      "hard": false,
+      "reason": "how index funds are usually bought",
+      "origin": "calibration-v1",
+      "cosine": 0.7169082281602623
+    },
+    {
+      "a": "concepts/monetary-policy",
+      "b": "concepts/inflacion",
+      "label": "related",
+      "hard": true,
+      "reason": "cross-lingual: the policy and its target",
+      "origin": "calibration-v1",
+      "cosine": 0.8236508225427389
+    },
+    {
+      "a": "concepts/circle-of-fifths",
+      "b": "concepts/chord-progressions",
+      "label": "related",
+      "hard": false,
+      "reason": "progressions move by fifths",
+      "origin": "calibration-v1",
+      "cosine": 0.6383689614382342
+    },
+    {
+      "a": "concepts/chord-progressions",
+      "b": "concepts/voice-leading",
+      "label": "related",
+      "hard": false,
+      "reason": "how one chord moves to the next",
+      "origin": "calibration-v1",
+      "cosine": 0.6902614573860018
+    },
+    {
+      "a": "concepts/spaced-repetition",
+      "b": "concepts/forgetting-curve",
+      "label": "related",
+      "hard": false,
+      "reason": "the curve the schedule is built on",
+      "origin": "calibration-v1",
+      "cosine": 0.5845831287049287
+    },
+    {
+      "a": "concepts/spaced-repetition",
+      "b": "concepts/repaso-espaciado",
+      "label": "related",
+      "hard": true,
+      "reason": "the same technique in Spanish",
+      "origin": "calibration-v1",
+      "cosine": 0.8045469629995095
+    },
+    {
+      "a": "concepts/forgetting-curve",
+      "b": "concepts/repaso-espaciado",
+      "label": "related",
+      "hard": true,
+      "reason": "cross-lingual, and linked by mechanism",
+      "origin": "calibration-v1",
+      "cosine": 0.5139345317433894
+    },
+    {
+      "a": "concepts/zettelkasten",
+      "b": "concepts/evergreen-notes",
+      "label": "related",
+      "hard": false,
+      "reason": "two methods of atomic linked notes",
+      "origin": "calibration-v1",
+      "cosine": 0.5146609546943415
+    },
+    {
+      "a": "concepts/photosynthesis",
+      "b": "concepts/calvin-cycle",
+      "label": "related",
+      "hard": false,
+      "reason": "the cycle is photosynthesis's second stage",
+      "origin": "calibration-v1",
+      "cosine": 0.6864074187950189
+    },
+    {
+      "a": "concepts/photosynthesis",
+      "b": "concepts/fotosintesis",
+      "label": "related",
+      "hard": true,
+      "reason": "the same process in Spanish",
+      "origin": "calibration-v1",
+      "cosine": 0.8828160341801633
+    },
+    {
+      "a": "concepts/calvin-cycle",
+      "b": "concepts/fotosintesis",
+      "label": "related",
+      "hard": true,
+      "reason": "cross-lingual whole and part",
+      "origin": "calibration-v1",
+      "cosine": 0.6226129306384718
+    },
+    {
+      "a": "concepts/stoic-ethics",
+      "b": "concepts/speech-act-theory",
+      "label": "unrelated",
+      "hard": true,
+      "reason": "both philosophy; ethics vs language",
+      "origin": "calibration-v1",
+      "cosine": 0.5048672021195051
+    },
+    {
+      "a": "concepts/existentialist-ethics",
+      "b": "concepts/mathematical-platonism",
+      "label": "unrelated",
+      "hard": true,
+      "reason": "both philosophy; ethics vs metaphysics of number",
+      "origin": "calibration-v1",
+      "cosine": 0.5395504162170606
+    },
+    {
+      "a": "concepts/speech-act-theory",
+      "b": "concepts/mathematical-platonism",
+      "label": "unrelated",
+      "hard": true,
+      "reason": "both philosophy; share only tags",
+      "origin": "calibration-v1",
+      "cosine": 0.5065096637006945
+    },
+    {
+      "a": "concepts/stoicism",
+      "b": "concepts/mathematical-platonism",
+      "label": "unrelated",
+      "hard": true,
+      "reason": "both philosophy; no shared subject",
+      "origin": "calibration-v1",
+      "cosine": 0.5518477687128958
+    },
+    {
+      "a": "concepts/modern-crop-irrigation",
+      "b": "concepts/beekeeping-hive-management",
+      "label": "unrelated",
+      "hard": true,
+      "reason": "both agriculture; watering vs bee colonies",
+      "origin": "calibration-v1",
+      "cosine": 0.4257255626709246
+    },
+    {
+      "a": "concepts/medieval-crop-rotation",
+      "b": "concepts/dairy-cattle-breeding",
+      "label": "unrelated",
+      "hard": true,
+      "reason": "both agriculture; field rotation vs animal genetics",
+      "origin": "calibration-v1",
+      "cosine": 0.48139689337247477
+    },
+    {
+      "a": "concepts/riego-por-goteo",
+      "b": "concepts/dairy-cattle-breeding",
+      "label": "unrelated",
+      "hard": true,
+      "reason": "both agriculture, across languages; no shared subject",
+      "origin": "calibration-v1",
+      "cosine": 0.44609878482258514
+    },
+    {
+      "a": "concepts/sourdough-bread-baking",
+      "b": "concepts/sous-vide-cooking",
+      "label": "unrelated",
+      "hard": true,
+      "reason": "both cooking; fermentation vs water bath",
+      "origin": "calibration-v1",
+      "cosine": 0.5624359653639733
+    },
+    {
+      "a": "concepts/sous-vide-cooking",
+      "b": "concepts/knife-sharpening",
+      "label": "unrelated",
+      "hard": true,
+      "reason": "both cooking technique; share tags only",
+      "origin": "calibration-v1",
+      "cosine": 0.5422581344178091
+    },
+    {
+      "a": "concepts/lacto-fermented-vegetables",
+      "b": "concepts/knife-sharpening",
+      "label": "unrelated",
+      "hard": true,
+      "reason": "both kitchen topics; no shared subject",
+      "origin": "calibration-v1",
+      "cosine": 0.48843030282604144
+    },
+    {
+      "a": "concepts/masa-madre",
+      "b": "concepts/sous-vide-cooking",
+      "label": "unrelated",
+      "hard": true,
+      "reason": "both cooking, across languages",
+      "origin": "calibration-v1",
+      "cosine": 0.46746068130839585
+    },
+    {
+      "a": "concepts/byzantine-naval-architecture",
+      "b": "concepts/byzantine-iconoclasm",
+      "label": "unrelated",
+      "hard": true,
+      "reason": "same empire and title word; ships vs religious images",
+      "origin": "calibration-v1",
+      "cosine": 0.43553081042399583
+    },
+    {
+      "a": "concepts/greek-fire",
+      "b": "concepts/byzantine-iconoclasm",
+      "label": "unrelated",
+      "hard": true,
+      "reason": "same empire; a weapon vs a religious dispute",
+      "origin": "calibration-v1",
+      "cosine": 0.3815962743436644
+    },
+    {
+      "a": "concepts/byzantine-naval-architecture",
+      "b": "concepts/hanseatic-league",
+      "label": "unrelated",
+      "hard": true,
+      "reason": "both medieval maritime history; war galleys vs a Baltic trade alliance",
+      "origin": "calibration-v1",
+      "cosine": 0.38365245390180425
+    },
+    {
+      "a": "concepts/tcp-congestion-control",
+      "b": "concepts/css-grid-layout",
+      "label": "unrelated",
+      "hard": true,
+      "reason": "both computing; networking vs page layout",
+      "origin": "calibration-v1",
+      "cosine": 0.5294061020924022
+    },
+    {
+      "a": "concepts/bufferbloat",
+      "b": "concepts/generational-garbage-collection",
+      "label": "unrelated",
+      "hard": true,
+      "reason": "both performance topics; routers vs heaps",
+      "origin": "calibration-v1",
+      "cosine": 0.5101280182913056
+    },
+    {
+      "a": "concepts/git-rebase-workflow",
+      "b": "concepts/generational-garbage-collection",
+      "label": "unrelated",
+      "hard": true,
+      "reason": "both software tooling; no shared subject",
+      "origin": "calibration-v1",
+      "cosine": 0.4927438367724506
+    },
+    {
+      "a": "concepts/flexbox",
+      "b": "concepts/git-merge-strategies",
+      "label": "unrelated",
+      "hard": true,
+      "reason": "both developer topics; layout vs version control",
+      "origin": "calibration-v1",
+      "cosine": 0.4542916306069363
+    },
+    {
+      "a": "concepts/control-de-congestion-tcp",
+      "b": "concepts/responsive-web-design",
+      "label": "unrelated",
+      "hard": true,
+      "reason": "both web technology, across languages",
+      "origin": "calibration-v1",
+      "cosine": 0.46040418518077086
+    },
+    {
+      "a": "concepts/type-2-diabetes",
+      "b": "concepts/migraine",
+      "label": "unrelated",
+      "hard": true,
+      "reason": "both chronic diseases, shared tags; metabolic vs neurological",
+      "origin": "calibration-v1",
+      "cosine": 0.513518665047119
+    },
+    {
+      "a": "concepts/metformin",
+      "b": "concepts/ankle-sprain-rehabilitation",
+      "label": "unrelated",
+      "hard": true,
+      "reason": "both medicine; a drug vs an injury",
+      "origin": "calibration-v1",
+      "cosine": 0.46096001952758603
+    },
+    {
+      "a": "concepts/insulin-resistance",
+      "b": "concepts/migraine",
+      "label": "unrelated",
+      "hard": true,
+      "reason": "both medicine; no shared mechanism",
+      "origin": "calibration-v1",
+      "cosine": 0.4633584192605117
+    },
+    {
+      "a": "concepts/diabetes-tipo-2",
+      "b": "concepts/ankle-sprain-rehabilitation",
+      "label": "unrelated",
+      "hard": true,
+      "reason": "both medicine, across languages",
+      "origin": "calibration-v1",
+      "cosine": 0.41947945803216935
+    },
+    {
+      "a": "concepts/index-fund-investing",
+      "b": "concepts/double-entry-bookkeeping",
+      "label": "unrelated",
+      "hard": true,
+      "reason": "both finance; investing vs record-keeping",
+      "origin": "calibration-v1",
+      "cosine": 0.4805138920752284
+    },
+    {
+      "a": "concepts/compound-interest",
+      "b": "concepts/double-entry-bookkeeping",
+      "label": "unrelated",
+      "hard": true,
+      "reason": "both finance; share tags only",
+      "origin": "calibration-v1",
+      "cosine": 0.5026684278909445
+    },
+    {
+      "a": "concepts/monetary-policy",
+      "b": "concepts/double-entry-bookkeeping",
+      "label": "unrelated",
+      "hard": true,
+      "reason": "both finance; macroeconomics vs ledgers",
+      "origin": "calibration-v1",
+      "cosine": 0.4417547843301304
+    },
+    {
+      "a": "concepts/circle-of-fifths",
+      "b": "concepts/guitar-string-gauges",
+      "label": "unrelated",
+      "hard": true,
+      "reason": "both music; theory vs hardware",
+      "origin": "calibration-v1",
+      "cosine": 0.5826840250014506
+    },
+    {
+      "a": "concepts/chord-progressions",
+      "b": "concepts/concert-hall-acoustics",
+      "label": "unrelated",
+      "hard": true,
+      "reason": "both music; harmony vs room acoustics",
+      "origin": "calibration-v1",
+      "cosine": 0.48661152647334277
+    },
+    {
+      "a": "concepts/voice-leading",
+      "b": "concepts/guitar-string-gauges",
+      "label": "unrelated",
+      "hard": true,
+      "reason": "both music; composition vs strings",
+      "origin": "calibration-v1",
+      "cosine": 0.5017831918961712
+    },
+    {
+      "a": "concepts/spaced-repetition",
+      "b": "concepts/pomodoro-technique",
+      "label": "unrelated",
+      "hard": true,
+      "reason": "both study techniques; memory vs time-boxing",
+      "origin": "calibration-v1",
+      "cosine": 0.5300045173144773
+    },
+    {
+      "a": "concepts/zettelkasten",
+      "b": "concepts/inbox-zero",
+      "label": "unrelated",
+      "hard": true,
+      "reason": "both personal workflows; notes vs email",
+      "origin": "calibration-v1",
+      "cosine": 0.4887570536958282
+    },
+    {
+      "a": "concepts/evergreen-notes",
+      "b": "concepts/pomodoro-technique",
+      "label": "unrelated",
+      "hard": true,
+      "reason": "both productivity; notes vs focus timer",
+      "origin": "calibration-v1",
+      "cosine": 0.4067585827633508
+    },
+    {
+      "a": "concepts/photosynthesis",
+      "b": "concepts/bird-migration",
+      "label": "unrelated",
+      "hard": true,
+      "reason": "both biology; plant energy vs animal behaviour",
+      "origin": "calibration-v1",
+      "cosine": 0.4454599611012886
+    },
+    {
+      "a": "concepts/calvin-cycle",
+      "b": "concepts/bird-migration",
+      "label": "unrelated",
+      "hard": true,
+      "reason": "both biology; no shared subject",
+      "origin": "calibration-v1",
+      "cosine": 0.2927524106182158
+    },
+    {
+      "a": "concepts/tcp-congestion-control",
+      "b": "concepts/photosynthesis",
+      "label": "unrelated",
+      "hard": false,
+      "reason": "networking vs plant biology",
+      "origin": "calibration-v1",
+      "cosine": 0.40708049287997394
+    },
+    {
+      "a": "concepts/metformin",
+      "b": "concepts/circle-of-fifths",
+      "label": "unrelated",
+      "hard": false,
+      "reason": "pharmacology vs music theory",
+      "origin": "calibration-v1",
+      "cosine": 0.37561173440853945
+    },
+    {
+      "a": "concepts/compound-interest",
+      "b": "concepts/greek-fire",
+      "label": "unrelated",
+      "hard": false,
+      "reason": "finance vs medieval weapons",
+      "origin": "calibration-v1",
+      "cosine": 0.32171084607602474
+    },
+    {
+      "a": "concepts/zettelkasten",
+      "b": "concepts/sous-vide-cooking",
+      "label": "unrelated",
+      "hard": false,
+      "reason": "note-taking vs cooking",
+      "origin": "calibration-v1",
+      "cosine": 0.3194564105631898
+    },
+    {
+      "a": "concepts/css-grid-layout",
+      "b": "concepts/migraine",
+      "label": "unrelated",
+      "hard": false,
+      "reason": "web layout vs neurology",
+      "origin": "calibration-v1",
+      "cosine": 0.32478114791111057
+    },
+    {
+      "a": "concepts/riego-por-goteo",
+      "b": "concepts/bad-faith",
+      "label": "unrelated",
+      "hard": false,
+      "reason": "irrigation vs philosophy, across languages",
+      "origin": "calibration-v1",
+      "cosine": 0.31215987442770204
+    },
+    {
+      "a": "concepts/diabetes-tipo-2",
+      "b": "concepts/git-rebase-workflow",
+      "label": "unrelated",
+      "hard": false,
+      "reason": "medicine vs version control",
+      "origin": "calibration-v1",
+      "cosine": 0.3150178051509076
+    },
+    {
+      "a": "concepts/masa-madre",
+      "b": "concepts/hanseatic-league",
+      "label": "unrelated",
+      "hard": false,
+      "reason": "baking vs trade history",
+      "origin": "calibration-v1",
+      "cosine": 0.3229843055957877
+    },
+    {
+      "a": "concepts/estoicismo",
+      "b": "concepts/bufferbloat",
+      "label": "unrelated",
+      "hard": false,
+      "reason": "philosophy vs networking, across languages",
+      "origin": "calibration-v1",
+      "cosine": 0.26428830424148775
+    },
+    {
+      "a": "concepts/inflacion",
+      "b": "concepts/calvin-cycle",
+      "label": "unrelated",
+      "hard": false,
+      "reason": "economics vs biochemistry",
+      "origin": "calibration-v1",
+      "cosine": 0.3291484151084694
+    }
+  ],
+  "verdict": {
+    "kind": "MOVE",
+    "detail": "lower to 0.59: recall 0.317 -> 0.707, 14 hard negatives within the band",
+    "t_min": 57,
+    "t_star": 59,
+    "recall_at_t_star": 0.7073170731707317,
+    "recall_at_current": 0.3170731707317073,
+    "exposure": 14
+  },
+  "counts": {
+    "related": [
+      41,
+      41
+    ],
+    "hard positives": [
+      21,
+      21
+    ],
+    "unrelated": [
+      50,
+      50
+    ],
+    "hard negatives": [
+      34,
+      34
+    ],
+    "easy negatives": [
+      16,
+      16
+    ]
+  }
+}

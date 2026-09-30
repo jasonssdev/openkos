@@ -1,49 +1,19 @@
-"""Re-measures `graph/proximity.py`'s `CANDIDATE_SIMILARITY_THRESHOLD = 0.70`
+"""Calibrates `graph/proximity.py`'s `CANDIDATE_SIMILARITY_THRESHOLD`
 on the embed text `state/reindex.py` ACTUALLY produces today (#1052).
 
 ## Why this exists
 
-The module docstring of `graph/proximity.py` said 0.70 was calibrated
-against `bge-m3` "over FULL OKF concept documents -- the shape
-`state/reindex.py` actually embeds (whole file text, frontmatter
-included)". That was true before #554, and definitely not true since #888
-(#889): `reindex()` now embeds `_compose_header` (title, description, tags)
-followed by one or more BODY CHUNKS (`EMBED_COMPOSITION_TAG = "chunk-v1"`),
-frontmatter is never embedded, and a document's stored vector is the
-NORMALIZED MEAN of its per-chunk vectors, not a single whole-file
-embedding. The 0.70 floor and its cited separation (related
-0.7614-0.8018, unrelated 0.3837-0.6460) were never re-measured on that
-shape. This harness does that measurement.
-
-## Pre-registered rule (written BEFORE this harness's first live run
-produced a number)
-
-Keep `CANDIDATE_SIMILARITY_THRESHOLD = 0.70` if, on the current
-`chunk-v1` shape, `min(related_cosine) > 0.70 > max(unrelated_cosine)` --
-a distance-threshold value strictly separating the two labelled classes
-still exists. Otherwise report the measured gap (or overlap) and the
-midpoint of `[max(unrelated_cosine), min(related_cosine)]` as a candidate
-replacement, but do NOT change the constant in the same change that makes
-this measurement: proximity's output feeds candidate-edge generation for
-`suggest-relations` and `contradictions`, so moving it is a behavior
-change that deserves its own review, not a side effect of a docstring
-fix. `render()` below reports exactly this rule's verdict; it never
-silently substitutes a different one.
-
-## Fixture
-
-`evals/pair_nomination/pair_labels.json` is an existing labelled set, but
-its ids resolve only inside a private 32-document E2E workspace that does
-not ship in this repository -- reusing it here is not reproducible by a
-contributor who only has this checkout. Per #1052's own instruction, this
-harness instead ships a small, self-contained, hand-written fixture: 8
-concept documents across 4 topic clusters (Stoicism / Existentialism /
-medieval-to-modern agriculture / two singleton outliers), 3 related pairs
-and 6 unrelated pairs -- 9 labelled pairs total, stated here rather than
-left for a reader to count. The Stoicism / Stoic Ethics vs Medieval Crop
-Rotation anchor from the ORIGINAL calibration (`graph/proximity.py`'s
-pre-#1052 docstring) is kept as one of the 6 unrelated pairs, so this
-measurement remains comparable in spirit to the one it replaces.
+`reindex()` embeds `_compose_header` (title, description, tags) followed
+by one or more `chunk-v1` BODY CHUNKS and stores the NORMALIZED MEAN of
+the per-chunk vectors -- not the whole-file shape the 0.70 floor was
+originally calibrated on. A first 9-pair smoke run of this harness scored
+related 0.5842-0.8043 against unrelated 0.2705-0.3996: no overlap, but the
+weakest related pair below 0.70, and nine pairs cannot say where the two
+classes meet. This harness now runs the larger labelled fixture in
+`proximity_fixtures.py` and applies the rule pre-registered in `README.md`
+and `DESIGN.md` beside it (the two copies are checked identical by
+`--self-test`). `decide()` below is that rule, mechanically; `render()`
+reports its verdict and never substitutes another.
 
 ## How the vectors are produced
 
@@ -53,31 +23,43 @@ with a real `Embedder` (never a reimplementation of `_compose_header` or
 the chunk-mean derivation), and reads the resulting document vectors back
 through `VectorStoreDB.document_vectors` -- the exact path
 `graph/proximity.py`'s `VectorProximitySource` itself reads at query time.
-Mirrors `evals/decision_revisions/run_decision_revisions_eval.py`'s
-`--vector-source reindex` arm; not imported from it, since no harness
-under `evals/` imports another (each is a standalone, single-file tool).
+Not imported from any sibling harness: no harness under `evals/` imports
+another (each is a standalone tool plus its own fixture module).
 
 Usage:
 
     uv run python -u evals/proximity_threshold/run_proximity_threshold_probe.py --self-test
-    uv run python -u evals/proximity_threshold/run_proximity_threshold_probe.py --live
+    uv run python -u evals/proximity_threshold/run_proximity_threshold_probe.py --live --model bge-m3
     uv run python -u evals/proximity_threshold/run_proximity_threshold_probe.py \\
-        --rescore evals/proximity_threshold/results/proximity-threshold-20260929T000000Z-bge-m3.json
+        --rescore evals/proximity_threshold/results/proximity-threshold-<stamp>-bge-m3.json
 
 `--self-test` and `--rescore` make no model calls and need no Ollama.
-`--live` needs a reachable Ollama with `bge-m3` pulled.
+`--live` needs a reachable Ollama with the embedding model pulled.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
+import math
 import pathlib
+import re
+import statistics
 import sys
 import tempfile
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Final
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+
+from proximity_fixtures import (
+    FIXTURE_DOCS,
+    PAIRS,
+    FixtureDoc,
+    LabelledPair,
+)
 
 from openkos.graph.proximity import CANDIDATE_SIMILARITY_THRESHOLD
 from openkos.llm.base import Embedder
@@ -89,165 +71,35 @@ HERE: Final = pathlib.Path(__file__).resolve().parent
 RESULTS_DIR: Final = HERE / "results"
 DEFAULT_EMBEDDING_MODEL: Final = "bge-m3"
 
+# -- the pre-registered rule's constants (README.md / DESIGN.md) ----------
+# Floors are handled in integer HUNDREDTHS so the grid has no float drift.
+GRID_LO: Final = 40
+GRID_HI: Final = 90
+CURRENT: Final = round(CANDIDATE_SIMILARITY_THRESHOLD * 100)
+HARD_FP_RATE: Final = 0.05
+SAFETY_MARGIN: Final = 2
+MIN_RECALL: Final = 0.50
+MIN_RECALL_GAIN: Final = 0.10
+EXPOSURE_BAND: Final = 10
+MIN_EXPOSURE: Final = 5
+MIN_RELATED: Final = 40
+MIN_UNRELATED: Final = 40
+MIN_HARD_NEGATIVES: Final = 20
+MIN_HARD_POSITIVES: Final = 10
 
-@dataclass(frozen=True)
-class FixtureDoc:
-    concept_id: str
-    """Bundle-relative path minus `.md` (OKF §2 identity)."""
-    title: str
-    description: str
-    tags: tuple[str, ...]
-    body: str
-
-
-FIXTURE_DOCS: Final[tuple[FixtureDoc, ...]] = (
-    FixtureDoc(
-        "concepts/stoicism",
-        "Stoicism",
-        "Hellenistic school holding that virtue is the only good, and that "
-        "freedom comes from knowing what is up to us.",
-        ("philosophy", "hellenistic", "ethics"),
-        "A Hellenistic school founded by Zeno of Citium that holds virtue to "
-        "be the only true good. Its practical core is the dichotomy of "
-        "control: some things are up to us -- judgement, impulse, desire, "
-        "aversion -- and some are not -- the body, reputation, office, the "
-        "actions of others. Suffering comes from wanting what was never "
-        "ours to govern.\n\nApatheia is freedom from the destructive "
-        "passions, not the absence of feeling. The Stoics kept the "
-        "eupatheiai, the good feelings: joy, caution, wishing. The goal is "
-        "not to stop feeling but to stop being ruled by it.",
-    ),
-    FixtureDoc(
-        "concepts/stoic-ethics",
-        "Stoic Ethics",
-        "The Stoic account of virtue as the sole good and the discipline "
-        "of assent to impressions.",
-        ("philosophy", "ethics", "stoicism"),
-        "Stoic ethics holds that virtue -- wisdom, courage, justice, "
-        "temperance -- is the only thing genuinely good, and vice the only "
-        "thing genuinely bad; everything else, health, wealth, reputation, "
-        "is merely preferred or dispreferred, never good or bad in "
-        "itself.\n\nThe discipline of assent governs which impressions a "
-        "person endorses as true: living in agreement with nature means "
-        "assenting only to correct impressions and acting from virtue "
-        "regardless of external outcome.",
-    ),
-    FixtureDoc(
-        "concepts/existentialism",
-        "Existentialism",
-        "20th-century philosophy centered on individual freedom, choice, "
-        "and authentic existence.",
-        ("philosophy", "existentialism"),
-        "Existentialism holds that existence precedes essence: a person is "
-        "not born with a fixed nature but creates one through free choices "
-        "made under conditions of radical freedom and responsibility. "
-        "Anxiety arises from confronting that freedom directly, without "
-        "the comfort of a pre-given purpose.\n\nBad faith names the "
-        "attempt to escape that freedom by pretending one's choices are "
-        "forced by circumstance, role, or nature, rather than owned.",
-    ),
-    FixtureDoc(
-        "concepts/existentialist-ethics",
-        "Existentialist Ethics",
-        "Existentialist arguments that authentic action creates value "
-        "through free choice rather than discovering it.",
-        ("philosophy", "ethics", "existentialism"),
-        "An existentialist ethics rejects a fixed, discoverable moral "
-        "order: value is created, not found, through an individual's "
-        "committed, authentic choices. Acting in bad faith -- treating a "
-        "choice as though it were forced -- is the central ethical "
-        "failure, not breaking an external rule.\n\nAuthenticity requires "
-        "owning the full weight of one's freedom and its consequences for "
-        "others, since every choice implicitly proposes a value others "
-        "could also choose.",
-    ),
-    FixtureDoc(
-        "concepts/medieval-crop-rotation",
-        "Medieval Crop Rotation",
-        "The three-field system used in medieval European agriculture to "
-        "sustain soil fertility across seasons.",
-        ("agriculture", "history", "medieval"),
-        "The three-field system divided arable land into three parts: one "
-        "planted with a autumn cereal, one with a spring legume, and one "
-        "left fallow, rotating each year. Resting a third of the land "
-        "restored soil fertility without artificial fertilizer, and the "
-        "legume field fixed nitrogen for the following cereal crop.\n\n"
-        "The system spread across medieval Europe from roughly the eighth "
-        "century onward and raised the cultivated share of land from one "
-        "half, under the older two-field system, to two thirds.",
-    ),
-    FixtureDoc(
-        "concepts/modern-crop-irrigation",
-        "Modern Crop Irrigation Systems",
-        "Contemporary irrigation techniques, including drip and "
-        "center-pivot systems, for row-crop agriculture.",
-        ("agriculture", "irrigation", "technology"),
-        "Drip irrigation delivers water directly to a plant's root zone "
-        "through a network of tubing and emitters, reducing evaporation "
-        "loss compared with flood irrigation and letting a grower fertigate "
-        "-- deliver dissolved fertilizer -- through the same network.\n\n"
-        "Center-pivot systems rotate a long sprinkler arm around a fixed "
-        "point, watering a circular field; paired with soil-moisture "
-        "sensors, they let a farm apply water on a schedule closer to crop "
-        "demand than a fixed calendar allows.",
-    ),
-    FixtureDoc(
-        "concepts/sourdough-bread-baking",
-        "Sourdough Bread Baking",
-        "Techniques for cultivating a wild-yeast starter and baking "
-        "naturally leavened bread.",
-        ("cooking", "baking", "fermentation"),
-        "A sourdough starter is a stable culture of wild yeast and "
-        "lactobacilli maintained by regular feedings of flour and water; "
-        "the yeast produces the carbon dioxide that leavens the dough, "
-        "while the bacteria produce the acids that give sourdough its "
-        "flavor and help preserve the finished loaf.\n\nBulk fermentation "
-        "and a long cold proof develop both flavor and the dough's gluten "
-        "structure, so a baker times each stage by the dough's visible "
-        "rise rather than by the clock alone.",
-    ),
-    FixtureDoc(
-        "concepts/byzantine-naval-architecture",
-        "Byzantine Naval Architecture",
-        "Shipbuilding design of the Byzantine navy, including the dromon "
-        "galley and its Greek-fire delivery.",
-        ("history", "maritime", "byzantine"),
-        "The dromon was the principal Byzantine war galley from roughly "
-        "the sixth to twelfth centuries: a long, low, oared vessel with "
-        "one or two banks of rowers and a lateen sail, built for speed and "
-        "maneuverability in the eastern Mediterranean.\n\nSome dromons "
-        "carried a bow-mounted siphon for projecting Greek fire, an "
-        "incendiary weapon whose exact composition was a closely guarded "
-        "state secret and remains only partially reconstructed today.",
-    ),
+VERDICTS: Final = (
+    "INCOMPLETE",
+    "INVALID_FIXTURE",
+    "INSUFFICIENT_EXPOSURE",
+    "OVERLAP",
+    "MOVE",
+    "KEEP",
 )
-
-RELATED_PAIRS: Final[tuple[tuple[str, str], ...]] = (
-    ("concepts/stoicism", "concepts/stoic-ethics"),
-    ("concepts/existentialism", "concepts/existentialist-ethics"),
-    ("concepts/medieval-crop-rotation", "concepts/modern-crop-irrigation"),
-)
-"""3 related pairs -- topically close enough that a human curating the
-graph would expect them nominated."""
-
-UNRELATED_PAIRS: Final[tuple[tuple[str, str], ...]] = (
-    # The original calibration's own anchor pair (pre-#1052 docstring),
-    # kept for continuity with the measurement this one replaces.
-    ("concepts/stoicism", "concepts/medieval-crop-rotation"),
-    ("concepts/stoicism", "concepts/sourdough-bread-baking"),
-    ("concepts/existentialism", "concepts/byzantine-naval-architecture"),
-    ("concepts/stoic-ethics", "concepts/modern-crop-irrigation"),
-    ("concepts/existentialist-ethics", "concepts/sourdough-bread-baking"),
-    ("concepts/medieval-crop-rotation", "concepts/byzantine-naval-architecture"),
-)
-"""6 unrelated pairs -- distinct topic domains, no shared provenance."""
 
 
 def _cosine(a: Sequence[float], b: Sequence[float]) -> float:
     """Cosine similarity of `a` and `b`. Guards a zero vector (returns
-    `0.0`) rather than dividing by zero -- mirrors
-    `evals/pair_nomination/run_pair_nomination_probe.py`'s own `_cosine`,
-    not imported from it (no harness under `evals/` imports another)."""
+    `0.0`) rather than dividing by zero."""
     dot = sum(x * y for x, y in zip(a, b, strict=True))
     norm_a = sum(x * x for x in a) ** 0.5
     norm_b = sum(x * x for x in b) ** 0.5
@@ -279,9 +131,7 @@ def _write_fixture_bundle(bundle_dir: pathlib.Path, docs: Sequence[FixtureDoc]) 
 class VectorReadBackMismatch(RuntimeError):
     """Raised by `embed_via_reindex` when the read-back vector count does
     not equal the number of fixture docs written -- never silently
-    returned as a partial mapping (mirrors
-    `evals/decision_revisions/run_decision_revisions_eval.py`'s
-    `VectorSourceMismatch`: a starved read here would score as a
+    returned as a partial mapping (a starved read would score as a
     measurement artifact, not the real production shape)."""
 
 
@@ -291,9 +141,7 @@ def embed_via_reindex(
     """Write `docs` into a temporary bundle, run the REAL
     `state.reindex.reindex` over it with `embedder`, and read the
     resulting document vectors back via `VectorStoreDB.document_vectors`
-    -- the same read `graph/proximity.py`'s `VectorProximitySource`
-    performs in production (through `state/vectorstore.py`'s `neighbors`,
-    over the SAME `doc_vectors` table)."""
+    -- the same `doc_vectors` table `VectorProximitySource` reads."""
     bundle_dir = tmp_dir / "bundle"
     _write_fixture_bundle(bundle_dir, docs)
     with vectorstore.open_vector_store(tmp_dir / ".openkos" / "vectors.db") as db:
@@ -310,121 +158,294 @@ def embed_via_reindex(
 
 
 @dataclass(frozen=True)
-class Measurement:
-    related_n: int
-    related_total: int
-    unrelated_n: int
-    unrelated_total: int
-    related_scores: tuple[float, ...]
-    unrelated_scores: tuple[float, ...]
-    min_related: float
-    """The weakest positive -- the related pair most likely to be MISSED
-    by a similarity floor."""
-    max_unrelated: float
-    """The strongest negative -- the unrelated pair most likely to be
-    wrongly nominated."""
-    falsifiable: bool
-    """`False` when either labelled class scored zero pairs -- a margin
-    with nothing on one side proves nothing (a filtered probe hides its
+class PairScore:
+    a: str
+    b: str
+    label: str
+    hard: bool
+    reason: str
+    origin: str
+    cosine: float | None
+    """`None` when either end has no vector -- kept, never dropped, so a
+    class's `n of TOTAL` can show the gap (a filtered probe hides its
     complement)."""
-    separates_at_current_threshold: bool
-    """The pre-registered rule's verdict: `True` iff
-    `min_related > CANDIDATE_SIMILARITY_THRESHOLD > max_unrelated`."""
-    proposed_midpoint: float | None
-    """`(max_unrelated + min_related) / 2`, reported ONLY when the classes
-    do not overlap (`max_unrelated < min_related`) -- a midpoint computed
-    across an overlap would not be a threshold at all."""
 
 
-def measure(vectors: dict[str, tuple[float, ...]]) -> Measurement:
-    def scores(pairs: Sequence[tuple[str, str]]) -> list[float]:
-        out: list[float] = []
-        for a, b in pairs:
-            if a not in vectors or b not in vectors:
-                continue
-            out.append(_cosine(vectors[a], vectors[b]))
-        return out
-
-    related_scores = scores(RELATED_PAIRS)
-    unrelated_scores = scores(UNRELATED_PAIRS)
-    falsifiable = bool(related_scores) and bool(unrelated_scores)
-    min_related = min(related_scores) if related_scores else 0.0
-    max_unrelated = max(unrelated_scores) if unrelated_scores else 0.0
-    separates = (
-        falsifiable and min_related > CANDIDATE_SIMILARITY_THRESHOLD > max_unrelated
-    )
-    no_overlap = falsifiable and max_unrelated < min_related
-    return Measurement(
-        related_n=len(related_scores),
-        related_total=len(RELATED_PAIRS),
-        unrelated_n=len(unrelated_scores),
-        unrelated_total=len(UNRELATED_PAIRS),
-        related_scores=tuple(related_scores),
-        unrelated_scores=tuple(unrelated_scores),
-        min_related=min_related,
-        max_unrelated=max_unrelated,
-        falsifiable=falsifiable,
-        separates_at_current_threshold=separates,
-        proposed_midpoint=(max_unrelated + min_related) / 2 if no_overlap else None,
-    )
+def score_pairs(
+    vectors: dict[str, tuple[float, ...]], pairs: Sequence[LabelledPair] = PAIRS
+) -> list[PairScore]:
+    out: list[PairScore] = []
+    for p in pairs:
+        cosine = (
+            _cosine(vectors[p.a], vectors[p.b])
+            if p.a in vectors and p.b in vectors
+            else None
+        )
+        out.append(PairScore(p.a, p.b, p.label, p.hard, p.reason, p.origin, cosine))
+    return out
 
 
-def render(m: Measurement) -> str:
-    lines = [
-        "# Proximity-threshold re-measurement (#1052)",
-        "",
-        f"related pairs scored: {m.related_n} of {m.related_total}",
-        f"unrelated pairs scored: {m.unrelated_n} of {m.unrelated_total}",
-        f"related cosine range: {min(m.related_scores):.4f}-{max(m.related_scores):.4f}"
-        if m.related_scores
-        else "related cosine range: n/a (0 scored)",
-        f"unrelated cosine range: {min(m.unrelated_scores):.4f}-{max(m.unrelated_scores):.4f}"
-        if m.unrelated_scores
-        else "unrelated cosine range: n/a (0 scored)",
-        f"weakest related (min): {m.min_related:.4f}",
-        f"strongest unrelated (max): {m.max_unrelated:.4f}",
-        f"current CANDIDATE_SIMILARITY_THRESHOLD: {CANDIDATE_SIMILARITY_THRESHOLD:.4f}",
-        f"falsifiable: {'yes' if m.falsifiable else 'NO -- UNFALSIFIABLE (an empty labelled class)'}",
+def _nominated(cosine: float, floor: int) -> bool:
+    """Production keeps a neighbor at L2 distance `<= MAX_NEIGHBOR_DISTANCE`,
+    i.e. cosine `>= CANDIDATE_SIMILARITY_THRESHOLD`: inclusive."""
+    return cosine >= floor / 100
+
+
+@dataclass(frozen=True)
+class GridRow:
+    floor: int
+    recall: float
+    related_nominated: int
+    hard_fp: int
+    easy_fp: int
+    admissible: bool
+
+
+@dataclass(frozen=True)
+class Verdict:
+    kind: str
+    """One of `VERDICTS`."""
+    detail: str
+    t_min: int | None = None
+    t_star: int | None = None
+    recall_at_t_star: float | None = None
+    recall_at_current: float | None = None
+    exposure: int | None = None
+
+
+@dataclass(frozen=True)
+class Analysis:
+    counts: dict[str, tuple[int, int]]
+    """class -> (scored n, TOTAL)."""
+    min_related: float | None
+    max_unrelated: float | None
+    median_hard_negative: float | None
+    median_easy_negative: float | None
+    hard_fp_budget: int
+    grid: tuple[GridRow, ...]
+    verdict: Verdict
+
+
+def _classes(scores: Sequence[PairScore]) -> dict[str, list[PairScore]]:
+    return {
+        "related": [s for s in scores if s.label == "related"],
+        "hard positives": [s for s in scores if s.label == "related" and s.hard],
+        "unrelated": [s for s in scores if s.label == "unrelated"],
+        "hard negatives": [s for s in scores if s.label == "unrelated" and s.hard],
+        "easy negatives": [s for s in scores if s.label == "unrelated" and not s.hard],
+    }
+
+
+def _values(rows: Sequence[PairScore]) -> list[float]:
+    return [r.cosine for r in rows if r.cosine is not None]
+
+
+def decide(scores: Sequence[PairScore]) -> Analysis:
+    """Apply the pre-registered rule (README.md, steps 1-8) verbatim."""
+    classes = _classes(scores)
+    counts = {name: (len(_values(rows)), len(rows)) for name, rows in classes.items()}
+    related = _values(classes["related"])
+    hard = _values(classes["hard negatives"])
+    easy = _values(classes["easy negatives"])
+    unrelated = _values(classes["unrelated"])
+    hard_total = counts["hard negatives"][1]
+    budget = math.floor(HARD_FP_RATE * hard_total)
+
+    grid: list[GridRow] = []
+    for floor in range(GRID_LO, GRID_HI + 1):
+        rel_n = sum(_nominated(c, floor) for c in related)
+        hard_fp = sum(_nominated(c, floor) for c in hard)
+        easy_fp = sum(_nominated(c, floor) for c in easy)
+        grid.append(
+            GridRow(
+                floor=floor,
+                recall=rel_n / len(related) if related else 0.0,
+                related_nominated=rel_n,
+                hard_fp=hard_fp,
+                easy_fp=easy_fp,
+                admissible=hard_fp <= budget and easy_fp == 0,
+            )
+        )
+    by_floor = {row.floor: row for row in grid}
+
+    def analysis(verdict: Verdict) -> Analysis:
+        return Analysis(
+            counts=counts,
+            min_related=min(related) if related else None,
+            max_unrelated=max(unrelated) if unrelated else None,
+            median_hard_negative=statistics.median(hard) if hard else None,
+            median_easy_negative=statistics.median(easy) if easy else None,
+            hard_fp_budget=budget,
+            grid=tuple(grid),
+            verdict=verdict,
+        )
+
+    # 1. completeness
+    incomplete = [name for name, (n, total) in counts.items() if n != total]
+    if incomplete:
+        return analysis(
+            Verdict("INCOMPLETE", f"unscored pairs in: {', '.join(incomplete)}")
+        )
+    # 2. fixture size
+    minimums = {
+        "related": MIN_RELATED,
+        "unrelated": MIN_UNRELATED,
+        "hard negatives": MIN_HARD_NEGATIVES,
+        "hard positives": MIN_HARD_POSITIVES,
+    }
+    short = [
+        f"{name} {counts[name][1]} < {minimum}"
+        for name, minimum in minimums.items()
+        if counts[name][1] < minimum
     ]
-    if not m.falsifiable:
-        lines.append(
-            "verdict: UNFALSIFIABLE -- cannot evaluate the pre-registered rule"
-        )
-    elif m.separates_at_current_threshold:
-        lines.append(
-            "verdict: KEEP 0.70 -- min(related) "
-            f"{m.min_related:.4f} > 0.70 > max(unrelated) {m.max_unrelated:.4f}"
-        )
-    else:
-        overlap = m.max_unrelated >= m.min_related
-        lines.append(
-            "verdict: OPEN QUESTION -- 0.70 does not sit strictly between "
-            f"the classes (min related {m.min_related:.4f}, max unrelated "
-            f"{m.max_unrelated:.4f})"
-        )
-        if overlap:
-            lines.append(
-                "the classes OVERLAP on this fixture -- no single threshold "
-                "separates them; the constant is NOT changed by this "
-                "measurement alone (needs its own design discussion)"
+    if short:
+        return analysis(Verdict("INVALID_FIXTURE", "; ".join(short)))
+    # 3. hard negatives must be measurably harder
+    if statistics.median(hard) <= statistics.median(easy):
+        return analysis(
+            Verdict(
+                "INSUFFICIENT_EXPOSURE",
+                "median(hard negatives) <= median(easy negatives): the hard "
+                "negatives are not harder; keep 0.70",
             )
-        elif m.proposed_midpoint is not None:
-            lines.append(
-                f"classes do not overlap; candidate midpoint = "
-                f"{m.proposed_midpoint:.4f} (not applied by this change)"
-            )
+        )
+    # 4. admissible floors and the candidate t*
+    admissible = [row.floor for row in grid if row.admissible]
+    if not admissible:
+        return analysis(
+            Verdict("OVERLAP", "no grid floor respects the false-nomination budget")
+        )
+    t_min = min(admissible)
+    t_star = t_min + SAFETY_MARGIN
+    if t_star > GRID_HI:
+        return analysis(
+            Verdict("OVERLAP", f"t* {t_star / 100:.2f} exceeds the grid", t_min, t_star)
+        )
+    recall_star = by_floor[t_star].recall
+    recall_now = by_floor[CURRENT].recall
+
+    def verdict(kind: str, detail: str, exposure: int | None = None) -> Analysis:
+        return analysis(
+            Verdict(kind, detail, t_min, t_star, recall_star, recall_now, exposure)
+        )
+
+    # 5. overlap
+    if recall_star < MIN_RECALL:
+        return verdict(
+            "OVERLAP", f"recall(t*) {recall_star:.3f} < {MIN_RECALL:.2f}; keep 0.70"
+        )
+    # 6. today's floor over-nominates
+    if not by_floor[CURRENT].admissible:
+        return verdict("MOVE", f"raise to {t_star / 100:.2f}: 0.70 is not admissible")
+    # 7. nothing lower is supported
+    if t_star >= CURRENT:
+        return verdict("KEEP", "0.70 is admissible and t* >= 0.70")
+    # 8. a lower floor: worth it, and exposed?
+    gain = recall_star - recall_now
+    if gain < MIN_RECALL_GAIN:
+        return verdict(
+            "KEEP",
+            f"recall gain {gain:.3f} < {MIN_RECALL_GAIN:.2f} at t* {t_star / 100:.2f}",
+        )
+    exposure = sum(c >= (t_star - EXPOSURE_BAND) / 100 for c in hard)
+    if exposure < MIN_EXPOSURE:
+        return verdict(
+            "INSUFFICIENT_EXPOSURE",
+            f"only {exposure} hard negative(s) score >= "
+            f"{(t_star - EXPOSURE_BAND) / 100:.2f} (need {MIN_EXPOSURE}); "
+            "keep 0.70 and extend the hard negatives",
+            exposure,
+        )
+    return verdict(
+        "MOVE",
+        f"lower to {t_star / 100:.2f}: recall {recall_now:.3f} -> "
+        f"{recall_star:.3f}, {exposure} hard negatives within the band",
+        exposure,
+    )
+
+
+def _fmt(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:.4f}"
+
+
+def render(scores: Sequence[PairScore], analysis: Analysis, *, model: str) -> str:
+    v = analysis.verdict
+    lines = [
+        "# Proximity-threshold calibration (#1052)",
+        "",
+        f"embedding model: {model}",
+        f"current CANDIDATE_SIMILARITY_THRESHOLD: {CURRENT / 100:.2f}",
+        "",
+    ]
+    for name, (n, total) in analysis.counts.items():
+        lines.append(f"{name} scored: {n} of {total}")
+    lines += [
+        "",
+        f"weakest related (min): {_fmt(analysis.min_related)}",
+        f"strongest unrelated (max): {_fmt(analysis.max_unrelated)}",
+    ]
+    if analysis.min_related is not None and analysis.max_unrelated is not None:
+        gap = analysis.min_related - analysis.max_unrelated
+        lines.append(
+            f"classes {'separate' if gap > 0 else 'OVERLAP'}: "
+            f"min(related) - max(unrelated) = {gap:+.4f}"
+        )
+    lines += [
+        f"median hard negative: {_fmt(analysis.median_hard_negative)}",
+        f"median easy negative: {_fmt(analysis.median_easy_negative)}",
+        f"hard-negative false-nomination budget: {analysis.hard_fp_budget} "
+        f"(floor({HARD_FP_RATE} x {analysis.counts['hard negatives'][1]}))",
+        "",
+        "| floor | recall | related | hard FP | easy FP | admissible |",
+        "|---|---|---|---|---|---|",
+    ]
+    total_related = analysis.counts["related"][1]
+    total_hard = analysis.counts["hard negatives"][1]
+    total_easy = analysis.counts["easy negatives"][1]
+    marks = {CURRENT, v.t_min, v.t_star}
+    for row in analysis.grid:
+        if row.floor % 5 and row.floor not in marks:
+            continue
+        lines.append(
+            f"| {row.floor / 100:.2f} | {row.recall:.3f} | "
+            f"{row.related_nominated} of {total_related} | "
+            f"{row.hard_fp} of {total_hard} | {row.easy_fp} of {total_easy} | "
+            f"{'yes' if row.admissible else 'no'} |"
+        )
+    lines += ["", "## Per-pair cosines (descending)", ""]
+    lines.append("| cosine | label | hard | pair | reason |")
+    lines.append("|---|---|---|---|---|")
+    ordered = sorted(
+        scores, key=lambda s: -1.0 if s.cosine is None else s.cosine, reverse=True
+    )
+    for s in ordered:
+        lines.append(
+            f"| {_fmt(s.cosine)} | {s.label} | {'yes' if s.hard else 'no'} | "
+            f"{s.a.removeprefix('concepts/')} / {s.b.removeprefix('concepts/')} | "
+            f"{s.reason} |"
+        )
+    lines += ["", f"verdict: {v.kind} -- {v.detail}"]
+    if v.t_star is not None:
+        lines.append(
+            f"t_min {(v.t_min or 0) / 100:.2f}, t* {v.t_star / 100:.2f}, recall(t*) {_fmt(v.recall_at_t_star)}, "
+            f"recall(0.70) {_fmt(v.recall_at_current)}"
+        )
+    if v.exposure is not None:
+        lines.append(
+            f"hard negatives within {EXPOSURE_BAND / 100:.2f} of t*: {v.exposure}"
+        )
     return "\n".join(lines) + "\n"
 
 
+# -- self-test --------------------------------------------------------------
+
+
 class _ReindexFakeEmbedder:
-    """A model-free per-CHUNK `Embedder` double for self-test wiring
-    coverage -- scripted by the TITLE on the chunk's first line
-    (`_compose_header` always puts `title` first), the same technique
-    `evals/decision_revisions/run_decision_revisions_eval.py`'s own
-    `_ReindexFakeEmbedder` uses, since `state.reindex.reindex` calls
-    `embed([chunk_text])` once PER CHUNK, not once per document.
-    `fail_titles` raises a transient `OllamaError` for a scripted title,
-    so a doc never gets stored -- the read-back-count-mismatch shape
+    """A model-free per-CHUNK `Embedder` double -- scripted by the TITLE on
+    the chunk's first line (`_compose_header` always puts `title` first),
+    since `state.reindex.reindex` calls `embed([chunk_text])` once PER
+    CHUNK. `fail_titles` raises a transient `OllamaError` for a scripted
+    title, so a doc never gets stored -- the shape
     `VectorReadBackMismatch` exists to catch, with zero network calls."""
 
     def __init__(
@@ -451,128 +472,267 @@ class _ReindexFakeEmbedder:
         return [self.vectors_by_title[title]]
 
 
-def _axis(index: int, dim: int = 8) -> tuple[float, ...]:
-    """A one-hot vector on `index` -- every `FIXTURE_DOCS` entry gets its
-    own dedicated axis (index == its position in `FIXTURE_DOCS`), so two
-    UNRELATED concepts are orthogonal (cosine exactly 0.0) unless a test
-    deliberately overlaps their axes below."""
-    return tuple(1.0 if i == index else 0.0 for i in range(dim))
+def _synthetic(
+    related: Sequence[float],
+    hard_negatives: Sequence[float],
+    easy_negatives: Sequence[float],
+    *,
+    hard_positives: int = 12,
+) -> list[PairScore]:
+    """Synthetic scores for rule tests: the first `hard_positives` related
+    entries are marked hard."""
+    out = [
+        PairScore(f"r{i}a", f"r{i}b", "related", i < hard_positives, "", "t", c)
+        for i, c in enumerate(related)
+    ]
+    out += [
+        PairScore(f"h{i}a", f"h{i}b", "unrelated", True, "", "t", c)
+        for i, c in enumerate(hard_negatives)
+    ]
+    out += [
+        PairScore(f"e{i}a", f"e{i}b", "unrelated", False, "", "t", c)
+        for i, c in enumerate(easy_negatives)
+    ]
+    return out
 
 
-def _blended(dominant: int, own: int, weight: float, dim: int = 8) -> tuple[float, ...]:
-    """A vector mostly on `dominant`'s axis with a `1 - weight` remainder
-    on `own`'s axis -- models a "related" doc whose vector leans toward
-    its partner's topic while keeping some of its own."""
-    v = [0.0] * dim
-    v[dominant] = weight
-    v[own] = 1.0 - weight
-    return tuple(v)
+def _spread(lo: float, hi: float, n: int) -> list[float]:
+    return [lo + (hi - lo) * i / (n - 1) for i in range(n)]
+
+
+_RULE_BLOCK = re.compile(r"<!-- rule:begin -->\n(.*?)<!-- rule:end -->", re.DOTALL)
 
 
 def _self_test() -> int:
-    """Zero model calls, zero network -- exercises the pure cosine/rule
-    arithmetic AND the real `reindex()`/`okf.dump_frontmatter`/
-    `document_vectors` wiring via `_ReindexFakeEmbedder`."""
+    """Zero model calls, zero network: the pure rule on synthetic scores
+    (one case per verdict), the fixture's own invariants, the README/DESIGN
+    rule copies, and the real `reindex()` wiring via a fake embedder."""
     from openkos.llm.base import EMBED_DIM
 
     failures: list[str] = []
+    checks = 0
 
     def check(name: str, cond: bool) -> None:
+        nonlocal checks
+        checks += 1
         if not cond:
             failures.append(name)
 
-    # -- pure arithmetic -----------------------------------------------
+    # -- pure arithmetic ---------------------------------------------------
     check(
         "cosine of identical vectors is 1",
-        abs(_cosine([1.0, 0.0], [1.0, 0.0]) - 1.0) < 1e-9,
+        abs(_cosine([1.0, 0.0], [1.0, 0.0]) - 1) < 1e-9,
     )
     check(
         "cosine of orthogonal vectors is 0", abs(_cosine([1.0, 0.0], [0.0, 1.0])) < 1e-9
     )
     check("cosine guards a zero vector", _cosine([0.0, 0.0], [1.0, 0.0]) == 0.0)
+    check("nomination is inclusive at the floor", _nominated(0.70, 70))
+    check("nomination excludes just below the floor", not _nominated(0.6999, 70))
+    check("the current floor is 0.70", CURRENT == 70)
 
-    # -- rule application over RELATED_PAIRS/UNRELATED_PAIRS, no I/O ----
-    # Axes, in `FIXTURE_DOCS` order: 0 stoicism, 1 stoic-ethics,
-    # 2 existentialism, 3 existentialist-ethics, 4 medieval-crop-rotation,
-    # 5 modern-crop-irrigation, 6 sourdough, 7 byzantine. Every related
-    # doc leans 90% onto its partner's axis, so EVERY one of the 6
-    # UNRELATED_PAIRS is exactly orthogonal (cosine 0.0) by construction,
-    # never by coincidence.
-    clean_vectors: dict[str, tuple[float, ...]] = {
-        "concepts/stoicism": _axis(0),
-        "concepts/stoic-ethics": _blended(0, 1, 0.9),
-        "concepts/existentialism": _axis(2),
-        "concepts/existentialist-ethics": _blended(2, 3, 0.9),
-        "concepts/medieval-crop-rotation": _axis(4),
-        "concepts/modern-crop-irrigation": _blended(4, 5, 0.9),
-        "concepts/sourdough-bread-baking": _axis(6),
-        "concepts/byzantine-naval-architecture": _axis(7),
-    }
-    clean = measure(clean_vectors)
-    check("falsifiable with both classes non-empty", clean.falsifiable)
+    # -- the rule on synthetic scores: one case per verdict ---------------
+    easy = _spread(0.10, 0.30, 16)
+
+    # KEEP (step 8, no material gain): every related pair already clears
+    # 0.70; hard negatives top out at 0.66, so t* = 0.68 buys nothing.
+    keep = decide(_synthetic(_spread(0.80, 0.95, 44), _spread(0.40, 0.66, 34), easy))
+    check("KEEP: verdict", keep.verdict.kind == "KEEP")
+    check("KEEP: t_min is the lowest floor with <= 1 hard FP", keep.verdict.t_min == 66)
+    check("KEEP: t* adds the 0.02 margin", keep.verdict.t_star == 68)
+    check("KEEP: budget is floor(0.05 x 34) = 1", keep.hard_fp_budget == 1)
+
+    # KEEP (step 7): the two strongest hard negatives sit at 0.69 and 0.67,
+    # so t_min = 0.68 and t* = 0.70, while 0.70 itself stays admissible.
+    keep7 = decide(
+        _synthetic(
+            _spread(0.75, 0.95, 44), [*_spread(0.30, 0.60, 32), 0.67, 0.69], easy
+        )
+    )
+    check("KEEP (t* >= 0.70): verdict", keep7.verdict.kind == "KEEP")
+    check("KEEP (t* >= 0.70): t* is 0.68 + 0.02", keep7.verdict.t_star == 70)
+    check("KEEP (t* >= 0.70): reached by step 7", "t* >= 0.70" in keep7.verdict.detail)
+
+    # MOVE (lower): related spread 0.55-0.90 (recall(0.70) ~0.43), hard
+    # negatives dense up to 0.50, so t* = 0.52 with >= 5 in the band.
+    move_down = decide(
+        _synthetic(_spread(0.55, 0.90, 44), _spread(0.30, 0.50, 34), easy)
+    )
+    check("MOVE lower: verdict", move_down.verdict.kind == "MOVE")
     check(
-        "every RELATED_PAIRS/UNRELATED_PAIRS entry scores (all 8 ids present)",
-        clean.related_n == len(RELATED_PAIRS)
-        and clean.unrelated_n == len(UNRELATED_PAIRS),
+        "MOVE lower: t* is below 0.70",
+        move_down.verdict.t_star is not None and move_down.verdict.t_star < CURRENT,
     )
     check(
-        "a clean separation (0.0 vs ~0.99) separates and reports KEEP",
-        clean.separates_at_current_threshold and "KEEP 0.70" in render(clean),
+        "MOVE lower: exposure >= 5",
+        move_down.verdict.exposure is not None and move_down.verdict.exposure >= 5,
+    )
+    check("MOVE lower: says lower", "lower to" in move_down.verdict.detail)
+
+    # MOVE (raise): five hard negatives sit at 0.75, so 0.70 over-nominates.
+    move_up = decide(
+        _synthetic(
+            _spread(0.85, 0.95, 44), [*_spread(0.30, 0.50, 29), *[0.75] * 5], easy
+        )
+    )
+    check("MOVE raise: verdict", move_up.verdict.kind == "MOVE")
+    check("MOVE raise: t* = 0.76 + 0.02", move_up.verdict.t_star == 78)
+    check("MOVE raise: says raise", "raise to" in move_up.verdict.detail)
+
+    # OVERLAP: the classes share one range, so the budget floor loses most
+    # related pairs.
+    overlap = decide(_synthetic(_spread(0.30, 0.60, 44), _spread(0.35, 0.62, 34), easy))
+    check("OVERLAP: verdict", overlap.verdict.kind == "OVERLAP")
+    check(
+        "OVERLAP: recall(t*) < 0.50",
+        overlap.verdict.recall_at_t_star is not None
+        and overlap.verdict.recall_at_t_star < MIN_RECALL,
+    )
+    no_floor = decide(_synthetic(_spread(0.30, 0.60, 44), [0.95] * 34, easy))
+    check("OVERLAP: no admissible floor", no_floor.verdict.kind == "OVERLAP")
+
+    # INSUFFICIENT_EXPOSURE (step 3): "hard" negatives no harder than easy.
+    flat = decide(_synthetic(_spread(0.60, 0.90, 44), _spread(0.10, 0.30, 34), easy))
+    check(
+        "INSUFFICIENT (step 3): verdict", flat.verdict.kind == "INSUFFICIENT_EXPOSURE"
+    )
+    check("INSUFFICIENT (step 3): names the medians", "median" in flat.verdict.detail)
+
+    # INSUFFICIENT_EXPOSURE (step 8): three hard negatives near the new
+    # floor, the rest far below -- a lower floor nothing tested.
+    sparse = decide(
+        _synthetic(_spread(0.54, 0.90, 44), [0.55, 0.50, 0.46, *[0.32] * 31], easy)
+    )
+    check(
+        "INSUFFICIENT (step 8): verdict", sparse.verdict.kind == "INSUFFICIENT_EXPOSURE"
+    )
+    check("INSUFFICIENT (step 8): exposure counted", sparse.verdict.exposure == 3)
+
+    # INCOMPLETE: one pair unscored; n of TOTAL shows it.
+    holed = _synthetic(_spread(0.80, 0.95, 44), _spread(0.40, 0.66, 34), easy)
+    holed[0] = PairScore("x", "y", "related", True, "", "t", None)
+    incomplete = decide(holed)
+    check("INCOMPLETE: verdict", incomplete.verdict.kind == "INCOMPLETE")
+    check(
+        "INCOMPLETE: n of TOTAL shows 43 of 44",
+        incomplete.counts["related"] == (43, 44),
+    )
+    check(
+        "INCOMPLETE: rendered as n of TOTAL",
+        "related scored: 43 of 44" in render(holed, incomplete, model="fake"),
     )
 
-    # An overlap case: weaken ONE related pair below 0.70 and strengthen
-    # ONE unrelated pair above 0.70 by pointing it at stoicism's own
-    # axis -- the classes now overlap, so the rule must report "open",
-    # never "keep", and must never propose a midpoint over an overlap.
-    overlap_vectors: dict[str, tuple[float, ...]] = dict(clean_vectors)
-    overlap_vectors["concepts/stoic-ethics"] = _blended(0, 1, 0.3)  # cosine ~0.39
-    overlap_vectors["concepts/sourdough-bread-baking"] = _blended(
-        0, 6, 0.95
-    )  # cosine ~0.999
-    overlapping = measure(overlap_vectors)
-    check(
-        "an overlapping fixture never separates at 0.70",
-        not overlapping.separates_at_current_threshold,
+    # INVALID_FIXTURE: the 9-pair smoke shape.
+    tiny = decide(
+        _synthetic([0.8, 0.7, 0.6], _spread(0.3, 0.4, 2), [0.2] * 4, hard_positives=1)
     )
-    check("an overlap never proposes a midpoint", overlapping.proposed_midpoint is None)
-    check(
-        "OPEN QUESTION verdict is rendered on overlap",
-        "OPEN QUESTION" in render(overlapping),
-    )
-    check("OVERLAP is named explicitly in the render", "OVERLAP" in render(overlapping))
+    check("INVALID_FIXTURE: verdict", tiny.verdict.kind == "INVALID_FIXTURE")
 
-    empty = measure({})
-    check("an empty vector map is UNFALSIFIABLE", not empty.falsifiable)
     check(
-        "UNFALSIFIABLE never claims a verdict either way",
-        "UNFALSIFIABLE" in render(empty),
-    )
-
-    # -- wiring: real reindex() + okf.dump_frontmatter + document_vectors
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp_dir = pathlib.Path(tmp)
-        vectors_by_title = {
-            doc.title: [1.0 if i == index else 0.0 for i in range(EMBED_DIM)]
-            for index, doc in enumerate(FIXTURE_DOCS)
+        "every verdict kind is exercised",
+        {
+            keep.verdict.kind,
+            move_up.verdict.kind,
+            overlap.verdict.kind,
+            flat.verdict.kind,
+            incomplete.verdict.kind,
+            tiny.verdict.kind,
         }
+        == set(VERDICTS),
+    )
+
+    # -- the fixture's invariants ------------------------------------------
+    ids = [doc.concept_id for doc in FIXTURE_DOCS]
+    titles = [doc.title for doc in FIXTURE_DOCS]
+    check("fixture concept ids are unique", len(set(ids)) == len(ids))
+    check(
+        "fixture titles are unique (the fake embedder keys on them)",
+        len(set(titles)) == len(titles),
+    )
+    check(
+        "every pair names two fixture docs",
+        all(p.a in ids and p.b in ids for p in PAIRS),
+    )
+    check("no pair joins a doc to itself", all(p.a != p.b for p in PAIRS))
+    unordered = [frozenset((p.a, p.b)) for p in PAIRS]
+    check("no pair is labelled twice", len(set(unordered)) == len(unordered))
+    check(
+        "every fixture doc is in some pair",
+        {x for p in PAIRS for x in (p.a, p.b)} == set(ids),
+    )
+    check("every pair carries a reason", all(p.reason.strip() for p in PAIRS))
+    check(
+        "the smoke-v1 subset is the original 9 pairs",
+        sum(p.origin == "smoke-v1" for p in PAIRS) == 9,
+    )
+    fixture_counts = decide(
+        [PairScore(p.a, p.b, p.label, p.hard, p.reason, p.origin, 0.0) for p in PAIRS]
+    ).counts
+    check("fixture has >= 40 related", fixture_counts["related"][1] >= MIN_RELATED)
+    check(
+        "fixture has >= 40 unrelated", fixture_counts["unrelated"][1] >= MIN_UNRELATED
+    )
+    check(
+        "fixture has >= 20 hard negatives",
+        fixture_counts["hard negatives"][1] >= MIN_HARD_NEGATIVES,
+    )
+    check(
+        "fixture has >= 10 hard positives",
+        fixture_counts["hard positives"][1] >= MIN_HARD_POSITIVES,
+    )
+    check(
+        "fixture has easy negatives to compare against",
+        fixture_counts["easy negatives"][1] >= 5,
+    )
+
+    # -- the pre-registered rule: two copies, one text ---------------------
+    blocks = [
+        _RULE_BLOCK.search((HERE / name).read_text(encoding="utf-8"))
+        for name in ("README.md", "DESIGN.md")
+    ]
+    check("both README.md and DESIGN.md carry the rule block", all(blocks))
+    if all(blocks):
+        texts = [b.group(1) for b in blocks if b is not None]
+        check("the two rule copies are identical", texts[0] == texts[1])
+        rule = " ".join(texts[0].split())
+        for needle in (
+            f"t = {GRID_LO / 100:.2f}, {(GRID_LO + 1) / 100:.2f}, ..., {GRID_HI / 100:.2f}",
+            f"floor({HARD_FP_RATE} * H)",
+            f"t* = t_min + {SAFETY_MARGIN / 100:.2f}",
+            f"recall(t*) < {MIN_RECALL:.2f}",
+            f"< {MIN_RECALL_GAIN:.2f}",
+            f"fewer than {MIN_EXPOSURE} hard negatives score `>= t* - {EXPOSURE_BAND / 100:.2f}`",
+            f"fewer than {MIN_RELATED} related pairs, {MIN_UNRELATED} unrelated pairs, "
+            f"{MIN_HARD_NEGATIVES} hard negatives or {MIN_HARD_POSITIVES} hard positives",
+        ):
+            check(f"rule text states the code's constant: {needle!r}", needle in rule)
+
+    # -- wiring: real reindex() + okf.dump_frontmatter + document_vectors ---
+    vectors_by_title = {
+        doc.title: [1.0 if i == index else 0.0 for i in range(EMBED_DIM)]
+        for index, doc in enumerate(FIXTURE_DOCS)
+    }
+    with tempfile.TemporaryDirectory() as tmp:
         fake = _ReindexFakeEmbedder(dict(vectors_by_title))
-        result = embed_via_reindex(FIXTURE_DOCS, fake, tmp_dir=tmp_dir)
+        result = embed_via_reindex(FIXTURE_DOCS, fake, tmp_dir=pathlib.Path(tmp))
         check(
-            "embed_via_reindex reads back exactly one vector per fixture doc",
+            "embed_via_reindex reads back one vector per fixture doc",
             len(result) == len(FIXTURE_DOCS),
         )
+        check("every fixture concept_id round-trips", set(result) == set(ids))
         check(
-            "every fixture concept_id round-trips through the real bundle walk",
-            set(result) == {doc.concept_id for doc in FIXTURE_DOCS},
-        )
-        check(
-            "reindex embedded exactly one chunk per single-chunk fixture doc",
+            "reindex embedded one chunk per single-chunk fixture doc",
             fake.calls == len(FIXTURE_DOCS),
         )
-        stoicism_vec = result["concepts/stoicism"]
         check(
-            "a scripted title's vector round-trips through doc_vectors unchanged",
-            abs(_cosine(stoicism_vec, vectors_by_title["Stoicism"]) - 1.0) < 1e-6,
+            "a scripted title's vector round-trips unchanged",
+            abs(_cosine(result["concepts/stoicism"], vectors_by_title["Stoicism"]) - 1)
+            < 1e-6,
+        )
+        wired = decide(score_pairs(result))
+        check(
+            "every labelled pair scores through the real wiring (n == TOTAL)",
+            all(n == total for n, total in wired.counts.values()),
         )
 
     with tempfile.TemporaryDirectory() as tmp2:
@@ -584,30 +744,53 @@ def _self_test() -> int:
             embed_via_reindex(FIXTURE_DOCS, failing_fake, tmp_dir=pathlib.Path(tmp2))
         except VectorReadBackMismatch as exc:
             raised = "concepts/stoicism" in str(exc)
-        check(
-            "a per-doc embed failure surfaces as VectorReadBackMismatch, "
-            "never a silent partial mapping",
-            raised,
-        )
+        check("a per-doc embed failure surfaces as VectorReadBackMismatch", raised)
 
-    total = 17
+    # -- JSON round-trip for --rescore -------------------------------------
+    payload = json.loads(json.dumps(_payload(holed, keep_model="fake")))
+    check("rescore payload round-trips its pair scores", _load_scores(payload) == holed)
+
     for name in failures:
         print(f"FAIL: {name}")
-    print(f"self-test: {total - len(failures)}/{total} passed")
+    print(f"self-test: {checks - len(failures)}/{checks} passed")
     return 1 if failures else 0
+
+
+# -- I/O ----------------------------------------------------------------------
+
+
+def _payload(scores: Sequence[PairScore], *, keep_model: str) -> dict[str, object]:
+    analysis = decide(scores)
+    return {
+        "model": keep_model,
+        "current_threshold": CURRENT / 100,
+        "pairs": [asdict(s) for s in scores],
+        "verdict": asdict(analysis.verdict),
+        "counts": {k: list(v) for k, v in analysis.counts.items()},
+    }
+
+
+def _load_scores(payload: dict[str, object]) -> list[PairScore]:
+    pairs = payload.get("pairs")
+    if not isinstance(pairs, list):
+        raise SystemExit(
+            "rescore: this results file has no per-pair scores -- it predates "
+            "the calibration fixture (the 9-pair smoke format); re-run --live"
+        )
+    return [PairScore(**p) for p in pairs]
 
 
 def _timestamp() -> str:
     return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
 
 
-def _run_live(model: str) -> Measurement:
+def _run_live(model: str) -> list[PairScore]:
     from openkos.llm.ollama import OllamaClient
 
     embedder = OllamaClient(model=model)
     with tempfile.TemporaryDirectory() as tmp:
         vectors = embed_via_reindex(FIXTURE_DOCS, embedder, tmp_dir=pathlib.Path(tmp))
-    return measure(vectors)
+    return score_pairs(vectors)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -622,7 +805,7 @@ def main(argv: list[str] | None = None) -> int:
         "--out",
         type=pathlib.Path,
         default=None,
-        help="write the .md report and sibling .json to this stem under results/",
+        help="write the .md report and sibling .json to this stem",
     )
     args = parser.parse_args(argv)
 
@@ -630,30 +813,28 @@ def main(argv: list[str] | None = None) -> int:
         return _self_test()
 
     if args.rescore is not None:
-        import json
-
         payload = json.loads(args.rescore.read_text(encoding="utf-8"))
-        payload["related_scores"] = tuple(payload["related_scores"])
-        payload["unrelated_scores"] = tuple(payload["unrelated_scores"])
-        print(render(Measurement(**payload)))
+        scores = _load_scores(payload)
+        print(render(scores, decide(scores), model=str(payload.get("model", "?"))))
         return 0
 
     if not args.live:
         parser.error("--live is required unless --self-test or --rescore is given")
 
-    measurement = _run_live(args.model)
-    report = render(measurement)
+    scores = _run_live(args.model)
+    report = render(scores, decide(scores), model=args.model)
     print(report)
 
     stem = args.out or (
         RESULTS_DIR / f"proximity-threshold-{_timestamp()}-{args.model}"
     )
     stem.parent.mkdir(parents=True, exist_ok=True)
-    import json
-
     stem.with_suffix(".md").write_text(report, encoding="utf-8")
     stem.with_suffix(".json").write_text(
-        json.dumps(asdict(measurement), indent=2, ensure_ascii=False), encoding="utf-8"
+        json.dumps(
+            _payload(scores, keep_model=args.model), indent=2, ensure_ascii=False
+        ),
+        encoding="utf-8",
     )
     print(f"wrote {stem.with_suffix('.md')}")
     print(f"wrote {stem.with_suffix('.json')}")
