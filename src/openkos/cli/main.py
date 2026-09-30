@@ -30,7 +30,7 @@ from openkos.application import consent as application_consent
 from openkos.application import doctor as application_doctor
 from openkos.application import drift as application_drift
 from openkos.application import ingest as application_ingest
-from openkos.application import ingest_service
+from openkos.application import ingest_service, reindex_service
 from openkos.application import lifecycle as application_lifecycle
 from openkos.application import lint as application_lint
 from openkos.application import list_service as application_list
@@ -140,7 +140,7 @@ from openkos.state import edge_suggestions as edge_suggestions_store
 from openkos.state import reindex as reindex_module
 from openkos.state import revision_findings as revision_findings_store
 from openkos.state.fts import FtsUnavailable
-from openkos.state.vectorstore import VecUnavailable, open_vector_store
+from openkos.state.vectorstore import open_vector_store
 from openkos.vcs import git as vcs_git
 
 _T = TypeVar("_T")
@@ -285,16 +285,12 @@ an invalid answer reprompts up to this many times before the picker gives
 up and silently falls back to `config.DEFAULT_MODEL`, so a non-interactive
 or misbehaving stdin can never hang `init` forever (design D3)."""
 
-# Uniform lock-contention message: `reindex`'s two error ladders (vectors/fts
-# and graph) and `_guard_workspace_lock`'s catch-all for every other verb all
-# format it, so a locked vectors.db/fts.db/graph.db/findings.db always reads
-# identically regardless of which store hit the lock or which verb noticed
-# (reindex-lock-handling, decision 5).
-_LOCK_CONTENTION_TEMPLATE = (
-    "openkos {command}: failed -- another process is holding the workspace "
-    "lock (a concurrent reindex?); wait for it to finish, then try again."
-)
-_LOCK_CONTENTION_MSG = _LOCK_CONTENTION_TEMPLATE.format(command="reindex")
+# Uniform lock-contention message: `reindex_service`'s two error ladders
+# (vectors/fts and graph) and `_guard_workspace_lock`'s catch-all for every
+# other verb all format it, so a locked vectors.db/fts.db/graph.db/findings.db
+# always reads identically regardless of which store hit the lock or which
+# verb noticed (reindex-lock-handling, decision 5).
+_LOCK_CONTENTION_TEMPLATE = reindex_service.LOCK_CONTENTION_TEMPLATE
 
 
 def _version_line() -> str:
@@ -15118,161 +15114,43 @@ def reindex(
         ),
     ),
 ) -> None:
-    """Backfill `.openkos/vectors.db`, `.openkos/fts.db`, and
+    """Backfill `.openkos/vectors.db`, `.openkos/fts.db` and
     `.openkos/graph.db` from the compiled bundle -- the sole writer of every
     derived store's data (spec: reindex-command).
 
-    Read-only over the bundle, write-only to the three `.openkos/*.db`
-    derived stores: no bundle file is ever touched, no confirmation prompt,
-    no `--auto`, mirroring `query`'s D1 gate shape (bare `require_workspace`,
-    no Phase B). Must run inside an initialized workspace; outside one it
-    refuses (exit 1) with a short reason on stderr (spec: Run outside a
-    workspace refuses).
-
-    Thin wiring only (spec: CLI Verb Is Thin Wiring): `require_workspace` →
-    `read_config` → `open_vector_store(vectors_db_path)` →
-    `state.reindex.reindex(bundle_dir, db, embedder, force=force,
-    fts_db_path=..., model_tag=cfg.embedding_model)` →
-    `sqlite_graph.reindex_graph(bundle_dir, graph_db_path, force=force)` →
-    print a summary of embedded/cache-hit/pruned/skipped counts and exit 0.
-    The vector/FTS orchestrator (`state/reindex.py`) owns the bundle walk,
-    the `content_hash` cache gate, the prune pass, the FTS manifest gate,
-    AND the embedding-model tag gate (MVP-2 follow-up #5: a stored tag
-    absent or different from `cfg.embedding_model` forces one full
-    re-embed, independent of `--force`; `ReindexReport.model_reembedded`
-    surfaces this as a dedicated summary line naming the old and new model,
-    plus a follow-up line when some docs could not be re-embedded this run
-    -- review correction, CRITICAL + WARNING findings); the graph gate
-    (`openkos.graph.sqlite_graph.reindex_graph`) is called SEPARATELY
-    rather than from inside `state/reindex.py`, because `state/reindex.py`
-    is canonical-layer code and must not import `openkos.graph` (derived
-    layer) -- this command is the entry-layer seam that ties both together
-    so a single invocation still writes all three stores. This command
-    owns none of the gate/rebuild logic itself.
-
-    Embeds through a local Ollama server running the model configured as
-    `embedding_model` in `openkos.yaml` (default `bge-m3`, ADR-0006).
-    An unreachable Ollama, a missing embedding model, or an unusable
-    `sqlite-vec` extension is reported on stderr with no raw traceback and
-    exits 1 -- the SAME ordered ladder `query` uses (`BackendUnavailable` →
-    `BackendModelNotFound` → a generic `(VecUnavailable, BackendError)`
-    fallback), with `VecUnavailable` substituted for `FtsUnavailable` (spec:
-    Error Ladder Mirrors query). A concurrent process holding a write lock
-    on `vectors.db`/`fts.db`/`graph.db` past `busy_timeout` (e.g. a
-    concurrent `reindex`) is ALSO caught -- at store open, `upsert_many`/the
-    end-of-run `commit`, or a store's `BEGIN IMMEDIATE` -- and reported with
-    the SAME uniform retry message across all three stores, discriminated
-    from any other operational failure by `state.derived.is_lock_contention`
-    (errorcode, never message text), never by a raw traceback
-    (reindex-lock-handling). Never alters `query`'s own behavior or
-    `retrieval/answer.py` (spec: No Retrieval Consumer Introduced).
+    A thin adapter over `application/reindex_service.reindex_workspace`: it
+    supplies the current directory as the workspace root, the effects (the
+    embedding client, the vector store, the proximity source), and a
+    `_ReindexObserver` that renders the summary and the advisories, then maps
+    every typed `ReindexRefused` to its message on stderr and exit code 1. The
+    orchestration -- the ordered backend error ladder, the lock-contention
+    discrimination, the summary-before-graph ordering -- lives in the service.
     """
-    root = Path.cwd()
-    reason = config.require_workspace(root)
-    if reason is not None:
-        typer.echo(f"openkos reindex: refusing to run -- {reason}.", err=True)
-        raise typer.Exit(code=1)
-
-    layout = config.WorkspaceLayout(root)
     try:
-        cfg = config.read_config(root)
-    except (OSError, ValueError) as exc:
-        typer.echo(
-            f"openkos reindex: failed while reading the workspace -- {exc}.",
-            err=True,
+        reindex_service.reindex_workspace(
+            Path.cwd(),
+            force=force,
+            ports=reindex_service.ReindexPorts(
+                embed_client=_embed_client,
+                open_vector_store=open_vector_store,
+                open_proximity=_open_proximity_or_degrade,
+                local_exemption=_resolve_local_exemption,
+            ),
+            observer=_ReindexObserver(),
         )
+    except reindex_service.ReindexRefused as exc:
+        typer.echo(exc.message, err=True)
         raise typer.Exit(code=1) from exc
 
-    embedder = _embed_client(cfg)
-    embedder_locality = cast(BackendDiagnostics, embedder)
-    _warn_if_nonlocal_embed_host("reindex", embedder_locality.locality, cfg)
-    try:
-        with open_vector_store(layout.vectors_db_path) as db:
-            # Captured BEFORE the call so the summary below can name the OLD
-            # tag even though `reindex()` may have already overwritten it in
-            # `vectors.db` by the time we get `report` back (review
-            # correction, WARNING finding: model-tag force observability).
-            previous_model_tag = db.read_model_tag()
-            report = reindex_module.reindex(
-                layout.bundle_dir,
-                db,
-                embedder,
-                force=force,
-                fts_db_path=layout.fts_db_path,
-                model_tag=cfg.embedding_model,
-                embedding_backend=cfg.backend,
-                # TTY-gated per-doc embedding progress on stderr; `None`
-                # (silent) when output is piped (issue #190, mirrors
-                # `suggest-relations`' #134 per-edge line).
-                on_progress=observability.progress_callback("reindex", "embedding doc"),
-                local_exemption=_resolve_local_exemption(embedder_locality, cfg),
-            )
-    except BackendUnavailable as exc:
-        typer.echo(
-            f"openkos reindex: failed -- {exc}. Start it with `ollama serve`, "
-            f"then try again.{_DOCTOR_HINT}",
-            err=True,
-        )
-        raise typer.Exit(code=1) from exc
-    except BackendModelNotFound as exc:
-        typer.echo(
-            "openkos reindex: failed -- embedding model "
-            f"'{cfg.embedding_model}' is not installed. Pull it with "
-            f"`ollama pull {cfg.embedding_model}`, then try again.",
-            err=True,
-        )
-        raise typer.Exit(code=1) from exc
-    # `BackendEmbeddingDimensionMismatch` is a PERMANENT, non-healing
-    # misconfiguration -- unlike `BackendUnavailable`/`BackendModelNotFound`,
-    # it names a concrete remediation: the configured `embedding_model` no
-    # longer produces `EMBED_DIM`-dimensional vectors, so it must be
-    # restored in `openkos.yaml`. Placed BEFORE the generic
-    # `(VecUnavailable, FtsUnavailable, BackendError)` tuple below --
-    # `BackendEmbeddingDimensionMismatch` subclasses `BackendError`, so
-    # reordering this branch after that tuple would silently swallow it
-    # into the generic message (same ordering discipline as the two
-    # handlers above). MUST NOT say "will retry next run" -- that phrasing
-    # is reserved for a transient `embed_failed` skip, not a permanent
-    # misconfiguration.
-    except BackendEmbeddingDimensionMismatch as exc:
-        typer.echo(
-            f"openkos reindex: failed -- {exc} Restore the working "
-            "'embedding_model' value in openkos.yaml, then run `openkos "
-            "reindex` again.",
-            err=True,
-        )
-        raise typer.Exit(code=1) from exc
-    # A lock-contention OperationalError (a concurrent process holding
-    # vectors.db/fts.db's write lock past busy_timeout) can be raised at
-    # ANY write surface inside the `with open_vector_store(...)` block
-    # above -- store open, `upsert_many`/the end-of-run `commit`, or FTS's
-    # `BEGIN IMMEDIATE` (propagated unchanged by `state/fts.py`'s errorcode
-    # discrimination) -- so this clause wraps the ENTIRE try, catching all
-    # three. Placed BEFORE the generic `(VecUnavailable, FtsUnavailable,
-    # BackendError)` tuple below (reindex-lock-handling, decision 2): a
-    # non-lock `OperationalError` is deliberately RE-RAISED, not swallowed
-    # into a generic clean exit -- this stays strictly additive, matching
-    # this catch's ONLY documented job (lock contention), and preserves
-    # whatever pre-existing (uncaught) behavior a different operational
-    # failure already had.
-    except sqlite3.OperationalError as exc:
-        if derived.is_lock_contention(exc):
-            typer.echo(_LOCK_CONTENTION_MSG, err=True)
-            raise typer.Exit(code=1) from exc
-        raise
-    # The two specific handlers above MUST precede this generic tuple, same
-    # ordering rationale as `query`'s ladder: both `BackendUnavailable` and
-    # `BackendModelNotFound` subclass `BackendError`. `FtsUnavailable` joins
-    # `VecUnavailable` here (Slice 5 review correction, Finding A): reindex
-    # now reaches the FTS write path (`state.reindex._reindex_fts` ->
-    # `fts.write_fts_index`), which raises `FtsUnavailable` exactly like
-    # `query`'s FTS read path already does -- this mirrors `query`'s own
-    # `(FtsUnavailable, BackendError)` ladder instead of leaving it as a raw,
-    # uncaught traceback.
-    except (VecUnavailable, FtsUnavailable, BackendError) as exc:
-        typer.echo(f"openkos reindex: failed -- {exc}.", err=True)
-        raise typer.Exit(code=1) from exc
 
+def _render_reindex_summary(
+    report: reindex_module.ReindexReport,
+    previous_model_tag: str | None,
+    cfg: config.Config,
+) -> None:
+    """Print the vectors/FTS summary and its follow-up notices for one
+    `reindex` run. Called by the service BEFORE the graph write (see
+    `_ReindexObserver.vectors_indexed`)."""
     # The vectors.db/fts.db summary is printed HERE, BEFORE the graph write
     # attempt below -- not after it, as an earlier revision did (review
     # finding R4). `report` already reflects durably-committed work at this
@@ -15355,51 +15233,25 @@ def reindex(
             err=True,
         )
 
-    # graph.db is written by a SEPARATE call, not by `state.reindex.reindex`
-    # itself: `state/reindex.py` is canonical-layer code and must not import
-    # `openkos.graph` (derived layer, docs/architecture.md); this entry-layer
-    # command is the seam that ties both together so a single `openkos
-    # reindex` invocation still writes all three derived stores (Slice 5,
-    # PR2; reindex-command: Reindex writes all three derived stores in one
-    # run). This call has its OWN try/except, deliberately separate from the
-    # vectors/FTS ladder above: `sqlite_graph.reindex_graph` raises no typed
-    # "unavailable" exception (plain `CREATE TABLE`, no extension dependency
-    # like `fts5`/`sqlite-vec`) -- its only failure mode is a bare
-    # `sqlite3.Error` (permission/IO/corrupt `graph.db`), which the vectors/FTS
-    # ladder above was never scoped to catch (PR3 carry-over fix, Engram bug
-    # #1470: the graph reindex ladder gap -- a graph-write failure after
-    # vectors.db/fts.db already succeeded used to crash with a raw traceback
-    # instead of the documented clean exit 1). Deliberately narrow: catches
-    # ONLY this call's `sqlite3.Error`. A locked `graph.db` (lock contention,
-    # discriminated by `is_lock_contention`) gets the SAME uniform
-    # `_LOCK_CONTENTION_MSG` ladder 1 uses for vectors.db/fts.db, reusing
-    # this broad `except sqlite3.Error` rather than a separate narrower
-    # clause -- a non-lock `sqlite3.Error` keeps its existing, graph-specific
-    # message unchanged (reindex-lock-handling; this closes the gap this
-    # comment used to flag as deferred).
-    try:
-        with_candidates = _open_proximity_or_degrade(layout.vectors_db_path)
-        try:
-            sqlite_graph.reindex_graph(
-                layout.bundle_dir,
-                layout.graph_db_path,
-                force=force,
-                candidates=with_candidates,
-            )
-        finally:
-            if with_candidates is not None:
-                with_candidates.close()
-    except sqlite3.Error as exc:
-        if isinstance(exc, sqlite3.OperationalError) and derived.is_lock_contention(
-            exc
-        ):
-            typer.echo(_LOCK_CONTENTION_MSG, err=True)
-            raise typer.Exit(code=1) from exc
-        typer.echo(
-            f"openkos reindex: failed while writing the graph index -- {exc}.",
-            err=True,
-        )
-        raise typer.Exit(code=1) from exc
+
+class _ReindexObserver:
+    """Renders what `reindex_service.reindex_workspace` reports as it goes."""
+
+    def embedder_ready(self, locality: BackendHostLocality, cfg: config.Config) -> None:
+        _warn_if_nonlocal_embed_host("reindex", locality, cfg)
+
+    def progress_callback(self) -> Callable[[int, int, object], None] | None:
+        # TTY-gated per-doc embedding progress on stderr; `None` (silent)
+        # when output is piped (issue #190).
+        return observability.progress_callback("reindex", "embedding doc")
+
+    def vectors_indexed(
+        self,
+        report: reindex_module.ReindexReport,
+        previous_model_tag: str | None,
+        cfg: config.Config,
+    ) -> None:
+        _render_reindex_summary(report, previous_model_tag, cfg)
 
 
 def _render_check(r: application_doctor.CheckResult) -> None:
