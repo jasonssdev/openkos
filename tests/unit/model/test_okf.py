@@ -4153,6 +4153,63 @@ def test_decode_v4_entry_requires_carried_content_ids_key() -> None:
         okf.decode_merge_ledger_entry(encoded)
 
 
+def test_survivor_after_sha256_round_trips_through_frontmatter() -> None:
+    """Issue #1110: `survivor_after_sha256` round-trips losslessly through
+    encode -> dump_frontmatter -> load_frontmatter -> decode, unlike
+    `carried_content_ids`/`index_restores` this field is NOT tied to a
+    single schema -- a V1 entry may carry it too, since verifying survivor
+    drift is an independent, optional check rather than core reversal
+    information."""
+    entry = _sample_ledger_entry(
+        survivor_after_sha256="a" * 64,
+    )
+
+    encoded = okf.encode_merged_from([entry])
+    text = okf.dump_frontmatter({"merged_from": encoded}, "")
+    metadata, _ = okf.load_frontmatter(text)
+    (decoded,) = okf.decode_merged_from(metadata)
+
+    assert decoded.survivor_after_sha256 == "a" * 64
+    assert decoded == entry
+
+
+def test_survivor_after_sha256_defaults_to_empty_sentinel() -> None:
+    """A `MergeLedgerEntry` constructed without `survivor_after_sha256`
+    (every pre-#1110 call site, and every existing test fixture) defaults
+    to the empty "cannot verify" sentinel, never `None` or an error."""
+    entry = _sample_ledger_entry()
+
+    assert entry.survivor_after_sha256 == ""
+
+
+def test_decode_absent_survivor_after_sha256_defaults_to_empty_sentinel() -> None:
+    """A ledger entry dict with no `survivor_after_sha256` key at all --
+    every entry recorded before #1110 shipped, on ANY schema -- decodes to
+    the empty sentinel rather than failing closed the way a genuinely
+    REQUIRED field (e.g. V4's `carried_content_ids`) would."""
+    entry = _sample_ledger_entry(schema=okf.MERGE_LEDGER_SCHEMA_V4)
+    (encoded,) = okf.encode_merged_from([entry])
+    del encoded["survivor_after_sha256"]
+
+    decoded = okf.decode_merge_ledger_entry(encoded)
+
+    assert decoded.survivor_after_sha256 == ""
+
+
+def test_encode_survivor_after_sha256_is_never_schema_guarded() -> None:
+    """Every schema version may carry `survivor_after_sha256` -- unlike
+    `carried_content_ids`/`index_restores`, encoding it on a V1 entry is
+    NOT a self-contradiction and must not raise."""
+    entry = _sample_ledger_entry(
+        schema=okf.MERGE_LEDGER_SCHEMA_V1,
+        survivor_after_sha256="b" * 64,
+    )
+
+    encoded = okf.encode_merge_ledger_entry(entry)
+
+    assert encoded["survivor_after_sha256"] == "b" * 64
+
+
 def test_merged_content_heading_matches_build_merged_document_bytes() -> None:
     """#685 item 3: the `## Merged content (<id>)` probe string was
     hand-assembled at every consumer site; `merged_content_heading` is the

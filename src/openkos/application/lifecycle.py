@@ -637,11 +637,28 @@ def merge_core(
     expected_survivor_sha256 = bundle_ledger.survivor_sha256(
         prepared.plan.merged_survivor
     )
+    # #1110: bind the COMMITTED entry's own `survivor_after_sha256` to the
+    # exact bytes about to land in `survivor_path` -- reusing the SAME hash
+    # the two-phase write below already binds into the pending sidecar's
+    # `expected_survivor_sha256` for crash recovery, so a later `unmerge`'s
+    # Phase A can tell whether the survivor was edited since (see
+    # `MergeLedgerEntry.survivor_after_sha256`). Patched HERE, not inside
+    # `plan_merge`, because the deprecated-status export above can still
+    # rewrite `prepared.plan.merged_survivor` after `plan_merge` returned --
+    # hashing the FINAL bytes at the point they are actually written is the
+    # only way the recorded hash and the disk bytes cannot diverge.
+    ledger_entries = [
+        *prepared.plan.ledger_entries[:-1],
+        dataclasses.replace(
+            prepared.plan.ledger_entries[-1],
+            survivor_after_sha256=expected_survivor_sha256,
+        ),
+    ]
     bundle_ledger.write_pending(
         survivor_canonical,
         bundle_dir,
         survivor_id=survivor_canonical,
-        entries=prepared.plan.ledger_entries,
+        entries=ledger_entries,
         expected_survivor_sha256=expected_survivor_sha256,
     )  # S1
     fsio.write_atomic(survivor_path, prepared.plan.merged_survivor)  # V
@@ -734,6 +751,25 @@ class PreparedUnmerge:
     survivor_canonical: str
     absorbed_canonical: str
     catalog_log_drifted: bool
+    survivor_drift_unverifiable: bool
+    """#1110: `True` when `plan.entry.survivor_after_sha256` is the empty
+    sentinel -- the tail ledger entry predates the survivor-edit check (a
+    v1-v5 entry recorded before #1110 shipped), so `prepare_unmerge` cannot
+    compare the survivor's current bytes against what that merge wrote.
+    `False` means the comparison ran (a mismatch either raises `ValueError`
+    or, with `discard_survivor_edits=True`, sets
+    `survivor_edits_discarded` instead). The command prints a one-line
+    warning on `True` and proceeds -- fail-open, but disclosed, only for
+    this legacy case."""
+    survivor_edits_discarded: bool
+    """#1110 follow-up: `True` when the survivor's current bytes DID
+    mismatch `survivor_after_sha256` (a genuine edit since the merge) AND
+    the caller passed `discard_survivor_edits=True`, so `prepare_unmerge`
+    proceeded instead of raising. `False` on every other path, including
+    the legacy `survivor_drift_unverifiable` case (nothing was detected
+    there to discard) and the ordinary no-drift case. The command prints
+    its own disclosure on `True`, naming the survivor and distinct from the
+    legacy-entry warning."""
     review: bool
     index_bytes: bytes
     log_bytes: bytes
@@ -827,6 +863,7 @@ def prepare_unmerge(
     *,
     now: datetime,
     cfg: config.Config,
+    discard_survivor_edits: bool = False,
 ) -> PreparedUnmerge:
     """Phase A (pure, no writes): read the survivor's ledger and the
     current catalog/log, plan the reversal (`bundle_merge.plan_unmerge`,
@@ -850,18 +887,55 @@ def prepare_unmerge(
     the raw bytes BESIDE the decoded text -- one observation per target,
     never a second read (issues #306, #313, #318) -- so the returned
     `PreparedUnmerge` can carry the drift guard's baselines for the
-    command to check after its confirm gate (issue #334)."""
+    command to check after its confirm gate (issue #334).
+
+    Raises `ValueError` BEFORE any preview (issue #1110) when the
+    survivor's CURRENT text does not hash to the tail entry's own
+    `survivor_after_sha256` -- an edit landed on the survivor at some point
+    between the merge and this unmerge, by a human or by another verb
+    (`repair`, `sync-tags`, even the deprecated-status export this merge
+    itself wrote), and restoring `survivor_before` over it would silently
+    discard that edit. This is DIFFERENT from `_reject_drifted_targets`'
+    post-confirm guard (`cli/main.py`, exit 3): that one only catches an
+    edit landing DURING the confirm prompt's own window, comparing disk
+    against what THIS run's own Phase A just read; this one compares disk
+    against what the MERGE recorded writing, so it catches an edit from any
+    time before this unmerge started, at the cost of also refusing a
+    survivor a later, entirely different verb legitimately rewrote after
+    the merge -- the conservative choice, since a write is a write
+    regardless of who made it. A tail entry with no recorded hash (every
+    entry from before #1110 shipped) cannot be checked at all; the caller
+    is told via `PreparedUnmerge.survivor_drift_unverifiable` so it can
+    disclose that instead of silently skipping the check.
+
+    `discard_survivor_edits=True` (the CLI's `--discard-survivor-edits`,
+    #1110 follow-up) is the ONLY escape from that raise: a plain re-run
+    with no flag hashes the identical edited survivor and refuses again --
+    forever, since nothing about the mismatch resolves itself -- so the
+    refusal needs an explicit, named way past it once the operator has
+    decided the edit is safe to discard (having copied it elsewhere, or
+    accepting the loss). The flag is checked ONLY at this one comparison:
+    it changes nothing about the absorbed-path collision above, the
+    rewrite-file drift checks below, or `_reject_drifted_targets`' own
+    post-confirm re-validation, and it is never implied by `--auto`
+    (`cfg`/caller-level orthogonality -- this function does not even see
+    `auto`). When it overrides a genuine mismatch,
+    `PreparedUnmerge.survivor_edits_discarded` is set so the caller can
+    disclose the override in its own preview -- a `False` mismatch was
+    never detected in the first place, so nothing to discard is reported
+    either."""
     index_path = layout.bundle_dir / "index.md"
     log_path = layout.bundle_dir / "log.md"
 
     # One `fsio.snapshot_read` observation (issues #306, #313, #318): the
-    # raw bytes are the drift guard's baseline for the survivor.
+    # raw bytes are the drift guard's baseline for the survivor; the
+    # decoded text also feeds the #1110 survivor-edit check below.
     # Durable-derived-state slice 1a: `plan_unmerge` no longer needs the
-    # DECODED text at all -- the ledger entries live in a sidecar
-    # (`bundle/ledger.py`), never the survivor's own frontmatter, and
-    # `restored_survivor` comes straight from the tail entry's
+    # decoded text to compute the RESTORE -- the ledger entries live in a
+    # sidecar (`bundle/ledger.py`), never the survivor's own frontmatter,
+    # and `restored_survivor` comes straight from the tail entry's
     # `survivor_before`, not from parsing this file.
-    survivor_bytes, _survivor_text = fsio.snapshot_read(survivor_path)
+    survivor_bytes, survivor_text = fsio.snapshot_read(survivor_path)
     existing_entries = bundle_ledger.read_entries(survivor_canonical, layout.bundle_dir)
     # Read BEFORE planning (#758): a V5 entry records the merge's catalog
     # delta, so the reversal is computed against these current texts
@@ -877,6 +951,33 @@ def prepare_unmerge(
         current_index_text=current_index_text,
         current_log_text=current_log_text,
     )
+
+    # #1110: pre-prompt, before any preview -- the survivor's own drift
+    # check, closing the gap the docstring above and the `unmerge` CLI
+    # docstring both name ("the survivor has no pre-prompt drift check at
+    # all"). `plan.entry` is the LIFO-tail entry this call is about to
+    # reverse; its `survivor_after_sha256` (empty for a pre-#1110 entry) is
+    # the ONLY baseline that reaches back further than this Phase A's own
+    # read, so it is what can tell "edited before I even started reading"
+    # from "edited during my confirm prompt" (the latter is
+    # `_reject_drifted_targets`' separate, narrower job).
+    survivor_drift_unverifiable = not plan.entry.survivor_after_sha256
+    survivor_edits_discarded = False
+    if not survivor_drift_unverifiable:
+        actual_survivor_sha256 = bundle_ledger.survivor_sha256(survivor_text)
+        if actual_survivor_sha256 != plan.entry.survivor_after_sha256:
+            if not discard_survivor_edits:
+                raise ValueError(
+                    f"'bundle/{survivor_canonical}.md' does not match the "
+                    "bytes this merge wrote to it -- it was edited (by a "
+                    "human, or by another verb such as `repair` or "
+                    "`sync-tags`) after the merge and before this unmerge. "
+                    "Restoring the pre-merge snapshot would silently "
+                    "discard that edit. Copy it somewhere safe, then "
+                    "re-run with --discard-survivor-edits; you can reapply "
+                    "the edit by hand once the unmerge has completed"
+                )
+            survivor_edits_discarded = True
 
     absorbed_path = layout.bundle_dir / f"{absorbed_canonical}.md"
     if absorbed_path.exists():
@@ -1069,6 +1170,8 @@ def prepare_unmerge(
         survivor_canonical=survivor_canonical,
         absorbed_canonical=absorbed_canonical,
         catalog_log_drifted=catalog_log_drifted,
+        survivor_drift_unverifiable=survivor_drift_unverifiable,
+        survivor_edits_discarded=survivor_edits_discarded,
         review=cfg.review,
         index_bytes=index_bytes,
         log_bytes=log_bytes,

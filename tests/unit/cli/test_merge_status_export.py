@@ -301,16 +301,17 @@ def test_unmerge_to_chain_leaves_lint_clean_at_every_step(
     assert "status-export-drift" not in lint_result.output
 
 
-def test_pin_unmerge_does_not_refuse_on_a_survivor_edited_after_merge(
+def test_unmerge_refuses_on_a_survivor_edited_after_merge(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Task 5.1 PIN (design Open Question, resolved): `unmerge` does NOT
-    refuse when the survivor was hand-edited after the merge -- it
-    silently overwrites the survivor with the ledger's pre-merge snapshot,
-    discarding the interleaved edit. There is no drift refusal for this
-    window; `prepare_unmerge`'s `survivor_bytes` baseline is captured
-    fresh at ITS OWN Phase A (whatever is on disk right now), never
-    compared against the merge-time state."""
+    """Issue #1110 fix (formerly a Task 5.1 PIN of the open bug): `unmerge`
+    now refuses, before any preview and with nothing written, when the
+    survivor was hand-edited after the merge -- `prepare_unmerge` compares
+    the survivor's current bytes against `survivor_after_sha256`, the hash
+    the merge itself recorded writing, instead of only checking against its
+    OWN Phase A read (which -- before this fix -- silently accepted
+    whatever was on disk and overwrote it with the pre-merge snapshot,
+    discarding the interleaved edit)."""
     _init_workspace(tmp_path, monkeypatch)
     _write_concept(tmp_path, "concepts/survivor", title="Survivor")
     _write_concept(tmp_path, "concepts/absorbed", title="Absorbed")
@@ -328,7 +329,10 @@ def test_pin_unmerge_does_not_refuse_on_a_survivor_edited_after_merge(
         app, ["unmerge", "concepts/survivor", "concepts/absorbed", "--auto"]
     )
 
-    assert result.exit_code == 0, result.output
-    assert survivor_path.read_text(encoding="utf-8") != hand_edit
-    metadata, _ = okf.load_frontmatter(survivor_path.read_text(encoding="utf-8"))
-    assert metadata["title"] == "Survivor"
+    assert result.exit_code == 1, result.output
+    assert "concepts/survivor" in result.output
+    assert "copy it somewhere safe" in result.output.lower()
+    # Nothing was written: the hand edit survives byte-for-byte, and the
+    # absorbed file was never recreated.
+    assert survivor_path.read_text(encoding="utf-8") == hand_edit
+    assert not (tmp_path / "bundle" / "concepts" / "absorbed.md").exists()

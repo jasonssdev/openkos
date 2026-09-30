@@ -404,6 +404,8 @@ def test_unmerge_core_is_directly_callable_and_restores_the_pre_merge_state(
         # `prepare_unmerge`) -- placeholder values are enough to satisfy the
         # dataclass shape for this Phase-B-only fixture.
         catalog_log_drifted=False,
+        survivor_drift_unverifiable=False,
+        survivor_edits_discarded=False,
         review=True,
         index_bytes=b"",
         log_bytes=b"",
