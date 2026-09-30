@@ -2857,14 +2857,28 @@ rewrite raises the Source's resolved `sensitivity` (the sensitivity delta
 fired), `ingest` MUST additionally print one stderr advisory stating that
 existing derived objects keep their own already-stamped sensitivity and
 naming `openkos set-sensitivity` (ADR-0009) as the command to raise them
-explicitly.
+explicitly. WHEN the tag-union delta is one of the deltas that fired,
+`ingest` MUST additionally print exactly one stderr advisory, at the same
+point as the `set-sensitivity` advisory, stating that existing derived
+objects keep the tags they were created with and naming
+`openkos sync-tags sources/<slug>` — the rewritten Source's own id — as the
+command that adds the Source's tags to them (`tag-sync`, ADR-0033). This
+advisory MUST NOT fire when the tag-union delta did not fire, and its
+presence is independent of the `set-sensitivity` advisory: a rewrite that
+fires both deltas prints both advisories. The advisory is printed
+regardless of whether the Source has any derived object on disk, because
+counting them would need the whole-bundle walk this rewrite deliberately
+does not perform; its wording MUST therefore not assert that any derived
+object exists.
 (Previously: named "Converged Re-Ingest Date-Only Rewrite", and triggered
 only by a differing resolved `event_date`; a differing `source_frontmatter`,
 tag union, or sensitivity did not trigger a rewrite, so a Source ingested
 before this change kept none of those values until `--re-extract`. The
 rewrite's preview carried no `source frontmatter recorded` or `tags added`
 line, and no rewrite ever printed the `set-sensitivity` advisory, because
-none of those deltas existed.)
+none of those deltas existed. A tag-union delta then printed no advisory at
+all: existing derived objects silently kept their creation-time tags, and
+no verb existed that could add the Source's new tags to them.)
 
 #### Scenario: A differing flag on a converged Source rewrites it with no extraction
 
@@ -2979,6 +2993,32 @@ none of those deltas existed.)
 - WHEN `openkos ingest <path>` completes the rewrite
 - THEN no `set-sensitivity` advisory is printed
 
+#### Scenario: A tag-union delta on the Source-only rewrite advises sync-tags
+
+- GIVEN a Source `sources/notes` that is unchanged, already extracted,
+  carries an `origin_key`, and is stored with `tags: [alpha]`, whose
+  incoming frontmatter now carries `tags: [beta]`
+- WHEN `openkos ingest <path>` completes the Source-only rewrite
+- THEN exactly one stderr advisory states that existing derived objects
+  keep the tags they were created with and names
+  `openkos sync-tags sources/notes`, and no `set-sensitivity` advisory is
+  printed
+
+#### Scenario: A rewrite with no tag-union delta prints no sync-tags advisory
+
+- GIVEN a Source-only rewrite triggered only by a differing resolved
+  `event_date` or a newly-parsed `source_frontmatter` mapping, with no
+  tag-union delta firing
+- WHEN `openkos ingest <path>` completes the rewrite
+- THEN no `sync-tags` advisory is printed
+
+#### Scenario: A rewrite firing both the tag and sensitivity deltas prints both advisories
+
+- GIVEN a Source-only rewrite whose incoming frontmatter both adds a tag
+  and raises the Source's resolved `sensitivity`
+- WHEN `openkos ingest <path>` completes the rewrite
+- THEN stderr carries the `set-sensitivity` advisory and the `sync-tags`
+  advisory, one each
 ### Requirement: Event-Date Origin Disclosure Line
 
 WHEN a re-ingest or fresh ingest records an `event_date` on the generated

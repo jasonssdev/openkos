@@ -1588,6 +1588,41 @@ class DescendantRaise:
 
 
 @dataclass(frozen=True)
+class TagAddition:
+    """One staged tag-union descendant write, computed by
+    `bundle.provenance.resolve_source_tag_additions` (design: "Interfaces /
+    Contracts"; ADR-0033). `added` is the subset of the Source's normalized
+    tags this member did not already carry, in the Source's own order --
+    never empty (a member whose union adds nothing is not staged at all).
+    `content` is the member's full frontmatter-plus-body text, already
+    re-rendered via `dump_frontmatter` with only `tags` replaced by
+    `union_tags(existing, source_tags)`, ready to write as-is.
+
+    Deliberately WITHOUT a `path` field, mirroring `DescendantRaise`:
+    `Path` is a filesystem concern, and this dataclass lives in the pure,
+    `Path`-free model layer. Every caller derives its own write target as
+    `layout.bundle_dir / f"{concept_id}.md"`.
+    """
+
+    concept_id: str
+    added: tuple[str, ...]
+    content: str
+
+
+@dataclass(frozen=True)
+class TagSkip:
+    """One member `resolve_source_tag_additions` deliberately did NOT
+    stage, paired with the reason a human needs to see (ADR-0033):
+    `"malformed-tags"` for a `tags` value that is present but not a list of
+    `str` (Decision 3), and `"below-source-sensitivity"` for a member whose
+    `sensitivity` ranks strictly below the Source's (Decision 4). Neither
+    reason ever rewrites the member's file."""
+
+    concept_id: str
+    reason: Literal["malformed-tags", "below-source-sensitivity"]
+
+
+@dataclass(frozen=True)
 class MergeLedgerEntry:
     """One `merged_from` list entry: the FULL pre-merge snapshot set for one
     absorbed object (spec: Reversibility Ledger; ADR-0002).

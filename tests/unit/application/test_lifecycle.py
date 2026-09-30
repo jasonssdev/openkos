@@ -12,12 +12,13 @@ reachable without driving a CLI command. Mirrors `test_ingest.py`'s and
 """
 
 import dataclasses
+import re
 from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
 
-from openkos import config
+from openkos import config, fsio
 from openkos.application import consent as consent_service
 from openkos.application import lifecycle as lifecycle_service
 from openkos.bundle import bundle
@@ -1751,3 +1752,304 @@ def test_prepare_merge_stages_its_gate_as_data(tmp_path: Path) -> None:
     # D2: a gate is a question, never an answer -- no field an adapter
     # could set to "already granted".
     assert not hasattr(prepared.confirmation, "granted")
+
+
+# ============================================================================
+# source-tag-sync (#1093): `prepare_sync_tags` / `sync_tags_core` -- mirrors
+# `prepare_relate`/`relate_core`'s Phase A/Phase B shape (ADR-0033, design:
+# "Application service (ADR-0018)").
+# ============================================================================
+
+
+def _write_source(
+    bundle_dir: Path,
+    concept_id: str,
+    *,
+    title: str,
+    tags: list[str] | None = None,
+    sensitivity: str | None = None,
+    provenance: list[str] | None = None,
+) -> Path:
+    concept_path = bundle_dir / f"{concept_id}.md"
+    concept_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata: dict[str, object] = {"type": "Source", "title": title}
+    if tags is not None:
+        metadata["tags"] = tags
+    if sensitivity is not None:
+        metadata["sensitivity"] = sensitivity
+    if provenance is not None:
+        metadata["provenance"] = provenance
+    concept_path.write_text(
+        okf.dump_frontmatter(metadata, f"# {title}\n"), encoding="utf-8"
+    )
+    return concept_path
+
+
+def test_prepare_sync_tags_single_source(tmp_path: Path) -> None:
+    """Phase A stages one descendant's union from a single named Source
+    (design: "prepare_sync_tags single-Source path")."""
+    layout = _workspace(tmp_path)
+    _write_source(layout.bundle_dir, "sources/notes", title="Notes", tags=["alpha"])
+    _write_concept(
+        layout.bundle_dir,
+        "concepts/a",
+        title="A",
+    )
+    (layout.bundle_dir / "concepts" / "a.md").write_text(
+        okf.dump_frontmatter(
+            {"type": "Concept", "title": "A", "provenance": ["sources/notes"]},
+            "# A\n",
+        ),
+        encoding="utf-8",
+    )
+
+    prepared = lifecycle_service.prepare_sync_tags(
+        layout, "sources/notes", now=datetime(2026, 1, 1, tzinfo=UTC)
+    )
+
+    assert prepared.roots == ("sources/notes",)
+    assert len(prepared.additions) == 1
+    assert prepared.additions[0].concept_id == "concepts/a"
+    assert prepared.additions[0].added == ("alpha",)
+    assert prepared.confirmation == consent_service.boolean_confirmation("sync-tags")
+
+
+def test_prepare_sync_tags_refuses_non_source(tmp_path: Path) -> None:
+    """Phase A refuses a target whose `type` is not `Source`, naming the
+    concept and stating that `sync-tags` takes a Source (spec "Target
+    Selection Is One Source Or Every Source")."""
+    layout = _workspace(tmp_path)
+    _write_concept(layout.bundle_dir, "concepts/alpha", title="Alpha")
+
+    with pytest.raises(ValueError, match="concepts/alpha") as caught:
+        lifecycle_service.prepare_sync_tags(
+            layout, "concepts/alpha", now=datetime(2026, 1, 1, tzinfo=UTC)
+        )
+    assert "Source" in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    "unsafe_id",
+    ["/sources/notes", "../outside", "index", "sources/ghost"],
+)
+def test_prepare_sync_tags_refuses_unsafe_id(tmp_path: Path, unsafe_id: str) -> None:
+    """Phase A refuses an absolute id, a `..` segment, a reserved basename,
+    or a nonexistent concept -- the same id-safety `resolve_concept_path`
+    already applies to every other id-taking write verb (spec "An unsafe id
+    refuses before any write")."""
+    layout = _workspace(tmp_path)
+    _write_source(layout.bundle_dir, "sources/notes", title="Notes", tags=["alpha"])
+
+    with pytest.raises(ValueError, match=re.escape(unsafe_id)):
+        lifecycle_service.prepare_sync_tags(
+            layout, unsafe_id, now=datetime(2026, 1, 1, tzinfo=UTC)
+        )
+
+
+# -- 2.9-2.10: the --all fold (Decision 8) -----------------------------------
+
+
+def test_prepare_sync_tags_all_folds_every_source(tmp_path: Path) -> None:
+    """`--all` (source_id=None) folds every Source's own additions into one
+    plan, roots sorted (spec "Two Sources each tag their own descendants in
+    one commit")."""
+    layout = _workspace(tmp_path)
+    _write_source(layout.bundle_dir, "sources/a", title="A", tags=["x"])
+    _write_source(layout.bundle_dir, "sources/b", title="B", tags=["y"])
+    _write_concept(layout.bundle_dir, "concepts/child-a", title="Child A")
+    (layout.bundle_dir / "concepts" / "child-a.md").write_text(
+        okf.dump_frontmatter(
+            {"type": "Concept", "title": "Child A", "provenance": ["sources/a"]},
+            "# Child A\n",
+        ),
+        encoding="utf-8",
+    )
+    (layout.bundle_dir / "concepts" / "child-b.md").write_text(
+        okf.dump_frontmatter(
+            {"type": "Concept", "title": "Child B", "provenance": ["sources/b"]},
+            "# Child B\n",
+        ),
+        encoding="utf-8",
+    )
+
+    prepared = lifecycle_service.prepare_sync_tags(
+        layout, None, now=datetime(2026, 1, 1, tzinfo=UTC)
+    )
+
+    assert prepared.roots == ("sources/a", "sources/b")
+    by_id = {addition.concept_id: addition for addition in prepared.additions}
+    assert by_id["concepts/child-a"].added == ("x",)
+    assert by_id["concepts/child-b"].added == ("y",)
+
+
+def test_all_stages_each_file_once(tmp_path: Path) -> None:
+    """A descendant reachable from TWO Sources' closures -- Source B citing
+    only Source A is the fixture that makes this reachable, since B itself
+    (Source-typed) is never written -- gains the union of both Sources'
+    tags in root order and appears exactly once in the staged result
+    (spec: "Every Source Folds Into One Plan With --all")."""
+    layout = _workspace(tmp_path)
+    _write_source(layout.bundle_dir, "sources/a", title="A", tags=["x"])
+    _write_source(
+        layout.bundle_dir, "sources/b", title="B", tags=["y"], provenance=["sources/a"]
+    )
+    (layout.bundle_dir / "concepts").mkdir(parents=True, exist_ok=True)
+    (layout.bundle_dir / "concepts" / "child.md").write_text(
+        okf.dump_frontmatter(
+            {"type": "Concept", "title": "Child", "provenance": ["sources/b"]},
+            "# Child\n",
+        ),
+        encoding="utf-8",
+    )
+
+    prepared = lifecycle_service.prepare_sync_tags(
+        layout, None, now=datetime(2026, 1, 1, tzinfo=UTC)
+    )
+
+    matches = [
+        addition
+        for addition in prepared.additions
+        if addition.concept_id == "concepts/child"
+    ]
+    assert len(matches) == 1
+    assert matches[0].added == ("x", "y")
+
+
+# -- 2.12-2.13: log text and baselines (Decisions 5, 6) ----------------------
+
+
+def test_log_entry_carries_no_tag_value(tmp_path: Path) -> None:
+    """The `log.md` entry names the Source and a count, never a tag value
+    (ADR-0033, spec "One commit and one log entry carry no tag value").
+    PRECONDITION: the tag value IS present in the Source's own text, so its
+    absence from the log entry is not an accident of the fixture."""
+    layout = _workspace(tmp_path)
+    _write_source(
+        layout.bundle_dir, "sources/notes", title="Notes", tags=["secret-project"]
+    )
+    assert "secret-project" in (layout.bundle_dir / "sources" / "notes.md").read_text(
+        encoding="utf-8"
+    )
+    (layout.bundle_dir / "concepts").mkdir(parents=True, exist_ok=True)
+    (layout.bundle_dir / "concepts" / "a.md").write_text(
+        okf.dump_frontmatter(
+            {"type": "Concept", "title": "A", "provenance": ["sources/notes"]},
+            "# A\n",
+        ),
+        encoding="utf-8",
+    )
+
+    prepared = lifecycle_service.prepare_sync_tags(
+        layout, "sources/notes", now=datetime(2026, 1, 1, tzinfo=UTC)
+    )
+
+    assert "secret-project" not in prepared.new_log_text
+    assert (
+        "**Sync-tags**: Added tags from [sources/notes](/sources/notes.md) to "
+        "1 concept(s)." in prepared.new_log_text
+    )
+
+
+def test_baselines_include_roots_and_log(tmp_path: Path) -> None:
+    """The drift-guard baselines carry every staged file, every contributing
+    root Source, and `log.md` (design Decision 5)."""
+    layout = _workspace(tmp_path)
+    _write_source(layout.bundle_dir, "sources/notes", title="Notes", tags=["alpha"])
+    (layout.bundle_dir / "concepts").mkdir(parents=True, exist_ok=True)
+    (layout.bundle_dir / "concepts" / "a.md").write_text(
+        okf.dump_frontmatter(
+            {"type": "Concept", "title": "A", "provenance": ["sources/notes"]},
+            "# A\n",
+        ),
+        encoding="utf-8",
+    )
+
+    prepared = lifecycle_service.prepare_sync_tags(
+        layout, "sources/notes", now=datetime(2026, 1, 1, tzinfo=UTC)
+    )
+
+    assert set(prepared.baselines.keys()) == {
+        "bundle/concepts/a.md",
+        "bundle/sources/notes.md",
+        "bundle/log.md",
+    }
+
+
+# -- 2.15: sync_tags_core write order and partial-failure reporting ---------
+
+
+def test_sync_tags_core_writes_in_id_order_then_log(tmp_path: Path) -> None:
+    layout = _workspace(tmp_path)
+    _write_source(layout.bundle_dir, "sources/notes", title="Notes", tags=["alpha"])
+    (layout.bundle_dir / "concepts").mkdir(parents=True, exist_ok=True)
+    for slug in ("zeta", "alpha"):
+        (layout.bundle_dir / "concepts" / f"{slug}.md").write_text(
+            okf.dump_frontmatter(
+                {
+                    "type": "Concept",
+                    "title": slug,
+                    "provenance": ["sources/notes"],
+                },
+                f"# {slug}\n",
+            ),
+            encoding="utf-8",
+        )
+
+    prepared = lifecycle_service.prepare_sync_tags(
+        layout, "sources/notes", now=datetime(2026, 1, 1, tzinfo=UTC)
+    )
+
+    landed = lifecycle_service.sync_tags_core(layout, prepared)
+
+    assert landed == [
+        "bundle/concepts/alpha.md",
+        "bundle/concepts/zeta.md",
+        "bundle/log.md",
+    ]
+    for slug in ("alpha", "zeta"):
+        metadata, _ = okf.load_frontmatter(
+            (layout.bundle_dir / "concepts" / f"{slug}.md").read_text(encoding="utf-8")
+        )
+        assert metadata["tags"] == ["alpha"]
+
+
+def test_sync_tags_core_names_landed_on_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A mid-write failure raises `SyncTagsWriteError` carrying the EXACT
+    list of paths already written, mirroring `PartialForgetWrite`'s shape --
+    the second `fsio.write_atomic` call fails, so `landed` must be exactly
+    the first path (mirrors `PartialForgetWrite`'s counted-not-probed
+    contract)."""
+    layout = _workspace(tmp_path)
+    _write_source(layout.bundle_dir, "sources/notes", title="Notes", tags=["alpha"])
+    (layout.bundle_dir / "concepts").mkdir(parents=True, exist_ok=True)
+    for slug in ("a", "b"):
+        (layout.bundle_dir / "concepts" / f"{slug}.md").write_text(
+            okf.dump_frontmatter(
+                {"type": "Concept", "title": slug, "provenance": ["sources/notes"]},
+                f"# {slug}\n",
+            ),
+            encoding="utf-8",
+        )
+
+    prepared = lifecycle_service.prepare_sync_tags(
+        layout, "sources/notes", now=datetime(2026, 1, 1, tzinfo=UTC)
+    )
+
+    calls: list[Path] = []
+    real_write_atomic = fsio.write_atomic
+
+    def _fail_on_second(path: Path, content: str) -> None:
+        calls.append(path)
+        if len(calls) == 2:
+            raise OSError("simulated write failure on 2nd write")
+        real_write_atomic(path, content)
+
+    monkeypatch.setattr("openkos.fsio.write_atomic", _fail_on_second)
+
+    with pytest.raises(lifecycle_service.SyncTagsWriteError) as caught:
+        lifecycle_service.sync_tags_core(layout, prepared)
+
+    assert len(calls) == 2
+    assert caught.value.landed == ["bundle/concepts/a.md"]

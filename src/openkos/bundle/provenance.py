@@ -58,7 +58,7 @@ canonical-layer: it MUST NOT import `openkos.graph`, is pure (no I/O), and
 takes the whole-bundle `files` snapshot the caller already has in memory.
 """
 
-from collections.abc import Collection, Mapping
+from collections.abc import Collection, Mapping, Sequence
 
 from openkos.bundle import links as bundle_links
 from openkos.bundle import relations as bundle_relations
@@ -424,6 +424,97 @@ def resolve_source_raises(
             )
         )
     return raises
+
+
+def resolve_source_tag_additions(
+    files: Mapping[str, str],
+    *,
+    source_id: str,
+    source_tags: Sequence[str],
+    source_level: str,
+) -> tuple[list[okf.TagAddition], list[okf.TagSkip]]:
+    """Pure per-Source tag-union resolver (design: "Pure resolver (canonical
+    layer)"; ADR-0033), mirroring `resolve_source_raises`'s shape with a
+    different per-member computation.
+
+    `files` is a whole-bundle snapshot (bundle-relative path, INCLUDING the
+    `.md` suffix, -> full file text); `source_id` is the canonical
+    (`.md`-stripped) id of the Source concept whose tags are being synced;
+    `source_tags` is the Source's tags, already normalized through
+    `okf.normalize_tags` by the caller; `source_level` is the Source's own
+    sensitivity, already ranked fail-closed through `okf.combine_sensitivity`
+    by the caller.
+
+    Resolves `source_id`'s provenance closure via `find_provenance_descendants`
+    (the conservative non-empty-subset rule, unchanged), excludes `source_id`
+    itself, and excludes every `type: Source` member (spec: "The Write Set Is
+    The Source's Provenance Closure, Minus Sources") -- a Source's tags come
+    only from its own incoming frontmatter and from human edits, never from
+    another Source's sync. Each remaining member is classified into exactly
+    one of:
+
+    - `TagSkip("malformed-tags")` when the member's `tags` value is present
+      but is not absent/`None`/a list of `str` (Decision 3) -- rewriting it
+      would discard a hand-written value.
+    - `TagSkip("below-source-sensitivity")` when the member's `sensitivity`
+      ranks strictly below `source_level` via `okf.sensitivity_direction`
+      (Decision 4) -- a Source's tags carry its sensitivity.
+    - `TagAddition` when `okf.union_tags(existing, source_tags)` adds at
+      least one tag not already present, staged with only `tags` replaced
+      via a full `okf.dump_frontmatter` re-render of the member's ORIGINAL
+      metadata (Decision 2, ADR-0033: union only, never remove).
+    - Neither, silently, when the union adds nothing -- an already-current
+      member is not a failure and is not reported.
+
+    The staged result is `sorted()` by `concept_id` (design: "sorted by
+    id"), matching `resolve_source_raises`'s determinism guarantee.
+    """
+    normalized_source_id = _normalize_id(source_id)
+    member_ids = [
+        member
+        for member in find_provenance_descendants(files, root_ids={source_id})
+        if member != normalized_source_id
+    ]
+
+    additions: list[okf.TagAddition] = []
+    skips: list[okf.TagSkip] = []
+    for member in member_ids:
+        member_text = files[f"{member}.md"]
+        member_metadata, member_body = okf.load_frontmatter(member_text)
+        if member_metadata.get("type") == "Source":
+            continue
+
+        raw_tags = member_metadata.get("tags")
+        if raw_tags is not None and not (
+            isinstance(raw_tags, list) and all(isinstance(tag, str) for tag in raw_tags)
+        ):
+            skips.append(okf.TagSkip(concept_id=member, reason="malformed-tags"))
+            continue
+        existing_tags: list[str] = list(raw_tags) if isinstance(raw_tags, list) else []
+
+        member_sensitivity = member_metadata.get("sensitivity")
+        if okf.sensitivity_direction(member_sensitivity, source_level) == "raise":
+            skips.append(
+                okf.TagSkip(concept_id=member, reason="below-source-sensitivity")
+            )
+            continue
+
+        new_tags = okf.union_tags(existing_tags, source_tags)
+        added = tuple(tag for tag in new_tags if tag not in existing_tags)
+        if not added:
+            continue
+
+        member_metadata["tags"] = new_tags
+        additions.append(
+            okf.TagAddition(
+                concept_id=member,
+                added=added,
+                content=okf.dump_frontmatter(member_metadata, member_body),
+            )
+        )
+
+    additions.sort(key=lambda addition: addition.concept_id)
+    return additions, skips
 
 
 def _source_levels(files: Mapping[str, str]) -> dict[str, str]:

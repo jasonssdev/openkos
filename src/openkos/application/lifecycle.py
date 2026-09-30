@@ -55,7 +55,7 @@ layering invariant, `tests/unit/application/test_layering.py`) -- every
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -2622,3 +2622,207 @@ def set_volatility_core(config_path: Path, prepared: PreparedSetVolatility) -> N
     `ValueError`. Performs NO VCS side effect -- `_autocommit` stays the
     caller's responsibility."""
     fsio.write_atomic(config_path, prepared.new_config_text)
+
+
+@dataclass(frozen=True)
+class PreparedTagSync:
+    """Pure Phase-A result of `prepare_sync_tags`: everything `sync-tags`'s
+    preview, confirm gate, drift guard, and `sync_tags_core` need, built in
+    memory without writing anything (source-tag-sync design: "Application
+    service (ADR-0018)"; ADR-0033).
+
+    `roots` is every invoked Source's canonical id, sorted -- one entry for
+    a named `<source-id>` invocation, every `type: Source` concept's id for
+    `--all`. `baselines` is the drift guard's snapshot (issues #306, #313,
+    #318): the raw bytes every staged descendant, every root Source that
+    actually contributed a staged tag, and `log.md` held at the ONE
+    whole-bundle `fsio.snapshot_read` observation Phase A read them from --
+    a Source contributing nothing is NOT a baseline (design Decision 5)."""
+
+    roots: tuple[str, ...]
+    additions: tuple[okf.TagAddition, ...]
+    skips: tuple[okf.TagSkip, ...]
+    new_log_text: str
+    baselines: Mapping[str, bytes]
+    confirmation: BooleanConfirmation
+
+
+def _source_tags_and_level(
+    bundle_snapshot: Mapping[str, str], source_canonical: str
+) -> tuple[tuple[str, ...], str]:
+    """The Source's own normalized tags and fail-closed sensitivity level
+    (design: "read normalize_tags(source.tags) and
+    combine_sensitivity(source.sensitivity, 'public')"), read from an
+    already-parsed whole-bundle snapshot."""
+    metadata, _ = okf.load_frontmatter(bundle_snapshot[f"{source_canonical}.md"])
+    tags = okf.normalize_tags(metadata.get("tags"))
+    level = okf.combine_sensitivity(metadata.get("sensitivity"), "public")
+    return tags, level
+
+
+def prepare_sync_tags(
+    layout: config.WorkspaceLayout, source_id: str | None, *, now: datetime
+) -> PreparedTagSync:
+    """Phase A (pure, no writes): resolve the target Source(s), stage every
+    tag-union addition over each Source's provenance closure, and render
+    the new `log.md` text -- shaped like `prepare_relate`/`prepare_merge`
+    (source-tag-sync design: "Application service"). Non-interactive;
+    raises `ValueError` on a non-Source target or an unsafe/nonexistent id
+    (via `resolve_concept_path`, the same id-safety every other id-taking
+    write verb uses). Writes nothing to disk.
+
+    `source_id=None` is `--all`: every `type: Source` concept in the
+    snapshot is an independent root, sorted by id (design Decision 8). Each
+    root's own `resolve_source_tag_additions` call runs against the SAME
+    whole-bundle snapshot (never a progressively-rewritten one, so a later
+    root's sensitivity/malformed classification of a shared member is
+    unaffected by an earlier root's staged tags); the per-root results are
+    then folded per member -- a member's total `added` is the insertion-
+    ordered union of every root's own `added` tuple, in root order -- and
+    each member's `TagAddition.content` is rendered ONCE, from its
+    ORIGINAL metadata, after every root has been folded (design Decision
+    8). A member staged by at least one root is dropped from the skip list
+    entirely: it was not, in the end, left untouched. A malformed member's
+    skip reason is identical across every root that reaches it (the shape
+    of its own `tags` value does not depend on which Source is asking), so
+    it naturally collapses to one entry."""
+    bundle_dir = layout.bundle_dir
+    log_path = layout.bundle_dir / "log.md"
+
+    bundle_bytes: dict[str, bytes] = {}
+    bundle_snapshot: dict[str, str] = {}
+    for path in okf.iter_bundle_markdown(bundle_dir):
+        if path.name in okf.RESERVED_FILENAMES:
+            continue
+        rel = path.relative_to(bundle_dir).as_posix()
+        bundle_bytes[rel], bundle_snapshot[rel] = fsio.snapshot_read(path)
+
+    if source_id is None:
+        root_ids = sorted(
+            rel.removesuffix(".md")
+            for rel, text in bundle_snapshot.items()
+            if okf.load_frontmatter(text)[0].get("type") == "Source"
+        )
+    else:
+        _, canonical = resolve_concept_path(bundle_dir, source_id)
+        member_metadata, _ = okf.load_frontmatter(bundle_snapshot[f"{canonical}.md"])
+        if member_metadata.get("type") != "Source":
+            raise ValueError(f"{canonical!r} is not a Source; sync-tags takes a Source")
+        root_ids = [canonical]
+
+    combined_added: dict[str, list[str]] = {}
+    combined_skip: dict[str, okf.TagSkip] = {}
+    contributing_roots: set[str] = set()
+    for root_id in root_ids:
+        source_tags, source_level = _source_tags_and_level(bundle_snapshot, root_id)
+        additions, skips = bundle_provenance.resolve_source_tag_additions(
+            bundle_snapshot,
+            source_id=root_id,
+            source_tags=source_tags,
+            source_level=source_level,
+        )
+        if additions:
+            contributing_roots.add(root_id)
+        for addition in additions:
+            bucket = combined_added.setdefault(addition.concept_id, [])
+            for tag in addition.added:
+                if tag not in bucket:
+                    bucket.append(tag)
+            combined_skip.pop(addition.concept_id, None)
+        for skip in skips:
+            if skip.concept_id not in combined_added:
+                combined_skip.setdefault(skip.concept_id, skip)
+
+    final_additions: list[okf.TagAddition] = []
+    for concept_id in sorted(combined_added):
+        member_metadata, member_body = okf.load_frontmatter(
+            bundle_snapshot[f"{concept_id}.md"]
+        )
+        existing_raw = member_metadata.get("tags")
+        existing_tags = list(existing_raw) if isinstance(existing_raw, list) else []
+        added = tuple(combined_added[concept_id])
+        member_metadata["tags"] = okf.union_tags(existing_tags, added)
+        final_additions.append(
+            okf.TagAddition(
+                concept_id=concept_id,
+                added=added,
+                content=okf.dump_frontmatter(member_metadata, member_body),
+            )
+        )
+    final_skips = sorted(combined_skip.values(), key=lambda skip: skip.concept_id)
+
+    log_bytes, log_text = fsio.snapshot_read(log_path)
+    if source_id is not None:
+        root = root_ids[0]
+        log_line = (
+            f"**Sync-tags**: Added tags from [{root}](/{root}.md) to "
+            f"{len(final_additions)} concept(s)."
+        )
+    else:
+        log_line = (
+            f"**Sync-tags**: Added tags from {len(contributing_roots)} "
+            f"Source(s) to {len(final_additions)} concept(s)."
+        )
+    new_log_text = bundle_log.insert_log_entry(
+        log_text, now.astimezone().date(), log_line
+    )
+
+    baselines: dict[str, bytes] = {
+        f"bundle/{addition.concept_id}.md": bundle_bytes[f"{addition.concept_id}.md"]
+        for addition in final_additions
+    }
+    for root_id in sorted(contributing_roots):
+        baselines[f"bundle/{root_id}.md"] = bundle_bytes[f"{root_id}.md"]
+    baselines["bundle/log.md"] = log_bytes
+
+    return PreparedTagSync(
+        roots=tuple(root_ids),
+        additions=tuple(final_additions),
+        skips=tuple(final_skips),
+        new_log_text=new_log_text,
+        baselines=baselines,
+        confirmation=boolean_confirmation("sync-tags"),
+    )
+
+
+class SyncTagsWriteError(OSError):
+    """`sync_tags_core`'s write failed, carrying the EXACT list of
+    bundle-relative paths already written when it did -- mirrors
+    `PartialForgetWrite`'s counted-not-probed contract (the same
+    `Path.exists()`-is-not-total hazard applies here): the adapter's
+    failure message must name what landed, and a mid-way failure never
+    rolls back what already landed (there is no cross-file rollback,
+    matching `set-sensitivity`/`relate`/`merge`).
+
+    Subclasses `OSError` so the adapter's existing `except (OSError,
+    ValueError)` arm catches it unchanged, and `str()` reproduces the
+    cause's text verbatim so the error line stays byte-identical."""
+
+    def __init__(self, cause: BaseException, landed: list[str]) -> None:
+        super().__init__(str(cause))
+        self.landed = landed
+
+
+def sync_tags_core(
+    layout: config.WorkspaceLayout, prepared: PreparedTagSync
+) -> list[str]:
+    """Phase B (after confirm): write every staged descendant in
+    concept-id order (`prepared.additions` is already sorted by
+    `prepare_sync_tags`), then `log.md` (spec "Drift Guard, Write Order,
+    One Log Entry, One Commit"). Non-interactive; raises
+    `SyncTagsWriteError` (an `OSError`) carrying every path already landed
+    on a mid-way failure. Performs NO VCS side effect -- `_autocommit`
+    stays the caller's responsibility."""
+    landed: list[str] = []
+    try:
+        for addition in prepared.additions:
+            path = f"bundle/{addition.concept_id}.md"
+            fsio.write_atomic(
+                layout.bundle_dir / f"{addition.concept_id}.md", addition.content
+            )
+            landed.append(path)
+        fsio.write_atomic(layout.bundle_dir / "log.md", prepared.new_log_text)
+        landed.append("bundle/log.md")
+    except (OSError, ValueError) as exc:
+        raise SyncTagsWriteError(exc, landed) from exc
+    return landed
