@@ -67,6 +67,13 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   ([#1143](https://github.com/jasonssdev/openkos/issues/1143), lock half; the
   per-document FTS/graph rebuild half is deferred to MVP 4).
 
+- The `AGENTS.md` that `init` writes into every workspace now says `provenance`
+  lists Concept IDs of Source documents (the `sources/<id>` form) instead of
+  "paths relative to the workspace root"
+  ([#1147](https://github.com/jasonssdev/openkos/issues/1147)). The old
+  sentence contradicted the ingestion spec, `lint`, and the canonical example,
+  and taught an agent operating a bundle the wrong shape for the field.
+
 - `ingest` no longer writes the absolute local path of the source into the
   Source concept's `description` and body
   ([#1129](https://github.com/jasonssdev/openkos/issues/1129)). The path leaked

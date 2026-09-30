@@ -55,6 +55,42 @@ at least `model`, `review`, and `default_sensitivity`. It MUST NOT alter
 - WHEN `read_config` runs, directly or via `ingest`
 - THEN it reports a clear error and performs no write
 
+### Requirement: Chat Deadline And Generation Ceiling Config
+
+`read_config` MUST return `chat_timeout` (seconds) and
+`max_generation_tokens` (tokens), which bound each `llm.chat` request only;
+embedding calls are unaffected. WHEN a key is absent or an explicit YAML
+null, the packaged default MUST apply: `600` seconds and `8192` tokens.
+`chat_timeout` MUST be a positive number, which is coerced to a float;
+`max_generation_tokens` MUST be a positive integer. A boolean MUST NOT
+satisfy either (it is an integer subtype in YAML, and `true` would
+otherwise read as a one-second deadline or a one-token ceiling), and a
+fractional `max_generation_tokens` MUST be refused. Zero and negative values
+MUST be refused for both; for `max_generation_tokens` this includes the
+values Ollama reserves (`-1` unlimited, `0` no completion, `-2` fill the
+window), which would silently disable the bound. A refused value MUST raise
+a `ValueError` whose message names the key and the offending value, so the
+misconfiguration surfaces at read time rather than at a chat seam.
+
+#### Scenario: Absent keys resolve to the packaged defaults
+
+- GIVEN an `openkos.yaml` with neither key
+- WHEN `read_config` runs
+- THEN `chat_timeout` is `600.0` and `max_generation_tokens` is `8192`
+
+#### Scenario: A boolean is refused, not read as a number
+
+- GIVEN `chat_timeout: true`, or `max_generation_tokens: true`
+- WHEN `read_config` runs
+- THEN it raises a `ValueError` naming the key
+
+#### Scenario: A non-positive or fractional value is refused
+
+- GIVEN `chat_timeout: 0`, or `max_generation_tokens: -1`, or
+  `max_generation_tokens: 2.5`
+- WHEN `read_config` runs
+- THEN it raises a `ValueError` naming the key and the value
+
 ### Requirement: Bundle Catalog Append
 
 The system MUST provide a primitive inserting a new entry into
@@ -3019,6 +3055,70 @@ recorded at all, `ingest` MUST print no such line.
   stored `event_date`
 - WHEN `openkos ingest <path>` completes
 - THEN no line reporting an `event_date` is printed
+### Requirement: Chunked Extraction Concurrency Is An Opt-In Boolean
+
+The system MUST accept an optional `concurrent_extraction` key in
+`openkos.yaml` whose value is a boolean, defaulting to `false` when the key
+is absent or an explicit YAML null. WHEN it is `true`, the chunked
+extraction fan-out MUST keep a bounded number of windows in flight at once
+instead of sending them one after another; that bound is a fixed engine
+constant and MUST NOT be configurable, so the key is an on/off switch and
+not a worker count. The results MUST be the same, in the same window order,
+as the sequential path, and the per-window retry-then-skip behavior MUST be
+unchanged. The key MUST affect only sources that take the chunked path: a
+source below the chunk threshold has no windows to overlap and MUST behave
+identically either way, on both extraction entry points (`union_judge` on
+or off).
+
+A non-boolean value, including an integer such as `2`, MUST be refused when
+the config is read with a `ValueError` naming `concurrent_extraction` and
+stating that it is an on/off switch, not a worker count; it MUST NOT be
+coerced to truthiness.
+
+WHEN `concurrent_extraction` is `true` and an extraction on a chunked source
+fails by exceeding its deadline, `ingest` MUST print, after the usual
+skip line, a stderr note that the setting may be the cause (concurrent
+windows queue on a server that does not run requests in parallel, and each
+request's `chat_timeout` keeps running while it waits) and naming both
+remedies: raising the server's parallelism, or setting
+`concurrent_extraction: false`. That note MUST NOT print for a source that
+does not chunk, nor for a failure that is not a timeout.
+
+#### Scenario: Default is sequential
+
+- GIVEN an `openkos.yaml` without `concurrent_extraction`
+- WHEN a chunked source is extracted
+- THEN its windows are sent one at a time
+
+#### Scenario: An integer is refused, not treated as a worker count
+
+- GIVEN `concurrent_extraction: 2`
+- WHEN the config is read
+- THEN it raises a `ValueError` naming `concurrent_extraction` and saying
+  it is an on/off switch, not a worker count
+
+#### Scenario: Concurrency preserves window order
+
+- GIVEN `concurrent_extraction: true` and a chunked source
+- WHEN its windows are extracted with a backend answering out of order
+- THEN the merged candidates are in window order, identical to the
+  sequential result
+
+#### Scenario: A timeout on a chunked source names the setting
+
+- GIVEN `concurrent_extraction: true`, a chunked source, and a chat call
+  that fails by timeout
+- WHEN `openkos ingest` runs
+- THEN stderr carries the note naming `concurrent_extraction: false` as a
+  remedy
+
+#### Scenario: A timeout on a source below the chunk threshold does not
+
+- GIVEN `concurrent_extraction: true`, a source below the chunk threshold,
+  and a chat call that fails by timeout
+- WHEN `openkos ingest` runs
+- THEN the note naming `concurrent_extraction` is not printed
+
 ### Requirement: Chunked Extraction Isolates a Single Failed Window
 
 WHEN a chunked source's extraction call for ONE window raises a
