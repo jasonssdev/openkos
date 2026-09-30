@@ -1077,7 +1077,7 @@ runs beforehand.
 WHEN a byte-identical re-ingest resolves to a Source concept that already
 exists, records an `origin_key`, and whose previous extraction ran to its
 intended conclusion — no `extraction_status: failed`, no judge-degrade
-`extraction_notice` token — `ingest` MUST skip extraction entirely (the
+`extraction_notice` token, no `ingest_pending` marker — `ingest` MUST skip extraction entirely (the
 convergence skip): no model call, no write of any kind (not even a regenerated Source,
 so prior markers like the sole-object disclosure survive untouched), exit
 0, and one stderr line disclosing the skip and naming `--re-extract` as the
@@ -1089,7 +1089,15 @@ re-ingest MUST converge on one set of objects per source, never accumulate.
 Extraction MUST still re-run, without any flag, when the previous run left
 RETRYABLE DEBT: `extraction_status: failed` or a judge-degrade
 `extraction_notice` token — the exact states whose `lint` findings
-name a plain re-ingest as the remedy. A legacy Source recording no
+name a plain re-ingest as the remedy — or when the Source carries
+`ingest_pending: true`, the trace of an ingest interrupted before its final
+write. Only the literal `true` counts; a Source without the key (every Source
+written before it existed) is complete and MUST NOT be re-extracted for that
+reason. The batch cost-gate skip prediction MUST treat a pending Source as
+not skipped. When a retry of a pending Source finds derived objects that cite
+it and that no `index.md` entry lists (written by the interrupted run before
+its catalog write), it MUST add their index and log entries without rewriting
+the files. A legacy Source recording no
 `origin_key` MUST take the full path once (which backfills the key), so the
 no-verb self-migration is not suppressed. `--re-extract` MUST force the full
 path on any re-ingest. A post-`forget` regenerate (raw bytes match, concept
@@ -1108,6 +1116,20 @@ absent) is a fresh pipeline run, never a skip.
   `extraction_notice`
 - WHEN `openkos ingest <path>` runs again with byte-identical content
 - THEN extraction re-runs and reconciles per slug as below
+
+#### Scenario: An interrupted ingest is not mistaken for a converged one
+
+- GIVEN a Source carrying `ingest_pending: true` whose derived objects,
+  index entries or log entries were never written
+- WHEN `openkos ingest <path>` runs again with byte-identical content
+- THEN extraction re-runs without any flag, the missing objects and catalog
+  entries are produced, and the Source is rewritten without the key
+
+#### Scenario: A Source that predates the key stays converged
+
+- GIVEN a Source recording an `origin_key` and no `ingest_pending` key
+- WHEN `openkos ingest <path>` runs again with byte-identical content
+- THEN extraction is skipped exactly as for any converged Source
 
 #### Scenario: --re-extract is the deliberate redo
 
@@ -1278,8 +1300,17 @@ before the catalog (raw copy, concept document, and each derived object
 before `index.md`/`log.md`), so the catalog never references a file that does
 not exist. Phase B is NOT required to be
 transactional as a whole: there is no rollback across the sequence, and a
-failure partway through MAY leave a partial, detectable result recoverable
-via git. `--auto` MUST skip the confirmation prompt and proceed directly
+failure or kill partway through MAY leave a partial result. That partial
+result MUST be self-describing and completable: the Source concept is written
+FIRST carrying the frontmatter key `ingest_pending: true` and rewritten
+WITHOUT it as the LAST write of the run, so a Source still carrying the key
+is the durable trace of an interrupted run (see "Byte-Identical Re-Ingest
+Converges Instead Of Accumulating"). A Source-only rewrite of an already
+converged Source extracts nothing and is a single atomic write that never
+carries the key. `ingest_pending` is an OKF §4.1 frontmatter extension:
+present only while pending, never written as `false`, ignored by consumers
+that do not know it, and absent from every Source written before it existed
+(absence means complete). `--auto` MUST skip the confirmation prompt and proceed directly
 to Phase B.
 Config `review: false` MUST likewise skip the prompt, the same as
 `--auto`. When `review: true` and stdin is not a TTY and `--auto` is not
@@ -1306,9 +1337,20 @@ because `ingest` honors "review before save".
 - GIVEN a shown preview and confirmation
 - WHEN a Phase B write past the first one fails
 - THEN the command exits non-zero with a clear error and no raw traceback;
-  writes already completed are NOT rolled back (no in-process undo); any
-  resulting partial (e.g. an uncatalogued concept) is visible via
-  `git status` and recoverable via `git checkout`/`git clean`
+  writes already completed are NOT rolled back (no in-process undo); the
+  Source left behind carries `ingest_pending: true`, so re-running the same
+  `ingest` completes the work instead of skipping it, and the partial result
+  is also visible via `git status` and recoverable via `git checkout`/`git clean`
+
+#### Scenario: A kill at any Phase B write is completed by the next ingest
+
+- GIVEN an `ingest` whose process is killed immediately before any one of:
+  the Source write, the first derived write, a later derived write, the
+  `index.md` write, the `log.md` write, or the final Source rewrite
+- WHEN `openkos ingest <path>` runs again with byte-identical content
+- THEN every derived object exists exactly once, the Source and every
+  derived object have exactly one `index.md` entry, the Source no longer
+  carries `ingest_pending`, and a further re-ingest converges
 
 #### Scenario: --auto skips the prompt
 
