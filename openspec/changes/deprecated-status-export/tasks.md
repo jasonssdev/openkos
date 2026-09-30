@@ -166,28 +166,39 @@ stacked in order; the chain strategy is the orchestrator's call.
 
 ## Phase 4 — Subtractive writers: `forget`, `purge`
 
-- [ ] 4.1 [PRE] Confirm `prepare_forget` already holds metadata for every
+- [x] 4.1 [PRE] Confirm `prepare_forget` already holds metadata for every
   non-purged document (`other_files`, `application/lifecycle.py:1290-1306`)
   so no second walk is needed; confirm `purge` reuses forget Phase A.
-- [ ] 4.2 [TEST] `forget M` where M solely supersedes Y (exported): Y
+  Deviation from a literal reading: `prepare_purge` does NOT literally call
+  `prepare_forget` -- it is its OWN independent Phase A that re-derives the
+  identical `purge_ids`/`other_files`/`member_metadata`/reference-detection
+  computation (this predates this change). "Reuses forget's Phase A" holds
+  at the ALGORITHM level (same purge-set resolution, same edge rule), which
+  is what this task's export-withdrawal computation was duplicated to
+  match -- not as a literal shared function call.
+- [x] 4.2 [TEST] `forget M` where M solely supersedes Y (exported): Y
   withdrawn, preview names it; Y also superseded by surviving N: Y
   unchanged; Y with unmarked `deprecated`: unchanged; incomplete walk: Y
   kept and the skip reported. RED.
-- [ ] 4.3 [IMPL] `ForgetPlan.status_rewrites` from
+- [x] 4.3 [IMPL] `ForgetPlan.status_rewrites` from
   `superseded_from_metadata(post view)`; preview lines; drift baselines.
-  GREEN 4.2.
-- [ ] 4.4 [TEST] Write ordering: fault-inject `fsio.remove_file` to fail on
+  GREEN 4.2. Implementation note: named `ForgetPlan.status_withdrawals`
+  (a `tuple[StatusWithdrawal, ...]`, each carrying `target`/`outcome`/
+  `new_text`) rather than a bare `dict[str, str]`, so the preview can also
+  report `WITHDRAW` vs `DROP_MARKER` per target and `purge` (task 4.7) can
+  reuse the exact same shape.
+- [x] 4.4 [TEST] Write ordering: fault-inject `fsio.remove_file` to fail on
   the first delete; assert index/log written, Y already withdrawn, M still
   present (catalog → exports → deletes). RED until 4.5.
-- [ ] 4.5 [IMPL] `forget_core` writes status rewrites after the catalog,
+- [x] 4.5 [IMPL] `forget_core` writes status rewrites after the catalog,
   before deletes, sorted. GREEN 4.4.
-- [ ] 4.6 [MUT] Move the export writes after the deletes; 4.4 must go RED.
+- [x] 4.6 [MUT] Move the export writes after the deletes; 4.4 must go RED.
   Revert, purge.
-- [ ] 4.7 [TEST] `purge M` (git fixture): Y withdrawn and `bundle/Y.md` in
+- [x] 4.7 [TEST] `purge M` (git fixture): Y withdrawn and `bundle/Y.md` in
   the post-rewrite commit beside index/log; an `OSError` writing Y gives a
   non-fatal WARNING naming Y and `openkos repair`, exit code unchanged.
   RED.
-- [ ] 4.8 [IMPL] Purge live-tree cleanup writes the rewrites and extends
+- [x] 4.8 [IMPL] Purge live-tree cleanup writes the rewrites and extends
   `commit_paths_rel` (`cli/main.py:6961-7043`). GREEN 4.7.
 
 ## Phase 5 — Rewiring writers: `merge`, `unmerge`

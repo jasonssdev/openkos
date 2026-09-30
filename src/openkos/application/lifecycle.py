@@ -61,7 +61,7 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Literal
 
-from openkos import config, fsio
+from openkos import config, fsio, lifecycle
 from openkos.application.consent import (
     BooleanConfirmation,
     TypedChallengeConfirmation,
@@ -1169,6 +1169,35 @@ class ForgetPlan:
     log_bytes: bytes
     concept_bytes: bytes
     other_bytes: dict[str, bytes]
+    status_withdrawals: tuple[StatusWithdrawal, ...]
+    """The deprecated-status export changes (`deprecated-status-export`,
+    issue #1075) `forget_core`/`purge` must write for every resurrection
+    target whose superseded-ness actually flips from True to False once
+    this purge set's edges are gone -- WITHDRAW or DROP-MARKER only, never
+    a target still superseded by a surviving concept (design Decision 5's
+    forget sequence)."""
+    skipped_withdrawal_ids: tuple[str, ...]
+    """Resurrection targets whose withdrawal was SKIPPED because the
+    post-forget edge walk was incomplete (spec: 'Withdrawal Requires A
+    Complete Edge Walk') -- an unreadable document may hold the only edge
+    that still supersedes one of these, so nothing is written for them."""
+    incomplete_walk_unreadable: tuple[str, ...]
+    """The unreadable/malformed document id(s) that made the post-forget
+    edge walk incomplete, for the skip report -- empty when the walk was
+    complete or no resurrection target needed it."""
+
+
+@dataclass(frozen=True)
+class StatusWithdrawal:
+    """One deprecated-status export change `forget`/`purge` applies to a
+    resurrected target OUTSIDE the purge set (deprecated-status-export,
+    issue #1075): `target`'s own concept id, the `okf.ExportOutcome`
+    (`WITHDRAW` or `DROP_MARKER` only -- callers never store an `UNCHANGED`
+    result here), and the new document text to write."""
+
+    target: str
+    outcome: okf.ExportOutcome
+    new_text: str
 
 
 class PartialForgetWrite(OSError):
@@ -1264,11 +1293,15 @@ def prepare_forget(
     # per-member titles/tombstones -- no extra bundle scan, for either
     # scope.
     #
-    # `other_bytes` shadows it for the guard -- and ONLY on `--scope
-    # source` (#326): on the default `self` scope the guard's member
-    # comprehension is empty by construction (`purge_ids` is statically
-    # `[concept_id]`), so retaining the whole bundle's raw bytes there
-    # would double Phase A's peak memory for nothing.
+    # `other_bytes` shadows it for the guard, ALWAYS (#326 originally
+    # scoped this to `--scope source` only, since on the default `self`
+    # scope the PURGE-MEMBER guard comprehension is empty by construction;
+    # deprecated-status-export, issue #1075, needs a resurrection target's
+    # baseline on EITHER scope -- a target outside the purge set can exist
+    # regardless of how the purge set itself was resolved -- so the raw
+    # bytes are retained unconditionally rather than re-reading a target
+    # a second time later, which the #306/#313/#318 one-read-per-target
+    # invariant forbids).
     other_files: dict[str, str] = {}
     other_bytes: dict[str, bytes] = {}
     for path in okf.iter_bundle_markdown(layout.bundle_dir):
@@ -1277,9 +1310,7 @@ def prepare_forget(
         if path == concept_path:
             continue
         rel = path.relative_to(layout.bundle_dir).as_posix()
-        raw, other_files[rel] = fsio.snapshot_read(path)
-        if scope == "source":
-            other_bytes[rel] = raw
+        other_bytes[rel], other_files[rel] = fsio.snapshot_read(path)
 
     # Unified Phase-A data path (design decision 6): `--scope self`
     # collapses to a single-member purge set, reproducing S2a byte-for-
@@ -1319,6 +1350,57 @@ def prepare_forget(
         },
         key=lambda pair: (pair[1], pair[0]),
     )
+
+    # deprecated-status-export (issue #1075, design Decision 5's forget
+    # sequence): for every DISTINCT resurrection target whose
+    # superseded-ness actually flips from True to False once this purge
+    # set's edges are gone, withdraw its export over the POST-FORGET
+    # bundle view -- every non-purged document's metadata, reused from
+    # `other_files` (already held in memory, no second walk). A target
+    # still superseded by a surviving concept is left untouched entirely
+    # (not even re-evaluated), matching the spec's "whose superseded-ness
+    # changes" scope.
+    status_withdrawals: list[StatusWithdrawal] = []
+    skipped_withdrawal_ids: list[str] = []
+    incomplete_walk_unreadable: tuple[str, ...] = ()
+    distinct_targets = sorted({target for _, target in resurrection_pairs})
+    if distinct_targets:
+        post_forget_metadata: dict[str, Mapping[str, object] | None] = {}
+        for rel, text in other_files.items():
+            if not rel.endswith(".md"):
+                continue
+            cid = rel[: -len(".md")]
+            if cid in purge_ids_set:
+                continue
+            try:
+                meta, _ = okf.load_frontmatter(text)
+            except Exception:  # broad: malformed frontmatter -- unreadable
+                post_forget_metadata[cid] = None
+                continue
+            post_forget_metadata[cid] = meta
+        superseded_post = lifecycle.superseded_from_metadata(post_forget_metadata)
+        for target in distinct_targets:
+            if target in superseded_post.ids:
+                continue  # still superseded by a surviving concept
+            if not superseded_post.complete:
+                skipped_withdrawal_ids.append(target)
+                incomplete_walk_unreadable = superseded_post.unreadable
+                continue
+            target_text = other_files[f"{target}.md"]
+            decision, new_target_text = okf.apply_deprecation_export(
+                target_text, superseded=False
+            )
+            if decision.outcome in (
+                okf.ExportOutcome.WITHDRAW,
+                okf.ExportOutcome.DROP_MARKER,
+            ):
+                status_withdrawals.append(
+                    StatusWithdrawal(
+                        target=target,
+                        outcome=decision.outcome,
+                        new_text=new_target_text,
+                    )
+                )
 
     # Set-difference inbound-reference detection (design decision 2):
     # `find_inbound_references` is called once PER purge-set member over
@@ -1424,26 +1506,32 @@ def prepare_forget(
         log_bytes=log_bytes,
         concept_bytes=concept_bytes,
         other_bytes=other_bytes,
+        status_withdrawals=tuple(status_withdrawals),
+        skipped_withdrawal_ids=tuple(skipped_withdrawal_ids),
+        incomplete_walk_unreadable=incomplete_walk_unreadable,
     )
 
 
 def forget_core(layout: config.WorkspaceLayout, plan: ForgetPlan) -> ForgetResult:
     """Phase B (after both gates): writes `index.md` then `log.md`
-    (`write_atomic`, catalog FIRST, covering every purge-set member) and
+    (`write_atomic`, catalog FIRST, covering every purge-set member), then
+    every resurrection target's deprecated-status export withdrawal
+    (`plan.status_withdrawals`, issue #1075, sorted by concept id), and
     deletes each member's concept file (`fsio.remove_file`) LAST, in
     deterministic `sorted(purge_ids)` order (design decision 5) -- so
-    `index.md`/`log.md` never reference a file that does not exist
-    (extracted verbatim from `forget`'s former inline body, design:
-    Interfaces/Contracts "S3 -- forget"). Non-interactive; raises
-    `OSError`/`ValueError`. Performs NO VCS side effect and no ledger/
-    decision/findings sweep -- `_sweep_ledger_sidecars_for_ids`,
-    `_sweep_decisions_for_ids`, and `_sweep_findings_for_ids` stay adapter-
-    side (they are shared with `purge`'s own Phase B, which calls the same
-    three helpers, and this module must stay siblings-only under ADR-0018
-    rather than import another verb's helpers), called by the command
-    immediately after this, inside the SAME try/except so a mid-sweep
-    failure reports the identical K-of-N recovery message a mid-unlink
-    failure would.
+    `index.md`/`log.md` never reference a file that does not exist, and a
+    failure between the export rewrites and the deletes leaves only export
+    drift, never a dangling catalog entry (extracted verbatim from
+    `forget`'s former inline body, design: Interfaces/Contracts "S3 --
+    forget"). Non-interactive; raises `OSError`/`ValueError`. Performs NO
+    VCS side effect and no ledger/decision/findings sweep --
+    `_sweep_ledger_sidecars_for_ids`, `_sweep_decisions_for_ids`, and
+    `_sweep_findings_for_ids` stay adapter-side (they are shared with
+    `purge`'s own Phase B, which calls the same three helpers, and this
+    module must stay siblings-only under ADR-0018 rather than import
+    another verb's helpers), called by the command immediately after this,
+    inside the SAME try/except so a mid-sweep failure reports the identical
+    K-of-N recovery message a mid-unlink failure would.
 
     This is NOT transactional as a whole: a failure partway through the N
     unlinks leaves a benign, git-recoverable partial result -- the catalog
@@ -1453,6 +1541,10 @@ def forget_core(layout: config.WorkspaceLayout, plan: ForgetPlan) -> ForgetResul
     try:
         fsio.write_atomic(layout.bundle_dir / "index.md", plan.new_index_text)
         fsio.write_atomic(layout.bundle_dir / "log.md", plan.new_log_text)
+        for withdrawal in sorted(plan.status_withdrawals, key=lambda w: w.target):
+            fsio.write_atomic(
+                layout.bundle_dir / f"{withdrawal.target}.md", withdrawal.new_text
+            )
         # N-delete, LAST, in deterministic sorted order (design decision 5)
         # -- the catalog already reflects every removal before any unlink,
         # so a failure partway through leaves a benign, git-recoverable
@@ -1611,6 +1703,12 @@ class PurgePlan:
     unverifiable_refs: int
     confirmation: TypedChallengeConfirmation
     drift_targets: dict[Path, bytes]
+    status_withdrawals: tuple[StatusWithdrawal, ...]
+    """The same deprecated-status export withdrawals `forget` computes for
+    its resurrection targets (`deprecated-status-export`, issue #1075,
+    `privacy-purge` spec: 'Purge Withdraws The Deprecated-Status Export Of
+    Resurrected Targets') -- WITHDRAW or DROP-MARKER only, never a target
+    still superseded by a surviving concept."""
 
 
 def purge_confirm_phrase(
@@ -1720,6 +1818,58 @@ def prepare_purge(
     member_metadata: dict[str, dict[str, object]] = {
         member: okf.load_frontmatter(text)[0] for member, text in member_texts.items()
     }
+
+    # deprecated-status-export (issue #1075, `privacy-purge` spec): the
+    # SAME resurrection-target withdrawal `forget`'s Phase A computes,
+    # since `purge` resolves the identical purge set over the identical
+    # bundle snapshot. See `prepare_forget`'s own comment for the full
+    # rationale; duplicated here rather than shared because `prepare_purge`
+    # already duplicates the rest of `forget`'s Phase A computation
+    # (`purge_ids`, `member_metadata`, reference detection) as its own
+    # independent pass, not a literal call into `prepare_forget`.
+    resurrection_pairs = {
+        (member, relation.target)
+        for member in purge_ids
+        for relation in okf.decode_relations(member_metadata[member])
+        if relation.type == "supersedes" and relation.target not in purge_ids_set
+    }
+    status_withdrawals: list[StatusWithdrawal] = []
+    distinct_targets = sorted({target for _, target in resurrection_pairs})
+    if distinct_targets:
+        post_purge_metadata: dict[str, Mapping[str, object] | None] = {}
+        for rel, text in other_files.items():
+            if not rel.endswith(".md"):
+                continue
+            cid = rel[: -len(".md")]
+            if cid in purge_ids_set:
+                continue
+            try:
+                meta, _ = okf.load_frontmatter(text)
+            except Exception:  # broad: malformed frontmatter -- unreadable
+                post_purge_metadata[cid] = None
+                continue
+            post_purge_metadata[cid] = meta
+        superseded_post = lifecycle.superseded_from_metadata(post_purge_metadata)
+        for target in distinct_targets:
+            if target in superseded_post.ids:
+                continue  # still superseded by a surviving concept
+            if not superseded_post.complete:
+                continue  # incomplete walk: skip, same fail-safe as forget
+            target_text = other_files[f"{target}.md"]
+            decision, new_target_text = okf.apply_deprecation_export(
+                target_text, superseded=False
+            )
+            if decision.outcome in (
+                okf.ExportOutcome.WITHDRAW,
+                okf.ExportOutcome.DROP_MARKER,
+            ):
+                status_withdrawals.append(
+                    StatusWithdrawal(
+                        target=target,
+                        outcome=decision.outcome,
+                        new_text=new_target_text,
+                    )
+                )
 
     # Reference-aware detection (rail 1's data), identical set-difference
     # gate to `forget`'s.
@@ -1867,6 +2017,7 @@ def prepare_purge(
         unverifiable_refs=len(unverifiable_refs),
         confirmation=confirmation,
         drift_targets=drift_targets,
+        status_withdrawals=tuple(status_withdrawals),
     )
 
 

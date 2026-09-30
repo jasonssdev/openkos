@@ -6110,10 +6110,28 @@ def forget(
         if scope == "source" and ref.kind != "unverifiable":
             line += f" -> {ref.member}"
         typer.echo(line)
+    status_outcome_by_target = {
+        withdrawal.target: withdrawal.outcome for withdrawal in plan.status_withdrawals
+    }
+    skipped_withdrawal_ids = set(plan.skipped_withdrawal_ids)
     for member, target in plan.resurrection_pairs:
+        status_suffix = ""
+        if target in status_outcome_by_target:
+            outcome = status_outcome_by_target[target]
+            status_suffix = (
+                "; status → stable"
+                if outcome is okf.ExportOutcome.WITHDRAW
+                else "; stale export marker removed"
+            )
+        elif target in skipped_withdrawal_ids:
+            unreadable = ", ".join(plan.incomplete_walk_unreadable)
+            status_suffix = (
+                f"; status export withdrawal skipped -- {unreadable} could "
+                "not be read (run `openkos repair` after resolving it)"
+            )
         typer.echo(
             f"  ~ bundle/{target}.md (re-enters retrieval: no longer "
-            f"superseded by {member})"
+            f"superseded by {member}{status_suffix})"
         )
     if scope == "source":
         typer.echo(f"  Total: {len(plan.purge_ids)} concept(s) to delete.")
@@ -6199,6 +6217,16 @@ def forget(
                 )
                 for member in plan.purge_ids
                 if member != canonical_id
+            },
+            # deprecated-status-export (issue #1075): every resurrection
+            # target this run will REWRITE is also a write target, so its
+            # pre-prompt baseline joins the guard exactly like a purge-set
+            # member's does.
+            **{
+                layout.bundle_dir / f"{withdrawal.target}.md": _require_member_baseline(
+                    "forget", plan.other_bytes, withdrawal.target
+                )
+                for withdrawal in plan.status_withdrawals
             },
         },
         "forget",
@@ -7015,6 +7043,28 @@ def purge(
     # reusing the exact same primitive `forget`'s Phase B calls, so the
     # sweep is written exactly once.
     decisions_touched = _sweep_decisions_for_ids(layout.bundle_dir, plan.purge_ids)
+    # deprecated-status-export (issue #1075, `privacy-purge` spec: "Purge
+    # Withdraws The Deprecated-Status Export Of Resurrected Targets"):
+    # write each resurrection target's WITHDRAW/DROP-MARKER outcome as part
+    # of this SAME live-tree cleanup pass. A per-target `OSError` is a
+    # non-fatal WARNING -- the irreversible rewrite already landed, and
+    # export drift never changes retrieval (`deprecated-status-export`) --
+    # so it neither raises nor changes `purge`'s exit code, matching every
+    # other step in this post-erasure bookkeeping block.
+    status_touched: list[Path] = []
+    for withdrawal in sorted(plan.status_withdrawals, key=lambda w: w.target):
+        target_path = layout.bundle_dir / f"{withdrawal.target}.md"
+        try:
+            fsio.write_atomic(target_path, withdrawal.new_text)
+        except OSError:
+            typer.echo(
+                f"openkos purge: WARNING -- failed to withdraw the "
+                f"deprecated-status export of '{withdrawal.target}'; run "
+                "`openkos repair` to fix it.",
+                err=True,
+            )
+            continue
+        status_touched.append(target_path)
     index_outcome = _purge_rebuild_indexes(layout)
     dropped_stores = index_outcome.dropped
     # #886: the disclosure is the operator's only account of what this
@@ -7045,7 +7095,7 @@ def purge(
             "bundle/log.md",
             *(
                 f"bundle/{p.relative_to(layout.bundle_dir).as_posix()}"
-                for p in (*ledger_touched, *decisions_touched)
+                for p in (*ledger_touched, *decisions_touched, *status_touched)
             ),
         ]
         try:
