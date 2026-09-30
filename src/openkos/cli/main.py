@@ -8071,11 +8071,24 @@ def _reconcile_merged_survivor(
     title = str(metadata.get("title") or "") or prepared.survivor_canonical
 
     try:
+        client = _chat_client(cfg)
+        # Egress gate (#1124): a merge involving any confidential member
+        # never sends its bodies to a backend that is not verifiably local.
+        if application_lifecycle.reconcile_blocked_by_sensitivity(
+            prepared,
+            local_exemption=_resolve_local_exemption(
+                cast(application_backends.HasLocality, client), cfg
+            ),
+        ):
+            return prepared, (
+                "a confidential concept is involved and the chat backend is "
+                "not verifiably local"
+            )
         reconciled = reconcile_merged_body(
             survivor_title=title,
             survivor_body=survivor_body,
             absorbed_body=absorbed_body,
-            llm=_chat_client(cfg),
+            llm=client,
         )
     except BackendError as exc:
         return prepared, str(exc)

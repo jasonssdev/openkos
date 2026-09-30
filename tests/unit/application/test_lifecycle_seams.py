@@ -23,6 +23,10 @@ behavioral tests in `test_lifecycle.py`:
 import dataclasses
 import re
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
+
+import pytest
 
 from openkos.application import consent as consent_service
 from openkos.application import lifecycle as application_lifecycle
@@ -242,3 +246,60 @@ def test_adjudicate_apply_same_repoint_count_unchanged_beyond_s1() -> None:
     # And every symbol this change relocated is gone from that set.
     for relocated in ("prepare_merge", "merge_core", "prepare_one_merge"):
         assert relocated not in patched
+
+
+def _doc(sensitivity: str | None) -> bytes:
+    line = f"sensitivity: {sensitivity}\n" if sensitivity is not None else ""
+    return f"---\ntype: Concept\n{line}---\n\nBody.\n".encode()
+
+
+def _prepared(
+    survivor: str | None, absorbed: str | None, merged: str | None
+) -> "application_lifecycle.PreparedMerge":
+    merged_text = _doc(merged).decode()
+    return cast(
+        "application_lifecycle.PreparedMerge",
+        SimpleNamespace(
+            survivor_bytes=_doc(survivor),
+            absorbed_bytes=_doc(absorbed),
+            plan=SimpleNamespace(merged_survivor=merged_text),
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("survivor", "absorbed", "merged", "blocked"),
+    [
+        ("private", "private", "private", False),
+        ("public", "private", "private", False),
+        ("confidential", "private", "private", True),
+        ("private", "confidential", "private", True),
+        ("private", "private", "confidential", True),
+        (None, "private", "private", True),
+        ("private", None, "private", True),
+        ("private", "private", None, True),
+    ],
+)
+def test_reconcile_blocked_by_sensitivity_is_a_fail_closed_high_water_mark(
+    survivor: str | None, absorbed: str | None, merged: str | None, blocked: bool
+) -> None:
+    """#1124: ANY confidential or unlabelled member blocks the send."""
+    prepared = _prepared(survivor, absorbed, merged)
+    assert (
+        application_lifecycle.reconcile_blocked_by_sensitivity(
+            prepared, local_exemption=False
+        )
+        is blocked
+    )
+
+
+def test_reconcile_blocked_by_sensitivity_released_only_by_the_local_exemption() -> (
+    None
+):
+    prepared = _prepared("confidential", "confidential", "confidential")
+    assert application_lifecycle.reconcile_blocked_by_sensitivity(
+        prepared, local_exemption=False
+    )
+    assert not application_lifecycle.reconcile_blocked_by_sensitivity(
+        prepared, local_exemption=True
+    )

@@ -62,7 +62,7 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Literal
 
-from openkos import config, fsio, lifecycle
+from openkos import config, fsio, lifecycle, sensitivity
 from openkos.application.consent import (
     BooleanConfirmation,
     TypedChallengeConfirmation,
@@ -2563,6 +2563,33 @@ def reconcile_planned(
     return (
         prepared.stacked_body.share >= _RECONCILE_SHARE_THRESHOLD
         and prepared.stacked_body.merged_chars >= _RECONCILE_MIN_MERGED_CHARS
+    )
+
+
+def reconcile_blocked_by_sensitivity(
+    prepared: PreparedMerge, *, local_exemption: bool
+) -> bool:
+    """Whether the #645 reconciliation pass must NOT send `prepared`'s bodies
+    to the chat backend (issue #1124): the same egress rule every other chat
+    seam applies, evaluated as a high-water mark over the merge.
+
+    Checks each member's ORIGINAL frontmatter (`survivor_bytes`,
+    `absorbed_bytes`) and the merged survivor's, all through
+    `sensitivity.should_block`, so a missing, blank or unparseable
+    `sensitivity` fails closed exactly as it does for the siblings.
+    `local_exemption` is the caller's verified `client.locality.is_local and
+    cfg.confidential_local_exemption`; `merge` has no `--include-confidential`
+    flag, so it is never an input here."""
+    texts = (
+        prepared.survivor_bytes.decode("utf-8", errors="replace"),
+        prepared.absorbed_bytes.decode("utf-8", errors="replace"),
+        prepared.plan.merged_survivor,
+    )
+    return any(
+        sensitivity.should_block(
+            okf.load_frontmatter(text)[0], local_exemption=local_exemption
+        )
+        for text in texts
     )
 
 
