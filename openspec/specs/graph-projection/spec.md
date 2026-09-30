@@ -1,21 +1,21 @@
 # Graph Projection Specification
 
-## Note
-
-The existing Non-Goals section defers "persistence to `.openkos/openkos.db`".
-This slice fulfills that: persistence is now in scope via the ADDED
-requirement below, written only by `reindex`. The in-memory,
-rebuild-per-run `build_graph(bundle_dir)` contract itself is unchanged for
-any caller that does not go through `reindex`.
-
 ## Purpose
 
-`graph/` is the first derived-layer package: a pure library that projects the
-bundle's existing untyped markdown links into an in-memory SQLite node-edge
-representation, exposes that projection through a `GraphStore` Protocol, and
-converts it to an `nx.DiGraph` for analysis. It is a read-only derived cache
-reconstructible from canonical markdown — never a mutator of bundle bytes.
-It has no CLI command; its only consumers are future retrieval/lint slices.
+`graph/` is a derived-layer package: a pure library that projects the
+bundle's markdown links and `relations:` frontmatter into an in-memory
+SQLite node-edge representation, exposes that projection through a
+`GraphStore` Protocol, and converts it to an `nx.DiGraph` for analysis. It
+is a read-only derived cache reconstructible from canonical markdown —
+never a mutator of bundle bytes. The projection is rebuilt per run by
+`build_graph(bundle_dir)`, and a persisted copy (`.openkos/graph.db`) is
+written by `reindex` (and rebuilt by `purge`) and gated by a
+bundle-manifest hash.
+
+It has no CLI command of its own. Its consumers are the verbs that read
+the projection: `navigate` (MCP neighbor reads), `status` (edge summary
+and index staleness), `suggest-relations` (candidate edges), `contradictions`
+and `curate` (candidate generation), and `reindex` (persistence).
 
 ## Non-Goals
 
@@ -34,7 +34,6 @@ What this spec does not define is:
   and mirrors `provenance:` membership; it does not infer or author a
   relation from prose, link text, or any other signal.
 - **A CLI `graph` verb.**
-- **Persistence to `.openkos/openkos.db`** (see the Note above).
 - **CI/import-linter layering enforcement.** Layering stays a followed
   convention.
 
@@ -44,7 +43,8 @@ What this spec does not define is:
 
 The system MUST provide a persistence path that writes the node-edge
 projection (nodes, edges, and `relation_type`) to on-disk SQLite storage
-under `.openkos/`, invoked ONLY by `reindex`, using the SAME node/edge
+under `.openkos/` (`graph.db`), written only by `reindex` and by the
+rebuild `purge` runs after a deletion, using the SAME node/edge
 extraction rules as in-memory `build_graph` (OKF concept ID node identity,
 bundle-relative link edge extraction, `relations:` frontmatter typing). A
 stored bundle-manifest hash MUST gate whether the persisted index is
@@ -61,7 +61,8 @@ rebuilt on a given `reindex` run.
 #### Scenario: Persisted index is read-only for non-reindex consumers
 
 - GIVEN a persisted graph index already written by `reindex`
-- WHEN `query`/`answer()` reads it
+- WHEN a non-`reindex` consumer reads or checks it (for example `status`'s
+  staleness check)
 - THEN no write occurs to the on-disk graph index file
 
 ### Requirement: In-Memory SQLite Node-Edge Projection
@@ -89,7 +90,7 @@ remain distinct.)
 - GIVEN any bundle
 - WHEN the projection is built directly via `build_graph` (not via
   `reindex`'s persistence path)
-- THEN no `.openkos/` directory or `openkos.db` file is created; the
+- THEN no `.openkos/` directory or `graph.db` file is created; the
   projection exists only in memory for the caller's session
 
 ### Requirement: Node Identity Is The OKF Concept ID

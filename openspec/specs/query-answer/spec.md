@@ -169,21 +169,21 @@ context and citations — rather than raise. WHEN every hit is unreadable,
 
 ### Requirement: Typed Exceptions Propagate Unswallowed
 
-`answer` MUST NOT catch or suppress `FtsUnavailable` or any `OllamaError`
+`answer` MUST NOT catch or suppress `FtsUnavailable` or any `BackendError`
 family member raised by `llm.chat`; these MUST propagate to the caller
-unchanged. `OllamaUnavailable`, `OllamaModelNotFound`, and
-`OllamaEmbeddingDimensionMismatch` raised while embedding the question
+unchanged. `BackendUnavailable`, `BackendModelNotFound`, and
+`BackendEmbeddingDimensionMismatch` raised while embedding the question
 (`embedder.embed([question])`) MUST ALSO propagate unswallowed — the first
 two are environment-fatal and the third is a permanent misconfiguration of
 the configured embedding model; none of the three is per-question
-transient. The GENERIC transient `OllamaError` raised while embedding the
+transient. The GENERIC transient `BackendError` raised while embedding the
 question is the ONLY exception to this rule: it is caught and handled by
 the Dense Retrieval Degrades To FTS-Only requirement instead, and MUST NOT
 propagate from `answer`.
 
-(Previously: only `OllamaUnavailable` and `OllamaModelNotFound` propagated
-from the question-embed step; `OllamaEmbeddingDimensionMismatch` was
-swallowed by the generic transient `OllamaError` degrade instead.)
+(Previously: only `BackendUnavailable` and `BackendModelNotFound` propagated
+from the question-embed step; `BackendEmbeddingDimensionMismatch` was
+swallowed by the generic transient `BackendError` degrade instead.)
 
 #### Scenario: FTS index unavailable
 
@@ -193,30 +193,30 @@ swallowed by the generic transient `OllamaError` degrade instead.)
 
 #### Scenario: LLM backend fails
 
-- GIVEN `llm.chat` raises an `OllamaError`-family exception
+- GIVEN `llm.chat` raises a `BackendError`-family exception
 - WHEN `answer(question, bundle_dir=bundle_dir, llm=llm)` is called
 - THEN that same exception propagates to the caller unchanged
 
 #### Scenario: Question-embed generic transient failure does not propagate
 
 - GIVEN `embedder.embed([question])` raises the generic transient
-  `OllamaError`
+  `BackendError`
 - WHEN `answer(...)` is called
 - THEN that exception does NOT propagate from `answer`; it is handled per
   the Dense Retrieval Degrades To FTS-Only requirement instead
 
 #### Scenario: Question-embed fatal subclasses still propagate
 
-- GIVEN `embedder.embed([question])` raises `OllamaUnavailable` or
-  `OllamaModelNotFound`
+- GIVEN `embedder.embed([question])` raises `BackendUnavailable` or
+  `BackendModelNotFound`
 - WHEN `answer(...)` is called
 - THEN that exception propagates to the caller unchanged, exactly like an
-  `OllamaError`-family exception from `llm.chat`
+  `BackendError`-family exception from `llm.chat`
 
 #### Scenario: Question-embed dimension mismatch still propagates
 
 - GIVEN `embedder.embed([question])` raises
-  `OllamaEmbeddingDimensionMismatch` (the configured embedding model does
+  `BackendEmbeddingDimensionMismatch` (the configured embedding model does
   not emit `EMBED_DIM`-dimensional vectors)
 - WHEN `answer(...)` is called
 - THEN that exception propagates to the caller unchanged rather than being
@@ -301,7 +301,7 @@ library and eval caller keeps byte-identical behavior, and the product-ON
 default MUST live in the workspace config alone.
 
 A transient backend error in the check MUST fall through to synthesis: an
-error is not evidence of insufficiency. The FATAL `OllamaError` subclasses
+error is not evidence of insufficiency. The FATAL `BackendError` subclasses
 MUST still propagate, so an unreachable backend never becomes an answered
 question. The check MUST NOT run when no context was assembled.
 
@@ -581,23 +581,23 @@ on its own terms.)
 
 WHEN dense retrieval cannot proceed — an absent/empty `vectors.db`, a
 `VecUnavailable`, a read-path `sqlite3.Error` raised by
-`vector_store.query`, OR the GENERIC transient `OllamaError` raised while
+`vector_store.query`, OR the GENERIC transient `BackendError` raised while
 embedding the question (`embedder.embed([question])`) — `answer` MUST catch
 it, proceed using the FTS list alone as the fused input (equivalent to an
 empty dense list), set `dense_degraded=True` on the returned `AnswerResult`,
-and MUST NOT raise. `answer` MUST NOT degrade on `OllamaUnavailable` (server
-unreachable), `OllamaModelNotFound` (configured embedding model not
-installed), or `OllamaEmbeddingDimensionMismatch` (configured embedding
+and MUST NOT raise. `answer` MUST NOT degrade on `BackendUnavailable` (server
+unreachable), `BackendModelNotFound` (configured embedding model not
+installed), or `BackendEmbeddingDimensionMismatch` (configured embedding
 model does not emit `EMBED_DIM`-dimensional vectors) raised from the
 question-embed step — these three subclasses are environment-fatal or
 permanently misconfigured, not per-question transient, and MUST propagate
 unswallowed to the caller so `query` reaches its existing fatal exit-1
-ladder. `FtsUnavailable` and any `OllamaError`-family exception raised by
+ladder. `FtsUnavailable` and any `BackendError`-family exception raised by
 `llm.chat` (the LLM completion path, not the question-embed step) also
 remain unaffected and continue to propagate unchanged.
 
-(Previously: only `OllamaUnavailable` and `OllamaModelNotFound` were
-excluded from the degrade; `OllamaEmbeddingDimensionMismatch` set
+(Previously: only `BackendUnavailable` and `BackendModelNotFound` were
+excluded from the degrade; `BackendEmbeddingDimensionMismatch` set
 `dense_degraded=True` and produced a silent FTS-only answer.)
 
 #### Scenario: Cold store (never reindexed) degrades cleanly
@@ -620,28 +620,28 @@ excluded from the degrade; `OllamaEmbeddingDimensionMismatch` set
 - WHEN `answer(...)` is called
 - THEN retrieval proceeds using FTS hits alone and no exception propagates
 
-#### Scenario: Question-embed generic transient OllamaError degrades to FTS-only, not exit 1
+#### Scenario: Question-embed generic transient BackendError degrades to FTS-only, not exit 1
 
 - GIVEN `embedder.embed([question])` raises the generic transient
-  `OllamaError` (e.g. the flaky EOF embedding path), not `OllamaUnavailable`
-  or `OllamaModelNotFound`
+  `BackendError` (e.g. the flaky EOF embedding path), not `BackendUnavailable`
+  or `BackendModelNotFound`
 - WHEN `answer(...)` is called
 - THEN retrieval proceeds using FTS hits alone, `dense_degraded` is `True`,
   no exception propagates from `answer`, and the caller (`query`) still
   exits 0 with its standard stderr retrieval summary
 
-#### Scenario: Question-embed OllamaUnavailable propagates to query's fatal ladder
+#### Scenario: Question-embed BackendUnavailable propagates to query's fatal ladder
 
-- GIVEN `embedder.embed([question])` raises `OllamaUnavailable` (Ollama
+- GIVEN `embedder.embed([question])` raises `BackendUnavailable` (Ollama
   server unreachable)
 - WHEN `answer(...)` is called
 - THEN that exception propagates from `answer` unswallowed, `dense_degraded`
   is NEVER set, and the caller (`query`) exits 1 via its existing
   server-unreachable message, not a degraded FTS-only answer
 
-#### Scenario: Question-embed OllamaModelNotFound propagates to query's fatal ladder
+#### Scenario: Question-embed BackendModelNotFound propagates to query's fatal ladder
 
-- GIVEN `embedder.embed([question])` raises `OllamaModelNotFound` (the
+- GIVEN `embedder.embed([question])` raises `BackendModelNotFound` (the
   configured embedding model is not installed)
 - WHEN `answer(...)` is called
 - THEN that exception propagates from `answer` unswallowed, `dense_degraded`
@@ -651,7 +651,7 @@ excluded from the degrade; `OllamaEmbeddingDimensionMismatch` set
 #### Scenario: Question-embed dimension mismatch propagates to query's fatal ladder
 
 - GIVEN `embedder.embed([question])` raises
-  `OllamaEmbeddingDimensionMismatch` (the configured embedding model returns
+  `BackendEmbeddingDimensionMismatch` (the configured embedding model returns
   wrong-length vectors)
 - WHEN `answer(...)` is called
 - THEN that exception propagates from `answer` unswallowed, `dense_degraded`
@@ -728,7 +728,7 @@ already fits MUST be sent byte-identical.
 
 Ollama does not raise on an oversized prompt: it discards the overflow and
 returns a normal reply, measured at `prompt_eval_count: 6146` for a
-184,000-char prompt against `num_ctx: 12288`. `OllamaGenerationCapped`
+184,000-char prompt against `num_ctx: 12288`. `BackendGenerationCapped`
 cannot catch this — it fires when GENERATION stops for length, while here
 generation finishes normally — so an unbounded prompt is silently truncated
 with no error anywhere.

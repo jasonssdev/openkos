@@ -850,7 +850,7 @@ existed.)
 - THEN both `OllamaClient` and `OpenAICompatibleClient` (and their exception
   types) are permitted imports for `mcp/server.py`, and the ban on importing
   `openkos.cli`/`openkos.graph` still holds
-### Requirement: Chat-Client Construction Moves To `application/backends.py` Behind An Injected Factory, With CLI Delegators Preserved
+### Requirement: Chat And Embed Client Construction Lives In `application/backends.py` Behind Injected Factories, With CLI Delegators
 
 The definitions of chat-client construction and local-exemption resolution
 MUST live in `application/backends.py`, taking the concrete client class as
@@ -862,18 +862,14 @@ by `cfg.backend` (`ollama` or `openai-compatible`), and
 following the same injected-factory, backend-dispatch shape for embedding
 construction. `cli/main.py` MUST keep its existing `_chat_client` and
 `_resolve_local_exemption` names, each reduced to a one-line delegator that
-calls the `application/backends.py` definition. This is a relocation of the
-definitions with the CLI's call sites left in place as delegators — not call
-sites repointed to `application` directly — so every existing test seam that
-patches `_chat_client`/`_resolve_local_exemption` by name keeps working, and
-the CLI's own observable behavior is unaffected. Both the CLI and the MCP
+calls the `application/backends.py` definition. The CLI's call sites stay in
+place as delegators — they are not repointed to `application` directly — so
+every existing test seam that patches `_chat_client`/`_resolve_local_exemption`
+by name keeps working, and the CLI's own observable behavior is unaffected.
+Both the CLI and the MCP
 adapter build their chat AND embed clients through these same,
 non-CLI-importable definitions, injecting both concrete client classes as
 factories so either can be selected by `cfg.backend`.
-(Previously: this requirement described chat-client construction and
-local-exemption resolution only, with no backend dispatch and no
-`embed_client()`, because only one backend — and no centralized embed
-construction — existed.)
 
 #### Scenario: The definition takes the client class as an injected factory
 

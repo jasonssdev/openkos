@@ -916,7 +916,7 @@ itself introduces no separate staging path.
 
 ### Requirement: Judge-Failure Degrade Is Reported, Ingest Still Succeeds
 
-WHEN the extraction judge call fails (raises `OllamaError`, returns an
+WHEN the extraction judge call fails (raises `BackendError`, returns an
 empty or unparseable reply), `ingest` MUST proceed with the merged-union
 candidates truncated by the backstop cap rather than falling back to
 Source-only, MUST emit a note to stderr distinct from the Source-only
@@ -925,7 +925,7 @@ degrade notice, and MUST exit 0.
 #### Scenario: Judge failure keeps validated candidates, not just the Source
 
 - GIVEN a fake LLM backend whose base extraction succeeds but whose judge
-  call raises `OllamaError`
+  call raises `BackendError`
 - WHEN `openkos ingest <path>` runs
 - THEN the merged-union candidates (backstop-truncated) are written as
   derived objects, a judge-failure note appears on stderr, and the exit
@@ -976,7 +976,7 @@ Extraction failure MUST NOT crash or abort the ingest command.
 #### Scenario: A source below the chunking threshold degrades on any backend error
 
 - GIVEN a source whose length does not trigger chunking, and a fake LLM
-  backend whose single extraction call raises `OllamaError`
+  backend whose single extraction call raises `BackendError`
 - WHEN `openkos ingest <path>` runs
 - THEN only the Source concept is written (no retry is attempted; this
   path has no chunk to isolate), a note describing the degrade appears on
@@ -985,7 +985,7 @@ Extraction failure MUST NOT crash or abort the ingest command.
 #### Scenario: An unreachable backend degrades on the first chunk failure, not the last
 
 - GIVEN a chunked source and a fake LLM backend whose `chat` call raises
-  `OllamaUnavailable` on one window
+  `BackendUnavailable` on one window
 - WHEN `openkos ingest <path>` runs
 - THEN only the Source concept is written, no retry is attempted for that
   window, and no later window is ever attempted
@@ -993,7 +993,7 @@ Extraction failure MUST NOT crash or abort the ingest command.
 #### Scenario: Every chunk failing even after its retry still degrades
 
 - GIVEN a chunked source and a fake LLM backend whose `chat` call raises
-  `OllamaGenerationCapped` on EVERY chunk, including each chunk's one
+  `BackendGenerationCapped` on EVERY chunk, including each chunk's one
   retry
 - WHEN `openkos ingest <path>` runs
 - THEN only the Source concept is written, the same stderr degrade note
@@ -1643,7 +1643,7 @@ stdout, such as under `CliRunner`), STDOUT MUST remain byte-clean of any
 spinner control characters or partial-line artifacts, and the exit code MUST
 be unchanged from before this indicator was added. The indicator MUST be
 cleared whether `extract_concept` returns successfully OR raises
-`OllamaError`, leaving no leftover partial line on either path.
+`BackendError`, leaving no leftover partial line on either path.
 
 #### Scenario: Spinner is stderr-only and stdout stays clean
 
@@ -1659,9 +1659,9 @@ cleared whether `extract_concept` returns successfully OR raises
 - WHEN the call completes
 - THEN the activity indicator is cleared with no leftover partial line
 
-#### Scenario: Spinner clears on OllamaError
+#### Scenario: Spinner clears on BackendError
 
-- GIVEN `extract_concept` raises `OllamaError`
+- GIVEN `extract_concept` raises `BackendError`
 - WHEN the error is raised
 - THEN the activity indicator is cleared with no leftover partial line, and
   `ingest` proceeds to its existing Source-only degrade behavior
@@ -1933,7 +1933,7 @@ from disk — it is recomputed from scratch every run.
 
 #### Scenario: failed is written
 
-- GIVEN a fake LLM backend whose `chat` call raises `OllamaError`
+- GIVEN a fake LLM backend whose `chat` call raises `BackendError`
 - WHEN `openkos ingest <path>` completes
 - THEN the Source's `extraction_status` is `failed`
 
@@ -3078,10 +3078,9 @@ recorded at all, `ingest` MUST print no such line.
 ### Requirement: Chunked Extraction Isolates a Single Failed Window
 
 WHEN a chunked source's extraction call for ONE window raises a
-`BackendError`-family exception (the backend-agnostic base class
-`OllamaError` and its siblings subclass) OTHER than `BackendUnavailable`,
-the system MUST retry that window's call EXACTLY ONCE. WHEN the retry also
-raises a `BackendError`-family exception, that window MUST be skipped --
+`BackendError`-family exception (the backend-agnostic base class) OTHER
+than `BackendUnavailable`, the system MUST retry that window's call
+EXACTLY ONCE. WHEN the retry also raises a `BackendError`-family exception, that window MUST be skipped --
 contributing no objects -- while every OTHER window's extraction results
 MUST still be merged, filtered, judged (on the default `union_judge` path),
 and staged normally, exactly as if the skipped window had answered `[]`.
@@ -3111,7 +3110,7 @@ judge-degrade `extraction_notice` tokens), even without `--re-extract`.
 #### Scenario: A single failed chunk is retried and recovers
 
 - GIVEN a chunked source and a fake LLM backend whose `chat` call raises
-  `OllamaGenerationCapped` on window 2's FIRST attempt only, succeeding on
+  `BackendGenerationCapped` on window 2's FIRST attempt only, succeeding on
   its retry and on every other window
 - WHEN `openkos ingest <path>` runs
 - THEN every window's object is written, no `extraction_notice` is set,
@@ -3120,7 +3119,7 @@ judge-degrade `extraction_notice` tokens), even without `--re-extract`.
 #### Scenario: A chunk that fails its retry is skipped, others are kept
 
 - GIVEN a chunked source of 12 windows and a fake LLM backend whose `chat`
-  call raises `OllamaGenerationCapped` on window 3's first attempt AND its
+  call raises `BackendGenerationCapped` on window 3's first attempt AND its
   retry, succeeding on every other window
 - WHEN `openkos ingest <path>` runs
 - THEN 11 windows' objects are written, the command exits 0, stderr names
@@ -3130,7 +3129,7 @@ judge-degrade `extraction_notice` tokens), even without `--re-extract`.
 #### Scenario: Every chunk fails even after retry degrades the whole source
 
 - GIVEN a chunked source and a fake LLM backend whose `chat` call raises
-  `OllamaGenerationCapped` on every window, including every retry
+  `BackendGenerationCapped` on every window, including every retry
 - WHEN `openkos ingest <path>` runs
 - THEN only the Source concept is written, the existing "concept
   extraction skipped" degrade note appears on stderr, `extraction_status`

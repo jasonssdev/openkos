@@ -461,11 +461,10 @@ model they named.
 
 ### Requirement: Availability Is Tracked Per Model, Not Per Run
 
-An availability failure — `OllamaUnavailable`/`OllamaModelNotFound` for the
-`ollama` backend, or `OpenAICompatibleUnavailable`/
-`OpenAICompatibleModelNotFound` for the `openai-compatible` backend — MUST
-skip only the later `needs_llm` stages that resolve the SAME model. A stage
-resolving a different model MUST still be attempted (#515).
+An availability failure — `BackendUnavailable` or `BackendModelNotFound`,
+raised by either backend — MUST skip only the later `needs_llm` stages that
+resolve the SAME model. A stage resolving a different model MUST still be
+attempted (#515).
 
 This replaces the run-scoped skip: one failed connection no longer settles
 reachability for models it never contacted. The deliberate cost is that a
@@ -473,8 +472,6 @@ genuinely dead server is contacted once per DISTINCT model rather than once
 per run; clients MUST be cached by model so stages sharing a tag share one
 connection. In a workspace with no `models:` override every stage resolves
 the same tag, so the observable behavior is unchanged.
-(Previously: only `OllamaUnavailable`/`OllamaModelNotFound` were named,
-because only the `ollama` backend existed.)
 
 #### Scenario: Failure on one model does not skip a stage on another
 

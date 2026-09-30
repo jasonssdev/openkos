@@ -71,30 +71,30 @@ and MUST NOT abort or crash the run for the remaining types.
 - WHEN `suggest-volatility` runs
 - THEN that type's entry is printed as `[?]`, never as an accepted tier
 
-### Requirement: Ordered OllamaError Handling
+### Requirement: Ordered BackendError Handling
 
-The system MUST handle `OllamaError` in the same 3-tier order used by
-`suggest-relations`: `OllamaUnavailable` first, then `OllamaModelNotFound`,
-then the generic `OllamaError` branch. Each branch MUST print a clear
+The system MUST handle `BackendError` in the same 3-tier order used by
+`suggest-relations`: `BackendUnavailable` first, then `BackendModelNotFound`,
+then the generic `BackendError` branch. Each branch MUST print a clear
 message to stderr and exit non-zero, with zero writes performed.
 
 #### Scenario: Ollama unreachable
 
-- GIVEN the LLM backend raises `OllamaUnavailable`
+- GIVEN the LLM backend raises `BackendUnavailable`
 - WHEN `suggest-volatility` runs
 - THEN stderr states Ollama is not responding and the process exits
   non-zero with no writes
 
 #### Scenario: Model not found
 
-- GIVEN the LLM backend raises `OllamaModelNotFound`
+- GIVEN the LLM backend raises `BackendModelNotFound`
 - WHEN `suggest-volatility` runs
 - THEN stderr states the model is missing with a pull remedy and the
   process exits non-zero with no writes
 
 #### Scenario: Generic Ollama error
 
-- GIVEN the LLM backend raises a generic `OllamaError`
+- GIVEN the LLM backend raises a generic `BackendError`
 - WHEN `suggest-volatility` runs
 - THEN stderr states a generic failure message and the process exits
   non-zero with no writes

@@ -2,11 +2,19 @@
 
 ## Purpose
 
-`llm/` is a pure library seam for chat completion against a locally running
-Ollama server: a `LLMBackend` Protocol plus a concrete `OllamaClient` that
-POSTs `/api/chat` via stdlib `urllib`, mapping every failure mode to a typed
-exception. It has no CLI command and no workspace effect; its only consumer
-is the future `query` command.
+`llm/` is a pure library seam for chat completion and embedding behind two
+backend-neutral Protocols, `LLMBackend` and `Embedder`, together with the
+neutral `Backend*` error hierarchy (`BackendError`, `BackendUnavailable`,
+`BackendModelNotFound`, `BackendGenerationCapped`,
+`BackendEmbeddingDimensionMismatch`) that code outside a concrete client
+catches. This spec is the contract for that neutral seam and for the
+default concrete client, `OllamaClient`, which talks to a locally running
+Ollama server (`/api/chat`, `/api/embed`, `/api/tags`) via stdlib `urllib`
+and maps every failure mode to a typed exception. The opt-in
+`openai-compatible` client is specified in `openai-compatible-client`, and
+the config keys and resolver that choose between the two in
+`backend-selection`. The package has no CLI command and no workspace
+effect; every LLM-calling verb reaches it only through the resolver.
 
 ## Non-Goals
 
@@ -16,11 +24,13 @@ transient, retryable failure before propagating. What this spec does not
 define is: streaming (`stream:true`/NDJSON); tool/function calling; retries
 or backoff for the CHAT path (`OllamaClient.chat` raises on first failure —
 see "Ollama Unavailable Raises A Typed Error" and "Other Failures Raise A
-Generic Typed Error", neither of which retries; retry there is deferred, not
-shipped); `/api/generate` or any non-Ollama provider; any CLI command;
-changes to `ingest`, `forget`, or `config`'s schema beyond an optional host
-key, `model`, and `embedding_model`. Persistence, vector storage, and
-retrieval fusion remain explicitly out of scope for this client.
+Generic Typed Error", neither of which retries); `/api/generate`; the
+OpenAI-compatible client's own contract (`openai-compatible-client`);
+backend choice and client construction (`backend-selection`); any CLI
+command; changes to `ingest`, `forget`, or `config`'s schema beyond an
+optional host key, `model`, and `embedding_model`. Persistence, vector
+storage, and retrieval fusion remain explicitly out of scope for this
+client.
 
 ## Requirements
 
@@ -49,6 +59,34 @@ return `message.content` from the response as a plain string.
 - WHEN `chat(messages)` is called
 - THEN the request body's `messages` array contains both entries, each with
   its original `role` and `content`, in the given order
+
+### Requirement: Concrete Errors Subclass The Neutral Backend Hierarchy
+
+The neutral hierarchy in `llm/base.py` MUST be `BackendError` as the root
+of every capability-scoped backend failure, with `BackendUnavailable`,
+`BackendModelNotFound`, `BackendGenerationCapped`, and
+`BackendEmbeddingDimensionMismatch` as its subclasses. The Ollama client's
+own exceptions MUST subclass them one-to-one: `OllamaError` subclasses
+`BackendError`; `OllamaUnavailable` subclasses both `OllamaError` and
+`BackendUnavailable`; `OllamaModelNotFound`, `OllamaGenerationCapped` and
+`OllamaEmbeddingDimensionMismatch` each subclass `OllamaError` and the
+matching neutral class. Code outside the concrete client modules (every
+verb, application service, and the doctor checks) MUST catch the neutral
+`Backend*` classes and MUST NOT import a concrete client's exceptions, so a
+failure from either backend is handled by the same clause.
+
+#### Scenario: A neutral catch handles an Ollama failure
+
+- GIVEN a call site with `except BackendUnavailable`
+- WHEN `OllamaClient.chat` raises `OllamaUnavailable`
+- THEN that clause catches it
+
+#### Scenario: Generic and specific failures stay distinguishable
+
+- GIVEN a call site ordering `BackendUnavailable`, then
+  `BackendModelNotFound`, then `BackendError`
+- WHEN the client raises `OllamaModelNotFound`
+- THEN the `BackendModelNotFound` clause handles it, not the generic one
 
 ### Requirement: Ollama Unavailable Raises A Typed Error
 

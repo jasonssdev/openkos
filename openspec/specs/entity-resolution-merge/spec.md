@@ -17,8 +17,9 @@ application service.
 
 Re-opening `entity-resolution`/`entity-resolution-adjudication`; embeddings;
 automatic no-confirm merge; N-way single-shot merge (>2-member HIGH groups
-need sequential pairwise merges); batch/`--from-adjudicate` mode; changes
-to `forget`.
+need sequential pairwise merges); a batch mode on the `merge` command itself
+(batch merging of adjudicated SAME pairs is `adjudicate --apply-same`,
+specified in `entity-resolution-adjudication`); changes to `forget`.
 
 ## Requirements
 
@@ -397,11 +398,11 @@ e.g. `_mask_fenced_code_blocks`) MUST NOT be rewritten.
 
 ### Requirement: Confirm-Gated Two-Phase Execution
 
-Phase A computes all changes without writing and previews the recomputed
-sensitivity outcome and every link to rewrite. Gate precedence mirrors
-`forget`: `--auto` > `review: false` > TTY prompt > non-TTY refusal.
-Declining leaves the bundle unchanged. Phase B updates catalog/log before
-removing the absorbed file.
+Phase A MUST compute all changes without writing and MUST preview the
+recomputed sensitivity outcome and every link to rewrite. Gate precedence
+MUST mirror `forget`: `--auto` > `review: false` > TTY prompt > non-TTY
+refusal. Declining MUST leave the bundle unchanged. Phase B MUST update
+catalog/log before removing the absorbed file.
 
 #### Scenario: Decline leaves bundle unchanged
 - GIVEN a TTY prompt is declined

@@ -3,12 +3,13 @@
 ## Purpose
 
 The `sensitivity` frontmatter field (`public`/`private`/`confidential`,
-default floor `private`) is written by ingest but has no reader today except
-merge's high-water-mark recompute. No verb or `llm.chat` call site gates on
-it. This spec makes sensitivity govern which concepts may reach `llm.chat`,
-via one shared fail-closed predicate applied uniformly across all six call
-sites: `adjudicate`, `contradictions`, `suggest-relations`,
-`suggest-volatility`, `query`, `extract`.
+default floor `private`) governs what may leave the process. One shared
+fail-closed predicate decides which concepts may reach `llm.chat`, and the
+same rule governs embedding against a backend that is not verifiably this
+machine and disclosure to non-LLM consumers such as the MCP read surface.
+The `--include-confidential` flag and the local-backend exemption release
+the `llm.chat` send only. The `llm.chat` call sites are enumerated in
+"Uniform Enforcement Across The Chat Call Sites".
 
 ## Non-Goals
 
@@ -52,15 +53,26 @@ exactly as it would be without this filter.
 
 #### Scenario: Private and public concepts reach llm.chat
 - GIVEN concepts with `sensitivity: private` and `sensitivity: public`
-- WHEN any of the six call sites processes them
+- WHEN any gated call site processes them
 - THEN both are sent unchanged
 
-### Requirement: Uniform Enforcement Across All Six Call Sites
+### Requirement: Uniform Enforcement Across The Chat Call Sites
 
-Every call site sending concept content to `llm.chat` — `adjudicate`,
-`contradictions`, `suggest-relations`, `suggest-volatility`, `query`,
-`extract` — MUST exclude any concept resolving to confidential before the
-send. No call site MAY bypass this gate.
+Every verb that sends concept content to `llm.chat` and offers
+`--include-confidential` MUST exclude any concept resolving to confidential
+before the send, with no bypass other than that flag (or the local-backend
+exemption). These verbs are `ingest` (extraction, the judge and the
+re-ask, gated on the resolved sensitivity floor per "Extract Gates on the
+Workspace Sensitivity Floor"), `adjudicate`, `contradictions`,
+`suggest-relations`, `suggest-volatility`, `revisions`, `query`, and
+`curate` (whose stages apply the same gate through the shared services).
+Known limitation, not intended behavior: the merged-body reconciliation
+call made by `merge`, `adjudicate --apply`, `adjudicate --apply-same` and
+`curate` applies no confidential gate. It is bounded only by the merge's own
+consent and the `--no-reconcile` opt-out (`entity-resolution-merge`), so a
+merge involving a `confidential` concept against a backend that is not
+local sends its bodies off the device. Closing this gap is outside this
+requirement's enumerated call sites.
 
 #### Scenario: Confidential excluded from adjudicate/contradictions/suggest-relations
 - GIVEN a confidential concept is a candidate for `adjudicate`,
@@ -78,6 +90,12 @@ send. No call site MAY bypass this gate.
 - GIVEN a confidential concept matches a question
 - WHEN `query`/`answer` runs without `--include-confidential`
 - THEN it is excluded from the fused hits fed to `llm.chat`
+
+#### Scenario: Confidential Decisions excluded from revisions
+- GIVEN a confidential Decision concept
+- WHEN `revisions` runs without `--include-confidential` on a non-local
+  backend
+- THEN its body is excluded from the judge's `llm.chat` payload
 
 ### Requirement: Extract Gates on the Workspace Sensitivity Floor
 
@@ -161,7 +179,7 @@ filtering resolution MUST still execute.
 
 #### Scenario: Flag is opt-in, default is exclusion
 - GIVEN a mixed bundle of public, private, and confidential concepts
-- WHEN any of the six commands run without `--include-confidential`
+- WHEN any gated verb runs without `--include-confidential`
 - THEN confidential concepts are excluded
 
 ### Requirement: Exclusion, Not Redaction
@@ -172,7 +190,7 @@ confidential concept's content.
 
 #### Scenario: No partial confidential content is sent
 - GIVEN a confidential concept
-- WHEN any of the six call sites builds its `llm.chat` payload without
+- WHEN any gated call site builds its `llm.chat` payload without
   `--include-confidential`
 - THEN none of that concept's content — full or partial — appears in the
   payload

@@ -11,10 +11,11 @@ report), never a persisted OKF type or `bundle/` state file.
 
 ## Non-Goals
 
-This spec does not define: LLM adjudication of candidates (slice 2);
-destructive `merge`/`resolve`, merge records, tombstones, sensitivity
-recompute, or un-merge (slice 3); embedding/vector-based candidate
-generation; any mutation of bundle bytes; changes to `ingest`'s
+This spec does not define: LLM adjudication of candidates
+(`entity-resolution-adjudication`); the destructive `merge`, merge records,
+sensitivity recompute, or un-merge (`entity-resolution-merge`); recording a
+human ruling that a group is distinct (`pending-work`); embedding/vector-based
+candidate generation; any mutation of bundle bytes; changes to `ingest`'s
 single-source contract; or stable/content-based concept ids.
 
 ## Requirements
@@ -389,8 +390,11 @@ candidates among the remaining valid documents.
 The CLI MUST expose a read-only reporting verb — named distinctly from the
 reserved `resolve`/`merge` verbs and shaped like `lint`/`status` — that
 renders `find_candidates`' output as a human-readable report to stdout,
-performs zero writes, requires no confirmation gate, and exits 0 whether or
-not any candidates are found.
+performs zero writes on that listing path, requires no confirmation gate,
+and exits 0 whether or not any candidates are found. The verb's ruling
+flags (`--keep-distinct`, `--reopen`, `--kept-distinct`) are outside this
+requirement: recording, reversing and listing a human's "these are
+distinct" ruling is specified in `pending-work`.
 
 #### Scenario: Report renders candidate groups with zero writes
 
@@ -523,14 +527,11 @@ ceiling, expressed as a private module-level `Final[int]` constant
 at `graph/sqlite_graph.py:241`), applied to the FULL cross-type group set
 BEFORE `find_candidates` returns and, transitively, BEFORE `curate`'s
 Identity stage or standalone `adjudicate`/`duplicates` issues a single
-adjudication call. Today `find_candidates` (`resolution/candidates.py:220-287`)
-returns every group an unbounded pairwise pass produces (module docstring,
-`candidates.py:307-309`: "an O(n^2) cost in concepts-per-type"), and an
-exhaustive grep for `_MAX`/`limit` across `resolution/candidates.py` and
-`resolution/adjudication.py` returns zero hits (exploration.md) — this
-requirement closes that gap by extending the house cap idiom
-(`_MAX_CANDIDATE_EDGES`, `graph/sqlite_graph.py:241`; `_MAX_PAIRS`,
-`resolution/contradiction.py:71`) to the one stage that never received it.
+adjudication call. The underlying pairwise pass is O(n^2) in
+concepts-per-type and produces every group it finds; this requirement
+bounds what `find_candidates` returns, extending the house cap idiom
+(`_MAX_CANDIDATE_EDGES` in the graph projection, `_MAX_PAIRS` in
+contradiction detection) to the one stage that never received it.
 
 This ceiling is a SAFETY RAIL against pathological corpora, not a
 per-session curation budget. It MUST be sized so that it rarely binds on a

@@ -3,19 +3,25 @@
 ## Purpose
 
 `openkos doctor` is a read-only environment health scan: a fixed set of
-checks against the local workspace and the local Ollama server, printed as
-`[PASS]`/`[FAIL]` lines with actionable remediation, usable even before
-`openkos init`.
+checks against the local workspace and the configured model backend (Ollama
+by default, or an OpenAI-compatible server), printed as
+`[PASS]`/`[FAIL]`/`[SKIP]`/`[NOT RUN]` lines with actionable remediation,
+usable even before `openkos init`.
 
 ## Requirements
 
 ### Requirement: Doctor Runs And Prints All Applicable Checks
 
-`doctor` MUST execute all checks applicable to the current context —
-workspace initialized, `openkos.yaml` valid, Ollama reachable, configured
-chat model installed, configured embedding model installed, bundle
-readable, workspace vector index present, vector extension loadable, `git`
-available, `git-filter-repo` available — and print exactly one
+`doctor` MUST execute all checks applicable to the current context, in
+this order, labelled as printed: `Workspace initialized`, `Config valid`,
+the backend-reachable check (`Ollama reachable` or `OpenAI-compatible
+server reachable`, by configured backend), `Model '<tag>' installed`,
+`Embedding model '<tag>' installed`, `Task models installed`,
+`Bundle readable`, `Workspace vector index present`,
+`Workspace FTS index present`, `Vector extension loadable`, `git available`,
+`git-filter-repo available`, `Backend host locality`,
+`Merge ledger torn writes`, and
+`Merge ledger entries free of post-merge mutation` — and print exactly one
 `[PASS]`/`[FAIL]`/`[SKIP]`/`[NOT RUN]` line per applicable check. It MUST
 NOT stop or skip remaining checks after any single check fails.
 
@@ -152,10 +158,6 @@ MUST cover both remedies rather than asserting either state as certain. For
 the `openai-compatible` backend, `doctor` MUST NOT probe for or reference
 `ollama`, `shutil.which("ollama")`, `ollama serve`, or `ollama pull` in any
 remediation line: none of that wording applies to a non-Ollama server.
-(Previously: any `OllamaUnavailable` failure produced the same generic
-`ollama serve` remediation regardless of whether the binary was present on
-PATH, and no backend other than `ollama` existed, so no branch existed for
-`openai-compatible`.)
 
 #### Scenario: Binary found, endpoint refuses — start-server remediation
 
@@ -238,13 +240,13 @@ PATH, and no backend other than `ollama` existed, so no branch existed for
 ### Requirement: Exit Code Reflects Critical Failures Only
 
 `doctor` MUST exit `0` when every applicable check completes (no
-`not-run`) and no CRITICAL check (config valid, Ollama reachable, chat
+`not-run`) and no CRITICAL check (config valid, backend reachable, chat
 model installed) reports `fail`; `1` when at least one CRITICAL check
 reports `fail`, regardless of whether any check also reports `not-run` — a
 known critical failure remains the dominant, already-actionable signal; and
 `2` when at least one check reports `not-run` and no CRITICAL check reports
-`fail` — the report could not be completed. The other seven checks stay
-informational: a `fail` on any of them, alone, MUST NOT cause a non-zero
+`fail` — the report could not be completed. Every check other than those
+three CRITICAL ones stays informational: a `fail` on any of them, alone, MUST NOT cause a non-zero
 exit, and a `not-run` on any of them, alone (with no critical failure),
 MUST NOT push the exit code past `2`.
 (Previously: exit was binary — `0`/`1` — driven solely by
@@ -851,6 +853,44 @@ MUST NOT be read as evidence that any ledger content was compared:
 - WHEN `openkos doctor` runs
 - THEN the merge-ledger-integrity check prints `[PASS]`, having skipped
   every entry rather than comparing and flagging it
+
+### Requirement: Backend Host Locality Check
+
+`doctor` MUST always emit one informational `Backend host locality` check,
+reusing the SAME backend client the backend-reachable check built, so it
+reports the host `doctor` itself would send to and never a re-derivation.
+The check MUST be `pass` when the backend is reachable, with a detail that
+states whether the host is `this machine` or `not this machine`, the
+configured host, and whether the confidential local exemption is `active`
+(the host is local AND `confidential_local_exemption` is enabled) or
+`inactive`. WHEN the backend is unreachable it MUST be `skip`, its detail
+MUST say the locality is configured but not verified while the backend is
+unreachable, and it MUST still name the host and the exemption state. It
+MUST NEVER report `fail`, so a non-local backend is not called broken and
+the check can never change the exit code.
+
+#### Scenario: A reachable local backend reports this machine
+
+- GIVEN a reachable backend on `localhost` and
+  `confidential_local_exemption` enabled
+- WHEN `openkos doctor` runs
+- THEN it prints a `[PASS] Backend host locality` line naming
+  `this machine`, the host, and `confidential local exemption active`
+
+#### Scenario: A non-local backend is reported, never failed
+
+- GIVEN a reachable backend on a non-loopback host
+- WHEN `openkos doctor` runs
+- THEN the `Backend host locality` line is `[PASS]`, names
+  `not this machine`, reports the exemption as `inactive`, and the exit
+  code is unaffected
+
+#### Scenario: An unreachable backend skips the locality check
+
+- GIVEN the backend is unreachable
+- WHEN `openkos doctor` runs
+- THEN the `Backend host locality` line is `[SKIP]`, says the locality is
+  not verified while the backend is unreachable, and still names the host
 
 ### Requirement: Doctor Is Read-Only
 

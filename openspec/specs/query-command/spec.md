@@ -144,23 +144,6 @@ projection.)
   derived-index-unavailable hint nor a graph-degrade note on its account,
   and the answer is unchanged
 
-### Requirement: Docstring No Longer Claims No Persisted State
-
-The `query` command's docstring MUST no longer state that retrieval carries
-"no persisted state, no CLI-level graph command"; it MUST describe the FTS
-and dense channels as reading persisted, `reindex`-written on-disk indexes.
-
-(Previously: this named graph retrieval alongside FTS as a persisted-index
-reader. Issue #434 removed the graph channel from retrieval; the docstring
-now explains that removal instead.)
-
-#### Scenario: Docstring reflects the persisted-index contract
-
-- GIVEN `cli/main.py`'s `query` command docstring
-- WHEN a reader reviews it after this change
-- THEN it states that FTS and dense retrieval read persisted on-disk indexes
-  maintained by `reindex`, and no longer claims no persisted state exists
-
 ### Requirement: `--limit` Option
 
 `query` MUST accept an optional `--limit <n>` argument defaulting to 5 and
@@ -180,7 +163,7 @@ MUST forward it unchanged as `answer(..., limit=n)`.
 
 ### Requirement: LLM And Index Errors Map To Exit 1
 
-WHEN `answer()` raises an `OllamaError`-family exception (for the `ollama`
+WHEN `answer()` raises an `BackendError`-family exception (for the `ollama`
 backend) or the analogous `OpenAICompatibleError`-family exception (for the
 `openai-compatible` backend), or `FtsUnavailable`, `query` MUST catch it,
 print a message to stderr, and exit 1 with no raw traceback reaching the
@@ -188,8 +171,7 @@ user. The stderr message MUST be actionable for each of the three enumerated
 causes below and MUST remain generic for all other cases. For the `ollama`
 backend, the wording below MUST remain byte-identical to before this change.
 
-- WHEN the raised exception is `OllamaUnavailable` (or, for the
-  `openai-compatible` backend, `OpenAICompatibleUnavailable`), the stderr
+- WHEN the raised exception is `BackendUnavailable`, the stderr
   message MUST state that the backend is not responding, MUST include the
   endpoint it tried to reach, and MUST additionally point to
   `openkos doctor` to diagnose the environment. For `ollama`, it MUST tell
@@ -197,15 +179,13 @@ backend, the wording below MUST remain byte-identical to before this change.
   `openai-compatible`, it MUST instead advise the user to verify the
   configured server is running at that endpoint, with no reference to
   `ollama serve` or any Ollama-specific command.
-- WHEN the raised exception is `OllamaModelNotFound` (or, for
-  `openai-compatible`, `OpenAICompatibleModelNotFound`), the stderr message
+- WHEN the raised exception is `BackendModelNotFound`, the stderr message
   MUST name the configured model that could not be found. For `ollama`, it
   MUST tell the user how to install it, referencing the
   `ollama pull <model>` command with the configured model name. For
   `openai-compatible`, it MUST instead advise the user to make that model
   available on the configured server, with no `ollama pull` reference.
-- WHEN the raised exception is `OllamaEmbeddingDimensionMismatch` (or, for
-  `openai-compatible`, `OpenAICompatibleEmbeddingDimensionMismatch`), the
+- WHEN the raised exception is `BackendEmbeddingDimensionMismatch`, the
   stderr message MUST identify the failure as a PERMANENT dimension
   mismatch caused by the configured embedding model, and MUST name
   restoring the working `embedding_model` value in `openkos.yaml` as the
@@ -216,8 +196,8 @@ backend, the wording below MUST remain byte-identical to before this change.
   Degrade And Hint At Reindex requirement MUST NOT be printed for this
   cause: `answer()` propagates instead of setting `dense_degraded`, so a run
   that hits this error never reaches that hint.
-- WHEN the raised exception is any other `OllamaError`/
-  `OpenAICompatibleError` or `FtsUnavailable`, `query` MUST print a friendly
+- WHEN the raised exception is any other `BackendError` or
+  `FtsUnavailable`, `query` MUST print a friendly
   (non-actionable-specific) failure message to stderr — unchanged from prior
   behavior.
 
@@ -232,9 +212,8 @@ the refusal conditional on whether FTS found hits. The accepted cost is
 denying the user even the answers FTS could have grounded; the ONLY remedy is
 restoring the working `embedding_model` in `openkos.yaml`, not a CLI flag.
 
-(Previously: the `OllamaUnavailable` message told the user to run
-`ollama serve` with no additional pointer to `openkos doctor`.)
-(Previously: `OllamaEmbeddingDimensionMismatch` never reached this ladder —
+
+(Previously: `BackendEmbeddingDimensionMismatch` never reached this ladder —
 `answer()` swallowed it into `dense_degraded`, so `query` printed a
 successful FTS-only answer at exit 0, plus the misleading
 `openkos reindex` hint, and never reported the misconfiguration.)
@@ -246,7 +225,7 @@ backend-conditional branch.)
 
 #### Scenario: Ollama backend unreachable
 
-- GIVEN `answer()` raises `OllamaUnavailable` because Ollama is not running
+- GIVEN `answer()` raises `BackendUnavailable` because Ollama is not running
   or not reachable at the configured host
 - WHEN `openkos query "<question>"` is run
 - THEN stderr states that Ollama is not responding, names the host it tried
@@ -256,7 +235,7 @@ backend-conditional branch.)
 
 #### Scenario: Configured model not installed
 
-- GIVEN `answer()` raises `OllamaModelNotFound` because the configured model
+- GIVEN `answer()` raises `BackendModelNotFound` because the configured model
   has not been pulled
 - WHEN `openkos query "<question>"` is run
 - THEN stderr names the configured model and tells the user to run
@@ -265,7 +244,7 @@ backend-conditional branch.)
 
 #### Scenario: Embedding model returns wrong-dimension vectors
 
-- GIVEN `answer()` raises `OllamaEmbeddingDimensionMismatch` because the
+- GIVEN `answer()` raises `BackendEmbeddingDimensionMismatch` because the
   configured `embedding_model` does not emit `EMBED_DIM`-dimensional vectors
 - WHEN `openkos query "<question>"` is run
 - THEN stderr identifies the failure as a permanent dimension mismatch and
@@ -281,7 +260,7 @@ backend-conditional branch.)
   would have printed a cited FTS-only answer at exit 0 had the embedding
   model been healthy
 - AND the configured `embedding_model` returns a wrong-dimension embedding,
-  so `answer()` raises `OllamaEmbeddingDimensionMismatch` AFTER those FTS
+  so `answer()` raises `BackendEmbeddingDimensionMismatch` AFTER those FTS
   hits were already retrieved
 - WHEN `openkos query "<question>"` is run
 - THEN the process exits 1 with nothing on stdout — no answer, no citation,
@@ -291,8 +270,8 @@ backend-conditional branch.)
 
 #### Scenario: Other Ollama error
 
-- GIVEN `answer()` raises an `OllamaError`-family exception that is neither
-  `OllamaUnavailable` nor `OllamaModelNotFound`
+- GIVEN `answer()` raises an `BackendError`-family exception that is neither
+  `BackendUnavailable` nor `BackendModelNotFound`
 - WHEN `openkos query "<question>"` is run
 - THEN a friendly failure message is printed to stderr and the process exits
   1, with no raw traceback shown
@@ -857,7 +836,8 @@ applies.
 MUST prompt for confirmation unless `--auto` is passed. WHEN running
 non-interactively (no TTY) with review enabled and `--auto` is absent,
 `query` MUST refuse to write and exit non-zero, leaving the bundle
-unchanged.
+unchanged. `--auto` and `review: false` MUST NOT bypass the
+unverified-grounding gate below.
 
 #### Scenario: TTY confirms before writing
 
@@ -878,6 +858,60 @@ unchanged.
 - WHEN `openkos query "<question>" --save` is run
 - THEN `query` refuses to write, exits non-zero, and the bundle is
   unchanged
+
+### Requirement: Unverified Grounding Gates `--save`
+
+WHEN the answer's LLM ran and its attribution fell back (`absent` or
+`unparsed`, anything other than `reported`), the citations `--save` would
+file as permanent `provenance` are the retrieval set, not what the model
+accounted for; the run is then said to have unverified grounding. The
+`--save` preview MUST disclose it with a line beginning
+`! unverified grounding:` that names the attribution state and the number of
+citations. A run that answered without an LLM call (a short-circuit) MUST
+NOT be treated as unverified.
+
+For an unverified run, `--save` MUST apply a gate stronger than the
+ordinary review gate, and `--auto` and `review: false` MUST NOT skip it:
+on a TTY it MUST ask `File it with these unverified citations as
+provenance?` in place of the ordinary confirmation and abort when declined;
+off a TTY it MUST refuse to write, print that the grounding is unverified
+naming the attribution state and `--allow-unattributed`, and exit `1` with
+the bundle unchanged.
+
+`query` MUST accept `--allow-unattributed`, which has effect only with
+`--save`: it skips this gate, leaving the ordinary `--auto`/`review`/TTY
+gate in force, so a backend that never emits the attribution line can file
+unattended by saying so explicitly. It MUST NOT change what is filed.
+
+#### Scenario: A fallback attribution refuses off a TTY even under --auto
+
+- GIVEN no TTY is attached, the answer's attribution is `absent`, and
+  `--auto` is passed
+- WHEN `openkos query "<question>" --save --auto` runs
+- THEN `query` refuses to write, exits `1`, names `--allow-unattributed`,
+  and the bundle is unchanged
+
+#### Scenario: --allow-unattributed files the retrieval set
+
+- GIVEN no TTY is attached, the answer's attribution is `absent`, and
+  `--auto` is passed
+- WHEN `openkos query "<question>" --save --auto --allow-unattributed` runs
+- THEN the write proceeds with the citations as provenance
+
+#### Scenario: A TTY asks the stronger question
+
+- GIVEN an interactive TTY and an `absent` attribution
+- WHEN `openkos query "<question>" --save` runs
+- THEN the preview carries a `! unverified grounding:` line and the prompt
+  is `File it with these unverified citations as provenance?`, which
+  replaces the ordinary confirmation
+
+#### Scenario: A reported attribution is not gated
+
+- GIVEN the answer's attribution is `reported`
+- WHEN `openkos query "<question>" --save` runs
+- THEN no unverified-grounding line is shown and only the ordinary gate
+  applies
 
 ### Requirement: Filed Concept Is Not Auto-Reindexed
 
@@ -1005,10 +1039,3 @@ user action.
 - WHEN `read_config` loads the file
 - THEN it succeeds without error — `read_config` never rejects an unknown
   top-level key, so the leftover line requires no user action
-
-## Note
-
-This change also includes two test/doc-only follow-ups to the already-merged
-`query-answer` capability — a `_SYSTEM_PROMPT` docstring and a multi-survivor
-citation-ordering test. Neither alters any `query-answer` requirement, so
-`query-answer/spec.md` is unchanged.
