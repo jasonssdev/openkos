@@ -756,10 +756,20 @@ class PreparedUnmerge:
     sentinel -- the tail ledger entry predates the survivor-edit check (a
     v1-v5 entry recorded before #1110 shipped), so `prepare_unmerge` cannot
     compare the survivor's current bytes against what that merge wrote.
-    `False` means the comparison ran and passed (a mismatch instead raises
-    `ValueError`, refusing before any preview). The command prints a
-    one-line warning on `True` and proceeds -- fail-open, but disclosed,
-    only for this legacy case."""
+    `False` means the comparison ran (a mismatch either raises `ValueError`
+    or, with `discard_survivor_edits=True`, sets
+    `survivor_edits_discarded` instead). The command prints a one-line
+    warning on `True` and proceeds -- fail-open, but disclosed, only for
+    this legacy case."""
+    survivor_edits_discarded: bool
+    """#1110 follow-up: `True` when the survivor's current bytes DID
+    mismatch `survivor_after_sha256` (a genuine edit since the merge) AND
+    the caller passed `discard_survivor_edits=True`, so `prepare_unmerge`
+    proceeded instead of raising. `False` on every other path, including
+    the legacy `survivor_drift_unverifiable` case (nothing was detected
+    there to discard) and the ordinary no-drift case. The command prints
+    its own disclosure on `True`, naming the survivor and distinct from the
+    legacy-entry warning."""
     review: bool
     index_bytes: bytes
     log_bytes: bytes
@@ -853,6 +863,7 @@ def prepare_unmerge(
     *,
     now: datetime,
     cfg: config.Config,
+    discard_survivor_edits: bool = False,
 ) -> PreparedUnmerge:
     """Phase A (pure, no writes): read the survivor's ledger and the
     current catalog/log, plan the reversal (`bundle_merge.plan_unmerge`,
@@ -895,7 +906,24 @@ def prepare_unmerge(
     regardless of who made it. A tail entry with no recorded hash (every
     entry from before #1110 shipped) cannot be checked at all; the caller
     is told via `PreparedUnmerge.survivor_drift_unverifiable` so it can
-    disclose that instead of silently skipping the check."""
+    disclose that instead of silently skipping the check.
+
+    `discard_survivor_edits=True` (the CLI's `--discard-survivor-edits`,
+    #1110 follow-up) is the ONLY escape from that raise: a plain re-run
+    with no flag hashes the identical edited survivor and refuses again --
+    forever, since nothing about the mismatch resolves itself -- so the
+    refusal needs an explicit, named way past it once the operator has
+    decided the edit is safe to discard (having copied it elsewhere, or
+    accepting the loss). The flag is checked ONLY at this one comparison:
+    it changes nothing about the absorbed-path collision above, the
+    rewrite-file drift checks below, or `_reject_drifted_targets`' own
+    post-confirm re-validation, and it is never implied by `--auto`
+    (`cfg`/caller-level orthogonality -- this function does not even see
+    `auto`). When it overrides a genuine mismatch,
+    `PreparedUnmerge.survivor_edits_discarded` is set so the caller can
+    disclose the override in its own preview -- a `False` mismatch was
+    never detected in the first place, so nothing to discard is reported
+    either."""
     index_path = layout.bundle_dir / "index.md"
     log_path = layout.bundle_dir / "log.md"
 
@@ -934,17 +962,22 @@ def prepare_unmerge(
     # from "edited during my confirm prompt" (the latter is
     # `_reject_drifted_targets`' separate, narrower job).
     survivor_drift_unverifiable = not plan.entry.survivor_after_sha256
+    survivor_edits_discarded = False
     if not survivor_drift_unverifiable:
         actual_survivor_sha256 = bundle_ledger.survivor_sha256(survivor_text)
         if actual_survivor_sha256 != plan.entry.survivor_after_sha256:
-            raise ValueError(
-                f"'bundle/{survivor_canonical}.md' does not match the bytes "
-                "this merge wrote to it -- it was edited (by a human, or "
-                "by another verb such as `repair` or `sync-tags`) after "
-                "the merge and before this unmerge. Restoring the "
-                "pre-merge snapshot would silently discard that edit. "
-                "Copy it somewhere safe, then re-run"
-            )
+            if not discard_survivor_edits:
+                raise ValueError(
+                    f"'bundle/{survivor_canonical}.md' does not match the "
+                    "bytes this merge wrote to it -- it was edited (by a "
+                    "human, or by another verb such as `repair` or "
+                    "`sync-tags`) after the merge and before this unmerge. "
+                    "Restoring the pre-merge snapshot would silently "
+                    "discard that edit. Copy it somewhere safe, then "
+                    "re-run with --discard-survivor-edits; you can reapply "
+                    "the edit by hand once the unmerge has completed"
+                )
+            survivor_edits_discarded = True
 
     absorbed_path = layout.bundle_dir / f"{absorbed_canonical}.md"
     if absorbed_path.exists():
@@ -1138,6 +1171,7 @@ def prepare_unmerge(
         absorbed_canonical=absorbed_canonical,
         catalog_log_drifted=catalog_log_drifted,
         survivor_drift_unverifiable=survivor_drift_unverifiable,
+        survivor_edits_discarded=survivor_edits_discarded,
         review=cfg.review,
         index_bytes=index_bytes,
         log_bytes=log_bytes,

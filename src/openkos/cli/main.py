@@ -9418,6 +9418,18 @@ def unmerge(
         "--auto",
         help="Skip the confirmation prompt and write immediately (unattended).",
     ),
+    discard_survivor_edits: bool = typer.Option(
+        False,
+        "--discard-survivor-edits",
+        help=(
+            "Bypass the survivor-edit refusal (#1110): proceed even though "
+            "the survivor's current bytes no longer match what the merge "
+            "wrote, discarding that edit. Independent of --auto -- it never "
+            "skips the confirmation prompt or any OTHER refusal (the "
+            "absorbed-path collision, a rewrite-file's own drift check, or "
+            "the post-confirm drift guard)."
+        ),
+    ),
 ) -> None:
     """Reverse a recorded `merge` on `survivor_id`, restoring both concept
     files to byte parity with their pre-merge state (spec: Unmerge Achieves
@@ -9571,6 +9583,7 @@ def unmerge(
             cfg=cfg,
             auto=auto,
             confirmed=False,
+            discard_survivor_edits=discard_survivor_edits,
         )
         # #640: after the single-step write committed. NOT inside
         # `_run_single_unmerge`, which the `--to` chain below invokes
@@ -9632,6 +9645,7 @@ def unmerge(
                 cfg=cfg,
                 auto=auto,
                 confirmed=True,
+                discard_survivor_edits=discard_survivor_edits,
             )
         except (typer.Exit, typer.Abort) as exc:
             # The step already reported its own failure on stderr (the
@@ -9676,6 +9690,7 @@ def _run_single_unmerge(
     cfg: config.Config,
     auto: bool,
     confirmed: bool,
+    discard_survivor_edits: bool = False,
 ) -> None:
     """ONE complete single-step unmerge -- the preview / confirm-gate /
     drift-guard machinery both `unmerge` forms share (issue #562), Phase A
@@ -9778,11 +9793,27 @@ def _run_single_unmerge(
     `repair`'s status export/migration or `sync-tags`, counts too, since a
     write is a write regardless of who made it) refuses closed with no
     write, naming the survivor and telling the operator to copy the edit
-    somewhere safe first. A tail entry recorded before #1110 shipped has no
-    hash to compare against; `prepare_unmerge` reports that via
-    `PreparedUnmerge.survivor_drift_unverifiable`, and the command prints a
-    one-line warning and proceeds -- fail-open, but disclosed, only for
-    that legacy case.
+    somewhere safe, then re-run with `--discard-survivor-edits`, and that
+    the edit can be reapplied by hand once the unmerge has completed. A
+    plain re-run WITHOUT that flag hashes the identical edited survivor and
+    refuses again -- forever, since nothing about the mismatch changes on
+    its own -- so the refusal must name the escape hatch rather than merely
+    advise "copy it somewhere safe" with no path forward (follow-up review
+    finding on #1110). `--discard-survivor-edits` bypasses ONLY this one
+    check: it is orthogonal to `--auto` (never implied by it, and vice
+    versa) and to every OTHER refusal below -- the absorbed-path collision,
+    a rewrite-file's own drift check, and the post-confirm
+    `_reject_drifted_targets` guard all still fire exactly as before, and
+    the flag proceeding past this check still costs the operator the usual
+    confirm gate unless `--auto`/`review: false` also apply. A tail entry
+    recorded before #1110 shipped has no hash to compare against at all;
+    `prepare_unmerge` reports that via
+    `PreparedUnmerge.survivor_drift_unverifiable` regardless of the flag,
+    and the command prints a one-line warning and proceeds -- fail-open,
+    but disclosed, only for that legacy case. When the flag DOES override a
+    genuine mismatch, `PreparedUnmerge.survivor_edits_discarded` is `True`
+    and the command prints its own disclosure naming the survivor, distinct
+    from the legacy-entry warning.
 
     The recreated absorbed file is the one write the guard cannot cover:
     Phase A refuses outright if it already exists, so there are no bytes to
@@ -9842,6 +9873,7 @@ def _run_single_unmerge(
             absorbed_canonical,
             now=now,
             cfg=cfg,
+            discard_survivor_edits=discard_survivor_edits,
         )
     except (OSError, ValueError) as exc:
         typer.echo(
@@ -9899,6 +9931,17 @@ def _run_single_unmerge(
             f"Warning: {survivor_canonical!r}'s merge ledger entry predates "
             "the survivor-edit check (#1110); cannot confirm its current "
             "bytes still match what the merge wrote, proceeding anyway."
+        )
+    if prepared.survivor_edits_discarded:
+        # #1110 follow-up: --discard-survivor-edits explicitly overrode the
+        # mismatch refusal below -- disclosed here, in the preview, not
+        # silently, and named for exactly the survivor whose post-merge
+        # edit is about to be lost.
+        typer.echo(
+            f"Warning: {survivor_canonical!r}'s post-merge edits are being "
+            "discarded (--discard-survivor-edits) -- it will be restored to "
+            "its pre-merge state, and anything changed on it since the "
+            "merge is gone unless you copied it somewhere safe first."
         )
 
     if not confirmed and not auto and prepared.review:

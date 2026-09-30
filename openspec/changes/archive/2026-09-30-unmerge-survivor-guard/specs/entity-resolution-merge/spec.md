@@ -17,13 +17,30 @@ confirm prompt's own window, since its baseline is Phase A's own read; this
 one catches an edit from ANY point between the merge and the unmerge,
 because its baseline is what the merge itself wrote.
 
-The refusal MUST name the survivor and tell the operator to copy the edit
-somewhere safe before re-running, MUST NOT suggest a plain re-run as a safe
-recovery (a re-run restores the identical stale `survivor_before` snapshot
-and discards the edit exactly as the original run would have), and MUST
-write nothing. It groups with `unmerge`'s existing pre-prompt Phase A
-refusals (the absorbed-path collision, and the link/relation/provenance
-drift checks) rather than with the separate post-confirm drift refusal.
+The refusal MUST name the survivor, tell the operator to copy the edit
+somewhere safe, and name the explicit escape hatch below
+(`--discard-survivor-edits`) as the way to proceed once that is done; it
+MUST NOT suggest a plain unqualified re-run as a safe recovery, since a
+plain re-run hashes the identical edited survivor and refuses again --
+forever, because nothing about the mismatch resolves on its own. The
+refusal MUST write nothing. It groups with `unmerge`'s existing pre-prompt
+Phase A refusals (the absorbed-path collision, and the link/relation/
+provenance drift checks) rather than with the separate post-confirm drift
+refusal.
+
+`unmerge` MUST provide an explicit, named, opt-in flag
+(`--discard-survivor-edits`) that bypasses ONLY this one check: passing it
+proceeds past a detected mismatch instead of refusing, restores the
+survivor from `survivor_before` exactly as it would on an untouched
+survivor (discarding the edit), and prints a warning naming the survivor
+and disclosing that its post-merge edits are being discarded. The flag
+MUST NOT be implied by `--auto` or by any other option -- an unattended run
+still refuses on a mismatch unless the flag is passed explicitly -- and it
+MUST NOT bypass any other refusal: the absorbed-path collision, the
+link/relation/provenance drift checks, and the post-confirm
+`_reject_drifted_targets` guard all still fire exactly as without the
+flag. The operator MAY reapply the discarded edit by hand once the unmerge
+completes.
 
 The comparison MUST treat ANY later rewrite of the survivor as disqualifying,
 regardless of who performed it -- a human hand-edit, or another verb
@@ -54,18 +71,46 @@ discarded.)
 
 - GIVEN a merge whose survivor was hand-edited afterward, before `unmerge`
   runs
-- WHEN `unmerge <survivor> <absorbed>` is run
+- WHEN `unmerge <survivor> <absorbed>` is run without
+  `--discard-survivor-edits`
 - THEN it exits non-zero before any preview or prompt, writes nothing, and
-  the refusal names the survivor and tells the operator to copy the edit
-  somewhere safe before re-running
+  the refusal names the survivor, tells the operator to copy the edit
+  somewhere safe, and names `--discard-survivor-edits` as the way to
+  proceed
 
 #### Scenario: Unmerge refuses when another verb rewrote the survivor after the merge
 
 - GIVEN a merge whose survivor was rewritten afterward by a different verb
   (not a human hand-edit), before `unmerge` runs
-- WHEN `unmerge <survivor> <absorbed>` is run
+- WHEN `unmerge <survivor> <absorbed>` is run without
+  `--discard-survivor-edits`
 - THEN it refuses exactly as it would for a human edit, with no allowance
   for the rewrite's origin
+
+#### Scenario: --discard-survivor-edits proceeds and discards the edit
+
+- GIVEN a merge whose survivor was edited afterward, before `unmerge` runs
+- WHEN `unmerge <survivor> <absorbed> --discard-survivor-edits` is run
+- THEN it proceeds past the mismatch, restores the survivor to its exact
+  pre-merge state (the edit is gone), completes the unmerge, and prints a
+  warning naming the survivor and disclosing that its post-merge edits
+  were discarded
+
+#### Scenario: --discard-survivor-edits does not bypass an unrelated refusal
+
+- GIVEN a merge where, afterward, an unrelated rewrite-file's inbound link
+  has drifted from what the merge recorded (the survivor itself untouched)
+- WHEN `unmerge <survivor> <absorbed> --discard-survivor-edits` is run
+- THEN it still refuses on the link-drift check exactly as it would
+  without the flag, with no write
+
+#### Scenario: --discard-survivor-edits is never implied by --auto
+
+- GIVEN a merge whose survivor was edited afterward
+- WHEN `unmerge <survivor> <absorbed> --auto` is run without
+  `--discard-survivor-edits`
+- THEN it still refuses on the survivor-edit check; `--auto` alone never
+  bypasses it
 
 #### Scenario: Unmerge warns but proceeds on a pre-fix ledger entry
 

@@ -260,6 +260,102 @@ def test_unmerge_survivor_edited_since_merge_refuses_closed_no_write(
     assert isinstance(result.exception, SystemExit)
     assert "concepts/survivor" in result.stderr
     assert "copy it somewhere safe" in result.stderr.lower()
+    # Follow-up review finding on #1110: "copy it somewhere safe" alone is
+    # a dead end -- a plain re-run hashes the identical edited survivor and
+    # refuses forever. The refusal must name the explicit escape hatch.
+    assert "--discard-survivor-edits" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert _snapshot(tmp_path) == before
+
+
+def test_unmerge_discard_survivor_edits_flag_proceeds_and_restores_pre_merge_survivor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #1110 follow-up: `--discard-survivor-edits` is the explicit,
+    named escape from the survivor-edit refusal -- a plain re-run with no
+    flag hashes the identical edited survivor and refuses again forever,
+    so the operator needs an explicit way to say "yes, discard this edit
+    and finish the unmerge". Passing the flag proceeds past the check,
+    restores the survivor to its exact pre-merge state (the edit is
+    discarded, as disclosed in the preview), and completes the unmerge."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/survivor", title="Survivor")
+    _write_concept(tmp_path, "concepts/absorbed", title="Absorbed")
+
+    pre_merge_survivor = (tmp_path / "bundle" / "concepts" / "survivor.md").read_text(
+        encoding="utf-8"
+    )
+
+    merge_result = runner.invoke(
+        app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+    assert merge_result.exit_code == 0, merge_result.stderr
+
+    survivor_path = tmp_path / "bundle" / "concepts" / "survivor.md"
+    edited_text = survivor_path.read_text(encoding="utf-8") + "\nEdited after merge.\n"
+    survivor_path.write_text(edited_text, encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        [
+            "unmerge",
+            "concepts/survivor",
+            "concepts/absorbed",
+            "--auto",
+            "--discard-survivor-edits",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "concepts/survivor" in result.output
+    assert "discarded" in result.output.lower()
+    assert survivor_path.read_text(encoding="utf-8") == pre_merge_survivor
+    assert (tmp_path / "bundle" / "concepts" / "absorbed.md").exists()
+
+
+def test_unmerge_discard_survivor_edits_flag_does_not_bypass_link_drift_refusal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #1110 follow-up: `--discard-survivor-edits` overrides ONLY the
+    survivor-edit check -- it must not blanket-bypass Phase A. A drifted
+    inbound-link rewrite file (an unrelated fail-closed check,
+    `bundle.links.reverse_link_rewrites`) still refuses exactly as it does
+    without the flag, even though the survivor itself was never touched."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/survivor", title="Survivor")
+    _write_concept(tmp_path, "concepts/absorbed", title="Absorbed")
+    _write_concept(
+        tmp_path,
+        "concepts/other",
+        title="Other",
+        body="See [Absorbed](/concepts/absorbed.md).",
+    )
+
+    merge_result = runner.invoke(
+        app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+    assert merge_result.exit_code == 0, merge_result.stderr
+
+    other_path = tmp_path / "bundle" / "concepts" / "other.md"
+    drifted_text = other_path.read_text(encoding="utf-8").replace(
+        "/concepts/survivor.md", "/concepts/elsewhere.md"
+    )
+    other_path.write_text(drifted_text, encoding="utf-8")
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(
+        app,
+        [
+            "unmerge",
+            "concepts/survivor",
+            "concepts/absorbed",
+            "--auto",
+            "--discard-survivor-edits",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
     assert "Traceback" not in result.stderr
     assert _snapshot(tmp_path) == before
 

@@ -56,9 +56,16 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   of the exact survivor bytes it wrote onto its ledger entry, and `unmerge`
   compares the survivor's current bytes against it before any preview or
   prompt: a mismatch refuses (exit 1, nothing written), names the survivor,
-  and tells the operator to copy the edit somewhere safe before re-running,
-  since a plain re-run only overwrites it again. A ledger entry recorded
-  before this fix has no hash to compare against; that one case warns that
+  and tells the operator to copy the edit somewhere safe, then re-run with
+  the new `--discard-survivor-edits` flag — a plain re-run with no flag
+  hashes the identical edited survivor and would refuse again forever.
+  `--discard-survivor-edits` bypasses only this one check (never the
+  absorbed-path collision, a rewrite-file's own drift check, or the
+  post-confirm drift guard) and is never implied by `--auto`; passing it
+  restores the survivor to its pre-merge state and prints its own warning
+  naming the survivor, and the discarded edit can be reapplied by hand
+  afterward. A ledger entry recorded before this fix has no hash to compare
+  against; that one case warns that
   it cannot verify the survivor and proceeds rather than refusing every
   bundle whose merges predate the fix. An untouched survivor still
   round-trips byte-for-byte, unchanged.
