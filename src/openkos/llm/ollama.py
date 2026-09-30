@@ -44,6 +44,7 @@ from openkos.llm.base import (
     BackendModelNotFound,
     BackendUnavailable,
     Message,
+    build_backend_opener,
 )
 from openkos.llm.base import (
     BackendHostLocality as BackendHostLocality,
@@ -219,7 +220,7 @@ class OllamaClient:
         temperature: float | None = None,
         seed: int | None = None,
         context_window: int | None = None,
-        urlopen: Callable[..., Any] = urllib.request.urlopen,
+        urlopen: Callable[..., Any] | None = None,
         embed_retry_attempts: int = DEFAULT_EMBED_RETRY_ATTEMPTS,
         embed_retry_backoff_base: float = DEFAULT_EMBED_RETRY_BACKOFF_BASE,
         sleep: Callable[[float], None] = time.sleep,
@@ -267,12 +268,15 @@ class OllamaClient:
         self._temperature = temperature
         self._seed = seed
         self._context_window = context_window
-        self._urlopen = urlopen
         self._embed_retry_attempts = embed_retry_attempts
         self._embed_retry_backoff_base = embed_retry_backoff_base
         self._sleep = sleep
         resolved_host = host or os.environ.get("OLLAMA_HOST") or DEFAULT_HOST
         self._host = _normalize_host(resolved_host).rstrip("/")
+        # Default transport is chosen by locality so a loopback host never
+        # consults environment proxy settings (issue #1127); an injected
+        # `urlopen` (tests) is used as given.
+        self._urlopen = urlopen or build_backend_opener(self.locality)
 
     @property
     def resolved_host(self) -> str:
