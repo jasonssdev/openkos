@@ -193,8 +193,8 @@ confirmation `declined` and every spend confirmation from the budget.
 | Site | Today | Reached by runner? | Change |
 | --- | --- | --- | --- |
 | single `ingest` confirm (`cli/main.py` `_confirm_ingest`) | callback into `ingest_service` | yes (watch) | none: runner passes `skip_confirmation` + policy |
-| batch ingest cost gate (`_ingest_batch`) | inline `typer.confirm`, non-TTY refuses | no (runner calls the service per file) | typed spend gate so `--auto` can consult the budget |
-| `curate` spend gate (`cli/curate.py` `gate`) | inline, `--auto` returns True | no (runner calls advisors, not curate) | typed spend gate; `--auto` consults budget |
+| batch ingest cost gate (`_ingest_batch`) | inline `typer.confirm`, non-TTY refuses | no (runner calls the service per file) | unchanged (a CLI run is never budget-limited) |
+| `curate` spend gate (`cli/curate.py` `gate`) | inline, `--auto` returns True | no (runner calls advisors, not curate) | unchanged (a CLI run is never budget-limited) |
 | `curate` per-item `_confirm` / `_confirm_item` | inline | no | unchanged |
 | `suggest-relations` confirm | inline, no isatty branch | yes (maintenance, compute only) | the compute core is extracted without the gate (#1168) |
 | `revisions` confirm | inline, non-TTY refuses | yes (compute only) | `application/revisions.py` `plan_revisions`/`judge_revisions` already gate-free |
@@ -275,8 +275,15 @@ already served-first), so progress resumes. A source whose estimate
 exceeds `max_calls_per_pass` can never run unattended: it gets a
 `watch_refusal` row with reason `exceeds per-pass budget`.
 
-**Scope.** Budgeted = runner jobs + `--auto` invocations. Attended TTY
-runs whose gate a person answered are neither limited nor counted.
+**Scope (accepted decision).** Budgeted = jobs the runner starts, and
+nothing else. A run a person launches from the CLI — attended, `--auto`, or
+a non-TTY batch — is neither limited nor counted, and keeps its existing
+cost gate exactly as today. This is the same line ADR-0037 draws: unattended
+is decided by who started the run, not by a flag, so `--auto` stays "skip
+the question" and never becomes "subject to the daemon's budget". An
+earlier draft of this design budgeted `--auto` runs too; it was dropped
+because it would have silently truncated existing scripted batch ingests at
+`max_sources_per_pass`.
 
 ## Decision 4 — Pending-work queue (#1141)
 
@@ -521,7 +528,7 @@ sequenceDiagram
 ```sql
 CREATE TABLE IF NOT EXISTS jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    kind TEXT NOT NULL CHECK (kind IN ('watch','maintenance','commit-retry','cli-auto')),
+    kind TEXT NOT NULL CHECK (kind IN ('watch','maintenance','commit-retry')),
     started_at TEXT NOT NULL, ended_at TEXT,
     outcome TEXT CHECK (outcome IN ('completed','budget_exhausted','timed_out',
         'stopped','busy','commit_failed','refused','failed')),
@@ -537,13 +544,22 @@ CREATE TABLE IF NOT EXISTS watch_observations (
 );
 ```
 
-Why `.openkos/` and not the per-user state directory: the record names
-workspace paths, so it must be inside `purge`'s wholesale delete and move
-with the workspace. It is not reconstructible, but nothing depends on it
-for correctness except the day's spend, and losing it is an explicit user
-action; an *unreadable* record fails closed (no model calls). This is the
-first `.openkos/` store that is operational rather than derived, and
-`docs/architecture.md`'s state taxonomy gains a row saying so.
+**`jobs.db` is disposable state, not a source of truth (accepted
+decision).** It lives under `.openkos/` because it names workspace paths,
+so it must be inside `purge`'s wholesale delete (`purge` still deletes it)
+and move with the workspace. Deleting it loses only job history and the
+current day's budget counters — never knowledge: nothing under `bundle/`,
+`raw/`, `bundle/.state/` or git depends on it, and the next job recreates it
+with fresh counters and no history, without error (`job-runtime`: "A
+deleted job record starts over without error"). That is how it satisfies
+AGENTS.md's "every SQLite store under `.openkos/` is a derived cache, never
+the source of truth": it is non-authoritative, so losing it costs at most a
+reset spend window, the same kind of cost as losing `insight_questions.db`.
+A record that is present but *unreadable* makes budgeted jobs refuse to
+spend until it is deleted (the remedy it names), because guessing the
+day's spend from a corrupt file is worse than resetting it deliberately.
+`docs/architecture.md`'s state taxonomy gains a row for it as disposable
+operational state.
 
 **Config** (Decision 3 table). **Queue** (Decision 4). **Lock and log
 paths** (Decisions 1 and 2).
@@ -563,7 +579,8 @@ paths** (Decisions 1 and 2).
 | Deadline passes mid-unit | unit completes; `timed_out`, rest deferred |
 | Budget exhausted | `budget_exhausted`, deferred count; `status`/`next`/`pending` show it |
 | Auto-commit fails (runner) | `commit_failed` + paths; retried first next job |
-| `jobs.db` unreadable | budgeted runs make no model call; `status` says not available |
+| `jobs.db` deleted | next job recreates it; fresh counters, no history, no error |
+| `jobs.db` present but unreadable | runner jobs make no model call and name deletion as the remedy; `status` says not available |
 | Queue unreadable | `next` falls back to recompute tiers; `pending` says not available |
 | Incremental refresh fails | transaction rolls back; whole rebuild |
 | Kill -9 anywhere | kernel releases lock; ADR-0035 marker completes ingest; stores roll back per transaction |
@@ -579,15 +596,31 @@ paths** (Decisions 1 and 2).
 - **Config.** An absent `unattended:` section means every default; the
   watch is off until `inbox` is set; `openkos.yaml.template` gains the
   section commented out. No existing workspace changes behaviour until the
-  user runs `openkos daemon` — except that `--auto` runs become budgeted
-  (see risks in the proposal).
+  user runs `openkos daemon`; CLI runs, including `--auto`, are never
+  budget-limited.
 - **Derived stores.** A pre-change `fts.db`/`graph.db` has no
   `doc_manifest`; its first refresh after a bundle change is one whole
   rebuild, after which refreshes are per-document.
 - **findings.db.** The queue tables are created on first enqueue. Existing
   findings are not migrated into rows; the first maintenance pass (or the
   first `curate`) enqueues from the served verdicts at zero model cost.
-- **jobs.db.** Created by the first budgeted run.
+- **jobs.db.** Created by the first runner job; disposable.
+
+## Accepted decisions (settled in review of the first draft)
+
+- **Budget scope: runner-started jobs only.** CLI runs, including `--auto`
+  and non-TTY batch ingest, are never budget-limited (Decision 3).
+- **`jobs.db` is disposable** under `.openkos/`, non-authoritative, deleted
+  by `purge` (Data shapes).
+- **The lock path ignores `$HOME` and `$XDG_STATE_HOME` on POSIX.** The home
+  directory comes from the account database for the effective uid, so a
+  user has exactly one lock per workspace regardless of the environment a
+  process was started with (a service manager's environment commonly
+  differs from a login shell's). This is a deliberate departure from a
+  plain "XDG state dir" reading; logs, which are not a rendezvous, do honour
+  `$XDG_STATE_HOME` (Decision 1, ADR-0036 Decision Eight).
+- **The verb is `openkos daemon`** (with `--once`), a foreground command;
+  no service installer ships (Decision 2).
 
 ## Code reality check
 
@@ -734,7 +767,6 @@ Strict TDD per `openspec/config.yaml`. The load-bearing tests, by risk:
   conventional stdlib. The one hard-to-reverse sub-choice — the log lives
   outside the workspace — is already required by ADR-0019 and is recorded
   in the `job-runtime` spec.
-- `jobs.db` as the first operational (non-derived) store under `.openkos/`
-  is recorded here and in the architecture doc update rather than in an
-  ADR; if review judges it a principle-level change, it belongs in
-  ADR-0037's scope and should be added there before acceptance.
+- `jobs.db` needs no ADR: it is disposable, non-authoritative state under
+  `.openkos/`, consistent with the existing principle rather than an
+  exception to it.

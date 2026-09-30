@@ -14,9 +14,10 @@ has one owner.
 ## Non-Goals
 
 This spec does not define: a token or currency budget; a budget shared
-across workspaces or per machine; rate limiting of a person's attended
-runs; counting embedding calls against the budget (they are reported, not
-budgeted); changing what an attended, TTY-confirmed run may spend; the
+across workspaces or per machine; any limit on a run a person launched
+from the CLI, with or without `--auto` (those keep their existing cost
+gates); counting embedding calls against the budget (they are reported,
+not budgeted); the
 default values' final calibration (they are provisional and documented as
 such).
 
@@ -70,9 +71,11 @@ The budget MUST be enforced per workspace. It MUST count every chat call a
 budgeted run issues to a model backend, including retries and re-asks, and
 MUST NOT count embedding calls. The daily count MUST be the sum of the
 chat calls of every budgeted run that started on the current local calendar
-day, read from the workspace's job record. When the job record cannot be
-read, a budgeted run MUST refuse to make any model call and MUST say why,
-rather than assume nothing was spent.
+day, read from the workspace's job record. The job record is disposable: an
+absent record MUST be treated as no history and zero calls spent today, with
+no error. A record that exists but cannot be read MUST make a budgeted run
+refuse to make any model call and say why, naming deletion of the record as
+the remedy, rather than guess what was spent.
 
 #### Scenario: Two passes share one day's budget
 
@@ -80,27 +83,35 @@ rather than assume nothing was spent.
 - WHEN another budgeted run starts today
 - THEN it may make at most 10 calls
 
+#### Scenario: A deleted record starts fresh counters
+
+- GIVEN `.openkos/jobs.db` was deleted after 40 calls were spent today
+- WHEN the next budgeted run starts
+- THEN it starts with zero calls spent today and no history, and reports no
+  error
+
 #### Scenario: An unreadable record fails closed
 
 - GIVEN `.openkos/jobs.db` exists but cannot be opened
 - WHEN a budgeted run starts
 - THEN it makes no model call and reports that its spend record is
-  unreadable
+  unreadable and may be deleted
 
-### Requirement: Budgeted Runs Are Unattended Runs And `--auto` Runs
+### Requirement: Only Runner-Started Jobs Are Budgeted
 
-Every job the runner starts, and every invocation of an LLM-bound verb with
-`--auto`, MUST be a budgeted run. `--auto` MUST continue to skip the cost
-question and MUST NOT skip the budget. An attended run -- a verb whose cost
-gate a person answered at a terminal -- MUST NOT be limited by the budget
-and MUST NOT count toward the daily total.
+Every job the job runner starts MUST be a budgeted run, and no other run
+MUST be. A run a person launched from the CLI -- attended at a terminal,
+with `--auto`, or as a non-TTY batch -- MUST NOT be limited by the budget,
+MUST NOT count toward the daily total, and MUST keep its existing cost
+gate and `--auto` behaviour unchanged. This follows ADR-0037's definition
+of unattended: it is decided by who started the run, not by a flag.
 
-#### Scenario: --auto skips the question, not the budget
+#### Scenario: A CLI --auto batch is not budget-limited
 
 - GIVEN `max_sources_per_pass: 2`
-- WHEN `openkos ingest notes/ --auto` runs over five new files
-- THEN two files are ingested, three are reported deferred, and no cost
-  question is asked
+- WHEN a person runs `openkos ingest notes/ --auto` over five new files
+- THEN all five files are ingested, no deferral is reported, and the run's
+  calls are not added to the daily total
 
 #### Scenario: A person's confirmed run is not truncated
 
@@ -108,6 +119,12 @@ and MUST NOT count toward the daily total.
 - WHEN a person runs `openkos ingest notes/` at a terminal over five new
   files and answers the cost gate yes
 - THEN all five files are ingested
+
+#### Scenario: A watch job is budget-limited
+
+- GIVEN `max_sources_per_pass: 2` and five settled new files in the inbox
+- WHEN a watch job runs
+- THEN it imports two files and records three deferred
 
 ### Requirement: Admission Is By Estimate, Accounting Is By Count
 
@@ -139,15 +156,14 @@ repeats. The count recorded MUST be the calls actually made.
 ### Requirement: Exhaustion Is A Visible Outcome
 
 A budgeted run that deferred work for budget MUST record `budget_exhausted`
-with the number of units deferred, MUST print (when attended by a terminal
-or run with `--auto`) one stderr line naming the limit that was reached and
-the number deferred, and MUST exit `0` when every unit it did start
-succeeded. `status` and `next` MUST surface the most recent exhaustion
-until a later run of the same kind completes without deferral.
+with the limit that was reached and the number of units deferred, and MUST
+log one line saying so. `status`, `next`, and `pending` MUST surface the
+most recent exhaustion until a later job of the same kind completes without
+deferral.
 
-#### Scenario: --auto prints what it deferred
+#### Scenario: status names what a job deferred
 
-- GIVEN `max_sources_per_pass: 1`
-- WHEN `openkos ingest notes/ --auto` runs over two new files
-- THEN stderr carries one line naming `max_sources_per_pass` and `1
-  deferred`, and the exit code is `0`
+- GIVEN a watch job that recorded `budget_exhausted` on
+  `max_sources_per_pass` with one file deferred
+- WHEN `openkos status` runs
+- THEN it names the watch job, `max_sources_per_pass`, and `1 deferred`

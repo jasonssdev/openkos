@@ -26,18 +26,17 @@ refuse when only those changed.
   phase
 - THEN the ingest writes and both entries are in `index.md`
 
-### Requirement: Batch `--auto` Is Bounded By The Unattended Budget
+### Requirement: A CLI Ingest Is Never Limited By The Unattended Budget
 
-A batch `ingest --auto` MUST admit files in its existing order while each
-file's call estimate fits the calls remaining and `max_sources_per_pass` is
-not reached (`unattended-budget`), MUST NOT start a file it cannot admit,
-and MUST print one stderr line naming the limit reached and the number of
-files deferred. The batch exit ladder is unchanged for the files it
-started; deferred files MUST NOT turn a successful batch into a failure.
+An `ingest` a person launches from the CLI -- single file or batch, attended
+or `--auto`, TTY or not -- MUST NOT be limited or counted by the
+`unattended:` budget, which applies only to jobs the runner starts
+(`unattended-budget`). Its cost gate, `--auto` behaviour, and exit ladder
+MUST be unchanged.
 
-#### Scenario: Deferred files do not fail the batch
+#### Scenario: --auto ingests more sources than max_sources_per_pass
 
-- GIVEN `max_sources_per_pass: 2` and five new files
-- WHEN `openkos ingest notes/ --auto` runs and the two admitted files
-  succeed
-- THEN it exits `0` and reports three deferred
+- GIVEN `unattended: {max_sources_per_pass: 2}` and five new files
+- WHEN `openkos ingest notes/ --auto` runs
+- THEN all five files are ingested, no deferral is reported, and the exit
+  code is what it would be without the `unattended:` section

@@ -57,8 +57,10 @@ without recomputing.
 3. **Spend budget** (#1140). An `unattended:` section in `openkos.yaml`
    (`max_calls_per_pass`, `max_calls_per_day`, `max_sources_per_pass`, plus
    the runtime's deadline, maintenance interval, inbox and quiet window);
-   per workspace; counted in chat calls; `--auto` skips the question but
-   never the budget; exhaustion recorded and surfaced. Provisional defaults
+   per workspace; counted in chat calls; applied only to jobs the runner
+   starts — a CLI run, including `--auto` and non-TTY batch ingest, is never
+   budget-limited and keeps today's cost gate; exhaustion recorded and
+   surfaced. Provisional defaults
    derived from measurements in the repo (design Decision 3).
 4. **Pending-work queue** (#1141). A derived queue table in
    `.openkos/findings.db` with a stable, kind-scoped decision key, payload
@@ -114,7 +116,7 @@ without recomputing.
 - `job-runtime`: `openkos daemon`, job kinds, recorded outcomes, logging,
   cooperative stop, deadline, policy-answered prompts, commit-failure retry.
 - `unattended-budget`: the `unattended:` keys, their validation and
-  defaults, counting and admission, `--auto` semantics, exhaustion.
+  defaults, counting and admission, runner-only scope, exhaustion.
 - `folder-watch`: inbox configuration, settling, refusal into the queue.
 
 ### Modified Capabilities
@@ -131,8 +133,8 @@ without recomputing.
 - `forget-command`, `privacy-purge`: sweeps cover the queue, `jobs.db`, and
   daemon logs.
 - `mcp`: `pending` lists open rows through the disclosure gate.
-- `curate-command`: reads and resolves queue rows; `--auto` budgeted.
-- `ingestion`: extraction lock-free; batch `--auto` budgeted.
+- `curate-command`: reads and resolves queue rows.
+- `ingestion`: extraction lock-free; a CLI ingest is never budget-limited.
 
 ## Approach
 
@@ -151,8 +153,8 @@ tests, committed on its own; `tasks.md` slices them near the advisory
 - **Immutable `raw/`:** strengthened — the watcher never touches `raw/` or
   the inbox, and a changed source is refused, not re-imported.
 - **Reconstructible:** the queue is derived and rebuildable; `jobs.db` is
-  the first operational (non-derived) store under `.openkos/`, holds no
-  knowledge, and fails closed when unreadable (flagged for review).
+  disposable, non-authoritative state — deleting it loses only job history
+  and the day's budget counters, never knowledge.
 - **Sensitivity:** the commit phase re-validates sensitivity inputs so a
   concurrent raise is never lost; queue rows pass the MCP disclosure gate;
   the `forget` sweep covers every field of a row that names a concept.
@@ -165,14 +167,13 @@ tests, committed on its own; `tasks.md` slices them near the advisory
 | Risk | Likelihood | Mitigation |
 | --- | --- | --- |
 | A split verb under-declares a read dependency and loses a concurrent sensitivity raise | Med, high impact | per-verb sentinel tests, mutation-proven; ADR-0036 names it mandatory |
-| `--auto` scripts that batch-ingest many files now stop at `max_sources_per_pass` (behaviour change for existing users) | High for those users | stderr deferral line, exit 0, documented; defaults provisional; open decision O1 |
 | Compute spent then refused at commit under contention | Med | catalog re-composition removes the common case; runner records and retries |
 | Incremental graph diverges from a whole rebuild | Med | property-test equivalence oracle; any failure falls back to rebuild |
 | Two processes resolve different lock directories | Low | account-database home on POSIX; environment ignored for the lock |
 | Mixed old/new versions during upgrade | Med | transitional double lock |
 | A new `.openkos/` tenant missed by a privacy sweep | Med | `pending_item_targets` column swept by membership; erasure tests |
 | Daemon log names concepts outside the workspace | Low | ids/paths only, never text; `purge` deletes the logs |
-| `jobs.db` loss resets the daily budget | Low | loss is a user action; unreadable fails closed |
+| `jobs.db` loss resets the day's budget counters | Low | disposable by design; loss is a user action; a corrupt record fails closed until deleted |
 
 ## Rollback Plan
 
@@ -187,14 +188,10 @@ leaves `doc_manifest` tables that the old whole-rebuild path ignores.
 Bundles, `raw/` and `bundle/.state/` are never migrated by this change, so
 no rollback touches knowledge.
 
-## Open decisions for the maintainer
+## Settled decisions
 
-- **O1. Exit code and default for a budget-truncated `--auto` run.** The
-  design exits 0 with a stderr deferral line, which keeps existing scripts
-  green but lets a script miss the deferral; exit 2 (ADR-0022's
-  "incomplete" code) would make it visible at the cost of breaking scripts
-  that treat non-zero as failure. The design chooses 0.
-- **O2. `jobs.db` under `.openkos/`.** Chosen for purge coverage and
-  portability with the workspace; it is not reconstructible, which bends
-  AGENTS.md's "every SQLite store under `.openkos/` is a derived cache".
-  The alternative is the per-user state directory, outside `purge`'s reach.
+Settled in review of the first draft (recorded in `design.md`, "Accepted
+decisions"): the budget applies only to runner-started jobs; `jobs.db` is
+disposable state under `.openkos/`; the lock path ignores `$HOME` and
+`$XDG_STATE_HOME` on POSIX; the verb is `openkos daemon`. No decision is
+open.

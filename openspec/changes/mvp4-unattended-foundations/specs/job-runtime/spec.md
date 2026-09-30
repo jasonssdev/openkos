@@ -75,9 +75,22 @@ record (`.openkos/jobs.db`, owner-only): `completed`, `budget_exhausted`,
 `timed_out`, `stopped`, `busy`, `commit_failed`, `refused`, or `failed`,
 with its start and end time, the model calls it made, the units of work it
 completed, and the units it deferred. The record MUST NOT contain document
-text, model output, or rationale. A job whose record cannot be written MUST
-still end, and the daemon MUST log the failure. `status`, `next`, and
-`pending` MUST read the record read-only.
+text, model output, or rationale. The record is disposable operational
+state, never a source of truth: deleting it MUST lose only job history and
+the current day's budget counters, never knowledge, and the next job MUST
+recreate it and start with fresh counters without error. A job whose record
+cannot be written MUST still end, and the daemon MUST log the failure.
+`status`, `next`, and `pending` MUST read the record read-only. `purge`
+MUST delete it (`privacy-purge`).
+
+#### Scenario: A deleted job record starts over without error
+
+- GIVEN a workspace whose `.openkos/jobs.db` held today's spend and job
+  history, and was then deleted
+- WHEN the next job runs
+- THEN it recreates the record, starts with zero calls spent today and no
+  history, reports no error, and no knowledge under `bundle/` or `raw/`
+  changed
 
 #### Scenario: A deferral is recorded, not silent
 

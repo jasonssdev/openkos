@@ -127,14 +127,16 @@ dependencies only.
   `mcp/server.py`'s setup in. Depends on: 1.1.
   Tests: `tests/unit/test_logsetup.py` (paths per OS; no file under
   `bundle/`; CLI goldens unchanged; sentinel body text never in a log). ~300.
-- [ ] 3.2 `jobs.db` store (`state/jobs.py`): jobs, uncommitted paths,
-  watch observations; read-only opener for `status`/`next`/`pending`;
-  unreadable → typed error. Tests: `tests/unit/state/test_jobs.py`. ~300.
+- [ ] 3.2 `jobs.db` store (`state/jobs.py`), disposable: jobs, uncommitted
+  paths, watch observations; read-only opener for `status`/`next`/`pending`;
+  absent → recreated with no history and no error; present but unreadable →
+  typed error naming deletion as the remedy.
+  Tests: `tests/unit/state/test_jobs.py` (deleted record → fresh counters,
+  no history, no error, no file under `bundle/` or `raw/` touched). ~300.
 - [ ] 3.3 Stop flag and deadline primitives (`application/runtime.py`:
-  `StopToken`, `Deadline`, `UnattendedPolicy`); typed spend gates for the
-  curate and batch-ingest cost questions in `application/consent.py`.
-  Tests: `tests/unit/application/test_runtime.py`,
-  `tests/unit/application/test_consent.py` (new gates). ~350.
+  `StopToken`, `Deadline`, `UnattendedPolicy`). The CLI's cost gates are
+  unchanged.
+  Tests: `tests/unit/application/test_runtime.py`. ~300.
 
 ## Phase 4 — Pending-work queue (#1141)
 
@@ -178,15 +180,18 @@ dependencies only.
   key refused; bool rejected; ranges); `tests/unit/test_config_keys_specified.py`
   must see `unattended` in a living spec after archive. ~300.
 - [ ] 5.2 `CountingBackend`, admission by estimate, daily sum from
-  `jobs.db`, fail-closed on unreadable record. Depends on: 3.2, 5.1.
+  `jobs.db` (absent → zero spent; unreadable → no model call). Runner-only:
+  the counting wrapper is installed only by the runner. Depends on: 3.2, 5.1.
   Tests: `tests/unit/application/test_budget.py` (retries counted; embeds
-  not counted; over-estimate source never started). ~350.
-- [ ] 5.3 `--auto` budgeting for batch `ingest`, `curate`,
-  `suggest-relations`, `revisions`; deferral line; exit 0; recorded as
-  `cli-auto` jobs. Depends on: 5.2, 3.3.
-  Tests: `tests/unit/cli/test_auto_budget.py` (five files, two admitted,
-  three deferred, exit 0; attended TTY run untruncated; truncated
-  contradictions resumes with zero repeated calls). ~400.
+  not counted; over-estimate source never started; a truncated
+  contradictions stage resumes with zero repeated calls). ~350.
+- [ ] 5.3 Pin that CLI runs are never budget-limited: batch `ingest --auto`,
+  `curate --auto`, `suggest-relations --auto`, `revisions --auto` with a
+  restrictive `unattended:` section behave exactly as without it.
+  Depends on: 5.2.
+  Tests: `tests/unit/cli/test_cli_unbudgeted.py` (`ingest notes/ --auto`
+  over five files with `max_sources_per_pass: 2` ingests all five, reports
+  no deferral, same exit code; no `jobs.db` row added). ~150.
 
 ## Phase 6 — Runner and daemon
 
@@ -229,7 +234,7 @@ dependencies only.
   operational store; the queue tenant; lock and logs outside the
   workspace); leaf-module rule; runner in the application layer.
   `docs/cli.md`: `daemon`, `pending`, `--wait`, exit 3 for every
-  contention, `--auto` budgeting, the `unattended:` keys (pointing at the
+  contention, runner-only budgeting, the `unattended:` keys (pointing at the
   config as the authority for defaults). `docs/roadmap.md`: MVP 4 status.
   No counts that rot. ~250.
 
