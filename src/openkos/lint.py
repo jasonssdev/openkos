@@ -782,13 +782,18 @@ def check_dangling_provenance(docs: list[LintDoc]) -> list[LintFinding]:
     `check_unextracted`/`check_below_source_sensitivity` follow: a function
     that never receives a directory is incapable of opening a walk.
 
-    A doc's OWN raw `resource` entry never fires. Every Source is built
-    with `provenance=[resource]` (`cli/main.py`, ingest), and a raw
-    resource path (`raw/<name>`) never normalizes to a bundle id, so
-    without this exclusion the check would report every Source in every
-    bundle on every run -- the exact trap design D8 names for
+    A doc's OWN raw `resource` entry never fires. LEGACY-ONLY as of issue
+    #1076: `ingest` no longer writes `provenance=[resource]` on a Source (a
+    Source's `resource` field alone already names its one raw original, so
+    `okf.build_source_concept`'s `provenance` parameter now defaults to
+    `None` and is omitted from freshly-built Sources), but a Source ingested
+    by an older `openkos` still carries `provenance: [raw/<name>]` on disk,
+    untouched -- no migration runs -- so without this exclusion the check
+    would start reporting every SUCH pre-existing Source in every bundle on
+    every run. This is the exact trap design D8 names for
     `bundle.provenance.resolve_backfill_raises`, which deliberately does
-    not call `find_unresolvable_provenance` for the same reason. The
+    not call `find_unresolvable_provenance` for the same reason (also
+    legacy-only now, kept for the same pre-existing bundles). The
     discriminator is `doc.resource`, matched against BOTH the raw value
     and its `.md`-stripped form, because `collect_docs` strips `.md` off
     every provenance entry: a Source ingested from a markdown file carries

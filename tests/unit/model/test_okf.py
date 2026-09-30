@@ -689,7 +689,6 @@ def _build_call_source(**overrides: object) -> str:
         "tags": ["call", "philosophy"],
         "generated": _TEST_GENERATED,
         "sensitivity": "private",
-        "provenance": ["raw/call-with-maria.txt"],
     }
     kwargs.update(overrides)
     return okf.build_source_concept(**kwargs)  # type: ignore[arg-type]
@@ -717,7 +716,7 @@ def test_build_source_concept_emits_required_frontmatter_fields() -> None:
     assert metadata["version"] == 1
     assert metadata["freshness"] == "snapshot"
     assert metadata["sensitivity"] == "private"
-    assert metadata["provenance"] == ["raw/call-with-maria.txt"]
+    assert "provenance" not in metadata
     assert "# Citations" not in body
 
 
@@ -1743,6 +1742,46 @@ def test_build_source_concept_never_writes_sources() -> None:
     metadata, _ = okf.load_frontmatter(text)
 
     assert "sources" not in metadata
+
+
+def test_build_source_concept_omits_provenance_by_default() -> None:
+    """Issue #1076: a Source's own `resource` field already names its one
+    raw original, so `ingest` no longer passes `provenance=[resource]` --
+    `provenance` is now OPTIONAL (default `None`), like every other
+    optional Source key, and is absent from a freshly-built Source's
+    frontmatter unless a caller explicitly passes one. A pre-existing
+    on-disk Source built by an older `openkos` still carries
+    `provenance: [raw/<file>]`; this pin is about what a FRESH build
+    produces, not a migration of documents already on disk."""
+    text = _build_call_source()
+
+    metadata, _ = okf.load_frontmatter(text)
+
+    assert "provenance" not in metadata
+    assert "provenance" not in text
+
+
+def test_build_source_concept_emits_provenance_when_explicitly_given() -> None:
+    """The parameter still works when a caller passes a non-empty list --
+    exercised today only by test fixtures modeling a pre-existing,
+    legacy-shaped Source (e.g. `backfill-source-titles`' hand-written
+    fixtures), never by `ingest` itself."""
+    text = _build_call_source(provenance=["raw/call-with-maria.txt"])
+
+    metadata, _ = okf.load_frontmatter(text)
+
+    assert metadata["provenance"] == ["raw/call-with-maria.txt"]
+
+
+def test_build_source_concept_omits_provenance_when_given_an_empty_list() -> None:
+    """An explicit empty list is treated the same as `None` -- absent,
+    never an empty `provenance: []` key -- matching `project_sources`'s own
+    "empty list means no entries" convention."""
+    text = _build_call_source(provenance=[])
+
+    metadata, _ = okf.load_frontmatter(text)
+
+    assert "provenance" not in metadata
 
 
 def test_sensitivity_order_pins_the_adr_0003_ordering() -> None:

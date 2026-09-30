@@ -324,9 +324,10 @@ def test_successful_ingest_of_valid_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A valid `ingest --auto` copies the raw source, writes one conformant
-    Source concept with provenance and `generated`/`status: stable` (no
+    Source concept with `resource` and `generated`/`status: stable` (no
     `# Citations`), and updates `index.md`/`log.md` (scenario: successful
-    ingest of a valid path)."""
+    ingest of a valid path). The Source carries no `provenance` frontmatter
+    key -- its `resource` already names the raw copy (issue #1076)."""
     _init_workspace(tmp_path, monkeypatch)
     source = tmp_path / "notes.txt"
     source.write_text("Some raw notes.", encoding="utf-8")
@@ -341,7 +342,8 @@ def test_successful_ingest_of_valid_path(
     concept_text = concept_path.read_text(encoding="utf-8")
     metadata, body = okf.load_frontmatter(concept_text)
     assert metadata["type"] == "Source"
-    assert metadata["provenance"] == ["raw/notes.txt"]
+    assert metadata["resource"] == "raw/notes.txt"
+    assert "provenance" not in metadata
     assert "## Source content" in body
     assert "Some raw notes." in body
     assert "# Citations" not in body

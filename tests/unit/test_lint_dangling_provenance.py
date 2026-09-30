@@ -11,11 +11,13 @@ cannot cascade to it.
 The check takes ONLY `docs` (no `bundle_dir`) -- the SAME structural
 no-fifth-walk guard `check_dangling_targets`/`check_unextracted`/
 `check_below_source_sensitivity` follow -- and it MUST NOT fire on a
-Source's own raw `resource` entry: every Source is built with
-`provenance=[resource]` (cli/main.py, ingest), and a raw resource path
+Source's own raw `resource` entry: a Source ingested before issue #1076
+carries `provenance=[resource]` on disk (`ingest` no longer writes this --
+see `okf.build_source_concept`'s now-optional `provenance` parameter -- but
+an old bundle's existing entry is never migrated), and a raw resource path
 never normalizes to a bundle id, so without the exclusion the check would
-report every Source in every bundle on every run (the trap design D8
-names for `resolve_backfill_raises`).
+report every such pre-existing Source in every bundle on every run (the
+trap design D8 names for `resolve_backfill_raises`).
 """
 
 from pathlib import Path
@@ -64,15 +66,34 @@ def test_concept_citing_missing_id_is_flagged_with_the_consequence() -> None:
 
 
 def test_source_citing_only_its_own_raw_resource_is_never_flagged() -> None:
-    """A Source's own raw `resource` entry never fires: `ingest` builds
-    every Source with `provenance=[resource]`, and `raw/<name>` never
+    """A Source's own raw `resource` entry never fires: a pre-#1076 Source
+    still on disk carries `provenance=[resource]`, and `raw/<name>` never
     resolves to a bundle id -- without this exclusion the check would
-    report every Source in every bundle on every run (design D8's trap)."""
+    report every such pre-existing Source in every bundle on every run
+    (design D8's trap)."""
     source = _doc(
         "sources/notes",
         doc_type="Source",
         resource="raw/notes.txt",
         provenance=("raw/notes.txt",),
+    )
+
+    findings = lint.check_dangling_provenance([source])
+
+    assert findings == []
+
+
+def test_a_freshly_ingested_source_with_no_provenance_is_never_flagged() -> None:
+    """Issue #1076: a Source written by the current `ingest` carries no
+    `provenance` key at all (its `resource` already names the raw original),
+    so `doc.provenance` is empty and the scan's `for target in
+    doc.provenance` loop never runs -- zero findings, with no dependency on
+    the `doc.resource == entry` exclusion at all."""
+    source = _doc(
+        "sources/notes",
+        doc_type="Source",
+        resource="raw/notes.txt",
+        provenance=(),
     )
 
     findings = lint.check_dangling_provenance([source])

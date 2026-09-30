@@ -773,6 +773,28 @@ def test_compose_source_document_emits_generated_and_stable_status() -> None:
     assert "timestamp" not in metadata
 
 
+def test_compose_source_document_never_writes_provenance() -> None:
+    """Issue #1076: `compose_source_document` no longer passes
+    `provenance=[resource]` into `okf.build_source_concept` -- a fresh
+    Source's `resource` field already names its one raw original, so the
+    written frontmatter carries no `provenance` key at all."""
+    plan = ingest_service.compose_source_document(
+        raw_content="Some raw notes about self-control.",
+        source_stem="notes",
+        source_display_path="notes.txt",
+        source_document_display_path="bundle/sources/notes.md",
+        resource="raw/notes.txt",
+        origin_key="deadbeef",
+        concept_text=None,
+        cfg=_default_cfg(),
+        timestamp="2026-07-14T18:30:00Z",
+    )
+
+    metadata, _ = okf.load_frontmatter(plan.content)
+
+    assert "provenance" not in metadata
+
+
 def test_compose_source_document_reads_back_on_disk_sensitivity() -> None:
     """Triangulation: a DIFFERENT code path -- an EXISTING prior Source
     read back at a higher sensitivity raises the resolved value to the
@@ -988,7 +1010,6 @@ def test_compose_source_document_frontmatter_free_is_byte_identical() -> None:
         tags=[],
         generated=okf.Generated(by=okf.engine_actor(), at="2026-07-14T18:30:00Z"),
         sensitivity=plan.resolved_sensitivity,
-        provenance=["raw/notes.txt"],
         raw_content=raw_content,
         extraction_status=None,
         extraction_notice=(),
@@ -997,6 +1018,7 @@ def test_compose_source_document_frontmatter_free_is_byte_identical() -> None:
     )
     assert plan.content == expected
     assert okf.SOURCE_FRONTMATTER_KEY not in plan.content
+    assert "provenance" not in okf.load_frontmatter(plan.content)[0]
 
 
 def test_compose_source_document_never_parses_frontmatter_for_non_utf8_or_blank_sources(
@@ -1117,6 +1139,29 @@ def test_compose_catalog_update_conditional_rerender_on_skip_reason() -> None:
     assert update.concept_content != source.content
     metadata, _ = okf.load_frontmatter(update.concept_content)
     assert metadata.get(okf.EXTRACTION_STATUS_KEY) == "no-concepts-found"
+
+
+def test_compose_catalog_update_rerender_never_writes_provenance() -> None:
+    """Issue #1076: the conditional re-render path (`skip_reason`/`notices`)
+    calls `okf.build_source_concept` a SECOND time, from scratch -- that
+    fresh build must not reintroduce `provenance=[resource]` either."""
+    source = _source_plan()
+    staged = _staged(skip_reason="no-concepts-found")
+
+    update = ingest_service.compose_catalog_update(
+        source=source,
+        staged=staged,
+        slug="notes",
+        resource="raw/notes.txt",
+        index_text="---\nokf_version: '0.1'\n---\n",
+        log_text="---\nokf_version: '0.1'\n---\n",
+        regenerate=False,
+        timestamp="2026-07-14T18:30:00Z",
+        entry_date=date(2026, 7, 14),
+    )
+
+    metadata, _ = okf.load_frontmatter(update.concept_content)
+    assert "provenance" not in metadata
 
 
 def test_compose_catalog_update_conditional_rerender_on_notices() -> None:
