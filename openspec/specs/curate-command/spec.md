@@ -457,6 +457,57 @@ model they named.
   and advising the operator to make it available on the configured server,
   with no `ollama pull` reference, and Metadata and Contradictions still run
 
+### Requirement: `rationale_language` Pins The Language Of Suggested Rationales
+
+The system MUST accept an optional `rationale_language` key in
+`openkos.yaml`: a free-form language name that pins the language in which
+the Metadata stage (`suggest-volatility`) and the Structure stage
+(`suggest-relations`) write their per-item rationales. The key MUST be
+absent-default `None`, and an explicit YAML null MUST behave as absent.
+WHEN it is set, the system MUST append one language sentence to the SYSTEM
+half of both rationale prompts, for the stages and for the standalone
+`suggest-relations` and `suggest-volatility` verbs alike, so one workspace
+never prints rationales in two languages depending on the verb. WHEN it is
+unset, the assembled prompts MUST be byte-identical to the prompts assembled
+without the key, and the rationale language is inherited per item from the
+documents involved.
+
+A present value MUST be a string that, after stripping surrounding
+whitespace, is non-blank, single-line (no `\n` or `\r`), at most 40
+characters, and free of the sentence-ending marks `.`, `!` and `?`; the
+stripped value is what is used. The system MUST NOT validate the value
+against a vocabulary of languages. A value that fails any of these checks,
+including a non-string such as the YAML word `no`, which parses as a
+boolean, MUST be refused when the config is read, with an error naming
+`rationale_language` and the offending value, before any model call.
+
+#### Scenario: A pinned language reaches both rationale prompts
+
+- GIVEN `rationale_language: Spanish`
+- WHEN the Structure and Metadata stages assemble their prompts
+- THEN each SYSTEM prompt ends with the sentence `Write the "rationale" in
+  Spanish.`, and nothing else in the prompt differs from the unpinned prompt
+
+#### Scenario: An unset key sends the unpinned prompt
+
+- GIVEN `openkos.yaml` has no `rationale_language` key
+- WHEN either rationale prompt is assembled
+- THEN the SYSTEM prompt is exactly the unpinned system text
+
+#### Scenario: A sentence typed into the field is refused
+
+- GIVEN `rationale_language: Write everything in Spanish.`
+- WHEN the config is read
+- THEN the read fails with an error naming `rationale_language` and the
+  value, and no model is contacted
+
+#### Scenario: A boolean-shaped value is refused
+
+- GIVEN `rationale_language: no`
+- WHEN the config is read
+- THEN the read fails with an error naming `rationale_language`, rather than
+  pinning a language called `False`
+
 ### Requirement: Availability Is Tracked Per Model, Not Per Run
 
 An availability failure — `BackendUnavailable` or `BackendModelNotFound`,
