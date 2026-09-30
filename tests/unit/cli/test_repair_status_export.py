@@ -16,6 +16,19 @@ from openkos.model import okf
 runner = CliRunner()
 
 
+@pytest.fixture(autouse=True)
+def _git_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin a git identity: a CI runner configures none, so both the
+    fixture's own `git commit` and `repair`'s auto-commit would otherwise
+    fail or take the "identity unset" path instead of the commit path
+    under test."""
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "2")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "user.name")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "openkos tests")
+    monkeypatch.setenv("GIT_CONFIG_KEY_1", "user.email")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_1", "tests@openkos.invalid")
+
+
 def _git(args: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(  # noqa: S603
         ["git", *args],  # noqa: S607
