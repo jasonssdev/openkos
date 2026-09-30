@@ -28,8 +28,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 
-import yaml
-
 from openkos import source_title
 from openkos.model import okf
 
@@ -190,8 +188,8 @@ def _patch_title_line(block: str, *, current_title: str, new_title: str) -> str:
     if not stripped or stripped[0] in "|>&*":
         raise ValueError(f"'title:' is not a rewritable scalar: {match.group(0)!r}")
     try:
-        parsed = yaml.safe_load(f"title:{value}\n")
-    except yaml.YAMLError as exc:
+        parsed = okf.parse_frontmatter_fragment(f"title:{value}\n")
+    except okf.FrontmatterError as exc:
         raise ValueError(f"'title:' did not parse: {match.group(0)!r}") from exc
     if not isinstance(parsed, dict) or parsed.get("title") != current_title:
         raise ValueError(f"'title:' does not round-trip: {match.group(0)!r}")
@@ -333,7 +331,7 @@ def scan_source_titles(files: Mapping[str, str]) -> ScanResult:
         metadata: dict[str, object] | None
         try:
             metadata, _ = okf.load_frontmatter(files[path])
-        except Exception:  # broad: malformed frontmatter is skipped rather
+        except okf.FrontmatterError:  # malformed frontmatter is skipped rather
             # than surfaced, mirroring `provenance._source_levels`
             metadata = None
         if metadata is None or metadata.get("type") != "Source":

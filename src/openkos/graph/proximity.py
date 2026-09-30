@@ -184,7 +184,7 @@ class VectorProximitySource:
                     # on iteration order.
                     if key not in best or hit.distance < best[key]:
                         best[key] = hit.distance
-        except Exception:
+        except Exception:  # noqa: BLE001 -- k-NN is advisory; any backend failure degrades to no candidates
             return []
         return [
             ProximityPair(
@@ -207,7 +207,7 @@ class VectorProximitySource:
             return
         try:
             closer()
-        except Exception:
+        except Exception:  # noqa: BLE001 -- teardown must never be what breaks a build
             return
 
     def __enter__(self) -> VectorProximitySource:
@@ -237,5 +237,5 @@ def open_proximity_source(path: Path) -> VectorProximitySource | None:
         return None
     try:
         return VectorProximitySource(open_vector_store(path))
-    except Exception:
+    except Exception:  # noqa: BLE001 -- an unopenable vector store degrades to no candidates
         return None

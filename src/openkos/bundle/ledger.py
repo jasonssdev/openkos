@@ -36,13 +36,10 @@ literal ASCII suffix, never a canonical equivalence -- a direct
 
 import dataclasses
 import hashlib
-import re
 from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
 from typing import Final, Literal
-
-import yaml
 
 from openkos import fsio
 from openkos.model import okf
@@ -72,11 +69,10 @@ RecoveryVerdict = Literal["none", "roll-forward", "roll-back"]
 function of on-disk state (design Decision 1's truth table), never a
 heuristic."""
 
-_SIDECAR_SKIP_ERRORS: Final = (OSError, ValueError, yaml.YAMLError)
-"""The three, and only three, per-sidecar failure classes a bundle-wide
-walk skips defensively (#562 review follow-up): unreadable bytes
-(`OSError`), unparseable frontmatter (`yaml.YAMLError` out of
-`okf.load_frontmatter`, which is neither `OSError` nor `ValueError`), and
+_SIDECAR_SKIP_ERRORS: Final = (OSError, ValueError)
+"""The per-sidecar failure classes a bundle-wide walk skips defensively
+(#562 review follow-up): unreadable bytes (`OSError`) and a `ValueError`,
+which covers both unparseable frontmatter (`okf.FrontmatterError`) and
 entries that fail to decode (the fail-closed `ValueError`
 `okf.decode_merge_ledger_entry` raises, e.g. on an unsupported schema
 version). Deliberately NOT a bare `Exception`: a genuine programming error
@@ -161,8 +157,7 @@ def find_absorber(concept_id: str, bundle_dir: Path) -> str | None:
     never raised over, never returned as an absorber: a missing or
     non-string `survivor_id` (mirroring `bundle_wide_max_entries`'
     posture), and equally one that is unreadable (`OSError`), carries
-    unparseable frontmatter (`yaml.YAMLError` out of
-    `okf.load_frontmatter`, which is neither `OSError` nor `ValueError`),
+    unparseable frontmatter (`okf.FrontmatterError`, a `ValueError`),
     or whose entries fail to decode (the fail-closed `ValueError`
     `okf.decode_merge_ledger_entry` raises on an unsupported schema
     version) -- exactly the `_SIDECAR_SKIP_ERRORS` classes, no broader.
@@ -496,45 +491,6 @@ def _migrate_whole_document_snapshot(
     return okf.dump_frontmatter(new_metadata, body)
 
 
-_OKF_VERSION_LINE_RE: Final = re.compile(r"(?m)^(okf_version:)[ \t]*(?:.*)$")
-"""Matches a whole `okf_version: ...` frontmatter line -- the ONE targeted
-substitution `_flip_index_okf_version` performs, never a `dump_frontmatter`
-re-dump of the whole snapshot (task 5.4/design.md Decision 1: "its body is
-untouched")."""
-
-
-def _needs_okf_version_flip(index_text: str) -> bool:
-    """`True` when `index_text` (a whole-`index.md` snapshot) declares an
-    `okf_version` other than `okf.OKF_VERSION` -- the V1-V4 `index_before`
-    flip's own precondition (design.md Decision 1: "when the snapshot's
-    declared `okf_version` differs")."""
-    metadata, _ = okf.load_frontmatter(index_text)
-    return metadata.get("okf_version") != okf.OKF_VERSION
-
-
-def _flip_index_okf_version(index_text: str) -> str:
-    """Flip a V1-V4 `index_before` whole-`index.md` snapshot's declared
-    `okf_version` to `okf.OKF_VERSION`, in place -- a targeted regex
-    substitution over the raw frontmatter block only, never a
-    `dump_frontmatter` re-dump of the whole document, so every OTHER
-    frontmatter field's quoting and the body are left byte-for-byte
-    untouched. Matches `dump_frontmatter`'s own single-quoted emission
-    style for a version string, so a second run over an already-flipped
-    snapshot is a byte-identical no-op."""
-    block, body = okf.split_frontmatter_verbatim(
-        index_text, label="migrate_sidecars_to_okf_v02"
-    )
-    new_block, count = _OKF_VERSION_LINE_RE.subn(
-        rf"\1 '{okf.OKF_VERSION}'", block, count=1
-    )
-    if count == 0:
-        raise ValueError(
-            "migrate_sidecars_to_okf_v02: index_before snapshot has no "
-            "okf_version field to flip"
-        )
-    return new_block + body
-
-
 def _body_start(text: str) -> int:
     """The character offset at which `text`'s body begins -- the length of
     its verbatim frontmatter block, measured on the ACTUAL text (never
@@ -657,8 +613,12 @@ def _migrate_entry(
     equality is preserved by construction: identical inputs receive
     identical treatment regardless of nesting depth."""
     new_index_before = entry.index_before
-    if entry.index_before and _needs_okf_version_flip(entry.index_before):
-        new_index_before = _flip_index_okf_version(entry.index_before)
+    if entry.index_before:
+        index_metadata, _ = okf.load_frontmatter(entry.index_before)
+        if not okf.okf_version_is_current(index_metadata):
+            new_index_before = okf.rewrite_okf_version(
+                entry.index_before, label="migrate_sidecars_to_okf_v02"
+            )
     return dataclasses.replace(
         entry,
         absorbed_snapshot=_migrate_whole_document_snapshot(

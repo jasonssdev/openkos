@@ -379,9 +379,9 @@ def plan_repair(bundle_dir: Path) -> RepairPlan | RepairRefusal:
     if index_path.is_file():
         index_bytes, index_text = fsio.snapshot_read(index_path)
         index_metadata, index_body = okf.load_frontmatter(index_text)
-        if index_metadata.get("okf_version") != okf.OKF_VERSION:
+        if not okf.okf_version_is_current(index_metadata):
             new_index_metadata = dict(index_metadata)
-            new_index_metadata["okf_version"] = okf.OKF_VERSION
+            new_index_metadata[okf.OKF_VERSION_KEY] = okf.OKF_VERSION
             index_new_text = okf.dump_frontmatter(new_index_metadata, index_body)
             baselines[index_path] = index_bytes
 

@@ -100,7 +100,7 @@ def _absorbed_snapshot_has_content(absorbed_snapshot: str) -> bool:
     privacy-over-reversibility rule)."""
     try:
         _, body = okf.load_frontmatter(absorbed_snapshot)
-    except Exception:  # broad: any parse failure means "cannot prove empty"
+    except okf.FrontmatterError:  # any parse failure means "cannot prove empty"
         return True
     return body.strip() != ""
 

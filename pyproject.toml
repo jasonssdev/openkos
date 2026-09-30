@@ -192,6 +192,7 @@ select = [
     "I",   # isort: deterministic import order, keeps the layering rule auditable
     "UP",  # pyupgrade: the 3.12 floor means no back-compat idioms are needed
     "B",   # bugbear: mutable defaults, `raise ... from`, unstrict `zip`
+    "BLE", # blind-except: a broad catch must name its reason (`noqa: BLE001 -- why`)
     "SIM", # flake8-simplify
     "S",   # bandit: untrusted user text, YAML frontmatter, git subprocess
     "DTZ", # naive datetimes would corrupt OKF `as of` / freshness stamps
@@ -206,6 +207,9 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = [
     "S101", # `assert` is what a test is made of
+]
+"evals/**/*.py" = [
+    "BLE001", # probe harnesses record a failed run and move on; they are not engine code
 ]
 
 [tool.ruff.lint.flake8-bugbear]

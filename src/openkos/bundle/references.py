@@ -153,11 +153,11 @@ def find_inbound_references(
         try:
             metadata, _ = okf.load_frontmatter(text)
             okf.decode_relations(metadata)
-        except Exception:  # fail-CLOSED backstop: ANY parse
+        except ValueError:  # fail-CLOSED backstop: ANY parse
             # failure on a file that mentions the target must be surfaced,
             # not silently skipped (the CRITICAL fail-open this closes);
-            # unlike `find_inbound_relation_rewrites`'s identical broad
-            # except, this branch reports rather than continues.
+            # unlike `find_inbound_relation_rewrites`'s identical
+            # `ValueError` catch, this branch reports rather than continues.
             if target_id in text:
                 found.append(
                     InboundReference(

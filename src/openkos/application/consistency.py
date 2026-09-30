@@ -52,7 +52,7 @@ def read_consistency(
     in_flight_writes: int | None
     try:
         in_flight_writes = len(bundle_ledger.scan_torn_writes(layout.bundle_dir))
-    except Exception as exc:  # broad: a marker read/parse failure, never propagated
+    except Exception as exc:  # noqa: BLE001 -- a marker read/parse failure, never propagated
         in_flight_writes = None
         not_run.append(read_outcome.NotRun(label="in_flight_write", reason=str(exc)))
 

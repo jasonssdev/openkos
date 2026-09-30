@@ -280,8 +280,9 @@ def _select_once(
     """
     try:
         reply = llm.chat(_build_judge_messages(source_text, candidates))
-    except Exception as exc:  # broad: design D7 -- the judge's failure must
-        # never destroy already-validated extraction work. Every exception
+    except Exception as exc:  # noqa: BLE001 -- design D7, see below
+        # Broad: the judge's failure must never destroy already-validated
+        # extraction work. Every exception
         # `llm.chat` can raise -- the `OllamaError` family or anything else
         # a backend implementation might throw -- degrades here, in this ONE
         # named place, rather than propagating or being caught piecemeal at

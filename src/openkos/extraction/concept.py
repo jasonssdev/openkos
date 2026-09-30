@@ -2699,9 +2699,9 @@ def _reask_for_further_subjects(
     )
     try:
         reply = llm.chat(_build_reask_messages(prompt_source, source_title, kept.title))
-    except Exception as exc:  # broad, and for the same reason `judge.select`
-        # is: the re-ask's own failure must never destroy already-validated
-        # extraction work. Whatever `llm.chat` raises -- the `OllamaError`
+    except Exception as exc:  # noqa: BLE001 -- see below
+        # Broad, and for the same reason `judge.select` is: the re-ask's own
+        # failure must never destroy already-validated extraction work. Whatever `llm.chat` raises -- the `OllamaError`
         # family or anything else -- means only "this ask added nothing".
         #
         # The TYPE is carried out (#828) and the message is NOT, exactly as
@@ -2989,9 +2989,9 @@ def _capture_further_participants(
         reply = llm.chat(
             _build_participant_capture_messages(prompt_source, source_title)
         )
-    except Exception as exc:  # broad, and for the same reason the #584
-        # re-ask is: a bonus call's own failure must never destroy
-        # already-validated extraction work.
+    except Exception as exc:  # noqa: BLE001 -- see below
+        # Broad, and for the same reason the #584 re-ask is: a bonus call's
+        # own failure must never destroy already-validated extraction work.
         #
         # TYPE only (#828), never `str(exc)` -- see the same guard in
         # `_reask_for_further_subjects` for why the message must not cross

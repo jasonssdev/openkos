@@ -797,7 +797,7 @@ def _guarded_read(
         return None
     try:
         metadata, body = okf.load_frontmatter(text)
-    except Exception:  # broad: any parse failure skips this hit (D2)
+    except okf.FrontmatterError:  # any parse failure skips this hit (D2)
         return None
     if sensitivity.should_block(
         metadata,

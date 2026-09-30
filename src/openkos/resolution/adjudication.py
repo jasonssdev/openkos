@@ -205,7 +205,7 @@ def _load_members(
             continue
         try:
             metadata, body = okf.load_frontmatter(text)
-        except Exception:  # noqa: S112 -- broad: any parse failure skips this member
+        except okf.FrontmatterError:
             continue
         if sensitivity.should_block(
             metadata,

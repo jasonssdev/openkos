@@ -6685,7 +6685,7 @@ def test_concurrent_fan_out_drains_in_flight_windows_before_it_raises() -> None:
             concept_mod.extract_concept(
                 text, source_title="Field Notes", llm=llm, concurrent=True
             )
-        except BaseException as exc:  # handed to the test thread
+        except BaseException as exc:  # noqa: BLE001 -- handed to the test thread to assert on
             outcome.append(exc)
 
     runner = threading.Thread(target=_run)

@@ -205,7 +205,7 @@ def parse_provenance_entry(text: str) -> frozenset[str] | None:
     metadata: dict[str, object] | None
     try:
         metadata, _ = okf.load_frontmatter(text)
-    except Exception:  # broad: malformed frontmatter is preserved
+    except okf.FrontmatterError:  # malformed frontmatter is preserved
         # rather than swallowed into the purge set, see
         # `provenance_closure`'s "critical over-deletion barrier"
         metadata = None
@@ -537,7 +537,7 @@ def _source_levels(files: Mapping[str, str]) -> dict[str, str]:
         metadata: dict[str, object] | None
         try:
             metadata, _ = okf.load_frontmatter(text)
-        except Exception:  # broad: malformed frontmatter is skipped rather
+        except okf.FrontmatterError:  # malformed frontmatter is skipped rather
             # than surfaced, mirroring `_parse_provenance_by_id`
             metadata = None
         if metadata is None:
@@ -589,7 +589,7 @@ def _levels_by_id(files: Mapping[str, str]) -> dict[str, object]:
         metadata: dict[str, object] | None
         try:
             metadata, _ = okf.load_frontmatter(text)
-        except Exception:  # broad: malformed frontmatter is skipped rather
+        except okf.FrontmatterError:  # malformed frontmatter is skipped rather
             # than surfaced, mirroring `_parse_provenance_by_id`
             metadata = None
         if metadata is None:
@@ -849,9 +849,9 @@ def find_unresolvable_provenance(
 
     **Deliberate behaviour change, NOT a byte-identical move**: the
     original inline loop caught only `except (OSError, ValueError)` around
-    `okf.load_frontmatter`; this function catches broad `except Exception`
-    (mirroring `_parse_provenance_by_id`'s identical broad catch just
-    above). `frontmatter.loads` raises `yaml.YAMLError` on malformed YAML,
+    `okf.load_frontmatter`; this function catches `okf.FrontmatterError`
+    (mirroring `_parse_provenance_by_id`'s identical catch just above).
+    Malformed YAML used to escape `load_frontmatter` as a `yaml.YAMLError`,
     which is neither an `OSError` nor a `ValueError`, so on `main` a
     sibling file with malformed frontmatter crashes `set-sensitivity` with
     an uncaught traceback; here it is silently skipped, same as any other
@@ -870,7 +870,7 @@ def find_unresolvable_provenance(
         metadata: dict[str, object] | None
         try:
             metadata, _ = okf.load_frontmatter(text)
-        except Exception:  # broad: malformed frontmatter is skipped rather
+        except okf.FrontmatterError:  # malformed frontmatter is skipped rather
             # than surfaced, mirroring `_parse_provenance_by_id`
             metadata = None
         if metadata is None:
@@ -921,7 +921,7 @@ def find_inbound_provenance_rewrites(
         metadata: dict[str, object] | None
         try:
             metadata, _ = okf.load_frontmatter(text)
-        except Exception:  # broad: an unrelated file's corrupt frontmatter
+        except okf.FrontmatterError:  # an unrelated file's corrupt frontmatter
             # must never crash or block an otherwise-unrelated merge scan
             # (mirrors find_inbound_relation_rewrites' identical skip).
             metadata = None

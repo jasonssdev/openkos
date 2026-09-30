@@ -104,7 +104,7 @@ def read_concept(
 
     try:
         metadata, body = okf.load_frontmatter(text)
-    except Exception:  # broad: a concurrent edit can corrupt frontmatter
+    except okf.FrontmatterError:  # a concurrent edit can corrupt frontmatter
         return UnreadableConcept(concept_id=canonical_id)
 
     not_run: list[read_outcome.NotRun] = []

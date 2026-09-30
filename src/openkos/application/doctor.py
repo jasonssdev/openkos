@@ -142,8 +142,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Literal
 
-import yaml
-
 from openkos import config, read_outcome
 from openkos.application import backends as application_backends
 from openkos.bundle import ledger as bundle_ledger
@@ -186,7 +184,7 @@ class ProbeUnavailable(Exception):
     catches it by name -- never the git-specific class."""
 
 
-_LEDGER_SIDECAR_READ_ERRORS: Final = (OSError, ValueError, yaml.YAMLError)
+_LEDGER_SIDECAR_READ_ERRORS: Final = (OSError, ValueError)
 """D2/D3 (design.md Decision 3): the classes that mean "corrupt sidecar" at
 `scan_torn_writes`'s and `scan_nesting_violations`'s own unguarded rglob/
 read/parse sites -- the exact same list `bundle.ledger`'s own private

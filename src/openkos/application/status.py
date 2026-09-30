@@ -252,7 +252,7 @@ def stale_index_names(
         return ()
     try:
         return stale_derived_stores(layout.bundle_dir, stores)
-    except Exception:  # broad: an advisory never breaks its own command
+    except Exception:  # noqa: BLE001 -- an advisory never breaks its own command
         return ()
 
 

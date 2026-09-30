@@ -362,7 +362,9 @@ def collect_docs(bundle_dir: Path) -> tuple[list[LintDoc], list[str]]:
             continue
         try:
             metadata, body = okf.load_frontmatter(text)
-        except Exception:  # broad: a concurrent edit can corrupt frontmatter mid-scan
+        except (
+            okf.FrontmatterError
+        ):  # a concurrent edit can corrupt frontmatter mid-scan
             skip_notices.append(f"{identity}.md: skipped (unparseable frontmatter)")
             continue
         try:

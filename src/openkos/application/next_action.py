@@ -294,7 +294,7 @@ class BundleSignals:
                         ("graph", self._layout.graph_db_path),
                     ),
                 )
-            except Exception:  # broad: an advisory never breaks its command
+            except Exception:  # noqa: BLE001 -- an advisory never breaks its command
                 self._stale_indexes = ()
         return self._stale_indexes
 

@@ -449,7 +449,7 @@ def _populate_graph_tables(
             continue
         try:
             metadata, body = okf.load_frontmatter(text)
-        except Exception:  # broad: a concurrent edit can corrupt frontmatter
+        except okf.FrontmatterError:  # a concurrent edit can corrupt frontmatter
             skipped.append(_skip_note(concept_id, reason="unparseable frontmatter"))
             continue
 
