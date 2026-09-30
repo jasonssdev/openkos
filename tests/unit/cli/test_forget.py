@@ -138,6 +138,22 @@ def test_traversal_concept_id_refuses(
     assert _snapshot(tmp_path) == before
 
 
+@pytest.mark.parametrize("concept_id", ["..\\..\\evil", "C:\\evil", "a:b"])
+def test_windows_path_syntax_concept_id_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, concept_id: str
+) -> None:
+    """A backslash or colon id (a traversal or drive-letter escape on
+    Windows) refuses cleanly (exit 1, no traceback) and writes nothing."""
+    _init_workspace(tmp_path, monkeypatch)
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["forget", concept_id, "--auto"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert _snapshot(tmp_path) == before
+
+
 def test_absolute_concept_id_refuses(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
