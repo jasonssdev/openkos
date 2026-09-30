@@ -631,6 +631,243 @@ def test_cancelled_tools_call_sends_no_response_and_unblocks_later_requests() ->
     assert responses == [{"jsonrpc": "2.0", "id": 2, "result": {}}]
 
 
+# -- bounds: line length, per-call deadline, concurrent-call cap (#1133) -----
+
+_INIT = _msg(
+    jsonrpc="2.0",
+    id="__init__",
+    method="initialize",
+    params={"protocolVersion": "2025-11-25"},
+)
+
+
+def _gated_tool(
+    name: str,
+    gate: threading.Event,
+    started: list[object],
+    started_events: dict[object, threading.Event],
+) -> tools.Tool:
+    """A tool that records its `n` argument, then blocks on `gate`."""
+
+    def _run(
+        arguments: Mapping[str, object],
+        ctx: tools.ToolContext,
+        progress: tools.ProgressSink | None,
+    ) -> object:
+        n = arguments["n"]
+        started.append(n)
+        started_events[n].set()
+        gate.wait(timeout=5)
+        return n
+
+    return tools.Tool(
+        name=name,
+        title=name,
+        description="Test-only gated tool.",
+        input_schema={"type": "object"},
+        output_schema={"type": "object"},
+        run=_run,
+        disclose=lambda raw, snapshot: {
+            "withheld": 0,
+            "warnings": [],
+            "not_run": [],
+            "value": raw,
+        },
+    )
+
+
+def _fast_tool() -> tools.Tool:
+    return tools.Tool(
+        name="fast",
+        title="Fast",
+        description="Test-only instant tool.",
+        input_schema={"type": "object"},
+        output_schema={"type": "object"},
+        run=lambda arguments, ctx, progress: "fast",
+        disclose=lambda raw, snapshot: {
+            "withheld": 0,
+            "warnings": [],
+            "not_run": [],
+            "value": raw,
+        },
+    )
+
+
+async def _await_responses(
+    buffer: io.BytesIO, count: int, *, timeout: float = 5
+) -> list[dict[str, Any]]:
+    for _ in range(int(timeout / 0.01)):
+        if len(_responses(buffer)) >= count:
+            break
+        await asyncio.sleep(0.01)
+    return _responses(buffer)
+
+
+def test_oversized_line_gets_parse_error_and_next_message_is_served() -> None:
+    """An over-long stdin line is answered with -32700 (id null) and the
+    following valid message is still served, end to end."""
+
+    async def _scenario() -> list[dict[str, Any]]:
+        buffer = io.BytesIO()
+        read_fd, write_fd = os.pipe()
+        reader = os.fdopen(read_fd, "rb")
+        streams = transport.StdioStreams(reader=reader, writer=buffer)
+        os.write(write_fd, b"z" * 500 + b"\n")
+        os.write(write_fd, _msg(jsonrpc="2.0", id=7, method="ping"))
+        os.close(write_fd)
+        await asyncio.wait_for(
+            server.serve_streams(streams, {}, _ctx(), max_line_bytes=64), timeout=5
+        )
+        return _responses(buffer)
+
+    responses = asyncio.run(_scenario())
+
+    assert responses == [
+        {
+            "jsonrpc": "2.0",
+            "id": None,
+            "error": {"code": -32700, "message": "parse error"},
+        },
+        {"jsonrpc": "2.0", "id": 7, "result": {}},
+    ]
+
+
+def test_call_deadline_answers_with_an_error_and_never_a_second_response() -> None:
+    """A tool that outlives the deadline gets exactly one response, an
+    error; when its worker finally returns, that late result is discarded
+    -- nothing more is written for the id."""
+    gate = threading.Event()
+    started: list[object] = []
+    events: dict[object, threading.Event] = {1: threading.Event()}
+    slow = _gated_tool("slow", gate, started, events)
+
+    async def _scenario() -> list[dict[str, Any]]:
+        buffer = io.BytesIO()
+        srv = server.Server(
+            {"slow": slow, "fast": _fast_tool()},
+            _ctx(),
+            transport.MessageWriter(buffer),
+            max_concurrent_calls=1,
+            call_deadline=0.05,
+        )
+        await srv.handle_raw(_INIT)
+        await srv.handle_raw(
+            _msg(
+                jsonrpc="2.0",
+                id=1,
+                method="tools/call",
+                params={"name": "slow", "arguments": {"n": 1}},
+            )
+        )
+        await _await_responses(buffer, 2)
+        gate.set()  # the worker now finishes, after its request was answered
+        # With one slot, this call can only start once the slow worker has
+        # really finished -- and that worker posts its late result first.
+        await srv.handle_raw(
+            _msg(jsonrpc="2.0", id=2, method="tools/call", params={"name": "fast"})
+        )
+        await _await_responses(buffer, 3)
+        for _ in range(20):
+            await asyncio.sleep(0)
+        return _responses(buffer)
+
+    responses = asyncio.run(_scenario())
+
+    assert [(r["id"], "error" in r) for r in responses] == [
+        ("__init__", False),
+        (1, True),
+        (2, False),
+    ]
+    assert responses[1]["error"]["code"] == -32001
+    assert responses[2]["result"]["structuredContent"]["value"] == "fast"
+
+
+def test_concurrent_calls_beyond_the_cap_wait_for_a_slot() -> None:
+    """With a cap of 2, the third of three concurrent calls does not start
+    a worker until one of the first two finishes; all three then complete."""
+    gate = threading.Event()
+    started: list[object] = []
+    events: dict[object, threading.Event] = {n: threading.Event() for n in (1, 2, 3)}
+    tool = _gated_tool("gated", gate, started, events)
+
+    async def _scenario() -> tuple[list[object], list[dict[str, Any]]]:
+        buffer = io.BytesIO()
+        srv = server.Server(
+            {"gated": tool},
+            _ctx(),
+            transport.MessageWriter(buffer),
+            max_concurrent_calls=2,
+            call_deadline=30,
+        )
+        await srv.handle_raw(_INIT)
+        loop = asyncio.get_running_loop()
+        for n in (1, 2, 3):
+            await srv.handle_raw(
+                _msg(
+                    jsonrpc="2.0",
+                    id=n,
+                    method="tools/call",
+                    params={"name": "gated", "arguments": {"n": n}},
+                )
+            )
+        await loop.run_in_executor(None, events[1].wait, 5)
+        await loop.run_in_executor(None, events[2].wait, 5)
+        for _ in range(50):
+            await asyncio.sleep(0.002)
+        before = sorted(started, key=str)  # 3 must not have started yet
+        gate.set()
+        responses = await _await_responses(buffer, 4)
+        return before, responses
+
+    before, responses = asyncio.run(_scenario())
+
+    assert before == [1, 2]
+    assert sorted(started, key=str) == [1, 2, 3]
+    assert sorted(r["id"] for r in responses if r["id"] != "__init__") == [1, 2, 3]
+    assert all("error" not in r for r in responses)
+
+
+def test_deadline_also_bounds_the_wait_for_a_slot() -> None:
+    """A call queued behind a full cap is answered with the deadline error
+    too, so waiting for a slot can never hang a request forever."""
+    gate = threading.Event()
+    started: list[object] = []
+    events: dict[object, threading.Event] = {1: threading.Event()}
+    tool = _gated_tool("gated", gate, started, events)
+
+    async def _scenario() -> list[dict[str, Any]]:
+        buffer = io.BytesIO()
+        srv = server.Server(
+            {"gated": tool, "fast": _fast_tool()},
+            _ctx(),
+            transport.MessageWriter(buffer),
+            max_concurrent_calls=1,
+            call_deadline=0.05,
+        )
+        await srv.handle_raw(_INIT)
+        await srv.handle_raw(
+            _msg(
+                jsonrpc="2.0",
+                id=1,
+                method="tools/call",
+                params={"name": "gated", "arguments": {"n": 1}},
+            )
+        )
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, events[1].wait, 5)
+        await srv.handle_raw(
+            _msg(jsonrpc="2.0", id=2, method="tools/call", params={"name": "fast"})
+        )
+        responses = await _await_responses(buffer, 3)
+        gate.set()
+        return responses
+
+    responses = asyncio.run(_scenario())
+
+    errors = {r["id"]: r["error"]["code"] for r in responses if "error" in r}
+    assert errors == {1: -32001, 2: -32001}
+
+
 # -- 3.8: end of input abandons in-flight requests and exits 0 ---------------
 
 
