@@ -259,14 +259,16 @@ an invalid answer reprompts up to this many times before the picker gives
 up and silently falls back to `config.DEFAULT_MODEL`, so a non-interactive
 or misbehaving stdin can never hang `init` forever (design D3)."""
 
-# Uniform lock-contention message for `reindex`'s two error ladders
-# (vectors/fts and graph) -- a single source of truth so a locked
-# vectors.db/fts.db/graph.db always reads identically regardless of which
-# store hit the lock (reindex-lock-handling, decision 5).
-_LOCK_CONTENTION_MSG = (
-    "openkos reindex: failed -- another process is holding the workspace "
+# Uniform lock-contention message: `reindex`'s two error ladders (vectors/fts
+# and graph) and `_guard_workspace_lock`'s catch-all for every other verb all
+# format it, so a locked vectors.db/fts.db/graph.db/findings.db always reads
+# identically regardless of which store hit the lock or which verb noticed
+# (reindex-lock-handling, decision 5).
+_LOCK_CONTENTION_TEMPLATE = (
+    "openkos {command}: failed -- another process is holding the workspace "
     "lock (a concurrent reindex?); wait for it to finish, then try again."
 )
+_LOCK_CONTENTION_MSG = _LOCK_CONTENTION_TEMPLATE.format(command="reindex")
 
 
 def _version_line() -> str:
@@ -374,6 +376,21 @@ def _guard_workspace_lock(
                     err=True,
                 )
                 raise typer.Exit(code=3) from exc
+            except sqlite3.OperationalError as exc:
+                # The one place a derived store's lock contention (a writer or
+                # opener still blocked after `busy_timeout`) becomes a
+                # refusal, for every locked verb, so no verb has to remember
+                # its own handler. A verb that handles the error itself
+                # (`reindex`'s ladders, the persist-time advisories) never
+                # reaches here. Any other operational failure is re-raised
+                # unchanged.
+                if not derived.is_lock_contention(exc):
+                    raise
+                typer.echo(
+                    _LOCK_CONTENTION_TEMPLATE.format(command=command_name),
+                    err=True,
+                )
+                raise typer.Exit(code=1) from exc
 
         wrapper.__openkos_locked_command__ = command_name  # type: ignore[attr-defined]
         return wrapper

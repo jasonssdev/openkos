@@ -46,11 +46,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
 from typing import Protocol
-from urllib.parse import quote
 
 import sqlite_vec
 
 from openkos.llm.base import EMBED_DIM
+from openkos.state.readonly import open_read_only
 
 _CREATE_VECTORS_TABLE_SQL = f"""
 CREATE VIRTUAL TABLE IF NOT EXISTS vectors USING vec0(
@@ -409,10 +409,9 @@ def vector_store_is_empty(path: Path) -> bool:
     `vector_meta` entirely, also counts as empty rather than raising."""
     if not path.exists():
         return True
-    uri = f"file:{quote(str(path))}?mode=ro"
     conn: sqlite3.Connection | None = None
     try:
-        conn = sqlite3.connect(uri, uri=True)
+        conn = open_read_only(path)
         row = conn.execute("SELECT COUNT(*) FROM vector_meta").fetchone()
     except sqlite3.Error:
         return True
