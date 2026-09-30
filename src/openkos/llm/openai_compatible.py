@@ -41,6 +41,7 @@ from openkos.llm.base import (
     BackendUnavailable,
     InstalledModel,
     Message,
+    build_backend_opener,
     classify_backend_host,
     measured_counters,
 )
@@ -99,21 +100,6 @@ class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
     ) -> None:
         """Never redirect -- see the class docstring."""
         return None
-
-
-_NO_REDIRECT_OPENER = urllib.request.build_opener(_NoRedirectHandler)
-"""Built once, at import time: `build_opener` detects that `_NoRedirectHandler`
-subclasses the default `HTTPRedirectHandler` and therefore installs it
-INSTEAD of (not alongside) the normal, redirect-following default --
-`urllib.request.build_opener`'s own documented behavior. Every other
-default handler (proxy, HTTP, HTTPS, ...) is unaffected.
-
-`OpenAICompatibleClient.__init__`'s `urlopen` default is this opener's
-`.open` method, not `urllib.request.urlopen` -- so a caller who never
-overrides `urlopen` gets the redirect refusal automatically, and the
-injectable `urlopen` parameter still lets a test (or `embed`/
-`list_models`, once they land) inject a fake transport exactly as
-before."""
 
 
 def _redact_location_query(location: str) -> str:
@@ -210,7 +196,7 @@ class OpenAICompatibleClient:
         seed: int | None = None,
         context_window: int | None = None,
         api_key: str | None = None,
-        urlopen: Callable[..., Any] = _NO_REDIRECT_OPENER.open,
+        urlopen: Callable[..., Any] | None = None,
         embed_retry_attempts: int = DEFAULT_EMBED_RETRY_ATTEMPTS,
         embed_retry_backoff_base: float = DEFAULT_EMBED_RETRY_BACKOFF_BASE,
         sleep: Callable[[float], None] = time.sleep,
@@ -242,11 +228,12 @@ class OpenAICompatibleClient:
         testability reason (no live server needed) and the same retry
         contract once `embed()` lands (Phase 6).
 
-        `urlopen` defaults to `_NO_REDIRECT_OPENER.open`, NOT
-        `urllib.request.urlopen` (security fix, issue #1057 Phase 4): see
-        `_NoRedirectHandler`'s docstring for why the plain default would
-        forward the `Authorization` header to whatever host a 3xx
-        `Location` names."""
+        `urlopen` defaults to an opener from `build_backend_opener` that
+        composes `_NoRedirectHandler` (security fix, issue #1057 Phase 4):
+        see its docstring for why the plain default would forward the
+        `Authorization` header to whatever host a 3xx `Location` names. A
+        loopback host additionally never consults environment proxy
+        settings (issue #1127)."""
         self._model = model
         self._base_url = base_url
         self._timeout = timeout
@@ -255,7 +242,9 @@ class OpenAICompatibleClient:
         self._seed = seed
         self._context_window = context_window
         self._api_key = api_key
-        self._urlopen = urlopen
+        self._urlopen = urlopen or build_backend_opener(
+            self.locality, _NoRedirectHandler
+        )
         self._embed_retry_attempts = embed_retry_attempts
         self._embed_retry_backoff_base = embed_retry_backoff_base
         self._sleep = sleep

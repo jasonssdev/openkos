@@ -14,18 +14,6 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
-### Security
-
-- `ingest` no longer writes through a symlinked `bundle/sources` or derived-object
-  directory, and the bundle walk no longer reads through a symlinked `.md` file
-  or directory ([#1126](https://github.com/jasonssdev/openkos/issues/1126)). The
-  symlink-boundary guard covered only `forget`/`get`, so with `bundle/sources`
-  linked outside the workspace `ingest` carried the source text out of it, and
-  a `bundle/leak.md` linked to an external file marked `sensitivity: public`
-  was admitted to `query` prompts, citations and embeddings. `ingest` now
-  refuses, before writing anything, with the same reason `forget` gives; the
-  walk drops the link, and `lint` reports it as `symlinked-markdown`.
-
 ### Changed
 
 - The computed `STATUS` column `list` prints, the `status` field
@@ -58,6 +46,17 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   one.
 
 ### Fixed
+
+- A concept id containing a backslash or a colon (`..\..\x`, `C:\x`,
+  `a:b`) is now refused by every id-taking verb and tool, and `slugify` no
+  longer emits a reserved Windows device name (`con`, `prn`, `aux`, `nul`,
+  `com1`-`com9`, `lpt1`-`lpt9`) as a whole slug: it appends `-doc`, so a
+  source titled `CON` files as `sources/con-doc.md`
+  ([#1131](https://github.com/jasonssdev/openkos/issues/1131)). On Windows the
+  old ids could traverse out of the bundle or replace its base path, and the
+  old slugs named files Windows cannot create. A workspace that already holds
+  `sources/con.md` and re-ingests a `con.*` file gets a second source at
+  `con-doc.md`; delete the old one.
 
 - `unmerge` no longer silently overwrites a survivor edited after its merge
   ([#1110](https://github.com/jasonssdev/openkos/issues/1110)). It restored
@@ -94,6 +93,28 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   automatically retries extraction to recover it. An unreachable backend,
   or every chunk failing even after its retry, still degrades the whole
   source exactly as before.
+
+### Security
+
+- `ingest` no longer writes through a symlinked `bundle/sources` or derived-object
+  directory, and the bundle walk no longer reads through a symlinked `.md` file
+  or directory ([#1126](https://github.com/jasonssdev/openkos/issues/1126)). The
+  symlink-boundary guard covered only `forget`/`get`, so with `bundle/sources`
+  linked outside the workspace `ingest` carried the source text out of it, and
+  a `bundle/leak.md` linked to an external file marked `sensitivity: public`
+  was admitted to `query` prompts, citations and embeddings. `ingest` now
+  refuses, before writing anything, with the same reason `forget` gives; the
+  walk drops the link, and `lint` reports it as `symlinked-markdown`.
+
+- A backend classified local no longer honours `http_proxy`/`https_proxy`
+  ([#1127](https://github.com/jasonssdev/openkos/issues/1127)). Locality is
+  judged from the URL literal, but urllib's default proxy handling does not
+  exempt `localhost` or `127.0.0.1` unless `no_proxy` lists them, so on a
+  machine with a system-wide proxy the confidential local exemption sent
+  confidential text (and the openai-compatible `Authorization` key) through
+  the proxy while treating it as never leaving the device. Both clients now
+  send a loopback host directly; a non-local host still honours the
+  environment proxy.
 
 ## [0.2.14] - 2026-09-11
 

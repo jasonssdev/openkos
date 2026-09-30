@@ -210,3 +210,34 @@ def test_hyphen_runs_collapse_across_mixed_ascii_and_unicode() -> None:
     trimmed at both ends, exactly as before -- the rule is unchanged, only
     the set of characters that survive it is wider."""
     assert _slugify("  ¿Qué?  --  Módulos!!  ") == "qué-módulos"
+
+
+_WINDOWS_DEVICE_NAMES = [
+    "con",
+    "prn",
+    "aux",
+    "nul",
+    *[f"com{n}" for n in "123456789¹²³"],
+    *[f"lpt{n}" for n in "123456789¹²³"],
+]
+
+
+@pytest.mark.parametrize("name", _WINDOWS_DEVICE_NAMES)
+@pytest.mark.parametrize("variant", [str.lower, str.upper, str.title])
+def test_windows_device_names_are_never_emitted_as_the_whole_slug(
+    name: str, variant: object
+) -> None:
+    """Windows refuses (or redirects to the device) a file whose base name
+    is a reserved device name, so `bundle/sources/con.md` cannot exist there.
+    The slug carries the name plus a deterministic `-doc` suffix instead."""
+    title = variant(name)  # type: ignore[operator]
+    assert _slugify(title) == f"{name}-doc"
+
+
+@pytest.mark.parametrize(
+    "title", ["console", "com10", "com", "lpt0", "con-txt", "a-con"]
+)
+def test_near_miss_of_a_device_name_is_untouched(title: str) -> None:
+    """Only the exact reserved base names are rewritten; a longer word that
+    merely starts with one keeps its slug byte-for-byte."""
+    assert _slugify(title) == title
