@@ -3223,23 +3223,6 @@ def test_read_config_backend_key(
     assert config.read_config(tmp_path).backend == expected_backend
 
 
-def test_read_config_rejects_backend_openai_compatible_before_the_enabling_slice(
-    tmp_path: Path,
-) -> None:
-    """`backend: openai-compatible` is refused with a message stating it is
-    not available in THIS version -- Phase 3 keeps it refused until Phase 14
-    enables it (design Decision 10). The client and resolver land in earlier
-    phases of #1057, but selecting the new backend does not."""
-    (tmp_path / "openkos.yaml").write_text(
-        "backend: openai-compatible\n", encoding="utf-8"
-    )
-
-    with pytest.raises(
-        ValueError, match=r"not available in this version; supported: ollama"
-    ):
-        config.read_config(tmp_path)
-
-
 def test_read_config_rejects_an_unrecognized_backend_value(tmp_path: Path) -> None:
     """Any other `backend` value is refused, naming the bad value and the
     accepted set."""
@@ -3361,18 +3344,42 @@ def test_ollama_default_path_config_is_byte_identical(tmp_path: Path) -> None:
     assert cfg.revision_history == config.DEFAULT_REVISION_HISTORY
 
 
+# --- #1057 Phase 14: `openai-compatible` becomes selectable -----------------
+
+
+def test_openai_compatible_now_selectable(tmp_path: Path) -> None:
+    """`backend: openai-compatible` with a valid `base_url` now succeeds
+    (design Decision 10, Phase 14): `SELECTABLE_BACKENDS` widens from
+    `{"ollama"}` to include the new backend, the only slice of #1057 that
+    makes it reachable from `openkos.yaml`. **RED today**: still refused
+    with 'not available in this version' while `SELECTABLE_BACKENDS ==
+    {"ollama"}`."""
+    (tmp_path / "openkos.yaml").write_text(
+        "backend: openai-compatible\nbase_url: http://127.0.0.1:8080\n",
+        encoding="utf-8",
+    )
+
+    cfg = config.read_config(tmp_path)
+
+    assert cfg.backend == "openai-compatible"
+    assert cfg.base_url == "http://127.0.0.1:8080"
+
+
 def test_backend_openai_compatible_without_base_url_message(tmp_path: Path) -> None:
-    """A workspace setting BOTH `backend: openai-compatible` and no
-    `base_url` currently surfaces 3.4's pre-enable refusal ("not available in
-    this version"), because that check fires before any base_url-required
-    check could. Superseded by task 14.3 once the backend value is accepted
-    for real."""
+    """Task 14.3: now that `openai-compatible` is genuinely accepted, a
+    workspace setting `backend: openai-compatible` with no `base_url` no
+    longer hits the pre-enable "not available" refusal -- it hits the LIVE
+    "`base_url` is required for this backend" refusal instead
+    (backend-selection spec: "`openai-compatible` Backend Requires An
+    Explicit `base_url`"). Supersedes the pre-Phase-14 expectation this same
+    test pinned before task 14.3."""
     (tmp_path / "openkos.yaml").write_text(
         "backend: openai-compatible\n", encoding="utf-8"
     )
 
     with pytest.raises(
-        ValueError, match=r"not available in this version; supported: ollama"
+        ValueError,
+        match=r"'backend: openai-compatible' requires an explicit 'base_url'",
     ):
         config.read_config(tmp_path)
 

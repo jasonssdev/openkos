@@ -9,6 +9,25 @@ max_generation_tokens: 8192  # safety rail: hard ceiling on tokens a chat call m
 context_window: 12288     # tokens the model holds at once (prompt + reply); unpinned it
                           # reserves its own 32K default and ~10 GB. Refused below the
                           # derived floor; blank the value to leave it unpinned.
+# backend: openai-compatible  # LLM backend family: "ollama" (default) or
+                          # "openai-compatible" (llama.cpp, LM Studio, vLLM, or
+                          # any server exposing /v1/chat/completions and
+                          # /v1/embeddings). Selecting openai-compatible
+                          # REQUIRES base_url below -- there is no packaged
+                          # default endpoint for it, unlike Ollama's. An
+                          # optional API key, if the server needs one, is read
+                          # only from the OPENKOS_OPENAI_API_KEY environment
+                          # variable -- never from this file.
+# base_url: http://127.0.0.1:8080  # chat endpoint for the selected backend.
+                          # UNSET by default: ollama then resolves OLLAMA_HOST
+                          # or its own packaged default; openai-compatible has
+                          # no default and refuses to start without this key.
+# embedding_base_url: http://127.0.0.1:8081  # separate endpoint used only for
+                          # embedding requests, for when the embedding model is
+                          # served by a different process or port than the
+                          # chat model. UNSET by default: embedding requests
+                          # fall back to base_url (or that backend's own
+                          # default).
 # temperature: 0.2        # sampling temperature forwarded as options.temperature.
                           # UNSET by default -- unpinned, sampling follows whatever
                           # the model's Modelfile ships (qwen3:8b: 0.6). Pinning it
