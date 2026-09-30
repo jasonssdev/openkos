@@ -1,0 +1,179 @@
+{
+  "empty_bundle_real_library": {
+    "calls": [],
+    "exit_code": 0,
+    "stderr": "",
+    "stdout": "openkos suggest-volatility: workspace at <ROOT>\n\nNo concept types found.\n"
+  },
+  "first_type_fails": {
+    "calls": [
+      {
+        "bundle_dir": "<ROOT>/bundle",
+        "include_confidential": "False",
+        "llm_type": "OfflineOllama",
+        "local_exemption": "True",
+        "on_progress": "None",
+        "rationale_language": "None"
+      }
+    ],
+    "exit_code": 1,
+    "stderr": "openkos suggest-volatility: failed after suggesting 0 concept type(s) -- down.\n",
+    "stdout": "openkos suggest-volatility: workspace at <ROOT>\n\nNext: openkos set-volatility <ConceptType> <tier>\n"
+  },
+  "incomplete_walk_warning": {
+    "calls": [
+      {
+        "bundle_dir": "<ROOT>/bundle",
+        "include_confidential": "False",
+        "llm_type": "OfflineOllama",
+        "local_exemption": "False",
+        "on_progress": "None",
+        "rationale_language": "None"
+      }
+    ],
+    "exit_code": 0,
+    "stderr": "openkos: bundle scan was incomplete -- a directory-scan error made part of the bundle unreadable, so this command's inputs are incomplete and its result may be missing content. Fix the directory permissions and re-run, or run 'openkos status' to see which directories could not be read.\nopenkos: bundle scan was incomplete -- a directory-scan error made part of the bundle unreadable, so the confidential-content filter could not inspect every document and some confidential material may not have been excluded. Fix the directory permissions and re-run, or pass --include-confidential to bypass the filter deliberately.\n",
+    "stdout": "openkos suggest-volatility: workspace at <ROOT>\n\nNo concept types found.\n"
+  },
+  "malformed_config": {
+    "calls": [],
+    "exit_code": 1,
+    "stderr": "openkos suggest-volatility: failed while reading the workspace -- openkos.yaml: invalid YAML -- while parsing a flow sequence\n  in \"<unicode string>\", line 1, column 8:\n    model: [unclosed\n           ^\nexpected ',' or ']', but got '<stream end>'\n  in \"<unicode string>\", line 2, column 1:\n    \n    ^.\n",
+    "stdout": ""
+  },
+  "missing_workspace": {
+    "calls": [],
+    "exit_code": 1,
+    "stderr": "openkos suggest-volatility: refusing to run -- no OpenKOS workspace found in this directory (run 'openkos init' first).\n",
+    "stdout": ""
+  },
+  "no_types": {
+    "calls": [
+      {
+        "bundle_dir": "<ROOT>/bundle",
+        "include_confidential": "False",
+        "llm_type": "OfflineOllama",
+        "local_exemption": "True",
+        "on_progress": "None",
+        "rationale_language": "None"
+      }
+    ],
+    "exit_code": 0,
+    "stderr": "",
+    "stdout": "openkos suggest-volatility: workspace at <ROOT>\n\nNo concept types found.\n"
+  },
+  "partial_generic": {
+    "calls": [
+      {
+        "bundle_dir": "<ROOT>/bundle",
+        "include_confidential": "False",
+        "llm_type": "OfflineOllama",
+        "local_exemption": "True",
+        "on_progress": "None",
+        "rationale_language": "None"
+      }
+    ],
+    "exit_code": 1,
+    "stderr": "openkos suggest-volatility: failed after suggesting 1 concept type(s) -- boom.\n",
+    "stdout": "openkos suggest-volatility: workspace at <ROOT>\n\n[slow] Person\n  rationale: kept work\n\nNext: openkos set-volatility <ConceptType> <tier>\n"
+  },
+  "partial_model_not_found": {
+    "calls": [
+      {
+        "bundle_dir": "<ROOT>/bundle",
+        "include_confidential": "False",
+        "llm_type": "OfflineOllama",
+        "local_exemption": "True",
+        "on_progress": "None",
+        "rationale_language": "None"
+      }
+    ],
+    "exit_code": 1,
+    "stderr": "openkos suggest-volatility: failed after suggesting 1 concept type(s) -- model 'qwen3:8b' is not installed. Pull it with `ollama pull qwen3:8b`, then try again.\n",
+    "stdout": "openkos suggest-volatility: workspace at <ROOT>\n\n[slow] Person\n  rationale: kept work\n\nNext: openkos set-volatility <ConceptType> <tier>\n"
+  },
+  "partial_unavailable": {
+    "calls": [
+      {
+        "bundle_dir": "<ROOT>/bundle",
+        "include_confidential": "False",
+        "llm_type": "OfflineOllama",
+        "local_exemption": "True",
+        "on_progress": "None",
+        "rationale_language": "None"
+      }
+    ],
+    "exit_code": 1,
+    "stderr": "openkos suggest-volatility: failed after suggesting 1 concept type(s) -- Ollama not reachable at x. Start it with `ollama serve`, then try again. Or run `openkos doctor` to diagnose the environment.\n",
+    "stdout": "openkos suggest-volatility: workspace at <ROOT>\n\n[slow] Person\n  rationale: kept work\n\nNext: openkos set-volatility <ConceptType> <tier>\n"
+  },
+  "raised_generic": {
+    "calls": [],
+    "exit_code": 1,
+    "stderr": "openkos suggest-volatility: failed -- boom.\n",
+    "stdout": ""
+  },
+  "raised_model_not_found": {
+    "calls": [],
+    "exit_code": 1,
+    "stderr": "openkos suggest-volatility: failed -- model 'qwen3:8b' is not installed. Pull it with `ollama pull qwen3:8b`, then try again.\n",
+    "stdout": ""
+  },
+  "raised_unavailable": {
+    "calls": [],
+    "exit_code": 1,
+    "stderr": "openkos suggest-volatility: failed -- Ollama not reachable at x. Start it with `ollama serve`, then try again. Or run `openkos doctor` to diagnose the environment.\n",
+    "stdout": ""
+  },
+  "raised_unavailable_openai_compatible": {
+    "calls": [],
+    "exit_code": 1,
+    "stderr": "openkos suggest-volatility: failed -- server down. Start it with `ollama serve`, then try again. Or run `openkos doctor` to diagnose the environment.\n",
+    "stdout": ""
+  },
+  "rationale_language": {
+    "calls": [
+      {
+        "bundle_dir": "<ROOT>/bundle",
+        "include_confidential": "False",
+        "llm_type": "OfflineOllama",
+        "local_exemption": "False",
+        "on_progress": "None",
+        "rationale_language": "'Spanish'"
+      }
+    ],
+    "exit_code": 0,
+    "stderr": "",
+    "stdout": "openkos suggest-volatility: workspace at <ROOT>\n\nNo concept types found.\n"
+  },
+  "tty_progress_include_confidential": {
+    "calls": [
+      {
+        "bundle_dir": "<ROOT>/bundle",
+        "include_confidential": "True",
+        "llm_type": "OfflineOllama",
+        "local_exemption": "False",
+        "on_progress": "callable",
+        "rationale_language": "None"
+      }
+    ],
+    "exit_code": 0,
+    "stderr_has_progress": true,
+    "stdout": "openkos suggest-volatility: workspace at <ROOT>\n\n[slow] Person\n  rationale: steady\n\nNext: openkos set-volatility <ConceptType> <tier>\n"
+  },
+  "valid_and_degraded": {
+    "calls": [
+      {
+        "bundle_dir": "<ROOT>/bundle",
+        "include_confidential": "False",
+        "llm_type": "OfflineOllama",
+        "local_exemption": "True",
+        "on_progress": "None",
+        "rationale_language": "None"
+      }
+    ],
+    "exit_code": 0,
+    "stderr": "",
+    "stdout": "openkos suggest-volatility: workspace at <ROOT>\n\n[slow] Person\n  rationale: people change slowly\n\n[?] Event\n  note: no valid tier suggested\n\n[fast] Decision\n  rationale: decisions churn\n\nNext: openkos set-volatility <ConceptType> <tier>\n"
+  }
+}
