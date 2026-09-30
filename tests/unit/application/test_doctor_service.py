@@ -966,3 +966,402 @@ def test_reset_point_thunk_is_not_called_without_a_nesting_violation(
     )
 
     assert calls == []
+
+
+# ---------------------------------------------------------------------------
+# issue #1057 Phase 12 -- doctor wording: endpoint+source, key set/not-set,
+# openai-compatible remediation (doctor-command delta spec, design Decision
+# 9). `doctor` keeps its OWN command-form strings here rather than calling
+# Phase 13a's `application/backends.py` wording functions (tasks-phase
+# decision 2: "doctor never calls them").
+#
+# Deviation from tasks.md's file name for this phase ("tests/unit/
+# application/test_doctor.py"): this project has no such file. The real
+# test module for `application/doctor.py` is `test_doctor_service.py` (its
+# own module docstring explains the split from `tests/unit/cli/
+# test_doctor.py`) -- extended here rather than creating a second,
+# differently-named module for the same target.
+# ---------------------------------------------------------------------------
+
+
+def _openai_compatible_cfg(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    base_url: str = "http://127.0.0.1:8000",
+    model: str = config.DEFAULT_MODEL,
+) -> config.WorkspaceLayout:
+    """A workspace with a real, `backend`-less `openkos.yaml` on disk (so
+    check 1 stays genuinely `pass`), but `config.read_config` monkeypatched
+    to return a `backend="openai-compatible"` `Config` -- `SELECTABLE_BACKENDS`
+    still refuses that value in a REAL `openkos.yaml` until Phase 14
+    (design Decision 10), exactly like `test_backends.py`'s own resolver
+    tests construct a `Config` directly rather than through `read_config`."""
+    layout = _workspace(tmp_path, model=model)
+    real_cfg = config.read_config(tmp_path)
+    oc_cfg = dataclasses.replace(
+        real_cfg, backend="openai-compatible", base_url=base_url
+    )
+    monkeypatch.setattr(config, "read_config", lambda _root: oc_cfg)
+    return layout
+
+
+def test_doctor_shows_endpoint_and_source_when_not_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Doctor-command spec "Doctor Shows The Effective Endpoint And Its
+    Resolution Source": a configured `base_url`, no `OLLAMA_HOST`, prints
+    the effective endpoint and names `base_url` as its source (task 12.1).
+    RED today: no such line exists."""
+    layout = _openai_compatible_cfg(
+        tmp_path, monkeypatch, base_url="http://127.0.0.1:8000"
+    )
+    locality = BackendHostLocality(is_local=True, display_host="127.0.0.1:8000")
+
+    results = doctor_service.run_diagnostics(
+        layout.root,
+        build_client=lambda _cfg, _model: _FakeBackend(
+            tags=[config.DEFAULT_MODEL], locality=locality
+        ),
+        git_available=True,
+        filter_repo_available=True,
+        reset_point_available=lambda: True,
+    )
+    check = _by_label(results, "OpenAI-compatible server reachable")
+    assert check.status == "pass"
+    assert check.detail is not None
+    assert "127.0.0.1:8000" in check.detail
+    assert "base_url" in check.detail
+
+
+def test_doctor_names_ollama_host_when_it_wins_precedence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`OLLAMA_HOST` set alongside a configured `base_url` (`backend:
+    ollama`) -- doctor names `OLLAMA_HOST`, not `base_url`, as the source
+    (task 12.2). RED today: no endpoint-and-source line exists at all."""
+    layout = _workspace(tmp_path)
+    real_cfg = config.read_config(tmp_path)
+    cfg_with_base_url = dataclasses.replace(real_cfg, base_url="http://cfghost:8080")
+    monkeypatch.setattr(config, "read_config", lambda _root: cfg_with_base_url)
+    monkeypatch.setenv("OLLAMA_HOST", "http://envhost:1234")
+    locality = BackendHostLocality(is_local=False, display_host="envhost:1234")
+
+    results = doctor_service.run_diagnostics(
+        layout.root,
+        build_client=lambda _cfg, _model: _FakeBackend(
+            tags=[config.DEFAULT_MODEL], locality=locality
+        ),
+        git_available=True,
+        filter_repo_available=True,
+        reset_point_available=lambda: True,
+    )
+    check = _by_label(results, "Ollama reachable")
+    assert check.detail is not None
+    assert "OLLAMA_HOST" in check.detail
+    assert "cfghost" not in check.detail
+    assert "envhost:1234" in check.detail
+
+
+def test_doctor_default_path_prints_no_endpoint_line_byte_identical(
+    tmp_path: Path,
+) -> None:
+    """No `base_url`/`OLLAMA_HOST` set: the reachable check's detail stays
+    BYTE-IDENTICAL to its pre-existing default-path wording -- no
+    endpoint-and-source line at all (task 12.3, doctor-command spec's third
+    ADDED scenario). This is a regression pin, not new RED: it already
+    passes today, and stays green after 12.4 lands."""
+    layout = _workspace(tmp_path)
+    results = doctor_service.run_diagnostics(
+        layout.root,
+        build_client=lambda _cfg, _model: _FakeBackend(tags=[config.DEFAULT_MODEL]),
+        git_available=True,
+        filter_repo_available=True,
+        reset_point_available=lambda: True,
+    )
+    check = _by_label(results, "Ollama reachable")
+    assert check.detail == "1 models"
+
+
+def test_doctor_never_prints_the_api_key_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sentinel-key test (doctor-command spec "The API Key Is Never Printed
+    By Doctor", task 12.5): across a PASS run and a FAIL run (unreachable
+    server, whose remediation names the endpoint), the sentinel API key
+    value never appears in any `CheckResult`'s `detail`/`remediation`.
+    Mutation-proof below."""
+    layout = _openai_compatible_cfg(tmp_path, monkeypatch)
+    monkeypatch.setenv("OPENKOS_OPENAI_API_KEY", "sk-super-secret-sentinel")
+    locality = BackendHostLocality(is_local=True, display_host="127.0.0.1:8000")
+
+    def _assert_no_leak(results: tuple[doctor_service.CheckResult, ...]) -> None:
+        for r in results:
+            assert "sk-super-secret-sentinel" not in (r.detail or "")
+            assert "sk-super-secret-sentinel" not in (r.remediation or "")
+
+    passing = doctor_service.run_diagnostics(
+        layout.root,
+        build_client=lambda _cfg, _model: _FakeBackend(
+            tags=[config.DEFAULT_MODEL], locality=locality
+        ),
+        git_available=True,
+        filter_repo_available=True,
+        reset_point_available=lambda: True,
+    )
+    _assert_no_leak(passing)
+
+    failing = doctor_service.run_diagnostics(
+        layout.root,
+        build_client=lambda _cfg, _model: _FakeBackend(
+            error=_CustomBackendUnavailable("connection refused"), locality=locality
+        ),
+        git_available=True,
+        filter_repo_available=True,
+        reset_point_available=lambda: True,
+    )
+    _assert_no_leak(failing)
+
+
+def test_doctor_key_absence_never_gates_a_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`OPENKOS_OPENAI_API_KEY` unset, configured server needs no key: no
+    check fails, is skipped, or is reported not-run because of the key's
+    absence (task 12.6)."""
+    layout = _openai_compatible_cfg(tmp_path, monkeypatch)
+    locality = BackendHostLocality(is_local=True, display_host="127.0.0.1:8000")
+
+    results = doctor_service.run_diagnostics(
+        layout.root,
+        build_client=lambda _cfg, _model: _FakeBackend(
+            tags=[config.DEFAULT_MODEL], locality=locality
+        ),
+        git_available=True,
+        filter_repo_available=True,
+        reset_point_available=lambda: True,
+    )
+    reachable = _by_label(results, "OpenAI-compatible server reachable")
+    assert reachable.status == "pass"
+    assert reachable.detail is not None
+    assert "not set" in reachable.detail
+    model_check = _by_label(results, f"Model '{config.DEFAULT_MODEL}' installed")
+    assert model_check.status == "pass"
+
+
+def test_doctor_openai_compatible_unreachable_remediation_no_ollama_wording(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`cfg.backend == "openai-compatible"`, endpoint refuses connection:
+    `[FAIL]` remediation names the configured endpoint, advises verifying
+    the server is running, and contains NO `ollama`/`ollama serve`/
+    `shutil.which("ollama")` reference (task 12.8). RED today: check 3
+    always emits the Ollama-specific `shutil.which`-driven remediation
+    regardless of `cfg.backend`."""
+    import shutil
+
+    calls: list[str] = []
+    real_which = shutil.which
+
+    def _tracking_which(name: str) -> str | None:
+        calls.append(name)
+        return real_which(name)
+
+    monkeypatch.setattr(shutil, "which", _tracking_which)
+    layout = _openai_compatible_cfg(
+        tmp_path, monkeypatch, base_url="http://127.0.0.1:9009"
+    )
+    locality = BackendHostLocality(is_local=True, display_host="127.0.0.1:9009")
+
+    results = doctor_service.run_diagnostics(
+        layout.root,
+        build_client=lambda _cfg, _model: _FakeBackend(
+            error=_CustomBackendUnavailable("connection refused"), locality=locality
+        ),
+        git_available=True,
+        filter_repo_available=True,
+        reset_point_available=lambda: True,
+    )
+    check = _by_label(results, "OpenAI-compatible server reachable")
+    assert check.status == "fail"
+    assert check.remediation is not None
+    assert "127.0.0.1:9009" in check.remediation
+    assert "running" in check.remediation
+    assert "ollama" not in check.remediation.lower()
+    assert "ollama" not in calls
+
+
+def test_doctor_openai_compatible_model_missing_lists_reported_ids(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`cfg.backend == "openai-compatible"`, server reachable, `/v1/models`
+    reports `a, b, c`, none matching the configured model: remediation
+    lists `a, b, c` and advises setting `model:` to one of them; no `ollama
+    pull` reference (task 12.9)."""
+    layout = _openai_compatible_cfg(tmp_path, monkeypatch, model="configured-model")
+    locality = BackendHostLocality(is_local=True, display_host="127.0.0.1:8000")
+
+    results = doctor_service.run_diagnostics(
+        layout.root,
+        build_client=lambda _cfg, _model: _FakeBackend(
+            tags=["a", "b", "c"], locality=locality
+        ),
+        git_available=True,
+        filter_repo_available=True,
+        reset_point_available=lambda: True,
+    )
+    check = _by_label(results, "Model 'configured-model' installed")
+    assert check.status == "fail"
+    assert check.remediation is not None
+    assert "a" in check.remediation
+    assert "b" in check.remediation
+    assert "c" in check.remediation
+    assert "model:" in check.remediation
+    assert "ollama pull" not in check.remediation
+
+
+def test_doctor_llama_cpp_gguf_path_false_alarm_note(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `/v1/models` response listing a GGUF file path instead of the
+    configured model name: the model-missing remediation mentions this
+    llama.cpp naming quirk and that the mismatch MAY NOT mean the model is
+    genuinely missing -- still `[FAIL]`, not silently passed (task 12.10)."""
+    layout = _openai_compatible_cfg(tmp_path, monkeypatch, model="configured-model")
+    locality = BackendHostLocality(is_local=True, display_host="127.0.0.1:8000")
+
+    results = doctor_service.run_diagnostics(
+        layout.root,
+        build_client=lambda _cfg, _model: _FakeBackend(
+            tags=["/models/llama-3-8b-instruct.Q4_K_M.gguf"], locality=locality
+        ),
+        git_available=True,
+        filter_repo_available=True,
+        reset_point_available=lambda: True,
+    )
+    check = _by_label(results, "Model 'configured-model' installed")
+    assert check.status == "fail"
+    assert check.remediation is not None
+    assert "GGUF" in check.remediation or "gguf" in check.remediation.lower()
+    assert "--alias" in check.remediation
+    assert "MAY NOT" in check.remediation or "may not" in check.remediation.lower()
+
+
+def test_ollama_remediation_bytes_unchanged(tmp_path: Path) -> None:
+    """The `ollama` backend's remediation stays byte-identical across the
+    existing `shutil.which`-driven scenarios and the model-missing pull
+    remediation (task 12.12, frozen-fixture comparison): proves that
+    branching on `cfg.backend` for `openai-compatible` moved nothing on the
+    default path."""
+    import shutil
+
+    layout = _workspace(tmp_path, model="customtag")
+
+    monkeypatch_which_found = pytest.MonkeyPatch()
+    monkeypatch_which_found.setattr(shutil, "which", lambda _name: "/usr/bin/ollama")
+    try:
+        found = doctor_service.run_diagnostics(
+            layout.root,
+            build_client=lambda _cfg, _model: _FakeBackend(
+                error=_CustomBackendUnavailable("connection refused")
+            ),
+            git_available=True,
+            filter_repo_available=True,
+            reset_point_available=lambda: False,
+        )
+    finally:
+        monkeypatch_which_found.undo()
+    assert _by_label(found, "Ollama reachable").remediation == "ollama serve"
+
+    monkeypatch_which_missing = pytest.MonkeyPatch()
+    monkeypatch_which_missing.setattr(shutil, "which", lambda _name: None)
+    try:
+        missing = doctor_service.run_diagnostics(
+            layout.root,
+            build_client=lambda _cfg, _model: _FakeBackend(
+                error=_CustomBackendUnavailable("connection refused")
+            ),
+            git_available=True,
+            filter_repo_available=True,
+            reset_point_available=lambda: False,
+        )
+    finally:
+        monkeypatch_which_missing.undo()
+    remediation = _by_label(missing, "Ollama reachable").remediation
+    assert remediation is not None
+    assert "no `ollama` binary found on PATH" in remediation
+
+    installed = doctor_service.run_diagnostics(
+        layout.root,
+        build_client=lambda _cfg, _model: _FakeBackend(tags=["other-model"]),
+        git_available=True,
+        filter_repo_available=True,
+        reset_point_available=lambda: False,
+    )
+    assert (
+        _by_label(installed, "Model 'customtag' installed").remediation
+        == "ollama pull customtag"
+    )
+
+
+def test_doctor_openai_compatible_embedding_model_missing_no_ollama_pull(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Blanket MODIFIED-requirement text (doctor-command spec): "For the
+    openai-compatible backend, doctor MUST NOT probe for or reference
+    ollama... ollama pull in any remediation line" -- this applies to the
+    embedding-model-installed check (5) too, not only the critical
+    model-installed check (4). Beyond tasks.md's explicit 12.1-12.12 list,
+    added to satisfy this MUST NOT clause in full."""
+    layout = _openai_compatible_cfg(tmp_path, monkeypatch)
+    real_cfg = config.read_config(tmp_path)
+    oc_cfg = dataclasses.replace(
+        real_cfg,
+        backend="openai-compatible",
+        base_url="http://127.0.0.1:8000",
+        embedding_model="configured-embedder",
+    )
+    monkeypatch.setattr(config, "read_config", lambda _root: oc_cfg)
+
+    results = doctor_service.run_diagnostics(
+        layout.root,
+        build_client=lambda _cfg, _model: _FakeBackend(tags=["some-other-model"]),
+        git_available=True,
+        filter_repo_available=True,
+        reset_point_available=lambda: True,
+    )
+    check = _by_label(results, "Embedding model 'configured-embedder' installed")
+    assert check.status == "fail"
+    assert check.remediation is not None
+    assert "ollama pull" not in check.remediation
+    assert "configured-embedder" in check.remediation
+
+
+def test_doctor_openai_compatible_task_models_missing_no_ollama_pull(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same blanket MUST NOT clause, for the task-models-installed check
+    (5b) when a `models:` override names a model the configured server does
+    not report. Beyond tasks.md's explicit list, added for spec completeness."""
+    layout = _openai_compatible_cfg(tmp_path, monkeypatch)
+    real_cfg = config.read_config(tmp_path)
+    oc_cfg = dataclasses.replace(
+        real_cfg,
+        backend="openai-compatible",
+        base_url="http://127.0.0.1:8000",
+        models={"edge_typing": "missing-task-model"},
+    )
+    monkeypatch.setattr(config, "read_config", lambda _root: oc_cfg)
+
+    results = doctor_service.run_diagnostics(
+        layout.root,
+        build_client=lambda _cfg, _model: _FakeBackend(tags=[config.DEFAULT_MODEL]),
+        git_available=True,
+        filter_repo_available=True,
+        reset_point_available=lambda: True,
+    )
+    check = _by_label(results, "Task models installed")
+    assert check.status == "fail"
+    assert check.remediation is not None
+    assert "ollama pull" not in check.remediation
+    assert "missing-task-model" in check.remediation

@@ -547,6 +547,11 @@ def _offline_ollama_by_default(
     monkeypatch.delenv("OLLAMA_HOST", raising=False)
     monkeypatch.delenv("OPENKOS_OPENAI_API_KEY", raising=False)
     _patch_backend_seams(monkeypatch)
+    # issue #1057 Phase 13b: `cli/main.py`'s once-per-process insecure-key
+    # warning guard is a module-level flag -- reset it before every test so
+    # a test that legitimately triggers it once never leaves it `True` for
+    # every later test in the same pytest session.
+    monkeypatch.setattr("openkos.cli.main._INSECURE_KEY_WARNING_PRINTED", False)
 
 
 def make_locked_error(

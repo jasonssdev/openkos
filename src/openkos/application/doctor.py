@@ -133,6 +133,7 @@ this module for free, exactly as they do for `status`/`lifecycle`.
 
 from __future__ import annotations
 
+import os
 import shutil
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -142,10 +143,12 @@ from typing import Final, Literal
 import yaml
 
 from openkos import config, read_outcome
+from openkos.application import backends as application_backends
 from openkos.bundle import ledger as bundle_ledger
 from openkos.llm.base import (
     BackendDiagnostics,
     BackendError,
+    BackendHostLocality,
     BackendUnavailable,
     InstalledModel,
     model_tag_matches,
@@ -323,7 +326,58 @@ def run_diagnostics(
     )
     client = build_client(cfg, model)
 
-    # 3. Ollama-reachable (critical, always)
+    # issue #1057 Phase 12 (design Decision 9, doctor-command delta spec):
+    # `doctor` keeps its OWN command-form strings here for BOTH backends --
+    # it never calls `application/backends.py`'s Phase 13a wording functions
+    # (tasks-phase decision 2), since its `ollama` forms (`shutil.which`
+    # three-way branching, `ollama pull <model>`) have no equivalent there.
+    #
+    # `backend_is_openai_compatible` gates every OpenAI-compatible-only
+    # branch below; the `ollama` path stays exactly as it always was,
+    # including calling `shutil.which("ollama")` -- checks 3/4/5/5b's
+    # `ollama` branches are BYTE-IDENTICAL to before this phase (task
+    # 12.3/12.12, regression pins).
+    backend_is_openai_compatible = (
+        cfg is not None
+        and cfg.backend == application_backends.BACKEND_OPENAI_COMPATIBLE
+    )
+    reachable_label = (
+        "OpenAI-compatible server reachable"
+        if backend_is_openai_compatible
+        else "Ollama reachable"
+    )
+    # `resolve_endpoint` is called a SECOND time here purely for its
+    # `.source` -- the same pure, side-effect-free precedence table
+    # `chat_client`/`diagnostics_client` already consulted to build
+    # `client` above; `client.locality.display_host` (already
+    # userinfo-redacted, #355) is the actual value shown, so this never
+    # re-derives or duplicates a raw environment/config read for display.
+    endpoint = (
+        application_backends.resolve_endpoint(cfg, purpose="chat")
+        if cfg is not None
+        else None
+    )
+    key_is_set = bool(os.environ.get(application_backends.API_KEY_ENV, "").strip())
+
+    def _endpoint_detail_suffix(locality: BackendHostLocality) -> str:
+        """Empty when the resolved source is the packaged default (task
+        12.3: the byte-identical default-path requirement) -- otherwise
+        `"; endpoint <host> (from <source>)"`, appended to whichever detail
+        string a branch already built."""
+        if endpoint is None or endpoint.source == "default":
+            return ""
+        return f"; endpoint {locality.display_host} (from {endpoint.source})"
+
+    def _key_status_suffix() -> str:
+        """Empty for `ollama` (Decision 8: doctor reports key status only
+        for `openai-compatible`); otherwise `"; API key: set"` / `"; API
+        key: not set"` -- never the value itself (task 12.5/12.7)."""
+        if not backend_is_openai_compatible:
+            return ""
+        return f"; API key: {'set' if key_is_set else 'not set'}"
+
+    # 3. backend-reachable (critical, always; label and remediation branch
+    # on `cfg.backend` -- issue #1057 Phase 12)
     reachable = False
     installed: list[InstalledModel] = []
     installed_tags: list[str] = []
@@ -331,16 +385,28 @@ def run_diagnostics(
         installed = client.list_models()
         installed_tags = [m.tag for m in installed]
         reachable = True
+        detail = f"{len(installed)} models"
+        detail += _endpoint_detail_suffix(client.locality)
+        detail += _key_status_suffix()
         results.append(
             CheckResult(
-                "Ollama reachable",
+                reachable_label,
                 "pass",
                 critical=True,
-                detail=f"{len(installed)} models",
+                detail=detail,
             )
         )
     except BackendUnavailable as exc:
-        if shutil.which("ollama") is None:
+        if backend_is_openai_compatible:
+            # No `shutil.which("ollama")` probe at all (spec: "MUST NOT
+            # probe for or reference ollama... in any remediation line")
+            # -- there is no single universal binary or start command
+            # across llama.cpp, LM Studio, vLLM, and LocalAI.
+            remediation = (
+                f"verify the configured server at {client.locality.display_host} "
+                "is running"
+            )
+        elif shutil.which("ollama") is None:
             remediation = (
                 "no `ollama` binary found on PATH -- install from "
                 "https://ollama.com, or if Ollama is already installed "
@@ -348,21 +414,24 @@ def run_diagnostics(
             )
         else:
             remediation = "ollama serve"
+        detail = str(exc) + _key_status_suffix()
         results.append(
             CheckResult(
-                "Ollama reachable",
+                reachable_label,
                 "fail",
                 critical=True,
                 remediation=remediation,
-                detail=str(exc),
+                detail=detail,
             )
         )
     except BackendError as exc:  # non-transport server error
+        detail = str(exc) + _key_status_suffix()
         results.append(
-            CheckResult("Ollama reachable", "fail", critical=True, detail=str(exc))
+            CheckResult(reachable_label, "fail", critical=True, detail=detail)
         )
 
-    # 4. model-installed (critical, always; SKIP-blocked if unreachable, D6)
+    # 4. model-installed (critical, always; SKIP-blocked if unreachable, D6;
+    # remediation branches on `cfg.backend` -- issue #1057 Phase 12)
     label = f"Model '{model}' installed"
     if not reachable:
         results.append(
@@ -372,6 +441,23 @@ def run_diagnostics(
         )
     elif model_tag_matches(model, installed_tags):
         results.append(CheckResult(label, "pass", critical=True))
+    elif backend_is_openai_compatible:
+        reported = ", ".join(installed_tags) if installed_tags else "(none reported)"
+        results.append(
+            CheckResult(
+                label,
+                "fail",
+                critical=True,
+                remediation=(
+                    f"the server reports: {reported} -- set model: to one of "
+                    "them (note: llama.cpp's llama-server reports its loaded "
+                    "GGUF file's path, or the value passed to --alias, "
+                    "rather than an arbitrary model name in /v1/models -- "
+                    "this mismatch MAY NOT mean the model is genuinely "
+                    "missing)"
+                ),
+            )
+        )
     else:
         results.append(
             CheckResult(
@@ -395,6 +481,17 @@ def run_diagnostics(
         )
     elif model_tag_matches(embedding_model, installed_tags):
         results.append(CheckResult(embedding_label, "pass", critical=False))
+    elif backend_is_openai_compatible:
+        results.append(
+            CheckResult(
+                embedding_label,
+                "fail",
+                critical=False,
+                remediation=(
+                    f"make '{embedding_model}' available on the configured server"
+                ),
+            )
+        )
     else:
         results.append(
             CheckResult(
@@ -475,15 +572,22 @@ def run_diagnostics(
         }
         if missing:
             named = ", ".join(f"{task} -> {tag}" for task, tag in missing.items())
+            if backend_is_openai_compatible:
+                remediation = "; ".join(
+                    f"make '{tag}' available on the configured server"
+                    for tag in dict.fromkeys(missing.values())
+                )
+            else:
+                remediation = " && ".join(
+                    f"ollama pull {tag}" for tag in dict.fromkeys(missing.values())
+                )
             results.append(
                 CheckResult(
                     task_label,
                     "fail",
                     critical=False,
                     detail=f"missing: {named}",
-                    remediation=" && ".join(
-                        f"ollama pull {tag}" for tag in dict.fromkeys(missing.values())
-                    ),
+                    remediation=remediation,
                 )
             )
         else:

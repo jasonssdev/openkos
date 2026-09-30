@@ -463,6 +463,146 @@ def test_api_key_only_passed_for_openai_compatible_backend(tmp_path: Path) -> No
     assert "api_key" not in client.kwargs
 
 
+# ---------------------------------------------------------------------------
+# Phase 13a -- wording functions + `insecure_key_warning` (issue #1057,
+# design Decision 8/9). `doctor` never calls these (tasks-phase decision 2);
+# only the CLI/curate/MCP wiring in Phase 13b does.
+# ---------------------------------------------------------------------------
+
+
+def test_start_hint_ollama_byte_identical(tmp_path: Path) -> None:
+    """`start_hint(cfg)` for `backend="ollama"` returns the exact existing
+    `` `ollama serve` `` literal (task 13.1). RED today: function doesn't
+    exist."""
+    cfg = _cfg(tmp_path)
+    assert backends.start_hint(cfg) == "Start it with `ollama serve`"
+
+
+def test_start_hint_ollama_byte_identical_for_none_cfg() -> None:
+    """`start_hint(None)` (no workspace yet) defaults to the `ollama`
+    wording too."""
+    assert backends.start_hint(None) == "Start it with `ollama serve`"
+
+
+def test_start_hint_openai_compatible(tmp_path: Path) -> None:
+    """`start_hint(cfg)` for `backend="openai-compatible"` names the
+    resolved chat endpoint's display host (task 13.2)."""
+    cfg = _cfg(
+        tmp_path, backend="openai-compatible", base_url="http://example.com:8080"
+    )
+    assert backends.start_hint(cfg) == (
+        "Start your OpenAI-compatible server at example.com:8080"
+    )
+
+
+def test_install_hint_ollama_byte_identical(tmp_path: Path) -> None:
+    """`install_hint(cfg, model)` for `backend="ollama"` returns the exact
+    existing `` `ollama pull <model>` `` literal (task 13.4)."""
+    cfg = _cfg(tmp_path)
+    assert backends.install_hint(cfg, "qwen3:8b") == (
+        "Pull it with `ollama pull qwen3:8b`"
+    )
+
+
+def test_install_hint_openai_compatible(tmp_path: Path) -> None:
+    """`install_hint(cfg, model)` for `backend="openai-compatible"` never
+    says `ollama pull` (task 13.4)."""
+    cfg = _cfg(
+        tmp_path, backend="openai-compatible", base_url="http://example.com:8080"
+    )
+    hint = backends.install_hint(cfg, "gemma2:27b")
+    assert "ollama pull" not in hint
+    assert "gemma2:27b" in hint
+    assert "openkos doctor" in hint
+
+
+def test_endpoint_label_ollama_is_ollama_host(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`endpoint_label(cfg, purpose="chat")` returns the resolved source
+    (task 13.6): `OLLAMA_HOST` when it wins precedence for `backend=
+    "ollama"` -- the only source an existing non-local Ollama endpoint could
+    ever have had before this change."""
+    cfg = _cfg(tmp_path)
+    monkeypatch.setenv("OLLAMA_HOST", "http://envhost:1234")
+    assert backends.endpoint_label(cfg, purpose="chat") == "OLLAMA_HOST"
+
+
+def test_endpoint_label_openai_compatible_names_the_config_key(
+    tmp_path: Path,
+) -> None:
+    """`endpoint_label(cfg, purpose=...)` names `base_url`/
+    `embedding_base_url` for `backend="openai-compatible"` (task 13.6)."""
+    cfg = _cfg(
+        tmp_path,
+        backend="openai-compatible",
+        base_url="http://example.com:8080",
+        embedding_base_url="http://embed.example.com:9000",
+    )
+    assert backends.endpoint_label(cfg, purpose="chat") == "base_url"
+    assert backends.endpoint_label(cfg, purpose="embed") == "embedding_base_url"
+
+
+def test_backend_label_ollama_is_Ollama(tmp_path: Path) -> None:
+    """`backend_label(cfg)` for `backend="ollama"` returns `"Ollama"` (task
+    13.8)."""
+    cfg = _cfg(tmp_path)
+    assert backends.backend_label(cfg) == "Ollama"
+    assert backends.backend_label(None) == "Ollama"
+
+
+def test_backend_label_openai_compatible(tmp_path: Path) -> None:
+    """`backend_label(cfg)` for `backend="openai-compatible"` returns
+    `"OpenAI-compatible server"` (task 13.8)."""
+    cfg = _cfg(
+        tmp_path, backend="openai-compatible", base_url="http://example.com:8080"
+    )
+    assert backends.backend_label(cfg) == "OpenAI-compatible server"
+
+
+@pytest.mark.parametrize(
+    ("has_key", "base_url", "expect_warning"),
+    [
+        (True, "http://example.com:8080", True),
+        (True, "http://127.0.0.1:8080", False),
+        (True, "https://example.com:8080", False),
+        (False, "http://example.com:8080", False),
+    ],
+    ids=["key_nonlocal_http", "key_local_http", "key_nonlocal_https", "no_key"],
+)
+def test_insecure_key_warning_matrix(
+    tmp_path: Path, has_key: bool, base_url: str, expect_warning: bool
+) -> None:
+    """The full key x scheme x locality matrix (task 13.10, Threat Matrix
+    "Secret over plain HTTP"): warns only for (key present, non-local,
+    `http://`); every other combination is `None`."""
+    cfg = _cfg(tmp_path, backend="openai-compatible", base_url=base_url)
+    environ = {"OPENKOS_OPENAI_API_KEY": "secret"} if has_key else {}
+
+    warning = backends.insecure_key_warning(cfg, environ=environ)
+
+    if expect_warning:
+        assert warning is not None
+        assert "example.com:8080" in warning
+    else:
+        assert warning is None
+
+
+def test_insecure_key_warning_never_includes_the_key_value(tmp_path: Path) -> None:
+    """Sentinel test (task 13.12): the warning string never contains the
+    key VALUE, only the fact that a credential is present. Mutation-proof
+    below."""
+    cfg = _cfg(
+        tmp_path, backend="openai-compatible", base_url="http://example.com:8080"
+    )
+    environ = {"OPENKOS_OPENAI_API_KEY": "sk-super-secret-sentinel"}
+
+    warning = backends.insecure_key_warning(cfg, environ=environ)
+
+    assert warning is not None
+    assert "sk-super-secret-sentinel" not in warning
+
+
 def test_openai_api_key_without_prefix_is_never_read(tmp_path: Path) -> None:
     """`OPENAI_API_KEY` (no prefix) set, `OPENKOS_OPENAI_API_KEY` unset;
     `chat_client`/`embed_client` construct the `openai-compatible` factory

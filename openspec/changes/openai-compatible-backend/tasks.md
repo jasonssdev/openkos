@@ -2168,57 +2168,77 @@ requirements; `query-command`'s question-vector cache key requirement.
 Design Decision 9's doctor-specific strings; the `doctor-command` delta
 spec's two ADDED requirements and one MODIFIED requirement.
 
-- [ ] **12.1** [TEST] `tests/unit/application/test_doctor.py` — add
+- [x] **12.1** [TEST] `tests/unit/application/test_doctor.py` — add
   `test_doctor_shows_endpoint_and_source_when_not_default`: a workspace
   with `base_url` set, no `OLLAMA_HOST`; doctor's reachable-check detail
   includes the endpoint and states it came from `base_url`. **RED today**:
   line doesn't exist.
-- [ ] **12.2** [TEST] same — add `test_doctor_names_ollama_host_when_it_wins_precedence`:
+
+  **Observed**: this project has no `tests/unit/application/test_doctor.py`
+  — the actual service-level test module for `application/doctor.py` is
+  `test_doctor_service.py` (its own docstring explains the split from
+  `tests/unit/cli/test_doctor.py`); extended that file instead of creating
+  a second one for the same target. RED confirmed (`AssertionError` on the
+  label lookup) before implementation.
+- [x] **12.2** [TEST] same — add `test_doctor_names_ollama_host_when_it_wins_precedence`:
   `OLLAMA_HOST` set alongside a configured `base_url`; doctor names
   `OLLAMA_HOST`, not `base_url`, as the source.
-- [ ] **12.3** [TEST] same — add
+- [x] **12.3** [TEST] same — add
   `test_doctor_default_path_prints_no_endpoint_line_byte_identical`: no
   `base_url`/`OLLAMA_HOST` set; the reachable-check detail is
   BYTE-IDENTICAL to the pre-change wording (e.g. `12 models`), no
   endpoint-and-source line at all.
-- [ ] **12.4** [IMPL] `application/doctor.py`: add the endpoint-and-source
+- [x] **12.4** [IMPL] `application/doctor.py`: add the endpoint-and-source
   detail line per `resolve_endpoint`'s reported source, printed ONLY when
   `source != "default"`. Makes 12.1-12.3 GREEN.
-- [ ] **12.5** [TEST] same — add `test_doctor_never_prints_the_api_key_value`,
+- [x] **12.5** [TEST] same — add `test_doctor_never_prints_the_api_key_value`,
   sentinel-key test: `OPENKOS_OPENAI_API_KEY` set to a sentinel string; run
   doctor across EVERY check outcome (including a failing reachable check
   whose remediation names the endpoint); the sentinel never appears in
   stdout or stderr. Mutation-proof: mutate the key-status line to
   interpolate the raw value, confirm this test fails, then revert.
-- [ ] **12.6** [TEST] same — add `test_doctor_key_absence_never_gates_a_check`:
+
+  **Observed mutation proof**: interpolated the raw key into
+  `_key_status_suffix`'s return string; the test failed with the sentinel
+  found in `detail`. Reverted with the exact inverse edit, purged
+  `__pycache__`, reconfirmed green.
+- [x] **12.6** [TEST] same — add `test_doctor_key_absence_never_gates_a_check`:
   `OPENKOS_OPENAI_API_KEY` unset, configured server needs no key; no check
   fails/skips because of the key's absence.
-- [ ] **12.7** [IMPL] `application/doctor.py`: add the `API key: set` /
+- [x] **12.7** [IMPL] `application/doctor.py`: add the `API key: set` /
   `not set` line for `openai-compatible` (never the value; never gating).
   Makes 12.5-12.6 GREEN.
-- [ ] **12.8** [TEST] same — add
+- [x] **12.8** [TEST] same — add
   `test_doctor_openai_compatible_unreachable_remediation_no_ollama_wording`:
   `cfg.backend == "openai-compatible"`, endpoint refuses connection;
   `[FAIL]` remediation names the configured endpoint, advises verifying the
   server is running, and contains NO `ollama`/`ollama serve`/
   `shutil.which("ollama")` reference.
-- [ ] **12.9** [TEST] same — add
+- [x] **12.9** [TEST] same — add
   `test_doctor_openai_compatible_model_missing_lists_reported_ids`: server
   reachable, `/v1/models` reports `a, b, c`, none matching the configured
   model; remediation lists `a, b, c` and advises setting `model:` to one of
   them; no `ollama pull` reference.
-- [ ] **12.10** [TEST] same — add `test_doctor_llama_cpp_gguf_path_false_alarm_note`:
+- [x] **12.10** [TEST] same — add `test_doctor_llama_cpp_gguf_path_false_alarm_note`:
   a `/v1/models` response listing a GGUF file path (or an `--alias` value)
   instead of the configured model name; the model-missing remediation
   mentions this llama.cpp naming quirk and that the mismatch MAY NOT mean
   the model is genuinely missing (still `[FAIL]`, not silently passed).
-- [ ] **12.11** [IMPL] `application/doctor.py`: `build_client(cfg, model)`
+- [x] **12.11** [IMPL] `application/doctor.py`: `build_client(cfg, model)`
   (per design's Interfaces/Contracts) constructing via `diagnostics_client(...)`;
   the `openai-compatible` branch of the reachable/model-installed checks
   with the wording from 12.8-12.10, keeping the existing `ollama`-branch
   wording (including `shutil.which("ollama")`'s three-way remediation)
   byte-identical. Makes 12.8-12.10 GREEN.
-- [ ] **12.12** [TEST] same — add `test_ollama_remediation_bytes_unchanged`,
+
+  **Observed**: also branched checks 5 (embedding-model-installed) and 5b
+  (task-models-installed) for `openai-compatible`, beyond the tasks.md
+  list — the MODIFIED requirement's "MUST NOT reference `ollama pull` in
+  any remediation line" is blanket, not scoped to check 4 alone; added
+  `test_doctor_openai_compatible_embedding_model_missing_no_ollama_pull`
+  and `test_doctor_openai_compatible_task_models_missing_no_ollama_pull`
+  (RED confirmed first) to cover it.
+- [x] **12.12** [TEST] same — add `test_ollama_remediation_bytes_unchanged`,
   parametrized over the existing `shutil.which`-driven scenarios (binary
   found+refused, no binary, uncertain signal) and the existing
   model-missing pull remediation: every string is byte-identical to before
@@ -2226,14 +2246,30 @@ spec's two ADDED requirements and one MODIFIED requirement.
 
 ### Phase 12 verification
 
-- [ ] **12.13** Run `uv run ruff check . && uv run ruff format --check . &&
+- [x] **12.13** Run `uv run ruff check . && uv run ruff format --check . &&
   uv run mypy .` — must be green.
-- [ ] **12.14** Run `uv run pytest tests/unit/application/test_doctor.py`
+
+  **Observed**: all three clean after `ruff format` auto-reformatted the
+  two touched files (`doctor.py`, `test_doctor_service.py`); `mypy .`:
+  Success, no issues found in 378 source files.
+- [x] **12.14** Run `uv run pytest tests/unit/application/test_doctor.py`
   focused, then `uv run pytest --cov` full suite; then `uv run python
   evals/run_self_tests.py`.
+
+  **Observed**: focused (`tests/unit/application/test_doctor_service.py
+  tests/unit/cli/test_doctor.py`) → 103 passed. Full `pytest --cov`
+  (unpiped, backgrounded, run once after Phase 13a also landed) →
+  **7424 passed, 0 failed, 2 skipped**, 94.23% branch coverage (>=90% gate
+  held). `evals/run_self_tests.py` deferred to the end-of-session
+  five-command verification below (not re-run per phase to avoid
+  redundant ~3s-per-check-times-44 runs mid-session).
 - [ ] **12.15** Commit, scope `cli` (doctor's verb lives in `cli/main.py`;
   `application/doctor.py` is its supporting module). Open PR 12 targeting
   `main`, after PR 9 merges (independent of PR 10/11).
+
+  **Observed**: committed on the current branch, scope `cli` — no push, no
+  PR opened per the apply run's instructions; PR creation is left to the
+  maintainer/orchestrator.
 
 **Rollback boundary**: revert the endpoint-and-source line, the key
 set/not-set line, and the `openai-compatible` remediation branches; the
@@ -2248,54 +2284,88 @@ Design Decision 9's shared pure functions and Decision 8's warning
 function, both in `application/backends.py`. No caller wired yet (Phase
 13b).
 
-- [ ] **13.1** [TEST] `tests/unit/application/test_backends.py` — add
+- [x] **13.1** [TEST] `tests/unit/application/test_backends.py` — add
   `test_start_hint_ollama_byte_identical`: `start_hint(cfg)` for
   `backend="ollama"` returns the exact existing `` `ollama serve` ``
   literal (confirm and pin the current string verbatim). **RED today**:
   function doesn't exist.
-- [ ] **13.2** [TEST] same — add `test_start_hint_openai_compatible`:
+
+  **Observed**: RED confirmed (`AttributeError: module 'openkos.
+  application.backends' has no attribute 'start_hint'`, and the same for
+  every other new symbol below — 14 tests failed together before
+  implementation). Also added `test_start_hint_ollama_byte_identical_for_none_cfg`
+  (`start_hint(None)` defaults to `ollama` too — not separately numbered
+  in tasks.md, added for the design's `cfg: Config | None` signature).
+- [x] **13.2** [TEST] same — add `test_start_hint_openai_compatible`:
   returns wording naming "Start your OpenAI-compatible server at
   `<display_host>`" (confirm exact wording against design's table during
   implementation).
-- [ ] **13.3** [IMPL] add `start_hint(cfg)`. Makes 13.1-13.2 GREEN.
-- [ ] **13.4** [TEST] same — add `test_install_hint_ollama_byte_identical` /
+- [x] **13.3** [IMPL] add `start_hint(cfg)`. Makes 13.1-13.2 GREEN.
+- [x] **13.4** [TEST] same — add `test_install_hint_ollama_byte_identical` /
   `test_install_hint_openai_compatible`: mirrors 13.1-13.2 for
   `install_hint(cfg, model)` (`` `ollama pull <model>` `` vs "make sure your
   OpenAI-compatible server serves '<model>'...").
-- [ ] **13.5** [IMPL] add `install_hint(cfg, model)`. Makes 13.4 GREEN.
-- [ ] **13.6** [TEST] same — add `test_endpoint_label_ollama_is_ollama_host` /
+- [x] **13.5** [IMPL] add `install_hint(cfg, model)`. Makes 13.4 GREEN.
+- [x] **13.6** [TEST] same — add `test_endpoint_label_ollama_is_ollama_host` /
   `test_endpoint_label_openai_compatible_names_the_config_key`: mirrors
   13.1-13.2 for `endpoint_label(cfg, purpose)` (`"OLLAMA_HOST"` vs
   `"base_url"`/`"embedding_base_url"`).
-- [ ] **13.7** [IMPL] add `endpoint_label(cfg, purpose)`. Makes 13.6 GREEN.
-- [ ] **13.8** [TEST] same — add `test_backend_label_ollama_is_Ollama` /
+- [x] **13.7** [IMPL] add `endpoint_label(cfg, purpose)`. Makes 13.6 GREEN.
+
+  **Observed**: implemented as a one-line delegation to
+  `resolve_endpoint(cfg, purpose=purpose).source` — the design table's "the
+  resolved source" phrasing for the `ollama` column turned out to be
+  literal, not just descriptive: reusing `resolve_endpoint` means
+  `endpoint_label` can never disagree with what `chat_client`/`embed_client`
+  actually resolved, for either backend, with no separate branch needed.
+- [x] **13.8** [TEST] same — add `test_backend_label_ollama_is_Ollama` /
   `test_backend_label_openai_compatible`: mirrors 13.1-13.2 for
   `backend_label(cfg)` (`"Ollama"` vs `"OpenAI-compatible server"`).
-- [ ] **13.9** [IMPL] add `backend_label(cfg)`. Makes 13.8 GREEN.
-- [ ] **13.10** [TEST] same — add `test_insecure_key_warning_matrix`,
+- [x] **13.9** [IMPL] add `backend_label(cfg)`. Makes 13.8 GREEN.
+- [x] **13.10** [TEST] same — add `test_insecure_key_warning_matrix`,
   parametrized over the full key×scheme×locality matrix (Threat Matrix
   "Secret over plain HTTP" row): (key present, non-local, `http://`) ->
   a warning string; (key present, local, `http://`) -> `None`; (key
   present, non-local, `https://`) -> `None`; (no key) -> `None` regardless
   of endpoint. Covers backend-selection's "A Non-Loopback Key Send Over
   Plain HTTP Is Warned" (all three scenarios).
-- [ ] **13.11** [IMPL] `insecure_key_warning(cfg, *, environ=os.environ) ->
+- [x] **13.11** [IMPL] `insecure_key_warning(cfg, *, environ=os.environ) ->
   str | None` per Decision 8/backend-selection. Makes 13.10 GREEN.
-- [ ] **13.12** [TEST] same — sentinel test
+- [x] **13.12** [TEST] same — sentinel test
   `test_insecure_key_warning_never_includes_the_key_value`: the warning
   string never contains the key VALUE, only the fact that a credential is
   present. Mutation-proof: mutate the warning to interpolate the key,
   confirm this test fails, then revert.
 
+  **Observed mutation proof**: interpolated `_read_api_key(environ)` into
+  the returned warning string; the sentinel test and the matrix's
+  `key_nonlocal_http` case both failed with the sentinel visible in the
+  message. Reverted with the exact inverse edit, purged `__pycache__`,
+  reconfirmed all 41 tests in the file green.
+
 ### Phase 13a verification
 
-- [ ] **13.13** Run `uv run ruff check . && uv run ruff format --check . &&
+- [x] **13.13** Run `uv run ruff check . && uv run ruff format --check . &&
   uv run mypy .` — must be green.
-- [ ] **13.14** Run `uv run pytest tests/unit/application/test_backends.py`
+
+  **Observed**: all three clean; `ruff format` reformatted
+  `test_backends.py` (line-length wrapping), `mypy .`: Success, no issues
+  found in 378 source files.
+- [x] **13.14** Run `uv run pytest tests/unit/application/test_backends.py`
   focused, then `uv run pytest --cov` full suite; then `uv run python
   evals/run_self_tests.py`.
+
+  **Observed**: focused → 41 passed. Full `pytest --cov` (unpiped,
+  backgrounded, run once after Phase 12 also landed on this branch) →
+  **7424 passed, 0 failed, 2 skipped**, 94.23% branch coverage (>=90% gate
+  held). `evals/run_self_tests.py` deferred to the end-of-session
+  five-command verification.
 - [ ] **13.15** Commit, scope `llm`. Open PR 13a targeting `main`, after PR
   9 merges.
+
+  **Observed**: committed on the current branch, scope `llm` — no push, no
+  PR opened per the apply run's instructions; left for the
+  maintainer/orchestrator.
 
 **Rollback boundary**: revert the five new functions; nothing calls them
 yet.
@@ -2307,7 +2377,7 @@ yet.
 `query-command`, `llm-edge-production`, `entity-resolution-adjudication`,
 `curate-command` delta specs.
 
-- [ ] **13.16** [TEST] `tests/unit/cli/test_query.py` — extend the
+- [x] **13.16** [TEST] `tests/unit/cli/test_query.py` — extend the
   `OllamaUnavailable`/`OpenAICompatibleUnavailable` branch assertions to
   cover: `ollama` wording byte-identical; `openai-compatible` wording
   (endpoint named, "verify server running", `openkos doctor` pointer, no
@@ -2315,34 +2385,69 @@ yet.
   wording (pull vs "make available on the server"); the dimension-mismatch
   permanent-error wording identical across both backends, reindex hint
   suppressed for both. **RED today**: every not-yet-conditional branch.
-- [ ] **13.17** [IMPL] `cli/main.py::query`'s exception ladder: branch each
+
+  **Observed**: added three new tests (`..._unreachable_no_ollama_wording`,
+  `..._model_not_found_no_ollama_pull`, `..._dimension_mismatch_same_remedy_as_ollama`)
+  rather than editing existing ones — the existing `ollama`-path tests stay
+  their own byte-identical regression pins, untouched. RED confirmed: 2 of
+  3 failed for the right reason (the dimension-mismatch branch was already
+  backend-neutral, so that one passed vacuously — it needs no `cfg.backend`
+  branch and none was added).
+- [x] **13.17** [IMPL] `cli/main.py::query`'s exception ladder: branch each
   handler on `cfg.backend`, calling `backend_label`/`endpoint_label`/
   `install_hint`/`start_hint` for the backend-specific clause, keeping the
   surrounding sentence and existing `ollama` wording byte-identical. Makes
   13.16 GREEN.
-- [ ] **13.18** [TEST] `tests/unit/cli/test_llm_edge_production.py`
+
+  **Observed**: `BackendUnavailable` handler now calls `start_hint(cfg)`;
+  `BackendModelNotFound` calls `install_hint(cfg, '<model>')` — the literal
+  `"<model>"` placeholder (not an f-string interpolation) matches the
+  PRE-EXISTING generic-model literal this handler always used (query builds
+  two backend clients, so no single real model name is known at this
+  catch site), and `install_hint`'s own `<model>` substitution reproduces
+  it exactly for `ollama`, byte-identical.
+- [x] **13.18** [TEST] `tests/unit/cli/test_llm_edge_production.py`
   (suggest-relations verb) — same pattern for `llm-edge-production`'s
   MODIFIED requirement (unavailable points to doctor, backend-conditional
   wording, model-not-found/generic ordering unchanged).
-- [ ] **13.19** [IMPL] wire the suggest-relations verb's handler. Makes
+
+  **Observed**: this project has no `test_llm_edge_production.py` — the
+  actual test module for the `suggest-relations` verb is
+  `test_suggest_relations.py`; extended that file instead of creating a
+  second one for the same verb. RED confirmed (2 failures for the right
+  reason).
+- [x] **13.19** [IMPL] wire the suggest-relations verb's handler. Makes
   13.18 GREEN.
-- [ ] **13.20** [TEST] `tests/unit/cli/test_adjudicate.py` — same pattern
+- [x] **13.20** [TEST] `tests/unit/cli/test_adjudicate.py` — same pattern
   for `entity-resolution-adjudication`'s 3-tier catch (Unavailable ->
   doctor pointer; ModelNotFound; generic), both backends.
-- [ ] **13.21** [IMPL] wire `adjudicate`'s handler. Makes 13.20 GREEN.
-- [ ] **13.22** [TEST] `tests/unit/cli/test_curate.py` — extend
+- [x] **13.21** [IMPL] wire `adjudicate`'s handler. Makes 13.20 GREEN.
+- [x] **13.22** [TEST] `tests/unit/cli/test_curate.py` — extend
   `curate-command`'s per-stage remediation assertions: a missing task model
   on `ollama` -> `ollama pull` naming that model, only that stage fails; on
   `openai-compatible` -> "make available on the configured server"
   wording, no `ollama pull`, only that stage fails, other stages still
   attempted.
-- [ ] **13.23** [IMPL] wire curate's per-stage missing-model remediation and
+
+  **Observed**: added `test_openai_compatible_model_not_found_no_ollama_pull_remediation`
+  at the engine level (`curate.run_curate(ctx)` against a fake stage,
+  mirroring the file's existing `test_ollama_model_not_found_also_short_circuits`
+  pattern) — extended `_fake_ctx`/`_FakeConfig` with `backend`/`base_url`
+  passthrough kwargs to support it. RED confirmed (`ollama pull` present
+  in the notice before the fix).
+- [x] **13.23** [IMPL] wire curate's per-stage missing-model remediation and
   confirm "Availability Is Tracked Per Model, Not Per Run" (per-model
   client caching from #515) already generalizes across the widened
   exception classes from Phase 2 without further change — if a genuine gap
   is found, add the per-model client cache keyed by resolved model tag.
   Makes 13.22 GREEN.
-- [ ] **13.24** [TEST] `tests/unit/cli/test_main.py` (or a dedicated
+
+  **Observed**: the `except BackendModelNotFound` handler now calls
+  `application_backends.install_hint(ctx.cfg, model)`. Confirmed no gap in
+  the per-model cache: `ctx.ollama_unavailable_notices`/`ctx.ollama_clients`
+  are keyed by the resolved model TAG (a plain string), already independent
+  of which backend produced the client — no further change needed.
+- [x] **13.24** [TEST] `tests/unit/cli/test_main.py` (or a dedicated
   advisories test module) — add
   `test_advisories_name_endpoint_label_not_literal_ollama_host`:
   `_warn_if_nonlocal_embed_host`/`_warn_withheld_from_embedding` take
@@ -2350,42 +2455,131 @@ yet.
   `"OLLAMA_HOST"`; for `backend="ollama"` the printed text is
   byte-identical to before; for `openai-compatible` it names `base_url`/
   `embedding_base_url`.
-- [ ] **13.25** [IMPL] wire both advisories through `endpoint_label`. Makes
+
+  **Observed**: this project has no `test_main.py`; extended the existing
+  `test_confidential_local_exemption.py` (the file that already owned
+  `_warn_if_nonlocal_embed_host`'s one direct unit test) rather than
+  inventing a new module, adding four tests total (byte-identical `ollama`
+  pin + `openai-compatible` case, for both advisory functions) and
+  extending its `_cfg()` helper with `backend`/`base_url`/
+  `embedding_base_url` kwargs. RED confirmed (`TypeError: takes 2
+  positional arguments but 3 were given` — neither function accepted `cfg`
+  yet).
+- [x] **13.25** [IMPL] wire both advisories through `endpoint_label`. Makes
   13.24 GREEN.
-- [ ] **13.26** [TEST] same module — add
+
+  **Observed**: both functions gained a required `cfg: config.Config`
+  parameter; every one of their ~9 call sites across `cli/main.py`
+  (`_embed_after_ingest`, `_refresh_derived_after_write`, `_ingest_batch`,
+  `query`, `reindex`, `mcp_cmd`) was updated to pass it — `cfg` was already
+  in scope at every site. `_embed_after_ingest` itself gained a new
+  required `cfg` keyword-only parameter, threaded from its sole caller.
+- [x] **13.26** [TEST] same module — add
   `test_insecure_key_warning_printed_once_per_process`: two chat/embed
   constructions in one process print the plain-HTTP-key warning at most
   ONCE to stderr (spy/counter on the print call, reset between tests).
-- [ ] **13.27** [IMPL] wire `insecure_key_warning` into `_chat_client`/
+
+  **Observed**: created `tests/unit/cli/test_insecure_key_warning.py` — the
+  "dedicated advisories test module" tasks.md itself suggests as the
+  fallback when no `test_main.py` exists. `tests/unit/conftest.py`'s
+  autouse `_offline_ollama_by_default` fixture now also resets
+  `main_mod._INSECURE_KEY_WARNING_PRINTED` to `False` before every test, so
+  the module-level once-per-process flag never leaks across the suite.
+- [x] **13.27** [IMPL] wire `insecure_key_warning` into `_chat_client`/
   `_embed_client`'s delegators with a once-per-process guard. Makes 13.26
   GREEN.
-- [ ] **13.28** [TEST] `tests/unit/mcp/test_server.py` — add
+
+  **Observed**: a pre-existing AST guard
+  (`tests/unit/cli/test_backends_delegation.py::
+  test_delegators_are_single_line_and_singly_defined`, from Phase 9/10)
+  pinned `_chat_client`/`_embed_client`/`_resolve_local_exemption` as
+  exactly ONE statement — adding the warning call broke it for two of the
+  three. Verified against the `mcp` spec's actual MUST clause: it names
+  `_chat_client`/`_resolve_local_exemption` only, never `_embed_client`.
+  Split the test: `_resolve_local_exemption` keeps the original
+  single-statement assertion untouched; a new
+  `test_chat_and_embed_client_delegate_and_warn` pins `_chat_client`/
+  `_embed_client`'s new two-statement shape (`_maybe_warn_insecure_key(cfg)`
+  then the bare delegating `return`) instead. Mutation-proof: removed the
+  `if _INSECURE_KEY_WARNING_PRINTED: return` guard, confirmed
+  `test_insecure_key_warning_printed_once_per_process` failed (2 warnings
+  instead of 1), reverted with the exact inverse edit, purged
+  `__pycache__`, reconfirmed green.
+- [x] **13.28** [TEST] `tests/unit/mcp/test_server.py` — add
   `test_mcp_prints_insecure_key_warning_once_at_startup`: the MCP server
   prints the same warning once to stderr at startup when applicable.
-- [ ] **13.29** [IMPL] wire the MCP startup warning. Makes 13.28 GREEN.
-- [ ] **13.30** [TEST] `tests/unit/cli/test_query.py` — add
+
+  **Observed**: also added `test_mcp_no_insecure_key_warning_for_ollama`.
+  Both reuse the existing `test_keyboard_interrupt_exits_130` pattern
+  (`transport.claim_stdio` monkeypatched to raise immediately, so `serve()`
+  runs its startup sequence synchronously without touching real stdio).
+  RED confirmed for the openai-compatible case (`caplog.text` empty before
+  `serve()` read config or checked the warning at all).
+- [x] **13.29** [IMPL] wire the MCP startup warning. Makes 13.28 GREEN.
+
+  **Observed**: added `_warn_insecure_key_at_startup(root)`, called from
+  `serve()` BEFORE `logger.propagate = False` is set (not after, as first
+  drafted) — `caplog`'s handler is attached to the root logger, and
+  `propagate = False` (set deliberately later, so PER-REQUEST logging is
+  never double-printed) would otherwise have silently swallowed this
+  one-shot startup advisory from any root-attached handler, test or real.
+  Best-effort: an `(OSError, ValueError)` from `config.read_config` is
+  swallowed here (never blocks serving) since every tool call already
+  surfaces a broken `openkos.yaml` on its own.
+- [x] **13.30** [TEST] `tests/unit/cli/test_query.py` — add
   `test_save_remote_embedding_host_disclosure_generalizes_to_openai_compatible`:
   `cfg.backend == "openai-compatible"` with a non-loopback
   `embedding_base_url`; the pre-`--save` disclosure fires identically in
   shape to the `ollama`/`OLLAMA_HOST` case, with the credentialed host
   redacted. Covers query-command's "A remote openai-compatible embedding
   endpoint gets the same disclosure".
-- [ ] **13.31** [IMPL] generalize the existing `OLLAMA_HOST`-specific
+
+  **Observed**: added to `tests/unit/cli/test_query_save.py` (the file that
+  actually owns `--save`'s disclosure tests; `test_query.py` covers the
+  exception ladder). The test PASSED on first run — the existing condition
+  already reads `embedder_locality.is_local`/`.display_host` off whichever
+  client `_embed_client(cfg)` built, with no `OLLAMA_HOST` literal in this
+  code path at all (Phase 9's resolver + Phase 11's backend-aware
+  `question_vectors.cache_key` already cover it). Per the strict-TDD rule
+  for a same-first-try pass, mutated the guarding condition (temporarily
+  added `and cfg.backend == "ollama"`) and confirmed the test fails, then
+  reverted with the exact inverse edit and purged `__pycache__`.
+- [x] **13.31** [IMPL] generalize the existing `OLLAMA_HOST`-specific
   disclosure condition to the shared locality classifier's verdict on the
   effective embedding endpoint (whichever backend/source produced it).
   Makes 13.30 GREEN; the existing `ollama`/`OLLAMA_HOST` scenario stays
   byte-identical (regression-pinned by 13.24's endpoint_label family).
 
+  **Observed**: no production code change was needed — see 13.30's note;
+  this task closed as a coverage addition confirming an already-general
+  implementation, not new wiring.
+
 ### Phase 13b verification
 
-- [ ] **13.32** Run `uv run ruff check . && uv run ruff format --check . &&
+- [x] **13.32** Run `uv run ruff check . && uv run ruff format --check . &&
   uv run mypy .` — must be green.
-- [ ] **13.33** Run `uv run pytest tests/unit/cli/ tests/unit/mcp/`
+
+  **Observed**: all three clean after `ruff format` reformatted the touched
+  files; `mypy .`: Success, no issues found in 379 source files.
+- [x] **13.33** Run `uv run pytest tests/unit/cli/ tests/unit/mcp/`
   focused, then `uv run pytest --cov` full suite; then `uv run python
   evals/run_self_tests.py`.
+
+  **Observed**: focused (`tests/unit/cli/ tests/unit/mcp/`) → **2647
+  passed, 1 skipped**. Full unpiped `uv run pytest --cov`, run once at the
+  end of all three phases together → **7458 passed, 0 failed, 2 skipped**,
+  96.87% branch coverage (>= 90% gate held), 438.99s wall time.
+  `uv run python evals/run_self_tests.py` → **44 of 44 harness
+  self-test(s) run, 0 failing**.
 - [ ] **13.34** Commit, scope `cli`/`mcp` as appropriate (split by module if
   the combined diff nears budget). Open PR 13b targeting `main`, after PR
   12 and PR 13a merge.
+
+  **Observed**: committed on the current branch, scope `cli` (spans
+  `cli/main.py`, `cli/curate.py`, `mcp/server.py`, and their tests as one
+  cohesive wiring change — well under the 400-line budget as a single
+  work unit) — no push, no PR opened per the apply run's instructions;
+  left for the maintainer/orchestrator.
 
 **Rollback boundary**: revert the handler wiring; PR 13a's functions stay
 unused but harmless.

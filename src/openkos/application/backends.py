@@ -40,7 +40,12 @@ from dataclasses import dataclass
 from typing import Any, Literal, Protocol, cast
 
 from openkos import config
-from openkos.llm.base import BackendDiagnostics, Embedder, LLMBackend
+from openkos.llm.base import (
+    BackendDiagnostics,
+    Embedder,
+    LLMBackend,
+    classify_backend_host,
+)
 
 BACKEND_OLLAMA: Literal["ollama"] = "ollama"
 """The `cfg.backend` value naming the Ollama family, mirroring
@@ -395,3 +400,95 @@ def resolve_local_exemption(client: HasLocality, cfg: config.Config) -> bool:
     `sensitivity.should_block`'s contract, never re-derived at a call
     site."""
     return client.locality.is_local and cfg.confidential_local_exemption
+
+
+# ---------------------------------------------------------------------------
+# issue #1057 Phase 13a -- backend-conditional wording (design Decision 9)
+# and the insecure-key-over-plain-HTTP warning (Decision 8). Each function
+# returns today's exact `ollama` bytes for `backend == "ollama"` (or a
+# `None`/default `cfg`) -- a caller keeps its OWN surrounding sentence and
+# calls the matching function ONLY for the backend-specific clause (Phase
+# 13b). `doctor` (Phase 12) deliberately does NOT call any of these: it
+# keeps its own command-form strings (`shutil.which("ollama")`'s three-way
+# branching has no equivalent here) -- see tasks.md's "Wording functions
+# land where consumed" decision.
+# ---------------------------------------------------------------------------
+
+
+def start_hint(cfg: config.Config | None) -> str:
+    """The actionable clause for "the backend is not responding" messages
+    (`query`/`adjudicate`/`suggest-relations`/`curate`, Phase 13b):
+    ``Start it with `ollama serve` `` for `ollama` (byte-identical to every
+    existing call site's own literal), or "Start your OpenAI-compatible
+    server at <display_host>" for `openai-compatible`, naming the resolved
+    CHAT endpoint's host (userinfo-redacted, #355) -- never a raw
+    unclassified `base_url`."""
+    if cfg is None or cfg.backend != BACKEND_OPENAI_COMPATIBLE:
+        return "Start it with `ollama serve`"
+    endpoint = resolve_endpoint(cfg, purpose="chat")
+    display_host = classify_backend_host(endpoint.url).display_host
+    return f"Start your OpenAI-compatible server at {display_host}"
+
+
+def install_hint(cfg: config.Config | None, model: str) -> str:
+    """The actionable clause for "this model is not available" messages:
+    ``Pull it with `ollama pull <model>` `` for `ollama` (byte-identical),
+    or a server-agnostic "make it available" clause for `openai-compatible`
+    -- no `ollama pull` reference, since it does not apply across
+    llama.cpp/LM Studio/vLLM/LocalAI."""
+    if cfg is None or cfg.backend != BACKEND_OPENAI_COMPATIBLE:
+        return f"Pull it with `ollama pull {model}`"
+    return (
+        f"Make sure your OpenAI-compatible server serves '{model}' (run "
+        "`openkos doctor` to see the models it reports)"
+    )
+
+
+def endpoint_label(cfg: config.Config, *, purpose: Literal["chat", "embed"]) -> str:
+    """Which config key/environment variable actually produced the
+    effective endpoint -- `resolve_endpoint`'s own `.source`, reused rather
+    than re-derived, so this can never disagree with what `chat_client`/
+    `embed_client` actually resolved. For `ollama`, this is `OLLAMA_HOST`
+    the one time a non-local Ollama endpoint could arise before this
+    change, but now genuinely dynamic (`base_url` also qualifies); for
+    `openai-compatible`, always `base_url`/`embedding_base_url`."""
+    return resolve_endpoint(cfg, purpose=purpose).source
+
+
+def backend_label(cfg: config.Config | None) -> str:
+    """The backend family's display name: `"Ollama"` (default, matching
+    every existing advisory's wording) or `"OpenAI-compatible server"`."""
+    if cfg is None or cfg.backend != BACKEND_OPENAI_COMPATIBLE:
+        return "Ollama"
+    return "OpenAI-compatible server"
+
+
+def insecure_key_warning(
+    cfg: config.Config, *, environ: Mapping[str, str] = os.environ
+) -> str | None:
+    """A warning string when an `openai-compatible` API key is configured,
+    the resolved CHAT endpoint is `http://`, and that endpoint classifies
+    non-local (design Decision 8, Threat Matrix "Secret over plain HTTP") --
+    `None` in every other case, including for `backend == "ollama"` (no key
+    exists there) and whenever no key is set.
+
+    Never includes the key's VALUE (task 13.12, sentinel-proof) -- only
+    `locality.display_host`, already userinfo-redacted (#355). Pure and
+    side-effect-free: callers (Phase 13b) own printing it, at most once per
+    process."""
+    if cfg.backend != BACKEND_OPENAI_COMPATIBLE:
+        return None
+    if _read_api_key(environ) is None:
+        return None
+    endpoint = resolve_endpoint(cfg, purpose="chat")
+    url = endpoint.url or ""
+    if not url.lower().startswith("http://"):
+        return None
+    locality = classify_backend_host(url)
+    if locality.is_local:
+        return None
+    return (
+        "warning: OPENKOS_OPENAI_API_KEY is being sent to a non-local server "
+        f"({locality.display_host}) over plain HTTP -- consider using "
+        "https:// or a loopback endpoint"
+    )

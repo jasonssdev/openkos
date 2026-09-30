@@ -661,6 +661,23 @@ async def serve_streams(
     return 0
 
 
+def _warn_insecure_key_at_startup(root: Path) -> None:
+    """Print `insecure_key_warning`'s advisory once at MCP server startup
+    (issue #1057 Phase 13b, design Decision 8), mirroring the CLI's
+    once-per-process `_maybe_warn_insecure_key` (`cli/main.py`) -- there is
+    only one startup per process here, so no separate guard flag is needed.
+
+    Best-effort: a config read failure here must never block serving --
+    every tool call already surfaces a broken `openkos.yaml` on its own."""
+    try:
+        cfg = config.read_config(root)
+    except (OSError, ValueError):
+        return
+    warning = application_backends.insecure_key_warning(cfg)
+    if warning is not None:
+        logger.warning("%s", warning)
+
+
 def serve(root: Path, *, expose_confidential: bool) -> int:
     """Serve `root` over stdio until end of input or `KeyboardInterrupt`
     (design Decisions 12-14).
@@ -673,6 +690,11 @@ def serve(root: Path, *, expose_confidential: bool) -> int:
     handler = logging.StreamHandler(sys.stderr)
     logger.setLevel(logging.INFO)
     logger.addHandler(handler)
+    # Before `propagate = False` below: this one-shot startup advisory
+    # should still reach a root-attached test/log handler (e.g. pytest's
+    # `caplog`), unlike the per-request logging that follows, which
+    # deliberately stops propagating so it is never double-printed.
+    _warn_insecure_key_at_startup(root)
     logger.propagate = False
     try:
         with transport.claim_stdio() as streams:

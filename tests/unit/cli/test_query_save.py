@@ -3061,6 +3061,47 @@ def test_a_query_without_save_names_no_filed_questions(
     assert "already-filed source questions" not in result.stderr
 
 
+def test_save_remote_embedding_host_disclosure_generalizes_to_openai_compatible(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`cfg.backend == "openai-compatible"` with a non-loopback
+    `embedding_base_url`: the pre-`--save` disclosure fires identically in
+    shape to the `ollama`/`OLLAMA_HOST` case, with the credentialed host
+    redacted (task 13.30, query-command spec). The condition is
+    `embedder_locality.is_local` -- the shared locality classifier's
+    verdict on whichever client `_embed_client(cfg)` actually built -- so
+    this is a coverage addition, not new production wiring; RED only if a
+    future change accidentally re-hardcodes `OLLAMA_HOST` into this
+    condition or message."""
+    import dataclasses
+
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
+    monkeypatch.setattr(
+        "openkos.application.query.answer",
+        lambda *a, **k: _fake_matched_answer(
+            citations=[Citation(concept_id="concepts/stoicism", title="Stoicism")]
+        ),
+    )
+    _stub_scan(monkeypatch, insight_identity.DuplicateScan([]))
+    real_cfg = config.read_config(tmp_path)
+    oc_cfg = dataclasses.replace(
+        real_cfg,
+        backend="openai-compatible",
+        base_url="http://127.0.0.1:8000",
+        embedding_base_url="http://user:s3cret@remote.example:9000",
+    )
+    monkeypatch.setattr(config, "read_config", lambda _root: oc_cfg)
+
+    result = runner.invoke(app, ["query", "what is stoicism?", "--save", "--auto"])
+
+    assert result.exit_code == 0
+    assert "already-filed source questions" in result.stderr
+    assert "cached" in result.stderr
+    assert "s3cret" not in result.stderr
+    assert "OLLAMA_HOST" not in result.stderr
+
+
 def test_every_filed_insight_is_compared_end_to_end(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

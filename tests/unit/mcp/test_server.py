@@ -723,6 +723,57 @@ def test_keyboard_interrupt_exits_130(monkeypatch: pytest.MonkeyPatch) -> None:
     assert exit_code == 130
 
 
+def test_mcp_prints_insecure_key_warning_once_at_startup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The MCP server prints the same insecure-key-over-plain-HTTP warning
+    once to stderr at startup, when applicable (task 13.28, design Decision
+    8). RED today: `serve()` never reads config or checks the warning at
+    all.
+
+    Mirrors `test_keyboard_interrupt_exits_130`'s pattern: `claim_stdio` is
+    monkeypatched to raise immediately, so `serve()` runs its startup
+    sequence synchronously (config read, warning check) without touching
+    real stdio."""
+    import dataclasses
+
+    config.write_config(tmp_path)
+    real_cfg = config.read_config(tmp_path)
+    oc_cfg = dataclasses.replace(
+        real_cfg, backend="openai-compatible", base_url="http://example.com:8080"
+    )
+    monkeypatch.setattr(config, "read_config", lambda _root: oc_cfg)
+    monkeypatch.setenv("OPENKOS_OPENAI_API_KEY", "secret")
+    monkeypatch.setattr(transport, "claim_stdio", _RaisesKeyboardInterrupt)
+
+    with caplog.at_level(logging.INFO, logger="openkos.mcp"):
+        exit_code = server.serve(tmp_path, expose_confidential=False)
+
+    assert exit_code == 130
+    assert caplog.text.count("OPENKOS_OPENAI_API_KEY") == 1
+    assert "secret" not in caplog.text
+
+
+def test_mcp_no_insecure_key_warning_for_ollama(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """`backend="ollama"` (default): no warning at startup, even with the
+    key env var set."""
+    config.write_config(tmp_path)
+    monkeypatch.setenv("OPENKOS_OPENAI_API_KEY", "secret")
+    monkeypatch.setattr(transport, "claim_stdio", _RaisesKeyboardInterrupt)
+
+    with caplog.at_level(logging.INFO, logger="openkos.mcp"):
+        exit_code = server.serve(tmp_path, expose_confidential=False)
+
+    assert exit_code == 130
+    assert "OPENKOS_OPENAI_API_KEY" not in caplog.text
+
+
 # -- 9.4/9.5: query progress and cancellation, against the REAL query tool --
 
 

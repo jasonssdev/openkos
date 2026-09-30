@@ -180,6 +180,30 @@ def _backend_factories() -> application_backends.BackendFactories:
     )
 
 
+_INSECURE_KEY_WARNING_PRINTED = False
+"""Module-level once-per-process guard (issue #1057 Phase 13b, design
+Decision 8): a curate/ingest run can build many chat/embed clients in one
+process, and printing `insecure_key_warning`'s advisory on every one would
+drown it out. `tests/unit/conftest.py`'s autouse `_offline_ollama_by_default`
+fixture resets this to `False` before every test, so it never leaks across
+the test suite the way a bare process-lifetime flag normally would."""
+
+
+def _maybe_warn_insecure_key(cfg: config.Config) -> None:
+    """Print `application_backends.insecure_key_warning(cfg)` to stderr, at
+    most once per process. Called from both `_chat_client` and
+    `_embed_client` so every construction site is covered without each one
+    remembering to call it itself."""
+    global _INSECURE_KEY_WARNING_PRINTED
+    if _INSECURE_KEY_WARNING_PRINTED:
+        return
+    warning = application_backends.insecure_key_warning(cfg)
+    if warning is None:
+        return
+    _INSECURE_KEY_WARNING_PRINTED = True
+    typer.echo(f"openkos: {warning}", err=True)
+
+
 def _chat_client(cfg: config.Config, *, task: str | None = None) -> LLMBackend:
     """One-line delegator (mcp-read-surface slice 8, design Decision 7; issue
     #1057 Phase 9, design Decision 4): the real definition, and its full
@@ -189,7 +213,12 @@ def _chat_client(cfg: config.Config, *, task: str | None = None) -> LLMBackend:
     classes from THIS module's own globals at call time via
     `_backend_factories()`, so every existing test that patches
     `openkos.cli.main.OllamaClient` (most load-bearingly,
-    `tests/unit/conftest.py`'s autouse network guard) keeps intercepting."""
+    `tests/unit/conftest.py`'s autouse network guard) keeps intercepting.
+
+    Also prints the once-per-process insecure-key warning (issue #1057
+    Phase 13b) before construction -- the warning is about how the client
+    about to be built will send its key, not about the client itself."""
+    _maybe_warn_insecure_key(cfg)
     return application_backends.chat_client(
         cfg, factories=_backend_factories(), task=task
     )
@@ -202,7 +231,9 @@ def _embed_client(cfg: config.Config) -> Embedder:
     `_backend_factories()`, so patching `openkos.cli.main.OllamaClient`/
     `openkos.cli.main.OpenAICompatibleClient` (as `tests/unit/conftest.py`'s
     autouse network guard does) keeps intercepting every one of them --
-    mirrors `_chat_client`'s existing shape and rationale exactly."""
+    mirrors `_chat_client`'s existing shape and rationale exactly, including
+    the once-per-process insecure-key warning (Phase 13b)."""
+    _maybe_warn_insecure_key(cfg)
     return application_backends.embed_client(cfg, factories=_backend_factories())
 
 
@@ -3992,7 +4023,9 @@ def _resolve_local_exemption(
     return application_backends.resolve_local_exemption(client, cfg)
 
 
-def _warn_if_nonlocal_embed_host(command: str, locality: BackendHostLocality) -> None:
+def _warn_if_nonlocal_embed_host(
+    command: str, locality: BackendHostLocality, cfg: config.Config
+) -> None:
     """One stderr advisory when the embedding host is not literally this
     machine (issue #199): document text and embedding vectors are about to
     be POSTed to it, and a user who exported `OLLAMA_HOST` for some other
@@ -4018,15 +4051,18 @@ def _warn_if_nonlocal_embed_host(command: str, locality: BackendHostLocality) ->
     exemption reads, so the two can never disagree about one host."""
     if locality.is_local:
         return
+    endpoint_name = application_backends.endpoint_label(cfg, purpose="embed")
     typer.echo(
         f"openkos {command}: note -- embedding host '{locality.display_host}' "
-        "is not this machine (OLLAMA_HOST); document text and embedding "
+        f"is not this machine ({endpoint_name}); document text and embedding "
         "vectors will leave this machine.",
         err=True,
     )
 
 
-def _warn_withheld_from_embedding(command: str, withheld: int) -> None:
+def _warn_withheld_from_embedding(
+    command: str, withheld: int, cfg: config.Config
+) -> None:
     """One stderr line naming the documents the embed gate held back (#922).
 
     The counterpart to `_warn_if_nonlocal_embed_host`, and needed for the
@@ -4039,15 +4075,22 @@ def _warn_withheld_from_embedding(command: str, withheld: int) -> None:
     It names the two levers rather than only the fact, because both are
     legitimate: point the backend at this machine, or lower the document's
     sensitivity if it was mis-classified. Silent on zero -- a local backend
-    withholds nothing and must stay quiet."""
+    withholds nothing and must stay quiet.
+
+    `cfg` (issue #1057 Phase 13b) names WHICH config key/environment
+    variable the operator should point at this machine, via
+    `endpoint_label` -- `OLLAMA_HOST` for the `ollama` backend
+    (byte-identical to before), `base_url`/`embedding_base_url` for
+    `openai-compatible`."""
     if withheld <= 0:
         return
+    endpoint_name = application_backends.endpoint_label(cfg, purpose="embed")
     typer.echo(
         f"openkos {command}: {withheld} document{_plural(withheld)} withheld "
         "from embedding -- their sensitivity blocks sending them to a backend "
         "that is not this machine, so they have no vector and dense retrieval "
-        "will not surface them. Point OLLAMA_HOST at this machine and re-run, "
-        "or lower the sensitivity if it is wrong.",
+        f"will not surface them. Point {endpoint_name} at this machine and "
+        "re-run, or lower the sensitivity if it is wrong.",
         err=True,
     )
 
@@ -4056,6 +4099,7 @@ def _embed_after_ingest(
     layout: config.WorkspaceLayout,
     embedder: Embedder,
     *,
+    cfg: config.Config,
     model_tag: str,
     embedding_backend: str = config.DEFAULT_BACKEND,
     warn_nonlocal_host: bool = True,
@@ -4110,7 +4154,7 @@ def _embed_after_ingest(
     # not about whether it arrived (#199).
     if warn_nonlocal_host:
         _warn_if_nonlocal_embed_host(
-            "ingest", cast(BackendDiagnostics, embedder).locality
+            "ingest", cast(BackendDiagnostics, embedder).locality, cfg
         )
     try:
         with open_vector_store(layout.vectors_db_path) as db:
@@ -4144,7 +4188,7 @@ def _embed_after_ingest(
             "incomplete until `openkos reindex` succeeds.",
             err=True,
         )
-    _warn_withheld_from_embedding("ingest", report.withheld_confidential)
+    _warn_withheld_from_embedding("ingest", report.withheld_confidential, cfg)
 
 
 def _refresh_derived_after_write(
@@ -4240,7 +4284,7 @@ def _refresh_derived_after_write(
         # `_embed_after_ingest`. The gate below is never suppressed.
         embedder_locality = cast(BackendDiagnostics, embedder)
         if warn_nonlocal_host:
-            _warn_if_nonlocal_embed_host(verb, embedder_locality.locality)
+            _warn_if_nonlocal_embed_host(verb, embedder_locality.locality, cfg)
         with open_vector_store(layout.vectors_db_path) as db:
             report = reindex_module.reindex(
                 layout.bundle_dir,
@@ -4251,7 +4295,7 @@ def _refresh_derived_after_write(
                 on_progress=observability.progress_callback(verb, "embedding doc"),
                 local_exemption=_resolve_local_exemption(embedder_locality, cfg),
             )
-        _warn_withheld_from_embedding(verb, report.withheld_confidential)
+        _warn_withheld_from_embedding(verb, report.withheld_confidential, cfg)
         # An exception is not the only way embedding degrades: `reindex`
         # folds a generic per-doc `BackendError` into `embed_failed` instead
         # of raising (same trap `_embed_after_ingest` documents), so a run
@@ -4799,6 +4843,7 @@ def _ingest_batch(
     _warn_if_nonlocal_embed_host(
         "ingest",
         cast(BackendDiagnostics, _embed_client(cfg)).locality,
+        cfg,
     )
 
     progress = observability.progress_callback("ingest", "ingesting file")
@@ -5788,6 +5833,7 @@ def _ingest_single(
     _embed_after_ingest(
         layout,
         embedder,
+        cfg=cfg,
         model_tag=cfg.embedding_model,
         embedding_backend=cfg.backend,
         warn_nonlocal_host=warn_nonlocal_embed_host,
@@ -12082,7 +12128,8 @@ def adjudicate(
         )
     except BackendUnavailable as exc:
         typer.echo(
-            f"openkos adjudicate: failed -- {exc}. Start it with `ollama serve`, "
+            f"openkos adjudicate: failed -- {exc}. "
+            f"{application_backends.start_hint(cfg)}, "
             f"then try again.{_DOCTOR_HINT}",
             err=True,
         )
@@ -12090,8 +12137,8 @@ def adjudicate(
     except BackendModelNotFound as exc:
         typer.echo(
             f"openkos adjudicate: failed -- model '{cfg.model}' is not "
-            f"installed. Pull it with `ollama pull {cfg.model}`, then try "
-            "again.",
+            f"installed. {application_backends.install_hint(cfg, cfg.model)}, "
+            "then try again.",
             err=True,
         )
         raise typer.Exit(code=1) from exc
@@ -12798,16 +12845,17 @@ def suggest_relations_cmd(
         )
     except BackendUnavailable as exc:
         typer.echo(
-            f"openkos suggest-relations: failed -- {exc}. Start it with "
-            f"`ollama serve`, then try again.{_DOCTOR_HINT}",
+            f"openkos suggest-relations: failed -- {exc}. "
+            f"{application_backends.start_hint(cfg)}, "
+            f"then try again.{_DOCTOR_HINT}",
             err=True,
         )
         raise typer.Exit(code=1) from exc
     except BackendModelNotFound as exc:
         typer.echo(
             f"openkos suggest-relations: failed -- model '{cfg.model}' is "
-            f"not installed. Pull it with `ollama pull {cfg.model}`, then "
-            "try again.",
+            f"not installed. {application_backends.install_hint(cfg, cfg.model)}, "
+            "then try again.",
             err=True,
         )
         raise typer.Exit(code=1) from exc
@@ -14873,7 +14921,7 @@ def query(
     llm = _chat_client(cfg)
     embedder = _embed_client(cfg)
     embedder_locality = cast(BackendDiagnostics, embedder).locality
-    _warn_if_nonlocal_embed_host("query", embedder_locality)
+    _warn_if_nonlocal_embed_host("query", embedder_locality, cfg)
     if save and not embedder_locality.is_local:
         # #764 finding 3. The standing advisory above was written when
         # `query` embedded ONE string -- the question just typed. Since #762
@@ -14940,19 +14988,24 @@ def query(
         )
     except BackendUnavailable as exc:
         typer.echo(
-            f"openkos query: failed -- {exc}. Start it with `ollama serve`, "
+            f"openkos query: failed -- {exc}. "
+            f"{application_backends.start_hint(cfg)}, "
             f"then try again.{_DOCTOR_HINT}",
             err=True,
         )
         raise typer.Exit(code=1) from exc
     except BackendModelNotFound as exc:
         # Names the REAL failing model from the exception text -- `query`
-        # now builds TWO Ollama-backed seams (chat `llm` + `embedder`), so
+        # now builds TWO backend-backed seams (chat `llm` + `embedder`), so
         # a hardcoded `cfg.model` would be wrong whenever the embedding
-        # model is the one that actually 404'd.
+        # model is the one that actually 404'd. `install_hint`'s own
+        # `<model>` literal placeholder (issue #1057 Phase 13b) preserves
+        # that same "name it generically, the exception text already named
+        # the real one" shape for the `openai-compatible` branch.
         typer.echo(
-            f"openkos query: failed -- {exc}. Pull it with "
-            "`ollama pull <model>`, then try again.",
+            f"openkos query: failed -- {exc}. "
+            f"{application_backends.install_hint(cfg, '<model>')}, then try "
+            "again.",
             err=True,
         )
         raise typer.Exit(code=1) from exc
@@ -15591,7 +15644,7 @@ def reindex(
 
     embedder = _embed_client(cfg)
     embedder_locality = cast(BackendDiagnostics, embedder)
-    _warn_if_nonlocal_embed_host("reindex", embedder_locality.locality)
+    _warn_if_nonlocal_embed_host("reindex", embedder_locality.locality, cfg)
     try:
         with open_vector_store(layout.vectors_db_path) as db:
             # Captured BEFORE the call so the summary below can name the OLD
@@ -15694,7 +15747,7 @@ def reindex(
         f"{report.skipped} skipped, {report.embed_failed} embed-failed, "
         f"{report.withheld_confidential} withheld."
     )
-    _warn_withheld_from_embedding("reindex", report.withheld_confidential)
+    _warn_withheld_from_embedding("reindex", report.withheld_confidential, cfg)
     if report.prune_skipped:
         typer.echo(
             "openkos reindex: prune pass was skipped this run -- a "
@@ -16431,7 +16484,9 @@ def mcp_cmd(
     # it makes no network call here, and `query` (slice 9) is what actually
     # uses one during serving.
     embedder = _embed_client(cfg)
-    _warn_if_nonlocal_embed_host("mcp", cast(BackendDiagnostics, embedder).locality)
+    _warn_if_nonlocal_embed_host(
+        "mcp", cast(BackendDiagnostics, embedder).locality, cfg
+    )
 
     from openkos.mcp import (
         server as mcp_server,  # lazy: asyncio stays off every other verb

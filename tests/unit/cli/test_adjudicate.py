@@ -42,6 +42,10 @@ from openkos.llm.ollama import (
     OllamaModelNotFound,
     OllamaUnavailable,
 )
+from openkos.llm.openai_compatible import (
+    OpenAICompatibleModelNotFound,
+    OpenAICompatibleUnavailable,
+)
 from openkos.model import okf
 from openkos.resolution.adjudication import (
     AdjudicatedCandidate,
@@ -851,6 +855,83 @@ def test_adjudicate_model_not_found_maps_to_exit_one(
     assert "is not installed" in result.stderr
     assert f"ollama pull {configured_model}" in result.stderr
     assert "openkos doctor" not in result.stderr
+    assert "Traceback" not in result.stderr
+    assert _snapshot(tmp_path / "bundle") == before
+
+
+def _init_openai_compatible_workspace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    base_url: str = "http://127.0.0.1:8000",
+) -> None:
+    """`_init_workspace` plus `config.read_config` monkeypatched to a
+    `backend="openai-compatible"` `Config` -- `SELECTABLE_BACKENDS` still
+    refuses that value in a REAL `openkos.yaml` until Phase 14, mirroring
+    `test_query.py`'s/`test_suggest_relations.py`'s identical helper."""
+    import dataclasses
+
+    _init_workspace(tmp_path, monkeypatch)
+    real_cfg = okf_config.read_config(tmp_path)
+    oc_cfg = dataclasses.replace(
+        real_cfg, backend="openai-compatible", base_url=base_url
+    )
+    monkeypatch.setattr(okf_config, "read_config", lambda _root: oc_cfg)
+
+
+def test_adjudicate_openai_compatible_unreachable_no_ollama_wording(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`cfg.backend == "openai-compatible"` and `adjudicate_candidates()`
+    raises `OpenAICompatibleUnavailable`: stderr names the configured
+    endpoint, advises verifying the server is running, and also names
+    `openkos doctor`, with no `ollama serve` reference (task 13.20,
+    entity-resolution-adjudication delta spec)."""
+    _init_openai_compatible_workspace(
+        tmp_path, monkeypatch, base_url="http://127.0.0.1:9009"
+    )
+    before = _snapshot(tmp_path / "bundle")
+
+    def _raise_unavailable(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> AdjudicationBatch:
+        raise OpenAICompatibleUnavailable("server not reachable")
+
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _raise_unavailable)
+
+    result = runner.invoke(app, ["adjudicate"])
+
+    assert result.exit_code != 0
+    assert "127.0.0.1:9009" in result.stderr
+    assert "ollama serve" not in result.stderr
+    assert "openkos doctor" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert _snapshot(tmp_path / "bundle") == before
+
+
+def test_adjudicate_openai_compatible_model_not_found_no_ollama_pull(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`cfg.backend == "openai-compatible"` and `adjudicate_candidates()`
+    raises `OpenAICompatibleModelNotFound`: stderr names the configured
+    model and advises making it available on the configured server, with no
+    `ollama pull` reference (task 13.20)."""
+    _init_openai_compatible_workspace(tmp_path, monkeypatch)
+    before = _snapshot(tmp_path / "bundle")
+
+    def _raise_model_not_found(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> AdjudicationBatch:
+        raise OpenAICompatibleModelNotFound("model not found")
+
+    monkeypatch.setattr(
+        "openkos.cli.main.adjudicate_candidates", _raise_model_not_found
+    )
+
+    result = runner.invoke(app, ["adjudicate"])
+
+    assert result.exit_code != 0
+    assert "ollama pull" not in result.stderr
     assert "Traceback" not in result.stderr
     assert _snapshot(tmp_path / "bundle") == before
 
