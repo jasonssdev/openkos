@@ -52,47 +52,47 @@ only the verb name and may land after Phase 3 or together with it.
 
 ### Precondition
 
-- [ ] **1.1** [CHECK] `grep -rn "sync_tags\|sync-tags\|TagAddition\|resolve_source_tag_additions" src tests`
+- [x] **1.1** [CHECK] `grep -rn "sync_tags\|sync-tags\|TagAddition\|resolve_source_tag_additions" src tests`
       returns nothing, recorded in the PR description, so every later test
       is known to be RED for the right reason.
 
 ### `model/okf.py` — dataclasses
 
-- [ ] **1.2** [IMPL] Add frozen `TagAddition(concept_id, added, content)`
+- [x] **1.2** [IMPL] Add frozen `TagAddition(concept_id, added, content)`
       and `TagSkip(concept_id, reason)` beside `DescendantRaise`, Path-free.
       Pure data, exercised through 1.3+; no standalone test.
 
 ### `bundle/provenance.py` — closure (Decision 1)
 
-- [ ] **1.3** [TEST] `tests/unit/bundle/test_provenance_tag_additions.py`:
+- [x] **1.3** [TEST] `tests/unit/bundle/test_provenance_tag_additions.py`:
       `test_single_source_descendant_is_staged` — Source `sources/notes`
       (`tags: [alpha]`), `concepts/a` citing only it, untagged → one
       `TagAddition("concepts/a", ("alpha",), …)`. RED: function missing.
-- [ ] **1.4** [TEST] `test_transitive_descendant_is_staged` (a → b chain)
+- [x] **1.4** [TEST] `test_transitive_descendant_is_staged` (a → b chain)
       and `test_multi_source_concept_is_not_a_candidate` (precondition: the
       same concept IS staged when its provenance is only `sources/a`).
-- [ ] **1.5** [TEST] `test_source_typed_member_is_never_written` — a
+- [x] **1.5** [TEST] `test_source_typed_member_is_never_written` — a
       `type: Source` concept inside the closure is absent from both result
       lists; precondition: an otherwise identical `type: Concept` member is
       staged.
-- [ ] **1.6** [IMPL] `resolve_source_tag_additions`: walk
+- [x] **1.6** [IMPL] `resolve_source_tag_additions`: walk
       `find_provenance_descendants(files, root_ids={source_id})`, drop the
       root and Source-typed members, sort by id. GREEN 1.3-1.5.
 
 ### Union rule (Decision 2, ADR-0033)
 
-- [ ] **1.7** [TEST] `test_union_appends_after_existing` — existing
+- [x] **1.7** [TEST] `test_union_appends_after_existing` — existing
       `[gamma, alpha]`, Source `[alpha, beta]` → content's `tags` is
       exactly `[gamma, alpha, beta]` (parsed back, literal list) and
       `added == ("beta",)`.
-- [ ] **1.8** [TEST] `test_hand_added_tag_survives` and
+- [x] **1.8** [TEST] `test_hand_added_tag_survives` and
       `test_tag_removed_from_source_is_kept` (literal expected lists).
-- [ ] **1.9** [TEST] `test_complete_member_is_not_staged` — precondition:
+- [x] **1.9** [TEST] `test_complete_member_is_not_staged` — precondition:
       the member is a closure member (asserted via
       `find_provenance_descendants`), then both result lists empty.
-- [ ] **1.10** [TEST] `test_only_tags_changes` — body, `sensitivity`,
+- [x] **1.10** [TEST] `test_only_tags_changes` — body, `sensitivity`,
       `provenance`, `title` re-parse equal to the original values.
-- [ ] **1.11** [IMPL] Compute `okf.union_tags(existing, source_tags)`,
+- [x] **1.11** [IMPL] Compute `okf.union_tags(existing, source_tags)`,
       stage only when it adds, render via `okf.dump_frontmatter`. GREEN
       1.7-1.10. [MUT] for any first-try-green test among them: replace
       `union_tags(existing, source_tags)` with `list(source_tags)` → 1.8
@@ -100,86 +100,86 @@ only the verb name and may land after Phase 3 or together with it.
 
 ### Malformed tags (Decision 3)
 
-- [ ] **1.12** [TEST] `test_malformed_tags_are_skipped`, parametrized over
+- [x] **1.12** [TEST] `test_malformed_tags_are_skipped`, parametrized over
       a mapping, a bare string, a number, `[alpha, 3]` → one
       `TagSkip(…, "malformed-tags")`, no addition.
-- [ ] **1.13** [TEST] `test_absent_or_null_tags_gain_source_tags` → added
+- [x] **1.13** [TEST] `test_absent_or_null_tags_gain_source_tags` → added
       `("alpha",)`, content `tags == ["alpha"]`.
-- [ ] **1.14** [IMPL] Writable iff absent/`None` or a list of `str`.
+- [x] **1.14** [IMPL] Writable iff absent/`None` or a list of `str`.
       GREEN 1.12-1.13. [MUT] if 1.12's bare-string case passed first try:
       route strings through `okf.normalize_tags` → it must go RED; revert.
 
 ### Sensitivity floor (Decision 4, ADR-0033)
 
-- [ ] **1.15** [TEST] `test_below_source_sensitivity_is_skipped` —
+- [x] **1.15** [TEST] `test_below_source_sensitivity_is_skipped` —
       Source level `confidential`, member `private` → `TagSkip(…,
       "below-source-sensitivity")`; precondition: the same member at
       `confidential` is staged.
-- [ ] **1.16** [TEST] `test_missing_member_sensitivity_under_confidential_is_skipped`
+- [x] **1.16** [TEST] `test_missing_member_sensitivity_under_confidential_is_skipped`
       and `test_unrecognized_member_sensitivity_is_not_below` (ranks
       fail-closed at `confidential`, so it is staged).
-- [ ] **1.17** [IMPL] Skip when `okf.sensitivity_direction(member_raw,
+- [x] **1.17** [IMPL] Skip when `okf.sensitivity_direction(member_raw,
       source_level) == "raise"`. GREEN 1.15-1.16.
-- [ ] **1.18** [MUT] Flip the comparison to `== "lower"` → 1.15 must go
+- [x] **1.18** [MUT] Flip the comparison to `== "lower"` → 1.15 must go
       RED; revert, purge `__pycache__`, re-run green.
 
 ### Phase 1 close
 
-- [ ] **1.19** Run the full gate. Commit `feat(bundle): resolve Source tag
+- [x] **1.19** Run the full gate. Commit `feat(bundle): resolve Source tag
       additions over the provenance closure (#1093)`.
 
 ## Phase 2 (PR 2): Application service
 
-- [ ] **2.1** [CHECK] Phase 1 merged; `grep -n "prepare_sync_tags"
+- [x] **2.1** [CHECK] Phase 1 merged; `grep -n "prepare_sync_tags"
       src/openkos/application/lifecycle.py` returns nothing.
-- [ ] **2.2** [IMPL] `PreparedTagSync` dataclass (design Interfaces).
-- [ ] **2.3** [TEST] `tests/unit/application/test_lifecycle.py`:
+- [x] **2.2** [IMPL] `PreparedTagSync` dataclass (design Interfaces).
+- [x] **2.3** [TEST] `tests/unit/application/test_lifecycle.py`:
       `test_prepare_sync_tags_single_source` — `tmp_path` workspace, one
       Source + one descendant → one addition, `roots == ("sources/notes",)`,
       `confirmation` equals `boolean_confirmation("sync-tags")`.
-- [ ] **2.4** [IMPL] `prepare_sync_tags` single-Source path: resolve via
+- [x] **2.4** [IMPL] `prepare_sync_tags` single-Source path: resolve via
       `resolve_concept_path`, snapshot every non-reserved `.md` with
       `fsio.snapshot_read`, read `normalize_tags(source.tags)` and
       `combine_sensitivity(source.sensitivity, "public")`, call the
       resolver. GREEN 2.3.
-- [ ] **2.5** [TEST] `test_prepare_sync_tags_refuses_non_source` →
+- [x] **2.5** [TEST] `test_prepare_sync_tags_refuses_non_source` →
       `ValueError` naming the id and "Source".
-- [ ] **2.6** [TEST] `test_prepare_sync_tags_refuses_unsafe_id`
+- [x] **2.6** [TEST] `test_prepare_sync_tags_refuses_unsafe_id`
       (parametrized: absolute, `..`, reserved basename, missing).
-- [ ] **2.7** [IMPL] `type == "Source"` check. GREEN 2.5 (2.6 is expected
+- [x] **2.7** [IMPL] `type == "Source"` check. GREEN 2.5 (2.6 is expected
       green on first run through `resolve_concept_path`).
-- [ ] **2.8** [MUT] Remove the `type` check → 2.5 RED; revert. For 2.6,
+- [x] **2.8** [MUT] Remove the `type` check → 2.5 RED; revert. For 2.6,
       bypass `resolve_concept_path` with a plain join → at least the `..`
       case RED; revert.
 
 ### `--all` fold (Decision 8)
 
-- [ ] **2.9** [TEST] `test_prepare_sync_tags_all_folds_every_source` — two
+- [x] **2.9** [TEST] `test_prepare_sync_tags_all_folds_every_source` — two
       Sources, one descendant each → two additions, roots sorted.
-- [ ] **2.10** [TEST] `test_all_stages_each_file_once` — a descendant in
+- [x] **2.10** [TEST] `test_all_stages_each_file_once` — a descendant in
       two closures (Source B citing only Source A is the fixture that makes
       this reachable; Source-typed B itself is not written) gains the union
       in root order and appears once.
-- [ ] **2.11** [IMPL] Enumerate Sources by `type`, sort, accumulate per
+- [x] **2.11** [IMPL] Enumerate Sources by `type`, sort, accumulate per
       member, render once. GREEN 2.9-2.10.
 
 ### Log text and baselines (Decisions 5, 6)
 
-- [ ] **2.12** [TEST] `test_log_entry_carries_no_tag_value` — Source
+- [x] **2.12** [TEST] `test_log_entry_carries_no_tag_value` — Source
       `tags: [secret-project]`; precondition: `"secret-project"` is in the
       Source text; then `"secret-project" not in prepared.new_log_text` and
       the entry reads `**Sync-tags**: Added tags from
       [sources/notes](/sources/notes.md) to 1 concept(s).`
-- [ ] **2.13** [TEST] `test_baselines_include_roots_and_log` — keys are
+- [x] **2.13** [TEST] `test_baselines_include_roots_and_log` — keys are
       staged files + contributing Sources + `log.md`.
-- [ ] **2.14** [IMPL] Log rendering via `bundle_log.insert_log_entry`,
+- [x] **2.14** [IMPL] Log rendering via `bundle_log.insert_log_entry`,
       baselines dict. GREEN 2.12-2.13.
-- [ ] **2.15** [TEST+IMPL] `sync_tags_core` writes additions in id order
+- [x] **2.15** [TEST+IMPL] `sync_tags_core` writes additions in id order
       then `log.md`; `test_sync_tags_core_names_landed_on_failure`
       (monkeypatch `fsio.write_atomic` to fail on the second call, assert
       the monkeypatch was actually invoked, then the error's `landed` list
       is exactly the first path). RED first, then implement.
-- [ ] **2.16** Full gate. Commit `feat(cli): stage Source tag sync in the
+- [x] **2.16** Full gate. Commit `feat(cli): stage Source tag sync in the
       lifecycle service (#1093)`.
 
 ## Phase 3 (PR 3): CLI verb + docs
