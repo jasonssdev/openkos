@@ -1213,6 +1213,10 @@ The raw copy destination and the concept slug MUST derive only from the
 source's basename (path with directory components stripped) and a
 sanitized slug. Directory-traversal or absolute-path segments in `<path>`
 MUST NOT influence where the copy or concept document is written.
+Every destination the ingest writes -- the raw copy, the Source concept,
+and each derived object -- MUST also be contained: if any segment of a
+destination path below the workspace root is a symlink, the ingest MUST
+refuse in Phase A rather than write through it.
 
 #### Scenario: Traversal segments are stripped, not followed
 
@@ -1230,6 +1234,16 @@ MUST NOT influence where the copy or concept document is written.
 - WHEN `openkos ingest <path>` runs
 - THEN it refuses in Phase A with a clear error, exits non-zero, and writes
   nothing (no raw copy, concept document, or catalog change)
+
+#### Scenario: A symlinked destination directory is refused before any write
+
+- GIVEN `bundle/sources`, or the directory of a derived object such as
+  `bundle/entities`, is a symlink
+- WHEN `openkos ingest <path>` runs
+- THEN it refuses with exit code 1 and the shared symlink-boundary reason
+  naming the linked segment, before any raw copy, concept document, derived
+  object, or catalog change is written, and nothing is written through the
+  link
 
 ### Requirement: OKF-Native Provenance
 

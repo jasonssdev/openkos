@@ -5160,6 +5160,18 @@ def ingest(
     )
 
 
+def _refuse_symlinked_destinations(root: Path, destinations: Sequence[Path]) -> None:
+    """Refuse `ingest` when any destination path passes through a symlinked
+    segment below the workspace root (#1126), with the shared D1-shaped reason
+    `require_workspace` uses and exit code 1. Runs before any write, so a
+    refusal leaves the workspace exactly as it was found."""
+    for destination in destinations:
+        reason = config.symlink_boundary_reason(destination, root)
+        if reason is not None:
+            typer.echo(f"openkos ingest: refusing to ingest -- {reason}.", err=True)
+            raise typer.Exit(code=1)
+
+
 def _ingest_single(
     src: Path,
     *,
@@ -5335,6 +5347,11 @@ def _ingest_single(
         raw_dest = layout.raw_dir / name
         sources_dir = layout.bundle_dir / "sources"
         concept_path = sources_dir / f"{slug}.md"
+        # Symlink boundary (#1126): `write_exclusive` opens with mode `x`,
+        # which follows a symlinked PARENT, so a linked `bundle/sources`
+        # carried the source text out of the workspace. Refused here, before
+        # the extraction spends a backend call and before anything is written.
+        _refuse_symlinked_destinations(root, [raw_dest, concept_path])
 
         if destination.disambiguated_from is not None:
             # A destination the user did not name is never chosen silently.
@@ -5642,6 +5659,9 @@ def _ingest_single(
             _render_staged_derived_objects(staged)
         derived_plans = staged.plans
         skip_reason = staged.skip_reason
+        # Same boundary for the derived-object directories (`bundle/entities`,
+        # ...), known only once staging has chosen each object's type.
+        _refuse_symlinked_destinations(root, [plan.path for plan in derived_plans])
         extraction_notice = staged.notices
         # One `_snapshot_read` observation per target: the decoded text
         # feeds `compose_catalog_update` below, the raw bytes feed
@@ -11997,6 +12017,13 @@ def lint() -> None:
         for finding in report.dot_dir_markdown:
             typer.echo(f"  {finding.path}: {finding.detail}")
     typer.echo()
+    typer.echo("Symlinked markdown:")
+    if not report.symlinked_markdown:
+        typer.echo("  No symlinked `.md` files or directories under bundle/.")
+    else:
+        for finding in report.symlinked_markdown:
+            typer.echo(f"  {finding.path}: {finding.detail}")
+    typer.echo()
     typer.echo("Deprecated-status exports:")
     if not report.status_export:
         typer.echo("  No deprecated-status export findings.")
@@ -12005,7 +12032,7 @@ def lint() -> None:
             typer.echo(f"  {finding.concept_id}: {finding.detail}")
 
     # Completed/not-run counts (design.md Decision 5, ADR-0022): against
-    # `application_lint.TOTAL_CHECKS` (14 calls), NOT the 15 `LintReport`
+    # `application_lint.TOTAL_CHECKS` (15 calls), NOT the 16 `LintReport`
     # finding-list fields -- `check_below_source_sensitivity` is one call
     # feeding two fields, so counting fields would overstate how many
     # checks ran.

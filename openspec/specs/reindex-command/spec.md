@@ -119,7 +119,18 @@ The orchestrator MUST discover documents via the existing `okf._iter_docs`
 walk (no new walker) and key each by `concept_id` = bundle-relative path
 minus `.md`, identical to the identity used by `FtsHit`/`Citation`/`forget`.
 Reserved filenames (`index.md`, `log.md`) MUST be excluded, mirroring
-`fts.build_index`.
+`fts.build_index`. The walk MUST NOT yield a symlinked `.md` file or descend
+through a symlinked directory: a link can point outside the workspace, so
+its bytes (and any `sensitivity` they carry) are not the bundle's knowledge.
+Every consumer of the bundle walk (`query`, `reindex`, `lint`, the
+disclosure gate) inherits this exclusion.
+
+#### Scenario: A symlinked concept file is not discovered
+
+- GIVEN `bundle/leak.md` is a symlink to a file outside the workspace whose
+  frontmatter says `sensitivity: public`
+- WHEN `reindex` (or `query`) discovers documents
+- THEN `leak` is not discovered, embedded, indexed, or disclosed
 
 #### Scenario: Discovered doc's identity matches forget's identity
 

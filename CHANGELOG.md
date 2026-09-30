@@ -14,6 +14,18 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+### Security
+
+- `ingest` no longer writes through a symlinked `bundle/sources` or derived-object
+  directory, and the bundle walk no longer reads through a symlinked `.md` file
+  or directory ([#1126](https://github.com/jasonssdev/openkos/issues/1126)). The
+  symlink-boundary guard covered only `forget`/`get`, so with `bundle/sources`
+  linked outside the workspace `ingest` carried the source text out of it, and
+  a `bundle/leak.md` linked to an external file marked `sensitivity: public`
+  was admitted to `query` prompts, citations and embeddings. `ingest` now
+  refuses, before writing anything, with the same reason `forget` gives; the
+  walk drops the link, and `lint` reports it as `symlinked-markdown`.
+
 ### Changed
 
 - The computed `STATUS` column `list` prints, the `status` field
