@@ -75,6 +75,7 @@ def test_delegators_are_single_line_and_singly_defined() -> None:
     for delegator, real_name in (
         ("_chat_client", "chat_client"),
         ("_resolve_local_exemption", "resolve_local_exemption"),
+        ("_embed_client", "embed_client"),
     ):
         node = _delegator_function(delegator)
         body = _non_docstring_body(node)
@@ -92,6 +93,42 @@ def test_delegators_are_single_line_and_singly_defined() -> None:
         assert _count_definitions(real_name) == 1, (
             f"{real_name} must be defined exactly once under src/"
         )
+
+
+def test_embed_client_delegator_shape(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`cli.main._embed_client(cfg)` (issue #1057 Phase 10, task 10.1) is a
+    new one-line delegator mirroring `_chat_client`: it calls
+    `application_backends.embed_client(cfg, factories=_backend_factories())`
+    -- confirmed here by spying on `application_backends.embed_client` and
+    asserting both the `cfg` and the `factories` it receives. RED today:
+    `_embed_client` doesn't exist."""
+    config.write_config(tmp_path)
+    cfg = config.read_config(tmp_path)
+
+    calls: list[tuple[config.Config, BackendFactories]] = []
+    original_embed_client = application_backends.embed_client
+
+    def _spy_embed_client(
+        spied_cfg: config.Config, *, factories: BackendFactories
+    ) -> object:
+        calls.append((spied_cfg, factories))
+        return original_embed_client(spied_cfg, factories=factories)
+
+    monkeypatch.setattr(application_backends, "embed_client", _spy_embed_client)
+
+    client = main_mod._embed_client(cfg)
+
+    assert len(calls) == 1
+    called_cfg, called_factories = calls[0]
+    assert called_cfg is cfg
+    assert called_factories.ollama is main_mod.__dict__["OllamaClient"]
+    assert (
+        called_factories.openai_compatible
+        is (main_mod.__dict__["OpenAICompatibleClient"])
+    )
+    assert isinstance(client, called_factories.ollama)
 
 
 def test_ollama_client_monkeypatch_still_intercepts(

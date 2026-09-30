@@ -22,6 +22,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner, _NamedTextIOWrapper
 
+from openkos.cli import main as main_mod
 from openkos.cli.main import app
 from openkos.graph import sqlite_graph
 from openkos.llm.base import EMBED_DIM
@@ -2190,4 +2191,41 @@ def test_no_history_truncation_prints_no_notice(
     result = runner.invoke(app, ["query", "what changed?"])
 
     assert result.exit_code == 0
+
+
+def test_query_embed_site_uses_the_embed_client_delegator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`query`'s embedding client is built through `main._embed_client(cfg)`
+    (issue #1057 Phase 10, task 10.7-10.8), not a direct
+    `OllamaClient(model=cfg.embedding_model)` construction. Confirmed by
+    spying on the delegator itself while `application.query.answer` is
+    patched away, so this pins the construction SHAPE, independent of
+    retrieval behavior. **RED today**: `query` still constructs
+    `OllamaClient` directly."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_result = AnswerResult(
+        answer="An answer.",
+        citations=[],
+        fts_hit_count=0,
+        llm_invoked=False,
+        no_match_cause="none",
+        skip_notices=[],
+    )
+    monkeypatch.setattr(
+        "openkos.application.query.answer", lambda *args, **kwargs: fake_result
+    )
+    calls: list[object] = []
+    original_embed_client = main_mod._embed_client
+
+    def _spy(cfg: object) -> object:
+        calls.append(cfg)
+        return original_embed_client(cfg)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(main_mod, "_embed_client", _spy)
+
+    result = runner.invoke(app, ["query", "what changed?"])
+
+    assert result.exit_code == 0, result.stdout
+    assert len(calls) == 1
     assert "goes back further" not in result.stderr

@@ -20,6 +20,7 @@ import pytest
 from typer.testing import CliRunner, _NamedTextIOWrapper
 
 from openkos import config
+from openkos.cli import main as main_mod
 from openkos.cli.main import app
 from openkos.llm.base import EMBED_DIM
 from openkos.llm.ollama import (
@@ -90,6 +91,33 @@ def test_reindex_successful_run_prints_summary_and_exits_zero(
     assert "1 pruned" in result.stdout
     assert "0 skipped" in result.stdout
     assert "0 embed-failed" in result.stdout
+
+
+def test_reindex_embed_site_uses_the_embed_client_delegator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`reindex`'s embedding client is built through
+    `main._embed_client(cfg)` (issue #1057 Phase 10, task 10.9-10.10), not a
+    direct `OllamaClient(model=cfg.embedding_model)` construction. **RED
+    today**: `reindex` still constructs `OllamaClient` directly."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_report = ReindexReport(embedded=0, cache_hits=0, pruned=0, skipped=0)
+    monkeypatch.setattr(
+        "openkos.cli.main.reindex_module.reindex", lambda *a, **k: fake_report
+    )
+    calls: list[object] = []
+    original_embed_client = main_mod._embed_client
+
+    def _spy(cfg: object) -> object:
+        calls.append(cfg)
+        return original_embed_client(cfg)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(main_mod, "_embed_client", _spy)
+
+    result = runner.invoke(app, ["reindex"])
+
+    assert result.exit_code == 0, result.stdout
+    assert len(calls) == 1
 
 
 def test_reindex_summary_notes_when_prune_pass_was_skipped(

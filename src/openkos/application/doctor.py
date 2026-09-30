@@ -51,15 +51,21 @@ nor `Embedder` covers any of that, so `openkos.llm.base` gained a THIRD
 capability-scoped Protocol, `BackendDiagnostics`, declaring exactly those
 two members -- see its own docstring for why it is separate from
 `LLMBackend` rather than folded into it. This module takes a
-`build_client: Callable[[str], BackendDiagnostics]` FACTORY as its
-injected parameter, not a constructed client -- check 2's own paragraph
-below explains why a factory is what closes issue #1002 item B -- and
-imports ONLY `openkos.llm.base` (`tests/unit/application/test_layering.py::
+`build_client: Callable[[config.Config | None, str], BackendDiagnostics]`
+FACTORY as its injected parameter, not a constructed client -- check 2's
+own paragraph below explains why a factory is what closes issue #1002
+item B -- and imports ONLY `openkos.llm.base`
+(`tests/unit/application/test_layering.py::
 test_application_modules_bind_no_concrete_llm_backend`) -- never
-`openkos.llm.ollama`. The CLI adapter supplies
-`build_client=lambda model: OllamaClient(model=model, timeout=...)`;
-structural typing means whatever it returns satisfies `BackendDiagnostics`
-with no extra construction on this module's side.
+`openkos.llm.ollama`. The CLI adapter supplies `build_client=lambda cfg,
+model: application_backends.diagnostics_client(cfg, model=model,
+timeout=..., factories=...)` (issue #1057 Phase 10, task 10.17-10.18),
+routing through the resolver seam so the probe dispatches by
+`cfg.backend` instead of always constructing `OllamaClient`; structural
+typing means whatever it returns satisfies `BackendDiagnostics` with no
+extra construction on this module's side. `cfg` is the SAME value check
+2 already computed (`None` outside a workspace or on a read failure) --
+never a second, independent read.
 
 That boundary also had to cover EXCEPTIONS, which the brief for this slice
 did not spell out: check 3 must distinguish "nothing is listening"
@@ -93,8 +99,8 @@ REPORTED (check 2's own `CheckResult.detail`) come apart.
 
 The fix inverts the injection instead of eliminating it (ADR-0018 still
 requires *something* be injected across WALL 1): the adapter no longer
-builds a client at all, it supplies `build_client: Callable[[str],
-BackendDiagnostics]`, a factory. Check 2's `config.read_config` call below
+builds a client at all, it supplies `build_client: Callable[[config.Config
+| None, str], BackendDiagnostics]`, a factory. Check 2's `config.read_config` call below
 is now the ONLY read of `openkos.yaml` a `doctor` run performs, and its own
 `model` -- the exact value check 2's `CheckResult` reports -- is what gets
 handed to `build_client`. `resolve_diagnostic_model` is gone; there is
@@ -187,7 +193,7 @@ unforecast scope left to a reviewer)."""
 def run_diagnostics(
     root: Path,
     *,
-    build_client: Callable[[str], BackendDiagnostics],
+    build_client: Callable[[config.Config | None, str], BackendDiagnostics],
     git_available: bool,
     filter_repo_available: bool,
     reset_point_available: Callable[[], bool],
@@ -200,12 +206,15 @@ def run_diagnostics(
     this module performs no network I/O and no `openkos.vcs` I/O of its
     own.
 
-    `build_client` is a FACTORY (`Callable[[str], BackendDiagnostics]`),
-    not a constructed client, and the difference closes issue #1002 item B.
-    Check 2 below performs the ONLY `config.read_config` call in a
-    `doctor` run; its resulting `model` -- the same value its own
-    `CheckResult.detail` reports -- is what gets passed to `build_client`
-    to produce check 3's client. A constructed-client parameter would force
+    `build_client` is a FACTORY (`Callable[[config.Config | None, str],
+    BackendDiagnostics]`), not a constructed client, and the difference
+    closes issue #1002 item B. Check 2 below performs the ONLY
+    `config.read_config` call in a `doctor` run; its resulting `cfg`/`model`
+    -- the same values its own `CheckResult.detail` reports -- are what get
+    passed to `build_client` to produce check 3's client (issue #1057 Phase
+    10: `cfg` was added alongside `model` so the CLI adapter's factory can
+    dispatch by `cfg.backend` through the resolver seam instead of always
+    building an Ollama client). A constructed-client parameter would force
     the adapter to read `openkos.yaml` itself, BEFORE calling this
     function, so the model probed and the model reported could only agree
     because nothing edited the file in the moment between two separate
@@ -312,7 +321,7 @@ def run_diagnostics(
     embedding_model = (
         cfg.embedding_model if cfg is not None else config.DEFAULT_EMBEDDING_MODEL
     )
-    client = build_client(model)
+    client = build_client(cfg, model)
 
     # 3. Ollama-reachable (critical, always)
     reachable = False

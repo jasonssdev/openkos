@@ -89,6 +89,39 @@ def test_mcp_backend_factories_shape() -> None:
     assert factories.openai_compatible is server.__dict__["OpenAICompatibleClient"]
 
 
+def test_make_embedder_uses_the_embed_client_resolver(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`mcp/server.py::_make_embedder(cfg)` (issue #1057 Phase 10, task
+    10.13-10.14) delegates to `application_backends.embed_client(cfg,
+    factories=_backend_factories())`, mirroring `_make_llm`'s existing
+    resolver shape -- not a direct `OllamaClient(model=cfg.embedding_model)`
+    construction. **RED today**: `_make_embedder` still constructs
+    `OllamaClient` directly."""
+    config.write_config(tmp_path)
+    cfg = config.read_config(tmp_path)
+    calls: list[tuple[config.Config, application_backends.BackendFactories]] = []
+    original_embed_client = application_backends.embed_client
+
+    def _spy(
+        spied_cfg: config.Config,
+        *,
+        factories: application_backends.BackendFactories,
+    ) -> object:
+        calls.append((spied_cfg, factories))
+        return original_embed_client(spied_cfg, factories=factories)
+
+    monkeypatch.setattr(application_backends, "embed_client", _spy)
+
+    embedder = server._make_embedder(cfg)
+
+    assert len(calls) == 1
+    called_cfg, called_factories = calls[0]
+    assert called_cfg is cfg
+    assert called_factories.ollama is server.__dict__["OllamaClient"]
+    assert isinstance(embedder, called_factories.ollama)
+
+
 def _make_server(
     buffer: io.BytesIO, registry: Mapping[str, tools.Tool] | None = None
 ) -> server.Server:

@@ -59,10 +59,12 @@ from openkos.graph.base import Edge, GraphStore
 from openkos.graph.sqlite_graph import build_graph
 from openkos.graph.summary import graph_edge_summary
 from openkos.llm.base import (
+    BackendDiagnostics,
     BackendEmbeddingDimensionMismatch,
     BackendError,
     BackendModelNotFound,
     BackendUnavailable,
+    Embedder,
     LLMBackend,
 )
 from openkos.llm.ollama import (
@@ -191,6 +193,17 @@ def _chat_client(cfg: config.Config, *, task: str | None = None) -> LLMBackend:
     return application_backends.chat_client(
         cfg, factories=_backend_factories(), task=task
     )
+
+
+def _embed_client(cfg: config.Config) -> Embedder:
+    """One-line delegator (issue #1057 Phase 10, design Decision 4): every
+    embed construction site in `cli/main.py` goes through
+    `application_backends.embed_client` with this module's own
+    `_backend_factories()`, so patching `openkos.cli.main.OllamaClient`/
+    `openkos.cli.main.OpenAICompatibleClient` (as `tests/unit/conftest.py`'s
+    autouse network guard does) keeps intercepting every one of them --
+    mirrors `_chat_client`'s existing shape and rationale exactly."""
+    return application_backends.embed_client(cfg, factories=_backend_factories())
 
 
 # Shared remediation clause appended to the BackendUnavailable handlers of
@@ -336,7 +349,12 @@ def _probe_installed_models() -> list[InstalledModel]:
     letting each picker fall back to its own default resolution
     independently."""
     try:
-        probe = OllamaClient(model=config.DEFAULT_MODEL, timeout=_PREFLIGHT_TIMEOUT)
+        probe = application_backends.diagnostics_client(
+            None,
+            model=config.DEFAULT_MODEL,
+            timeout=_PREFLIGHT_TIMEOUT,
+            factories=_backend_factories(),
+        )
         return probe.list_models()
     except Exception:
         return []
@@ -1767,7 +1785,12 @@ def init(
     # stays 0 on every outcome, and the file-writer guarantee above is
     # unaffected either way.
     try:
-        probe = OllamaClient(model=resolved_model, timeout=_PREFLIGHT_TIMEOUT)
+        probe = application_backends.diagnostics_client(
+            None,
+            model=resolved_model,
+            timeout=_PREFLIGHT_TIMEOUT,
+            factories=_backend_factories(),
+        )
         ready = model_tag_matches(resolved_model, [m.tag for m in probe.list_models()])
     except Exception:
         ready = False
@@ -4022,7 +4045,7 @@ def _warn_withheld_from_embedding(command: str, withheld: int) -> None:
 
 def _embed_after_ingest(
     layout: config.WorkspaceLayout,
-    embedder: OllamaClient,
+    embedder: Embedder,
     *,
     model_tag: str,
     warn_nonlocal_host: bool = True,
@@ -4076,7 +4099,9 @@ def _embed_after_ingest(
     # itself then degrades: the advisory is about where the data is headed,
     # not about whether it arrived (#199).
     if warn_nonlocal_host:
-        _warn_if_nonlocal_embed_host("ingest", embedder.locality)
+        _warn_if_nonlocal_embed_host(
+            "ingest", cast(BackendDiagnostics, embedder).locality
+        )
     try:
         with open_vector_store(layout.vectors_db_path) as db:
             report = reindex_module.reindex(
@@ -4191,7 +4216,7 @@ def _refresh_derived_after_write(
     try:
         if cfg is None:
             cfg = config.read_config(layout.root)
-        embedder = OllamaClient(model=cfg.embedding_model)
+        embedder = _embed_client(cfg)
         # #922: this seam embedded every document and did not even emit the
         # non-local host advisory the other two embed paths have carried
         # since #199 -- a write-time refresh against a remote `OLLAMA_HOST`
@@ -4202,8 +4227,9 @@ def _refresh_derived_after_write(
         # that already emitted it themselves before reaching here -- exactly
         # the once-per-invocation contract #353 item 4 established for
         # `_embed_after_ingest`. The gate below is never suppressed.
+        embedder_locality = cast(BackendDiagnostics, embedder)
         if warn_nonlocal_host:
-            _warn_if_nonlocal_embed_host(verb, embedder.locality)
+            _warn_if_nonlocal_embed_host(verb, embedder_locality.locality)
         with open_vector_store(layout.vectors_db_path) as db:
             report = reindex_module.reindex(
                 layout.bundle_dir,
@@ -4211,7 +4237,7 @@ def _refresh_derived_after_write(
                 embedder,
                 model_tag=cfg.embedding_model,
                 on_progress=observability.progress_callback(verb, "embedding doc"),
-                local_exemption=_resolve_local_exemption(embedder, cfg),
+                local_exemption=_resolve_local_exemption(embedder_locality, cfg),
             )
         _warn_withheld_from_embedding(verb, report.withheld_confidential)
         # An exception is not the only way embedding degrades: `reindex`
@@ -4759,7 +4785,8 @@ def _ingest_batch(
     # it resolved (issue #240) -- construction performs no I/O, and every
     # per-file run builds its own identical client for the actual embed.
     _warn_if_nonlocal_embed_host(
-        "ingest", OllamaClient(model=cfg.embedding_model).locality
+        "ingest",
+        cast(BackendDiagnostics, _embed_client(cfg)).locality,
     )
 
     progress = observability.progress_callback("ingest", "ingesting file")
@@ -5745,16 +5772,18 @@ def _ingest_single(
     # AFTER the commit, never before: the ingest is durable by this point,
     # so a failing embedder degrades to a notice instead of stranding
     # written-but-uncommitted files (#183).
-    embed_client = OllamaClient(model=cfg.embedding_model)
+    embedder = _embed_client(cfg)
     _embed_after_ingest(
         layout,
-        embed_client,
+        embedder,
         model_tag=cfg.embedding_model,
         warn_nonlocal_host=warn_nonlocal_embed_host,
         # Resolved from the client that will do the sending, beside the cfg
         # that carries the workspace's opt-out (#922) -- the same two terms
         # `_resolve_local_exemption` ANDs for the five chat seams.
-        local_exemption=_resolve_local_exemption(embed_client, cfg),
+        local_exemption=_resolve_local_exemption(
+            cast(BackendDiagnostics, embedder), cfg
+        ),
     )
 
     return _SingleIngestOutcome(
@@ -14828,9 +14857,10 @@ def query(
         raise typer.Exit(code=1) from exc
 
     llm = _chat_client(cfg)
-    embedder = OllamaClient(model=cfg.embedding_model)
-    _warn_if_nonlocal_embed_host("query", embedder.locality)
-    if save and not embedder.locality.is_local:
+    embedder = _embed_client(cfg)
+    embedder_locality = cast(BackendDiagnostics, embedder).locality
+    _warn_if_nonlocal_embed_host("query", embedder_locality)
+    if save and not embedder_locality.is_local:
         # #764 finding 3. The standing advisory above was written when
         # `query` embedded ONE string -- the question just typed. Since #762
         # a save also ships every comparable filed insight's SOURCE QUESTION
@@ -14844,7 +14874,7 @@ def query(
         # the truncation notice discloses.
         typer.echo(
             "openkos query: note -- --save also sends already-filed source "
-            f"questions to '{embedder.locality.display_host}' to check this "
+            f"questions to '{embedder_locality.display_host}' to check this "
             "one for duplicates: at most one per filed insight, and only the "
             "first time each is seen. They are cached after that, so a warm "
             "workspace sends only the question you just asked.",
@@ -15545,8 +15575,9 @@ def reindex(
         )
         raise typer.Exit(code=1) from exc
 
-    embedder = OllamaClient(model=cfg.embedding_model)
-    _warn_if_nonlocal_embed_host("reindex", embedder.locality)
+    embedder = _embed_client(cfg)
+    embedder_locality = cast(BackendDiagnostics, embedder)
+    _warn_if_nonlocal_embed_host("reindex", embedder_locality.locality)
     try:
         with open_vector_store(layout.vectors_db_path) as db:
             # Captured BEFORE the call so the summary below can name the OLD
@@ -15565,7 +15596,7 @@ def reindex(
                 # (silent) when output is piped (issue #190, mirrors
                 # `suggest-relations`' #134 per-edge line).
                 on_progress=observability.progress_callback("reindex", "embedding doc"),
-                local_exemption=_resolve_local_exemption(embedder, cfg),
+                local_exemption=_resolve_local_exemption(embedder_locality, cfg),
             )
     except BackendUnavailable as exc:
         typer.echo(
@@ -15926,8 +15957,13 @@ def doctor() -> None:
     # disagreeing with each other (issue #1002 item B; `resolve_diagnostic_model`,
     # which used to read `openkos.yaml` a second time just to produce this
     # client BEFORE `run_diagnostics` ran, is gone).
-    def _build_client(model: str) -> OllamaClient:
-        return OllamaClient(model=model, timeout=_PREFLIGHT_TIMEOUT)
+    def _build_client(cfg: config.Config | None, model: str) -> BackendDiagnostics:
+        return application_backends.diagnostics_client(
+            cfg,
+            model=model,
+            timeout=_PREFLIGHT_TIMEOUT,
+            factories=_backend_factories(),
+        )
 
     results = application_doctor.run_diagnostics(
         root,
@@ -16379,8 +16415,8 @@ def mcp_cmd(
     # embedding client is constructed only to read its resolved locality --
     # it makes no network call here, and `query` (slice 9) is what actually
     # uses one during serving.
-    embedder = OllamaClient(model=cfg.embedding_model)
-    _warn_if_nonlocal_embed_host("mcp", embedder.locality)
+    embedder = _embed_client(cfg)
+    _warn_if_nonlocal_embed_host("mcp", cast(BackendDiagnostics, embedder).locality)
 
     from openkos.mcp import (
         server as mcp_server,  # lazy: asyncio stays off every other verb

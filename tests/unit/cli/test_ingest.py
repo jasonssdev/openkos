@@ -5463,6 +5463,76 @@ def test_confidential_skip_message_admits_embeddings_still_ran(
     assert "added to the embedding index" in result.stderr
 
 
+# --- Embed construction routes through the resolver seam (#1057 Phase 10) --
+
+
+def test_single_file_ingest_embed_sites_use_the_embed_client_delegator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A single-file `ingest --auto` builds its embedding client through
+    `cli.main._embed_client(cfg)` -- the one-line delegator over
+    `application_backends.embed_client` (issue #1057 Phase 10, tasks
+    10.3-10.4) -- at BOTH of its two embed sites: `_ingest_single`'s own
+    embed (issue #183) and the end-of-run `_refresh_derived_after_write`
+    call. Confirmed by spying on `main._embed_client` rather than on
+    `OllamaClient` directly, so the assertion pins the DELEGATOR, not merely
+    that some client was built. **RED today**: both sites still construct
+    `OllamaClient(model=cfg.embedding_model)` directly, so `_embed_client`
+    is never called."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake = _EmbeddingLLM(_concept_reply())
+    monkeypatch.setattr("openkos.cli.main.OllamaClient", lambda *a, **k: fake)
+    calls: list[object] = []
+    original_embed_client = main._embed_client
+
+    def _spy(cfg: object) -> object:
+        calls.append(cfg)
+        return original_embed_client(cfg)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(main, "_embed_client", _spy)
+    src = tmp_path / "note.md"
+    src.write_text("# Note\n\nRaw material.\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", str(src), "--auto"])
+
+    assert result.exit_code == 0, result.stdout
+    # `_ingest_single`'s own embed, plus `_refresh_derived_after_write`'s.
+    assert len(calls) == 2
+
+
+def test_batch_ingest_embed_sites_use_the_embed_client_delegator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A DIRECTORY (batch-mode) `ingest --auto` builds its embedding client
+    through `_embed_client` at every one of its embed sites: the
+    once-per-batch embedding-host advisory (`_ingest_batch`, issue #1057
+    Phase 10, tasks 10.5-10.6), the per-file `_ingest_single` call the
+    batch loop invokes, and the batch's own end-of-run
+    `_refresh_derived_after_write` call. A batch of exactly one file makes
+    the expected count exact: one advisory call, one per-file call, one
+    end-of-run refresh call. **RED today**: the advisory site still
+    constructs `OllamaClient(model=cfg.embedding_model).locality` directly."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake = _EmbeddingLLM(_concept_reply())
+    monkeypatch.setattr("openkos.cli.main.OllamaClient", lambda *a, **k: fake)
+    calls: list[object] = []
+    original_embed_client = main._embed_client
+
+    def _spy(cfg: object) -> object:
+        calls.append(cfg)
+        return original_embed_client(cfg)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(main, "_embed_client", _spy)
+    batch_dir = tmp_path / "notes"
+    batch_dir.mkdir()
+    (batch_dir / "note.md").write_text("# Note\n\nRaw material.\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", str(batch_dir), "--auto"])
+
+    assert result.exit_code == 0, result.stdout
+    assert len(calls) == 3
+
+
 # --- Title derivation from content (source-title-from-heading) -------------
 #
 # `title` is derived from `raw_content` via `source_title.derive_source_title`
