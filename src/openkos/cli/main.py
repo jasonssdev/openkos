@@ -1484,10 +1484,15 @@ def _autocommit(root: Path, paths: Sequence[str], message: str) -> str | None:
     the caller's exit code or leaves a canonical write unfinished; the
     worst outcome is a stderr WARNING pointing at `git status`.
 
-    `paths` MUST be workspace-relative, POSIX paths; staging always goes
-    through `commit_paths`' scoped `git add -- <paths>` (never `-A`/`-a`),
-    so a pre-existing unrelated dirty file elsewhere in the workspace is
-    never swept into this commit.
+    `paths` MUST be workspace-relative, POSIX paths, taken literally (a
+    name containing `[`, `*` or `?` is a name, not a glob). Staging and the
+    commit both go through `commit_paths`' pathspec (`git add -- <paths>`
+    then `git commit -- <paths>`, never `-A`/`-a`), so the commit contains
+    ONLY `paths`: an unrelated file elsewhere in the workspace, whether
+    unstaged OR already staged by the user (or an editor plugin), is neither
+    committed nor unstaged. A `git add`/`git commit` that hangs on a prompt
+    is abandoned after a bounded timeout and reported as the same WARNING
+    as any other failure.
 
     Returns the new commit's abbreviated sha, or `None` on EVERY degradation
     path -- not a repository, identity unset, `commit_paths` raising, or a
