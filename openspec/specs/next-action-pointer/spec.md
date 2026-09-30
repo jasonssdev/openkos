@@ -15,12 +15,11 @@ This spec does not define: any change to `openkos status` (its output, body,
 ordering, or spec are untouched); `--json` or any structured output;
 non-zero exit on findings (`next` is not a CI gate); a count of unseen or
 skipped findings anywhere in its output; recommendations for
-`suggest-relations`, `contradictions`, or `suggest-volatility` (all three
-require a live model backend and are out of scope); the informational
-concept-to-concept edge-count line (`next` never calls `build_graph`);
-remedies for findings that name no command (`conformance`, `dangling`,
-`multi-source-uncovered`, `unbacked-provenance` — these remain visible only
-through `openkos status`/`openkos lint`).
+`suggest-relations` or `suggest-volatility` (both require a live model
+backend and are out of scope); the informational concept-to-concept
+edge-count line (`next` never calls `build_graph`); remedies for findings
+that name no command (`conformance`, `dangling`, `unbacked-provenance` —
+these remain visible only through `openkos status`/`openkos lint`).
 
 ## Requirements
 
@@ -63,15 +62,37 @@ output mode is offered.
 
 `openkos next` MUST rank these actionable finding kinds, in this fixed
 order, and MUST recommend the command belonging to the highest-ranked kind
-with at least one finding: (1) missing or empty vector index, command
-`openkos reindex`; (1b) missing on-disk FTS index (`.openkos/fts.db`
-absent; absence only — staleness stays the stale-derived-indexes tier's
-job), command `openkos reindex` (issue #553); (2) unextracted source
-(`extraction_status: failed`), command `openkos ingest <resource>`; (3)
-below-source-sensitivity descendant, command `openkos backfill-sensitivity`;
-(4) pending exact-title duplicate group, command `openkos duplicates`. A
-lower-ranked tier's finding MUST NOT be recommended while a higher-ranked
+with at least one finding:
+
+1. an empty bundle (zero eligible documents), command `openkos ingest
+   <path>`; WHEN a directory of the bundle could not be read, the bundle
+   MUST NOT be claimed empty and the command MUST be `openkos status`;
+2. missing or empty vector index, command `openkos reindex`;
+3. missing on-disk FTS index (`.openkos/fts.db` absent; absence only —
+   staleness belongs to the next tier), command `openkos reindex`;
+4. stale derived indexes (`fts.db` or `graph.db` describing an older bundle
+   than the one on disk), command `openkos reindex`;
+5. unextracted source (`extraction_status: failed`), command `openkos
+   ingest <resource>`;
+6. derived objects stored without judge selection, command `openkos ingest
+   <resource>`;
+7. below-source-sensitivity descendant, command `openkos
+   backfill-sensitivity`;
+8. multi-source-uncovered document, command the finding's own
+   `openkos set-sensitivity <id> <level>` remediation;
+9. pending exact-title duplicate group, command `openkos curate`;
+10. on-disk name that is not NFC, command `openkos normalize-names`;
+11. open contradiction finding, command `openkos contradictions`.
+
+A lower-ranked tier's finding MUST NOT be recommended while a higher-ranked
 tier has at least one finding.
+
+#### Scenario: An empty bundle recommends the first ingest
+
+- GIVEN a bundle with zero eligible documents and an empty vector index
+- WHEN `openkos next` runs
+- THEN it recommends `openkos ingest <path>` and does not recommend
+  `openkos reindex`
 
 #### Scenario: A missing FTS index outranks every content tier
 
@@ -88,88 +109,132 @@ tier has at least one finding.
 - WHEN `openkos next` runs
 - THEN it recommends `openkos reindex` with the missing-vector-index reason
 
-#### Scenario: Tier 1 outranks tier 2
+#### Scenario: A missing vector index outranks unextracted sources
 
-- GIVEN a bundle whose vector index is missing and which also contains a
-  Source with `extraction_status: failed`
+- GIVEN a bundle with documents whose vector index is missing and which also
+  contains a Source with `extraction_status: failed`
 - WHEN `openkos next` runs
 - THEN it recommends `openkos reindex` and does not mention `openkos ingest`
 
-#### Scenario: Tier 2 outranks tier 3
+#### Scenario: A stale derived index outranks every content tier
 
-- GIVEN a bundle with a present vector index, containing a Source with
-  `extraction_status: failed` and also a provenance descendant below its
-  Source's sensitivity
+- GIVEN a bundle whose vector and FTS indexes are present but whose FTS
+  index describes an older bundle than the one on disk, and which also
+  contains a Source with `extraction_status: failed`
 - WHEN `openkos next` runs
-- THEN it recommends `openkos ingest <resource>` for the failed Source and
-  does not mention `openkos backfill-sensitivity`
+- THEN it recommends `openkos reindex` with a reason naming the stale index,
+  and does not mention `openkos ingest`
 
-#### Scenario: Tier 3 outranks tier 4
+#### Scenario: Unextracted sources outrank unjudged extractions
 
-- GIVEN a bundle with a present vector index and no unextracted sources,
-  containing a provenance descendant below its Source's sensitivity and also
-  an exact-title duplicate group
+- GIVEN a bundle with fresh indexes, containing a Source with
+  `extraction_status: failed` and also a Source whose derived objects lack
+  judge selection
+- WHEN `openkos next` runs
+- THEN it recommends `openkos ingest <resource>` for the failed Source
+
+#### Scenario: Unjudged extractions outrank below-source-sensitivity descendants
+
+- GIVEN a bundle with fresh indexes and no failed extractions, containing a
+  Source whose derived objects lack judge selection and also a provenance
+  descendant below its Source's sensitivity
+- WHEN `openkos next` runs
+- THEN it recommends `openkos ingest <resource>` for that Source and does
+  not mention `openkos backfill-sensitivity`
+
+#### Scenario: Below-source-sensitivity outranks multi-source-uncovered
+
+- GIVEN a bundle with fresh indexes and no extraction debt, containing a
+  provenance descendant below its Source's sensitivity and also a
+  multi-source-uncovered document
 - WHEN `openkos next` runs
 - THEN it recommends `openkos backfill-sensitivity` and does not mention
-  `openkos duplicates`
+  `openkos set-sensitivity`
 
-#### Scenario: All four tiers present, tier 1 wins
+#### Scenario: Multi-source-uncovered outranks duplicate groups
+
+- GIVEN a bundle with fresh indexes and no extraction debt or
+  below-source-sensitivity descendants, containing a multi-source-uncovered
+  document and also an exact-title duplicate group
+- WHEN `openkos next` runs
+- THEN it recommends that document's `openkos set-sensitivity` remediation
+  and does not mention `openkos curate`
+
+#### Scenario: Duplicate groups outrank non-NFC names
+
+- GIVEN a bundle where every higher-ranked tier finds nothing, containing an
+  exact-title duplicate group and also an on-disk name that is not NFC
+- WHEN `openkos next` runs
+- THEN it recommends `openkos curate` and does not mention `openkos
+  normalize-names`
+
+#### Scenario: Non-NFC names outrank open contradictions
+
+- GIVEN a bundle where every higher-ranked tier finds nothing, containing an
+  on-disk name that is not NFC and also an open contradiction finding
+- WHEN `openkos next` runs
+- THEN it recommends `openkos normalize-names` and does not mention
+  `openkos contradictions`
+
+#### Scenario: Every tier present, the highest wins
 
 - GIVEN a bundle whose vector index is missing, and which also contains a
   Source with `extraction_status: failed`, a provenance descendant below its
-  Source's sensitivity, and an exact-title duplicate group
+  Source's sensitivity, an exact-title duplicate group, and an open
+  contradiction finding
 - WHEN `openkos next` runs
 - THEN it recommends `openkos reindex` only, mentioning none of `openkos
-  ingest`, `openkos backfill-sensitivity`, or `openkos duplicates`
+  ingest`, `openkos backfill-sensitivity`, `openkos curate`, or `openkos
+  contradictions`
 
 ### Requirement: First-Hit Short-Circuit Cost Contract
 
 `openkos next` MUST stop evaluating tiers at the first one with a finding
 and MUST NOT perform work belonging to any lower-ranked tier. This is a cost
-contract, asserted by walk count, not a suggestion: stopping at tier 1 MUST
-perform zero bundle walks (only the cheap vector-index presence check).
-Stopping at tier 2 or at tier 3 MUST perform exactly one bundle walk, and
-tiers 2 and 3 MUST share that single walk — evaluating both from tiers 2 and
-3 MUST NOT trigger two separate bundle-walk calls. Reaching tier 4, or
-finding no actionable tier at all, MUST perform at most three bundle walks
-in total across the whole run.
+contract, asserted by walk count, not a suggestion. The tiers that read the
+bundle's documents (empty bundle, unextracted source, unjudged extraction,
+below-source-sensitivity, multi-source-uncovered) MUST share a single
+memoized document-collection walk — evaluating several of them in one run
+MUST NOT trigger a second call. Every other signal (the stale-index
+manifest hash, the exact-title duplicate groups, the non-NFC name scan)
+MUST be computed only when its own tier is reached. The presence checks for
+the vector index and the FTS index MUST perform zero bundle walks. The
+empty-bundle tier MUST read documents only when the vector index is empty.
+Reaching the duplicate-group tier MUST perform at most three bundle walks
+in total, counting the shared document-collection walk and the
+duplicate-group scan's own walks.
 
-#### Scenario: Stopping at tier 1 performs zero bundle walks
+#### Scenario: Stopping at the missing-FTS tier performs zero bundle walks
 
-- GIVEN a bundle whose vector index is missing
+- GIVEN a bundle whose vector index is populated and whose `.openkos/fts.db`
+  is absent
 - WHEN `openkos next` runs
 - THEN it recommends `openkos reindex` having performed zero bundle walks
 
-#### Scenario: Stopping at tier 2 performs exactly one bundle walk
+#### Scenario: Document-reading tiers share one walk
 
-- GIVEN a bundle with a present vector index and a Source with
-  `extraction_status: failed`
-- WHEN `openkos next` runs
-- THEN it recommends `openkos ingest <resource>` having performed exactly
-  one bundle walk
-
-#### Scenario: Stopping at tier 3 performs exactly one bundle walk, sharing tier 2's walk
-
-- GIVEN a bundle with a present vector index, no unextracted sources, and a
+- GIVEN a bundle with fresh indexes, no unextracted sources, and a
   provenance descendant below its Source's sensitivity
 - WHEN `openkos next` runs
-- THEN it recommends `openkos backfill-sensitivity` having performed exactly
-  one bundle walk, and evaluating tier 2 and tier 3 together triggers only
-  one call to the shared document-collection walk
+- THEN it recommends `openkos backfill-sensitivity`, and evaluating the
+  document-reading tiers together triggers only one call to the shared
+  document-collection walk
 
-#### Scenario: Reaching tier 4 performs at most three bundle walks
+#### Scenario: A document-tier finding never pays a later tier's walk
 
-- GIVEN a bundle with a present vector index, no unextracted sources, no
-  below-source-sensitivity descendants, and an exact-title duplicate group
+- GIVEN a bundle with fresh indexes and a Source with
+  `extraction_status: failed`, which also contains an exact-title duplicate
+  group and a non-NFC on-disk name
 - WHEN `openkos next` runs
-- THEN it recommends `openkos duplicates` having performed at most three
-  bundle walks in total
+- THEN it recommends `openkos ingest <resource>` and computes neither the
+  duplicate groups nor the non-NFC scan
 
 ### Requirement: Non-NFC On-Disk Names Are Ranked Last
 
 `openkos next` MUST recommend `openkos normalize-names` when at least one
 on-disk name under the bundle is not NFC, and this tier MUST be ranked
-LAST — below every other tier, including the duplicate-group tier (#491).
+below every other tier except the open-contradictions tier, including the
+duplicate-group tier.
 
 The ranking is not a cost decision but an ordering one: a decomposed name
 blocks nothing, is not missing, and is not unsafe, since
@@ -212,13 +277,18 @@ for it.
 
 ### Requirement: Per-Tier Command Reflects the Finding's Own Command
 
-For tiers 2 and 3, `openkos next` MUST print the exact command string the
-underlying finding already carries rather than deriving a new one; it MUST
-NOT construct a different command for the same finding than the one the
-finding's own detail names. Tier 1's command MUST be exactly `openkos
-reindex`. Tier 4's command MUST be exactly `openkos duplicates`.
+For the unextracted-source, unjudged-extraction, and
+below-source-sensitivity tiers, `openkos next` MUST print the exact command
+string the underlying finding already carries rather than deriving a new
+one; for the multi-source-uncovered tier it MUST print the finding's own
+structured remediation. It MUST NOT construct a different command for the
+same finding than the one the finding itself names. The three index tiers'
+command MUST be exactly `openkos reindex`. The duplicate-group tier's
+command MUST be exactly `openkos curate`. The non-NFC tier's command MUST
+be exactly `openkos normalize-names`. The open-contradictions tier's command
+MUST be exactly `openkos contradictions`.
 
-#### Scenario: Tier 2's printed command matches the finding's own command
+#### Scenario: The unextracted-source tier's printed command matches the finding's own command
 
 - GIVEN a bundle with a Source with `extraction_status: failed` and a known
   `resource`
@@ -226,7 +296,7 @@ reindex`. Tier 4's command MUST be exactly `openkos duplicates`.
 - THEN the printed command is identical to the retry command the
   unextracted-source finding itself carries
 
-#### Scenario: Tier 3's printed command matches the finding's own command
+#### Scenario: The below-source-sensitivity tier's printed command matches the finding's own command
 
 - GIVEN a bundle with a provenance descendant below its Source's sensitivity
 - WHEN `openkos next` recommends a command for that finding
@@ -234,26 +304,37 @@ reindex`. Tier 4's command MUST be exactly `openkos duplicates`.
   below-source-sensitivity finding itself carries, exactly `openkos
   backfill-sensitivity`
 
-#### Scenario: Tier 1's command is the fixed reindex command
+#### Scenario: The multi-source-uncovered tier prints the finding's remediation
+
+- GIVEN a bundle with a multi-source-uncovered document whose finding
+  carries a runnable `openkos set-sensitivity` remediation
+- WHEN `openkos next` recommends a command for that finding
+- THEN the printed command is identical to that remediation
+
+#### Scenario: The index tiers' command is the fixed reindex command
 
 - GIVEN a bundle whose vector index is missing
 - WHEN `openkos next` runs
 - THEN the printed command is exactly `openkos reindex`
 
-#### Scenario: Tier 4's command is the fixed duplicates command
+#### Scenario: The duplicate-group tier's command is the fixed curate command
 
 - GIVEN a bundle with an exact-title duplicate group and no higher-ranked
   finding
 - WHEN `openkos next` runs
-- THEN the printed command is exactly `openkos duplicates`
+- THEN the printed command is exactly `openkos curate`, and the reason names
+  `openkos duplicates` as the way to review the groups first
 
 ### Requirement: A Declined Finding Is Named, Never Silently Dropped
 
 A finding whose own detail yields no runnable command MUST NOT be
 recommended: printing a command that cannot be run as printed is worse than
-printing none. Tier 2 therefore declines when the Source records no
+printing none. The unextracted-source tier therefore declines when the Source records no
 `resource`, and when the command extracted from the finding's detail is not
-exactly `openkos ingest` followed by that Source's own `resource` value.
+exactly `openkos ingest` followed by that Source's own `resource` value; the
+unjudged-extraction tier declines on the same conditions, and the
+multi-source-uncovered tier declines when its finding carries no runnable
+remediation.
 
 Each such declination MUST be named in the output, on every path, whether or
 not a lower-ranked tier subsequently fires. The declination MUST identify
@@ -285,7 +366,7 @@ established cannot be trusted in generated prose.
 - GIVEN a bundle containing both a declined unextracted-source finding and
   an exact-title duplicate group
 - WHEN `openkos next` runs
-- THEN it recommends `openkos duplicates` and still names the declined
+- THEN it recommends `openkos curate` and still names the declined
   document
 
 #### Scenario: A runnable finding produces no declination
@@ -332,22 +413,22 @@ claim otherwise, so the cost contract above is unaffected.
 - WHEN `openkos next` runs
 - THEN every one of them is named by path
 
-#### Scenario: Stopping at tier 1 names no skipped documents
+#### Scenario: Stopping before any document is read names no skipped documents
 
-- GIVEN a bundle whose vector index is missing and which also contains an
-  unparseable document
+- GIVEN a bundle whose vector index is populated but whose `.openkos/fts.db`
+  is absent, and which also contains an unparseable document
 - WHEN `openkos next` runs
 - THEN it recommends `openkos reindex`, performs zero bundle walks, and
   names no skipped document
 
 ### Requirement: No-Runnable-Action Output Never Claims Cleanliness
 
-WHEN none of the four ranked tiers produces a finding, `openkos next` MUST
+WHEN no ranked tier produces a finding, `openkos next` MUST
 print a line naming `openkos status` as the place to see the full report,
 and MUST NOT state or imply that the bundle is clean, free of issues, or has
 nothing needing attention. This output MUST be the same regardless of
 whether commandless findings (conformance, dangling,
-multi-source-uncovered) exist in the bundle, because `next`'s short-circuit
+unbacked-provenance) exist in the bundle, because `next`'s short-circuit
 means it never proves their absence.
 
 Declinations and skip notices are NOT commandless findings and are exempt
@@ -368,10 +449,9 @@ violation"; OKF v0.2 renumbers the conformance section to §11 (v0.2
 
 #### Scenario: No ranked tier fires despite commandless findings existing
 
-- GIVEN a bundle with a present vector index, no unextracted sources, no
-  below-source-sensitivity descendants, no exact-title duplicate groups, and
-  at least one commandless finding (a §11 conformance violation, a dangling
-  reference, or a multi-source-uncovered descendant)
+- GIVEN a bundle where no ranked tier fires and at least one commandless
+  finding exists (a §11 conformance violation, a dangling reference, or an
+  unbacked-provenance finding)
 - WHEN `openkos next` runs
 - THEN it still prints the same no-runnable-action line naming `openkos
   status`, and does not claim the bundle is clean
@@ -379,11 +459,12 @@ violation"; OKF v0.2 renumbers the conformance section to §11 (v0.2
 
 `openkos next` MUST NOT print any numeral representing a count of findings
 it did not rank or did not walk far enough to discover, on any path,
-including the path that reaches tier 4 and has already paid for every walk.
+including the path that reaches the duplicate-group tier and has already
+paid for every walk before it.
 
 What this bans is a numeral standing IN PLACE OF items the output never
 enumerates — "3 other items pending" over a list of nothing. A count
-attached to a full enumeration is not that, and is permitted: tier 4's own
+attached to a full enumeration is not that, and is permitted: the duplicate-group tier's own
 group count describes the finding that fired, and the skip-notice count is
 immediately followed by every skipped document named by path. The
 distinction is whether the reader can act on what the numeral refers to.
@@ -395,10 +476,11 @@ distinction is whether the reader can act on what the numeral refers to.
 - THEN its output contains no numeral describing how many other findings
   exist or remain unseen
 
-#### Scenario: No count appears when tier 4 has already paid every walk
+#### Scenario: No count appears when the duplicate-group tier has already paid every walk
 
-- GIVEN a bundle that reaches tier 4 evaluation (no tier 1-3 finding exists)
-  and also contains commandless findings not evaluated by any tier
+- GIVEN a bundle that reaches the duplicate-group tier (no higher-ranked
+  finding exists) and also contains commandless findings not evaluated by
+  any tier
 - WHEN `openkos next` runs
 - THEN its output contains no numeral describing how many commandless or
   unranked findings exist, even though every bundle walk has already run
@@ -417,39 +499,40 @@ regardless of workspace state or which tier fires.
 ### Requirement: Duplicate-Group Check Gated on Higher Tiers
 
 `openkos next` MUST evaluate the exact-title duplicate-group check only
-after tiers 1 through 3 have each produced no finding. It MUST NOT evaluate
-the duplicate-group check when any of tiers 1, 2, or 3 has already produced
-a finding.
+after every tier ranked above the duplicate-group tier has produced no
+finding. It MUST NOT evaluate the duplicate-group check when any of those
+tiers has already produced a finding.
 
-#### Scenario: Duplicate-group check does not run when tier 1 fires
+#### Scenario: Duplicate-group check does not run when the vector index is missing
 
 - GIVEN a bundle whose vector index is missing and which also contains an
   exact-title duplicate group
 - WHEN `openkos next` runs
 - THEN the exact-title duplicate-group check does not run
 
-#### Scenario: Duplicate-group check does not run when tier 2 fires
+#### Scenario: Duplicate-group check does not run when an extraction tier fires
 
-- GIVEN a bundle with a present vector index, a Source with
+- GIVEN a bundle with fresh indexes, a Source with
   `extraction_status: failed`, and an exact-title duplicate group
 - WHEN `openkos next` runs
 - THEN the exact-title duplicate-group check does not run
 
-#### Scenario: Duplicate-group check does not run when tier 3 fires
+#### Scenario: Duplicate-group check does not run when a sensitivity tier fires
 
-- GIVEN a bundle with a present vector index, no unextracted sources, a
+- GIVEN a bundle with fresh indexes, no unextracted sources, a
   provenance descendant below its Source's sensitivity, and an exact-title
   duplicate group
 - WHEN `openkos next` runs
 - THEN the exact-title duplicate-group check does not run
 
-#### Scenario: Duplicate-group check runs only when tiers 1-3 are all empty
+#### Scenario: Duplicate-group check runs only when every higher tier is empty
 
-- GIVEN a bundle with a present vector index, no unextracted sources, no
-  below-source-sensitivity descendants, and an exact-title duplicate group
+- GIVEN a bundle with fresh indexes, no unextracted or unjudged sources, no
+  sensitivity findings, and an exact-title duplicate group
 - WHEN `openkos next` runs
-- THEN the exact-title duplicate-group check runs and `openkos duplicates`
-  is recommended
+- THEN the exact-title duplicate-group check runs and `openkos curate` is
+  recommended
+
 ### Requirement: Each Recommendation And Declination Names Its Subjects
 
 `NextAction` MUST carry an additive, structured `subjects` field —

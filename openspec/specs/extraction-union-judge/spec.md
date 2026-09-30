@@ -102,17 +102,19 @@ introduce candidates absent from the union.
 
 WHEN the judge call raises `OllamaError`, returns an empty reply, or returns
 a reply that fails parsing/validation, the system MUST NOT discard the
-extraction work. It MUST fall back to the full merged union, truncated by
-the backstop cap, MUST flag this degrade in the `ExtractionReport`, and MUST
+extraction work. It MUST fall back to the full merged union, left unranked
+and without the backstop cap (see "Backstop Cap Applied Once, After Judge
+Selection"), MUST flag this degrade in the `ExtractionReport`, and MUST
 emit a note to stderr. Extraction MUST NOT raise in this path.
 
-#### Scenario: Judge OllamaError degrades to backstopped union
+#### Scenario: Judge OllamaError degrades to the unranked union
 
 - GIVEN a merged union of valid candidates and a judge call that raises
   `OllamaError`
 - WHEN extraction completes
-- THEN the returned objects are the merged union truncated by the backstop
-  cap, the report records the judge failure, and a note appears on stderr
+- THEN the returned objects are the full merged union (bounded only by the
+  pre-judge ceiling), the report records the judge failure, and a note
+  appears on stderr
 
 #### Scenario: Unparseable judge reply degrades the same way
 
@@ -137,9 +139,13 @@ emit a note to stderr. Extraction MUST NOT raise in this path.
 
 ### Requirement: Backstop Cap Applied Once, After Judge Selection
 
-The system MUST apply a fixed backstop cap of 12 objects exactly once, after
-judge selection (or after the failure degrade), never before. The cap MUST
-NOT be user-configurable.
+The system MUST apply a fixed backstop cap of 20 objects exactly once, after
+judge selection (or after the empty-selection degrade), never before. The cap
+MUST NOT be user-configurable. WHEN the judge is unavailable (both judge
+attempts failed, so nothing ranked the candidates), the system MUST NOT apply
+the cap, because a positional cut on an unranked set discards by arrival
+order; that set remains bounded by the pre-judge ceiling of 24 merged
+candidates.
 
 #### Scenario: Judge selection under the cap is untouched
 
@@ -149,9 +155,18 @@ NOT be user-configurable.
 
 #### Scenario: Pathological judge output is bounded
 
-- GIVEN a judge-selected (or failure-degraded) set of more than 12 objects
+- GIVEN a judge-selected (or empty-selection-degraded) set of more than 20
+  objects
 - WHEN the backstop is applied
-- THEN no more than 12 objects are returned
+- THEN no more than 20 objects are returned
+
+#### Scenario: Judge unavailable keeps the unranked set whole
+
+- GIVEN a merged union of more than 20 candidates and a judge that failed on
+  both attempts
+- WHEN extraction completes
+- THEN the backstop is not applied and all candidates that survived the
+  pre-judge ceiling are returned
 
 ### Requirement: Run and Judge Bookkeeping on the Extraction Report
 

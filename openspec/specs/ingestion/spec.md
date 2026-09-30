@@ -6,7 +6,7 @@
 it gates the workspace, reads the configuration, builds the LLM client,
 and performs every snapshot read, then delegates to the ingest
 application service, which stages a bounded list of derived objects —
-zero up to a post-judge backstop cap of 12, each classified across the
+zero up to a post-judge backstop cap of 20, each classified across the
 9-type derived-object vocabulary (`Concept`, `Entity`, `Place`, `Event`,
 `Procedure`, `Decision`, `Project`, `Person`, `Organization`) — alongside
 the generated Source concept. `ingest` itself owns argument parsing,
@@ -144,7 +144,7 @@ from that mapping (see "Source Tag Lift And Re-Ingest Union"); otherwise
 `source_frontmatter` is absent and `tags` carries only what this
 capability otherwise resolves. In addition, `ingest` MUST attempt LLM-driven
 extraction of a **bounded list** of derived objects —
-zero up to a post-judge backstop cap of 12 — each of a type in the 9-type
+zero up to a post-judge backstop cap of 20 — each of a type in the 9-type
 classifiable
 vocabulary (`{Concept, Entity, Place, Event, Procedure, Decision, Project,
 Person, Organization}`) from the source. WHEN extraction succeeds, for EACH
@@ -831,9 +831,13 @@ degrade, and MUST exit 0.
 
 `ingest` MUST compute the complete set of derived objects to write with zero
 writes (Phase A) before Phase B writes any of them. The number of derived
-objects written for a single source MUST NOT exceed a backstop cap of 12,
+objects written for a single source MUST NOT exceed a backstop cap of 20,
 applied exactly once, after union construction and judge selection (or after
-the judge-failure degrade) — never as a pre-judge truncation. During
+the judge-failure degrade) — never as a pre-judge truncation. The one
+exception is the judge-unavailable degrade, in which the judge could not
+rank the candidates: the cap MUST NOT be applied, because a positional cut
+on an unranked set discards by arrival order, and the set remains bounded by
+the pre-judge candidate ceiling of 24 merged candidates. During
 staging, the system MUST, per candidate in reply order: derive a slug from
 the candidate's title and drop a candidate whose title yields an empty slug;
 apply an in-batch slug-collision guard that keeps the first and drops later
@@ -851,16 +855,12 @@ MUST be reserved only once its candidate survives every check, so a dropped
 or redirected candidate never reserves a slug for a later one. Each
 per-candidate drop or disambiguation MUST be reported to stderr and MUST
 affect only that candidate, never the whole batch.
-(Previously: hard cap of 5 in spec text, 6 in code, applied as a blind
-first-N truncation before any selection step; now a backstop of 20 applied (12 before #564)
-once, after union+judge selection.)
-
 #### Scenario: More than the backstop of validated objects is bounded
 
-- GIVEN a source whose union+judge selection would yield more than 12 valid
+- GIVEN a source whose union+judge selection would yield more than 20 valid
   objects
 - WHEN `openkos ingest <path>` completes
-- THEN no more than 12 derived objects are written
+- THEN no more than 20 derived objects are written
 
 #### Scenario: Two objects in one reply collide on slug
 
@@ -911,7 +911,7 @@ itself introduces no separate staging path.
 
 - GIVEN a source long enough to be split into chunks during extraction
 - WHEN `openkos ingest <path>` completes
-- THEN staged derived objects obey the same 12-object backstop and slug
+- THEN staged derived objects obey the same 20-object backstop and slug
   rules as an unchunked source, with no chunk-specific exception
 
 ### Requirement: Judge-Failure Degrade Is Reported, Ingest Still Succeeds

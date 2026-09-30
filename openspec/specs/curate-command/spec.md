@@ -583,23 +583,19 @@ than equal to the uncapped group count).
   (50), not the uncapped `produced` value (80), and a truncation notice
   naming both counts is also printed
 
-### Requirement: Slice Boundary
+### Requirement: All Five Stages Run
 
-Slice 1 MUST declare all five stages in the runtime `_STAGES` sequence and
-MUST implement the stage framework, cost-gate/decline machinery, and
-Preconditions + Identity fully; it MUST be independently shippable.
-Structure, Metadata, and Contradictions MUST appear in `_STAGES` at
-runtime but MUST be skipped without prompting or any model call, and MUST
-appear in the end-of-run summary labeled "not yet available in this
-version". Slice 2 MUST replace that label with full behavior for
-Structure, Metadata, and Contradictions, plus the two core extractions.
+`curate` MUST declare all five stages — Preconditions, Identity, Structure,
+Metadata, Contradictions — in its runtime stage sequence, and each MUST
+compute its own queue when the loop reaches it. A stage MUST NOT be skipped
+as unimplemented; an empty queue or a declined cost gate is reported as that
+stage's outcome. The end-of-run summary MUST list an outcome for all five
+stages.
 
-#### Scenario: Slice 1 declares five stages, three not-yet-available
+#### Scenario: Every stage executes
 
-- GIVEN only slice 1 is merged
-- WHEN `curate` runs
-- THEN Preconditions and Identity execute fully, Structure, Metadata, and
-  Contradictions are skipped without any prompt or model call, and the
-  summary lists all five stages with the latter three marked "not yet
-  available in this version"
-</content>
+- GIVEN a bundle with pending findings in every category
+- WHEN `curate` runs to completion
+- THEN Preconditions, Identity, Structure, Metadata, and Contradictions each
+  probe their own queue and execute, and the summary lists all five stages
+  with a real outcome for each
