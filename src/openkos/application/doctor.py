@@ -151,6 +151,7 @@ from openkos.llm.base import (
     BackendHostLocality,
     BackendUnavailable,
     InstalledModel,
+    classify_backend_host,
     model_tag_matches,
 )
 from openkos.model import okf
@@ -191,6 +192,40 @@ read/parse sites -- the exact same list `bundle.ledger`'s own private
 importing a private name across the layer boundary (T1.5, declined for this
 change: no test currently references the private name, and the rename is
 unforecast scope left to a reviewer)."""
+
+
+def _api_key_destination_check(cfg: config.Config | None) -> CheckResult:
+    """Where `OPENKOS_OPENAI_API_KEY` will be sent, before any call is made.
+    Names each origin (`scheme://host[:port]`, no path, query, or userinfo)
+    and whether it is this machine; never the key's value. `pass` in every
+    branch -- the line reports a destination, and must not gate anything on
+    the key's presence."""
+    label = "API key destination"
+    if cfg is None or cfg.backend != application_backends.BACKEND_OPENAI_COMPATIBLE:
+        return CheckResult(
+            label,
+            "pass",
+            critical=False,
+            detail="backend is ollama; no API key is sent",
+        )
+    origins = application_backends.key_destinations(cfg)
+    if not origins:
+        return CheckResult(
+            label,
+            "pass",
+            critical=False,
+            detail=f"no API key set ({application_backends.API_KEY_ENV}); none is sent",
+        )
+    described = ", ".join(
+        f"{origin} ({'this machine' if classify_backend_host(origin).is_local else 'not this machine'})"
+        for origin in origins
+    )
+    return CheckResult(
+        label,
+        "pass",
+        critical=False,
+        detail=f"API key will be sent to {described}",
+    )
 
 
 def run_diagnostics(
@@ -854,6 +889,10 @@ def run_diagnostics(
             ),
         )
     )
+
+    # 11b. api-key-destination (informational, always `pass`: it reports a
+    # fact, never a fault, and key presence must never gate an outcome).
+    results.append(_api_key_destination_check(cfg))
 
     # 12. merge-ledger-torn-writes (informational, workspace-only; SKIP
     # outside -- Check A, design Decision 5: mechanically exact, zero false
