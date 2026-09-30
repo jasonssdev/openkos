@@ -549,13 +549,11 @@ def test_the_chat_client_ast_guard_still_sees_every_construction() -> None:
 _EXPECTED_VERB_TASKS = {
     "_ingest_single": "extraction",
     "adjudicate": "adjudication",
-    "suggest_relations_cmd": "edge_typing",
-    "suggest_volatility_cmd": "volatility_typing",
     "contradictions": "contradiction",
 }
 """Which `main.py` function must resolve which task's model (#515).
 
-Keyed by TASK, so `suggest_relations_cmd` and `curate`'s Structure stage
+Keyed by TASK, so `suggest-relations` and `curate`'s Structure stage
 land on the same key and cannot drift onto different models -- the property
 #515 decision 1 chose this schema shape to protect.
 
@@ -611,6 +609,49 @@ def test_every_llm_verb_resolves_its_own_task_model() -> None:
         "these verbs do not resolve the task model they are measured on, so "
         f"a `models:` override would be silently ignored there: {wrong}"
     )
+
+
+_EXPECTED_SERVICE_TASKS = {
+    "suggest_relations_service.py": "edge_typing",
+    "suggest_volatility_service.py": "volatility_typing",
+}
+"""The verbs whose orchestration moved into `application/` (issue #1168): the
+service names the task it runs on and hands it to the adapter's `chat_client`
+port, which forwards it to `_chat_client(cfg, task=task)`."""
+
+
+def test_the_extracted_verbs_still_resolve_their_own_task_model() -> None:
+    """`suggest-relations` and `suggest-volatility` pass their task through
+    the `chat_client` port, exactly as they passed `task=` to `_chat_client`
+    before the move -- a service that dropped it would silently ignore the
+    workspace's `models:` override, the failure #515 decision 2 refuses."""
+    application = _SRC.parent / "application"
+    for filename, expected in _EXPECTED_SERVICE_TASKS.items():
+        tree = ast.parse((application / filename).read_text(encoding="utf-8"))
+        tasks = {
+            str(call.args[1].value)
+            for call in ast.walk(tree)
+            if isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Attribute)
+            and call.func.attr == "chat_client"
+            and len(call.args) == 2
+            and isinstance(call.args[1], ast.Constant)
+        }
+        assert tasks == {expected}, (filename, tasks)
+
+    # The adapter side of the port must forward it, not drop it.
+    adapter = ast.parse((_SRC / "main.py").read_text(encoding="utf-8"))
+    forwarded = _chat_client_tasks_by_function(adapter)
+    assert forwarded["_suggest_relations_ports"] == {None}
+    ports_source = ast.unparse(
+        next(
+            node
+            for node in ast.walk(adapter)
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "_suggest_relations_ports"
+        )
+    )
+    assert "_chat_client(cfg, task=task)" in ports_source
 
 
 def test_query_and_the_locality_probe_stay_on_the_global_model() -> None:
