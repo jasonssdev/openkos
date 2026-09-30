@@ -694,6 +694,50 @@ logged to stderr. `initialize` MUST NOT be cancellable.
 - WHEN the client sends `notifications/cancelled` naming it
 - THEN the handshake proceeds to completion regardless
 
+### Requirement: Stdin Lines And Tool Calls Are Bounded
+
+The server MUST bound what one peer can make it hold. A stdin line longer
+than 8 MiB (terminator included) MUST be dropped without being buffered
+whole: the rest of that line is discarded, the dropped message is answered
+with `-32700` and `id: null` exactly like any unparseable frame, and the
+next line is read and served normally. The queue between the stdin reader
+and the dispatcher MUST be bounded, and the reader MUST block, not drop
+frames, when it is full.
+
+Tool calls MUST be bounded in both number and time. At most a fixed number
+of tool-call worker threads run at once; a call beyond that waits for a
+free slot rather than starting a thread. Every `tools/call` MUST have a
+deadline, the configured `chat_timeout` plus a fixed headroom (the packaged
+default `chat_timeout` plus that headroom when the config cannot be read),
+covering both the wait for a slot and the run. When it expires the server
+MUST answer that request with JSON-RPC error `-32001` and a generic message,
+and MUST NOT write any further response for that request id, including when
+the abandoned worker later returns a result. A worker thread cannot be
+stopped, so its slot MUST be released only when the thread actually
+finishes, never when its request is answered, cancelled or abandoned.
+
+#### Scenario: An over-long line is dropped and the next message is served
+
+- GIVEN a stdin line longer than the maximum line length, followed by a
+  valid request
+- WHEN the server reads them
+- THEN it answers the long line with `-32700` and `id: null`, and answers
+  the valid request normally
+
+#### Scenario: A tool call past its deadline gets one error response
+
+- GIVEN a `tools/call` whose tool runs longer than the deadline
+- WHEN the deadline expires
+- THEN the server responds with error `-32001`, and when the worker later
+  finishes, nothing further is written for that request id
+
+#### Scenario: A call beyond the concurrency cap waits for a slot
+
+- GIVEN as many tool calls running as the cap allows
+- WHEN another `tools/call` arrives
+- THEN no worker thread starts for it until a running worker finishes, and
+  it is answered with `-32001` if its deadline expires first
+
 ### Requirement: Closing Stdin Abandons In-Flight Requests And Exits Cleanly
 
 WHEN the client closes stdin (end of input), the server MUST stop reading
