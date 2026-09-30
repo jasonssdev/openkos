@@ -215,21 +215,6 @@ def test_parse_subject_reply_evidence_field() -> None:
     assert paraphrased_result.value == "Priya"
 
 
-def test_subject_input_digest_changes_with_title_or_body_only() -> None:
-    base = decision_subject.subject_input_digest("Billing tool", "We chose Postgres.")
-    title_changed = decision_subject.subject_input_digest(
-        "Billing decision", "We chose Postgres."
-    )
-    body_changed = decision_subject.subject_input_digest(
-        "Billing tool", "We chose SQLite."
-    )
-    stable = decision_subject.subject_input_digest("Billing tool", "We chose Postgres.")
-
-    assert title_changed != base
-    assert body_changed != base
-    assert stable == base
-
-
 def test_subject_prompt_version_is_derived_from_the_system_prompt() -> None:
     expected = hashlib.sha256(
         decision_subject._SUBJECT_SYSTEM_PROMPT.encode()

@@ -91,14 +91,6 @@ def _normalize(value: str) -> str:
     return " ".join(value.casefold().split())
 
 
-def subject_input_digest(title: str, body: str) -> str:
-    """A digest over exactly the subject prompt's variable input: `title`
-    and `body`, joined by a NUL byte so a boundary shift between the two
-    (e.g. an empty title) cannot collide with a different split of the
-    same concatenated text."""
-    return hashlib.sha256((title + "\x00" + body).encode()).hexdigest()
-
-
 _SUBJECT_SYSTEM_PROMPT: Final = """You are analyzing one Decision recorded in a knowledge base.
 
 Identify the ONE choice this Decision records:

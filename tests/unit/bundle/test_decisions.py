@@ -412,3 +412,74 @@ def test_clearing_both_kinds_removes_the_sidecar(tmp_path: Path) -> None:
     decisions.write_identity_decisions("events/a", bundle_dir, records=[])
 
     assert not decisions.decisions_path_for("events/a", bundle_dir).is_file()
+
+
+def _sidecar_with_one_malformed_identity_row(bundle_dir: Path) -> Path:
+    decisions.write_identity_decisions("events/a", bundle_dir, records=[_identity()])
+    path = decisions.decisions_path_for("events/a", bundle_dir)
+    metadata, body = okf.load_frontmatter(path.read_text(encoding="utf-8"))
+    raw = metadata["identity_decisions"]
+    assert isinstance(raw, list)
+    raw.append({"decision_key": "k", "member_ids": ["only-one"]})
+    path.write_text(okf.dump_frontmatter(metadata, body=body), encoding="utf-8")
+    return path
+
+
+def test_malformed_identity_row_is_reported_through_the_callback_not_stderr(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A dropped identity row is a lost human ruling, so it is announced --
+    but by the caller-supplied callback, never by the library writing to
+    stderr. The message carries the count and the walked path verbatim."""
+    path = _sidecar_with_one_malformed_identity_row(tmp_path / "bundle")
+    messages: list[str] = []
+
+    result = decisions.read_identity_decisions_at(path, on_warning=messages.append)
+
+    assert result == [_identity()]
+    assert messages == [
+        f"openkos: warning -- 1 malformed identity decision record(s) in {path}; "
+        "those groups will be offered again."
+    ]
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert captured.out == ""
+
+
+def test_malformed_identity_row_without_a_callback_is_silent(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = _sidecar_with_one_malformed_identity_row(tmp_path / "bundle")
+
+    assert decisions.read_identity_decisions_at(path) == [_identity()]
+    assert capsys.readouterr().err == ""
+
+
+def test_id_addressed_reader_forwards_the_callback(tmp_path: Path) -> None:
+    bundle_dir = tmp_path / "bundle"
+    path = _sidecar_with_one_malformed_identity_row(bundle_dir)
+    messages: list[str] = []
+
+    decisions.read_identity_decisions(
+        "events/a", bundle_dir, on_warning=messages.append
+    )
+
+    assert len(messages) == 1
+    assert str(path) in messages[0]
+
+
+def test_write_decisions_forwards_the_callback_for_the_rows_it_would_drop(
+    tmp_path: Path,
+) -> None:
+    """`write_decisions` re-reads the identity list and rewrites it, so a
+    malformed row is lost right here -- the write path must be able to say so."""
+    bundle_dir = tmp_path / "bundle"
+    _sidecar_with_one_malformed_identity_row(bundle_dir)
+    messages: list[str] = []
+
+    decisions.write_decisions(
+        "events/a", bundle_dir, records=[], on_warning=messages.append
+    )
+
+    assert len(messages) == 1
+    assert "1 malformed identity decision record(s)" in messages[0]
