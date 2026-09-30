@@ -2,23 +2,31 @@
 
 ## Purpose
 
-`openkos lint` is the second read-only bundle-reader command (after
-`status`): a purely mechanical, read-only health check that flags two
-freshness signals — stale inline stamps and orphan pages — without mutating
-any bundle file.
+`openkos lint` is a purely mechanical, read-only health check over the
+bundle: it never mutates a bundle file and its findings never gate the exit
+code. It reports freshness signals (stale inline stamps, orphan pages),
+reference integrity (dangling relations, body links and provenance
+entries), extraction health (unextracted, unjudged, unevidenced and
+staging-dropped Sources), sensitivity and provenance signals (below-source
+sensitivity, multi-source uncovered descendants, unbacked provenance
+claims), bundle-layout signals (non-NFC names, Markdown under `.state/`,
+Markdown under other dot-directories) and deprecated-status export drift.
+A check that cannot complete is reported as `not-run` on the returned
+report rather than raised.
 
 ## Non-Goals
 
-This spec does not define: CI-gating, non-zero exit on findings, or severity
-thresholds (findings are informational only, mirroring `status`); error vs.
-warning tiers (flat warning-level in MVP-1); `--json` or any structured
-output; volatility classification via the `freshness` field remains out of
-scope — `freshness` stays a binary snapshot/non-snapshot skip flag,
-orthogonal to volatility; volatility classification is instead read from
-the concept's `volatility` field and per-type registry default (see
-`concept-volatility`), applied only to resolve each concept's stale-stamp
-window; conformance checking (`check_conformance` / OKF §11 stays a
-separate vocabulary).
+This spec does not define: CI-gating on findings or severity thresholds
+(findings are informational only, mirroring `status`); error vs. warning
+tiers (every finding is one flat warning-level kind); `--json` or any
+structured output; volatility classification via the `freshness` field
+remains out of scope — `freshness` stays a binary snapshot/non-snapshot
+skip flag, orthogonal to volatility; volatility classification is instead
+read from the concept's `volatility` field and per-type registry default
+(see `concept-volatility`), applied only to resolve each concept's
+stale-stamp window; conformance checking (`check_conformance` / OKF §11
+stays a separate vocabulary — `lint` is a knowledge-health opinion, never
+OKF's verdict on validity).
 
 ## Requirements
 
@@ -685,3 +693,119 @@ than asserting that an export is stale.
 - THEN no `status-export-drift` finding is reported for `b`, and the
   stale-export half of the scan reports `not-run` naming the unreadable
   document
+
+### Requirement: Dangling-Provenance Scan
+
+`openkos lint` MUST flag, as a `dangling-provenance` finding, each
+`provenance:` entry of a concept document that names an id absent from
+the bundle's concept set, walking the same collected documents the other
+reference scans walk (the check takes only the collected `docs`, so it
+opens no additional directory walk). It MUST report one finding per unique
+(citing document, missing entry) pair, in the document's own provenance
+order. A document's own `resource` value (matched both as written and with
+a trailing `.md` removed) MUST NOT be flagged as missing, per entry: any
+other non-resolving entry on the same document still fires. The finding's
+detail MUST say that the entry is unreachable from any Source's provenance
+closure, so `openkos backfill-sensitivity` will never raise the document
+and `openkos set-sensitivity` cannot cascade to it. The scan MUST NOT write
+and MUST NOT gate the exit code.
+
+#### Scenario: A provenance entry naming a missing id is flagged
+
+- GIVEN a concept document whose `provenance:` cites an id with no
+  corresponding document
+- WHEN `openkos lint` runs
+- THEN it reports one `dangling-provenance` finding naming the citing
+  document and the missing id, and exits `0`
+
+#### Scenario: A document's own raw resource is not flagged
+
+- GIVEN a Source whose `provenance:` contains its own `resource` value
+- WHEN `openkos lint` runs
+- THEN no `dangling-provenance` finding is reported for that entry
+
+#### Scenario: A repeated missing entry yields one finding
+
+- GIVEN a document whose provenance names the same missing id twice
+- WHEN `openkos lint` runs
+- THEN exactly one `dangling-provenance` finding is reported for that pair
+
+### Requirement: Unevidenced-Source and Staging-Dropped Scans
+
+`openkos lint` MUST report an `unevidenced` finding for each Source whose
+`extraction_notice` carries `objects-without-evidence` (a stored derived
+object quotes no line from its source), and a `staging-dropped` finding for
+each Source whose `extraction_notice` carries
+`candidates-dropped-in-staging` (at least one extracted candidate was
+dropped while staging). Each check MUST match only its own token and
+ignore every other and unrecognized token. Each finding's detail MUST name
+`--re-extract` (without the resource) as the flag that forces a redo, and
+MUST NOT name a plain `openkos ingest <resource>`, because re-ingesting an
+unchanged source skips extraction. Neither kind is folded into the
+unjudged scan. Both scans are read-only and non-gating.
+
+#### Scenario: A Source with objects lacking evidence is flagged
+
+- GIVEN a Source whose `extraction_notice` contains
+  `objects-without-evidence`
+- WHEN `openkos lint` runs
+- THEN it reports one `unevidenced` finding naming `--re-extract`
+
+#### Scenario: A Source that lost candidates in staging is flagged
+
+- GIVEN a Source whose `extraction_notice` contains
+  `candidates-dropped-in-staging`
+- WHEN `openkos lint` runs
+- THEN it reports one `staging-dropped` finding naming `--re-extract`,
+  and no `unevidenced` finding for that Source
+
+### Requirement: State-Directory Markdown Scan
+
+`openkos lint` MUST report a `state-dir-markdown` finding for every `*.md`
+file found under `bundle/.state/`. The `.state/` subtree holds only
+non-Markdown derived-state sidecars (the merge ledger), and every
+exclusion walk in the engine relies on it never matching `*.md`. The scan
+MUST be a names-only walk separate from the concept walk, MUST be
+read-only and non-gating, and MUST degrade to `not-run` on an `OSError`
+(see Read-Only and Human-Readable Only).
+
+#### Scenario: A Markdown file under .state is flagged
+
+- GIVEN `bundle/.state/ledger/note.md` exists
+- WHEN `openkos lint` runs
+- THEN it reports one `state-dir-markdown` finding naming
+  `.state/ledger/note.md`, and exits `0`
+
+#### Scenario: A clean .state directory reports nothing
+
+- GIVEN `bundle/.state/` holds only non-Markdown files, or does not exist
+- WHEN `openkos lint` runs
+- THEN no `state-dir-markdown` finding is reported
+
+### Requirement: Dot-Directory Markdown Scan
+
+`openkos lint` MUST report a `dot-dir-markdown` finding for each top-level
+dot-directory under `bundle/` (other than `.state/`, which keeps its own
+finding) that holds `*.md` files the bundle walk excludes from every count.
+It MUST emit one finding per dot-directory, identified by its
+bundle-relative path, carrying the file count and up to three example
+paths followed by a count of the rest. The detail MUST state that those
+files are not treated as Knowledge Objects (not counted, not in
+`bundle_manifest_hash`, not indexed or embedded), that this is correct when
+the directory is editor or tooling configuration, and that real knowledge
+must be moved out of the dot-directory. The scan MUST be derived from the
+same exclusion rule the bundle walk uses (so the two cannot drift), MUST be
+read-only and non-gating, and MUST degrade to `not-run` on an `OSError`.
+
+#### Scenario: An editor's trash directory yields one finding
+
+- GIVEN `bundle/.obsidian/.trash/` holds five `.md` files
+- WHEN `openkos lint` runs
+- THEN it reports one `dot-dir-markdown` finding for `.obsidian` with the
+  count `5`, three example paths and `and 2 more`, not five findings
+
+#### Scenario: A dot-directory without Markdown reports nothing
+
+- GIVEN `bundle/.obsidian/` holds only non-Markdown files
+- WHEN `openkos lint` runs
+- THEN no `dot-dir-markdown` finding is reported

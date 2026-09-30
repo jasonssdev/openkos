@@ -4,8 +4,9 @@
 
 `openkos list [TYPE]` is the missing discovery counterpart to the id-taking
 write verbs (`forget`, `relate`, `merge`, `unmerge`, `set-sensitivity`): it
-enumerates bundle objects with their id, sensitivity, lifecycle status, and
-title, read-only, in a single bundle walk.
+enumerates bundle objects with their id, type, sensitivity, lifecycle
+status, and title, read-only, in a single bundle walk. Its `--sources` mode
+is the reverse-provenance lookup: which Sources reach a given concept.
 
 ## Non-Goals
 
@@ -24,24 +25,32 @@ this spec — `list` states its own read-only requirement independently.
 `openkos list` MUST refuse to run outside an initialized workspace, using
 the same `require_workspace` check every other read-only verb uses.
 
-`list` MUST have exactly three exit outcomes, in this order:
+`list` MUST have exactly the following exit outcomes, in this order:
 
-1. **Argument refusal** — an unrecognized TYPE filter (see *Type Filter
-   Vocabulary*) or an out-of-range `--limit` (see *Output Bounding*) exits
-   non-zero BEFORE the workspace is consulted.
-2. **Workspace refusal** — `require_workspace` failure exits non-zero.
-3. **Success** — every other invocation exits 0, including an empty bundle
-   and a bundle containing unreadable or unparseable documents.
+1. **Argument refusal** — `--sources` combined with a TYPE filter, an
+   unrecognized TYPE filter (see *Type Filter Vocabulary*), or a
+   non-positive `--limit` (see *Output Bounding*) exits `1` BEFORE the
+   workspace is consulted, checked in that order.
+2. **Workspace refusal** — `require_workspace` failure exits `1`.
+3. **Concept-id refusal** — in `--sources` mode only, a concept id that does
+   not resolve to a bundle document (nonexistent, or carrying `..`
+   segments) exits `1` (see *Reverse-Provenance Mode*).
+4. **Incomplete report** — in `--sources` mode only, a bundle document that
+   could not be read during the provenance walk exits `2` after printing
+   the report.
+5. **Success** — every other invocation exits `0`, including an empty
+   bundle, a `--sources` query no Source reaches, and a bundle containing
+   unreadable or unparseable documents in the ordinary listing.
 
-Once past those two refusals, `require_workspace` failure MUST be the only
-remaining non-zero exit path: no bundle content, however malformed, may make
-`list` fail.
+In the ordinary listing, once past the two refusals above,
+`require_workspace` failure MUST be the only remaining non-zero exit path:
+no bundle content, however malformed, may make it fail.
 
-This argument-before-workspace ordering is not new. It matches
-`set-volatility`, which validates `tier` and `concept_type` and exits 1 on
-either before calling `config.require_workspace`
-(`src/openkos/cli/main.py:3545-3563`). A caller who typed a bad flag should
-learn that from the flag, not from an unrelated workspace error.
+Argument validation precedes the workspace check, matching
+`set-volatility`, which validates `tier` and `concept_type` and exits `1` on
+either before calling `config.require_workspace`. A caller who typed a bad
+flag should learn that from the flag, not from an unrelated workspace
+error.
 
 #### Scenario: Run outside a workspace
 - GIVEN a directory that is not an initialized OpenKOS workspace
@@ -131,15 +140,19 @@ and therefore never appear as a distinct "merged" row.
 
 ### Requirement: Column Layout
 
-Each row MUST print exactly four columns, in order: `ID`, `SENSITIVITY`,
-`STATUS`, `TITLE`. `SENSITIVITY` and `STATUS` MUST always be present
-(never blank) for every row that was successfully parsed.
+Each row MUST print exactly five columns, in order: `ID`, `TYPE`,
+`SENSITIVITY`, `STATUS`, `TITLE`, aligned over the header labels and the
+rows actually shown. `TYPE` MUST be derived from the object's `link_dir`
+(the registry's type name for that directory, or `(unknown)` for an object
+outside the registry's directories), never re-read from a document's `type`
+field. `SENSITIVITY` and `STATUS` MUST always be present (never blank) for
+every row that was successfully parsed.
 
 #### Scenario: Row layout
 - GIVEN a bundle with one active, public concept
 - WHEN `openkos list` runs
-- THEN the row shows `ID`, `SENSITIVITY`, `STATUS`, then `TITLE`, in that
-  order
+- THEN the row shows `ID`, `TYPE`, `SENSITIVITY`, `STATUS`, then `TITLE`,
+  in that order
 
 ### Requirement: Confidential Titles Are Printed in Full
 
@@ -198,3 +211,63 @@ NOT offer `--json` or any other structured output mode.
 - WHEN `openkos list` runs with any combination of flags
 - THEN no file under the workspace is created, modified, or deleted, and no
   `--json` flag is accepted
+
+### Requirement: Reverse-Provenance Mode
+
+`openkos list --sources <concept-id>` MUST list every Source whose
+provenance chain reaches the given concept, transitively, answering
+"which Sources need raising to protect this object". It MUST be a whole
+mode: it takes no TYPE filter, and combining `--sources` with a TYPE
+argument MUST be refused with exit `1` before the workspace is consulted.
+The id MUST resolve through the same gate every id-taking verb uses; an id
+that does not resolve MUST be refused with exit `1` naming the reason.
+
+The output MUST be a `Sources whose provenance reaches '<id>':` heading
+and one row per reaching Source with columns `ID`, `SENSITIVITY`, `TITLE`,
+carrying each Source's current sensitivity. A provenance entry under
+`sources/` that has no file behind it MUST render as `(not in bundle)`
+rather than vanish. WHEN no Source reaches the concept, it MUST print
+`No Source reaches '<id>' through provenance.` and exit `0`. The mode MUST
+be read-only.
+
+WHEN a bundle document could not be read while walking for provenance
+edges, the command MUST print the count and each unreadable document's path
+before the rows, and MUST exit `2` (the same incomplete-report exit `lint`
+and `doctor` use); a run whose walk was complete MUST print no
+incompleteness line and exit `0`. `--limit` and `--all` do not bound this
+mode's rows.
+
+#### Scenario: Sources reaching a derived concept are listed
+
+- GIVEN a derived concept whose provenance names a Source directly and a
+  second concept that itself derives from a further Source
+- WHEN `openkos list --sources <derived-id>` runs
+- THEN it prints a row for each reaching Source with its `SENSITIVITY`
+  and `TITLE`, and exits `0`
+
+#### Scenario: --sources with a TYPE filter is refused
+
+- GIVEN any workspace, or none
+- WHEN `openkos list people --sources <id>` runs
+- THEN it exits `1` stating that `--sources` takes no TYPE filter, before
+  any workspace check
+
+#### Scenario: An unknown concept id is refused
+
+- GIVEN an initialized workspace with no concept `nonexistent`
+- WHEN `openkos list --sources nonexistent` runs
+- THEN it exits `1` naming that the concept does not exist
+
+#### Scenario: A concept no Source reaches
+
+- GIVEN a concept with no provenance chain to any Source
+- WHEN `openkos list --sources <id>` runs
+- THEN it prints `No Source reaches '<id>' through provenance.` and
+  exits `0`
+
+#### Scenario: An unreadable document makes the report incomplete
+
+- GIVEN a bundle document that cannot be read during the provenance walk
+- WHEN `openkos list --sources <id>` runs
+- THEN it prints the count of unreadable documents and each path, still
+  prints the rows it found, and exits `2`

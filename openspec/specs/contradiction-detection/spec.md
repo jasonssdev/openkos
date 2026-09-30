@@ -168,8 +168,10 @@ the candidate set, the report MUST state this explicitly — never silently.
 ### Requirement: Read-Only `contradictions` CLI Verb, High-Confidence Default
 
 The CLI MUST expose a `contradictions` verb gating on `require_workspace`,
-building `OllamaClient` and injecting it into `find_contradictions`,
-performing zero bundle writes. Its only persistence is the findings store
+building the configured chat client and injecting it into
+`find_contradictions`, performing zero bundle writes on the judging path
+(the ruling flags in "`--decline`, `--reopen` And `--declined` Manage
+Findings" are the only writers). Its only persistence is the findings store
 under `.openkos/` (#653) — the same "persisting a finding is not a bundle
 write" carve-out `curate`'s Contradictions stage holds. By default it MUST
 display only `CONTRADICTS` verdicts above the confidence threshold;
@@ -219,6 +221,50 @@ MUST bypass serving and re-judge every candidate.
 - WHEN `contradictions --fresh` runs
 - THEN every candidate is judged with a model call
 
+### Requirement: `--decline`, `--reopen` And `--declined` Manage Findings
+
+`contradictions` MUST accept `--decline PAIR_ID_A PAIR_ID_B`, which records
+the finding for that concept pair as declined; `--reopen PAIR_ID_A
+PAIR_ID_B`, which returns a declined finding to open so it is eligible to
+rank again; and `--declined`, which lists every declined finding instead of
+running detection. The pair MUST be sorted internally, so argument order
+does not matter. `--merged-absorbed-id <id>` MUST be accepted with
+`--decline` or `--reopen` to address a merged-body candidate, distinguishing
+it from a typed-edge candidate over the same pair (the identity is defined
+in `pending-work`).
+
+Each of the three flags MUST short-circuit before the graph build and before
+any chat client is built, so none makes a model call. `--decline` and
+`--reopen` MUST write only the decision record under
+`bundle/.state/decisions/`, MUST NOT require a matching persisted finding
+(declining a pair with no findings row succeeds), MUST be idempotent for
+the same target state, and MUST autocommit the record with a commit message
+naming the action and the pair. `--declined` MUST write nothing and MUST
+print `No declined findings.` when none exist. An ordinary judged run MUST
+hide any verdict whose decision identity is already declined.
+
+#### Scenario: Declining a pair records a ruling without a model call
+
+- GIVEN a workspace with two related concepts `a` and `b` and no findings
+  row for them
+- WHEN `openkos contradictions --decline b a` runs
+- THEN it prints that `a <-> b` was declined, writes only the decision
+  record under `bundle/.state/decisions/`, and makes no model call
+
+#### Scenario: Reopening restores eligibility
+
+- GIVEN `a` and `b` were declined
+- WHEN `openkos contradictions --reopen a b` runs
+- THEN the decision is set back to open and a later judged run may show
+  the finding again
+
+#### Scenario: The declined listing
+
+- GIVEN one declined finding
+- WHEN `openkos contradictions --declined` runs
+- THEN the declined finding is listed and no model call or bundle write
+  occurs; with none declined it prints `No declined findings.`
+
 ### Requirement: `--all` Reveals Every Verdict
 
 The `contradictions` verb MAY accept `--all` to display every verdict
@@ -234,10 +280,10 @@ verdict list.
 
 ### Requirement: Degrade-On-No-Model Mirrors `adjudicate`'s 3-Tier Catch
 
-The verb MUST report each of `OllamaUnavailable`, `OllamaModelNotFound`,
-and generic `OllamaError` (checked in that order) with an actionable
+The verb MUST report each of `BackendUnavailable`, `BackendModelNotFound`,
+and generic `BackendError` (checked in that order) with an actionable
 message, write nothing, and exit non-zero — mirroring `adjudicate`'s
-degrade contract. Since #441, a mid-loop failure from `llm.chat` reaches
+degrade contract. A mid-loop failure from `llm.chat` reaches
 the verb as `ContradictionBatch.failure` (with the completed verdicts
 preserved and reported first), not as a raise; the 3-tier catch around the
 call itself remains only for a failure raised outside the guarded chat
@@ -246,7 +292,7 @@ seam.
 #### Scenario: Each tier degrades cleanly with zero writes
 
 - GIVEN `find_contradictions` returns a batch whose `failure` is one of the
-  three `OllamaError` tiers (or, for a failure outside the guarded chat
+  three `BackendError` tiers (or, for a failure outside the guarded chat
   seam, raises one)
 - WHEN `contradictions` runs
 - THEN the completed verdicts (if any) report first, the matching message

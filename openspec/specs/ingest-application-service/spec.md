@@ -56,7 +56,7 @@ and degrade condition it currently renders — the ordered set covered by
 the existing `_<name>_notice(report)` helpers, per-candidate drop reasons
 (empty slug, in-batch collision, on-disk exists, build failure), and
 degrade reasons (`no-extractable-text`, `blocked-by-sensitivity`,
-`failed`, including the caught `OllamaError`) — and MUST NOT call
+`failed`, including the caught `BackendError`) — and MUST NOT call
 `typer.echo` or any other presentation call to render them. The adapter
 MUST render this data using the relocated `_notice` helpers, in the same
 order and with the same wording as before this change.

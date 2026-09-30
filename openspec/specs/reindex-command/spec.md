@@ -290,7 +290,7 @@ regardless of a matching `content_hash`.
 
 ### Requirement: Error Ladder Mirrors `query`
 
-`reindex` MUST catch `OllamaError`-family exceptions and `VecUnavailable`,
+`reindex` MUST catch `BackendError`-family exceptions and `VecUnavailable`,
 printing a clear message to stderr and exiting 1, never a raw traceback.
 Additionally, `reindex` MUST catch lock-contention `sqlite3.OperationalError`
 raised at ANY write surface of the three on-disk stores (vectors, FTS,
@@ -364,7 +364,7 @@ this catch; it keeps its existing (generic operational-error) handling.
 `reindex` MUST embed each queued document as a set of per-chunk embed calls
 (per-document grain: one document's chunk loop is a single unit) rather
 than as one whole-batch call across documents. WHEN any chunk's embed call
-within a document's chunk loop raises the generic transient `OllamaError`
+within a document's chunk loop raises the generic transient `BackendError`
 (the HTTP-400 EOF class) and the retry budget (`llm-client`) is exhausted,
 `reindex` MUST treat the WHOLE document as failed: it MUST NOT upsert any
 chunk, any `doc_vectors` row, or any `vector_meta` update for that document,
@@ -379,8 +379,8 @@ NOT abort the run: `reindex` MUST still perform its single end-of-run
 commit covering every successfully embedded document plus any pruning, MUST
 exit `0`, and MUST continue processing every remaining queued document.
 
-WHEN any chunk's embed call instead raises `OllamaUnavailable`,
-`OllamaModelNotFound`, OR `OllamaEmbeddingDimensionMismatch`, `reindex` MUST
+WHEN any chunk's embed call instead raises `BackendUnavailable`,
+`BackendModelNotFound`, OR `BackendEmbeddingDimensionMismatch`, `reindex` MUST
 NOT treat it as a per-document failure. `reindex` MUST re-raise it from the
 chunk loop BEFORE the generic transient-error handler, letting it propagate
 to the existing "Error Ladder Mirrors `query`" requirement unchanged: a
@@ -397,7 +397,7 @@ invariant.)
 #### Scenario: One poison document among many survives as a partial-progress run
 
 - GIVEN a batch of 10 queued documents where document #4 has one chunk (of
-  several) whose embed call raises the transient generic `OllamaError`
+  several) whose embed call raises the transient generic `BackendError`
   after exhausting the retry budget, and every other document's every chunk
   succeeds
 - WHEN `openkos reindex` runs
@@ -425,7 +425,7 @@ invariant.)
 #### Scenario: Every queued document transiently fails leaves an empty embed pass, not a crash
 
 - GIVEN every queued document has at least one chunk whose embed call
-  raises the transient generic `OllamaError` after exhausting the retry
+  raises the transient generic `BackendError` after exhausting the retry
   budget
 - WHEN `openkos reindex` runs
 - THEN `ReindexReport.embedded` is `0`, `ReindexReport.embed_failed` equals
@@ -435,7 +435,7 @@ invariant.)
 #### Scenario: Unreachable Ollama mid-chunk-loop is fatal, not a per-document skip
 
 - GIVEN Ollama becomes unreachable partway through a document's chunk loop
-  (some chunks already embedded, `OllamaUnavailable` raised on the next
+  (some chunks already embedded, `BackendUnavailable` raised on the next
   chunk)
 - WHEN `openkos reindex` runs
 - THEN it does NOT count that document as `embed_failed`, does NOT proceed
@@ -445,7 +445,7 @@ invariant.)
 #### Scenario: Missing embedding model mid-chunk-loop is fatal, not a per-document skip
 
 - GIVEN the configured embedding model is not installed and
-  `OllamaModelNotFound` is raised while embedding one of a queued
+  `BackendModelNotFound` is raised while embedding one of a queued
   document's chunks
 - WHEN `openkos reindex` runs
 - THEN it does NOT count that document as `embed_failed`, prints the
@@ -455,7 +455,7 @@ invariant.)
 #### Scenario: Dimension mismatch mid-chunk-loop is fatal, not a per-document skip
 
 - GIVEN the configured embedding model returns a wrong-length vector row
-  and `OllamaEmbeddingDimensionMismatch` is raised while embedding one of a
+  and `BackendEmbeddingDimensionMismatch` is raised while embedding one of a
   queued document's chunks
 - WHEN `openkos reindex` runs
 - THEN it does NOT count that document as `embed_failed`, does NOT proceed
@@ -467,7 +467,7 @@ invariant.)
 
 WHEN `ReindexReport.embed_failed > 0` — one or more docs were skipped
 specifically because their embed call transiently failed (the generic
-`OllamaError` EOF class) after the retry budget was exhausted — `reindex`
+`BackendError` EOF class) after the retry budget was exhausted — `reindex`
 MUST print a distinct, actionable stderr notice stating that this run is
 INCOMPLETE and advising the user to run `openkos reindex` again to
 complete it. This notice keys ONLY on `embed_failed`, NEVER on the existing
@@ -482,7 +482,7 @@ new-model (survivor) and old-model (failed) vectors until a later run
 reaches `skipped == 0 AND embed_failed == 0`; the user MUST be told the
 reindex is incomplete rather than left to discover the mixed state
 silently. A run whose embed loop instead hits a FATAL error
-(`OllamaUnavailable`/`OllamaModelNotFound`/`OllamaEmbeddingDimensionMismatch`,
+(`BackendUnavailable`/`BackendModelNotFound`/`BackendEmbeddingDimensionMismatch`,
 see the Per-Doc Embed Failure Is Isolated, Not Fatal requirement) exits 1
 before reaching this notice — the notice applies only to a run that
 completes with exit 0. A dimension-mismatch exit MUST NOT be worded as
@@ -518,7 +518,7 @@ completes with exit 0. A dimension-mismatch exit MUST NOT be worded as
 
 #### Scenario: Dimension mismatch never reaches the transient re-run notice
 
-- GIVEN a run whose embed loop raises `OllamaEmbeddingDimensionMismatch`
+- GIVEN a run whose embed loop raises `BackendEmbeddingDimensionMismatch`
   on some queued doc
 - WHEN `openkos reindex` exits 1
 - THEN the transient "will retry next run" notice is NOT printed for that
@@ -677,10 +677,14 @@ and MUST introduce no read-path consumer of the state it writes. That state
 is derived state only -- `vectors.db` plus the on-disk FTS and graph indexes
 under `.openkos/`, per `### Requirement: Reindex Becomes Sole Writer Of FTS
 And Graph Derived Indexes` above -- never bundle bytes.
-(Previously: "it only populates `vectors.db`" -- true while `reindex` wrote
-that store alone, and contradicted by the sole-writer requirement above once
-FTS and graph persistence landed. The no-retrieval-consumer obligation is
-unchanged; only the write set it names is corrected.)
+
+#### Scenario: Reindex leaves query behavior and the bundle untouched
+
+- GIVEN a bundle and an initialized workspace
+- WHEN `openkos reindex` runs
+- THEN `retrieval/answer.py` and `query` behave identically to before the
+  run, no read-path consumer of the reindexed state is introduced, and no
+  bundle file is created, modified, or deleted
 
 ### Requirement: Reindex Discloses The Real Re-Embed Trigger, Not A False Model-Change Claim
 

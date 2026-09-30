@@ -295,17 +295,17 @@ rather than a guessed one.
 - THEN the rendered verdict is `DIFFERENT`, the rationale carries the
   withdrawal note, and no model call is made
 
-### Requirement: `OllamaError`-Family Propagates Unswallowed From The Leaf
+### Requirement: `BackendError`-Family Propagates Unswallowed From The Leaf
 
-Any `OllamaError`-family exception raised by `llm.chat` MUST propagate
+Any `BackendError`-family exception raised by `llm.chat` MUST propagate
 unswallowed out of `adjudicate_candidates` to the caller; the leaf MUST NOT
 catch or degrade transport/model-availability failures itself.
 
 #### Scenario: Backend transport failure propagates
 
-- GIVEN an `LLMBackend` that raises `OllamaUnavailable` on `chat`
+- GIVEN an `LLMBackend` that raises `BackendUnavailable` on `chat`
 - WHEN `adjudicate_candidates` runs
-- THEN `OllamaUnavailable` propagates out of the call, uncaught by the leaf
+- THEN `BackendUnavailable` propagates out of the call, uncaught by the leaf
 
 ### Requirement: Read-Only `adjudicate` CLI Verb
 
@@ -342,12 +342,12 @@ flag.
 ### Requirement: Degrade-On-No-Model Mirrors `query`'s 3-Tier Catch
 
 For the `ollama` backend, the `adjudicate` verb MUST catch
-`OllamaUnavailable`, then `OllamaModelNotFound`, then generic `OllamaError`
+`BackendUnavailable`, then `BackendModelNotFound`, then generic `BackendError`
 (in that subclass order), report a clear actionable message, and write
 nothing, mirroring `query`'s degrade contract. WHEN the caught exception is
-`OllamaUnavailable`, the message MUST additionally point to `openkos doctor`
-to diagnose the environment, mirroring `query`'s `OllamaUnavailable`
-wording; the `OllamaModelNotFound` and generic `OllamaError` messages are
+`BackendUnavailable`, the message MUST additionally point to `openkos doctor`
+to diagnose the environment, mirroring `query`'s `BackendUnavailable`
+wording; the `BackendModelNotFound` and generic `BackendError` messages are
 unchanged. This wording MUST remain byte-identical to before this change.
 
 For the `openai-compatible` backend, `adjudicate` MUST catch the analogous
@@ -360,7 +360,7 @@ advise verifying the configured server is running, and point to
 `OpenAICompatibleModelNotFound` message MUST name the configured model and
 advise making it available on the configured server, with no `ollama pull`
 reference.
-(Previously: the `OllamaUnavailable` message told the user to run
+(Previously: the `BackendUnavailable` message told the user to run
 `ollama serve` with no additional pointer to `openkos doctor`.)
 (Previously: only the `ollama` backend existed, so this requirement named
 Ollama's exception classes and wording unconditionally, with no
@@ -368,7 +368,7 @@ backend-conditional branch.)
 
 #### Scenario: Ollama unreachable also points to doctor
 
-- GIVEN `adjudicate_candidates` raises `OllamaUnavailable`
+- GIVEN `adjudicate_candidates` raises `BackendUnavailable`
 - WHEN `openkos adjudicate` runs
 - THEN stderr tells the user to run `ollama serve` and also names
   `openkos doctor` to diagnose the environment
@@ -1292,10 +1292,12 @@ existing `--apply`/`--json` mutual-exclusion pattern.
 
 #### Scenario: `--apply-same --apply` exits 2
 
+- GIVEN an initialized workspace
 - WHEN `adjudicate --apply-same --apply` runs
 - THEN stderr contains a clear rejection message and the exit code is 2
 
 #### Scenario: `--apply-same --json` exits 2
 
+- GIVEN an initialized workspace
 - WHEN `adjudicate --apply-same --json` runs
 - THEN stderr contains a clear rejection message and the exit code is 2

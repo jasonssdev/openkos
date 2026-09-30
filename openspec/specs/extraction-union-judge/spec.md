@@ -100,17 +100,17 @@ introduce candidates absent from the union.
 
 ### Requirement: Judge Failure Fails Closed to the Backstopped Union
 
-WHEN the judge call raises `OllamaError`, returns an empty reply, or returns
+WHEN the judge call raises `BackendError`, returns an empty reply, or returns
 a reply that fails parsing/validation, the system MUST NOT discard the
 extraction work. It MUST fall back to the full merged union, left unranked
 and without the backstop cap (see "Backstop Cap Applied Once, After Judge
 Selection"), MUST flag this degrade in the `ExtractionReport`, and MUST
 emit a note to stderr. Extraction MUST NOT raise in this path.
 
-#### Scenario: Judge OllamaError degrades to the unranked union
+#### Scenario: Judge BackendError degrades to the unranked union
 
 - GIVEN a merged union of valid candidates and a judge call that raises
-  `OllamaError`
+  `BackendError`
 - WHEN extraction completes
 - THEN the returned objects are the full merged union (bounded only by the
   pre-judge ceiling), the report records the judge failure, and a note
@@ -120,7 +120,7 @@ emit a note to stderr. Extraction MUST NOT raise in this path.
 
 - GIVEN a judge reply that is not valid JSON
 - WHEN extraction completes
-- THEN the outcome is identical to the `OllamaError` degrade path
+- THEN the outcome is identical to the `BackendError` degrade path
 
 #### Scenario: Valid selection admitting zero objects degrades the same way
 

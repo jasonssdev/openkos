@@ -151,25 +151,20 @@ it were a valid suggestion, and never written anywhere.
 ### Requirement: Ollama Unavailability Points To `doctor`
 
 WHEN the suggestion verb's underlying `suggest_relations` call raises
-`OllamaUnavailable` (for the `ollama` backend) or `OpenAICompatibleUnavailable`
-(for the `openai-compatible` backend), the CLI MUST catch it before the
-generic `OllamaError`/`OpenAICompatibleError` handler, print to stderr a
+`BackendUnavailable` (from either backend), the CLI MUST catch it before the
+generic `BackendError` handler, print to stderr a
 message that states the backend is not responding, and additionally points
 to `openkos doctor` to diagnose the environment, then exit 1 with zero
 writes to any bundle file. For `ollama`, the message MUST tell the user to
 start it with `ollama serve`, byte-identical to before this change. For
 `openai-compatible`, the message MUST instead advise verifying the
 configured server is running at its endpoint, with no `ollama serve`
-reference. The `OllamaModelNotFound`/`OpenAICompatibleModelNotFound` and
-generic `OllamaError`/`OpenAICompatibleError` branches, and their ordering
-relative to the unavailable exception, MUST remain unchanged.
-(Previously: only the `ollama` backend existed, so this requirement named
-`OllamaUnavailable` and `ollama serve` unconditionally, with no
-backend-conditional branch.)
+reference. The `BackendModelNotFound` and generic `BackendError` branches,
+and their ordering relative to the unavailable exception, are unchanged.
 
 #### Scenario: Ollama unreachable points to doctor
 
-- GIVEN `suggest_relations` raises `OllamaUnavailable`
+- GIVEN `suggest_relations` raises `BackendUnavailable`
 - WHEN the suggestion verb runs
 - THEN stderr tells the user to run `ollama serve` and also names
   `openkos doctor` to diagnose the environment
@@ -177,8 +172,8 @@ backend-conditional branch.)
 
 #### Scenario: Model-not-found and generic errors unchanged
 
-- GIVEN `suggest_relations` raises `OllamaModelNotFound` or a generic
-  `OllamaError`
+- GIVEN `suggest_relations` raises `BackendModelNotFound` or a generic
+  `BackendError`
 - WHEN the suggestion verb runs
 - THEN the existing pull-remedy or generic failure message is printed
   unchanged, with no `doctor` pointer added
@@ -274,6 +269,47 @@ absent.
 - WHEN `suggest-relations` runs
 - THEN it prints a message stating candidates are not computable yet due
   to missing embeddings, distinct from both other messages, and exits 0
+
+### Requirement: `suggest-relations --edge-offset` Browses Beyond The Candidate Cap
+
+`suggest-relations` MUST accept `--edge-offset <n>` (integer, minimum `0`,
+default `0`), which skips the first `n` ranked embedding-proximity
+candidate edges so the batch beyond the per-run candidate cap can be
+browsed without first typing the batch before it. The default `0` MUST
+select the same window as a run without the flag. A negative value MUST be
+rejected as a usage error (exit `2`) before any workspace or model work.
+WHEN the offset is at or past the end of the ranked candidate set, the verb
+MUST print `no candidate edges at --edge-offset <n>; re-run with a smaller
+offset.` and return without an LLM call, rather than claiming nothing is
+untyped and never wrapping around. WHEN a run is truncated by the cap and a
+further ranked batch exists, the verb MUST name the exact `--edge-offset`
+value at which the next batch starts.
+
+#### Scenario: An offset skips the first ranked candidates
+
+- GIVEN more ranked candidate edges than the per-run cap
+- WHEN `openkos suggest-relations --edge-offset <n>` runs
+- THEN the candidate window starts after the first `n` ranked candidates
+
+#### Scenario: An offset past the candidate set says so
+
+- GIVEN fewer than `n` ranked candidate edges
+- WHEN `openkos suggest-relations --edge-offset <n>` runs
+- THEN it prints the `no candidate edges at --edge-offset <n>` line, makes
+  no model call, and does not print the "nothing untyped" state message
+
+#### Scenario: A truncated run names the next offset
+
+- GIVEN a run truncated by the candidate cap with a further batch beyond
+  its window
+- WHEN `openkos suggest-relations` completes
+- THEN it prints the exact `--edge-offset` value that starts the next batch
+
+#### Scenario: A negative offset is a usage error
+
+- GIVEN any invocation
+- WHEN `openkos suggest-relations --edge-offset -1` runs
+- THEN it exits `2` with a range error and performs no workspace read
 
 ### Requirement: Persisted Suggestions Are Served Before Re-Typing
 

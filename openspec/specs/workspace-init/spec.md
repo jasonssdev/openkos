@@ -367,7 +367,8 @@ post-success Ollama preflight warning, after Phase B completes.
 
 ### Requirement: Config Model Field Type Enforcement
 
-`read_config` MUST enforce that a present `model` value in `openkos.yaml` is a `str`. It MUST slot this check into the existing "checked `is not
+`read_config` MUST enforce that a present `model` value in `openkos.yaml`
+is a `str`. It MUST slot this check into the existing "checked `is not
 None`, not truthiness" conditional used for every field's fallback, without
 altering that pattern for `model` or any other field (e.g. `review: false`
 MUST still survive untouched). WHEN the parsed `model` value is present but
@@ -379,7 +380,7 @@ as YAML `null`, it MUST fall back to `DEFAULT_MODEL` unchanged — this is not
 a type error. WHEN `model` is a normal string, `read_config` MUST use it
 unchanged.
 
-##### Scenario: Boolean-typed model value raises ValueError
+#### Scenario: Boolean-typed model value raises ValueError
 
 - GIVEN an `openkos.yaml` containing `model: yes`, which PyYAML's default
   resolver parses as the Python `bool` `True`
@@ -387,20 +388,20 @@ unchanged.
 - THEN it raises `ValueError` naming `model` as the offending field and
   stating that a string is required
 
-##### Scenario: Absent or null model falls back to the default
+#### Scenario: Absent or null model falls back to the default
 
 - GIVEN an `openkos.yaml` with no `model` key, or `model: null` / `model: ~`
 - WHEN `read_config` parses the file
 - THEN the resulting `Config.model` equals `DEFAULT_MODEL`, and no
   `ValueError` is raised
 
-##### Scenario: String model is used unchanged
+#### Scenario: String model is used unchanged
 
 - GIVEN an `openkos.yaml` containing `model: qwen3:8b`
 - WHEN `read_config` parses the file
 - THEN the resulting `Config.model` equals `"qwen3:8b"` exactly
 
-##### Scenario: Explicit review: false is unaffected by the model type check
+#### Scenario: Explicit review: false is unaffected by the model type check
 
 - GIVEN an `openkos.yaml` containing `review: false` and a valid string
   `model`

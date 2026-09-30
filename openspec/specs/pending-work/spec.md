@@ -172,6 +172,16 @@ output, MUST NOT be adjudicated by `curate`'s Identity stage, and MUST be
 excluded before that stage's cost gate so it costs no model call. An
 explicit listing view MUST exist, and the ruling MUST be reversible.
 
+The ruling surface MUST be `duplicates --keep-distinct <id>` (repeated once
+per member, at least two distinct members), `duplicates --reopen <id>`
+(repeated the same way) to reverse it, and `duplicates --kept-distinct` to
+list every ruled group. Each MUST short-circuit before the whole-bundle
+candidate walk, and MUST NOT make a model call. Member ids MUST be
+path-safety canonicalized, deduplicated and sorted, so either typing order
+addresses the same record; existence of the named concepts MUST NOT be
+required. Fewer than two distinct members MUST be refused with exit `2`.
+A recorded or reversed ruling MUST be autocommitted.
+
 Declining a per-item merge prompt MUST record the ruling, on EVERY
 interactive walk that offers one — a decline persisted on one surface and
 forgotten on another is drift between two paths that share a prompt.
