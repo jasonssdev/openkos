@@ -869,7 +869,6 @@ MODEL_MISMATCH_MESSAGE = (
 calls, state their remedy, and are not failures -- the store is simply not built
 for the currently configured model."""
 
-_DOCTOR_HINT = " Or run `openkos doctor` to diagnose the environment."
 _VERB = "revisions"
 
 
@@ -979,7 +978,7 @@ def revisions_batch_failure_message(
     if isinstance(failure, BackendUnavailable):
         return (
             f"{context} -- {failure}. Start it with `ollama serve`, then "
-            f"try again.{_DOCTOR_HINT}"
+            f"try again.{application_backends.DOCTOR_HINT}"
         )
     if isinstance(failure, BackendModelNotFound):
         return (

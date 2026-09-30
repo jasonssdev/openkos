@@ -66,7 +66,7 @@ from openkos.resolution.edge_typing import (
 from openkos.state import derived
 from openkos.state import edge_suggestions as edge_suggestions_store
 
-DOCTOR_HINT = " Or run `openkos doctor` to diagnose the environment."
+DOCTOR_HINT = application_backends.DOCTOR_HINT
 """The remediation clause appended to a `BackendUnavailable` message."""
 
 _VERB = "suggest-relations"
