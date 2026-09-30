@@ -993,6 +993,38 @@ def test_mcp_prints_insecure_key_warning_once_at_startup(
     assert "secret" not in caplog.text
 
 
+def test_mcp_remote_key_notice_goes_to_stderr_logging_never_stdout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The non-local https key notice rides the same stderr logger as the
+    plain-http warning; stdout (the JSON-RPC channel) stays empty."""
+    import dataclasses
+
+    config.write_config(tmp_path)
+    real_cfg = config.read_config(tmp_path)
+    oc_cfg = dataclasses.replace(
+        real_cfg,
+        backend="openai-compatible",
+        base_url="https://api.example.com/v1",
+        embedding_base_url="https://embed.example.org/v1",
+    )
+    monkeypatch.setattr(config, "read_config", lambda _root: oc_cfg)
+    monkeypatch.setenv("OPENKOS_OPENAI_API_KEY", "secret")
+    monkeypatch.setattr(transport, "claim_stdio", _RaisesKeyboardInterrupt)
+
+    with caplog.at_level(logging.INFO, logger="openkos.mcp"):
+        exit_code = server.serve(tmp_path, expose_confidential=False)
+
+    assert exit_code == 130
+    assert caplog.text.count("https://api.example.com") == 1
+    assert caplog.text.count("https://embed.example.org") == 1
+    assert "secret" not in caplog.text
+    assert capsys.readouterr().out == ""
+
+
 def test_mcp_no_insecure_key_warning_for_ollama(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

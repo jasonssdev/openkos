@@ -763,6 +763,8 @@ def _warn_insecure_key_at_startup(root: Path) -> None:
     warning = application_backends.insecure_key_warning(cfg)
     if warning is not None:
         logger.warning("%s", warning)
+    for _origin, message in application_backends.remote_key_notices(cfg):
+        logger.warning("%s", message)
 
 
 def _tool_deadline_for(root: Path) -> float:
