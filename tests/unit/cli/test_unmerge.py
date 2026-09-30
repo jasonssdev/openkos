@@ -207,6 +207,93 @@ def test_unmerge_restores_survivor_absorbed_index_log_and_reverses_links(
     assert "**Unmerge**" in log_text
 
 
+def _strip_survivor_after_sha256(bundle_dir: Path, survivor_id: str) -> None:
+    """Rewrite `survivor_id`'s committed ledger sidecar TAIL entry to look
+    like a pre-#1110 entry: delete `survivor_after_sha256` from its raw
+    dict. Every other field a real merge already wrote is left untouched,
+    so this simulates "a merge made before the fix shipped" from real
+    merge output rather than hand-authoring a whole entry from scratch."""
+    path = bundle_ledger.ledger_path_for(survivor_id, bundle_dir)
+    metadata, _ = okf.load_frontmatter(path.read_text(encoding="utf-8"))
+    raw_merged_from = metadata["merged_from"]
+    assert isinstance(raw_merged_from, list)
+    raw_entries = list(raw_merged_from)
+    tail = dict(raw_entries[-1])
+    del tail["survivor_after_sha256"]
+    raw_entries[-1] = tail
+    metadata["merged_from"] = raw_entries
+    path.write_text(okf.dump_frontmatter(metadata), encoding="utf-8")
+    # The workspace's git state must match a real session's before a verb
+    # that deletes this document reaches its auto-commit (issue #819).
+    commit_pending_fixture_docs()
+
+
+def test_unmerge_survivor_edited_since_merge_refuses_closed_no_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #1110: an edit landing on the survivor at ANY point between
+    the merge and this unmerge -- not only inside the post-confirm
+    drift-guard's narrower prompt window -- is caught pre-prompt
+    (`prepare_unmerge` comparing current bytes against the ledger entry's
+    own `survivor_after_sha256`) and refused closed, naming the survivor
+    and telling the operator to copy the edit somewhere safe, instead of
+    being silently overwritten by the stale `survivor_before` snapshot."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/survivor", title="Survivor")
+    _write_concept(tmp_path, "concepts/absorbed", title="Absorbed")
+
+    merge_result = runner.invoke(
+        app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+    assert merge_result.exit_code == 0, merge_result.stderr
+
+    survivor_path = tmp_path / "bundle" / "concepts" / "survivor.md"
+    edited_text = survivor_path.read_text(encoding="utf-8") + "\nEdited after merge.\n"
+    survivor_path.write_text(edited_text, encoding="utf-8")
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(
+        app, ["unmerge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "concepts/survivor" in result.stderr
+    assert "copy it somewhere safe" in result.stderr.lower()
+    assert "Traceback" not in result.stderr
+    assert _snapshot(tmp_path) == before
+
+
+def test_unmerge_legacy_ledger_entry_warns_it_cannot_verify_survivor_edit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #1110: a ledger entry recorded before the survivor-edit check
+    shipped has no `survivor_after_sha256` to compare against.
+    `prepare_unmerge` cannot verify the survivor was unedited since the
+    merge, so `unmerge` warns once on stderr and proceeds (fail-open, but
+    disclosed) rather than refusing every bundle whose merges predate the
+    fix."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/survivor", title="Survivor")
+    _write_concept(tmp_path, "concepts/absorbed", title="Absorbed")
+
+    merge_result = runner.invoke(
+        app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+    assert merge_result.exit_code == 0, merge_result.stderr
+
+    _strip_survivor_after_sha256(tmp_path / "bundle", "concepts/survivor")
+
+    result = runner.invoke(
+        app, ["unmerge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert "cannot confirm" in result.output.lower()
+    assert "#1110" in result.output
+    assert (tmp_path / "bundle" / "concepts" / "absorbed.md").exists()
+
+
 def test_unmerge_of_non_merged_pair_refuses_no_write(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

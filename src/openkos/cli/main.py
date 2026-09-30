@@ -9761,14 +9761,28 @@ def _run_single_unmerge(
     somewhere safe first, and never advises the plain re-run that would
     discard it.
 
-    What that adds differs per target, and only one group was already
-    protected. The link/relation/provenance rewrite files DO have a
-    pre-prompt fail-closed check below, so for them the guard narrows a
-    timing window. `index.md`/`log.md` have only the warn-and-continue
-    `catalog_log_drifted` notice (see Limitation), and the survivor has no
-    pre-prompt drift check at all -- for those three the guard is the FIRST
-    thing that refuses, and only for drift landing inside the prompt
-    window. Drift that arrives a moment earlier is still discarded.
+    What that adds differs per target. The link/relation/provenance rewrite
+    files DO have a pre-prompt fail-closed check below, so for them the
+    guard narrows a timing window. `index.md`/`log.md` have only the
+    warn-and-continue `catalog_log_drifted` notice (see Limitation) -- for
+    those two the guard is the FIRST thing that refuses, and only for
+    drift landing inside the prompt window; drift that arrives a moment
+    earlier is still discarded.
+
+    The survivor is different again (issue #1110, fixed): `prepare_unmerge`
+    compares its CURRENT bytes against the tail ledger entry's own
+    `survivor_after_sha256` -- the hash the merge itself recorded writing --
+    BEFORE any preview or prompt, so an edit landing at ANY point between
+    the merge and this unmerge (not only inside the prompt window, and not
+    only a human edit: another verb rewriting the survivor afterward, e.g.
+    `repair`'s status export/migration or `sync-tags`, counts too, since a
+    write is a write regardless of who made it) refuses closed with no
+    write, naming the survivor and telling the operator to copy the edit
+    somewhere safe first. A tail entry recorded before #1110 shipped has no
+    hash to compare against; `prepare_unmerge` reports that via
+    `PreparedUnmerge.survivor_drift_unverifiable`, and the command prints a
+    one-line warning and proceeds -- fail-open, but disclosed, only for
+    that legacy case.
 
     The recreated absorbed file is the one write the guard cannot cover:
     Phase A refuses outright if it already exists, so there are no bytes to
@@ -9875,6 +9889,16 @@ def _run_single_unmerge(
         typer.echo(
             "Warning: index.md/log.md changed since the merge; unmerge "
             "restores the pre-merge snapshot and will discard those changes."
+        )
+    if prepared.survivor_drift_unverifiable:
+        # #1110: this merge's ledger entry predates the survivor-edit check
+        # (no recorded `survivor_after_sha256`) -- fail-OPEN only for this
+        # legacy case, but disclosed, rather than refuse every bundle whose
+        # merges all happened before the fix shipped.
+        typer.echo(
+            f"Warning: {survivor_canonical!r}'s merge ledger entry predates "
+            "the survivor-edit check (#1110); cannot confirm its current "
+            "bytes still match what the merge wrote, proceeding anyway."
         )
 
     if not confirmed and not auto and prepared.review:

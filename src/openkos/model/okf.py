@@ -1690,6 +1690,28 @@ class MergeLedgerEntry:
     entry never carries it, and `plan_merge` always populates it
     explicitly."""
 
+    survivor_after_sha256: str = ""
+    """#1110 addition: `sha256` (via `bundle.ledger.survivor_sha256`) of the
+    EXACT survivor bytes THIS merge wrote -- bound at Phase B write time
+    (`application.lifecycle.merge_core`), reusing the SAME value the
+    two-phase write already binds into the pending sidecar's own
+    `expected_survivor_sha256` for crash recovery. Lets `unmerge`'s Phase A
+    tell whether the survivor's CURRENT bytes still match what the merge
+    wrote, BEFORE any preview or prompt -- catching an edit landing at any
+    point between the merge and this unmerge (by a human, or by another
+    verb such as `repair` or `sync-tags`), not only one landing inside the
+    post-confirm drift guard's narrower prompt window.
+
+    Unlike `relation_rewrites`/`carried_content_ids`/`index_restores`, this
+    field is NOT tied to a schema bump: verifying survivor drift is an
+    independent, optional safety check, never information the core
+    reversal computation needs, so every schema version may carry it (or
+    not). Defaults to `''` -- the sentinel for "not recorded": every entry
+    written before #1110 shipped (v1 through today's v5) has no such key on
+    disk at all, and `unmerge` treats an empty value as "cannot verify",
+    warning once and proceeding rather than refusing a bundle whose merges
+    all predate the fix."""
+
 
 def encode_merge_ledger_entry(entry: MergeLedgerEntry) -> dict[str, object]:
     """Turn one `MergeLedgerEntry` into a plain-dict shape safe for
@@ -1760,6 +1782,12 @@ def encode_merge_ledger_entry(entry: MergeLedgerEntry) -> dict[str, object]:
             for pr in entry.provenance_rewrites
         ],
         "carried_content_ids": list(entry.carried_content_ids),
+        # #1110: unconditional, on every schema -- unlike the fields above,
+        # this one is never guarded by a "wrong schema" check (see the
+        # field's own docstring): it is an optional drift-check hash, not
+        # core reversal information, so no schema is barred from carrying
+        # it and none is required to.
+        "survivor_after_sha256": entry.survivor_after_sha256,
     }
     if entry.schema == MERGE_LEDGER_SCHEMA_V5:
         # The catalog DELTA replaces the two whole-file snapshots; the keys
@@ -1950,6 +1978,13 @@ def decode_merge_ledger_entry(raw: object) -> MergeLedgerEntry:
         # above, so their keys are ABSENT rather than empty (#758); every
         # earlier schema still requires both.
         catalog_snapshots_stored = schema != MERGE_LEDGER_SCHEMA_V5
+        # #1110: read regardless of `schema` -- unlike every field above,
+        # this one is never schema-gated (see `MergeLedgerEntry.
+        # survivor_after_sha256`'s own docstring), so an absent key (every
+        # entry recorded before #1110 shipped, or a hand-authored v1/v2
+        # fixture) decodes to the empty "cannot verify" sentinel rather
+        # than failing closed the way a genuinely REQUIRED field would.
+        survivor_after_sha256 = str(raw.get("survivor_after_sha256", ""))
         return MergeLedgerEntry(
             schema=schema,
             merged_at=str(raw["merged_at"]),
@@ -1965,6 +2000,7 @@ def decode_merge_ledger_entry(raw: object) -> MergeLedgerEntry:
             provenance_rewrites=provenance_rewrites,
             carried_content_ids=carried_content_ids,
             index_restores=index_restores,
+            survivor_after_sha256=survivor_after_sha256,
         )
     except KeyError as exc:
         raise ValueError(f"merged_from entry missing field {exc}") from exc

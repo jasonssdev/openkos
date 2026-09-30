@@ -318,6 +318,48 @@ def test_merge_core_writes_index_log_touched_files_survivor_last_and_ledger(
     assert "**Merge**" in log_text
 
 
+def test_merge_core_binds_survivor_after_sha256_to_the_written_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #1110: the committed ledger entry's `survivor_after_sha256`
+    equals `bundle_ledger.survivor_sha256` of the EXACT bytes `merge_core`
+    wrote to the survivor -- the same value bound into the pending
+    sidecar's own `expected_survivor_sha256` for crash recovery, now also
+    persisted onto the committed entry so `unmerge`'s Phase A can verify
+    the survivor was unedited since."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/survivor", title="Survivor")
+    _write_concept(tmp_path, "concepts/absorbed", title="Absorbed")
+
+    bundle_dir = tmp_path / "bundle"
+    index_path = bundle_dir / "index.md"
+    log_path = bundle_dir / "log.md"
+    survivor_path, survivor_canonical, absorbed_path, absorbed_canonical = _resolve(
+        bundle_dir, "concepts/survivor", "concepts/absorbed"
+    )
+    now = datetime(2026, 3, 15, 12, 30, tzinfo=UTC)
+
+    prepared = application_lifecycle.prepare_merge(
+        bundle_dir,
+        index_path,
+        log_path,
+        survivor_path,
+        absorbed_path,
+        survivor_canonical,
+        absorbed_canonical,
+        tmp_path,
+        now=now,
+    )
+    application_lifecycle.merge_core(bundle_dir, index_path, log_path, prepared)
+
+    written_survivor_text = survivor_path.read_text(encoding="utf-8")
+    expected_sha256 = bundle_ledger.survivor_sha256(written_survivor_text)
+
+    (entry,) = bundle_ledger.read_entries(survivor_canonical, bundle_dir)
+    assert entry.survivor_after_sha256 == expected_sha256
+    assert entry.survivor_after_sha256 != ""
+
+
 def test_merge_core_committed_paths_include_the_ledger_sidecar(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
