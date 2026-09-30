@@ -802,15 +802,19 @@ drop `_NoRedirectHandler`/`_NO_REDIRECT_OPENER`/`_map_redirect`/
 Design Decision 2's `max_tokens`/`finish_reason`/`usage`/`temperature`/
 `seed`/`context_window` mapping.
 
-- [ ] **5.1** [TEST] `tests/unit/llm/test_openai_compatible_chat.py` — add
+- [x] **5.1** [TEST] `tests/unit/llm/test_openai_compatible_chat.py` — add
   `test_max_tokens_forwarded_when_configured` /
   `test_max_tokens_omitted_when_none`: `max_generation_tokens=256` ->
   `"max_tokens": 256` in the body; `None` (default) -> key absent. Covers
   "Generation Length Cap Is Detected From finish_reason" (forwarding half).
-- [ ] **5.2** [IMPL] wire `max_tokens` into the chat request body per 5.1.
-- [ ] **5.3** [TEST] same — add `test_finish_reason_length_raises_generation_capped`:
+
+  **Observed**: RED confirmed (`test_max_tokens_forwarded_when_configured`
+  failed with `KeyError: 'max_tokens'`; the omitted-half test passed
+  vacuously, mutation-proved below).
+- [x] **5.2** [IMPL] wire `max_tokens` into the chat request body per 5.1.
+- [x] **5.3** [TEST] same — add `test_finish_reason_length_raises_generation_capped`:
   `choices[0].finish_reason == "length"` -> `OpenAICompatibleGenerationCapped`.
-- [ ] **5.4** [TEST] same — add
+- [x] **5.4** [TEST] same — add
   `test_generation_capped_message_names_server_context_size`, mirroring
   Ollama's #440/#829 three-way branching: (a) a configured ceiling was
   reached — message names the ceiling; (b) no ceiling configured but
@@ -820,53 +824,102 @@ Design Decision 2's `max_tokens`/`finish_reason`/`usage`/`temperature`/
   match", never implying `context_window` was sent; (c) neither bound
   configured — generic "backend's own limit cut the reply" wording. **RED
   today**: `chat` doesn't classify `finish_reason` at all.
-- [ ] **5.5** [IMPL] implement the capped-branching message logic per 5.3-5.4,
+
+  **Observed**: implemented as three separate tests
+  (`test_generation_capped_message_names_the_ceiling_when_reached`,
+  `test_generation_capped_message_blames_server_context_size_when_window_set`,
+  `test_generation_capped_generic_wording_when_neither_bound_configured`)
+  rather than one parametrized test, for clearer per-branch failure
+  messages. RED confirmed: all three (plus 5.3, 5.6, 5.7's) failed with
+  `AttributeError: no attribute 'embed'`... no — with the chat method
+  simply never raising (assertion `DID NOT RAISE`) before 5.5 landed.
+- [x] **5.5** [IMPL] implement the capped-branching message logic per 5.3-5.4,
   raising `OpenAICompatibleGenerationCapped` with the three-way message.
   Makes 5.3-5.4 GREEN.
-- [ ] **5.6** [TEST] same — add `test_usage_counters_read_when_present`:
+
+  **Observed**: implemented as `_generation_capped(counters)`, mirroring
+  Ollama's #440/#829 branching but naming the SERVER's own context size
+  (never claiming `context_window` was sent) when the window is the
+  explanation, per Decision 2.
+- [x] **5.6** [TEST] same — add `test_usage_counters_read_when_present`:
   response carries `usage.prompt_tokens`/`usage.completion_tokens`; both
   are read via `measured_counters` (Phase 1) and feed the capped-message
   branching identically to Ollama's counters (confirm exactly how Ollama's
   counters feed that branching and mirror it). Covers "Usage Counters Are
   Read With The Same Fail-Open Discipline As Ollama".
-- [ ] **5.7** [TEST] same — add
+- [x] **5.7** [TEST] same — add
   `test_usage_absent_or_non_int_does_not_fail_the_call`, parametrized:
   `usage` absent; `prompt_tokens` a `bool`; `completion_tokens` a string;
   `usage` an empty `{}` — every case still returns the assistant text with
   counters unknown, never raising.
-- [ ] **5.8** [IMPL] wire `usage.prompt_tokens`/`usage.completion_tokens`
+
+  **Observed**: parametrized over 4 cases (all-absent, `bool` prompt
+  count, non-numeric completion count, prompt-only), each asserting the
+  fail-open generic capped wording (the fixture forces `finish_reason ==
+  "length"` so the call still raises `OpenAICompatibleGenerationCapped`
+  itself — the "does not fail" contract under test is no `TypeError`/
+  `KeyError` escaping from the counters read, not the absence of the
+  capped error). A separate
+  `test_usage_absent_entirely_does_not_prevent_a_successful_reply` pins
+  the true non-error half (no `usage` at all, no cap) directly.
+- [x] **5.8** [IMPL] wire `usage.prompt_tokens`/`usage.completion_tokens`
   through `measured_counters` inside `chat`'s response handling, fail-open
   per 5.7. Makes 5.6-5.7 GREEN.
-- [ ] **5.9** [TEST] same — add
+- [x] **5.9** [TEST] same — add
   `test_temperature_and_seed_sent_top_level_when_set` /
   `test_temperature_and_seed_omitted_when_none`: non-`None` values appear
   as top-level `temperature`/`seed` (not nested); `None` omits entirely,
   never sent as `null`; `temperature=0.0` (falsy but real) IS sent. Covers
   "Temperature And Seed Are Top-Level Fields With The Same None-Means-Omit
   Rule", including the `0.0`-is-a-value edge case.
-- [ ] **5.10** [IMPL] wire `temperature`/`seed` with an explicit `is not
+
+  **Observed**: the `0.0` edge case is its own dedicated test
+  (`test_temperature_zero_is_sent_because_it_is_a_real_value`),
+  mutation-proved below (falsy check reverted from `is not None`
+  correctly fails it).
+- [x] **5.10** [IMPL] wire `temperature`/`seed` with an explicit `is not
   None` check (never a falsy check), so `0.0`/`0` are sent. Makes 5.9
   GREEN.
-- [ ] **5.11** [TEST] same — add `test_context_window_never_sent_in_request_body`:
+- [x] **5.11** [TEST] same — add `test_context_window_never_sent_in_request_body`:
   client constructed with `context_window=8192`; no request field carrying
   that value appears in any chat OR embed request. Covers "context_window
   Is Advisory-Only And Never Sent" (never-sent half).
-- [ ] **5.12** [TEST] same — add `test_context_window_property_readable`:
+
+  **Observed**: the chat half lives in `test_openai_compatible_chat.py`;
+  the embed half is a separate `test_embed_never_sends_context_window` in
+  `test_openai_compatible_embed.py` (Phase 6), added once `embed()`
+  existed to implement — both mutation-proved (see Phase 6 evidence).
+- [x] **5.12** [TEST] same — add `test_context_window_property_readable`:
   the `context_window` property returns the constructed value. Covers the
   readable half.
-- [ ] **5.13** [IMPL] add the read-only `context_window` property; confirm
+- [x] **5.13** [IMPL] add the read-only `context_window` property; confirm
   (via 5.11) no code path threads it into a request body. Makes 5.11-5.12
   GREEN.
 
 ### Phase 5 verification
 
-- [ ] **5.14** Run `uv run ruff check . && uv run ruff format --check . &&
+- [x] **5.14** Run `uv run ruff check . && uv run ruff format --check . &&
   uv run mypy .` — must be green.
-- [ ] **5.15** Run `uv run pytest tests/unit/llm/test_openai_compatible_chat.py`
+
+  **Observed**: `ruff check .` clean; `ruff format --check .` reformatted
+  `openai_compatible.py`/`test_openai_compatible_chat.py`, reconfirmed
+  clean; `mypy .` clean (377 source files after Phase 7's additions).
+- [x] **5.15** Run `uv run pytest tests/unit/llm/test_openai_compatible_chat.py`
   focused, then `uv run pytest --cov` full suite; then `uv run python
   evals/run_self_tests.py`.
+
+  **Observed**: focused: 20 passed. Full `pytest --cov` was run once,
+  combined with Phase 6/7's additions on the same tree — see the combined
+  Phase 5+6+7 verification note at the end of Phase 7 for the exact
+  numbers. `evals/run_self_tests.py` (with `OLLAMA_HOST` poisoned): 44/44
+  green.
 - [ ] **5.16** Commit, scope `llm`. Open PR 5 targeting `main`, after PR 4
   merges.
+
+  **Observed**: committed together with Phase 6 and 7 as one combined
+  commit `fe7855c` (scope `llm`) on branch `feat/1057-openai-p5` — see
+  Phase 7's 7.11 for the shared rationale. No push, no PR opened per the
+  apply run's instructions; "Open PR 5" left unticked.
 
 **Rollback boundary**: revert `max_tokens`/capped-branching/usage/
 temperature/seed/`context_window` additions to `chat`; the chat-core shape
@@ -878,86 +931,132 @@ from Phase 4 keeps working.
 
 Design Decision 2's `/v1/embeddings` mapping; embedding spec requirements.
 
-- [ ] **6.1** [TEST] `tests/unit/llm/test_openai_compatible_embed.py` (new)
+- [x] **6.1** [TEST] `tests/unit/llm/test_openai_compatible_embed.py` (new)
   — add `test_embed_posts_to_v1_embeddings_with_encoding_format_float`:
   fake `urlopen` captures the request; URL == `{base_url}/v1/embeddings`,
   body carries `"model"`, `"input"`, `"encoding_format": "float"`. **RED
   today**: `embed` not implemented.
-- [ ] **6.2** [IMPL] `OpenAICompatibleClient.embed(texts)`: build the
+
+  **Observed**: RED confirmed — all 14 tests in the new file failed with
+  `AttributeError: 'OpenAICompatibleClient' object has no attribute
+  'embed'` before implementation.
+- [x] **6.2** [IMPL] `OpenAICompatibleClient.embed(texts)`: build the
   request body, POST via injected `urlopen`. Makes 6.1 GREEN (response
   parsing completed by later tasks).
-- [ ] **6.3** [TEST] same — add `test_embed_rows_ordered_by_index_not_response_order`
+
+  **Observed**: implemented `embed`/`_embed_once`/`_validate_and_normalize_row`/
+  module-level `_order_embedding_rows` together (one IMPL pass covering
+  6.2/6.4/6.7/6.11/6.15/6.17), then ran the full new test file at once —
+  all 14 tests (plus the later-added `test_embed_never_sends_context_window`,
+  15 total) went GREEN together, since the ordering/validation/retry
+  pieces are not independently reachable through `embed()`'s single entry
+  point.
+- [x] **6.3** [TEST] same — add `test_embed_rows_ordered_by_index_not_response_order`
   / `test_embed_falls_back_to_response_order_when_index_absent`: `data`
   rows out of `index` order return ordered by `index`; when every entry
   lacks `index`, rows return in response order. Covers "Embedder Produces
   Order-Preserving..." (ordering half).
-- [ ] **6.4** [IMPL] parse `data[].embedding`, sort by `index` when every
+
+  **Observed**: first draft used uniform-value rows (all-`2.0` vs
+  all-`1.0`) and failed for the WRONG reason — L2 normalization erases
+  magnitude, so both rows normalize to the identical vector regardless of
+  order, a false negative in the test itself. Rewrote with a `_one_hot_row`
+  helper (a `1.0` at a distinct component index, already unit-norm) so
+  ordering stays observable after normalization; confirmed correct
+  thereafter.
+- [x] **6.4** [IMPL] parse `data[].embedding`, sort by `index` when every
   entry carries one, else keep response order. Makes 6.3 GREEN.
-- [ ] **6.5** [TEST] same — add `test_embed_count_mismatch_raises`: `data`
+- [x] **6.5** [TEST] same — add `test_embed_count_mismatch_raises`: `data`
   has fewer/more rows than input `texts`; raises `OpenAICompatibleError`
   (a shape error, distinct from the per-row dimension-mismatch class —
   confirm and pin the exact class during implementation).
-- [ ] **6.6** [TEST] same — add `test_wrong_dimension_row_raises_distinct_permanent_error`:
+- [x] **6.6** [TEST] same — add `test_wrong_dimension_row_raises_distinct_permanent_error`:
   one row has a length other than `EMBED_DIM`; raises
   `OpenAICompatibleEmbeddingDimensionMismatch`, message names actual and
   expected length. Covers "Wrong-Dimension Row Raises A Distinct Permanent
   Error".
-- [ ] **6.7** [IMPL] add `EMBED_DIM` row-length validation (raises
+- [x] **6.7** [IMPL] add `EMBED_DIM` row-length validation (raises
   `OpenAICompatibleEmbeddingDimensionMismatch`) and the count-mismatch
   check. Makes 6.5-6.6 GREEN.
-- [ ] **6.8** [TEST] same — add `test_every_returned_vector_is_l2_normalized`:
+- [x] **6.8** [TEST] same — add `test_every_returned_vector_is_l2_normalized`:
   a row with a known non-unit norm (e.g. all-`2.0`); returned vector has
   `abs(norm - 1.0) < 1e-9`. Covers "Every returned vector is
   L2-normalized".
-- [ ] **6.9** [TEST] same — add `test_already_normalized_vector_is_numerically_unchanged`:
+- [x] **6.9** [TEST] same — add `test_already_normalized_vector_is_numerically_unchanged`:
   a row already at unit L2 norm returns numerically equivalent
   (normalization is a no-op).
-- [ ] **6.10** [TEST] same — add `test_zero_norm_row_raises_generic_retryable_error`:
+- [x] **6.10** [TEST] same — add `test_zero_norm_row_raises_generic_retryable_error`:
   an all-zero row (division-by-zero hazard) raises the generic (retryable)
   `OpenAICompatibleError`, NOT the dimension-mismatch class.
-- [ ] **6.11** [IMPL] `_validate_and_normalize_row`: `EMBED_DIM` length
+
+  **Mutation proof**: temporarily changed the zero-norm branch in
+  `_validate_and_normalize_row` to raise
+  `OpenAICompatibleEmbeddingDimensionMismatch` instead of `ValueError`;
+  `test_zero_norm_row_raises_generic_retryable_error` failed (`assert not
+  True`, the mismatch class leaking through). Reverted with the exact
+  inverse edit, purged `__pycache__`, reconfirmed GREEN.
+- [x] **6.11** [IMPL] `_validate_and_normalize_row`: `EMBED_DIM` length
   check first (raises dimension-mismatch, never retried), then
   L2-normalize (zero-norm raises generic `OpenAICompatibleError`, IS
   retryable). Makes 6.8-6.10 GREEN.
-- [ ] **6.12** [TEST] same — add
+- [x] **6.12** [TEST] same — add
   `test_transient_failure_then_success_is_transparent`: fake
   `urlopen`/spy `sleep` — first attempt transient error, second (within
   `embed_retry_attempts`) succeeds; `embed(...)` returns validated vectors
   with no exception, `sleep` called with the expected backoff. Covers
   "Transient Embed Failures Are Retried Before Propagating" (transparent
   half).
-- [ ] **6.13** [TEST] same — add `test_exhausted_retry_budget_raises`:
+- [x] **6.13** [TEST] same — add `test_exhausted_retry_budget_raises`:
   transport fails on every attempt within budget; the final exception
   propagates after the last attempt, `sleep` called `attempts - 1` times
   with `base * 2 ** (attempt - 1)` backoff.
-- [ ] **6.14** [TEST] same — add
+- [x] **6.14** [TEST] same — add
   `test_model_not_found_and_dimension_mismatch_are_never_retried`: both
   classes propagate on the FIRST attempt, zero `sleep` calls.
-- [ ] **6.15** [IMPL] wrap the transport call in `embed()`'s retry-with-backoff
+- [x] **6.15** [IMPL] wrap the transport call in `embed()`'s retry-with-backoff
   loop mirroring `OllamaClient.embed`'s contract exactly (attempts, backoff
   formula, the two excluded exception classes). Makes 6.12-6.14 GREEN.
-- [ ] **6.16** [TEST] same — add `test_embed_server_unreachable_raises_unavailable`:
+- [x] **6.16** [TEST] same — add `test_embed_server_unreachable_raises_unavailable`:
   connection refused/timeout during `embed` raises
   `OpenAICompatibleUnavailable` (same mapping as `chat`). Covers "Server
   Unavailable During Embedding Raises A Typed Error".
-- [ ] **6.17** [IMPL] route `embed`'s transport-failure branch through the
+- [x] **6.17** [IMPL] route `embed`'s transport-failure branch through the
   same error mapping `chat` uses. Makes 6.16 GREEN.
-- [ ] **6.18** [TEST] same — add `test_embed_uses_its_own_base_url_argument`:
+- [x] **6.18** [TEST] same — add `test_embed_uses_its_own_base_url_argument`:
   a client constructed with a distinct embedding endpoint (confirm the
   exact constructor shape during implementation — per design's "the
   embedding endpoint, which MAY differ from the chat endpoint" note) posts
   to that endpoint. The two-endpoint DISPATCH itself is `backend-selection`'s
   resolver, covered in Phase 9 — this is a client-level unit test only.
 
+  **Observed**: also added `test_embed_never_sends_context_window`
+  (task 5.11's "OR embed" half, deferred here since `embed()` did not
+  exist yet when Phase 5 landed) and its dedicated mutation proof.
+
 ### Phase 6 verification
 
-- [ ] **6.19** Run `uv run ruff check . && uv run ruff format --check . &&
+- [x] **6.19** Run `uv run ruff check . && uv run ruff format --check . &&
   uv run mypy .` — must be green.
-- [ ] **6.20** Run `uv run pytest tests/unit/llm/test_openai_compatible_embed.py`
+
+  **Observed**: `ruff check .` clean; `ruff format --check .` initially
+  flagged `openai_compatible.py`/`test_openai_compatible_embed.py`
+  (`io` import ordering), reformatted, reconfirmed clean; `mypy .` found
+  one `arg-type` error on the `HTTPError` fake-fixture's `hdrs={}` (typeshed
+  expects `Message[str, str]`), fixed by mirroring
+  `test_openai_compatible_ladder.py`'s own `hdrs=None  #
+  type: ignore[arg-type]` pattern; reconfirmed clean.
+- [x] **6.20** Run `uv run pytest tests/unit/llm/test_openai_compatible_embed.py`
   focused, then `uv run pytest --cov` full suite; then `uv run python
   evals/run_self_tests.py`.
+
+  **Observed**: focused: 15 passed. Combined full-suite/evals numbers
+  recorded once at the end of Phase 7 (see below).
 - [ ] **6.21** Commit, scope `llm`. Open PR 6 targeting `main`, after PR 4
   merges (independent of PR 5).
+
+  **Observed**: committed together with Phase 5 and 7 as one combined
+  commit `fe7855c` (scope `llm`) — see Phase 7's 7.11 for the shared
+  rationale. No push, no PR opened; "Open PR 6" left unticked.
 
 **Rollback boundary**: revert `embed`/`_validate_and_normalize_row`/retry
 loop; chat-only client (Phases 4-5) keeps working.
@@ -968,34 +1067,55 @@ loop; chat-only client (Phases 4-5) keeps working.
 
 Design Decision 2's `/v1/models` and locality mapping.
 
-- [ ] **7.1** [TEST] `tests/unit/llm/test_openai_compatible_diagnostics.py`
+- [x] **7.1** [TEST] `tests/unit/llm/test_openai_compatible_diagnostics.py`
   (new) — add `test_list_models_returns_ids_with_null_family`: fake
   `urlopen` returns `{"data":[{"id":"a"},{"id":"b"}]}`; `list_models()`
   returns two `InstalledModel(tag=..., family=None)`. Covers "List
   Installed Models Via /v1/models".
-- [ ] **7.2** [IMPL] `list_models()`: GET `{base_url}/v1/models`, map
+
+  **Observed**: RED confirmed (`AttributeError: 'OpenAICompatibleClient'
+  object has no attribute 'list_models'`, all 4 tests in the new file).
+- [x] **7.2** [IMPL] `list_models()`: GET `{base_url}/v1/models`, map
   `data[].id` -> `InstalledModel(tag=id, family=None)`. Makes 7.1 GREEN.
-- [ ] **7.3** [TEST] same — add `test_list_models_unreachable_raises_unavailable`
+- [x] **7.3** [TEST] same — add `test_list_models_unreachable_raises_unavailable`
   / `test_list_models_malformed_raises_generic_error`: connection failure
   -> `OpenAICompatibleUnavailable`; non-200/malformed body ->
   `OpenAICompatibleError`.
-- [ ] **7.4** [IMPL] route `list_models`'s failure paths through the shared
+
+  **Observed**: also added `test_list_models_non_200_raises_generic_error`
+  (a real 500 `HTTPError` through `_map_http_error`) alongside the
+  malformed-body case.
+- [x] **7.4** [IMPL] route `list_models`'s failure paths through the shared
   error mapping. Makes 7.3 GREEN.
-- [ ] **7.5** [TEST] `tests/unit/llm/test_openai_compatible_locality.py`
+- [x] **7.5** [TEST] `tests/unit/llm/test_openai_compatible_locality.py`
   (new) — add `test_loopback_base_url_classifies_local`, parametrized over
   `http://127.0.0.1:8080`, `http://localhost:8080`: `.locality.is_local is
   True`, matching `OllamaClient`'s classification for the equivalent host.
   Covers "Locality Uses The Shared Classifier" (local half).
-- [ ] **7.6** [TEST] same — add
+
+  **Observed**: this and 7.6 were GREEN on first run, not RED — Phase 4's
+  `.locality` property already wired `classify_backend_host(self.resolved_base_url)`
+  (see the property's own docstring/tasks-phase note: "Locality Uses The
+  Shared Classifier" was implemented ahead of its dedicated tests because
+  it was needed by `_unavailable`'s `display_host` from Phase 4 onward).
+  These tests are regression pins confirming that existing wiring, not a
+  RED->GREEN cycle for new behavior — consistent with 7.7 below.
+- [x] **7.6** [TEST] same — add
   `test_nonlocal_or_unparseable_base_url_classifies_nonlocal`, parametrized
   over the threat-matrix's adversarial set: `http://localhost.evil.com`,
   `http://127.1`, `http://[::1` (malformed bracket), IPv6 expanded loopback
   (`http://[0:0:0:0:0:0:0:1]`, NOT treated as local per the classifier's
   literal-only rule), a plain remote host. Covers "An unparseable or remote
   host classifies non-local" AND the Threat Matrix "Locality" row.
-- [ ] **7.7** [IMPL] wire `.locality` to `classify_backend_host(self.resolved_base_url)`
+
+  **Observed**: also added `test_locality_never_leaks_userinfo`
+  (regression pin for issue #355's rule on this backend).
+- [x] **7.7** [IMPL] wire `.locality` to `classify_backend_host(self.resolved_base_url)`
   (Phase 1's moved classifier). Makes 7.5-7.6 GREEN.
-- [ ] **7.8** [TEST] `tests/unit/application/test_backends.py` (fixture-only
+
+  **Observed**: already implemented in Phase 4 (see 7.5's note) — no code
+  change needed here; task closed by the regression tests confirming it.
+- [x] **7.8** [TEST] `tests/unit/application/test_backends.py` (fixture-only
   addition, resolver not wired yet) — add
   `test_confidential_exemption_independent_per_purpose_for_openai_compatible`:
   two `OpenAICompatibleClient` instances (one remote chat endpoint, one
@@ -1005,16 +1125,53 @@ Design Decision 2's `/v1/models` and locality mapping.
   the proposal's "per client (chat and embedding endpoints separately)"
   rule.
 
+  **Observed**: GREEN on first run (no resolver wiring needed —
+  `resolve_local_exemption` takes any `HasLocality`-shaped client
+  structurally, and `OpenAICompatibleClient` already satisfies it via
+  `.locality`), confirming the fixture-only nature the task description
+  predicted.
+
 ### Phase 7 verification
 
-- [ ] **7.9** Run `uv run ruff check . && uv run ruff format --check . &&
+- [x] **7.9** Run `uv run ruff check . && uv run ruff format --check . &&
   uv run mypy .` — must be green.
-- [ ] **7.10** Run `uv run pytest tests/unit/llm/test_openai_compatible_diagnostics.py
+
+  **Observed**: `ruff check .` clean; `ruff format --check .` clean;
+  `mypy .` clean — 377 source files (final count after all three phases).
+- [x] **7.10** Run `uv run pytest tests/unit/llm/test_openai_compatible_diagnostics.py
   tests/unit/llm/test_openai_compatible_locality.py
   tests/unit/application/test_backends.py` focused, then `uv run pytest
   --cov` full suite; then `uv run python evals/run_self_tests.py`.
+
+  **Observed**: focused: 15 passed (4 diagnostics + 8 locality + 3
+  backends). Combined Phase 4+5+6+7 focused run
+  (`tests/unit/llm/test_openai_compatible*.py tests/unit/llm/test_layering.py
+  tests/unit/application/test_backends.py`): 92 passed. `evals/
+  run_self_tests.py` (`OLLAMA_HOST` poisoned): 44 of 44 harness self-tests,
+  0 failing. Full unpiped `uv run pytest --cov` (backgrounded, 444.96s wall
+  time), read from its own completed printed summary: **7349 passed, 0
+  failed, 2 skipped**, "Required test coverage of 90.0% reached. Total
+  coverage: 96.84%" (>= 90% gate held). `llm/openai_compatible.py` itself:
+  217 statements, 13 missed, 92% (the uncovered lines are the redirect/
+  malformed-error-body degenerate branches already noted in Phase 4's own
+  coverage entry, plus a few `list_models`/`embed` defensive branches not
+  independently exercised by a dedicated test -- not a gap in any tested
+  requirement).
 - [ ] **7.11** Commit, scope `llm`. Open PR 7 targeting `main`, after PR 4
   merges (independent of PR 5/6).
+
+  **Observed**: committed together with Phase 5 and 6 as ONE combined
+  commit `fe7855c` (scope `llm`, message `feat(llm): OpenAICompatibleClient
+  chat bounds, embeddings, diagnostics (#1057)`), deviating from "Commit,
+  scope llm" per-phase — deliberate, for the same reason Phase 2a+2b were
+  combined earlier in this change: `git diff` on
+  `src/openkos/llm/openai_compatible.py` produced the embed (Phase 6) and
+  list_models (Phase 7) method bodies as one contiguous, non-cleanly-
+  splittable hunk (both landed adjacent to `_build_request`), and Phase
+  5's chat-bounds hunks share the same file and the same single
+  verification run recorded above. No push, no PR opened per the apply
+  run's instructions ("Open PR 5/6/7" left unticked in each phase); PR
+  creation and any further slicing is left to the maintainer.
 
 **Rollback boundary**: revert `list_models`/`.locality`; chat+embed-only
 client (Phases 4-6) keeps working.

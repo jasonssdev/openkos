@@ -16,6 +16,7 @@ from typing import Any
 
 from openkos import config
 from openkos.application import backends
+from openkos.llm.openai_compatible import OpenAICompatibleClient
 
 
 def _cfg(tmp_path: Path, **overrides: Any) -> config.Config:
@@ -100,3 +101,27 @@ def test_resolve_local_exemption_truth_table(tmp_path: Path) -> None:
             is_local,
             policy,
         )
+
+
+def test_confidential_exemption_independent_per_purpose_for_openai_compatible(
+    tmp_path: Path,
+) -> None:
+    """Two `OpenAICompatibleClient` instances -- one remote chat endpoint,
+    one loopback embedding endpoint -- each resolve
+    `resolve_local_exemption` independently, matching existing Ollama
+    behavior for two separately classified endpoints (issue #1057 task
+    7.8, Threat Matrix "Confidential exemption"; proposal's "per client
+    (chat and embedding endpoints separately)" rule). Wired through
+    `HasLocality`'s structural Protocol -- `resolve_local_exemption` takes
+    no `OpenAICompatibleClient`-specific branch, so this is a fixture-only
+    addition, not new resolver wiring (that lands in Phase 9)."""
+    cfg = _cfg(tmp_path)
+    remote_chat_client = OpenAICompatibleClient(
+        model="qwen3", base_url="http://example.com:8080"
+    )
+    loopback_embed_client = OpenAICompatibleClient(
+        model="bge-m3", base_url="http://127.0.0.1:8080"
+    )
+
+    assert backends.resolve_local_exemption(remote_chat_client, cfg) is False
+    assert backends.resolve_local_exemption(loopback_embed_client, cfg) is True

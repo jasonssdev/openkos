@@ -24,6 +24,7 @@ the backend-agnostic pure helpers (`classify_backend_host`,
 
 import http.client
 import json
+import math
 import time
 import urllib.error
 import urllib.request
@@ -31,14 +32,17 @@ from collections.abc import Callable, Sequence
 from typing import Any
 
 from openkos.llm.base import (
+    EMBED_DIM,
     BackendEmbeddingDimensionMismatch,
     BackendError,
     BackendGenerationCapped,
     BackendHostLocality,
     BackendModelNotFound,
     BackendUnavailable,
+    InstalledModel,
     Message,
     classify_backend_host,
+    measured_counters,
 )
 
 DEFAULT_TIMEOUT = 600.0
@@ -121,6 +125,26 @@ def _redact_location_query(location: str) -> str:
     diagnostic text."""
     without_fragment = location.split("#", 1)[0]
     return without_fragment.split("?", 1)[0]
+
+
+def _order_embedding_rows(rows: list[Any]) -> list[Any]:
+    """Sort `/v1/embeddings`' `data` rows by integer `index` when EVERY
+    row carries one; otherwise keep response order (Decision 2:
+    "sorted by integer index when every entry carries one, else response
+    order"). Returns each row's `embedding` field, not the row dict
+    itself -- a row missing that key, or one that is not a dict at all,
+    raises `KeyError`/`TypeError`, both caught and rewrapped by
+    `_embed_once`'s caller."""
+    every_row_has_index = all(
+        isinstance(row, dict)
+        and isinstance(row.get("index"), int)
+        and not isinstance(row.get("index"), bool)
+        for row in rows
+    )
+    ordered = (
+        sorted(rows, key=lambda row: row["index"]) if every_row_has_index else rows
+    )
+    return [row["embedding"] for row in ordered]
 
 
 class OpenAICompatibleError(BackendError):
@@ -256,6 +280,17 @@ class OpenAICompatibleClient:
         return stripped
 
     @property
+    def context_window(self) -> int | None:
+        """The configured context window, read-only and advisory-only
+        (task 5.13): usable for OpenKOS's own prompt-budget planning
+        exactly as `OllamaClient.context_window` is used today, but NEVER
+        threaded into any request body -- `chat()` never reads
+        `self._context_window` when building a request, only
+        `_generation_capped` reads it, purely to build a message (spec:
+        "context_window Is Advisory-Only And Never Sent")."""
+        return self._context_window
+
+    @property
     def locality(self) -> BackendHostLocality:
         """This client's own locality verdict, from the ONE shared
         authority (`classify_backend_host`) applied to `resolved_base_url`
@@ -283,6 +318,19 @@ class OpenAICompatibleClient:
             "messages": list(messages),
             "stream": False,
         }
+        # `max_tokens`/`temperature`/`seed` are TOP-LEVEL fields (unlike
+        # Ollama's nested `options`, Decision 2) and each follows the same
+        # `is not None` -> omit rule: `temperature=0.0`/`seed=0` are real
+        # values, not absent ones, so a falsy check would drop them.
+        # `context_window` is deliberately NOT read here at all -- it is
+        # advisory-only and MUST NEVER be sent (spec: "context_window Is
+        # Advisory-Only And Never Sent").
+        if self._max_generation_tokens is not None:
+            request_body["max_tokens"] = self._max_generation_tokens
+        if self._temperature is not None:
+            request_body["temperature"] = self._temperature
+        if self._seed is not None:
+            request_body["seed"] = self._seed
         payload = json.dumps(request_body).encode("utf-8")
         request = self._build_request(url, payload, method="POST")
         try:
@@ -312,7 +360,8 @@ class OpenAICompatibleClient:
 
         try:
             data = json.loads(body)
-            content = data["choices"][0]["message"]["content"]
+            choice = data["choices"][0]
+            content = choice["message"]["content"]
         except (
             json.JSONDecodeError,
             KeyError,
@@ -329,7 +378,268 @@ class OpenAICompatibleClient:
                 "Expected choices[0].message.content to be a string, got "
                 f"{type(content)!r}"
             )
+
+        # `finish_reason` is read AFTER the malformed-response guard above,
+        # on the already-validated `choice` dict, so a response missing it
+        # entirely never raises here -- `.get` returns `None`, which simply
+        # does not equal `"length"` (fail-open on the signal; mirrors
+        # `OllamaClient.chat`'s `done_reason` handling).
+        finish_reason = (
+            choice.get("finish_reason") if isinstance(choice, dict) else None
+        )
+        if finish_reason == "length":
+            usage = data.get("usage") if isinstance(data, dict) else None
+            counters = (
+                measured_counters(
+                    usage.get("prompt_tokens"), usage.get("completion_tokens")
+                )
+                if isinstance(usage, dict)
+                else None
+            )
+            raise self._generation_capped(counters)
         return content
+
+    def _generation_capped(
+        self, counters: tuple[int, int] | None
+    ) -> OpenAICompatibleGenerationCapped:
+        """Build the `OpenAICompatibleGenerationCapped` for a
+        `finish_reason == "length"` response (task 5.5), keeping Ollama's
+        #440/#829 "which bound actually bound" branching but naming the
+        SERVER's own context size -- never `context_window`'s value as if
+        it were sent -- when the window is what filled, because
+        `context_window` is advisory-only and never sent (Decision 2).
+
+        (a) a configured `max_generation_tokens` ceiling was reached ->
+            names the ceiling.
+        (b) no ceiling configured, but a `context_window` is, and it is
+            what filled (or the ceiling could not be confirmed while a
+            window is configured) -> names the server's own context size,
+            with the raise-the-server-setting remediation.
+        (c) neither bound is configured -> generic "the backend's own
+            limit cut the reply" wording.
+
+        Fails open on the SIGNAL exactly as the `finish_reason` check
+        above does: missing/non-numeric counters fall through to the
+        best-available account from whichever bound IS configured, never
+        raising a `TypeError`/`KeyError` of their own."""
+        ceiling = self._max_generation_tokens
+        window = self._context_window
+        if counters is not None:
+            prompt_tokens, generated = counters
+            if ceiling is not None and generated >= ceiling:
+                return OpenAICompatibleGenerationCapped(
+                    "OpenAI-compatible server stopped generation at the "
+                    f"configured max_generation_tokens ceiling ({ceiling}) "
+                    "before the reply finished; the response is truncated "
+                    "and unusable."
+                )
+            if window is not None and prompt_tokens + generated >= window:
+                return OpenAICompatibleGenerationCapped(
+                    "OpenAI-compatible server stopped generation because "
+                    "its own context size filled, not a configured "
+                    "max_generation_tokens ceiling: the prompt took "
+                    f"{prompt_tokens} tokens and generation stopped at "
+                    f"{generated}. Raise the server's own context size "
+                    "(`-c` for llama.cpp, `--max-model-len` for vLLM) and "
+                    f"set context_window to match (currently {window}); "
+                    "this client never sends context_window to the "
+                    "server."
+                )
+        if ceiling is not None:
+            return OpenAICompatibleGenerationCapped(
+                "OpenAI-compatible server stopped generation at the "
+                f"configured max_generation_tokens ceiling ({ceiling}) "
+                "before the reply finished; the response is truncated and "
+                "unusable."
+            )
+        if window is not None:
+            return OpenAICompatibleGenerationCapped(
+                "OpenAI-compatible server stopped generation for length "
+                "before the reply finished, with no max_generation_tokens "
+                "ceiling set on this client. Raise the server's own "
+                "context size (`-c` for llama.cpp, `--max-model-len` for "
+                f"vLLM) and set context_window to match (currently "
+                f"{window}); this client never sends context_window to "
+                "the server."
+            )
+        return OpenAICompatibleGenerationCapped(
+            "OpenAI-compatible server stopped generation for length "
+            "before the reply finished, with no max_generation_tokens "
+            "ceiling or context_window configured on this client -- the "
+            "backend's own limit cut the reply; the response is truncated "
+            "and unusable."
+        )
+
+    def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        """POST `texts` to `{resolved_base_url}/v1/embeddings` and return
+        one `EMBED_DIM`-float, L2-normalized vector per input, in order
+        (Embedder contract; Decision 2's `/v1/embeddings` mapping).
+
+        Short-circuits to `[]` with no HTTP call when `texts` is empty,
+        mirroring `OllamaClient.embed`. Wraps `_embed_once` in the same
+        retry-with-backoff loop `OllamaClient.embed` uses (task 6.15):
+        `OpenAICompatibleModelNotFound` and
+        `OpenAICompatibleEmbeddingDimensionMismatch` both raise
+        immediately, consuming no retry attempt -- neither a missing
+        model nor a wrong-dimension response can heal mid-run. Every
+        other `OpenAICompatibleError` (the generic transient class, AND
+        `OpenAICompatibleUnavailable`) is retried up to
+        `embed_retry_attempts` times total, sleeping
+        `embed_retry_backoff_base * 2 ** (attempt - 1)` between attempts
+        (exponential)."""
+        if not texts:
+            return []
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                return self._embed_once(texts)
+            except (
+                OpenAICompatibleModelNotFound,
+                OpenAICompatibleEmbeddingDimensionMismatch,
+            ):
+                raise
+            except OpenAICompatibleError:
+                if attempt >= self._embed_retry_attempts:
+                    raise
+                backoff = self._embed_retry_backoff_base * 2 ** (attempt - 1)
+                self._sleep(backoff)
+
+    def _embed_once(self, texts: Sequence[str]) -> list[list[float]]:
+        """One `embed()` attempt: a single POST to
+        `{resolved_base_url}/v1/embeddings` and response parse, with no
+        retry logic of its own (the retry loop lives in `embed()`).
+
+        Reuses `chat()`'s connect/read transport ladder, `_map_http_error`
+        and `_map_redirect`. `encoding_format: "float"` is sent explicitly
+        (Decision 2): a server defaulting to base64 would otherwise fail
+        row validation. Rows are ordered by `_order_embedding_rows`, then
+        each is length-checked against `EMBED_DIM` and L2-normalized by
+        `_validate_and_normalize_row` -- any other shape raises
+        `OpenAICompatibleError`."""
+        url = f"{self.resolved_base_url}/v1/embeddings"
+        payload = json.dumps(
+            {
+                "model": self._model,
+                "input": list(texts),
+                "encoding_format": "float",
+            }
+        ).encode("utf-8")
+        request = self._build_request(url, payload, method="POST")
+        try:
+            response = self._urlopen(request, timeout=self._timeout)
+        except urllib.error.HTTPError as exc:
+            if 300 <= exc.code < 400:
+                raise self._map_redirect(exc) from exc
+            raise self._map_http_error(exc) from exc
+        except (urllib.error.URLError, TimeoutError) as exc:
+            raise self._unavailable(exc) from exc
+
+        try:
+            body = response.read()
+        except (
+            urllib.error.URLError,
+            TimeoutError,
+            OSError,
+            http.client.IncompleteRead,
+        ) as exc:
+            raise self._unavailable(exc) from exc
+
+        try:
+            data = json.loads(body)
+            if not isinstance(data, dict):
+                raise TypeError(f"expected a JSON object, got {type(data)!r}")
+            rows = data["data"]
+            if not isinstance(rows, list):
+                raise TypeError(f"expected data to be a list, got {type(rows)!r}")
+            if len(rows) != len(texts):
+                raise ValueError(
+                    f"OpenAI-compatible server returned {len(rows)} "
+                    f"embeddings for {len(texts)} inputs"
+                )
+            ordered = _order_embedding_rows(rows)
+            result = [self._validate_and_normalize_row(row) for row in ordered]
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+            raise OpenAICompatibleError(
+                f"Malformed response from OpenAI-compatible server: {exc}"
+            ) from exc
+        return result
+
+    def _validate_and_normalize_row(self, row: object) -> list[float]:
+        """Validate one embedding row: exactly `EMBED_DIM` numeric
+        entries, then L2-normalized (task 6.11).
+
+        The `EMBED_DIM` length check runs FIRST and raises the distinct,
+        PERMANENT `OpenAICompatibleEmbeddingDimensionMismatch` -- never
+        retried by `embed()`'s loop. A correct-length row with a
+        non-numeric entry raises a plain `ValueError`, always caught and
+        rewrapped as the generic `OpenAICompatibleError` by `_embed_once`'s
+        caller (scope discipline: only the wrong-LENGTH branch is
+        permanent). A zero-norm row (division-by-zero hazard) is the same
+        generic, RETRYABLE class, not the dimension-mismatch one."""
+        if not isinstance(row, list) or len(row) != EMBED_DIM:
+            got = len(row) if isinstance(row, list) else type(row).__name__
+            raise OpenAICompatibleEmbeddingDimensionMismatch(
+                f"OpenAI-compatible server returned an embedding row of "
+                f"length {got}, expected exactly {EMBED_DIM} (EMBED_DIM) "
+                "-- this is a permanent dimension mismatch caused by the "
+                "configured embedding model, not a transient failure; it "
+                "will not heal by retrying."
+            )
+        values: list[float] = []
+        for value in row:
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(
+                    f"expected each embedding entry to be numeric, got {type(value)!r}"
+                )
+            values.append(float(value))
+        norm = math.sqrt(sum(value * value for value in values))
+        if norm == 0.0:
+            raise ValueError(
+                "OpenAI-compatible server returned an all-zero embedding "
+                "row, which cannot be L2-normalized (division by zero)"
+            )
+        return [value / norm for value in values]
+
+    def list_models(self) -> list[InstalledModel]:
+        """GET `{resolved_base_url}/v1/models`; return installed models
+        with `tag=id`, `family=None` (Decision 2's "List Installed Models
+        Via /v1/models" mapping: this backend's model listing carries no
+        family information, unlike Ollama's `/api/tags`). Config-free,
+        like `OllamaClient.list_models`."""
+        url = f"{self.resolved_base_url}/v1/models"
+        request = self._build_request(url, None, method="GET")
+        try:
+            response = self._urlopen(request, timeout=self._timeout)
+        except urllib.error.HTTPError as exc:
+            if 300 <= exc.code < 400:
+                raise self._map_redirect(exc) from exc
+            raise self._map_http_error(exc) from exc
+        except (urllib.error.URLError, TimeoutError) as exc:
+            raise self._unavailable(exc) from exc
+
+        try:
+            body = response.read()
+        except (
+            urllib.error.URLError,
+            TimeoutError,
+            OSError,
+            http.client.IncompleteRead,
+        ) as exc:
+            raise self._unavailable(exc) from exc
+
+        # Mirror `chat()`'s guard: wrap ALL body parsing in one
+        # try/except, so a valid-JSON body whose `data` is null or a
+        # non-iterable scalar maps to `OpenAICompatibleError` instead of
+        # leaking a bare `TypeError` from the list comprehension.
+        try:
+            entries = json.loads(body)["data"]
+            models = [InstalledModel(tag=entry["id"], family=None) for entry in entries]
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+            raise OpenAICompatibleError(
+                f"Malformed response from OpenAI-compatible server: {exc}"
+            ) from exc
+        return models
 
     def _build_request(
         self, url: str, payload: bytes | None, *, method: str
