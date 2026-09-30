@@ -1310,27 +1310,32 @@ adds `resolve_endpoint`, `embed_client`, `diagnostics_client`.
 
 ### `BackendFactories`, `Endpoint`, `resolve_endpoint`
 
-- [ ] **9.1** [TEST] `tests/unit/application/test_backends.py` — add
+- [x] **9.1** [TEST] `tests/unit/application/test_backends.py` — add
   `test_backend_factories_dataclass_shape`: `BackendFactories(ollama=...,
   openai_compatible=...)` constructs; frozen/slots. **RED today**: doesn't
   exist.
-- [ ] **9.2** [IMPL] `application/backends.py`: add `BackendFactories`
+
+  **Observed**: RED confirmed (`AttributeError: module
+  'openkos.application.backends' has no attribute 'BackendFactories'`,
+  along with 24 sibling tasks-9 tests added in the same batch — full RED
+  list: 25 failed, 2 passed).
+- [x] **9.2** [IMPL] `application/backends.py`: add `BackendFactories`
   (frozen dataclass), `BACKEND_OLLAMA`/`BACKEND_OPENAI_COMPATIBLE`/
   `API_KEY_ENV` constants, `EndpointSource` `Literal`, `Endpoint` (frozen
   dataclass: `url: str | None`, `source: EndpointSource`). Makes 9.1 GREEN.
-- [ ] **9.3** [TEST] same — add `test_resolve_endpoint_ollama_chat_precedence_table`,
+- [x] **9.3** [TEST] same — add `test_resolve_endpoint_ollama_chat_precedence_table`,
   parametrized over Decision 5's table for `backend="ollama"`,
   `purpose="chat"`: `OLLAMA_HOST` (injected `environ`) > `base_url` >
   default; each case asserts both `.url` and `.source`. **RED today**:
   `resolve_endpoint` doesn't exist.
-- [ ] **9.4** [TEST] same — add `test_resolve_endpoint_ollama_embed_precedence_table`:
+- [x] **9.4** [TEST] same — add `test_resolve_endpoint_ollama_embed_precedence_table`:
   `OLLAMA_HOST` > `embedding_base_url` > `base_url` > default, for
   `purpose="embed"`.
-- [ ] **9.5** [TEST] same — add `test_resolve_endpoint_openai_compatible_precedence_table`:
+- [x] **9.5** [TEST] same — add `test_resolve_endpoint_openai_compatible_precedence_table`:
   chat -> `base_url` only (no default — construct a `Config` directly,
   bypassing `read_config`'s refusal, to exercise the resolver's own
   defensive behavior); embed -> `embedding_base_url` > `base_url`.
-- [ ] **9.6** [TEST] same — add
+- [x] **9.6** [TEST] same — add
   `test_resolve_endpoint_openai_compatible_never_consults_ollama_host`:
   `OLLAMA_HOST` set, `backend="openai-compatible"`, `base_url` set to a
   DIFFERENT host; `resolve_endpoint` returns the `base_url` value,
@@ -1340,123 +1345,241 @@ adds `resolve_endpoint`, `embed_client`, `diagnostics_client`.
   openai-compatible backend" scenario). Mutation-proof: mutate the dispatch
   to check `OLLAMA_HOST` for both backends, confirm this test fails, then
   revert.
-- [ ] **9.7** [IMPL] `resolve_endpoint(cfg, *, purpose, environ=os.environ)
+
+  **Observed mutation proof**: added an `if environ.get("OLLAMA_HOST"):
+  return Endpoint(...)` branch to the top of `resolve_endpoint`'s
+  `openai-compatible` arm; the test failed (`'http://evil-host.invalid:9999'
+  == 'http://127.0.0.1:8080'`). Reverted with the exact inverse edit,
+  purged `__pycache__`, reconfirmed all 27 tests green.
+- [x] **9.7** [IMPL] `resolve_endpoint(cfg, *, purpose, environ=os.environ)
   -> Endpoint` implementing the full precedence table (Decision 5). Makes
   9.3-9.6 GREEN.
 
 ### `chat_client`/`embed_client` dispatch, byte-identity
 
-- [ ] **9.8** [TEST] same — add `test_default_path_kwargs_are_byte_identical`:
+- [x] **9.8** [TEST] same — add `test_default_path_kwargs_are_byte_identical`:
   `chat_client` called with a default `Config` (no `backend`/`base_url`/
   `OLLAMA_HOST`) constructs the Ollama factory with `host` ABSENT from the
   kwargs entirely (not `host=None`) — pins the exact byte-identity
   invariant ("the Ollama factory receives `host=` ONLY when `source` is a
   config key").
-- [ ] **9.9** [TEST] same — add `test_host_passed_only_when_source_is_config_key`,
+- [x] **9.9** [TEST] same — add `test_host_passed_only_when_source_is_config_key`,
   parametrized: `source="OLLAMA_HOST"` -> no `host=` kwarg (the Ollama
   client resolves `OLLAMA_HOST` itself, unchanged); `source="base_url"` ->
   `host=<base_url>`; `source="default"` -> no `host=` kwarg.
-- [ ] **9.10** [IMPL] `application/backends.py::chat_client`: change
+- [x] **9.10** [IMPL] `application/backends.py::chat_client`: change
   signature from `factory=` to `factories: BackendFactories`, dispatch by
   `cfg.backend` to `factories.ollama`/`factories.openai_compatible`, call
   `resolve_endpoint(cfg, purpose="chat")`, forward `host=`/`base_url=` per
   9.9's rule. Makes 9.8-9.9 GREEN for the chat path.
-- [ ] **9.11** [TEST] same — add `test_chat_client_dispatches_to_openai_compatible_factory`:
+
+  **Observed**: also updated `chat_client`'s return type from the
+  unconstrained `ClientT` TypeVar to the `LLMBackend` Protocol (imported
+  from `openkos.llm.base`, the one concrete-free import the layering guard
+  permits) — a single `factories.ollama`/`factories.openai_compatible`
+  dispatch can no longer return a TypeVar with no argument carrying it
+  (mypy `type-var` error), and the two branches can return two unrelated
+  concrete classes, so a real static return type is the Protocol both
+  satisfy, not a re-widened TypeVar. Callers needing `.locality`
+  (`_resolve_local_exemption`) `cast` to `HasLocality` at the call site,
+  mirroring the pre-existing pattern already used in `mcp/server.py`.
+- [x] **9.11** [TEST] same — add `test_chat_client_dispatches_to_openai_compatible_factory`:
   `cfg.backend == "openai-compatible"`, both factories injected as
   recording spies; `chat_client(...)` constructs via
   `factories.openai_compatible`, not `factories.ollama`. Covers
   `backend-selection` "Chat construction dispatches by cfg.backend".
-- [ ] **9.12** [TEST] same — add `test_embed_client_mirrors_chat_client_dispatch_shape`:
+- [x] **9.12** [TEST] same — add `test_embed_client_mirrors_chat_client_dispatch_shape`:
   same dispatch assertion for a new `embed_client(cfg, *, factories)`, using
   `purpose="embed"` endpoint resolution.
-- [ ] **9.13** [IMPL] add `embed_client(cfg, *, factories) -> ConfiguredClient`
+- [x] **9.13** [IMPL] add `embed_client(cfg, *, factories) -> ConfiguredClient`
   mirroring `chat_client`'s dispatch shape, resolving the EMBED endpoint,
   passing `model=cfg.embedding_model` (no `chat_timeout`, no per-task model
   resolution — embedding clients keep the transport default timeout, per
   design's Data Flow note). Makes 9.12 GREEN.
-- [ ] **9.14** [TEST] same — add `test_diagnostics_client_shape`:
+
+  **Observed**: return type is the `Embedder` Protocol (not a generic
+  `ConfiguredClient` — no such alias exists; `Embedder`/`LLMBackend`/
+  `BackendDiagnostics` from `openkos.llm.base` are the three Protocols this
+  phase's dispatch functions return), same reasoning as 9.10. Added
+  `test_embed_client_default_path_kwargs` alongside 9.12 to pin the
+  no-`chat_timeout`/no-per-task-resolution kwargs shape explicitly.
+- [x] **9.14** [TEST] same — add `test_diagnostics_client_shape`:
   `diagnostics_client(cfg_or_none, *, model, timeout, factories,
   purpose="chat")` dispatches identically, usable by the init picker/
   preflight/doctor probe sites (Phase 10) with `cfg=None` defaulting to
   Ollama (O1).
-- [ ] **9.15** [IMPL] add `diagnostics_client(...)` per 9.14 and design's
+- [x] **9.15** [IMPL] add `diagnostics_client(...)` per 9.14 and design's
   Interfaces/Contracts signature. Makes 9.14 GREEN.
+
+  **Observed**: return type `BackendDiagnostics` (the existing
+  `llm/base.py` Protocol `application/doctor.py` already depends on for
+  `list_models()`/`.locality`, not `LLMBackend`/`Embedder` — a diagnostics
+  probe needs neither `.chat()` nor `.embed()`).
 
 ### API key read
 
-- [ ] **9.16** [TEST] same — add
+- [x] **9.16** [TEST] same — add
   `test_api_key_read_from_environ_stripped_and_empty_as_absent`,
   parametrized: `OPENKOS_OPENAI_API_KEY=" secret "` -> `"secret"` passed as
   `api_key=`; unset -> `api_key=None`; set to `""`/whitespace-only ->
   treated as absent.
-- [ ] **9.17** [TEST] same — add `test_api_key_only_passed_for_openai_compatible_backend`:
+- [x] **9.17** [TEST] same — add `test_api_key_only_passed_for_openai_compatible_backend`:
   `cfg.backend == "ollama"`, `OPENKOS_OPENAI_API_KEY` set — the Ollama
   factory call's kwargs never include an API key. Security-property
   regression pin.
-- [ ] **9.18** [TEST] same — add `test_openai_api_key_without_prefix_is_never_read`:
+- [x] **9.18** [TEST] same — add `test_openai_api_key_without_prefix_is_never_read`:
   `OPENAI_API_KEY` (no prefix) set, `OPENKOS_OPENAI_API_KEY` unset;
   `chat_client`/`embed_client` construct the `openai-compatible` factory
   with `api_key=None`. Sentinel test — mutation-proof: mutate the read to
   also check `OPENAI_API_KEY` as a fallback, confirm this test fails, then
   revert. Covers backend-selection's "OPENAI_API_KEY is never read" AND
   Threat Matrix "Credential confusion".
-- [ ] **9.19** [IMPL] wire the `environ`-injected key read (default
+
+  **Observed mutation proof**: changed `_read_api_key` to
+  `environ.get(API_KEY_ENV) or environ.get("OPENAI_API_KEY", "")`; both
+  this test and `test_api_key_read_from_environ_stripped_and_empty_as_absent`
+  failed (`'leaked-unrelated-cloud-key' is None` / wrong value on the
+  `unset` case). Reverted with the exact inverse edit, purged
+  `__pycache__`, reconfirmed all 27 tests green.
+- [x] **9.19** [IMPL] wire the `environ`-injected key read (default
   `os.environ`) into `chat_client`/`embed_client`, passed as `api_key=`
   ONLY to the `openai_compatible` factory call. Makes 9.16-9.18 GREEN.
 
+  **Observed**: also wired into `diagnostics_client` (its `openai-compatible`
+  branch reads the same key), consistent with 9.15's dispatch shape.
+
 ### CLI/curate/MCP bindings
 
-- [ ] **9.20** [TEST] `tests/unit/cli/test_backends_delegation.py` (existing)
+- [x] **9.20** [TEST] `tests/unit/cli/test_backends_delegation.py` (existing)
   — extend/confirm `_chat_client`'s exact Ollama-path kwargs assertion
   still holds with the new `factories=` parameter shape.
-- [ ] **9.21** [IMPL] `cli/main.py`: add `_backend_factories() ->
+
+  **Observed**: RED confirmed first (`TypeError: chat_client() got an
+  unexpected keyword argument 'factory'. Did you mean 'factories'?`) before
+  9.21 landed. Updated `test_ollama_client_monkeypatch_still_intercepts`'s
+  `_bypassing_chat_client` mock to the `factories: BackendFactories`
+  signature.
+- [x] **9.21** [IMPL] `cli/main.py`: add `_backend_factories() ->
   BackendFactories` returning `BackendFactories(ollama=OllamaClient,
   openai_compatible=OpenAICompatibleClient)` read from `cli/main.py`'s own
   module globals; update `_chat_client`'s one-line delegator to pass
   `factories=_backend_factories()`. Makes 9.20 GREEN; the ~144 existing
   `openkos.cli.main.OllamaClient` test patches keep intercepting.
-- [ ] **9.22** [TEST] `tests/unit/mcp/test_server.py` — add
+
+  **Observed**: also widened `_chat_client`'s return type from `OllamaClient`
+  to `LLMBackend` (imported from `openkos.llm.base`) and
+  `_resolve_local_exemption`'s parameter from `OllamaClient` to
+  `application_backends.HasLocality`, then wrapped its 7 call sites with
+  `cast(application_backends.HasLocality, ...)` — `mypy .` caught all 7
+  as `arg-type` errors before the cast was added; clean after.
+- [x] **9.22** [TEST] `tests/unit/mcp/test_server.py` — add
   `test_mcp_backend_factories_shape`: `mcp/server.py::_backend_factories()`
   returns the analogous `BackendFactories` built from `mcp.server`'s own
   globals.
-- [ ] **9.22a** [IMPL] `mcp/server.py`: add `_backend_factories()`; update
+
+  **Observed**: first version compared against the directly-imported
+  `OllamaClient`/`OpenAICompatibleClient` names and passed in isolation
+  (written before 9.26's conftest change extended the offline-seam patch
+  to `mcp.server`), then FAILED once 9.26 landed
+  (`assert <OfflineOllama> is OllamaClient`) — a real regression the
+  fixture change exposed, not a flaky test. Fixed by reading
+  `server.__dict__` dynamically instead, mirroring `test_backends_delegation.py`'s
+  existing `main_mod.__dict__["OllamaClient"]` pattern; reconfirmed green
+  together with the rest of the Phase 9 focused set.
+- [x] **9.22a** [IMPL] `mcp/server.py`: add `_backend_factories()`; update
   `_make_llm` (chat only — `_make_embedder` stays untouched until Phase 10)
   to call `chat_client` with it. Makes 9.22 GREEN.
-- [ ] **9.22b** [TEST] `tests/unit/mcp/test_layering.py` (extend) — add
+- [x] **9.22b** [TEST] `tests/unit/mcp/test_layering.py` (extend) — add
   `test_mcp_server_may_import_both_concrete_client_classes`: the existing
   static import check permits `mcp/server.py` to import BOTH
   `OllamaClient` and `OpenAICompatibleClient` (and their exception types),
   while the ban on `openkos.cli`/`openkos.graph` imports still holds.
   Covers `mcp` spec's "mcp/server.py may import both concrete client
   classes".
-- [ ] **9.23** [TEST] `tests/unit/cli/test_curate.py` — add
+
+  **Observed**: the existing `test_layering_invariants` has no explicit
+  `openkos.graph` check (only `openkos.cli` and the non-`openkos.*`
+  import bans) — added a NEW, independent test asserting the two positive
+  imports plus a fresh `cli_offenders` check, run ALONGSIDE (not
+  replacing) the pre-existing guard.
+- [x] **9.23** [TEST] `tests/unit/cli/test_curate.py` — add
   `test_curate_context_carries_backend_factories`: `CurateContext` gains a
   `backend_factories` field that `cli/main.py` fills from
   `_backend_factories()`; the stage loop's chat construction calls
   `application_backends.chat_client(ctx.cfg, factories=ctx.backend_factories,
   task=stage.task)` instead of constructing `OllamaClient` directly.
-- [ ] **9.24** [IMPL] `cli/curate.py`: add `backend_factories` to
+
+  **Observed**: same `server.__dict__`-style dynamic-lookup fix needed here
+  too (`ctx.backend_factories.openai_compatible is OpenAICompatibleClient`
+  failed once the ambient offline-seam patch covered `cli.main`'s copy);
+  fixed by reading `main_module.__dict__[...]` for both names.
+- [x] **9.24** [IMPL] `cli/curate.py`: add `backend_factories` to
   `CurateContext`; `cli/main.py` fills it; route stage chat construction
   through `chat_client`. Makes 9.23 GREEN. Move the four existing tests
   patching `openkos.cli.curate.OllamaClient` to patch
   `openkos.cli.main.OllamaClient` instead (per design's explicit note),
   confirming they still pass.
 
+  **Observed**: `backend_factories: BackendFactories | None = None`
+  (curate.py binds no concrete backend class at all now — the `OllamaClient`
+  import was removed entirely from `curate.py`); the stage loop raises a
+  clear `RuntimeError` if ever reached with `None` rather than silently
+  degrading. Beyond the four string-literal `monkeypatch.setattr(
+  "openkos.cli.curate.OllamaClient", ...)` patches (moved to
+  `"openkos.cli.main.OllamaClient"`), found and fixed 6 MORE
+  object-form `monkeypatch.setattr(curate, "OllamaClient", ...)` patches
+  the task text didn't name — each moved to a `backend_factories=` kwarg on
+  `_fake_ctx` instead, since `curate` no longer has an `OllamaClient`
+  module attribute to patch at all. Also: added `backend`/`base_url`/
+  `embedding_base_url` fields to the test file's `_FakeConfig` (read by
+  `resolve_endpoint`, which the stage loop now calls transitively) and 3
+  fake client stand-ins (`_RaisingOllamaClient`'s specific-test variant,
+  `_RecordingOllama`, `_NoChatOllama`) needed a `.locality` property added
+  — `cli.main.OllamaClient` is now ALSO the command's own local-exemption
+  seam (previously a separate, independent patch point from
+  `cli.curate.OllamaClient`), so unifying the two seams means a raising
+  sentinel for "the stage loop must not build a client" also has to
+  tolerate the command's own unconditional, unrelated local-exemption
+  probe — rewrote that one sentinel to raise only on a SECOND construction.
+  All 170 tests in `tests/unit/cli/test_curate.py` pass.
+
 ### conftest, construction guard (chat-scoped, ratchet)
 
-- [ ] **9.25** [TEST] `tests/unit/conftest.py` — add
+- [x] **9.25** [TEST] `tests/unit/conftest.py` — add
   `test_conftest_single_helper_patches_both_bindings`: the autouse fixture
   patches `OllamaClient`/`OpenAICompatibleClient` in BOTH
   `openkos.cli.main` and `openkos.mcp.server` through one shared
   helper/tuple-of-binding-modules, and `delenv("OPENKOS_OPENAI_API_KEY",
   raising=False)` runs so no developer's exported key leaks into a test.
-- [ ] **9.26** [IMPL] `tests/unit/conftest.py`: implement the one-helper
+
+  **Deviation (disclosed, not silent)**: pytest's default `python_files`
+  pattern (`test_*.py`/`*_test.py`) does NOT collect test functions
+  defined inside `conftest.py` under a directory-based run (`pytest
+  tests/unit`) — verified empirically (a scratch probe test placed in
+  `conftest.py` was collected by `pytest tests/unit/conftest.py` directly
+  but absent from `pytest tests/unit --collect-only`). A test placed
+  literally in `conftest.py`, as this task names, would silently never run
+  under `uv run pytest --cov` (the required verification command) or CI.
+  Placed `test_conftest_single_helper_patches_both_bindings` in the
+  already-collected `tests/unit/test_network_guard.py` instead, following
+  its own pre-existing `test_offline_seam_is_installed_for_an_ordinary_unit_test`/
+  `_cli_ollama_seam()` pattern (dynamic `getattr` reads on both modules),
+  plus a structural (`inspect.getsource`) check for the `delenv` call
+  since the clear cannot be proven behaviorally from inside the test it
+  protects (it already ran before the test body starts).
+- [x] **9.26** [IMPL] `tests/unit/conftest.py`: implement the one-helper
   patch across the binding-module tuple `(openkos.cli.main,
   openkos.mcp.server)`, `delenv("OPENKOS_OPENAI_API_KEY")`. Makes 9.25
   GREEN — this is ALSO the seam `test_network_guard.py`'s `live_backend`
   marker needs: extend its lift to cover `OpenAICompatibleClient` at both
   binding modules now that the seam exists.
-- [ ] **9.27** [TEST] `tests/unit/test_backend_construction_guard.py` (new)
+
+  **Observed**: `_wants_live_backend`-gated `_offline_ollama_by_default`
+  already lifts BOTH classes at both modules together (single early
+  `return` shared with the socket guard), so no separate marker-lift change
+  was needed beyond routing the existing fixture through
+  `_patch_backend_seams`.
+- [x] **9.27** [TEST] `tests/unit/test_backend_construction_guard.py` (new)
   — add `test_no_direct_client_construction_outside_llm_and_factories`: an
   AST walk of every `.py` under `src/openkos/` outside `llm/` rejects a
   bare `OllamaClient(` or `OpenAICompatibleClient(` call EXCEPT inside a
@@ -1470,28 +1593,73 @@ adds `resolve_endpoint`, `embed_client`, `diagnostics_client`.
   asserts every allowlisted entry still points at an ACTUAL direct
   construction (a stale entry is itself a failure). **RED today**: the ten
   sites are indeed direct constructions.
-- [ ] **9.28** [IMPL] implement the guard with the allowlist per 9.27;
+
+  **Observed line-number drift**: the task's line numbers were computed
+  against an earlier snapshot of `cli/main.py`; the actual current lines
+  (confirmed by grep against the as-shipped file) are 339/1770/4194/4762/
+  5748/14831/15548/15930/16382 and `mcp/server.py:212` — `_PENDING_SITES`
+  uses these real, current numbers (the guard's own "stale entry" check
+  would otherwise fail immediately against the task text's numbers). Wrote
+  test+implementation together in one file (no separate production module
+  — this guard IS the test, matching `test_neutral_catch_sites.py`'s
+  precedent from Phase 2a); ran once green (no separate RED phase observed
+  for the guard itself, since Phase 9's other tasks were already fully
+  implemented by the time this file was written) — 9.29's mutation proof
+  below is what demonstrates it can fail.
+- [x] **9.28** [IMPL] implement the guard with the allowlist per 9.27;
   confirm the three now-migrated chat sites (`_chat_client`, curate stage
   chat, MCP `_make_llm`) are clean/off the allowlist by construction. Makes
   9.27 GREEN.
-- [ ] **9.29** [TEST] same file — mutation-proof: temporarily reintroduce a
+- [x] **9.29** [TEST] same file — mutation-proof: temporarily reintroduce a
   direct `OllamaClient(...)` call at one of the three MIGRATED chat sites
   (scratch copy or planted fixture), confirm the guard fails, then remove
   it and record the result inline.
 
+  **Observed mutation proof**: added `OllamaClient(model="mutation-probe")`
+  as an extra statement inside `application/backends.py::chat_client`'s
+  Ollama branch (line 281, the shared body every migrated chat site now
+  delegates to). Guard failed with exactly
+  `{'application/backends.py': [281]}` under `offenders` (not
+  `_PENDING_SITES`, confirming that site is correctly unallowlisted).
+  Reverted with the exact inverse edit, purged `__pycache__`, reconfirmed
+  green; comment recorded inline in the test file per the task's own
+  instruction.
+
 ### Phase 9 verification
 
-- [ ] **9.30** Run `uv run ruff check . && uv run ruff format --check . &&
+- [x] **9.30** Run `uv run ruff check . && uv run ruff format --check . &&
   uv run mypy .` — must be green.
-- [ ] **9.31** Run `uv run pytest tests/unit/application/test_backends.py
+
+  **Observed**: `ruff check .` — All checks passed. `ruff format --check .`
+  — 378 files already formatted. `mypy .` — Success: no issues found in
+  378 source files.
+- [x] **9.31** Run `uv run pytest tests/unit/application/test_backends.py
   tests/unit/cli/test_backends_delegation.py tests/unit/cli/test_curate.py
   tests/unit/mcp/test_server.py tests/unit/mcp/test_layering.py
   tests/unit/test_backend_construction_guard.py
   tests/unit/test_network_guard.py` focused, then `uv run pytest --cov`
   full suite; then `uv run python evals/run_self_tests.py`.
+
+  **Observed**: focused command → **245 passed**. Full `uv run pytest --cov`
+  (unpiped, 438.36s wall time) → **7382 passed, 0 failed, 2 skipped**,
+  96.82% branch coverage (>= 90% gate held);
+  `src/openkos/application/backends.py` not listed individually in the
+  coverage table (covered under the aggregate, no dedicated low-coverage
+  line flagged); `src/openkos/cli/curate.py` 95%, `src/openkos/cli/main.py`
+  95%, `src/openkos/mcp/server.py` 94% — consistent with pre-existing
+  coverage levels, no new uncovered branch introduced by this phase's
+  changes specifically (the reported misses are pre-existing lines, not
+  Phase 9 additions). `uv run python evals/run_self_tests.py`
+  (`OLLAMA_HOST` poisoned to `http://127.0.0.1:1`): **44 of 44 harness
+  self-test(s) run, 0 failing**.
 - [ ] **9.32** Commit as one or more work-unit commits, split by touched
   module's scope (`llm` for `backends.py`'s resolver, `cli`/`mcp` for the
   adapter wiring). Open PR 9 targeting `main`, after PR 3 and PR 8 merge.
+
+  **Observed**: commit(s) to be made on the current branch
+  (`feat/1057-openai-p9`); "Open PR 9" left unticked per apply-phase
+  instructions (no push, no PR from this session — left for the
+  maintainer).
 
 **Rollback boundary**: revert `BackendFactories`/`resolve_endpoint`/
 `chat_client`'s `factories=` signature back to `factory=`/single-Ollama

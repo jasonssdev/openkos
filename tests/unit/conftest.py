@@ -459,16 +459,42 @@ class OfflineOpenAICompatible(OpenAICompatibleClient):
         )
 
 
+_BACKEND_BINDING_MODULES = ("openkos.cli.main", "openkos.mcp.server")
+"""Every adapter module that binds its own copy of both concrete client
+classes through its own `_backend_factories()` (issue #1057 Phase 9, design
+Decision 4): `cli/main.py` and `mcp/server.py` each read `OllamaClient`/
+`OpenAICompatibleClient` from their OWN module globals at call time, so a
+seam that patches only one of the two adapters would leave the other
+reaching the network. One tuple, walked by one helper, means a future third
+adapter needs only a new entry here, not a hand-written third patch call."""
+
+
+def _patch_backend_seams(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Patch `OllamaClient`/`OpenAICompatibleClient` to their offline
+    doubles in every `_BACKEND_BINDING_MODULES` entry (task 9.26): the ONE
+    shared helper `_offline_ollama_by_default` calls, so both concrete
+    classes stay covered in both adapters through a single call site."""
+    for module_path in _BACKEND_BINDING_MODULES:
+        monkeypatch.setattr(f"{module_path}.OllamaClient", OfflineOllama)
+        monkeypatch.setattr(
+            f"{module_path}.OpenAICompatibleClient", OfflineOpenAICompatible
+        )
+
+
 @pytest.fixture(autouse=True)
 def _offline_ollama_by_default(
     request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Patch the CLI's Ollama seam so no unit test reaches the network by
-    accident. Same constructor signature, so call sites are unaffected.
+    """Patch both adapters' backend seams so no unit test reaches the
+    network by accident, and clear `OPENKOS_OPENAI_API_KEY` alongside
+    `OLLAMA_HOST` so a developer's exported key never leaks into a test
+    (issue #1057 Phase 9). Same constructor signatures, so call sites are
+    unaffected.
 
-    Every `OllamaClient(...)` construction site in `cli/main.py` resolves the
-    class through this one module global, so patching the single name covers
-    all of them.
+    Every `OllamaClient(...)`/`OpenAICompatibleClient(...)` construction
+    site in `cli/main.py` and `mcp/server.py` resolves the class through
+    that module's own globals, so `_patch_backend_seams` patching both
+    names in both modules covers every one of them.
 
     Skipped for `@pytest.mark.live_backend` tests, in lockstep with the socket
     guard: a marked test that got sockets back but kept this stub would reach
@@ -497,6 +523,14 @@ def _offline_ollama_by_default(
     required even though the advisory itself is now environment-free.
     Tests that pin the advisory set the variable explicitly.
 
+    Also clears `OPENKOS_OPENAI_API_KEY` (issue #1057 Phase 9): unlike
+    `OLLAMA_HOST`, `OpenAICompatibleClient` itself never reads this variable
+    -- `application/backends.py`'s resolver does, in the application layer
+    -- but a developer's own exported key would still leak into the
+    `api_key=` kwarg any resolver-level test that forgets to inject its own
+    `environ` observes, which is exactly the same nondeterminism class this
+    fixture exists to end for `OLLAMA_HOST`.
+
     One consequence worth naming rather than discovering later:
     `test_ingest.py` overrides this with `_FakeLLM`, which serves `chat()`
     but NOT `embed()`. Its tests therefore reach `_embed_after_ingest`, raise
@@ -511,7 +545,8 @@ def _offline_ollama_by_default(
     if _wants_live_backend(request):
         return
     monkeypatch.delenv("OLLAMA_HOST", raising=False)
-    monkeypatch.setattr("openkos.cli.main.OllamaClient", OfflineOllama)
+    monkeypatch.delenv("OPENKOS_OPENAI_API_KEY", raising=False)
+    _patch_backend_seams(monkeypatch)
 
 
 def make_locked_error(
