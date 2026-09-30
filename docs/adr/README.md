@@ -68,3 +68,4 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 | [0030](0030-untrusted-incoming-frontmatter.md) | Incoming frontmatter is untrusted -- preserved whole in one namespace, with a closed per-key lift | Accepted | 2026-09-29 |
 | [0031](0031-openai-compatible-backend.md) | A second, OpenAI-compatible local backend beside the Ollama default | Accepted | 2026-09-29 |
 | [0032](0032-deprecated-status-is-an-export-of-computed-supersession.md) | Frontmatter `status: deprecated` is a marked export of computed supersession, never read back | Proposed | 2026-09-29 |
+| [0033](0033-source-tag-sync-is-union-only.md) | Source tag sync is union-only and never tags below the Source's sensitivity | Proposed | 2026-09-30 |
