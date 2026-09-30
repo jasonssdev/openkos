@@ -63,6 +63,7 @@ from openkos.llm.base import (
     BackendError,
     BackendModelNotFound,
     BackendUnavailable,
+    LLMBackend,
 )
 from openkos.llm.ollama import (
     BackendHostLocality,
@@ -72,6 +73,7 @@ from openkos.llm.ollama import (
     is_timeout_failure,
     model_tag_matches,
 )
+from openkos.llm.openai_compatible import OpenAICompatibleClient
 from openkos.model import okf, types
 from openkos.model.relations import ASYMMETRIC_RELATION_TYPES, validate_relation_type
 from openkos.model.types import INSIGHT_TYPE as _INSIGHT_TYPE
@@ -161,16 +163,34 @@ app = typer.Typer()
 _PREFLIGHT_TIMEOUT = 5.0
 
 
-def _chat_client(cfg: config.Config, *, task: str | None = None) -> OllamaClient:
-    """One-line delegator (mcp-read-surface slice 8, design Decision 7): the
-    real definition, and its full docstring, now live in
-    `application/backends.py` -- moved there so a non-CLI adapter (the MCP
-    server) can build a chat client without importing `openkos.cli`. Kept
-    under this name, reading `OllamaClient` from THIS module's own globals
-    at call time, so every existing test that patches
+def _backend_factories() -> application_backends.BackendFactories:
+    """Build this adapter's `BackendFactories` from THIS module's own
+    globals, read at call time (issue #1057 Phase 9, design Decision 4):
+    every chat AND embed construction site in `cli/main.py`/`cli/curate.py`
+    goes through `application_backends.chat_client`/`embed_client` with
+    this value, so patching `openkos.cli.main.OllamaClient`/
+    `openkos.cli.main.OpenAICompatibleClient` (as
+    `tests/unit/conftest.py`'s autouse network guard does) keeps
+    intercepting every one of them -- the ~144 existing
+    `openkos.cli.main.OllamaClient` test patches never had to move."""
+    return application_backends.BackendFactories(
+        ollama=OllamaClient, openai_compatible=OpenAICompatibleClient
+    )
+
+
+def _chat_client(cfg: config.Config, *, task: str | None = None) -> LLMBackend:
+    """One-line delegator (mcp-read-surface slice 8, design Decision 7; issue
+    #1057 Phase 9, design Decision 4): the real definition, and its full
+    docstring, now live in `application/backends.py` -- moved there so a
+    non-CLI adapter (the MCP server) can build a chat client without
+    importing `openkos.cli`. Kept under this name, reading both concrete
+    classes from THIS module's own globals at call time via
+    `_backend_factories()`, so every existing test that patches
     `openkos.cli.main.OllamaClient` (most load-bearingly,
     `tests/unit/conftest.py`'s autouse network guard) keeps intercepting."""
-    return application_backends.chat_client(cfg, factory=OllamaClient, task=task)
+    return application_backends.chat_client(
+        cfg, factories=_backend_factories(), task=task
+    )
 
 
 # Shared remediation clause appended to the BackendUnavailable handlers of
@@ -3925,12 +3945,18 @@ def _render_staged_derived_objects(
         )
 
 
-def _resolve_local_exemption(client: OllamaClient, cfg: config.Config) -> bool:
+def _resolve_local_exemption(
+    client: application_backends.HasLocality, cfg: config.Config
+) -> bool:
     """One-line delegator (mcp-read-surface slice 8, design Decision 7): the
     real definition, and its full docstring, now live in
     `application/backends.py` -- moved there for the same reason as
     `_chat_client` above. Kept under this name so the ~200 existing
-    references to `_resolve_local_exemption` by name are unaffected."""
+    references to `_resolve_local_exemption` by name are unaffected.
+
+    Typed against `HasLocality` (not `OllamaClient`, issue #1057 Phase 9):
+    `_chat_client` may now return an `OpenAICompatibleClient` too, and both
+    satisfy this narrower structural Protocol."""
     return application_backends.resolve_local_exemption(client, cfg)
 
 
@@ -11941,7 +11967,9 @@ def adjudicate(
     if notice is not None:
         typer.echo(notice, err=True)
     llm = _chat_client(cfg, task="adjudication")
-    local_exemption = _resolve_local_exemption(llm, cfg)
+    local_exemption = _resolve_local_exemption(
+        cast(application_backends.HasLocality, llm), cfg
+    )
     # #779: serve digest-fresh persisted verdicts before any model contact,
     # exactly as `contradictions` has since #653 -- the two advisors no
     # longer disagree about whether a repeat run on an unchanged bundle
@@ -12526,7 +12554,9 @@ def suggest_relations_cmd(
     # (issue #240). Construction performs no I/O -- it only resolves and
     # stores the host -- so nothing is contacted by moving it up.
     llm = _chat_client(cfg, task="edge_typing")
-    local_exemption = _resolve_local_exemption(llm, cfg)
+    local_exemption = _resolve_local_exemption(
+        cast(application_backends.HasLocality, llm), cfg
+    )
     observability.warn_if_walk_incomplete(
         layout.bundle_dir,
         include_confidential=include_confidential,
@@ -12900,7 +12930,9 @@ def suggest_volatility_cmd(
         raise typer.Exit(code=1) from exc
 
     llm = _chat_client(cfg, task="volatility_typing")
-    local_exemption = _resolve_local_exemption(llm, cfg)
+    local_exemption = _resolve_local_exemption(
+        cast(application_backends.HasLocality, llm), cfg
+    )
     observability.warn_if_walk_incomplete(
         layout.bundle_dir,
         include_confidential=include_confidential,
@@ -14065,7 +14097,9 @@ def contradictions(
         raise typer.Exit(code=1) from exc
 
     llm = _chat_client(cfg, task="contradiction")
-    local_exemption = _resolve_local_exemption(llm, cfg)
+    local_exemption = _resolve_local_exemption(
+        cast(application_backends.HasLocality, llm), cfg
+    )
     observability.warn_if_walk_incomplete(
         layout.bundle_dir,
         include_confidential=include_confidential,
@@ -14473,7 +14507,9 @@ def revisions(
     typer.echo(_REVISIONS_EXPERIMENTAL_NOTICE, err=True)
 
     llm = _chat_client(cfg)
-    local_exemption = _resolve_local_exemption(llm, cfg)
+    local_exemption = _resolve_local_exemption(
+        cast(application_backends.HasLocality, llm), cfg
+    )
     # design.md Decision B2: the flag (or the local exemption) releases only
     # the judge's `llm.chat` send of a confidential Decision's body -- it
     # never authorizes an embedding call, which this verb never makes at
@@ -14816,7 +14852,9 @@ def query(
         )
     # The CHAT client decides the exemption, not the embedder: the
     # confidential concept bodies travel in the `llm.chat` payload (#240).
-    local_exemption = _resolve_local_exemption(llm, cfg)
+    local_exemption = _resolve_local_exemption(
+        cast(application_backends.HasLocality, llm), cfg
+    )
     observability.warn_if_walk_incomplete(
         layout.bundle_dir,
         include_confidential=include_confidential,
@@ -16245,7 +16283,9 @@ def curate(
     accepted_stages = curate_module.resolve_accepted_stages(
         explicit_accept, review=cfg.review
     )
-    local_exemption = _resolve_local_exemption(_chat_client(cfg), cfg)
+    local_exemption = _resolve_local_exemption(
+        cast(application_backends.HasLocality, _chat_client(cfg)), cfg
+    )
     observability.warn_if_walk_incomplete(
         layout.bundle_dir,
         include_confidential=include_confidential,
@@ -16263,6 +16303,7 @@ def curate(
         accepted_stages=accepted_stages,
         no_reconcile=no_reconcile,
         reconcile=reconcile,
+        backend_factories=_backend_factories(),
     )
     outcomes = curate_module.run_curate(ctx)
     for line in curate_module.render_summary(outcomes):

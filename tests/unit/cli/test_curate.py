@@ -20,10 +20,12 @@ import pytest
 from typer.testing import CliRunner, _NamedTextIOWrapper
 
 from openkos import config
+from openkos.application import backends as application_backends
 from openkos.application import lifecycle as application_lifecycle
 from openkos.application.consent import BooleanConfirmation
 from openkos.bundle import decisions as bundle_decisions
 from openkos.cli import curate, observability
+from openkos.cli import main as main_module
 from openkos.cli.main import app
 from openkos.graph import sqlite_graph
 from openkos.llm.base import EMBED_DIM
@@ -164,6 +166,9 @@ class _FakeConfig:
         temperature: float | None = config.DEFAULT_TEMPERATURE,
         seed: int | None = config.DEFAULT_SEED,
         models: dict[str, str] | None = None,
+        backend: str = config.DEFAULT_BACKEND,
+        base_url: str | None = None,
+        embedding_base_url: str | None = None,
     ) -> None:
         self.model = model
         self.review = review
@@ -173,6 +178,14 @@ class _FakeConfig:
         self.temperature = temperature
         self.seed = seed
         self.models = models or {}
+        # issue #1057 Phase 9: `resolve_endpoint` (called from the stage
+        # loop's `application_backends.chat_client`) reads these three --
+        # defaulted to the packaged Ollama path so every existing
+        # `_fake_ctx()` caller stays on the byte-identical default without
+        # naming them.
+        self.backend = backend
+        self.base_url = base_url
+        self.embedding_base_url = embedding_base_url
 
 
 class _FakeLayout:
@@ -199,6 +212,7 @@ def _fake_ctx(
     temperature: float | None = config.DEFAULT_TEMPERATURE,
     seed: int | None = config.DEFAULT_SEED,
     accepted_stages: frozenset[str] = frozenset(),
+    backend_factories: application_backends.BackendFactories | None = None,
 ) -> curate.CurateContext:
     return curate.CurateContext(
         root=tmp_path,
@@ -208,6 +222,12 @@ def _fake_ctx(
         ),
         auto=auto,
         accepted_stages=accepted_stages,
+        # Reads `openkos.cli.main`'s own globals at call time, exactly like
+        # the real `curate` command (issue #1057 task 9.24) -- so the
+        # ambient `_offline_ollama_by_default` autouse fixture's patch of
+        # `openkos.cli.main.OllamaClient` keeps intercepting for a
+        # `_fake_ctx`-built context too, with no per-test change needed.
+        backend_factories=backend_factories or main_module._backend_factories(),
     )
 
 
@@ -800,6 +820,33 @@ def test_render_summary_with_fake_stages_matches_outcome_count(
 
 
 # ---------------------------------------------------------------------------
+# Phase 9 -- resolver seam: CurateContext carries backend_factories (issue
+# #1057).
+# ---------------------------------------------------------------------------
+
+
+def test_curate_context_carries_backend_factories() -> None:
+    """`CurateContext` gains a `backend_factories` field that `cli/main.py`
+    fills from `_backend_factories()`; the stage loop's chat construction
+    calls `application_backends.chat_client(ctx.cfg,
+    factories=ctx.backend_factories, task=stage.task)` instead of
+    constructing `OllamaClient` directly (task 9.23)."""
+    ctx = _fake_ctx(Path("unused-root"))
+
+    # Read `main_module.__dict__` for both names (not the directly-imported
+    # `OpenAICompatibleClient`): the autouse `_offline_ollama_by_default`
+    # fixture patches both to their offline doubles for every unit test,
+    # exactly the property `_backend_factories()` reading `cli.main`'s own
+    # globals at call time depends on.
+    assert isinstance(ctx.backend_factories, application_backends.BackendFactories)
+    assert ctx.backend_factories.ollama is main_module.__dict__["OllamaClient"]
+    assert (
+        ctx.backend_factories.openai_compatible
+        is main_module.__dict__["OpenAICompatibleClient"]
+    )
+
+
+# ---------------------------------------------------------------------------
 # 1.14/1.15 -- lazy OllamaClient, short-circuit, generic failure
 # ---------------------------------------------------------------------------
 
@@ -808,7 +855,7 @@ def test_no_ollama_client_built_when_every_gate_is_declined(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(_NamedTextIOWrapper, "isatty", lambda self: False)
-    monkeypatch.setattr("openkos.cli.curate.OllamaClient", _RaisingOllamaClient)
+    monkeypatch.setattr("openkos.cli.main.OllamaClient", _RaisingOllamaClient)
     stage = _fake_stage(
         "Identity", probe=lambda ctx: curate.StageProbe(items=(1,), llm_calls=1)
     )
@@ -2001,10 +2048,31 @@ def test_identity_non_tty_auto_declines_write_walk_with_hint(
         "openkos.cli.curate.find_candidates_report",
         lambda *a, **k: CandidateGroupReport(groups=(group,), produced=1, retained=1),
     )
-    # The write-decline must fire BEFORE the client is ever built: a
-    # constructed client here means model spend leaked past the consent
-    # boundary (the sentinel raises on construction).
-    monkeypatch.setattr("openkos.cli.curate.OllamaClient", _RaisingOllamaClient)
+
+    # The write-decline must fire BEFORE the STAGE LOOP ever builds a
+    # client: a second construction here means model spend leaked past the
+    # consent boundary (the sentinel raises on it). The FIRST construction
+    # is legitimate and unrelated to what this test checks -- `curate`'s
+    # own command wrapper resolves the confidential local exemption from a
+    # client it builds unconditionally at the top, through the SAME shared
+    # seam (issue #1057 Phase 9 unified `cli.main.OllamaClient` as the one
+    # patch point for both) -- so the sentinel must allow exactly that one
+    # call, not zero.
+    class _RaisesOnSecondConstruction:
+        _constructed = 0
+
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            type(self)._constructed += 1
+            if type(self)._constructed > 1:
+                raise AssertionError(
+                    "OllamaClient must never be constructed for a declined write walk"
+                )
+
+        @property
+        def locality(self) -> object:
+            return LOCAL_BACKEND_LOCALITY
+
+    monkeypatch.setattr("openkos.cli.main.OllamaClient", _RaisesOnSecondConstruction)
     # No `_simulate_tty`: CliRunner's stdin is the non-TTY side of the D3
     # matrix under test.
 
@@ -2049,7 +2117,14 @@ def test_identity_confidential_member_never_reaches_the_llm_payload(
             payloads.append(str(messages))
             return '{"verdict": "UNCERTAIN", "confidence": 0.4, "rationale": "stub"}'
 
-    monkeypatch.setattr("openkos.cli.curate.OllamaClient", _RecordingOllama)
+        @property
+        def locality(self) -> object:
+            # issue #1057 Phase 9: `cli.main.OllamaClient` is now also the
+            # command's own local-exemption seam (unified with the stage
+            # loop's), so this stand-in needs `.locality` too.
+            return LOCAL_BACKEND_LOCALITY
+
+    monkeypatch.setattr("openkos.cli.main.OllamaClient", _RecordingOllama)
     _simulate_tty(monkeypatch)
     # `curate` resolves the confidential local exemption from its own
     # client, and the suite's stand-in reports a LOCAL backend -- where #240
@@ -3843,12 +3918,21 @@ def test_identity_all_confidential_group_makes_no_model_call(
         def __init__(self, *args: object, **kwargs: object) -> None:
             pass
 
+        @property
+        def locality(self) -> object:
+            # issue #1057 Phase 9: `cli.main.OllamaClient` is now also the
+            # command's own local-exemption seam (unified with the stage
+            # loop's); the test disables the exemption via the workspace
+            # switch below, so this value is never actually consulted for
+            # confidentiality -- it only needs to exist.
+            return LOCAL_BACKEND_LOCALITY
+
         def chat(self, messages: object) -> str:
             raise AssertionError(
                 "llm.chat must never be called for an all-confidential group"
             )
 
-    monkeypatch.setattr("openkos.cli.curate.OllamaClient", _NoChatOllama)
+    monkeypatch.setattr("openkos.cli.main.OllamaClient", _NoChatOllama)
     _simulate_tty(monkeypatch)
     # `curate` resolves the confidential local exemption from its own
     # client, and the suite's stand-in reports a LOCAL backend -- where #240
@@ -5109,10 +5193,15 @@ def test_unavailability_no_longer_skips_a_stage_on_a_DIFFERENT_model(
         task="volatility_typing",
     )
     monkeypatch.setattr(curate, "_STAGES", (first, second))
-    monkeypatch.setattr(curate, "OllamaClient", lambda **kwargs: _OfflineOllama())
 
     ctx = _fake_ctx(
-        Path("unused-root"), auto=True, models={"edge_typing": "gemma2:27b"}
+        Path("unused-root"),
+        auto=True,
+        models={"edge_typing": "gemma2:27b"},
+        backend_factories=application_backends.BackendFactories(
+            ollama=lambda **kwargs: _OfflineOllama(),
+            openai_compatible=lambda **kwargs: _OfflineOllama(),
+        ),
     )
     outcomes = curate.run_curate(ctx)
 
@@ -5164,9 +5253,15 @@ def test_unavailability_still_skips_a_later_stage_on_the_SAME_model(
         task="contradiction",
     )
     monkeypatch.setattr(curate, "_STAGES", (first, second))
-    monkeypatch.setattr(curate, "OllamaClient", lambda **kwargs: _OfflineOllama())
 
-    ctx = _fake_ctx(Path("unused-root"), auto=True)  # no `models:` override
+    ctx = _fake_ctx(
+        Path("unused-root"),
+        auto=True,
+        backend_factories=application_backends.BackendFactories(
+            ollama=lambda **kwargs: _OfflineOllama(),
+            openai_compatible=lambda **kwargs: _OfflineOllama(),
+        ),
+    )  # no `models:` override
     outcomes = curate.run_curate(ctx)
 
     assert calls == ["First"]
@@ -5192,7 +5287,6 @@ def test_stages_sharing_a_model_share_one_client(
         built.append(str(kwargs["model"]))
         return _OfflineOllama()
 
-    monkeypatch.setattr(curate, "OllamaClient", _record)
     stages = tuple(
         _fake_stage(
             name,
@@ -5209,7 +5303,12 @@ def test_stages_sharing_a_model_share_one_client(
     monkeypatch.setattr(curate, "_STAGES", stages)
 
     ctx = _fake_ctx(
-        Path("unused-root"), auto=True, models={"edge_typing": "gemma2:27b"}
+        Path("unused-root"),
+        auto=True,
+        models={"edge_typing": "gemma2:27b"},
+        backend_factories=application_backends.BackendFactories(
+            ollama=_record, openai_compatible=_record
+        ),
     )
     curate.run_curate(ctx)
 
@@ -5221,8 +5320,9 @@ def test_stages_sharing_a_model_share_one_client(
 def test_curate_forwards_configured_temperature_and_seed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`curate`'s own client construction (main.py cannot import curate.py,
-    so `_chat_client` cannot be reused here) forwards the workspace's
+    """`curate`'s stage loop, routed through the shared
+    `application_backends.chat_client` resolver (issue #1057 Phase 9, same
+    definition `_chat_client` delegates to) forwards the workspace's
     `temperature`/`seed` exactly like `chat_timeout`/`max_generation_tokens`/
     `context_window` already do (issue #1013)."""
     built: list[dict[str, object]] = []
@@ -5231,7 +5331,6 @@ def test_curate_forwards_configured_temperature_and_seed(
         built.append(kwargs)
         return _OfflineOllama()
 
-    monkeypatch.setattr(curate, "OllamaClient", _record)
     stage = _fake_stage(
         "First",
         probe=lambda ctx: curate.StageProbe(items=(1,), llm_calls=1),
@@ -5240,7 +5339,15 @@ def test_curate_forwards_configured_temperature_and_seed(
     )
     monkeypatch.setattr(curate, "_STAGES", (stage,))
 
-    ctx = _fake_ctx(Path("unused-root"), auto=True, temperature=0.0, seed=7)
+    ctx = _fake_ctx(
+        Path("unused-root"),
+        auto=True,
+        temperature=0.0,
+        seed=7,
+        backend_factories=application_backends.BackendFactories(
+            ollama=_record, openai_compatible=_record
+        ),
+    )
     curate.run_curate(ctx)
 
     assert built[0]["temperature"] == 0.0
@@ -5273,10 +5380,15 @@ def test_model_not_found_names_the_STAGE_model_not_the_global_one(
         task="edge_typing",
     )
     monkeypatch.setattr(curate, "_STAGES", (stage,))
-    monkeypatch.setattr(curate, "OllamaClient", lambda **kwargs: _OfflineOllama())
 
     ctx = _fake_ctx(
-        Path("unused-root"), auto=True, models={"edge_typing": "gemma2:27b"}
+        Path("unused-root"),
+        auto=True,
+        models={"edge_typing": "gemma2:27b"},
+        backend_factories=application_backends.BackendFactories(
+            ollama=lambda **kwargs: _OfflineOllama(),
+            openai_compatible=lambda **kwargs: _OfflineOllama(),
+        ),
     )
     outcomes = curate.run_curate(ctx)
 

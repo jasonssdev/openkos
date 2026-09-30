@@ -19,7 +19,7 @@ import ast
 import json
 import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -29,13 +29,15 @@ from openkos.llm.ollama import OllamaClient
 
 _SRC = Path(main_module.__file__).parent
 _APPLICATION_BACKENDS = _SRC.parent / "application" / "backends.py"
-"""mcp-read-surface slice 8 (design Decision 7): `_chat_client` no longer
-constructs `OllamaClient` directly -- it delegates to
-`application.backends.chat_client(cfg, factory=OllamaClient, ...)`, whose
-own body is the real (and now only shared) construction call, shaped
-`factory(model=..., ...)`. The guards below must see that site too, or they
-would go blind to `main.py`'s whole chat-client seam the moment it became a
-delegator."""
+"""mcp-read-surface slice 8 (design Decision 7), widened by issue #1057
+Phase 9 (design Decision 4): `_chat_client` no longer constructs
+`OllamaClient` directly -- it delegates to
+`application.backends.chat_client(cfg, factories=..., ...)`, whose own body
+holds the real (and now only shared) construction calls, dispatched by
+`cfg.backend` as `factories.ollama(model=..., ...)`/
+`factories.openai_compatible(model=..., ...)`. The guards below must see
+both branches, or they would go blind to `main.py`'s whole chat-client seam
+the moment it became a delegator."""
 
 
 def _scanned_source_files() -> list[Path]:
@@ -82,14 +84,43 @@ def _is_chat_model_arg(node: ast.keyword) -> bool:
     return node.arg == "model" and _is_chat_model_expr(node.value)
 
 
+def _ollama_chat_client(cfg: config.Config, *, task: str | None = None) -> OllamaClient:
+    """`main_module._chat_client(cfg, ...)`, cast back to the concrete
+    `OllamaClient` these tests inspect private attributes of (issue #1057
+    Phase 9): `_chat_client`'s return type widened to the `LLMBackend`
+    Protocol so it can also return an `OpenAICompatibleClient`, but every
+    test below constructs a default (`backend="ollama"`) `Config`, so the
+    real returned object is always an `OllamaClient` -- this cast states
+    that fact to the type checker rather than working around it."""
+    return cast(OllamaClient, main_module._chat_client(cfg, task=task))
+
+
+def _is_chat_factory_call_target(func: ast.expr) -> bool:
+    """True for the callee of a real chat-client construction: a direct
+    `OllamaClient(...)` name (`curate.py`'s own site, pre-Phase-9), or the
+    dispatch-by-attribute shape `factories.ollama(...)`/
+    `factories.openai_compatible(...)` (`application/backends.py`'s shared
+    `chat_client` definition, issue #1057 Phase 9, design Decision 4 --
+    both concrete class names are deliberately absent from that call site,
+    so the detector must recognize the `factories.<name>` attribute access
+    too, not only a literal class name)."""
+    if isinstance(func, ast.Name):
+        return func.id == "OllamaClient"
+    return (
+        isinstance(func, ast.Attribute)
+        and isinstance(func.value, ast.Name)
+        and func.value.id == "factories"
+        and func.attr in {"ollama", "openai_compatible"}
+    )
+
+
 def _chat_client_calls(tree: ast.AST) -> list[ast.Call]:
     """Every real chat-client construction CALL: either a direct
     `OllamaClient(model=<something>, ...)` (`curate.py`'s own site) or the
-    injected-factory shape `factory(model=<something>, ...)`
-    (`application/backends.py`'s shared `chat_client` definition,
-    mcp-read-surface slice 8, design Decision 7 -- the concrete class name
-    is deliberately absent from THAT call site, so the detector must
-    recognize the factory parameter too, not only the literal class name).
+    dispatch-by-attribute shape `factories.ollama(model=<something>, ...)`/
+    `factories.openai_compatible(model=<something>, ...)`
+    (`application/backends.py`'s shared `chat_client` definition, issue
+    #1057 Phase 9).
 
     Walks the AST rather than the raw text on purpose: several docstrings in
     `main.py`/`backends.py` quote `OllamaClient(model=cfg.model)` while
@@ -100,8 +131,7 @@ def _chat_client_calls(tree: ast.AST) -> list[ast.Call]:
         node
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id in {"OllamaClient", "factory"}
+        and _is_chat_factory_call_target(node.func)
         and any(_is_chat_model_arg(kw) for kw in node.keywords)
     ]
 
@@ -110,7 +140,7 @@ def test_chat_client_applies_configured_timeout() -> None:
     """`_chat_client` hands the workspace's `chat_timeout` to the client."""
     cfg = _cfg(chat_timeout=42.5)
 
-    client = main_module._chat_client(cfg)
+    client = _ollama_chat_client(cfg)
 
     assert client._timeout == 42.5
 
@@ -121,7 +151,7 @@ def test_chat_client_uses_the_configured_model() -> None:
     runs."""
     cfg = _cfg(model="some-model:latest")
 
-    assert main_module._chat_client(cfg)._model == "some-model:latest"
+    assert _ollama_chat_client(cfg)._model == "some-model:latest"
 
 
 def test_every_chat_client_construction_passes_a_timeout() -> None:
@@ -173,7 +203,7 @@ def test_chat_client_applies_configured_max_generation_tokens() -> None:
     """`_chat_client` hands the workspace's `max_generation_tokens` to the client."""
     cfg = _cfg(max_generation_tokens=2048)
 
-    client = main_module._chat_client(cfg)
+    client = _ollama_chat_client(cfg)
 
     assert client._max_generation_tokens == 2048
 
@@ -211,7 +241,7 @@ def test_chat_client_applies_configured_context_window() -> None:
     """`_chat_client` hands the workspace's `context_window` to the client."""
     cfg = _cfg(context_window=16384)
 
-    client = main_module._chat_client(cfg)
+    client = _ollama_chat_client(cfg)
 
     assert client._context_window == 16384
 
@@ -221,7 +251,7 @@ def test_chat_client_forwards_an_opted_out_context_window() -> None:
     a real opt-out rather than a value the wiring quietly replaces."""
     cfg = _cfg(context_window=None)
 
-    assert main_module._chat_client(cfg)._context_window is None
+    assert _ollama_chat_client(cfg)._context_window is None
 
 
 def test_every_chat_client_construction_passes_a_context_window() -> None:
@@ -257,7 +287,7 @@ def test_chat_client_applies_configured_temperature() -> None:
     """`_chat_client` hands the workspace's `temperature` to the client."""
     cfg = _cfg(temperature=0.2)
 
-    assert main_module._chat_client(cfg)._temperature == 0.2
+    assert _ollama_chat_client(cfg)._temperature == 0.2
 
 
 def test_chat_client_applies_a_configured_temperature_of_zero() -> None:
@@ -265,7 +295,7 @@ def test_chat_client_applies_a_configured_temperature_of_zero() -> None:
     check anywhere in the wiring would silently drop it."""
     cfg = _cfg(temperature=0.0)
 
-    assert main_module._chat_client(cfg)._temperature == 0.0
+    assert _ollama_chat_client(cfg)._temperature == 0.0
 
 
 def test_chat_client_forwards_an_opted_out_temperature() -> None:
@@ -274,7 +304,7 @@ def test_chat_client_forwards_an_opted_out_temperature() -> None:
     quietly replaces."""
     cfg = _cfg(temperature=None)
 
-    assert main_module._chat_client(cfg)._temperature is None
+    assert _ollama_chat_client(cfg)._temperature is None
 
 
 def test_every_chat_client_construction_passes_a_temperature() -> None:
@@ -305,7 +335,7 @@ def test_chat_client_applies_configured_seed() -> None:
     """`_chat_client` hands the workspace's `seed` to the client."""
     cfg = _cfg(seed=7)
 
-    assert main_module._chat_client(cfg)._seed == 7
+    assert _ollama_chat_client(cfg)._seed == 7
 
 
 def test_chat_client_forwards_an_opted_out_seed() -> None:
@@ -313,7 +343,7 @@ def test_chat_client_forwards_an_opted_out_seed() -> None:
     `None`."""
     cfg = _cfg(seed=None)
 
-    assert main_module._chat_client(cfg)._seed is None
+    assert _ollama_chat_client(cfg)._seed is None
 
 
 def test_every_chat_client_construction_passes_a_seed() -> None:
@@ -392,7 +422,7 @@ def test_chat_client_omits_temperature_and_seed_from_the_request_when_unset(
     monkeypatch.setattr(main_module, "OllamaClient", OllamaClient)
     cfg = _cfg(temperature=None, seed=None)
 
-    options = _sent_options(main_module._chat_client(cfg))
+    options = _sent_options(_ollama_chat_client(cfg))
 
     assert "temperature" not in options
     assert "seed" not in options
@@ -408,7 +438,7 @@ def test_chat_client_sends_a_configured_temperature_of_zero_and_seed(
     monkeypatch.setattr(main_module, "OllamaClient", OllamaClient)
     cfg = _cfg(temperature=0.0, seed=7)
 
-    options = _sent_options(main_module._chat_client(cfg))
+    options = _sent_options(_ollama_chat_client(cfg))
 
     assert options["temperature"] == 0.0
     assert options["seed"] == 7
@@ -453,7 +483,7 @@ def test_chat_client_resolves_the_named_task_model() -> None:
     """
     cfg = _cfg(models={"edge_typing": "gemma2:27b"})
 
-    assert main_module._chat_client(cfg, task="edge_typing")._model == "gemma2:27b"
+    assert _ollama_chat_client(cfg, task="edge_typing")._model == "gemma2:27b"
 
 
 def test_chat_client_without_a_task_keeps_the_global_model() -> None:
@@ -463,7 +493,7 @@ def test_chat_client_without_a_task_keeps_the_global_model() -> None:
     model chosen for edge typing."""
     cfg = _cfg(models={"edge_typing": "gemma2:27b"})
 
-    assert main_module._chat_client(cfg)._model == "qwen3:8b"
+    assert _ollama_chat_client(cfg)._model == "qwen3:8b"
 
 
 def test_chat_client_falls_back_for_an_unkeyed_task() -> None:
@@ -471,7 +501,7 @@ def test_chat_client_falls_back_for_an_unkeyed_task() -> None:
     workspace that keys one task does not move the other four."""
     cfg = _cfg(models={"edge_typing": "gemma2:27b"})
 
-    assert main_module._chat_client(cfg, task="extraction")._model == "qwen3:8b"
+    assert _ollama_chat_client(cfg, task="extraction")._model == "qwen3:8b"
 
 
 def test_chat_client_keeps_timeout_and_ceiling_on_a_per_task_model() -> None:
@@ -485,7 +515,7 @@ def test_chat_client_keeps_timeout_and_ceiling_on_a_per_task_model() -> None:
         max_generation_tokens=2048,
     )
 
-    client = main_module._chat_client(cfg, task="edge_typing")
+    client = _ollama_chat_client(cfg, task="edge_typing")
 
     assert (client._timeout, client._max_generation_tokens) == (42.5, 2048)
 

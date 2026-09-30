@@ -18,6 +18,7 @@ import pytest
 
 from openkos import config
 from openkos.application import backends as application_backends
+from openkos.application.backends import BackendFactories
 from openkos.cli import main as main_mod
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -101,16 +102,14 @@ def test_ollama_client_monkeypatch_still_intercepts(
     that constructs a chat client through the new
     `application/backends.py` delegator still gets the patched class.
     Proven with a mutation: patch `application.backends.chat_client` to
-    bypass the injected factory and construct `OllamaClient` imported
+    bypass the injected factories and construct `OllamaClient` imported
     directly from `openkos.llm.ollama` instead; confirm this mutation makes
     the existing `tests/unit/conftest.py` network guard's patch silently
     inert (the returned client is no longer the patched class); then
     restore the real `chat_client` and confirm the patch intercepts again.
     Covers "The CLI's observable behavior, and its test seam, are
-    unaffected" (the ~200-monkeypatch must-have). RED today: same reason as
-    above -- `_chat_client` is not yet a delegator that reads `OllamaClient`
-    from `cli.main`'s own module globals at call time through
-    `application.backends.chat_client`."""
+    unaffected" (the ~200-monkeypatch must-have), extended to the
+    `factories=` parameter shape (issue #1057 task 9.20)."""
     config.write_config(tmp_path)
     cfg = config.read_config(tmp_path)
 
@@ -125,17 +124,20 @@ def test_ollama_client_monkeypatch_still_intercepts(
     client = main_mod._chat_client(cfg)
     assert isinstance(client, patched_class)
 
-    # The mutation: bypass the injected factory entirely, importing
+    # The mutation: bypass the injected factories entirely, importing
     # OllamaClient directly the way a REPOINTED call site (not a
-    # delegator) would -- this is exactly what design Decision 7 forbids.
+    # delegator) would -- this is exactly what design Decision 4 forbids.
     from openkos.llm import ollama as ollama_module
 
     original_chat_client = application_backends.chat_client
 
     def _bypassing_chat_client(
-        bypassed_cfg: config.Config, *, factory: object, task: str | None = None
+        bypassed_cfg: config.Config,
+        *,
+        factories: BackendFactories,
+        task: str | None = None,
     ) -> object:
-        del factory  # deliberately ignored -- the defect under test
+        del factories  # deliberately ignored -- the defect under test
         return ollama_module.OllamaClient(
             model=config.resolve_task_model(bypassed_cfg, task),
             timeout=bypassed_cfg.chat_timeout,
