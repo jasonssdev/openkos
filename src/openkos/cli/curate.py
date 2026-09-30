@@ -2103,11 +2103,13 @@ def run_curate(ctx: CurateContext) -> list[StageOutcome]:
             # A remediation naming the global default would send the
             # operator to pull a model that is already installed while the
             # one actually missing stays missing -- actively wrong guidance,
-            # which is worse than none.
+            # which is worse than none. `install_hint` (issue #1057 Phase
+            # 13b) branches on `ctx.cfg.backend` for the actionable clause;
+            # for `ollama` it stays byte-identical.
             notice = (
                 f"unavailable -- model '{model}' is not "
-                f"installed. Pull it with `ollama pull {model}`, then "
-                "try again."
+                f"installed. {application_backends.install_hint(ctx.cfg, model)}, "
+                "then try again."
             )
             ctx.ollama_unavailable_notices[model] = notice
             outcome = _availability_outcome(ctx, notice)

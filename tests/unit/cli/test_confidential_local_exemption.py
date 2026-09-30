@@ -143,9 +143,16 @@ def test_resolve_local_exemption_reads_the_client_not_the_environment(
     assert main_mod._resolve_local_exemption(local_client, _cfg(True)) is True
 
 
-def _cfg(exemption: bool) -> config.Config:
+def _cfg(
+    exemption: bool,
+    *,
+    backend: str = config.DEFAULT_BACKEND,
+    base_url: str | None = None,
+    embedding_base_url: str | None = None,
+) -> config.Config:
     """A `Config` differing from the packaged defaults only in
-    `confidential_local_exemption`."""
+    `confidential_local_exemption` (and, for Phase 13b's endpoint_label
+    tests, `backend`/`base_url`/`embedding_base_url`)."""
     return config.Config(
         model=config.DEFAULT_MODEL,
         review=config.DEFAULT_REVIEW,
@@ -166,6 +173,9 @@ def _cfg(exemption: bool) -> config.Config:
         concurrent_extraction=config.DEFAULT_CONCURRENT_EXTRACTION,
         type_sensitivity_defaults=dict(config.DEFAULT_TYPE_SENSITIVITY_DEFAULTS),
         rationale_language=config.DEFAULT_RATIONALE_LANGUAGE,
+        backend=backend,
+        base_url=base_url,
+        embedding_base_url=embedding_base_url,
     )
 
 
@@ -185,7 +195,9 @@ def test_advisory_is_driven_by_the_locality_it_is_handed(
     monkeypatch.setenv("OLLAMA_HOST", _REMOTE_HOST)
 
     main_mod._warn_if_nonlocal_embed_host(
-        "ingest", BackendHostLocality(is_local=True, display_host="localhost:11434")
+        "ingest",
+        BackendHostLocality(is_local=True, display_host="localhost:11434"),
+        _cfg(True),
     )
 
     assert capsys.readouterr().err == ""
@@ -193,11 +205,88 @@ def test_advisory_is_driven_by_the_locality_it_is_handed(
     main_mod._warn_if_nonlocal_embed_host(
         "ingest",
         BackendHostLocality(is_local=False, display_host="remote.example:11434"),
+        _cfg(True),
     )
 
     captured = capsys.readouterr()
     assert "embedding host 'remote.example:11434' is not this machine" in captured.err
     assert "s3cret" not in captured.err
+
+
+def test_advisory_names_ollama_host_byte_identical(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """For `backend="ollama"`, the advisory's parenthetical still names
+    `OLLAMA_HOST` literally -- byte-identical to before `endpoint_label`
+    replaced the hardcoded string (task 13.24, regression pin)."""
+    monkeypatch.setenv("OLLAMA_HOST", _REMOTE_HOST)
+
+    main_mod._warn_if_nonlocal_embed_host(
+        "ingest",
+        BackendHostLocality(is_local=False, display_host="remote.example:11434"),
+        _cfg(True),
+    )
+
+    captured = capsys.readouterr()
+    assert "is not this machine (OLLAMA_HOST)" in captured.err
+
+
+def test_advisory_names_base_url_for_openai_compatible(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """For `backend="openai-compatible"`, the advisory's parenthetical
+    names `base_url`/`embedding_base_url` -- never the literal `OLLAMA_HOST`
+    string (task 13.24). RED today: `_warn_if_nonlocal_embed_host` doesn't
+    even accept a `cfg` parameter yet."""
+    cfg = _cfg(
+        True,
+        backend="openai-compatible",
+        base_url="http://example.com:8080",
+        embedding_base_url="http://embed.example.com:9000",
+    )
+
+    main_mod._warn_if_nonlocal_embed_host(
+        "ingest",
+        BackendHostLocality(is_local=False, display_host="embed.example.com:9000"),
+        cfg,
+    )
+
+    captured = capsys.readouterr()
+    assert "is not this machine (embedding_base_url)" in captured.err
+    assert "OLLAMA_HOST" not in captured.err
+
+
+def test_withheld_advisory_names_ollama_host_byte_identical(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`_warn_withheld_from_embedding` for `backend="ollama"` still says
+    `Point OLLAMA_HOST at this machine` -- byte-identical (task 13.24/13.25
+    regression pin). `OLLAMA_HOST` set, matching the only real-world case a
+    withheld-confidential document exists at all: `should_block` only
+    withholds when the resolved endpoint is genuinely non-local."""
+    monkeypatch.setenv("OLLAMA_HOST", _REMOTE_HOST)
+
+    main_mod._warn_withheld_from_embedding("ingest", 2, _cfg(True))
+
+    captured = capsys.readouterr()
+    assert "Point OLLAMA_HOST at this machine" in captured.err
+
+
+def test_withheld_advisory_names_base_url_for_openai_compatible(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`_warn_withheld_from_embedding` for `backend="openai-compatible"`
+    names `embedding_base_url`/`base_url`, never `OLLAMA_HOST` (task
+    13.24/13.25). RED today: `_warn_withheld_from_embedding` doesn't accept
+    a `cfg` parameter yet."""
+    cfg = _cfg(True, backend="openai-compatible", base_url="http://example.com:8080")
+
+    main_mod._warn_withheld_from_embedding("ingest", 2, cfg)
+
+    captured = capsys.readouterr()
+    assert "Point base_url at this machine" in captured.err
+    assert "OLLAMA_HOST" not in captured.err
 
 
 # --- each seam receives the resolved boolean -------------------------------
@@ -686,6 +775,7 @@ def test_embed_after_ingest_threads_the_resolved_exemption(
     main_mod._embed_after_ingest(
         config.WorkspaceLayout(tmp_path),
         client,
+        cfg=cfg,
         model_tag=cfg.embedding_model,
         local_exemption=main_mod._resolve_local_exemption(client, cfg),
     )
@@ -712,6 +802,7 @@ def test_embed_after_ingest_defaults_to_withholding(
     main_mod._embed_after_ingest(
         config.WorkspaceLayout(tmp_path),
         OllamaClient(model=cfg.embedding_model),
+        cfg=cfg,
         model_tag=cfg.embedding_model,
     )
 

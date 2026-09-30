@@ -62,27 +62,78 @@ def _count_definitions(name: str) -> int:
 
 
 def test_delegators_are_single_line_and_singly_defined() -> None:
-    """`cli.main._chat_client` and `_resolve_local_exemption` are each a
-    single `return` statement calling `application_backends.*`; a
-    source-wide AST/grep confirms each function's real body (`chat_client`,
-    `resolve_local_exemption`) has exactly one definition under `src/`.
-    Covers "The CLI keeps one-line delegators under their existing names"
-    and "The CLI's observable behavior, and its test seam, are unaffected"
-    (structural half). RED today: `_chat_client`/`_resolve_local_exemption`
-    do not exist as delegators yet -- today's bodies are the full
-    implementations. Kills leaving a second copy of either body after the
-    move."""
+    """`cli.main._resolve_local_exemption` is a single `return` statement
+    calling `application_backends.resolve_local_exemption`; a source-wide
+    AST/grep confirms its real body has exactly one definition under
+    `src/`. Covers "The CLI keeps one-line delegators under their existing
+    names" and "The CLI's observable behavior, and its test seam, are
+    unaffected" (structural half). Kills leaving a second copy of the real
+    body after the move.
+
+    `_chat_client`/`_embed_client` are NOT covered here since issue #1057
+    Phase 13b (task 13.27): both now call `_maybe_warn_insecure_key(cfg)`
+    before delegating, so they are no longer single-statement -- their own
+    shape is pinned by `test_chat_and_embed_client_delegate_and_warn`
+    below instead. The mcp spec's "one-line delegator" MUST names
+    `_chat_client` and `_resolve_local_exemption` only; `_embed_client` was
+    never in that MUST clause."""
+    node = _delegator_function("_resolve_local_exemption")
+    body = _non_docstring_body(node)
+    assert len(body) == 1, (
+        f"_resolve_local_exemption must be a single statement: {body}"
+    )
+    (stmt,) = body
+    assert isinstance(stmt, ast.Return), (
+        "_resolve_local_exemption must be a bare return"
+    )
+    call = stmt.value
+    assert isinstance(call, ast.Call), "_resolve_local_exemption must return a call"
+    func = call.func
+    assert isinstance(func, ast.Attribute), (
+        "_resolve_local_exemption must call an attribute"
+    )
+    assert func.attr == "resolve_local_exemption", (
+        f"_resolve_local_exemption must call "
+        f"application_backends.resolve_local_exemption, found {ast.dump(func)}"
+    )
+    assert _count_definitions("resolve_local_exemption") == 1, (
+        "resolve_local_exemption must be defined exactly once under src/"
+    )
+
+
+def test_chat_and_embed_client_delegate_and_warn() -> None:
+    """`_chat_client`/`_embed_client` (issue #1057 Phase 13b, task 13.27)
+    are each exactly TWO statements: a bare `_maybe_warn_insecure_key(cfg)`
+    call, then a bare `return application_backends.<real_name>(...)` --
+    never reimplementing dispatch logic of their own. Each real body
+    (`chat_client`, `embed_client`) still has exactly one definition under
+    `src/`. RED today: `_maybe_warn_insecure_key` doesn't exist and neither
+    delegator calls it."""
     for delegator, real_name in (
         ("_chat_client", "chat_client"),
-        ("_resolve_local_exemption", "resolve_local_exemption"),
         ("_embed_client", "embed_client"),
     ):
         node = _delegator_function(delegator)
         body = _non_docstring_body(node)
-        assert len(body) == 1, f"{delegator} must be a single statement: {body}"
-        (stmt,) = body
-        assert isinstance(stmt, ast.Return), f"{delegator} must be a bare return"
-        call = stmt.value
+        assert len(body) == 2, f"{delegator} must be exactly two statements: {body}"
+        warn_stmt, return_stmt = body
+        assert isinstance(warn_stmt, ast.Expr), (
+            f"{delegator}'s first statement must be a bare call expression"
+        )
+        assert isinstance(warn_stmt.value, ast.Call), (
+            f"{delegator}'s first statement must be a call"
+        )
+        warn_func = warn_stmt.value.func
+        assert isinstance(warn_func, ast.Name), (
+            f"{delegator} must call a bare name first, found {ast.dump(warn_func)}"
+        )
+        assert warn_func.id == "_maybe_warn_insecure_key", (
+            f"{delegator} must call _maybe_warn_insecure_key first, found {warn_func.id}"
+        )
+        assert isinstance(return_stmt, ast.Return), (
+            f"{delegator} must end in a bare return"
+        )
+        call = return_stmt.value
         assert isinstance(call, ast.Call), f"{delegator} must return a call"
         func = call.func
         assert isinstance(func, ast.Attribute), f"{delegator} must call an attribute"

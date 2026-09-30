@@ -22,6 +22,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner, _NamedTextIOWrapper
 
+from openkos import config
 from openkos.cli import main as main_mod
 from openkos.cli.main import app
 from openkos.graph import sqlite_graph
@@ -32,6 +33,11 @@ from openkos.llm.ollama import (
     OllamaError,
     OllamaModelNotFound,
     OllamaUnavailable,
+)
+from openkos.llm.openai_compatible import (
+    OpenAICompatibleEmbeddingDimensionMismatch,
+    OpenAICompatibleModelNotFound,
+    OpenAICompatibleUnavailable,
 )
 from openkos.retrieval.answer import NO_MATCH, AnswerResult, Citation
 from openkos.state import fts, vectorstore
@@ -1270,6 +1276,99 @@ def test_query_specific_ollama_subclasses_do_not_fall_through_to_generic(
     # remediation proves the mismatch reached its OWN handler (issue #209).
     assert result.stderr != f"openkos query: failed -- {mismatch_message}.\n"
     assert "openkos.yaml" in result.stderr
+
+
+def _init_openai_compatible_workspace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    base_url: str = "http://127.0.0.1:8000",
+) -> None:
+    """`_init_workspace` plus `config.read_config` monkeypatched to return a
+    `backend="openai-compatible"` `Config` -- `SELECTABLE_BACKENDS` still
+    refuses that value in a REAL `openkos.yaml` until Phase 14 (design
+    Decision 10), so every openai-compatible CLI-wording test in this phase
+    bypasses `read_config`'s own validation exactly like `test_backends.py`/
+    `test_doctor_service.py` already do."""
+    import dataclasses
+
+    _init_workspace(tmp_path, monkeypatch)
+    real_cfg = config.read_config(tmp_path)
+    oc_cfg = dataclasses.replace(
+        real_cfg, backend="openai-compatible", base_url=base_url
+    )
+    monkeypatch.setattr(config, "read_config", lambda _root: oc_cfg)
+
+
+def test_query_openai_compatible_unreachable_no_ollama_wording(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`cfg.backend == "openai-compatible"` and `answer()` raises
+    `OpenAICompatibleUnavailable`: stderr states the backend is not
+    responding, names the configured endpoint, advises verifying the server
+    is running, also names `openkos doctor`, and contains NO `ollama serve`
+    reference (task 13.16, query-command spec "openai-compatible backend
+    unreachable"). RED today: `query`'s ladder always uses `ollama serve`
+    wording regardless of `cfg.backend`."""
+    _init_openai_compatible_workspace(
+        tmp_path, monkeypatch, base_url="http://127.0.0.1:9009"
+    )
+
+    def _raise_unavailable(*args: object, **kwargs: object) -> AnswerResult:
+        raise OpenAICompatibleUnavailable("server not reachable")
+
+    monkeypatch.setattr("openkos.application.query.answer", _raise_unavailable)
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code != 0
+    assert "127.0.0.1:9009" in result.stderr
+    assert "ollama serve" not in result.stderr
+    assert "openkos doctor" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
+def test_query_openai_compatible_model_not_found_no_ollama_pull(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`cfg.backend == "openai-compatible"` and `answer()` raises
+    `OpenAICompatibleModelNotFound`: stderr names the configured model and
+    advises making it available on the configured server, with no `ollama
+    pull` reference (task 13.16)."""
+    _init_openai_compatible_workspace(tmp_path, monkeypatch)
+
+    def _raise_model_not_found(*args: object, **kwargs: object) -> AnswerResult:
+        raise OpenAICompatibleModelNotFound("model 'gemma2' not found")
+
+    monkeypatch.setattr("openkos.application.query.answer", _raise_model_not_found)
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code != 0
+    assert "ollama pull" not in result.stderr
+    assert "openkos doctor" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
+def test_query_openai_compatible_dimension_mismatch_same_remedy_as_ollama(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`cfg.backend == "openai-compatible"` and `answer()` raises
+    `OpenAICompatibleEmbeddingDimensionMismatch`: same permanent-remedy
+    wording as `ollama` (task 13.16, no backend branch needed here since
+    the message never mentions a backend-specific command)."""
+    _init_openai_compatible_workspace(tmp_path, monkeypatch)
+
+    def _raise_dimension_mismatch(*args: object, **kwargs: object) -> AnswerResult:
+        raise OpenAICompatibleEmbeddingDimensionMismatch("wrong embedding width.")
+
+    monkeypatch.setattr("openkos.application.query.answer", _raise_dimension_mismatch)
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code != 0
+    assert "openkos.yaml" in result.stderr
+    assert result.stdout == ""
 
 
 def test_query_fts_unavailable_maps_to_exit_one(

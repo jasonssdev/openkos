@@ -23,6 +23,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from openkos import config as config_mod
 from openkos.cli import main
 from openkos.cli.main import app
 from openkos.config import WorkspaceLayout
@@ -34,6 +35,10 @@ from openkos.llm.ollama import (
     OllamaError,
     OllamaModelNotFound,
     OllamaUnavailable,
+)
+from openkos.llm.openai_compatible import (
+    OpenAICompatibleModelNotFound,
+    OpenAICompatibleUnavailable,
 )
 from openkos.model import okf
 from openkos.model.relations import ASYMMETRIC_RELATION_TYPES
@@ -578,6 +583,87 @@ def test_suggest_relations_model_not_found_maps_to_exit_one(
     assert "is not installed" in result.stderr
     assert f"ollama pull {configured_model}" in result.stderr
     assert "openkos doctor" not in result.stderr
+    assert "Traceback" not in result.stderr
+    assert _snapshot(tmp_path) == before
+
+
+def _init_openai_compatible_workspace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    base_url: str = "http://127.0.0.1:8000",
+) -> None:
+    """`_init_workspace` plus `config.read_config` monkeypatched to a
+    `backend="openai-compatible"` `Config` -- `SELECTABLE_BACKENDS` still
+    refuses that value in a REAL `openkos.yaml` until Phase 14, so this
+    bypasses `read_config`'s own validation, mirroring `test_query.py`'s
+    identical helper for this same purpose."""
+    import dataclasses
+
+    _init_workspace(tmp_path, monkeypatch)
+    real_cfg = config_mod.read_config(tmp_path)
+    oc_cfg = dataclasses.replace(
+        real_cfg, backend="openai-compatible", base_url=base_url
+    )
+    monkeypatch.setattr(config_mod, "read_config", lambda _root: oc_cfg)
+
+
+def test_suggest_relations_openai_compatible_unreachable_no_ollama_wording(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`cfg.backend == "openai-compatible"` and `suggest_relations()` raises
+    `OpenAICompatibleUnavailable`: stderr advises verifying the configured
+    server is running at its endpoint, names `openkos doctor`, and contains
+    NO `ollama serve` reference (task 13.18, llm-edge-production delta spec).
+
+    Deviation from tasks.md's suggested new-file name
+    (`tests/unit/cli/test_llm_edge_production.py`): this project's existing
+    test module for the `suggest-relations` verb is `test_suggest_relations.py`
+    -- extended here rather than creating a second file for the same verb."""
+    _init_openai_compatible_workspace(
+        tmp_path, monkeypatch, base_url="http://127.0.0.1:9009"
+    )
+    _patch_candidate_edges(
+        monkeypatch, [Edge(source_id="concepts/a", target_id="concepts/b")]
+    )
+    before = _snapshot(tmp_path)
+
+    def _raise_unavailable(edges: object, **kwargs: object) -> EdgeSuggestionBatch:
+        raise OpenAICompatibleUnavailable("server not reachable")
+
+    monkeypatch.setattr("openkos.cli.main.suggest_edge_types", _raise_unavailable)
+
+    result = runner.invoke(app, ["suggest-relations", "--auto"])
+
+    assert result.exit_code != 0
+    assert "127.0.0.1:9009" in result.stderr
+    assert "ollama serve" not in result.stderr
+    assert "openkos doctor" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert _snapshot(tmp_path) == before
+
+
+def test_suggest_relations_openai_compatible_model_not_found_no_ollama_pull(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`cfg.backend == "openai-compatible"` and `suggest_relations()` raises
+    `OpenAICompatibleModelNotFound`: no `ollama pull` reference (task
+    13.18)."""
+    _init_openai_compatible_workspace(tmp_path, monkeypatch)
+    _patch_candidate_edges(
+        monkeypatch, [Edge(source_id="concepts/a", target_id="concepts/b")]
+    )
+    before = _snapshot(tmp_path)
+
+    def _raise_model_not_found(edges: object, **kwargs: object) -> EdgeSuggestionBatch:
+        raise OpenAICompatibleModelNotFound("model not found")
+
+    monkeypatch.setattr("openkos.cli.main.suggest_edge_types", _raise_model_not_found)
+
+    result = runner.invoke(app, ["suggest-relations", "--auto"])
+
+    assert result.exit_code != 0
+    assert "ollama pull" not in result.stderr
     assert "Traceback" not in result.stderr
     assert _snapshot(tmp_path) == before
 

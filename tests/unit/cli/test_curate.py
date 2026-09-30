@@ -30,6 +30,7 @@ from openkos.cli.main import app
 from openkos.graph import sqlite_graph
 from openkos.llm.base import EMBED_DIM
 from openkos.llm.ollama import OllamaError, OllamaModelNotFound, OllamaUnavailable
+from openkos.llm.openai_compatible import OpenAICompatibleModelNotFound
 from openkos.model import okf
 from openkos.resolution.adjudication import (
     AdjudicatedCandidate,
@@ -213,12 +214,18 @@ def _fake_ctx(
     seed: int | None = config.DEFAULT_SEED,
     accepted_stages: frozenset[str] = frozenset(),
     backend_factories: application_backends.BackendFactories | None = None,
+    backend: str = config.DEFAULT_BACKEND,
+    base_url: str | None = None,
 ) -> curate.CurateContext:
     return curate.CurateContext(
         root=tmp_path,
         layout=_FakeLayout(tmp_path),  # type: ignore[arg-type]
         cfg=_FakeConfig(  # type: ignore[arg-type]
-            models=models, temperature=temperature, seed=seed
+            models=models,
+            temperature=temperature,
+            seed=seed,
+            backend=backend,
+            base_url=base_url,
         ),
         auto=auto,
         accepted_stages=accepted_stages,
@@ -934,6 +941,47 @@ def test_ollama_model_not_found_also_short_circuits(
     # #515 re-keyed this from a run-scoped flag to a per-model map; the
     # assertion is the same claim, addressed by the model that failed.
     assert list(ctx.ollama_unavailable_notices) == ["stub-model"]
+
+
+def test_openai_compatible_model_not_found_no_ollama_pull_remediation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`ctx.cfg.backend == "openai-compatible"` and a stage's `run` raises
+    `OpenAICompatibleModelNotFound`: the sequencer's notice names the
+    resolved model and advises making it available on the configured
+    server, with no `ollama pull` reference (task 13.22, curate-command
+    delta spec "A missing task model on the openai-compatible backend fails
+    only its own stage"). RED today: the sequencer's `except
+    BackendModelNotFound` handler always says `ollama pull`."""
+    _patch_stdin_isatty(monkeypatch, True)
+    monkeypatch.setattr("typer.confirm", lambda *a, **k: True)
+
+    def _failing_run(
+        ctx: curate.CurateContext, probe: curate.StageProbe
+    ) -> curate.StageOutcome:
+        raise OpenAICompatibleModelNotFound("model missing")
+
+    stage = _fake_stage(
+        "First",
+        probe=lambda ctx: curate.StageProbe(items=(1,), llm_calls=1),
+        run=_failing_run,
+        writes=False,
+    )
+    monkeypatch.setattr(curate, "_STAGES", (stage,))
+
+    ctx = _fake_ctx(
+        Path("unused-root"),
+        auto=True,
+        backend="openai-compatible",
+        base_url="http://127.0.0.1:8000",
+    )
+    outcomes = curate.run_curate(ctx)
+
+    assert list(ctx.ollama_unavailable_notices) == ["stub-model"]
+    notice = ctx.ollama_unavailable_notices["stub-model"]
+    assert "ollama pull" not in notice
+    assert "stub-model" in notice
+    assert outcomes[0].status == "unavailable"
 
 
 def test_generic_ollama_error_fails_only_that_stage(
