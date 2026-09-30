@@ -5465,10 +5465,13 @@ def _ingest_single(
         source_plan = application_ingest.compose_source_document(
             raw_content=raw_content,
             source_stem=src.stem,
-            source_display_path=str(src),
+            # The raw copy's basename, never the absolute import path: the
+            # description is committed, embedded and served over MCP, and the
+            # original location is not knowledge about the source (#1129).
+            source_display_path=Path(resource).name,
             # A SECOND path, deliberately. `source_display_path` names the RAW
             # source and feeds the Source document's description ("Raw source
-            # imported from '<src>'"); the refusal messages must instead name
+            # imported from '<name>'"); the refusal messages must instead name
             # the SOURCE DOCUMENT, because that is the file whose frontmatter
             # failed to parse and the one the operator has to open. The
             # pre-move code used two different values here and collapsing them
