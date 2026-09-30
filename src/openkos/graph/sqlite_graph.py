@@ -119,11 +119,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
 from typing import Final, Protocol
-from urllib.parse import quote
 
 from openkos.graph.base import Edge
 from openkos.model import okf
 from openkos.state import derived
+from openkos.state.readonly import open_read_only
 
 
 class ProximityPairLike(Protocol):
@@ -738,8 +738,7 @@ def open_graph_store_readonly(path: Path) -> "SqliteGraphStore | None":
     """
     if not path.exists():
         return None
-    uri = f"file:{quote(str(path))}?mode=ro"
-    conn = sqlite3.connect(uri, uri=True)
+    conn = open_read_only(path)
     try:
         conn.execute("SELECT 1 FROM nodes LIMIT 1")
     except BaseException:
