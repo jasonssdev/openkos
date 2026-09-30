@@ -2,8 +2,9 @@
 
 Mirrors `tests/unit/resolution/test_layering.py`'s AST-based canonical-import
 guard, applied to the canonical layer's own `bundle` package: `bundle` MUST
-NOT import `openkos.graph` (AGENTS.md:41 -- the canonical layer, `model` /
-`bundle` / `state`, never depends on the derived layer)."""
+NOT import `openkos.graph` (AGENTS.md's Layering rule -- the canonical layer,
+`model` / `bundle` / `vcs`, never depends on the derived layer, which is
+`state` / `retrieval` / `graph`)."""
 
 import ast
 from pathlib import Path

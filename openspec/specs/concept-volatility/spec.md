@@ -91,16 +91,62 @@ registry) OR its tier value is not one of `static`, `slow`, `volatile`.
 - THEN the result is identical to S1 behavior with no `type_tiers` step
   present
 
+### Requirement: `volatility_windows` Config Maps A Tier To A Window
+
+The system MUST support an optional `volatility_windows:` map in
+`openkos.yaml` (tier name → duration), read-only, absent-default `{}`, that
+sets the stale-stamp window each tier resolves to. Only the `slow` and
+`volatile` keys are read; `static` has no window (it is never flagged) and
+any other key is ignored. WHEN a tier's key is absent, its packaged default
+MUST apply: `90d` for `slow` and `7d` for `volatile`. A duration MUST be a
+positive integer followed by `d` (days) or `w` (weeks, seven days each),
+with surrounding whitespace tolerated. WHEN a present value is not a valid
+duration (a non-string, a zero or negative count, or any other shape), the
+system MUST NOT raise: that tier MUST resolve to the packaged default
+freshness window, `7d`, and `lint` MUST report a notice naming the invalid
+value. WHEN `volatility_windows` is not a mapping at all (a list or a
+scalar), it MUST be treated as `{}`.
+
+#### Scenario: A configured tier window replaces the packaged default
+
+- GIVEN `volatility_windows: {slow: 30d}` and a `Concept` (registry tier
+  `slow`) with no `volatility` frontmatter
+- WHEN its window is resolved
+- THEN the window is 30 days, and the `volatile` window is still 7 days
+
+#### Scenario: Absent map uses the packaged tier defaults
+
+- GIVEN `openkos.yaml` has no `volatility_windows` key
+- WHEN a `slow`-tier and a `volatile`-tier concept have their windows
+  resolved
+- THEN the windows are 90 days and 7 days respectively
+
+#### Scenario: An invalid duration degrades with a notice, never raises
+
+- GIVEN `volatility_windows: {volatile: soon}` and a `volatile`-tier concept
+- WHEN its window is resolved
+- THEN the window is the packaged default freshness window (7 days), a
+  notice names the invalid value, and no exception is raised
+
+#### Scenario: A `static` key is not a window
+
+- GIVEN `volatility_windows: {static: 1d}` and a `static`-tier concept
+- WHEN freshness is evaluated for that concept
+- THEN it is never flagged stale
+
 ### Requirement: Deterministic, Never-Raising Window Resolution
 
 Resolving a concept's effective volatility tier and window MUST follow the
 precedence: per-concept `volatility` override → `type_tiers` config
 override → per-type registry default → global `freshness_window` fallback.
+The resolved tier MUST then map to its window: `static` → never flagged;
+`slow` and `volatile` → the tier's `volatility_windows` entry (or its
+packaged default); the fallback tier → the global `freshness_window`.
 Resolution MUST be a pure, deterministic function of concept data, an
 injected clock, and config; it MUST NOT raise on an unknown type, an
-invalid `volatility` value, an invalid or unknown `type_tiers` entry, or
-missing config — each such case MUST degrade to the next step in the
-precedence chain.
+invalid `volatility` value, an invalid or unknown `type_tiers` entry, an
+invalid `volatility_windows` duration, or missing config — each such case
+MUST degrade to the next step in the precedence chain.
 
 #### Scenario: Unknown or invalid volatility degrades without raising
 
