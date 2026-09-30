@@ -91,6 +91,18 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   or every chunk failing even after its retry, still degrades the whole
   source exactly as before.
 
+### Security
+
+- A backend classified local no longer honours `http_proxy`/`https_proxy`
+  ([#1127](https://github.com/jasonssdev/openkos/issues/1127)). Locality is
+  judged from the URL literal, but urllib's default proxy handling does not
+  exempt `localhost` or `127.0.0.1` unless `no_proxy` lists them, so on a
+  machine with a system-wide proxy the confidential local exemption sent
+  confidential text (and the openai-compatible `Authorization` key) through
+  the proxy while treating it as never leaving the device. Both clients now
+  send a loopback host directly; a non-local host still honours the
+  environment proxy.
+
 ## [0.2.14] - 2026-09-11
 
 Thirty-seven commits closing twenty-two issues, and the release has two
