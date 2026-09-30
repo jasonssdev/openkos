@@ -7,8 +7,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 and commit history follows [Conventional Commits](https://www.conventionalcommits.org/).
 
 > OpenKOS is **alpha** — it runs, and the API may still change. The package is
-> published on [PyPI](https://pypi.org/project/openkos/); the MVP 1 (Compiler)
-> and MVP 2 (Graph and Memory) arcs are complete. The project's vision,
+> published on [PyPI](https://pypi.org/project/openkos/); the MVP 1 (Compiler),
+> MVP 2 (Graph and Memory), and MVP 3 (Ask Surface) arcs are complete. The project's vision,
 > architecture, and design live in the documents under
 > [`docs/`](https://github.com/jasonssdev/openkos/tree/main/docs).
 

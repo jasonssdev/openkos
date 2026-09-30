@@ -190,13 +190,13 @@ The result: connecting a bundle to GitHub is safe by default — you push the kn
 Local-first constrains *where the data and compute live* — on the user's machine, offline, theirs — not the *interface technology*. What breaks local-first is a **cloud-hosted** app that holds users' data on someone else's server, not the browser or web tech per se. So OpenKOS is not limited to a single kind of UI. Several delivery paths are all local-first:
 
 - **Desktop app** (Tauri/Electron/native) — one installer and an icon, no terminal; the friendliest path for non-technical users, and where a runtime and model can be bundled. Note that a Tauri/Electron app *is* a web UI in a native shell, so "web vs desktop" is a false dichotomy at the technical level.
-- **Local web UI (`localhost`)** — the engine serves a browser UI from its own local API (the FastAPI layer). Nothing leaves the machine; this is how Jupyter, Ollama, and most self-hosted tools work. Best wrapped inside the desktop app so the user never starts a server by hand.
+- **Local web UI (`localhost`)** — the engine would serve a browser UI from its own local API (a Horizon item; not built). Nothing leaves the machine; this is how Jupyter, Ollama, and most self-hosted tools work. Best wrapped inside the desktop app so the user never starts a server by hand.
 - **Static HTML explorer** — a single self-contained HTML file that reads a bundle with no server (the approach of Google's OKF visualizer). Zero install, ideal for browsing knowledge read-only.
 - **Editor plugin** — because the bundle is plain markdown, Obsidian and VS Code already act as a GUI over the knowledge; a plugin adds OpenKOS actions inside a tool the user already uses.
 - **Chat / agent (MCP)** — the user "just talks to" OpenKOS from an AI client. For some non-technical users this is the lowest-friction interface of all.
 - **CLI** — for technical users and automation.
 
-The key architectural point: all of these are **thin adapters over the same local engine**. Today `cli` and `mcp` both exist; `api` remains MVP 3 work. The application services under `application/` are what let `mcp` be a thin adapter rather than a second implementation of the CLI's read verbs — the same reason a future `api` would extract nothing new. Adding a front-end never touches the core; UIs stack on top of one engine. For non-technical users the likely order is desktop app first, then chat/MCP, then an editor plugin.
+The key architectural point: all of these are **thin adapters over the same local engine**. Today `cli` and `mcp` both exist; a local `api` is a Horizon item. The application services under `application/` are what let `mcp` be a thin adapter rather than a second implementation of the CLI's read verbs — the same reason a future `api` would extract nothing new. Adding a front-end never touches the core; UIs stack on top of one engine. For non-technical users the likely order is desktop app first, then chat/MCP, then an editor plugin.
 
 The one thing outside the local-first spirit is a **cloud-hosted, multi-tenant** service holding users' knowledge. A legitimate middle ground is **self-hosting** — the user runs the local web UI on their *own* server or VPS: still their data and their machine, just remote, rather than someone else's cloud.
 
@@ -206,15 +206,15 @@ Nothing in this section exists yet. It is kept separate from everything above so
 a reader can never mistake a plan for a module, and it is deliberately short —
 dates and scope belong to [`roadmap.md`](roadmap.md), not here.
 
-- **`api/` (MVP 3).** A thin async adapter over the synchronous application
+- **`api/` (Horizon).** A thin async adapter over the synchronous application
   services, following the same pattern `mcp/` already ships: an adapter built
   on Typer command internals would duplicate behaviour and drift.
 - **A published extension surface.** `Producer`/`Consumer` interfaces and an
   entry-point group for third-party ingesters and exporters are a roadmap item
-  (MVP 3 and Horizon). No interface, protocol, or entry point for them exists
+  (a stable Python API and the extension surface are MVP 5). No interface, protocol, or entry point for them exists
   today, and adopting one would need its own ADR.
-- **Format and store options.** A second vector backend, full OKF import/export,
-  and memory projections are all named in the roadmap and unbuilt.
+- **Format and store options.** A second vector backend, full OKF import/export
+  (MVP 5), and memory projections (Horizon) are all named in the roadmap and unbuilt.
 
 Two long-standing entries in this document turned out to be decisions rather
 than pending work, and are recorded here so they are not re-proposed as gaps: a

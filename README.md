@@ -9,7 +9,7 @@
 
 OpenKOS turns your scattered text into a living, portable knowledge base your AI agents can actually use — compiled once, kept current, and stored as plain [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf) files so it is never locked to any app, model, or vendor.
 
-> **Project status: alpha.** The Compiler and the Graph-and-Memory arcs (MVP 1 and MVP 2) are complete and shipped. The API may still change between releases, but OpenKOS is published and installable now. Early contributors and feedback are welcome — see [Contributing](#contributing).
+> **Project status: alpha.** The Compiler, the Graph-and-Memory, and the Ask Surface arcs (MVP 1, MVP 2, and MVP 3) are complete and shipped. The API may still change between releases, but OpenKOS is published and installable now. Early contributors and feedback are welcome — see [Contributing](#contributing).
 
 ---
 
@@ -79,7 +79,7 @@ Retrieval (RAG) doesn't fix this: it re-reads your raw documents on every questi
 
 Instead of retrieving from raw sources every time, an LLM can *incrementally build and maintain* a persistent, interlinked knowledge base that sits between you and your sources — Andrej Karpathy's [LLM Wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) pattern. Knowledge is compiled once and then kept current. It compounds.
 
-In June 2026 Google Cloud published a vendor-neutral specification for that pattern: the **Open Knowledge Format (OKF)** — a directory of markdown files with YAML frontmatter, portable across any tool. It is young (v0.1, still a draft) but open, minimal, and gaining adoption. Google's framing was: *"What's missing is a format, not another service,"* and they invited the community to build producers and consumers.
+In June 2026 Google Cloud published a vendor-neutral specification for that pattern: the **Open Knowledge Format (OKF)** — a directory of markdown files with YAML frontmatter, portable across any tool. It is young (v0.2, still pre-1.0) but open, minimal, and gaining adoption. Google's framing was: *"What's missing is a format, not another service,"* and they invited the community to build producers and consumers.
 
 **OpenKOS is that producer and consumer, built for individuals and running entirely on your machine.**
 

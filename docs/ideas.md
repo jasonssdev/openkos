@@ -33,8 +33,8 @@ the install step entirely, and the agent can drive the verbs on their behalf.
 
 *Cost and risk.* A thin wrapper is cheap; keeping it in step with the whole verb
 surface is not. It also creates a second supported surface with its own bug reports before
-the CLI is stable. Probably belongs after the MCP server, not before it — the
-plugin should wrap the agent-facing API rather than shelling out to the CLI.
+the CLI is stable. The plugin should wrap the MCP server's agent-facing tools
+rather than shelling out to the CLI.
 
 ### Container image and compose file
 
@@ -113,7 +113,8 @@ filling it is the human's.
 
 *Cost and risk.* The failure mode is nagging. A gap report that lists everything
 missing is noise; the value is in a small number of high-confidence gaps, which
-means ranking, which means this depends on pending work being durable first.
+means ranking, which builds on the durable pending-work store
+([ADR-0014](adr/0014-durable-pending-work-stores.md)).
 
 ### Stuck work
 
@@ -125,8 +126,9 @@ and never acted on, a contradiction reported three sessions running.
 a signal about the proposal, not about the user. It should either be escalated
 or dropped, and either requires noticing it.
 
-*Cost and risk.* Depends entirely on pending work being persisted. Not
-independently actionable.
+*Cost and risk.* Builds on the persisted pending-work store
+([ADR-0014](adr/0014-durable-pending-work-stores.md)); not independently
+actionable.
 
 ### Trends over the log
 
@@ -158,8 +160,9 @@ Preferences answer "how does this person work", which is knowledge, changes over
 time, and belongs where knowledge lives. It also stops the engine re-proposing
 things that have already been rejected.
 
-*Cost and risk.* This is the same underlying problem as durable pending work and
-should be designed with it, not separately. Two mechanisms for remembering
+*Cost and risk.* This is the same underlying problem as durable pending work
+([ADR-0014](adr/0014-durable-pending-work-stores.md)) and should be designed
+with it, not separately. Two mechanisms for remembering
 judgments would be worse than none.
 
 ---
@@ -188,8 +191,8 @@ pass that reviews what came in, what is pending, and what went stale.
 Freshness tiers already imply a cadence; nothing in the product currently
 invites one.
 
-*Cost and risk.* Only worth building once there is durable pending work to
-review. Otherwise it is `curate` with a different name.
+*Cost and risk.* Only worth building over the durable pending work the engine
+already keeps ([ADR-0014](adr/0014-durable-pending-work-stores.md)). Otherwise it is `curate` with a different name.
 
 ### Compacting history
 
@@ -341,7 +344,7 @@ conformance to a written spec. A working exchange with an independent
 implementation is evidence, and it is the kind of result the format's authors
 explicitly asked the community to produce.
 
-*Cost and risk.* The specification is a v0.1 draft, so disagreements found in
+*Cost and risk.* The specification is a pre-1.0 draft, so disagreements found in
 such a test may be ambiguities in the spec rather than bugs in either
 implementation. That outcome is still worth having — it just needs to be
 reported as a spec question, not a defect.

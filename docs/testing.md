@@ -235,8 +235,8 @@ grows as the engine does, so this guide deliberately does not list them.
 
 What to verify instead:
 
-- Outside a workspace, *Workspace initialized* is the only check expected to
-  fail or skip.
+- Outside a workspace, *Workspace initialized* is expected to `[FAIL]` and the
+  six checks that need a workspace to inspect are expected to `[SKIP]`.
 - Every failing line prints a remediation — the command that fixes it. A `[FAIL]`
   with no actionable next step is a finding.
 - The exit code is `1` only if a **critical** check fails; a `[SKIP]` never
@@ -875,7 +875,7 @@ knowing the tool, still had to stop and guess what to do next.
 
 ## Not available yet — do not test as missing features
 
-MCP server, local REST API, full OKF import/export, a
+Local REST API, full OKF import/export, a
 `--sensitivity` flag on ingest, a configurable extraction cap, and `--json` or
 structured output on any command other than `adjudicate` (which has `--json`).
 All deferred by design (see [`roadmap.md`](roadmap.md)).
