@@ -152,7 +152,10 @@ def is_contradiction_declined(
 
 
 def is_group_kept_distinct(
-    layout: config.WorkspaceLayout, member_ids: Sequence[str]
+    layout: config.WorkspaceLayout,
+    member_ids: Sequence[str],
+    *,
+    on_warning: Callable[[str], None] | None = None,
 ) -> bool:
     """`True` iff a human has ruled this exact member set distinct and has
     not reopened it (#797) -- the identity twin of
@@ -161,11 +164,14 @@ def is_group_kept_distinct(
     `CandidateGroup.member_ids` arrives sorted, but this is also reachable
     from operator-supplied ids, so it sorts defensively rather than
     trusting the caller -- see this module's docstring ("Twin-sorting
-    contract") for why its twin `is_contradiction_declined` does not."""
+    contract") for why its twin `is_contradiction_declined` does not.
+
+    `on_warning` receives the note for a malformed identity row dropped
+    while reading the sidecar; the caller decides how it is shown."""
     members = tuple(sorted(member_ids))
     key = bundle_decisions.identity_decision_key_for(members)
     for record in bundle_decisions.read_identity_decisions(
-        members[0], layout.bundle_dir
+        members[0], layout.bundle_dir, on_warning=on_warning
     ):
         if record.decision_key == key:
             return record.state == "declined"

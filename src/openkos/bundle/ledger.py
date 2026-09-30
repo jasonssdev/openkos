@@ -237,7 +237,7 @@ def rewrite_entries_at(
         if path.is_file():
             path.unlink()
         return path
-    path.parent.mkdir(parents=True, exist_ok=True)
+    fsio.mkdir_private(path.parent, top=okf.state_dir_of(path))
     container = _encode_container(survivor_id, entries)
     fsio.write_atomic(path, okf.dump_frontmatter(container))
     return path
@@ -259,7 +259,7 @@ def write_pending(
     tree on demand (a survivor's first-ever merge has no sidecar directory
     yet)."""
     pending_path = pending_path_for(concept_id, bundle_dir)
-    pending_path.parent.mkdir(parents=True, exist_ok=True)
+    fsio.mkdir_private(pending_path.parent, top=okf.state_dir_of(pending_path))
     container = _encode_container(survivor_id, entries)
     container["expected_survivor_sha256"] = expected_survivor_sha256
     fsio.write_atomic(pending_path, okf.dump_frontmatter(container))

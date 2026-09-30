@@ -201,6 +201,11 @@ class StatusReport:
     behind that same zero-edge guard, so this is a truthfulness fix, not a
     behaviour change -- `not None` and `not False` agree."""
 
+    warnings: tuple[str, ...] = ()
+    """Complete, already-worded notes about state the read had to work
+    around (today: a malformed identity-decision row it dropped), each once.
+    The service never writes them anywhere; the CLI renders them."""
+
 
 def stale_index_names(
     layout: config.WorkspaceLayout, *, reads: tuple[str, ...]
@@ -360,10 +365,19 @@ def build_status_report(layout: config.WorkspaceLayout) -> StatusReport:
     # not inside `find_exact_title_groups` (deliberately uncapped and
     # shared), so the suppression stays this caller's own choice, exactly
     # as it was inline.
+    warnings: list[str] = []
+
+    def _note(message: str) -> None:
+        # The same sidecar is re-read once per group; say it once.
+        if message not in warnings:
+            warnings.append(message)
+
     exact_title_group_count = sum(
         1
         for group in find_exact_title_groups(layout.bundle_dir)
-        if not application_pending.is_group_kept_distinct(layout, group.member_ids)
+        if not application_pending.is_group_kept_distinct(
+            layout, group.member_ids, on_warning=_note
+        )
     )
 
     # #598: the persisted contradiction verdicts `curate` already paid an
@@ -413,4 +427,5 @@ def build_status_report(layout: config.WorkspaceLayout) -> StatusReport:
         stale_indexes=stale_indexes,
         edge_summary=edge_summary,
         asserted_relations=asserted_relations,
+        warnings=tuple(warnings),
     )

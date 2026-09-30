@@ -28,6 +28,7 @@ from typing import Final, Literal, get_args
 import frontmatter
 import yaml
 
+from openkos import fsio
 from openkos.model.types import BUILDABLE_TYPES as _CONCEPT_TYPES
 
 OKF_VERSION: Final = "0.2"
@@ -80,6 +81,17 @@ ADR-0019 (#984): it carries no `.md` suffix of its own by convention
 suffix. So nothing under it is a concept document by construction, on
 either ground; `lint` separately flags any `.md` file that turns up here as
 a structural-exclusion regression."""
+
+
+def state_dir_of(path: Path) -> Path:
+    """The `.state` directory `path` lives under (the innermost such ancestor),
+    or `path`'s own parent when it is under none. Lets a sidecar writer that
+    holds only a file path create `bundle/.state/` itself owner-only (#1135)."""
+    for candidate in path.parents:
+        if candidate.name == STATE_DIRNAME:
+            return candidate
+    return path.parent
+
 
 _LOG_HEADING_RE: Final = re.compile(r"^## (.+)$", re.MULTILINE)
 """Every level-2 heading in a `log.md`, per §9. `### ` cannot false-match:
@@ -179,6 +191,23 @@ EXTRACTION_STATUS_VALUES: Final[tuple[ExtractionStatus, ...]] = get_args(
 via `ExtractionStatus`/mypy-strict, and readers match a single literal
 (`== EXTRACTION_STATUS_FAILED`) rather than membership-testing this tuple,
 so an unrecognized on-disk value is structurally ignored."""
+
+INGEST_PENDING_KEY: Final = "ingest_pending"
+"""The optional frontmatter key marking a Source whose ingest has not yet run
+to completion (#1136).
+
+`ingest` writes the Source BEFORE the derived objects, `index.md` and
+`log.md` and rewrites it WITHOUT this key as the LAST write of the run, so
+the key's presence is the durable trace of an interrupted run -- exactly the
+"pending marker" shape the merge ledger uses for a torn merge. The marker is
+`true` while pending and ABSENT otherwise; it is never written as `false`.
+
+It is a PENDING marker rather than a completion stamp on purpose: every
+Source written before this key existed lacks it, and those are complete, so
+absence has to mean "complete". A completion stamp would read every existing
+workspace as unfinished and force a full re-extraction of every source ever
+ingested. A frontmatter extension is legal under OKF §4.1 and degrades
+gracefully: a consumer that has never heard of the key ignores it."""
 
 ORIGIN_KEY_KEY: Final = "origin_key"
 """The optional frontmatter key recording WHICH FILE ON DISK a Source was
@@ -1134,6 +1163,25 @@ def refresh_sources(metadata: dict[str, object]) -> dict[str, object]:
     else:
         updated[SOURCES_KEY] = projected
     return updated
+
+
+def is_ingest_pending(metadata: Mapping[str, object]) -> bool:
+    """Whether `metadata` marks an interrupted ingest (`INGEST_PENDING_KEY`).
+
+    Only the literal `true` the engine writes counts. Frontmatter is
+    hand-editable, and any other value (`false`, a string, a number) reads as
+    "not pending" -- the behavior of every Source that never carried the key."""
+    return metadata.get(INGEST_PENDING_KEY) is True
+
+
+def mark_ingest_pending(content: str) -> str:
+    """`content` (a Source document) with `INGEST_PENDING_KEY: true` added to
+    its frontmatter and every other key, and the body, unchanged -- so
+    removing the key again gives back exactly the bytes `build_source_concept`
+    produced, which is what the run's final write emits."""
+    metadata, body = load_frontmatter(content)
+    metadata[INGEST_PENDING_KEY] = True
+    return dump_frontmatter(metadata, body)
 
 
 def build_source_concept(
@@ -3303,8 +3351,46 @@ def _bundle_markdown_candidates(bundle_dir: Path) -> Iterator[Path]:
     account of what the first one dropped. A copy of this glob in each
     would let the halves stop partitioning the same set -- widen it here
     (a second suffix, a different pattern) and both move together or
-    neither does."""
-    yield from sorted(bundle_dir.rglob("*.md"))
+    neither does.
+
+    A path with a symlinked segment below `bundle_dir` is NOT a candidate
+    (#1126): the link can point outside the workspace, so its bytes (and any
+    `sensitivity: public` they carry) are not this bundle's knowledge. Dropping
+    it here, at the enumeration, keeps the walk and its dot-directory
+    complement one partition; `scan_symlinked_bundle_entries` is the separate,
+    reported account of what was dropped, and `lint` surfaces it."""
+    for path in sorted(bundle_dir.rglob("*.md")):
+        if fsio.symlinked_segment(path, bundle_dir) is None:
+            yield path
+
+
+def scan_symlinked_bundle_entries(bundle_dir: Path) -> list[Path]:
+    """Every symlink under `bundle_dir` the bundle walk refuses to read
+    through (#1126): a `.md` leaf link, or a directory link (which is never
+    descended). Names only -- nothing is opened or resolved.
+
+    The complement `lint.check_symlinked_markdown` reports, so an excluded
+    link is surfaced rather than silently absent. Dot-directories are skipped:
+    the walk already excludes them wholesale and `dot-dir-markdown` reports
+    them. Sorted, so the report is stable."""
+    found: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(bundle_dir, followlinks=False):
+        here = Path(dirpath)
+        kept: list[str] = []
+        for name in dirnames:
+            if name.startswith("."):
+                continue
+            if (here / name).is_symlink():
+                found.append(here / name)
+            else:
+                kept.append(name)
+        dirnames[:] = kept
+        found.extend(
+            here / name
+            for name in filenames
+            if name.endswith(".md") and (here / name).is_symlink()
+        )
+    return sorted(found)
 
 
 def iter_bundle_markdown(bundle_dir: Path) -> Iterator[Path]:

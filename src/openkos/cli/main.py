@@ -77,7 +77,11 @@ from openkos.llm.ollama import (
 )
 from openkos.llm.openai_compatible import OpenAICompatibleClient
 from openkos.model import okf, types
-from openkos.model.relations import ASYMMETRIC_RELATION_TYPES, validate_relation_type
+from openkos.model.relations import (
+    ASYMMETRIC_RELATION_TYPES,
+    relation_type_note,
+    validate_relation_type,
+)
 from openkos.model.types import INSIGHT_TYPE as _INSIGHT_TYPE
 from openkos.model.types import TYPE_TO_SECTION as _TYPE_TO_SECTION
 from openkos.resolution import find_candidates_report
@@ -193,6 +197,28 @@ _REMOTE_KEY_NOTICED: set[str] = set()
 """Origins whose non-local API-key notice was already printed this process:
 one line per distinct host, however many clients are built. Reset by
 `tests/unit/conftest.py` alongside `_INSECURE_KEY_WARNING_PRINTED`."""
+
+
+def _echo_warning(message: str) -> None:
+    """Render a warning a library function returned to us, on stderr -- the
+    one place the CLI decides how those notes look. Passed as the
+    `on_warning` callback of the `bundle` readers/writers, which never write
+    to a stream themselves."""
+    typer.echo(message, err=True)
+
+
+def _echo_warning_once() -> Callable[[str], None]:
+    """An `_echo_warning` that says each distinct message once per call
+    site: a reader consulted once per candidate group would otherwise repeat
+    the same note for every group."""
+    seen: set[str] = set()
+
+    def _emit(message: str) -> None:
+        if message not in seen:
+            seen.add(message)
+            _echo_warning(message)
+
+    return _emit
 
 
 def _maybe_warn_insecure_key(cfg: config.Config) -> None:
@@ -376,6 +402,14 @@ def _guard_workspace_lock(
                     err=True,
                 )
                 raise typer.Exit(code=3) from exc
+            except lock.WorkspaceLockUnavailableError as exc:
+                # Exit 1, not 3: a re-run refuses again until the directory is
+                # fixed, so the retry-safe code would be a false promise.
+                typer.echo(
+                    f"openkos {command_name}: refusing to run -- {exc}.",
+                    err=True,
+                )
+                raise typer.Exit(code=1) from exc
             except sqlite3.OperationalError as exc:
                 # The one place a derived store's lock contention (a writer or
                 # opener still blocked after `busy_timeout`) becomes a
@@ -1139,7 +1173,9 @@ def _sweep_decisions_for_ids(bundle_dir: Path, purge_ids: Iterable[str]) -> list
         # #797: the identity list is swept on its own terms -- a
         # keep-distinct ruling names EVERY member, so any member landing in
         # the purge set drops the whole record.
-        identity_records = bundle_decisions.read_identity_decisions_at(decisions_path)
+        identity_records = bundle_decisions.read_identity_decisions_at(
+            decisions_path, on_warning=_echo_warning
+        )
         identity_remaining = [
             record
             for record in identity_records
@@ -5191,6 +5227,18 @@ def ingest(
     )
 
 
+def _refuse_symlinked_destinations(root: Path, destinations: Sequence[Path]) -> None:
+    """Refuse `ingest` when any destination path passes through a symlinked
+    segment below the workspace root (#1126), with the shared D1-shaped reason
+    `require_workspace` uses and exit code 1. Runs before any write, so a
+    refusal leaves the workspace exactly as it was found."""
+    for destination in destinations:
+        reason = config.symlink_boundary_reason(destination, root)
+        if reason is not None:
+            typer.echo(f"openkos ingest: refusing to ingest -- {reason}.", err=True)
+            raise typer.Exit(code=1)
+
+
 def _ingest_single(
     src: Path,
     *,
@@ -5366,6 +5414,11 @@ def _ingest_single(
         raw_dest = layout.raw_dir / name
         sources_dir = layout.bundle_dir / "sources"
         concept_path = sources_dir / f"{slug}.md"
+        # Symlink boundary (#1126): `write_exclusive` opens with mode `x`,
+        # which follows a symlinked PARENT, so a linked `bundle/sources`
+        # carried the source text out of the workspace. Refused here, before
+        # the extraction spends a backend call and before anything is written.
+        _refuse_symlinked_destinations(root, [raw_dest, concept_path])
 
         if destination.disambiguated_from is not None:
             # A destination the user did not name is never chosen silently.
@@ -5463,10 +5516,13 @@ def _ingest_single(
         source_plan = application_ingest.compose_source_document(
             raw_content=raw_content,
             source_stem=src.stem,
-            source_display_path=str(src),
+            # The raw copy's basename, never the absolute import path: the
+            # description is committed, embedded and served over MCP, and the
+            # original location is not knowledge about the source (#1129).
+            source_display_path=Path(resource).name,
             # A SECOND path, deliberately. `source_display_path` names the RAW
             # source and feeds the Source document's description ("Raw source
-            # imported from '<src>'"); the refusal messages must instead name
+            # imported from '<name>'"); the refusal messages must instead name
             # the SOURCE DOCUMENT, because that is the file whose frontmatter
             # failed to parse and the one the operator has to open. The
             # pre-move code used two different values here and collapsing them
@@ -5673,6 +5729,9 @@ def _ingest_single(
             _render_staged_derived_objects(staged)
         derived_plans = staged.plans
         skip_reason = staged.skip_reason
+        # Same boundary for the derived-object directories (`bundle/entities`,
+        # ...), known only once staging has chosen each object's type.
+        _refuse_symlinked_destinations(root, [plan.path for plan in derived_plans])
         extraction_notice = staged.notices
         # One `_snapshot_read` observation per target: the decoded text
         # feeds `compose_catalog_update` below, the raw bytes feed
@@ -5691,6 +5750,18 @@ def _ingest_single(
         # dedup-before-insert Source bullet (D3), and the derived-plans
         # index/log loop (design: one confirm gate, one preview) including
         # the durable disambiguation audit entry (#131).
+        # #1136: a prior Source still marked `ingest_pending` was left by an
+        # interrupted run; objects that run wrote but never catalogued are
+        # adopted into this run's index/log update (never rewritten).
+        adopted: tuple[application_ingest.AdoptedObject, ...] = (
+            application_ingest.find_uncatalogued_objects(
+                layout.bundle_dir, slug, index_text
+            )
+            if converged is None
+            and had_prior_source
+            and application_ingest.prior_ingest_pending(concept_text)
+            else ()
+        )
         catalog_update = application_ingest.compose_catalog_update(
             source=source_plan,
             staged=staged,
@@ -5701,6 +5772,7 @@ def _ingest_single(
             regenerate=regenerate,
             timestamp=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
             entry_date=now.astimezone().date(),
+            adopted=adopted,
         )
         concept_content = catalog_update.concept_content
         new_index_text = catalog_update.new_index_text
@@ -5791,6 +5863,11 @@ def _ingest_single(
             )
         for plan in derived_plans:
             typer.echo(f"  + bundle/{plan.link_dir}/{plan.slug}.md")
+        for obj in adopted:
+            typer.echo(
+                f"  ~ bundle/{obj.link_dir}/{obj.slug}.md "
+                "(written by an interrupted ingest -- now catalogued)"
+            )
         typer.echo(f"  ~ {index_path.name} (Source entry refreshed)")
         typer.echo(f"  ~ {log_path.name} (new dated entry)")
     else:
@@ -5818,6 +5895,17 @@ def _ingest_single(
     # re-validate each target now -- after the gate, before the first write.
     _reject_drifted_targets(layout, guarded_targets, "ingest")
 
+    # #1136: Phase B is a sequence of individually atomic writes with no
+    # transaction around it, so the Source -- the one file the convergence
+    # gate reads -- is written FIRST carrying `ingest_pending` and rewritten
+    # WITHOUT it as the LAST write. A kill anywhere in between leaves a
+    # pending Source, which `converged_reingest` never treats as converged.
+    # A Source-only rewrite (`converged` set) extracts nothing and stays one
+    # atomic write: the marker there would only force a needless re-extract.
+    two_step = converged is None
+    first_content = (
+        okf.mark_ingest_pending(concept_content) if two_step else concept_content
+    )
     try:
         sources_dir.mkdir(parents=True, exist_ok=True)
         if regenerate:
@@ -5834,12 +5922,12 @@ def _ingest_single(
             # surfacing the same `FileExistsError` through the same error
             # path, as the fresh-ingest branch below.
             if had_prior_source:
-                fsio.write_atomic(concept_path, concept_content)
+                fsio.write_atomic(concept_path, first_content)
             else:
-                fsio.write_exclusive(concept_path, concept_content)
+                fsio.write_exclusive(concept_path, first_content)
         else:
             fsio.copy_exclusive(src, raw_dest)
-            fsio.write_exclusive(concept_path, concept_content)
+            fsio.write_exclusive(concept_path, first_content)
         # Phase B write loop (design D5): `derived_plans` is the COMPLETE,
         # already-deduped write set computed by
         # `application_ingest.stage_derived_objects` in Phase A -- no
@@ -5850,6 +5938,8 @@ def _ingest_single(
             fsio.write_exclusive(plan.path, plan.content)
         fsio.write_atomic(index_path, new_index_text)
         fsio.write_atomic(log_path, new_log_text)
+        if two_step:
+            fsio.write_atomic(concept_path, concept_content)
     except (OSError, ValueError) as exc:
         typer.echo(
             f"openkos ingest: failed while writing the ingest -- {exc}.", err=True
@@ -5860,6 +5950,12 @@ def _ingest_single(
     imported_paths.extend(
         f"bundle/{plan.link_dir}/{plan.slug}.md" for plan in derived_plans
     )
+    # Adopted objects were written by the interrupted run and are still
+    # uncommitted; they belong in this run's commit (#1136).
+    committed_paths = [
+        *imported_paths,
+        *(f"bundle/{obj.link_dir}/{obj.slug}.md" for obj in adopted),
+    ]
     typer.echo(
         f"openkos ingest: imported '{src}' -> {', '.join(imported_paths)} "
         f"({index_path.name}, {log_path.name} updated)."
@@ -5869,7 +5965,7 @@ def _ingest_single(
 
     _autocommit(
         root,
-        [*imported_paths, "bundle/index.md", "bundle/log.md"],
+        [*committed_paths, "bundle/index.md", "bundle/log.md"],
         f"openkos: ingest {name} (+{len(derived_plans)} concepts)",
     )
 
@@ -7304,6 +7400,9 @@ def relate(
     except (OSError, ValueError) as exc:
         typer.echo(f"openkos relate: refusing to relate -- {exc}.", err=True)
         raise typer.Exit(code=1) from exc
+    rel_note = relation_type_note(rel_type)
+    if rel_note is not None:
+        typer.echo(rel_note, err=True)
 
     now = datetime.now(UTC)
 
@@ -11336,6 +11435,8 @@ def status() -> None:
     # finding R3-needs-attention-header-lost-on-failure).
     typer.echo("Needs attention:")
     report = application_status.build_status_report(layout)
+    for warning in report.warnings:
+        _echo_warning(warning)
 
     needs_attention: list[str] = [*overview.survey.findings]
     needs_attention.extend(
@@ -11502,6 +11603,8 @@ def next_cmd() -> None:
 
     layout = config.WorkspaceLayout(root)
     result = next_action_module.next_action(layout)
+    for warning in result.warnings:
+        _echo_warning(warning)
     for line in next_action_module.render_lines(result):
         typer.echo(line)
 
@@ -12028,6 +12131,13 @@ def lint() -> None:
         for finding in report.dot_dir_markdown:
             typer.echo(f"  {finding.path}: {finding.detail}")
     typer.echo()
+    typer.echo("Symlinked markdown:")
+    if not report.symlinked_markdown:
+        typer.echo("  No symlinked `.md` files or directories under bundle/.")
+    else:
+        for finding in report.symlinked_markdown:
+            typer.echo(f"  {finding.path}: {finding.detail}")
+    typer.echo()
     typer.echo("Deprecated-status exports:")
     if not report.status_export:
         typer.echo("  No deprecated-status export findings.")
@@ -12036,7 +12146,7 @@ def lint() -> None:
             typer.echo(f"  {finding.concept_id}: {finding.detail}")
 
     # Completed/not-run counts (design.md Decision 5, ADR-0022): against
-    # `application_lint.TOTAL_CHECKS` (14 calls), NOT the 15 `LintReport`
+    # `application_lint.TOTAL_CHECKS` (15 calls), NOT the 16 `LintReport`
     # finding-list fields -- `check_below_source_sensitivity` is one call
     # feeding two fields, so counting fields would overstate how many
     # checks ran.
@@ -12183,10 +12293,13 @@ def duplicates(
     # truncation notice describe what the corpus PRODUCED, and filtering
     # before them would let a ruled-distinct group silently consume a cap
     # slot's worth of accounting.
+    note = _echo_warning_once()
     groups = [
         group
         for group in report.groups
-        if not application_pending.is_group_kept_distinct(layout, group.member_ids)
+        if not application_pending.is_group_kept_distinct(
+            layout, group.member_ids, on_warning=note
+        )
     ]
     suppressed = len(report.groups) - len(groups)
     notice = candidate_group_truncation_notice(report)
@@ -13591,7 +13704,7 @@ def _apply_contradiction_decision(
         )
     )
     path = bundle_decisions.write_decisions(
-        owner_id, layout.bundle_dir, records=records
+        owner_id, layout.bundle_dir, records=records, on_warning=_echo_warning
     )
     return f"bundle/{path.relative_to(layout.bundle_dir).as_posix()}"
 
@@ -13683,7 +13796,9 @@ def _duplicates_kept_distinct_view(root: Path, layout: config.WorkspaceLayout) -
     for decisions_path in bundle_decisions.iter_decisions(layout.bundle_dir):
         records.extend(
             record
-            for record in bundle_decisions.read_identity_decisions_at(decisions_path)
+            for record in bundle_decisions.read_identity_decisions_at(
+                decisions_path, on_warning=_echo_warning
+            )
             if record.state == "declined"
         )
     if not records:
@@ -13719,7 +13834,9 @@ def _apply_identity_decision(
     members = tuple(sorted(member_ids))
     key = bundle_decisions.identity_decision_key_for(members)
     owner_id = members[0]
-    existing = bundle_decisions.read_identity_decisions(owner_id, layout.bundle_dir)
+    existing = bundle_decisions.read_identity_decisions(
+        owner_id, layout.bundle_dir, on_warning=_echo_warning
+    )
     records = [record for record in existing if record.decision_key != key]
     records.append(
         bundle_decisions.IdentityDecisionRecord(

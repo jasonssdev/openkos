@@ -14,7 +14,6 @@ an empty or whitespace-only type, the vocabulary's one hard fail-closed
 rule.
 """
 
-import sys
 from dataclasses import dataclass
 
 
@@ -42,7 +41,7 @@ seeded but not exhaustive -- see `validate_relation_type`."""
 SEEDED_RELATION_TYPES: frozenset[str] = frozenset(rt.name for rt in REGISTRY)
 """The open vocabulary's seeded defaults. Any other non-empty, single-line
 string is still a valid relation type -- membership here only controls
-whether `validate_relation_type` prints an advisory note."""
+whether `relation_type_note` returns an advisory note."""
 
 ENGINE_OWNED_RELATION_TYPES: frozenset[str] = frozenset({"derived_from"})
 """Seeded types the ENGINE derives, and an LLM must therefore never propose
@@ -133,30 +132,30 @@ type added to one but not the other would otherwise be a silent gap; keying
 both off this one constant makes it a failing test instead."""
 
 
-def validate_relation_type(rel_type: str, *, warn: bool = True) -> str:
+def validate_relation_type(rel_type: str) -> str:
     """Validate `rel_type` for the `relate` CLI verb's write path.
 
     Strips surrounding whitespace, then raises `ValueError` if the result is
     empty (the vocabulary's one hard fail-closed gate -- spec: "Empty/
-    whitespace type rejected"). Otherwise returns the stripped type,
-    printing an advisory note to stderr -- never raising -- when it is not
-    one of `SEEDED_RELATION_TYPES` (spec: "Unknown type accepted with WARN
-    to stderr"): the vocabulary is open by design, so an unrecognized type
-    is always accepted for write, only flagged.
-
-    `warn=False` suppresses that advisory note while keeping the empty-type
-    fail-closed gate and the returned value identical -- for callers on a
-    non-write PREVIEW path (e.g. `suggest-relations`'s per-edge suggestion
-    parse) where one note per out-of-vocab suggestion would flood stderr
-    (issue #134). The note is a write-path affordance, not a preview one.
-    """
+    whitespace type rejected"). Otherwise returns the stripped type, never
+    raising for an unseeded one: the vocabulary is open by design, so an
+    unrecognized type is always accepted for write. Pure -- it writes
+    nothing; `relation_type_note` is the advisory the write path shows."""
     stripped = rel_type.strip()
     if not stripped:
         raise ValueError("relation type must be non-empty")
-    if warn and stripped not in SEEDED_RELATION_TYPES:
-        print(
-            f"openkos: note -- '{stripped}' is not a seeded relation type "
-            f"(known: {', '.join(sorted(SEEDED_RELATION_TYPES))})",
-            file=sys.stderr,
-        )
     return stripped
+
+
+def relation_type_note(rel_type: str) -> str | None:
+    """The advisory line for a relation type outside `SEEDED_RELATION_TYPES`,
+    or `None` for a seeded one (spec: "Unknown type accepted with WARN to
+    stderr"). Returned, not printed: the CLI's write path renders it, and a
+    preview path (`suggest-relations`) simply never asks for it."""
+    stripped = rel_type.strip()
+    if stripped in SEEDED_RELATION_TYPES:
+        return None
+    return (
+        f"openkos: note -- '{stripped}' is not a seeded relation type "
+        f"(known: {', '.join(sorted(SEEDED_RELATION_TYPES))})"
+    )

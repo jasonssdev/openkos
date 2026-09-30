@@ -292,6 +292,11 @@ class LintReport:
     found under any dot-directory OTHER than `bundle/.state/` -- which
     keeps its own, more specific `state_dir_markdown` finding instead --
     see `check_dot_dir_markdown`."""
+    symlinked_markdown: list[LintFinding] = field(default_factory=list)
+    """`"symlinked-markdown"` findings (#1126): a symlinked `.md` file or
+    directory under `bundle/`, which every bundle walk refuses to read
+    through because the link can leave the workspace tree -- see
+    `check_symlinked_markdown`."""
     status_export: list[LintFinding] = field(default_factory=list)
     """`"status-export-drift"` and `"status-export-blocked"` findings
     (deprecated-status-export, issue #1075): the computed supersession
@@ -311,7 +316,7 @@ class LintReport:
     failed to read/parse or carried malformed `relations:` --
     deprecated-status-export, issue #1075) --
     containment happens in `application/lint.py`, not here; this field is
-    only the shape the result is carried in. A `tuple`, unlike its fifteen
+    only the shape the result is carried in. A `tuple`, unlike its sixteen
     `list` siblings above: it is never mutated after `build_lint_report`
     constructs it, mirroring `application.doctor.run_diagnostics`' own
     `tuple[CheckResult, ...]` return shape. Empty on a fully complete run
@@ -1789,6 +1794,34 @@ def check_dot_dir_markdown(bundle_dir: Path) -> list[LintFinding]:
             )
         )
     return findings
+
+
+def check_symlinked_markdown(bundle_dir: Path) -> list[LintFinding]:
+    """Report every symlinked `.md` file or directory under `bundle_dir`
+    (#1126). Read-only and NON-GATING, like every other `lint` finding.
+
+    `okf.iter_bundle_markdown` refuses to read through a symlink -- the link
+    can point outside the workspace, carrying external bytes (and an external
+    `sensitivity: public`) into prompts, embeddings and the index -- so the
+    entry is absent from every count. This is the account of that exclusion:
+    without it the file would vanish from the bundle with no signal. It
+    consumes `okf.scan_symlinked_bundle_entries`, the walk's own complement,
+    and decides nothing about which entries qualify."""
+    return [
+        LintFinding(
+            kind="symlinked-markdown",
+            path=path.relative_to(bundle_dir).as_posix(),
+            detail=(
+                f"'{path.relative_to(bundle_dir).as_posix()}' is a symlink; "
+                "OpenKOS does not read knowledge through a symlink because it "
+                "can leave the workspace tree, so it is NOT treated as a "
+                "Knowledge Object and is not indexed or embedded -- replace "
+                "the link with the real file or directory, or move the "
+                "target inside the workspace"
+            ),
+        )
+        for path in okf.scan_symlinked_bundle_entries(bundle_dir)
+    ]
 
 
 def check_non_nfc_names(bundle_dir: Path) -> list[LintFinding]:

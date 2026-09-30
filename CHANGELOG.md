@@ -93,6 +93,36 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   `git add` and `git commit` run with a bounded timeout and no terminal
   prompts, and a timeout is reported as the usual auto-commit WARNING.
 
+- `ingest` no longer writes the absolute local path of the source into the
+  Source concept's `description` and body
+  ([#1129](https://github.com/jasonssdev/openkos/issues/1129)). The path leaked
+  the account name and directory layout into git history, embeddings, and MCP
+  replies; the Source now names the raw copy's basename and its `raw/<name>`
+  resource. Existing workspaces keep their old text (no migration is run);
+  edit a Source by hand to drop the path from it.
+
+- `ingest` no longer leaves a Source the next run skips forever when it is
+  killed part-way ([#1136](https://github.com/jasonssdev/openkos/issues/1136)).
+  Phase B wrote the Source before the derived objects, `index.md` and
+  `log.md`, and the convergence gate read only the Source, so a kill in that
+  window produced "source unchanged and already extracted" with no objects, no
+  index entry and no log entry. The Source is now written first carrying
+  `ingest_pending: true` and rewritten without it as the last write; a
+  pending Source is retried by a plain re-ingest, which also catalogues any
+  objects the interrupted run had already written. Sources written before this
+  change carry no such key and stay converged.
+
+- A concept id containing a backslash or a colon (`..\..\x`, `C:\x`,
+  `a:b`) is now refused by every id-taking verb and tool, and `slugify` no
+  longer emits a reserved Windows device name (`con`, `prn`, `aux`, `nul`,
+  `com1`-`com9`, `lpt1`-`lpt9`) as a whole slug: it appends `-doc`, so a
+  source titled `CON` files as `sources/con-doc.md`
+  ([#1131](https://github.com/jasonssdev/openkos/issues/1131)). On Windows the
+  old ids could traverse out of the bundle or replace its base path, and the
+  old slugs named files Windows cannot create. A workspace that already holds
+  `sources/con.md` and re-ingests a `con.*` file gets a second source at
+  `con-doc.md`; delete the old one.
+
 - `unmerge` no longer silently overwrites a survivor edited after its merge
   ([#1110](https://github.com/jasonssdev/openkos/issues/1110)). It restored
   the survivor from the ledger's pre-merge snapshot unconditionally, with no
@@ -131,6 +161,16 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Security
 
+- `ingest` no longer writes through a symlinked `bundle/sources` or derived-object
+  directory, and the bundle walk no longer reads through a symlinked `.md` file
+  or directory ([#1126](https://github.com/jasonssdev/openkos/issues/1126)). The
+  symlink-boundary guard covered only `forget`/`get`, so with `bundle/sources`
+  linked outside the workspace `ingest` carried the source text out of it, and
+  a `bundle/leak.md` linked to an external file marked `sensitivity: public`
+  was admitted to `query` prompts, citations and embeddings. `ingest` now
+  refuses, before writing anything, with the same reason `forget` gives; the
+  walk drops the link, and `lint` reports it as `symlinked-markdown`.
+
 - A backend classified local no longer honours `http_proxy`/`https_proxy`
   ([#1127](https://github.com/jasonssdev/openkos/issues/1127)). Locality is
   judged from the URL literal, but urllib's default proxy handling does not
@@ -140,6 +180,25 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   the proxy while treating it as never leaving the device. Both clients now
   send a loopback host directly; a non-local host still honours the
   environment proxy.
+
+- The per-user workspace lock directory under the OS temp dir is now trusted
+  only when it is a real directory owned by you with no group/other access, and
+  the lock file is opened without following symlinks
+  ([#1134](https://github.com/jasonssdev/openkos/issues/1134)). Another local
+  user pre-creating that guessable path used to turn every mutating verb into a
+  traceback, or into an endless "busy" refusal; it is now one clean refusal
+  (exit `1`, naming the directory and the `chmod 700` / remove fix). Exit `3`
+  stays reserved for genuine contention.
+
+- `.openkos/` and `bundle/.state/` are now created with mode `0700`, and every
+  SQLite store under `.openkos/` (with its WAL sidecars) with mode `0600`,
+  whatever the umask ([#1135](https://github.com/jasonssdev/openkos/issues/1135)).
+  The stores hold the full text and embeddings of every document, including
+  `confidential` ones, and were previously readable by every local account on a
+  host with a world-readable home directory. Existing workspaces are not
+  changed automatically: `openkos doctor` now reports an exposed `.openkos/`,
+  store, or `bundle/.state/` with a one-line `chmod go-rwx` fix. `bundle/` and
+  `raw/` are your own files and are left alone.
 
 ## [0.2.14] - 2026-09-11
 

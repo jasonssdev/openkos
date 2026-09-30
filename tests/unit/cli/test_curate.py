@@ -43,6 +43,7 @@ from openkos.vcs import git as vcs_git
 from tests.unit.cli.conftest import (
     changed_paths,
     commit_pending_fixture_docs,
+    corrupt_identity_sidecar,
     disable_local_exemption,
     seed_workspace_docs,
 )
@@ -6232,6 +6233,43 @@ def test_identity_persists_fresh_verdicts_for_the_next_run(
         "1 of 1 candidate group(s) served from persisted adjudications; "
         "0 judged fresh." in second.stderr
     )
+
+
+def test_curate_still_surfaces_a_malformed_identity_row_warning(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The reader used to print this itself; now `curate`'s Identity stage
+    passes a callback so the operator still learns a ruling was dropped."""
+    _stub_later_stages_empty(monkeypatch)
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _reindexed_workspace(tmp_path, monkeypatch)
+    calls: list[int] = []
+    _stub_identity_group_with_call_log(monkeypatch, calls, verdict=Verdict.DIFFERENT)
+    members = ("concepts/a", "concepts/b")
+    bundle_dir = tmp_path / "bundle"
+    bundle_decisions.write_identity_decisions(
+        members[0],
+        bundle_dir,
+        records=[
+            bundle_decisions.IdentityDecisionRecord(
+                decision_key=bundle_decisions.identity_decision_key_for(members),
+                member_ids=members,
+                state="open",
+                decided_at="2026-08-20T00:00:00+00:00",
+            )
+        ],
+    )
+    _, warning = corrupt_identity_sidecar(bundle_dir, members[0])
+
+    _simulate_tty(monkeypatch)
+    result = runner.invoke(app, ["curate"], input="y\n")
+
+    assert result.exit_code == 0, result.stderr
+    assert warning in result.stderr.splitlines()
 
 
 def test_identity_rubric_stale_notice_names_the_reason(

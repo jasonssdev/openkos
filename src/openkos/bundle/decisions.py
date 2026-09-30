@@ -26,8 +26,7 @@ rationale, maintainer decision D6): no operator action can produce a
 direct unit-test call to `write_decisions` can."""
 
 import hashlib
-import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Literal
@@ -222,18 +221,31 @@ def _decode_identity_record(raw: dict[str, object]) -> IdentityDecisionRecord | 
 
 
 def read_identity_decisions(
-    concept_id: str, bundle_dir: Path
+    concept_id: str,
+    bundle_dir: Path,
+    *,
+    on_warning: Callable[[str], None] | None = None,
 ) -> list[IdentityDecisionRecord]:
     """Every `IdentityDecisionRecord` recorded under `concept_id`'s sidecar
     (#797). Absent file, or a v1 sidecar with no identity list, returns
-    `[]` -- mirroring `read_decisions`' own absent-file contract."""
-    return read_identity_decisions_at(decisions_path_for(concept_id, bundle_dir))
+    `[]` -- mirroring `read_decisions`' own absent-file contract.
+    `on_warning` is forwarded to `read_identity_decisions_at`."""
+    return read_identity_decisions_at(
+        decisions_path_for(concept_id, bundle_dir), on_warning=on_warning
+    )
 
 
-def read_identity_decisions_at(path: Path) -> list[IdentityDecisionRecord]:
+def read_identity_decisions_at(
+    path: Path, *, on_warning: Callable[[str], None] | None = None
+) -> list[IdentityDecisionRecord]:
     """The walked-path reader, `read_decisions_at`'s twin: the privacy sweep
     reads from the file actually on disk, never from a path rebuilt from a
-    possibly-drifted `concept_id` frontmatter field."""
+    possibly-drifted `concept_id` frontmatter field.
+
+    A malformed row is dropped, and the drop is reported by calling
+    `on_warning` with the complete message -- this module never writes to a
+    stream, so the caller decides how (and whether) to render it. `None`
+    means the caller does not surface it."""
     if not path.is_file():
         return []
     metadata, _ = okf.load_frontmatter(path.read_text(encoding="utf-8"))
@@ -244,13 +256,13 @@ def read_identity_decisions_at(path: Path) -> list[IdentityDecisionRecord]:
         _decode_identity_record(entry) for entry in raw if isinstance(entry, dict)
     ]
     dropped = sum(1 for record in decoded if record is None)
-    if dropped:
-        # Never silent: a dropped row is a human ruling lost, and losing it
-        # quietly re-offers a merge they already refused.
-        print(
+    if dropped and on_warning is not None:
+        # Never silent on a path that can lose data: a dropped row is a human
+        # ruling lost, and losing it quietly re-offers a merge they already
+        # refused. The caller renders it.
+        on_warning(
             f"openkos: warning -- {dropped} malformed identity decision "
-            f"record(s) in {path}; those groups will be offered again.",
-            file=sys.stderr,
+            f"record(s) in {path}; those groups will be offered again."
         )
     return [record for record in decoded if record is not None]
 
@@ -319,7 +331,11 @@ def read_decisions_at(path: Path) -> list[DecisionRecord]:
 
 
 def write_decisions(
-    concept_id: str, bundle_dir: Path, *, records: list[DecisionRecord]
+    concept_id: str,
+    bundle_dir: Path,
+    *,
+    records: list[DecisionRecord],
+    on_warning: Callable[[str], None] | None = None,
 ) -> Path:
     """(Re)write `concept_id`'s CONTRADICTION decisions to hold EXACTLY
     `records` -- mirrors `bundle.ledger.write_entries`'s full-replace
@@ -333,13 +349,16 @@ def write_decisions(
     other's human rulings.
 
     Written via `fsio.write_atomic`, over `okf.dump_frontmatter`'s output
-    with an empty body (ADR-0002 invariant 3, preserved literally)."""
+    with an empty body (ADR-0002 invariant 3, preserved literally).
+
+    `on_warning` receives the note for any malformed identity row this
+    rewrite would drop (see `read_identity_decisions_at`)."""
     path = decisions_path_for(concept_id, bundle_dir)
     return rewrite_both_at(
         path,
         concept_id=concept_id,
         records=records,
-        identity_records=read_identity_decisions_at(path),
+        identity_records=read_identity_decisions_at(path, on_warning=on_warning),
     )
 
 
@@ -361,32 +380,10 @@ def rewrite_both_at(
         if path.is_file():
             path.unlink()
         return path
-    path.parent.mkdir(parents=True, exist_ok=True)
+    fsio.mkdir_private(path.parent, top=okf.state_dir_of(path))
     container = _encode_container(concept_id, records, identity_records)
     fsio.write_atomic(path, okf.dump_frontmatter(container, body=""))
     return path
-
-
-def rewrite_decisions_at(
-    path: Path, *, concept_id: str, records: list[DecisionRecord]
-) -> Path:
-    """(Re)write the sidecar AT `path` to hold EXACTLY `records`, using
-    `concept_id` only as container CONTENT -- never to derive the path.
-
-    The walked-path twin of `bundle.ledger.rewrite_entries_at`: the privacy
-    sweep must write each rewrite back to the path it WALKED, not to a path
-    rebuilt from the (possibly drifted or hostile) `concept_id` frontmatter
-    field, which would let a traversal id escape the bundle and silently
-    scrub the wrong file. `write_decisions` is the id-addressed wrapper. An
-    empty `records` list removes the file -- unless the sidecar also holds
-    identity decisions (#797), which are preserved and keep the file alive;
-    removing an absent file is a no-op."""
-    return rewrite_both_at(
-        path,
-        concept_id=concept_id,
-        records=records,
-        identity_records=read_identity_decisions_at(path),
-    )
 
 
 def iter_decisions(bundle_dir: Path) -> list[Path]:
