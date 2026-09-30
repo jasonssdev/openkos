@@ -9259,7 +9259,10 @@ def merge(
     if prepared.removed >= 1:
         typer.echo(f"  ~ {index_path.name} (remove entry)")
     typer.echo(f"  ~ {log_path.name} (new dated entry)")
-    typer.echo(f"  ~ bundle/{survivor_canonical}.md (merged content)")
+    status_suffix = ""
+    if prepared.status_outcome is not None:
+        status_suffix = _status_export_preview_suffix(prepared.status_outcome)
+    typer.echo(f"  ~ bundle/{survivor_canonical}.md (merged content{status_suffix})")
     typer.echo(f"  - bundle/{absorbed_canonical}.md")
     # #796: `merge` is the command `duplicates` and `adjudicate` BOTH name
     # in their closing hints, and it was the one path #776's cross-source
@@ -9853,8 +9856,21 @@ def _run_single_unmerge(
         typer.echo(
             f"  ~ {log_path.name} (restore pre-merge contents, append unmerge entry)"
         )
-    typer.echo(f"  ~ bundle/{survivor_canonical}.md (restore pre-merge contents)")
-    typer.echo(f"  + bundle/{absorbed_canonical}.md (restore)")
+    survivor_status_suffix = ""
+    if prepared.survivor_status_outcome is not None:
+        survivor_status_suffix = _status_export_preview_suffix(
+            prepared.survivor_status_outcome
+        )
+    typer.echo(
+        f"  ~ bundle/{survivor_canonical}.md (restore pre-merge contents"
+        f"{survivor_status_suffix})"
+    )
+    absorbed_status_suffix = ""
+    if prepared.absorbed_status_outcome is not None:
+        absorbed_status_suffix = _status_export_preview_suffix(
+            prepared.absorbed_status_outcome
+        )
+    typer.echo(f"  + bundle/{absorbed_canonical}.md (restore{absorbed_status_suffix})")
     if prepared.catalog_log_drifted:
         typer.echo(
             "Warning: index.md/log.md changed since the merge; unmerge "
@@ -10422,14 +10438,19 @@ def reconcile(
 
 
 def _status_export_preview_suffix(outcome: okf.ExportOutcome) -> str:
-    """Preview text naming a deprecated-status export outcome for the
-    counterpart of a directed `supersedes` write (deprecated-status-export,
-    issue #1075, design Decision 5's reconcile/relate sequences). `EXPORT`
-    names the status change; `BLOCKED` states the human value stays and the
-    concept is hidden regardless; every other outcome (`UNCHANGED`) adds
-    nothing -- this write did not change that concept's superseded-ness."""
+    """Preview text naming a deprecated-status export outcome for a
+    document a write is about to touch (deprecated-status-export, issue
+    #1075, design Decision 5's reconcile/relate/merge sequences). `EXPORT`
+    names the status change; `WITHDRAW` names the reverse; `DROP_MARKER`
+    says only the stale marker goes; `BLOCKED` states the human value stays
+    and the concept is hidden regardless; `UNCHANGED` adds nothing -- this
+    write did not change that concept's superseded-ness."""
     if outcome is okf.ExportOutcome.EXPORT:
         return "; status → deprecated"
+    if outcome is okf.ExportOutcome.WITHDRAW:
+        return "; status → stable"
+    if outcome is okf.ExportOutcome.DROP_MARKER:
+        return "; stale export marker removed"
     if outcome is okf.ExportOutcome.BLOCKED:
         return "; own status preserved (hidden from retrieval regardless)"
     return ""

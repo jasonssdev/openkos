@@ -203,33 +203,55 @@ stacked in order; the chain strategy is the orchestrator's call.
 
 ## Phase 5 — Rewiring writers: `merge`, `unmerge`
 
-- [ ] 5.1 [PRE] Pin current behavior: write a test showing that today an
+- [x] 5.1 [PRE] Pin current behavior: write a test showing that today an
   absorbed `status` fills a survivor gap through the generic scalar rule
   (`model/okf.py:2415-2425`), and whether `unmerge` refuses when the
   survivor changed after the merge (design Open Question). Record both
-  results before changing code.
-- [ ] 5.2 [TEST] `build_merged_document`: absorbed marker never crosses;
+  results before changing code. Findings: (1) confirmed -- an absorbed
+  human-authored `status` still fills a gapped survivor today, and this
+  rule is UNCHANGED by this phase for a non-exported value; (2)
+  resolved -- `unmerge` does NOT refuse: `prepare_unmerge`'s
+  `survivor_bytes` baseline is captured fresh at its OWN Phase A (whatever
+  is on disk right now), never compared against the merge-time state, so a
+  hand-edit landing between merge and unmerge is silently discarded by the
+  ledger's verbatim restore. Both pinned by
+  `tests/unit/cli/test_merge_status_export.py`.
+- [x] 5.2 [TEST] `build_merged_document`: absorbed marker never crosses;
   absorbed marked `deprecated` never fills a survivor gap; an absorbed
   human `draft` still fills it (unchanged rule). RED on the first two.
-- [ ] 5.3 [IMPL] `_SPECIAL_KEYS` + marked-status skip. GREEN 5.2.
-- [ ] 5.4 [TEST] `merge` end to end: third party supersedes absorbed →
+- [x] 5.3 [IMPL] `_SPECIAL_KEYS` + marked-status skip. GREEN 5.2.
+- [x] 5.4 [TEST] `merge` end to end: third party supersedes absorbed →
   survivor exported, preview names it; absorbed supersedes survivor
   (self-loop dropped) with survivor exported → survivor withdrawn. RED.
-- [ ] 5.5 [IMPL] `prepare_merge` projects the survivor over the post-merge
-  view. GREEN 5.4.
-- [ ] 5.6 [TEST] Parity: on an export-consistent fixture (third party
+- [x] 5.5 [IMPL] `prepare_merge` projects the survivor over the post-merge
+  view. GREEN 5.4. Implementation note: the projected text is folded
+  directly into `plan.merged_survivor` (a `dataclasses.replace` on the
+  frozen `MergePlan`, not a separate `PreparedMerge` field) -- this keeps
+  the ledger's `survivor_sha256` binding, the eventual disk write, and
+  `_reconcile_merged_survivor`'s body-only rebuild (which re-extracts
+  metadata from that exact text) consistent for free. `status_outcome` is
+  the only new `PreparedMerge` field, carried solely for the preview.
+- [x] 5.6 [TEST] Parity: on an export-consistent fixture (third party
   supersedes absorbed, absorbed exported) `merge` then `unmerge` leaves
   every file byte-identical. Expected first-try GREEN → 5.8.
-- [ ] 5.7 [TEST] Drift carve-out: pre-merge hand-written edge with an
+- [x] 5.7 [TEST] Drift carve-out: pre-merge hand-written edge with an
   unexported absorbed → after `unmerge`, absorbed is exported, preview
   names it, all other bytes match snapshots. RED.
-- [ ] 5.8 [IMPL] `prepare_unmerge` projects restored survivor/absorbed
+- [x] 5.8 [IMPL] `prepare_unmerge` projects restored survivor/absorbed
   over the post-unmerge view; `unmerge_core` writes the projected texts.
-  GREEN 5.7 and keep 5.6 GREEN.
-- [ ] 5.9 [MUT] Guard 5.6: make the unmerge projection always EXPORT; 5.6
+  GREEN 5.7 and keep 5.6 GREEN. Implementation note: `prepare_unmerge`
+  holds no in-memory whole-bundle snapshot of its own (unlike `merge`/
+  `forget`/`purge`, it only ever reads the files it must reverse), so this
+  is a genuinely NEW `okf._iter_docs` walk, overridden at exactly the
+  three places Phase B is about to change (restored survivor, restored
+  absorbed, reversed relation-retargeted third parties). Same
+  fold-into-`plan` pattern as 5.5 (`restored_survivor`/`restored_absorbed`
+  mutated via `dataclasses.replace`); two new preview-only fields
+  (`survivor_status_outcome`/`absorbed_status_outcome`).
+- [x] 5.9 [MUT] Guard 5.6: make the unmerge projection always EXPORT; 5.6
   must go RED. Make it project the survivor only; 5.7 must go RED. Revert,
   purge.
-- [ ] 5.10 `unmerge --to` chain over two merges with exports: each step
+- [x] 5.10 `unmerge --to` chain over two merges with exports: each step
   consistent; `lint` reports no drift afterwards.
 
 ## Phase 6 — Docs and the shipped example

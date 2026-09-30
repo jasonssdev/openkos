@@ -2627,9 +2627,18 @@ def build_merged_document(
         TYPE_ALTERNATIVE_KEY,
         EVENT_DATE_KEY,
         SOURCE_FRONTMATTER_KEY,
+        STATUS_DERIVED_FROM_KEY,
     )
     for key, absorbed_value in absorbed_metadata.items():
         if key in _SPECIAL_KEYS:
+            continue
+        if key == "status" and has_valid_export_marker(absorbed_metadata):
+            # deprecated-status-export (issue #1075, design Decision 6): an
+            # absorbed EXPORTED deprecation describes the ABSORBED
+            # concept's own supersession, which this merge's relation
+            # rewiring changes -- it must never fill a survivor gap
+            # either, unlike a human-authored `status` value (handled by
+            # the generic branch below on every OTHER iteration).
             continue
         survivor_value = merged.get(key)
         if isinstance(absorbed_value, list) or isinstance(survivor_value, list):

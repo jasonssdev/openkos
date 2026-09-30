@@ -55,6 +55,7 @@ layering invariant, `tests/unit/application/test_layering.py`) -- every
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -297,6 +298,12 @@ class PreparedMerge:
     contracts expressed as data" #918 names `merge` for by name. The
     adapter still decides WHETHER to ask (`review`, `--auto`, TTY); this
     only says what is asked."""
+    status_outcome: okf.ExportOutcome | None
+    """The deprecated-status export change (`deprecated-status-export`,
+    issue #1075) applied to the survivor over its post-merge superseded
+    state, or `None` when the projection outcome was `UNCHANGED` (nothing
+    to disclose). The change itself is already folded into
+    `plan.merged_survivor`; this field exists only for the preview."""
 
 
 @dataclass(frozen=True)
@@ -426,6 +433,68 @@ def prepare_merge(
         absorbed_id=absorbed_canonical,
     )
 
+    # deprecated-status-export (issue #1075, design Decision 6): project
+    # the merged survivor's status over its POST-merge superseded state --
+    # only the survivor's superseded-ness can change from a merge (an
+    # inbound retarget can newly supersede it; a dropped self-loop can
+    # un-supersede it). `plan.merged_survivor` is mutated in place here
+    # (never a separate field): the ledger's `survivor_sha256` binding,
+    # the eventual disk write, and `_reconcile_merged_survivor`'s
+    # body-only rebuild (which re-extracts metadata from this exact text)
+    # all stay consistent for free.
+    survivor_merged_metadata, survivor_merged_body = okf.load_frontmatter(
+        plan.merged_survivor
+    )
+    post_merge_metadata: dict[str, Mapping[str, object] | None] = {
+        survivor_canonical: survivor_merged_metadata
+    }
+    relation_rewrite_files = {rewrite.file for rewrite in relation_rewrites}
+    for rel, text in other_files.items():
+        if not rel.endswith(".md"):
+            continue
+        cid = rel[: -len(".md")]
+        if cid == absorbed_canonical:
+            continue  # disappears after this merge
+        source_text = text
+        if rel in relation_rewrite_files:
+            source_text = bundle_relations.apply_relation_rewrites(
+                text,
+                file=rel,
+                survivor_id=survivor_canonical,
+                absorbed_id=absorbed_canonical,
+                rewrites=relation_rewrites,
+            )
+        try:
+            meta, _ = okf.load_frontmatter(source_text)
+        except Exception:  # broad: malformed frontmatter -- unreadable
+            meta = None
+        post_merge_metadata[cid] = meta
+
+    superseded_post = lifecycle.superseded_from_metadata(post_merge_metadata)
+    status_decision: okf.ExportDecision | None = None
+    if survivor_canonical in superseded_post.ids:
+        status_decision = okf.project_deprecation_export(
+            survivor_merged_metadata, superseded=True
+        )
+    elif superseded_post.complete:
+        status_decision = okf.project_deprecation_export(
+            survivor_merged_metadata, superseded=False
+        )
+    # else: incomplete walk and not provably superseded -- skip, same
+    # fail-safe as `forget`/`purge` ("Withdrawal Requires A Complete Edge
+    # Walk").
+    status_outcome: okf.ExportOutcome | None = None
+    if status_decision is not None and status_decision.outcome is not (
+        okf.ExportOutcome.UNCHANGED
+    ):
+        status_outcome = status_decision.outcome
+        plan = dataclasses.replace(
+            plan,
+            merged_survivor=okf.dump_frontmatter(
+                status_decision.metadata, survivor_merged_body
+            ),
+        )
+
     # Body-stacking report (issue #409, report half): `build_merged_document`
     # stays pure and returns bytes only (design decision -- see
     # `StackedBodyReport`'s docstring), so this recomputes the signal from
@@ -498,6 +567,7 @@ def prepare_merge(
         survivor_bytes=survivor_bytes,
         absorbed_bytes=absorbed_bytes,
         touched_bytes=touched_bytes,
+        status_outcome=status_outcome,
     )
 
 
@@ -646,6 +716,14 @@ class PreparedUnmerge:
 
     plan: bundle_merge.UnmergePlan
     new_log_text: str
+    survivor_status_outcome: okf.ExportOutcome | None
+    absorbed_status_outcome: okf.ExportOutcome | None
+    """The deprecated-status export change (`deprecated-status-export`,
+    issue #1075) applied to the restored survivor/absorbed document over
+    the post-unmerge superseded state, or `None` when the outcome was
+    `UNCHANGED` (nothing to disclose). Already folded into
+    `plan.restored_survivor`/`plan.restored_absorbed`; these fields exist
+    only for the preview."""
     link_reversed_texts: dict[str, str]
     relation_reversed_texts: dict[str, str]
     provenance_restored_texts: dict[str, str]
@@ -897,6 +975,77 @@ def prepare_unmerge(
         for rel in relation_rewrite_files
     }
 
+    # deprecated-status-export (issue #1075, `entity-resolution-merge` spec:
+    # "Unmerge Achieves Round-Trip Parity"): after restoring, evaluate the
+    # export projection for the restored survivor AND the restored absorbed
+    # document over the POST-unmerge bundle. Unlike `prepare_merge`, this
+    # verb holds no in-memory whole-bundle snapshot of its own (it only
+    # ever read the files it must reverse), so this is a genuinely
+    # additional walk -- `okf._iter_docs` gives the CURRENT (pre-Phase-B)
+    # bundle state, which this overrides at exactly the three places
+    # Phase B is about to change: the survivor (restored, not merged), the
+    # absorbed document (restored, doesn't exist on disk yet), and every
+    # relation-retargeted third party (reversed, not merged-ward).
+    restored_survivor_metadata, restored_survivor_body = okf.load_frontmatter(
+        plan.restored_survivor
+    )
+    restored_absorbed_metadata, restored_absorbed_body = okf.load_frontmatter(
+        plan.restored_absorbed
+    )
+    post_unmerge_metadata: dict[str, Mapping[str, object] | None] = {}
+    for scan in okf._iter_docs(layout.bundle_dir):
+        cid = okf.concept_id_for(scan.path, layout.bundle_dir)
+        if scan.read_error is not None or scan.parse_error is not None:
+            post_unmerge_metadata[cid] = None
+        else:
+            post_unmerge_metadata[cid] = scan.metadata or {}
+    post_unmerge_metadata[survivor_canonical] = restored_survivor_metadata
+    post_unmerge_metadata[absorbed_canonical] = restored_absorbed_metadata
+    for rel in relation_rewrite_files:
+        cid = rel[: -len(".md")] if rel.endswith(".md") else rel
+        try:
+            meta, _ = okf.load_frontmatter(relation_reversed_texts[rel])
+        except Exception:  # broad: malformed frontmatter -- unreadable
+            meta = None
+        post_unmerge_metadata[cid] = meta
+
+    superseded_post = lifecycle.superseded_from_metadata(post_unmerge_metadata)
+
+    def _project(
+        concept_id: str, metadata: Mapping[str, object]
+    ) -> okf.ExportDecision | None:
+        if concept_id in superseded_post.ids:
+            return okf.project_deprecation_export(metadata, superseded=True)
+        if superseded_post.complete:
+            return okf.project_deprecation_export(metadata, superseded=False)
+        return None  # incomplete walk, not provably superseded -- skip
+
+    survivor_decision = _project(survivor_canonical, restored_survivor_metadata)
+    absorbed_decision = _project(absorbed_canonical, restored_absorbed_metadata)
+
+    survivor_status_outcome: okf.ExportOutcome | None = None
+    if survivor_decision is not None and survivor_decision.outcome is not (
+        okf.ExportOutcome.UNCHANGED
+    ):
+        survivor_status_outcome = survivor_decision.outcome
+        plan = dataclasses.replace(
+            plan,
+            restored_survivor=okf.dump_frontmatter(
+                survivor_decision.metadata, restored_survivor_body
+            ),
+        )
+    absorbed_status_outcome: okf.ExportOutcome | None = None
+    if absorbed_decision is not None and absorbed_decision.outcome is not (
+        okf.ExportOutcome.UNCHANGED
+    ):
+        absorbed_status_outcome = absorbed_decision.outcome
+        plan = dataclasses.replace(
+            plan,
+            restored_absorbed=okf.dump_frontmatter(
+                absorbed_decision.metadata, restored_absorbed_body
+            ),
+        )
+
     new_log_text = bundle_log.insert_log_entry(
         plan.restored_log,
         now.astimezone().date(),
@@ -908,6 +1057,8 @@ def prepare_unmerge(
         confirmation=boolean_confirmation("unmerge"),
         plan=plan,
         new_log_text=new_log_text,
+        survivor_status_outcome=survivor_status_outcome,
+        absorbed_status_outcome=absorbed_status_outcome,
         link_reversed_texts=reversed_texts,
         relation_reversed_texts=relation_reversed_texts,
         provenance_restored_texts=provenance_reversed_texts,
