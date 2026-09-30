@@ -91,3 +91,38 @@ def test_index_status_matches_the_file(adr: Path) -> None:
     assert listed == front, (
         f"ADR-{number}: index says {listed!r}, the file says {front!r}"
     )
+
+
+_STATUS_VOCABULARY = re.compile(
+    r"^(?:Proposed|Accepted|Deprecated|Amended"
+    r"|Amended by ADR-\d{4}(?: and ADR-\d{4})*"
+    r"|Superseded(?: in part)? by ADR-\d{4}(?: and ADR-\d{4})*)$"
+)
+"""The lifecycle `docs/adr/README.md` documents. A status outside it is one a
+reader of the README cannot interpret."""
+
+_AMENDS_LINE = re.compile(r"^- \*\*Amends:\*\*\s*\[ADR-(\d{4})\]", re.MULTILINE)
+
+
+@pytest.mark.parametrize("adr", _adr_files(), ids=lambda p: p.name[:4])
+def test_status_uses_the_documented_lifecycle(adr: Path) -> None:
+    status = _frontmatter_status(adr.read_text(encoding="utf-8"))
+
+    assert _STATUS_VOCABULARY.match(status), (
+        f"{adr.name}: status {status!r} is not in the README's lifecycle"
+    )
+
+
+@pytest.mark.parametrize("adr", _adr_files(), ids=lambda p: p.name[:4])
+def test_an_amended_adr_names_its_amender(adr: Path) -> None:
+    """An ADR that amends another must be visible from the one it amends: a
+    reader who starts at the amended ADR, or at the index, otherwise gets the
+    unamended answer."""
+    amender = adr.name[:4]
+    for amended in _AMENDS_LINE.findall(adr.read_text(encoding="utf-8")):
+        target = next(_ADR_DIR.glob(f"{amended}-*.md"))
+        status = _frontmatter_status(target.read_text(encoding="utf-8"))
+        assert f"ADR-{amender}" in status, (
+            f"ADR-{amended} is amended by ADR-{amender}, but its status is "
+            f"{status!r}"
+        )

@@ -16,18 +16,21 @@ sensitivity: public
 
 An **Architecture Decision Record (ADR)** captures a single significant decision: the context that forced it, the decision itself, and its consequences. ADRs are short, immutable-once-accepted, and append-only — we do not rewrite history; when a decision changes, we add a new ADR that supersedes the old one.
 
-> **The ADR log starts with the code.** During the design phase the project's decisions live in the design documents under [`docs/`](../) (vision, philosophy, knowledge object model, roadmap, tech stack). ADRs are meant to record decisions *as they are made during development*, with real implementation context — so the numbered log begins with the first decision taken while building MVP 1, not before. This directory holds the process and template, ready for that first entry.
+> **The ADR log starts with the code.** During the design phase the project's decisions live in the design documents under [`docs/`](../) (vision, philosophy, knowledge object model, roadmap, tech stack). ADRs are meant to record decisions *as they are made during development*, with real implementation context — so the numbered log begins with the first decision taken while building MVP 1, not before.
 
 ## Status lifecycle
 
 - **Proposed** — under discussion (usually via a design proposal issue).
 - **Accepted** — the decision is in effect.
+- **Amended** — in effect, with part of it changed by a dated amendment section appended to the same ADR.
+- **Amended by ADR-XXXX** — in effect, with part of it changed by a later ADR, which names it on an `Amends:` line.
 - **Superseded by ADR-XXXX** — replaced by a later decision; kept for history.
+- **Superseded in part by ADR-XXXX** — one clause replaced by a later decision; the rest stays in effect.
 - **Deprecated** — no longer relevant, but retained.
 
 ## How to add an ADR
 
-1. Copy [`template.md`](template.md) to `NNNN-short-title.md`, using the next number (the first is `0001`).
+1. Copy [`template.md`](template.md) to `NNNN-short-title.md`, using the next number.
 2. Fill in context, decision, consequences, and alternatives considered.
 3. Open a pull request. Significant decisions should reference a design proposal issue.
 4. Once merged as **Accepted**, the ADR is not edited except to change its status.
@@ -47,7 +50,7 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 | [0009](0009-source-sensitivity-propagation.md) | Source sensitivity propagates to provenance descendants, raise-only | Accepted | 2026-07-28 |
 | [0010](0010-reingest-raise-only-sensitivity.md) | Re-ingest resolves sensitivity as a raise-only high-water mark | Accepted | 2026-07-28 |
 | [0011](0011-provenance-retarget-on-merge.md) | Third-party provenance retargets on merge; v3 reversibility ledger | Accepted | 2026-07-29 |
-| [0012](0012-sensitivity-backfill-per-source-sweep.md) | Sensitivity backfill as an explicit per-Source sweep, not a silent migration | Accepted | 2026-07-29 |
+| [0012](0012-sensitivity-backfill-per-source-sweep.md) | Sensitivity backfill as an explicit per-Source sweep, not a silent migration | Amended by ADR-0016 | 2026-07-29 |
 | [0013](0013-relocate-merge-ledger-to-bundle-state.md) | Relocate the merge ledger to `bundle/.state/ledger/` | Superseded in part by ADR-0017 | 2026-08-11 |
 | [0014](0014-durable-pending-work-stores.md) | Durable pending-work stores -- findings in `.openkos/`, decisions in `bundle/.state/` | Accepted | 2026-08-12 |
 | [0015](0015-per-type-default-sensitivity.md) | Per-type default sensitivity as a floor-relative offset | Amended | 2026-08-14 |
@@ -64,7 +67,7 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 | [0026](0026-superseded-concepts-re-enter-answers-only-as-labelled-history.md) | A superseded concept re-enters an answer only as labelled, citable history, and only when the workspace opts in | Accepted | 2026-09-26 |
 | [0027](0027-hand-rolled-stdio-mcp-server.md) | The MCP adapter is a hand-rolled stdio server for protocol revision 2025-11-25, with no SDK | Accepted | 2026-09-26 |
 | [0028](0028-mcp-disclosure-is-its-own-boundary.md) | Disclosure to an MCP client is its own sensitivity boundary -- hidden by default, opened only at launch | Accepted | 2026-09-26 |
-| [0029](0029-adopt-okf-v02-frontmatter.md) | Adopt OKF v0.2 frontmatter -- provenance stays the truth, sources is its projection, and repair migrates existing bundles | Accepted | 2026-09-29 |
+| [0029](0029-adopt-okf-v02-frontmatter.md) | Adopt OKF v0.2 frontmatter -- provenance stays the truth, sources is its projection, and repair migrates existing bundles | Amended by ADR-0032 | 2026-09-29 |
 | [0030](0030-untrusted-incoming-frontmatter.md) | Incoming frontmatter is untrusted -- preserved whole in one namespace, with a closed per-key lift | Accepted | 2026-09-29 |
 | [0031](0031-openai-compatible-backend.md) | A second, OpenAI-compatible local backend beside the Ollama default | Accepted | 2026-09-29 |
 | [0032](0032-deprecated-status-is-an-export-of-computed-supersession.md) | Frontmatter `status: deprecated` is a marked export of computed supersession, never read back | Accepted | 2026-09-29 |
