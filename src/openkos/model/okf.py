@@ -181,6 +181,23 @@ via `ExtractionStatus`/mypy-strict, and readers match a single literal
 (`== EXTRACTION_STATUS_FAILED`) rather than membership-testing this tuple,
 so an unrecognized on-disk value is structurally ignored."""
 
+INGEST_PENDING_KEY: Final = "ingest_pending"
+"""The optional frontmatter key marking a Source whose ingest has not yet run
+to completion (#1136).
+
+`ingest` writes the Source BEFORE the derived objects, `index.md` and
+`log.md` and rewrites it WITHOUT this key as the LAST write of the run, so
+the key's presence is the durable trace of an interrupted run -- exactly the
+"pending marker" shape the merge ledger uses for a torn merge. The marker is
+`true` while pending and ABSENT otherwise; it is never written as `false`.
+
+It is a PENDING marker rather than a completion stamp on purpose: every
+Source written before this key existed lacks it, and those are complete, so
+absence has to mean "complete". A completion stamp would read every existing
+workspace as unfinished and force a full re-extraction of every source ever
+ingested. A frontmatter extension is legal under OKF §4.1 and degrades
+gracefully: a consumer that has never heard of the key ignores it."""
+
 ORIGIN_KEY_KEY: Final = "origin_key"
 """The optional frontmatter key recording WHICH FILE ON DISK a Source was
 ingested from (#552), as a digest -- never a path.
@@ -1039,6 +1056,25 @@ def refresh_sources(metadata: dict[str, object]) -> dict[str, object]:
     else:
         updated[SOURCES_KEY] = projected
     return updated
+
+
+def is_ingest_pending(metadata: Mapping[str, object]) -> bool:
+    """Whether `metadata` marks an interrupted ingest (`INGEST_PENDING_KEY`).
+
+    Only the literal `true` the engine writes counts. Frontmatter is
+    hand-editable, and any other value (`false`, a string, a number) reads as
+    "not pending" -- the behavior of every Source that never carried the key."""
+    return metadata.get(INGEST_PENDING_KEY) is True
+
+
+def mark_ingest_pending(content: str) -> str:
+    """`content` (a Source document) with `INGEST_PENDING_KEY: true` added to
+    its frontmatter and every other key, and the body, unchanged -- so
+    removing the key again gives back exactly the bytes `build_source_concept`
+    produced, which is what the run's final write emits."""
+    metadata, body = load_frontmatter(content)
+    metadata[INGEST_PENDING_KEY] = True
+    return dump_frontmatter(metadata, body)
 
 
 def build_source_concept(

@@ -101,6 +101,17 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   resource. Existing workspaces keep their old text (no migration is run);
   edit a Source by hand to drop the path from it.
 
+- `ingest` no longer leaves a Source the next run skips forever when it is
+  killed part-way ([#1136](https://github.com/jasonssdev/openkos/issues/1136)).
+  Phase B wrote the Source before the derived objects, `index.md` and
+  `log.md`, and the convergence gate read only the Source, so a kill in that
+  window produced "source unchanged and already extracted" with no objects, no
+  index entry and no log entry. The Source is now written first carrying
+  `ingest_pending: true` and rewritten without it as the last write; a
+  pending Source is retried by a plain re-ingest, which also catalogues any
+  objects the interrupted run had already written. Sources written before this
+  change carry no such key and stay converged.
+
 - A concept id containing a backslash or a colon (`..\..\x`, `C:\x`,
   `a:b`) is now refused by every id-taking verb and tool, and `slugify` no
   longer emits a reserved Windows device name (`con`, `prn`, `aux`, `nul`,

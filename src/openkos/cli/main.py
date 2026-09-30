@@ -5744,6 +5744,18 @@ def _ingest_single(
         # dedup-before-insert Source bullet (D3), and the derived-plans
         # index/log loop (design: one confirm gate, one preview) including
         # the durable disambiguation audit entry (#131).
+        # #1136: a prior Source still marked `ingest_pending` was left by an
+        # interrupted run; objects that run wrote but never catalogued are
+        # adopted into this run's index/log update (never rewritten).
+        adopted: tuple[application_ingest.AdoptedObject, ...] = (
+            application_ingest.find_uncatalogued_objects(
+                layout.bundle_dir, slug, index_text
+            )
+            if converged is None
+            and had_prior_source
+            and application_ingest.prior_ingest_pending(concept_text)
+            else ()
+        )
         catalog_update = application_ingest.compose_catalog_update(
             source=source_plan,
             staged=staged,
@@ -5754,6 +5766,7 @@ def _ingest_single(
             regenerate=regenerate,
             timestamp=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
             entry_date=now.astimezone().date(),
+            adopted=adopted,
         )
         concept_content = catalog_update.concept_content
         new_index_text = catalog_update.new_index_text
@@ -5844,6 +5857,11 @@ def _ingest_single(
             )
         for plan in derived_plans:
             typer.echo(f"  + bundle/{plan.link_dir}/{plan.slug}.md")
+        for obj in adopted:
+            typer.echo(
+                f"  ~ bundle/{obj.link_dir}/{obj.slug}.md "
+                "(written by an interrupted ingest -- now catalogued)"
+            )
         typer.echo(f"  ~ {index_path.name} (Source entry refreshed)")
         typer.echo(f"  ~ {log_path.name} (new dated entry)")
     else:
@@ -5871,6 +5889,17 @@ def _ingest_single(
     # re-validate each target now -- after the gate, before the first write.
     _reject_drifted_targets(layout, guarded_targets, "ingest")
 
+    # #1136: Phase B is a sequence of individually atomic writes with no
+    # transaction around it, so the Source -- the one file the convergence
+    # gate reads -- is written FIRST carrying `ingest_pending` and rewritten
+    # WITHOUT it as the LAST write. A kill anywhere in between leaves a
+    # pending Source, which `converged_reingest` never treats as converged.
+    # A Source-only rewrite (`converged` set) extracts nothing and stays one
+    # atomic write: the marker there would only force a needless re-extract.
+    two_step = converged is None
+    first_content = (
+        okf.mark_ingest_pending(concept_content) if two_step else concept_content
+    )
     try:
         sources_dir.mkdir(parents=True, exist_ok=True)
         if regenerate:
@@ -5887,12 +5916,12 @@ def _ingest_single(
             # surfacing the same `FileExistsError` through the same error
             # path, as the fresh-ingest branch below.
             if had_prior_source:
-                fsio.write_atomic(concept_path, concept_content)
+                fsio.write_atomic(concept_path, first_content)
             else:
-                fsio.write_exclusive(concept_path, concept_content)
+                fsio.write_exclusive(concept_path, first_content)
         else:
             fsio.copy_exclusive(src, raw_dest)
-            fsio.write_exclusive(concept_path, concept_content)
+            fsio.write_exclusive(concept_path, first_content)
         # Phase B write loop (design D5): `derived_plans` is the COMPLETE,
         # already-deduped write set computed by
         # `application_ingest.stage_derived_objects` in Phase A -- no
@@ -5903,6 +5932,8 @@ def _ingest_single(
             fsio.write_exclusive(plan.path, plan.content)
         fsio.write_atomic(index_path, new_index_text)
         fsio.write_atomic(log_path, new_log_text)
+        if two_step:
+            fsio.write_atomic(concept_path, concept_content)
     except (OSError, ValueError) as exc:
         typer.echo(
             f"openkos ingest: failed while writing the ingest -- {exc}.", err=True
@@ -5913,6 +5944,12 @@ def _ingest_single(
     imported_paths.extend(
         f"bundle/{plan.link_dir}/{plan.slug}.md" for plan in derived_plans
     )
+    # Adopted objects were written by the interrupted run and are still
+    # uncommitted; they belong in this run's commit (#1136).
+    committed_paths = [
+        *imported_paths,
+        *(f"bundle/{obj.link_dir}/{obj.slug}.md" for obj in adopted),
+    ]
     typer.echo(
         f"openkos ingest: imported '{src}' -> {', '.join(imported_paths)} "
         f"({index_path.name}, {log_path.name} updated)."
@@ -5922,7 +5959,7 @@ def _ingest_single(
 
     _autocommit(
         root,
-        [*imported_paths, "bundle/index.md", "bundle/log.md"],
+        [*committed_paths, "bundle/index.md", "bundle/log.md"],
         f"openkos: ingest {name} (+{len(derived_plans)} concepts)",
     )
 
