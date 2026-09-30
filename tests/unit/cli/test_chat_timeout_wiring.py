@@ -551,7 +551,7 @@ _EXPECTED_VERB_TASKS = {
     "adjudicate": "adjudication",
     "suggest_relations_cmd": "edge_typing",
     "suggest_volatility_cmd": "volatility_typing",
-    "contradictions": "contradiction",
+    "_run_contradictions_report": "contradiction",
 }
 """Which `main.py` function must resolve which task's model (#515).
 
