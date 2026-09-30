@@ -1,0 +1,269 @@
+{
+  "auto_run_reverses": {
+    "exit_code": 0,
+    "rows": [
+      [
+        [
+          "decisions/a",
+          "decisions/b"
+        ],
+        "reverses",
+        0.9,
+        "stub",
+        false
+      ]
+    ],
+    "stderr": "openkos revisions: experimental -- detection quality is unmeasured on real bundles; review every finding before applying it with 'openkos reconcile --from-findings'.\n1 candidate pair(s), 0 served -> 1 LLM call(s) to judge (this can take a while). Pass --auto to skip this prompt.\n",
+    "stdout": "decisions/a\n  [REVERSES] with decisions/b (confidence 0.90) [direction unknown: decisions/b: no Source reached] [not actionable: unquoted]\n    decisions/a: (no verbatim quote from decisions/a)\n    decisions/b: (no verbatim quote from decisions/b)\n    rationale: stub\n    next: openkos reconcile --from-findings\n\n"
+  },
+  "auto_run_unrelated_hidden": {
+    "exit_code": 0,
+    "rows": [
+      [
+        [
+          "decisions/a",
+          "decisions/b"
+        ],
+        "unrelated",
+        0.5,
+        "stub",
+        false
+      ]
+    ],
+    "stderr": "openkos revisions: experimental -- detection quality is unmeasured on real bundles; review every finding before applying it with 'openkos reconcile --from-findings'.\n1 candidate pair(s), 0 served -> 1 LLM call(s) to judge (this can take a while). Pass --auto to skip this prompt.\n",
+    "stdout": "No decision revisions found.\n"
+  },
+  "confidential_excluded": {
+    "exit_code": 0,
+    "rows": [],
+    "stderr": "openkos revisions: experimental -- detection quality is unmeasured on real bundles; review every finding before applying it with 'openkos reconcile --from-findings'.\n",
+    "stdout": "No candidate Decision pairs found (need two Decisions from different Sources with similar embeddings).\n"
+  },
+  "confidential_included": {
+    "exit_code": 0,
+    "rows": [
+      [
+        [
+          "decisions/confidential",
+          "decisions/open"
+        ],
+        "reaffirms",
+        0.5,
+        "stub",
+        true
+      ]
+    ],
+    "stderr": "openkos revisions: experimental -- detection quality is unmeasured on real bundles; review every finding before applying it with 'openkos reconcile --from-findings'.\n1 candidate pair(s), 0 served -> 1 LLM call(s) to judge (this can take a while). Pass --auto to skip this prompt.\n",
+    "stdout": "decisions/confidential\n  [REAFFIRMS] with decisions/open (confidence 0.50) [direction unknown: decisions/open: no Source reached]\n\n"
+  },
+  "first_call_fails": {
+    "exit_code": 1,
+    "rows": [],
+    "stderr": "openkos revisions: experimental -- detection quality is unmeasured on real bundles; review every finding before applying it with 'openkos reconcile --from-findings'.\n1 candidate pair(s), 0 served -> 1 LLM call(s) to judge (this can take a while). Pass --auto to skip this prompt.\nopenkos revisions: failed after judging 0 of 1 planned pair(s) -- down.\n",
+    "stdout": "No decision revisions found.\n"
+  },
+  "fresh_all_unrelated_shown": {
+    "exit_code": 0,
+    "rows": [
+      [
+        [
+          "decisions/a",
+          "decisions/b"
+        ],
+        "unrelated",
+        0.5,
+        "stub",
+        false
+      ]
+    ],
+    "stderr": "openkos revisions: experimental -- detection quality is unmeasured on real bundles; review every finding before applying it with 'openkos reconcile --from-findings'.\n1 candidate pair(s), 0 served -> 1 LLM call(s) to judge (this can take a while). Pass --auto to skip this prompt.\n",
+    "stdout": "decisions/a\n  [UNRELATED] with decisions/b (confidence 0.50) [direction unknown: decisions/b: no Source reached]\n\n"
+  },
+  "malformed_config": {
+    "exit_code": 1,
+    "rows": [],
+    "stderr": "openkos revisions: failed while reading the workspace -- openkos.yaml: invalid YAML -- while parsing a flow sequence\n  in \"<unicode string>\", line 1, column 8:\n    model: [unclosed\n           ^\nexpected ',' or ']', but got '<stream end>'\n  in \"<unicode string>\", line 2, column 1:\n    \n    ^.\n",
+    "stdout": ""
+  },
+  "missing_workspace": {
+    "exit_code": 1,
+    "rows": [],
+    "stderr": "openkos revisions: refusing to run -- no OpenKOS workspace found in this directory (run 'openkos init' first).\n",
+    "stdout": ""
+  },
+  "no_candidate_pairs": {
+    "exit_code": 0,
+    "rows": [],
+    "stderr": "openkos revisions: experimental -- detection quality is unmeasured on real bundles; review every finding before applying it with 'openkos reconcile --from-findings'.\n",
+    "stdout": "No candidate Decision pairs found (need two Decisions from different Sources with similar embeddings).\n"
+  },
+  "no_decisions": {
+    "exit_code": 0,
+    "rows": [],
+    "stderr": "openkos revisions: experimental -- detection quality is unmeasured on real bundles; review every finding before applying it with 'openkos reconcile --from-findings'.\n",
+    "stdout": "No Decision objects found.\n"
+  },
+  "non_tty_refuses": {
+    "exit_code": 1,
+    "rows": [],
+    "stderr": "openkos revisions: experimental -- detection quality is unmeasured on real bundles; review every finding before applying it with 'openkos reconcile --from-findings'.\n1 candidate pair(s), 0 served -> 1 LLM call(s) to judge (this can take a while). Pass --auto to skip this prompt.\nopenkos revisions: refusing to spend model calls without confirmation -- stdin is not a TTY; re-run with --auto.\n",
+    "stdout": ""
+  },
+  "partial_generic": {
+    "exit_code": 1,
+    "rows": [
+      [
+        [
+          "decisions/a",
+          "decisions/b"
+        ],
+        "reverses",
+        0.9,
+        "stub",
+        false
+      ]
+    ],
+    "stderr": "openkos revisions: experimental -- detection quality is unmeasured on real bundles; review every finding before applying it with 'openkos reconcile --from-findings'.\n2 candidate pair(s), 0 served -> 2 LLM call(s) to judge (this can take a while). Pass --auto to skip this prompt.\nopenkos revisions: failed after judging 1 of 2 planned pair(s) -- boom.\n",
+    "stdout": "decisions/a\n  [REVERSES] with decisions/b (confidence 0.90) [direction unknown: decisions/b: no Source reached] [not actionable: unquoted]\n    decisions/a: (no verbatim quote from decisions/a)\n    decisions/b: (no verbatim quote from decisions/b)\n    rationale: stub\n    next: openkos reconcile --from-findings\n\n"
+  },
+  "partial_model_not_found": {
+    "exit_code": 1,
+    "rows": [
+      [
+        [
+          "decisions/a",
+          "decisions/b"
+        ],
+        "reverses",
+        0.9,
+        "stub",
+        false
+      ]
+    ],
+    "stderr": "openkos revisions: experimental -- detection quality is unmeasured on real bundles; review every finding before applying it with 'openkos reconcile --from-findings'.\n2 candidate pair(s), 0 served -> 2 LLM call(s) to judge (this can take a while). Pass --auto to skip this prompt.\nopenkos revisions: failed after judging 1 of 2 planned pair(s) -- model 'qwen3:8b' is not installed. Pull it with `ollama pull qwen3:8b`, then try again.\n",
+    "stdout": "decisions/a\n  [REVERSES] with decisions/b (confidence 0.90) [direction unknown: decisions/b: no Source reached] [not actionable: unquoted]\n    decisions/a: (no verbatim quote from decisions/a)\n    decisions/b: (no verbatim quote from decisions/b)\n    rationale: stub\n    next: openkos reconcile --from-findings\n\n"
+  },
+  "partial_served_gate_counts": {
+    "exit_code": 0,
+    "rows": [
+      [
+        [
+          "decisions/a",
+          "decisions/b"
+        ],
+        "reaffirms",
+        0.9,
+        "stub rationale",
+        false
+      ],
+      [
+        [
+          "decisions/a",
+          "decisions/c"
+        ],
+        "unrelated",
+        0.5,
+        "stub",
+        false
+      ],
+      [
+        [
+          "decisions/b",
+          "decisions/c"
+        ],
+        "unrelated",
+        0.5,
+        "stub",
+        false
+      ]
+    ],
+    "stderr": "openkos revisions: experimental -- detection quality is unmeasured on real bundles; review every finding before applying it with 'openkos reconcile --from-findings'.\n3 candidate pair(s), 1 served -> 2 LLM call(s) to judge (this can take a while). Pass --auto to skip this prompt.\n",
+    "stdout": "decisions/a\n  [REAFFIRMS] with decisions/b (confidence 0.90) [direction unknown: decisions/b: no Source reached]\n  [UNRELATED] with decisions/c (confidence 0.50) [direction unknown: decisions/c: no Source reached]\n\ndecisions/b\n  [UNRELATED] with decisions/c (confidence 0.50) [direction unknown: decisions/c: no Source reached]\n\n"
+  },
+  "partial_unavailable": {
+    "exit_code": 1,
+    "rows": [
+      [
+        [
+          "decisions/a",
+          "decisions/b"
+        ],
+        "reverses",
+        0.9,
+        "stub",
+        false
+      ]
+    ],
+    "stderr": "openkos revisions: experimental -- detection quality is unmeasured on real bundles; review every finding before applying it with 'openkos reconcile --from-findings'.\n2 candidate pair(s), 0 served -> 2 LLM call(s) to judge (this can take a while). Pass --auto to skip this prompt.\nopenkos revisions: failed after judging 1 of 2 planned pair(s) -- Ollama not reachable at x. Start it with `ollama serve`, then try again. Or run `openkos doctor` to diagnose the environment.\n",
+    "stdout": "decisions/a\n  [REVERSES] with decisions/b (confidence 0.90) [direction unknown: decisions/b: no Source reached] [not actionable: unquoted]\n    decisions/a: (no verbatim quote from decisions/a)\n    decisions/b: (no verbatim quote from decisions/b)\n    rationale: stub\n    next: openkos reconcile --from-findings\n\n"
+  },
+  "served_no_gate": {
+    "exit_code": 0,
+    "rows": [
+      [
+        [
+          "decisions/a",
+          "decisions/b"
+        ],
+        "reaffirms",
+        0.9,
+        "stub rationale",
+        false
+      ]
+    ],
+    "stderr": "openkos revisions: experimental -- detection quality is unmeasured on real bundles; review every finding before applying it with 'openkos reconcile --from-findings'.\n",
+    "stdout": "decisions/a\n  [REAFFIRMS] with decisions/b (confidence 0.90) [direction unknown: decisions/b: no Source reached]\n\n"
+  },
+  "truncation_notice": {
+    "exit_code": 0,
+    "rows": [
+      [
+        [
+          "decisions/a",
+          "decisions/b"
+        ],
+        "unrelated",
+        0.5,
+        "stub",
+        true
+      ]
+    ],
+    "stderr": "openkos revisions: experimental -- detection quality is unmeasured on real bundles; review every finding before applying it with 'openkos reconcile --from-findings'.\nFAKE NOTICE\n1 candidate pair(s), 0 served -> 1 LLM call(s) to judge (this can take a while). Pass --auto to skip this prompt.\n",
+    "stdout": "No decision revisions found.\n"
+  },
+  "tty_confirm": {
+    "exit_code": 0,
+    "rows": [
+      [
+        [
+          "decisions/a",
+          "decisions/b"
+        ],
+        "refines",
+        0.8,
+        "stub",
+        false
+      ]
+    ],
+    "stderr": "openkos revisions: experimental -- detection quality is unmeasured on real bundles; review every finding before applying it with 'openkos reconcile --from-findings'.\n1 candidate pair(s), 0 served -> 1 LLM call(s) to judge (this can take a while). Pass --auto to skip this prompt.\n\ropenkos revisions: judging pair 1/1 - 0s...\n",
+    "stdout": "Proceed? [y/N]: y\ndecisions/a\n  [REFINES] with decisions/b (confidence 0.80) [direction unknown: decisions/b: no Source reached] [not actionable: unquoted]\n    decisions/a: (no verbatim quote from decisions/a)\n    decisions/b: (no verbatim quote from decisions/b)\n    rationale: stub\n    next: openkos reconcile --from-findings\n\n"
+  },
+  "tty_decline": {
+    "exit_code": 0,
+    "rows": [],
+    "stderr": "openkos revisions: experimental -- detection quality is unmeasured on real bundles; review every finding before applying it with 'openkos reconcile --from-findings'.\n1 candidate pair(s), 0 served -> 1 LLM call(s) to judge (this can take a while). Pass --auto to skip this prompt.\n",
+    "stdout": "Proceed? [y/N]: n\nAborted -- no revisions judged.\n"
+  },
+  "vector_store_absent": {
+    "exit_code": 0,
+    "rows": [],
+    "stderr": "openkos revisions: experimental -- detection quality is unmeasured on real bundles; review every finding before applying it with 'openkos reconcile --from-findings'.\nopenkos revisions: no document embeddings found -- run 'openkos reindex' first.\n",
+    "stdout": ""
+  },
+  "vector_store_model_mismatch": {
+    "exit_code": 0,
+    "rows": [],
+    "stderr": "openkos revisions: experimental -- detection quality is unmeasured on real bundles; review every finding before applying it with 'openkos reconcile --from-findings'.\nopenkos revisions: vectors.db was embedded with a different embedding model or scheme than 'embedding_model' -- run 'openkos reindex' first.\n",
+    "stdout": ""
+  }
+}

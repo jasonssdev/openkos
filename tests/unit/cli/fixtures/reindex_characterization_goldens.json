@@ -1,0 +1,112 @@
+{
+  "backend_unavailable": {
+    "exit_code": 1,
+    "stderr": "openkos reindex: failed -- Ollama not reachable at x. Start it with `ollama serve`, then try again. Or run `openkos doctor` to diagnose the environment.\n",
+    "stdout": ""
+  },
+  "dimension_mismatch": {
+    "exit_code": 1,
+    "stderr": "openkos reindex: failed -- expected 1024, got 7. Restore the working 'embedding_model' value in openkos.yaml, then run `openkos reindex` again.\n",
+    "stdout": ""
+  },
+  "embed_failed_notice": {
+    "exit_code": 0,
+    "stderr": "openkos reindex: INCOMPLETE -- 2 docs could not be embedded (transient failure). Run `openkos reindex` again to complete it.\n",
+    "stdout": "openkos reindex: 1 embedded, 0 cache-hits, 0 pruned, 0 skipped, 2 embed-failed, 0 withheld.\n"
+  },
+  "fts_unavailable": {
+    "exit_code": 1,
+    "stderr": "openkos reindex: failed -- fts5 missing.\n",
+    "stdout": ""
+  },
+  "generic_backend_error": {
+    "exit_code": 1,
+    "stderr": "openkos reindex: failed -- boom.\n",
+    "stdout": ""
+  },
+  "graph_failure_keeps_the_summary": {
+    "exit_code": 1,
+    "stderr": "openkos reindex: failed while writing the graph index -- disk I/O error.\n",
+    "stdout": "openkos reindex: 3 embedded, 1 cache-hit, 0 pruned, 0 skipped, 0 embed-failed, 0 withheld.\nopenkos reindex: prune pass was skipped this run -- a directory-scan error made part of the bundle unreadable, so no concept was pruned even if some appeared absent (review carry-over, fold-in #3).\n"
+  },
+  "lock_contention_at_store_open": {
+    "exit_code": 1,
+    "stderr": "openkos reindex: failed -- another process is holding the workspace lock (a concurrent reindex?); wait for it to finish, then try again.\n",
+    "stdout": ""
+  },
+  "lock_contention_in_graph": {
+    "exit_code": 1,
+    "stderr": "openkos reindex: failed -- another process is holding the workspace lock (a concurrent reindex?); wait for it to finish, then try again.\n",
+    "stdout": "openkos reindex: 1 embedded, 0 cache-hits, 0 pruned, 0 skipped, 0 embed-failed, 0 withheld.\n"
+  },
+  "lock_contention_in_orchestrator": {
+    "exit_code": 1,
+    "stderr": "openkos reindex: failed -- another process is holding the workspace lock (a concurrent reindex?); wait for it to finish, then try again.\n",
+    "stdout": ""
+  },
+  "malformed_config": {
+    "exit_code": 1,
+    "stderr": "openkos reindex: failed while reading the workspace -- openkos.yaml: invalid YAML -- while parsing a flow sequence\n  in \"<unicode string>\", line 1, column 8:\n    model: [unclosed\n           ^\nexpected ',' or ']', but got '<stream end>'\n  in \"<unicode string>\", line 2, column 1:\n    \n    ^.\n",
+    "stdout": ""
+  },
+  "missing_workspace": {
+    "exit_code": 1,
+    "stderr": "openkos reindex: refusing to run -- no OpenKOS workspace found in this directory (run 'openkos init' first).\n",
+    "stdout": ""
+  },
+  "model_not_found": {
+    "exit_code": 1,
+    "stderr": "openkos reindex: failed -- embedding model 'bge-m3' is not installed. Pull it with `ollama pull bge-m3`, then try again.\n",
+    "stdout": ""
+  },
+  "model_reembed_complete_with_absent_tag": {
+    "exit_code": 0,
+    "stderr": "",
+    "stdout": "openkos reindex: 2 embedded, 0 cache-hits, 0 pruned, 0 skipped, 0 embed-failed, 0 withheld.\nopenkos reindex: re-embedded all vectors -- no embedding-model tag stored (fresh or dropped store); embed_calls=2.\n"
+  },
+  "model_reembed_complete_with_previous_tag": {
+    "exit_code": 0,
+    "stderr": "",
+    "stdout": "openkos reindex: 2 embedded, 0 cache-hits, 0 pruned, 0 skipped, 0 embed-failed, 0 withheld.\nopenkos reindex: re-embedded all vectors -- embedding model changed (old-model -> bge-m3); embed_calls=2.\n"
+  },
+  "model_reembed_incomplete": {
+    "exit_code": 0,
+    "stderr": "openkos reindex: 1 document withheld from embedding -- their sensitivity blocks sending them to a backend that is not this machine, so they have no vector and dense retrieval will not surface them. Point default at this machine and re-run, or lower the sensitivity if it is wrong.\nopenkos reindex: INCOMPLETE -- 1 doc could not be embedded (transient failure). Run `openkos reindex` again to complete it.\n",
+    "stdout": "openkos reindex: 1 embedded, 0 cache-hits, 0 pruned, 1 skipped, 1 embed-failed, 1 withheld.\nopenkos reindex: embed text composition changed (compose-v1 -> chunk-v1); your embedding model is unchanged (bge-m3); re-embedding all vectors -- INCOMPLETE: 3 docs could not be re-embedded, will retry next run; embed_calls=3.\n"
+  },
+  "nonlocal_embed_host_advisory": {
+    "exit_code": 0,
+    "stderr": "openkos reindex: note -- embedding host 'embed.example.invalid:11434' is not this machine (OLLAMA_HOST); document text and embedding vectors will leave this machine.\n",
+    "stdout": "openkos reindex: 1 embedded, 0 cache-hits, 0 pruned, 0 skipped, 0 embed-failed, 0 withheld.\n"
+  },
+  "prune_skipped_notice": {
+    "exit_code": 0,
+    "stderr": "",
+    "stdout": "openkos reindex: 1 embedded, 0 cache-hits, 0 pruned, 2 skipped, 0 embed-failed, 0 withheld.\nopenkos reindex: prune pass was skipped this run -- a directory-scan error made part of the bundle unreadable, so no concept was pruned even if some appeared absent (review carry-over, fold-in #3).\n"
+  },
+  "real_run_on_a_small_bundle": {
+    "exit_code": 0,
+    "stderr": "",
+    "stdout": "openkos reindex: 1 embedded, 0 cache-hits, 0 pruned, 0 skipped, 0 embed-failed, 0 withheld.\nopenkos reindex: re-embedded all vectors -- no embedding-model tag stored (fresh or dropped store); embed_calls=1.\n"
+  },
+  "success_counts": {
+    "exit_code": 0,
+    "stderr": "",
+    "stdout": "openkos reindex: 3 embedded, 2 cache-hits, 1 pruned, 0 skipped, 0 embed-failed, 0 withheld.\n"
+  },
+  "success_singular_cache_hit": {
+    "exit_code": 0,
+    "stderr": "",
+    "stdout": "openkos reindex: 0 embedded, 1 cache-hit, 0 pruned, 0 skipped, 0 embed-failed, 0 withheld.\n"
+  },
+  "vec_unavailable": {
+    "exit_code": 1,
+    "stderr": "openkos reindex: failed -- sqlite-vec missing.\n",
+    "stdout": ""
+  },
+  "withheld_confidential_warning": {
+    "exit_code": 0,
+    "stderr": "openkos reindex: 2 documents withheld from embedding -- their sensitivity blocks sending them to a backend that is not this machine, so they have no vector and dense retrieval will not surface them. Point default at this machine and re-run, or lower the sensitivity if it is wrong.\n",
+    "stdout": "openkos reindex: 1 embedded, 0 cache-hits, 0 pruned, 0 skipped, 0 embed-failed, 2 withheld.\n"
+  }
+}

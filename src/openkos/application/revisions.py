@@ -40,11 +40,18 @@ import sqlite3
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
-from typing import Literal
+from pathlib import Path
+from typing import Literal, Protocol, cast
 
 from openkos import config, lifecycle, sensitivity
+from openkos.application import backends as application_backends
 from openkos.bundle import provenance as bundle_provenance
-from openkos.llm.base import BackendError, LLMBackend
+from openkos.llm.base import (
+    BackendError,
+    BackendModelNotFound,
+    BackendUnavailable,
+    LLMBackend,
+)
 from openkos.model import okf
 from openkos.model.relations import RESOLUTION_RELATION_TYPES
 from openkos.resolution import decision_revision
@@ -828,3 +835,259 @@ def actionable_revision_findings(
         )
     ]
     return tuple(sorted(results, key=lambda finding: finding.pair_ids))
+
+
+# -- The `revisions` run ----------------------------------------------------
+#
+# The use case `openkos revisions` is an adapter over (issue #1168): the
+# front half (`load_decisions`, `plan_revisions`) and the judging half
+# (`judge_revisions`) above, sequenced with the one cost gate between them.
+# `run_revisions` takes an explicit `root`, returns a typed `RevisionsRun` and
+# raises typed `RevisionsRefused` subclasses; it never prompts, renders, reads
+# the current directory, calls `sys.stdin.isatty()` or raises `typer.Exit`.
+
+EXPERIMENTAL_NOTICE = (
+    "openkos revisions: experimental -- detection quality is unmeasured on "
+    "real bundles; review every finding before applying it with 'openkos "
+    "reconcile --from-findings'."
+)
+"""design.md's Phase B re-plan, Decision B4: stated once, on every non-refused
+run -- the whole point is that this detector has only been measured against a
+synthetic harness fixture (`evals/decision_revisions/`), never against a real
+bundle."""
+
+NO_VECTORS_MESSAGE = (
+    "openkos revisions: no document embeddings found -- run 'openkos reindex' first."
+)
+MODEL_MISMATCH_MESSAGE = (
+    "openkos revisions: vectors.db was embedded with a different embedding "
+    "model or scheme than 'embedding_model' -- run 'openkos reindex' first."
+)
+"""design.md Decision B1's two whole-run vector-store degrade messages:
+`revisions` never embeds, so a Decision's document vector comes ONLY from
+`.openkos/vectors.db` as written by `openkos reindex`. Both cases make zero LLM
+calls, state their remedy, and are not failures -- the store is simply not built
+for the currently configured model."""
+
+_VERB = "revisions"
+
+
+class RevisionsRefused(Exception):
+    """Base of every refusal `run_revisions` raises. `message` is the complete,
+    user-facing text, so an adapter renders it verbatim and maps the TYPE to an
+    exit code."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
+
+class NotAWorkspace(RevisionsRefused):
+    """`root` is not an OpenKOS workspace."""
+
+
+class WorkspaceUnreadable(RevisionsRefused):
+    """Reading `openkos.yaml` raised `OSError`/`ValueError`."""
+
+
+class ConfirmationUnavailable(RevisionsRefused):
+    """The cost question was required and could not be asked (stdin is not a
+    TTY and `--auto` was not passed); nothing was judged."""
+
+
+@dataclass(frozen=True)
+class RevisionsRequest:
+    skip_confirmation: bool = False
+    """`--auto`: skip the pair-judgment question."""
+    include_confidential: bool = False
+    fresh: bool = False
+
+
+ConfirmationAnswer = Literal["proceed", "declined", "unavailable"]
+
+
+class RevisionsObserver(Protocol):
+    """The adapter's window onto a run."""
+
+    def started(self) -> None:
+        """The workspace was accepted; the run is about to start."""
+
+    def truncation_notice(self, notice: str) -> None:
+        """Candidates were dropped by the cap; stated BEFORE the cost gate so an
+        operator learns it before consenting to the spend."""
+
+    def cost_gate(self, plan: RevisionPlan) -> None:
+        """State the exact judge-call count. Called whenever at least one pair
+        is left to judge, even under `--auto`."""
+
+    def confirm_judging(self) -> ConfirmationAnswer:
+        """Ask whether to proceed. `"unavailable"` means it could not be asked."""
+
+    def progress_callback(
+        self,
+    ) -> Callable[[int, int, decision_revision.RevisionVerdict], None] | None:
+        """The per-pair judging progress hook, or `None` for silence."""
+
+
+@dataclass(frozen=True)
+class RevisionsPorts:
+    chat_client: Callable[[config.Config, str | None], LLMBackend]
+    resolve_local_exemption: Callable[
+        [application_backends.HasLocality, config.Config], bool
+    ] = application_backends.resolve_local_exemption
+    truncation_notice: Callable[
+        [decision_revision.RevisionCandidatePlan], str | None
+    ] = decision_revision.revision_truncation_notice
+
+
+@dataclass(frozen=True)
+class RevisionsReport:
+    """What a judged run holds: the decisions it considered, the plan it
+    judged and the outcome -- everything `revisions_report` renders from."""
+
+    decisions: DecisionSet
+    plan: RevisionPlan
+    outcome: RevisionOutcome
+
+
+@dataclass(frozen=True)
+class RevisionsRun:
+    """One `run_revisions` result. `status` is how far it got; `report` is set
+    exactly when `status == "completed"`."""
+
+    status: Literal[
+        "no_decisions", "vectors_absent", "model_mismatch", "declined", "completed"
+    ]
+    model: str
+    report: RevisionsReport | None = None
+    cfg: config.Config | None = None
+    """The run's config, so a partial-batch message words the backend."""
+
+
+def revisions_batch_failure_message(
+    outcome: RevisionOutcome,
+    *,
+    total: int,
+    model: str,
+    cfg: config.Config | None = None,
+) -> str:
+    """One line for a partial `RevisionOutcome` (#441 precedent): the same
+    3-tier cause-specific wording the sibling verbs use, prefixed with how much
+    paid-for judging survived. `total` is `len(plan.to_judge)` -- the
+    judged-pair budget this run actually paid for, never the full candidate plan
+    (served pairs cost nothing and cannot fail)."""
+    failure = outcome.failure
+    context = (
+        f"openkos {_VERB}: failed after judging {len(outcome.results)} "
+        f"of {total} planned pair(s)"
+    )
+    if isinstance(failure, BackendUnavailable):
+        return (
+            f"{context} -- {failure}. {application_backends.start_hint(cfg)}, "
+            f"then try again.{application_backends.DOCTOR_HINT}"
+        )
+    if isinstance(failure, BackendModelNotFound):
+        return (
+            f"{context} -- model '{model}' is not installed. "
+            f"{application_backends.install_hint(cfg, model)}, then try again."
+        )
+    return f"{context} -- {failure}."
+
+
+def run_revisions(
+    root: Path,
+    request: RevisionsRequest,
+    ports: RevisionsPorts,
+    observer: RevisionsObserver,
+) -> RevisionsRun:
+    """Detect Decisions that a later Decision reverses, refines or reaffirms in
+    the workspace at `root`. Read-only over the bundle: the one thing it writes
+    is `.openkos/findings.db`.
+
+    Candidate pairs are blocked by embedding similarity over each eligible
+    Decision's document vector, read directly from `.openkos/vectors.db` -- this
+    makes NO embedding call, ever (Decision B1). The ONE cost gate (Decision B4)
+    fires only when there is at least one candidate pair left to judge."""
+    reason = config.require_workspace(root)
+    if reason is not None:
+        raise NotAWorkspace(f"openkos {_VERB}: refusing to run -- {reason}.")
+
+    layout = config.WorkspaceLayout(root)
+    try:
+        cfg = config.read_config(root)
+    except (OSError, ValueError) as exc:
+        raise WorkspaceUnreadable(
+            f"openkos {_VERB}: failed while reading the workspace -- {exc}."
+        ) from exc
+
+    observer.started()
+
+    llm = ports.chat_client(cfg, None)
+    local_exemption = ports.resolve_local_exemption(
+        cast(application_backends.HasLocality, llm), cfg
+    )
+    # design.md Decision B2: the flag (or the local exemption) releases only the
+    # judge's `llm.chat` send of a confidential Decision's body -- it never
+    # authorizes an embedding call, which this run never makes at all.
+    effective_confidential = request.include_confidential or local_exemption
+
+    decisions = load_decisions(
+        layout,
+        include_confidential=effective_confidential,
+        local_exemption=local_exemption,
+    )
+    if not decisions.decisions:
+        return RevisionsRun(status="no_decisions", model=cfg.model)
+
+    plan = plan_revisions(
+        layout,
+        decisions,
+        embedding_model=cfg.embedding_model,
+        effective_confidential=effective_confidential,
+        fresh=request.fresh,
+        backend=cfg.backend,
+    )
+
+    # design.md Decision B1's table: a whole-run vector-store degrade makes zero
+    # LLM calls -- there is no candidate plan worth judging, so neither the gate
+    # nor the judge is ever reached.
+    if plan.coverage.store == "absent":
+        return RevisionsRun(status="vectors_absent", model=cfg.model)
+    if plan.coverage.store == "model-mismatch":
+        return RevisionsRun(status="model_mismatch", model=cfg.model)
+
+    # #378 precedent: stated BEFORE the gate, so an operator learns candidates
+    # were dropped before consenting to the spend.
+    notice = ports.truncation_notice(plan.candidate_plan)
+    if notice is not None:
+        observer.truncation_notice(notice)
+
+    # Decision B4: the one remaining cost gate, stated (even under `--auto`)
+    # whenever there is at least one pair left to judge -- a gate whose count is
+    # zero states nothing and asks nothing.
+    if plan.to_judge:
+        observer.cost_gate(plan)
+        if not request.skip_confirmation:
+            answer = observer.confirm_judging()
+            if answer == "unavailable":
+                raise ConfirmationUnavailable(
+                    f"openkos {_VERB}: refusing to spend model calls "
+                    "without confirmation -- stdin is not a TTY; re-run "
+                    "with --auto."
+                )
+            if answer == "declined":
+                return RevisionsRun(status="declined", model=cfg.model)
+
+    outcome = judge_revisions(
+        layout,
+        plan,
+        llm=llm,
+        effective_confidential=effective_confidential,
+        on_progress=observer.progress_callback(),
+    )
+    return RevisionsRun(
+        status="completed",
+        model=cfg.model,
+        cfg=cfg,
+        report=RevisionsReport(decisions=decisions, plan=plan, outcome=outcome),
+    )

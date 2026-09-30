@@ -14,6 +14,25 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+### Fixed
+
+- `suggest-volatility` no longer tells an `openai-compatible` workspace to start
+  Ollama or `ollama pull` a model when its backend fails
+  ([#1175](https://github.com/jasonssdev/openkos/issues/1175)). The message now
+  names the configured backend, the way `suggest-relations` does. The
+  partial-batch failure line of `suggest-volatility`, `suggest-relations` and
+  `revisions` ("failed after suggesting N ...") follows the configured backend
+  too.
+
+### Security
+
+- The merged-body reconciliation that `merge`, `curate`, and `adjudicate --apply`
+  run no longer sends a `confidential` concept to a non-local model
+  ([#1124](https://github.com/jasonssdev/openkos/issues/1124)). It follows the
+  same egress rule as every other chat call: a merge involving a confidential
+  concept skips the pass and keeps the stacked body, with a notice, unless the
+  backend is verifiably local and `confidential_local_exemption` is on.
+
 ## [0.3.0] - 2026-09-30
 
 MVP 3, the Ask Surface, is complete. The headline is `openkos mcp`: a

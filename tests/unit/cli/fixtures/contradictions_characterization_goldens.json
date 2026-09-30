@@ -1,0 +1,866 @@
+{
+  "candidate_edge_truncation": {
+    "exit_code": 0,
+    "findings_rows": null,
+    "state_files": {},
+    "stderr": "",
+    "stdout": "openkos contradictions: workspace at <ROOT>\n\n50 of 60 candidate edge(s) shown (cap reached)\n\nThe graph has no typed edges yet. Apply relations first: `openkos suggest-relations` then `openkos relate`, or `openkos curate`.\n"
+  },
+  "corrupt_findings_db": {
+    "exit_code": 0,
+    "findings_rows": [
+      {
+        "unreadable": "DatabaseError"
+      }
+    ],
+    "state_files": {},
+    "stderr": "openkos contradictions: warning -- failed to read persisted findings (file is not a database); judging every candidate fresh.\nopenkos contradictions: warning -- failed to persist findings (file is not a database); this run's verdicts are shown below but will not be served from the store on a later run.\n",
+    "stdout": "openkos contradictions: workspace at <ROOT>\n\n0 of 1 candidate(s) served from persisted findings; 1 judged fresh.\n\n[CONTRADICTS] concepts/a <-> concepts/b (confidence: 0.90)\n  - x\n  rationale: fake reply\n\n"
+  },
+  "decline_merged_body": {
+    "exit_code": 0,
+    "findings_rows": null,
+    "last_commit": {
+      "files": [
+        "bundle/.state/decisions/concepts/a.decisions.okf"
+      ],
+      "subject": "openkos: decline contradiction concepts/a/concepts/a"
+    },
+    "state_files": {
+      "bundle/.state/decisions/concepts/a.decisions.okf": "---\nconcept_id: concepts/a\ndecisions:\n- decided_at: '<TS>'\n  decision_key: e747c862204ba5b0b1419386a0a29f91\n  merged_absorbed_id: concepts/z\n  pair_ids:\n  - concepts/a\n  - concepts/a\n  state: declined\nschema: openkos.decisions/v2\n---\n"
+    },
+    "stderr": "",
+    "stdout": "openkos contradictions: declined concepts/a <-> concepts/a (merged content, absorbed concepts/z).\n"
+  },
+  "decline_twice": {
+    "exit_code": 0,
+    "findings_rows": null,
+    "last_commit": {
+      "files": [
+        "bundle/.state/decisions/concepts/a.decisions.okf"
+      ],
+      "subject": "openkos: decline contradiction concepts/a/concepts/b"
+    },
+    "state_files": {
+      "bundle/.state/decisions/concepts/a.decisions.okf": "---\nconcept_id: concepts/a\ndecisions:\n- decided_at: '<TS>'\n  decision_key: 002a56ed430ecc9c1eca9138e8d3971a\n  merged_absorbed_id: null\n  pair_ids:\n  - concepts/a\n  - concepts/b\n  state: declined\nschema: openkos.decisions/v2\n---\n"
+    },
+    "stderr": "",
+    "stdout": "openkos contradictions: declined concepts/a <-> concepts/b.\n"
+  },
+  "decline_typed": {
+    "exit_code": 0,
+    "findings_rows": null,
+    "last_commit": {
+      "files": [
+        "bundle/.state/decisions/concepts/a.decisions.okf"
+      ],
+      "subject": "openkos: decline contradiction concepts/a/concepts/b"
+    },
+    "state_files": {
+      "bundle/.state/decisions/concepts/a.decisions.okf": "---\nconcept_id: concepts/a\ndecisions:\n- decided_at: '<TS>'\n  decision_key: 002a56ed430ecc9c1eca9138e8d3971a\n  merged_absorbed_id: null\n  pair_ids:\n  - concepts/a\n  - concepts/b\n  state: declined\nschema: openkos.decisions/v2\n---\n"
+    },
+    "stderr": "",
+    "stdout": "openkos contradictions: declined concepts/a <-> concepts/b.\n"
+  },
+  "declined_verdict_hidden": {
+    "exit_code": 0,
+    "findings_rows": [
+      {
+        "confidence": 0.9,
+        "conflicting_claims": [
+          "x"
+        ],
+        "input_digests": [
+          [
+            "concepts/a",
+            "113e194150349b1a9e602c8d14ac2e17f32e81449f42cf6f35c87695cb6548b1"
+          ],
+          [
+            "concepts/b",
+            "6b39090260a5b5b8e08b6fead19654ad36b9d65a105cbf1e6f73c3808248626e"
+          ],
+          [
+            "relation_type",
+            "5b962d789a179c3b0fef884c6ce16d3cf13ec3d7f64401515ae44ef6a5a1f951"
+          ]
+        ],
+        "merged_absorbed_id": null,
+        "pair_ids": [
+          "concepts/a",
+          "concepts/b"
+        ],
+        "rationale": "fake reply",
+        "verdict": "contradicts"
+      }
+    ],
+    "state_files": {
+      "bundle/.state/decisions/concepts/a.decisions.okf": "---\nconcept_id: concepts/a\ndecisions:\n- decided_at: '<TS>'\n  decision_key: 002a56ed430ecc9c1eca9138e8d3971a\n  merged_absorbed_id: null\n  pair_ids:\n  - concepts/a\n  - concepts/b\n  state: declined\nschema: openkos.decisions/v2\n---\n"
+    },
+    "stderr": "",
+    "stdout": "openkos contradictions: workspace at <ROOT>\n\n0 of 1 candidate(s) served from persisted findings; 1 judged fresh.\n\nNo high-confidence contradictions found.\n"
+  },
+  "declined_view_empty": {
+    "exit_code": 0,
+    "findings_rows": null,
+    "state_files": {},
+    "stderr": "",
+    "stdout": "openkos contradictions --declined: workspace at <ROOT>\n\nNo declined findings.\n"
+  },
+  "declined_view_populated": {
+    "exit_code": 0,
+    "findings_rows": [
+      {
+        "confidence": 0.9,
+        "conflicting_claims": [
+          "persisted claim"
+        ],
+        "input_digests": [
+          [
+            "concepts/a",
+            "113e194150349b1a9e602c8d14ac2e17f32e81449f42cf6f35c87695cb6548b1"
+          ],
+          [
+            "concepts/b",
+            "6b39090260a5b5b8e08b6fead19654ad36b9d65a105cbf1e6f73c3808248626e"
+          ],
+          [
+            "relation_type",
+            "5b962d789a179c3b0fef884c6ce16d3cf13ec3d7f64401515ae44ef6a5a1f951"
+          ]
+        ],
+        "merged_absorbed_id": null,
+        "pair_ids": [
+          "concepts/a",
+          "concepts/b"
+        ],
+        "rationale": "persisted rationale",
+        "verdict": "contradicts"
+      },
+      {
+        "confidence": 0.25,
+        "conflicting_claims": [],
+        "input_digests": [
+          [
+            "concepts/a",
+            "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+          ]
+        ],
+        "merged_absorbed_id": null,
+        "pair_ids": [
+          "concepts/c",
+          "concepts/d"
+        ],
+        "rationale": "stale rationale",
+        "verdict": "uncertain"
+      }
+    ],
+    "state_files": {
+      "bundle/.state/decisions/concepts/a.decisions.okf": "---\nconcept_id: concepts/a\ndecisions:\n- decided_at: '<TS>'\n  decision_key: 002a56ed430ecc9c1eca9138e8d3971a\n  merged_absorbed_id: null\n  pair_ids:\n  - concepts/a\n  - concepts/b\n  state: declined\n- decided_at: '<TS>'\n  decision_key: e747c862204ba5b0b1419386a0a29f91\n  merged_absorbed_id: concepts/z\n  pair_ids:\n  - concepts/a\n  - concepts/a\n  state: declined\nschema: openkos.decisions/v2\n---\n",
+      "bundle/.state/decisions/concepts/c.decisions.okf": "---\nconcept_id: concepts/c\ndecisions:\n- decided_at: '<TS>'\n  decision_key: 0db3dcac0f957bde319bcb8f8981350b\n  merged_absorbed_id: null\n  pair_ids:\n  - concepts/c\n  - concepts/d\n  state: declined\nschema: openkos.decisions/v2\n---\n",
+      "bundle/.state/decisions/concepts/e.decisions.okf": "---\nconcept_id: concepts/e\ndecisions:\n- decided_at: '<TS>'\n  decision_key: eaed068d550ae45b6c39a4f22e3cb2ea\n  merged_absorbed_id: null\n  pair_ids:\n  - concepts/e\n  - concepts/f\n  state: open\nschema: openkos.decisions/v2\n---\n"
+    },
+    "stderr": "",
+    "stdout": "openkos contradictions --declined: workspace at <ROOT>\n\n[DECLINED] concepts/a <-> concepts/b\n  verdict: contradicts (confidence: 0.90)\n  rationale: persisted rationale\n\n[DECLINED] concepts/c <-> concepts/d [stale]\n  verdict: uncertain (confidence: 0.25)\n  rationale: stale rationale\n\n[DECLINED] concepts/a (merged content, absorbed concepts/z)\n  (no persisted finding on record -- it may have been purged or never recomputed)\n\n"
+  },
+  "default_excludes_pair": {
+    "exit_code": 0,
+    "findings_rows": null,
+    "state_files": {},
+    "stderr": "",
+    "stdout": "openkos contradictions: workspace at <ROOT>\n\n1 typed relation(s); none are contradiction candidates.\n"
+  },
+  "first_candidate_failure": {
+    "exit_code": 1,
+    "findings_rows": null,
+    "state_files": {},
+    "stderr": "openkos contradictions: failed after judging 0 of 1 planned candidate(s) -- down. Start it with `ollama serve`, then try again. Or run `openkos doctor` to diagnose the environment.\n",
+    "stdout": "openkos contradictions: workspace at <ROOT>\n\n0 of 1 candidate(s) served from persisted findings; 0 judged fresh.\n\nNo high-confidence contradictions found.\n"
+  },
+  "fresh_flag_rejudges": {
+    "exit_code": 0,
+    "findings_rows": [
+      {
+        "confidence": 0.9,
+        "conflicting_claims": [
+          "persisted claim"
+        ],
+        "input_digests": [
+          [
+            "concepts/a",
+            "113e194150349b1a9e602c8d14ac2e17f32e81449f42cf6f35c87695cb6548b1"
+          ],
+          [
+            "concepts/b",
+            "6b39090260a5b5b8e08b6fead19654ad36b9d65a105cbf1e6f73c3808248626e"
+          ],
+          [
+            "relation_type",
+            "5b962d789a179c3b0fef884c6ce16d3cf13ec3d7f64401515ae44ef6a5a1f951"
+          ]
+        ],
+        "merged_absorbed_id": null,
+        "pair_ids": [
+          "concepts/a",
+          "concepts/b"
+        ],
+        "rationale": "persisted rationale",
+        "verdict": "contradicts"
+      },
+      {
+        "confidence": 0.9,
+        "conflicting_claims": [
+          "x"
+        ],
+        "input_digests": [
+          [
+            "concepts/a",
+            "113e194150349b1a9e602c8d14ac2e17f32e81449f42cf6f35c87695cb6548b1"
+          ],
+          [
+            "concepts/b",
+            "6b39090260a5b5b8e08b6fead19654ad36b9d65a105cbf1e6f73c3808248626e"
+          ],
+          [
+            "relation_type",
+            "5b962d789a179c3b0fef884c6ce16d3cf13ec3d7f64401515ae44ef6a5a1f951"
+          ]
+        ],
+        "merged_absorbed_id": null,
+        "pair_ids": [
+          "concepts/a",
+          "concepts/b"
+        ],
+        "rationale": "fake reply",
+        "verdict": "contradicts"
+      }
+    ],
+    "state_files": {},
+    "stderr": "",
+    "stdout": "openkos contradictions: workspace at <ROOT>\n\n[CONTRADICTS] concepts/a <-> concepts/b (confidence: 0.90)\n  - x\n  rationale: fake reply\n\n"
+  },
+  "include_flags_restore_pair": {
+    "exit_code": 0,
+    "findings_rows": [
+      {
+        "confidence": 0.9,
+        "conflicting_claims": [
+          "x"
+        ],
+        "input_digests": [
+          [
+            "concepts/a",
+            "48d414ced64eacd1fd16ac1e472b11b9dd33ba5b7e464239c61d55f52db7095c"
+          ],
+          [
+            "concepts/b",
+            "ff20425c334d13f2060f6e07e71bf87aaa23655e33427ccf82f8fb948b1fd422"
+          ],
+          [
+            "relation_type",
+            "5b962d789a179c3b0fef884c6ce16d3cf13ec3d7f64401515ae44ef6a5a1f951"
+          ]
+        ],
+        "merged_absorbed_id": null,
+        "pair_ids": [
+          "concepts/a",
+          "concepts/b"
+        ],
+        "rationale": "fake reply",
+        "verdict": "contradicts"
+      }
+    ],
+    "state_files": {},
+    "stderr": "",
+    "stdout": "openkos contradictions: workspace at <ROOT>\n\n0 of 1 candidate(s) served from persisted findings; 1 judged fresh.\n\n[CONTRADICTS] concepts/a <-> concepts/b (confidence: 0.90)\n  - x\n  rationale: fake reply\n\n"
+  },
+  "incomplete_walk_warning": {
+    "exit_code": 0,
+    "findings_rows": [
+      {
+        "confidence": 0.9,
+        "conflicting_claims": [
+          "x"
+        ],
+        "input_digests": [
+          [
+            "concepts/a",
+            "113e194150349b1a9e602c8d14ac2e17f32e81449f42cf6f35c87695cb6548b1"
+          ],
+          [
+            "concepts/b",
+            "6b39090260a5b5b8e08b6fead19654ad36b9d65a105cbf1e6f73c3808248626e"
+          ],
+          [
+            "relation_type",
+            "5b962d789a179c3b0fef884c6ce16d3cf13ec3d7f64401515ae44ef6a5a1f951"
+          ]
+        ],
+        "merged_absorbed_id": null,
+        "pair_ids": [
+          "concepts/a",
+          "concepts/b"
+        ],
+        "rationale": "fake reply",
+        "verdict": "contradicts"
+      }
+    ],
+    "state_files": {},
+    "stderr": "openkos: bundle scan was incomplete -- a directory-scan error made part of the bundle unreadable, so this command's inputs are incomplete and its result may be missing content. Fix the directory permissions and re-run, or run 'openkos status' to see which directories could not be read.\n",
+    "stdout": "openkos contradictions: workspace at <ROOT>\n\n0 of 1 candidate(s) served from persisted findings; 1 judged fresh.\n\n[CONTRADICTS] concepts/a <-> concepts/b (confidence: 0.90)\n  - x\n  rationale: fake reply\n\n"
+  },
+  "judged_all_flag": {
+    "exit_code": 0,
+    "findings_rows": [
+      {
+        "confidence": 0.9,
+        "conflicting_claims": [
+          "x"
+        ],
+        "input_digests": [
+          [
+            "concepts/a",
+            "113e194150349b1a9e602c8d14ac2e17f32e81449f42cf6f35c87695cb6548b1"
+          ],
+          [
+            "concepts/b",
+            "6b39090260a5b5b8e08b6fead19654ad36b9d65a105cbf1e6f73c3808248626e"
+          ],
+          [
+            "relation_type",
+            "5b962d789a179c3b0fef884c6ce16d3cf13ec3d7f64401515ae44ef6a5a1f951"
+          ]
+        ],
+        "merged_absorbed_id": null,
+        "pair_ids": [
+          "concepts/a",
+          "concepts/b"
+        ],
+        "rationale": "fake reply",
+        "verdict": "contradicts"
+      }
+    ],
+    "state_files": {},
+    "stderr": "",
+    "stdout": "openkos contradictions: workspace at <ROOT>\n\n0 of 1 candidate(s) served from persisted findings; 1 judged fresh.\n\n[CONTRADICTS] concepts/a <-> concepts/b (confidence: 0.90)\n  - x\n  rationale: fake reply\n\n"
+  },
+  "judged_default_view": {
+    "exit_code": 0,
+    "findings_rows": [
+      {
+        "confidence": 0.9,
+        "conflicting_claims": [
+          "x"
+        ],
+        "input_digests": [
+          [
+            "concepts/a",
+            "113e194150349b1a9e602c8d14ac2e17f32e81449f42cf6f35c87695cb6548b1"
+          ],
+          [
+            "concepts/b",
+            "6b39090260a5b5b8e08b6fead19654ad36b9d65a105cbf1e6f73c3808248626e"
+          ],
+          [
+            "relation_type",
+            "5b962d789a179c3b0fef884c6ce16d3cf13ec3d7f64401515ae44ef6a5a1f951"
+          ]
+        ],
+        "merged_absorbed_id": null,
+        "pair_ids": [
+          "concepts/a",
+          "concepts/b"
+        ],
+        "rationale": "fake reply",
+        "verdict": "contradicts"
+      }
+    ],
+    "state_files": {},
+    "stderr": "",
+    "stdout": "openkos contradictions: workspace at <ROOT>\n\n0 of 1 candidate(s) served from persisted findings; 1 judged fresh.\n\n[CONTRADICTS] concepts/a <-> concepts/b (confidence: 0.90)\n  - x\n  rationale: fake reply\n\n"
+  },
+  "malformed_config": {
+    "exit_code": 1,
+    "findings_rows": null,
+    "state_files": {},
+    "stderr": "openkos contradictions: failed while reading the workspace -- openkos.yaml: invalid YAML -- while parsing a flow sequence\n  in \"<unicode string>\", line 1, column 8:\n    model: [unclosed\n           ^\nexpected ',' or ']', but got '<stream end>'\n  in \"<unicode string>\", line 2, column 1:\n    \n    ^.\n",
+    "stdout": ""
+  },
+  "missing_workspace": {
+    "exit_code": 1,
+    "findings_rows": null,
+    "state_files": {},
+    "stderr": "openkos contradictions: refusing to run -- no OpenKOS workspace found in this directory (run 'openkos init' first).\n",
+    "stdout": ""
+  },
+  "missing_workspace_decline": {
+    "exit_code": 1,
+    "findings_rows": null,
+    "state_files": {},
+    "stderr": "openkos contradictions: refusing to run -- no OpenKOS workspace found in this directory (run 'openkos init' first).\n",
+    "stdout": ""
+  },
+  "missing_workspace_declined": {
+    "exit_code": 1,
+    "findings_rows": null,
+    "state_files": {},
+    "stderr": "openkos contradictions: refusing to run -- no OpenKOS workspace found in this directory (run 'openkos init' first).\n",
+    "stdout": ""
+  },
+  "partial_generic": {
+    "exit_code": 1,
+    "findings_rows": [
+      {
+        "confidence": 0.9,
+        "conflicting_claims": [
+          "claim one",
+          "claim two"
+        ],
+        "input_digests": [
+          [
+            "relation_type",
+            "5b962d789a179c3b0fef884c6ce16d3cf13ec3d7f64401515ae44ef6a5a1f951"
+          ]
+        ],
+        "merged_absorbed_id": null,
+        "pair_ids": [
+          "concepts/a",
+          "concepts/b"
+        ],
+        "rationale": "kept work",
+        "verdict": "contradicts"
+      }
+    ],
+    "state_files": {},
+    "stderr": "openkos contradictions: failed after judging 1 of 2 planned candidate(s) -- boom.\n",
+    "stdout": "openkos contradictions: workspace at <ROOT>\n\n0 of 2 candidate(s) served from persisted findings; 1 judged fresh.\n\n[CONTRADICTS] concepts/a <-> concepts/b (confidence: 0.90)\n  - claim one\n  - claim two\n  rationale: kept work\n\n"
+  },
+  "partial_model_not_found": {
+    "exit_code": 1,
+    "findings_rows": [
+      {
+        "confidence": 0.9,
+        "conflicting_claims": [
+          "claim one",
+          "claim two"
+        ],
+        "input_digests": [
+          [
+            "relation_type",
+            "5b962d789a179c3b0fef884c6ce16d3cf13ec3d7f64401515ae44ef6a5a1f951"
+          ]
+        ],
+        "merged_absorbed_id": null,
+        "pair_ids": [
+          "concepts/a",
+          "concepts/b"
+        ],
+        "rationale": "kept work",
+        "verdict": "contradicts"
+      }
+    ],
+    "state_files": {},
+    "stderr": "openkos contradictions: failed after judging 1 of 2 planned candidate(s) -- model 'qwen3:8b' is not installed. Pull it with `ollama pull qwen3:8b`, then try again.\n",
+    "stdout": "openkos contradictions: workspace at <ROOT>\n\n0 of 2 candidate(s) served from persisted findings; 1 judged fresh.\n\n[CONTRADICTS] concepts/a <-> concepts/b (confidence: 0.90)\n  - claim one\n  - claim two\n  rationale: kept work\n\n"
+  },
+  "partial_unavailable": {
+    "exit_code": 1,
+    "findings_rows": [
+      {
+        "confidence": 0.9,
+        "conflicting_claims": [
+          "claim one",
+          "claim two"
+        ],
+        "input_digests": [
+          [
+            "relation_type",
+            "5b962d789a179c3b0fef884c6ce16d3cf13ec3d7f64401515ae44ef6a5a1f951"
+          ]
+        ],
+        "merged_absorbed_id": null,
+        "pair_ids": [
+          "concepts/a",
+          "concepts/b"
+        ],
+        "rationale": "kept work",
+        "verdict": "contradicts"
+      }
+    ],
+    "state_files": {},
+    "stderr": "openkos contradictions: failed after judging 1 of 2 planned candidate(s) -- connection refused. Start it with `ollama serve`, then try again. Or run `openkos doctor` to diagnose the environment.\n",
+    "stdout": "openkos contradictions: workspace at <ROOT>\n\n0 of 2 candidate(s) served from persisted findings; 1 judged fresh.\n\n[CONTRADICTS] concepts/a <-> concepts/b (confidence: 0.90)\n  - claim one\n  - claim two\n  rationale: kept work\n\n"
+  },
+  "persist_failure_degrades": {
+    "exit_code": 0,
+    "findings_rows": null,
+    "state_files": {},
+    "stderr": "openkos contradictions: warning -- failed to persist findings (disk full); this run's verdicts are shown below but will not be served from the store on a later run.\n",
+    "stdout": "openkos contradictions: workspace at <ROOT>\n\n0 of 1 candidate(s) served from persisted findings; 1 judged fresh.\n\n[CONTRADICTS] concepts/a <-> concepts/b (confidence: 0.90)\n  - x\n  rationale: fake reply\n\n"
+  },
+  "quarantine_notice": {
+    "exit_code": 0,
+    "findings_rows": null,
+    "state_files": {},
+    "stderr": "",
+    "stdout": "openkos contradictions: workspace at <ROOT>\n\n1 candidate edge(s) withheld among objects of unjudged source(s) sources/s: their extraction was stored without judge selection (#772); re-ingest the source so a judge selects, then reindex to reconsider them\n\nThe graph has no typed edges yet. Apply relations first: `openkos suggest-relations` then `openkos relate`, or `openkos curate`.\n"
+  },
+  "raise_generic": {
+    "exit_code": 1,
+    "findings_rows": null,
+    "state_files": {},
+    "stderr": "openkos contradictions: failed -- boom.\n",
+    "stdout": ""
+  },
+  "raise_model_not_found": {
+    "exit_code": 1,
+    "findings_rows": null,
+    "state_files": {},
+    "stderr": "openkos contradictions: failed -- model 'qwen3:8b' is not installed. Pull it with `ollama pull qwen3:8b`, then try again.\n",
+    "stdout": ""
+  },
+  "raise_unavailable": {
+    "exit_code": 1,
+    "findings_rows": null,
+    "state_files": {},
+    "stderr": "openkos contradictions: failed -- connection refused. Start it with `ollama serve`, then try again. Or run `openkos doctor` to diagnose the environment.\n",
+    "stdout": ""
+  },
+  "reopen_merged_body": {
+    "exit_code": 0,
+    "findings_rows": null,
+    "last_commit": {
+      "files": [
+        "bundle/.state/decisions/concepts/a.decisions.okf"
+      ],
+      "subject": "openkos: reopen contradiction concepts/a/concepts/a"
+    },
+    "state_files": {
+      "bundle/.state/decisions/concepts/a.decisions.okf": "---\nconcept_id: concepts/a\ndecisions:\n- decided_at: '<TS>'\n  decision_key: e747c862204ba5b0b1419386a0a29f91\n  merged_absorbed_id: concepts/z\n  pair_ids:\n  - concepts/a\n  - concepts/a\n  state: open\nschema: openkos.decisions/v2\n---\n"
+    },
+    "stderr": "",
+    "stdout": "openkos contradictions: reopened concepts/a <-> concepts/a (merged content, absorbed concepts/z).\n"
+  },
+  "reopen_typed": {
+    "exit_code": 0,
+    "findings_rows": null,
+    "last_commit": {
+      "files": [
+        "bundle/.state/decisions/concepts/a.decisions.okf"
+      ],
+      "subject": "openkos: reopen contradiction concepts/a/concepts/b"
+    },
+    "state_files": {
+      "bundle/.state/decisions/concepts/a.decisions.okf": "---\nconcept_id: concepts/a\ndecisions:\n- decided_at: '<TS>'\n  decision_key: 002a56ed430ecc9c1eca9138e8d3971a\n  merged_absorbed_id: null\n  pair_ids:\n  - concepts/a\n  - concepts/b\n  state: open\nschema: openkos.decisions/v2\n---\n"
+    },
+    "stderr": "",
+    "stdout": "openkos contradictions: reopened concepts/a <-> concepts/b.\n"
+  },
+  "served_consistent_all_flag": {
+    "exit_code": 0,
+    "findings_rows": [
+      {
+        "confidence": 0.4,
+        "conflicting_claims": [
+          "persisted claim"
+        ],
+        "input_digests": [
+          [
+            "concepts/a",
+            "113e194150349b1a9e602c8d14ac2e17f32e81449f42cf6f35c87695cb6548b1"
+          ],
+          [
+            "concepts/b",
+            "6b39090260a5b5b8e08b6fead19654ad36b9d65a105cbf1e6f73c3808248626e"
+          ],
+          [
+            "relation_type",
+            "5b962d789a179c3b0fef884c6ce16d3cf13ec3d7f64401515ae44ef6a5a1f951"
+          ]
+        ],
+        "merged_absorbed_id": null,
+        "pair_ids": [
+          "concepts/a",
+          "concepts/b"
+        ],
+        "rationale": "persisted rationale",
+        "verdict": "consistent"
+      }
+    ],
+    "state_files": {},
+    "stderr": "",
+    "stdout": "openkos contradictions: workspace at <ROOT>\n\n1 of 1 candidate(s) served from persisted findings; 0 judged fresh.\n\n[CONSISTENT] concepts/a <-> concepts/b (confidence: 0.40)\n  - persisted claim\n  rationale: persisted rationale\n\n"
+  },
+  "served_consistent_hidden": {
+    "exit_code": 0,
+    "findings_rows": [
+      {
+        "confidence": 0.9,
+        "conflicting_claims": [
+          "persisted claim"
+        ],
+        "input_digests": [
+          [
+            "concepts/a",
+            "113e194150349b1a9e602c8d14ac2e17f32e81449f42cf6f35c87695cb6548b1"
+          ],
+          [
+            "concepts/b",
+            "6b39090260a5b5b8e08b6fead19654ad36b9d65a105cbf1e6f73c3808248626e"
+          ],
+          [
+            "relation_type",
+            "5b962d789a179c3b0fef884c6ce16d3cf13ec3d7f64401515ae44ef6a5a1f951"
+          ]
+        ],
+        "merged_absorbed_id": null,
+        "pair_ids": [
+          "concepts/a",
+          "concepts/b"
+        ],
+        "rationale": "persisted rationale",
+        "verdict": "consistent"
+      }
+    ],
+    "state_files": {},
+    "stderr": "",
+    "stdout": "openkos contradictions: workspace at <ROOT>\n\n1 of 1 candidate(s) served from persisted findings; 0 judged fresh.\n\nNo high-confidence contradictions found.\n"
+  },
+  "served_from_persisted": {
+    "exit_code": 0,
+    "findings_rows": [
+      {
+        "confidence": 0.9,
+        "conflicting_claims": [
+          "persisted claim"
+        ],
+        "input_digests": [
+          [
+            "concepts/a",
+            "113e194150349b1a9e602c8d14ac2e17f32e81449f42cf6f35c87695cb6548b1"
+          ],
+          [
+            "concepts/b",
+            "6b39090260a5b5b8e08b6fead19654ad36b9d65a105cbf1e6f73c3808248626e"
+          ],
+          [
+            "relation_type",
+            "5b962d789a179c3b0fef884c6ce16d3cf13ec3d7f64401515ae44ef6a5a1f951"
+          ]
+        ],
+        "merged_absorbed_id": null,
+        "pair_ids": [
+          "concepts/a",
+          "concepts/b"
+        ],
+        "rationale": "persisted rationale",
+        "verdict": "contradicts"
+      }
+    ],
+    "state_files": {},
+    "stderr": "",
+    "stdout": "openkos contradictions: workspace at <ROOT>\n\n1 of 1 candidate(s) served from persisted findings; 0 judged fresh.\n\n[CONTRADICTS] concepts/a <-> concepts/b (confidence: 0.90)\n  - persisted claim\n  rationale: persisted rationale\n\n"
+  },
+  "stale_pair_rejudged": {
+    "exit_code": 0,
+    "findings_rows": [
+      {
+        "confidence": 0.9,
+        "conflicting_claims": [
+          "persisted claim"
+        ],
+        "input_digests": [
+          [
+            "concepts/a",
+            "0000000000000000000000000000000000000000000000000000000000000000"
+          ]
+        ],
+        "merged_absorbed_id": null,
+        "pair_ids": [
+          "concepts/a",
+          "concepts/b"
+        ],
+        "rationale": "persisted rationale",
+        "verdict": "contradicts"
+      },
+      {
+        "confidence": 0.9,
+        "conflicting_claims": [
+          "x"
+        ],
+        "input_digests": [
+          [
+            "concepts/a",
+            "113e194150349b1a9e602c8d14ac2e17f32e81449f42cf6f35c87695cb6548b1"
+          ],
+          [
+            "concepts/b",
+            "6b39090260a5b5b8e08b6fead19654ad36b9d65a105cbf1e6f73c3808248626e"
+          ],
+          [
+            "relation_type",
+            "5b962d789a179c3b0fef884c6ce16d3cf13ec3d7f64401515ae44ef6a5a1f951"
+          ]
+        ],
+        "merged_absorbed_id": null,
+        "pair_ids": [
+          "concepts/a",
+          "concepts/b"
+        ],
+        "rationale": "fake reply",
+        "verdict": "contradicts"
+      }
+    ],
+    "state_files": {},
+    "stderr": "",
+    "stdout": "openkos contradictions: workspace at <ROOT>\n\n0 of 1 candidate(s) served from persisted findings; 1 judged fresh.\n\n[CONTRADICTS] concepts/a <-> concepts/b (confidence: 0.90)\n  - x\n  rationale: fake reply\n\n"
+  },
+  "truncated_plan_uncertain_hidden": {
+    "exit_code": 0,
+    "findings_rows": [
+      {
+        "confidence": 0.3,
+        "conflicting_claims": [
+          "claim one",
+          "claim two"
+        ],
+        "input_digests": [
+          [
+            "relation_type",
+            "5b962d789a179c3b0fef884c6ce16d3cf13ec3d7f64401515ae44ef6a5a1f951"
+          ]
+        ],
+        "merged_absorbed_id": null,
+        "pair_ids": [
+          "concepts/a",
+          "concepts/b"
+        ],
+        "rationale": "unsure",
+        "verdict": "uncertain"
+      }
+    ],
+    "state_files": {},
+    "stderr": "",
+    "stdout": "openkos contradictions: workspace at <ROOT>\n\n0 of 1 candidate(s) served from persisted findings; 1 judged fresh.\n\n1 of 251 candidate(s) shown (cap reached); dropped: 200 typed-edge, 50 merged-body\n\nNo high-confidence contradictions found.\n"
+  },
+  "unrecognized_stored_verdict": {
+    "exit_code": 0,
+    "findings_rows": [
+      {
+        "confidence": 0.9,
+        "conflicting_claims": [
+          "persisted claim"
+        ],
+        "input_digests": [
+          [
+            "concepts/a",
+            "113e194150349b1a9e602c8d14ac2e17f32e81449f42cf6f35c87695cb6548b1"
+          ],
+          [
+            "concepts/b",
+            "6b39090260a5b5b8e08b6fead19654ad36b9d65a105cbf1e6f73c3808248626e"
+          ],
+          [
+            "relation_type",
+            "5b962d789a179c3b0fef884c6ce16d3cf13ec3d7f64401515ae44ef6a5a1f951"
+          ]
+        ],
+        "merged_absorbed_id": null,
+        "pair_ids": [
+          "concepts/a",
+          "concepts/b"
+        ],
+        "rationale": "persisted rationale",
+        "verdict": "mystery"
+      },
+      {
+        "confidence": 0.9,
+        "conflicting_claims": [
+          "x"
+        ],
+        "input_digests": [
+          [
+            "concepts/a",
+            "113e194150349b1a9e602c8d14ac2e17f32e81449f42cf6f35c87695cb6548b1"
+          ],
+          [
+            "concepts/b",
+            "6b39090260a5b5b8e08b6fead19654ad36b9d65a105cbf1e6f73c3808248626e"
+          ],
+          [
+            "relation_type",
+            "5b962d789a179c3b0fef884c6ce16d3cf13ec3d7f64401515ae44ef6a5a1f951"
+          ]
+        ],
+        "merged_absorbed_id": null,
+        "pair_ids": [
+          "concepts/a",
+          "concepts/b"
+        ],
+        "rationale": "fake reply",
+        "verdict": "contradicts"
+      }
+    ],
+    "state_files": {},
+    "stderr": "",
+    "stdout": "openkos contradictions: workspace at <ROOT>\n\n0 of 1 candidate(s) served from persisted findings; 1 judged fresh.\n\n[CONTRADICTS] concepts/a <-> concepts/b (confidence: 0.90)\n  - x\n  rationale: fake reply\n\n"
+  },
+  "vacuous_plan_no_findings": {
+    "exit_code": 0,
+    "findings_rows": null,
+    "state_files": {},
+    "stderr": "openkos contradictions: warning -- the graph has no applied relations, so typed-edge contradiction coverage is empty; only 2 merged-body candidate(s) will be judged. A clean result here is NOT an all-clear. Apply relations first: `openkos suggest-relations` then `openkos relate`, or `openkos curate`.\n",
+    "stdout": "openkos contradictions: workspace at <ROOT>\n\n0 of 2 candidate(s) served from persisted findings; 0 judged fresh.\n\nCandidate relations unavailable \u2014 run `openkos reindex` (vectors.db missing).\n"
+  },
+  "vacuous_plan_with_merged_verdict": {
+    "exit_code": 0,
+    "findings_rows": [
+      {
+        "confidence": 0.91,
+        "conflicting_claims": [
+          "claim m1"
+        ],
+        "input_digests": [
+          [
+            "concepts/survivor0:survivor_before",
+            "f56336926ee791af52b2eeb7d17187ea54004fa45873cd1206a18a4cd7187cd6"
+          ],
+          [
+            "concepts/absorbed0:absorbed_snapshot",
+            "b4595a1375a133d760473dbe79fd6d068a3e32c850ec8b2b9e44a65303c8bd30"
+          ]
+        ],
+        "merged_absorbed_id": "concepts/absorbed0",
+        "pair_ids": [
+          "concepts/survivor0",
+          "concepts/survivor0"
+        ],
+        "rationale": "merged body disagrees",
+        "verdict": "contradicts"
+      }
+    ],
+    "state_files": {},
+    "stderr": "openkos contradictions: warning -- the graph has no applied relations, so typed-edge contradiction coverage is empty; only 1 merged-body candidate(s) will be judged. A clean result here is NOT an all-clear. Apply relations first: `openkos suggest-relations` then `openkos relate`, or `openkos curate`.\n",
+    "stdout": "openkos contradictions: workspace at <ROOT>\n\n0 of 1 candidate(s) served from persisted findings; 1 judged fresh.\n\n[CONTRADICTS] concepts/survivor0 (merged content, absorbed concepts/absorbed0) (confidence: 0.91)\n  next: openkos unmerge concepts/survivor0 concepts/absorbed0 (LIFO-enforced: refuses unless this is the survivor's most recent unreversed merge)\n  - claim m1\n  rationale: merged body disagrees\n\n"
+  },
+  "zero_state_embeddings_missing": {
+    "exit_code": 0,
+    "findings_rows": null,
+    "state_files": {},
+    "stderr": "",
+    "stdout": "openkos contradictions: workspace at <ROOT>\n\nCandidate relations unavailable \u2014 run `openkos reindex` (vectors.db missing).\n"
+  },
+  "zero_state_no_typed_edges": {
+    "exit_code": 0,
+    "findings_rows": null,
+    "state_files": {},
+    "stderr": "",
+    "stdout": "openkos contradictions: workspace at <ROOT>\n\nThe graph has no typed edges yet. Apply relations first: `openkos suggest-relations` then `openkos relate`, or `openkos curate`.\n"
+  },
+  "zero_state_typed_edges_none": {
+    "exit_code": 0,
+    "findings_rows": null,
+    "state_files": {},
+    "stderr": "",
+    "stdout": "openkos contradictions: workspace at <ROOT>\n\n1 typed relation(s); none are contradiction candidates.\n"
+  }
+}

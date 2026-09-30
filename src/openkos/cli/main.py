@@ -5,7 +5,6 @@ import functools
 import glob
 import json
 import os
-import re
 import sqlite3
 import sys
 import unicodedata
@@ -18,7 +17,7 @@ from datetime import UTC, date, datetime
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 from pathlib import Path, PurePosixPath
-from typing import Final, Literal, NamedTuple, TypedDict, TypeVar, cast
+from typing import Final, Literal, NamedTuple, NoReturn, TypedDict, TypeVar, cast
 
 import typer
 from rich.console import Console
@@ -26,11 +25,19 @@ from rich.console import Console
 from openkos import config, fsio, lock, read_outcome, source_date, source_title
 from openkos import lint as lint_check
 from openkos.application import backends as application_backends
-from openkos.application import consent as application_consent
+from openkos.application import (
+    contradictions_service,
+    duplicates_service,
+    ingest_service,
+    merge_service,
+    reconcile_service,
+    reindex_service,
+    unmerge_service,
+    write_gate,
+)
 from openkos.application import doctor as application_doctor
 from openkos.application import drift as application_drift
 from openkos.application import ingest as application_ingest
-from openkos.application import ingest_service
 from openkos.application import lifecycle as application_lifecycle
 from openkos.application import lint as application_lint
 from openkos.application import list_service as application_list
@@ -40,13 +47,14 @@ from openkos.application import query as application_query
 from openkos.application import repair as application_repair
 from openkos.application import revisions as revisions_service
 from openkos.application import status as application_status
+from openkos.application import suggest_relations_service as relations_service
+from openkos.application import suggest_volatility_service as volatility_service
 from openkos.application.revisions_report import revisions_report
 from openkos.bundle import bundle, listing, source_titles
 from openkos.bundle import decisions as bundle_decisions
 from openkos.bundle import index as bundle_index
 from openkos.bundle import ledger as bundle_ledger
 from openkos.bundle import log as bundle_log
-from openkos.bundle import merge as bundle_merge
 from openkos.bundle import provenance as bundle_provenance
 from openkos.cli import curate as curate_module
 from openkos.cli import observability
@@ -78,7 +86,6 @@ from openkos.llm.ollama import (
 from openkos.llm.openai_compatible import OpenAICompatibleClient
 from openkos.model import okf, types
 from openkos.model.relations import (
-    ASYMMETRIC_RELATION_TYPES,
     relation_type_note,
     validate_relation_type,
 )
@@ -99,17 +106,12 @@ from openkos.resolution.candidates import (
     candidate_group_truncation_notice,
 )
 from openkos.resolution.contradiction import (
-    CandidatePlan,
     ContradictionBatch,
     ContradictionVerdict,
-    contradiction_truncation_notice,
     find_contradictions,
-    is_high_confidence_contradiction,
     is_high_confidence_finding,
     plan_candidates,
-    vacuous_coverage_notice,
 )
-from openkos.resolution.contradiction import Verdict as ContradictionVerdictValue
 from openkos.resolution.decision_revision import (
     DecisionDate,
     RevisionVerdict,
@@ -118,19 +120,13 @@ from openkos.resolution.decision_revision import (
     revision_truncation_notice,
 )
 from openkos.resolution.edge_typing import (
-    LEAST_SPECIFIC_RELATION_TYPE,
     EdgeSuggestion,
-    EdgeSuggestionBatch,
     candidate_edges,
-    candidate_truncation_notice,
-    corrected_edge_from_rationale,
-    next_candidate_offset,
-    quarantined_candidate_notice,
     suggest_edge_types,
 )
 from openkos.resolution.reconciliation import reconcile_merged_body
 from openkos.resolution.volatility_typing import (
-    TierSuggestionBatch,
+    TierSuggestion,
     suggest_volatility,
 )
 from openkos.retrieval.answer import NO_MATCH, NoMatchCause
@@ -140,7 +136,7 @@ from openkos.state import edge_suggestions as edge_suggestions_store
 from openkos.state import reindex as reindex_module
 from openkos.state import revision_findings as revision_findings_store
 from openkos.state.fts import FtsUnavailable
-from openkos.state.vectorstore import VecUnavailable, open_vector_store
+from openkos.state.vectorstore import open_vector_store
 from openkos.vcs import git as vcs_git
 
 _T = TypeVar("_T")
@@ -285,16 +281,12 @@ an invalid answer reprompts up to this many times before the picker gives
 up and silently falls back to `config.DEFAULT_MODEL`, so a non-interactive
 or misbehaving stdin can never hang `init` forever (design D3)."""
 
-# Uniform lock-contention message: `reindex`'s two error ladders (vectors/fts
-# and graph) and `_guard_workspace_lock`'s catch-all for every other verb all
-# format it, so a locked vectors.db/fts.db/graph.db/findings.db always reads
-# identically regardless of which store hit the lock or which verb noticed
-# (reindex-lock-handling, decision 5).
-_LOCK_CONTENTION_TEMPLATE = (
-    "openkos {command}: failed -- another process is holding the workspace "
-    "lock (a concurrent reindex?); wait for it to finish, then try again."
-)
-_LOCK_CONTENTION_MSG = _LOCK_CONTENTION_TEMPLATE.format(command="reindex")
+# Uniform lock-contention message: `reindex_service`'s two error ladders
+# (vectors/fts and graph) and `_guard_workspace_lock`'s catch-all for every
+# other verb all format it, so a locked vectors.db/fts.db/graph.db/findings.db
+# always reads identically regardless of which store hit the lock or which
+# verb noticed (reindex-lock-handling, decision 5).
+_LOCK_CONTENTION_TEMPLATE = reindex_service.LOCK_CONTENTION_TEMPLATE
 
 
 def _version_line() -> str:
@@ -701,75 +693,6 @@ def _snapshot_read(path: Path) -> tuple[bytes, str]:
     still call this name directly -- mirrors `_slugify`'s own delegation to
     `bundle.source_titles.slugify`."""
     return fsio.snapshot_read(path)
-
-
-def _reject_torn_ledger_write(
-    bundle_dir: Path, survivor_canonical: str, verb: str
-) -> None:
-    """Refuse (exit 1, writes nothing) when a `.pending` intent marker
-    already exists for `survivor_canonical`'s ledger sidecar (design
-    Decision 5, Check A -- a torn two-phase write from a prior crashed
-    `merge`). `merge`/`unmerge` both call this in Phase A, before any
-    write, and with NO `--force` override: unlike the doctor-flagged
-    (post-merge-mutation) refusal, a torn `.pending` is mechanically
-    exact and trivially repairable (`bundle_ledger.recover`), and forcing
-    past it would commit a known-inconsistent ledger on top of an
-    unresolved crash artifact."""
-    pending_path = bundle_ledger.pending_path_for(survivor_canonical, bundle_dir)
-    if not pending_path.is_file():
-        return
-    typer.echo(
-        f"openkos {verb}: refusing to {verb} -- {survivor_canonical!r}'s ledger "
-        "has a torn write pending (a prior merge crashed mid-commit). Run "
-        "`openkos doctor` to inspect it; this refusal has no --force override "
-        "because the marker is trivially repairable and forcing past it would "
-        "commit a known-inconsistent ledger.",
-        err=True,
-    )
-    raise typer.Exit(code=1)
-
-
-def _reject_flagged_ledger_write(
-    root: Path, bundle_dir: Path, survivor_canonical: str, force: bool
-) -> None:
-    """Refuse (exit 1, writes nothing) when `survivor_canonical`'s ledger
-    sidecar is flagged by doctor's Check B (post-merge mutation,
-    `bundle_ledger.scan_nesting_violations`) -- UNLESS `--force` is passed
-    (spec: "`merge` Refuses On A Doctor-Flagged Ledger, With `--force`").
-
-    `merge` calls this in Phase A, before any write. `--force` bypasses
-    ONLY this refusal -- it is orthogonal to the confirm-gate precedence
-    (`--auto`/`review: false`/TTY prompt) that governs the write itself,
-    mirroring `forget --force`'s independence from `--auto`. Unlike
-    `_reject_torn_ledger_write` (Check A, mechanically exact and trivially
-    repairable), Check B's corruption is not always repairable, so this
-    refusal has an escape hatch for an operator who has already confirmed
-    it is safe to proceed."""
-    if force:
-        return
-    violations = bundle_ledger.scan_nesting_violations(bundle_dir)
-    if not any(survivor_id == survivor_canonical for survivor_id, _ in violations):
-        return
-    if vcs_git.repo_root(root) is not None and vcs_git.has_reset_point(root):
-        reset_remedy = "run `git reset --hard <first-merge>~1` then `openkos reindex`"
-    else:
-        reset_remedy = (
-            "no git reset point is available in this workspace (no "
-            "repository, no configured git identity, or no commit "
-            "history) -- there is no remedy that restores reversibility "
-            "for the affected merge(s)"
-        )
-    typer.echo(
-        f"openkos merge: refusing to merge -- {survivor_canonical!r}'s ledger "
-        "is flagged by the merge-ledger-integrity check (post-merge "
-        "mutation). If the ledger is merely unmigrated (still embedded in "
-        "the survivor's own frontmatter, not corrupted), run `openkos "
-        f"repair`; if corrupted, {reset_remedy} -- reversibility of merges "
-        "made before this fix is not guaranteed. Re-run with --force to "
-        "bypass this refusal.",
-        err=True,
-    )
-    raise typer.Exit(code=1)
 
 
 def _excise_merged_sections(snapshot: str, purge_ids: set[str]) -> str:
@@ -1193,24 +1116,6 @@ def _sweep_decisions_for_ids(bundle_dir: Path, purge_ids: Iterable[str]) -> list
         )
         touched.append(decisions_path)
     return touched
-
-
-def _okf_v02_migration_hint(index_path: Path) -> str | None:
-    """`None` unless `index_path` exists and declares an `okf_version`
-    other than `okf.OKF_VERSION` -- the one-sentence hint `unmerge`'s drift
-    refusal appends (okf-v02-migration Phase 6, `okf-format-migration`
-    spec): a bundle that predates `repair`'s OKF migration is a fact the
-    operator can act on regardless of what caused this particular refusal.
-    A missing `index.md` is tolerated (OKF §11) and reads as "nothing to
-    hint about" here, mirroring `plan_repair`'s own no-flip-needed rule for
-    an absent index."""
-    try:
-        metadata, _ = okf.load_frontmatter(index_path.read_text(encoding="utf-8"))
-    except OSError:
-        return None
-    if okf.okf_version_is_current(metadata):
-        return None
-    return "this bundle predates OKF 0.2; run `openkos repair` first."
 
 
 def _reject_drifted_targets(
@@ -1990,37 +1895,6 @@ def _echo_adjudicate_batch_failure(
         typer.echo(f"{context} -- {failure}.", err=True)
 
 
-def _echo_suggest_relations_batch_failure(
-    batch: EdgeSuggestionBatch, *, total: int, model: str
-) -> None:
-    """One stderr line for a partial `EdgeSuggestionBatch` (#441): the same
-    3-tier cause-specific wording the raise-path handlers use, prefixed with
-    how much paid-for work survived (mirrors
-    `_echo_adjudicate_batch_failure`). The `isinstance` dispatch mirrors the
-    handlers' ORDER for the same reason they are ordered: both specific
-    classes subclass `BackendError`, so the generic branch must come last or
-    their actionable remediation is lost."""
-    failure = batch.failure
-    context = (
-        f"openkos suggest-relations: failed after suggesting "
-        f"{len(batch.results)} of {total} untyped edge(s)"
-    )
-    if isinstance(failure, BackendUnavailable):
-        typer.echo(
-            f"{context} -- {failure}. Start it with `ollama serve`, then try "
-            f"again.{_DOCTOR_HINT}",
-            err=True,
-        )
-    elif isinstance(failure, BackendModelNotFound):
-        typer.echo(
-            f"{context} -- model '{model}' is not installed. Pull it with "
-            f"`ollama pull {model}`, then try again.",
-            err=True,
-        )
-    else:
-        typer.echo(f"{context} -- {failure}.", err=True)
-
-
 def _echo_contradictions_batch_failure(
     batch: ContradictionBatch, *, total: int, model: str
 ) -> None:
@@ -2038,40 +1912,6 @@ def _echo_contradictions_batch_failure(
     context = (
         f"openkos contradictions: failed after judging {len(batch.results)} "
         f"of {total} planned candidate(s)"
-    )
-    if isinstance(failure, BackendUnavailable):
-        typer.echo(
-            f"{context} -- {failure}. Start it with `ollama serve`, then try "
-            f"again.{_DOCTOR_HINT}",
-            err=True,
-        )
-    elif isinstance(failure, BackendModelNotFound):
-        typer.echo(
-            f"{context} -- model '{model}' is not installed. Pull it with "
-            f"`ollama pull {model}`, then try again.",
-            err=True,
-        )
-    else:
-        typer.echo(f"{context} -- {failure}.", err=True)
-
-
-def _echo_suggest_volatility_batch_failure(
-    batch: TierSuggestionBatch, *, model: str
-) -> None:
-    """One stderr line for a partial `TierSuggestionBatch` (#441): the same
-    3-tier cause-specific wording the raise-path handlers use, prefixed with
-    how much paid-for work survived (mirrors
-    `_echo_adjudicate_batch_failure`). Unlike its three siblings, the count
-    has no of-total: `suggest_volatility` derives its type queue INSIDE the
-    leaf, so the verb holds no pre-flight total and fabricating one would
-    cost a second full bundle walk for an error line. The `isinstance`
-    dispatch mirrors the handlers' ORDER for the same reason they are
-    ordered: both specific classes subclass `BackendError`, so the generic
-    branch must come last or their actionable remediation is lost."""
-    failure = batch.failure
-    context = (
-        f"openkos suggest-volatility: failed after suggesting "
-        f"{len(batch.results)} concept type(s)"
     )
     if isinstance(failure, BackendUnavailable):
         typer.echo(
@@ -2181,7 +2021,14 @@ def _apply_reconciliation(
     ):
         return prepared
     prepared, failure = _reconcile_merged_survivor(root, prepared)
-    if failure is not None:
+    if isinstance(failure, _SensitivitySkip):
+        typer.echo(
+            f"openkos {verb}: skipped body reconciliation -- "
+            f"{failure.concept_id} is confidential and the backend is not "
+            "local; the stacked body was kept.",
+            err=True,
+        )
+    elif failure is not None:
         typer.echo(
             f"openkos {verb}: notice -- reconciliation failed ({failure}); "
             "kept the stacked body.",
@@ -2274,43 +2121,6 @@ def _echo_n_gt2_skip(bundle_dir: Path, group: "CandidateGroup") -> None:
         typer.echo(f"    openkos merge {survivor_id} {absorbed_id}")
 
 
-def _commit_one_merge(
-    root: Path,
-    layout: config.WorkspaceLayout,
-    index_path: Path,
-    log_path: Path,
-    prepared: "PreparedMerge",
-) -> str | None:
-    """`merge_core` + `_autocommit` for one prepared merge, extracted
-    verbatim from the former inline body (issue #137 closing slice, Phase 1
-    refactor). Raises `OSError`/`ValueError` straight from `merge_core`,
-    unchanged -- callers decide how to report and whether to stop.
-
-    Returns `_autocommit`'s sha (issue #800) rather than echoing the
-    disclosure itself, because this helper is NOT curate-only: `adjudicate
-    --apply` and `--apply-same` drive it too, and #800 scopes the new line
-    to `forget`, `merge` and `curate`. Printing here would silently widen it
-    to `adjudicate`. The Identity caller in `cli/curate.py` echoes; the two
-    `adjudicate` walks ignore the value, exactly as they did when it was
-    `None`."""
-    merge_result = application_lifecycle.merge_core(
-        layout.bundle_dir, index_path, log_path, prepared
-    )
-    return _autocommit(
-        root,
-        [
-            "bundle/index.md",
-            "bundle/log.md",
-            *(f"bundle/{rel}" for rel in merge_result.touched_files),
-            f"bundle/{prepared.survivor_canonical}.md",
-            f"bundle/{prepared.absorbed_canonical}.md",
-            merge_result.ledger_sidecar_path,
-        ],
-        f"openkos: merge {prepared.absorbed_canonical} into "
-        f"{prepared.survivor_canonical}",
-    )
-
-
 def _run_adjudicate_apply(
     root: Path,
     layout: config.WorkspaceLayout,
@@ -2347,7 +2157,7 @@ def _run_adjudicate_apply(
 
     Between the accepted `y` and the write sits the same TOCTOU window
     every drift-guarded verb closes (the #306/#313/#319 arc): every byte
-    `_commit_one_merge` writes was computed by `_prepare_one_merge` BEFORE
+    `merge_service.commit_merge` writes was computed by `_prepare_one_merge` BEFORE
     the `[y/N]` prompt, so an edit landing on any target while the
     prompt waited -- likeliest on the survivor, worst on the absorbed
     file, which is UNLINKED rather than overwritten -- would be silently
@@ -2453,7 +2263,7 @@ def _run_adjudicate_apply(
 
         # #688: same post-consent, pre-drift-check slot `merge` and
         # curate's Identity stage use, via the same helper -- this walk
-        # drives `_prepare_one_merge`/`_commit_one_merge` directly too, so
+        # drives `_prepare_one_merge`/`merge_service.commit_merge` directly too, so
         # it had the identical silent-stacking gap.
         prepared = _apply_reconciliation(
             root,
@@ -2463,7 +2273,7 @@ def _run_adjudicate_apply(
             verb="adjudicate --apply",
         )
 
-        # Issue #346: every byte `_commit_one_merge` writes below was
+        # Issue #346: every byte `merge_service.commit_merge` writes below was
         # computed before the prompt, so re-validate each target now --
         # after the accepted `y`, before the first write. The absorbed
         # file rides in `deletes=` because it is UNLINKED, not overwritten
@@ -2477,7 +2287,7 @@ def _run_adjudicate_apply(
         )
 
         try:
-            _commit_one_merge(root, layout, index_path, log_path, prepared)
+            merge_service.commit_merge(root, layout, prepared, autocommit=_autocommit)
         except (OSError, ValueError) as exc:
             typer.echo(
                 "openkos adjudicate --apply: failed while merging "
@@ -2499,7 +2309,7 @@ def _run_adjudicate_apply(
         typer.echo(f"  declined: {item}")
 
     # #640: once per invocation, after the whole walk -- never inside
-    # `_commit_one_merge`, which runs per accepted pair.
+    # `merge_service.commit_merge`, which runs per accepted pair.
     if applied:
         _refresh_derived_after_write(layout, None, verb="adjudicate")
 
@@ -2630,7 +2440,7 @@ def _run_adjudicate_apply_same(
     `PreparedMerge`), since an earlier merge in THIS SAME batch may already
     have absorbed a later pair's member; that legitimate case is still
     skipped, not crashed on, and still yields applied < previewed.
-    Accepted merges commit sequentially via `_commit_one_merge`; a
+    Accepted merges commit sequentially via `merge_service.commit_merge`; a
     mid-batch failure stops the run but keeps every prior commit intact
     and reversible via `unmerge` -- and, before raising, echoes a partial
     summary (applied so far / previewed, and that the remainder was never
@@ -2642,7 +2452,7 @@ def _run_adjudicate_apply_same(
     Pass 2's re-prepare narrows the batch's TOCTOU window but does not
     close it (the #306/#313/#319 arc): an edit landing during the confirm
     gate or an earlier pair's commit IS re-read and recomputed over, but
-    every byte `_commit_one_merge` writes for pair k was still captured by
+    every byte `merge_service.commit_merge` writes for pair k was still captured by
     that pair's re-prepare BEFORE the write, so an edit landing in the
     re-prepare-to-write gap would be silently destroyed -- likeliest on
     the survivor, worst on the absorbed file, which is UNLINKED rather
@@ -2790,7 +2600,7 @@ def _run_adjudicate_apply_same(
             verb="adjudicate --apply-same",
         )
 
-        # Issue #346: every byte `_commit_one_merge` writes below was
+        # Issue #346: every byte `merge_service.commit_merge` writes below was
         # captured by this pair's re-prepare above, so re-validate each
         # target now -- after the baseline capture, before the first
         # write. The absorbed file rides in `deletes=` because it is
@@ -2819,7 +2629,7 @@ def _run_adjudicate_apply_same(
             raise
 
         try:
-            _commit_one_merge(root, layout, index_path, log_path, prepared)
+            merge_service.commit_merge(root, layout, prepared, autocommit=_autocommit)
         except (OSError, ValueError) as exc:
             typer.echo(
                 "openkos adjudicate --apply-same: failed while merging "
@@ -2858,7 +2668,7 @@ def _run_adjudicate_apply_same(
         f"{cross_type_note})"
     )
 
-    # #640: once per batch, after Pass 2 -- never per `_commit_one_merge`.
+    # #640: once per batch, after Pass 2 -- never per `merge_service.commit_merge`.
     if applied:
         _refresh_derived_after_write(layout, None, verb="adjudicate")
 
@@ -3499,7 +3309,7 @@ _first_free_disambiguated_slug = application_ingest.first_free_disambiguated_slu
 # 1). The three TYPES are bound back here under their original names, the
 # same "plain assignment, not a renamed import" shape as `_DerivedPlan`
 # above, so every quoted forward-ref annotation still elsewhere in this
-# module (`_apply_reconciliation`, `_commit_one_merge`,
+# module (`_apply_reconciliation`, `merge_service.commit_merge`,
 # `_refused_stacked_line`) resolves unchanged.
 # `_canonicalize_concept_id`/`_resolve_concept_path`/`_merge_drift_targets`
 # and `_member_body_length`/`_ordered_merge_pair`/`_cross_source_same_pair`/
@@ -3524,7 +3334,7 @@ _first_free_disambiguated_slug = application_ingest.first_free_disambiguated_slu
 # `monkeypatch.setattr("openkos.cli.main.prepare_merge"/"merge_core", ...)`
 # must raise `AttributeError` rather than silently no-op. Every call site in
 # this module -- `merge` itself, `application.lifecycle.prepare_one_merge`,
-# `_commit_one_merge` -- therefore calls
+# `merge_service.commit_merge` -- therefore calls
 # `application_lifecycle.prepare_merge`/`merge_core` by module attribute.
 StackedBodyReport = application_lifecycle.StackedBodyReport
 PreparedMerge = application_lifecycle.PreparedMerge
@@ -3540,7 +3350,7 @@ MergeResult = application_lifecycle.MergeResult
 #
 # `PreparedMerge` and its two siblings above are bound back because quoted
 # forward-ref annotations elsewhere in this module (`_apply_reconciliation`,
-# `_commit_one_merge`, `_refused_stacked_line`) still name them. These two
+# `merge_service.commit_merge`, `_refused_stacked_line`) still name them. These two
 # have no such reader: after the move, `grep PreparedRelate` and `grep
 # PreparedSetVolatility` find nothing in this module but this comment, and
 # every call site -- here, in `cli/curate.py`, and in the tests -- reaches
@@ -8038,9 +7848,18 @@ def set_volatility_cmd(
     )
 
 
+@dataclass(frozen=True)
+class _SensitivitySkip:
+    """A DELIBERATE skip of the reconciliation pass (#1124): `concept_id` is
+    confidential and the backend is not local. Distinct from a failure
+    reason string so the notice never reads as something having broken."""
+
+    concept_id: str
+
+
 def _reconcile_merged_survivor(
     root: Path, prepared: "PreparedMerge"
-) -> tuple["PreparedMerge", str | None]:
+) -> tuple["PreparedMerge", "str | _SensitivitySkip | None"]:
     """Run the #645 reconciliation pass over `prepared`'s merged survivor:
     returns `(updated_prepared, None)` on success, or `(prepared,
     failure_reason)` -- the caller keeps the stacked body and notices.
@@ -8071,11 +7890,22 @@ def _reconcile_merged_survivor(
     title = str(metadata.get("title") or "") or prepared.survivor_canonical
 
     try:
+        client = _chat_client(cfg)
+        # Egress gate (#1124): a merge involving any confidential member
+        # never sends its bodies to a backend that is not verifiably local.
+        blocker = application_lifecycle.reconcile_sensitivity_blocker(
+            prepared,
+            local_exemption=_resolve_local_exemption(
+                cast(application_backends.HasLocality, client), cfg
+            ),
+        )
+        if blocker is not None:
+            return prepared, _SensitivitySkip(blocker)
         reconciled = reconcile_merged_body(
             survivor_title=title,
             survivor_body=survivor_body,
             absorbed_body=absorbed_body,
-            llm=_chat_client(cfg),
+            llm=client,
         )
     except BackendError as exc:
         return prepared, str(exc)
@@ -8087,6 +7917,98 @@ def _reconcile_merged_survivor(
     new_text = okf.dump_frontmatter(metadata, reconciled)
     new_plan = dataclasses.replace(prepared.plan, merged_survivor=new_text)
     return dataclasses.replace(prepared, plan=new_plan), None
+
+
+def _ask_confirmation(prompt: str) -> write_gate.ConfirmationAnswer:
+    """The confirmation question the curation write services ask, answered on
+    a TTY only: a decline is a no, and without a TTY the question cannot be
+    asked (the service then refuses with its own text)."""
+    if not sys.stdin.isatty():
+        return "unavailable"
+    try:
+        typer.confirm(prompt, abort=True)
+    except typer.Abort:
+        return "declined"
+    return "proceed"
+
+
+def _exit_for_write_refusal(exc: write_gate.WriteRefused) -> NoReturn:
+    """Render a curation service's typed refusal and map its TYPE to the exit
+    contract: Typer's own abort for a declined prompt, 3 for drift (the one
+    failure a script may retry, #319), 1 for everything else."""
+    if isinstance(exc, write_gate.ConfirmationDeclined):
+        raise typer.Abort() from exc
+    typer.echo(exc.message, err=True)
+    raise typer.Exit(
+        code=3 if isinstance(exc, write_gate.DriftDetected) else 1
+    ) from exc
+
+
+class _CliMergeObserver(merge_service.MergeObserver):
+    """Renders what `merge_concepts` reports: the plan and the closing lines
+    to stdout, in the order the verb has always printed them."""
+
+    def proposed(self, preview: merge_service.MergePreview) -> None:
+        prepared = preview.prepared
+        survivor_canonical = prepared.survivor_canonical
+        absorbed_canonical = prepared.absorbed_canonical
+        typer.echo("openkos merge: proposed changes:")
+        typer.echo(
+            f"  ~ sensitivity: {prepared.sensitivity_before} -> "
+            f"{prepared.sensitivity_after}"
+        )
+        for relation in prepared.dropped_self_loops:
+            typer.echo(f"  - drop self-loop: {relation.target} ({relation.type})")
+        for relation in prepared.deduped_collisions:
+            typer.echo(f"  ~ dedupe collision: {relation.target} ({relation.type})")
+        if prepared.stacked_body is not None:
+            typer.echo(
+                f"  + stack absorbed body: {prepared.stacked_body.absorbed_chars} "
+                f"unreconciled char(s) ({prepared.stacked_body.share:.0%} of "
+                "merged body -- bodies were appended, not reconciled)"
+            )
+        if preview.reconcile_planned:
+            typer.echo(f"  ~ {_RECONCILE_PLAN_NOTE}")
+        for rel in prepared.rewritten_files:
+            typer.echo(f"  ~ bundle/{rel} (rewrite inbound link(s) to survivor)")
+        for rel in prepared.relation_rewritten_files:
+            typer.echo(f"  ~ bundle/{rel} (retarget relation to survivor)")
+        for rel in prepared.provenance_rewritten_files:
+            typer.echo(f"  ~ bundle/{rel} (retarget provenance to survivor)")
+        if prepared.removed >= 1:
+            typer.echo(f"  ~ {preview.index_name} (remove entry)")
+        typer.echo(f"  ~ {preview.log_name} (new dated entry)")
+        status_suffix = ""
+        if prepared.status_outcome is not None:
+            status_suffix = _status_export_preview_suffix(prepared.status_outcome)
+        typer.echo(
+            f"  ~ bundle/{survivor_canonical}.md (merged content{status_suffix})"
+        )
+        typer.echo(f"  - bundle/{absorbed_canonical}.md")
+        # #796: `merge` is the command `duplicates` and `adjudicate` BOTH name
+        # in their closing hints, and it was the one path #776's cross-source
+        # guardrail never reached -- the batch door was locked while the door
+        # the tool recommends stayed open. Printed after the plan and before
+        # the gate, so it is the last thing read before consenting.
+        if preview.cross_source_same_pair:
+            typer.echo(_CROSS_SOURCE_WALK_NOTE)
+        # #904 inherits #796's lesson verbatim: `merge` is the command the
+        # cross-type skip message itself prints, so guarding only the batch
+        # would send the operator through an unguarded door with the exact
+        # arguments the guard just refused. The label's `member_ids` order is
+        # `(survivor, absorbed)` here, so it also states the direction.
+        if preview.cross_type_concern is not None:
+            typer.echo(_cross_type_walk_note(preview.cross_type_concern))
+
+    def merged(self, summary: merge_service.MergeSummary) -> None:
+        typer.echo(
+            f"openkos merge: merged 'bundle/{summary.absorbed_canonical}.md' into "
+            f"'bundle/{summary.survivor_canonical}.md' "
+            f"({summary.index_name}, {summary.log_name} updated)."
+        )
+
+    def committed(self, sha: str) -> None:
+        _echo_commit_disclosure(sha, prefix="openkos merge: ")
 
 
 @app.command(
@@ -8250,190 +8172,130 @@ def merge(
         raise typer.Exit(code=2)
 
     root = Path.cwd()
-    layout = config.WorkspaceLayout(root)
-    index_path = layout.bundle_dir / "index.md"
-    log_path = layout.bundle_dir / "log.md"
-
-    try:
-        workspace_reason = config.require_workspace(root)
-        if workspace_reason is not None:
-            typer.echo(
-                f"openkos merge: refusing to merge -- {workspace_reason}.",
-                err=True,
-            )
-            raise typer.Exit(code=1)
-
-        survivor_path, survivor_canonical = application_lifecycle.resolve_concept_path(
-            layout.bundle_dir, survivor_id
-        )
-        absorbed_path, absorbed_canonical = application_lifecycle.resolve_concept_path(
-            layout.bundle_dir, absorbed_id
-        )
-        if survivor_canonical == absorbed_canonical:
-            raise ValueError(
-                "survivor and absorbed concept-ids must be distinct, both "
-                f"resolved to {survivor_canonical!r}"
-            )
-    except (OSError, ValueError) as exc:
-        typer.echo(f"openkos merge: refusing to merge -- {exc}.", err=True)
-        raise typer.Exit(code=1) from exc
-
-    _reject_torn_ledger_write(layout.bundle_dir, survivor_canonical, "merge")
-    _reject_flagged_ledger_write(root, layout.bundle_dir, survivor_canonical, force)
-
-    now = datetime.now(UTC)
-
-    try:
-        prepared = application_lifecycle.prepare_merge(
-            layout.bundle_dir,
-            index_path,
-            log_path,
-            survivor_path,
-            absorbed_path,
-            survivor_canonical,
-            absorbed_canonical,
+    ports = merge_service.MergePorts(
+        autocommit=lambda root, paths, message: _autocommit(root, paths, message),
+        has_reset_point=lambda root: (
+            vcs_git.repo_root(root) is not None and vcs_git.has_reset_point(root)
+        ),
+        apply_reconciliation=lambda root, prepared, policy: _apply_reconciliation(
             root,
-            now=now,
-        )
-    except (OSError, ValueError) as exc:
-        typer.echo(
-            f"openkos merge: failed while preparing the merge -- {exc}.", err=True
-        )
-        raise typer.Exit(code=1) from exc
-
-    typer.echo("openkos merge: proposed changes:")
-    typer.echo(
-        f"  ~ sensitivity: {prepared.sensitivity_before} -> {prepared.sensitivity_after}"
+            prepared,
+            no_reconcile=policy.no_reconcile,
+            reconcile=policy.reconcile,
+            verb="merge",
+        ),
+        clock=lambda: datetime.now(UTC),
     )
-    for relation in prepared.dropped_self_loops:
-        typer.echo(f"  - drop self-loop: {relation.target} ({relation.type})")
-    for relation in prepared.deduped_collisions:
-        typer.echo(f"  ~ dedupe collision: {relation.target} ({relation.type})")
-    # #645 (ruling: opt-out): plan the reconciliation pass when the stacked
-    # share reaches the threshold, disclosed HERE -- in the plan, before
-    # the consent gate -- so the model call is part of what the human
-    # approves. `--no-reconcile` is the opt-out; failure falls back to the
-    # stacked body after the gate.
-    reconcile_planned = application_lifecycle.reconcile_planned(
-        prepared, no_reconcile=no_reconcile, reconcile=reconcile
-    )
-    if prepared.stacked_body is not None:
-        typer.echo(
-            f"  + stack absorbed body: {prepared.stacked_body.absorbed_chars} "
-            f"unreconciled char(s) ({prepared.stacked_body.share:.0%} of "
-            "merged body -- bodies were appended, not reconciled)"
-        )
-    if reconcile_planned:
-        typer.echo(f"  ~ {_RECONCILE_PLAN_NOTE}")
-    for rel in prepared.rewritten_files:
-        typer.echo(f"  ~ bundle/{rel} (rewrite inbound link(s) to survivor)")
-    for rel in prepared.relation_rewritten_files:
-        typer.echo(f"  ~ bundle/{rel} (retarget relation to survivor)")
-    for rel in prepared.provenance_rewritten_files:
-        typer.echo(f"  ~ bundle/{rel} (retarget provenance to survivor)")
-    if prepared.removed >= 1:
-        typer.echo(f"  ~ {index_path.name} (remove entry)")
-    typer.echo(f"  ~ {log_path.name} (new dated entry)")
-    status_suffix = ""
-    if prepared.status_outcome is not None:
-        status_suffix = _status_export_preview_suffix(prepared.status_outcome)
-    typer.echo(f"  ~ bundle/{survivor_canonical}.md (merged content{status_suffix})")
-    typer.echo(f"  - bundle/{absorbed_canonical}.md")
-    # #796: `merge` is the command `duplicates` and `adjudicate` BOTH name
-    # in their closing hints, and it was the one path #776's cross-source
-    # guardrail never reached -- the batch door was locked while the door
-    # the tool recommends stayed open. Printed after the plan and before
-    # the gate, so it is the last thing read before consenting.
-    if application_lifecycle.cross_source_same_pair(
-        layout.bundle_dir, (survivor_canonical, absorbed_canonical)
-    ):
-        typer.echo(_CROSS_SOURCE_WALK_NOTE)
-    # #904 inherits #796's lesson verbatim: `merge` is the command the
-    # cross-type skip message itself prints, so guarding only the batch
-    # would send the operator through an unguarded door with the exact
-    # arguments the guard just refused. The label's `member_ids` order is
-    # `(survivor, absorbed)` here, so it also states the direction.
-    cross_type_concern = application_lifecycle.cross_type_concern(
-        layout.bundle_dir, (survivor_canonical, absorbed_canonical)
-    )
-    if cross_type_concern is not None:
-        typer.echo(_cross_type_walk_note(cross_type_concern))
-
-    if not auto and prepared.review:
-        if sys.stdin.isatty():
-            typer.confirm(prepared.confirmation.prompt, abort=True)
-        else:
-            # #918: the wording comes from the staged request, not a literal
-            # here, so an api/mcp adapter driving this gate headlessly reads
-            # the same sentence the CLI prints.
-            typer.echo(prepared.confirmation.non_tty_refusal, err=True)
-            raise typer.Exit(code=1)
-
-    # #645: the reconciliation call runs AFTER consent (the plan disclosed
-    # it) and BEFORE the drift re-check below, so the slow model call sits
-    # inside the window the drift guard re-validates rather than after it.
-    # Any failure keeps the stacked body and notices -- the merge itself
-    # never fails on an improvement pass.
-    prepared = _apply_reconciliation(
-        root, prepared, no_reconcile=no_reconcile, reconcile=reconcile, verb="merge"
-    )
-
-    # Issue #334: every byte `merge_core` writes below was computed from a
-    # pre-prompt read, so re-validate each target now -- after the gate,
-    # before the first write.
-    #
-    # The ABSORBED file is in here too, not just the write targets: it is
-    # UNLINKED, so an edit landing on it during the prompt would be
-    # destroyed outright -- strictly worse than being overwritten, since
-    # nothing survives to recover from. The keys are built from the same
-    # `bundle_dir`/resolution both phases share (#325): `survivor_path`/
-    # `absorbed_path` are `_resolve_concept_path`'s `bundle_dir /
-    # f"{canonical}.md"`, the exact construction `merge_core` writes and
-    # removes.
-    _reject_drifted_targets(
-        layout,
-        application_lifecycle.merge_drift_targets(layout, prepared),
-        "merge",
-        # #319: the absorbed file is the one path `merge_core` UNLINKS;
-        # everything else in the mapping is overwritten.
-        deletes=frozenset({absorbed_path}),
-    )
-
     try:
-        result = application_lifecycle.merge_core(
-            layout.bundle_dir, index_path, log_path, prepared
+        merge_service.merge_concepts(
+            root,
+            survivor_id,
+            absorbed_id,
+            merge_service.MergePolicy(
+                auto=auto,
+                force=force,
+                no_reconcile=no_reconcile,
+                reconcile=reconcile,
+            ),
+            ports=ports,
+            observer=_CliMergeObserver(),
+            confirm=_ask_confirmation,
         )
-    except (OSError, ValueError) as exc:
-        typer.echo(f"openkos merge: failed while writing the merge -- {exc}.", err=True)
-        raise typer.Exit(code=1) from exc
-
-    typer.echo(
-        f"openkos merge: merged 'bundle/{absorbed_canonical}.md' into "
-        f"'bundle/{survivor_canonical}.md' "
-        f"({index_path.name}, {log_path.name} updated)."
-    )
-
-    merge_sha = _autocommit(
-        root,
-        [
-            "bundle/index.md",
-            "bundle/log.md",
-            *(f"bundle/{rel}" for rel in result.touched_files),
-            f"bundle/{survivor_canonical}.md",
-            f"bundle/{absorbed_canonical}.md",
-            result.ledger_sidecar_path,
-        ],
-        f"openkos: merge {absorbed_canonical} into {survivor_canonical}",
-    )
-    # #800: `unmerge` reverses a merge, but only through the ledger and only
-    # in last-in-first-out order; the commit is the unconditional way back,
-    # so it is named here, after the success line and only when it exists.
-    if merge_sha is not None:
-        _echo_commit_disclosure(merge_sha, prefix="openkos merge: ")
+    except write_gate.WriteRefused as exc:
+        _exit_for_write_refusal(exc)
 
     # #640: `cfg=None` -- `merge` never reads config; the helper reads its
     # own copy inside the vector stage's fail-open envelope.
-    _refresh_derived_after_write(layout, None, verb="merge")
+    _refresh_derived_after_write(config.WorkspaceLayout(root), None, verb="merge")
+
+
+class _CliUnmergeObserver(unmerge_service.UnmergeObserver):
+    """Renders what the unmerge service reports: each step's plan, the
+    `--to` plan and its per-step banners, and the closing lines, in the order
+    the verb has always printed them."""
+
+    def proposed(self, preview: unmerge_service.UnmergePreview) -> None:
+        prepared = preview.prepared
+        plan = prepared.plan
+        survivor_canonical = preview.survivor_canonical
+        absorbed_canonical = preview.absorbed_canonical
+        typer.echo("openkos unmerge: proposed changes:")
+        for rel in prepared.rewritten_files:
+            typer.echo(f"  ~ bundle/{rel} (reverse inbound link rewrite)")
+        for rel in prepared.relation_rewrite_files:
+            typer.echo(f"  ~ bundle/{rel} (restore pre-merge relations snapshot)")
+        for rel in prepared.provenance_rewrite_files:
+            typer.echo(f"  ~ bundle/{rel} (restore pre-merge provenance snapshot)")
+        if plan.entry.schema == okf.MERGE_LEDGER_SCHEMA_V5:
+            typer.echo(f"  ~ {preview.index_name} (restore this merge's catalog entry)")
+            typer.echo(
+                f"  ~ {preview.log_name} (remove this merge's entry, append unmerge)"
+            )
+        else:
+            typer.echo(f"  ~ {preview.index_name} (restore pre-merge contents)")
+            typer.echo(
+                f"  ~ {preview.log_name} (restore pre-merge contents, append "
+                "unmerge entry)"
+            )
+        survivor_status_suffix = ""
+        if prepared.survivor_status_outcome is not None:
+            survivor_status_suffix = _status_export_preview_suffix(
+                prepared.survivor_status_outcome
+            )
+        typer.echo(
+            f"  ~ bundle/{survivor_canonical}.md (restore pre-merge contents"
+            f"{survivor_status_suffix})"
+        )
+        absorbed_status_suffix = ""
+        if prepared.absorbed_status_outcome is not None:
+            absorbed_status_suffix = _status_export_preview_suffix(
+                prepared.absorbed_status_outcome
+            )
+        typer.echo(
+            f"  + bundle/{absorbed_canonical}.md (restore{absorbed_status_suffix})"
+        )
+        if prepared.catalog_log_drifted:
+            typer.echo(
+                "Warning: index.md/log.md changed since the merge; unmerge "
+                "restores the pre-merge snapshot and will discard those changes."
+            )
+        if prepared.survivor_drift_unverifiable:
+            typer.echo(
+                f"Warning: {survivor_canonical!r}'s merge ledger entry predates "
+                "the survivor-edit check (#1110); cannot confirm its current "
+                "bytes still match what the merge wrote, proceeding anyway."
+            )
+        if prepared.survivor_edits_discarded:
+            typer.echo(
+                f"Warning: {survivor_canonical!r}'s post-merge edits are being "
+                "discarded (--discard-survivor-edits) -- it will be restored to "
+                "its pre-merge state, and anything changed on it since the "
+                "merge is gone unless you copied it somewhere safe first."
+            )
+
+    def restored(self, summary: unmerge_service.UnmergeSummary) -> None:
+        typer.echo(
+            f"openkos unmerge: restored 'bundle/{summary.absorbed_canonical}.md' "
+            f"from 'bundle/{summary.survivor_canonical}.md' "
+            f"({summary.index_name}, {summary.log_name} updated)."
+        )
+
+    def unwind_planned(self, plan: unmerge_service.UnwindPlan) -> None:
+        total = len(plan.steps)
+        typer.echo(
+            f"openkos unmerge: unwind plan for '{plan.survivor_canonical}' -- "
+            f"{total} step{'s' if total != 1 else ''}, newest merge first:"
+        )
+        for step_number, step in enumerate(plan.steps, start=1):
+            typer.echo(f"step {step_number}: restore '{step.absorbed_id}'")
+            for line in step.preview_lines:
+                typer.echo(line)
+
+    def step_starting(self, step_number: int, total: int, absorbed_id: str) -> None:
+        typer.echo(
+            f"openkos unmerge: step {step_number} of {total} -- restoring "
+            f"'{absorbed_id}'"
+        )
 
 
 _UNMERGE_ARGUMENT_RULE: Final = "exactly one of the two is required"
@@ -8548,7 +8410,7 @@ def unmerge(
     otherwise a TTY prompts ONCE for the whole plan via `typer.confirm`
     and aborts (exit 1) on decline; otherwise (non-TTY, no `--auto`) this
     refuses to write. Execution is a sequential loop over
-    `_run_single_unmerge`: each step re-runs the COMPLETE single-step
+    `unmerge_service`: each step re-runs the COMPLETE single-step
     machinery -- Phase A recomputed from CURRENT disk state, every
     fail-closed drift/collision check included, then Phase B's writes in
     their documented order, the per-step `**Unmerge**` audit line and the
@@ -8578,10 +8440,9 @@ def unmerge(
     The single-step machinery itself -- Phase A's gates and fail-closed
     checks, the preview, the confirm gate, the post-confirm drift guard,
     and Phase B's write order -- is documented on
-    `_run_single_unmerge`, which both forms share.
+    `application.unmerge_service`, which both forms share.
     """
     root = Path.cwd()
-    layout = config.WorkspaceLayout(root)
 
     target_input = absorbed_id if absorbed_id is not None else to
     if target_input is None:
@@ -8599,693 +8460,60 @@ def unmerge(
         )
         raise typer.Exit(code=1)
 
-    try:
-        workspace_reason = config.require_workspace(root)
-        if workspace_reason is not None:
-            typer.echo(
-                f"openkos unmerge: refusing to unmerge -- {workspace_reason}.",
-                err=True,
-            )
-            raise typer.Exit(code=1)
-
-        # `_resolve_concept_path`, split open (issue #562): the path-safety
-        # canonicalization still runs FIRST and unchanged, but existence is
-        # decided here so the "does not exist" refusal -- and ONLY that
-        # refusal, never a path-safety rejection -- can be extended with
-        # `find_absorber`'s reverse lookup across the ledger sidecars.
-        survivor_canonical = application_lifecycle.canonicalize_concept_id(survivor_id)
-        survivor_path = okf.concept_path_for(survivor_canonical, layout.bundle_dir)
-        if not survivor_path.is_file():
-            message = f"concept '{survivor_id}' does not exist"
-            absorber = bundle_ledger.find_absorber(
-                survivor_canonical, layout.bundle_dir
-            )
-            if absorber is not None:
-                message += (
-                    f". It was absorbed into '{absorber}'; run "
-                    f"`openkos unmerge {absorber} {survivor_canonical}` first "
-                    "to restore it"
-                )
-            raise ValueError(message)
-        target_canonical = application_lifecycle.canonicalize_concept_id(target_input)
-    except (OSError, ValueError) as exc:
-        typer.echo(f"openkos unmerge: refusing to unmerge -- {exc}.", err=True)
-        raise typer.Exit(code=1) from exc
-
-    _reject_torn_ledger_write(layout.bundle_dir, survivor_canonical, "unmerge")
-
-    now = datetime.now(UTC)
-
-    try:
-        cfg = config.read_config(root)
-    except (OSError, ValueError) as exc:
-        typer.echo(
-            f"openkos unmerge: failed while preparing the unmerge -- {exc}.", err=True
-        )
-        raise typer.Exit(code=1) from exc
-
-    if to is None:
-        # Classic two-arg path: one single-step unmerge, its own preview
-        # and confirm gate included -- byte-identical behavior to the
-        # pre-#562 command.
-        _run_single_unmerge(
-            root,
-            layout,
-            survivor_path,
-            survivor_canonical,
-            target_canonical,
-            now=now,
-            cfg=cfg,
-            auto=auto,
-            confirmed=False,
-            discard_survivor_edits=discard_survivor_edits,
-        )
-        # #640: after the single-step write committed. NOT inside
-        # `_run_single_unmerge`, which the `--to` chain below invokes
-        # once per entry -- the refresh is once per invocation.
-        _refresh_derived_after_write(layout, cfg, verb="unmerge")
-        return
-
-    try:
-        entries = bundle_ledger.read_entries(survivor_canonical, layout.bundle_dir)
-        sequence = bundle_merge.plan_unwind_sequence(
-            survivor_id=survivor_canonical,
-            to_absorbed_id=target_canonical,
-            entries=entries,
-        )
-    except (OSError, ValueError) as exc:
-        typer.echo(
-            f"openkos unmerge: failed while preparing the unmerge -- {exc}.", err=True
-        )
-        raise typer.Exit(code=1) from exc
-
-    total = len(sequence)
-    typer.echo(
-        f"openkos unmerge: unwind plan for '{survivor_canonical}' -- "
-        f"{total} step{'s' if total != 1 else ''}, newest merge first:"
+    policy = unmerge_service.UnmergePolicy(
+        auto=auto, discard_survivor_edits=discard_survivor_edits
     )
-    for step_number, entry in enumerate(sequence, start=1):
-        typer.echo(f"step {step_number}: restore '{entry.absorbed_id}'")
-        for line in application_lifecycle.unwind_step_preview_lines(
-            entry, survivor_canonical
-        ):
-            typer.echo(line)
-
-    if not auto and cfg.review:
-        # The `--to` chain consents to the WHOLE unwind sequence up front,
-        # before any step's `prepare_unmerge` runs, so there is no plan to
-        # read the request from -- build it from the same service helper
-        # the per-step gate's `PreparedUnmerge` carries (#918), so both
-        # gates cannot drift apart.
-        chain_confirmation = application_consent.boolean_confirmation("unmerge")
-        if sys.stdin.isatty():
-            typer.confirm(chain_confirmation.prompt, abort=True)
-        else:
-            typer.echo(chain_confirmation.non_tty_refusal, err=True)
-            raise typer.Exit(code=1)
-
-    for step_number, entry in enumerate(sequence, start=1):
-        typer.echo(
-            f"openkos unmerge: step {step_number} of {total} -- restoring "
-            f"'{entry.absorbed_id}'"
-        )
-        try:
-            _run_single_unmerge(
+    ports = unmerge_service.UnmergePorts(
+        autocommit=lambda root, paths, message: _autocommit(root, paths, message),
+        clock=lambda: datetime.now(UTC),
+    )
+    observer = _CliUnmergeObserver()
+    try:
+        if to is None:
+            # Classic two-arg path: one single-step unmerge, its own preview
+            # and confirm gate included -- byte-identical behavior to the
+            # pre-#562 command.
+            unmerge_service.unmerge_concept(
                 root,
-                layout,
-                survivor_path,
-                survivor_canonical,
-                entry.absorbed_id,
-                now=now,
-                cfg=cfg,
-                auto=auto,
-                confirmed=True,
-                discard_survivor_edits=discard_survivor_edits,
+                survivor_id,
+                target_input,
+                policy,
+                ports=ports,
+                observer=observer,
+                confirm=_ask_confirmation,
             )
-        except (typer.Exit, typer.Abort) as exc:
-            # The step already reported its own failure on stderr (the
-            # single-step machinery never lets a raw traceback out); this
-            # adds the chain-level accounting the operator needs next.
-            completed = step_number - 1
-            if completed:
-                progress = (
-                    f"steps 1..{completed} completed and left a consistent "
-                    "bundle (git-recoverable); completed steps are not "
-                    "rolled back"
-                )
-            else:
-                progress = "no earlier steps had completed"
-            typer.echo(
-                f"openkos unmerge: --to unwind stopped at step {step_number} "
-                f"of {total} (restore '{entry.absorbed_id}') -- {progress}.",
-                err=True,
-            )
-            # The step's own exit code survives the chain wrapper: exit 3
-            # (the post-confirm drift refusal) is the ONE documented exit
-            # a script may safely retry, and collapsing it to 1 here would
-            # silently revoke that contract mid-chain (review finding,
-            # issue #562). `typer.Abort` has no code and stays the
-            # conventional 1.
-            exit_code = exc.exit_code if isinstance(exc, typer.Exit) else 1
-            raise typer.Exit(code=exit_code) from exc
-
-    # #640: once, after the WHOLE chain completed -- a stopped chain raised
-    # above and leaves the stale-index warnings as its safety net.
-    _refresh_derived_after_write(layout, cfg, verb="unmerge")
-
-
-def _run_single_unmerge(
-    root: Path,
-    layout: config.WorkspaceLayout,
-    survivor_path: Path,
-    survivor_canonical: str,
-    absorbed_canonical: str,
-    *,
-    now: datetime,
-    cfg: config.Config,
-    auto: bool,
-    confirmed: bool,
-    discard_survivor_edits: bool = False,
-) -> None:
-    """ONE complete single-step unmerge -- the preview / confirm-gate /
-    drift-guard machinery both `unmerge` forms share (issue #562), Phase A
-    and Phase B delegated to `application.lifecycle.prepare_unmerge`/
-    `unmerge_core` (issue #918 Slice S2b, completing the Phase A/B split
-    S2a left partial). The classic two-arg path calls this once with
-    `confirmed=False`; the `--to` unwind loop calls it once per ledger
-    entry with `confirmed=True`, because the WHOLE plan was already
-    confirmed at its single gate -- `confirmed` short-circuits the prompt
-    exactly like `--auto` does, and everything AFTER the gate (the
-    post-confirm drift guard included) runs identically on every path.
-    Any failure is reported on stderr and raised as `typer.Exit`, never a
-    raw traceback; the caller owns any chain-level accounting on top.
-
-    Phase A (pure, no writes; `application_lifecycle.prepare_unmerge`,
-    called by module attribute, never an aliased import, so a stale
-    monkeypatch target raises loudly instead of silently missing) mirrors
-    `merge`'s gate shape: the caller has already resolved
-    `survivor_path`/`survivor_canonical` via the path-safety gates
-    (`_canonicalize_concept_id` plus the existence check) and canonicalized
-    `absorbed_canonical` via `_canonicalize_concept_id` ONLY -- the SAME
-    path-safety checks minus the existence check, since the absorbed file
-    is EXPECTED to be absent (removed by the merge being reversed) until
-    Phase B recreates it. `bundle.merge.plan_unmerge` (U2) then reads the
-    survivor's `merged_from` ledger and computes the entire restoration in
-    memory: the restored survivor (`survivor_before`, stripping this entry
-    while retaining any earlier ones), the restored absorbed document
-    (`absorbed_snapshot`), and the restored `index.md`/`log.md`
-    (`index_before`/`log_before`). If a file already exists at the
-    absorbed concept's path (drift since the merge), this refuses before
-    any write (threat matrix: Unmerge restore collision). Every recorded
-    inbound-link rewrite is then read from disk and reversed in memory via
-    `bundle.links.reverse_link_rewrites` (U3) -- bounded to the exact
-    recorded `{file, old_link, new_link, offset}` occurrence, never a
-    blind replace-all -- which fails closed (`ValueError`) if a target file
-    drifted since the merge (threat matrix: Link-file drift before unmerge).
-
-    Every recorded `relation_rewrites` entry (design D1/D3; `[]` for a
-    pre-slice-2a v1 ledger entry) is read from disk and reversed via
-    `bundle.relations.reverse_relation_rewrites` -- an ABSOLUTE whole-file
-    overwrite of the recorded pre-merge snapshot, never offset math (design
-    D4's overlapping-LIFO proof relies on this exact property) -- but
-    DRIFT-AWARE and FAIL-CLOSED, symmetric with the link path: the file's
-    CURRENT on-disk text is compared against what THIS merge deterministically
-    wrote there (recomputed by re-applying the retarget to the recorded
-    pre-merge snapshot), and a mismatch (a legitimate edit landed on that
-    file after the merge and before this `unmerge`) raises `ValueError`
-    rather than silently clobbering that edit with the stale snapshot
-    (CRITICAL fix, review correction batch). A file present in BOTH
-    `link_rewrites` and `relation_rewrites` (design D5) has its inbound-link
-    reversal SKIPPED entirely: the relation snapshot already restores that
-    file's full bytes -- link included -- so also attempting
-    `reverse_link_rewrites` on it would either corrupt the already-restored
-    text or fail closed on a now-nonexistent `new_link` occurrence.
-
-    The preview printed before the confirm gate, rendered here from
-    `PreparedUnmerge`'s fields, surfaces every file this DESTRUCTIVE-in-
-    reverse write will touch: each reversed inbound link, each restored
-    relation snapshot, the catalog/log restoration, the restored survivor,
-    and the recreated absorbed file.
-
-    Confirm gate, identical precedence and mechanism to `merge`/`forget`
-    (plus the `confirmed` short-circuit above): `--auto` skips the prompt
-    outright; otherwise config `review: false` (`prepared.review`) skips it
-    the same way; otherwise, on a TTY, `typer.confirm` asks and aborts
-    (exit 1) on decline; otherwise (non-TTY, no `--auto`) this refuses to
-    write (exit 1), telling the user to re-run with `--auto`. Declining or
-    refusing leaves the bundle completely untouched -- Phase A never
-    writes anything.
-
-    Past that gate -- and on the runs that skip it, since `--auto`,
-    `review: false`, and `confirmed` skip the prompt but not the window it
-    stood in -- `_reject_drifted_targets` re-reads `index.md`, `log.md`,
-    the survivor and every rewritten third-party file, and refuses the
-    WHOLE run (exit 3, nothing written) if any changed or vanished since
-    Phase A read it (issues #306, #313, #319). The refusal carries a
-    CUSTOM remedy (#328) because `unmerge` is the one guarded verb whose
-    re-run is not a safe recovery: nothing is recomputed from the current
-    state, so a re-run restores the pre-merge snapshots over
-    `index.md`/`log.md`/the survivor -- overwriting the protected edit --
-    and keeps refusing on an edited rewrite file until the edit is
-    reverted. The message therefore tells the operator to copy the edit
-    somewhere safe first, and never advises the plain re-run that would
-    discard it.
-
-    What that adds differs per target. The link/relation/provenance rewrite
-    files DO have a pre-prompt fail-closed check below, so for them the
-    guard narrows a timing window. `index.md`/`log.md` have only the
-    warn-and-continue `catalog_log_drifted` notice (see Limitation) -- for
-    those two the guard is the FIRST thing that refuses, and only for
-    drift landing inside the prompt window; drift that arrives a moment
-    earlier is still discarded.
-
-    The survivor is different again (issue #1110, fixed): `prepare_unmerge`
-    compares its CURRENT bytes against the tail ledger entry's own
-    `survivor_after_sha256` -- the hash the merge itself recorded writing --
-    BEFORE any preview or prompt, so an edit landing at ANY point between
-    the merge and this unmerge (not only inside the prompt window, and not
-    only a human edit: another verb rewriting the survivor afterward, e.g.
-    `repair`'s status export/migration or `sync-tags`, counts too, since a
-    write is a write regardless of who made it) refuses closed with no
-    write, naming the survivor and telling the operator to copy the edit
-    somewhere safe, then re-run with `--discard-survivor-edits`, and that
-    the edit can be reapplied by hand once the unmerge has completed. A
-    plain re-run WITHOUT that flag hashes the identical edited survivor and
-    refuses again -- forever, since nothing about the mismatch changes on
-    its own -- so the refusal must name the escape hatch rather than merely
-    advise "copy it somewhere safe" with no path forward (follow-up review
-    finding on #1110). `--discard-survivor-edits` bypasses ONLY this one
-    check: it is orthogonal to `--auto` (never implied by it, and vice
-    versa) and to every OTHER refusal below -- the absorbed-path collision,
-    a rewrite-file's own drift check, and the post-confirm
-    `_reject_drifted_targets` guard all still fire exactly as before, and
-    the flag proceeding past this check still costs the operator the usual
-    confirm gate unless `--auto`/`review: false` also apply. A tail entry
-    recorded before #1110 shipped has no hash to compare against at all;
-    `prepare_unmerge` reports that via
-    `PreparedUnmerge.survivor_drift_unverifiable` regardless of the flag,
-    and the command prints a one-line warning and proceeds -- fail-open,
-    but disclosed, only for that legacy case. When the flag DOES override a
-    genuine mismatch, `PreparedUnmerge.survivor_edits_discarded` is `True`
-    and the command prints its own disclosure naming the survivor, distinct
-    from the legacy-entry warning.
-
-    The recreated absorbed file is the one write the guard cannot cover:
-    Phase A refuses outright if it already exists, so there are no bytes to
-    compare against. Its protection is the write itself being create-only
-    (`fsio.write_exclusive`, #323): a file created at that path between
-    Phase A's existence check and Phase B's write raises `FileExistsError`
-    instead of being clobbered, making the Phase-A promise hold at write
-    time.
-
-    Phase B (after confirm; delegated to `application.lifecycle.
-    unmerge_core`, called by module attribute) writes, in this order:
-    `index.md` then `log.md` restored to their EXACT pre-merge bytes
-    (`index_before`/`log_before`) first; then every reversed inbound-link
-    file; then the recreated absorbed file (`absorbed_snapshot`); then the
-    restored survivor (`survivor_before`, which drops this ledger entry
-    while keeping any earlier ones intact) -- mirroring `merge`'s own
-    ordering reasoning (the least-recoverable-if-lost artifacts land
-    first, most easily git-recoverable last); and FINALLY, only once every
-    restore above has landed, `log.md` is written a SECOND time with one
-    `**Unmerge**` audit line appended on top of the just-restored
-    `log_before` -- so the append-only audit trail net-grows by exactly
-    one line documenting the round trip, even though every other file
-    returns to its pre-merge bytes exactly. Not transactional as a whole,
-    matching `merge`/`forget`'s documented limitation: a failure partway
-    through is a benign, git-recoverable partial result, never silent
-    corruption. That now includes a file created at the absorbed path
-    during the prompt window (#323): its create-only write errors
-    mid-Phase-B instead of silently winning, leaving the catalog/log
-    restored, every reversed inbound-link/relation/provenance rewrite file
-    already restored too (they land before the absorbed write in the order
-    above), the created file intact, and the survivor -- ledger and all,
-    so the absorbed content stays recoverable -- untouched. Any failure,
-    Phase A or Phase B, is caught and reported on stderr (exit 1), not a
-    raw traceback.
-
-    Limitation: `unmerge` restores `index.md`/`log.md` to their EXACT
-    pre-merge snapshot (`index_before`/`log_before`), not a merge of that
-    snapshot with whatever is on disk now. If another command (`ingest`,
-    `forget`, or an unrelated `merge`) touched the catalog/log after this
-    merge, that content is discarded when `unmerge` runs -- Phase A detects
-    this drift and prints a warning in the preview before the confirm gate,
-    but does not refuse; round-trip parity assumes a prompt unmerge. In a
-    `--to` unwind, later steps legitimately trip this same notice: each
-    completed step's own `**Unmerge**` audit line IS a post-merge log
-    change from the next step's point of view, so the warning is expected
-    chain-noise there, not a defect.
-    """
-    index_path = layout.bundle_dir / "index.md"
-    log_path = layout.bundle_dir / "log.md"
-
-    try:
-        prepared = application_lifecycle.prepare_unmerge(
-            root,
-            layout,
-            survivor_path,
-            survivor_canonical,
-            absorbed_canonical,
-            now=now,
-            cfg=cfg,
-            discard_survivor_edits=discard_survivor_edits,
-        )
-    except (OSError, ValueError) as exc:
-        typer.echo(
-            f"openkos unmerge: failed while preparing the unmerge -- {exc}.", err=True
-        )
-        raise typer.Exit(code=1) from exc
-
-    plan = prepared.plan
-
-    typer.echo("openkos unmerge: proposed changes:")
-    for rel in prepared.rewritten_files:
-        typer.echo(f"  ~ bundle/{rel} (reverse inbound link rewrite)")
-    for rel in prepared.relation_rewrite_files:
-        typer.echo(f"  ~ bundle/{rel} (restore pre-merge relations snapshot)")
-    for rel in prepared.provenance_rewrite_files:
-        typer.echo(f"  ~ bundle/{rel} (restore pre-merge provenance snapshot)")
-    # #758: a V5 entry reverses the merge's own catalog/log edit and leaves
-    # everything else standing, so the preview must not keep promising a
-    # wholesale restore -- the two shapes really do different things to
-    # these two files, and the operator is consenting to one of them.
-    if plan.entry.schema == okf.MERGE_LEDGER_SCHEMA_V5:
-        typer.echo(f"  ~ {index_path.name} (restore this merge's catalog entry)")
-        typer.echo(f"  ~ {log_path.name} (remove this merge's entry, append unmerge)")
-    else:
-        typer.echo(f"  ~ {index_path.name} (restore pre-merge contents)")
-        typer.echo(
-            f"  ~ {log_path.name} (restore pre-merge contents, append unmerge entry)"
-        )
-    survivor_status_suffix = ""
-    if prepared.survivor_status_outcome is not None:
-        survivor_status_suffix = _status_export_preview_suffix(
-            prepared.survivor_status_outcome
-        )
-    typer.echo(
-        f"  ~ bundle/{survivor_canonical}.md (restore pre-merge contents"
-        f"{survivor_status_suffix})"
-    )
-    absorbed_status_suffix = ""
-    if prepared.absorbed_status_outcome is not None:
-        absorbed_status_suffix = _status_export_preview_suffix(
-            prepared.absorbed_status_outcome
-        )
-    typer.echo(f"  + bundle/{absorbed_canonical}.md (restore{absorbed_status_suffix})")
-    if prepared.catalog_log_drifted:
-        typer.echo(
-            "Warning: index.md/log.md changed since the merge; unmerge "
-            "restores the pre-merge snapshot and will discard those changes."
-        )
-    if prepared.survivor_drift_unverifiable:
-        # #1110: this merge's ledger entry predates the survivor-edit check
-        # (no recorded `survivor_after_sha256`) -- fail-OPEN only for this
-        # legacy case, but disclosed, rather than refuse every bundle whose
-        # merges all happened before the fix shipped.
-        typer.echo(
-            f"Warning: {survivor_canonical!r}'s merge ledger entry predates "
-            "the survivor-edit check (#1110); cannot confirm its current "
-            "bytes still match what the merge wrote, proceeding anyway."
-        )
-    if prepared.survivor_edits_discarded:
-        # #1110 follow-up: --discard-survivor-edits explicitly overrode the
-        # mismatch refusal below -- disclosed here, in the preview, not
-        # silently, and named for exactly the survivor whose post-merge
-        # edit is about to be lost.
-        typer.echo(
-            f"Warning: {survivor_canonical!r}'s post-merge edits are being "
-            "discarded (--discard-survivor-edits) -- it will be restored to "
-            "its pre-merge state, and anything changed on it since the "
-            "merge is gone unless you copied it somewhere safe first."
-        )
-
-    if not confirmed and not auto and prepared.review:
-        if sys.stdin.isatty():
-            typer.confirm(prepared.confirmation.prompt, abort=True)
         else:
-            # #918: wording from the staged request, not a literal -- see
-            # the same change at `merge`'s gate.
-            typer.echo(prepared.confirmation.non_tty_refusal, err=True)
-            raise typer.Exit(code=1)
+            unmerge_service.unwind_merges(
+                root,
+                survivor_id,
+                target_input,
+                policy,
+                ports=ports,
+                observer=observer,
+                confirm=_ask_confirmation,
+            )
+    except unmerge_service.UnwindStopped as exc:
+        # The step already owes its own refusal on stderr (the single-step
+        # machinery never lets a raw traceback out); the stop line adds the
+        # chain-level accounting the operator needs next.
+        if not isinstance(exc.cause, write_gate.ConfirmationDeclined):
+            typer.echo(exc.cause.message, err=True)
+        typer.echo(exc.message, err=True)
+        # The step's own exit code survives the chain wrapper: exit 3 (the
+        # post-confirm drift refusal) is the ONE documented exit a script may
+        # safely retry, and collapsing it to 1 here would silently revoke that
+        # contract mid-chain (review finding, issue #562). A declined prompt
+        # has no code and stays the conventional 1.
+        raise typer.Exit(
+            code=3 if isinstance(exc.cause, write_gate.DriftDetected) else 1
+        ) from exc
+    except write_gate.WriteRefused as exc:
+        _exit_for_write_refusal(exc)
 
-    # Issue #313: every byte below was computed from a pre-prompt read, so
-    # re-validate each target now -- after the gate, before the first write.
-    #
-    # `absorbed_path` is absent by necessity, not oversight -- see the
-    # docstring. The guard's `Mapping[Path, bytes]` cannot express "expected
-    # absent", so its window is closed by the write itself being create-only
-    # (`fsio.write_exclusive` below, #323), not by an entry here.
-    _reject_drifted_targets(
-        layout,
-        {
-            index_path: prepared.index_bytes,
-            log_path: prepared.log_bytes,
-            survivor_path: prepared.survivor_bytes,
-            **{
-                layout.bundle_dir / rel: data
-                for rel, data in prepared.rewrite_bytes.items()
-            },
-        },
-        "unmerge",
-        # #328: the guard's default advice -- "re-run to recompute" -- is
-        # actively destructive here. `unmerge` does not recompute anything
-        # from the current state: `index.md`/`log.md`/the survivor are
-        # restored to their PRE-MERGE snapshots, so a re-run overwrites the
-        # very edit this refusal just protected; and an edited rewrite file
-        # keeps failing `reverse_link_rewrites`' own drift check until the
-        # edit is reverted. The remedy must describe that asymmetry and put
-        # "save your edit first" ahead of any re-run.
-        remedy=(
-            "Copy your edit somewhere safe before re-running: a re-run "
-            "restores the pre-merge snapshots over index.md, log.md, and "
-            "the survivor (overwriting the edit), and keeps refusing on an "
-            "edited rewrite file until that edit is reverted."
-        ),
-        # okf-v02-migration Phase 6: an unrepaired bundle's own drift refusal
-        # gets one extra actionable sentence naming `repair` -- the drift
-        # itself may be unrelated to the migration, but the operator can fix
-        # this first regardless of what caused the refusal.
-        hint=_okf_v02_migration_hint(index_path),
-    )
-
-    # Phase B (issue #918 Slice S2b): both Phase A and Phase B now go
-    # through the module attribute (never an aliased import, so a stale
-    # monkeypatch target raises loudly instead of silently missing) -- see
-    # `unmerge_core`'s own docstring for the exact write order and
-    # recoverability reasoning.
-    try:
-        result = application_lifecycle.unmerge_core(layout, prepared)
-    except (OSError, ValueError) as exc:
-        typer.echo(
-            f"openkos unmerge: failed while writing the unmerge -- {exc}.", err=True
-        )
-        raise typer.Exit(code=1) from exc
-
-    typer.echo(
-        f"openkos unmerge: restored 'bundle/{absorbed_canonical}.md' from "
-        f"'bundle/{survivor_canonical}.md' "
-        f"({index_path.name}, {log_path.name} updated)."
-    )
-
-    _autocommit(
-        root,
-        result.committed_paths,
-        f"openkos: unmerge {absorbed_canonical}",
-    )
-
-
-_RECONCILE_ANCHOR_TEMPLATE = "<!-- okos:reconcile target={target} role={role} -->"
-"""Hidden HTML-comment anchor keyed on the counterpart concept-id (design:
-Interfaces / Contracts). `reconcile`'s idempotency check
-(`_reconcile_anchor_present`) matches on `target=<id>` alone, ignoring
-`role` and the note's heading level, so ANY prior anchor for that
-counterpart -- however it got there -- suppresses a re-append."""
-
-_RECONCILE_ANCHOR_RE = re.compile(r"<!-- okos:reconcile target=(\S+) role=(\w+) -->")
-
-
-def _reconcile_anchor_present(body: str, counterpart_id: str) -> bool:
-    """Return whether `body` already carries a `## Reconciliation` anchor
-    referencing `counterpart_id` (any role) -- `reconcile`'s idempotency
-    gate: a repeated call for the same pair never re-appends a duplicate
-    note (spec: Idempotent Re-run)."""
-    return any(
-        match.group(1) == counterpart_id
-        for match in _RECONCILE_ANCHOR_RE.finditer(body)
-    )
-
-
-_ReconcileRole = Literal["reconciled", "supersedes", "superseded", "revises", "revised"]
-
-
-def _reconcile_sentence(
-    role: _ReconcileRole, counterpart_id: str, date_str: str
-) -> str:
-    """One human-readable sentence for a `## Reconciliation` note, per
-    `role` (design: Interfaces / Contracts) -- `reconciled` (symmetric,
-    both coexist), `supersedes` (this concept wins), `superseded` (hidden
-    from retrieval as of this edge; deprecated-status-export, issue #1075,
-    also exports this onto the concept's own `status` unless a
-    human-authored value blocks it), `revises` (this concept refines its
-    counterpart; both remain current), or `revised` (the mirror role on the
-    refined counterpart). `role` is a closed `Literal`, and any other value
-    raises defensively (rather than silently falling through to the
-    "superseded" sentence) so a typo can never mislabel a note."""
-    link = f"[{counterpart_id}](/{counterpart_id}.md)"
-    if role == "reconciled":
-        return f"Reconciled with {link} on {date_str} (both coexist)."
-    if role == "supersedes":
-        return f"Supersedes {link} as of {date_str} (this concept wins)."
-    if role == "superseded":
-        return f"Superseded by {link} as of {date_str} (hidden from retrieval)."
-    if role == "revises":
-        return f"Revises {link} as of {date_str} (refinement; both remain current)."
-    if role == "revised":
-        return f"Revised by {link} as of {date_str} (refinement; both remain current)."
-    raise ValueError(f"unexpected reconciliation role {role!r}")
-
-
-def _reconciliation_note(
-    *, counterpart_id: str, role: _ReconcileRole, date_str: str
-) -> str:
-    """Build one full `## Reconciliation` body note: an h2 heading (chosen
-    over `#` to avoid a second top-level heading alongside the concept's own
-    title, design note), the hidden anchor keyed on `counterpart_id`, and
-    one sentence linking to the counterpart."""
-    anchor = _RECONCILE_ANCHOR_TEMPLATE.format(target=counterpart_id, role=role)
-    sentence = _reconcile_sentence(role, counterpart_id, date_str)
-    return f"## Reconciliation\n{anchor}\n{sentence}\n"
-
-
-def _append_reconciliation_note(body: str, note: str) -> str:
-    """Append `note` to `body` as a new trailing section, additive-only --
-    never overwrites existing content (mirrors
-    `okf.build_merged_document`'s body-append separator math)."""
-    new_body = body.rstrip("\n") + "\n\n" + note
-    if not new_body.endswith("\n"):
-        new_body += "\n"
-    return new_body
-
-
-def _add_relation_if_absent(
-    relations: list[okf.Relation], new_relation: okf.Relation
-) -> tuple[list[okf.Relation], bool]:
-    """Append `new_relation` to `relations` unless an identical
-    `(target, type)` pair is already present, mirroring `relate`'s
-    idempotent dedup (task 2.3). Returns the possibly-extended list and
-    whether an entry was actually added."""
-    already_present = any(
-        relation.target == new_relation.target and relation.type == new_relation.type
-        for relation in relations
-    )
-    if already_present:
-        return relations, False
-    return [*relations, new_relation], True
-
-
-_ResolutionMode = Literal["none", "symmetric", "directional", "revision", "mixed"]
-_RequestedMode = Literal["symmetric", "directional", "revision"]
-
-_MODE_BY_RESOLUTION_TYPE: dict[str, _RequestedMode] = {
-    "reconciled_with": "symmetric",
-    "supersedes": "directional",
-    "revises": "revision",
-}
-"""The mode `reconcile`'s classifier assigns to each `RESOLUTION_RELATION_
-TYPES` member (design Decision 2). Keyed by that shared constant rather than
-hand-listed a second time, so a type added to one and not the other becomes
-`test_mode_and_role_tables_cover_every_resolution_type`'s failing assertion
-instead of a `KeyError` at classify time."""
-
-_DIRECTED_ROLES: dict[str, tuple[_ReconcileRole, _ReconcileRole]] = {
-    "supersedes": ("supersedes", "superseded"),
-    "revises": ("revises", "revised"),
-}
-"""The (holder role, target role) pair for each DIRECTED resolution type --
-`reconciled_with` has no entry here, since a symmetric edge has no holder
-(design Decision 4)."""
-
-
-def _existing_reconciliation_state(
-    *,
-    relations_a: list[okf.Relation],
-    relations_b: list[okf.Relation],
-    canonical_a: str,
-    canonical_b: str,
-) -> tuple[_ResolutionMode, str | None]:
-    """Classify the pair's EXISTING reconciliation state from
-    already-loaded (pre-mutation) relations -- the CRITICAL refuse-on-conflict
-    gate (fix: a mode-switch re-run must never add a second, contradictory
-    reconciliation resolution). One table-driven pass (design Decision 2)
-    collects the set of `(mode, holder)` pairs any `RESOLUTION_RELATION_TYPES`
-    edge between `{a, b}` implies -- a symmetric `reconciled_with` always
-    contributes `(symmetric, None)` regardless of which side holds it (so a
-    ONE-SIDED `reconciled_with` still classifies as `symmetric`, not
-    `mixed`), while `supersedes`/`revises` contribute `(mode, <holder>)`.
-
-    Returns `("none", None)` when the pair carries no prior reconciliation,
-    the single collected `(mode, holder)` when exactly one kind of edge (in
-    at most one direction) is present, or `("mixed", None)` when the pair
-    carries more than one -- disagreeing resolutions only a hand edit can
-    produce, which this classifier refuses to rank by precedence."""
-    found: set[tuple[_RequestedMode, str | None]] = set()
-    for relation in relations_a:
-        if relation.target == canonical_b and relation.type in _MODE_BY_RESOLUTION_TYPE:
-            mode = _MODE_BY_RESOLUTION_TYPE[relation.type]
-            found.add((mode, None if mode == "symmetric" else canonical_a))
-    for relation in relations_b:
-        if relation.target == canonical_a and relation.type in _MODE_BY_RESOLUTION_TYPE:
-            mode = _MODE_BY_RESOLUTION_TYPE[relation.type]
-            found.add((mode, None if mode == "symmetric" else canonical_b))
-
-    if not found:
-        return "none", None
-    if len(found) == 1:
-        (mode, holder) = next(iter(found))
-        return mode, holder
-    return "mixed", None
-
-
-def _reconciliation_state_description(mode: _ResolutionMode, holder: str | None) -> str:
-    """Human-readable description of an existing reconciliation state, for
-    the refuse-on-conflict error message."""
-    if mode == "directional":
-        return f"a directional reconciliation ({holder!r} supersedes its counterpart)"
-    if mode == "revision":
-        return f"a revision ({holder!r} revises its counterpart; both remain current)"
-    if mode == "mixed":
-        return (
-            "conflicting resolutions (more than one 'supersedes', 'revises' "
-            "or 'reconciled_with' edge between the pair, and they disagree)"
-        )
-    return "a symmetric reconciliation ('reconciled_with')"
-
-
-def _resolve_pair_member(
-    layout: config.WorkspaceLayout,
-    flag: str,
-    value: str,
-    canonical_a: str,
-    canonical_b: str,
-) -> tuple[str, str]:
-    """Resolve `value` (an id passed to `flag`, e.g. `--winner` or
-    `--revision`) to `(holder, counterpart)`, where `holder` is EXACTLY one
-    of `canonical_a`/`canonical_b` (design Decision 5 step 3). `value` is
-    resolved via `application_lifecycle.resolve_concept_path` first -- an
-    absolute id, a `..` segment, a reserved basename, or a nonexistent
-    concept refuses there, byte-identical to how `--winner` already refused
-    before this helper existed. Only once `value` resolves to a REAL concept
-    that is not a pair member does this raise its own message, shared by
-    both flags so their validation cannot drift apart by copy-paste."""
-    _, resolved = application_lifecycle.resolve_concept_path(layout.bundle_dir, value)
-    if resolved == canonical_a:
-        return canonical_a, canonical_b
-    if resolved == canonical_b:
-        return canonical_b, canonical_a
-    raise ValueError(
-        f"{flag} {value!r} must resolve to one of the pair "
-        f"({canonical_a!r}, {canonical_b!r}), got {resolved!r}"
-    )
+    # #640: once per invocation, after the single step -- or the WHOLE chain --
+    # completed. A stopped chain raised above and leaves the stale-index
+    # warnings as its safety net.
+    _refresh_derived_after_write(config.WorkspaceLayout(root), None, verb="unmerge")
 
 
 @app.command(
@@ -9454,131 +8682,44 @@ def reconcile(
     layout = config.WorkspaceLayout(root)
     log_path = layout.bundle_dir / "log.md"
 
-    try:
-        workspace_reason = config.require_workspace(root)
-        if workspace_reason is not None:
-            typer.echo(
-                f"openkos reconcile: refusing to reconcile -- {workspace_reason}.",
-                err=True,
-            )
-            raise typer.Exit(code=1)
-
-        # #567: `--from-findings` is a whole mode, never a modifier. Explicit
-        # ids, `--winner`, `--revision`, and `--auto` all belong to the
-        # two-id form -- a directional or revision resolution needs a human
-        # to NAME the holder, and the batch walk's consent is per item by
-        # design, so there is no bulk path to skip a prompt on.
-        if from_findings:
-            if (
-                id_a is not None
-                or id_b is not None
-                or winner is not None
-                or revision is not None
-                or auto
-            ):
-                raise ValueError(
-                    "--from-findings takes no concept ids, no --winner, no "
-                    "--revision, and no --auto; use the two-id form for a "
-                    "directional, revision, or unattended reconciliation"
-                )
-        # Decision 5 step 2: this runs before any id is resolved, so the
-        # refusal never depends on whether `id_a`/`id_b`/the flag values
-        # exist -- a reconciliation is either a reversal or a refinement,
-        # never both.
-        elif winner is not None and revision is not None:
-            raise ValueError(
-                "--winner and --revision are mutually exclusive: a "
-                "reconciliation is either a reversal (--winner) or a "
-                "refinement (--revision), never both"
-            )
-        elif id_a is None or id_b is None:
-            raise ValueError(
-                "two concept ids are required (or pass --from-findings to "
-                "walk the persisted open findings)"
-            )
-    except (OSError, ValueError) as exc:
-        typer.echo(f"openkos reconcile: refusing to reconcile -- {exc}.", err=True)
-        raise typer.Exit(code=1) from exc
-
     if from_findings:
+        # `--from-findings` is a whole mode (#567): it takes no ids, no
+        # `--winner`, no `--revision` and no `--auto` -- a batch walk gets its
+        # consent per item and deliberately has no unattended bulk path.
+        try:
+            reconcile_service.check_workspace(root)
+            reconcile_service.validate_request(
+                id_a=id_a,
+                id_b=id_b,
+                winner=winner,
+                revision=revision,
+                from_findings=True,
+                auto=auto,
+            )
+        except write_gate.WriteRefused as exc:
+            _exit_for_write_refusal(exc)
         _run_reconcile_from_findings(root, layout, log_path)
         return
-    if id_a is None or id_b is None:  # pragma: no cover -- gate above refused
-        raise typer.Exit(code=1)
 
     try:
-        path_a, canonical_a = application_lifecycle.resolve_concept_path(
-            layout.bundle_dir, id_a
+        outcome = reconcile_service.reconcile_concepts(
+            root,
+            id_a,
+            id_b,
+            winner=winner,
+            revision=revision,
+            auto=auto,
+            ports=_reconcile_ports(),
+            observer=_CliReconcileObserver(),
+            confirm=_ask_confirmation,
         )
-        path_b, canonical_b = application_lifecycle.resolve_concept_path(
-            layout.bundle_dir, id_b
-        )
-        if canonical_a == canonical_b:
-            raise ValueError(
-                f"id_a and id_b must be distinct, both resolved to {canonical_a!r}"
-            )
-        # Distinct STRINGS are not distinct FILES (#324): on a
-        # case-insensitive filesystem (macOS default) `foo` and `Foo` are
-        # two canonical ids for ONE file -- and a symlink aliases one under
-        # any name on any filesystem. The drift guard cannot catch this
-        # either: both keys snapshot the same identical bytes (no drift),
-        # and Phase B's second `write_atomic` over the same inode then
-        # silently discards the first document's edge and note. `samefile`
-        # compares device+inode -- after `_resolve_concept_path` proved
-        # both exist, so error precedence is preserved -- and is naturally
-        # False for genuinely distinct files on case-sensitive hosts. The
-        # string check above stays: it is cheap and gives the literal
-        # self-pair its clearer message.
-        if path_a.samefile(path_b):
-            raise ValueError(
-                f"id_a and id_b must be distinct, {canonical_a!r} and "
-                f"{canonical_b!r} resolve to the same file on this filesystem"
-            )
-
-        holder_canonical: str | None = None
-        target_canonical: str | None = None
-        edge_type: Literal["supersedes", "revises"] = "supersedes"
-        if winner is not None:
-            holder_canonical, target_canonical = _resolve_pair_member(
-                layout, "--winner", winner, canonical_a, canonical_b
-            )
-        elif revision is not None:
-            holder_canonical, target_canonical = _resolve_pair_member(
-                layout, "--revision", revision, canonical_a, canonical_b
-            )
-            edge_type = "revises"
-    except (OSError, ValueError) as exc:
-        typer.echo(f"openkos reconcile: refusing to reconcile -- {exc}.", err=True)
-        raise typer.Exit(code=1) from exc
-
-    try:
-        cfg = config.read_config(root)
-    except (OSError, ValueError) as exc:
-        typer.echo(
-            f"openkos reconcile: failed while preparing the reconcile -- {exc}.",
-            err=True,
-        )
-        raise typer.Exit(code=1) from exc
-
-    changed = _reconcile_pair(
-        root,
-        layout,
-        log_path,
-        cfg,
-        path_a,
-        canonical_a,
-        path_b,
-        canonical_b,
-        holder_canonical,
-        target_canonical,
-        auto=auto,
-        edge_type=edge_type,
-    )
+    except write_gate.WriteRefused as exc:
+        _exit_for_write_refusal(exc)
     # #655: the last write verb joins #640's contract -- once, end of run,
     # only when a concept document actually changed (the idempotent
     # no-change re-run invalidated nothing).
-    if changed:
-        _refresh_derived_after_write(layout, cfg, verb="reconcile")
+    if outcome.changed:
+        _refresh_derived_after_write(layout, None, verb="reconcile")
 
 
 def _status_export_preview_suffix(outcome: okf.ExportOutcome) -> str:
@@ -9600,10 +8741,76 @@ def _status_export_preview_suffix(outcome: okf.ExportOutcome) -> str:
     return ""
 
 
-def _reconcile_pair(
+class _CliReconcileObserver(reconcile_service.ReconcileObserver):
+    """Renders what the reconcile service reports: one pair's plan and its
+    closing line, in the order the verb has always printed them."""
+
+    def proposed(self, preview: reconcile_service.ReconcilePreview) -> None:
+        pair = preview.pair
+        status_suffix_a = ""
+        status_suffix_b = ""
+        if preview.status_outcome is not None:
+            suffix = _status_export_preview_suffix(preview.status_outcome)
+            if preview.target_is_a:
+                status_suffix_a = suffix
+            else:
+                status_suffix_b = suffix
+        typer.echo("openkos reconcile: proposed changes:")
+        if pair.holder_canonical is not None:
+            # Directed mode: name the edge itself first, so the reviewer sees
+            # the decision (which concept wins or refines) before the per-file
+            # detail. `!r` mirrors how every other message here quotes ids.
+            typer.echo(
+                f"  = {pair.holder_canonical!r} {pair.edge_type} "
+                f"{pair.target_canonical!r}"
+            )
+        typer.echo(
+            f"  ~ bundle/{pair.canonical_a}.md (relation "
+            f"{'added' if preview.edge_added_a else 'unchanged'}; note "
+            f"{'appended' if preview.note_added_a else 'already present'}"
+            f"{status_suffix_a})"
+        )
+        typer.echo(
+            f"  ~ bundle/{pair.canonical_b}.md (relation "
+            f"{'added' if preview.edge_added_b else 'unchanged'}; note "
+            f"{'appended' if preview.note_added_b else 'already present'}"
+            f"{status_suffix_b})"
+        )
+        typer.echo(f"  ~ {preview.log_name} (new dated entry)")
+
+    def written(self, written: reconcile_service.ReconcileWritten) -> None:
+        pair = written.pair
+        if pair.holder_canonical is None:
+            typer.echo(
+                "openkos reconcile: recorded a symmetric reconciliation between "
+                f"'bundle/{pair.canonical_a}.md' and "
+                f"'bundle/{pair.canonical_b}.md' ({written.log_name} updated)."
+            )
+        elif pair.edge_type == "supersedes":
+            typer.echo(
+                f"openkos reconcile: recorded '{pair.holder_canonical}' as "
+                f"superseding '{pair.target_canonical}'; "
+                f"'{pair.target_canonical}' now lists as deprecated "
+                f"({written.log_name} updated)."
+            )
+        else:
+            typer.echo(
+                f"openkos reconcile: recorded '{pair.holder_canonical}' as "
+                f"revising '{pair.target_canonical}'; both remain current "
+                f"({written.log_name} updated)."
+            )
+
+
+def _reconcile_ports() -> reconcile_service.ReconcilePorts:
+    return reconcile_service.ReconcilePorts(
+        autocommit=lambda root, paths, message: _autocommit(root, paths, message),
+        snapshot_read=lambda path: _snapshot_read(path),
+        clock=lambda: datetime.now(UTC),
+    )
+
+
+def _record_pair_reconciliation(
     root: Path,
-    layout: config.WorkspaceLayout,
-    log_path: Path,
     cfg: config.Config,
     path_a: Path,
     canonical_a: str,
@@ -9616,302 +8823,38 @@ def _reconcile_pair(
     announce_preview: bool = True,
     edge_type: Literal["supersedes", "revises"] = "supersedes",
 ) -> bool:
-    """One pair's complete reconcile transaction -- Phase A in-memory build,
-    conflict gate, preview, confirm gate, drift re-validation, Phase B
-    additive writes, and autocommit -- extracted verbatim from the two-id
-    command body so `--from-findings` (#567) walks the SAME write path
-    instead of a second implementation. `announce_preview=False` suppresses
-    only the 'proposed changes' preview (the batch walk collects consent
-    from the finding context before calling); every gate below still runs.
-    Raises `typer.Exit` exactly as the two-id form always did: exit 1 for a
-    prepare/conflict/write failure, exit 3 for post-consent target drift.
+    """One pair's reconcile transaction for the `--from-findings` walks: the
+    adapter over `reconcile_service.reconcile_pair` (the full Phase A /
+    confirm / drift-guard / Phase B contract is documented there), so both
+    walks write through the SAME path as the two-id form. Renders the typed
+    refusals and raises `typer.Exit` exactly as the two-id form always did:
+    exit 1 for a prepare/conflict/write failure, exit 3 for post-consent
+    target drift -- the walks catch it to skip a bad pair, re-raising 3.
 
-    `holder_canonical is None` means a SYMMETRIC request (`edge_type` is
-    then ignored); otherwise `holder_canonical` is the pair member that gets
-    the outbound edge and `target_canonical` its counterpart, with
-    `edge_type` naming which directed resolution (`"supersedes"` or
-    `"revises"`, design Decision 4) -- `_run_reconcile_from_findings` always
-    passes `None, None` and the `edge_type="supersedes"` default, so its
-    call site stays byte-unchanged by this change.
-
-    Returns whether this run CHANGED a concept document (#655): an edge
-    added or a note appended on either side. `False` is the idempotent
-    no-change re-run, which writes only the log entry -- `log.md` is a
-    catalog file no derived index reads, so the caller's #640 write-time
-    refresh keys on this signal, never on "the transaction completed"."""
-    now = datetime.now(UTC)
-    today = now.astimezone().date()
-    date_str = today.isoformat()
-
-    try:
-        # One `_snapshot_read` observation per target: the decoded text
-        # feeds the parsers below, the raw bytes feed
-        # `_reject_drifted_targets` (issues #306, #313, #318).
-        bytes_a, text_a = _snapshot_read(path_a)
-        bytes_b, text_b = _snapshot_read(path_b)
-        log_bytes, log_text = _snapshot_read(log_path)
-
-        metadata_a, body_a = okf.load_frontmatter(text_a)
-        metadata_b, body_b = okf.load_frontmatter(text_b)
-        relations_a = okf.decode_relations(metadata_a)
-        relations_b = okf.decode_relations(metadata_b)
-
-        # CRITICAL refuse-on-conflict gate (before ANY edge is computed or
-        # written): a pair may carry AT MOST ONE reconciliation resolution
-        # written by `reconcile`. Compare the pair's EXISTING state to the
-        # one requested by THIS invocation -- an unrelated (`"none"`) prior
-        # state proceeds as a fresh write, an IDENTICAL prior state falls
-        # through to the ordinary idempotent no-op path below, but a
-        # DIFFERENT prior state (mode switch, or opposite `--winner`) is
-        # refused here, with zero writes -- this is what prevents a 2nd
-        # `supersedes` edge from coexisting with a stale `reconciled_with`
-        # edge (or a 2nd, opposite-direction `supersedes` edge), and
-        # prevents the `## Reconciliation` note from going stale relative
-        # to frontmatter (the note-append gate below is anchor-keyed on
-        # `target` alone and blind to `role`, so it cannot itself repair a
-        # mismatched note on a later run).
-        existing_mode, existing_holder = _existing_reconciliation_state(
-            relations_a=relations_a,
-            relations_b=relations_b,
-            canonical_a=canonical_a,
-            canonical_b=canonical_b,
-        )
-        requested_mode: _RequestedMode = (
-            _MODE_BY_RESOLUTION_TYPE[edge_type]
-            if holder_canonical is not None
-            else "symmetric"
-        )
-        if existing_mode != "none" and (
-            existing_mode != requested_mode or existing_holder != holder_canonical
-        ):
-            description = _reconciliation_state_description(
-                existing_mode, existing_holder
-            )
-            raise ValueError(
-                f"concepts {canonical_a!r} and {canonical_b!r} are already "
-                f"reconciled as {description}; reconcile will not overwrite "
-                "an existing resolution. To change it, edit the concepts "
-                "manually or revert with git, then re-run"
-            )
-
-        edge_added_a = False
-        edge_added_b = False
-        role_a: _ReconcileRole
-        role_b: _ReconcileRole
-        if holder_canonical is None:
-            relations_a, edge_added_a = _add_relation_if_absent(
-                relations_a, okf.Relation(target=canonical_b, type="reconciled_with")
-            )
-            relations_b, edge_added_b = _add_relation_if_absent(
-                relations_b, okf.Relation(target=canonical_a, type="reconciled_with")
-            )
-            role_a, role_b = "reconciled", "reconciled"
-        else:
-            holder_role, target_role = _DIRECTED_ROLES[edge_type]
-            if holder_canonical == canonical_a:
-                relations_a, edge_added_a = _add_relation_if_absent(
-                    relations_a, okf.Relation(target=canonical_b, type=edge_type)
-                )
-                role_a, role_b = holder_role, target_role
-            else:
-                relations_b, edge_added_b = _add_relation_if_absent(
-                    relations_b, okf.Relation(target=canonical_a, type=edge_type)
-                )
-                role_a, role_b = target_role, holder_role
-
-        note_added_a = False
-        if not _reconcile_anchor_present(body_a, canonical_b):
-            body_a = _append_reconciliation_note(
-                body_a,
-                _reconciliation_note(
-                    counterpart_id=canonical_b, role=role_a, date_str=date_str
-                ),
-            )
-            note_added_a = True
-
-        note_added_b = False
-        if not _reconcile_anchor_present(body_b, canonical_a):
-            body_b = _append_reconciliation_note(
-                body_b,
-                _reconciliation_note(
-                    counterpart_id=canonical_a, role=role_b, date_str=date_str
-                ),
-            )
-            note_added_b = True
-
-        # deprecated-status-export (issue #1075, design Decision 5): a
-        # directed `supersedes` edge that was just ADDED (never on a
-        # symmetric/`revises` reconcile, and never on an idempotent
-        # no-edge re-run) exports the counterpart's status in this SAME
-        # Phase B write. `edge_type == "revises"` and the idempotent case
-        # both leave `status_outcome` `None`, writing nothing.
-        status_outcome: okf.ExportOutcome | None = None
-        target_is_a = False
-        if holder_canonical is not None and edge_type == "supersedes":
-            edge_added = (
-                edge_added_a if holder_canonical == canonical_a else edge_added_b
-            )
-            if edge_added:
-                target_is_a = holder_canonical != canonical_a
-                if target_is_a:
-                    decision = okf.project_deprecation_export(
-                        metadata_a, superseded=True
-                    )
-                    metadata_a = decision.metadata
-                else:
-                    decision = okf.project_deprecation_export(
-                        metadata_b, superseded=True
-                    )
-                    metadata_b = decision.metadata
-                status_outcome = decision.outcome
-
-        metadata_a[okf.RELATIONS_KEY] = okf.encode_relations(relations_a)
-        metadata_b[okf.RELATIONS_KEY] = okf.encode_relations(relations_b)
-        new_text_a = okf.dump_frontmatter(metadata_a, body_a)
-        new_text_b = okf.dump_frontmatter(metadata_b, body_b)
-
-        changed = edge_added_a or edge_added_b or note_added_a or note_added_b
-        if not changed:
-            log_line = (
-                f"**Reconcile**: [{canonical_a}](/{canonical_a}.md) and "
-                f"[{canonical_b}](/{canonical_b}.md) are already reconciled; "
-                "no change."
-            )
-        elif holder_canonical is None:
-            log_line = (
-                "**Reconcile**: Recorded a symmetric 'reconciled_with' "
-                f"between [{canonical_a}](/{canonical_a}.md) and "
-                f"[{canonical_b}](/{canonical_b}.md)."
-            )
-        elif edge_type == "supersedes":
-            log_line = (
-                f"**Reconcile**: [{holder_canonical}](/{holder_canonical}.md) "
-                f"supersedes [{target_canonical}](/{target_canonical}.md) "
-                "(recorded 'supersedes')."
-            )
-        else:
-            log_line = (
-                f"**Reconcile**: [{holder_canonical}](/{holder_canonical}.md) "
-                f"revises [{target_canonical}](/{target_canonical}.md) "
-                "(recorded 'revises'; both remain current)."
-            )
-        new_log_text = bundle_log.insert_log_entry(log_text, today, log_line)
-    except (OSError, ValueError) as exc:
-        typer.echo(
-            f"openkos reconcile: failed while preparing the reconcile -- {exc}.",
-            err=True,
-        )
-        raise typer.Exit(code=1) from exc
-
-    status_suffix_a = ""
-    status_suffix_b = ""
-    if status_outcome is not None:
-        suffix = _status_export_preview_suffix(status_outcome)
-        if target_is_a:
-            status_suffix_a = suffix
-        else:
-            status_suffix_b = suffix
-
-    if announce_preview:
-        typer.echo("openkos reconcile: proposed changes:")
-        if holder_canonical is not None:
-            # Names the direction before the confirm gate, so a preview
-            # reader sees who revises/supersedes whom -- not only the
-            # post-write echo (design Decision 6).
-            typer.echo(f"  = {holder_canonical!r} {edge_type} {target_canonical!r}")
-        typer.echo(
-            f"  ~ bundle/{canonical_a}.md (relation "
-            f"{'added' if edge_added_a else 'unchanged'}; note "
-            f"{'appended' if note_added_a else 'already present'}"
-            f"{status_suffix_a})"
-        )
-        typer.echo(
-            f"  ~ bundle/{canonical_b}.md (relation "
-            f"{'added' if edge_added_b else 'unchanged'}; note "
-            f"{'appended' if note_added_b else 'already present'}"
-            f"{status_suffix_b})"
-        )
-        typer.echo(f"  ~ {log_path.name} (new dated entry)")
-
-    if not auto and cfg.review:
-        if sys.stdin.isatty():
-            typer.confirm("Proceed with these changes?", abort=True)
-        else:
-            typer.echo(
-                "openkos reconcile: refusing to write without confirmation -- "
-                "stdin is not a TTY; re-run with --auto.",
-                err=True,
-            )
-            raise typer.Exit(code=1)
-
-    # Issue #313: every byte below was computed from a pre-prompt read, so
-    # re-validate each target now -- after the gate, before the first write.
-    # Whole-run refusal is what keeps the pair from ending up disagreeing
-    # about its own resolution.
-    _reject_drifted_targets(
-        layout,
-        {
-            path_a: bytes_a,
-            path_b: bytes_b,
-            log_path: log_bytes,
-        },
-        "reconcile",
+    Returns whether this run CHANGED a concept document (#655): the
+    idempotent no-change re-run writes only the log entry."""
+    pair = reconcile_service.PairRequest(
+        path_a=path_a,
+        canonical_a=canonical_a,
+        path_b=path_b,
+        canonical_b=canonical_b,
+        holder_canonical=holder_canonical,
+        target_canonical=target_canonical,
+        edge_type=edge_type,
     )
-
     try:
-        fsio.write_atomic(path_a, new_text_a)
-        fsio.write_atomic(path_b, new_text_b)
-        fsio.write_atomic(log_path, new_log_text)
-    except (OSError, ValueError) as exc:
-        typer.echo(
-            f"openkos reconcile: failed while writing the reconcile -- {exc}.",
-            err=True,
-        )
-        raise typer.Exit(code=1) from exc
-
-    if holder_canonical is None:
-        typer.echo(
-            "openkos reconcile: recorded a symmetric reconciliation between "
-            f"'bundle/{canonical_a}.md' and 'bundle/{canonical_b}.md' "
-            f"({log_path.name} updated)."
-        )
-    elif edge_type == "supersedes":
-        # Name the STATUS the loser will carry, not only the act (#389).
-        # This verb said "recorded as superseding" while `list` shows
-        # `deprecated` in its STATUS column, so the operator met two words
-        # for the action they had just performed and its effect, with
-        # nothing connecting them.
-        typer.echo(
-            f"openkos reconcile: recorded '{holder_canonical}' as superseding "
-            f"'{target_canonical}'; '{target_canonical}' now lists as "
-            f"deprecated ({log_path.name} updated)."
-        )
-    else:
-        # Mirrors #389 for the OPPOSITE case: a revision hides nothing, so
-        # the echo names that directly rather than leaving the operator to
-        # infer it from silence (design Decision 6).
-        typer.echo(
-            f"openkos reconcile: recorded '{holder_canonical}' as revising "
-            f"'{target_canonical}'; both remain current "
-            f"({log_path.name} updated)."
-        )
-
-    if holder_canonical is None:
-        reconcile_message = f"openkos: reconcile {canonical_a} <-> {canonical_b}"
-    elif edge_type == "supersedes":
-        reconcile_message = (
-            f"openkos: reconcile {holder_canonical} supersedes {target_canonical}"
-        )
-    else:
-        reconcile_message = (
-            f"openkos: reconcile {holder_canonical} revises {target_canonical}"
-        )
-    _autocommit(
-        root,
-        [f"bundle/{canonical_a}.md", f"bundle/{canonical_b}.md", "bundle/log.md"],
-        reconcile_message,
-    )
-    return changed
+        return reconcile_service.reconcile_pair(
+            root,
+            cfg,
+            pair,
+            auto=auto,
+            announce_preview=announce_preview,
+            ports=_reconcile_ports(),
+            observer=_CliReconcileObserver(),
+            confirm=_ask_confirmation,
+        ).changed
+    except write_gate.WriteRefused as exc:
+        _exit_for_write_refusal(exc)
 
 
 def _ask_later_decision_and_type(a: str, b: str) -> tuple[str, str, str] | None:
@@ -9989,7 +8932,7 @@ def _run_reconcile_from_findings(
     a pair member), and a high-confidence CONTRADICTS verdict (the same
     `is_high_confidence_finding` threshold the live display uses) -- then
     prompt per item and write each accepted pair's SYMMETRIC reconciliation
-    through `_reconcile_pair`, the exact transaction the two-id form runs.
+    through `_record_pair_reconciliation`, the exact transaction the two-id form runs.
 
     Consent is per item and TTY-only, mirroring curate's Identity walk: a
     reconciliation is a semantic judgment, so there is deliberately no
@@ -10098,10 +9041,8 @@ def _run_reconcile_from_findings(
             continue
 
         try:
-            pair_changed = _reconcile_pair(
+            pair_changed = _record_pair_reconciliation(
                 root,
-                layout,
-                log_path,
                 cfg,
                 path_a,
                 canonical_a,
@@ -10216,10 +9157,8 @@ def _run_reconcile_from_findings(
             edge_type = cast(Literal["supersedes", "revises"], raw_edge_type)
 
         try:
-            pair_changed = _reconcile_pair(
+            pair_changed = _record_pair_reconciliation(
                 root,
-                layout,
-                log_path,
                 cfg,
                 path_a,
                 canonical_a,
@@ -11204,61 +10143,72 @@ def duplicates(
     flag for consistency.
     """
     root = Path.cwd()
-    reason = config.require_workspace(root)
-    if reason is not None:
-        typer.echo(f"openkos duplicates: refusing to run -- {reason}.", err=True)
-        raise typer.Exit(code=1)
+    try:
+        # #797: the three decision verbs short-circuit BEFORE the whole-bundle
+        # walk, mirroring `contradictions --decline/--reopen/--declined`. A human
+        # ruling must be recordable on a workspace whose candidate set is
+        # expensive to compute, or slow to write is slow to use.
+        if keep_distinct:
+            ruling = duplicates_service.record_identity_ruling(
+                root,
+                keep_distinct,
+                flag="--keep-distinct",
+                target_state="declined",
+                on_warning=_echo_warning,
+            )
+            typer.echo(
+                f"openkos duplicates: keeping distinct {' + '.join(ruling.members)}."
+            )
+            _autocommit(
+                root,
+                [ruling.rel_path],
+                f"openkos: keep distinct {'/'.join(ruling.members)}",
+            )
+            return
+        if reopen:
+            ruling = duplicates_service.record_identity_ruling(
+                root,
+                reopen,
+                flag="--reopen",
+                target_state="open",
+                on_warning=_echo_warning,
+            )
+            typer.echo(f"openkos duplicates: reopened {' + '.join(ruling.members)}.")
+            _autocommit(
+                root,
+                [ruling.rel_path],
+                f"openkos: reopen identity {'/'.join(ruling.members)}",
+            )
+            return
+        if kept_distinct:
+            _duplicates_kept_distinct_view(root)
+            return
 
-    layout = config.WorkspaceLayout(root)
-
-    # #797: the three decision verbs short-circuit BEFORE the whole-bundle
-    # walk, mirroring `contradictions --decline/--reopen/--declined`. A
-    # human ruling must be recordable on a workspace whose candidate set is
-    # expensive to compute, or slow to write is slow to use.
-    if keep_distinct:
-        members = _validated_identity_members(keep_distinct, "--keep-distinct")
-        rel_path = _apply_identity_decision(layout, members, target_state="declined")
-        typer.echo(f"openkos duplicates: keeping distinct {' + '.join(members)}.")
-        _autocommit(root, [rel_path], f"openkos: keep distinct {'/'.join(members)}")
-        return
-    if reopen:
-        members = _validated_identity_members(reopen, "--reopen")
-        rel_path = _apply_identity_decision(layout, members, target_state="open")
-        typer.echo(f"openkos duplicates: reopened {' + '.join(members)}.")
-        _autocommit(root, [rel_path], f"openkos: reopen identity {'/'.join(members)}")
-        return
-    if kept_distinct:
-        _duplicates_kept_distinct_view(root, layout)
-        return
-
-    report = find_candidates_report(
-        layout.bundle_dir, include_deprecated=include_deprecated
-    )
-    # The suppression runs AFTER the walk, never inside it: the cap and its
-    # truncation notice describe what the corpus PRODUCED, and filtering
-    # before them would let a ruled-distinct group silently consume a cap
-    # slot's worth of accounting.
-    note = _echo_warning_once()
-    groups = [
-        group
-        for group in report.groups
-        if not application_pending.is_group_kept_distinct(
-            layout, group.member_ids, on_warning=note
+        report = duplicates_service.report_duplicates(
+            root,
+            include_deprecated=include_deprecated,
+            find_candidates_report=find_candidates_report,
+            on_warning=_echo_warning_once(),
         )
-    ]
-    suppressed = len(report.groups) - len(groups)
-    notice = candidate_group_truncation_notice(report)
-    if notice is not None:
-        typer.echo(notice, err=True)
+    except duplicates_service.InvalidMembers as exc:
+        typer.echo(exc.message, err=True)
+        raise typer.Exit(code=2) from exc
+    except duplicates_service.DuplicatesRefused as exc:
+        typer.echo(exc.message, err=True)
+        raise typer.Exit(code=1) from exc
+
+    if report.truncation_notice is not None:
+        typer.echo(report.truncation_notice, err=True)
 
     typer.echo(f"openkos duplicates: workspace at {root}")
     typer.echo()
-    if suppressed:
+    if report.suppressed:
         typer.echo(
-            f"Hiding {suppressed} group{_plural(suppressed)} you ruled "
-            "distinct (`openkos duplicates --kept-distinct` lists them)."
+            f"Hiding {report.suppressed} group{_plural(report.suppressed)} you "
+            "ruled distinct (`openkos duplicates --kept-distinct` lists them)."
         )
         typer.echo()
+    groups = report.groups
     if not groups:
         typer.echo("No candidates found.")
         return
@@ -11281,6 +10231,22 @@ def duplicates(
             typer.echo(f"  - {member_id}")
         typer.echo()
     typer.echo("Next: openkos merge <survivor> <absorbed>")
+
+
+def _duplicates_kept_distinct_view(root: Path) -> None:
+    """`--kept-distinct`: every group a human ruled distinct, so the ruling is
+    visible and reversible rather than an invisible suppression (#797)."""
+    records = duplicates_service.list_kept_distinct(root, on_warning=_echo_warning)
+    typer.echo(f"openkos duplicates --kept-distinct: workspace at {root}")
+    typer.echo()
+    if not records:
+        typer.echo("No groups kept distinct.")
+        return
+    for record in records:
+        typer.echo(f"[KEPT DISTINCT] {' + '.join(record.member_ids)}")
+        typer.echo(f"  decided: {record.decided_at}")
+        typer.echo()
+    typer.echo("Reopen one with: openkos duplicates --reopen <id> --reopen <id>")
 
 
 @app.command(
@@ -11835,174 +10801,175 @@ def _zero_edge_state_message(
     return none_survived.format(count=count)
 
 
-def _suggestion_caveat(suggested_type: str) -> str:
-    """What a suggested type does NOT establish, spelled ONCE (#778).
-
-    Two caveats, one helper, because they are answered at the same moment
-    and by the same three surfaces -- `suggest-relations`' listing, its
-    `--apply` preview and prompt, and `curate`'s Structure stage. #778 was
-    exactly one surface spelling a caveat while another stayed silent, and
-    two helpers would let that happen again one caveat at a time.
-
-    - **Asymmetric types** carry #624's direction caveat. `docs/testing.md`
-      documents this wording as the contract wherever a suggested direction
-      is presented, so it is reproduced byte-for-byte.
-    - **The least-specific type** carries #802's. `related_to` is the
-      rubric's honest answer when no specific type holds -- "the two are
-      connected, and the documents do not support saying how" -- but the
-      operator saw `[related_to]` above a rationale explaining why it is
-      NOT any specific type, and was asked to approve it with nothing
-      saying what approving it asserts. The caveat says what the type
-      itself means, which is also why it is not a warning: the answer is
-      correct, and the graph edge it writes claims less than the reader of
-      a bare type label would assume.
-
-    A single `if/elif` is safe because the two classes are disjoint -- the
-    least-specific type is symmetric -- and a test pins that, so a future
-    asymmetric least-specific type cannot silently take whichever branch
-    happens to be written first.
-    """
-    if suggested_type in ASYMMETRIC_RELATION_TYPES:
-        return " (direction model-suggested, unverified)"
-    if suggested_type == LEAST_SPECIFIC_RELATION_TYPE:
-        return " (connected; the documents do not say how)"
-    return ""
+_suggestion_caveat = relations_service.suggestion_caveat
+"""Re-exported for the callers that reach the caveat through `cli.main`
+(curate's Structure stage). The definition -- what a suggested type does NOT
+establish (#778) -- lives in `application/suggest_relations_service.py`, beside
+the `--apply` walk that renders it."""
 
 
-def _run_suggest_relations_apply(
-    root: Path,
-    layout: config.WorkspaceLayout,
-    results: Sequence[EdgeSuggestion],
-) -> None:
-    """The interactive `suggest-relations --apply` walk (issue #560,
-    mirroring `_run_adjudicate_apply`): per VALID suggestion, render the
-    same `[type] source -> target` + rationale block the read-only report
-    prints, prompt through `curate._confirm` (the one validating per-item
-    write-consent prompt, #398/#483 contract), and on `y` write through the
-    exact `prepare_relate` -> `_reject_drifted_targets` -> `relate_core` ->
-    `_autocommit` sequence curate's Structure stage uses -- reused verbatim
-    so the write paths cannot drift. A degraded suggestion is reported and
-    skipped without a prompt; an already-present relation is reported and
-    skipped without a write; declines are listed after the summary so a
-    typo-free decline set is revisitable. Every byte `relate_core` writes
-    was computed by `prepare_relate` BEFORE the prompt, so each accepted
-    item re-validates its two targets against the prepared baselines
-    strictly after its `y` and strictly before its write (the
-    #306/#313/#319 drift arc); drift refuses with exit 3, prior per-item
-    commits remain intact."""
-    log_path = layout.bundle_dir / "log.md"
-    now = datetime.now(UTC)
-    applied = 0
-    skipped = 0
-    declined: list[str] = []
-
-    for result in results:
-        # `effective_edge`, not `edge` (#991 second review round): this is
-        # the WRITE path, so the direction that reaches `prepare_relate`
-        # (and therefore the bundle) must be the corrected one when the
-        # object-type direction-signature check found one -- `edge` itself
-        # stays the candidate identity, unswapped, for persistence and
-        # reassembly.
-        edge = result.effective_edge
-        if result.suggested_type is None:
-            typer.echo(f"[?] {edge.source_id} -> {edge.target_id}")
-            typer.echo("  note: no valid type suggested")
-            skipped += 1
-            continue
-
-        # #778: the SAME caveat curate's Structure stage spells (#624) --
-        # an asymmetric direction carries no evidence, and the surface
-        # that most invites bulk application must not be the one surface
-        # missing the documented warning. Rendered on the preview line
-        # AND inside the consent prompt, mirroring curate exactly.
-        caveat = _suggestion_caveat(result.suggested_type)
-        typer.echo(
-            f"[{result.suggested_type}] {edge.source_id} -> {edge.target_id}{caveat}"
-        )
-        typer.echo(f"  rationale: {result.rationale}")
-        if not curate_module._confirm(
-            f"Relate {edge.source_id} -> {edge.target_id} "
-            f"[{result.suggested_type}]{caveat}? [y/N]"
-        ):
-            skipped += 1
-            declined.append(
-                f"{edge.source_id} -> {edge.target_id} [{result.suggested_type}]"
-            )
-            continue
-
-        source_path = okf.concept_path_for(edge.source_id, layout.bundle_dir)
-        target_path = okf.concept_path_for(edge.target_id, layout.bundle_dir)
-        try:
-            prepared = application_lifecycle.prepare_relate(
-                source_path,
-                log_path,
-                edge.source_id,
-                edge.target_id,
-                result.suggested_type,
-                root,
-                now=now,
-                target_path=target_path,
-            )
-        except (OSError, ValueError) as exc:
-            typer.echo(
-                "openkos suggest-relations --apply: failed while relating "
-                f"{edge.source_id} -> {edge.target_id} -- {exc}.",
-                err=True,
-            )
-            raise typer.Exit(code=1) from exc
-
-        if prepared.already_present:
-            typer.echo("  note: already present -- nothing to write")
-            skipped += 1
-            continue
-
-        drift_baselines = {
-            source_path: prepared.source_bytes,
-            log_path: prepared.log_bytes,
-        }
-        if prepared.target_bytes is not None:
-            drift_baselines[target_path] = prepared.target_bytes
-        _reject_drifted_targets(
-            layout,
-            drift_baselines,
-            "suggest-relations --apply",
-        )
-
-        try:
-            application_lifecycle.relate_core(
-                source_path, log_path, prepared, target_path=target_path
-            )
-        except (OSError, ValueError) as exc:
-            typer.echo(
-                "openkos suggest-relations --apply: failed while relating "
-                f"{edge.source_id} -> {edge.target_id} -- {exc}.",
-                err=True,
-            )
-            raise typer.Exit(code=1) from exc
-
-        apply_commit_paths = [f"bundle/{edge.source_id}.md", "bundle/log.md"]
-        if prepared.new_target_text is not None:
-            apply_commit_paths.insert(1, f"bundle/{edge.target_id}.md")
-        _autocommit(
-            root,
-            apply_commit_paths,
-            f"openkos: relate {edge.source_id} -> {edge.target_id} "
-            f"({result.suggested_type})",
-        )
-        applied += 1
-
-    prefix = "nothing to apply -- " if applied == 0 and skipped == 0 else ""
-    typer.echo(
-        f"openkos suggest-relations --apply: {prefix}applied {applied}, "
-        f"skipped {skipped} (declined: {len(declined)})"
+def _relations_zero_state_message(
+    layout: config.WorkspaceLayout, store: GraphStore, embeddings_missing: bool
+) -> str:
+    """`suggest-relations`' wording for a zero-candidate outcome, handed to the
+    service as a port because `_zero_edge_state_message` is shared with
+    `contradictions`."""
+    return _zero_edge_state_message(
+        layout,
+        store=store,
+        use_typed_count=False,
+        embeddings_missing=embeddings_missing,
+        none_survived="{count} relation(s) exist; none are untyped.",
+        all_excluded=(
+            "{count} relation(s) exist; {untyped} untyped, but every "
+            "untyped pair is already typed elsewhere or filtered as "
+            "confidential -- nothing left to suggest."
+        ),
     )
-    for item in declined:
-        typer.echo(f"  declined: {item}")
 
-    # #640: once per invocation, only when the walk applied at least one
-    # relation write; an all-declined walk invalidated nothing.
-    if applied:
-        _refresh_derived_after_write(layout, None, verb="suggest-relations")
+
+class _SuggestRelationsObserver:
+    """The CLI's rendering of a `suggest-relations` run (issue #1168): the
+    service hands it typed data and this class owns every word and the cost
+    question."""
+
+    def walk_incomplete(
+        self, bundle_dir: Path, *, include_confidential: bool, local_exemption: bool
+    ) -> None:
+        observability.warn_if_walk_incomplete(
+            bundle_dir,
+            include_confidential=include_confidential,
+            local_exemption=local_exemption,
+        )
+
+    def workspace_header(self, root: Path) -> None:
+        typer.echo(f"openkos suggest-relations: workspace at {root}")
+        typer.echo()
+
+    def empty_window(self, edge_offset: int) -> None:
+        typer.echo(
+            f"no candidate edges at --edge-offset {edge_offset}; "
+            "re-run with a smaller offset."
+        )
+
+    def candidate_notices(self, truncation: str | None, quarantine: str | None) -> None:
+        if truncation is not None:
+            typer.echo(truncation)
+            typer.echo()
+        if quarantine is not None:
+            typer.echo(quarantine)
+            typer.echo()
+
+    def no_candidates(self, message: str) -> None:
+        typer.echo(message)
+
+    def warn(self, message: str) -> None:
+        typer.echo(message, err=True)
+
+    def serve_split(self, served: int, total: int, fresh: int) -> None:
+        typer.echo(
+            f"openkos suggest-relations: {served} of {total} "
+            "candidate edge(s) served from persisted suggestions; "
+            f"{fresh} typed fresh.",
+            err=True,
+        )
+
+    def confirm_cost(self, quote: relations_service.CostQuote) -> bool:
+        served_clause = f", {quote.served} served" if quote.served else ""
+        # #872: the pace clause rides the paid path only -- a fully-served run
+        # makes zero calls, so "one per edge (this can take a while)" would be
+        # false two tokens after the count said so. The `--auto` hint stays
+        # either way: the prompt it names still fires.
+        pace_note = ", one per edge (this can take a while)" if quote.to_type else ""
+        typer.echo(
+            f"{quote.total} untyped edge(s){served_clause} -> {quote.to_type} LLM "
+            f"call(s){pace_note}. Pass --auto to skip this prompt.",
+            err=True,
+        )
+        return typer.confirm("Proceed?")
+
+    def edge_progress(self, index: int, count: int, suggestion: EdgeSuggestion) -> None:
+        """Per-edge progress line to stderr (keeps stdout the clean report).
+
+        `effective_edge`, not `edge` (#991 second review round): this renders
+        the direction the type actually holds in, honoring a correction the
+        same way every other rendering surface does."""
+        edge = suggestion.effective_edge
+        label = suggestion.suggested_type or "?"
+        typer.echo(
+            f"  [{index}/{count}] {edge.source_id} -> {edge.target_id}  [{label}]",
+            err=True,
+        )
+
+
+class _ApplyObserver:
+    """The CLI's rendering of the `suggest-relations --apply` walk: the same
+    `[type] source -> target` + rationale block the read-only report prints,
+    and the one validating per-item consent prompt (`curate._confirm`, the
+    #398/#483 contract)."""
+
+    def degraded(self, edge: Edge) -> None:
+        typer.echo(f"[?] {edge.source_id} -> {edge.target_id}")
+        typer.echo("  note: no valid type suggested")
+
+    def preview(
+        self, edge: Edge, suggested_type: str, caveat: str, rationale: str
+    ) -> None:
+        # #778: the SAME caveat curate's Structure stage spells (#624) -- an
+        # asymmetric direction carries no evidence, and the surface that most
+        # invites bulk application must not be the one surface missing the
+        # documented warning. Rendered on the preview line AND inside the
+        # consent prompt, mirroring curate exactly.
+        typer.echo(f"[{suggested_type}] {edge.source_id} -> {edge.target_id}{caveat}")
+        typer.echo(f"  rationale: {rationale}")
+
+    def confirm_relate(self, edge: Edge, suggested_type: str, caveat: str) -> bool:
+        return curate_module._confirm(
+            f"Relate {edge.source_id} -> {edge.target_id} "
+            f"[{suggested_type}]{caveat}? [y/N]"
+        )
+
+    def already_present(self) -> None:
+        typer.echo("  note: already present -- nothing to write")
+
+    def summary(self, outcome: relations_service.ApplyOutcome) -> None:
+        prefix = "nothing to apply -- " if outcome.nothing_to_apply else ""
+        typer.echo(
+            f"openkos suggest-relations --apply: {prefix}applied {outcome.applied}, "
+            f"skipped {outcome.skipped} (declined: {len(outcome.declined)})"
+        )
+        for item in outcome.declined:
+            typer.echo(f"  declined: {item}")
+
+
+def _suggest_relations_ports() -> relations_service.SuggestRelationsPorts:
+    """The service's effects, each resolved through this module's globals AT
+    CALL TIME (a lambda, not a bound reference) so a test that patches
+    `openkos.cli.main.candidate_edges`, `suggest_edge_types`, `build_graph`,
+    `_open_proximity_or_degrade` or `_chat_client` keeps intercepting."""
+    return relations_service.SuggestRelationsPorts(
+        chat_client=lambda cfg, task: _chat_client(cfg, task=task),
+        zero_state_message=_relations_zero_state_message,
+        autocommit=lambda root, paths, message: _autocommit(root, paths, message),
+        refresh_derived=lambda layout: _refresh_derived_after_write(
+            layout, None, verb="suggest-relations"
+        ),
+        resolve_local_exemption=lambda client, cfg: _resolve_local_exemption(
+            client, cfg
+        ),
+        open_proximity=lambda path: _open_proximity_or_degrade(path),
+        build_graph=lambda *args, **kwargs: build_graph(*args, **kwargs),
+        candidate_edges=lambda *args, **kwargs: candidate_edges(*args, **kwargs),
+        suggest_edge_types=lambda *args, **kwargs: suggest_edge_types(*args, **kwargs),
+    )
+
+
+def _refuse(exc: "relations_service.SuggestionRefused") -> "typer.Exit":
+    """Print a typed suggestion refusal verbatim and map its TYPE to the exit
+    code: 3 for drift (the one failure a script may safely retry, #319), 1 for
+    everything else."""
+    typer.echo(exc.message, err=True)
+    return typer.Exit(code=3 if isinstance(exc, relations_service.DriftDetected) else 1)
 
 
 @app.command(
@@ -12053,24 +11020,11 @@ def suggest_relations_cmd(
     """LLM-suggest a relation `type` for every existing UNTYPED body-link
     edge: read-only, like `adjudicate`.
 
-    A FIFTH read command, mirroring `adjudicate`'s wiring: the shared
-    `config.require_workspace` gate (D1), then a Phase-A `read_config` guard
-    (`except (OSError, ValueError)`, lint parity). It then counts the
-    candidate edges via `resolution.edge_typing.candidate_edges`, which owns
-    the candidate-narrowing logic. This command builds the graph projection
-    ONCE per invocation via `graph.sqlite_graph.build_graph` and threads the
-    open store into every reader it calls, including the zero-result
-    `_zero_edge_state_message` path that used to trigger a second full build
-    (#196). Holding an open `openkos.graph` store here is established
-    practice (`query`, `reindex`); the live layering rule forbids only
-    canonical-layer imports of `openkos.graph` and a `graph` CLI verb. It
-    builds a real `OllamaClient(model=cfg.model)` BEFORE the candidate
-    count is known -- construction performs no I/O, it only resolves and
-    stores the host -- because the confidential local exemption (#240)
-    must be resolved from that SAME client before `candidate_edges` (the
-    pre-flight sensitivity filter) runs; the cost gate on the candidate
-    count still happens first, and only a confirmed run reaches
-    `suggest_edge_types`, which the resolved client is then injected into.
+    A thin adapter over `application.suggest_relations_service` (issue #1168):
+    the service owns the workspace gate, the candidate count, the serve
+    partition, the typing run, the persistence and the `--apply` write
+    sequence; this verb keeps the rendering, the cost question, the per-item
+    consent prompts and the exit-code mapping.
 
     Cost gate (issue #134): each untyped edge costs one LLM inference, run
     sequentially, so a large bundle can take many minutes with the model
@@ -12090,15 +11044,13 @@ def suggest_relations_cmd(
     curate's Structure-stage walk verbatim): each VALID suggestion is
     rendered, then gated behind `curate._confirm`'s validating per-item
     `[y/N]` prompt (#398 contract); an accepted `y` writes through the SAME
-    `prepare_relate` -> `_reject_drifted_targets` -> `relate_core` ->
-    `_autocommit` path the `relate` verb and curate's Structure stage use,
-    so the three write paths cannot drift apart. A degraded suggestion has
-    nothing applicable and is never prompted; an already-present relation
-    is reported and skipped without a write; declines are listed at the end
-    (the #483 revisitable-decline contract). Before #560 the standalone
-    verb spent one LLM call per candidate edge and then offered no way to
-    accept the result except typing one `relate` command per edge by hand
-    -- a dead end that billed the user for nothing.
+    `prepare_relate` -> drift guard -> `relate_core` -> auto-commit path the
+    `relate` verb and curate's Structure stage use, so the three write paths
+    cannot drift apart. A degraded suggestion has nothing applicable and is
+    never prompted; an already-present relation is reported and skipped
+    without a write; declines are listed at the end (the #483
+    revisitable-decline contract). Drift refuses with exit 3, prior per-item
+    commits remain intact.
 
     A degraded suggestion (`suggested_type=None` -- a malformed LLM reply,
     or a suggested type that failed `validate_relation_type`) renders as
@@ -12126,273 +11078,41 @@ def suggest_relations_cmd(
     called for it.
 
     No file under the workspace is ever created, modified, or deleted
-    (spec: Verb performs zero writes).
+    (spec: Verb performs zero writes) -- except `--apply`'s accepted
+    relations, and the persisted suggestions in `.openkos/findings.db`.
     """
     root = Path.cwd()
-    reason = config.require_workspace(root)
-    if reason is not None:
-        typer.echo(f"openkos suggest-relations: refusing to run -- {reason}.", err=True)
-        raise typer.Exit(code=1)
-
-    layout = config.WorkspaceLayout(root)
+    ports = _suggest_relations_ports()
     try:
-        cfg = config.read_config(root)
-    except (OSError, ValueError) as exc:
-        typer.echo(
-            f"openkos suggest-relations: failed while reading the workspace -- {exc}.",
-            err=True,
+        outcome = relations_service.suggest_relations(
+            root,
+            relations_service.SuggestRelationsRequest(
+                include_confidential=include_confidential,
+                fresh=fresh,
+                edge_offset=edge_offset,
+                skip_confirmation=auto,
+            ),
+            ports,
+            _SuggestRelationsObserver(),
         )
-        raise typer.Exit(code=1) from exc
+    except relations_service.SuggestionRefused as exc:
+        raise _refuse(exc) from exc
 
-    # Built here rather than just before the run: `candidate_edges` below
-    # already filters on sensitivity, so the exemption must be resolved from
-    # the SAME client the later `suggest_edge_types` will send through
-    # (issue #240). Construction performs no I/O -- it only resolves and
-    # stores the host -- so nothing is contacted by moving it up.
-    llm = _chat_client(cfg, task="edge_typing")
-    local_exemption = _resolve_local_exemption(
-        cast(application_backends.HasLocality, llm), cfg
-    )
-    observability.warn_if_walk_incomplete(
-        layout.bundle_dir,
-        include_confidential=include_confidential,
-        local_exemption=local_exemption,
-    )
-
-    # Count the candidate edges FIRST, with no LLM call, so the cost of the
-    # one-inference-per-edge run can be previewed and gated before the model
-    # is ever contacted (issue #134).
-    #
-    # graph-projection-reuse (#196): the proximity source is closed as early
-    # as possible -- `build_graph` consumes it eagerly inside
-    # `_populate_graph_tables`, so it is dead the instant `build_graph`
-    # returns. The projection itself is built exactly ONCE per invocation
-    # and threaded, via `store=`, into both `candidate_edges` and the
-    # zero-result `_zero_edge_state_message` path (which used to trigger a
-    # second full build).
-    source = _open_proximity_or_degrade(layout.vectors_db_path)
-    embeddings_missing = source is None
-    try:
-        graph = build_graph(
-            layout.bundle_dir, candidates=source, candidate_offset=edge_offset
-        )
-    finally:
-        if source is not None:
-            source.close()
-
-    with graph as store:
-        edges = candidate_edges(
-            layout.bundle_dir,
-            include_confidential=include_confidential,
-            local_exemption=local_exemption,
-            store=store,
-        )
-
-        typer.echo(f"openkos suggest-relations: workspace at {root}")
-        typer.echo()
-        # #567: an offset at or past the candidate set produced an empty
-        # window on purpose -- say so, instead of the zero-candidate state
-        # message below claiming there is nothing untyped at all.
-        if edge_offset > 0 and not edges:
-            typer.echo(
-                f"no candidate edges at --edge-offset {edge_offset}; "
-                "re-run with a smaller offset."
-            )
-            return
-        # #378 slice 2 (post-review correction): pass 3's candidate-edge cap
-        # truncation, never silent -- but restricted to what THIS caller may
-        # see. Read here, INSIDE the `with` block, since `store` closes
-        # below.
-        #
-        # `store.candidate_report.produced`/`.retained` are RAW counts: pass
-        # 3 has no sensitivity awareness, so they can include pairs with a
-        # confidential endpoint that `candidate_edges` above already
-        # excluded from `edges`. Printing them directly would disclose a
-        # pre-cap volume the edge list below deliberately withholds --
-        # `candidate_truncation_notice` re-derives both counts from
-        # `report.pairs` through the SAME `sensitivity.sensitive_concept_ids`
-        # walk `candidate_edges` just ran, so this line and `total` below
-        # agree on what a caller without `--include-confidential` may see.
-        notice = candidate_truncation_notice(
-            store.candidate_report,
-            layout.bundle_dir,
-            include_confidential=include_confidential,
-            local_exemption=local_exemption,
-        )
-        # #841: the unjudged-source withholding, disclosed beside the cap's
-        # truncation -- both say the queue is smaller than the bundle could
-        # produce, and both re-derive their visible counts through the same
-        # sensitivity walk.
-        quarantine_notice = quarantined_candidate_notice(
-            store.candidate_report,
-            layout.bundle_dir,
-            include_confidential=include_confidential,
-            local_exemption=local_exemption,
-        )
-        # #567: computed inside the `with` block (the report lives on
-        # `store`), printed beside the #560 pointer after the run below.
-        batch_offset = next_candidate_offset(
-            store.candidate_report,
-            layout.bundle_dir,
-            include_confidential=include_confidential,
-            local_exemption=local_exemption,
-        )
-        if notice is not None:
-            typer.echo(notice)
-            typer.echo()
-        if quarantine_notice is not None:
-            typer.echo(quarantine_notice)
-            typer.echo()
-        total = len(edges)
-        if total == 0:
-            typer.echo(
-                _zero_edge_state_message(
-                    layout,
-                    store=store,
-                    use_typed_count=False,
-                    embeddings_missing=embeddings_missing,
-                    none_survived="{count} relation(s) exist; none are untyped.",
-                    all_excluded=(
-                        "{count} relation(s) exist; {untyped} untyped, but every "
-                        "untyped pair is already typed elsewhere or filtered as "
-                        "confidential -- nothing left to suggest."
-                    ),
-                )
-            )
-            return
-
-    # Everything from here on runs OUTSIDE the `with` block: the store is
-    # not needed once `edges` is materialized, so the minutes-long LLM run
-    # and its progress loop stay out of the store's lifetime
-    # (graph-projection-reuse design §4).
-    # #799: the serve partition runs BEFORE the cost gate, so the gate
-    # states the calls this run will ACTUALLY make rather than the worst
-    # case -- announcing 49 and spending 0 is as dishonest as the reverse.
-    # It keys on the EFFECTIVE confidential inclusion (`--include-
-    # confidential` OR the verified local-backend exemption, the same
-    # disjunction `sensitivity.should_block` applies), which is why it runs
-    # after `local_exemption` is resolved above.
-    effective_confidential = include_confidential or local_exemption
-    served_by_key: dict[str, EdgeSuggestion] = {}
-    to_type = edges
-    # The split line is reported when a store was actually READ, not on
-    # every run: a first-ever run has no cache to have missed, and the
-    # cost gate below already states its price. A store that was read and
-    # served nothing IS worth saying out loud -- that is drift, and a
-    # silent re-spend is the #799 complaint.
-    #
-    # READ, not merely PRESENT (#809). The gate used to be file existence,
-    # so an unreadable store printed `0 of N served` directly beneath the
-    # warning saying the read had failed -- a count of zero meaning "could
-    # not look", rendered in the words of a count meaning "looked, found
-    # nothing". `_partition_edge_suggestion_serves` answers the honest
-    # question, and `curate`'s Structure stage gates on the same one.
-    store_read = False
-    if not fresh:
-        served_by_key, to_type, store_read = _partition_edge_suggestion_serves(
-            layout, edges, include_confidential=effective_confidential
-        )
-    if store_read:
-        typer.echo(
-            f"openkos suggest-relations: {len(served_by_key)} of {total} "
-            "candidate edge(s) served from persisted suggestions; "
-            f"{len(to_type)} typed fresh.",
-            err=True,
-        )
-
-    if not auto:
-        served_clause = f", {len(served_by_key)} served" if served_by_key else ""
-        # #872: the pace clause rides the paid path only -- a fully-served
-        # run makes zero calls, so "one per edge (this can take a while)"
-        # would be false two tokens after the count said so. The `--auto`
-        # hint stays either way: the prompt it names still fires.
-        pace_note = ", one per edge (this can take a while)" if to_type else ""
-        typer.echo(
-            f"{total} untyped edge(s){served_clause} -> {len(to_type)} LLM "
-            f"call(s){pace_note}. Pass --auto to skip this prompt.",
-            err=True,
-        )
-        if not typer.confirm("Proceed?"):
-            typer.echo("Aborted -- no suggestions generated.")
-            return
-
-    def _on_progress(index: int, count: int, suggestion: EdgeSuggestion) -> None:
-        """Per-edge progress line to stderr (keeps stdout the clean report).
-
-        `effective_edge`, not `edge` (#991 second review round): this
-        renders the direction the type actually holds in, honoring a
-        correction the same way every other rendering surface does."""
-        edge = suggestion.effective_edge
-        label = suggestion.suggested_type or "?"
-        typer.echo(
-            f"  [{index}/{count}] {edge.source_id} -> {edge.target_id}  [{label}]",
-            err=True,
-        )
-
-    try:
-        # Still called with an empty `to_type` (a fully-served run): zero
-        # edges means zero `llm.chat` calls by construction, and the
-        # pre-#799 seam contract stays byte-identical.
-        batch = suggest_edge_types(
-            to_type,
-            bundle_dir=layout.bundle_dir,
-            llm=llm,
-            include_confidential=include_confidential,
-            local_exemption=local_exemption,
-            # #812: the same workspace key `curate`'s Structure stage
-            # reads, forwarded here for the reason `Config.models`'s
-            # docstring gives for being keyed by TASK and not by verb --
-            # this verb and that stage run one suggester, and a setting
-            # that reached only one of them would print one workspace's
-            # rationales in two languages depending on what was typed.
-            # `None` on a workspace that never set it: the pre-#812 prompt,
-            # byte for byte.
-            rationale_language=cfg.rationale_language,
-            on_progress=_on_progress,
-        )
-    except BackendUnavailable as exc:
-        typer.echo(
-            f"openkos suggest-relations: failed -- {exc}. "
-            f"{application_backends.start_hint(cfg)}, "
-            f"then try again.{_DOCTOR_HINT}",
-            err=True,
-        )
-        raise typer.Exit(code=1) from exc
-    except BackendModelNotFound as exc:
-        typer.echo(
-            f"openkos suggest-relations: failed -- model '{cfg.model}' is "
-            f"not installed. {application_backends.install_hint(cfg, cfg.model)}, "
-            "then try again.",
-            err=True,
-        )
-        raise typer.Exit(code=1) from exc
-    # The two specific handlers above MUST precede this generic handler:
-    # both `BackendUnavailable` and `BackendModelNotFound` subclass
-    # `BackendError`, so reordering would silently funnel them into this
-    # fallback and lose their actionable remediation messages (mirrors
-    # `adjudicate`'s ordering).
-    except BackendError as exc:
-        typer.echo(f"openkos suggest-relations: failed -- {exc}.", err=True)
-        raise typer.Exit(code=1) from exc
-
-    # #799: fresh suggestions persist even on a partial batch (the paid-for
-    # work is kept, mirroring #441's own posture), then the run's results
-    # are rebuilt in CANDIDATE order so a served suggestion and a fresh one
-    # are indistinguishable downstream -- `--apply`, the listing, and
-    # curate all read this one list.
-    _persist_edge_suggestions(
-        layout, batch.results, include_confidential=effective_confidential
-    )
-    results: list[EdgeSuggestion] = (
-        _reassemble_edge_suggestions(edges, served_by_key, batch.results)
-        if served_by_key
-        else list(batch.results)
-    )
+    if outcome.status == "declined":
+        typer.echo("Aborted -- no suggestions generated.")
+        return
+    if outcome.status != "completed":
+        return
 
     if apply:
-        _run_suggest_relations_apply(root, layout, results)
+        try:
+            relations_service.apply_relation_suggestions(
+                root, outcome.results, ports, _ApplyObserver()
+            )
+        except relations_service.SuggestionRefused as exc:
+            raise _refuse(exc) from exc
     else:
-        for result in results:
+        for result in outcome.results:
             # `effective_edge`, not `edge` (#991 second review round): the
             # candidate identity `edge` stays fixed for persistence/
             # reassembly, but this listing must show the direction the
@@ -12417,7 +11137,7 @@ def suggest_relations_cmd(
             "openkos relate <source> <type> <target>"
         )
 
-    if notice is not None:
+    if outcome.truncation_notice is not None:
         # Issue #560: the cap is not a dead end -- an applied/related pair
         # becomes a typed edge and leaves the candidate set, so the next
         # run's cap budget reaches the candidates dropped this time.
@@ -12426,22 +11146,48 @@ def suggest_relations_cmd(
             "(--apply or relate), then re-run suggest-relations to surface "
             "the next batch."
         )
-        if batch_offset is not None:
+        if outcome.next_offset is not None:
             # #567: browsing without typing -- name the exact offset the
             # next ranked batch starts at, gated on a visible pair actually
             # existing beyond this run's window.
             typer.echo(
                 f"Or browse it without typing these: re-run with "
-                f"--edge-offset {batch_offset}."
+                f"--edge-offset {outcome.next_offset}."
             )
 
-    if batch.failure is not None:
+    if outcome.failure is not None and outcome.batch is not None:
         # Partial batch (#441): the report above already rendered the
         # completed suggestions exactly as a complete run over that list --
         # the paid-for work is never discarded -- so all that remains is the
         # one stderr failure line and the BackendError-family exit code.
-        _echo_suggest_relations_batch_failure(batch, total=total, model=cfg.model)
-        raise typer.Exit(code=1) from batch.failure
+        typer.echo(
+            relations_service.relations_batch_failure_message(
+                outcome.batch,
+                total=outcome.total,
+                model=outcome.model,
+                cfg=outcome.cfg,
+            ),
+            err=True,
+        )
+        raise typer.Exit(code=1) from outcome.failure
+
+
+class _VolatilityObserver:
+    """The CLI's rendering of a `suggest-volatility` run (issue #1168)."""
+
+    def walk_incomplete(
+        self, bundle_dir: Path, *, include_confidential: bool, local_exemption: bool
+    ) -> None:
+        observability.warn_if_walk_incomplete(
+            bundle_dir,
+            include_confidential=include_confidential,
+            local_exemption=local_exemption,
+        )
+
+    def progress_callback(self) -> Callable[[int, int, TierSuggestion], None] | None:
+        # TTY-gated per-type progress on stderr; `None` (silent) when output is
+        # piped (issue #190, mirrors `suggest-relations`' #134 per-edge line).
+        return observability.progress_callback("suggest-volatility", "suggesting type")
 
 
 @app.command(
@@ -12464,13 +11210,9 @@ def suggest_volatility_cmd(
     """LLM-suggest a volatility `tier` for every concept TYPE present in the
     bundle: read-only, like `suggest-relations`.
 
-    A SIXTH read command, mirroring `suggest-relations`'s wiring exactly:
-    the shared `config.require_workspace` gate (D1), then a Phase-A
-    `read_config` guard (`except (OSError, ValueError)`, lint parity), then
-    a real `OllamaClient(model=cfg.model)` is built and injected -- as the
-    `LLMBackend` -- into `resolution.volatility_typing.suggest_volatility`,
-    the config-free leaf that owns the internal bundle read (via
-    `lint.collect_docs`).
+    A thin adapter over `application.suggest_volatility_service` (issue
+    #1168): the service owns the workspace gate, the client wiring and the
+    typing run; this verb keeps the rendering and the exit-code mapping.
 
     `suggest-volatility` never writes, merges, or decides -- it only prints
     a suggested `tier` + rationale per concept type present for human
@@ -12493,11 +11235,11 @@ def suggest_volatility_cmd(
     and exit 1. The completed suggestions are NEVER discarded: the report
     first renders `batch.results` exactly as a complete run over that list,
     THEN one stderr line reports the failure with the completed count (no
-    of-total -- see `_echo_suggest_volatility_batch_failure` for why this
-    verb cannot state one) and the run exits 1. The raise-path handler
-    ladder is retained around the call itself for an injected backend that
-    raises outside `llm.chat`'s guarded seam -- same wording, no counts,
-    zero writes either way.
+    of-total -- see `volatility_batch_failure_message` for why this verb
+    cannot state one) and the run exits 1. The raise-path handler ladder is
+    retained around the call itself for an injected backend that raises
+    outside `llm.chat`'s guarded seam -- same wording, no counts, zero
+    writes either way.
 
     Unless `--include-confidential` is passed, a confidential concept
     (sensitivity-fail-closed-filter) is excluded from sampling for its type
@@ -12509,83 +11251,36 @@ def suggest_volatility_cmd(
     (spec: Verb performs zero writes).
     """
     root = Path.cwd()
-    reason = config.require_workspace(root)
-    if reason is not None:
-        typer.echo(
-            f"openkos suggest-volatility: refusing to run -- {reason}.", err=True
-        )
-        raise typer.Exit(code=1)
-
-    layout = config.WorkspaceLayout(root)
     try:
-        cfg = config.read_config(root)
-    except (OSError, ValueError) as exc:
-        typer.echo(
-            f"openkos suggest-volatility: failed while reading the workspace -- {exc}.",
-            err=True,
-        )
-        raise typer.Exit(code=1) from exc
-
-    llm = _chat_client(cfg, task="volatility_typing")
-    local_exemption = _resolve_local_exemption(
-        cast(application_backends.HasLocality, llm), cfg
-    )
-    observability.warn_if_walk_incomplete(
-        layout.bundle_dir,
-        include_confidential=include_confidential,
-        local_exemption=local_exemption,
-    )
-    try:
-        batch = suggest_volatility(
-            layout.bundle_dir,
-            llm=llm,
-            include_confidential=include_confidential,
-            local_exemption=local_exemption,
-            # #812, the mirror of `suggest-relations`' own forwarding --
-            # see the note at that call site.
-            rationale_language=cfg.rationale_language,
-            # TTY-gated per-type progress on stderr; `None` (silent) when
-            # output is piped (issue #190, mirrors `suggest-relations`' #134
-            # per-edge line).
-            on_progress=observability.progress_callback(
-                "suggest-volatility", "suggesting type"
+        outcome = volatility_service.suggest_volatility_tiers(
+            root,
+            volatility_service.VolatilityRequest(
+                include_confidential=include_confidential
             ),
+            volatility_service.VolatilityPorts(
+                chat_client=lambda cfg, task: _chat_client(cfg, task=task),
+                resolve_local_exemption=lambda client, cfg: _resolve_local_exemption(
+                    client, cfg
+                ),
+                suggest_volatility=lambda *args, **kwargs: suggest_volatility(
+                    *args, **kwargs
+                ),
+            ),
+            _VolatilityObserver(),
         )
-    except BackendUnavailable as exc:
-        typer.echo(
-            f"openkos suggest-volatility: failed -- {exc}. Start it with "
-            f"`ollama serve`, then try again.{_DOCTOR_HINT}",
-            err=True,
-        )
-        raise typer.Exit(code=1) from exc
-    except BackendModelNotFound as exc:
-        typer.echo(
-            f"openkos suggest-volatility: failed -- model '{cfg.model}' is "
-            f"not installed. Pull it with `ollama pull {cfg.model}`, then "
-            "try again.",
-            err=True,
-        )
-        raise typer.Exit(code=1) from exc
-    # The two specific handlers above MUST precede this generic handler:
-    # both `BackendUnavailable` and `BackendModelNotFound` subclass
-    # `BackendError`, so reordering would silently funnel them into this
-    # fallback and lose their actionable remediation messages (mirrors
-    # `suggest-relations`'s ordering).
-    except BackendError as exc:
-        typer.echo(f"openkos suggest-volatility: failed -- {exc}.", err=True)
-        raise typer.Exit(code=1) from exc
+    except relations_service.SuggestionRefused as exc:
+        raise _refuse(exc) from exc
 
-    results = batch.results
     typer.echo(f"openkos suggest-volatility: workspace at {root}")
     typer.echo()
-    if not results and batch.failure is None:
+    if not outcome.results and outcome.failure is None:
         # Guarded on a clean run only (#441): a first-type failure also
         # carries zero results, and "No concept types found." would then
         # claim an empty bundle the failure, not the walk, produced.
         typer.echo("No concept types found.")
         return
 
-    for result in results:
+    for result in outcome.results:
         if result.suggested_tier is None:
             typer.echo(f"[?] {result.type_name}")
             typer.echo("  note: no valid tier suggested")
@@ -12596,62 +11291,18 @@ def suggest_volatility_cmd(
 
     typer.echo("Next: openkos set-volatility <ConceptType> <tier>")
 
-    if batch.failure is not None:
+    if outcome.failure is not None:
         # Partial batch (#441): the report above already rendered the
         # completed suggestions exactly as a complete run over that list --
         # the paid-for work is never discarded -- so all that remains is the
         # one stderr failure line and the BackendError-family exit code.
-        _echo_suggest_volatility_batch_failure(batch, model=cfg.model)
-        raise typer.Exit(code=1) from batch.failure
-
-
-def _sorted_decision_pair(pair: tuple[str, str]) -> tuple[str, str]:
-    """Canonicalize an operator-supplied `--decline`/`--reopen` pair into
-    `decision_key_for`'s expected order (design Decision 3: "sorted
-    pair_ids"). The CLI accepts either order, but the identity -- and the
-    decisions sidecar it is stored under (`pair_ids[0]`'s own file) -- must
-    be stable regardless of which order the operator typed the two ids
-    in."""
-    pair_a, pair_b = sorted(pair)
-    return pair_a, pair_b
-
-
-def _apply_contradiction_decision(
-    layout: config.WorkspaceLayout,
-    pair: tuple[str, str],
-    merged_absorbed_id: str | None,
-    *,
-    target_state: bundle_decisions.DecisionState,
-) -> str:
-    """Write (or update in place) the single decision record identified by
-    `pair`/`merged_absorbed_id` to `target_state`, returning the
-    workspace-relative decision path for the caller's `_autocommit` list
-    (design Decision 5, mirrors `MergeResult.ledger_sidecar_path`).
-
-    Never opens `.openkos/findings.db`: decline/reopen never read the
-    findings store as a precondition (design Decision 7 corollary) -- a
-    matching findings row is not required either way. Any existing record
-    for the SAME `decision_key` is replaced in place (idempotent re-
-    decline/re-reopen); every OTHER record already in the owning sidecar is
-    preserved, mirroring `write_decisions`'s full-replace contract."""
-    pair_ids = _sorted_decision_pair(pair)
-    key = bundle_decisions.decision_key_for(pair_ids, merged_absorbed_id)
-    owner_id = pair_ids[0]
-    existing = bundle_decisions.read_decisions(owner_id, layout.bundle_dir)
-    records = [record for record in existing if record.decision_key != key]
-    records.append(
-        bundle_decisions.DecisionRecord(
-            decision_key=key,
-            pair_ids=pair_ids,
-            merged_absorbed_id=merged_absorbed_id,
-            state=target_state,
-            decided_at=datetime.now(UTC).isoformat(),
+        typer.echo(
+            volatility_service.volatility_batch_failure_message(
+                outcome.batch, model=outcome.model, cfg=outcome.cfg
+            ),
+            err=True,
         )
-    )
-    path = bundle_decisions.write_decisions(
-        owner_id, layout.bundle_dir, records=records, on_warning=_echo_warning
-    )
-    return f"bundle/{path.relative_to(layout.bundle_dir).as_posix()}"
+        raise typer.Exit(code=1) from outcome.failure
 
 
 def _record_identity_decline_from_walk(
@@ -12683,118 +11334,19 @@ def _record_identity_decline_from_walk(
         )
 
 
-def _validated_identity_members(
-    raw_members: Sequence[str], flag: str
-) -> tuple[str, ...]:
-    """Canonicalize operator-supplied member ids for an identity ruling
-    (#797): deduped and sorted, so either typing order reaches the same
-    record and the same owning sidecar.
-
-    Every id goes through `_canonicalize_concept_id` FIRST -- the documented
-    path-safety gate `forget`/`merge` apply. These ids reach
-    `bundle_decisions.decisions_path_for`, which joins them onto the
-    decisions root, so an absolute id or a `..` segment would otherwise
-    write a sidecar OUTSIDE the bundle. It also collapses `./` and repeated
-    slashes, so two spellings of one id cannot key two rulings. Existence is
-    NOT required (the `unmerge` variant): a ruling may name a concept absent
-    right now, and demanding a live file would make the human's answer
-    depend on the machine's state -- the dependency this feature removes.
-
-    Refuses (exit 2) below two DISTINCT members. A one-member "group" is
-    not a duplicate ruling at all, and a repeated id silently collapsing to
-    one would write a record no candidate group can ever match -- a ruling
-    that appears to have been recorded and suppresses nothing is worse than
-    a refusal."""
-    canonical: set[str] = set()
-    for member in raw_members:
-        stripped = member.strip()
-        if not stripped:
-            continue
-        try:
-            canonical.add(application_lifecycle.canonicalize_concept_id(stripped))
-        except ValueError as exc:
-            typer.echo(
-                f"openkos duplicates: refusing to run -- {flag} {exc}.", err=True
-            )
-            raise typer.Exit(code=2) from exc
-    members = tuple(sorted(canonical))
-    if len(members) < 2:
-        typer.echo(
-            f"openkos duplicates: refusing to run -- {flag} needs at least two "
-            "distinct concept ids; repeat the flag once per member.",
-            err=True,
-        )
-        raise typer.Exit(code=2)
-    return members
-
-
-def _duplicates_kept_distinct_view(root: Path, layout: config.WorkspaceLayout) -> None:
-    """`--kept-distinct`: every group a human ruled distinct, so the ruling
-    is visible and reversible rather than an invisible suppression (#797).
-
-    Reads the WALKED sidecar path, never one rebuilt from a sidecar's own
-    `concept_id` frontmatter field -- the same traversal guard
-    `_contradictions_declined_view` applies."""
-    typer.echo(f"openkos duplicates --kept-distinct: workspace at {root}")
-    typer.echo()
-    records: list[bundle_decisions.IdentityDecisionRecord] = []
-    for decisions_path in bundle_decisions.iter_decisions(layout.bundle_dir):
-        records.extend(
-            record
-            for record in bundle_decisions.read_identity_decisions_at(
-                decisions_path, on_warning=_echo_warning
-            )
-            if record.state == "declined"
-        )
-    if not records:
-        typer.echo("No groups kept distinct.")
-        return
-    for record in sorted(records, key=lambda item: item.decision_key):
-        typer.echo(f"[KEPT DISTINCT] {' + '.join(record.member_ids)}")
-        typer.echo(f"  decided: {record.decided_at}")
-        typer.echo()
-    typer.echo("Reopen one with: openkos duplicates --reopen <id> --reopen <id>")
-
-
 def _apply_identity_decision(
     layout: config.WorkspaceLayout,
     member_ids: tuple[str, ...],
     *,
     target_state: bundle_decisions.DecisionState,
 ) -> str:
-    """Write (or update in place) the single identity ruling for
-    `member_ids` to `target_state` (#797), returning the workspace-relative
-    path for the caller's `_autocommit` list -- the identity twin of
-    `_apply_contradiction_decision`, same posture throughout.
-
-    Never opens `.openkos/findings.db`. A keep-distinct ruling must be
-    writable with NO adjudication row behind it: the human may be
-    overruling a verdict the model has not produced yet, or one that was
-    recomputed away. Requiring a matching row would make the human's answer
-    depend on the machine's, which is the dependency this issue removes.
-
-    Members are sorted before keying AND before choosing the owning
-    sidecar, so an operator typing the two ids in either order reaches the
-    same record."""
-    members = tuple(sorted(member_ids))
-    key = bundle_decisions.identity_decision_key_for(members)
-    owner_id = members[0]
-    existing = bundle_decisions.read_identity_decisions(
-        owner_id, layout.bundle_dir, on_warning=_echo_warning
+    """Write (or update in place) the single identity ruling for `member_ids`
+    (#797), returning the workspace-relative path for the caller's
+    `_autocommit` list. The write lives in `application/duplicates_service.py`;
+    this adapter only chooses how the notes it reads are shown."""
+    return duplicates_service.apply_identity_decision(
+        layout, member_ids, target_state=target_state, on_warning=_echo_warning
     )
-    records = [record for record in existing if record.decision_key != key]
-    records.append(
-        bundle_decisions.IdentityDecisionRecord(
-            decision_key=key,
-            member_ids=members,
-            state=target_state,
-            decided_at=datetime.now(UTC).isoformat(),
-        )
-    )
-    path = bundle_decisions.write_identity_decisions(
-        owner_id, layout.bundle_dir, records=records
-    )
-    return f"bundle/{path.relative_to(layout.bundle_dir).as_posix()}"
 
 
 class AdjudicationServes(NamedTuple):
@@ -12968,21 +11520,10 @@ def _partition_adjudication_serves(
     return AdjudicationServes(served, to_judge, rubric_stale, store_read=True)
 
 
-class EdgeSuggestionServes(NamedTuple):
-    """What `_partition_edge_suggestion_serves` answers (#809).
-
-    `store_read` is the third value because the count alone cannot carry
-    the difference between "looked, found nothing" and "could not look".
-    Both produce an empty `served`, and only one of them is worth
-    reporting as a split -- so every caller that renders that line gates
-    on this flag rather than re-deriving a proxy for it. Two callers
-    previously derived two DIFFERENT proxies (file existence on one
-    surface, a non-empty served map on the other) and disagreed about the
-    same failure as a result."""
-
-    served: "dict[str, EdgeSuggestion]"
-    to_type: "list[Edge]"
-    store_read: bool
+EdgeSuggestionServes = relations_service.EdgeSuggestionServes
+"""Re-exported for the callers that unpack it by name (curate's Structure
+stage). The definition lives in `application/suggest_relations_service.py`,
+beside the partition it answers."""
 
 
 def _reassemble_edge_suggestions(
@@ -12990,43 +11531,11 @@ def _reassemble_edge_suggestions(
     served: "dict[str, EdgeSuggestion]",
     fresh: "Sequence[EdgeSuggestion]",
 ) -> "list[EdgeSuggestion]":
-    """Rebuild a run's suggestions in CANDIDATE order, merging what the
-    store served with what the model just typed (#809).
-
-    Shared by `suggest-relations` and `curate`'s Structure stage, which
-    had a near-verbatim copy each. The helpers immediately beside this one
-    -- `_partition_edge_suggestion_serves` and `_persist_edge_suggestions`
-    -- were already shared, so the duplication was against this seam's own
-    convention, and a later fix to the merge (a key collision, an ordering
-    rule) would have landed in one copy and silently missed the other.
-
-    A served suggestion wins over a fresh one for the same key. That is
-    not arbitrary: a key can only appear in both when the partition served
-    it AND the model typed it anyway, which the caller's own flow makes
-    impossible, so the precedence is a tiebreak that should never fire
-    rather than a policy. Ordering follows `edges` so a served suggestion
-    and a fresh one are indistinguishable downstream.
-
-    Keyed on `result.edge`, deliberately NOT `effective_edge` (#991 second
-    review round): `edges` (this function's other argument, the candidate
-    set) is always in CANDIDATE direction, and a direction-corrected fresh
-    result's `edge` stays the candidate too -- only `corrected_edge`
-    differs -- so this lookup matches. Keying on `effective_edge` instead
-    would silently drop every corrected suggestion: its swapped pair would
-    never match a candidate key in `edges`."""
-    fresh_by_key = {
-        edge_suggestions_store.pair_key_for(
-            result.edge.source_id, result.edge.target_id
-        ): result
-        for result in fresh
-    }
-    rebuilt: list[EdgeSuggestion] = []
-    for edge in edges:
-        key = edge_suggestions_store.pair_key_for(edge.source_id, edge.target_id)
-        found = served.get(key) or fresh_by_key.get(key)
-        if found is not None:
-            rebuilt.append(found)
-    return rebuilt
+    """One-line delegator (issue #1168): the merge lives in
+    `application/suggest_relations_service.py`, shared by `suggest-relations`
+    and `curate`'s Structure stage, and is kept under this name for the
+    callers that reach it through `cli.main`."""
+    return relations_service.reassemble_edge_suggestions(edges, served, fresh)
 
 
 def _partition_edge_suggestion_serves(
@@ -13037,86 +11546,23 @@ def _partition_edge_suggestion_serves(
     warn_on_failure: bool = True,
     surface: str = "suggest-relations",
 ) -> EdgeSuggestionServes:
-    """Split `edges` into suggestions servable from `.openkos/findings.db`
-    and the edges that still need a model call (#799) -- the edge-typing
-    twin of `_partition_adjudication_serves`, same posture throughout.
+    """Delegator to `relations_service.partition_edge_suggestion_serves`
+    (issue #1168), which owns the serve rule (#799, #809). This wrapper only
+    renders the service's advisory, to stderr.
 
-    Also reports whether the store was READ (#809). An absent file and an
-    unreadable one both mean no suggestion can serve, but only the second
-    is a failure, and neither is the same as a store that was read and
-    held nothing for these edges. Answering it HERE is what stops each
-    caller inventing its own proxy.
-
-    An edge is SERVED iff its latest persisted row matches this run's
-    EFFECTIVE `include_confidential` bit (a suggestion computed over a
-    different graph projection must never serve), carries a digest row
-    for BOTH current endpoints and no others, every stored digest equals
-    the endpoint's CURRENT content hash, and the stored type still
-    validates. Everything else re-types, conservatively -- including a
-    present-but-corrupt store, which degrades to one stderr advisory and
-    a full fresh run rather than crashing before any model spend.
-
-    The key is DIRECTED (`edge_suggestions_store.pair_key_for`): half the
-    vocabulary is asymmetric, so `a -> b` and `b -> a` are different
-    questions and one must never answer for the other."""
-    if not layout.findings_db_path.exists():
-        return EdgeSuggestionServes({}, edges, store_read=False)
-    try:
-        conn = derived.open_derived_connection(layout.findings_db_path)
-        try:
-            persisted = edge_suggestions_store.open_edge_suggestions(conn)
-        finally:
-            conn.close()
-    except (OSError, sqlite3.Error) as exc:
-        # `warn_on_failure=False` is curate's pricing probe (#867 review):
-        # the stage RUN rebuilds this partition minutes later and warns
-        # then, so an unreadable store costs one warning per curate run,
-        # not one per read -- the standalone verb partitions once and
-        # always warns. `surface` names the command the user actually ran
-        # (#867 review): a warning during a curate run must not be
-        # attributed to the standalone verb.
-        if warn_on_failure:
-            typer.echo(
-                f"openkos {surface}: warning -- failed to read persisted "
-                f"suggestions ({exc}); typing every edge fresh.",
-                err=True,
-            )
-        return EdgeSuggestionServes({}, edges, store_read=False)
-    latest: dict[str, edge_suggestions_store.PersistedEdgeSuggestion] = {}
-    for row in persisted:
-        latest[edge_suggestions_store.pair_key_for(row.source_id, row.target_id)] = row
-
-    current_digest = application_pending.current_finding_digest(layout.bundle_dir)
-    served: dict[str, EdgeSuggestion] = {}
-    to_type: list[Edge] = []
-    for edge in edges:
-        key = edge_suggestions_store.pair_key_for(edge.source_id, edge.target_id)
-        stored = latest.get(key)
-        if stored is None or stored.include_confidential != include_confidential:
-            to_type.append(edge)
-            continue
-        endpoints = {edge.source_id, edge.target_id}
-        if {digest.input_ref for digest in stored.input_digests} != endpoints or any(
-            current_digest(digest.input_ref) != digest.digest
-            for digest in stored.input_digests
-        ):
-            to_type.append(edge)
-            continue
-        try:
-            validate_relation_type(stored.suggested_type)
-        except ValueError:
-            to_type.append(edge)
-            continue
-        # #991 R4: reconstructed from the PERSISTED rationale, never by
-        # re-reading the bundle -- a re-read can fail transiently and
-        # disagree with the disclosure already frozen at fresh time.
-        served[key] = EdgeSuggestion(
-            edge=edge,
-            suggested_type=stored.suggested_type,
-            rationale=stored.rationale,
-            corrected_edge=corrected_edge_from_rationale(edge, stored.rationale),
-        )
-    return EdgeSuggestionServes(served, to_type, store_read=True)
+    `warn_on_failure=False` is curate's pricing probe (#867 review): the stage
+    RUN rebuilds this partition minutes later and warns then, so an unreadable
+    store costs one warning per curate run, not one per read -- the standalone
+    verb partitions once and always warns. `surface` names the command the user
+    actually ran, so a warning during a curate run is not attributed to the
+    standalone verb."""
+    return relations_service.partition_edge_suggestion_serves(
+        layout,
+        edges,
+        include_confidential=include_confidential,
+        on_warning=_echo_stderr if warn_on_failure else None,
+        surface=surface,
+    )
 
 
 def _persist_edge_suggestions(
@@ -13126,65 +11572,22 @@ def _persist_edge_suggestions(
     include_confidential: bool,
     surface: str = "suggest-relations",
 ) -> None:
-    """Persist freshly computed edge-typing suggestions (#799), fail-open:
-    a failed persist costs one stderr advisory, never the run -- the same
-    posture `_persist_adjudications` takes.
+    """Delegator to `relations_service.persist_edge_suggestions` (issue
+    #1168), which owns the persist rule (#799). This wrapper only renders the
+    service's advisory, to stderr; `surface` names the command the user
+    actually ran (#867 review), since curate's Structure stage persists
+    through this helper too."""
+    relations_service.persist_edge_suggestions(
+        layout,
+        results,
+        include_confidential=include_confidential,
+        on_warning=_echo_stderr,
+        surface=surface,
+    )
 
-    Two results are skipped rather than stored. A `suggested_type` of
-    `None` is the fail-closed degrade (malformed reply, unparseable or
-    invalid type): a FAILURE, not a verdict, and caching it would never
-    retry. An endpoint with no current digest (unreadable) is skipped for
-    the adjudication tenant's reason -- a row whose staleness can never be
-    checked would serve forever."""
-    if not results:
-        return
-    current_digest = application_pending.current_finding_digest(layout.bundle_dir)
-    batch: list[edge_suggestions_store.PersistedEdgeSuggestion] = []
-    for result in results:
-        if result.suggested_type is None:
-            continue
-        # `result.edge`, deliberately NOT `effective_edge` (#991 second
-        # review round): the row is keyed on the CANDIDATE pair -- the
-        # question that was asked -- never on a direction-corrected one, or
-        # a verdict for "b -> a" would be persisted and later served under
-        # "a -> b"'s key (`state.edge_suggestions`'s "Direction is
-        # identity" invariant).
-        edge = result.edge
-        digests: list[edge_suggestions_store.InputDigest] = []
-        for endpoint_id in (edge.source_id, edge.target_id):
-            digest = current_digest(endpoint_id)
-            if digest is None:
-                break
-            digests.append(
-                edge_suggestions_store.InputDigest(input_ref=endpoint_id, digest=digest)
-            )
-        else:
-            batch.append(
-                edge_suggestions_store.PersistedEdgeSuggestion(
-                    source_id=edge.source_id,
-                    target_id=edge.target_id,
-                    suggested_type=result.suggested_type,
-                    rationale=result.rationale,
-                    include_confidential=include_confidential,
-                    input_digests=tuple(digests),
-                )
-            )
-    if not batch:
-        return
-    try:
-        conn = derived.open_derived_connection(layout.findings_db_path)
-        try:
-            edge_suggestions_store.record_edge_suggestions(conn, batch)
-        finally:
-            conn.close()
-    except (OSError, sqlite3.Error) as exc:
-        # `surface` names the command the user actually ran (#867 review):
-        # curate's Structure stage persists through this helper too.
-        typer.echo(
-            f"openkos {surface}: warning -- failed to persist edge "
-            f"suggestions ({exc}); the next run will re-type them.",
-            err=True,
-        )
+
+def _echo_stderr(message: str) -> None:
+    typer.echo(message, err=True)
 
 
 def _persist_adjudications(
@@ -13245,116 +11648,6 @@ def _persist_adjudications(
             f"verdicts ({exc}); the next run will re-judge them.",
             err=True,
         )
-
-
-def _contradiction_spec_key(spec: object) -> tuple[tuple[str, str], str | None]:
-    """The `(pair_ids, merged_absorbed_id)` identity of one candidate spec
-    -- the SAME identity `bundle.decisions.decision_key_for` and the
-    findings store key on (design Decision 3), spelled as a plain tuple so
-    specs and persisted rows can be joined without hashing the (unhashable,
-    ledger-entry-carrying) spec itself. `spec` is typed loosely because
-    `_CandidateSpec` is `resolution.contradiction`'s own private shape;
-    only its two identity attributes are read here."""
-    merge_entry = getattr(spec, "merge_entry", None)
-    absorbed = merge_entry.absorbed_id if merge_entry is not None else None
-    return (spec.pair_ids, absorbed)  # type: ignore[attr-defined]
-
-
-def _partition_persisted_serves(
-    layout: config.WorkspaceLayout, plan: CandidatePlan
-) -> tuple[
-    dict[tuple[tuple[str, str], str | None], ContradictionVerdict], CandidatePlan
-]:
-    """Split `plan` into verdicts servable from `.openkos/findings.db` and
-    the candidates that still need a model call (#653).
-
-    A candidate is SERVED iff its latest persisted finding's stored digest
-    rows are exactly the rows `cli.curate.finding_input_digests` computes
-    for the pair's CURRENT bytes -- the same function that recorded them,
-    so equality means "nothing this verdict was computed from has changed".
-    Everything else re-judges, conservatively: no persisted row, any digest
-    drift, an unreadable input (fewer current rows than stored), a
-    stored verdict value outside the enum -- or a present-but-corrupt
-    store, which degrades to one stderr advisory and a full fresh judge
-    (#685 item 4) rather than crashing before any model spend. `consistent`
-    rows serve exactly
-    like `contradicts` rows -- they are what proves a pair needs no
-    re-judging (the display filter, not this partition, decides what is
-    shown).
-
-    Returns `(served_by_key, judged_plan)`: the served verdicts keyed by
-    `_contradiction_spec_key`, and a copy of `plan` whose `specs` are only
-    the candidates to judge -- totals untouched, so the truncation notice
-    keeps describing the ORIGINAL plan."""
-    if not layout.findings_db_path.exists():
-        return {}, plan
-    # Fail OPEN to judging on a present-but-corrupt store (#685 item 4,
-    # mirroring the persist path's #684 posture): this read runs BEFORE any
-    # model spend, so a crash here would cost the whole run to protect a
-    # cache -- one stderr advisory and a full fresh judge is strictly
-    # better. `sqlite3.Error` covers a non-database file; `OSError` an
-    # unreadable one.
-    try:
-        conn = derived.open_derived_connection(layout.findings_db_path)
-        try:
-            persisted = findings.open_findings(conn)
-        finally:
-            conn.close()
-    except (OSError, sqlite3.Error) as exc:
-        typer.echo(
-            "openkos contradictions: warning -- failed to read persisted "
-            f"findings ({exc}); judging every candidate fresh.",
-            err=True,
-        )
-        return {}, plan
-    # Insertion order is `record_findings` order: iterating forward and
-    # overwriting leaves the LATEST row for each identity -- a pair curate
-    # judged twice serves its newest verdict, never a superseded one.
-    latest: dict[tuple[tuple[str, str], str | None], findings.PersistedFinding] = {}
-    for pf in persisted:
-        latest[(pf.pair_ids, pf.merged_absorbed_id)] = pf
-
-    served: dict[tuple[tuple[str, str], str | None], ContradictionVerdict] = {}
-    to_judge = []
-    for spec in plan.specs:
-        key = _contradiction_spec_key(spec)
-        row = latest.get(key)
-        # Row lookup FIRST (#685 item 4): a candidate with no persisted
-        # finding is judged without paying the per-pair digest I/O -- the
-        # hashes exist only to compare against a stored row.
-        if row is None:
-            to_judge.append(spec)
-            continue
-        current = curate_module.finding_input_digests(layout.bundle_dir, spec)
-        if not current or tuple(row.input_digests) != current:
-            to_judge.append(spec)
-            continue
-        try:
-            verdict_value = ContradictionVerdictValue(row.verdict)
-        except ValueError:
-            to_judge.append(spec)
-            continue
-        served[key] = ContradictionVerdict(
-            pair_ids=row.pair_ids,
-            verdict=verdict_value,
-            confidence=row.confidence,
-            rationale=row.rationale,
-            conflicting_claims=row.conflicting_claims,
-            merged_absorbed_id=row.merged_absorbed_id,
-        )
-    return served, dataclasses.replace(plan, specs=tuple(to_judge))
-
-
-def _open_findings_by_decision_key(
-    layout: config.WorkspaceLayout,
-) -> dict[str, findings.PersistedFinding]:
-    """Every persisted finding, keyed by the SAME `decision_key_for`
-    identity a decision record is keyed on (design Decision 7's read-time
-    join) -- used ONLY by the `--declined` view's stale-label lookup."""
-    return {
-        bundle_decisions.decision_key_for(pf.pair_ids, pf.merged_absorbed_id): pf
-        for pf in application_pending.persisted_findings(layout)
-    }
 
 
 # `_contradiction_finding_counts` moved verbatim into `application/status.py`
@@ -13449,36 +11742,202 @@ def render_contradiction_header(result: ContradictionVerdict) -> None:
         )
 
 
-def _contradictions_declined_view(root: Path, layout: config.WorkspaceLayout) -> None:
-    """`contradictions --declined` (pending-work spec: "The declined-
-    listing view surfaces it", design Decision 3's "explicit listing
-    view"). Short-circuits before the graph build and LLM client (design
-    File changes table): every declined record comes from
-    `bundle.decisions.iter_decisions`'s INCLUDE walk, never from a fresh
-    LLM judgment."""
+class _CliContradictionsObserver(contradictions_service.ContradictionsObserver):
+    """Renders the advisories a `contradictions` run raises before any verdict
+    exists; everything the report shows comes back in the outcome."""
+
+    def __init__(
+        self,
+        layout: config.WorkspaceLayout,
+        *,
+        include_confidential: bool,
+    ) -> None:
+        self._layout = layout
+        self._include_confidential = include_confidential
+
+    def exemption_resolved(self, local_exemption: bool) -> None:
+        observability.warn_if_walk_incomplete(
+            self._layout.bundle_dir,
+            include_confidential=self._include_confidential,
+            local_exemption=local_exemption,
+        )
+
+    def vacuous_coverage(self, notice: str) -> None:
+        typer.echo(f"openkos contradictions: {notice}", err=True)
+
+    def persisted_findings_unreadable(self, error: Exception) -> None:
+        typer.echo(
+            "openkos contradictions: warning -- failed to read persisted "
+            f"findings ({error}); judging every candidate fresh.",
+            err=True,
+        )
+
+    def progress_callback(self) -> Callable[[int, int, object], None] | None:
+        # TTY-gated per-pair progress on stderr; `None` (silent) when output is
+        # piped (issue #190, mirrors `suggest-relations`' #134 per-edge line).
+        return observability.progress_callback("contradictions", "checking pair")
+
+    def persist_failed(self, error: Exception) -> None:
+        typer.echo(
+            "openkos contradictions: warning -- failed to persist "
+            f"findings ({error}); this run's verdicts are shown below "
+            "but will not be served from the store on a later run.",
+            err=True,
+        )
+
+
+def _record_contradiction_decision(
+    root: Path,
+    pair: tuple[str, str],
+    merged_absorbed_id: str | None,
+    *,
+    target_state: bundle_decisions.DecisionState,
+) -> None:
+    """`contradictions --decline`/`--reopen`: persist one decision through the
+    service, say so, then stage ONLY its sidecar."""
+    ruling = contradictions_service.record_contradiction_decision(
+        root,
+        pair,
+        merged_absorbed_id,
+        target_state=target_state,
+        on_warning=_echo_warning,
+    )
+    pair_a, pair_b = ruling.pair
+    verb, label = (
+        ("declined", "decline")
+        if target_state == "declined"
+        else ("reopened", "reopen")
+    )
+    typer.echo(
+        f"openkos contradictions: {verb} {pair_a} <-> {pair_b}"
+        + (
+            f" (merged content, absorbed {merged_absorbed_id})"
+            if merged_absorbed_id is not None
+            else ""
+        )
+        + "."
+    )
+    _autocommit(
+        root,
+        [ruling.rel_path],
+        f"openkos: {label} contradiction {pair_a}/{pair_b}",
+    )
+
+
+def _contradictions_declined_view(root: Path) -> None:
+    """`contradictions --declined`: every declined record, joined to its
+    persisted finding. Short-circuits before the graph build and the LLM client
+    -- every record comes from the decisions sidecars, never from a fresh
+    judgment."""
+    entries = contradictions_service.list_declined(root)
     typer.echo(f"openkos contradictions --declined: workspace at {root}")
     typer.echo()
-
-    declined_records: list[bundle_decisions.DecisionRecord] = []
-    for decisions_path in bundle_decisions.iter_decisions(layout.bundle_dir):
-        metadata, _ = okf.load_frontmatter(decisions_path.read_text(encoding="utf-8"))
-        concept_id = metadata.get("concept_id")
-        if not isinstance(concept_id, str):
-            continue
-        # Read the WALKED path, not a path rebuilt from the sidecar's own
-        # `concept_id` content (F1b read-side traversal).
-        for record in bundle_decisions.read_decisions_at(decisions_path):
-            if record.state == "declined":
-                declined_records.append(record)
-
-    if not declined_records:
+    if not entries:
         typer.echo("No declined findings.")
         return
+    for entry in entries:
+        _echo_declined_finding(entry.record, entry.finding)
 
-    findings_by_key = _open_findings_by_decision_key(layout)
-    declined_records.sort(key=lambda record: record.decision_key)
-    for record in declined_records:
-        _echo_declined_finding(record, findings_by_key.get(record.decision_key))
+
+def _run_contradictions_report(
+    root: Path, options: contradictions_service.ContradictionsOptions
+) -> None:
+    """The judged `contradictions` run: call the service, then render its
+    outcome (and the partial-batch failure, which is the only non-zero exit
+    that still prints a report)."""
+    layout = config.WorkspaceLayout(root)
+    ports = contradictions_service.ContradictionsPorts(
+        chat_client=lambda cfg: _chat_client(cfg, task="contradiction"),
+        local_exemption=_resolve_local_exemption,
+        open_proximity=_open_proximity_or_degrade,
+        build_graph=build_graph,
+        plan_candidates=plan_candidates,
+        find_contradictions=find_contradictions,
+        persist_findings=curate_module.persist_findings,
+        finding_input_digests=curate_module.finding_input_digests,
+        zero_state_message=lambda ws_layout, store, embeddings_missing: (
+            _zero_edge_state_message(
+                ws_layout,
+                store=store,
+                use_typed_count=True,
+                embeddings_missing=embeddings_missing,
+                none_survived=(
+                    "{count} typed relation(s); none are contradiction candidates."
+                ),
+            )
+        ),
+    )
+    outcome = contradictions_service.run_contradictions(
+        root,
+        options=options,
+        ports=ports,
+        observer=_CliContradictionsObserver(
+            layout, include_confidential=options.include_confidential
+        ),
+    )
+
+    typer.echo(f"openkos contradictions: workspace at {root}")
+    typer.echo()
+    if not options.fresh and outcome.plan.specs:
+        # #685 item 6: the judged-fresh count is what actually HAPPENED
+        # (`batch.results`), never the planned `judged_plan.specs` -- on a
+        # partial batch the two differ, and printing the plan here overstated
+        # the spend the stderr epilogue then contradicted.
+        typer.echo(
+            f"{outcome.served_count} of {len(outcome.plan.specs)} candidate(s) "
+            "served from persisted findings; "
+            f"{outcome.fresh_count} judged fresh."
+        )
+        typer.echo()
+    if outcome.candidate_notice is not None:
+        typer.echo(outcome.candidate_notice)
+        typer.echo()
+    if outcome.quarantine_notice is not None:
+        typer.echo(outcome.quarantine_notice)
+        typer.echo()
+    if outcome.zero_state is not None:
+        typer.echo(outcome.zero_state)
+        return
+
+    if outcome.truncation_notice is not None:
+        typer.echo(outcome.truncation_notice)
+        typer.echo()
+    if not outcome.displayed:
+        # No early return (#441): the partial-batch failure epilogue below must
+        # run after every display path, exactly as in `adjudicate`.
+        # Vacuous-coverage guard (#557): a clean line over a run that judged
+        # zero typed-edge pairs must not read as an all-clear -- stderr may be
+        # discarded (piped runs), so the qualification rides the stdout line
+        # itself.
+        if outcome.vacuous_notice is not None:
+            typer.echo(
+                "No high-confidence contradictions found -- NOT an "
+                "all-clear: zero typed-edge pairs were judged (the graph "
+                "has no applied relations)."
+            )
+        else:
+            typer.echo("No high-confidence contradictions found.")
+
+    for result in outcome.displayed:
+        render_contradiction_header(result)
+        for claim in result.conflicting_claims:
+            typer.echo(f"  - {claim}")
+        typer.echo(f"  rationale: {result.rationale}")
+        typer.echo()
+
+    if outcome.batch.failure is not None:
+        # Partial batch (#441): the report above already rendered the completed
+        # verdicts exactly as a complete run over that list -- the paid-for work
+        # is never discarded -- so all that remains is the one stderr failure
+        # line and the BackendError-family exit code. #653: the
+        # completed-of-total counts describe what was actually SENT to the model
+        # this run -- the judged subset, not the full plan.
+        _echo_contradictions_batch_failure(
+            outcome.batch,
+            total=outcome.judged_plan.llm_calls,
+            model=outcome.model,
+        )
+        raise typer.Exit(code=1) from outcome.batch.failure
 
 
 @app.command(
@@ -13635,380 +12094,64 @@ def contradictions(
     Default").
     """
     root = Path.cwd()
-    reason = config.require_workspace(root)
-    if reason is not None:
-        typer.echo(f"openkos contradictions: refusing to run -- {reason}.", err=True)
-        raise typer.Exit(code=1)
-
-    layout = config.WorkspaceLayout(root)
-
-    if decline is not None:
-        rel_path = _apply_contradiction_decision(
-            layout, decline, merged_absorbed_id, target_state="declined"
-        )
-        pair_a, pair_b = _sorted_decision_pair(decline)
-        typer.echo(
-            f"openkos contradictions: declined {pair_a} <-> {pair_b}"
-            + (
-                f" (merged content, absorbed {merged_absorbed_id})"
-                if merged_absorbed_id is not None
-                else ""
-            )
-            + "."
-        )
-        _autocommit(
-            root,
-            [rel_path],
-            f"openkos: decline contradiction {pair_a}/{pair_b}",
-        )
-        return
-
-    if reopen is not None:
-        rel_path = _apply_contradiction_decision(
-            layout, reopen, merged_absorbed_id, target_state="open"
-        )
-        pair_a, pair_b = _sorted_decision_pair(reopen)
-        typer.echo(
-            f"openkos contradictions: reopened {pair_a} <-> {pair_b}"
-            + (
-                f" (merged content, absorbed {merged_absorbed_id})"
-                if merged_absorbed_id is not None
-                else ""
-            )
-            + "."
-        )
-        _autocommit(
-            root,
-            [rel_path],
-            f"openkos: reopen contradiction {pair_a}/{pair_b}",
-        )
-        return
-
-    if declined:
-        _contradictions_declined_view(root, layout)
-        return
-
     try:
-        cfg = config.read_config(root)
-    except (OSError, ValueError) as exc:
-        typer.echo(
-            f"openkos contradictions: failed while reading the workspace -- {exc}.",
-            err=True,
-        )
-        raise typer.Exit(code=1) from exc
-
-    llm = _chat_client(cfg, task="contradiction")
-    local_exemption = _resolve_local_exemption(
-        cast(application_backends.HasLocality, llm), cfg
-    )
-    observability.warn_if_walk_incomplete(
-        layout.bundle_dir,
-        include_confidential=include_confidential,
-        local_exemption=local_exemption,
-    )
-    # graph-projection-reuse (#196): source-then-build prologue, mirroring
-    # `suggest_relations_cmd` -- the proximity source is closed as early as
-    # possible, right after `build_graph` consumes it. Unlike
-    # `suggest-relations`, the LLM loop runs INSIDE `find_contradictions`, so
-    # the store stays open across it (design §4): splitting this block would
-    # require two builds, which is exactly what #196 removes.
-    source = _open_proximity_or_degrade(layout.vectors_db_path)
-    embeddings_missing = source is None
-    try:
-        graph = build_graph(layout.bundle_dir, candidates=source)
-    finally:
-        if source is not None:
-            source.close()
-
-    with graph as store:
-        # Built here, not inside `find_contradictions`, because the cap-reached
-        # line below has to name WHICH KIND was truncated (#444) -- and passing
-        # it in means that line describes the exact list that was judged.
-        plan = plan_candidates(
-            layout.bundle_dir,
-            store=store,
-            include_deprecated=include_deprecated,
-            include_confidential=include_confidential,
-            local_exemption=local_exemption,
-        )
-        # Vacuous-coverage guard (#557): warn BEFORE the judging loop, not
-        # after -- the run costs one LLM call per candidate, and an operator
-        # who only needed typed-edge coverage can abort instead of paying
-        # for a check that cannot answer their question.
-        vacuous = vacuous_coverage_notice(plan)
-        if vacuous is not None:
-            typer.echo(f"openkos contradictions: {vacuous}", err=True)
-        # #653: serve persisted, digest-fresh findings instead of re-billing
-        # the model for verdicts the store already holds. `--fresh` bypasses
-        # the store; the truncation/vacuous notices above keep describing
-        # the ORIGINAL plan either way.
-        served_by_key: dict[
-            tuple[tuple[str, str], str | None], ContradictionVerdict
-        ] = {}
-        judged_plan = plan
-        if not fresh:
-            served_by_key, judged_plan = _partition_persisted_serves(layout, plan)
-        try:
-            batch, _total_pairs = find_contradictions(
-                layout.bundle_dir,
-                llm=llm,
-                include_deprecated=include_deprecated,
-                include_confidential=include_confidential,
-                local_exemption=local_exemption,
-                store=store,
-                plan=judged_plan,
-                # TTY-gated per-pair progress on stderr; `None` (silent)
-                # when output is piped (issue #190, mirrors
-                # `suggest-relations`' #134 per-edge line).
-                on_progress=observability.progress_callback(
-                    "contradictions", "checking pair"
-                ),
-            )
-        except BackendUnavailable as exc:
-            typer.echo(
-                f"openkos contradictions: failed -- {exc}. Start it with "
-                f"`ollama serve`, then try again.{_DOCTOR_HINT}",
-                err=True,
-            )
-            raise typer.Exit(code=1) from exc
-        except BackendModelNotFound as exc:
-            typer.echo(
-                f"openkos contradictions: failed -- model '{cfg.model}' is not "
-                f"installed. Pull it with `ollama pull {cfg.model}`, then try "
-                "again.",
-                err=True,
-            )
-            raise typer.Exit(code=1) from exc
-        # The two specific handlers above MUST precede this generic handler:
-        # both `BackendUnavailable` and `BackendModelNotFound` subclass
-        # `BackendError`, so reordering would silently funnel them into this
-        # fallback and lose their actionable remediation messages (mirrors
-        # `suggest-relations`'s ordering).
-        except BackendError as exc:
-            typer.echo(f"openkos contradictions: failed -- {exc}.", err=True)
-            raise typer.Exit(code=1) from exc
-
-        # #653: freshly judged verdicts persist through curate's EXACT write
-        # path (`persist_findings`), so the next default run serves them --
-        # `.openkos/` derived state only, never a bundle write. Partial
-        # batches persist their completed prefix (`zip` inside stops there).
-        # Fail-open (review R4-persist-on-critical-path, lineage
-        # review-f5e797b9b50625cd): this write runs AFTER the paid model
-        # calls and BEFORE any verdict is displayed -- a locked or corrupt
-        # findings.db degrades to one stderr advisory, never a crash that
-        # discards the paid-for verdicts (#441's posture).
-        fresh_verdicts = list(batch.results)
-        if fresh_verdicts:
-            try:
-                curate_module.persist_findings(layout, judged_plan, fresh_verdicts)
-            except (OSError, sqlite3.Error) as exc:
-                typer.echo(
-                    "openkos contradictions: warning -- failed to persist "
-                    f"findings ({exc}); this run's verdicts are shown below "
-                    "but will not be served from the store on a later run.",
-                    err=True,
-                )
-
-        # Reassemble in the ORIGINAL plan order: a served verdict and a
-        # fresh one must interleave exactly where their candidates sat, or
-        # the display order would depend on what happened to be cached.
-        fresh_by_key = {
-            _contradiction_spec_key(spec): verdict
-            for spec, verdict in zip(judged_plan.specs, fresh_verdicts, strict=False)
-        }
-        verdicts = []
-        placed: set[int] = set()
-        for spec in plan.specs:
-            key = _contradiction_spec_key(spec)
-            if key in served_by_key:
-                verdicts.append(served_by_key[key])
-            elif key in fresh_by_key:
-                verdicts.append(fresh_by_key[key])
-                placed.add(id(fresh_by_key[key]))
-        # #441 posture: a judged result that maps onto no plan spec (an
-        # injected finder in tests, or a future planner/finder drift) is
-        # paid-for work -- appended after the plan-ordered ones rather than
-        # silently dropped. In production every result maps, so this is a
-        # provable no-op there.
-        verdicts.extend(v for v in fresh_verdicts if id(v) not in placed)
-        typer.echo(f"openkos contradictions: workspace at {root}")
-        typer.echo()
-        if not fresh and plan.specs:
-            # #685 item 6: the judged-fresh count is what actually HAPPENED
-            # (`batch.results`), never the planned `judged_plan.specs` -- on
-            # a partial batch the two differ, and printing the plan here
-            # overstated the spend the stderr epilogue then contradicted.
-            typer.echo(
-                f"{len(served_by_key)} of {len(plan.specs)} candidate(s) "
-                "served from persisted findings; "
-                f"{len(fresh_verdicts)} judged fresh."
-            )
-            typer.echo()
-        # #378 slice 2 (post-review correction): pass 3's candidate-edge cap
-        # truncation, never silent -- distinct from
-        # `contradiction_truncation_notice(plan)` below, which reports the
-        # contradiction-engine's OWN candidate cap. Read here, INSIDE the
-        # `with` block, since `store` closes below.
-        #
-        # The two lines count genuinely different things -- the plan's totals
-        # come from `plan_candidates`, which is deprecation-filtered, this
-        # one from pass 3's own seeding -- but BOTH must now respect the
-        # sensitivity-fail-closed-filter before being printed:
-        # `candidate_truncation_notice` re-derives its counts from
-        # `store.candidate_report.pairs` (RAW, unfiltered by pass 3 itself)
-        # through `sensitivity.sensitive_concept_ids`, so this line never
-        # discloses a pre-cap volume that includes a confidential endpoint
-        # `find_contradictions` above already excluded from its own results.
-        notice = candidate_truncation_notice(
-            store.candidate_report,
-            layout.bundle_dir,
-            include_confidential=include_confidential,
-            local_exemption=local_exemption,
-        )
-        if notice is not None:
-            typer.echo(notice)
-            typer.echo()
-        # #841: the unjudged-source withholding, disclosed here too -- the
-        # contradiction engine reads the same candidate projection, so its
-        # queue is also smaller than the bundle could produce.
-        quarantine_notice = quarantined_candidate_notice(
-            store.candidate_report,
-            layout.bundle_dir,
-            include_confidential=include_confidential,
-            local_exemption=local_exemption,
-        )
-        if quarantine_notice is not None:
-            typer.echo(quarantine_notice)
-            typer.echo()
-        if not verdicts and batch.failure is None:
-            # Guarded on a clean run only (#441): a first-candidate failure
-            # also carries zero verdicts, and the zero-candidates state
-            # message would then claim an empty graph the failure, not the
-            # projection, produced.
-            typer.echo(
-                _zero_edge_state_message(
-                    layout,
-                    store=store,
-                    use_typed_count=True,
-                    embeddings_missing=embeddings_missing,
-                    none_survived=(
-                        "{count} typed relation(s); none are contradiction candidates."
-                    ),
-                )
+        if decline is not None:
+            _record_contradiction_decision(
+                root, decline, merged_absorbed_id, target_state="declined"
             )
             return
-
-    truncation = contradiction_truncation_notice(plan)
-    if truncation is not None:
-        typer.echo(truncation)
-        typer.echo()
-
-    displayed = (
-        verdicts
-        if show_all
-        else [v for v in verdicts if is_high_confidence_contradiction(v)]
-    )
-    # pending-work spec ("Declined Findings Are Hidden By Default"): a
-    # verdict whose decision_key already carries a `declined` decision is
-    # dropped from the DISPLAY list only -- it still counts in `verdicts`
-    # for the zero-edge/truncation/partial-failure reporting above, which
-    # describe what was JUDGED, not what was declined.
-    displayed = [
-        v
-        for v in displayed
-        if not application_pending.is_contradiction_declined(
-            layout, v.pair_ids, v.merged_absorbed_id
-        )
-    ]
-    if not displayed:
-        # No early return (#441): the partial-batch failure epilogue below
-        # must run after every display path, exactly as in `adjudicate`.
-        # Vacuous-coverage guard (#557): a clean line over a run that judged
-        # zero typed-edge pairs must not read as an all-clear -- stderr may
-        # be discarded (piped runs), so the qualification rides the stdout
-        # line itself.
-        if vacuous is not None:
-            typer.echo(
-                "No high-confidence contradictions found -- NOT an "
-                "all-clear: zero typed-edge pairs were judged (the graph "
-                "has no applied relations)."
+        if reopen is not None:
+            _record_contradiction_decision(
+                root, reopen, merged_absorbed_id, target_state="open"
             )
-        else:
-            typer.echo("No high-confidence contradictions found.")
-
-    for result in displayed:
-        render_contradiction_header(result)
-        for claim in result.conflicting_claims:
-            typer.echo(f"  - {claim}")
-        typer.echo(f"  rationale: {result.rationale}")
-        typer.echo()
-
-    if batch.failure is not None:
-        # Partial batch (#441): the report above already rendered the
-        # completed verdicts exactly as a complete run over that list -- the
-        # paid-for work is never discarded -- so all that remains is the one
-        # stderr failure line and the BackendError-family exit code.
-        # #653: the completed-of-total counts describe what was actually
-        # SENT to the model this run -- the judged subset, not the full
-        # plan, since served candidates cost nothing and cannot fail.
-        _echo_contradictions_batch_failure(
-            batch, total=judged_plan.llm_calls, model=cfg.model
+            return
+        if declined:
+            _contradictions_declined_view(root)
+            return
+        _run_contradictions_report(
+            root,
+            contradictions_service.ContradictionsOptions(
+                show_all=show_all,
+                include_deprecated=include_deprecated,
+                include_confidential=include_confidential,
+                fresh=fresh,
+            ),
         )
-        raise typer.Exit(code=1) from batch.failure
+    except contradictions_service.ContradictionsRefused as exc:
+        typer.echo(exc.message, err=True)
+        raise typer.Exit(code=1) from exc
 
 
-_REVISIONS_EXPERIMENTAL_NOTICE = (
-    "openkos revisions: experimental -- detection quality is unmeasured on "
-    "real bundles; review every finding before applying it with 'openkos "
-    "reconcile --from-findings'."
-)
-"""design.md's Phase B re-plan, Decision B4: printed once, on stderr, on
-every non-refused invocation -- the whole point is that this detector has
-only been measured against a synthetic harness fixture
-(`evals/decision_revisions/`), never against a real bundle."""
+class _RevisionsObserver:
+    """The CLI's rendering of a `revisions` run (issue #1168): the service
+    hands it typed data and this class owns every word and the TTY question."""
 
-_REVISIONS_NO_VECTORS_MESSAGE = (
-    "openkos revisions: no document embeddings found -- run 'openkos reindex' first."
-)
-_REVISIONS_MODEL_MISMATCH_MESSAGE = (
-    "openkos revisions: vectors.db was embedded with a different embedding "
-    "model or scheme than 'embedding_model' -- run 'openkos reindex' first."
-)
-"""design.md Decision B1's two whole-run vector-store degrade messages:
-`revisions` never embeds, so a Decision's document vector comes ONLY from
-`.openkos/vectors.db` as written by `openkos reindex`. Both cases make zero
-LLM calls, print their remedy, and exit 0 -- nothing failed; the store is
-simply not built for the currently configured model."""
+    def started(self) -> None:
+        typer.echo(revisions_service.EXPERIMENTAL_NOTICE, err=True)
 
+    def truncation_notice(self, notice: str) -> None:
+        typer.echo(notice, err=True)
 
-def _echo_revisions_batch_failure(
-    outcome: revisions_service.RevisionOutcome, *, total: int, model: str
-) -> None:
-    """One stderr line for a partial `RevisionOutcome` (#441 precedent,
-    byte-identical shape to `_echo_contradictions_batch_failure`): the same
-    3-tier cause-specific wording, prefixed with how much paid-for judging
-    survived. `total` is `len(plan.to_judge)` -- the judged-pair budget this
-    run actually paid for, never the full candidate plan (served pairs cost
-    nothing and cannot fail)."""
-    failure = outcome.failure
-    context = (
-        f"openkos revisions: failed after judging {len(outcome.results)} "
-        f"of {total} planned pair(s)"
-    )
-    if isinstance(failure, BackendUnavailable):
+    def cost_gate(self, plan: revisions_service.RevisionPlan) -> None:
         typer.echo(
-            f"{context} -- {failure}. Start it with `ollama serve`, then "
-            f"try again.{_DOCTOR_HINT}",
+            f"{len(plan.candidate_plan.candidates)} candidate pair(s), "
+            f"{len(plan.served)} served -> {len(plan.to_judge)} LLM "
+            "call(s) to judge (this can take a while). Pass --auto to "
+            "skip this prompt.",
             err=True,
         )
-    elif isinstance(failure, BackendModelNotFound):
-        typer.echo(
-            f"{context} -- model '{model}' is not installed. Pull it with "
-            f"`ollama pull {model}`, then try again.",
-            err=True,
-        )
-    else:
-        typer.echo(f"{context} -- {failure}.", err=True)
+
+    def confirm_judging(self) -> revisions_service.ConfirmationAnswer:
+        # The same three branches every other cost gate in this CLI has:
+        # a TTY asks, and non-TTY stdin without `--auto` cannot ask.
+        if not sys.stdin.isatty():
+            return "unavailable"
+        return "proceed" if typer.confirm("Proceed?") else "declined"
+
+    def progress_callback(
+        self,
+    ) -> Callable[[int, int, RevisionVerdict], None] | None:
+        return observability.progress_callback("revisions", "judging pair")
 
 
 @app.command(
@@ -14049,6 +12192,11 @@ def revisions(
     refines, or reaffirms (#1014 piece (a), Phase B re-plan): read-only over
     the bundle, like `contradictions`/`suggest-relations`.
 
+    A thin adapter over `application.revisions.run_revisions` (issue #1168):
+    the service owns the workspace gate, the planning, the ONE cost gate's
+    WHEN and the judging; this verb keeps the rendering, the TTY question and
+    the exit-code mapping.
+
     Candidate pairs are blocked by embedding similarity over each eligible
     Decision's document vector, read directly from `.openkos/vectors.db`
     (`application.revisions.read_decision_vectors`) -- this verb makes NO
@@ -14088,121 +12236,70 @@ def revisions(
     one stderr line says so on every invocation, and every finding should
     be reviewed before it is applied.
     """
-    root = Path.cwd()
-    reason = config.require_workspace(root)
-    if reason is not None:
-        typer.echo(f"openkos revisions: refusing to run -- {reason}.", err=True)
-        raise typer.Exit(code=1)
-
-    layout = config.WorkspaceLayout(root)
-
     try:
-        cfg = config.read_config(root)
-    except (OSError, ValueError) as exc:
-        typer.echo(
-            f"openkos revisions: failed while reading the workspace -- {exc}.",
-            err=True,
+        run = revisions_service.run_revisions(
+            Path.cwd(),
+            revisions_service.RevisionsRequest(
+                skip_confirmation=auto,
+                include_confidential=include_confidential,
+                fresh=fresh,
+            ),
+            revisions_service.RevisionsPorts(
+                chat_client=lambda cfg, task: _chat_client(cfg, task=task),
+                resolve_local_exemption=lambda client, cfg: _resolve_local_exemption(
+                    client, cfg
+                ),
+                truncation_notice=lambda candidate_plan: revision_truncation_notice(
+                    candidate_plan
+                ),
+            ),
+            _RevisionsObserver(),
         )
+    except revisions_service.RevisionsRefused as exc:
+        typer.echo(exc.message, err=True)
         raise typer.Exit(code=1) from exc
 
-    typer.echo(_REVISIONS_EXPERIMENTAL_NOTICE, err=True)
-
-    llm = _chat_client(cfg)
-    local_exemption = _resolve_local_exemption(
-        cast(application_backends.HasLocality, llm), cfg
-    )
-    # design.md Decision B2: the flag (or the local exemption) releases only
-    # the judge's `llm.chat` send of a confidential Decision's body -- it
-    # never authorizes an embedding call, which this verb never makes at
-    # all (Decision B1).
-    effective_confidential = include_confidential or local_exemption
-
-    decisions = revisions_service.load_decisions(
-        layout,
-        include_confidential=effective_confidential,
-        local_exemption=local_exemption,
-    )
-    if not decisions.decisions:
+    if run.status == "no_decisions":
         typer.echo("No Decision objects found.")
         return
-
-    plan = revisions_service.plan_revisions(
-        layout,
-        decisions,
-        embedding_model=cfg.embedding_model,
-        effective_confidential=effective_confidential,
-        fresh=fresh,
-        backend=cfg.backend,
-    )
-
-    # design.md Decision B1's table: a whole-run vector-store degrade makes
-    # zero LLM calls and exits 0 -- there is no candidate plan worth
-    # judging, so neither the gate nor the judge is ever reached.
-    if plan.coverage.store == "absent":
-        typer.echo(_REVISIONS_NO_VECTORS_MESSAGE, err=True)
+    if run.status == "vectors_absent":
+        typer.echo(revisions_service.NO_VECTORS_MESSAGE, err=True)
         return
-    if plan.coverage.store == "model-mismatch":
-        typer.echo(_REVISIONS_MODEL_MISMATCH_MESSAGE, err=True)
+    if run.status == "model_mismatch":
+        typer.echo(revisions_service.MODEL_MISMATCH_MESSAGE, err=True)
+        return
+    if run.status == "declined":
+        typer.echo("Aborted -- no revisions judged.")
         return
 
-    # #378 precedent (`curate.py:1660-1663`, mirrored by `contradictions`'
-    # own truncation notice): printed BEFORE the gate line, so an operator
-    # learns candidates were dropped before consenting to the spend.
-    notice = revision_truncation_notice(plan.candidate_plan)
-    if notice is not None:
-        typer.echo(notice, err=True)
-
-    # design.md's Phase B re-plan, Decision B4: the one remaining cost gate,
-    # printed (unconditionally, even under `--auto`) whenever there is at
-    # least one pair left to judge -- a gate whose count is zero prints
-    # nothing and asks nothing (spec: Zero-LLM Probe Precedes The Cost
-    # Gate / One Exact Cost Gate Before Pair Judgment).
-    if plan.to_judge:
-        typer.echo(
-            f"{len(plan.candidate_plan.candidates)} candidate pair(s), "
-            f"{len(plan.served)} served -> {len(plan.to_judge)} LLM "
-            "call(s) to judge (this can take a while). Pass --auto to "
-            "skip this prompt.",
-            err=True,
-        )
-        if not auto:
-            if sys.stdin.isatty():
-                if not typer.confirm("Proceed?"):
-                    typer.echo("Aborted -- no revisions judged.")
-                    return
-            else:
-                typer.echo(
-                    "openkos revisions: refusing to spend model calls "
-                    "without confirmation -- stdin is not a TTY; re-run "
-                    "with --auto.",
-                    err=True,
-                )
-                raise typer.Exit(code=1)
-
-    outcome = revisions_service.judge_revisions(
-        layout,
-        plan,
-        llm=llm,
-        effective_confidential=effective_confidential,
-        on_progress=observability.progress_callback("revisions", "judging pair"),
-    )
-
+    report = run.report
+    if report is None:
+        return
     typer.echo(
         revisions_report(
-            plan, outcome, excluded=decisions.bad_relations, show_all=show_all
+            report.plan,
+            report.outcome,
+            excluded=report.decisions.bad_relations,
+            show_all=show_all,
         )
     )
 
-    if outcome.failure is not None:
+    if report.outcome.failure is not None:
         # Partial batch (#441 posture, mirrored from `contradictions`): the
         # report above already rendered every verdict judged so far exactly
         # as a complete run over that list would -- the paid-for work is
         # never discarded -- so all that remains is the one stderr failure
         # line and the BackendError-family exit code.
-        _echo_revisions_batch_failure(
-            outcome, total=len(plan.to_judge), model=cfg.model
+        typer.echo(
+            revisions_service.revisions_batch_failure_message(
+                report.outcome,
+                total=len(report.plan.to_judge),
+                model=run.model,
+                cfg=run.cfg,
+            ),
+            err=True,
         )
-        raise typer.Exit(code=1) from outcome.failure
+        raise typer.Exit(code=1) from report.outcome.failure
 
 
 def _no_match_message(cause: NoMatchCause, fts_hit_count: int) -> str:
@@ -15091,161 +13188,43 @@ def reindex(
         ),
     ),
 ) -> None:
-    """Backfill `.openkos/vectors.db`, `.openkos/fts.db`, and
+    """Backfill `.openkos/vectors.db`, `.openkos/fts.db` and
     `.openkos/graph.db` from the compiled bundle -- the sole writer of every
     derived store's data (spec: reindex-command).
 
-    Read-only over the bundle, write-only to the three `.openkos/*.db`
-    derived stores: no bundle file is ever touched, no confirmation prompt,
-    no `--auto`, mirroring `query`'s D1 gate shape (bare `require_workspace`,
-    no Phase B). Must run inside an initialized workspace; outside one it
-    refuses (exit 1) with a short reason on stderr (spec: Run outside a
-    workspace refuses).
-
-    Thin wiring only (spec: CLI Verb Is Thin Wiring): `require_workspace` →
-    `read_config` → `open_vector_store(vectors_db_path)` →
-    `state.reindex.reindex(bundle_dir, db, embedder, force=force,
-    fts_db_path=..., model_tag=cfg.embedding_model)` →
-    `sqlite_graph.reindex_graph(bundle_dir, graph_db_path, force=force)` →
-    print a summary of embedded/cache-hit/pruned/skipped counts and exit 0.
-    The vector/FTS orchestrator (`state/reindex.py`) owns the bundle walk,
-    the `content_hash` cache gate, the prune pass, the FTS manifest gate,
-    AND the embedding-model tag gate (MVP-2 follow-up #5: a stored tag
-    absent or different from `cfg.embedding_model` forces one full
-    re-embed, independent of `--force`; `ReindexReport.model_reembedded`
-    surfaces this as a dedicated summary line naming the old and new model,
-    plus a follow-up line when some docs could not be re-embedded this run
-    -- review correction, CRITICAL + WARNING findings); the graph gate
-    (`openkos.graph.sqlite_graph.reindex_graph`) is called SEPARATELY
-    rather than from inside `state/reindex.py`, because `state/reindex.py`
-    is canonical-layer code and must not import `openkos.graph` (derived
-    layer) -- this command is the entry-layer seam that ties both together
-    so a single invocation still writes all three stores. This command
-    owns none of the gate/rebuild logic itself.
-
-    Embeds through a local Ollama server running the model configured as
-    `embedding_model` in `openkos.yaml` (default `bge-m3`, ADR-0006).
-    An unreachable Ollama, a missing embedding model, or an unusable
-    `sqlite-vec` extension is reported on stderr with no raw traceback and
-    exits 1 -- the SAME ordered ladder `query` uses (`BackendUnavailable` →
-    `BackendModelNotFound` → a generic `(VecUnavailable, BackendError)`
-    fallback), with `VecUnavailable` substituted for `FtsUnavailable` (spec:
-    Error Ladder Mirrors query). A concurrent process holding a write lock
-    on `vectors.db`/`fts.db`/`graph.db` past `busy_timeout` (e.g. a
-    concurrent `reindex`) is ALSO caught -- at store open, `upsert_many`/the
-    end-of-run `commit`, or a store's `BEGIN IMMEDIATE` -- and reported with
-    the SAME uniform retry message across all three stores, discriminated
-    from any other operational failure by `state.derived.is_lock_contention`
-    (errorcode, never message text), never by a raw traceback
-    (reindex-lock-handling). Never alters `query`'s own behavior or
-    `retrieval/answer.py` (spec: No Retrieval Consumer Introduced).
+    A thin adapter over `application/reindex_service.reindex_workspace`: it
+    supplies the current directory as the workspace root, the effects (the
+    embedding client, the vector store, the proximity source), and a
+    `_ReindexObserver` that renders the summary and the advisories, then maps
+    every typed `ReindexRefused` to its message on stderr and exit code 1. The
+    orchestration -- the ordered backend error ladder, the lock-contention
+    discrimination, the summary-before-graph ordering -- lives in the service.
     """
-    root = Path.cwd()
-    reason = config.require_workspace(root)
-    if reason is not None:
-        typer.echo(f"openkos reindex: refusing to run -- {reason}.", err=True)
-        raise typer.Exit(code=1)
-
-    layout = config.WorkspaceLayout(root)
     try:
-        cfg = config.read_config(root)
-    except (OSError, ValueError) as exc:
-        typer.echo(
-            f"openkos reindex: failed while reading the workspace -- {exc}.",
-            err=True,
+        reindex_service.reindex_workspace(
+            Path.cwd(),
+            force=force,
+            ports=reindex_service.ReindexPorts(
+                embed_client=_embed_client,
+                open_vector_store=open_vector_store,
+                open_proximity=_open_proximity_or_degrade,
+                local_exemption=_resolve_local_exemption,
+            ),
+            observer=_ReindexObserver(),
         )
+    except reindex_service.ReindexRefused as exc:
+        typer.echo(exc.message, err=True)
         raise typer.Exit(code=1) from exc
 
-    embedder = _embed_client(cfg)
-    embedder_locality = cast(BackendDiagnostics, embedder)
-    _warn_if_nonlocal_embed_host("reindex", embedder_locality.locality, cfg)
-    try:
-        with open_vector_store(layout.vectors_db_path) as db:
-            # Captured BEFORE the call so the summary below can name the OLD
-            # tag even though `reindex()` may have already overwritten it in
-            # `vectors.db` by the time we get `report` back (review
-            # correction, WARNING finding: model-tag force observability).
-            previous_model_tag = db.read_model_tag()
-            report = reindex_module.reindex(
-                layout.bundle_dir,
-                db,
-                embedder,
-                force=force,
-                fts_db_path=layout.fts_db_path,
-                model_tag=cfg.embedding_model,
-                embedding_backend=cfg.backend,
-                # TTY-gated per-doc embedding progress on stderr; `None`
-                # (silent) when output is piped (issue #190, mirrors
-                # `suggest-relations`' #134 per-edge line).
-                on_progress=observability.progress_callback("reindex", "embedding doc"),
-                local_exemption=_resolve_local_exemption(embedder_locality, cfg),
-            )
-    except BackendUnavailable as exc:
-        typer.echo(
-            f"openkos reindex: failed -- {exc}. Start it with `ollama serve`, "
-            f"then try again.{_DOCTOR_HINT}",
-            err=True,
-        )
-        raise typer.Exit(code=1) from exc
-    except BackendModelNotFound as exc:
-        typer.echo(
-            "openkos reindex: failed -- embedding model "
-            f"'{cfg.embedding_model}' is not installed. Pull it with "
-            f"`ollama pull {cfg.embedding_model}`, then try again.",
-            err=True,
-        )
-        raise typer.Exit(code=1) from exc
-    # `BackendEmbeddingDimensionMismatch` is a PERMANENT, non-healing
-    # misconfiguration -- unlike `BackendUnavailable`/`BackendModelNotFound`,
-    # it names a concrete remediation: the configured `embedding_model` no
-    # longer produces `EMBED_DIM`-dimensional vectors, so it must be
-    # restored in `openkos.yaml`. Placed BEFORE the generic
-    # `(VecUnavailable, FtsUnavailable, BackendError)` tuple below --
-    # `BackendEmbeddingDimensionMismatch` subclasses `BackendError`, so
-    # reordering this branch after that tuple would silently swallow it
-    # into the generic message (same ordering discipline as the two
-    # handlers above). MUST NOT say "will retry next run" -- that phrasing
-    # is reserved for a transient `embed_failed` skip, not a permanent
-    # misconfiguration.
-    except BackendEmbeddingDimensionMismatch as exc:
-        typer.echo(
-            f"openkos reindex: failed -- {exc} Restore the working "
-            "'embedding_model' value in openkos.yaml, then run `openkos "
-            "reindex` again.",
-            err=True,
-        )
-        raise typer.Exit(code=1) from exc
-    # A lock-contention OperationalError (a concurrent process holding
-    # vectors.db/fts.db's write lock past busy_timeout) can be raised at
-    # ANY write surface inside the `with open_vector_store(...)` block
-    # above -- store open, `upsert_many`/the end-of-run `commit`, or FTS's
-    # `BEGIN IMMEDIATE` (propagated unchanged by `state/fts.py`'s errorcode
-    # discrimination) -- so this clause wraps the ENTIRE try, catching all
-    # three. Placed BEFORE the generic `(VecUnavailable, FtsUnavailable,
-    # BackendError)` tuple below (reindex-lock-handling, decision 2): a
-    # non-lock `OperationalError` is deliberately RE-RAISED, not swallowed
-    # into a generic clean exit -- this stays strictly additive, matching
-    # this catch's ONLY documented job (lock contention), and preserves
-    # whatever pre-existing (uncaught) behavior a different operational
-    # failure already had.
-    except sqlite3.OperationalError as exc:
-        if derived.is_lock_contention(exc):
-            typer.echo(_LOCK_CONTENTION_MSG, err=True)
-            raise typer.Exit(code=1) from exc
-        raise
-    # The two specific handlers above MUST precede this generic tuple, same
-    # ordering rationale as `query`'s ladder: both `BackendUnavailable` and
-    # `BackendModelNotFound` subclass `BackendError`. `FtsUnavailable` joins
-    # `VecUnavailable` here (Slice 5 review correction, Finding A): reindex
-    # now reaches the FTS write path (`state.reindex._reindex_fts` ->
-    # `fts.write_fts_index`), which raises `FtsUnavailable` exactly like
-    # `query`'s FTS read path already does -- this mirrors `query`'s own
-    # `(FtsUnavailable, BackendError)` ladder instead of leaving it as a raw,
-    # uncaught traceback.
-    except (VecUnavailable, FtsUnavailable, BackendError) as exc:
-        typer.echo(f"openkos reindex: failed -- {exc}.", err=True)
-        raise typer.Exit(code=1) from exc
 
+def _render_reindex_summary(
+    report: reindex_module.ReindexReport,
+    previous_model_tag: str | None,
+    cfg: config.Config,
+) -> None:
+    """Print the vectors/FTS summary and its follow-up notices for one
+    `reindex` run. Called by the service BEFORE the graph write (see
+    `_ReindexObserver.vectors_indexed`)."""
     # The vectors.db/fts.db summary is printed HERE, BEFORE the graph write
     # attempt below -- not after it, as an earlier revision did (review
     # finding R4). `report` already reflects durably-committed work at this
@@ -15328,51 +13307,25 @@ def reindex(
             err=True,
         )
 
-    # graph.db is written by a SEPARATE call, not by `state.reindex.reindex`
-    # itself: `state/reindex.py` is canonical-layer code and must not import
-    # `openkos.graph` (derived layer, docs/architecture.md); this entry-layer
-    # command is the seam that ties both together so a single `openkos
-    # reindex` invocation still writes all three derived stores (Slice 5,
-    # PR2; reindex-command: Reindex writes all three derived stores in one
-    # run). This call has its OWN try/except, deliberately separate from the
-    # vectors/FTS ladder above: `sqlite_graph.reindex_graph` raises no typed
-    # "unavailable" exception (plain `CREATE TABLE`, no extension dependency
-    # like `fts5`/`sqlite-vec`) -- its only failure mode is a bare
-    # `sqlite3.Error` (permission/IO/corrupt `graph.db`), which the vectors/FTS
-    # ladder above was never scoped to catch (PR3 carry-over fix, Engram bug
-    # #1470: the graph reindex ladder gap -- a graph-write failure after
-    # vectors.db/fts.db already succeeded used to crash with a raw traceback
-    # instead of the documented clean exit 1). Deliberately narrow: catches
-    # ONLY this call's `sqlite3.Error`. A locked `graph.db` (lock contention,
-    # discriminated by `is_lock_contention`) gets the SAME uniform
-    # `_LOCK_CONTENTION_MSG` ladder 1 uses for vectors.db/fts.db, reusing
-    # this broad `except sqlite3.Error` rather than a separate narrower
-    # clause -- a non-lock `sqlite3.Error` keeps its existing, graph-specific
-    # message unchanged (reindex-lock-handling; this closes the gap this
-    # comment used to flag as deferred).
-    try:
-        with_candidates = _open_proximity_or_degrade(layout.vectors_db_path)
-        try:
-            sqlite_graph.reindex_graph(
-                layout.bundle_dir,
-                layout.graph_db_path,
-                force=force,
-                candidates=with_candidates,
-            )
-        finally:
-            if with_candidates is not None:
-                with_candidates.close()
-    except sqlite3.Error as exc:
-        if isinstance(exc, sqlite3.OperationalError) and derived.is_lock_contention(
-            exc
-        ):
-            typer.echo(_LOCK_CONTENTION_MSG, err=True)
-            raise typer.Exit(code=1) from exc
-        typer.echo(
-            f"openkos reindex: failed while writing the graph index -- {exc}.",
-            err=True,
-        )
-        raise typer.Exit(code=1) from exc
+
+class _ReindexObserver:
+    """Renders what `reindex_service.reindex_workspace` reports as it goes."""
+
+    def embedder_ready(self, locality: BackendHostLocality, cfg: config.Config) -> None:
+        _warn_if_nonlocal_embed_host("reindex", locality, cfg)
+
+    def progress_callback(self) -> Callable[[int, int, object], None] | None:
+        # TTY-gated per-doc embedding progress on stderr; `None` (silent)
+        # when output is piped (issue #190).
+        return observability.progress_callback("reindex", "embedding doc")
+
+    def vectors_indexed(
+        self,
+        report: reindex_module.ReindexReport,
+        previous_model_tag: str | None,
+        cfg: config.Config,
+    ) -> None:
+        _render_reindex_summary(report, previous_model_tag, cfg)
 
 
 def _render_check(r: application_doctor.CheckResult) -> None:
@@ -15894,7 +13847,7 @@ def curate(
     Per-Stage Cost Gate).
 
     Identity reuses the exact `find_candidates` / `adjudicate_candidates` /
-    `_prepare_one_merge` / `_commit_one_merge` / `_reject_drifted_targets`
+    `_prepare_one_merge` / `merge_service.commit_merge` / `_reject_drifted_targets`
     building blocks `adjudicate --apply` already exercises (design D4/D6):
     an accepted SAME 2-member pair commits per-item, auto-committing before
     the next candidate; an N>2 group is never auto-merged -- the exact
@@ -15983,7 +13936,7 @@ def curate(
 
     # #640: once at END of run, only when some stage actually applied a
     # write -- an all-declined/empty session invalidated nothing. NOT per
-    # stage and NOT inside `_commit_one_merge` (Identity commits per item).
+    # stage and NOT inside `merge_service.commit_merge` (Identity commits per item).
     if any(outcome.applied for outcome in outcomes):
         _refresh_derived_after_write(layout, cfg, verb="curate")
 

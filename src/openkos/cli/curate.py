@@ -34,7 +34,7 @@ does. The one thing this module never imports at module scope is
 `cli.main` itself -- `main.py` imports THIS module to register the `curate`
 command, so importing `main` back at module scope here would be circular.
 Identity's `run` needs a handful of `main.py`-private helpers
-(`_commit_one_merge`, `_echo_n_gt2_skip`, `_reject_drifted_targets`) that
+(`merge_service.commit_merge`, `_echo_n_gt2_skip`, `_reject_drifted_targets`) that
 already exist there for `merge`/`adjudicate --apply`; those are imported
 LAZILY, inside the function bodies that need them, which is safe because
 by the time any `curate` invocation actually runs, both modules have
@@ -57,6 +57,7 @@ import typer
 from openkos import config, lint, sensitivity
 from openkos.application import backends as application_backends
 from openkos.application import lifecycle as application_lifecycle
+from openkos.application import merge_service
 from openkos.application import next_action as next_action_module
 from openkos.application import pending as application_pending
 from openkos.cli import observability
@@ -817,7 +818,7 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
     remainder + persist (#867, the verb's own serve contract via the same
     shared helpers), then, per SAME 2-member group, the exact
     `_prepare_one_merge` / preview / `[y/N]` / `_reject_drifted_targets`
-    / `_commit_one_merge` walk `adjudicate --apply` already performs (design
+    / `merge_service.commit_merge` walk `adjudicate --apply` already performs (design
     D4/D6) -- reused verbatim rather than re-implemented, so the two write
     paths can never drift apart. N>2 groups are never auto-merged
     (`_echo_n_gt2_skip` prints the exact pairwise `openkos merge` commands,
@@ -1038,8 +1039,8 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         )
 
         try:
-            merge_sha = cli_main._commit_one_merge(
-                ctx.root, layout, index_path, log_path, prepared
+            merge_sha = merge_service.commit_merge(
+                ctx.root, layout, prepared, autocommit=cli_main._autocommit
             )
         except (OSError, ValueError) as exc:
             typer.echo(
