@@ -52,7 +52,8 @@ Most of this release needs nothing from you. These are the points that do:
   workspaces are not changed; `doctor` reports exposed state with the
   `chmod go-rwx` fix.
 - **A `.md` file under any dot-directory in `bundle/` is no longer part of the
-  bundle**, and a symlinked bundle path is refused. `lint` reports both.
+  bundle**, and neither is a symlinked `.md` file or directory: reads skip it,
+  `ingest` refuses to write through one, and `lint` reports both.
 - **The proximity candidate floor drops from 0.70 to 0.59**, so
   `suggest-relations` and `contradictions` nominate more candidate pairs, and
   cost more on a bundle that has many.
