@@ -67,3 +67,4 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 | [0029](0029-adopt-okf-v02-frontmatter.md) | Adopt OKF v0.2 frontmatter -- provenance stays the truth, sources is its projection, and repair migrates existing bundles | Accepted | 2026-09-29 |
 | [0030](0030-untrusted-incoming-frontmatter.md) | Incoming frontmatter is untrusted -- preserved whole in one namespace, with a closed per-key lift | Accepted | 2026-09-29 |
 | [0031](0031-openai-compatible-backend.md) | A second, OpenAI-compatible local backend beside the Ollama default | Accepted | 2026-09-29 |
+| [0032](0032-deprecated-status-is-an-export-of-computed-supersession.md) | Frontmatter `status: deprecated` is a marked export of computed supersession, never read back | Proposed | 2026-09-29 |
