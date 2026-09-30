@@ -36,7 +36,7 @@ import unicodedata
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Literal
 
 from openkos import config, source_date, source_title
@@ -198,6 +198,195 @@ Contracts) -- one entry per per-candidate staging decision
 slug) but is still a `StagingDrop`, because the adapter must render its own
 distinct wording -- the same reason #884's `lost_in_staging` counter does
 NOT increment for it (see that field's docstring below)."""
+
+
+def raw_collision_family(raw_dir: Path, name: str) -> list[Path]:
+    """Every file in `raw_dir` belonging to `name`'s collision family --
+    `<stem><ext>` itself and every `<stem>-N<ext>` (N a positive integer) --
+    sorted ascending by `N`, the bare name first (#552).
+
+    The raw-layer sibling of `collision_family`, deliberately a separate
+    function rather than a generalization of it. That one globs `*.md` and
+    matches on the STEM alone, which is right for a bundle link dir where
+    every file is a `.md` document and the stem IS the identity. `raw/`
+    holds arbitrary user files, so the extension is part of the name and
+    must be matched exactly: `notes.txt` and `notes.md` are two different
+    basenames that never collided in `raw/` and must not start now.
+
+    Anchored regex on the stem, never a glob, for `collision_family`'s
+    reason: an unrelated `<stem>-draft<ext>` must not join the family. Both
+    sides NFC-normalized for the same macOS reason (#414) -- HFS+ rewrites a
+    filename to NFD on write, so the on-disk spelling of a name openkos
+    created in NFC can legitimately come back decomposed, and matching raw
+    bytes would read an EMPTY family and disambiguate forever.
+    """
+    if not raw_dir.is_dir():
+        return []
+    named = PurePosixPath(name)
+    base = unicodedata.normalize("NFC", named.stem)
+    normalized_ext = unicodedata.normalize("NFC", named.suffix)
+    pattern = re.compile(rf"^{re.escape(base)}(?:-(\d+))?$")
+    members: list[tuple[int, Path]] = []
+    for path in raw_dir.iterdir():
+        if not path.is_file():
+            continue
+        member = PurePosixPath(path.name)
+        if unicodedata.normalize("NFC", member.suffix) != normalized_ext:
+            continue
+        match = pattern.match(unicodedata.normalize("NFC", member.stem))
+        if match is None:
+            continue
+        members.append((int(match.group(1)) if match.group(1) else 0, path))
+    members.sort(key=lambda item: item[0])
+    return [path for _, path in members]
+
+
+def first_free_raw_name(family: list[Path], name: str) -> str:
+    """First free `<stem>-N<ext>` (N from 2) not already on disk in
+    `family` -- `first_free_disambiguated_slug`'s raw-layer sibling (#552),
+    same ascending deterministic scan and the same NFC comparison."""
+    named = PurePosixPath(name)
+    stem, ext = named.stem, named.suffix
+    taken = {unicodedata.normalize("NFC", path.name) for path in family}
+    n = 2
+    while unicodedata.normalize("NFC", f"{stem}-{n}{ext}") in taken:
+        n += 1
+    return f"{stem}-{n}{ext}"
+
+
+def member_source_exists(bundle_dir: Path, member: Path) -> bool:
+    """Whether raw file `member` has an owning Source document at all
+    (#865). Distinguishes the two cases `raw_member_origin_key` folds into
+    `None`: a Source that records no key (legacy, identity = its absence,
+    preserved by a same-path re-ingest) versus NO Source (a file placed in
+    `raw/` by hand, whose fresh ingest must stamp the computed digest)."""
+    slug = source_titles.slugify(Path(member.name).stem)
+    if not slug:
+        return False
+    return okf.concept_path_for(f"sources/{slug}", bundle_dir).exists()
+
+
+def raw_member_origin_key(bundle_dir: Path, member: Path) -> str | None:
+    """The `origin_key` recorded by the Source owning raw file `member`, or
+    `None` when it has none or cannot be read (#552).
+
+    `None` means "unknown origin", never "no match": a Source written before
+    `origin_key` existed, or one whose document is unreadable/malformed. The
+    caller degrades that case to the byte comparison, which is exactly
+    today's predicate -- so an unreadable neighbour can never escalate into
+    a refusal or a spurious new copy. Mirrors `family_owns_source`'s
+    per-member parse tolerance.
+    """
+    slug = source_titles.slugify(Path(member.name).stem)
+    if not slug:
+        return None
+    concept_path = okf.concept_path_for(f"sources/{slug}", bundle_dir)
+    try:
+        metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return None
+    except Exception:  # broad: malformed frontmatter degrades to unknown
+        return None
+    value = metadata.get(okf.ORIGIN_KEY_KEY)
+    return value if isinstance(value, str) and value else None
+
+
+@dataclass(frozen=True)
+class RawDestination:
+    """Where this ingest's raw copy goes, and how it got there (#552)."""
+
+    name: str
+    regenerate: bool
+    """Whether an existing raw copy was matched -- an idempotent re-ingest."""
+    disambiguated_from: str | None
+    """The basename that was already taken, `None` when none was."""
+    origin_key: str | None
+    """The `origin_key` the rebuilt Source records (#865). The candidate
+    path's own digest on every branch EXCEPT the same-PATH match on a
+    member with an owning Source, where it is that Source's recorded value
+    instead (possibly `None`, and then preserved as absent): the
+    workspace's `raw/` copy is not a new origin, and stamping its digest
+    would orphan the original external path's identity -- so the NEXT
+    external re-ingest would mismatch on the key and spawn exactly the
+    duplicate Source #865 reports. A same-path member with NO owning
+    Source has no identity to preserve, so its fresh ingest stamps the
+    computed digest like any other."""
+
+
+def resolve_raw_destination(
+    src: Path, layout: config.WorkspaceLayout, origin_key: str
+) -> RawDestination:
+    """Resolve `src` to its `raw/` destination, disambiguating a basename
+    already held by a DIFFERENT file (#552).
+
+    `raw/` is a flat namespace derived from `Path(src).name` -- the
+    path-traversal defence, which is correct and is not weakened here: every
+    name this returns is still a bare basename under `raw/`. What changes is
+    that a taken basename no longer forces one of two bad outcomes (refuse a
+    legitimate file, or silently absorb it into the incumbent's Source).
+
+    Identity is the ORIGIN, never the content. Two empty `__init__.py` files
+    from two packages are two sources; the byte check passed on them, which
+    is precisely how one silently inherited the other's provenance.
+
+    The matrix, in family order:
+
+    - a member whose recorded `origin_key` EQUALS `origin_key` is the same
+      file -> re-ingest it (the caller still applies raw immutability to its
+      bytes). Checked first because it is a string comparison, no extra
+      filesystem contact;
+    - a member whose file IS `src` -- same resolved PATH -- is the
+      workspace's own `raw/` copy (#865). A recorded key digests the
+      ORIGINAL external path, so the raw copy's own digest can never equal
+      it, and before #865 the retry command `lint`/`status` print
+      (`openkos ingest raw/<name>`) fell through to disambiguation and
+      duplicated the source it meant to repair. Re-ingest it, preserving
+      an owning Source's recorded identity; a member with NO owning Source
+      at all (a file placed in `raw/` by hand, ingested for the first
+      time) stamps the computed digest instead (see
+      `RawDestination.origin_key`);
+    - a member with a recorded but DIFFERENT `origin_key` is a different
+      file -> keep scanning;
+    - a member with NO recorded origin is a pre-#552 Source. Match it on
+      identical bytes, which is exactly today's predicate, so a legacy
+      workspace stays idempotent and backfills its key on this run.
+
+    Nothing matched -> the first free `<stem>-N<ext>`.
+
+    **Immutability is scoped to a file we KNOW is the same one.** That is
+    the whole of the change, stated at its sharpest: a legacy member with
+    differing bytes cannot be PROVEN to be the candidate, and #552 asks for
+    disambiguation "when the basename exists with different content".
+    Refusing there is the harm it was filed for -- real content turned away.
+    No existing byte is ever rewritten either way, so the immutability
+    guarantee itself is untouched; only the set of files it claims to cover
+    is now the set it can actually identify.
+    """
+    family = raw_collision_family(layout.raw_dir, src.name)
+    if not family:
+        return RawDestination(src.name, False, None, origin_key=origin_key)
+    resolved_src = src.resolve(strict=False)
+    src_bytes = src.read_bytes()
+    for member in family:
+        member_origin = raw_member_origin_key(layout.bundle_dir, member)
+        if member_origin is not None and member_origin == origin_key:
+            return RawDestination(member.name, True, None, origin_key=origin_key)
+        if member.resolve(strict=False) == resolved_src:
+            return RawDestination(
+                member.name,
+                True,
+                None,
+                origin_key=member_origin
+                if member_source_exists(layout.bundle_dir, member)
+                else origin_key,
+            )
+        if member_origin is not None:
+            continue
+        if member.read_bytes() == src_bytes:
+            return RawDestination(member.name, True, None, origin_key=origin_key)
+    return RawDestination(
+        first_free_raw_name(family, src.name), False, src.name, origin_key=origin_key
+    )
 
 
 @dataclass(frozen=True)
