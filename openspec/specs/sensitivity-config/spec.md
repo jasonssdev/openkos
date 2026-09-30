@@ -50,7 +50,7 @@ or write the concept file.
 
 `<concept-id>` MUST be resolved to a concept file the same way other
 mutating verbs resolve one. An absolute id, an id containing a `..`
-segment, an id matching a reserved basename, or an id that does not resolve
+segment, a backslash or a colon, an id matching a reserved basename, or an id that does not resolve
 to an existing concept file MUST each be refused before any write: clear
 stderr message, non-zero exit, nothing written.
 

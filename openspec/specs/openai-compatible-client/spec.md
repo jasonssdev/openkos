@@ -386,6 +386,19 @@ the embedding endpoint.
 - WHEN `locality` is read
 - THEN it reports non-local (fail-closed)
 
+#### Scenario: Environment proxy variables never apply to a backend classified local
+
+- GIVEN `http_proxy`/`https_proxy` are set and `no_proxy` does not list the
+  host
+- AND a client (`OpenAICompatibleClient` or `OllamaClient`) whose `locality`
+  reports local
+- WHEN it sends any request (chat, embed, or model listing)
+- THEN the request goes directly to the backend and never through the
+  proxy, so neither the request body nor the `Authorization` header reaches
+  it
+- AND a client whose `locality` reports non-local still honours the
+  environment proxy settings
+
 ### Requirement: Error Hierarchy Mirrors Ollama's Under The Neutral Bases
 
 `OpenAICompatibleError` MUST subclass `BackendError`.
