@@ -121,8 +121,6 @@ from openkos.resolution.decision_revision import (
 from openkos.resolution.edge_typing import (
     EdgeSuggestion,
     candidate_edges,
-    candidate_truncation_notice,
-    quarantined_candidate_notice,
     suggest_edge_types,
 )
 from openkos.resolution.reconciliation import reconcile_merged_body
