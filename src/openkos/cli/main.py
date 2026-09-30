@@ -2180,7 +2180,14 @@ def _apply_reconciliation(
     ):
         return prepared
     prepared, failure = _reconcile_merged_survivor(root, prepared)
-    if failure is not None:
+    if isinstance(failure, _SensitivitySkip):
+        typer.echo(
+            f"openkos {verb}: skipped body reconciliation -- "
+            f"{failure.concept_id} is confidential and the backend is not "
+            "local; the stacked body was kept.",
+            err=True,
+        )
+    elif failure is not None:
         typer.echo(
             f"openkos {verb}: notice -- reconciliation failed ({failure}); "
             "kept the stacked body.",
@@ -8037,9 +8044,18 @@ def set_volatility_cmd(
     )
 
 
+@dataclass(frozen=True)
+class _SensitivitySkip:
+    """A DELIBERATE skip of the reconciliation pass (#1124): `concept_id` is
+    confidential and the backend is not local. Distinct from a failure
+    reason string so the notice never reads as something having broken."""
+
+    concept_id: str
+
+
 def _reconcile_merged_survivor(
     root: Path, prepared: "PreparedMerge"
-) -> tuple["PreparedMerge", str | None]:
+) -> tuple["PreparedMerge", "str | _SensitivitySkip | None"]:
     """Run the #645 reconciliation pass over `prepared`'s merged survivor:
     returns `(updated_prepared, None)` on success, or `(prepared,
     failure_reason)` -- the caller keeps the stacked body and notices.
@@ -8070,11 +8086,22 @@ def _reconcile_merged_survivor(
     title = str(metadata.get("title") or "") or prepared.survivor_canonical
 
     try:
+        client = _chat_client(cfg)
+        # Egress gate (#1124): a merge involving any confidential member
+        # never sends its bodies to a backend that is not verifiably local.
+        blocker = application_lifecycle.reconcile_sensitivity_blocker(
+            prepared,
+            local_exemption=_resolve_local_exemption(
+                cast(application_backends.HasLocality, client), cfg
+            ),
+        )
+        if blocker is not None:
+            return prepared, _SensitivitySkip(blocker)
         reconciled = reconcile_merged_body(
             survivor_title=title,
             survivor_body=survivor_body,
             absorbed_body=absorbed_body,
-            llm=_chat_client(cfg),
+            llm=client,
         )
     except BackendError as exc:
         return prepared, str(exc)
