@@ -225,10 +225,11 @@ def test_commit_paths_returns_none_when_the_sha_cannot_be_read_back(
         argv: Sequence[str],
         cwd: Path,
         env: Mapping[str, str] | None = None,
+        timeout: float | None = None,
     ) -> subprocess.CompletedProcess[str]:
         if list(argv)[1:2] == ["rev-parse"]:
             return subprocess.CompletedProcess(list(argv), 128, "", "boom")
-        return real_run(argv, cwd, env)
+        return real_run(argv, cwd, env, timeout)
 
     monkeypatch.setattr(git, "_run", _fail_rev_parse)
 
@@ -266,10 +267,11 @@ def test_commit_paths_returns_none_when_the_sha_read_back_raises(
         argv: Sequence[str],
         cwd: Path,
         env: Mapping[str, str] | None = None,
+        timeout: float | None = None,
     ) -> subprocess.CompletedProcess[str]:
         if list(argv)[1:2] == ["rev-parse"]:
             raise git.GitError("failed to invoke git: simulated exec failure")
-        return real_run(argv, cwd, env)
+        return real_run(argv, cwd, env, timeout)
 
     monkeypatch.setattr(git, "_run", _raise_on_rev_parse)
 
@@ -309,13 +311,16 @@ def test_commit_paths_raises_git_error_on_add_failure(
     real_run = git._run
 
     def _fake_run(
-        argv: list[str], cwd: Path, env: dict[str, str] | None = None
+        argv: list[str],
+        cwd: Path,
+        env: Mapping[str, str] | None = None,
+        timeout: float | None = None,
     ) -> subprocess.CompletedProcess[str]:
         if argv[:2] == ["git", "add"]:
             return subprocess.CompletedProcess(
                 argv, returncode=128, stdout="", stderr="git add exploded"
             )
-        return real_run(argv, cwd, env)
+        return real_run(argv, cwd, env, timeout)
 
     monkeypatch.setattr(git, "_run", _fake_run)
 
@@ -333,13 +338,16 @@ def test_commit_paths_raises_git_error_on_commit_failure(
     real_run = git._run
 
     def _fake_run(
-        argv: list[str], cwd: Path, env: dict[str, str] | None = None
+        argv: list[str],
+        cwd: Path,
+        env: Mapping[str, str] | None = None,
+        timeout: float | None = None,
     ) -> subprocess.CompletedProcess[str]:
         if argv[:2] == ["git", "commit"]:
             return subprocess.CompletedProcess(
                 argv, returncode=1, stdout="", stderr="git commit exploded"
             )
-        return real_run(argv, cwd, env)
+        return real_run(argv, cwd, env, timeout)
 
     monkeypatch.setattr(git, "_run", _fake_run)
 
@@ -361,11 +369,14 @@ def test_commit_paths_never_uses_add_dash_a_or_dash_all_flag(
     captured: list[list[str]] = []
 
     def _spy_run(
-        argv: list[str], cwd: Path, env: dict[str, str] | None = None
+        argv: list[str],
+        cwd: Path,
+        env: Mapping[str, str] | None = None,
+        timeout: float | None = None,
     ) -> subprocess.CompletedProcess[str]:
         if argv[:2] == ["git", "add"]:
             captured.append(list(argv))
-        return real_run(argv, cwd, env)
+        return real_run(argv, cwd, env, timeout)
 
     monkeypatch.setattr(git, "_run", _spy_run)
 
@@ -1565,3 +1576,166 @@ def test_expunge_paths_scrub_index_anchor_asymmetry_survivor_kept(
     ) == sum(fixture.anchor_survivor_bullet in text for text in index_texts_after)
     # The log.md tombstone -- carrying the SAME anchor -- is still removed.
     assert not any(tombstone_line in text for text in log_texts_after)
+
+
+# --- #1128: exact-path commit, literal pathspecs, bounded add/commit --------
+
+
+def _committed_files(repo: Path, rev: str = "HEAD") -> set[str]:
+    out = git._run(["git", "show", "--name-only", "--format=", rev], cwd=repo).stdout
+    return {line for line in out.splitlines() if line}
+
+
+def _seed_commit(repo: Path) -> None:
+    (repo / "seed.txt").write_text("seed\n", encoding="utf-8")
+    git.commit_paths(repo, ["seed.txt"], "seed")
+
+
+def test_commit_paths_leaves_foreign_staged_content_staged_and_uncommitted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Content the user already staged is neither swept into the engine's
+    commit nor dropped from the index (#1128)."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo_with_identity(repo, monkeypatch, tmp_path)
+    _seed_commit(repo)
+    (repo / "unrelated.txt").write_text("mine\n", encoding="utf-8")
+    git._run(["git", "add", "--", "unrelated.txt"], cwd=repo)
+    (repo / "engine.txt").write_text("engine\n", encoding="utf-8")
+
+    git.commit_paths(repo, ["engine.txt"], "openkos: engine")
+
+    assert _committed_files(repo) == {"engine.txt"}
+    staged = git._run(["git", "diff", "--cached", "--name-only"], cwd=repo)
+    assert staged.stdout.split() == ["unrelated.txt"]
+
+
+def test_commit_paths_commits_a_deletion_and_a_tracked_edit_together(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo_with_identity(repo, monkeypatch, tmp_path)
+    _seed_commit(repo)
+    (repo / "gone.txt").write_text("x\n", encoding="utf-8")
+    git.commit_paths(repo, ["gone.txt"], "add gone")
+    (repo / "gone.txt").unlink()
+    (repo / "seed.txt").write_text("changed\n", encoding="utf-8")
+
+    git.commit_paths(repo, ["gone.txt", "seed.txt"], "openkos: forget")
+
+    assert _committed_files(repo) == {"gone.txt", "seed.txt"}
+
+
+def test_commit_paths_treats_glob_characters_in_a_name_literally(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A user's file name with pathspec magic is a name, not a glob (#1128)."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo_with_identity(repo, monkeypatch, tmp_path)
+    _seed_commit(repo)
+    (repo / "raw").mkdir()
+    (repo / "raw" / "[a-z]*.txt").write_text("literal\n", encoding="utf-8")
+    (repo / "raw" / "unrelated.txt").write_text("sibling\n", encoding="utf-8")
+
+    git.commit_paths(repo, ["raw/[a-z]*.txt"], "openkos: ingest")
+
+    assert _committed_files(repo) == {"raw/[a-z]*.txt"}
+    status = git._run(["git", "status", "--porcelain"], cwd=repo).stdout
+    assert "raw/unrelated.txt" in status
+
+
+def test_commit_paths_bounds_add_and_commit_and_disables_prompts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo_with_identity(repo, monkeypatch, tmp_path)
+    (repo / "a.txt").write_text("a\n", encoding="utf-8")
+    real_run = git._run
+    seen: dict[str, tuple[float | None, Mapping[str, str] | None]] = {}
+
+    def _spy(
+        argv: Sequence[str],
+        cwd: Path,
+        env: Mapping[str, str] | None = None,
+        timeout: float | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        seen[list(argv)[1]] = (timeout, env)
+        return real_run(argv, cwd, env, timeout)
+
+    monkeypatch.setattr(git, "_run", _spy)
+
+    git.commit_paths(repo, ["a.txt"], "m")
+
+    for verb in ("add", "commit"):
+        timeout, env = seen[verb]
+        assert timeout == git._COMMIT_TIMEOUT_SECONDS
+        assert env is not None
+        assert env["GIT_LITERAL_PATHSPECS"] == "1"
+        assert env["GIT_TERMINAL_PROMPT"] == "0"
+    assert seen["rev-parse"][0] is None
+
+
+def test_run_maps_a_timeout_to_git_error(tmp_path: Path) -> None:
+    with pytest.raises(git.GitError, match="timed out"):
+        git._run(
+            ["python3", "-c", "import time; time.sleep(30)"],
+            cwd=tmp_path,
+            timeout=0.2,
+        )
+
+
+def test_run_without_timeout_passes_none_to_subprocess(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The filter-repo path must stay unbounded: the default is no timeout."""
+    captured: dict[str, object] = {}
+    real = subprocess.run
+
+    def _spy(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        captured.update(kwargs)
+        return real(*args, **kwargs)  # type: ignore[call-overload,no-any-return]
+
+    monkeypatch.setattr(subprocess, "run", _spy)
+    git._run(["git", "--version"], cwd=tmp_path)
+
+    assert captured["timeout"] is None
+
+
+def test_commit_paths_accepts_an_empty_directory_among_its_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`init` passes a fresh, empty `raw/`. `git add` takes it silently but
+    `git commit -- raw` would refuse it, so it must not sink the commit."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo_with_identity(repo, monkeypatch, tmp_path)
+    (repo / "raw").mkdir()
+    (repo / "openkos.yaml").write_text("name: x\n", encoding="utf-8")
+
+    sha = git.commit_paths(repo, ["openkos.yaml", "raw"], "chore: initialize")
+
+    assert sha
+    assert _committed_files(repo) == {"openkos.yaml"}
+
+
+def test_commit_paths_with_nothing_known_raises_and_never_commits_staged_content(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An empty pathspec list must not degrade to a bare `git commit`, which
+    would commit whatever the user had staged."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo_with_identity(repo, monkeypatch, tmp_path)
+    _seed_commit(repo)
+    (repo / "mine.txt").write_text("m\n", encoding="utf-8")
+    git._run(["git", "add", "--", "mine.txt"], cwd=repo)
+    (repo / "emptydir").mkdir()
+
+    with pytest.raises(git.GitError, match="nothing to commit"):
+        git.commit_paths(repo, ["emptydir"], "openkos: nothing")
+
+    assert _committed_files(repo) == {"seed.txt"}
