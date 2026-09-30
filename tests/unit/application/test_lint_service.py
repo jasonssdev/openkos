@@ -272,8 +272,8 @@ def test_total_checks_matches_the_number_of_check_calls_in_build_lint_report() -
     """AST drift guard, same style as `test_layering.py`'s own AST-based
     guards: `TOTAL_CHECKS` must equal the number of
     `lint_check.check_*`/`lint_check.scan_*` call sites inside
-    `build_lint_report`'s body. Thirteen calls populate `LintReport`'s
-    fourteen finding-list fields because `check_below_source_sensitivity`
+    `build_lint_report`'s body. Fourteen calls populate `LintReport`'s
+    fifteen finding-list fields because `check_below_source_sensitivity`
     feeds both `below_source` and `multi_source_uncovered` (tasks.md
     T2.6/T2.7) -- so the count this guard pins is NOT the field count."""
     source = inspect.getsource(lint_service.build_lint_report)

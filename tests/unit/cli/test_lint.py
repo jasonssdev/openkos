@@ -1145,7 +1145,7 @@ def test_lint_reports_a_late_name_walk_failure_as_not_run_without_losing_finding
     assert not isinstance(result.exception, OSError)
     assert "simulated unreadable subdirectory" in result.stdout
     assert "Stale stamps:" in result.stdout
-    assert "12 check(s) completed, 1 did not run." in result.stdout
+    assert "13 check(s) completed, 1 did not run." in result.stdout
     assert "failed while reading the workspace" not in result.stderr
 
 
@@ -1173,7 +1173,7 @@ def test_lint_reports_a_state_dir_walk_failure_as_not_run_without_losing_finding
     assert not isinstance(result.exception, OSError)
     assert "simulated unreadable state dir" in result.stdout
     assert "Stale stamps:" in result.stdout
-    assert "12 check(s) completed, 1 did not run." in result.stdout
+    assert "13 check(s) completed, 1 did not run." in result.stdout
     assert "failed while reading the workspace" not in result.stderr
 
 
@@ -1197,5 +1197,5 @@ def test_lint_reports_a_dot_dir_walk_failure_as_not_run_without_losing_findings(
     assert not isinstance(result.exception, OSError)
     assert "simulated unreadable dot directory" in result.stdout
     assert "Stale stamps:" in result.stdout
-    assert "12 check(s) completed, 1 did not run." in result.stdout
+    assert "13 check(s) completed, 1 did not run." in result.stdout
     assert "failed while reading the workspace" not in result.stderr

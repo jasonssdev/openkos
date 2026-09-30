@@ -107,7 +107,7 @@ def test_repair_nothing_to_migrate_is_a_graceful_no_op(
     result = runner.invoke(app, ["repair"])
 
     assert result.exit_code == 0
-    assert "nothing to migrate" in result.output.lower()
+    assert "nothing to repair" in result.output.lower()
 
 
 def test_repair_refuses_with_no_override_when_a_torn_write_exists(
@@ -331,7 +331,7 @@ def test_repair_gate2_not_evaluated_when_nothing_to_extract(
     """Task 6.1: a bundle with no pre-relocation, frontmatter-embedded
     `merged_from` history to extract, but a survivor whose ALREADY-
     RELOCATED sidecar carries 2+ merge-ledger entries, does NOT refuse on
-    Gate 2 -- the OKF migration (or "nothing to migrate") proceeds instead
+    Gate 2 -- the OKF migration (or "nothing to repair") proceeds instead
     (entity-resolution-merge: "A sidecar-only bundle with 2 or more entries
     proceeds to OKF migration")."""
     _init_workspace(tmp_path, monkeypatch)
@@ -554,7 +554,7 @@ def test_repair_second_run_reports_nothing_to_migrate_and_writes_nothing(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> None:
     """Task 6.14: after a successful migration, a second `repair`
-    invocation prints "nothing to migrate" (extended to also cover OKF
+    invocation prints "nothing to repair" (extended to also cover OKF
     content, not only merge ledgers), exits 0, creates no commit, and the
     bundle's git status shows zero changes (okf-format-migration: "Re-
     running repair after a successful migration is a no-op")."""
@@ -576,7 +576,7 @@ def test_repair_second_run_reports_nothing_to_migrate_and_writes_nothing(
     second = runner.invoke(app, ["repair"])
 
     assert second.exit_code == 0
-    assert "nothing to migrate" in second.output.lower()
+    assert "nothing to repair" in second.output.lower()
     after_head = _git(["rev-parse", "HEAD"], cwd=tmp_path).stdout.strip()
     assert after_head == before_head
     status = _git(["status", "--porcelain"], cwd=tmp_path).stdout.strip()

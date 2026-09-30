@@ -20,19 +20,23 @@ def _write_doc(
     path: Path,
     *,
     status: str | None = None,
+    marker: str | None = None,
     relations: list[tuple[str, str]] | None = None,
     relations_raw: str | None = None,
     body: str = "",
 ) -> None:
     """Write a minimal concept `.md` file with optional `status:` and
-    `relations:` frontmatter. `relations` is a list of `(target, type)`
-    pairs encoded as the standard `{target, type}` mapping shape;
-    `relations_raw` overrides it with a hand-written frontmatter block (for
-    malformed-shape cases)."""
+    `relations:` frontmatter. `marker` writes `status_derived_from:` with
+    that exact value (deprecated-status-export). `relations` is a list of
+    `(target, type)` pairs encoded as the standard `{target, type}` mapping
+    shape; `relations_raw` overrides it with a hand-written frontmatter
+    block (for malformed-shape cases)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = ["---", "type: Concept", "title: Stub"]
     if status is not None:
         lines.append(f"status: {status}")
+    if marker is not None:
+        lines.append(f"{okf.STATUS_DERIVED_FROM_KEY}: {marker}")
     if relations_raw is not None:
         lines.append(relations_raw)
     elif relations is not None:
@@ -273,6 +277,144 @@ def test_revises_edge_does_not_deprecate_either_end(tmp_path: Path) -> None:
     deprecated = lifecycle.deprecated_concept_ids(bundle_dir)
 
     assert deprecated == frozenset()
+
+
+def test_superseded_from_metadata_excludes_self_targets(tmp_path: Path) -> None:
+    """`superseded_from_metadata` applies the same non-self-target rule as
+    `deprecated_concept_ids` (design: 'the predicate and the export can
+    never disagree about who is superseded')."""
+    docs: dict[str, dict[str, object] | None] = {
+        "a": {"relations": [{"target": "a", "type": "supersedes"}]},
+    }
+
+    result = lifecycle.superseded_from_metadata(docs)
+
+    assert result.ids == frozenset()
+    assert result.complete is True
+    assert result.unreadable == ()
+
+
+def test_superseded_from_metadata_marks_mutual_two_cycle_both_superseded() -> None:
+    """Fail-safe cycle rule (R2) holds for the superseded set too."""
+    docs: dict[str, dict[str, object] | None] = {
+        "a": {"relations": [{"target": "b", "type": "supersedes"}]},
+        "b": {"relations": [{"target": "a", "type": "supersedes"}]},
+    }
+
+    result = lifecycle.superseded_from_metadata(docs)
+
+    assert result.ids == frozenset({"a", "b"})
+    assert result.complete is True
+
+
+def test_superseded_from_metadata_marks_three_cycle_all_superseded() -> None:
+    docs: dict[str, dict[str, object] | None] = {
+        "a": {"relations": [{"target": "b", "type": "supersedes"}]},
+        "b": {"relations": [{"target": "c", "type": "supersedes"}]},
+        "c": {"relations": [{"target": "a", "type": "supersedes"}]},
+    }
+
+    result = lifecycle.superseded_from_metadata(docs)
+
+    assert result.ids == frozenset({"a", "b", "c"})
+    assert result.complete is True
+
+
+def test_superseded_from_metadata_unreadable_doc_marks_incomplete() -> None:
+    """A `None` entry (unreadable/unparseable document) makes the walk
+    incomplete and is named in `unreadable` -- an unreadable document may
+    hold the only edge that supersedes some concept (spec: 'Withdrawal
+    Requires A Complete Edge Walk')."""
+    docs: dict[str, dict[str, object] | None] = {
+        "a": {"relations": [{"target": "b", "type": "supersedes"}]},
+        "broken": None,
+    }
+
+    result = lifecycle.superseded_from_metadata(docs)
+
+    assert result.ids == frozenset({"b"})
+    assert result.complete is False
+    assert result.unreadable == ("broken",)
+
+
+def test_superseded_from_metadata_malformed_relations_marks_incomplete() -> None:
+    """A `relations:` value that fails `okf.decode_relations` also makes the
+    walk incomplete and is named in `unreadable`."""
+    docs: dict[str, dict[str, object] | None] = {
+        "broken": {"relations": "not-a-list"},
+    }
+
+    result = lifecycle.superseded_from_metadata(docs)
+
+    assert result.ids == frozenset()
+    assert result.complete is False
+    assert result.unreadable == ("broken",)
+
+
+def test_deprecated_concept_ids_excludes_marked_but_unsuperseded_concept(
+    tmp_path: Path,
+) -> None:
+    """spec (deprecated-status-export): 'A stale export does not hide a
+    concept' -- a `status: deprecated` + valid marker with no inbound
+    `supersedes` edge is NOT effective-deprecated, and `list` (which goes
+    through the same `okf.declares_deprecated` helper) reports it `stable`."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "b.md",
+        status="deprecated",
+        marker="supersedes",
+    )
+
+    deprecated = lifecycle.deprecated_concept_ids(bundle_dir)
+
+    assert deprecated == frozenset()
+
+    from openkos.bundle import listing
+
+    rows = listing.list_objects(bundle_dir)
+    assert [row.status for row in rows if row.concept_id == "concepts/b"] == ["stable"]
+
+
+_EXAMPLE_BUNDLE = (
+    Path(__file__).resolve().parents[2] / "examples" / "good-life-demo" / "bundle"
+)
+_V01_FIXTURE_BUNDLE = (
+    Path(__file__).resolve().parent / "fixtures" / "good_life_demo_v01" / "bundle"
+)
+
+
+def test_deprecated_concept_ids_unaffected_on_shipped_example_bundle() -> None:
+    """Regression (deprecated-status-export, issue #1075, Phase 1, task
+    1.12): neither shipped fixture bundle carries a `supersedes` edge or a
+    `status: deprecated` concept, so Phase 1's read-back narrowing on
+    `declares_deprecated` changes nothing for them -- `deprecated_concept_ids`
+    returns the same empty set it always did."""
+    assert lifecycle.deprecated_concept_ids(_EXAMPLE_BUNDLE) == frozenset()
+
+
+def test_deprecated_concept_ids_unaffected_on_v01_fixture_bundle() -> None:
+    """Same regression, over the OKF v0.1-shaped fixture bundle."""
+    assert lifecycle.deprecated_concept_ids(_V01_FIXTURE_BUNDLE) == frozenset()
+
+
+def test_superseded_concept_ids_matches_deprecated_concept_ids_edge_half(
+    tmp_path: Path,
+) -> None:
+    """`superseded_concept_ids` walks the same bundle and returns the same
+    edge-derived ids `deprecated_concept_ids` folds into its own result."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "a.md",
+        status="active",
+        relations=[("concepts/b", "supersedes")],
+    )
+    _write_doc(bundle_dir / "concepts" / "b.md", status="active")
+
+    result = lifecycle.superseded_concept_ids(bundle_dir)
+
+    assert result.ids == frozenset({"concepts/b"})
+    assert result.complete is True
+    assert result.unreadable == ()
 
 
 @dataclass(frozen=True)
