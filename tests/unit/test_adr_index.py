@@ -123,6 +123,5 @@ def test_an_amended_adr_names_its_amender(adr: Path) -> None:
         target = next(_ADR_DIR.glob(f"{amended}-*.md"))
         status = _frontmatter_status(target.read_text(encoding="utf-8"))
         assert f"ADR-{amender}" in status, (
-            f"ADR-{amended} is amended by ADR-{amender}, but its status is "
-            f"{status!r}"
+            f"ADR-{amended} is amended by ADR-{amender}, but its status is {status!r}"
         )
