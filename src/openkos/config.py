@@ -449,15 +449,16 @@ own default parameter all key off this one constant, so the "no backend key
 set" default-path invariant design.md pins for every slice of #1057 (byte-
 identical Ollama behavior) lives in exactly one place."""
 
-SELECTABLE_BACKENDS: Final = frozenset({DEFAULT_BACKEND})
-"""Every `backend:` value `read_config` accepts in THIS version (design
-Decision 10). `OpenAICompatibleClient`, the resolver in
+SELECTABLE_BACKENDS: Final = frozenset({DEFAULT_BACKEND, "openai-compatible"})
+"""Every `backend:` value `read_config` accepts (design Decision 10).
+`"openai-compatible"` joined this set in issue #1057's Phase 14 -- the
+enabling slice -- after `OpenAICompatibleClient`, the resolver in
 `application/backends.py`, and the `base_url`/`embedding_base_url` config
-keys below all land in earlier phases of issue #1057 than the slice that
-adds `"openai-compatible"` to this set -- until then a workspace cannot
-select the new backend at all; `read_config` refuses it with a message
-naming this set, so the two-step rollout is enforced by the one value a
-later commit widens, never duplicated at each call site."""
+keys below had already landed in earlier, inert phases; the two-step
+rollout was enforced by this one value, never duplicated at each call
+site. Selecting `"openai-compatible"` without an explicit `base_url` is
+still refused separately (see `read_config`'s own check), since this set
+alone cannot express that requirement."""
 
 DEFAULT_VOLATILITY_WINDOWS: dict[str, str] = {"slow": "90d", "volatile": "7d"}
 """Packaged per-tier default windows (freshness-lint-v1, design: "Per-tier
@@ -1320,10 +1321,11 @@ class Config:
     stay valid without edits."""
     backend: str = DEFAULT_BACKEND
     """Which LLM backend family this workspace targets: `"ollama"` (the
-    default) or, once selectable (issue #1057, design Decision 10),
-    `"openai-compatible"`. Defaults to `DEFAULT_BACKEND` when `backend:` is
-    absent or explicit null, validated against `SELECTABLE_BACKENDS` at
-    `read_config` time.
+    default) or `"openai-compatible"` (issue #1057, design Decision 10).
+    Defaults to `DEFAULT_BACKEND` when `backend:` is absent or explicit
+    null, validated against `SELECTABLE_BACKENDS` at `read_config` time.
+    `"openai-compatible"` additionally requires an explicit `base_url` --
+    see that field's docstring.
 
     Added LAST and DEFAULTED, like `revision_history` above: every
     hand-built `Config(...)` test construction that predates #1057 keeps
@@ -1741,20 +1743,21 @@ def read_config(root: Path) -> Config:
     resolved_backend = backend if backend is not None else DEFAULT_BACKEND
     if resolved_backend not in SELECTABLE_BACKENDS:
         accepted = ", ".join(sorted(SELECTABLE_BACKENDS))
-        if resolved_backend == "openai-compatible":
-            # Refused by name specifically (rather than falling into the
-            # generic branch below), because #1057's client and resolver
-            # already exist by the time this refusal ships (Phases 4-13) --
-            # "not available" is the accurate word, not "unrecognized"
-            # (design Decision 10). Widened to a real accept once Phase 14
-            # adds it to `SELECTABLE_BACKENDS`.
-            raise ValueError(
-                f"{layout.config_path.name}: 'backend: openai-compatible' is "
-                f"not available in this version; supported: {accepted}"
-            )
         raise ValueError(
             f"{layout.config_path.name}: 'backend' names unrecognized value "
             f"{resolved_backend!r}; supported: {accepted}"
+        )
+    if resolved_backend == "openai-compatible" and base_url is None:
+        # Unlike `ollama`, which has a packaged default endpoint, there is
+        # no common default port across OpenAI-compatible servers
+        # (backend-selection spec: "`openai-compatible` Backend Requires An
+        # Explicit `base_url`"). Checked before the shape validation below,
+        # since an ABSENT `base_url` is a distinct failure from a
+        # malformed one.
+        raise ValueError(
+            f"{layout.config_path.name}: 'backend: openai-compatible' "
+            "requires an explicit 'base_url' -- there is no packaged "
+            "default endpoint for this backend"
         )
     if base_url is not None and not isinstance(base_url, str):
         raise ValueError(

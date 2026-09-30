@@ -2591,35 +2591,67 @@ unused but harmless.
 Design Decision 10 — the only slice that makes `openai-compatible` reachable
 from `openkos.yaml`.
 
-- [ ] **14.1** [TEST] `tests/unit/test_config.py` — add
+- [x] **14.1** [TEST] `tests/unit/test_config.py` — add
   `test_openai_compatible_now_selectable`: `backend: openai-compatible` +
   valid `base_url` now succeeds. **RED today**: still refused
   (`SELECTABLE_BACKENDS == {"ollama"}`).
-- [ ] **14.2** [IMPL] `config.py`: `SELECTABLE_BACKENDS =
+
+  **Observed**: RED confirmed (`ValueError: ... not available in this
+  version; supported: ollama`).
+- [x] **14.2** [IMPL] `config.py`: `SELECTABLE_BACKENDS =
   frozenset({"ollama", "openai-compatible"})`. Makes 14.1 GREEN.
-- [ ] **14.3** [TEST] same — update `test_backend_openai_compatible_without_base_url_message`
+
+  **Observed**: also removed the now-unreachable `"not available in this
+  version"` special-case branch (its own comment said it would be "widened
+  to a real accept once Phase 14 adds it to `SELECTABLE_BACKENDS`") and
+  added the new `base_url`-required refusal in its place (see 14.3); updated
+  the `SELECTABLE_BACKENDS`/`Config.backend` docstrings, which described the
+  now-completed two-step rollout in future tense.
+- [x] **14.3** [TEST] same — update `test_backend_openai_compatible_without_base_url_message`
   (3.7) to assert the LIVE "base_url required for openai-compatible"
   message now that the value is genuinely accepted (supersedes the
   pre-enable "not available in this version" expectation).
-- [ ] **14.4** [TEST] `tests/unit/test_canonical_example.py` (or the
+
+  **Observed**: updated as specified. Additionally REMOVED
+  `test_read_config_rejects_backend_openai_compatible_before_the_enabling_slice`
+  (task 3.3's split): it wrote the identical `"backend: openai-compatible\n"`
+  input as 3.7's test and asserted the same now-superseded "not available"
+  message — its own name ("before_the_enabling_slice") became false the
+  moment this phase landed, and keeping it would have meant two tests
+  pinning contradictory expectations for the same input. 3.7's updated test
+  is the sole survivor covering this input. Deviation from the task list,
+  disclosed here since removing a test was not itself an enumerated task.
+- [x] **14.4** [TEST] `tests/unit/test_canonical_example.py` (or the
   template-testing module) — add `test_template_documents_new_keys_as_comments`:
   the packaged `openkos.yaml.template` contains `backend`, `base_url`,
   `embedding_base_url` each as a commented-out line with an explanatory
   comment. Covers workspace-init's "The template documents the new backend
   keys as comments".
-- [ ] **14.5** [IMPL] `src/openkos/templates/openkos.yaml.template`: add the
+
+  **Observed**: RED confirmed by stashing the template edit and re-running
+  (`AssertionError: 'backend''s comment did not survive`); restored and
+  GREEN.
+- [x] **14.5** [IMPL] `src/openkos/templates/openkos.yaml.template`: add the
   three commented entries. Makes 14.4 GREEN.
-- [ ] **14.6** [TEST] `tests/unit/cli/test_init.py` — add
+- [x] **14.6** [TEST] `tests/unit/cli/test_init.py` — add
   `test_fresh_init_never_writes_new_backend_keys`: a fresh `openkos init`
   with no special flags produces `openkos.yaml` with no ACTIVE `backend:`/
   `base_url:`/`embedding_base_url:` line. Covers workspace-init's "A fresh
   init never writes backend, base_url, or embedding_base_url".
-- [ ] **14.7** [TEST] `tests/unit/test_canonical_example.py` — extend the
+- [x] **14.7** [TEST] `tests/unit/test_canonical_example.py` — extend the
   existing byte-identical-template assertion to confirm the three new
   commented lines don't perturb the existing `model:`/`embedding_model:`
   substitution behavior (regression pin on workspace-init's "Static
   openkos.yaml Template").
-- [ ] **14.8** [TEST] `tests/unit/e2e/test_openai_compatible_workspace.py`
+
+  **Observed**: the pre-existing `test_config_is_byte_identical_to_a_fresh_init`
+  already performs a full-file byte comparison against
+  `examples/good-life-demo/openkos.yaml`, so it required the canonical
+  example's checked-in `openkos.yaml` to be updated with the identical three
+  commented lines (done) rather than a change to the test itself; added a
+  second, targeted `test_new_backend_keys_stay_commented_after_a_fresh_write`
+  alongside it, pinning the specific claim this task names.
+- [x] **14.8** [TEST] `tests/unit/e2e/test_openai_compatible_workspace.py`
   (new) — add `test_ingest_query_reindex_doctor_through_offline_double`: a
   `tmp_path` workspace with `backend: openai-compatible`,
   `base_url: http://127.0.0.1:8080` (loopback; the offline double
@@ -2628,28 +2660,69 @@ from `openkos.yaml`.
   reach ONLY the offline double (network guard active), and `doctor`/the
   client report LOCAL. Covers the proposal's Success Criteria for the
   `openai-compatible` end-to-end path.
-- [ ] **14.9** [TEST] same file — add
+
+  **Observed**: MCP `query` invoked directly through `mcp/tools.py::execute`
+  against a real `ToolContext` built by `mcp/server.py::_build_context`
+  (not the JSON-RPC transport, which is `mcp/server.py::Server`'s own
+  concern, covered elsewhere). Proof that the RIGHT client was reached (not
+  just "no crash"): `OllamaClient` patched to a raiser and
+  `OpenAICompatibleClient` patched to a recording spy subclass of
+  `OfflineOpenAICompatible`, in both `cli.main` and `mcp.server`. RED
+  confirmed by temporarily reverting `SELECTABLE_BACKENDS` to `{"ollama"}`
+  (both assertions failed with the pre-enable refusal message); restored
+  and GREEN.
+- [x] **14.9** [TEST] same file — add
   `test_remote_base_url_withholds_confidential_for_both_purposes`: a
   NON-loopback `base_url`/`embedding_base_url`; confidential material is
   withheld from BOTH chat and embed sends independently (mirrors the
   existing Ollama confidential-exemption e2e test).
-- [ ] **14.10** [IMPL] close any integration gap 14.8-14.9 expose (expected:
+
+  **Observed**: mirrors `test_confidential_local_exemption.py`'s
+  `test_remote_backend_denies_the_exemption_at_every_seam` (`query` seam,
+  spied `local_exemption` kwarg) for the chat half, and its
+  `test_reindex_withholds_a_confidential_doc_and_says_so` (real `reindex`
+  over a confidential doc) for the embed half, both adapted to
+  `openai-compatible` with a non-loopback `base_url`/`embedding_base_url`
+  and `OPENKOS_OPENAI_API_KEY` set, asserting the key never appears in
+  output. RED confirmed together with 14.8 (same `SELECTABLE_BACKENDS`
+  revert); restored and GREEN.
+- [x] **14.10** [IMPL] close any integration gap 14.8-14.9 expose (expected:
   none, if Phases 1-13 are individually correct — treat an e2e RED as a
   genuine integration bug, not new feature work).
 
+  **Observed**: no gap found — both e2e tests passed once 14.1-14.3's
+  enabling change landed; Phases 1-13's resolver/client/wording work needed
+  no further change.
+
 ### Phase 14 verification
 
-- [ ] **14.11** Run `uv run ruff check . && uv run ruff format --check . &&
+- [x] **14.11** Run `uv run ruff check . && uv run ruff format --check . &&
   uv run mypy .` — must be green.
-- [ ] **14.12** Run `uv run pytest tests/unit/test_config.py
+
+  **Observed**: `ruff check .` clean; `ruff format --check .` reformatted
+  1 file (`tests/unit/test_canonical_example.py`), reconfirmed clean;
+  `mypy .`: Success, no issues found in 381 source files.
+- [x] **14.12** Run `uv run pytest tests/unit/test_config.py
   tests/unit/cli/test_init.py tests/unit/e2e/test_openai_compatible_workspace.py`
   focused, then `uv run pytest --cov` full suite.
-- [ ] **14.13** Run `uv run python evals/run_self_tests.py` — must stay
+
+  **Observed**: focused (plus `tests/unit/test_canonical_example.py`) →
+  501 passed. Full `pytest --cov` (unpiped, backgrounded — 441.11s wall
+  time) → **7463 passed, 0 failed, 2 skipped**, 96.87% branch coverage
+  (>= 90% gate held), run once at the end of Phase 14 and Phase 15 together.
+- [x] **14.13** Run `uv run python evals/run_self_tests.py` — must stay
   green and model-free with `OLLAMA_HOST` poisoned, even though
   `openai-compatible` is now selectable (no eval selects it, per Out of
   Scope/F1).
+
+  **Observed**: 44 of 44 harness self-test(s) run, 0 failing.
 - [ ] **14.14** Commit, scope `config`. Open PR 14 targeting `main`, after
   PR 10, 11, 12, 13a, 13b all merge.
+
+  **Observed**: committed on the current branch (`feat/1057-openai-p14`,
+  stacked on the Phase 12-13b wording branch, PR #1104), scope `config` —
+  no push, no PR opened per the apply run's instructions; PR creation is
+  left to the maintainer/orchestrator.
 
 **Rollback boundary**: revert `SELECTABLE_BACKENDS` to `{"ollama"}` and drop
 the template's active documentation lines (the comments themselves are
@@ -2662,36 +2735,90 @@ before Phase 14; every earlier phase's code is inert on the default path.
 
 Shape-level only, per AGENTS.md's "docs describe the shape, not the diff."
 
-- [ ] **15.1** [DOC] `docs/tech_stack.md`: add a shape-level mention of the
+- [x] **15.1** [DOC] `docs/tech_stack.md`: add a shape-level mention of the
   second backend (OpenAI-compatible HTTP API) alongside Ollama.
-- [ ] **15.2** [DOC] `docs/architecture.md`: mention the
+
+  **Observed**: rewrote the existing "Runtime" paragraph, which previously
+  asserted "OpenKOS does not speak it, so they cannot be used in its
+  place" — exactly the stale exclusivity claim AGENTS.md's docs policy
+  warns against once a second backend exists. New wording: `ollama` stays
+  the default and unconfigured workspaces see no change; `openai-compatible`
+  is opt-in via `backend: openai-compatible` + an explicit `base_url`; the
+  API key comes only from `OPENKOS_OPENAI_API_KEY`.
+- [x] **15.2** [DOC] `docs/architecture.md`: mention the
   `llm/openai_compatible.py` module and the single resolver seam at the
   shape level (no line counts, no "since #1057").
-- [ ] **15.3** [DOC] `docs/cli.md`: update the `backend`/`base_url`/
+
+  **Observed**: added `openai_compatible.py` to the `llm/` tree listing and
+  `backends.py` to the `application/` tree listing; added one new principles
+  bullet ("One resolver seam constructs every LLM client"). The existing
+  "MVP 3" history bullet already named `application/backends.py` as
+  delivered from an earlier phase of this same change — left unchanged,
+  consistent with "docs describe the shape, not the diff."
+- [x] **15.3** [DOC] `docs/cli.md`: update the `backend`/`base_url`/
   `embedding_base_url` config keys' description and `doctor`'s
   endpoint-and-source line, wherever the CLI's command surface is
   documented.
-- [ ] **15.4** [DOC] Known-limitations note (placement confirmed during
+
+  **Observed**: added the three keys (commented) to the `openkos.yaml`
+  example block plus a new `### backend, base_url, embedding_base_url`
+  section; updated `doctor`'s checks 3/4/11 and its exit-code/
+  outside-workspace paragraphs from Ollama-specific to backend-conditional
+  wording (label, endpoint-and-source line, API-key-set line, backend-aware
+  remediation); updated the "Sensitivity and the local backend" section's
+  withheld-document advisory to name the backend-conditional endpoint
+  instead of only `OLLAMA_HOST`. Scoping decision: left the `ingest`/
+  `query`/`--save` sections' own `OLLAMA_HOST`-specific advisory prose
+  untouched — that wording remains accurate for the (default) `ollama`
+  path, and task 15.3's named deliverable is the config-key description and
+  doctor's endpoint-and-source line, not an exhaustive rewrite of every
+  `OLLAMA_HOST` mention in the file.
+- [x] **15.4** [DOC] Known-limitations note (placement confirmed during
   implementation, likely `docs/tech_stack.md`): reasoning-output handling
   is inconsistent across servers (documented limitation, not a defect);
   `context_window` is advisory-only for this backend; llama.cpp's embedding
   batch size may need tuning for large ingest batches.
-- [ ] **15.5** [TEST] `tests/unit/test_canonical_example.py` (or a
+
+  **Observed**: placed in `docs/tech_stack.md`, immediately after the
+  rewritten "Runtime" paragraph, as confirmed during implementation.
+- [x] **15.5** [TEST] `tests/unit/test_canonical_example.py` (or a
   docs-drift grep, per AGENTS.md's docs policy) — confirm no doc states a
   stale count or an "as of #1057" timestamp, and that `docs/cli.md`'s
   description of `backend`/`base_url` matches the actual config keys (grep
   the config module's key names against the doc).
 
+  **Observed**: added `test_docs_cli_names_the_real_backend_config_keys`,
+  asserting `docs/cli.md` names `` `backend` ``/`` `base_url` ``/
+  `` `embedding_base_url` ``, every value in `config.SELECTABLE_BACKENDS`,
+  and `OPENKOS_OPENAI_API_KEY`. Additionally grepped this phase's own diff
+  for `#1057`/"since #1057" and found none. RED confirmed via `git diff
+  --stat` showing the referenced doc sections as genuinely new content
+  before this phase.
+
 ### Phase 15 verification
 
-- [ ] **15.6** Run `uv run ruff check . && uv run ruff format --check . &&
+- [x] **15.6** Run `uv run ruff check . && uv run ruff format --check . &&
   uv run mypy .` — must be green (docs-only, still run for repo-wide
   hygiene).
-- [ ] **15.7** Run `uv run pytest tests/unit/test_canonical_example.py`
+
+  **Observed**: same combined run as 14.11 (Phase 14 and Phase 15 touch
+  overlapping test files) — all three clean.
+- [x] **15.7** Run `uv run pytest tests/unit/test_canonical_example.py`
   focused, then `uv run pytest --cov` full suite (no-op on behavior).
-- [ ] **15.8** Run `uv run python evals/run_self_tests.py` — must be green.
+
+  **Observed**: focused → included in the 501-test run reported under
+  14.12. Full `pytest --cov` reported under 14.12 (7463 passed, 0 failed,
+  2 skipped, 96.87% coverage) covers Phase 15's changes too — docs-only, so
+  genuinely no behavior change.
+- [x] **15.8** Run `uv run python evals/run_self_tests.py` — must be green.
+
+  **Observed**: same run reported under 14.13 — 44 of 44, 0 failing.
 - [ ] **15.9** Commit, scope `docs`. Open PR 15 targeting `main`, after PR
   14 merges — the final PR of the chain.
+
+  **Observed**: committed on the current branch, scope `docs` — no push,
+  no PR opened per the apply run's instructions; PR creation is left to the
+  maintainer/orchestrator.
 
 **Rollback boundary**: revert the doc edits file-by-file; no code behavior
 depends on this slice.

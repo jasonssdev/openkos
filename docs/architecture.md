@@ -56,9 +56,10 @@ openkos/
 │   │   ├── contradiction.py  reconciliation.py
 │   │   └── edge_typing.py  volatility_typing.py
 │   ├── llm/                      # model runtime abstraction
-│   │   ├── base.py  ollama.py  prompting.py  parsing.py
+│   │   ├── base.py  ollama.py  openai_compatible.py  prompting.py  parsing.py
 │   ├── application/              # synchronous use-case services (ADR-0018)
 │   │   ├── query.py  ingest.py  lifecycle.py
+│   │   ├── backends.py           # the one seam that resolves/constructs an LLM client
 │   │   └── consent.py            # confirmation gates staged as typed data
 │   ├── cli/                      # Typer entry layer
 │   │   ├── main.py  curate.py  next_action.py  observability.py
@@ -80,7 +81,8 @@ openkos/
 The principles that shape it:
 
 - **Each package is a piece of the architecture.** `model` is the Knowledge Object; `bundle` + `vcs` are the durable canonical layer; `state` + `retrieval` + `graph` are the derived layer; `extraction` + `resolution` are the pipeline that turns text into objects and then decides what they mean; `lint`/`lifecycle`/`sensitivity` are the disciplines; `cli` and `mcp` are entry layers, one synchronous over stdin/args, one async over stdio.
-- **The `base.py` files are the seams that exist today.** `graph/base.py` and `llm/base.py` define the shapes their implementations satisfy (`sqlite_graph.py`, `ollama.py`). They are internal seams, not a published plugin API: OpenKOS ships no `Producer`/`Consumer` interface and no entry-point group. That extension surface is a roadmap item, not present code — see [`roadmap.md`](roadmap.md).
+- **The `base.py` files are the seams that exist today.** `graph/base.py` and `llm/base.py` define the shapes their implementations satisfy (`sqlite_graph.py`, `ollama.py`, `openai_compatible.py`). They are internal seams, not a published plugin API: OpenKOS ships no `Producer`/`Consumer` interface and no entry-point group. That extension surface is a roadmap item, not present code — see [`roadmap.md`](roadmap.md).
+- **One resolver seam constructs every LLM client.** `application/backends.py` resolves the configured `backend` (`ollama`, the default, or `openai-compatible`), the effective endpoint, and the environment-only API key, then constructs the matching concrete client — the CLI and MCP adapters call through it rather than importing `OllamaClient`/`OpenAICompatibleClient` directly. Adding a backend widens this one seam; it does not touch the pipeline packages that call `LLMBackend`/`Embedder`.
 - **Use-case services, not one orchestrator.** [ADR-0018](adr/0018-application-layer-for-bounded-context-services.md) chose narrow synchronous services under `application/` over a single `engine.py`, so each use case owns its own composition instead of one module owning all of them. All three have landed — `query.py`, `ingest.py`, `lifecycle.py` — with `consent.py` holding the confirmation contracts as typed data so a non-TTY adapter can answer a gate without re-deriving its prompt ([#918](https://github.com/jasonssdev/openkos/issues/918)). `cli/` keeps parsing, presentation, exit codes, and the shared write mechanics the services call through rather than own.
 - **The derived layer is reconstructible — but not uniformly, and not for free.** The five SQLite stores under `.openkos/` sit at three different points on that scale. See [State taxonomy](#state-taxonomy) below, which is the one place that distinction is written down.
 

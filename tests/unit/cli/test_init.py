@@ -289,6 +289,30 @@ def test_fresh_empty_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     assert "openkos ingest" in result.stdout
 
 
+def test_fresh_init_never_writes_new_backend_keys(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fresh `openkos init` with no special flags never writes an ACTIVE
+    `backend:`, `base_url:`, or `embedding_base_url:` line -- only `model:`
+    and `embedding_model:` were substituted, and the three new keys remain
+    commented exactly as in the template (issue #1057 Phase 14;
+    workspace-init: "A fresh init never writes backend, base_url, or
+    embedding_base_url"). **RED before Phase 14**: the template carried none
+    of the three keys at all, so their commented form could not survive."""
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 0
+    content = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
+    assert "\nbackend:" not in content
+    assert "\nbase_url:" not in content
+    assert "\nembedding_base_url:" not in content
+    assert "# backend:" in content
+    assert "# base_url:" in content
+    assert "# embedding_base_url:" in content
+
+
 def test_init_creates_no_openkos_dir_or_vectors_db(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

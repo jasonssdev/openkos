@@ -81,6 +81,64 @@ def test_agents_md_is_byte_identical_to_a_fresh_init(tmp_path: Path) -> None:
     ).read_text(encoding="utf-8")
 
 
+def test_template_documents_new_keys_as_comments() -> None:
+    """The packaged template documents `backend`, `base_url`, and
+    `embedding_base_url` each as a commented-out line with an explanatory
+    comment (issue #1057 Phase 14; workspace-init: "The template documents
+    the new backend keys as comments"). **RED before Phase 14**: none of the
+    three keys appear in the template at all."""
+    template = config._read_template("openkos.yaml.template")
+    lines = template.splitlines()
+
+    for key in ("backend", "base_url", "embedding_base_url"):
+        commented_prefix = f"# {key}:"
+        matching = [line for line in lines if line.startswith(commented_prefix)]
+        assert matching, f"{key!r} is not documented as a commented-out line"
+        assert "#" in matching[0][len(commented_prefix) :], (
+            f"{key!r}'s commented line has no explanatory comment"
+        )
+        # None of the three is ever active (uncommented) elsewhere in the
+        # template.
+        assert not any(line.startswith(f"{key}:") for line in lines), (
+            f"{key!r} appears active somewhere in the template"
+        )
+
+
+def test_docs_cli_names_the_real_backend_config_keys() -> None:
+    """`docs/cli.md`'s `backend`/`base_url`/`embedding_base_url` description
+    names the real config key names and the real accepted `backend` values
+    (issue #1057 Phase 15's docs-drift check, per AGENTS.md's "docs describe
+    the shape, not the diff" -- a doc that quietly drifts from the config
+    module teaches a value that no longer exists)."""
+    docs_cli = (Path(__file__).resolve().parents[2] / "docs" / "cli.md").read_text(
+        encoding="utf-8"
+    )
+
+    for key in ("backend", "base_url", "embedding_base_url"):
+        assert f"`{key}`" in docs_cli, f"docs/cli.md never names {key!r}"
+    for value in sorted(config.SELECTABLE_BACKENDS):
+        assert value in docs_cli, f"docs/cli.md never names backend value {value!r}"
+    assert "OPENKOS_OPENAI_API_KEY" in docs_cli
+
+
+def test_new_backend_keys_stay_commented_after_a_fresh_write(tmp_path: Path) -> None:
+    """A fresh `write_config` never activates the three new keys, and their
+    presence in the template does not perturb the `model:`/
+    `embedding_model:` substitution (issue #1057 Phase 14, regression pin on
+    workspace-init's "Static openkos.yaml Template"; the byte-identical
+    example test above is the authoritative full-file pin, this is a
+    targeted one)."""
+    config.write_config(tmp_path)
+
+    written = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
+
+    assert f"model: {config.DEFAULT_MODEL}" in written
+    assert f"embedding_model: {config.DEFAULT_EMBEDDING_MODEL}" in written
+    for key in ("backend", "base_url", "embedding_base_url"):
+        assert f"\n{key}:" not in written, f"{key!r} was written active"
+        assert f"# {key}:" in written, f"{key!r}'s comment did not survive"
+
+
 def _concept_docs() -> list[Path]:
     return [
         path
