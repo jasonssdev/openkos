@@ -104,6 +104,23 @@ def test_template_documents_new_keys_as_comments() -> None:
         )
 
 
+def test_docs_cli_names_the_real_backend_config_keys() -> None:
+    """`docs/cli.md`'s `backend`/`base_url`/`embedding_base_url` description
+    names the real config key names and the real accepted `backend` values
+    (issue #1057 Phase 15's docs-drift check, per AGENTS.md's "docs describe
+    the shape, not the diff" -- a doc that quietly drifts from the config
+    module teaches a value that no longer exists)."""
+    docs_cli = (Path(__file__).resolve().parents[2] / "docs" / "cli.md").read_text(
+        encoding="utf-8"
+    )
+
+    for key in ("backend", "base_url", "embedding_base_url"):
+        assert f"`{key}`" in docs_cli, f"docs/cli.md never names {key!r}"
+    for value in sorted(config.SELECTABLE_BACKENDS):
+        assert value in docs_cli, f"docs/cli.md never names backend value {value!r}"
+    assert "OPENKOS_OPENAI_API_KEY" in docs_cli
+
+
 def test_new_backend_keys_stay_commented_after_a_fresh_write(tmp_path: Path) -> None:
     """A fresh `write_config` never activates the three new keys, and their
     presence in the template does not perturb the `model:`/
