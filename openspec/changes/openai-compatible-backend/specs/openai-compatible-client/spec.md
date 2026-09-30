@@ -206,7 +206,12 @@ The client MUST accept an optional API key as a caller-supplied argument.
 WHEN present, every request MUST carry it as an `Authorization: Bearer
 <key>` header. WHEN absent, no `Authorization` header MUST be sent. The key
 MUST NEVER appear in an exception message, a log line, or any other
-diagnostic text the client produces.
+diagnostic text the client produces. The client MUST NOT follow any HTTP
+redirect (any 3xx status, any request method), because the standard
+redirect-following behavior copies the `Authorization` header onto the
+redirected request regardless of destination host; a redirect response
+MUST instead raise a typed, non-retryable error naming the status, and
+MUST NOT echo the redirect target's query string.
 
 #### Scenario: Present key is sent as a bearer header
 
@@ -225,6 +230,16 @@ diagnostic text the client produces.
 - GIVEN a client constructed with an API key, and a request that fails
 - WHEN the resulting exception's message is inspected
 - THEN the key value does not appear anywhere in it
+
+#### Scenario: A redirect response is refused, never forwarding the key
+
+- GIVEN a client constructed with an API key, configured against a server
+  that responds with an HTTP redirect (e.g. 303) to a different host
+- WHEN a request is made
+- THEN the client raises a typed error naming the redirect status, the
+  second host never receives any request or the `Authorization` header,
+  and the raised error's message contains neither the key nor the
+  redirect target's query string
 
 ### Requirement: Testable Without A Live Server
 
