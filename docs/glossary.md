@@ -67,7 +67,7 @@ Definitions of the terms that appear throughout OpenKOS. Terms are listed alphab
 
 **log.md** — An append-only, chronological record of what happened in the bundle (ingests, queries, reconciliations). Defined by OKF as an optional, reserved filename.
 
-**MCP (Model Context Protocol)** — A standard for exposing tools to AI agents. In MVP 3, OpenKOS exposes the bundle through an MCP server so agents can query and navigate it.
+**MCP (Model Context Protocol)** — A standard for exposing tools to AI agents. OpenKOS exposes the bundle through an MCP server (`openkos mcp`) so agents can query and navigate it.
 
 **Operating manual (`AGENTS.md`)** — A per-bundle markdown file, following the vendor-neutral `AGENTS.md` convention, that tells an AI agent how the bundle is organized and what conventions to follow when operating on it (ingesting, querying, maintaining). Prose instructions — the disciplined-maintainer layer of the LLM Wiki pattern. Distinct from the structured [Config](#config-openkosyaml).
 
@@ -109,4 +109,4 @@ Definitions of the terms that appear throughout OpenKOS. Terms are listed alphab
 
 **Typed relationship** — A link between Knowledge Objects with a declared meaning (for example `depends_on`, `derived_from`, `part_of`). Typed relationships are what the OpenKOS graph and retrieval layers traverse, and they ship with the MVP 2 graph (written by `openkos relate`). They are an **OpenKOS extension, not an OKF feature**: OKF links are untyped, and the kind of relationship is carried by the prose next to the link. The typing is layered on as an extra frontmatter key, so a plain OKF consumer still sees the untyped directed edges the spec promises it and loses nothing structural.
 
-**okf_version** — A frontmatter field declaring the OKF version a bundle targets (OpenKOS writes `"0.1"`). It lives in the bundle-root `index.md` — the one place OKF permits frontmatter in a reserved file — and exists so a future consumer knows exactly which revision of the spec the bundle was written against.
+**okf_version** — A frontmatter field declaring the OKF version a bundle targets (OpenKOS writes `"0.2"`). It lives in the bundle-root `index.md` — the one place OKF permits frontmatter in a reserved file — and exists so a future consumer knows exactly which revision of the spec the bundle was written against.

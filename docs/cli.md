@@ -14,7 +14,7 @@ sensitivity: public
 
 # CLI Reference
 
-This is the single source of truth for the OpenKOS command line. It covers the complete MVP 1 (Compiler) and MVP 2 (Graph and Memory) surface, which ship today (the project is **alpha**). Anything still deferred to MVP 3 is marked as such.
+This is the single source of truth for the OpenKOS command line. It covers the complete MVP 1 (Compiler), MVP 2 (Graph and Memory) and MVP 3 (Ask Surface) surface, which ship today (the project is **alpha**). Anything not yet built is marked as such.
 
 ## Conventions
 
@@ -1132,6 +1132,6 @@ A withheld document is **not** an error and does not change the exit code. `rein
 
 **`ingest`'s extraction floor gate does NOT take this exemption.** The table above governs the per-concept `confidential` filter on the six commands that resolve and thread it into a real `llm.chat` seam: the five read verbs (`query`, `contradictions`, `adjudicate`, `suggest-relations`, `suggest-volatility`) and `curate`, which resolves its own exemption and threads it into the same underlying `adjudicate_candidates`/`suggest_volatility`/`find_contradictions` calls its Identity/Metadata/Contradictions stages reuse. `ingest`'s SEPARATE check — whether a workspace's `default_sensitivity` floor is confidential enough to skip concept extraction from a newly ingested Source entirely — refuses regardless of backend locality: it always keeps the Source-only fallback (only LLM-based concept extraction is skipped) rather than granting a local backend a pass. This is deliberate, not an oversight: extraction runs against content the operator has not yet reviewed at all, at ingest time, before any human has looked at it, so a local-backend reader should not be surprised that `ingest` still refuses here even with the exemption active elsewhere. Note that the Source-only fallback keeps the document **searchable lexically** in every case, and embedded as well whenever the embed gate above allows it — against a remote backend a `confidential` Source is indexed by FTS but has no vector.
 
-## Still deferred (MVP 3)
+## Not yet built
 
-For orientation, these are **not** yet part of the CLI: the local REST API and full OKF import/export. `openkos mcp` (above) already ships the ask surface — an MCP client, not the CLI, is its interface. Everything else described above — hybrid semantic/graph query, volatility-aware freshness windows, entity resolution and merge, the typed graph, reference-aware/cascade `forget`, and the `purge` verb — ships today (MVP 1 and MVP 2 complete).
+For orientation, these are **not** part of the CLI: a local REST API (a Horizon item) and full OKF import/export (MVP 5). `openkos mcp` (above) already ships the ask surface — an MCP client, not the CLI, is its interface. Everything else described above — hybrid semantic/graph query, volatility-aware freshness windows, entity resolution and merge, the typed graph, reference-aware/cascade `forget`, and the `purge` verb — ships today.

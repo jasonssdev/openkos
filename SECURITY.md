@@ -19,7 +19,7 @@ Please include, as much as you can:
 
 - a description of the vulnerability and its potential impact;
 - the steps or a minimal proof of concept to reproduce it;
-- affected component (for example: ingestion, extraction, retrieval, CLI, API, MCP server);
+- affected component (for example: ingestion, extraction, retrieval, CLI, MCP server);
 - your environment (OS, Python version, commit or version);
 - any suggested remediation.
 

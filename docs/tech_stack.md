@@ -80,7 +80,7 @@ As shipped, the whole derived layer is five SQLite files under `.openkos/`, all 
 | In-memory graph analysis | NetworkX (on subgraphs) | NetworkX | BSD |
 | Local LLM (extraction) | Ollama (Qwen3 / Mistral Small) | larger model | check the vendor's terms |
 
-The runtime and interoperability layer (FastAPI local API, MCP server, OKF import/export) arrives with MVP 3.
+The MCP server (`openkos mcp`, stdio) ships; it is hand-rolled rather than built on an SDK ([ADR-0027](adr/0027-hand-rolled-stdio-mcp-server.md)). A local REST API is a Horizon item and no web framework is a dependency; full OKF import/export is MVP 5.
 
 **What each runtime dependency is for.** `pyproject.toml` is the authority for the list itself; this table exists because a manifest says *what* is required and never *why*, and a dependency whose reason nobody records is one nobody can retire:
 
@@ -103,7 +103,6 @@ SQLite, FTS5, and everything git-related add nothing: SQLite ships with Python, 
 - **Python 3.12+**
 - **Typer** for the command-line interface (Click, MIT, is the mature fallback if we ever want fewer abstractions)
 - **Stdlib dataclasses and hand-rolled validators** for schemas and validation — Pydantic was in the original plan but has not been needed; it remains an option if validation outgrows the stdlib
-- **FastAPI** for the local API layer (introduced in MVP 3)
 - **Markdown + YAML frontmatter** using the OKF v0.2 field set (`type`, `title`, `description`, `resource`, `tags`, `generated`, `status`, `sources`)
 
 ## Local AI
@@ -132,7 +131,7 @@ That is the deeper point, and it is deliberate: **OpenKOS does not bless a model
 
 **If no model is installed,** `openkos init` guides rather than failing silently: on a TTY it prompts for a model tag (default `qwen3:8b`), resolving the tag by precedence `--model` flag > prompt > default — it does not detect hardware or auto-pull a model. A missing model is then diagnosed by `openkos doctor`, which suggests the `ollama pull <model>` remediation. For non-technical users later, the path is an embedded runtime (no separate install), hardware-aware auto-download with a progress UI, and an optional, explicit cloud fallback — never for `confidential` content — for machines that cannot run a capable local model. There is an honest hardware floor: a weak machine runs a weaker model and leans more on review and lint.
 
-- **Model Context Protocol (MCP)** for exposing the bundle to external agents (MVP 3).
+- **Model Context Protocol (MCP)** for exposing the bundle to external agents, served by `openkos mcp` over stdio with a hand-rolled implementation ([ADR-0027](adr/0027-hand-rolled-stdio-mcp-server.md)).
 - **Model licensing note.** Not every "open" model is OSI open source, and the line moves — which is why this document tells you what to check rather than which weights to trust. Read the licence of the release you are about to pull, on the vendor's own terms page.
 
   What to look for. Vendor-specific licences — the **Gemma Terms of Use** and the **Llama Community License** are the two you will meet most often — are not OSI open source. They typically carry a prohibited-use policy you must pass downstream to your own users, and reserve the vendor's right to terminate. The Gemma Terms go further and reserve the right to *"restrict (remotely or otherwise) usage"*.
