@@ -93,6 +93,14 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   `git add` and `git commit` run with a bounded timeout and no terminal
   prompts, and a timeout is reported as the usual auto-commit WARNING.
 
+- `ingest` no longer writes the absolute local path of the source into the
+  Source concept's `description` and body
+  ([#1129](https://github.com/jasonssdev/openkos/issues/1129)). The path leaked
+  the account name and directory layout into git history, embeddings, and MCP
+  replies; the Source now names the raw copy's basename and its `raw/<name>`
+  resource. Existing workspaces keep their old text (no migration is run);
+  edit a Source by hand to drop the path from it.
+
 - A concept id containing a backslash or a colon (`..\..\x`, `C:\x`,
   `a:b`) is now refused by every id-taking verb and tool, and `slugify` no
   longer emits a reserved Windows device name (`con`, `prn`, `aux`, `nul`,
