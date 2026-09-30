@@ -24,6 +24,30 @@ uv run python -u evals/proximity_threshold/run_proximity_threshold_probe.py --re
 `--self-test` and `--rescore` make no model calls. `--live` needs a
 reachable Ollama with the embedding model pulled.
 
+## Fixture
+
+`proximity_fixtures.py`: 63 hand-written concept documents across ten
+domains (philosophy, agriculture, cooking, history, computing, medicine,
+finance, music, personal knowledge practice, biology), seven of them in
+Spanish, and 91 labelled pairs, each with a one-line reason:
+
+| class | pairs | of which hard |
+|---|---|---|
+| related | 41 | 21 (cross-lingual, cross-domain, or linked by mechanism) |
+| unrelated | 50 | 34 (same domain, different subject; easy: 16) |
+
+The original 9-pair smoke fixture is kept verbatim inside it
+(`origin="smoke-v1"`). `--self-test` pins the fixture's invariants (sizes
+against the rule's minimums, unique ids and titles, no pair labelled
+twice, every document used) and fails if the two copies of the rule below
+drift apart or stop stating the constants the code applies.
+
+The report prints `n of TOTAL` for every class, the lowest related against
+the highest unrelated cosine, the recall / false-nomination table over the
+floor grid, every pair's cosine with its label and reason, and the verdict.
+`results/proximity-threshold-20260929T120502Z-bge-m3.*` is the smoke run;
+it predates per-pair output, so `--rescore` refuses it.
+
 ## Decision rule
 
 <!-- rule:begin -->
