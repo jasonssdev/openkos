@@ -269,7 +269,7 @@ stacked in order; the chain strategy is the orchestrator's call.
   no `repair`/commit was needed. Verified on a temp copy of the example
   and on a fresh `init`: `lint` reports "No deprecated-status export
   findings" (14/14 checks completed) and `status` runs clean on both.
-- [ ] 6.3 Archive notes (for the archive phase, not apply): the Non-Goals
+- [x] 6.3 Archive notes (for the archive phase, not apply): the Non-Goals
   prose of `okf-format-migration` ("the engine starting to write `status:
   deprecated`") and `status-aware-retrieval` ("any change to how
   `status`/`supersedes` are written") becomes false once merged; edit both

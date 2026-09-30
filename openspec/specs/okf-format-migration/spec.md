@@ -20,10 +20,10 @@ bundle from one shape to the other.
 
 This spec does not define: a separate `migrate` verb (the migration is an
 extension of the existing `repair` verb); lazy or on-read migration of
-existing bundles; writing `status: draft` from any writer; the engine
-starting to write `status: deprecated` when a concept is superseded
-(deprecation stays derived from `supersedes` edges at read time, per
-`status-aware-retrieval`); `verified`, trust tiers, `stale_after`,
+existing bundles; writing `status: draft` from any writer; how a superseded
+concept's `status: deprecated` is written (that is the marked export
+defined by `deprecated-status-export`; deprecation itself stays derived
+from `supersedes` edges at read time, per `status-aware-retrieval`); `verified`, trust tiers, `stale_after`,
 `usage_count`/`usage_window`, or Attested Computation (OKF v0.2 families
 this change does not adopt); per-claim `[^id]` footnotes in bodies (`##
 Related` remains the attribution surface); or a `doctor`/`status` advisory
@@ -64,9 +64,13 @@ MUST read `generated.at` or `timestamp` directly for this purpose.
 
 Every consumer that reads a concept's lifecycle `status` MUST treat
 `"stable"`, a legacy `"active"`, `"draft"`, and an absent `status` key
-identically as NOT deprecated. Only the literal value `"deprecated"`, and
-the existing inbound-`supersedes`-edge rule (`status-aware-retrieval`),
-MUST mark a concept deprecated.
+identically as NOT deprecated. Only the literal value `"deprecated"`
+WITHOUT a valid `status_derived_from` export marker, and the existing
+inbound-`supersedes`-edge rule (`status-aware-retrieval`), MUST mark a
+concept deprecated. A `"deprecated"` carrying a valid export marker is the
+engine's deprecated-status export (`deprecated-status-export`), derived
+from that edge rule and never read back as a declaration of its own.
+(Previously: the literal `"deprecated"` always counted; no engine path wrote it, so no export marker existed.)
 
 #### Scenario: A legacy `active` concept is not deprecated
 
@@ -88,6 +92,12 @@ MUST mark a concept deprecated.
 - WHEN its effective status is resolved
 - THEN it is reported as not deprecated
 
+#### Scenario: An exported `deprecated` is not a declaration
+
+- GIVEN a concept with `status: deprecated` and `status_derived_from:
+  supersedes`, and no inbound `supersedes` edge
+- WHEN its effective status is resolved by any consumer
+- THEN it is reported as not deprecated
 ### Requirement: Mixed-Bundle Read Parity
 
 For a bundle containing any combination of OKF v0.1-shaped concepts

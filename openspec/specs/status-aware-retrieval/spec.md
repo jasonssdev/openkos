@@ -14,18 +14,23 @@ shared effective-status predicate.
 `forget`/tombstones (S2); sensitivity fail-closed filtering (S3); export
 confidential exclusion (S4); anchor-based reconcile conflict detection
 (#1619, deferred); down-ranking or partial-visibility strategies (exclusion
-only, by product decision); any change to how `status`/`supersedes` are
-written.
+only, by product decision); how `status`/`supersedes` are written (a
+marked `status: deprecated` export is defined by `deprecated-status-export`
+and is never read back by this predicate).
 
 ## Requirements
 
 ### Requirement: Effective Status Resolution
 
 The system MUST resolve each concept's effective retrieval status from (1)
-its own `status` field and (2) whether it is the TARGET of an inbound
-`supersedes` edge authored by a DIFFERENT concept. A concept MUST be treated
-as deprecated WHEN its `status` equals `"deprecated"` OR it is targeted by
-such an edge. A self-referencing `supersedes` edge (source == target) MUST
+its own human-authored `status` field and (2) whether it is the TARGET of
+an inbound `supersedes` edge authored by a DIFFERENT concept. A concept MUST
+be treated as deprecated WHEN its `status` equals `"deprecated"` without a
+valid `status_derived_from` export marker OR it is targeted by such an
+edge. A `status: deprecated` carrying a valid export marker is the
+engine's own deprecated-status export (`deprecated-status-export`) and MUST
+NOT, on its own, mark the concept deprecated: the export is written FROM
+this predicate's edge rule and is never read back into it. A self-referencing `supersedes` edge (source == target) MUST
 NOT mark a concept deprecated. Supersession that forms a cycle is
 contradictory and unresolved, so the system fails safe: EVERY concept
 targeted by a non-self `supersedes` edge is deprecated — including both
@@ -37,6 +42,7 @@ either end deprecated. Deprecation is governed only by the `status` field
 and inbound `supersedes` edges as described above; this holds uniformly
 across every consumer of the shared effective-status predicate, including
 `lifecycle.deprecated_concept_ids` and the `list` STATUS column.
+(Previously: every `status: deprecated` counted as the concept's own declaration; the engine wrote none, so no export marker existed.)
 (Previously: this requirement defined deprecation via `status` and
 `supersedes` only, with no explicit statement about `revises`; this adds
 the explicit non-deprecation guarantee for `revises` as a tested
@@ -76,6 +82,16 @@ Deprecated" for the general dual-reader guarantee.)
   `lifecycle.deprecated_concept_ids` and by the `list` STATUS column
 - THEN neither A nor B appears in `deprecated_concept_ids`, and `list`
   reports both as `stable`
+
+#### Scenario: An engine export alone does not deprecate
+- GIVEN a concept with `status: deprecated` and `status_derived_from:
+  supersedes`, and no inbound `supersedes` edge
+- WHEN its effective status is resolved
+- THEN it is NOT deprecated
+- GIVEN the same concept is the target of another concept's `supersedes`
+  edge
+- WHEN its effective status is resolved
+- THEN it is deprecated, by the edge rule
 ### Requirement: Deprecated Concepts Excluded By Default
 
 By default, retrieval and candidate-generation paths MUST NOT return, rank,
