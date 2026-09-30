@@ -306,7 +306,7 @@ def decide(scores: Sequence[PairScore]) -> Analysis:
             Verdict(
                 "INSUFFICIENT_EXPOSURE",
                 "median(hard negatives) <= median(easy negatives): the hard "
-                "negatives are not harder; keep 0.70",
+                f"negatives are not harder; keep {CURRENT / 100:.2f}",
             )
         )
     # 4. admissible floors and the candidate t*
@@ -332,14 +332,21 @@ def decide(scores: Sequence[PairScore]) -> Analysis:
     # 5. overlap
     if recall_star < MIN_RECALL:
         return verdict(
-            "OVERLAP", f"recall(t*) {recall_star:.3f} < {MIN_RECALL:.2f}; keep 0.70"
+            "OVERLAP",
+            f"recall(t*) {recall_star:.3f} < {MIN_RECALL:.2f}; "
+            f"keep {CURRENT / 100:.2f}",
         )
     # 6. today's floor over-nominates
     if not by_floor[CURRENT].admissible:
-        return verdict("MOVE", f"raise to {t_star / 100:.2f}: 0.70 is not admissible")
+        return verdict(
+            "MOVE",
+            f"raise to {t_star / 100:.2f}: {CURRENT / 100:.2f} is not admissible",
+        )
     # 7. nothing lower is supported
     if t_star >= CURRENT:
-        return verdict("KEEP", "0.70 is admissible and t* >= 0.70")
+        return verdict(
+            "KEEP", f"{CURRENT / 100:.2f} is admissible and t* >= {CURRENT / 100:.2f}"
+        )
     # 8. a lower floor: worth it, and exposed?
     gain = recall_star - recall_now
     if gain < MIN_RECALL_GAIN:
@@ -353,7 +360,7 @@ def decide(scores: Sequence[PairScore]) -> Analysis:
             "INSUFFICIENT_EXPOSURE",
             f"only {exposure} hard negative(s) score >= "
             f"{(t_star - EXPOSURE_BAND) / 100:.2f} (need {MIN_EXPOSURE}); "
-            "keep 0.70 and extend the hard negatives",
+            f"keep {CURRENT / 100:.2f} and extend the hard negatives",
             exposure,
         )
     return verdict(
@@ -529,29 +536,52 @@ def _self_test() -> int:
     check("cosine guards a zero vector", _cosine([0.0, 0.0], [1.0, 0.0]) == 0.0)
     check("nomination is inclusive at the floor", _nominated(0.70, 70))
     check("nomination excludes just below the floor", not _nominated(0.6999, 70))
-    check("the current floor is 0.70", CURRENT == 70)
+    check("the current floor is 0.59 (#1052)", CURRENT == 59)
 
     # -- the rule on synthetic scores: one case per verdict ---------------
     easy = _spread(0.10, 0.30, 16)
 
-    # KEEP (step 8, no material gain): every related pair already clears
-    # 0.70; hard negatives top out at 0.66, so t* = 0.68 buys nothing.
-    keep = decide(_synthetic(_spread(0.80, 0.95, 44), _spread(0.40, 0.66, 34), easy))
-    check("KEEP: verdict", keep.verdict.kind == "KEEP")
-    check("KEEP: t_min is the lowest floor with <= 1 hard FP", keep.verdict.t_min == 66)
-    check("KEEP: t* adds the 0.02 margin", keep.verdict.t_star == 68)
-    check("KEEP: budget is floor(0.05 x 34) = 1", keep.hard_fp_budget == 1)
-
-    # KEEP (step 7): the two strongest hard negatives sit at 0.69 and 0.67,
-    # so t_min = 0.68 and t* = 0.70, while 0.70 itself stays admissible.
-    keep7 = decide(
+    # KEEP (step 8, no material gain): every related pair already clears the
+    # current floor; hard negatives top out 4 points below it, so t* (2
+    # points above t_min) still sits below CURRENT and buys no recall.
+    keep = decide(
         _synthetic(
-            _spread(0.75, 0.95, 44), [*_spread(0.30, 0.60, 32), 0.67, 0.69], easy
+            _spread(0.80, 0.95, 44),
+            _spread((CURRENT - 30) / 100, (CURRENT - 4) / 100, 34),
+            easy,
         )
     )
-    check("KEEP (t* >= 0.70): verdict", keep7.verdict.kind == "KEEP")
-    check("KEEP (t* >= 0.70): t* is 0.68 + 0.02", keep7.verdict.t_star == 70)
-    check("KEEP (t* >= 0.70): reached by step 7", "t* >= 0.70" in keep7.verdict.detail)
+    check("KEEP: verdict", keep.verdict.kind == "KEEP")
+    check(
+        "KEEP: t_min is the lowest floor with <= 1 hard FP",
+        keep.verdict.t_min == CURRENT - 4,
+    )
+    check("KEEP: t* adds the 0.02 margin", keep.verdict.t_star == CURRENT - 2)
+    check("KEEP: budget is floor(0.05 x 34) = 1", keep.hard_fp_budget == 1)
+
+    # KEEP (step 7): the two strongest hard negatives sit 3 and 1 points
+    # below the current floor, so t_min = CURRENT - 2 and t* = CURRENT,
+    # while CURRENT itself stays admissible.
+    keep7 = decide(
+        _synthetic(
+            _spread(0.75, 0.95, 44),
+            [
+                *_spread((CURRENT - 39) / 100, (CURRENT - 9) / 100, 32),
+                (CURRENT - 3) / 100,
+                (CURRENT - 1) / 100,
+            ],
+            easy,
+        )
+    )
+    check("KEEP (t* >= CURRENT): verdict", keep7.verdict.kind == "KEEP")
+    check(
+        "KEEP (t* >= CURRENT): t* is (CURRENT - 2) + 0.02",
+        keep7.verdict.t_star == CURRENT,
+    )
+    check(
+        "KEEP (t* >= CURRENT): reached by step 7",
+        f"t* >= {CURRENT / 100:.2f}" in keep7.verdict.detail,
+    )
 
     # MOVE (lower): related spread 0.55-0.90 (recall(0.70) ~0.43), hard
     # negatives dense up to 0.50, so t* = 0.52 with >= 5 in the band.

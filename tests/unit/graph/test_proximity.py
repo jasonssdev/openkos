@@ -11,6 +11,7 @@ collapse, and the promise never to raise.
 
 from __future__ import annotations
 
+from math import sqrt
 from pathlib import Path
 
 import pytest
@@ -51,6 +52,56 @@ def _hit(concept_id: str, distance: float) -> VecHit:
 
 
 # --- similarity floor -------------------------------------------------------
+
+
+def test_candidate_similarity_threshold_is_calibrated_to_the_1052_floor() -> None:
+    """Pins the pre-registered calibration verdict (#1052): the 91-pair
+    labelled fixture measured `min(related) = 0.4238`, `max(unrelated) =
+    0.5827`, and the decision rule's candidate `t* = 0.59` -- zero of 34 hard
+    negatives and zero of 16 easy negatives nominated, recall 0.317 -> 0.707.
+    See `evals/proximity_threshold/results/
+    proximity-threshold-20260930T065305Z-bge-m3.md` for the full run."""
+    assert proximity.CANDIDATE_SIMILARITY_THRESHOLD == 0.59
+
+
+def test_pairs_nominates_a_neighbor_at_the_calibrated_floor_cosine() -> None:
+    """Calibration pin (#1052): a neighbor at cosine similarity 0.60 clears
+    the 0.59 floor and must be nominated. Distance is derived from cosine via
+    `d = sqrt(2 - 2 * cosine)`, the same conversion `MAX_NEIGHBOR_DISTANCE`
+    uses -- this test would stay green under a hand-picked distance even if
+    that conversion broke, which is why it goes through the formula rather
+    than a literal."""
+    distance_at_cosine_0_60 = sqrt(2 - 2 * 0.60)
+    query = _FakeNeighborQuery(
+        {
+            "concepts/a": [
+                _hit("concepts/a", 0.0),
+                _hit("concepts/b", distance_at_cosine_0_60),
+            ]
+        }
+    )
+
+    pairs = proximity.VectorProximitySource(query).pairs(["concepts/a", "concepts/b"])
+
+    assert [(p.source_id, p.target_id) for p in pairs] == [("concepts/a", "concepts/b")]
+
+
+def test_pairs_drops_a_neighbor_below_the_calibrated_floor_cosine() -> None:
+    """Calibration pin (#1052): a neighbor at cosine similarity 0.58 falls
+    below the 0.59 floor and must NOT be nominated."""
+    distance_at_cosine_0_58 = sqrt(2 - 2 * 0.58)
+    query = _FakeNeighborQuery(
+        {
+            "concepts/a": [
+                _hit("concepts/a", 0.0),
+                _hit("concepts/b", distance_at_cosine_0_58),
+            ]
+        }
+    )
+
+    pairs = proximity.VectorProximitySource(query).pairs(["concepts/a", "concepts/b"])
+
+    assert pairs == []
 
 
 def test_pairs_includes_a_neighbor_exactly_at_the_distance_ceiling() -> None:
