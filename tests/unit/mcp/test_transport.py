@@ -97,11 +97,107 @@ def test_start_reader_posts_lines_then_sentinel() -> None:
             await asyncio.wait_for(queue.get(), timeout=5),
             await asyncio.wait_for(queue.get(), timeout=5),
         ]
-        thread.join(timeout=5)
+        # Off the loop thread: the reader hands its last item over through
+        # the loop, so joining from the loop itself would deadlock.
+        await loop.run_in_executor(None, thread.join, 5)
         assert not thread.is_alive()
         return items
 
     assert asyncio.run(_scenario()) == [b"one\n", b"two\n", None]
+
+
+def test_start_reader_drops_an_oversized_line_and_serves_the_next() -> None:
+    """A line longer than `max_line_bytes` is never posted as-is: the reader
+    posts `OVERSIZED_FRAME` (invalid JSON, so it decodes to a parse error),
+    discards the rest of that line, and the next line arrives intact."""
+
+    async def _scenario() -> list[bytes | None]:
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+        read_fd, write_fd = os.pipe()
+        reader = os.fdopen(read_fd, "rb")
+        thread = transport.start_reader(reader, loop, queue, max_line_bytes=16)
+        try:
+            os.write(write_fd, b"x" * 100 + b"\n")
+            os.write(write_fd, b'{"ok":1}\n')
+        finally:
+            os.close(write_fd)
+        items = [await asyncio.wait_for(queue.get(), timeout=5) for _ in range(3)]
+        await loop.run_in_executor(None, thread.join, 5)
+        return items
+
+    items = asyncio.run(_scenario())
+
+    assert items == [transport.OVERSIZED_FRAME, b'{"ok":1}\n', None]
+    with pytest.raises(transport.ParseError):
+        transport.decode_line(transport.OVERSIZED_FRAME)
+
+
+def test_start_reader_accepts_a_line_of_exactly_the_limit() -> None:
+    """The bound includes the newline: a line that is exactly
+    `max_line_bytes` long, terminator included, is a normal frame."""
+
+    async def _scenario() -> list[bytes | None]:
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+        read_fd, write_fd = os.pipe()
+        reader = os.fdopen(read_fd, "rb")
+        transport.start_reader(reader, loop, queue, max_line_bytes=8)
+        try:
+            os.write(write_fd, b"1234567\n")
+        finally:
+            os.close(write_fd)
+        return [await asyncio.wait_for(queue.get(), timeout=5) for _ in range(2)]
+
+    assert asyncio.run(_scenario()) == [b"1234567\n", None]
+
+
+def test_start_reader_oversized_line_at_end_of_input() -> None:
+    """An over-long line cut off by end of input (no newline ever) is still
+    dropped with one marker, and the end sentinel follows."""
+
+    async def _scenario() -> list[bytes | None]:
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+        read_fd, write_fd = os.pipe()
+        reader = os.fdopen(read_fd, "rb")
+        transport.start_reader(reader, loop, queue, max_line_bytes=8)
+        try:
+            os.write(write_fd, b"y" * 50)
+        finally:
+            os.close(write_fd)
+        return [await asyncio.wait_for(queue.get(), timeout=5) for _ in range(2)]
+
+    assert asyncio.run(_scenario()) == [transport.OVERSIZED_FRAME, None]
+
+
+def test_start_reader_backpressures_on_a_bounded_queue() -> None:
+    """With a full bounded queue the reader thread blocks instead of
+    growing the queue or dropping lines: every line arrives, in order, and
+    the queue never holds more than its bound."""
+
+    async def _scenario() -> tuple[list[bytes | None], int]:
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=1)
+        read_fd, write_fd = os.pipe()
+        reader = os.fdopen(read_fd, "rb")
+        transport.start_reader(reader, loop, queue)
+        try:
+            os.write(write_fd, b"a\nb\nc\nd\n")
+        finally:
+            os.close(write_fd)
+        await asyncio.sleep(0.1)  # let the reader run into the full queue
+        peak = queue.qsize()
+        items: list[bytes | None] = []
+        for _ in range(5):
+            items.append(await asyncio.wait_for(queue.get(), timeout=5))
+            peak = max(peak, queue.qsize())
+        return items, peak
+
+    items, peak = asyncio.run(_scenario())
+
+    assert items == [b"a\n", b"b\n", b"c\n", b"d\n", None]
+    assert peak <= 1
 
 
 def test_start_reader_swallows_closed_loop_error() -> None:
