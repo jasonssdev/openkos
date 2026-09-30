@@ -6,6 +6,7 @@ Merge Fuses Two Distinct Concept-IDs; Confirm-Gated Two-Phase Execution).
 `unmerge` is a later unit (U5) and is intentionally NOT exercised here.
 """
 
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,7 @@ from openkos.bundle import ledger as bundle_ledger
 from openkos.bundle import links as bundle_links
 from openkos.cli import main
 from openkos.cli.main import app
+from openkos.llm.base import BackendHostLocality, Message
 from openkos.model import okf
 from tests.unit.cli.conftest import (
     changed_paths,
@@ -2071,3 +2073,148 @@ def test_a_hand_written_concept_merge_carries_no_warning(
 
     assert result.exit_code == 0, result.stderr
     assert "cross-source" not in result.stdout
+
+
+# --- #1124: the reconciliation pass honours the egress gate ------------------
+
+_PRIVATE_SENTENCE = "The confidential figure is 41,337 units."
+
+
+class _RecordingChat:
+    """A chat backend that records every payload it is sent, so a test asserts
+    on what actually reached the backend rather than on an exit code."""
+
+    def __init__(self, *, is_local: bool) -> None:
+        self.sent: list[str] = []
+        self.locality = BackendHostLocality(
+            is_local=is_local,
+            display_host="localhost:11434" if is_local else "remote.example:443",
+        )
+
+    def chat(self, messages: "Sequence[Message]") -> str:
+        self.sent.extend(message["content"] for message in messages)
+        return _RECONCILED_BODY
+
+
+def _seed_confidential_merge(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    survivor_sensitivity: str,
+    absorbed_sensitivity: str,
+    is_local: bool,
+) -> _RecordingChat:
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(
+        tmp_path,
+        "concepts/survivor",
+        title="Survivor",
+        body=_LONG_BODY,
+        sensitivity=survivor_sensitivity,
+    )
+    _write_concept(
+        tmp_path,
+        "concepts/absorbed",
+        title="Absorbed",
+        body=f"{_PRIVATE_SENTENCE} {_LONG_BODY}",
+        sensitivity=absorbed_sensitivity,
+    )
+    backend = _RecordingChat(is_local=is_local)
+    monkeypatch.setattr(main, "_chat_client", lambda cfg, *, task=None: backend)
+    return backend
+
+
+@pytest.mark.parametrize(
+    ("survivor_sensitivity", "absorbed_sensitivity", "blocker"),
+    [
+        ("confidential", "private", "concepts/survivor"),
+        ("private", "confidential", "concepts/absorbed"),
+    ],
+)
+@pytest.mark.usefixtures("pinned_git_identity")
+def test_merge_reconciliation_never_sends_confidential_to_a_remote_backend(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    survivor_sensitivity: str,
+    absorbed_sensitivity: str,
+    blocker: str,
+) -> None:
+    """#1124: a merge with a confidential member against a non-local backend
+    sends NOTHING -- on either side of the merge (high-water mark) -- keeps
+    the stacked body, says so on stderr, and still completes the merge."""
+    backend = _seed_confidential_merge(
+        tmp_path,
+        monkeypatch,
+        survivor_sensitivity=survivor_sensitivity,
+        absorbed_sensitivity=absorbed_sensitivity,
+        is_local=False,
+    )
+
+    result = runner.invoke(
+        app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert backend.sent == []
+    assert (
+        "openkos merge: skipped body reconciliation -- "
+        f"{blocker} is confidential and the backend is not local; "
+        "the stacked body was kept."
+    ) in result.stderr.splitlines()
+    assert "reconciliation failed" not in result.stderr
+    survivor_text = (tmp_path / "bundle" / "concepts" / "survivor.md").read_text(
+        encoding="utf-8"
+    )
+    assert _PRIVATE_SENTENCE in survivor_text
+    assert "## Merged content" in survivor_text
+    assert not (tmp_path / "bundle" / "concepts" / "absorbed.md").exists()
+
+
+def test_merge_reconciliation_still_runs_for_a_confidential_merge_on_a_local_backend(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The local exemption (#240) still applies: nothing leaves the device, so
+    a confidential merge reconciles against a verified-local backend."""
+    backend = _seed_confidential_merge(
+        tmp_path,
+        monkeypatch,
+        survivor_sensitivity="private",
+        absorbed_sensitivity="confidential",
+        is_local=True,
+    )
+
+    result = runner.invoke(
+        app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert any(_PRIVATE_SENTENCE in sent for sent in backend.sent)
+    survivor_text = (tmp_path / "bundle" / "concepts" / "survivor.md").read_text(
+        encoding="utf-8"
+    )
+    assert _RECONCILED_BODY in survivor_text
+
+
+def test_merge_reconciliation_still_runs_for_a_non_confidential_merge_on_a_remote_backend(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The gate blocks confidentiality, not remoteness: a private merge
+    reconciles against a remote backend exactly as before."""
+    backend = _seed_confidential_merge(
+        tmp_path,
+        monkeypatch,
+        survivor_sensitivity="private",
+        absorbed_sensitivity="public",
+        is_local=False,
+    )
+
+    result = runner.invoke(
+        app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert any(_PRIVATE_SENTENCE in sent for sent in backend.sent)
+    survivor_text = (tmp_path / "bundle" / "concepts" / "survivor.md").read_text(
+        encoding="utf-8"
+    )
+    assert _RECONCILED_BODY in survivor_text
