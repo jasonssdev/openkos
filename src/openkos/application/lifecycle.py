@@ -56,7 +56,7 @@ layering invariant, `tests/unit/application/test_layering.py`) -- every
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -1345,6 +1345,92 @@ def merge_drift_targets(
         survivor_path: prepared.survivor_bytes,
         absorbed_path: prepared.absorbed_bytes,
     }
+
+
+def torn_ledger_refusal(
+    bundle_dir: Path, survivor_canonical: str, verb: str
+) -> str | None:
+    """The refusal text owed when a `.pending` intent marker already exists
+    for `survivor_canonical`'s ledger sidecar (design Decision 5, Check A --
+    a torn two-phase write from a prior crashed `merge`), else `None`.
+    `merge`/`unmerge` both check it in Phase A, before any write, with NO
+    `--force` override: unlike the doctor-flagged (post-merge-mutation)
+    refusal, a torn `.pending` is mechanically exact and trivially
+    repairable (`bundle_ledger.recover`), and forcing past it would commit a
+    known-inconsistent ledger on top of an unresolved crash artifact.
+
+    Returns the text instead of raising so each caller can turn it into its
+    own refusal; the wording lived in `cli/main.py::_reject_torn_ledger_write`
+    and is unchanged."""
+    pending_path = bundle_ledger.pending_path_for(survivor_canonical, bundle_dir)
+    if not pending_path.is_file():
+        return None
+    return (
+        f"openkos {verb}: refusing to {verb} -- {survivor_canonical!r}'s ledger "
+        "has a torn write pending (a prior merge crashed mid-commit). Run "
+        "`openkos doctor` to inspect it; this refusal has no --force override "
+        "because the marker is trivially repairable and forcing past it would "
+        "commit a known-inconsistent ledger."
+    )
+
+
+def flagged_ledger_refusal(
+    bundle_dir: Path,
+    survivor_canonical: str,
+    *,
+    has_reset_point: Callable[[], bool],
+) -> str | None:
+    """The refusal text owed when `survivor_canonical`'s ledger sidecar is
+    flagged by doctor's Check B (post-merge mutation,
+    `bundle_ledger.scan_nesting_violations`), else `None` (spec: "`merge`
+    Refuses On A Doctor-Flagged Ledger, With `--force`"). The caller decides
+    whether `--force` bypasses it, by not asking.
+
+    Unlike the torn-marker check, Check B's corruption is not always
+    repairable, so the text names the reset remedy -- which depends on
+    whether the workspace has a version-control reset point. That is a VCS
+    fact this layer may not learn itself, so `has_reset_point` answers it and
+    is called ONLY once a violation is found, exactly as the inline body
+    did."""
+    violations = bundle_ledger.scan_nesting_violations(bundle_dir)
+    if not any(survivor_id == survivor_canonical for survivor_id, _ in violations):
+        return None
+    if has_reset_point():
+        reset_remedy = "run `git reset --hard <first-merge>~1` then `openkos reindex`"
+    else:
+        reset_remedy = (
+            "no git reset point is available in this workspace (no "
+            "repository, no configured git identity, or no commit "
+            "history) -- there is no remedy that restores reversibility "
+            "for the affected merge(s)"
+        )
+    return (
+        f"openkos merge: refusing to merge -- {survivor_canonical!r}'s ledger "
+        "is flagged by the merge-ledger-integrity check (post-merge "
+        "mutation). If the ledger is merely unmigrated (still embedded in "
+        "the survivor's own frontmatter, not corrupted), run `openkos "
+        f"repair`; if corrupted, {reset_remedy} -- reversibility of merges "
+        "made before this fix is not guaranteed. Re-run with --force to "
+        "bypass this refusal."
+    )
+
+
+def okf_v02_migration_hint(index_path: Path) -> str | None:
+    """`None` unless `index_path` exists and declares an `okf_version`
+    other than `okf.OKF_VERSION` -- the one-sentence hint `unmerge`'s drift
+    refusal appends (okf-v02-migration Phase 6, `okf-format-migration`
+    spec): a bundle that predates `repair`'s OKF migration is a fact the
+    operator can act on regardless of what caused this particular refusal.
+    A missing `index.md` is tolerated (OKF §11) and reads as "nothing to
+    hint about" here, mirroring `plan_repair`'s own no-flip-needed rule for
+    an absent index."""
+    try:
+        metadata, _ = okf.load_frontmatter(index_path.read_text(encoding="utf-8"))
+    except OSError:
+        return None
+    if okf.okf_version_is_current(metadata):
+        return None
+    return "this bundle predates OKF 0.2; run `openkos repair` first."
 
 
 # ---------------------------------------------------------------------------

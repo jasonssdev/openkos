@@ -15,13 +15,12 @@ import re
 from pathlib import Path
 
 import pytest
-import typer
 from typer.testing import CliRunner, _NamedTextIOWrapper
 
 from openkos import fsio
+from openkos.application import drift as application_drift
 from openkos.bundle import index as bundle_index
 from openkos.bundle import ledger as bundle_ledger
-from openkos.cli import main
 from openkos.cli.main import app
 from openkos.model import okf
 from tests.unit.cli.conftest import (
@@ -2303,16 +2302,16 @@ def test_unmerge_to_midchain_drift_refusal_propagates_exit_3(
     #562). The chain-level accounting still prints."""
     _survivor_with_chained_merges(tmp_path, monkeypatch, "alpha", "beta")
 
-    original_guard = main._reject_drifted_targets
+    original_guard = application_drift.describe_drift
     calls = {"count": 0}
 
-    def drifting_guard(*args: object, **kwargs: object) -> None:
+    def drifting_guard(*args: object, **kwargs: object) -> str | None:
         calls["count"] += 1
         if calls["count"] == 2:
-            raise typer.Exit(code=3)
-        original_guard(*args, **kwargs)  # type: ignore[arg-type]
+            return "openkos unmerge: refusing to write -- simulated drift."
+        return original_guard(*args, **kwargs)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(main, "_reject_drifted_targets", drifting_guard)
+    monkeypatch.setattr(application_drift, "describe_drift", drifting_guard)
 
     result = runner.invoke(
         app, ["unmerge", "concepts/survivor", "--to", "concepts/alpha", "--auto"]

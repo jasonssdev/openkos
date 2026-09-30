@@ -5,7 +5,6 @@ import functools
 import glob
 import json
 import os
-import re
 import sqlite3
 import sys
 import unicodedata
@@ -18,7 +17,7 @@ from datetime import UTC, date, datetime
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 from pathlib import Path, PurePosixPath
-from typing import Final, Literal, NamedTuple, TypedDict, TypeVar, cast
+from typing import Final, Literal, NamedTuple, NoReturn, TypedDict, TypeVar, cast
 
 import typer
 from rich.console import Console
@@ -26,11 +25,16 @@ from rich.console import Console
 from openkos import config, fsio, lock, read_outcome, source_date, source_title
 from openkos import lint as lint_check
 from openkos.application import backends as application_backends
-from openkos.application import consent as application_consent
 from openkos.application import doctor as application_doctor
 from openkos.application import drift as application_drift
 from openkos.application import ingest as application_ingest
-from openkos.application import ingest_service
+from openkos.application import (
+    ingest_service,
+    merge_service,
+    reconcile_service,
+    unmerge_service,
+    write_gate,
+)
 from openkos.application import lifecycle as application_lifecycle
 from openkos.application import lint as application_lint
 from openkos.application import list_service as application_list
@@ -46,7 +50,6 @@ from openkos.bundle import decisions as bundle_decisions
 from openkos.bundle import index as bundle_index
 from openkos.bundle import ledger as bundle_ledger
 from openkos.bundle import log as bundle_log
-from openkos.bundle import merge as bundle_merge
 from openkos.bundle import provenance as bundle_provenance
 from openkos.cli import curate as curate_module
 from openkos.cli import observability
@@ -703,75 +706,6 @@ def _snapshot_read(path: Path) -> tuple[bytes, str]:
     return fsio.snapshot_read(path)
 
 
-def _reject_torn_ledger_write(
-    bundle_dir: Path, survivor_canonical: str, verb: str
-) -> None:
-    """Refuse (exit 1, writes nothing) when a `.pending` intent marker
-    already exists for `survivor_canonical`'s ledger sidecar (design
-    Decision 5, Check A -- a torn two-phase write from a prior crashed
-    `merge`). `merge`/`unmerge` both call this in Phase A, before any
-    write, and with NO `--force` override: unlike the doctor-flagged
-    (post-merge-mutation) refusal, a torn `.pending` is mechanically
-    exact and trivially repairable (`bundle_ledger.recover`), and forcing
-    past it would commit a known-inconsistent ledger on top of an
-    unresolved crash artifact."""
-    pending_path = bundle_ledger.pending_path_for(survivor_canonical, bundle_dir)
-    if not pending_path.is_file():
-        return
-    typer.echo(
-        f"openkos {verb}: refusing to {verb} -- {survivor_canonical!r}'s ledger "
-        "has a torn write pending (a prior merge crashed mid-commit). Run "
-        "`openkos doctor` to inspect it; this refusal has no --force override "
-        "because the marker is trivially repairable and forcing past it would "
-        "commit a known-inconsistent ledger.",
-        err=True,
-    )
-    raise typer.Exit(code=1)
-
-
-def _reject_flagged_ledger_write(
-    root: Path, bundle_dir: Path, survivor_canonical: str, force: bool
-) -> None:
-    """Refuse (exit 1, writes nothing) when `survivor_canonical`'s ledger
-    sidecar is flagged by doctor's Check B (post-merge mutation,
-    `bundle_ledger.scan_nesting_violations`) -- UNLESS `--force` is passed
-    (spec: "`merge` Refuses On A Doctor-Flagged Ledger, With `--force`").
-
-    `merge` calls this in Phase A, before any write. `--force` bypasses
-    ONLY this refusal -- it is orthogonal to the confirm-gate precedence
-    (`--auto`/`review: false`/TTY prompt) that governs the write itself,
-    mirroring `forget --force`'s independence from `--auto`. Unlike
-    `_reject_torn_ledger_write` (Check A, mechanically exact and trivially
-    repairable), Check B's corruption is not always repairable, so this
-    refusal has an escape hatch for an operator who has already confirmed
-    it is safe to proceed."""
-    if force:
-        return
-    violations = bundle_ledger.scan_nesting_violations(bundle_dir)
-    if not any(survivor_id == survivor_canonical for survivor_id, _ in violations):
-        return
-    if vcs_git.repo_root(root) is not None and vcs_git.has_reset_point(root):
-        reset_remedy = "run `git reset --hard <first-merge>~1` then `openkos reindex`"
-    else:
-        reset_remedy = (
-            "no git reset point is available in this workspace (no "
-            "repository, no configured git identity, or no commit "
-            "history) -- there is no remedy that restores reversibility "
-            "for the affected merge(s)"
-        )
-    typer.echo(
-        f"openkos merge: refusing to merge -- {survivor_canonical!r}'s ledger "
-        "is flagged by the merge-ledger-integrity check (post-merge "
-        "mutation). If the ledger is merely unmigrated (still embedded in "
-        "the survivor's own frontmatter, not corrupted), run `openkos "
-        f"repair`; if corrupted, {reset_remedy} -- reversibility of merges "
-        "made before this fix is not guaranteed. Re-run with --force to "
-        "bypass this refusal.",
-        err=True,
-    )
-    raise typer.Exit(code=1)
-
-
 def _excise_merged_sections(snapshot: str, purge_ids: set[str]) -> str:
     """Remove every purge-set member's delimited `## Merged content (<id>)`
     section from a ledger snapshot string (issue #602, leak 1).
@@ -1193,24 +1127,6 @@ def _sweep_decisions_for_ids(bundle_dir: Path, purge_ids: Iterable[str]) -> list
         )
         touched.append(decisions_path)
     return touched
-
-
-def _okf_v02_migration_hint(index_path: Path) -> str | None:
-    """`None` unless `index_path` exists and declares an `okf_version`
-    other than `okf.OKF_VERSION` -- the one-sentence hint `unmerge`'s drift
-    refusal appends (okf-v02-migration Phase 6, `okf-format-migration`
-    spec): a bundle that predates `repair`'s OKF migration is a fact the
-    operator can act on regardless of what caused this particular refusal.
-    A missing `index.md` is tolerated (OKF §11) and reads as "nothing to
-    hint about" here, mirroring `plan_repair`'s own no-flip-needed rule for
-    an absent index."""
-    try:
-        metadata, _ = okf.load_frontmatter(index_path.read_text(encoding="utf-8"))
-    except OSError:
-        return None
-    if okf.okf_version_is_current(metadata):
-        return None
-    return "this bundle predates OKF 0.2; run `openkos repair` first."
 
 
 def _reject_drifted_targets(
@@ -2281,43 +2197,6 @@ def _echo_n_gt2_skip(bundle_dir: Path, group: "CandidateGroup") -> None:
         typer.echo(f"    openkos merge {survivor_id} {absorbed_id}")
 
 
-def _commit_one_merge(
-    root: Path,
-    layout: config.WorkspaceLayout,
-    index_path: Path,
-    log_path: Path,
-    prepared: "PreparedMerge",
-) -> str | None:
-    """`merge_core` + `_autocommit` for one prepared merge, extracted
-    verbatim from the former inline body (issue #137 closing slice, Phase 1
-    refactor). Raises `OSError`/`ValueError` straight from `merge_core`,
-    unchanged -- callers decide how to report and whether to stop.
-
-    Returns `_autocommit`'s sha (issue #800) rather than echoing the
-    disclosure itself, because this helper is NOT curate-only: `adjudicate
-    --apply` and `--apply-same` drive it too, and #800 scopes the new line
-    to `forget`, `merge` and `curate`. Printing here would silently widen it
-    to `adjudicate`. The Identity caller in `cli/curate.py` echoes; the two
-    `adjudicate` walks ignore the value, exactly as they did when it was
-    `None`."""
-    merge_result = application_lifecycle.merge_core(
-        layout.bundle_dir, index_path, log_path, prepared
-    )
-    return _autocommit(
-        root,
-        [
-            "bundle/index.md",
-            "bundle/log.md",
-            *(f"bundle/{rel}" for rel in merge_result.touched_files),
-            f"bundle/{prepared.survivor_canonical}.md",
-            f"bundle/{prepared.absorbed_canonical}.md",
-            merge_result.ledger_sidecar_path,
-        ],
-        f"openkos: merge {prepared.absorbed_canonical} into "
-        f"{prepared.survivor_canonical}",
-    )
-
-
 def _run_adjudicate_apply(
     root: Path,
     layout: config.WorkspaceLayout,
@@ -2354,7 +2233,7 @@ def _run_adjudicate_apply(
 
     Between the accepted `y` and the write sits the same TOCTOU window
     every drift-guarded verb closes (the #306/#313/#319 arc): every byte
-    `_commit_one_merge` writes was computed by `_prepare_one_merge` BEFORE
+    `merge_service.commit_merge` writes was computed by `_prepare_one_merge` BEFORE
     the `[y/N]` prompt, so an edit landing on any target while the
     prompt waited -- likeliest on the survivor, worst on the absorbed
     file, which is UNLINKED rather than overwritten -- would be silently
@@ -2460,7 +2339,7 @@ def _run_adjudicate_apply(
 
         # #688: same post-consent, pre-drift-check slot `merge` and
         # curate's Identity stage use, via the same helper -- this walk
-        # drives `_prepare_one_merge`/`_commit_one_merge` directly too, so
+        # drives `_prepare_one_merge`/`merge_service.commit_merge` directly too, so
         # it had the identical silent-stacking gap.
         prepared = _apply_reconciliation(
             root,
@@ -2470,7 +2349,7 @@ def _run_adjudicate_apply(
             verb="adjudicate --apply",
         )
 
-        # Issue #346: every byte `_commit_one_merge` writes below was
+        # Issue #346: every byte `merge_service.commit_merge` writes below was
         # computed before the prompt, so re-validate each target now --
         # after the accepted `y`, before the first write. The absorbed
         # file rides in `deletes=` because it is UNLINKED, not overwritten
@@ -2484,7 +2363,7 @@ def _run_adjudicate_apply(
         )
 
         try:
-            _commit_one_merge(root, layout, index_path, log_path, prepared)
+            merge_service.commit_merge(root, layout, prepared, autocommit=_autocommit)
         except (OSError, ValueError) as exc:
             typer.echo(
                 "openkos adjudicate --apply: failed while merging "
@@ -2506,7 +2385,7 @@ def _run_adjudicate_apply(
         typer.echo(f"  declined: {item}")
 
     # #640: once per invocation, after the whole walk -- never inside
-    # `_commit_one_merge`, which runs per accepted pair.
+    # `merge_service.commit_merge`, which runs per accepted pair.
     if applied:
         _refresh_derived_after_write(layout, None, verb="adjudicate")
 
@@ -2637,7 +2516,7 @@ def _run_adjudicate_apply_same(
     `PreparedMerge`), since an earlier merge in THIS SAME batch may already
     have absorbed a later pair's member; that legitimate case is still
     skipped, not crashed on, and still yields applied < previewed.
-    Accepted merges commit sequentially via `_commit_one_merge`; a
+    Accepted merges commit sequentially via `merge_service.commit_merge`; a
     mid-batch failure stops the run but keeps every prior commit intact
     and reversible via `unmerge` -- and, before raising, echoes a partial
     summary (applied so far / previewed, and that the remainder was never
@@ -2649,7 +2528,7 @@ def _run_adjudicate_apply_same(
     Pass 2's re-prepare narrows the batch's TOCTOU window but does not
     close it (the #306/#313/#319 arc): an edit landing during the confirm
     gate or an earlier pair's commit IS re-read and recomputed over, but
-    every byte `_commit_one_merge` writes for pair k was still captured by
+    every byte `merge_service.commit_merge` writes for pair k was still captured by
     that pair's re-prepare BEFORE the write, so an edit landing in the
     re-prepare-to-write gap would be silently destroyed -- likeliest on
     the survivor, worst on the absorbed file, which is UNLINKED rather
@@ -2797,7 +2676,7 @@ def _run_adjudicate_apply_same(
             verb="adjudicate --apply-same",
         )
 
-        # Issue #346: every byte `_commit_one_merge` writes below was
+        # Issue #346: every byte `merge_service.commit_merge` writes below was
         # captured by this pair's re-prepare above, so re-validate each
         # target now -- after the baseline capture, before the first
         # write. The absorbed file rides in `deletes=` because it is
@@ -2826,7 +2705,7 @@ def _run_adjudicate_apply_same(
             raise
 
         try:
-            _commit_one_merge(root, layout, index_path, log_path, prepared)
+            merge_service.commit_merge(root, layout, prepared, autocommit=_autocommit)
         except (OSError, ValueError) as exc:
             typer.echo(
                 "openkos adjudicate --apply-same: failed while merging "
@@ -2865,7 +2744,7 @@ def _run_adjudicate_apply_same(
         f"{cross_type_note})"
     )
 
-    # #640: once per batch, after Pass 2 -- never per `_commit_one_merge`.
+    # #640: once per batch, after Pass 2 -- never per `merge_service.commit_merge`.
     if applied:
         _refresh_derived_after_write(layout, None, verb="adjudicate")
 
@@ -3506,7 +3385,7 @@ _first_free_disambiguated_slug = application_ingest.first_free_disambiguated_slu
 # 1). The three TYPES are bound back here under their original names, the
 # same "plain assignment, not a renamed import" shape as `_DerivedPlan`
 # above, so every quoted forward-ref annotation still elsewhere in this
-# module (`_apply_reconciliation`, `_commit_one_merge`,
+# module (`_apply_reconciliation`, `merge_service.commit_merge`,
 # `_refused_stacked_line`) resolves unchanged.
 # `_canonicalize_concept_id`/`_resolve_concept_path`/`_merge_drift_targets`
 # and `_member_body_length`/`_ordered_merge_pair`/`_cross_source_same_pair`/
@@ -3531,7 +3410,7 @@ _first_free_disambiguated_slug = application_ingest.first_free_disambiguated_slu
 # `monkeypatch.setattr("openkos.cli.main.prepare_merge"/"merge_core", ...)`
 # must raise `AttributeError` rather than silently no-op. Every call site in
 # this module -- `merge` itself, `application.lifecycle.prepare_one_merge`,
-# `_commit_one_merge` -- therefore calls
+# `merge_service.commit_merge` -- therefore calls
 # `application_lifecycle.prepare_merge`/`merge_core` by module attribute.
 StackedBodyReport = application_lifecycle.StackedBodyReport
 PreparedMerge = application_lifecycle.PreparedMerge
@@ -3547,7 +3426,7 @@ MergeResult = application_lifecycle.MergeResult
 #
 # `PreparedMerge` and its two siblings above are bound back because quoted
 # forward-ref annotations elsewhere in this module (`_apply_reconciliation`,
-# `_commit_one_merge`, `_refused_stacked_line`) still name them. These two
+# `merge_service.commit_merge`, `_refused_stacked_line`) still name them. These two
 # have no such reader: after the move, `grep PreparedRelate` and `grep
 # PreparedSetVolatility` find nothing in this module but this comment, and
 # every call site -- here, in `cli/curate.py`, and in the tests -- reaches
@@ -8116,6 +7995,98 @@ def _reconcile_merged_survivor(
     return dataclasses.replace(prepared, plan=new_plan), None
 
 
+def _ask_confirmation(prompt: str) -> write_gate.ConfirmationAnswer:
+    """The confirmation question the curation write services ask, answered on
+    a TTY only: a decline is a no, and without a TTY the question cannot be
+    asked (the service then refuses with its own text)."""
+    if not sys.stdin.isatty():
+        return "unavailable"
+    try:
+        typer.confirm(prompt, abort=True)
+    except typer.Abort:
+        return "declined"
+    return "proceed"
+
+
+def _exit_for_write_refusal(exc: write_gate.WriteRefused) -> NoReturn:
+    """Render a curation service's typed refusal and map its TYPE to the exit
+    contract: Typer's own abort for a declined prompt, 3 for drift (the one
+    failure a script may retry, #319), 1 for everything else."""
+    if isinstance(exc, write_gate.ConfirmationDeclined):
+        raise typer.Abort() from exc
+    typer.echo(exc.message, err=True)
+    raise typer.Exit(
+        code=3 if isinstance(exc, write_gate.DriftDetected) else 1
+    ) from exc
+
+
+class _CliMergeObserver(merge_service.MergeObserver):
+    """Renders what `merge_concepts` reports: the plan and the closing lines
+    to stdout, in the order the verb has always printed them."""
+
+    def proposed(self, preview: merge_service.MergePreview) -> None:
+        prepared = preview.prepared
+        survivor_canonical = prepared.survivor_canonical
+        absorbed_canonical = prepared.absorbed_canonical
+        typer.echo("openkos merge: proposed changes:")
+        typer.echo(
+            f"  ~ sensitivity: {prepared.sensitivity_before} -> "
+            f"{prepared.sensitivity_after}"
+        )
+        for relation in prepared.dropped_self_loops:
+            typer.echo(f"  - drop self-loop: {relation.target} ({relation.type})")
+        for relation in prepared.deduped_collisions:
+            typer.echo(f"  ~ dedupe collision: {relation.target} ({relation.type})")
+        if prepared.stacked_body is not None:
+            typer.echo(
+                f"  + stack absorbed body: {prepared.stacked_body.absorbed_chars} "
+                f"unreconciled char(s) ({prepared.stacked_body.share:.0%} of "
+                "merged body -- bodies were appended, not reconciled)"
+            )
+        if preview.reconcile_planned:
+            typer.echo(f"  ~ {_RECONCILE_PLAN_NOTE}")
+        for rel in prepared.rewritten_files:
+            typer.echo(f"  ~ bundle/{rel} (rewrite inbound link(s) to survivor)")
+        for rel in prepared.relation_rewritten_files:
+            typer.echo(f"  ~ bundle/{rel} (retarget relation to survivor)")
+        for rel in prepared.provenance_rewritten_files:
+            typer.echo(f"  ~ bundle/{rel} (retarget provenance to survivor)")
+        if prepared.removed >= 1:
+            typer.echo(f"  ~ {preview.index_name} (remove entry)")
+        typer.echo(f"  ~ {preview.log_name} (new dated entry)")
+        status_suffix = ""
+        if prepared.status_outcome is not None:
+            status_suffix = _status_export_preview_suffix(prepared.status_outcome)
+        typer.echo(
+            f"  ~ bundle/{survivor_canonical}.md (merged content{status_suffix})"
+        )
+        typer.echo(f"  - bundle/{absorbed_canonical}.md")
+        # #796: `merge` is the command `duplicates` and `adjudicate` BOTH name
+        # in their closing hints, and it was the one path #776's cross-source
+        # guardrail never reached -- the batch door was locked while the door
+        # the tool recommends stayed open. Printed after the plan and before
+        # the gate, so it is the last thing read before consenting.
+        if preview.cross_source_same_pair:
+            typer.echo(_CROSS_SOURCE_WALK_NOTE)
+        # #904 inherits #796's lesson verbatim: `merge` is the command the
+        # cross-type skip message itself prints, so guarding only the batch
+        # would send the operator through an unguarded door with the exact
+        # arguments the guard just refused. The label's `member_ids` order is
+        # `(survivor, absorbed)` here, so it also states the direction.
+        if preview.cross_type_concern is not None:
+            typer.echo(_cross_type_walk_note(preview.cross_type_concern))
+
+    def merged(self, summary: merge_service.MergeSummary) -> None:
+        typer.echo(
+            f"openkos merge: merged 'bundle/{summary.absorbed_canonical}.md' into "
+            f"'bundle/{summary.survivor_canonical}.md' "
+            f"({summary.index_name}, {summary.log_name} updated)."
+        )
+
+    def committed(self, sha: str) -> None:
+        _echo_commit_disclosure(sha, prefix="openkos merge: ")
+
+
 @app.command(
     help=(
         "Fuse two concepts into one, keeping a ledger entry that makes the "
@@ -8277,190 +8248,130 @@ def merge(
         raise typer.Exit(code=2)
 
     root = Path.cwd()
-    layout = config.WorkspaceLayout(root)
-    index_path = layout.bundle_dir / "index.md"
-    log_path = layout.bundle_dir / "log.md"
-
-    try:
-        workspace_reason = config.require_workspace(root)
-        if workspace_reason is not None:
-            typer.echo(
-                f"openkos merge: refusing to merge -- {workspace_reason}.",
-                err=True,
-            )
-            raise typer.Exit(code=1)
-
-        survivor_path, survivor_canonical = application_lifecycle.resolve_concept_path(
-            layout.bundle_dir, survivor_id
-        )
-        absorbed_path, absorbed_canonical = application_lifecycle.resolve_concept_path(
-            layout.bundle_dir, absorbed_id
-        )
-        if survivor_canonical == absorbed_canonical:
-            raise ValueError(
-                "survivor and absorbed concept-ids must be distinct, both "
-                f"resolved to {survivor_canonical!r}"
-            )
-    except (OSError, ValueError) as exc:
-        typer.echo(f"openkos merge: refusing to merge -- {exc}.", err=True)
-        raise typer.Exit(code=1) from exc
-
-    _reject_torn_ledger_write(layout.bundle_dir, survivor_canonical, "merge")
-    _reject_flagged_ledger_write(root, layout.bundle_dir, survivor_canonical, force)
-
-    now = datetime.now(UTC)
-
-    try:
-        prepared = application_lifecycle.prepare_merge(
-            layout.bundle_dir,
-            index_path,
-            log_path,
-            survivor_path,
-            absorbed_path,
-            survivor_canonical,
-            absorbed_canonical,
+    ports = merge_service.MergePorts(
+        autocommit=lambda root, paths, message: _autocommit(root, paths, message),
+        has_reset_point=lambda root: (
+            vcs_git.repo_root(root) is not None and vcs_git.has_reset_point(root)
+        ),
+        apply_reconciliation=lambda root, prepared, policy: _apply_reconciliation(
             root,
-            now=now,
-        )
-    except (OSError, ValueError) as exc:
-        typer.echo(
-            f"openkos merge: failed while preparing the merge -- {exc}.", err=True
-        )
-        raise typer.Exit(code=1) from exc
-
-    typer.echo("openkos merge: proposed changes:")
-    typer.echo(
-        f"  ~ sensitivity: {prepared.sensitivity_before} -> {prepared.sensitivity_after}"
+            prepared,
+            no_reconcile=policy.no_reconcile,
+            reconcile=policy.reconcile,
+            verb="merge",
+        ),
+        clock=lambda: datetime.now(UTC),
     )
-    for relation in prepared.dropped_self_loops:
-        typer.echo(f"  - drop self-loop: {relation.target} ({relation.type})")
-    for relation in prepared.deduped_collisions:
-        typer.echo(f"  ~ dedupe collision: {relation.target} ({relation.type})")
-    # #645 (ruling: opt-out): plan the reconciliation pass when the stacked
-    # share reaches the threshold, disclosed HERE -- in the plan, before
-    # the consent gate -- so the model call is part of what the human
-    # approves. `--no-reconcile` is the opt-out; failure falls back to the
-    # stacked body after the gate.
-    reconcile_planned = application_lifecycle.reconcile_planned(
-        prepared, no_reconcile=no_reconcile, reconcile=reconcile
-    )
-    if prepared.stacked_body is not None:
-        typer.echo(
-            f"  + stack absorbed body: {prepared.stacked_body.absorbed_chars} "
-            f"unreconciled char(s) ({prepared.stacked_body.share:.0%} of "
-            "merged body -- bodies were appended, not reconciled)"
-        )
-    if reconcile_planned:
-        typer.echo(f"  ~ {_RECONCILE_PLAN_NOTE}")
-    for rel in prepared.rewritten_files:
-        typer.echo(f"  ~ bundle/{rel} (rewrite inbound link(s) to survivor)")
-    for rel in prepared.relation_rewritten_files:
-        typer.echo(f"  ~ bundle/{rel} (retarget relation to survivor)")
-    for rel in prepared.provenance_rewritten_files:
-        typer.echo(f"  ~ bundle/{rel} (retarget provenance to survivor)")
-    if prepared.removed >= 1:
-        typer.echo(f"  ~ {index_path.name} (remove entry)")
-    typer.echo(f"  ~ {log_path.name} (new dated entry)")
-    status_suffix = ""
-    if prepared.status_outcome is not None:
-        status_suffix = _status_export_preview_suffix(prepared.status_outcome)
-    typer.echo(f"  ~ bundle/{survivor_canonical}.md (merged content{status_suffix})")
-    typer.echo(f"  - bundle/{absorbed_canonical}.md")
-    # #796: `merge` is the command `duplicates` and `adjudicate` BOTH name
-    # in their closing hints, and it was the one path #776's cross-source
-    # guardrail never reached -- the batch door was locked while the door
-    # the tool recommends stayed open. Printed after the plan and before
-    # the gate, so it is the last thing read before consenting.
-    if application_lifecycle.cross_source_same_pair(
-        layout.bundle_dir, (survivor_canonical, absorbed_canonical)
-    ):
-        typer.echo(_CROSS_SOURCE_WALK_NOTE)
-    # #904 inherits #796's lesson verbatim: `merge` is the command the
-    # cross-type skip message itself prints, so guarding only the batch
-    # would send the operator through an unguarded door with the exact
-    # arguments the guard just refused. The label's `member_ids` order is
-    # `(survivor, absorbed)` here, so it also states the direction.
-    cross_type_concern = application_lifecycle.cross_type_concern(
-        layout.bundle_dir, (survivor_canonical, absorbed_canonical)
-    )
-    if cross_type_concern is not None:
-        typer.echo(_cross_type_walk_note(cross_type_concern))
-
-    if not auto and prepared.review:
-        if sys.stdin.isatty():
-            typer.confirm(prepared.confirmation.prompt, abort=True)
-        else:
-            # #918: the wording comes from the staged request, not a literal
-            # here, so an api/mcp adapter driving this gate headlessly reads
-            # the same sentence the CLI prints.
-            typer.echo(prepared.confirmation.non_tty_refusal, err=True)
-            raise typer.Exit(code=1)
-
-    # #645: the reconciliation call runs AFTER consent (the plan disclosed
-    # it) and BEFORE the drift re-check below, so the slow model call sits
-    # inside the window the drift guard re-validates rather than after it.
-    # Any failure keeps the stacked body and notices -- the merge itself
-    # never fails on an improvement pass.
-    prepared = _apply_reconciliation(
-        root, prepared, no_reconcile=no_reconcile, reconcile=reconcile, verb="merge"
-    )
-
-    # Issue #334: every byte `merge_core` writes below was computed from a
-    # pre-prompt read, so re-validate each target now -- after the gate,
-    # before the first write.
-    #
-    # The ABSORBED file is in here too, not just the write targets: it is
-    # UNLINKED, so an edit landing on it during the prompt would be
-    # destroyed outright -- strictly worse than being overwritten, since
-    # nothing survives to recover from. The keys are built from the same
-    # `bundle_dir`/resolution both phases share (#325): `survivor_path`/
-    # `absorbed_path` are `_resolve_concept_path`'s `bundle_dir /
-    # f"{canonical}.md"`, the exact construction `merge_core` writes and
-    # removes.
-    _reject_drifted_targets(
-        layout,
-        application_lifecycle.merge_drift_targets(layout, prepared),
-        "merge",
-        # #319: the absorbed file is the one path `merge_core` UNLINKS;
-        # everything else in the mapping is overwritten.
-        deletes=frozenset({absorbed_path}),
-    )
-
     try:
-        result = application_lifecycle.merge_core(
-            layout.bundle_dir, index_path, log_path, prepared
+        merge_service.merge_concepts(
+            root,
+            survivor_id,
+            absorbed_id,
+            merge_service.MergePolicy(
+                auto=auto,
+                force=force,
+                no_reconcile=no_reconcile,
+                reconcile=reconcile,
+            ),
+            ports=ports,
+            observer=_CliMergeObserver(),
+            confirm=_ask_confirmation,
         )
-    except (OSError, ValueError) as exc:
-        typer.echo(f"openkos merge: failed while writing the merge -- {exc}.", err=True)
-        raise typer.Exit(code=1) from exc
-
-    typer.echo(
-        f"openkos merge: merged 'bundle/{absorbed_canonical}.md' into "
-        f"'bundle/{survivor_canonical}.md' "
-        f"({index_path.name}, {log_path.name} updated)."
-    )
-
-    merge_sha = _autocommit(
-        root,
-        [
-            "bundle/index.md",
-            "bundle/log.md",
-            *(f"bundle/{rel}" for rel in result.touched_files),
-            f"bundle/{survivor_canonical}.md",
-            f"bundle/{absorbed_canonical}.md",
-            result.ledger_sidecar_path,
-        ],
-        f"openkos: merge {absorbed_canonical} into {survivor_canonical}",
-    )
-    # #800: `unmerge` reverses a merge, but only through the ledger and only
-    # in last-in-first-out order; the commit is the unconditional way back,
-    # so it is named here, after the success line and only when it exists.
-    if merge_sha is not None:
-        _echo_commit_disclosure(merge_sha, prefix="openkos merge: ")
+    except write_gate.WriteRefused as exc:
+        _exit_for_write_refusal(exc)
 
     # #640: `cfg=None` -- `merge` never reads config; the helper reads its
     # own copy inside the vector stage's fail-open envelope.
-    _refresh_derived_after_write(layout, None, verb="merge")
+    _refresh_derived_after_write(config.WorkspaceLayout(root), None, verb="merge")
+
+
+class _CliUnmergeObserver(unmerge_service.UnmergeObserver):
+    """Renders what the unmerge service reports: each step's plan, the
+    `--to` plan and its per-step banners, and the closing lines, in the order
+    the verb has always printed them."""
+
+    def proposed(self, preview: unmerge_service.UnmergePreview) -> None:
+        prepared = preview.prepared
+        plan = prepared.plan
+        survivor_canonical = preview.survivor_canonical
+        absorbed_canonical = preview.absorbed_canonical
+        typer.echo("openkos unmerge: proposed changes:")
+        for rel in prepared.rewritten_files:
+            typer.echo(f"  ~ bundle/{rel} (reverse inbound link rewrite)")
+        for rel in prepared.relation_rewrite_files:
+            typer.echo(f"  ~ bundle/{rel} (restore pre-merge relations snapshot)")
+        for rel in prepared.provenance_rewrite_files:
+            typer.echo(f"  ~ bundle/{rel} (restore pre-merge provenance snapshot)")
+        if plan.entry.schema == okf.MERGE_LEDGER_SCHEMA_V5:
+            typer.echo(f"  ~ {preview.index_name} (restore this merge's catalog entry)")
+            typer.echo(
+                f"  ~ {preview.log_name} (remove this merge's entry, append unmerge)"
+            )
+        else:
+            typer.echo(f"  ~ {preview.index_name} (restore pre-merge contents)")
+            typer.echo(
+                f"  ~ {preview.log_name} (restore pre-merge contents, append "
+                "unmerge entry)"
+            )
+        survivor_status_suffix = ""
+        if prepared.survivor_status_outcome is not None:
+            survivor_status_suffix = _status_export_preview_suffix(
+                prepared.survivor_status_outcome
+            )
+        typer.echo(
+            f"  ~ bundle/{survivor_canonical}.md (restore pre-merge contents"
+            f"{survivor_status_suffix})"
+        )
+        absorbed_status_suffix = ""
+        if prepared.absorbed_status_outcome is not None:
+            absorbed_status_suffix = _status_export_preview_suffix(
+                prepared.absorbed_status_outcome
+            )
+        typer.echo(
+            f"  + bundle/{absorbed_canonical}.md (restore{absorbed_status_suffix})"
+        )
+        if prepared.catalog_log_drifted:
+            typer.echo(
+                "Warning: index.md/log.md changed since the merge; unmerge "
+                "restores the pre-merge snapshot and will discard those changes."
+            )
+        if prepared.survivor_drift_unverifiable:
+            typer.echo(
+                f"Warning: {survivor_canonical!r}'s merge ledger entry predates "
+                "the survivor-edit check (#1110); cannot confirm its current "
+                "bytes still match what the merge wrote, proceeding anyway."
+            )
+        if prepared.survivor_edits_discarded:
+            typer.echo(
+                f"Warning: {survivor_canonical!r}'s post-merge edits are being "
+                "discarded (--discard-survivor-edits) -- it will be restored to "
+                "its pre-merge state, and anything changed on it since the "
+                "merge is gone unless you copied it somewhere safe first."
+            )
+
+    def restored(self, summary: unmerge_service.UnmergeSummary) -> None:
+        typer.echo(
+            f"openkos unmerge: restored 'bundle/{summary.absorbed_canonical}.md' "
+            f"from 'bundle/{summary.survivor_canonical}.md' "
+            f"({summary.index_name}, {summary.log_name} updated)."
+        )
+
+    def unwind_planned(self, plan: unmerge_service.UnwindPlan) -> None:
+        total = len(plan.steps)
+        typer.echo(
+            f"openkos unmerge: unwind plan for '{plan.survivor_canonical}' -- "
+            f"{total} step{'s' if total != 1 else ''}, newest merge first:"
+        )
+        for step_number, step in enumerate(plan.steps, start=1):
+            typer.echo(f"step {step_number}: restore '{step.absorbed_id}'")
+            for line in step.preview_lines:
+                typer.echo(line)
+
+    def step_starting(self, step_number: int, total: int, absorbed_id: str) -> None:
+        typer.echo(
+            f"openkos unmerge: step {step_number} of {total} -- restoring "
+            f"'{absorbed_id}'"
+        )
 
 
 _UNMERGE_ARGUMENT_RULE: Final = "exactly one of the two is required"
@@ -8575,7 +8486,7 @@ def unmerge(
     otherwise a TTY prompts ONCE for the whole plan via `typer.confirm`
     and aborts (exit 1) on decline; otherwise (non-TTY, no `--auto`) this
     refuses to write. Execution is a sequential loop over
-    `_run_single_unmerge`: each step re-runs the COMPLETE single-step
+    `unmerge_service`: each step re-runs the COMPLETE single-step
     machinery -- Phase A recomputed from CURRENT disk state, every
     fail-closed drift/collision check included, then Phase B's writes in
     their documented order, the per-step `**Unmerge**` audit line and the
@@ -8605,10 +8516,9 @@ def unmerge(
     The single-step machinery itself -- Phase A's gates and fail-closed
     checks, the preview, the confirm gate, the post-confirm drift guard,
     and Phase B's write order -- is documented on
-    `_run_single_unmerge`, which both forms share.
+    `application.unmerge_service`, which both forms share.
     """
     root = Path.cwd()
-    layout = config.WorkspaceLayout(root)
 
     target_input = absorbed_id if absorbed_id is not None else to
     if target_input is None:
@@ -8626,693 +8536,60 @@ def unmerge(
         )
         raise typer.Exit(code=1)
 
-    try:
-        workspace_reason = config.require_workspace(root)
-        if workspace_reason is not None:
-            typer.echo(
-                f"openkos unmerge: refusing to unmerge -- {workspace_reason}.",
-                err=True,
-            )
-            raise typer.Exit(code=1)
-
-        # `_resolve_concept_path`, split open (issue #562): the path-safety
-        # canonicalization still runs FIRST and unchanged, but existence is
-        # decided here so the "does not exist" refusal -- and ONLY that
-        # refusal, never a path-safety rejection -- can be extended with
-        # `find_absorber`'s reverse lookup across the ledger sidecars.
-        survivor_canonical = application_lifecycle.canonicalize_concept_id(survivor_id)
-        survivor_path = okf.concept_path_for(survivor_canonical, layout.bundle_dir)
-        if not survivor_path.is_file():
-            message = f"concept '{survivor_id}' does not exist"
-            absorber = bundle_ledger.find_absorber(
-                survivor_canonical, layout.bundle_dir
-            )
-            if absorber is not None:
-                message += (
-                    f". It was absorbed into '{absorber}'; run "
-                    f"`openkos unmerge {absorber} {survivor_canonical}` first "
-                    "to restore it"
-                )
-            raise ValueError(message)
-        target_canonical = application_lifecycle.canonicalize_concept_id(target_input)
-    except (OSError, ValueError) as exc:
-        typer.echo(f"openkos unmerge: refusing to unmerge -- {exc}.", err=True)
-        raise typer.Exit(code=1) from exc
-
-    _reject_torn_ledger_write(layout.bundle_dir, survivor_canonical, "unmerge")
-
-    now = datetime.now(UTC)
-
-    try:
-        cfg = config.read_config(root)
-    except (OSError, ValueError) as exc:
-        typer.echo(
-            f"openkos unmerge: failed while preparing the unmerge -- {exc}.", err=True
-        )
-        raise typer.Exit(code=1) from exc
-
-    if to is None:
-        # Classic two-arg path: one single-step unmerge, its own preview
-        # and confirm gate included -- byte-identical behavior to the
-        # pre-#562 command.
-        _run_single_unmerge(
-            root,
-            layout,
-            survivor_path,
-            survivor_canonical,
-            target_canonical,
-            now=now,
-            cfg=cfg,
-            auto=auto,
-            confirmed=False,
-            discard_survivor_edits=discard_survivor_edits,
-        )
-        # #640: after the single-step write committed. NOT inside
-        # `_run_single_unmerge`, which the `--to` chain below invokes
-        # once per entry -- the refresh is once per invocation.
-        _refresh_derived_after_write(layout, cfg, verb="unmerge")
-        return
-
-    try:
-        entries = bundle_ledger.read_entries(survivor_canonical, layout.bundle_dir)
-        sequence = bundle_merge.plan_unwind_sequence(
-            survivor_id=survivor_canonical,
-            to_absorbed_id=target_canonical,
-            entries=entries,
-        )
-    except (OSError, ValueError) as exc:
-        typer.echo(
-            f"openkos unmerge: failed while preparing the unmerge -- {exc}.", err=True
-        )
-        raise typer.Exit(code=1) from exc
-
-    total = len(sequence)
-    typer.echo(
-        f"openkos unmerge: unwind plan for '{survivor_canonical}' -- "
-        f"{total} step{'s' if total != 1 else ''}, newest merge first:"
+    policy = unmerge_service.UnmergePolicy(
+        auto=auto, discard_survivor_edits=discard_survivor_edits
     )
-    for step_number, entry in enumerate(sequence, start=1):
-        typer.echo(f"step {step_number}: restore '{entry.absorbed_id}'")
-        for line in application_lifecycle.unwind_step_preview_lines(
-            entry, survivor_canonical
-        ):
-            typer.echo(line)
-
-    if not auto and cfg.review:
-        # The `--to` chain consents to the WHOLE unwind sequence up front,
-        # before any step's `prepare_unmerge` runs, so there is no plan to
-        # read the request from -- build it from the same service helper
-        # the per-step gate's `PreparedUnmerge` carries (#918), so both
-        # gates cannot drift apart.
-        chain_confirmation = application_consent.boolean_confirmation("unmerge")
-        if sys.stdin.isatty():
-            typer.confirm(chain_confirmation.prompt, abort=True)
-        else:
-            typer.echo(chain_confirmation.non_tty_refusal, err=True)
-            raise typer.Exit(code=1)
-
-    for step_number, entry in enumerate(sequence, start=1):
-        typer.echo(
-            f"openkos unmerge: step {step_number} of {total} -- restoring "
-            f"'{entry.absorbed_id}'"
-        )
-        try:
-            _run_single_unmerge(
+    ports = unmerge_service.UnmergePorts(
+        autocommit=lambda root, paths, message: _autocommit(root, paths, message),
+        clock=lambda: datetime.now(UTC),
+    )
+    observer = _CliUnmergeObserver()
+    try:
+        if to is None:
+            # Classic two-arg path: one single-step unmerge, its own preview
+            # and confirm gate included -- byte-identical behavior to the
+            # pre-#562 command.
+            unmerge_service.unmerge_concept(
                 root,
-                layout,
-                survivor_path,
-                survivor_canonical,
-                entry.absorbed_id,
-                now=now,
-                cfg=cfg,
-                auto=auto,
-                confirmed=True,
-                discard_survivor_edits=discard_survivor_edits,
+                survivor_id,
+                target_input,
+                policy,
+                ports=ports,
+                observer=observer,
+                confirm=_ask_confirmation,
             )
-        except (typer.Exit, typer.Abort) as exc:
-            # The step already reported its own failure on stderr (the
-            # single-step machinery never lets a raw traceback out); this
-            # adds the chain-level accounting the operator needs next.
-            completed = step_number - 1
-            if completed:
-                progress = (
-                    f"steps 1..{completed} completed and left a consistent "
-                    "bundle (git-recoverable); completed steps are not "
-                    "rolled back"
-                )
-            else:
-                progress = "no earlier steps had completed"
-            typer.echo(
-                f"openkos unmerge: --to unwind stopped at step {step_number} "
-                f"of {total} (restore '{entry.absorbed_id}') -- {progress}.",
-                err=True,
-            )
-            # The step's own exit code survives the chain wrapper: exit 3
-            # (the post-confirm drift refusal) is the ONE documented exit
-            # a script may safely retry, and collapsing it to 1 here would
-            # silently revoke that contract mid-chain (review finding,
-            # issue #562). `typer.Abort` has no code and stays the
-            # conventional 1.
-            exit_code = exc.exit_code if isinstance(exc, typer.Exit) else 1
-            raise typer.Exit(code=exit_code) from exc
-
-    # #640: once, after the WHOLE chain completed -- a stopped chain raised
-    # above and leaves the stale-index warnings as its safety net.
-    _refresh_derived_after_write(layout, cfg, verb="unmerge")
-
-
-def _run_single_unmerge(
-    root: Path,
-    layout: config.WorkspaceLayout,
-    survivor_path: Path,
-    survivor_canonical: str,
-    absorbed_canonical: str,
-    *,
-    now: datetime,
-    cfg: config.Config,
-    auto: bool,
-    confirmed: bool,
-    discard_survivor_edits: bool = False,
-) -> None:
-    """ONE complete single-step unmerge -- the preview / confirm-gate /
-    drift-guard machinery both `unmerge` forms share (issue #562), Phase A
-    and Phase B delegated to `application.lifecycle.prepare_unmerge`/
-    `unmerge_core` (issue #918 Slice S2b, completing the Phase A/B split
-    S2a left partial). The classic two-arg path calls this once with
-    `confirmed=False`; the `--to` unwind loop calls it once per ledger
-    entry with `confirmed=True`, because the WHOLE plan was already
-    confirmed at its single gate -- `confirmed` short-circuits the prompt
-    exactly like `--auto` does, and everything AFTER the gate (the
-    post-confirm drift guard included) runs identically on every path.
-    Any failure is reported on stderr and raised as `typer.Exit`, never a
-    raw traceback; the caller owns any chain-level accounting on top.
-
-    Phase A (pure, no writes; `application_lifecycle.prepare_unmerge`,
-    called by module attribute, never an aliased import, so a stale
-    monkeypatch target raises loudly instead of silently missing) mirrors
-    `merge`'s gate shape: the caller has already resolved
-    `survivor_path`/`survivor_canonical` via the path-safety gates
-    (`_canonicalize_concept_id` plus the existence check) and canonicalized
-    `absorbed_canonical` via `_canonicalize_concept_id` ONLY -- the SAME
-    path-safety checks minus the existence check, since the absorbed file
-    is EXPECTED to be absent (removed by the merge being reversed) until
-    Phase B recreates it. `bundle.merge.plan_unmerge` (U2) then reads the
-    survivor's `merged_from` ledger and computes the entire restoration in
-    memory: the restored survivor (`survivor_before`, stripping this entry
-    while retaining any earlier ones), the restored absorbed document
-    (`absorbed_snapshot`), and the restored `index.md`/`log.md`
-    (`index_before`/`log_before`). If a file already exists at the
-    absorbed concept's path (drift since the merge), this refuses before
-    any write (threat matrix: Unmerge restore collision). Every recorded
-    inbound-link rewrite is then read from disk and reversed in memory via
-    `bundle.links.reverse_link_rewrites` (U3) -- bounded to the exact
-    recorded `{file, old_link, new_link, offset}` occurrence, never a
-    blind replace-all -- which fails closed (`ValueError`) if a target file
-    drifted since the merge (threat matrix: Link-file drift before unmerge).
-
-    Every recorded `relation_rewrites` entry (design D1/D3; `[]` for a
-    pre-slice-2a v1 ledger entry) is read from disk and reversed via
-    `bundle.relations.reverse_relation_rewrites` -- an ABSOLUTE whole-file
-    overwrite of the recorded pre-merge snapshot, never offset math (design
-    D4's overlapping-LIFO proof relies on this exact property) -- but
-    DRIFT-AWARE and FAIL-CLOSED, symmetric with the link path: the file's
-    CURRENT on-disk text is compared against what THIS merge deterministically
-    wrote there (recomputed by re-applying the retarget to the recorded
-    pre-merge snapshot), and a mismatch (a legitimate edit landed on that
-    file after the merge and before this `unmerge`) raises `ValueError`
-    rather than silently clobbering that edit with the stale snapshot
-    (CRITICAL fix, review correction batch). A file present in BOTH
-    `link_rewrites` and `relation_rewrites` (design D5) has its inbound-link
-    reversal SKIPPED entirely: the relation snapshot already restores that
-    file's full bytes -- link included -- so also attempting
-    `reverse_link_rewrites` on it would either corrupt the already-restored
-    text or fail closed on a now-nonexistent `new_link` occurrence.
-
-    The preview printed before the confirm gate, rendered here from
-    `PreparedUnmerge`'s fields, surfaces every file this DESTRUCTIVE-in-
-    reverse write will touch: each reversed inbound link, each restored
-    relation snapshot, the catalog/log restoration, the restored survivor,
-    and the recreated absorbed file.
-
-    Confirm gate, identical precedence and mechanism to `merge`/`forget`
-    (plus the `confirmed` short-circuit above): `--auto` skips the prompt
-    outright; otherwise config `review: false` (`prepared.review`) skips it
-    the same way; otherwise, on a TTY, `typer.confirm` asks and aborts
-    (exit 1) on decline; otherwise (non-TTY, no `--auto`) this refuses to
-    write (exit 1), telling the user to re-run with `--auto`. Declining or
-    refusing leaves the bundle completely untouched -- Phase A never
-    writes anything.
-
-    Past that gate -- and on the runs that skip it, since `--auto`,
-    `review: false`, and `confirmed` skip the prompt but not the window it
-    stood in -- `_reject_drifted_targets` re-reads `index.md`, `log.md`,
-    the survivor and every rewritten third-party file, and refuses the
-    WHOLE run (exit 3, nothing written) if any changed or vanished since
-    Phase A read it (issues #306, #313, #319). The refusal carries a
-    CUSTOM remedy (#328) because `unmerge` is the one guarded verb whose
-    re-run is not a safe recovery: nothing is recomputed from the current
-    state, so a re-run restores the pre-merge snapshots over
-    `index.md`/`log.md`/the survivor -- overwriting the protected edit --
-    and keeps refusing on an edited rewrite file until the edit is
-    reverted. The message therefore tells the operator to copy the edit
-    somewhere safe first, and never advises the plain re-run that would
-    discard it.
-
-    What that adds differs per target. The link/relation/provenance rewrite
-    files DO have a pre-prompt fail-closed check below, so for them the
-    guard narrows a timing window. `index.md`/`log.md` have only the
-    warn-and-continue `catalog_log_drifted` notice (see Limitation) -- for
-    those two the guard is the FIRST thing that refuses, and only for
-    drift landing inside the prompt window; drift that arrives a moment
-    earlier is still discarded.
-
-    The survivor is different again (issue #1110, fixed): `prepare_unmerge`
-    compares its CURRENT bytes against the tail ledger entry's own
-    `survivor_after_sha256` -- the hash the merge itself recorded writing --
-    BEFORE any preview or prompt, so an edit landing at ANY point between
-    the merge and this unmerge (not only inside the prompt window, and not
-    only a human edit: another verb rewriting the survivor afterward, e.g.
-    `repair`'s status export/migration or `sync-tags`, counts too, since a
-    write is a write regardless of who made it) refuses closed with no
-    write, naming the survivor and telling the operator to copy the edit
-    somewhere safe, then re-run with `--discard-survivor-edits`, and that
-    the edit can be reapplied by hand once the unmerge has completed. A
-    plain re-run WITHOUT that flag hashes the identical edited survivor and
-    refuses again -- forever, since nothing about the mismatch changes on
-    its own -- so the refusal must name the escape hatch rather than merely
-    advise "copy it somewhere safe" with no path forward (follow-up review
-    finding on #1110). `--discard-survivor-edits` bypasses ONLY this one
-    check: it is orthogonal to `--auto` (never implied by it, and vice
-    versa) and to every OTHER refusal below -- the absorbed-path collision,
-    a rewrite-file's own drift check, and the post-confirm
-    `_reject_drifted_targets` guard all still fire exactly as before, and
-    the flag proceeding past this check still costs the operator the usual
-    confirm gate unless `--auto`/`review: false` also apply. A tail entry
-    recorded before #1110 shipped has no hash to compare against at all;
-    `prepare_unmerge` reports that via
-    `PreparedUnmerge.survivor_drift_unverifiable` regardless of the flag,
-    and the command prints a one-line warning and proceeds -- fail-open,
-    but disclosed, only for that legacy case. When the flag DOES override a
-    genuine mismatch, `PreparedUnmerge.survivor_edits_discarded` is `True`
-    and the command prints its own disclosure naming the survivor, distinct
-    from the legacy-entry warning.
-
-    The recreated absorbed file is the one write the guard cannot cover:
-    Phase A refuses outright if it already exists, so there are no bytes to
-    compare against. Its protection is the write itself being create-only
-    (`fsio.write_exclusive`, #323): a file created at that path between
-    Phase A's existence check and Phase B's write raises `FileExistsError`
-    instead of being clobbered, making the Phase-A promise hold at write
-    time.
-
-    Phase B (after confirm; delegated to `application.lifecycle.
-    unmerge_core`, called by module attribute) writes, in this order:
-    `index.md` then `log.md` restored to their EXACT pre-merge bytes
-    (`index_before`/`log_before`) first; then every reversed inbound-link
-    file; then the recreated absorbed file (`absorbed_snapshot`); then the
-    restored survivor (`survivor_before`, which drops this ledger entry
-    while keeping any earlier ones intact) -- mirroring `merge`'s own
-    ordering reasoning (the least-recoverable-if-lost artifacts land
-    first, most easily git-recoverable last); and FINALLY, only once every
-    restore above has landed, `log.md` is written a SECOND time with one
-    `**Unmerge**` audit line appended on top of the just-restored
-    `log_before` -- so the append-only audit trail net-grows by exactly
-    one line documenting the round trip, even though every other file
-    returns to its pre-merge bytes exactly. Not transactional as a whole,
-    matching `merge`/`forget`'s documented limitation: a failure partway
-    through is a benign, git-recoverable partial result, never silent
-    corruption. That now includes a file created at the absorbed path
-    during the prompt window (#323): its create-only write errors
-    mid-Phase-B instead of silently winning, leaving the catalog/log
-    restored, every reversed inbound-link/relation/provenance rewrite file
-    already restored too (they land before the absorbed write in the order
-    above), the created file intact, and the survivor -- ledger and all,
-    so the absorbed content stays recoverable -- untouched. Any failure,
-    Phase A or Phase B, is caught and reported on stderr (exit 1), not a
-    raw traceback.
-
-    Limitation: `unmerge` restores `index.md`/`log.md` to their EXACT
-    pre-merge snapshot (`index_before`/`log_before`), not a merge of that
-    snapshot with whatever is on disk now. If another command (`ingest`,
-    `forget`, or an unrelated `merge`) touched the catalog/log after this
-    merge, that content is discarded when `unmerge` runs -- Phase A detects
-    this drift and prints a warning in the preview before the confirm gate,
-    but does not refuse; round-trip parity assumes a prompt unmerge. In a
-    `--to` unwind, later steps legitimately trip this same notice: each
-    completed step's own `**Unmerge**` audit line IS a post-merge log
-    change from the next step's point of view, so the warning is expected
-    chain-noise there, not a defect.
-    """
-    index_path = layout.bundle_dir / "index.md"
-    log_path = layout.bundle_dir / "log.md"
-
-    try:
-        prepared = application_lifecycle.prepare_unmerge(
-            root,
-            layout,
-            survivor_path,
-            survivor_canonical,
-            absorbed_canonical,
-            now=now,
-            cfg=cfg,
-            discard_survivor_edits=discard_survivor_edits,
-        )
-    except (OSError, ValueError) as exc:
-        typer.echo(
-            f"openkos unmerge: failed while preparing the unmerge -- {exc}.", err=True
-        )
-        raise typer.Exit(code=1) from exc
-
-    plan = prepared.plan
-
-    typer.echo("openkos unmerge: proposed changes:")
-    for rel in prepared.rewritten_files:
-        typer.echo(f"  ~ bundle/{rel} (reverse inbound link rewrite)")
-    for rel in prepared.relation_rewrite_files:
-        typer.echo(f"  ~ bundle/{rel} (restore pre-merge relations snapshot)")
-    for rel in prepared.provenance_rewrite_files:
-        typer.echo(f"  ~ bundle/{rel} (restore pre-merge provenance snapshot)")
-    # #758: a V5 entry reverses the merge's own catalog/log edit and leaves
-    # everything else standing, so the preview must not keep promising a
-    # wholesale restore -- the two shapes really do different things to
-    # these two files, and the operator is consenting to one of them.
-    if plan.entry.schema == okf.MERGE_LEDGER_SCHEMA_V5:
-        typer.echo(f"  ~ {index_path.name} (restore this merge's catalog entry)")
-        typer.echo(f"  ~ {log_path.name} (remove this merge's entry, append unmerge)")
-    else:
-        typer.echo(f"  ~ {index_path.name} (restore pre-merge contents)")
-        typer.echo(
-            f"  ~ {log_path.name} (restore pre-merge contents, append unmerge entry)"
-        )
-    survivor_status_suffix = ""
-    if prepared.survivor_status_outcome is not None:
-        survivor_status_suffix = _status_export_preview_suffix(
-            prepared.survivor_status_outcome
-        )
-    typer.echo(
-        f"  ~ bundle/{survivor_canonical}.md (restore pre-merge contents"
-        f"{survivor_status_suffix})"
-    )
-    absorbed_status_suffix = ""
-    if prepared.absorbed_status_outcome is not None:
-        absorbed_status_suffix = _status_export_preview_suffix(
-            prepared.absorbed_status_outcome
-        )
-    typer.echo(f"  + bundle/{absorbed_canonical}.md (restore{absorbed_status_suffix})")
-    if prepared.catalog_log_drifted:
-        typer.echo(
-            "Warning: index.md/log.md changed since the merge; unmerge "
-            "restores the pre-merge snapshot and will discard those changes."
-        )
-    if prepared.survivor_drift_unverifiable:
-        # #1110: this merge's ledger entry predates the survivor-edit check
-        # (no recorded `survivor_after_sha256`) -- fail-OPEN only for this
-        # legacy case, but disclosed, rather than refuse every bundle whose
-        # merges all happened before the fix shipped.
-        typer.echo(
-            f"Warning: {survivor_canonical!r}'s merge ledger entry predates "
-            "the survivor-edit check (#1110); cannot confirm its current "
-            "bytes still match what the merge wrote, proceeding anyway."
-        )
-    if prepared.survivor_edits_discarded:
-        # #1110 follow-up: --discard-survivor-edits explicitly overrode the
-        # mismatch refusal below -- disclosed here, in the preview, not
-        # silently, and named for exactly the survivor whose post-merge
-        # edit is about to be lost.
-        typer.echo(
-            f"Warning: {survivor_canonical!r}'s post-merge edits are being "
-            "discarded (--discard-survivor-edits) -- it will be restored to "
-            "its pre-merge state, and anything changed on it since the "
-            "merge is gone unless you copied it somewhere safe first."
-        )
-
-    if not confirmed and not auto and prepared.review:
-        if sys.stdin.isatty():
-            typer.confirm(prepared.confirmation.prompt, abort=True)
         else:
-            # #918: wording from the staged request, not a literal -- see
-            # the same change at `merge`'s gate.
-            typer.echo(prepared.confirmation.non_tty_refusal, err=True)
-            raise typer.Exit(code=1)
+            unmerge_service.unwind_merges(
+                root,
+                survivor_id,
+                target_input,
+                policy,
+                ports=ports,
+                observer=observer,
+                confirm=_ask_confirmation,
+            )
+    except unmerge_service.UnwindStopped as exc:
+        # The step already owes its own refusal on stderr (the single-step
+        # machinery never lets a raw traceback out); the stop line adds the
+        # chain-level accounting the operator needs next.
+        if not isinstance(exc.cause, write_gate.ConfirmationDeclined):
+            typer.echo(exc.cause.message, err=True)
+        typer.echo(exc.message, err=True)
+        # The step's own exit code survives the chain wrapper: exit 3 (the
+        # post-confirm drift refusal) is the ONE documented exit a script may
+        # safely retry, and collapsing it to 1 here would silently revoke that
+        # contract mid-chain (review finding, issue #562). A declined prompt
+        # has no code and stays the conventional 1.
+        raise typer.Exit(
+            code=3 if isinstance(exc.cause, write_gate.DriftDetected) else 1
+        ) from exc
+    except write_gate.WriteRefused as exc:
+        _exit_for_write_refusal(exc)
 
-    # Issue #313: every byte below was computed from a pre-prompt read, so
-    # re-validate each target now -- after the gate, before the first write.
-    #
-    # `absorbed_path` is absent by necessity, not oversight -- see the
-    # docstring. The guard's `Mapping[Path, bytes]` cannot express "expected
-    # absent", so its window is closed by the write itself being create-only
-    # (`fsio.write_exclusive` below, #323), not by an entry here.
-    _reject_drifted_targets(
-        layout,
-        {
-            index_path: prepared.index_bytes,
-            log_path: prepared.log_bytes,
-            survivor_path: prepared.survivor_bytes,
-            **{
-                layout.bundle_dir / rel: data
-                for rel, data in prepared.rewrite_bytes.items()
-            },
-        },
-        "unmerge",
-        # #328: the guard's default advice -- "re-run to recompute" -- is
-        # actively destructive here. `unmerge` does not recompute anything
-        # from the current state: `index.md`/`log.md`/the survivor are
-        # restored to their PRE-MERGE snapshots, so a re-run overwrites the
-        # very edit this refusal just protected; and an edited rewrite file
-        # keeps failing `reverse_link_rewrites`' own drift check until the
-        # edit is reverted. The remedy must describe that asymmetry and put
-        # "save your edit first" ahead of any re-run.
-        remedy=(
-            "Copy your edit somewhere safe before re-running: a re-run "
-            "restores the pre-merge snapshots over index.md, log.md, and "
-            "the survivor (overwriting the edit), and keeps refusing on an "
-            "edited rewrite file until that edit is reverted."
-        ),
-        # okf-v02-migration Phase 6: an unrepaired bundle's own drift refusal
-        # gets one extra actionable sentence naming `repair` -- the drift
-        # itself may be unrelated to the migration, but the operator can fix
-        # this first regardless of what caused the refusal.
-        hint=_okf_v02_migration_hint(index_path),
-    )
-
-    # Phase B (issue #918 Slice S2b): both Phase A and Phase B now go
-    # through the module attribute (never an aliased import, so a stale
-    # monkeypatch target raises loudly instead of silently missing) -- see
-    # `unmerge_core`'s own docstring for the exact write order and
-    # recoverability reasoning.
-    try:
-        result = application_lifecycle.unmerge_core(layout, prepared)
-    except (OSError, ValueError) as exc:
-        typer.echo(
-            f"openkos unmerge: failed while writing the unmerge -- {exc}.", err=True
-        )
-        raise typer.Exit(code=1) from exc
-
-    typer.echo(
-        f"openkos unmerge: restored 'bundle/{absorbed_canonical}.md' from "
-        f"'bundle/{survivor_canonical}.md' "
-        f"({index_path.name}, {log_path.name} updated)."
-    )
-
-    _autocommit(
-        root,
-        result.committed_paths,
-        f"openkos: unmerge {absorbed_canonical}",
-    )
-
-
-_RECONCILE_ANCHOR_TEMPLATE = "<!-- okos:reconcile target={target} role={role} -->"
-"""Hidden HTML-comment anchor keyed on the counterpart concept-id (design:
-Interfaces / Contracts). `reconcile`'s idempotency check
-(`_reconcile_anchor_present`) matches on `target=<id>` alone, ignoring
-`role` and the note's heading level, so ANY prior anchor for that
-counterpart -- however it got there -- suppresses a re-append."""
-
-_RECONCILE_ANCHOR_RE = re.compile(r"<!-- okos:reconcile target=(\S+) role=(\w+) -->")
-
-
-def _reconcile_anchor_present(body: str, counterpart_id: str) -> bool:
-    """Return whether `body` already carries a `## Reconciliation` anchor
-    referencing `counterpart_id` (any role) -- `reconcile`'s idempotency
-    gate: a repeated call for the same pair never re-appends a duplicate
-    note (spec: Idempotent Re-run)."""
-    return any(
-        match.group(1) == counterpart_id
-        for match in _RECONCILE_ANCHOR_RE.finditer(body)
-    )
-
-
-_ReconcileRole = Literal["reconciled", "supersedes", "superseded", "revises", "revised"]
-
-
-def _reconcile_sentence(
-    role: _ReconcileRole, counterpart_id: str, date_str: str
-) -> str:
-    """One human-readable sentence for a `## Reconciliation` note, per
-    `role` (design: Interfaces / Contracts) -- `reconciled` (symmetric,
-    both coexist), `supersedes` (this concept wins), `superseded` (hidden
-    from retrieval as of this edge; deprecated-status-export, issue #1075,
-    also exports this onto the concept's own `status` unless a
-    human-authored value blocks it), `revises` (this concept refines its
-    counterpart; both remain current), or `revised` (the mirror role on the
-    refined counterpart). `role` is a closed `Literal`, and any other value
-    raises defensively (rather than silently falling through to the
-    "superseded" sentence) so a typo can never mislabel a note."""
-    link = f"[{counterpart_id}](/{counterpart_id}.md)"
-    if role == "reconciled":
-        return f"Reconciled with {link} on {date_str} (both coexist)."
-    if role == "supersedes":
-        return f"Supersedes {link} as of {date_str} (this concept wins)."
-    if role == "superseded":
-        return f"Superseded by {link} as of {date_str} (hidden from retrieval)."
-    if role == "revises":
-        return f"Revises {link} as of {date_str} (refinement; both remain current)."
-    if role == "revised":
-        return f"Revised by {link} as of {date_str} (refinement; both remain current)."
-    raise ValueError(f"unexpected reconciliation role {role!r}")
-
-
-def _reconciliation_note(
-    *, counterpart_id: str, role: _ReconcileRole, date_str: str
-) -> str:
-    """Build one full `## Reconciliation` body note: an h2 heading (chosen
-    over `#` to avoid a second top-level heading alongside the concept's own
-    title, design note), the hidden anchor keyed on `counterpart_id`, and
-    one sentence linking to the counterpart."""
-    anchor = _RECONCILE_ANCHOR_TEMPLATE.format(target=counterpart_id, role=role)
-    sentence = _reconcile_sentence(role, counterpart_id, date_str)
-    return f"## Reconciliation\n{anchor}\n{sentence}\n"
-
-
-def _append_reconciliation_note(body: str, note: str) -> str:
-    """Append `note` to `body` as a new trailing section, additive-only --
-    never overwrites existing content (mirrors
-    `okf.build_merged_document`'s body-append separator math)."""
-    new_body = body.rstrip("\n") + "\n\n" + note
-    if not new_body.endswith("\n"):
-        new_body += "\n"
-    return new_body
-
-
-def _add_relation_if_absent(
-    relations: list[okf.Relation], new_relation: okf.Relation
-) -> tuple[list[okf.Relation], bool]:
-    """Append `new_relation` to `relations` unless an identical
-    `(target, type)` pair is already present, mirroring `relate`'s
-    idempotent dedup (task 2.3). Returns the possibly-extended list and
-    whether an entry was actually added."""
-    already_present = any(
-        relation.target == new_relation.target and relation.type == new_relation.type
-        for relation in relations
-    )
-    if already_present:
-        return relations, False
-    return [*relations, new_relation], True
-
-
-_ResolutionMode = Literal["none", "symmetric", "directional", "revision", "mixed"]
-_RequestedMode = Literal["symmetric", "directional", "revision"]
-
-_MODE_BY_RESOLUTION_TYPE: dict[str, _RequestedMode] = {
-    "reconciled_with": "symmetric",
-    "supersedes": "directional",
-    "revises": "revision",
-}
-"""The mode `reconcile`'s classifier assigns to each `RESOLUTION_RELATION_
-TYPES` member (design Decision 2). Keyed by that shared constant rather than
-hand-listed a second time, so a type added to one and not the other becomes
-`test_mode_and_role_tables_cover_every_resolution_type`'s failing assertion
-instead of a `KeyError` at classify time."""
-
-_DIRECTED_ROLES: dict[str, tuple[_ReconcileRole, _ReconcileRole]] = {
-    "supersedes": ("supersedes", "superseded"),
-    "revises": ("revises", "revised"),
-}
-"""The (holder role, target role) pair for each DIRECTED resolution type --
-`reconciled_with` has no entry here, since a symmetric edge has no holder
-(design Decision 4)."""
-
-
-def _existing_reconciliation_state(
-    *,
-    relations_a: list[okf.Relation],
-    relations_b: list[okf.Relation],
-    canonical_a: str,
-    canonical_b: str,
-) -> tuple[_ResolutionMode, str | None]:
-    """Classify the pair's EXISTING reconciliation state from
-    already-loaded (pre-mutation) relations -- the CRITICAL refuse-on-conflict
-    gate (fix: a mode-switch re-run must never add a second, contradictory
-    reconciliation resolution). One table-driven pass (design Decision 2)
-    collects the set of `(mode, holder)` pairs any `RESOLUTION_RELATION_TYPES`
-    edge between `{a, b}` implies -- a symmetric `reconciled_with` always
-    contributes `(symmetric, None)` regardless of which side holds it (so a
-    ONE-SIDED `reconciled_with` still classifies as `symmetric`, not
-    `mixed`), while `supersedes`/`revises` contribute `(mode, <holder>)`.
-
-    Returns `("none", None)` when the pair carries no prior reconciliation,
-    the single collected `(mode, holder)` when exactly one kind of edge (in
-    at most one direction) is present, or `("mixed", None)` when the pair
-    carries more than one -- disagreeing resolutions only a hand edit can
-    produce, which this classifier refuses to rank by precedence."""
-    found: set[tuple[_RequestedMode, str | None]] = set()
-    for relation in relations_a:
-        if relation.target == canonical_b and relation.type in _MODE_BY_RESOLUTION_TYPE:
-            mode = _MODE_BY_RESOLUTION_TYPE[relation.type]
-            found.add((mode, None if mode == "symmetric" else canonical_a))
-    for relation in relations_b:
-        if relation.target == canonical_a and relation.type in _MODE_BY_RESOLUTION_TYPE:
-            mode = _MODE_BY_RESOLUTION_TYPE[relation.type]
-            found.add((mode, None if mode == "symmetric" else canonical_b))
-
-    if not found:
-        return "none", None
-    if len(found) == 1:
-        (mode, holder) = next(iter(found))
-        return mode, holder
-    return "mixed", None
-
-
-def _reconciliation_state_description(mode: _ResolutionMode, holder: str | None) -> str:
-    """Human-readable description of an existing reconciliation state, for
-    the refuse-on-conflict error message."""
-    if mode == "directional":
-        return f"a directional reconciliation ({holder!r} supersedes its counterpart)"
-    if mode == "revision":
-        return f"a revision ({holder!r} revises its counterpart; both remain current)"
-    if mode == "mixed":
-        return (
-            "conflicting resolutions (more than one 'supersedes', 'revises' "
-            "or 'reconciled_with' edge between the pair, and they disagree)"
-        )
-    return "a symmetric reconciliation ('reconciled_with')"
-
-
-def _resolve_pair_member(
-    layout: config.WorkspaceLayout,
-    flag: str,
-    value: str,
-    canonical_a: str,
-    canonical_b: str,
-) -> tuple[str, str]:
-    """Resolve `value` (an id passed to `flag`, e.g. `--winner` or
-    `--revision`) to `(holder, counterpart)`, where `holder` is EXACTLY one
-    of `canonical_a`/`canonical_b` (design Decision 5 step 3). `value` is
-    resolved via `application_lifecycle.resolve_concept_path` first -- an
-    absolute id, a `..` segment, a reserved basename, or a nonexistent
-    concept refuses there, byte-identical to how `--winner` already refused
-    before this helper existed. Only once `value` resolves to a REAL concept
-    that is not a pair member does this raise its own message, shared by
-    both flags so their validation cannot drift apart by copy-paste."""
-    _, resolved = application_lifecycle.resolve_concept_path(layout.bundle_dir, value)
-    if resolved == canonical_a:
-        return canonical_a, canonical_b
-    if resolved == canonical_b:
-        return canonical_b, canonical_a
-    raise ValueError(
-        f"{flag} {value!r} must resolve to one of the pair "
-        f"({canonical_a!r}, {canonical_b!r}), got {resolved!r}"
-    )
+    # #640: once per invocation, after the single step -- or the WHOLE chain --
+    # completed. A stopped chain raised above and leaves the stale-index
+    # warnings as its safety net.
+    _refresh_derived_after_write(config.WorkspaceLayout(root), None, verb="unmerge")
 
 
 @app.command(
@@ -9481,131 +8758,44 @@ def reconcile(
     layout = config.WorkspaceLayout(root)
     log_path = layout.bundle_dir / "log.md"
 
-    try:
-        workspace_reason = config.require_workspace(root)
-        if workspace_reason is not None:
-            typer.echo(
-                f"openkos reconcile: refusing to reconcile -- {workspace_reason}.",
-                err=True,
-            )
-            raise typer.Exit(code=1)
-
-        # #567: `--from-findings` is a whole mode, never a modifier. Explicit
-        # ids, `--winner`, `--revision`, and `--auto` all belong to the
-        # two-id form -- a directional or revision resolution needs a human
-        # to NAME the holder, and the batch walk's consent is per item by
-        # design, so there is no bulk path to skip a prompt on.
-        if from_findings:
-            if (
-                id_a is not None
-                or id_b is not None
-                or winner is not None
-                or revision is not None
-                or auto
-            ):
-                raise ValueError(
-                    "--from-findings takes no concept ids, no --winner, no "
-                    "--revision, and no --auto; use the two-id form for a "
-                    "directional, revision, or unattended reconciliation"
-                )
-        # Decision 5 step 2: this runs before any id is resolved, so the
-        # refusal never depends on whether `id_a`/`id_b`/the flag values
-        # exist -- a reconciliation is either a reversal or a refinement,
-        # never both.
-        elif winner is not None and revision is not None:
-            raise ValueError(
-                "--winner and --revision are mutually exclusive: a "
-                "reconciliation is either a reversal (--winner) or a "
-                "refinement (--revision), never both"
-            )
-        elif id_a is None or id_b is None:
-            raise ValueError(
-                "two concept ids are required (or pass --from-findings to "
-                "walk the persisted open findings)"
-            )
-    except (OSError, ValueError) as exc:
-        typer.echo(f"openkos reconcile: refusing to reconcile -- {exc}.", err=True)
-        raise typer.Exit(code=1) from exc
-
     if from_findings:
+        # `--from-findings` is a whole mode (#567): it takes no ids, no
+        # `--winner`, no `--revision` and no `--auto` -- a batch walk gets its
+        # consent per item and deliberately has no unattended bulk path.
+        try:
+            reconcile_service.check_workspace(root)
+            reconcile_service.validate_request(
+                id_a=id_a,
+                id_b=id_b,
+                winner=winner,
+                revision=revision,
+                from_findings=True,
+                auto=auto,
+            )
+        except write_gate.WriteRefused as exc:
+            _exit_for_write_refusal(exc)
         _run_reconcile_from_findings(root, layout, log_path)
         return
-    if id_a is None or id_b is None:  # pragma: no cover -- gate above refused
-        raise typer.Exit(code=1)
 
     try:
-        path_a, canonical_a = application_lifecycle.resolve_concept_path(
-            layout.bundle_dir, id_a
+        outcome = reconcile_service.reconcile_concepts(
+            root,
+            id_a,
+            id_b,
+            winner=winner,
+            revision=revision,
+            auto=auto,
+            ports=_reconcile_ports(),
+            observer=_CliReconcileObserver(),
+            confirm=_ask_confirmation,
         )
-        path_b, canonical_b = application_lifecycle.resolve_concept_path(
-            layout.bundle_dir, id_b
-        )
-        if canonical_a == canonical_b:
-            raise ValueError(
-                f"id_a and id_b must be distinct, both resolved to {canonical_a!r}"
-            )
-        # Distinct STRINGS are not distinct FILES (#324): on a
-        # case-insensitive filesystem (macOS default) `foo` and `Foo` are
-        # two canonical ids for ONE file -- and a symlink aliases one under
-        # any name on any filesystem. The drift guard cannot catch this
-        # either: both keys snapshot the same identical bytes (no drift),
-        # and Phase B's second `write_atomic` over the same inode then
-        # silently discards the first document's edge and note. `samefile`
-        # compares device+inode -- after `_resolve_concept_path` proved
-        # both exist, so error precedence is preserved -- and is naturally
-        # False for genuinely distinct files on case-sensitive hosts. The
-        # string check above stays: it is cheap and gives the literal
-        # self-pair its clearer message.
-        if path_a.samefile(path_b):
-            raise ValueError(
-                f"id_a and id_b must be distinct, {canonical_a!r} and "
-                f"{canonical_b!r} resolve to the same file on this filesystem"
-            )
-
-        holder_canonical: str | None = None
-        target_canonical: str | None = None
-        edge_type: Literal["supersedes", "revises"] = "supersedes"
-        if winner is not None:
-            holder_canonical, target_canonical = _resolve_pair_member(
-                layout, "--winner", winner, canonical_a, canonical_b
-            )
-        elif revision is not None:
-            holder_canonical, target_canonical = _resolve_pair_member(
-                layout, "--revision", revision, canonical_a, canonical_b
-            )
-            edge_type = "revises"
-    except (OSError, ValueError) as exc:
-        typer.echo(f"openkos reconcile: refusing to reconcile -- {exc}.", err=True)
-        raise typer.Exit(code=1) from exc
-
-    try:
-        cfg = config.read_config(root)
-    except (OSError, ValueError) as exc:
-        typer.echo(
-            f"openkos reconcile: failed while preparing the reconcile -- {exc}.",
-            err=True,
-        )
-        raise typer.Exit(code=1) from exc
-
-    changed = _reconcile_pair(
-        root,
-        layout,
-        log_path,
-        cfg,
-        path_a,
-        canonical_a,
-        path_b,
-        canonical_b,
-        holder_canonical,
-        target_canonical,
-        auto=auto,
-        edge_type=edge_type,
-    )
+    except write_gate.WriteRefused as exc:
+        _exit_for_write_refusal(exc)
     # #655: the last write verb joins #640's contract -- once, end of run,
     # only when a concept document actually changed (the idempotent
     # no-change re-run invalidated nothing).
-    if changed:
-        _refresh_derived_after_write(layout, cfg, verb="reconcile")
+    if outcome.changed:
+        _refresh_derived_after_write(layout, None, verb="reconcile")
 
 
 def _status_export_preview_suffix(outcome: okf.ExportOutcome) -> str:
@@ -9627,10 +8817,76 @@ def _status_export_preview_suffix(outcome: okf.ExportOutcome) -> str:
     return ""
 
 
-def _reconcile_pair(
+class _CliReconcileObserver(reconcile_service.ReconcileObserver):
+    """Renders what the reconcile service reports: one pair's plan and its
+    closing line, in the order the verb has always printed them."""
+
+    def proposed(self, preview: reconcile_service.ReconcilePreview) -> None:
+        pair = preview.pair
+        status_suffix_a = ""
+        status_suffix_b = ""
+        if preview.status_outcome is not None:
+            suffix = _status_export_preview_suffix(preview.status_outcome)
+            if preview.target_is_a:
+                status_suffix_a = suffix
+            else:
+                status_suffix_b = suffix
+        typer.echo("openkos reconcile: proposed changes:")
+        if pair.holder_canonical is not None:
+            # Directed mode: name the edge itself first, so the reviewer sees
+            # the decision (which concept wins or refines) before the per-file
+            # detail. `!r` mirrors how every other message here quotes ids.
+            typer.echo(
+                f"  = {pair.holder_canonical!r} {pair.edge_type} "
+                f"{pair.target_canonical!r}"
+            )
+        typer.echo(
+            f"  ~ bundle/{pair.canonical_a}.md (relation "
+            f"{'added' if preview.edge_added_a else 'unchanged'}; note "
+            f"{'appended' if preview.note_added_a else 'already present'}"
+            f"{status_suffix_a})"
+        )
+        typer.echo(
+            f"  ~ bundle/{pair.canonical_b}.md (relation "
+            f"{'added' if preview.edge_added_b else 'unchanged'}; note "
+            f"{'appended' if preview.note_added_b else 'already present'}"
+            f"{status_suffix_b})"
+        )
+        typer.echo(f"  ~ {preview.log_name} (new dated entry)")
+
+    def written(self, written: reconcile_service.ReconcileWritten) -> None:
+        pair = written.pair
+        if pair.holder_canonical is None:
+            typer.echo(
+                "openkos reconcile: recorded a symmetric reconciliation between "
+                f"'bundle/{pair.canonical_a}.md' and "
+                f"'bundle/{pair.canonical_b}.md' ({written.log_name} updated)."
+            )
+        elif pair.edge_type == "supersedes":
+            typer.echo(
+                f"openkos reconcile: recorded '{pair.holder_canonical}' as "
+                f"superseding '{pair.target_canonical}'; "
+                f"'{pair.target_canonical}' now lists as deprecated "
+                f"({written.log_name} updated)."
+            )
+        else:
+            typer.echo(
+                f"openkos reconcile: recorded '{pair.holder_canonical}' as "
+                f"revising '{pair.target_canonical}'; both remain current "
+                f"({written.log_name} updated)."
+            )
+
+
+def _reconcile_ports() -> reconcile_service.ReconcilePorts:
+    return reconcile_service.ReconcilePorts(
+        autocommit=lambda root, paths, message: _autocommit(root, paths, message),
+        snapshot_read=lambda path: _snapshot_read(path),
+        clock=lambda: datetime.now(UTC),
+    )
+
+
+def _record_pair_reconciliation(
     root: Path,
-    layout: config.WorkspaceLayout,
-    log_path: Path,
     cfg: config.Config,
     path_a: Path,
     canonical_a: str,
@@ -9643,302 +8899,38 @@ def _reconcile_pair(
     announce_preview: bool = True,
     edge_type: Literal["supersedes", "revises"] = "supersedes",
 ) -> bool:
-    """One pair's complete reconcile transaction -- Phase A in-memory build,
-    conflict gate, preview, confirm gate, drift re-validation, Phase B
-    additive writes, and autocommit -- extracted verbatim from the two-id
-    command body so `--from-findings` (#567) walks the SAME write path
-    instead of a second implementation. `announce_preview=False` suppresses
-    only the 'proposed changes' preview (the batch walk collects consent
-    from the finding context before calling); every gate below still runs.
-    Raises `typer.Exit` exactly as the two-id form always did: exit 1 for a
-    prepare/conflict/write failure, exit 3 for post-consent target drift.
+    """One pair's reconcile transaction for the `--from-findings` walks: the
+    adapter over `reconcile_service.reconcile_pair` (the full Phase A /
+    confirm / drift-guard / Phase B contract is documented there), so both
+    walks write through the SAME path as the two-id form. Renders the typed
+    refusals and raises `typer.Exit` exactly as the two-id form always did:
+    exit 1 for a prepare/conflict/write failure, exit 3 for post-consent
+    target drift -- the walks catch it to skip a bad pair, re-raising 3.
 
-    `holder_canonical is None` means a SYMMETRIC request (`edge_type` is
-    then ignored); otherwise `holder_canonical` is the pair member that gets
-    the outbound edge and `target_canonical` its counterpart, with
-    `edge_type` naming which directed resolution (`"supersedes"` or
-    `"revises"`, design Decision 4) -- `_run_reconcile_from_findings` always
-    passes `None, None` and the `edge_type="supersedes"` default, so its
-    call site stays byte-unchanged by this change.
-
-    Returns whether this run CHANGED a concept document (#655): an edge
-    added or a note appended on either side. `False` is the idempotent
-    no-change re-run, which writes only the log entry -- `log.md` is a
-    catalog file no derived index reads, so the caller's #640 write-time
-    refresh keys on this signal, never on "the transaction completed"."""
-    now = datetime.now(UTC)
-    today = now.astimezone().date()
-    date_str = today.isoformat()
-
-    try:
-        # One `_snapshot_read` observation per target: the decoded text
-        # feeds the parsers below, the raw bytes feed
-        # `_reject_drifted_targets` (issues #306, #313, #318).
-        bytes_a, text_a = _snapshot_read(path_a)
-        bytes_b, text_b = _snapshot_read(path_b)
-        log_bytes, log_text = _snapshot_read(log_path)
-
-        metadata_a, body_a = okf.load_frontmatter(text_a)
-        metadata_b, body_b = okf.load_frontmatter(text_b)
-        relations_a = okf.decode_relations(metadata_a)
-        relations_b = okf.decode_relations(metadata_b)
-
-        # CRITICAL refuse-on-conflict gate (before ANY edge is computed or
-        # written): a pair may carry AT MOST ONE reconciliation resolution
-        # written by `reconcile`. Compare the pair's EXISTING state to the
-        # one requested by THIS invocation -- an unrelated (`"none"`) prior
-        # state proceeds as a fresh write, an IDENTICAL prior state falls
-        # through to the ordinary idempotent no-op path below, but a
-        # DIFFERENT prior state (mode switch, or opposite `--winner`) is
-        # refused here, with zero writes -- this is what prevents a 2nd
-        # `supersedes` edge from coexisting with a stale `reconciled_with`
-        # edge (or a 2nd, opposite-direction `supersedes` edge), and
-        # prevents the `## Reconciliation` note from going stale relative
-        # to frontmatter (the note-append gate below is anchor-keyed on
-        # `target` alone and blind to `role`, so it cannot itself repair a
-        # mismatched note on a later run).
-        existing_mode, existing_holder = _existing_reconciliation_state(
-            relations_a=relations_a,
-            relations_b=relations_b,
-            canonical_a=canonical_a,
-            canonical_b=canonical_b,
-        )
-        requested_mode: _RequestedMode = (
-            _MODE_BY_RESOLUTION_TYPE[edge_type]
-            if holder_canonical is not None
-            else "symmetric"
-        )
-        if existing_mode != "none" and (
-            existing_mode != requested_mode or existing_holder != holder_canonical
-        ):
-            description = _reconciliation_state_description(
-                existing_mode, existing_holder
-            )
-            raise ValueError(
-                f"concepts {canonical_a!r} and {canonical_b!r} are already "
-                f"reconciled as {description}; reconcile will not overwrite "
-                "an existing resolution. To change it, edit the concepts "
-                "manually or revert with git, then re-run"
-            )
-
-        edge_added_a = False
-        edge_added_b = False
-        role_a: _ReconcileRole
-        role_b: _ReconcileRole
-        if holder_canonical is None:
-            relations_a, edge_added_a = _add_relation_if_absent(
-                relations_a, okf.Relation(target=canonical_b, type="reconciled_with")
-            )
-            relations_b, edge_added_b = _add_relation_if_absent(
-                relations_b, okf.Relation(target=canonical_a, type="reconciled_with")
-            )
-            role_a, role_b = "reconciled", "reconciled"
-        else:
-            holder_role, target_role = _DIRECTED_ROLES[edge_type]
-            if holder_canonical == canonical_a:
-                relations_a, edge_added_a = _add_relation_if_absent(
-                    relations_a, okf.Relation(target=canonical_b, type=edge_type)
-                )
-                role_a, role_b = holder_role, target_role
-            else:
-                relations_b, edge_added_b = _add_relation_if_absent(
-                    relations_b, okf.Relation(target=canonical_a, type=edge_type)
-                )
-                role_a, role_b = target_role, holder_role
-
-        note_added_a = False
-        if not _reconcile_anchor_present(body_a, canonical_b):
-            body_a = _append_reconciliation_note(
-                body_a,
-                _reconciliation_note(
-                    counterpart_id=canonical_b, role=role_a, date_str=date_str
-                ),
-            )
-            note_added_a = True
-
-        note_added_b = False
-        if not _reconcile_anchor_present(body_b, canonical_a):
-            body_b = _append_reconciliation_note(
-                body_b,
-                _reconciliation_note(
-                    counterpart_id=canonical_a, role=role_b, date_str=date_str
-                ),
-            )
-            note_added_b = True
-
-        # deprecated-status-export (issue #1075, design Decision 5): a
-        # directed `supersedes` edge that was just ADDED (never on a
-        # symmetric/`revises` reconcile, and never on an idempotent
-        # no-edge re-run) exports the counterpart's status in this SAME
-        # Phase B write. `edge_type == "revises"` and the idempotent case
-        # both leave `status_outcome` `None`, writing nothing.
-        status_outcome: okf.ExportOutcome | None = None
-        target_is_a = False
-        if holder_canonical is not None and edge_type == "supersedes":
-            edge_added = (
-                edge_added_a if holder_canonical == canonical_a else edge_added_b
-            )
-            if edge_added:
-                target_is_a = holder_canonical != canonical_a
-                if target_is_a:
-                    decision = okf.project_deprecation_export(
-                        metadata_a, superseded=True
-                    )
-                    metadata_a = decision.metadata
-                else:
-                    decision = okf.project_deprecation_export(
-                        metadata_b, superseded=True
-                    )
-                    metadata_b = decision.metadata
-                status_outcome = decision.outcome
-
-        metadata_a[okf.RELATIONS_KEY] = okf.encode_relations(relations_a)
-        metadata_b[okf.RELATIONS_KEY] = okf.encode_relations(relations_b)
-        new_text_a = okf.dump_frontmatter(metadata_a, body_a)
-        new_text_b = okf.dump_frontmatter(metadata_b, body_b)
-
-        changed = edge_added_a or edge_added_b or note_added_a or note_added_b
-        if not changed:
-            log_line = (
-                f"**Reconcile**: [{canonical_a}](/{canonical_a}.md) and "
-                f"[{canonical_b}](/{canonical_b}.md) are already reconciled; "
-                "no change."
-            )
-        elif holder_canonical is None:
-            log_line = (
-                "**Reconcile**: Recorded a symmetric 'reconciled_with' "
-                f"between [{canonical_a}](/{canonical_a}.md) and "
-                f"[{canonical_b}](/{canonical_b}.md)."
-            )
-        elif edge_type == "supersedes":
-            log_line = (
-                f"**Reconcile**: [{holder_canonical}](/{holder_canonical}.md) "
-                f"supersedes [{target_canonical}](/{target_canonical}.md) "
-                "(recorded 'supersedes')."
-            )
-        else:
-            log_line = (
-                f"**Reconcile**: [{holder_canonical}](/{holder_canonical}.md) "
-                f"revises [{target_canonical}](/{target_canonical}.md) "
-                "(recorded 'revises'; both remain current)."
-            )
-        new_log_text = bundle_log.insert_log_entry(log_text, today, log_line)
-    except (OSError, ValueError) as exc:
-        typer.echo(
-            f"openkos reconcile: failed while preparing the reconcile -- {exc}.",
-            err=True,
-        )
-        raise typer.Exit(code=1) from exc
-
-    status_suffix_a = ""
-    status_suffix_b = ""
-    if status_outcome is not None:
-        suffix = _status_export_preview_suffix(status_outcome)
-        if target_is_a:
-            status_suffix_a = suffix
-        else:
-            status_suffix_b = suffix
-
-    if announce_preview:
-        typer.echo("openkos reconcile: proposed changes:")
-        if holder_canonical is not None:
-            # Names the direction before the confirm gate, so a preview
-            # reader sees who revises/supersedes whom -- not only the
-            # post-write echo (design Decision 6).
-            typer.echo(f"  = {holder_canonical!r} {edge_type} {target_canonical!r}")
-        typer.echo(
-            f"  ~ bundle/{canonical_a}.md (relation "
-            f"{'added' if edge_added_a else 'unchanged'}; note "
-            f"{'appended' if note_added_a else 'already present'}"
-            f"{status_suffix_a})"
-        )
-        typer.echo(
-            f"  ~ bundle/{canonical_b}.md (relation "
-            f"{'added' if edge_added_b else 'unchanged'}; note "
-            f"{'appended' if note_added_b else 'already present'}"
-            f"{status_suffix_b})"
-        )
-        typer.echo(f"  ~ {log_path.name} (new dated entry)")
-
-    if not auto and cfg.review:
-        if sys.stdin.isatty():
-            typer.confirm("Proceed with these changes?", abort=True)
-        else:
-            typer.echo(
-                "openkos reconcile: refusing to write without confirmation -- "
-                "stdin is not a TTY; re-run with --auto.",
-                err=True,
-            )
-            raise typer.Exit(code=1)
-
-    # Issue #313: every byte below was computed from a pre-prompt read, so
-    # re-validate each target now -- after the gate, before the first write.
-    # Whole-run refusal is what keeps the pair from ending up disagreeing
-    # about its own resolution.
-    _reject_drifted_targets(
-        layout,
-        {
-            path_a: bytes_a,
-            path_b: bytes_b,
-            log_path: log_bytes,
-        },
-        "reconcile",
+    Returns whether this run CHANGED a concept document (#655): the
+    idempotent no-change re-run writes only the log entry."""
+    pair = reconcile_service.PairRequest(
+        path_a=path_a,
+        canonical_a=canonical_a,
+        path_b=path_b,
+        canonical_b=canonical_b,
+        holder_canonical=holder_canonical,
+        target_canonical=target_canonical,
+        edge_type=edge_type,
     )
-
     try:
-        fsio.write_atomic(path_a, new_text_a)
-        fsio.write_atomic(path_b, new_text_b)
-        fsio.write_atomic(log_path, new_log_text)
-    except (OSError, ValueError) as exc:
-        typer.echo(
-            f"openkos reconcile: failed while writing the reconcile -- {exc}.",
-            err=True,
-        )
-        raise typer.Exit(code=1) from exc
-
-    if holder_canonical is None:
-        typer.echo(
-            "openkos reconcile: recorded a symmetric reconciliation between "
-            f"'bundle/{canonical_a}.md' and 'bundle/{canonical_b}.md' "
-            f"({log_path.name} updated)."
-        )
-    elif edge_type == "supersedes":
-        # Name the STATUS the loser will carry, not only the act (#389).
-        # This verb said "recorded as superseding" while `list` shows
-        # `deprecated` in its STATUS column, so the operator met two words
-        # for the action they had just performed and its effect, with
-        # nothing connecting them.
-        typer.echo(
-            f"openkos reconcile: recorded '{holder_canonical}' as superseding "
-            f"'{target_canonical}'; '{target_canonical}' now lists as "
-            f"deprecated ({log_path.name} updated)."
-        )
-    else:
-        # Mirrors #389 for the OPPOSITE case: a revision hides nothing, so
-        # the echo names that directly rather than leaving the operator to
-        # infer it from silence (design Decision 6).
-        typer.echo(
-            f"openkos reconcile: recorded '{holder_canonical}' as revising "
-            f"'{target_canonical}'; both remain current "
-            f"({log_path.name} updated)."
-        )
-
-    if holder_canonical is None:
-        reconcile_message = f"openkos: reconcile {canonical_a} <-> {canonical_b}"
-    elif edge_type == "supersedes":
-        reconcile_message = (
-            f"openkos: reconcile {holder_canonical} supersedes {target_canonical}"
-        )
-    else:
-        reconcile_message = (
-            f"openkos: reconcile {holder_canonical} revises {target_canonical}"
-        )
-    _autocommit(
-        root,
-        [f"bundle/{canonical_a}.md", f"bundle/{canonical_b}.md", "bundle/log.md"],
-        reconcile_message,
-    )
-    return changed
+        return reconcile_service.reconcile_pair(
+            root,
+            cfg,
+            pair,
+            auto=auto,
+            announce_preview=announce_preview,
+            ports=_reconcile_ports(),
+            observer=_CliReconcileObserver(),
+            confirm=_ask_confirmation,
+        ).changed
+    except write_gate.WriteRefused as exc:
+        _exit_for_write_refusal(exc)
 
 
 def _ask_later_decision_and_type(a: str, b: str) -> tuple[str, str, str] | None:
@@ -10016,7 +9008,7 @@ def _run_reconcile_from_findings(
     a pair member), and a high-confidence CONTRADICTS verdict (the same
     `is_high_confidence_finding` threshold the live display uses) -- then
     prompt per item and write each accepted pair's SYMMETRIC reconciliation
-    through `_reconcile_pair`, the exact transaction the two-id form runs.
+    through `_record_pair_reconciliation`, the exact transaction the two-id form runs.
 
     Consent is per item and TTY-only, mirroring curate's Identity walk: a
     reconciliation is a semantic judgment, so there is deliberately no
@@ -10125,10 +9117,8 @@ def _run_reconcile_from_findings(
             continue
 
         try:
-            pair_changed = _reconcile_pair(
+            pair_changed = _record_pair_reconciliation(
                 root,
-                layout,
-                log_path,
                 cfg,
                 path_a,
                 canonical_a,
@@ -10243,10 +9233,8 @@ def _run_reconcile_from_findings(
             edge_type = cast(Literal["supersedes", "revises"], raw_edge_type)
 
         try:
-            pair_changed = _reconcile_pair(
+            pair_changed = _record_pair_reconciliation(
                 root,
-                layout,
-                log_path,
                 cfg,
                 path_a,
                 canonical_a,
@@ -15921,7 +14909,7 @@ def curate(
     Per-Stage Cost Gate).
 
     Identity reuses the exact `find_candidates` / `adjudicate_candidates` /
-    `_prepare_one_merge` / `_commit_one_merge` / `_reject_drifted_targets`
+    `_prepare_one_merge` / `merge_service.commit_merge` / `_reject_drifted_targets`
     building blocks `adjudicate --apply` already exercises (design D4/D6):
     an accepted SAME 2-member pair commits per-item, auto-committing before
     the next candidate; an N>2 group is never auto-merged -- the exact
@@ -16010,7 +14998,7 @@ def curate(
 
     # #640: once at END of run, only when some stage actually applied a
     # write -- an all-declined/empty session invalidated nothing. NOT per
-    # stage and NOT inside `_commit_one_merge` (Identity commits per item).
+    # stage and NOT inside `merge_service.commit_merge` (Identity commits per item).
     if any(outcome.applied for outcome in outcomes):
         _refresh_derived_after_write(layout, cfg, verb="curate")
 
