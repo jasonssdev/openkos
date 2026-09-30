@@ -14,6 +14,16 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+### Fixed
+
+- `suggest-volatility` no longer tells an `openai-compatible` workspace to start
+  Ollama or `ollama pull` a model when its backend fails
+  ([#1175](https://github.com/jasonssdev/openkos/issues/1175)). The message now
+  names the configured backend, the way `suggest-relations` does. The
+  partial-batch failure line of `suggest-volatility`, `suggest-relations` and
+  `revisions` ("failed after suggesting N ...") follows the configured backend
+  too.
+
 ### Security
 
 - The merged-body reconciliation that `merge`, `curate`, and `adjudicate --apply`
