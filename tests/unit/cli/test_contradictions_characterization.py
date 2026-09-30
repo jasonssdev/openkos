@@ -62,6 +62,13 @@ _GOLDENS: dict[str, dict[str, Any]] = json.loads(
 _TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T[\d:.]+\+00:00")
 
 
+@pytest.fixture(autouse=True)
+def _pinned_identity_for_the_whole_scenario(pinned_git_identity: None) -> None:
+    """Pin the git identity around the WHOLE scenario, `init` included: a CI
+    runner configures none, so an unpinned `init` skips its own commit and the
+    recorded `last_commit` would differ from the goldens."""
+
+
 def _scrub(text: str, root: Path) -> str:
     for spelling in {str(root.resolve()), str(root)}:
         text = text.replace(spelling, "<ROOT>")
