@@ -11068,6 +11068,13 @@ def lint() -> None:
         for finding in report.dot_dir_markdown:
             typer.echo(f"  {finding.path}: {finding.detail}")
     typer.echo()
+    typer.echo("Symlinked markdown:")
+    if not report.symlinked_markdown:
+        typer.echo("  No symlinked `.md` files or directories under bundle/.")
+    else:
+        for finding in report.symlinked_markdown:
+            typer.echo(f"  {finding.path}: {finding.detail}")
+    typer.echo()
     typer.echo("Deprecated-status exports:")
     if not report.status_export:
         typer.echo("  No deprecated-status export findings.")
@@ -11076,7 +11083,7 @@ def lint() -> None:
             typer.echo(f"  {finding.concept_id}: {finding.detail}")
 
     # Completed/not-run counts (design.md Decision 5, ADR-0022): against
-    # `application_lint.TOTAL_CHECKS` (14 calls), NOT the 15 `LintReport`
+    # `application_lint.TOTAL_CHECKS` (15 calls), NOT the 16 `LintReport`
     # finding-list fields -- `check_below_source_sensitivity` is one call
     # feeding two fields, so counting fields would overstate how many
     # checks ran.

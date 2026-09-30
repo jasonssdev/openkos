@@ -250,3 +250,44 @@ def rename_two_step(src: Path, nfc_name: str) -> Path:
             f"found byte-exactly in {parent} after renaming {original_name!r}"
         )
     return dst
+
+
+def symlinked_segment(path: Path, boundary: Path) -> Path | None:
+    """Return the outermost segment of `path` strictly below `boundary` that is
+    a symlink, `path` itself if it is not under `boundary` at all, or `None`
+    when `path` is contained (#926).
+
+    The shared containment primitive behind every symlink refusal. Two
+    genuinely different escapes fold into this one check, and BOTH matter:
+
+    * A linked **inner directory** carries writes and deletes outside the
+      workspace. `bundle/area/thing.md` with `area` linked resolves into the
+      external tree, so `fsio.remove_file`'s `unlink` deletes the external
+      file and `fsio.write_atomic`'s temp-then-`replace` writes there.
+    * A linked **leaf** does NOT carry writes or deletes -- `unlink` removes
+      the link, and `replace` overwrites the link -- but it is a READ vector:
+      every reader resolves through it, so external bytes reach prompts,
+      answers, and the git lifecycle. Refusing only the directory case would
+      leave that open.
+
+    Segments AT OR ABOVE `boundary` are deliberately NOT inspected. Reaching a
+    workspace through a linked ancestor (`~/ws` -> `/Volumes/x/ws`) is ordinary
+    use and escapes nothing: everything below still resolves within one tree.
+    `boundary` itself is excluded for the same reason plus a second one --
+    `require_workspace` already owns whether `bundle/` is a link, and reporting
+    it here too would make every concept path blame the wrong segment.
+
+    `is_symlink()` is `False` for a path that does not exist, so this admits an
+    absent path as contained; callers that need existence decide that
+    separately (`_resolve_concept_path` still owns its own `is_file` refusal).
+    """
+    try:
+        relative = path.relative_to(boundary)
+    except ValueError:
+        return path
+    current = boundary
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            return current
+    return None

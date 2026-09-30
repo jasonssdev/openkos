@@ -93,6 +93,11 @@ class InconsistentWorkspace(IngestRefused):
     """The Source concept exists but its raw copy is missing."""
 
 
+class SymlinkedDestination(IngestRefused):
+    """A destination path passes through a symlinked segment below the
+    workspace root (#1126); nothing was written."""
+
+
 class SourceCheckFailed(IngestRefused):
     """Checking the source or the workspace raised `OSError`/`ValueError`."""
 
@@ -139,6 +144,21 @@ class IngestPolicy:
     skip_confirmation: bool = False
     """`--auto`: the confirmation question is not asked. The drift guard
     still runs -- skipping the prompt does not skip the window it stood in."""
+
+
+def _refuse_symlinked_destinations(root: Path, destinations: Sequence[Path]) -> None:
+    """Refuse when any destination path passes through a symlinked segment
+    below the workspace root (#1126), with the shared D1-shaped reason
+    `require_workspace` uses. `write_exclusive` opens with mode `x`, which
+    follows a symlinked PARENT, so a linked directory would carry source text
+    out of the workspace. Runs before any write, so a refusal leaves the
+    workspace exactly as it was found."""
+    for destination in destinations:
+        reason = config.symlink_boundary_reason(destination, root)
+        if reason is not None:
+            raise SymlinkedDestination(
+                f"openkos ingest: refusing to ingest -- {reason}."
+            )
 
 
 def _utc_now() -> datetime:
@@ -480,6 +500,9 @@ def _prepare(
         raw_dest = layout.raw_dir / name
         sources_dir = layout.bundle_dir / "sources"
         concept_path = sources_dir / f"{slug}.md"
+        # Symlink boundary (#1126): refused here, before the extraction spends
+        # a backend call and before anything is written.
+        _refuse_symlinked_destinations(root, [raw_dest, concept_path])
 
         if destination.disambiguated_from is not None:
             # A destination the user did not name is never chosen silently.
@@ -733,6 +756,9 @@ def _prepare(
             obs.staged(staged)
         derived_plans = staged.plans
         skip_reason = staged.skip_reason
+        # Same boundary for the derived-object directories (`bundle/entities`,
+        # ...), known only once staging has chosen each object's type.
+        _refuse_symlinked_destinations(root, [plan.path for plan in derived_plans])
         extraction_notice = staged.notices
         # One snapshot observation per target: the decoded text feeds
         # `compose_catalog_update` below, the raw bytes feed the drift guard

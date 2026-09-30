@@ -361,6 +361,7 @@ def test_refusals_are_never_os_or_value_errors() -> None:
         svc.RawImmutabilityRefused,
         svc.InconsistentWorkspace,
         svc.SourceCheckFailed,
+        svc.SymlinkedDestination,
         svc.PreparationFailed,
         svc.WriteFailed,
         svc.DriftDetected,
@@ -369,3 +370,35 @@ def test_refusals_are_never_os_or_value_errors() -> None:
     ):
         assert issubclass(cls, svc.IngestRefused)
         assert not issubclass(cls, (OSError, ValueError))
+
+
+def test_a_symlinked_destination_directory_is_refused_before_any_write(
+    workspace: Path, tmp_path: Path
+) -> None:
+    """#1126: `write_exclusive` follows a symlinked PARENT, so a linked
+    `bundle/sources` would carry the source out of the workspace. The check
+    sits before extraction and before the first write, inside the service."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sources = workspace / "bundle" / "sources"
+    if sources.exists():
+        sources.rmdir()
+    try:
+        sources.symlink_to(outside, target_is_directory=True)
+    except OSError as exc:  # pragma: no cover - platform without symlinks
+        pytest.skip(f"symlink privilege unavailable: {exc}")
+    src = _source(tmp_path)
+    calls: list[str] = []
+
+    with pytest.raises(svc.SymlinkedDestination) as excinfo:
+        svc.ingest_source(
+            workspace,
+            src,
+            svc.IngestPolicy(skip_confirmation=True),
+            ports=_ports(calls),
+        )
+
+    assert "is a symlink" in excinfo.value.message
+    assert list(outside.iterdir()) == []
+    assert not (workspace / "raw" / "notes.txt").exists()
+    assert calls == []
