@@ -317,7 +317,7 @@ Design Decision 3.
   (>= 90% gate held). `uv run python evals/run_self_tests.py`: 44/44 green
   with `OLLAMA_HOST` poisoned. `ruff check .`, `ruff format --check .`,
   `mypy .`: all clean.
-- [ ] **2.10** Commit, scope `llm` (or the touched module's own listed scope
+- [x] **2.10** Commit, scope `llm` (or the touched module's own listed scope
   where more specific). Open PR 2a targeting `main`, after PR 1 merges.
 
   **Observed**: committed on the current branch (no push, no PR opened per
@@ -374,7 +374,7 @@ Design Decision 3.
   **7231 passed, 0 failed, 2 skipped**, 96.92% branch coverage (>=90% gate
   held) — the one Phase-2a-documented interim failure is now closed.
   `evals/run_self_tests.py`: 44/44 green, `OLLAMA_HOST` poisoned.
-- [ ] **2.16** Commit, scope `cli`/`mcp` as appropriate. Open PR 2b targeting
+- [x] **2.16** Commit, scope `cli`/`mcp` as appropriate. Open PR 2b targeting
   `main`, after PR 2a merges.
 
   **Observed**: committed together with Phase 2a's work on the current
@@ -458,7 +458,7 @@ Design Decision 6. `openai-compatible` stays refused until Phase 14.
 - [x] **3.13** Run `uv run pytest tests/unit/test_config.py` focused, then
   `uv run pytest --cov` full suite; then `uv run python
   evals/run_self_tests.py`.
-- [ ] **3.14** Commit, scope `config`. Open PR 3 targeting `main`, after PR
+- [x] **3.14** Commit, scope `config`. Open PR 3 targeting `main`, after PR
   1 merges (independent of PR 2a/2b).
   Observed: commit half done (scope `config`, on branch `feat/1057-openai-p3`);
   "Open PR 3" half intentionally left for the orchestrator/maintainer per
@@ -701,7 +701,7 @@ requirements.
   defensive/degenerate paths covered by the design's own fail-open
   contract, not a gap in the tested requirements). `evals/
   run_self_tests.py`: 44/44 green.
-- [ ] **4.26** Commit, scope `llm`. Open PR 4 targeting `main`, after PR 1,
+- [x] **4.26** Commit, scope `llm`. Open PR 4 targeting `main`, after PR 1,
   2a, 2b merge.
 
   **Observed**: committed on the current branch (`feat/1057-openai-p4`,
@@ -785,7 +785,7 @@ enforce it.
   wall time) → **7276 passed, 0 failed, 2 skipped**, 96.93% branch
   coverage (>= 90% gate held); `llm/openai_compatible.py`: 104 statements,
   2 missed, 98%. `evals/run_self_tests.py`: 44/44 green.
-- [ ] Commit as a separate follow-up commit (not squashed into 4.26's),
+- [x] Commit as a separate follow-up commit (not squashed into 4.26's),
   scope `llm`. No push, no PR — left to the maintainer, same as 4.26.
 
 **Rollback boundary**: delete `llm/openai_compatible.py`; nothing else
@@ -913,7 +913,7 @@ Design Decision 2's `max_tokens`/`finish_reason`/`usage`/`temperature`/
   Phase 5+6+7 verification note at the end of Phase 7 for the exact
   numbers. `evals/run_self_tests.py` (with `OLLAMA_HOST` poisoned): 44/44
   green.
-- [ ] **5.16** Commit, scope `llm`. Open PR 5 targeting `main`, after PR 4
+- [x] **5.16** Commit, scope `llm`. Open PR 5 targeting `main`, after PR 4
   merges.
 
   **Observed**: committed together with Phase 6 and 7 as one combined
@@ -1051,7 +1051,7 @@ Design Decision 2's `/v1/embeddings` mapping; embedding spec requirements.
 
   **Observed**: focused: 15 passed. Combined full-suite/evals numbers
   recorded once at the end of Phase 7 (see below).
-- [ ] **6.21** Commit, scope `llm`. Open PR 6 targeting `main`, after PR 4
+- [x] **6.21** Commit, scope `llm`. Open PR 6 targeting `main`, after PR 4
   merges (independent of PR 5).
 
   **Observed**: committed together with Phase 5 and 7 as one combined
@@ -1157,7 +1157,7 @@ Design Decision 2's `/v1/models` and locality mapping.
   coverage entry, plus a few `list_models`/`embed` defensive branches not
   independently exercised by a dedicated test -- not a gap in any tested
   requirement).
-- [ ] **7.11** Commit, scope `llm`. Open PR 7 targeting `main`, after PR 4
+- [x] **7.11** Commit, scope `llm`. Open PR 7 targeting `main`, after PR 4
   merges (independent of PR 5/6).
 
   **Observed**: committed together with Phase 5 and 6 as ONE combined
@@ -1287,7 +1287,7 @@ client (Phases 4-6) keeps working.
   unaffected by this phase — no production code changed, only test
   infrastructure). `evals/run_self_tests.py` (with `OLLAMA_HOST` poisoned):
   44/44 green.
-- [ ] **8.9** Commit, scope `llm`. Open PR 8 targeting `main`, after PR 4,
+- [x] **8.9** Commit, scope `llm`. Open PR 8 targeting `main`, after PR 4,
   5, 6, 7 merge.
 
   **Observed**: commit half done, scope `llm`, on branch
@@ -1652,7 +1652,7 @@ adds `resolve_endpoint`, `embed_client`, `diagnostics_client`.
   Phase 9 additions). `uv run python evals/run_self_tests.py`
   (`OLLAMA_HOST` poisoned to `http://127.0.0.1:1`): **44 of 44 harness
   self-test(s) run, 0 failing**.
-- [ ] **9.32** Commit as one or more work-unit commits, split by touched
+- [x] **9.32** Commit as one or more work-unit commits, split by touched
   module's scope (`llm` for `backends.py`'s resolver, `cli`/`mcp` for the
   adapter wiring). Open PR 9 targeting `main`, after PR 3 and PR 8 merge.
 
@@ -1844,7 +1844,7 @@ Closes the ten `_PENDING_SITES` entries Phase 9's guard allowlisted, per the
   pass, run once source was stable) — is recorded under Phase 11's 11.23
   below: **7413 passed, 0 failed, 2 skipped**, 96.85% branch coverage, and
   `evals/run_self_tests.py` 44/44 green.
-- [ ] **10.23** Commit, scope `cli`/`mcp` as appropriate. Open PR 10
+- [x] **10.23** Commit, scope `cli`/`mcp` as appropriate. Open PR 10
   targeting `main`, after PR 9 merges.
 
   **Observed**: commit(s) to be made on the current branch
@@ -2143,7 +2143,7 @@ requirements; `query-command`'s question-vector cache key requirement.
   quality gates a second time after this note itself was written
   (tasks.md-only edit, no source touched) to confirm nothing drifted —
   still clean.
-- [ ] **11.24** Commit, scope `state` (or the nearest AGENTS.md-listed scope
+- [x] **11.24** Commit, scope `state` (or the nearest AGENTS.md-listed scope
   if `state` is not on the list at commit time — e.g. `memory`). Open PR 11
   targeting `main`, after PR 9 merges.
 
@@ -2263,7 +2263,7 @@ spec's two ADDED requirements and one MODIFIED requirement.
   held). `evals/run_self_tests.py` deferred to the end-of-session
   five-command verification below (not re-run per phase to avoid
   redundant ~3s-per-check-times-44 runs mid-session).
-- [ ] **12.15** Commit, scope `cli` (doctor's verb lives in `cli/main.py`;
+- [x] **12.15** Commit, scope `cli` (doctor's verb lives in `cli/main.py`;
   `application/doctor.py` is its supporting module). Open PR 12 targeting
   `main`, after PR 9 merges (independent of PR 10/11).
 
@@ -2360,7 +2360,7 @@ function, both in `application/backends.py`. No caller wired yet (Phase
   **7424 passed, 0 failed, 2 skipped**, 94.23% branch coverage (>=90% gate
   held). `evals/run_self_tests.py` deferred to the end-of-session
   five-command verification.
-- [ ] **13.15** Commit, scope `llm`. Open PR 13a targeting `main`, after PR
+- [x] **13.15** Commit, scope `llm`. Open PR 13a targeting `main`, after PR
   9 merges.
 
   **Observed**: committed on the current branch, scope `llm` — no push, no
@@ -2571,7 +2571,7 @@ yet.
   96.87% branch coverage (>= 90% gate held), 438.99s wall time.
   `uv run python evals/run_self_tests.py` → **44 of 44 harness
   self-test(s) run, 0 failing**.
-- [ ] **13.34** Commit, scope `cli`/`mcp` as appropriate (split by module if
+- [x] **13.34** Commit, scope `cli`/`mcp` as appropriate (split by module if
   the combined diff nears budget). Open PR 13b targeting `main`, after PR
   12 and PR 13a merge.
 
@@ -2716,7 +2716,7 @@ from `openkos.yaml`.
   Scope/F1).
 
   **Observed**: 44 of 44 harness self-test(s) run, 0 failing.
-- [ ] **14.14** Commit, scope `config`. Open PR 14 targeting `main`, after
+- [x] **14.14** Commit, scope `config`. Open PR 14 targeting `main`, after
   PR 10, 11, 12, 13a, 13b all merge.
 
   **Observed**: committed on the current branch (`feat/1057-openai-p14`,
@@ -2813,7 +2813,7 @@ Shape-level only, per AGENTS.md's "docs describe the shape, not the diff."
 - [x] **15.8** Run `uv run python evals/run_self_tests.py` — must be green.
 
   **Observed**: same run reported under 14.13 — 44 of 44, 0 failing.
-- [ ] **15.9** Commit, scope `docs`. Open PR 15 targeting `main`, after PR
+- [x] **15.9** Commit, scope `docs`. Open PR 15 targeting `main`, after PR
   14 merges — the final PR of the chain.
 
   **Observed**: committed on the current branch, scope `docs` — no push,
@@ -2822,3 +2822,20 @@ Shape-level only, per AGENTS.md's "docs describe the shape, not the diff."
 
 **Rollback boundary**: revert the doc edits file-by-file; no code behavior
 depends on this slice.
+
+## Delivery record
+
+| PR | Phases |
+|---|---|
+| #1096 | planning, Phase 1 |
+| #1097 | Phases 2a + 2b (combined so the AST guard landed green) |
+| #1098 | Phase 3 |
+| #1099 | Phase 4 + the no-redirect security fix |
+| #1100 | Phases 5–7 (one module, no clean hunk split) |
+| #1101 | Phase 8 |
+| #1102 | Phase 9 |
+| #1103 | Phases 10 + 11 |
+| #1104 | Phases 12, 13a, 13b |
+| #1105 | Phases 14 + 15 |
+
+Every PR merged with green CI on its exact head SHA.

@@ -66,4 +66,4 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 | [0028](0028-mcp-disclosure-is-its-own-boundary.md) | Disclosure to an MCP client is its own sensitivity boundary -- hidden by default, opened only at launch | Accepted | 2026-09-26 |
 | [0029](0029-adopt-okf-v02-frontmatter.md) | Adopt OKF v0.2 frontmatter -- provenance stays the truth, sources is its projection, and repair migrates existing bundles | Accepted | 2026-09-29 |
 | [0030](0030-untrusted-incoming-frontmatter.md) | Incoming frontmatter is untrusted -- preserved whole in one namespace, with a closed per-key lift | Accepted | 2026-09-29 |
-| [0031](0031-openai-compatible-backend.md) | A second, OpenAI-compatible local backend beside the Ollama default | Proposed | 2026-09-29 |
+| [0031](0031-openai-compatible-backend.md) | A second, OpenAI-compatible local backend beside the Ollama default | Accepted | 2026-09-29 |
