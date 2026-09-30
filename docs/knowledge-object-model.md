@@ -374,7 +374,7 @@ Because OpenKOS accumulates knowledge and preserves history, removal is delibera
 
 The `forget`/`purge` flow shows inbound references and (with `--scope source`) derived descendants before acting, defaults to the least destructive scope, and requires explicit confirmation — a typed phrase for a purge.
 
-Note that "deleted", "forgotten", and "purged" are lifecycle *events*, recorded as tombstones in `log.md` and in git history — **not** values of the `status` field, which stays `draft | stable | deprecated` (OKF §5.4). Retrieval keys deprecation off `status: deprecated` (plus `supersedes` edges from `reconcile`); a `forget`/`purge`, by contrast, removes the document outright rather than changing its status.
+Note that "deleted", "forgotten", and "purged" are lifecycle *events*, recorded as tombstones in `log.md` and in git history — **not** values of the `status` field, which stays `draft | stable | deprecated` (OKF §5.4). Retrieval keys deprecation off `status: deprecated` (plus `supersedes` edges from `reconcile`); a `forget`/`purge`, by contrast, removes the document outright rather than changing its status. A superseded concept's own frontmatter also carries this as an export — `status: deprecated` plus a `status_derived_from: supersedes` marker, derived from the edge for the benefit of OKF consumers outside OpenKOS — and the engine never reads a marked value back as a declaration.
 
 ---
 

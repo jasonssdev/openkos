@@ -256,15 +256,19 @@ stacked in order; the chain strategy is the orchestrator's call.
 
 ## Phase 6 — Docs and the shipped example
 
-- [ ] 6.1 `docs/knowledge-object-model.md` Lifecycle (line ~377): one
+- [x] 6.1 `docs/knowledge-object-model.md` Lifecycle (line ~377): one
   sentence — a superseded concept's frontmatter carries `status:
   deprecated` with `status_derived_from: supersedes`, derived from the edge
   and never read back. `docs/cli.md` reconcile (`--winner`, ~405/416) and
   `relate`: the loser's frontmatter now says `deprecated`; `repair` fixes
   drift. No counts, no "since #".
-- [ ] 6.2 Check `examples/good-life-demo/bundle` for `supersedes` edges; if
+- [x] 6.2 Check `examples/good-life-demo/bundle` for `supersedes` edges; if
   any, run `openkos repair` there and commit the result; run `openkos lint`
   and `openkos status` on it and a fresh `init` (zero export findings).
+  Finding: no `supersedes` edge exists anywhere in the shipped example, so
+  no `repair`/commit was needed. Verified on a temp copy of the example
+  and on a fresh `init`: `lint` reports "No deprecated-status export
+  findings" (14/14 checks completed) and `status` runs clean on both.
 - [ ] 6.3 Archive notes (for the archive phase, not apply): the Non-Goals
   prose of `okf-format-migration` ("the engine starting to write `status:
   deprecated`") and `status-aware-retrieval` ("any change to how

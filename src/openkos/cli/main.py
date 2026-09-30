@@ -9981,8 +9981,10 @@ def _reconcile_sentence(
 ) -> str:
     """One human-readable sentence for a `## Reconciliation` note, per
     `role` (design: Interfaces / Contracts) -- `reconciled` (symmetric,
-    both coexist), `supersedes` (this concept wins), `superseded`
-    (label-only, no status change), `revises` (this concept refines its
+    both coexist), `supersedes` (this concept wins), `superseded` (hidden
+    from retrieval as of this edge; deprecated-status-export, issue #1075,
+    also exports this onto the concept's own `status` unless a
+    human-authored value blocks it), `revises` (this concept refines its
     counterpart; both remain current), or `revised` (the mirror role on the
     refined counterpart). `role` is a closed `Literal`, and any other value
     raises defensively (rather than silently falling through to the
@@ -9993,7 +9995,7 @@ def _reconcile_sentence(
     if role == "supersedes":
         return f"Supersedes {link} as of {date_str} (this concept wins)."
     if role == "superseded":
-        return f"Superseded by {link} as of {date_str} (label-only, no status change)."
+        return f"Superseded by {link} as of {date_str} (hidden from retrieval)."
     if role == "revises":
         return f"Revises {link} as of {date_str} (refinement; both remain current)."
     if role == "revised":

@@ -386,6 +386,10 @@ def test_unmerge_core_is_directly_callable_and_restores_the_pre_merge_state(
         confirmation=consent_service.boolean_confirmation("unmerge"),
         plan=plan,
         new_log_text=new_log_text,
+        # `unmerge_core` never reads either -- preview-only fields
+        # (deprecated-status-export, issue #1075); placeholder value.
+        survivor_status_outcome=None,
+        absorbed_status_outcome=None,
         link_reversed_texts={},
         relation_reversed_texts={},
         provenance_restored_texts={},
