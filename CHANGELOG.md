@@ -14,19 +14,6 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
-### Fixed
-
-- A concept id containing a backslash or a colon (`..\..\x`, `C:\x`,
-  `a:b`) is now refused by every id-taking verb and tool, and `slugify` no
-  longer emits a reserved Windows device name (`con`, `prn`, `aux`, `nul`,
-  `com1`-`com9`, `lpt1`-`lpt9`) as a whole slug: it appends `-doc`, so a
-  source titled `CON` files as `sources/con-doc.md`
-  ([#1131](https://github.com/jasonssdev/openkos/issues/1131)). On Windows the
-  old ids could traverse out of the bundle or replace its base path, and the
-  old slugs named files Windows cannot create. A workspace that already holds
-  `sources/con.md` and re-ingests a `con.*` file gets a second source at
-  `con-doc.md`; delete the old one.
-
 ### Changed
 
 - The computed `STATUS` column `list` prints, the `status` field
@@ -59,6 +46,26 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   one.
 
 ### Fixed
+
+- A concept id containing a backslash or a colon (`..\..\x`, `C:\x`,
+  `a:b`) is now refused by every id-taking verb and tool, and `slugify` no
+  longer emits a reserved Windows device name (`con`, `prn`, `aux`, `nul`,
+  `com1`-`com9`, `lpt1`-`lpt9`) as a whole slug: it appends `-doc`, so a
+  source titled `CON` files as `sources/con-doc.md`
+  ([#1131](https://github.com/jasonssdev/openkos/issues/1131)). On Windows the
+  old ids could traverse out of the bundle or replace its base path, and the
+  old slugs named files Windows cannot create. A workspace that already holds
+  `sources/con.md` and re-ingests a `con.*` file gets a second source at
+  `con-doc.md`; delete the old one.
+
+- `status` and `next` no longer report freshly rebuilt derived stores as stale
+  when the workspace path contains `#`, `?` or `%`
+  ([#1132](https://github.com/jasonssdev/openkos/issues/1132)). Every
+  read-only store open now goes through one percent-encoding opener. A
+  SQLite "database is locked" from any locked verb (not only `reindex`) now
+  exits 1 with the same retry message instead of a traceback
+  ([#1143](https://github.com/jasonssdev/openkos/issues/1143), lock half; the
+  per-document FTS/graph rebuild half is deferred to MVP 4).
 
 - `ingest` no longer writes the absolute local path of the source into the
   Source concept's `description` and body
