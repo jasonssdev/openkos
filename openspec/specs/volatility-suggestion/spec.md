@@ -79,8 +79,9 @@ message to stderr and exit non-zero, with zero writes performed.
 
 - GIVEN the LLM backend raises `BackendUnavailable`
 - WHEN `suggest-volatility` runs
-- THEN stderr states Ollama is not responding and the process exits
-  non-zero with no writes
+- THEN stderr states the configured backend is not responding and how to
+  start it (`ollama serve` for `ollama`, the endpoint host for
+  `openai-compatible`), and the process exits non-zero with no writes
 
 #### Scenario: Model not found
 

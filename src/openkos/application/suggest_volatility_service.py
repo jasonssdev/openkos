@@ -82,6 +82,8 @@ class VolatilityPorts:
 class VolatilityOutcome:
     batch: TierSuggestionBatch
     model: str
+    cfg: config.Config | None = None
+    """The run's config, so a partial-batch message words the backend."""
 
     @property
     def results(self) -> tuple[TierSuggestion, ...]:
@@ -92,7 +94,9 @@ class VolatilityOutcome:
         return self.batch.failure
 
 
-def volatility_batch_failure_message(batch: TierSuggestionBatch, *, model: str) -> str:
+def volatility_batch_failure_message(
+    batch: TierSuggestionBatch, *, model: str, cfg: config.Config | None = None
+) -> str:
     """One line for a partial batch (#441). Unlike its siblings the count has no
     of-total: `suggest_volatility` derives its type queue INSIDE the leaf, so
     the verb holds no pre-flight total and fabricating one would cost a second
@@ -100,7 +104,7 @@ def volatility_batch_failure_message(batch: TierSuggestionBatch, *, model: str) 
     context = (
         f"openkos {_VERB}: failed after suggesting {len(batch.results)} concept type(s)"
     )
-    return batch_failure_message(context, batch.failure, model)
+    return batch_failure_message(context, batch.failure, model, cfg)
 
 
 def suggest_volatility_tiers(
@@ -141,14 +145,15 @@ def suggest_volatility_tiers(
         )
     except BackendUnavailable as exc:
         raise BackendNotReachable(
-            f"openkos {_VERB}: failed -- {exc}. Start it with "
-            f"`ollama serve`, then try again.{DOCTOR_HINT}"
+            f"openkos {_VERB}: failed -- {exc}. "
+            f"{application_backends.start_hint(cfg)}, "
+            f"then try again.{DOCTOR_HINT}"
         ) from exc
     except BackendModelNotFound as exc:
         raise ModelNotInstalled(
             f"openkos {_VERB}: failed -- model '{cfg.model}' is "
-            f"not installed. Pull it with `ollama pull {cfg.model}`, then "
-            "try again."
+            f"not installed. {application_backends.install_hint(cfg, cfg.model)}, "
+            "then try again."
         ) from exc
     # The two specific handlers above MUST precede this generic handler: both
     # subclass `BackendError`, so reordering would funnel them into this
@@ -156,4 +161,4 @@ def suggest_volatility_tiers(
     except BackendError as exc:
         raise BackendFailed(f"openkos {_VERB}: failed -- {exc}.") from exc
 
-    return VolatilityOutcome(batch=batch, model=cfg.model)
+    return VolatilityOutcome(batch=batch, model=cfg.model, cfg=cfg)

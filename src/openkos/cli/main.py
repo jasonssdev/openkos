@@ -11162,7 +11162,10 @@ def suggest_relations_cmd(
         # one stderr failure line and the BackendError-family exit code.
         typer.echo(
             relations_service.relations_batch_failure_message(
-                outcome.batch, total=outcome.total, model=outcome.model
+                outcome.batch,
+                total=outcome.total,
+                model=outcome.model,
+                cfg=outcome.cfg,
             ),
             err=True,
         )
@@ -11295,7 +11298,7 @@ def suggest_volatility_cmd(
         # one stderr failure line and the BackendError-family exit code.
         typer.echo(
             volatility_service.volatility_batch_failure_message(
-                outcome.batch, model=outcome.model
+                outcome.batch, model=outcome.model, cfg=outcome.cfg
             ),
             err=True,
         )
@@ -12289,7 +12292,10 @@ def revisions(
         # line and the BackendError-family exit code.
         typer.echo(
             revisions_service.revisions_batch_failure_message(
-                report.outcome, total=len(report.plan.to_judge), model=run.model
+                report.outcome,
+                total=len(report.plan.to_judge),
+                model=run.model,
+                cfg=run.cfg,
             ),
             err=True,
         )
