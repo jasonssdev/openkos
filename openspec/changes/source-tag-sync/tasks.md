@@ -233,22 +233,22 @@ only the verb name and may land after Phase 3 or together with it.
 
 ## Phase 4 (PR 4): Ingest advisory
 
-- [ ] **4.1** [TEST] `tests/unit/cli/test_ingest.py`:
+- [x] **4.1** [TEST] `tests/unit/cli/test_ingest.py`:
       `test_tag_delta_rewrite_advises_sync_tags` — Source-only rewrite
       fixture (stored `[alpha]`, incoming `[beta]`): stderr contains
       exactly one line naming `openkos sync-tags sources/<slug>`; no
       `set-sensitivity` advisory. RED: no such line.
-- [ ] **4.2** [TEST] `test_no_tag_delta_no_sync_tags_advisory` —
+- [x] **4.2** [TEST] `test_no_tag_delta_no_sync_tags_advisory` —
       event-date-only and frontmatter-only rewrites; precondition: the
       4.1 fixture does print it (shared helper asserts presence first).
-- [ ] **4.3** [TEST] `test_tag_and_sensitivity_delta_print_both`.
-- [ ] **4.4** [IMPL] One `typer.echo(..., err=True)` keyed on
+- [x] **4.3** [TEST] `test_tag_and_sensitivity_delta_print_both`.
+- [x] **4.4** [IMPL] One `typer.echo(..., err=True)` keyed on
       `converged is not None and source_plan.tags_added`, next to the
       `set-sensitivity` advisory; wording must not assert that derived
       objects exist. GREEN 4.1-4.3.
-- [ ] **4.5** [MUT] Key the advisory on `source_plan.lift_changed`
+- [x] **4.5** [MUT] Key the advisory on `source_plan.lift_changed`
       instead → 4.2's frontmatter-only case RED; revert.
-- [ ] **4.6** Full gate. Commit `feat(cli): advise sync-tags when a
+- [x] **4.6** Full gate. Commit `feat(cli): advise sync-tags when a
       Source-only rewrite adds tags (#1093)`.
 
 ## Archive

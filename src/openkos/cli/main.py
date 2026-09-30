@@ -5742,6 +5742,22 @@ def _ingest_single(
                 "set-sensitivity' to raise them explicitly.",
                 err=True,
             )
+        # source-tag-sync (#1093), ADR-0033: existing derived objects keep
+        # the tags they were created with (this rewrite never re-tags
+        # them), so a tag-union delta that fires here needs its own
+        # advisory naming the verb that closes the gap. Fires independently
+        # of the sensitivity advisory above -- a rewrite firing both deltas
+        # prints both. Printed regardless of whether the Source has any
+        # derived object on disk (this rewrite deliberately does not walk
+        # the bundle), so the wording below must not assert one exists.
+        if converged is not None and source_plan.tags_added:
+            typer.echo(
+                "openkos ingest: this Source-only rewrite added tags to "
+                "the Source -- existing derived objects keep the tags "
+                f"they were created with; run 'openkos sync-tags "
+                f"sources/{slug}' to add the Source's current tags to them.",
+                err=True,
+            )
         for plan in derived_plans:
             typer.echo(f"  + bundle/{plan.link_dir}/{plan.slug}.md")
         typer.echo(f"  ~ {index_path.name} (Source entry refreshed)")

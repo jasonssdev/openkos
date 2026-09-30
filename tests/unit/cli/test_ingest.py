@@ -10697,6 +10697,109 @@ def test_source_only_rewrite_that_does_not_raise_sensitivity_prints_no_advisory(
     assert "openkos set-sensitivity" not in result.stderr
 
 
+# --- source-tag-sync (#1093): the Source-only rewrite's sync-tags advisory
+# (ingestion delta: "Converged Re-Ingest Source-Only Rewrite", ADR-0033) ---
+
+
+def test_tag_delta_rewrite_advises_sync_tags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ingestion: "A tag-union delta on the Source-only rewrite advises
+    sync-tags" -- a Source-only rewrite whose tag-union delta fires prints
+    exactly one stderr line naming `openkos sync-tags sources/<slug>`, and
+    no `set-sensitivity` advisory. RED today: no such line is printed."""
+    concept_path = _reingested_converged_source(
+        tmp_path, monkeypatch, first_raw=_GROUNDED_NOTES
+    )
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["tags"] == []
+
+    with_tags = f"---\ntags: [alpha, beta]\n---\n{_GROUNDED_NOTES}"
+    (tmp_path / "notes.txt").write_text(with_tags, encoding="utf-8")
+    (tmp_path / "raw" / "notes.txt").write_text(with_tags, encoding="utf-8")
+
+    fake = _patch_llm(monkeypatch, raises=AssertionError("must not be called"))
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert fake.calls == []
+    sync_tags_lines = [
+        line for line in result.stderr.splitlines() if "openkos sync-tags" in line
+    ]
+    assert len(sync_tags_lines) == 1
+    assert "openkos sync-tags sources/notes" in sync_tags_lines[0]
+    assert "openkos set-sensitivity" not in result.stderr
+
+
+def test_no_tag_delta_no_sync_tags_advisory(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ingestion: "A rewrite with no tag-union delta prints no sync-tags
+    advisory" -- a frontmatter-only rewrite prints no such line.
+    PRECONDITION (in an independent workspace): the SAME fixture shape but
+    WITH a tag-union delta DOES print the advisory (mirrors
+    `test_tag_delta_rewrite_advises_sync_tags`), so this test's own absence
+    assertion is not an accident of wording."""
+    precondition_root = tmp_path_factory.mktemp("sync-tags-advisory-precondition")
+    _reingested_converged_source(
+        precondition_root, monkeypatch, first_raw=_GROUNDED_NOTES
+    )
+    with_tags = f"---\ntags: [alpha]\n---\n{_GROUNDED_NOTES}"
+    (precondition_root / "notes.txt").write_text(with_tags, encoding="utf-8")
+    (precondition_root / "raw" / "notes.txt").write_text(with_tags, encoding="utf-8")
+    fake_precondition = _patch_llm(
+        monkeypatch, raises=AssertionError("must not be called")
+    )
+    precondition_result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert precondition_result.exit_code == 0
+    assert fake_precondition.calls == []
+    assert "openkos sync-tags" in precondition_result.stderr
+
+    # Frontmatter-only rewrite, independent workspace: a newly-parsed
+    # `source_frontmatter` mapping with no `tags` key at all.
+    concept_path = _reingested_converged_source(
+        tmp_path, monkeypatch, first_raw=_GROUNDED_NOTES
+    )
+    with_frontmatter = f"---\nauthor: Jane\n---\n{_GROUNDED_NOTES}"
+    (tmp_path / "notes.txt").write_text(with_frontmatter, encoding="utf-8")
+    (tmp_path / "raw" / "notes.txt").write_text(with_frontmatter, encoding="utf-8")
+    fake = _patch_llm(monkeypatch, raises=AssertionError("must not be called"))
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert fake.calls == []
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata[okf.SOURCE_FRONTMATTER_KEY] == {"author": "Jane"}
+    assert "openkos sync-tags" not in result.stderr
+
+
+def test_tag_and_sensitivity_delta_print_both(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ingestion: "A rewrite firing both the tag and sensitivity deltas
+    prints both advisories" -- one stderr line each."""
+    concept_path = _reingested_converged_source(
+        tmp_path, monkeypatch, first_raw=_GROUNDED_NOTES
+    )
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["tags"] == []
+    assert metadata["sensitivity"] == "private"
+
+    with_both = f"---\ntags: [alpha]\nsensitivity: confidential\n---\n{_GROUNDED_NOTES}"
+    (tmp_path / "notes.txt").write_text(with_both, encoding="utf-8")
+    (tmp_path / "raw" / "notes.txt").write_text(with_both, encoding="utf-8")
+
+    fake = _patch_llm(monkeypatch, raises=AssertionError("must not be called"))
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert fake.calls == []
+    assert "openkos set-sensitivity" in result.stderr
+    assert "openkos sync-tags" in result.stderr
+
+
 def test_source_only_rewrite_event_date_only_prints_neither_new_line(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
