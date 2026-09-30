@@ -230,12 +230,12 @@ def test_raise_path(
     _run(scenario, tmp_path, ["suggest-volatility"])
 
 
-def test_raise_path_on_an_openai_compatible_workspace_keeps_the_ollama_wording(
+def test_raise_path_on_an_openai_compatible_workspace_names_the_backend(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The raise-path remediation is hardcoded to Ollama wording even on an
-    `openai-compatible` workspace (unlike `suggest-relations`, which goes
-    through `start_hint`). A behaviour-preserving move must keep it."""
+    """The raise-path remediation follows the configured backend, exactly as
+    `suggest-relations` words it (#1175): no Ollama wording on an
+    `openai-compatible` workspace."""
     _init_workspace(tmp_path, monkeypatch)
     with (tmp_path / "openkos.yaml").open("a", encoding="utf-8") as handle:
         handle.write("backend: openai-compatible\nbase_url: http://127.0.0.1:1/v1\n")
@@ -245,4 +245,18 @@ def test_raise_path_on_an_openai_compatible_workspace_keeps_the_ollama_wording(
         raise OllamaUnavailable("server down")
 
     monkeypatch.setattr("openkos.cli.main.suggest_volatility", _raise)
+    result = runner.invoke(app, ["suggest-volatility"])
+    assert result.exit_code == 1
+    assert "Ollama" not in result.stderr
+    assert "ollama" not in result.stderr
+    assert "Start your OpenAI-compatible server at 127.0.0.1:1" in result.stderr
     _run("raised_unavailable_openai_compatible", tmp_path, ["suggest-volatility"])
+
+    def _raise_missing(*args: object, **kwargs: object) -> None:
+        raise OllamaModelNotFound("nope")
+
+    monkeypatch.setattr("openkos.cli.main.suggest_volatility", _raise_missing)
+    result = runner.invoke(app, ["suggest-volatility"])
+    assert "ollama" not in result.stderr
+    assert "Make sure your OpenAI-compatible server serves" in result.stderr
+    _run("raised_model_not_found_openai_compatible", tmp_path, ["suggest-volatility"])

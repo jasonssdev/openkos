@@ -119,6 +119,12 @@
     "stderr": "openkos suggest-volatility: failed -- model 'qwen3:8b' is not installed. Pull it with `ollama pull qwen3:8b`, then try again.\n",
     "stdout": ""
   },
+  "raised_model_not_found_openai_compatible": {
+    "calls": [],
+    "exit_code": 1,
+    "stderr": "openkos suggest-volatility: failed -- model 'qwen3:8b' is not installed. Make sure your OpenAI-compatible server serves 'qwen3:8b' (run `openkos doctor` to see the models it reports), then try again.\n",
+    "stdout": ""
+  },
   "raised_unavailable": {
     "calls": [],
     "exit_code": 1,
@@ -128,7 +134,7 @@
   "raised_unavailable_openai_compatible": {
     "calls": [],
     "exit_code": 1,
-    "stderr": "openkos suggest-volatility: failed -- server down. Start it with `ollama serve`, then try again. Or run `openkos doctor` to diagnose the environment.\n",
+    "stderr": "openkos suggest-volatility: failed -- server down. Start your OpenAI-compatible server at 127.0.0.1:1, then try again. Or run `openkos doctor` to diagnose the environment.\n",
     "stdout": ""
   },
   "rationale_language": {

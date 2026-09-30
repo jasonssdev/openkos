@@ -141,14 +141,15 @@ def suggest_volatility_tiers(
         )
     except BackendUnavailable as exc:
         raise BackendNotReachable(
-            f"openkos {_VERB}: failed -- {exc}. Start it with "
-            f"`ollama serve`, then try again.{DOCTOR_HINT}"
+            f"openkos {_VERB}: failed -- {exc}. "
+            f"{application_backends.start_hint(cfg)}, "
+            f"then try again.{DOCTOR_HINT}"
         ) from exc
     except BackendModelNotFound as exc:
         raise ModelNotInstalled(
             f"openkos {_VERB}: failed -- model '{cfg.model}' is "
-            f"not installed. Pull it with `ollama pull {cfg.model}`, then "
-            "try again."
+            f"not installed. {application_backends.install_hint(cfg, cfg.model)}, "
+            "then try again."
         ) from exc
     # The two specific handlers above MUST precede this generic handler: both
     # subclass `BackendError`, so reordering would funnel them into this
