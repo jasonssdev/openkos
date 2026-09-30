@@ -83,6 +83,17 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   or every chunk failing even after its retry, still degrades the whole
   source exactly as before.
 
+### Security
+
+- The per-user workspace lock directory under the OS temp dir is now trusted
+  only when it is a real directory owned by you with no group/other access, and
+  the lock file is opened without following symlinks
+  ([#1134](https://github.com/jasonssdev/openkos/issues/1134)). Another local
+  user pre-creating that guessable path used to turn every mutating verb into a
+  traceback, or into an endless "busy" refusal; it is now one clean refusal
+  (exit `1`, naming the directory and the `chmod 700` / remove fix). Exit `3`
+  stays reserved for genuine contention.
+
 ## [0.2.14] - 2026-09-11
 
 Thirty-seven commits closing twenty-two issues, and the release has two
