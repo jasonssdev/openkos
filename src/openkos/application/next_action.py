@@ -198,6 +198,11 @@ class NextResult:
     might have found. A run whose first tier fires without paying the docs
     walk collected no notices and says nothing -- surfacing them must not
     buy them with the walk the cost contract forbids (D3)."""
+    warnings: tuple[str, ...] = ()
+    """Complete notes about state a read had to work around (today: a
+    malformed identity-decision row it dropped), each once and only for
+    reads this run paid for. Not part of `render_lines`; the CLI writes
+    them to stderr."""
 
 
 class BundleSignals:
@@ -211,11 +216,24 @@ class BundleSignals:
         self._skip_notices: tuple[str, ...] = ()
         self._declinations: list[str] = []
         self._declination_subjects: list[tuple[str, ...] | None] = []
+        self._warnings: list[str] = []
         self._exact_title_groups: list[CandidateGroup] | None = None
         self._stale_indexes: tuple[str, ...] | None = None
         self._walk_incomplete: bool | None = None
         self._non_nfc_entries: list[lint_check.NonNfcEntry] | None = None
         self._open_contradictions: tuple[findings.PersistedFinding, ...] | None = None
+
+    def _note_warning(self, message: str) -> None:
+        """Keep a note a reader returned; the same sidecar is re-read once
+        per group, so each distinct message is kept once."""
+        if message not in self._warnings:
+            self._warnings.append(message)
+
+    @property
+    def observed_warnings(self) -> tuple[str, ...]:
+        """Notes seen so far, like `observed_skip_notices`: reading this
+        never triggers a read."""
+        return tuple(self._warnings)
 
     def record_declination(
         self, notice: str, *, subjects: tuple[str, ...] | None
@@ -346,7 +364,9 @@ class BundleSignals:
             self._exact_title_groups = [
                 group
                 for group in find_exact_title_groups(self._layout.bundle_dir)
-                if not pending.is_group_kept_distinct(self._layout, group.member_ids)
+                if not pending.is_group_kept_distinct(
+                    self._layout, group.member_ids, on_warning=self._note_warning
+                )
             ]
         return self._exact_title_groups
 
@@ -977,6 +997,7 @@ def next_action(layout: config.WorkspaceLayout) -> NextResult:
         declinations=signals.observed_declinations,
         declination_subjects=signals.observed_declination_subjects,
         skip_notices=signals.observed_skip_notices,
+        warnings=signals.observed_warnings,
     )
 
 

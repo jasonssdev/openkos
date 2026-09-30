@@ -455,14 +455,6 @@ def endpoint_label(cfg: config.Config, *, purpose: Literal["chat", "embed"]) -> 
     return resolve_endpoint(cfg, purpose=purpose).source
 
 
-def backend_label(cfg: config.Config | None) -> str:
-    """The backend family's display name: `"Ollama"` (default, matching
-    every existing advisory's wording) or `"OpenAI-compatible server"`."""
-    if cfg is None or cfg.backend != BACKEND_OPENAI_COMPATIBLE:
-        return "Ollama"
-    return "OpenAI-compatible server"
-
-
 def insecure_key_warning(
     cfg: config.Config, *, environ: Mapping[str, str] = os.environ
 ) -> str | None:
