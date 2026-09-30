@@ -44,8 +44,6 @@ acronym similarity. The HIGH (exact normalized-key) tier is exempt from
 this blocking — see Requirement: Cross-Type Exact-Title Bucketing (HIGH
 Tier). A recorded `type_alternative` is the one further exemption — see
 Requirement: A Recorded Type Alternative Bridges The Per-Type Block.
-(Previously: this requirement applied to ALL tiers including HIGH, with no
-exemption.)
 
 #### Scenario: Cross-type similar-but-not-identical titles produce no candidate
 
@@ -186,7 +184,8 @@ continue to invoke the near-match similarity function zero times.
 
 - GIVEN a bundle with ACRONYM and LOW candidate groups but no cross-type
   exact-title overlap
-- WHEN `find_candidates(bundle_dir)` runs before and after this change
+- WHEN `find_candidates(bundle_dir)` runs with and without the cross-type
+  exact-title pass
 - THEN the ACRONYM and LOW groups returned are byte-identical
 
 ### Requirement: `CandidateGroup.member_types` Field
@@ -258,7 +257,7 @@ the threshold MUST NOT form a candidate on this basis.
 ### Requirement: Short-Token Dropping Never Manufactures A Single-Token Title
 
 The near-match tokenizer MUST NOT let its short-token drop rule reduce a
-multi-word title to fewer than two tokens (issue #555: `ai agent` ->
+multi-word title to fewer than two tokens (`ai agent` ->
 `("agent",)` subset-matched everything sharing that one generic token at a
 displayed `1.000`, flooding the LOW tier). When dropping would do so, the
 original words — short ones included — MUST be retained for the
@@ -267,7 +266,7 @@ silently excused. A genuinely single-word title is NOT affected: it was
 never reduced, and its accepted single-token tradeoff (documented on the
 scoring function) stands unchanged.
 
-#### Scenario: A manufactured single-token title no longer matches everything
+#### Scenario: A manufactured single-token title does not match everything
 
 - GIVEN same-type objects titled "AI Agent" and "Agent Observability"
 - WHEN `find_candidates` runs
@@ -285,7 +284,7 @@ scoring function) stands unchanged.
 
 - GIVEN same-type objects titled "Stoicism" and "Stoic Philosophy"
 - WHEN `find_candidates` runs
-- THEN a LOW candidate is still returned, exactly as before the guard
+- THEN a LOW candidate is still returned
 
 ### Requirement: Exact-Title-Only Entry Point
 
@@ -451,8 +450,8 @@ exactly one legend line explaining the `[tier] type -- trigger` columns
 the tally and BEFORE the group loop. The legend MUST NOT repeat per group.
 The LOW description MUST state what the ratio actually is — the weakest
 per-token best match of the smaller title — and that `1.000` means every
-token matched, NOT that the titles are identical (issue #555's secondary
-finding: the bare `1.000` read as "identical").
+token matched, NOT that the titles are identical (the bare `1.000` reads as
+"identical").
 
 #### Scenario: Legend appears once regardless of group count
 
@@ -509,22 +508,22 @@ extraction-specific).
 
 ### Requirement: Existing Detail Lines Stay Byte-Identical
 
-All per-group detail lines emitted by `duplicates` before this change MUST
-remain byte-identical after adding the tally, legend, and hint lines.
+All per-group detail lines emitted by `duplicates` MUST remain byte-identical whether or not the
+tally, legend, and hint lines are printed around them.
 
 #### Scenario: Pre-existing substring assertions still pass
 
-- GIVEN any pre-existing CliRunner test asserting a per-group detail
-  substring on `duplicates` output
-- WHEN `duplicates` runs after this change
-- THEN that substring is still present, unchanged
+- GIVEN a CliRunner test asserting a per-group detail substring on
+  `duplicates` output
+- WHEN `duplicates` runs
+- THEN that substring is present, unchanged by the tally, legend, and hint
+  lines
 
 ### Requirement: Bounded Candidate-Group Output Per Call
 
 `find_candidates` MUST bound its returned `CandidateGroup` list to a fixed
 ceiling, expressed as a private module-level `Final[int]` constant
-(`_MAX_CANDIDATE_GROUPS`, value `50`, matching `sqlite_graph._MAX_CANDIDATE_EDGES`
-at `graph/sqlite_graph.py:241`), applied to the FULL cross-type group set
+(`_MAX_CANDIDATE_GROUPS`, value `50`, matching `sqlite_graph._MAX_CANDIDATE_EDGES`), applied to the FULL cross-type group set
 BEFORE `find_candidates` returns and, transitively, BEFORE `curate`'s
 Identity stage or standalone `adjudicate`/`duplicates` issues a single
 adjudication call. The underlying pairwise pass is O(n^2) in
@@ -566,25 +565,24 @@ subsequent call sees.
 WHEN the full cross-type candidate-group set exceeds `_MAX_CANDIDATE_GROUPS`,
 `find_candidates` MUST rank the full set before truncating, using this
 total order: tier priority first — HIGH before ACRONYM before LOW, matching
-the existing `_TIER_ORDER` table (`candidates.py:42-64`) — then, within the
+the existing `_TIER_ORDER` table — then, within the
 LOW tier only, by `near_match_score` descending (closest match first; the
-score is recoverable from `CandidateGroup.trigger`, formatted per
-`candidates.py:282`). Because HIGH and ACRONYM groups carry no score, ties
+score is recoverable from `CandidateGroup.trigger`, formatted to three
+decimals). Because HIGH and ACRONYM groups carry no score, ties
 within either of those two tiers, and any tie within LOW at equal score,
 MUST be broken by the SAME `(okf_type, member_ids)` ascending total order
 `find_candidates` already establishes as its final sort key
-(`candidates.py:286`, documented at `candidates.py:295-306`). Tier priority
+(in `find_candidates_report`). Tier priority
 in this ranking is GLOBAL across the whole cross-type set — a HIGH-tier
 group in an alphabetically later `okf_type` MUST outrank a LOW-tier group
 in an alphabetically earlier `okf_type` when both compete for the same
 capacity. Once the retained subset is selected, `find_candidates` MUST
 still return it in the module's existing canonical output order
-(`okf_type` ascending, then tier, then `member_ids` — `candidates.py:286`):
+(`okf_type` ascending, then tier, then `member_ids`):
 the ranking above governs ONLY which groups survive the cap, never the
 order of the returned list. This ranking MUST be stable: given an
 unchanged bundle, repeated calls MUST produce the identical retained set
-in the identical order (extends the existing determinism guarantee,
-`candidates.py:227-230`).
+in the identical order (extends the existing determinism guarantee).
 
 #### Scenario: HIGH groups fill the cap before any LOW group is considered
 
@@ -641,7 +639,7 @@ in the identical order (extends the existing determinism guarantee,
 
 `find_candidates` MUST make BOTH the pre-cap count (`produced`) and the
 post-cap count (`retained`) observable to its callers, mirroring the
-`CandidateReport(produced, retained)` shape `graph/sqlite_graph.py:251-273`
+`CandidateReport(produced, retained)` shape in `graph/sqlite_graph.py`
 already establishes for `_MAX_CANDIDATE_EDGES`. WHEN `produced > retained`
 (the cap bound), that fact MUST be disclosed to a caller rendering a
 report or cost line — never silently dropped. WHEN `produced == retained`
@@ -666,10 +664,10 @@ required.
 ### Requirement: ACRONYM Once-Under-The-Stronger-Tier Behavior Is Preserved
 
 The existing rule that a pair matching both the ACRONYM and LOW criteria
-is emitted exactly once, under the ACRONYM tier (`candidates.py:258-273`,
+is emitted exactly once, under the ACRONYM tier (`_pair_group` in `resolution/candidates.py`,
 "evaluated BEFORE the near-match rule so a pair qualifying under both is
 emitted once, under the stronger of the two"), MUST be unaffected by
-ranking or truncation: the ranking and cap in this delta operate strictly
+ranking or truncation: the ranking and cap operate strictly
 AFTER group construction and MUST NOT cause a pair to be reconsidered
 under, or double-counted against, a different tier.
 

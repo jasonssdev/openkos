@@ -222,7 +222,7 @@ predicate.
 #### Scenario: A meeting-titled Person is still dropped by framing removal
 
 - GIVEN a `Person` candidate titled after the meeting itself (a framing
-  stub, the shape measured in #522/#533)
+  stub, the shape the eval harness measures)
 - WHEN `_drop_framing_objects` runs
 - THEN the candidate is dropped; `Person` is NOT exempt from framing removal
 

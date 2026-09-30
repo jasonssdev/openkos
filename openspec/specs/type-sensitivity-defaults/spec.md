@@ -20,21 +20,14 @@ any concept already on disk.
 The system MUST accept a workspace config field mapping an OKF type name to
 a non-negative integer offset above the workspace's `default_sensitivity`
 floor. WHEN the field is absent from config, the system MUST behave as
-though it were set to `{}` — the PACKAGED policy is "none" (#756). WHEN the
+though it were set to `{}` — the PACKAGED policy is "none". WHEN the
 field is present and empty (`{}`), the system MUST likewise apply no
 per-type offset to any type, i.e. every type is born exactly at
 `default_sensitivity` (subject only to Source high-water-mark inheritance).
 
 The system MUST NOT ship a per-type offset for any type. `Person: 1` is
 documented as a RECOMMENDED opt-in for workspaces holding material about
-third parties, and nothing more. (Previously the packaged default was
-`{"Person": 1}`. On the primary use case — a local bundle against a local
-backend — it protected nothing, because `confidential_local_exemption` lets
-confidential objects participate normally, and it diluted the signal it is
-made of: when 100% of a type is `confidential`, the marker stops meaning
-"especially sensitive" and starts meaning "this is a Person". Type
-correlates with risk; it does not measure it. The offset MECHANISM is
-unchanged and every requirement below still governs it.)
+third parties, and nothing more.
 
 #### Scenario: Absent field applies no offset
 
@@ -248,8 +241,8 @@ per-type offset.
 
 `build_source_concept` MUST NOT consult the per-type sensitivity offset
 mapping. Only concepts built via `okf.build_concept` are in scope; a
-Source's own sensitivity continues to resolve exactly as it did before this
-capability existed.
+Source's own sensitivity resolves exactly as it would without
+this capability.
 
 #### Scenario: A Source's own sensitivity is untouched by the Person default
 

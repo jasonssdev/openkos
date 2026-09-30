@@ -5,7 +5,7 @@
 After every mutating verb (`ingest`, `forget`, `relate`, `merge`, `unmerge`,
 `reconcile`, `set-volatility`, `set-sensitivity`) completes its canonical Phase-B writes, `openkos` commits
 exactly the paths that verb wrote, so the working tree stays clean without
-the user ever touching git. This mirrors `init`'s Slice 1 git block and
+the user ever touching git. This mirrors `init`'s git block and
 reuses its primitives (`repo_root`, `has_git_identity`, `commit_paths`).
 
 ## Requirements
@@ -83,8 +83,6 @@ MUST be added explicitly to the caller's path list passed to `_autocommit`,
 the same way `MergeResult.ledger_sidecar_path` is added for a merge. A
 decision path not explicitly listed MUST NOT be picked up implicitly and
 MUST NOT enter the commit.
-(Previously: scoped-staging behavior only, no explicit link to the
-pending-work decision path.)
 
 #### Scenario: Unrelated dirty file is left untouched
 
@@ -249,7 +247,7 @@ non-fatal WARNING remains the whole report in that case.
 
 `reindex` output (`.openkos/*.db`) MUST NEVER be staged or committed by
 `_autocommit` (it stays gitignored). `purge` is out of scope for this
-capability. Auto-commit MUST be unconditional in this slice — there MUST be
+capability. Auto-commit MUST be unconditional — there MUST be
 no configuration flag or CLI option to disable it.
 
 #### Scenario: Derived index database is never committed

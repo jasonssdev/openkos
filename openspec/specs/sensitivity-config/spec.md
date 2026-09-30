@@ -242,8 +242,6 @@ Source concept itself. WHEN a partial write failure occurs after one or
 more descendant raises have already landed, the command MUST NOT roll back
 any already-written file and its failure message MUST name every path that
 already landed before the failure.
-(Previously: the partial-write-failure message named none of the paths that
-already landed.)
 
 #### Scenario: Raising a Source raises every derived object in the same run
 
@@ -279,7 +277,7 @@ already landed.)
   excluded from propagation, and the Source concept's own write still
   succeeds
 
-#### Scenario: Unresolvable-provenance warnings are scoped to the invoked Source (#232)
+#### Scenario: Unresolvable-provenance warnings are scoped to the invoked Source
 
 - GIVEN a bundle with two independent Source concepts, each with its own
   derived concept, where every Source cites its own unresolvable raw
@@ -303,7 +301,7 @@ already landed.)
 - THEN both concepts are written without any confirmation prompt, and both
   appear in the success message
 
-#### Scenario: Partial write failure names every path that already landed (#233)
+#### Scenario: Partial write failure names every path that already landed
 
 - GIVEN a Source raise staging writes for three derived concepts, where the
   write fails after the first two land but before the third

@@ -53,7 +53,7 @@ naming the invalid value and the two accepted values.
 `openkos.yaml` MUST accept an optional `base_url` key naming the chat
 endpoint for the currently selected `backend`, used by both `ollama` and
 `openai-compatible` alike — there is no per-backend-name key namespace. WHEN
-absent, the `ollama` backend resolves its own default as before this change
+absent, the `ollama` backend resolves its own packaged default
 (see Endpoint Resolution Precedence below); the `openai-compatible` backend
 has no packaged default and MUST refuse to be selected without an explicit
 `base_url` (see "`openai-compatible` Backend Requires An Explicit `base_url`"
@@ -157,7 +157,7 @@ precedence, highest first: (1) an explicit constructor argument, (2) the
 `OLLAMA_HOST` environment variable, (3) the workspace's configured
 `base_url` (or `embedding_base_url` for the embedding endpoint), (4) the
 packaged Ollama default. A user who sets only `OLLAMA_HOST` MUST see the
-identical effective endpoint as before this change, whether or not
+effective endpoint `OLLAMA_HOST` names, whether or not
 `base_url` is also present in `openkos.yaml`.
 
 For the `openai-compatible` backend, `OLLAMA_HOST` MUST NOT be consulted:
@@ -198,9 +198,8 @@ API key it carries, to another host.
 
 - GIVEN a workspace with `OLLAMA_HOST` set in the environment and no
   `base_url`/`backend` key ever added to `openkos.yaml`
-- WHEN this change is applied and a client is constructed
-- THEN the effective endpoint is identical to what it resolved to before
-  this change
+- WHEN a client is constructed
+- THEN the effective endpoint is the one `OLLAMA_HOST` names
 
 ### Requirement: The API Key Is Read Only From An Environment Variable
 

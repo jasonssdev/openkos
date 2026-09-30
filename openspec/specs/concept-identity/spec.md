@@ -5,12 +5,11 @@
 Define the canonical spelling of a concept id and the two shared helpers that
 enforce it: the path→id derivation every bundle reader uses, and the id→path
 reconstruction every document lookup uses. NFC is the canonical spelling by
-construction — `_slugify` has emitted NFC since #414 — and this spec makes the
+construction — `_slugify` has always emitted NFC — and this spec makes the
 read side honor it, so two on-disk spellings of the same logical name (NFC,
 or the NFD a normalizing filesystem such as HFS+ rewrites on write) can never
 disagree with the ids spelled in `relations:` targets, ledger entries, or
-`provenance:` references. (Merged from change `nfc-canonical-concept-ids`,
-issue #430.)
+`provenance:` references.
 
 ## Requirements
 

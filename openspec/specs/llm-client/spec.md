@@ -145,13 +145,9 @@ hard-coded. The base URL MUST default to `http://localhost:11434` when no
 override is given, and MUST resolve by this precedence, highest first: an
 explicit constructor argument, then the `OLLAMA_HOST` environment variable,
 then the workspace's configured `base_url` (see `backend-selection`), then
-the default. A user who sets only `OLLAMA_HOST` MUST see the identical
-effective endpoint as before this change, whether or not a `base_url` key is
+the default. A user who sets only `OLLAMA_HOST` MUST see the
+effective endpoint `OLLAMA_HOST` names, whether or not a `base_url` key is
 also present in `openkos.yaml`.
-(Previously: the override source was described only as "e.g. via
-`OLLAMA_HOST` or an equivalent caller-supplied value," with no explicit
-precedence against a separately configured `base_url`, because
-`openkos.yaml` had no `base_url` key at all.)
 
 #### Scenario: Default base URL used when no override given
 
@@ -185,9 +181,8 @@ precedence against a separately configured `base_url`, because
 
 - GIVEN a workspace with `OLLAMA_HOST` set in the environment and no
   `base_url`/`backend` key ever added to `openkos.yaml`
-- WHEN this change is applied and `chat(messages)` is called
-- THEN the request targets the identical endpoint it targeted before this
-  change
+- WHEN `chat(messages)` is called
+- THEN the request targets the endpoint `OLLAMA_HOST` names
 ### Requirement: Testable Without A Live Ollama Server
 
 The HTTP transport MUST be an injectable/mockable seam so unit tests can
@@ -238,7 +233,7 @@ config-free: the `llm` package MUST NOT import `openkos.config`.
 
 - GIVEN an installed entry with a `name` field but no `model` field
 - WHEN `list_models()` is called
-- THEN the entry's tag is taken from `name`, unchanged from prior behavior
+- THEN the entry's tag is taken from `name`
 
 #### Scenario: Unreachable server raises OllamaUnavailable
 
@@ -352,7 +347,7 @@ each resulting row is a list of exactly 1024 floats. A response that is
 not valid JSON, lacks a recognized vector key, or contains a row with
 non-numeric values MUST raise `OllamaError`. A response whose row has the
 WRONG LENGTH (not exactly 1024 entries) MUST instead raise the distinct
-`OllamaEmbeddingDimensionMismatch` (see the new requirement below) — this
+`OllamaEmbeddingDimensionMismatch` (see the requirement below) — this
 is NOT a generic `OllamaError` and MUST NOT be caught by a bare
 `except OllamaError` at any call site that needs to distinguish the two.
 
@@ -417,8 +412,7 @@ to `OllamaModelNotFound`.
 
 - GIVEN a call site with an unmodified bare `except OllamaError`
 - WHEN `embed(texts)` raises `OllamaEmbeddingDimensionMismatch`
-- THEN that bare `except OllamaError` still catches it, unchanged from
-  before this requirement existed
+- THEN that bare `except OllamaError` still catches it
 
 ### Requirement: Ollama Unavailable During Embedding Raises A Typed Error
 

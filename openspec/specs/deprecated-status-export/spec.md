@@ -5,7 +5,7 @@
 OpenKOS decides that a concept is deprecated from `supersedes` edges
 (`status-aware-retrieval`). An external OKF v0.2 consumer reads only the
 superseded concept's own frontmatter, where `status` is absent or `stable`,
-so it cannot tell that the concept is no longer current (issue #1075). This
+so it cannot tell that the concept is no longer current. This
 capability defines the deprecated-status EXPORT: a deterministic projection
 of the computed supersession onto the superseded concept's frontmatter
 `status`, marked as engine-derived so the engine never reads its own export

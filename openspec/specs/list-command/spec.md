@@ -11,7 +11,7 @@ is the reverse-provenance lookup: which Sources reach a given concept.
 ## Non-Goals
 
 This spec does not define: `--json` or any structured output (deferred, not
-banned — see issue #240 note under the confidential-titles requirement);
+banned — see the note under the confidential-titles requirement);
 `--sensitivity` filtering, `--fields`, or full-text search over titles;
 recency ordering (alphabetical by id only); any change to `status`,
 `duplicates`, `survey_bundle`, or the concept-id format; MCP/API surfaces.
@@ -129,7 +129,7 @@ without printing any rows.
 
 `openkos list` MUST show deprecated and superseded objects by default,
 marked with their status, with no flag to hide them. Objects deleted from
-disk by `merge` (`src/openkos/bundle/merge.py:23`) are absent from the walk
+disk by `merge` (`src/openkos/bundle/merge.py`) are absent from the walk
 and therefore never appear as a distinct "merged" row.
 
 #### Scenario: Deprecated object shown by default
@@ -162,13 +162,13 @@ truncates a title, and no omitted row based on sensitivity; output MUST be
 byte-identical across sensitivity levels for the same underlying data.
 `sensitivity` governs what LEAVES the machine, not what the owner sees on
 their own terminal: `--include-confidential`
-(`src/openkos/sensitivity.py:78-99`) is exclusively an LLM-send gate
-(`should_block` / `blocks_llm_send`) and MUST NOT be overloaded into a
+is exclusively an LLM-send gate
+(`should_block` / `blocks_llm_send` in `src/openkos/sensitivity.py`) and MUST NOT be overloaded into a
 display gate. Precedent: `duplicates`
-(`src/openkos/cli/main.py:5149-5218`) already prints ids for confidential
-objects with no gate. Issue #240 ("scope the confidential gate to non-local
-LLM backends") may change what `--include-confidential` means for LLM
-sends, but `list` performs no LLM send at all, so #240's outcome does not
+(`src/openkos/cli/main.py`) already prints ids for confidential
+objects with no gate. A future scoping of the confidential gate to non-local
+LLM backends may change what `--include-confidential` means for LLM
+sends, but `list` performs no LLM send at all, so that outcome does not
 change this requirement in either direction.
 
 #### Scenario: Confidential title printed in full

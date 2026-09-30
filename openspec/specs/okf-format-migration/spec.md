@@ -25,7 +25,7 @@ concept's `status: deprecated` is written (that is the marked export
 defined by `deprecated-status-export`; deprecation itself stays derived
 from `supersedes` edges at read time, per `status-aware-retrieval`); `verified`, trust tiers, `stale_after`,
 `usage_count`/`usage_window`, or Attested Computation (OKF v0.2 families
-this change does not adopt); per-claim `[^id]` footnotes in bodies (`##
+the engine does not adopt); per-claim `[^id]` footnotes in bodies (`##
 Related` remains the attribution surface); or a `doctor`/`status` advisory
 pointing an unmigrated bundle at `repair` (a candidate follow-up — reader
 compatibility already makes an unmigrated bundle safe to use as-is).
@@ -70,7 +70,6 @@ inbound-`supersedes`-edge rule (`status-aware-retrieval`), MUST mark a
 concept deprecated. A `"deprecated"` carrying a valid export marker is the
 engine's deprecated-status export (`deprecated-status-export`), derived
 from that edge rule and never read back as a declaration of its own.
-(Previously: the literal `"deprecated"` always counted; no engine path wrote it, so no export marker existed.)
 
 #### Scenario: A legacy `active` concept is not deprecated
 

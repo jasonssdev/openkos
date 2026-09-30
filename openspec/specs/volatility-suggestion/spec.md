@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`volatility-suggestion` is slice 2 of the freshness work: a read-only CLI
+`volatility-suggestion` covers freshness suggestion: a read-only CLI
 verb, `suggest-volatility`, that asks the LLM to propose a volatility tier
 (`static`/`slow`/`volatile`) plus a rationale for each concept type present
 in the workspace, and points the human at `set-volatility` to apply an
@@ -26,9 +26,6 @@ an LLM-suggested tier (one of `static`, `slow`, `volatile`) and a rationale.
 The verb MUST perform ZERO writes to any bundle file, index, log, or config.
 Output MUST be a plain stdout report ending with a hint to run `openkos
 set-volatility <ConceptType> <tier>` to apply an accepted suggestion.
-(Previously: the trailing hint told the user to hand-edit `type_tiers:` in
-`openkos.yaml` directly; `suggest-volatility` itself still performs zero
-writes.)
 
 #### Scenario: Verb suggests a tier per type
 

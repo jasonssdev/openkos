@@ -41,16 +41,6 @@ either end deprecated. Deprecation is governed only by the `status` field
 and inbound `supersedes` edges as described above; this holds uniformly
 across every consumer of the shared effective-status predicate, including
 `lifecycle.deprecated_concept_ids` and the `list` STATUS column.
-(Previously: every `status: deprecated` counted as the concept's own declaration; the engine wrote none, so no export marker existed.)
-(Previously: this requirement defined deprecation via `status` and
-`supersedes` only, with no explicit statement about `revises`; this adds
-the explicit non-deprecation guarantee for `revises` as a tested
-requirement, since `reconcile --revision` newly writes that edge type.)
-(Previously: the scenarios below and the `list` STATUS column example used
-the OKF v0.1 status value `active`; OKF v0.2 writers now emit `stable`, and
-every reader treats a legacy `active` identically to `stable` — neither is
-deprecated. See `okf-format-migration`'s "Legacy Lifecycle Values Are Not
-Deprecated" for the general dual-reader guarantee.)
 
 #### Scenario: status field alone marks deprecated
 - GIVEN a concept with `status: deprecated` and no supersedes edges
@@ -107,9 +97,6 @@ counted in `fused_count`, `fts_hit_count`, `dense_hit_count`, or any other
 hit-count metadata, and it MUST NEVER be rendered or attributed as a
 current answer — its history block is always labelled as an earlier,
 non-current version.
-(Previously: this requirement did not address revision history; a
-superseded concept had no retrieval-adjacent path back into the prompt at
-all.)
 
 #### Scenario: Deprecated concept absent from a matching query
 - GIVEN a deprecated concept whose content matches a question lexically and
@@ -152,8 +139,6 @@ Requested") MUST NOT run at all: no history block is attached to any
 successor. Under the flag, a formerly deprecated predecessor is admitted as
 an ordinary hit, and attaching it again as a history block would carry a
 non-current label that contradicts its restored hit status.
-(Previously: this requirement did not address revision history's
-interaction with the flag.)
 
 #### Scenario: Flag restores a deprecated concept
 - GIVEN the only-deprecated-match scenario above

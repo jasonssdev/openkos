@@ -435,9 +435,6 @@ Declinations and skip notices are NOT commandless findings and are exempt
 from that sameness rule: both name specific documents this run actually
 observed, so withholding them to keep the output uniform would trade an
 honest report for a tidy one.
-(Previously: the example commandless finding cited "a §9 conformance
-violation"; OKF v0.2 renumbers the conformance section to §11 (v0.2
-§13.1); the requirement's behavior is unchanged.)
 
 #### Scenario: No ranked tier fires on a truly empty bundle
 

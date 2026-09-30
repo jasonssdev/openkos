@@ -4,7 +4,7 @@
 
 `openkos backfill-sensitivity` is a dedicated, raise-only, bundle-wide sweep
 that closes the sensitivity gap left by bundles or descendants created
-before Source-to-descendant propagation existed (#219). It resolves every
+before Source-to-descendant propagation existed. It resolves every
 `type: Source` concept's provenance descendants and raises each descendant
 strictly below its Source, in one preview, one confirmation, one `log.md`
 entry, and one commit.
@@ -41,8 +41,8 @@ provenance descendants and compute each descendant's new value via
 that computation is a strict raise over the descendant's current value.
 The command MUST NOT write a Source as its own closure root; a Source that
 is a genuine provenance descendant of another Source is raised like any
-other descendant, and no `type` filter is applied to the descendant set,
-matching `main.py:3389-3404`. A descendant already at or above its Source's
+other descendant, and no `type` filter is applied to the descendant set.
+A descendant already at or above its Source's
 level MUST NOT be staged.
 
 #### Scenario: A descendant below its Source is raised

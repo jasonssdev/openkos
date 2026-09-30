@@ -3,7 +3,7 @@
 ## Purpose
 
 `resolution/adjudication.py` is a read-only, config-free precision layer over
-slice 1's `find_candidates` output: it prompts an injected `LLMBackend` to
+`find_candidates` output: it prompts an injected `LLMBackend` to
 adjudicate each `CandidateGroup` — using member title + full body — into a
 `SAME` / `DIFFERENT` / `UNCERTAIN` verdict with confidence and rationale,
 surfaced through the read-only `adjudicate` CLI verb; `adjudicate_candidates`
@@ -37,7 +37,7 @@ confirm / Phase B composition that gets it there belongs to
   in the same database file discharges nothing on its own, so a new tenant
   of that file inherits no erasure until that requirement names it too.
 - **Embeddings or vector-based candidate generation.**
-- **Any change to slice-1 `find_candidates` or its thresholds**
+- **Any change to `find_candidates` or its thresholds**
   (`entity-resolution`). This spec is a precision layer over that output.
 - **Batching multiple groups into one LLM call.** Adjudication is one call
   per group, in candidate order.
@@ -93,11 +93,12 @@ The `Verdict` schema (`verdict`/`confidence`/`rationale`) and the
 `verdict`, `rationale`) MUST remain unchanged: no `member_types` field is
 added to the `--json` payload or to `AdjudicatedCandidate`.
 
-#### Scenario: Single-type group keeps today's exact prompt bytes
+#### Scenario: Single-type group keeps its exact prompt bytes
 
 - GIVEN a same-type `CandidateGroup`
 - WHEN `_build_messages` renders its prompt
-- THEN the prompt bytes are identical to before this change
+- THEN the prompt carries no per-member type tags and its bytes do not
+  depend on `member_types`
 
 #### Scenario: Cross-type group names both types and tags each member
 
@@ -347,8 +348,8 @@ For the `ollama` backend, the `adjudicate` verb MUST catch
 nothing, mirroring `query`'s degrade contract. WHEN the caught exception is
 `BackendUnavailable`, the message MUST additionally point to `openkos doctor`
 to diagnose the environment, mirroring `query`'s `BackendUnavailable`
-wording; the `BackendModelNotFound` and generic `BackendError` messages are
-unchanged. This wording MUST remain byte-identical to before this change.
+wording; the `BackendModelNotFound` and generic `BackendError` messages keep
+their own wording, byte-for-byte, with no `openkos doctor` pointer added.
 
 For the `openai-compatible` backend, `adjudicate` MUST catch the analogous
 `OpenAICompatibleUnavailable`, then `OpenAICompatibleModelNotFound`, then
@@ -360,11 +361,6 @@ advise verifying the configured server is running, and point to
 `OpenAICompatibleModelNotFound` message MUST name the configured model and
 advise making it available on the configured server, with no `ollama pull`
 reference.
-(Previously: the `BackendUnavailable` message told the user to run
-`ollama serve` with no additional pointer to `openkos doctor`.)
-(Previously: only the `ollama` backend existed, so this requirement named
-Ollama's exception classes and wording unconditionally, with no
-backend-conditional branch.)
 
 #### Scenario: Ollama unreachable also points to doctor
 
@@ -535,21 +531,22 @@ returned string and the empty-on-zero contract are observable.
 ### Requirement: Existing Detail Lines Stay Byte-Identical
 
 All per-result detail lines (verdict, confidence, rationale) emitted by
-`adjudicate` before this change MUST remain byte-identical after adding the
-tally, legend, and hint lines.
+`adjudicate` MUST remain byte-identical whether or not the tally, legend,
+and hint lines are printed around them.
 
 #### Scenario: Pre-existing substring assertions still pass
 
-- GIVEN any pre-existing CliRunner test asserting a per-result detail
-  substring on `adjudicate` output
-- WHEN `adjudicate` runs after this change
-- THEN that substring is still present, unchanged
+- GIVEN a CliRunner test asserting a per-result detail substring on
+  `adjudicate` output
+- WHEN `adjudicate` runs
+- THEN that substring is present, unchanged by the tally, legend, and hint
+  lines
 
 ### Requirement: Persisted Verdicts Are Served Before Re-Judging
 
 `openkos adjudicate` MUST persist every freshly judged verdict to the
-`adjudications` tables of `.openkos/findings.db` (issue #779 --
-`state.adjudications`, the findings store's second tenant, so `purge`'s
+`adjudications` tables of `.openkos/findings.db`
+(`state.adjudications`, the findings store's second tenant, so `purge`'s
 wholesale deletion and `forget`'s sweep cover it with no new privacy
 surface), alongside one content-hash digest per member computed at
 persist time. A later run MUST serve a candidate group from the store,
@@ -559,7 +556,7 @@ group's member set matches the run's EFFECTIVE confidential inclusion
 same disjunction `sensitivity.should_block` applies, so the partition
 runs only after the exemption is resolved; a verdict computed over a
 different member subset must never serve), was computed under the
-CURRENT judgment rubric (issue #838 -- the row's stored `rubric_digest`
+CURRENT judgment rubric (the row's stored `rubric_digest`
 equals `resolution.adjudication.rubric_digest()`, a fingerprint over the
 adjudication system prompt plus the deterministic post-parse withdrawal
 rule's defining data, so the prompt and the rule cannot drift apart; a
@@ -569,7 +566,7 @@ build would produce), carries a digest row for
 EVERY current group member and no others, every stored digest equals the
 member's CURRENT content hash, and the stored verdict is in the
 vocabulary. The `rubric_digest` column MUST be added to a store a
-pre-#838 build created by a real migration at the one place the tables
+build without the column created by a real migration at the one place the tables
 are created, and the read path MUST tolerate the pre-migration shape
 (reporting those rows' rubric as unknown) rather than degrading the
 whole store to a failed read.
@@ -585,8 +582,7 @@ The run MUST report the split on stderr
 (`N of M candidate group(s) served from persisted adjudications; K judged
 fresh.`), mirroring `contradictions`' line, and a `--fresh` flag MUST
 bypass the serve and re-persist, mirroring `contradictions --fresh`.
-The rubric-driven re-spend MUST be announced, not silent (issue #838's
-explicit ruling): when at least one group re-judges only because its row
+The rubric-driven re-spend MUST be announced, not silent: when at least one group re-judges only because its row
 predates the current rubric (mismatched or absent digest), one stderr
 line names the rubric as the cause -- a rubric change re-judging every
 cached group would otherwise surface as a sudden `0 of N served` with no
@@ -600,8 +596,7 @@ Occurrences Is Withdrawn). A row written before that withdrawal existed
 still carries the verdict its own rationale argues against; re-deciding it
 on read costs no model call, because the rule is pure and reads only the
 rationale the row already stores. Writes stay confined to derived state under
-`.openkos/` -- the bundle remains untouched on a read-only run, exactly
-as before.
+`.openkos/` -- the bundle remains untouched on a read-only run.
 
 #### Scenario: A repeat run on an unchanged bundle costs zero model calls
 
@@ -661,8 +656,8 @@ single valid JSON OBJECT with EXACTLY these four keys: `partial` (boolean),
 `results` holds one object per entry in the `results` set, with EXACTLY these
 fields per object: `member_ids` (list of strings, already sorted), `okf_type`
 (string), `tier` (`"HIGH"` or `"LOW"`), `verdict` (`"SAME"`, `"DIFFERENT"`, or
-`"UNCERTAIN"`), `rationale` (string), and `cross_source` (boolean, issue
-#776: `true` exactly when the verdict is SAME, the group has two members,
+`"UNCERTAIN"`), `rationale` (string), and `cross_source` (boolean:
+`true` exactly when the verdict is SAME, the group has two members,
 and their provenance sets are disjoint -- the same predicate the human
 listing's note fires on, because the unattended pipelines `--json` serves
 cannot read a stdout note). The object MUST NOT contain a
@@ -831,15 +826,15 @@ JSON (partial or otherwise).
 ### Requirement: Non-JSON Output Stays Byte-Identical
 
 Without `--json`, `adjudicate` output (tally, legend, per-group detail,
-`Next:` hint, and empty-state messages) MUST remain byte-identical to its
-behavior before this change.
+`Next:` hint, and empty-state messages) MUST be byte-identical to what
+`adjudicate` prints with no JSON option at all.
 
 #### Scenario: Human output unchanged when `--json` is absent
 
-- GIVEN any pre-existing CliRunner assertion on `adjudicate` stdout without
-  `--json`
-- WHEN `adjudicate` runs after this change
-- THEN that assertion still passes unchanged
+- GIVEN a CliRunner assertion on `adjudicate` stdout without `--json`
+- WHEN `adjudicate` runs
+- THEN that assertion passes: the human output does not depend on the JSON
+  path
 
 ### Requirement: `--apply` Eligibility Filter
 
@@ -872,7 +867,7 @@ group, where `N` is its member count.
 
 For each eligible group, the survivor MUST be the member with the RICHER
 BODY (longer stripped body text), falling back to `member_ids[0]`
-(ascending id) only on an exact tie (issue #776: string order alone made a
+(ascending id) only on an exact tie (string order alone made a
 bilingual pleonasm the permanent Concept ID purely because `f` sorts
 before `o`; the richer-body rule mirrors the extraction union's own
 twin-drop precedent). An unreadable member measures below every readable
@@ -882,9 +877,8 @@ stated in the preview (`survivor: <id> (richer body)` or `survivor: <id>
 stated criterion is the defect, not the determinism. Before prompting, a
 preview of what `prepare_merge` would fuse (survivor, absorbed, rewrites,
 removed) MUST be printed. The prompt text MUST be exactly
-`Merge <absorbed> into <survivor>? [y/N]` (issue #483: the same #398
-contract `curate`'s per-item walks advertise -- the formerly advertised
-`skip` token never had behavior distinct from a decline).
+`Merge <absorbed> into <survivor>? [y/N]` (the same contract `curate`'s per-item walks advertise; there is no `skip`
+token distinct from a decline).
 
 The same ordering rule and criterion disclosure apply to EVERY walk that
 drives `_prepare_one_merge`: `--apply`, `--apply-same`, and `curate`'s
@@ -895,9 +889,9 @@ direction Pass 1 previewed and the typed count consented to, never a live
 recomputation: an earlier merge in the same batch can enrich a shared
 member enough to flip a recomputed ordering, and the operator would then
 get a direction they never saw. A structural consequence, deliberate: with the smaller
-body always absorbed into the larger, a 2-member batch merge can no
-longer reach #559's 80% stacked-share domination guardrail -- the hazard
-that guardrail refused is now prevented by construction (the guardrail
+body always absorbed into the larger, a 2-member batch merge cannot
+reach the 80% stacked-share domination guardrail -- the hazard
+that guardrail refuses is prevented by construction (the guardrail
 itself remains as defense in depth).
 
 #### Scenario: Preview precedes the exact prompt text
@@ -926,8 +920,7 @@ itself remains as defense in depth).
 ### Requirement: Cross-Source SAME Verdicts Are Flagged And Batch-Gated
 
 A SAME verdict over a 2-member group whose members BOTH carry non-empty
-`provenance:` frontmatter with DISJOINT sets is the risky class (issue
-#776: exactly this shape fused two meetings held a week apart into one
+`provenance:` frontmatter with DISJOINT sets is the risky class (exactly this shape fused two meetings held a week apart into one
 false Event). The read-only listing MUST mark such verdicts with a
 `note: cross-source -- members share no source` line; the interactive
 `--apply` walk MUST print the warning BEFORE its `[y/N]` prompt while
@@ -969,7 +962,7 @@ flagging on absence would mark every hand-written concept forever.
 ### Requirement: Prompt Response Semantics
 
 The prompt MUST be validated by the same helper `curate`'s per-item walks
-use (`curate._confirm`, issue #483): `y`/`yes` (case/whitespace-insensitive)
+use (`curate._confirm`): `y`/`yes` (case/whitespace-insensitive)
 MUST apply the merge; `n`/`no` and empty input (the documented `N` default)
 MUST decline it and continue to the next group; any OTHER answer MUST be
 re-asked with a one-line notice naming the accepted tokens, never silently
@@ -1091,7 +1084,7 @@ At the end of the run, `adjudicate --apply` MUST print a summary line
 skips, and declined (N/empty) prompts. After the summary line, each
 operator-declined merge MUST be named on its own
 `  declined: <absorbed> -> <survivor>` line — two-space indented, exactly as
-the implementation emits it (issue #483, mirroring #398's decline listing) —
+the implementation emits it (mirroring `curate`'s decline listing) —
 and no such line may appear for a merge that was applied.
 
 #### Scenario: Summary reflects applied and skipped counts
@@ -1124,15 +1117,15 @@ message, apply nothing, and exit 0.
 ### Requirement: Plain `adjudicate` Is Unchanged
 
 `adjudicate` without `--apply` — plain, with `--json`, or with `--same-only`
-— MUST behave exactly as before this change; no output, exit code, or
-filesystem behavior on these paths may regress.
+— MUST be unaffected by the apply path: its output, exit code, and
+filesystem behavior are independent of `--apply`.
 
 #### Scenario: Non-`--apply` behavior is unaffected
 
-- GIVEN any pre-existing CliRunner assertion on `adjudicate`, `adjudicate
-  --json`, or `adjudicate --same-only`
-- WHEN that command runs after this change
-- THEN the assertion still passes unchanged
+- GIVEN a CliRunner assertion on `adjudicate`, `adjudicate --json`, or
+  `adjudicate --same-only`
+- WHEN that command runs
+- THEN the assertion passes: none of these paths depends on `--apply`
 
 ### Requirement: `--apply-same` Eligibility Filter
 
@@ -1181,14 +1174,14 @@ The confirmation gate MUST be resolved in this order:
 
 0. A `--confirm-count` value that is not a whole number (empty or
    non-numeric) MUST be refused (exit 2) BEFORE candidate discovery and
-   before any model call (issue #779): it cannot possibly match any
+   before any model call: it cannot possibly match any
    count, and validating it last made the cheapest possible check the
    most expensive step in the workflow.
 1. If `--confirm-count <value>` is supplied on the command line, proceed
    ONLY when `value.strip()` exactly equals the eligible-merge count; a
    wrong number MUST abort with ZERO BUNDLE writes (persisted verdicts
    are derived state under `.openkos/`, written by the adjudication
-   itself before this gate -- issue #779).
+   itself before this gate).
 2. Else, if stdin is a TTY, print the full aggregate preview, then prompt
    the operator to type the exact eligible-merge count; the same
    exact-match-or-abort-zero-writes rule applies.

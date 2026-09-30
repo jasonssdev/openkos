@@ -15,7 +15,7 @@ and `application/ingest.py`, and it is where the headless-consent protocol's
 typed data contract lands.
 
 The module also carries `relate`'s and `set_volatility_cmd`'s pure
-`prepare_*`/`*_core` pairs (issue #959, following the shape `prepare_merge`/
+`prepare_*`/`*_core` pairs (following the shape `prepare_merge`/
 `merge_core` set), each staging its confirm-gate wording as a
 `BooleanConfirmation` the same way `PreparedMerge` does. Their presence here
 does not widen "five" above: neither `relate` nor `set_volatility_cmd`
@@ -35,7 +35,7 @@ LLM/`git-filter-repo` backend construction; `relate`'s and
 `set_volatility_cmd`'s own CLI-level orchestration (their confirm-gate
 driving, preview echoing, and `_autocommit` sequencing stay in
 `cli/main.py`/`cli/curate.py` — only their pure `prepare_*`/`*_core` pairs
-moved here, issue #959, not composition into a bigger verb the way the five
+moved here, not composition into a bigger verb the way the five
 in Purpose are); `reconcile`; `curate`; the `api`/`mcp` adapters themselves;
 the headless-consent protocol's wire/transport shape (how a non-TTY caller
 supplies a pre-recorded answer); any change to on-disk formats, ledger
@@ -77,13 +77,13 @@ A typed-challenge response MUST be compared for exact equality against
 
 The typed-challenge variant MUST cover BOTH typed gates in the codebase, which
 differ in comparison policy: `purge`'s confirmation phrase compares the raw
-response (`main.py:7331`), while `adjudicate --apply-same`'s eligible count
-compares `response.strip()` (`main.py:3057`). That policy MUST be carried as a
+response (`purge` in `cli/main.py`), while `adjudicate --apply-same`'s eligible count
+compares `response.strip()` (`adjudicate` in `cli/main.py`). That policy MUST be carried as a
 field on the request, not re-derived at each call site.
 
 The boolean variant's bypass flag MUST be nullable. `purge` has NO boolean
 variant and MUST NOT be given one: its gate is a typed phrase with no `--auto`
-bypass, because the operation is irreversible (`main.py:7316`). Representing
+bypass, because the operation is irreversible. Representing
 `purge` as a boolean confirmation would invent a bypass the CLI does not offer.
 
 #### Scenario: A boolean confirmation is granted
@@ -105,7 +105,7 @@ bypass, because the operation is irreversible (`main.py:7316`). Representing
   --apply-same` request, each carrying its own comparison policy
 - WHEN a response with surrounding whitespace is supplied to both
 - THEN the `adjudicate --apply-same` request matches and the `purge` request
-  does not, reproducing `main.py:3057` and `main.py:7331` exactly
+  does not, reproducing each gate's existing comparison policy exactly
 
 #### Scenario: Purge is never representable as a bypassable boolean gate
 
@@ -146,11 +146,10 @@ The service MUST return the "IRREVERSIBLE history rewrite" disclosure as
 string template data; the adapter MUST render it unchanged, with no
 rephrasing and no new wording.
 
-#### Scenario: The disclosure text is unchanged after extraction
+#### Scenario: The disclosure text is unchanged by the extraction
 
-- GIVEN any scenario `tests/unit/cli/test_purge.py` covered before this
-  change
-- WHEN the same `purge` invocation runs after the extraction
+- GIVEN any scenario `tests/unit/cli/test_purge.py` covers
+- WHEN the same `purge` invocation runs through the service
 - THEN the IRREVERSIBLE history-rewrite disclosure text is byte-identical
 
 ### Requirement: Shared Write Mechanics Stay Adapter-Side, Each With One Definition
@@ -163,8 +162,7 @@ unchanged.
 #### Scenario: Committing a staged plan uses the existing shared helpers
 
 - GIVEN a staged plan produced by the lifecycle service — for any of the
-  five verbs it composes, or for either pure pair it merely holds (issue
-  #959)
+  five verbs it composes, or for either pure pair it merely holds
 - WHEN a caller commits it
 - THEN the same shared write helpers used by every other write-capable
   command run, with no duplicate implementation inside the service
@@ -174,7 +172,7 @@ unchanged.
 The service MUST NOT perform interactive confirmation, TTY detection,
 stdout/stderr rendering, or process exit-code selection for ANY code it
 holds — the five verbs it composes and `relate`'s and `set_volatility_cmd`'s
-relocated pure pairs alike (issue #959); those stay with the calling
+relocated pure pairs alike; those stay with the calling
 adapter.
 
 This is the invariant the relocation exists for, so it is scoped to what
@@ -194,13 +192,13 @@ must be able to drive any pair in here without importing `openkos.cli`,
 
 For every input covered by the existing CLI/unit test suites for `merge`,
 `unmerge`, `forget`, `purge`, `adjudicate --apply`/`--apply-same`, and —
-since issue #959 relocated their pairs — `relate` and `set-volatility`, each
+since their pairs were relocated — `relate` and `set-volatility`, each
 command MUST produce the same exit code, stdout, and stderr — including the
-non-TTY refusal path — after the extraction as before it.
+non-TTY refusal path — through the service as through the direct CLI implementation.
 
 #### Scenario: A previously-passing CLI scenario is unchanged
 
-- GIVEN any scenario the existing test suites covered before this change,
-  across every verb named above
-- WHEN the same CLI invocation runs after the extraction
+- GIVEN any scenario the existing test suites cover, across every verb
+  named above
+- WHEN the same CLI invocation runs through the service
 - THEN its exit code, stdout, and stderr are unchanged

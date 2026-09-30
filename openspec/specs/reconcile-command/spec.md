@@ -31,9 +31,6 @@ By default (no `--winner` flag), the system MUST write a SYMMETRIC
 as `target`. The system MUST append a `## Reconciliation` body note to
 BOTH concepts referencing the counterpart, and MUST append a
 `**Reconcile**` line to `log.md`.
-(Previously: the note heading was written in this spec as
-`# Reconciliation`; this corrects the spec to match the code, which writes
-`## Reconciliation`.)
 
 #### Scenario: Symmetric reconcile
 
@@ -54,9 +51,6 @@ a `**Reconcile**` log line. `<id>` MUST equal exactly one of the two pair
 members; any other value MUST error before any write occurs. The
 `supersedes` edge MUST be documented as label-only: it enforces no
 deprecation or lifecycle behavior.
-(Previously: the note heading was written in this spec as
-`# Reconciliation`; this corrects the spec to match the code, which writes
-`## Reconciliation`.)
 
 #### Scenario: Winner supersedes loser
 
@@ -105,10 +99,6 @@ symmetric, same `--winner`, or same `--revision`) MUST NOT duplicate the
 edge (deduped on `(target, type)`) and MUST NOT re-append a
 `## Reconciliation` note already citing the same counterpart. The system
 MUST instead write a "no change" variant of the `**Reconcile**` log line.
-(Previously: this requirement covered only the symmetric and `--winner`
-shapes, and referenced the note heading as `# Reconciliation`; both are
-corrected here — the invariant now also covers `--revision`, and the note
-heading matches the code's `## Reconciliation`.)
 
 #### Scenario: Re-run is a no-op write
 
@@ -146,7 +136,6 @@ preview MUST name the counterpart's status change (`status → deprecated`)
 or, when BLOCKED, state that its own `status` is preserved and that it is
 hidden from retrieval regardless. The write path MUST NOT invoke
 contradiction detection or any LLM.
-(Previously: the system MUST NOT write any `status`/deprecate field; deprecation was visible only through the `supersedes` edge.)
 
 #### Scenario: Existing content preserved
 
@@ -189,7 +178,7 @@ contradiction detection or any LLM.
 
 After a successful `reconcile` that changed at least one concept document
 (either form: two-id or `--from-findings`), the derived indexes MUST be
-refreshed end-of-run through the shared write-time refresh helper (#640),
+refreshed end-of-run through the shared write-time refresh helper,
 exactly once per invocation, fail-open with the single advisory line. A
 run that changed nothing — the idempotent re-run, a declined confirm
 gate, or a walk where every pair was declined or skipped — MUST NOT
@@ -387,7 +376,7 @@ directly. This override restriction does not apply to an UNDIRECTED
 (untyped-change) finding, because the system infers no kind for one in the
 first place — there, the human's combined answer supplies the relation
 type the system never detected, which is choosing, not overriding. The
-existing contradiction-findings walk MUST be unaffected by this addition.
+existing contradiction-findings walk MUST be unaffected by revision-finding handling.
 
 #### Scenario: A REVERSES finding is offered as supersedes held by the later Decision
 
@@ -453,5 +442,4 @@ existing contradiction-findings walk MUST be unaffected by this addition.
 - GIVEN a bundle with both pending contradiction findings and pending
   revision findings
 - WHEN `reconcile --from-findings` runs
-- THEN the existing contradiction-findings walk behaves exactly as before
-  this addition
+- THEN the existing contradiction-findings walk behaves exactly as it does when no revision findings are pending

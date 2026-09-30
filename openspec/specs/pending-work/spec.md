@@ -3,13 +3,12 @@
 ## Purpose
 
 Durable persistence for machine-computed findings and operator decisions
-produced by `curate`'s advisor stages. This slice covers the Contradictions
-advisor only (#556): a `CONTRADICTS`/`CONSISTENT`/`UNCERTAIN` verdict from
+produced by `curate`'s advisor stages. It covers the Contradictions
+advisor only: a `CONTRADICTS`/`CONSISTENT`/`UNCERTAIN` verdict from
 `find_contradictions`, and an operator's decline of one.
 
 **Out of scope.** The other three advisor kinds — candidate edges, duplicate
-groups, volatility proposals — and issues #553 (FTS never built) and #557
-(false all-clear on an unrelated graph) are not governed by this spec.
+groups, volatility proposals — are not governed by this spec.
 
 Findings and decisions have opposite natures and are stored separately.
 Findings are recomputable machine inference, kept in `.openkos/` (already
@@ -18,8 +17,8 @@ judgment, kept in `bundle/.state/`, committed, reusing ADR-0013's
 frontmatter-sidecar mechanism.
 
 The two hazards inherited from ADR-0013 — `_autocommit`'s scoped staging
-and `purge`/`forget`'s sweep coverage of the new `bundle/.state/**`
-subtree — are specified as deltas against the shipped capabilities that
+and `purge`/`forget`'s sweep coverage of the `bundle/.state/**`
+subtree — are specified in the capabilities that
 already own those contracts (`workspace-autocommit`, `privacy-purge`,
 `forget-command`), not here, so the requirement lives where the next author
 reading `_autocommit`/`purge`/`forget` will find it.
@@ -149,7 +148,7 @@ current and MUST NOT be silently dropped.
 
 An operator MUST be able to record that the members of a duplicate-candidate
 group are NOT the same entity, through a non-interactive command surface,
-and that ruling MUST survive the session that produced it (issue #797).
+and that ruling MUST survive the session that produced it.
 
 The ruling's identity MUST be derived from the group's MEMBER SET, sorted so
 it is independent of the order the members were supplied in, and MUST NOT be

@@ -59,7 +59,7 @@ degrade reasons (`no-extractable-text`, `blocked-by-sensitivity`,
 `failed`, including the caught `BackendError`) — and MUST NOT call
 `typer.echo` or any other presentation call to render them. The adapter
 MUST render this data using the relocated `_notice` helpers, in the same
-order and with the same wording as before this change.
+order and with the same wording as the ingest notices always print.
 
 #### Scenario: The service module renders nothing
 
@@ -102,14 +102,14 @@ the adapter performs every read that also feeds `guarded_targets`.
 - THEN it references no filesystem read primitive; text-dependent
   computations operate only on the parameters passed in
 
-### Requirement: The #773 Convergence Short-Circuit Is A Typed Outcome
+### Requirement: The Convergence Short-Circuit Is A Typed Outcome
 
 WHEN the plan-composition core reaches the byte-identical re-ingest
-convergence case (issue #773), the service MUST return a typed outcome
+convergence case, the service MUST return a typed outcome
 distinguishing it from every other outcome, rather than terminating via an
 internal early return. The adapter MUST map that outcome to the same
 CLI-observable behavior (no model call, no write, exit 0, the disclosure
-line naming `--re-extract`) as before this change.
+line naming `--re-extract`).
 
 #### Scenario: Convergence returns a typed outcome, not a raw return
 
@@ -138,13 +138,13 @@ calls the shared write helpers unchanged.
 
 For every input covered by the existing `tests/unit/cli/test_ingest.py`
 suite, `openkos ingest <file>` MUST produce the same exit code, stdout,
-and stderr — including every output-text assertion — after this
-extraction as before it.
+and stderr — including every output-text assertion — through the
+service, identical to the direct CLI implementation.
 
 #### Scenario: A previously-passing CLI scenario is unchanged
 
-- GIVEN any scenario `test_ingest.py` covered before this change
-- WHEN the same CLI invocation runs after the extraction
+- GIVEN any scenario `test_ingest.py` covers
+- WHEN the same CLI invocation runs through the service
 - THEN its exit code, stdout, and stderr are unchanged
 ### Requirement: compose_source_document Accepts An Optional Event Date
 
@@ -155,13 +155,13 @@ stored-value read-back) — the caller supplies the value the `ingestion`
 capability's precedence rules already resolved. WHEN `event_date` is
 `None`, the generated Source concept's frontmatter MUST omit the
 `event_date` key, and the rest of the generated document MUST be
-byte-identical to `compose_source_document`'s output before this
-parameter existed.
+byte-identical to `compose_source_document`'s output without the
+parameter.
 
 #### Scenario: A None event_date produces a byte-identical Source
 
 - GIVEN a call to `compose_source_document` with `event_date=None` and
-  inputs identical to a call made before this parameter existed
+  inputs identical to a call that omits the parameter
 - WHEN the two calls' output is compared
 - THEN the generated Source concept document is byte-identical, and
   neither carries an `event_date` key

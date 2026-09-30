@@ -14,7 +14,7 @@ The question-vector space (`state/question_vectors.py`,
 `resolution/insight_identity.py`) — a separate store, never chunked.
 Extraction's own `_MEETING_CHUNK_THRESHOLD`/`_CHUNK_THRESHOLD` tuning and
 meeting-shape branching — not reused here. FTS behaviour — unchanged.
-Assembled-context token budgeting (#882).
+Assembled-context token budgeting.
 
 ## Requirements
 

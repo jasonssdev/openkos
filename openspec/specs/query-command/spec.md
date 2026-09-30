@@ -51,8 +51,6 @@ vector store via `open_vector_store(layout.vectors_db_path)`, call
 embedder=embedder, vector_store=vector_store, limit=n)`, and render to
 stdout the answer text followed by each citation as `concept_id` and
 `title`. The process MUST exit 0.
-(Previously: only the chat `OllamaClient` was built; no dense seams were
-constructed or injected.)
 
 #### Scenario: Matching answer with citations
 
@@ -73,8 +71,6 @@ stdout text: `"zero_hits"` states nothing matched; `"all_unreadable"`
 states matches were found but unreadable and points at possible bundle
 corruption (e.g., suggesting `openkos lint`); `"empty_query"` prompts
 the user to provide a question.
-(Previously: a single canned no-match line covered all three causes
-indistinguishably.)
 
 #### Scenario: Zero matching concepts
 - GIVEN `no_match_cause` is `"zero_hits"`
@@ -110,14 +106,6 @@ existing dense-unavailable hint.
 
 An absent or corrupt `graph.db` MUST NOT trigger this hint, and MUST NOT
 change the answer, the citations, or any count in the retrieval summary.
-
-(Previously: the graph derived index was covered by this requirement too —
-`query` opened `.openkos/graph.db` read-only, degraded to `graph_index=None`
-when it was absent or corrupt, and printed the same reindex hint. Issue #434
-removed the retrieval consumer, so `query` no longer opens the store at all.
-`reindex` still writes `graph.db` and the shared stale-index advisory still
-names it, because contradiction-candidate derivation still reads the typed
-projection.)
 
 #### Scenario: Never-reindexed workspace hints at reindex for FTS too
 
@@ -169,7 +157,7 @@ backend) or the analogous `OpenAICompatibleError`-family exception (for the
 print a message to stderr, and exit 1 with no raw traceback reaching the
 user. The stderr message MUST be actionable for each of the three enumerated
 causes below and MUST remain generic for all other cases. For the `ollama`
-backend, the wording below MUST remain byte-identical to before this change.
+backend, the wording below applies verbatim.
 
 - WHEN the raised exception is `BackendUnavailable`, the stderr
   message MUST state that the backend is not responding, MUST include the
@@ -198,8 +186,7 @@ backend, the wording below MUST remain byte-identical to before this change.
   that hits this error never reaches that hint.
 - WHEN the raised exception is any other `BackendError` or
   `FtsUnavailable`, `query` MUST print a friendly
-  (non-actionable-specific) failure message to stderr — unchanged from prior
-  behavior.
+  (non-actionable-specific) failure message to stderr.
 
 For a dimension mismatch on either backend, the exit-1 refusal MUST be
 UNCONDITIONAL. `answer()` runs lexical retrieval BEFORE dense retrieval, so
@@ -212,16 +199,6 @@ the refusal conditional on whether FTS found hits. The accepted cost is
 denying the user even the answers FTS could have grounded; the ONLY remedy is
 restoring the working `embedding_model` in `openkos.yaml`, not a CLI flag.
 
-
-(Previously: `BackendEmbeddingDimensionMismatch` never reached this ladder —
-`answer()` swallowed it into `dense_degraded`, so `query` printed a
-successful FTS-only answer at exit 0, plus the misleading
-`openkos reindex` hint, and never reported the misconfiguration.)
-(Previously: the FTS hits gathered before the mismatch were still fused,
-cited, and printed; this requirement deliberately discards them.)
-(Previously: only the `ollama` backend existed, so every branch above named
-Ollama's own exception classes and wording unconditionally, with no
-backend-conditional branch.)
 
 #### Scenario: Ollama backend unreachable
 
@@ -318,7 +295,7 @@ backend-conditional branch.)
 The rendered citations MUST be exactly `AnswerResult.citations` — same
 members, same order (hit-rank) — with each line showing that citation's
 `concept_id` and `title`, plus a trailing `[confidential]` marker on
-exactly the citations whose `confidential` flag is set (issue #569), and
+exactly the citations whose `confidential` flag is set, and
 no other content.
 
 #### Scenario: Citation order matches the answer
@@ -330,8 +307,7 @@ no other content.
 
 ### Requirement: Confidential Citations Are Disclosed
 
-The read path MUST disclose what the write path already discloses (issue
-#569): when any rendered citation carries the `confidential` flag, each
+The read path MUST disclose what the write path already discloses: when any rendered citation carries the `confidential` flag, each
 such citation line MUST end with a `[confidential]` marker, and `query`
 MUST print ONE stderr NOTICE — equivalent to the commit-path confidential
 NOTICE — stating the answer cites content marked
@@ -366,17 +342,6 @@ of rendered citations. The summary MUST carry NO graph term, and `query`
 MUST NOT print a graph-degrade note on any run. STDOUT MUST carry only the
 answer text and (when present) the `Citations:` block — unchanged in shape
 from current behavior.
-
-(Previously: the line carried a third retrieval term, `<n> graph-added` from
-`AnswerResult.graph_contributed_count` — how many reserved slots the seeded
-personalized-PageRank channel filled with concepts FTS and dense never found
-— plus a separate note whenever `graph_degraded` was `True`. That term was
-itself a correction of an earlier one reporting `graph_hit_count`, the raw
-candidate pool, which printed `10 graph` on a workspace with zero typed
-edges. Issue #434 removed the channel the term described: measured over 10
-questions the slot it claimed was 7 times harmful, 3 times neutral and never
-beneficial, because seeded PageRank ranks by global centrality — a property
-of the corpus, not of the question — and the slot always cost a real hit.)
 
 #### Scenario: Successful answer keeps stdout pipe-clean
 
@@ -466,15 +431,14 @@ WHEN `--save` is passed and `answer()` returns a matched result, `query`
 MUST, after rendering the answer, build a new document via the ingest
 builder with: body = the rendered answer text; title = the first rung of the
 TITLE LADDER that resolves -- the answer's first sentence as a DECLARATIVE
-title, else a definitional question's own SUBJECT (issue #646), else that
-first sentence's opening CLAUSE when it was refused for LENGTH alone (issue
-#696), else the question verbatim -- or `--title` when given; description =
+title, else a definitional question's own SUBJECT, else that
+first sentence's opening CLAUSE when it was refused for LENGTH alone ), else the question verbatim -- or `--title` when given; description =
 the question, or `--description` when given; type
-= `"Insight"` (the filed-synthesis type, issue #570), or `--type` when
+= `"Insight"` (the filed-synthesis type), or `--type` when
 given (any buildable type); provenance = the cited concepts' ids
 (`result.citations`).
 
-The type distinction is truth-decay (issue #570): an extracted `Concept`
+The type distinction is truth-decay: an extracted `Concept`
 depends on an immutable `Source`; a filed synthesis depends on the MUTABLE
 bundle, so every ingest, merge, or correction can invalidate it. `Insight`
 therefore defaults to the `volatile` tier, is never emitted by the LLM
@@ -493,9 +457,6 @@ for a `"superseded"` history citation, or `— earlier version (refined)
 cited as history for this answer` for a `"refined"` one. An ordinary
 (non-history) cited concept's `## Related` bullet MUST be unaffected —
 unchanged in shape from current behavior.
-(Previously: no history citations existed, so `provenance:` and every
-`## Related` bullet were built from ordinary cited concepts only, and
-`build_concept` accepted no `related_notes` parameter.)
 
 #### Scenario: Default filing is a declaratively-titled Insight
 
@@ -529,7 +490,7 @@ unchanged in shape from current behavior.
   minimum, or itself a question, or is over-long with no clause boundary to
   cut at, AND the question names no recognizable subject
 - WHEN the document is built
-- THEN the title falls back to the question (the pre-#570 default)
+- THEN the title falls back to the question (the default)
 
 #### Scenario: `--title`, `--description`, `--type` override defaults
 
@@ -594,7 +555,7 @@ that nothing beneath the answer reaches a `Source`.
 ### Requirement: `--save` Discloses A Possible Duplicate Before Confirming
 
 BEFORE the `--save` confirmation gate, `query` MUST disclose already-filed
-insights whose SOURCE QUESTION resembles the question being filed (#762),
+insights whose SOURCE QUESTION resembles the question being filed,
 one line per candidate, most-similar first.
 
 The lookup MUST run on the question, never on the answer body or the derived
@@ -614,7 +575,7 @@ backend MUST disclose nothing rather than fail the save.
 
 WHEN the lookup could not run — the embedding backend failed, or returned a
 malformed batch — `query` MUST say so on stderr rather than rendering the
-same silence as a scan that ran and found nothing (#764). Having nothing to
+same silence as a scan that ran and found nothing. Having nothing to
 compare against is NOT such a case: that scan ran correctly.
 
 `query` MUST likewise announce on stderr when the pre-synthesis sufficiency
@@ -636,7 +597,7 @@ configured guard is distinguishable from one the guard allowed.
 
 The lookup MUST compare against EVERY comparable already-filed insight, and
 MUST report that it could not run rather than comparing only some of them
-(#764). A partial comparison that renders like a complete one is the failure
+A partial comparison that renders like a complete one is the failure
 to avoid, and once the scan promises all of them there is no count left to
 disclose a shortfall with.
 
@@ -646,7 +607,7 @@ Cached vectors MUST be keyed by embedding model AND embedding backend,
 following the same key rule `reindex`'s embedding tag uses (see
 `reindex-command`'s "Embedding-Model Tag Gate Forces Full Re-Embed On
 Mismatch"): the bare model name for the `ollama` backend, so a cache built
-before this change stays valid with no forced re-embed, and a
+under that bare key stays valid with no forced re-embed, and a
 backend-qualified form for `openai-compatible`, so a backend switch never
 reuses a question vector cached under the other backend even when the model
 name is identical. Cached vectors MUST be dropped when their insight leaves
@@ -684,9 +645,8 @@ on screen explaining the wait.
 
 #### Scenario: An ollama-backend cache key stays bare, so existing rows remain valid
 
-- GIVEN a question-vector cache written before this change, keyed by bare
-  model name only
-- WHEN this change is applied and `backend: ollama` stays configured
+- GIVEN a question-vector cache keyed by bare model name only
+- WHEN `backend: ollama` is configured
 - THEN the cache key for that model is unchanged (the bare model name), and
   previously cached rows remain valid with no forced re-embed
 
@@ -700,16 +660,12 @@ on screen explaining the wait.
 WHEN the configured embedding endpoint is NOT verifiably this machine — for
 either backend, decided by the shared locality classifier — `--save` MUST
 announce, before the send, that already-filed source questions are
-transmitted too, naming the ceiling (#764). The standing non-local
+transmitted too, naming the ceiling. The standing non-local
 embedding-host advisory (`sensitivity-aware-llm`'s "Embedding Is Gated As
 Egress" requirement) covers the question just typed; a save additionally
 ships other filings' questions, which is a different disclosure rather than
 a louder one. A `query` without `--save` MUST NOT print it: no filed
 question is sent there.
-(Previously: this paragraph and its scenario named `OLLAMA_HOST`
-specifically, because no other backend or endpoint source existed; the
-condition is now the shared locality classifier's verdict on the effective
-embedding endpoint, whichever backend and resolution source produced it.)
 
 #### Scenario: A remote embedding host is told what a save sends
 
@@ -732,7 +688,7 @@ embedding endpoint, whichever backend and resolution source produced it.)
 
 WHEN `AnswerResult.attribution` is `"reported"` and `citations` is empty —
 the answer itself reported drawing on none of the concepts retrieved for it
-(issue #753) — `query` MUST print one stderr warning saying the answer
+— `query` MUST print one stderr warning saying the answer
 stands on nothing in the bundle. It MUST NOT print that warning when
 `attribution` is `"absent"` or `"unparsed"`: there the citation list was not
 decided by the answer, so its emptiness is a retrieval fact rather than a
@@ -820,7 +776,7 @@ applies.
 - WHEN the `--save` proposed-changes preview is printed
 - THEN the concept line names the inherited level (e.g.
   `(sensitivity: confidential, inherited from citations)`), so the user
-  consents knowing what will be written (issue #569)
+  consents knowing what will be written
 
 #### Scenario: A fold landing on the default stays undisclosed
 
@@ -999,8 +955,8 @@ recommend enabling it.
 pass it to `answer(..., revision_history=cfg.revision_history)`.
 
 `read_config` MUST NOT reject an unrecognized top-level key. This applies to
-a leftover `revision_history` key found in `openkos.yaml` after this feature
-is reverted from the codebase — `read_config` reads declared keys by name
+a leftover `revision_history` key found in `openkos.yaml` after the feature that reads it
+is removed from the codebase — `read_config` reads declared keys by name
 and never rejects a key it does not look for, so a stale line requires no
 user action.
 
@@ -1031,11 +987,11 @@ user action.
 - THEN it states the key is opt-in and unmeasured, and does not recommend
   enabling it
 
-#### Scenario: A leftover key from a reverted feature is silently ignored
+#### Scenario: A leftover key from a removed feature is silently ignored
 
 - GIVEN `openkos.yaml` still contains a `revision_history: true` line after
-  the feature that reads it has been reverted, so `Config` no longer
-  declares that field
+  the feature that reads it has been removed, so `Config` does not
+  declare that field
 - WHEN `read_config` loads the file
 - THEN it succeeds without error — `read_config` never rejects an unknown
   top-level key, so the leftover line requires no user action
