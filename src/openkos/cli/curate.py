@@ -20,14 +20,12 @@ have to see the POST-merge bundle, not a stale pre-run view (design D4,
 proposal D4). Every stage therefore derives its own queue from scratch when
 the loop reaches it, by calling its own `probe` fresh, every run.
 
-`_STAGES` has carried all five entries since slice 1 (design D2), and as of
-slice 2 every entry is `live=True` with a real `probe`/`run` pair -- the
-slice-1 state (Structure, Metadata, Contradictions at `live=False`, skipped
-without probing and labeled "not yet available in this version") is history,
-kept only as the record of HOW the tuple stayed frozen: slice 2 flipped
-`live` and filled in `probe`/`run` on the three existing entries with no
-framework change (spec: Slice Boundary). The `live` field itself remains,
-as the descriptor contract a future stage would ship through the same way.
+`_STAGES` declares all five entries (design D2) and every entry is
+`live=True` with a real `probe`/`run` pair (spec: All Five Stages Run). The
+`live` field itself remains as the descriptor contract a future stage would
+ship through: a `live=False` entry is skipped without probing and labeled
+"not yet available in this version" (see `_NOT_LIVE_NOTICE`), which no
+current stage triggers.
 
 Imports here mirror `next_action.py`'s own precedent (design D1): this
 module is the CLI-layer composition root, so it imports `resolution`,
@@ -1955,14 +1953,13 @@ _STAGES: tuple[Stage, ...] = (
     ),
 )
 """D1 order, all five entries declared at runtime (design D2): Preconditions,
-Identity, Structure, Metadata, Contradictions. All five are `live=True` as
-of slice 2 -- the tuple's SHAPE stayed frozen from slice 1 through slice 2;
-only `live` flipped and `probe`/`run` were filled in on the last three,
-exactly as design D10 planned."""
+Identity, Structure, Metadata, Contradictions. All five are `live=True`
+(spec: All Five Stages Run)."""
 
 _NOT_LIVE_NOTICE = "not yet available in this version"
-"""Verbatim spec wording (Requirement: Slice Boundary) for a `live=False`
-stage's summary line."""
+"""Summary-line wording for a `live=False` stage. No current stage is
+declared `live=False`, so this is exercised only by the `live` descriptor
+contract, not by any shipped stage."""
 
 
 def run_curate(ctx: CurateContext) -> list[StageOutcome]:

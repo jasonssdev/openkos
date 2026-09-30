@@ -15992,7 +15992,10 @@ def reindex(
     force: bool = typer.Option(
         False,
         "--force",
-        help="Re-embed every discovered doc, ignoring the content-hash cache.",
+        help=(
+            "Re-embed every discovered doc, ignoring the content-hash cache, "
+            "and rebuild the FTS and graph indexes unconditionally."
+        ),
     ),
 ) -> None:
     """Backfill `.openkos/vectors.db`, `.openkos/fts.db`, and

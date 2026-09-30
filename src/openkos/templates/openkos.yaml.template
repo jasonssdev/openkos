@@ -120,5 +120,3 @@ context_window: 12288     # tokens the model holds at once (prompt + reply); unp
 # Layout is fixed: `raw/` (immutable sources) and `bundle/` (the OKF
 # bundle root) live next to this file. The engine does not read layout
 # keys from this config; making them configurable is future work.
-
-# type_registry is maintained by the engine (canonical + emergent types)

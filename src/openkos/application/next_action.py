@@ -15,13 +15,23 @@ what is unsafe, then what is merely ambiguous*:
    label at all (#386) -- every other recommendation presupposes content,
    so the first ingest outranks them all;
 1. a missing vector index blocks dense retrieval and candidate edges, so
-   every later judgment is made over a starved corpus;
-2. an unextracted source is knowledge absent from the bundle entirely;
-3. a descendant below its Source's sensitivity is present but mislabelled;
+   every later judgment is made over a starved corpus; a missing FTS index
+   (#553) and stale derived indexes (#381) follow it, all recommending
+   `reindex`;
+2. an unextracted source is knowledge absent from the bundle entirely, and
+   so are derived objects stored without judge selection (#868);
+3. a descendant below its Source's sensitivity is present but mislabelled,
+   and so is a multi-source-uncovered document (#693);
 4. a duplicate group is present, correctly labelled, and merely ambiguous;
 5. a non-NFC on-disk name (#491) is none of those -- the bundle WORKS, since
    `okf.concept_path_for` resolves an NFC id against a decomposed file. It
-   is hygiene, and hygiene outranks nothing.
+   is hygiene, and hygiene outranks nothing;
+6. an open contradiction finding is content that is present and correctly
+   labelled, and its findings-store read is only paid once nothing above
+   it fires, so it ranks last.
+
+The authoritative order is `_TIERS` below; the spec pinning it is
+`openspec/specs/next-action-pointer/spec.md` ("Pinned Tier Order").
 
 Absence outranks ambiguity BECAUSE the ambiguity cannot be judged correctly
 over an incomplete set -- adjudicating duplicates before the missing
