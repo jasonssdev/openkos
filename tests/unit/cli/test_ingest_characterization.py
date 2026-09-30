@@ -38,11 +38,13 @@ from typing import Any
 import pytest
 
 from openkos.cli.main import app
+from tests.unit.cli.conftest import echo_after
 from tests.unit.cli.test_ingest import (
     _concept_reply,
     _init_workspace,
     _patch_llm,
     _set_config_field,
+    _simulate_tty,
     runner,
 )
 from tests.unit.conftest import LOCAL_BACKEND_LOCALITY
@@ -87,8 +89,8 @@ def _deterministic_git_identity(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GIT_CONFIG_VALUE_1", "tests@openkos.invalid")
 
 
-def _run(args: list[str]) -> dict[str, Any]:
-    result = runner.invoke(app, args)
+def _run(args: list[str], *, stdin: str | None = None) -> dict[str, Any]:
+    result = runner.invoke(app, args, input=stdin)
     return {
         "exit_code": result.exit_code,
         "stdout": result.stdout,
@@ -286,3 +288,164 @@ def test_already_exists_create_only_matches_pre_move_golden(
         "already_exists_create_only",
         _run(["ingest", "notes.txt", "--auto", "--re-extract"]),
     )
+
+
+# -- The application-service extraction (issue #1138): the refusal, prompt,
+# drift, re-ingest-preview and batch paths the first ten scenarios do not
+# reach. Generated against the tree BEFORE `_ingest_single` moved into
+# `application/ingest_service.py`, so each is the CLI's pre-move stream. --
+
+
+def test_interactive_confirm_proceeds_matches_pre_move_golden(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _concept_reply())
+    (tmp_path / "notes.txt").write_text(_GROUNDED_NOTES, encoding="utf-8")
+    _simulate_tty(monkeypatch)
+    _assert_matches_golden(
+        "interactive_confirm_proceeds", _run(["ingest", "notes.txt"], stdin="y\n")
+    )
+
+
+def test_interactive_decline_matches_pre_move_golden(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _concept_reply())
+    (tmp_path / "notes.txt").write_text(_GROUNDED_NOTES, encoding="utf-8")
+    _simulate_tty(monkeypatch)
+    _assert_matches_golden(
+        "interactive_decline", _run(["ingest", "notes.txt"], stdin="n\n")
+    )
+    assert not (tmp_path / "raw" / "notes.txt").exists()
+
+
+def test_non_tty_without_auto_matches_pre_move_golden(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _concept_reply())
+    (tmp_path / "notes.txt").write_text(_GROUNDED_NOTES, encoding="utf-8")
+    _assert_matches_golden("non_tty_without_auto", _run(["ingest", "notes.txt"]))
+
+
+def test_reingest_interactive_preview_matches_pre_move_golden(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The regenerate preview branch (sensitivity clause, `~` lines) under a
+    real confirm."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _concept_reply())
+    (tmp_path / "notes.txt").write_text(_GROUNDED_NOTES, encoding="utf-8")
+    first = _run(["ingest", "notes.txt", "--auto"])
+    assert first["exit_code"] == 0, first
+    _simulate_tty(monkeypatch)
+    _assert_matches_golden(
+        "reingest_interactive_preview",
+        _run(["ingest", "notes.txt", "--re-extract"], stdin="y\n"),
+    )
+
+
+@pytest.mark.parametrize("target", ["bundle/index.md", "bundle/log.md"])
+def test_drift_after_the_preview_matches_pre_move_golden(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    (tmp_path / "notes.txt").write_text("Some raw notes.", encoding="utf-8")
+    hook = echo_after(
+        monkeypatch,
+        lambda: (tmp_path / target).write_text("edited\n", encoding="utf-8"),
+        trigger="(new dated entry)",
+    )
+    actual = _run(["ingest", "notes.txt", "--auto"])
+    assert hook.fired
+    _assert_matches_golden(f"drift_{Path(target).stem}", actual)
+
+
+def test_missing_source_matches_pre_move_golden(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    _assert_matches_golden("source_missing", _run(["ingest", "gone.txt", "--auto"]))
+
+
+def test_not_a_workspace_matches_pre_move_golden(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "notes.txt").write_text("Some raw notes.", encoding="utf-8")
+    _assert_matches_golden("not_a_workspace", _run(["ingest", "notes.txt", "--auto"]))
+
+
+def test_inconsistent_workspace_matches_pre_move_golden(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    (tmp_path / "notes.txt").write_text("Some raw notes.", encoding="utf-8")
+    assert _run(["ingest", "notes.txt", "--auto"])["exit_code"] == 0
+    (tmp_path / "raw" / "notes.txt").unlink()
+    _assert_matches_golden(
+        "inconsistent_workspace", _run(["ingest", "notes.txt", "--auto"])
+    )
+
+
+def test_disambiguated_destination_matches_pre_move_golden(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    (tmp_path / "a" / "notes.txt").write_text("First notes.", encoding="utf-8")
+    (tmp_path / "b" / "notes.txt").write_text("Second notes.", encoding="utf-8")
+    assert _run(["ingest", "a/notes.txt", "--auto"])["exit_code"] == 0
+    _assert_matches_golden(
+        "disambiguated_destination", _run(["ingest", "b/notes.txt", "--auto"])
+    )
+
+
+def test_malformed_config_matches_pre_move_golden(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    (tmp_path / "openkos.yaml").write_text("not: valid: yaml: [", encoding="utf-8")
+    (tmp_path / "notes.txt").write_text("Some raw notes.", encoding="utf-8")
+    _assert_matches_golden("malformed_config", _run(["ingest", "notes.txt", "--auto"]))
+
+
+def test_batch_auto_matches_pre_move_golden(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _concept_reply())
+    batch = tmp_path / "drop"
+    batch.mkdir()
+    (batch / "one.txt").write_text(_GROUNDED_NOTES, encoding="utf-8")
+    (batch / "two.txt").write_text("Other words entirely.\n", encoding="utf-8")
+    _assert_matches_golden("batch_auto", _run(["ingest", "drop", "--auto"]))
+
+
+def test_batch_non_tty_without_auto_matches_pre_move_golden(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    batch = tmp_path / "drop"
+    batch.mkdir()
+    (batch / "one.txt").write_text(_GROUNDED_NOTES, encoding="utf-8")
+    (batch / "two.txt").write_text("Other words entirely.\n", encoding="utf-8")
+    _assert_matches_golden("batch_non_tty", _run(["ingest", "drop"]))
+
+
+def test_batch_with_a_refused_file_matches_pre_move_golden(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A batch whose second file trips raw immutability: the skip line, the
+    summary, and the exit ladder (1 -- a hard refusal)."""
+    _init_workspace(tmp_path, monkeypatch)
+    batch = tmp_path / "drop"
+    batch.mkdir()
+    (batch / "one.txt").write_text("Alpha.\n", encoding="utf-8")
+    assert _run(["ingest", "drop/one.txt", "--auto"])["exit_code"] == 0
+    (batch / "one.txt").write_text("Changed bytes.\n", encoding="utf-8")
+    (batch / "two.txt").write_text("Beta.\n", encoding="utf-8")
+    _assert_matches_golden("batch_refused_file", _run(["ingest", "drop", "--auto"]))
