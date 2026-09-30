@@ -161,6 +161,16 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Security
 
+- `ingest` no longer writes through a symlinked `bundle/sources` or derived-object
+  directory, and the bundle walk no longer reads through a symlinked `.md` file
+  or directory ([#1126](https://github.com/jasonssdev/openkos/issues/1126)). The
+  symlink-boundary guard covered only `forget`/`get`, so with `bundle/sources`
+  linked outside the workspace `ingest` carried the source text out of it, and
+  a `bundle/leak.md` linked to an external file marked `sensitivity: public`
+  was admitted to `query` prompts, citations and embeddings. `ingest` now
+  refuses, before writing anything, with the same reason `forget` gives; the
+  walk drops the link, and `lint` reports it as `symlinked-markdown`.
+
 - A backend classified local no longer honours `http_proxy`/`https_proxy`
   ([#1127](https://github.com/jasonssdev/openkos/issues/1127)). Locality is
   judged from the URL literal, but urllib's default proxy handling does not

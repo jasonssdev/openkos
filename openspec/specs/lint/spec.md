@@ -796,3 +796,28 @@ read-only and non-gating, and MUST degrade to `not-run` on an `OSError`.
 - GIVEN `bundle/.obsidian/` holds only non-Markdown files
 - WHEN `openkos lint` runs
 - THEN no `dot-dir-markdown` finding is reported
+
+### Requirement: Symlinked Markdown Scan
+
+`openkos lint` MUST report a `symlinked-markdown` finding for each symlinked
+`.md` file or symlinked directory under `bundle/` (dot-directories aside,
+which keep their own finding). The bundle walk refuses to read through a
+symlink because it can leave the workspace tree, so the entry is not a
+Knowledge Object and is not counted, indexed, or embedded; the finding is the
+account of that exclusion and MUST name the bundle-relative path and say the
+link should be replaced with the real file or directory. The scan MUST be
+names-only (nothing is opened or resolved), read-only and non-gating, and
+MUST degrade to `not-run` on an `OSError`.
+
+#### Scenario: A symlinked concept file is reported and excluded
+
+- GIVEN `bundle/leak.md` is a symlink to a file outside the workspace
+- WHEN `openkos lint` runs
+- THEN it reports one `symlinked-markdown` finding for `leak.md`, and the
+  file is absent from every count
+
+#### Scenario: A bundle without symlinks reports nothing
+
+- GIVEN no `.md` file or directory under `bundle/` is a symlink
+- WHEN `openkos lint` runs
+- THEN no `symlinked-markdown` finding is reported
