@@ -183,9 +183,12 @@ def test_unknown_relation_type_accepted_with_warn(
 
     assert result.exit_code == 0
     known = ", ".join(sorted(relations.SEEDED_RELATION_TYPES))
-    assert result.stderr == (
+    # Exact first line: `relate` may add its own auto-commit WARNING after
+    # it (e.g. a runner with no git identity), which is environment state,
+    # not part of the relation-type advisory this test pins.
+    assert result.stderr.splitlines()[0] == (
         f"openkos: note -- 'custom_relation' is not a seeded relation type "
-        f"(known: {known})\n"
+        f"(known: {known})"
     )
     assert _relations_of(tmp_path, source_id) == [
         okf.Relation(target=target_id, type="custom_relation")
