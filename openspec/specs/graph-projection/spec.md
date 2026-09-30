@@ -73,10 +73,7 @@ non-reserved concept `.md` file in a bundle, enumerated via the existing
 `okf._iter_docs` walk — mirroring `state/fts.py`'s build pattern. Calling
 `build_graph(bundle_dir)` directly MUST NOT touch disk; disk persistence
 exists ONLY via the dedicated on-disk writer path invoked by `reindex` (see
-the new persisted-index requirement above).
-(Previously: `build_graph` had no on-disk persistence concept at all; this
-clarifies the in-memory call and the new `reindex`-only persistence path
-remain distinct.)
+the persisted-index requirement above).
 
 #### Scenario: Projection builds one node per concept document
 
@@ -100,9 +97,6 @@ bundle-relative path with the `.md` suffix removed, NFC-normalized — the same
 identity `fts.py` and `forget` use. Because the id is NFC regardless of the
 on-disk spelling, an edge whose `relations:` target is spelled NFC MUST match
 a node whose filename a normalizing filesystem stored as NFD.
-(Previously: the id was the raw relative path with no normalization, so a
-node derived from an NFD filename could not be matched by an NFC-spelled
-`relations:` target and the edge was dropped silently.)
 
 #### Scenario: Node id matches the concept id convention
 
@@ -153,12 +147,9 @@ match; membership only — never derived from link text or heading). This
 synthesis MUST NOT write to `relations:` frontmatter, MUST NOT mutate
 bundle bytes, and MUST NOT change ingest byte-identity. WHEN no matching
 `relations:` entry exists AND the target is not a `provenance:` member,
-`relation_type` MUST remain `NULL`, unchanged from before. The existing
+`relation_type` MUST remain `NULL`. The existing
 untyped `[text](/id.md)` `_LINK_RE` edge-extraction path MUST remain
 unchanged for objects without a `relations:` key.
-(Previously: absent a `relations:` match, `relation_type` always stayed
-`NULL` regardless of `provenance:` frontmatter; this adds provenance-mirror
-synthesis as a second, projection-only typing source.)
 
 #### Scenario: Typed relation edge carries its relation_type
 
@@ -299,7 +290,7 @@ first pass (bundle-relative markdown links) and the second pass
 synthesis) MUST remain unaffected, including body links and
 `relations:` entries that reference a `Source` document — the
 Concept→Source `derived_from` provenance mirror MUST continue to work
-exactly as before this change. This pass is projection-ephemeral: it
+unchanged by the pass below. This pass is projection-ephemeral: it
 MUST NOT write to `relations:` frontmatter or any bundle file, and
 MUST be fully recomputed on every `build_graph()` call with no
 cross-run cache. Candidate edges MUST NOT alter the node/edge output
@@ -521,8 +512,8 @@ invocation, not cross-invocation caching.
 - GIVEN a caller invokes `graph_edge_summary`, `candidate_edges`, or
   `find_contradictions` without passing `store`
 - WHEN the reader runs
-- THEN it opens and closes its own `build_graph` projection exactly as it
-  did before this change, and its return value and output are unchanged
+- THEN it opens and closes its own `build_graph` projection, and its return value
+  and output do not depend on the injected-store path
 
 #### Scenario: Reader never closes a store it did not open
 
@@ -578,7 +569,7 @@ supplied store, not to any particular build configuration.
 ### Requirement: Embedding-Proximity Pairs Are Derived From Chunk-Backed Document Vectors
 
 `VectorProximitySource.pairs()` MUST continue to call `neighbors()` per
-document id exactly as before; the vector `neighbors()` ranks by is now a
+document id as it always has; the vector `neighbors()` ranks by is a
 chunk-derived document vector rather than a single truncated embedding, but
 `pairs()`'s own contract, signature, and never-raises degrade are
 unaffected.

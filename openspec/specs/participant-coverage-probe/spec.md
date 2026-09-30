@@ -76,7 +76,7 @@ change's evidence.
 - GIVEN a post-phase-1a probe baseline showing non-zero
   `Person`/`Organization` recall
 - WHEN the phase-2 gate decision is made
-- THEN phase-2 is not opened on the strength of this change's measurement
+- THEN phase-2 is not opened on the strength of that measurement
   alone
 
 ### Requirement: No Per-Type Sensitivity Behavior in Probe Scope

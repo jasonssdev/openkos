@@ -805,9 +805,6 @@ the graph exclusively through an `application` service, not directly.
 or its set-producing sibling. `application` MUST NOT import `openkos.mcp`.
 The CLI MUST import `openkos.mcp` lazily, inside the `mcp` verb's own
 function body, so `asyncio` never loads on the CLI's ordinary startup path.
-(Previously: the allowed concrete-client import was "the Ollama client's
-concrete class and its exception types" only, because no second backend
-existed.)
 
 #### Scenario: openkos.mcp never imports openkos.cli
 
@@ -880,7 +877,7 @@ factories so either can be selected by `cfg.backend`.
 
 #### Scenario: The CLI keeps one-line delegators under their existing names
 
-- GIVEN `cli/main.py` after this relocation
+- GIVEN `cli/main.py`
 - WHEN `_chat_client` and `_resolve_local_exemption` are inspected
 - THEN each still exists under its existing name as a single-line call into
   `application/backends.py`'s definition
@@ -890,8 +887,7 @@ factories so either can be selected by `cfg.backend`.
 - GIVEN the CLI's existing chat-client and local-exemption behavior, and
   the existing tests that patch `_chat_client`/`_resolve_local_exemption` by
   name
-- WHEN the CLI runs any command that constructs a backend, after this
-  relocation
+- WHEN the CLI runs any command that constructs a backend
 - THEN its observable behavior is unchanged, and the same patches still take
   effect
 

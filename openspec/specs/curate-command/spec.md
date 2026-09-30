@@ -92,15 +92,15 @@ Identity MUST call `find_candidates` then `adjudicate_candidates`, then
 apply each accepted pair via `_prepare_one_merge`/`_commit_one_merge`,
 auto-committing per merge. N>2 groups MUST NOT be auto-merged; `curate`
 MUST print the exact pairwise `openkos merge` commands per group.
-Because `find_candidates` now bounds and ranks its output before any
-adjudication call (entity-resolution delta: Bounded Candidate-Group
+Because `find_candidates` bounds and ranks its output before any
+adjudication call (`entity-resolution`: Bounded Candidate-Group
 Output Per Call), the number of `CandidateGroup`s Identity's probe
-(`_identity_probe`, `cli/curate.py:271-282`) queues, and therefore the
+(`_identity_probe` in `cli/curate.py`) queues, and therefore the
 number of adjudication calls `_identity_run` issues, MUST never exceed
 `_MAX_CANDIDATE_GROUPS` regardless of corpus size — the SAME sequencer
 that already gates Identity's cost line and consent flow (curate-command:
 Per-Stage Cost Gate) is unchanged; only the upstream group count it reads
-from `probe.llm_calls` is now bounded.
+from `probe.llm_calls` is bounded.
 
 #### Scenario: Accepted pair is committed per-item
 
@@ -375,7 +375,7 @@ no destructive work to disclose.
 Every `needs_llm` stage MUST declare which measured task its LLM calls
 belong to, and MUST contact the model resolved for that task by this
 precedence: an explicit `models:` entry, then the packaged per-task default
-(`DEFAULT_TASK_MODELS`), then the global `model:` (#515, #513). An explicit
+(`DEFAULT_TASK_MODELS`), then the global `model:`. An explicit
 YAML null in `models:` MUST decline a packaged default and resolve to the
 global `model:` — the operator's stated choice always wins over a shipped
 one, and a packaged default that costs a large download MUST have an
@@ -404,8 +404,6 @@ on the configured server for `openai-compatible`, with no `ollama pull`
 reference in that case. Falling back to the global model MUST NOT happen:
 the operator would keep writing relation types believing they came from the
 model they named.
-(Previously: the missing-model remediation was worded only as
-`ollama pull`, because only the `ollama` backend existed.)
 
 #### Scenario: A stage runs on its own task model
 
@@ -440,7 +438,7 @@ model they named.
 
 - GIVEN a workspace with no `models:` key
 - WHEN any stage's cost gate asks for consent
-- THEN the printed output is byte-identical to its pre-#515 wording
+- THEN the printed output is byte-identical to the wording without per-task models
 
 #### Scenario: A missing task model fails only its own stage
 
@@ -464,9 +462,9 @@ model they named.
 An availability failure — `BackendUnavailable` or `BackendModelNotFound`,
 raised by either backend — MUST skip only the later `needs_llm` stages that
 resolve the SAME model. A stage resolving a different model MUST still be
-attempted (#515).
+attempted.
 
-This replaces the run-scoped skip: one failed connection no longer settles
+There is no run-scoped skip: one failed connection does not settle
 reachability for models it never contacted. The deliberate cost is that a
 genuinely dead server is contacted once per DISTINCT model rather than once
 per run; clients MUST be cached by model so stages sharing a tag share one
@@ -490,7 +488,7 @@ the same tag, so the observable behavior is unchanged.
 
 `curate` MUST exit 0 on a completed or declined run (including a
 Preconditions halt), 1 on failure, 2 on usage error, and 3 on a drift
-refusal, consistent with other verbs (#319).
+refusal, consistent with other verbs.
 
 #### Scenario: Declined stages still exit zero
 
@@ -512,21 +510,21 @@ test suites MUST pass unedited.
 
 #### Scenario: Standalone relate output is unchanged
 
-- GIVEN the same inputs as before extraction
+- GIVEN any valid `relate` inputs
 - WHEN `openkos relate` runs standalone
-- THEN its output is byte-identical to pre-extraction behavior
+- THEN its output is unaffected by the helper `curate` shares with it
 
 ### Requirement: Identity Cost Line Discloses Truncation
 
 `_identity_probe` MUST expose the SAME `produced`/`retained` truncation
-signal `find_candidates` now makes observable (entity-resolution delta:
+signal `find_candidates` makes observable (`entity-resolution`:
 Truncation Is Never Silent), through `StageProbe.notice` — the same
 channel `_structure_probe` already uses for the Structure stage's
-candidate-edge cap (`cli/curate.py:417-431`). WHEN Identity's candidate-
+candidate-edge cap (`_structure_probe` in `cli/curate.py`). WHEN Identity's candidate-
 group set is truncated (`produced > retained`), the printed notice MUST
 disclose both counts, in a shape consistent with the existing
 `"{retained} of {produced} ... shown (cap reached)"` pattern
-(`resolution/edge_typing.py:589`) substituting the group noun for the
+(`candidate_truncation_notice` in `resolution/edge_typing.py`) substituting the group noun for the
 edge noun used by Structure. WHEN Identity's candidate-group set is NOT
 truncated (`produced == retained`), NO truncation notice MUST be printed,
 matching Structure's existing no-truncation behavior. The exact notice
@@ -555,8 +553,9 @@ For any bundle whose Identity `CandidateGroup` count does not exceed
 `_MAX_CANDIDATE_GROUPS`, EVERY existing pinned literal in
 `tests/unit/cli/test_curate.py` that asserts Identity's `cost_line`
 output (the `"{n} candidate group(s) -> {n} LLM call(s)"` shape produced
-by `cost_line`, `cli/curate.py:188-204`, from `probe.llm_calls`) MUST
-remain unchanged: this change MUST NOT alter the cost-line wording,
+by `cost_line` in `cli/curate.py`, from `probe.llm_calls`) MUST
+remain unchanged: the candidate-group cap MUST NOT alter the cost-line
+wording,
 MUST NOT alter `probe.llm_calls`'s value for a below-cap corpus, and
 MUST NOT introduce a truncation notice for a below-cap corpus. Only a
 bundle whose candidate-group count exceeds the cap is a test-visible

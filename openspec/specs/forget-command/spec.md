@@ -205,7 +205,7 @@ every persisted finding whose `pair_ids` (either element) or
 verbatim claim text quoted from concept bodies, so a finding referencing a
 forgotten concept is the same class of leak the ledger and decisions
 sweeps already close. The SAME sweep MUST also delete every persisted
-ADJUDICATION (issue #779: the `adjudications` tables are the same file's
+ADJUDICATION (the `adjudications` tables are the same file's
 second tenant) whose member set names a purge-set member -- an
 adjudication's `rationale` can quote the member's body verbatim -- under
 the same erasure discipline. The SAME sweep MUST ALSO delete, under the
@@ -218,11 +218,6 @@ from either Decision's body. The deletion MUST be an erasure
 tombstone. A missing store is a no-op and is never created by the sweep; a
 corrupt or unreadable store degrades to a stderr warning naming the
 residue and remedy, never an aborted forget.
-(Previously: this requirement covered only the `findings` and
-`adjudications` tenants of `.openkos/findings.db`. This widens the SAME
-sweep, under the same erasure discipline, to also cover
-`decision-revision-detection`'s revision-finding tables -- `findings.db`'s
-third tenant.)
 
 #### Scenario: Forgetting a concept scrubs its persisted finding claims
 
@@ -342,8 +337,8 @@ This shape shrinks the sweep's own surface: a v5 entry holds one catalog
 bullet and its neighbour, where a v1–v4 entry held the entire catalog and
 log of the bundle as it stood at merge time.
 
-Dropping the member's own `absorbed_id` entry alone is NOT sufficient
-(issue #602): `build_merged_document` APPENDS, so entry *k*'s
+Dropping the member's own `absorbed_id` entry alone is NOT sufficient:
+`build_merged_document` APPENDS, so entry *k*'s
 `survivor_before` already embeds the *k-1* bodies absorbed before it, and
 a member's whole file can sit in a THIRD survivor's entry as a
 `relation_rewrites`/`provenance_rewrites` snapshot under an unrelated
@@ -367,7 +362,7 @@ forgotten body.
   `bundle/.state/ledger/`
 
 Body content is not the only way a member's identity enters another
-entry's snapshots (issue #689). A member that was never absorbed by a
+entry's snapshots. A member that was never absorbed by a
 given survivor can still be REFERENCED from it — a `## Related` link in
 the snapshotted body, a catalog bullet in `index_before`, an ingest line
 or a `forget` tombstone in `log_before` — each carrying the member's
@@ -419,7 +414,7 @@ neither link nor anchor, can never match.
   untouched
 
 #### Scenario: A reconciled (undelimited) carried body is redacted wholesale
-- GIVEN a merge whose reconciliation pass (#645) wove an absorbed body
+- GIVEN a merge whose reconciliation pass wove an absorbed body
   into the live survivor with no delimiter, a LATER merge on the same
   survivor whose ledger entry therefore snapshots that content
   undelimited (annotated in the entry's `carried_content_ids`, or — for a
@@ -428,7 +423,7 @@ neither link nor anchor, can never match.
   a `forget` of the first absorbed id
 - WHEN the sweep completes
 - THEN the later entry's `survivor_before` is replaced wholesale with the
-  redaction sentinel (privacy over reversibility, #667); the entry's
+  redaction sentinel (privacy over reversibility); the entry's
   other restore fields keep the ordinary structural scrub, and a later
   `unmerge` of that entry refuses rather than restoring the sentinel
 
@@ -541,7 +536,6 @@ incomplete, the withdrawal is skipped and reported per "Withdrawal Requires
 A Complete Edge Walk". The preview line for each resurrected target MUST
 also state its status change (`status → stable`) when one will be written,
 or that its own human-authored `status` is kept.
-(Previously: forget disclosed the resurrection only; no path wrote a deprecated-status export, so there was nothing to withdraw.)
 
 #### Scenario: A cascade member's supersedes edge discloses resurrection
 - GIVEN a purge-set member M has an outbound `supersedes` edge to concept Y
@@ -615,7 +609,6 @@ result with the catalog already consistent-forward. On such a partial failure
 of a cascade (N > 1), the error MUST report how many of the N members were
 removed before failing and how many remain, and point to recovery (git or
 `openkos lint`), so the operator is not left to reconstruct partial state.
-(Previously: Phase B wrote only the catalog and the deletions; there were no export rewrites to order.)
 
 #### Scenario: Catalog updated before any cascade file deletion
 - GIVEN a confirmed `--scope source` forget of 3 concepts

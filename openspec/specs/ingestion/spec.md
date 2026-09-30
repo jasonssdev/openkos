@@ -112,7 +112,7 @@ updating files that already exist, separate from `write_exclusive`.
 
 - GIVEN a file that already exists
 - WHEN `write_exclusive` targets that path
-- THEN it refuses, unchanged from before this change
+- THEN it refuses and leaves the existing file untouched
 
 #### Scenario: write_exclusive cleans up its own partial file on write failure
 
@@ -228,18 +228,6 @@ requirement; the Source document's filename and concept id do not change.
 This requirement does NOT read a source's own YAML `title:` field, does NOT
 recognize setext headings, and does NOT backfill already-ingested Sources.
 
-(Previously: `title` was always `_titleize(src.stem)`, with no content-derived
-candidate or fallback chain.)
-(Previously: frontmatter carried `timestamp` and `status: active`, and both
-the verbatim and undecodable body cases ended with a bare `# Citations`
-heading; OKF v0.2 supersedes both with `generated`/`status: stable`/
-`sources`, and the heading is no longer written.)
-(Previously: the generated Source concept's frontmatter never carried
-`source_frontmatter`, and `tags` was always empty regardless of any
-incoming frontmatter the raw source carried.)
-(Previously: `ingest` also wrote `provenance: [resource]` on the Source
-concept itself; see "OKF-Native Provenance" above for why that stopped.)
-
 #### Scenario: Successful ingest embeds verbatim text
 
 - GIVEN an initialized workspace and a readable UTF-8 text source at
@@ -269,7 +257,7 @@ concept itself; see "OKF-Native Provenance" above for why that stopped.)
   writes nothing
 
 > "**for this source**" is decided by ORIGIN, never by basename alone
-> (#552). A raw copy that merely SHARES a basename with this candidate,
+> A raw copy that merely SHARES a basename with this candidate,
 > while belonging to a different file, is not "this source" and MUST NOT
 > trigger this refusal — see the disambiguation requirement below.
 
@@ -356,7 +344,7 @@ concept itself; see "OKF-Native Provenance" above for why that stopped.)
 - WHEN `openkos ingest <path>` completes
 - THEN the title falls back to `_titleize(src.stem)`
 
-#### Scenario: A balanced parenthetical span is stripped, not fatal (#592)
+#### Scenario: A balanced parenthetical span is stripped, not fatal
 
 - GIVEN a candidate title whose only forbidden characters form balanced
   `(...)` or `[...]` spans (e.g. `MCP (Model Context Protocol)`)
@@ -632,13 +620,12 @@ Containment MUST be token-level, never raw substring: `Rust` is not
 contained in `Trust Boundaries`, and only token equality gets that right.
 Tokens too short to carry topic signal MUST be dropped first, and the
 contained title MUST retain at least two of them — a single generic token
-contained in anything is the failure `resolution/similarity.py` records
-(#555), where one manufactured single-token title landed in eleven
+contained in anything is the failure `resolution/similarity.py` records, where one manufactured single-token title landed in eleven
 duplicate groups. Partial overlap is NOT containment: a title sharing one
 token with the source title while naming its own subject MUST NOT fire.
 
 The predicate MUST also recognise ACRONYM/EXPANSION as the same topic
-(#586): one title's token being the initials of a contiguous run of words
+(one title's token being the initials of a contiguous run of words
 in the other, in EITHER direction, so `Model Context Protocol` under a
 source titled `MCP` is recognised despite sharing no token with it. The
 initialism MUST carry at least three letters — two-letter initialisms are
@@ -647,9 +634,9 @@ or every title sharing a first letter would match.
 
 This recognition MUST live in the ADDITIVE predicate only. It MUST NOT
 reach the drop rule: an object named after its source's expansion is the
-model writing the fuller name, and deleting it for that is the #413
+model writing the fuller name, and deleting it for that is a known
 mistake. It also MUST NOT be presented as settling entity IDENTITY, which
-`resolution/similarity.py`'s acronym tier (#397) already decides and routes
+`resolution/similarity.py`'s acronym tier already decides and routes
 through `adjudicate`/`merge`.
 
 The title comparison shared with chunk-merge dedup MUST stay exact.
@@ -942,7 +929,7 @@ degrade notice, and MUST exit 0.
 
 ### Requirement: Pre-Archive Measurement Gate
 
-Before this change is archived, before/after runs on
+Before a change to the extraction path lands, before/after runs on
 `evals/extraction_cap/run_cap_eval.py` and the AMI type-coverage harness
 MUST show recall not regressed on any fixture: genuine-subject retention
 MUST NOT decrease and known-facet retention MUST NOT increase, on every
@@ -954,7 +941,7 @@ measured fixture including chunked transcripts.
   union+judge path
 - WHEN any fixture shows decreased genuine-subject recall or increased
   facet retention
-- THEN the change MUST NOT be archived until the regression is resolved
+- THEN the change MUST NOT land until the regression is resolved
 
 ### Requirement: Extraction Degrades Gracefully on LLM Unavailability
 
@@ -1026,8 +1013,6 @@ lifted from that Source's incoming frontmatter — as its own `tags` at
 creation time. This inheritance applies only to derived objects created in
 the same run as the Source; it does NOT re-tag a derived object that
 already exists on disk from an earlier run.
-(Previously: a derived object's `tags` was always empty; no tag was
-inherited from the Source at creation.)
 
 #### Scenario: Provenance and sensitivity inherited from the Source's own value
 
@@ -1092,9 +1077,9 @@ runs beforehand.
 WHEN a byte-identical re-ingest resolves to a Source concept that already
 exists, records an `origin_key`, and whose previous extraction ran to its
 intended conclusion — no `extraction_status: failed`, no judge-degrade
-`extraction_notice` token — `ingest` MUST skip extraction entirely (issue
-#773): no model call, no write of any kind (not even a regenerated Source,
-so prior markers like #585's sole-object disclosure survive untouched), exit
+`extraction_notice` token — `ingest` MUST skip extraction entirely (the
+convergence skip): no model call, no write of any kind (not even a regenerated Source,
+so prior markers like the sole-object disclosure survive untouched), exit
 0, and one stderr line disclosing the skip and naming `--re-extract` as the
 deliberate redo. Extraction is non-deterministic, so re-running it on an
 unchanged source unions every set the model has ever produced — the
@@ -1102,9 +1087,9 @@ create-only dedup below can only catch verbatim-reproduced slugs — and a
 re-ingest MUST converge on one set of objects per source, never accumulate.
 
 Extraction MUST still re-run, without any flag, when the previous run left
-RETRYABLE DEBT: `extraction_status: failed` (#187) or a judge-degrade
-`extraction_notice` token (#772) — the exact states whose `lint` findings
-name a plain re-ingest as the remedy. A pre-#552 legacy Source recording no
+RETRYABLE DEBT: `extraction_status: failed` or a judge-degrade
+`extraction_notice` token — the exact states whose `lint` findings
+name a plain re-ingest as the remedy. A legacy Source recording no
 `origin_key` MUST take the full path once (which backfills the key), so the
 no-verb self-migration is not suppressed. `--re-extract` MUST force the full
 path on any re-ingest. A post-`forget` regenerate (raw bytes match, concept
@@ -1148,8 +1133,6 @@ against a concept already carrying this source's `provenance` — INCLUDING a
 disambiguated slug (`<slug>-N`) this source previously won — MUST be
 recognized as this source's own object and treated as the create-only no-op
 above, not as a foreign-source collision requiring further disambiguation.
-(Previously: reconciliation did not distinguish which source owned a
-colliding slug, and made no mention of disambiguated `-N` slugs.)
 
 #### Scenario: Re-ingest leaves an existing derived object untouched
 
@@ -1186,7 +1169,7 @@ colliding slug, and made no mention of disambiguated `-N` slugs.)
 - GIVEN a source already ingested and re-ingested with byte-identical raw
   content and a successful previous extraction
 - WHEN `openkos ingest <path>` runs again
-- THEN it short-circuits (issue #773's convergence requirement above), with
+- THEN it short-circuits (the convergence requirement above), with
   no new derived-object files of any kind
 
 ### Requirement: Derived Object Cataloging and Logging
@@ -1261,10 +1244,6 @@ Provenance and Sensitivity Inheritance").
 (Reason: a Source's own `provenance: [raw/<file>]` entry duplicated
 `resource`, was never projected into `sources`, and read as exactly the
 raw-path provenance shape every other conformance rule forbids.)
-
-(Previously: `ingest` wrote `provenance: [resource]` on every Source
-concept; a Source written before this change keeps that on-disk entry
-untouched, and `lint`/`status` MUST NOT start flagging it.)
 
 #### Scenario: A Source's provenance is its resource field alone
 
@@ -1358,8 +1337,7 @@ Source concept's `sensitivity` MUST equal
 `okf.combine_sensitivity(cfg.default_sensitivity, frontmatter_candidate)`
 when the source's incoming frontmatter lifts a `sensitivity` candidate,
 and MUST equal `cfg.default_sensitivity` otherwise; no `--sensitivity`
-flag is offered in this slice. This is a narrowing of a previously
-unconditional guarantee, not new behavior: on a RE-INGEST
+flag is offered. On a RE-INGEST
 (`regenerate=True`), the Source's `sensitivity` MUST instead be resolved
 as the high-water mark, via `okf.combine_sensitivity`, of the on-disk
 value, `cfg.default_sensitivity`, and any `sensitivity` candidate lifted
@@ -1395,20 +1373,12 @@ exactly as an unrecognized on-disk value does — a malformed VALUE for a
 recognized `sensitivity` key is not the same case as a malformed or
 non-mapping frontmatter BLOCK, which lifts nothing at all (see "Incoming
 Frontmatter Parse Is Fail-Closed And Bounded"). `timestamp`, `description`,
-`resource`, `provenance`, and the body MUST continue to refresh exactly as
-before this change; only the `sensitivity` field is carried forward, as a
+`resource`, `provenance`, and the body MUST refresh from the new ingest;
+only the `sensitivity` field is carried forward, as a
 merge into the freshly built metadata, never a restore of the prior
 document. WHEN a regenerated Source's resolved `sensitivity` exceeds
 `cfg.default_sensitivity`, the re-ingest preview line for that Source MUST
 name the preserved level.
-(Previously: stated unconditionally that the Source's `sensitivity` equals
-`cfg.default_sensitivity`, with no distinction between a fresh ingest and a
-re-ingest, so a re-ingest silently reset any level a human had raised via
-`set-sensitivity`.)
-(Previously: sensitivity resolution folded only the on-disk value and
-`cfg.default_sensitivity`; a source's own incoming frontmatter
-`sensitivity` value played no part in resolution, on either a fresh
-ingest or a re-ingest.)
 
 #### Scenario: Fresh ingest still stamps the config default
 
@@ -1641,7 +1611,7 @@ STDERR only. The indicator MUST NOT report a percentage, ETA, or any other
 determinate progress signal. On a non-TTY stream (e.g. piped or captured
 stdout, such as under `CliRunner`), STDOUT MUST remain byte-clean of any
 spinner control characters or partial-line artifacts, and the exit code MUST
-be unchanged from before this indicator was added. The indicator MUST be
+be unaffected by the indicator. The indicator MUST be
 cleared whether `extract_concept` returns successfully OR raises
 `BackendError`, leaving no leftover partial line on either path.
 
@@ -1651,7 +1621,7 @@ cleared whether `extract_concept` returns successfully OR raises
   (non-TTY)
 - WHEN the blocking `extract_concept` call runs
 - THEN stdout contains no spinner control characters or partial lines, and
-  the command's exit code is unchanged from behavior before this indicator
+  the command's exit code is unaffected by the indicator
 
 #### Scenario: Spinner clears on extraction success
 
@@ -1746,9 +1716,6 @@ MUST be appended to the same list as rules 1-2. Rule 3 covers exactly the two
 structural checks below; validating an `index.md`'s body shape
 (heading/bullet structure per §8) is explicitly OUT OF SCOPE for this
 requirement, as is any change to the freshness/orphan lint.
-(Previously: this requirement cited OKF §9, the v0.1 conformance section
-number, and §6 for index-file body shape; OKF v0.2 renumbers these to §11
-and §8 respectively, with no change in behavior.)
 
 #### Scenario: Reserved-file walk does not perturb rules 1-2
 
@@ -1764,11 +1731,6 @@ frontmatter FENCE (opening `---` delimiter with a closing `---`, whether or
 not its YAML parses) as a violation UNLESS the file is the bundle-root
 `index.md` (`path.parent == bundle_dir`), where §12 permits an `okf_version:
 "0.2"` frontmatter block as the sole exception.
-(Previously: titled "index.md Frontmatter Conformance (§6 + §11 Root
-Exception)", citing OKF v0.1's §6 (index files) and §11 (versioning), and
-the permitted root-exception value was `okf_version: "0.1"`; OKF v0.2
-renumbers these sections to §8 and §12 respectively, and the exception
-value is now `"0.2"`.)
 
 #### Scenario: Root index.md with okf_version frontmatter passes
 
@@ -1813,7 +1775,7 @@ list, an entry missing `target`/`type`, or an entry with an empty value)
 MUST be reported as a violation in the existing `f"{path}: {message}"`
 shape, appended to the existing rules 1-3 violation list. For any document
 without a `relations:` key, the existing rules 1-3 output MUST remain
-byte-identical to before this rule was added.
+byte-identical to what rules 1-3 alone produce.
 
 #### Scenario: Malformed relations entry reported as violation
 
@@ -1825,7 +1787,7 @@ byte-identical to before this rule was added.
 #### Scenario: Byte-identical output when relations is absent
 
 - GIVEN a bundle with no document containing a `relations:` key
-- WHEN `check_conformance` runs before and after this rule is added
+- WHEN `check_conformance` runs with and without the `relations:` rule
 - THEN the violation list is byte-identical
 
 #### Scenario: Well-formed relations passes
@@ -1840,9 +1802,6 @@ The reference bundle at `examples/good-life-demo/bundle` MUST pass
 `check_conformance` with an empty violation list under all three §11 rules,
 asserted by a test that runs in CI's existing `test` job with no CI
 configuration changes required.
-(Previously: titled "Reference Bundle Full §9 Conformance", citing OKF v0.1's
-§9 conformance section number; OKF v0.2 renumbers conformance to §11 with no
-change in the checked behavior.)
 
 #### Scenario: Reference bundle passes all three rules
 
@@ -1987,7 +1946,7 @@ directory layout into every Source's frontmatter and git history, removable
 only by `purge`. The key MUST be derived from the RESOLVED path, so two
 spellings of one file (`./notes.txt` from inside a folder,
 `folder/notes.txt` from its parent) yield one key. `origin_key` MUST be
-ABSENT on any Source written before this key existed, and absence MUST mean
+ABSENT on any legacy Source written without it, and absence MUST mean
 exactly one thing: origin not recorded.
 
 `ingest` MUST resolve its raw destination against the whole COLLISION
@@ -2005,7 +1964,7 @@ Resolution MUST proceed in family order:
    different file — skip it and continue;
 3. a member whose owning Source records NO `origin_key`, or whose Source
    cannot be read or parsed, has unknown origin — match it on byte-identical
-   content, which is the pre-#552 predicate, and continue otherwise.
+   content, which is the legacy predicate, and continue otherwise.
 
 When no member matches, the destination MUST be the first free
 `<stem>-N<ext>` (N ascending from 2), and `ingest` MUST report the
@@ -2086,8 +2045,8 @@ WHEN a single `ingest` run's extraction retains EXACTLY ONE derived object and
 that object restates the topic the Source's own title names, the system MUST
 write an `extraction_notice` frontmatter key on the Source concept with the
 value `sole-object-restates-source`. When no `extraction_notice` vocabulary
-token applies (this one, #772's judge-degrade quarantine tokens — see
-"Judge-Degrade Quarantine Marker" — #843's staging-loss marker — see
+token applies (this one, the judge-degrade quarantine tokens — see
+"Judge-Degrade Quarantine Marker" — the staging-loss marker — see
 "Staging-Loss Disclosure Marker" — or any other vocabulary member), the key
 MUST be ABSENT — no `ok`/`none` sentinel, mirroring `extraction_status`.
 Readers MUST ignore any value outside this vocabulary without raising.
@@ -2180,13 +2139,13 @@ quality selection — either because every judge attempt was unusable
 no candidate (`judge_status == "empty"`) — the system MUST write an
 `extraction_notice` frontmatter key on the Source concept recording which
 degrade occurred: `judge-selection-unavailable` for `"failed"`,
-`judge-selection-empty` for `"empty"` (issue #772). Fail-open is retained —
+`judge-selection-empty` for `"empty"`. Fail-open is retained —
 the objects are still written — but the admission MUST NOT be silent debt:
 the marker is what lets `lint`'s unjudged-extraction scan and `status`'s
 needs-attention fold-in guarantee a later surface revisits these objects.
 
 The two tokens MUST stay distinct, preserving on disk the same failed/empty
-split #754 established in the terminal notices: the causes carry different
+split the terminal notices use: the causes carry different
 retry expectations. The terminal degrade notice MUST disclose the marking,
 mirroring the sole-object notice's `marking the Source (extraction_notice:
 <token>)` shape.
@@ -2236,7 +2195,7 @@ WHEN staging drops at least one extracted candidate on a CONTENT-LOSING path
 — an unslugifiable title, an in-batch slug collision, or a
 `okf.build_concept` validation failure — the system MUST write an
 `extraction_notice` frontmatter key on the Source concept with the value
-`candidates-dropped-in-staging` (issue #843). The per-candidate stderr
+`candidates-dropped-in-staging`. The per-candidate stderr
 echoes remain; the marker is the durable half, so a later `lint`/`status`
 pass can learn the bundle may under-represent this source after the
 terminal has scrolled. One aggregate stderr line MUST disclose the marking,
@@ -2252,8 +2211,8 @@ when two candidates of one run slugify alike, the first was already staged,
 so the content is on disk. Counting it also created debt no command could
 clear, since the redo this marker prescribes (`--re-extract`) reproduces the
 same collision deterministically. The per-candidate stderr echo still names
-the skipped duplicate, which is a fact; what it no longer does is stamp a
-loss claim that is not.
+the skipped duplicate, which is a fact; it does not stamp a loss
+claim that is not one.
 
 `extraction_notice` MUST record EVERY condition a run tripped, not the
 highest-precedence one. The key was single-valued and the strongest token
@@ -2273,16 +2232,16 @@ count a file ONCE however many conditions it carries, because that term
 measures files. `lint` is the surface that enumerates every condition.
 
 The token MUST NOT be retryable debt (`cli/main._extraction_retry_due`
-excludes it, on #801's exact grounds): a plain re-ingest re-runs the same
+excludes it, on the same grounds as the other quarantine tokens): a plain re-ingest re-runs the same
 prompt over the same bytes and is promised to fix nothing about the sample
 that failed staging. The `lint` finding (`check_staging_dropped`, kind
 `staging-dropped`, its own `Staging-dropped candidates:` section) MUST name
 `--re-extract` as the redo and MUST NOT spell a bare re-ingest command.
 `status` MUST fold the finding into "needs attention".
 
-This marker covers the formerly silent `plans == [] and skip_reason is
-None` state (every candidate individually dropped): that state still writes
-no `extraction_status` key, and now carries this notice.
+This marker covers the `plans == [] and skip_reason is None` state (every
+candidate individually dropped): that state writes no `extraction_status`
+key, and carries this notice.
 
 #### Scenario: A sole candidate lost in staging marks the Source
 
@@ -2356,7 +2315,7 @@ no `extraction_status` key, and now carries this notice.
 per invocation, at the END of the run — after the single-file pipeline
 returns, or after a batch's per-file loop completes — so the quickstart
 (`init` -> `ingest` -> `query`) gets hybrid retrieval on its first query
-without a manual `openkos reindex` in between (issue #553). A batch of N
+without a manual `openkos reindex` in between. A batch of N
 files MUST pay one build, never one per file. The build MUST be fail-open:
 it runs after the ingested Sources and concepts are already written and
 committed, so any build failure degrades to one stderr notice naming
@@ -2384,13 +2343,13 @@ The batch cost gate MUST announce an ESTIMATE of the model calls the run
 will spend, summed from per-file estimates computed by
 `extraction.concept.estimate_extraction_calls` — the same thresholds and
 window arithmetic the pipeline branches on — never a one-call-per-file
-identity (issue #775: the gate announced 3 and the run made ~16, an
+identity (the gate announced 3 and the run made ~16, an
 order-of-magnitude consent failure). The line MUST be labelled as an
 estimate (`~N LLM call(s) (estimate; ...)`), MUST name how many sources
 will be split into roughly how many windows when any source fans out, and
 MUST count a file at zero when the pipeline will make no model call for
 it: an undecodable or blank source, the confidential floor gate without
-`--include-confidential`, and a file #773's convergence skip will not
+`--include-confidential`, and a file the convergence skip will not
 extract (disclosed as `N unchanged -- extraction will be skipped`). The
 skip prediction MUST reuse the same retryable-debt predicate `ingest`'s
 own skip decision reads, and MUST fail open — a file whose state cannot be
@@ -2424,9 +2383,9 @@ are out of the documented cost table's.
 ### Requirement: Batch Summary Discloses Extraction Notices
 
 The batch summary — deliberately the run's LAST word on stdout, after every
-per-file outcome line (issue #349) — MUST carry a term counting the files
+per-file outcome line — MUST carry a term counting the files
 whose Source concept finished the run carrying an `extraction_notice`
-(issue #805, item 1), beside the existing ingested / re-ingested / skipped /
+(item 1), beside the existing ingested / re-ingested / skipped /
 extraction-degraded terms.
 
 The term MUST count EVERY member of the `extraction_notice` vocabulary, not
@@ -2458,7 +2417,7 @@ every other ingest advisory.
 
 The term counts what a Source CARRIES when the run ends, not what the run
 stamped. A byte-identical re-ingest converges without re-extracting and
-stamps nothing (issue #773), yet leaves the prior run's notice untouched on
+stamps nothing, yet leaves the prior run's notice untouched on
 disk — so that file MUST still be counted. Reading the prior token back for
 this purpose is a READ of frontmatter the convergence guard already
 inspects, never a write-back: the never-read-back rule governs what is
@@ -2502,15 +2461,12 @@ Source's content was last generated, unconditionally set at ingest time.
 generated Source concept ONLY when a value is available (from the
 `--event-date` flag, file-name inference, or carry-forward on re-ingest); a
 Source ingested with no such evidence MUST omit the key entirely, producing
-output byte-identical to `ingest`'s behavior before this key existed.
+the same document as if `event_date` were not a supported key.
 `event_date` MUST NEVER be defaulted to ingest time or any other derived
 value — "no evidence" and "unknown" MUST be represented by the key's
 absence, never by a stand-in value. WHEN `ingest` writes the key, it MUST
 emit a quoted ISO-8601 date string (`event_date:
 '2026-07-14'`), never a bare, unquoted date scalar.
-(Previously: contrasted `event_date` with `timestamp` alone; OKF v0.2
-supersedes `timestamp` with `generated.at` for fresh writes, with legacy
-`timestamp` still read on unmigrated documents.)
 
 #### Scenario: No flag and no dated file name omits the key
 
@@ -2518,15 +2474,15 @@ supersedes `timestamp` with `generated.at` for fresh writes, with legacy
   `YYYY-MM-DD` token, ingested with no `--event-date` flag
 - WHEN `openkos ingest <path>` completes
 - THEN the generated Source concept's frontmatter contains no `event_date`
-  key, and the document is otherwise byte-identical to `ingest`'s output
-  before this key existed
+  key, and the document is otherwise identical to what `ingest` writes when
+  `event_date` is unsupported
 
 #### Scenario: event_date is never the ingest timestamp
 
 - GIVEN a source ingested with no `--event-date` flag and no dated file
   name
 - WHEN the generated Source concept's frontmatter is inspected
-- THEN its `generated.at` reflects the ingest time as before, and no
+- THEN its `generated.at` reflects the ingest time, and no
   `event_date` key exists carrying that same or any other derived value
 
 #### Scenario: Derived objects never carry an event date
@@ -2665,8 +2621,6 @@ frontmatter (per "Source Tag Lift And Re-Ingest Union"'s sibling
 date-lift rule); otherwise the file-name inference above; otherwise unset
 (the key is omitted). An incoming `created:` key, or any other
 frontmatter date-like key, MUST NOT be consulted for this precedence.
-(Previously: the file-name inference immediately followed the flag, with
-no frontmatter `date:` tier between them.)
 
 #### Scenario: The flag wins over a dated file name
 
@@ -2742,8 +2696,6 @@ other malformed value — `ingest` MUST treat it as absent for the
 precedence chain above: it MUST NEVER be carried forward as-is. `ingest`
 MUST print exactly one warning to stderr naming the malformed value and
 the Source it was found in, and MUST NOT fail the run.
-(Previously: the file-name inference immediately followed the stored
-value, with no frontmatter `date:` tier between them.)
 
 #### Scenario: Re-ingest with no flag keeps the stored value
 
@@ -2789,7 +2741,7 @@ value, with no frontmatter `date:` tier between them.)
 
 #### Scenario: A legacy Source with no stored value falls back to the file name
 
-- GIVEN a Source previously ingested before this feature existed, carrying
+- GIVEN a legacy Source ingested without frontmatter recording, carrying
   no `event_date`, whose raw file name carries a single valid dated token
 - WHEN `openkos ingest <path>` re-ingests the same source with no
   `--event-date` flag
@@ -2798,7 +2750,7 @@ value, with no frontmatter `date:` tier between them.)
 
 #### Scenario: A legacy Source with no stored value and no dated file name stays unset
 
-- GIVEN a Source previously ingested before this feature existed, carrying
+- GIVEN a legacy Source ingested without frontmatter recording, carrying
   no `event_date`, whose raw file name carries no dated token
 - WHEN `openkos ingest <path>` re-ingests the same source with no
   `--event-date` flag
@@ -2841,7 +2793,7 @@ go through the same preview, confirm gate, drift guard, and autocommit as
 any other regenerate. WHEN NONE of `event_date`, `source_frontmatter`, the
 tag union, or the resolved `sensitivity` differ from what is currently
 stored, the run MUST continue to converge and write nothing, exactly as
-`ingest` behaved before this feature existed.
+an ordinary converged re-ingest does.
 
 The preview for this rewrite MUST print one additional line naming
 `source frontmatter recorded ({n} key(s))`, where `{n}` is the number of
@@ -2870,15 +2822,6 @@ regardless of whether the Source has any derived object on disk, because
 counting them would need the whole-bundle walk this rewrite deliberately
 does not perform; its wording MUST therefore not assert that any derived
 object exists.
-(Previously: named "Converged Re-Ingest Date-Only Rewrite", and triggered
-only by a differing resolved `event_date`; a differing `source_frontmatter`,
-tag union, or sensitivity did not trigger a rewrite, so a Source ingested
-before this change kept none of those values until `--re-extract`. The
-rewrite's preview carried no `source frontmatter recorded` or `tags added`
-line, and no rewrite ever printed the `set-sensitivity` advisory, because
-none of those deltas existed. A tag-union delta then printed no advisory at
-all: existing derived objects silently kept their creation-time tags, and
-no verb existed that could add the Source's new tags to them.)
 
 #### Scenario: A differing flag on a converged Source rewrites it with no extraction
 
@@ -2906,8 +2849,7 @@ no verb existed that could add the Source's new tags to them.)
   resolve
 - WHEN `openkos ingest <path>` re-ingests it (with or without
   `--event-date` naming the already-stored value)
-- THEN convergence is preserved: nothing is written, exactly as before
-  this feature existed
+- THEN convergence is preserved: nothing is written, as for any converged re-ingest
 
 #### Scenario: The Source-only rewrite is idempotent
 
@@ -2919,7 +2861,7 @@ no verb existed that could add the Source's new tags to them.)
 
 #### Scenario: Newly-present incoming frontmatter on an otherwise converged Source triggers a rewrite
 
-- GIVEN a Source ingested before this feature existed — unchanged, already
+- GIVEN a legacy Source ingested without frontmatter recording — unchanged, already
   extracted, carries an `origin_key`, and stores no `source_frontmatter` —
   whose raw file now carries a leading frontmatter block this run parses
   successfully
@@ -3029,8 +2971,6 @@ value was already stored and carried forward unchanged). WHEN an explicit
 `--event-date` flag overwrites a differing stored value on re-ingest, that
 line MUST name both the old and the new value. WHEN no `event_date` is
 recorded at all, `ingest` MUST print no such line.
-(Previously: the origin vocabulary was `flag`, `file name`, or `kept`;
-`frontmatter` did not exist as an origin.)
 
 #### Scenario: The line names the flag origin
 
@@ -3092,8 +3032,8 @@ LLM Unavailability" requirement -- a skip is never silently indistinguishable
 from a total failure.
 
 `BackendUnavailable` (the backend could not be reached at all) MUST NEVER
-be retried or skipped: it MUST propagate on its FIRST occurrence, exactly
-as before this requirement existed, because an unreachable backend will
+be retried or skipped: it MUST propagate on its FIRST occurrence, as it
+always has, because an unreachable backend will
 not answer a different window either.
 
 WHEN at least one window is skipped and at least one window survives, the

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`typed-relationships` is slice 1 of the typed-graph work: the `relations:`
+`typed-relationships` covers the typed-graph foundation: the `relations:`
 OKF frontmatter field, the `openkos relate <source> <rel> <target>` CLI
 verb that writes it deterministically (no LLM), and a seeded-but-extensible
 relation-type vocabulary.
@@ -14,7 +14,7 @@ full reversible frontmatter-edge rewiring through merge/unmerge (deferred
 ledger extension); a user-facing relations query/graph-read CLI surface;
 inverse/symmetric-relation bookkeeping; embeddings/hybrid retrieval; or any
 change to the existing untyped `[text](/id.md)` link behavior — all
-deferred to later slices.
+deferred.
 
 ## Requirements
 

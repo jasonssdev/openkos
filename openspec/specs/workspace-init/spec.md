@@ -51,8 +51,6 @@ call to action rather than under it.
 key, `okf_version`, with parsed value equal to the string `0.2`, and an
 empty body. The requirement is on the parsed value, not on the byte
 sequence — either single- or double-quoted YAML scalars satisfy it.
-(Previously: the parsed value was `0.1`; OKF v0.2 adoption bumps the
-bundle-root declared version.)
 
 #### Scenario: Exact parsed frontmatter, empty body
 
@@ -134,10 +132,6 @@ off-allowlist value passed via `--embedding-model` MUST still pass this
 YAML-safety check and MUST be written, with a warning (see Off-Allowlist
 Embedding Model Flag Is Warned, Not Blocked), never silently coerced to
 the default.
-(Previously: the template had no `backend`, `base_url`, or
-`embedding_base_url` keys at all, because no second backend existed; a
-workspace's endpoint was entirely `OLLAMA_HOST`-environment-driven and
-undocumented in the shipped config.)
 
 #### Scenario: Byte-identical template except model, default path
 
@@ -210,7 +204,7 @@ undocumented in the shipped config.)
 - THEN the corresponding validator raises `ValueError`, init exits
   non-zero, and `openkos.yaml` does not exist
 
-#### Scenario: The template documents the new backend keys as comments
+#### Scenario: The template documents the backend keys as comments
 
 - GIVEN the packaged `openkos.yaml.template`
 - WHEN it is inspected
@@ -223,7 +217,7 @@ undocumented in the shipped config.)
 - WHEN the generated `openkos.yaml` is inspected
 - THEN it contains no active `backend:`, `base_url:`, or
   `embedding_base_url:` line — only `model:` and `embedding_model:` were
-  substituted, and the new keys remain commented exactly as in the template
+  substituted, and the backend keys remain commented exactly as in the template
 ### Requirement: Vetted 1024-Dim Embedding Model Allowlist
 
 The system MUST expose a static, code-level allowlist of embedding model
@@ -732,15 +726,12 @@ Init's output MUST satisfy OKF §11 conformance for a fresh bundle. Rules 1
 a fresh bundle contains zero non-reserved `.md` files for the mechanical
 conformance check to inspect. Rule 3 (reserved-file structure) MUST hold by
 construction, through the `index.md` and `log.md` shapes required by the
-Bundle Index Shape and Bundle Log Shape requirements above. This slice MUST
+Bundle Index Shape and Bundle Log Shape requirements above. `init` MUST
 NOT claim a mechanical check of rule 3 — that check is deferred to `lint`.
 When the mechanical conformance check encounters a file it cannot read or
 decode (for example a permission error or invalid encoding), it MUST
 report that failure distinctly as an I/O/read error and MUST NOT report it
 as a conformance violation.
-(Previously: cited OKF §9 conformance; OKF v0.2 renumbers the conformance
-section to §11 (v0.2 §13.1); the underlying rules and their pass/fail
-behavior are unchanged.)
 
 #### Scenario: Mechanical check reports no violations on a fresh bundle
 
@@ -755,7 +746,7 @@ behavior are unchanged.)
 - WHEN `bundle/index.md` and `bundle/log.md` are inspected against the
   shapes required by Bundle Index Shape and Bundle Log Shape
 - THEN both satisfy OKF §11 rule 3 by construction
-- AND no mechanical rule-3 check is performed by this slice; that check is
+- AND no mechanical rule-3 check is performed by `init`; that check is
   deferred to `lint`
 
 #### Scenario: Unreadable file is reported as an I/O error, not a conformance violation

@@ -9,7 +9,7 @@ concept-ids a human has confirmed are the same entity, plus a first-class
 parsing, workspace setup, the confirmation gate, rendering the preview and
 result, and the catalog/log write via the shared write helpers; the Phase A
 (prepare) / confirm-gate / Phase B (write) composition for both commands —
-including `unmerge`'s newly public `prepare_unmerge`/`unmerge_core` pair,
+including `unmerge`'s public `prepare_unmerge`/`unmerge_core` pair,
 matching `merge`'s existing shape — is delegated to the lifecycle
 application service.
 
@@ -47,8 +47,7 @@ ids MUST be rejected with no write.
 The APPEND stacks the absorbed body under a
 `## Merged content (<absorbed-id>)` delimiter. The absorbed body carries
 its own `# ` title heading, so appending it verbatim produced a merged
-document with TWO level-1 headings — two document roots in one file
-(issue #803).
+document with TWO level-1 headings — two document roots in one file.
 
 The absorbed body's LEADING `# ` heading MUST therefore be demoted to
 `### ` before it is stacked. The delimiter directly above already names
@@ -68,10 +67,6 @@ v0.2 §13.1), that MAY still appear — hand-authored or not yet migrated — on
 an absorbed document, and MUST NOT be demoted blind. Reconciliation is
 what folds two documents into one; this requirement only stops the
 unreconciled fallback from asserting two roots.
-(Previously: described `# Citations` as "an OKF §8 RESERVED heading"; OKF
-v0.2 retires that heading in favor of frontmatter `sources` and no longer
-reserves it, though a legacy or hand-authored section may still exist and
-is still never demoted blind.)
 
 The demotion is PRESENTATION-ONLY and MUST NOT affect reversibility.
 `unmerge` restores from the ledger's verbatim pre-merge snapshots, and
@@ -117,13 +112,10 @@ document's `type` MUST be the survivor's declared type, and the absorbed
 object's `type` MUST be discarded without being surfaced as a "conflict"
 requiring resolution — this is explicit, tested behavior, not an
 incidental side effect of generic scalar-merge logic.
-(Previously: the scalar-wins rule was stated generically; `type`'s
-behavior on a cross-type merge was an implicit consequence never named or
-pinned by a dedicated test.)
 
 `type_alternative` is EXCLUDED from the generic fill-the-gap branch: the
-absorbed side's value MUST NEVER be imported into the merged document
-(issue #803). It records ONE extraction's uncertainty about ONE document's
+absorbed side's value MUST NEVER be imported into the merged document.
+It records ONE extraction's uncertainty about ONE document's
 classification, not a property of the entity, so importing it manufactures
 doubt no extraction ever expressed about the survivor — the reported case
 came out of a merge newly flagged as possibly an `Organization`. The
@@ -136,7 +128,7 @@ value MUST be restored to it unchanged by `unmerge`.
 
 `event_date` is likewise EXCLUDED from the generic fill-the-gap branch:
 the absorbed side's value MUST NEVER be imported onto a survivor that
-lacks its own (issue #1014c). It records evidence about WHEN a single
+lacks its own. It records evidence about WHEN a single
 Source's event happened, not a property that generalizes to a merged
 entity, so importing it would stamp a date onto a survivor whose own
 content carries no such evidence. A survivor carrying its OWN `event_date`
@@ -144,8 +136,6 @@ MUST keep it, unaffected by the absorbed side's value, whatever that value
 is. A survivor with none MUST remain without one after the merge;
 `unmerge` MUST restore the absorbed document's own `event_date`, if it had
 one, unchanged.
-(Previously: `event_date` did not exist; this exclusion did not apply to
-it.)
 
 `source_frontmatter` is likewise EXCLUDED from the generic fill-the-gap
 branch: the absorbed side's value MUST NEVER be imported onto a survivor
@@ -158,8 +148,6 @@ unaffected by the absorbed side's value, whatever that value is. A
 survivor with none MUST remain without one after the merge; `unmerge`
 MUST restore the absorbed document's own `source_frontmatter`, if it had
 one, unchanged.
-(Previously: `source_frontmatter` did not exist; this exclusion did not
-apply to it.)
 
 `status_derived_from` (the deprecated-status export marker,
 `deprecated-status-export`) is EXCLUDED from the generic fill-the-gap
@@ -174,7 +162,6 @@ self-loop can un-supersede it) — and any resulting status change MUST
 appear in the Phase A preview. A human-authored absorbed `status` (no valid
 marker) still follows the generic scalar rule, unchanged. `unmerge`
 restores the absorbed document's own `status` and marker unchanged.
-(Previously: `status_derived_from` did not exist, and the absorbed side's `status` always followed the generic scalar rule.)
 
 
 #### Scenario: Conflicting fields resolved and surfaced
@@ -303,18 +290,14 @@ merge, and each successive merge photographed a larger catalog than the
 one before it.)
 
 Backward compatibility is by SHAPE, not by migration. An entry with no
-`provenance_rewrites` key (v1 or v2) MUST still decode and unmerge exactly
-as before; one with no `relation_rewrites` key (v1) MUST likewise still
+`provenance_rewrites` key (v1 or v2) MUST still decode and unmerge with
+their original semantics; one with no `relation_rewrites` key (v1) MUST likewise still
 decode; and a v1–v4 entry, which carries `index_before`/`log_before` and no
 `index_restores`, MUST keep its whole-file catalog restore and its drift
 warning unchanged. The reader MUST accept v1, v2, v3, v4, and v5 entries
 regardless of storage location, and MUST NOT rewrite an older entry into
 the newer shape — an entry already on disk records no delta, so converting
 it would mean inventing reversal information nobody stored.
-(Previously: entries were embedded directly in the survivor's own
-`merged_from` frontmatter key, growing that file geometrically across
-merges; then relocated to a sidecar under `bundle/.state/ledger/`, which
-fixed the document corruption but not what the entry stored.)
 
 #### Scenario: No `merged_from` key remains in survivor frontmatter
 - GIVEN a merge that appends a new ledger entry
@@ -347,11 +330,11 @@ fixed the document corruption but not what the entry stored.)
   no discard warning is printed
 
 #### Scenario: A pre-v5 snapshot entry keeps its old behavior
-- GIVEN a ledger entry written before this change, carrying
+- GIVEN a legacy ledger entry (schema v1-v4), carrying
   `index_before`/`log_before`
 - WHEN `unmerge` reverses it after `index.md` changed since the merge
 - THEN `index.md` is restored wholesale from the snapshot and the drift
-  warning is printed, exactly as before
+  warning is printed
 
 #### Scenario: Unmerge restores every touched file, including drops/dedupes
 - GIVEN a merge that dropped a self-loop and deduped a collision on a
@@ -366,11 +349,11 @@ fixed the document corruption but not what the entry stored.)
 - WHEN each merge is unmerged in reverse (LIFO) order
 - THEN the file is restored to its exact byte state at each step
 
-#### Scenario: Pre-slice-2a v1 ledger entry still unmerges exactly
+#### Scenario: Legacy v1 ledger entry still unmerges exactly
 - GIVEN a sidecar entry with no `relation_rewrites` key (v1)
 - WHEN `unmerge` runs against it
 - THEN it decodes successfully and restores survivor/absorbed/catalog
-  exactly as before slice 2a
+  exactly
 
 #### Scenario: A v1 and a v2 ledger entry are still readable after the v3 bump
 - GIVEN one entry with neither `relation_rewrites` nor
@@ -421,7 +404,7 @@ the survivor's sidecar before Phase A completes, and MUST refuse (exit
 non-zero, write nothing) when that check reports the ledger as
 post-merge-mutated, UNLESS `--force` is passed. The refusal message MUST
 ALWAYS name the repair verb (for a clean, unmigrated ledger) and MUST
-ALWAYS state that reversibility of merges made before this fix is not
+ALWAYS state that reversibility of merges made while the ledger was embedded is not
 guaranteed. The reset-and-replay remedy is conditional on the workspace
 actually having one, exactly as the doctor check's own remediation is:
 when the workspace is a git repository with a reachable reset point, the
@@ -457,7 +440,7 @@ refuse-plus-`--force` shape.
 - THEN the ledger-integrity refusal is bypassed but the existing
   confirm-gate precedence still governs the write
 
-### Requirement: Repair Verb Refuses On Any Sign Of Cross-Survivor Pollution Risk (Slice 1b)
+### Requirement: Repair Verb Refuses On Any Sign Of Cross-Survivor Pollution Risk
 
 The migration/repair verb (extracting a pre-fix, frontmatter-embedded
 `merged_from` history into a `bundle/.state/ledger/` sidecar) MUST refuse
@@ -485,13 +468,7 @@ convert a git-revertible bug into permanent durable fact, so this refusal
 has no override flag of any kind when it applies. The refusal message MUST
 state that the only path forward is `git reset --hard <first-merge>~1`
 followed by `openkos reindex`, and that reversibility of merges made
-before this fix is not guaranteed.
-(Previously: the ≥2-entries gate was evaluated, and could refuse the whole
-run, on every repair-verb invocation regardless of whether it had any
-pre-relocation ledger left to extract; the gate is now scoped to runs that
-have ledger extraction to do, so a bundle whose ledgers are already
-relocated to sidecars — including a twice-merged survivor's sidecar — can
-still be OKF v0.1 → v0.2 migrated.)
+while the ledger was embedded is not guaranteed.
 
 #### Scenario: Repair verb migrates a clean ledger verbatim
 - GIVEN a bundle where no survivor (migrated or unmigrated) carries 2 or
@@ -556,11 +533,8 @@ restore third-party derived objects' `sensitivity` — merge never wrote it
 (propagation is `set-sensitivity`'s exclusive concern) and lowering is a
 separate gated one-way operation (ADR-0008, ADR-0010); an explicit
 non-requirement, not an oversight.
-(Previously: reversed the entry embedded in the survivor's own
-frontmatter; the parity and precedence contract is unchanged, only the
-entry's storage location and removal target moved to the sidecar.)
 
-Unwind ergonomics (#562): a non-tail `absorbed-id` that IS recorded deeper
+Unwind ergonomics: a non-tail `absorbed-id` that IS recorded deeper
 in the ledger MUST refuse with the full LIFO unwind sequence — every id
 from the tail down to and including the request, in execution order — and
 name `--to` as the one-command alternative; an id recorded nowhere keeps a
@@ -574,7 +548,7 @@ two-arg form); the positional `absorbed-id` and `--to` are mutually
 exclusive, and supplying both or neither refuses cleanly.
 
 The absorbed id MUST stay explicit: `unmerge` MUST NOT default to the
-survivor's most recent ledger entry (issue #805, item 4). It is a
+survivor's most recent ledger entry. It is a
 destructive restore, and a consequential change stays reviewable rather
 than silently automatic — an implicit target would let an `--auto` run
 reverse a merge the operator never named. Because that makes the argument
@@ -603,7 +577,6 @@ a `supersedes` edge touching them — MAY either document's `status` and
 `status_derived_from` differ from its snapshot, and then only as the
 projection dictates. This is the only permitted deviation from
 byte-for-byte parity.
-(Previously: `unmerge` restored snapshots only; no export existed that could disagree with the restored edges.)
 
 
 #### Scenario: Merge then unmerge restores the pre-merge bundle byte-for-byte
@@ -778,8 +751,7 @@ order (mirrors `apply_relation_rewrites`).
 After `merge` retargets a third-party object's `provenance` to the
 survivor, a later `set-sensitivity` RAISE on the survivor MUST resolve that
 object as a provenance descendant and propagate to it (existing
-`sensitivity-config` raise-only propagation). This is the functional defect
-#230 fixes: pre-retarget, the object was unreachable and silently skipped.
+`sensitivity-config` raise-only propagation). Without the retarget, the object was unreachable and silently skipped.
 
 #### Scenario: A raise on the survivor reaches a provenance-retargeted descendant
 - GIVEN a merge retargeted a third-party object's `provenance` from
@@ -790,7 +762,7 @@ object as a provenance descendant and propagate to it (existing
 
 ### Requirement: Merged-Body Reconciliation Reaches Every Consenting Caller
 
-The #645 merged-body reconciliation pass — one model call that rewrites a
+The merged-body reconciliation pass — one model call that rewrites a
 merge's stacked body as a single coherent document — MUST be planned and
 applied by EVERY caller that consents to a merge, not only the `merge`
 command. The consenting callers are `merge`, `curate`'s Identity stage,
@@ -806,7 +778,7 @@ Every consenting caller MUST expose the opt-out, and it MUST be the same
 `--no-reconcile` lever rather than a second differently-named one:
 `merge --no-reconcile`, `curate --no-reconcile`, and `adjudicate
 --no-reconcile` (covering both `--apply` and `--apply-same`). Its default
-MUST be reconciliation ON, per #645's opt-out ruling. A caller that plans
+MUST be reconciliation ON, with an opt-out. A caller that plans
 the pass without offering the opt-out would send both note bodies to the
 model with no way for the operator to refuse.
 
@@ -817,7 +789,7 @@ threshold is met, because the thresholds are a heuristic tuned for the
 unattended default while the flag is a human acting on a preview that has
 just said "bodies were appended, not reconciled". Without it that
 disclosure names a problem the operator has no way to act on: re-running
-the merge produces the same stacked result (issue #803).
+the merge produces the same stacked result.
 
 `--reconcile` and `--no-reconcile` together MUST be REFUSED, not silently
 resolved, before any workspace gate or read. Either precedence rule would
@@ -831,7 +803,7 @@ second rule: a merged document below `floor / share-threshold` chars can
 never clear it, however large the absorbed share, so short documents were
 stacked no matter how much of the result the absorbed half was — the
 reported case being two `Person` merges at 39% and 40% share that missed
-by 11 and 19 characters (issue #803). Re-anchoring is monotone
+by 11 and 19 characters. Re-anchoring is monotone
 (`merged_chars >= absorbed_chars` always), so it admits merges without
 withdrawing any, and it preserves the floor's stated intent: two one-line
 bodies stacking at a high share while carrying nothing worth a model call
@@ -842,7 +814,7 @@ re-check, so the slow model call sits inside the window the drift guard
 re-validates. Any failure MUST keep the stacked body and notice on stderr:
 the merge itself never gains a new failure mode from an improvement pass.
 
-This is the defect issue #688 reports: the planning lived in the `merge`
+This is the defect that motivates it: the planning lived in the `merge`
 command body while `curate` — the path the product recommends and `next`
 points at — stacked bodies at shares of 38%, 46% and 54%, above the very
 thresholds at which the standalone verb offered the pass at 27%.
@@ -903,7 +875,7 @@ heading where the body opens with prose, and MUST NOT rewrite a later `# `
 heading, which is the model's own sectioning rather than the document's
 name. Pinning is deterministic rather than prompt-asked because the
 survivor's title is a fact already in hand; asking the model to echo it
-would trade that fact for a probability (issue #695).
+would trade that fact for a probability.
 
 #### Scenario: A reconciled body headed with the absorbed title is corrected
 - GIVEN a reconciled reply whose first line is the ABSORBED document's
@@ -922,7 +894,7 @@ would trade that fact for a probability (issue #695).
 
 Every surface that offers to merge two concepts MUST name the cross-source
 class before the operator consents: members that each carry a non-empty
-`provenance:` whose sets are DISJOINT (issue #796, extending #776).
+`provenance:` whose sets are DISJOINT (extending the adjudication cross-source rule).
 
 That includes plain `merge`, not only the adjudication walks. `merge` is
 the command `duplicates` and `adjudicate` both name in their closing hints,
@@ -1031,8 +1003,7 @@ after the merge committed. This is deliberately conservative: the guard has
 no way to distinguish a rewrite that would be safe to discard from one that
 would not, so it refuses on all of them alike.
 
-A `merged_from` entry recorded before this requirement existed (schema v1
-through the entry shape current at the time of this change) carries no
+A legacy `merged_from` entry (schema v1 through v5) carries no
 `survivor_after_sha256` at all. `unmerge` MUST NOT refuse such an entry for
 lack of a hash to compare against; instead it MUST print a warning
 disclosing that it cannot verify the survivor was unedited since that merge,
@@ -1040,13 +1011,9 @@ and MUST proceed with the restore. This is the one case where the check
 fails open, and it MUST be disclosed rather than silent.
 
 An untouched survivor -- whose current bytes still match what the merge
-wrote -- MUST be restored exactly as before this requirement: this check
+wrote -- MUST be restored exactly: this check
 adds no observable change to the documented byte-for-byte round-trip parity
 on an otherwise-untouched bundle.
-(Previously: `unmerge` restored the survivor from `survivor_before`
-unconditionally, with no check of any kind against the survivor's current
-bytes; any edit landing between the merge and the unmerge was silently
-discarded.)
 
 #### Scenario: Unmerge refuses a survivor edited after the merge
 
@@ -1095,8 +1062,7 @@ discarded.)
 
 #### Scenario: Unmerge warns but proceeds on a pre-fix ledger entry
 
-- GIVEN a `merged_from` tail entry recorded before this requirement
-  existed, carrying no `survivor_after_sha256`
+- GIVEN a legacy `merged_from` tail entry carrying no `survivor_after_sha256`
 - WHEN `unmerge <survivor> <absorbed>` is run, whether or not the survivor
   was actually edited
 - THEN it prints a warning that it cannot verify the survivor was unedited

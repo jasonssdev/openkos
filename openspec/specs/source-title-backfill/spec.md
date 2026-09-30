@@ -4,7 +4,7 @@
 
 `openkos backfill-source-titles` is a dedicated, bundle-wide sweep that
 closes the title gap left by Sources ingested before
-`source-title-from-heading` (#248): it re-derives each `type: source`
+`source-title-from-heading`: it re-derives each `type: source`
 concept's `title` from its immutable `raw/` bytes via
 `derive_source_title`, in one three-bucket preview, one confirmation, one
 `log.md` entry, and one commit — mirroring `backfill-sensitivity`'s shape
@@ -17,7 +17,7 @@ only — re-running `openkos ingest` on a byte-identical file already
 regenerates a single Source's title); any rewrite of historical `log.md`
 entries (the old title stays in history by design — decision 1 of the
 proposal); the companion lint check "Source title still equals its slug"
-(separate follow-up, #248's own *What Is Still Owed* list); any slug,
+(a separate follow-up); any slug,
 filename, or Concept ID rename; any rebuild of
 `.openkos/{fts,vectors,graph}.db` (`reindex` stays the sole, always-manual
 writer); full-document regeneration via `build_source_concept` (the
@@ -161,10 +161,6 @@ including `generated` and `sources` on a v0.2-shaped Source — and every
 other line of the body MUST remain byte-identical to before the run. A
 v0.2-shaped Source carries no `# Citations` section at all, and this
 requirement MUST NOT be read as expecting one to exist.
-(Previously: named `# Citations` and "all other frontmatter keys" without
-qualifying either for OKF v0.2 shape; a v0.2-shaped Source no longer has a
-`# Citations` section, and the "other frontmatter keys" preserved now
-include `generated`/`sources`.)
 
 #### Scenario: Only title and first line change
 

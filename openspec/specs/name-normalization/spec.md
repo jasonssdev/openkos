@@ -8,12 +8,11 @@ Form C) — the condition `openkos lint`'s `non-nfc-name` finding reports but
 does not remediate. It follows the standard Phase A -> confirm gate -> Phase
 B -> `_autocommit` shape shared by other mutating verbs (e.g.
 `backfill-sensitivity`), and reuses lint's own scan so the verb and `lint`
-never disagree about what counts as an offending entry. (Merged from
-change `nfc-rename-migration`, PR #492, closing #474.)
+never disagree about what counts as an offending entry.
 
 ## Non-Goals
 
-- Transliteration or ASCII-folding of names (rejected in #414); only the
+- Transliteration or ASCII-folding of names (rejected); only the
   normalization FORM changes, never the characters a name contains.
 - NFKC or any compatibility normalization; NFC only.
 - Renaming anything outside `bundle_dir` (no `raw/`-adjacent, workspace-level,

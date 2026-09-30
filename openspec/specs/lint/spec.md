@@ -206,10 +206,6 @@ incomplete run, never by a finding's presence. `lint` MUST NOT be a CI gate
 in MVP-1 on findings; the only nonzero exits are the pre-existing
 "workspace cannot be read" case and this incomplete-run case. `lint` MUST
 print completed and not-run counts alongside its findings sections.
-(Previously: the only nonzero exit was "workspace cannot be read"; no
-vocabulary distinguished an incomplete run from a clean or found-something
-run, and a failing late walk crashed uncaught before reaching this rule at
-all.)
 
 #### Scenario: Empty or fresh bundle has no findings
 
@@ -261,9 +257,6 @@ either walk's own directory read raises an `OSError`, that check MUST
 degrade to `not-run` — carrying the raised reason — rather than raising
 uncaught, and MUST NOT discard any of the other already-computed finding
 lists.
-(Previously: an `OSError` from either walk propagated uncaught, discarding
-all other already-computed finding lists and aborting the report before it
-rendered; neither walk's failure mode was specified at all.)
 
 #### Scenario: No mutation on any run
 
@@ -335,15 +328,14 @@ Contract already covers all existing kinds and MUST cover this one too.
 `openkos lint` MUST flag any Source document whose frontmatter
 `extraction_notice` carries a judge-degrade token
 (`judge-selection-unavailable` or `judge-selection-empty`) as an `unjudged`
-finding (issue #772) — the read half of ingest's fail-open-but-quarantine
+finding — the read half of ingest's fail-open-but-quarantine
 design: objects stored without quality selection are retryable debt, and a
 marker nothing reads is not a quarantine. `sole-object-restates-source`
 and any unrecognized, out-of-vocabulary token MUST NEVER produce this
 finding — that token is an honest disclosure, not debt. The finding's
-detail MUST name which degrade occurred (the failed/empty split #754
-established) and MUST spell the same three-outcome retry hint the
+detail MUST name which degrade occurred (the failed/empty split) and MUST spell the same three-outcome retry hint the
 `unextracted` kind renders, built from the Source's own `resource` value —
-including #285's declining outcome for an unspellable `resource`. This
+including the declining outcome for an unspellable `resource`. This
 scan MUST reuse `LintDoc`'s existing single-pass `collect_docs` walk — no
 new bundle walk — and MUST NOT change `lint`'s exit code. Findings render
 under their own `Unjudged extractions:` section.
@@ -566,11 +558,6 @@ reason — rather than raising uncaught, and MUST NOT discard any of the
 other already-computed finding lists. A `not-run` outcome here IS gating on
 run-completeness, per the Non-Gating Exit Contract's incomplete-run
 vocabulary — distinct from an ordinary finding, which stays non-gating.
-(Merged from change `nfc-rename-migration`, PR #492; first formal capture
-of the detection shipped in #490.)
-(Previously: an `OSError` from this scan's walk propagated uncaught,
-discarding all 11 other already-computed finding lists and aborting the
-report before it rendered.)
 
 #### Scenario: A decomposed on-disk name is flagged
 

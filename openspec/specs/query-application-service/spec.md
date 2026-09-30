@@ -39,10 +39,8 @@ adapter can refuse an uninitialized workspace in its own idiom.
 The callable (`run_query`) MUST additionally accept an optional keyword-only
 `progress` callback and thread it, unmodified, into its `answer()` call.
 WHEN a caller omits `progress` (the default), the composed call's behavior,
-return value, and every side effect MUST remain byte-identical to the
-callable's contract before this parameter existed.
-(Previously: `run_query` had no `progress` parameter and could not thread
-one into `answer()`.)
+return value, and every side effect MUST remain byte-identical to a call
+made without the parameter.
 
 #### Scenario: A non-CLI caller answers a question
 
@@ -125,11 +123,11 @@ the calling adapter.
 
 For every input covered by the existing `test_query.py`/`test_query_save.py`
 CLI tests, `openkos query` and `openkos query --save` invoked through the
-CLI MUST produce the same exit code, stdout, and stderr after this
-extraction as before it.
+CLI MUST produce the same exit code, stdout, and stderr as the
+direct CLI implementation.
 
 #### Scenario: A previously-passing CLI scenario is unchanged
 
-- GIVEN any scenario the CLI test suite covered before this change
-- WHEN the same CLI invocation runs after the extraction
+- GIVEN any scenario the CLI test suite covers
+- WHEN the same CLI invocation runs through the service
 - THEN its exit code, stdout, and stderr are unchanged

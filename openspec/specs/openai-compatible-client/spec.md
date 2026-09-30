@@ -198,7 +198,7 @@ servers fix their context size at server start (e.g. `-c`,
 - GIVEN a client constructed with an explicit `context_window`
 - WHEN a caller reads the `context_window` property
 - THEN it returns the configured value, usable for local prompt-budget
-  planning exactly as Ollama's property is used today
+  planning exactly as Ollama's property is used
 
 ### Requirement: An Optional Bearer Key Is Applied Per Request And Never Logged
 

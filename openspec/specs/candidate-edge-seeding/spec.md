@@ -48,9 +48,9 @@ MUST produce identical, identically-ordered output.
 ### Requirement: An Unjudged Source's Own Pairs Are Withheld And Disclosed
 
 The candidate pass MUST withhold any nominated pair whose BOTH endpoints
-cite (`provenance:`) a common source carrying one of #772's judge-degrade
+cite (`provenance:`) a common source carrying one of the judge-degrade
 `extraction_notice` tokens (`judge-selection-unavailable` or
-`judge-selection-empty`) — issue #841: objects stored without judge
+`judge-selection-empty`) — objects stored without judge
 selection are mutually proximate almost by construction, and each retained
 pair becomes one LLM call downstream and permanent typed structure once
 accepted. The gate MUST match EXACTLY those two tokens (every other
@@ -70,7 +70,7 @@ quarantine; the projection is derived state a rebuild reconsiders).
 
 A generic per-source share cap is deliberately NOT specified: no
 threshold separates a productive source from a degraded one without a
-measurement harness (issue #841's own analysis), while this gate bounds
+measurement harness (as the measured analysis found), while this gate bounds
 the documented failure at deterministic cost.
 
 #### Scenario: A quarantined source's mutual pair is withheld
@@ -127,5 +127,4 @@ reversibility.
 
 - GIVEN a bundle containing candidate edges produced by this module
 - WHEN `merge`/`unmerge` runs on unrelated concepts
-- THEN its behavior and reversibility guarantees are unchanged from
-  before this module existed
+- THEN its behavior and reversibility guarantees are unaffected by this module

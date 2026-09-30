@@ -175,7 +175,7 @@ introduce a second `git-filter-repo` invocation.
 
 `purge`'s live-tree half of this sweep is the SAME shared primitive
 `forget`'s Phase B calls, and therefore carries the same
-reference-scrubbing obligation (issue #689): a purge-set member that was
+reference-scrubbing obligation: a purge-set member that was
 merely REFERENCED from a surviving sidecar — a `## Related` link, a
 catalog bullet, a log line, each carrying its title and former path — MUST
 be dropped from every snapshot field, not only members whose absorbed
@@ -208,7 +208,7 @@ real rewrite, not on the primitive alone.
   `git-filter-repo` pass as the concept's own file expunge
 
 > **UNIMPLEMENTED, and UNREACHABLE under the current command surface
-> (#573).** This scenario is not satisfied and is recorded here rather than
+> ** This scenario is not satisfied and is recorded here rather than
 > left silent: an unimplemented privacy scenario that reads as implemented
 > is worse than a tracked gap.
 >
@@ -228,7 +228,7 @@ real rewrite, not on the primitive alone.
 > **What would make it reachable.** Any verb that learns to address an
 > ABSORBED id — that is, any change relaxing or bypassing
 > `_resolve_concept_path`'s existence gate for a ledger-known id. The
-> concrete candidate is `unmerge --to <id>` (#562), which reads the same
+> concrete candidate is `unmerge --to <id>`, which reads the same
 > ledger. Whoever implements that MUST close this gap in the same change,
 > or the existence gate stops being the thing that makes this safe.
 
@@ -402,10 +402,10 @@ is rebuilt, and MUST instruct the user to run `openkos reindex`. This MUST
 be message-only: `purge` MUST NOT prompt interactively and MUST NOT
 auto-run `reindex` itself.
 
-That warning MUST also disclose what the rebuild costs (issue #698).
+That warning MUST also disclose what the rebuild costs (a full re-embed).
 `vectors.db` holds BOTH the `vector_meta` content-hash cache and the `meta`
 embedding-model tag, so dropping the file drops both: the restore is a FULL
-re-embed of every surviving document, one embedding call each (now one
+re-embed of every surviving document, one embedding call each (more precisely, one
 embedding call per CHUNK, per the `embedding-chunking` capability), never
 an incremental top-up. Because the tag lived in the dropped store, the
 NEXT `openkos reindex` run finds NO stored tag at all and takes reindex's
@@ -422,14 +422,6 @@ every document must be embedded again whatever the tag says. Only carrying
 the SURVIVORS' vectors into a fresh database would deliver incrementality,
 which changes the delete-and-rebuild erasure posture above and is out of
 scope for this requirement.
-(Previously: this requirement stated that `reindex` would additionally
-report the drop as `embedding model changed (unset -> <model>)`, and that
-the warning must pre-empt THAT wording. The reindex-command capability's
-corrected disclosure retires the bare-tag-vs-bare-model comparison that
-produced that false claim: an absent stored tag now takes the distinct
-"no embedding-model tag stored (fresh or dropped store)" branch, never the
-model-changed branch, so this warning must pre-empt the corrected wording
-instead.)
 
 #### Scenario: Successful purge warns about degraded dense retrieval
 

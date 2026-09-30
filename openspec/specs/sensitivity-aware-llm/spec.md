@@ -113,13 +113,6 @@ the Source and onto any derived object it writes. WHEN the resulting floor
 is `confidential`, `extract` MUST NOT call `llm.chat` at all; WHEN it is
 `private` or `public`, `extract` proceeds unchanged.
 
-(Previously: stated that `extract` "has no per-doc `sensitivity` value" in
-all cases and gated unconditionally on `cfg.default_sensitivity`, so a
-re-extract of a Source already raised to `confidential` on disk -- via
-`set-sensitivity`, the high-water mark, or a prior raise -- sent its text to
-a non-local `llm.chat` backend whenever the workspace default alone was
-`private` or `public`, without `--include-confidential` (issue #1086).)
-
 #### Scenario: Confidential floor skips extract's llm.chat call
 
 - GIVEN a workspace with `default_sensitivity: confidential`
@@ -130,7 +123,7 @@ a non-local `llm.chat` backend whenever the workspace default alone was
 
 - GIVEN a workspace with `default_sensitivity: private`
 - WHEN `extract` runs
-- THEN it calls `llm.chat` exactly as before this change
+- THEN it calls `llm.chat`
 
 #### Scenario: A re-extract of a Source raised to confidential blocks the send
 
@@ -153,7 +146,7 @@ a non-local `llm.chat` backend whenever the workspace default alone was
 - GIVEN a Source whose resolved sensitivity is `private`, and a workspace
   with `default_sensitivity: private`
 - WHEN `openkos ingest <path> --re-extract` runs
-- THEN it calls `llm.chat` exactly as before this change
+- THEN it calls `llm.chat`
 
 #### Scenario: A confidential Source blocks even under the most permissive workspace default
 
@@ -234,8 +227,6 @@ unlistable subdirectory in either location MUST trigger the warning. The
 command MUST still exit 0 (WARN, not refuse). The warning MUST be skipped
 when `--include-confidential` is passed, since the filter is then
 deliberately disabled.
-(Previously: the walk-incompleteness check covered only `bundle/**.md`;
-`bundle/.state/` did not exist as a scanned location.)
 
 #### Scenario: Incomplete concept walk warns and still exits 0
 - GIVEN a bundle where `okf._walk_errors` reports at least one unlistable
@@ -277,7 +268,7 @@ because its subtree became unlistable, or a permission change occurred,
 after the walk but before the load) MUST still be excluded.
 `--include-confidential` MUST bypass this re-check identically to how it
 bypasses walk-based exclusion, restoring byte-identical pre-filter behavior.
-`query` already implements this re-check (S3 FIX-2, answer.py:211-214) and
+`query` already implements this re-check (`retrieval/answer.py`) and
 requires no behavior change.
 
 #### Scenario: Confidential doc absent from the precomputed blocked set is caught at load
@@ -296,9 +287,9 @@ requires no behavior change.
 
 #### Scenario: Query is already conformant
 - GIVEN `query`'s existing send-time `sensitivity.blocks_llm_send` re-check
-  (S3 FIX-2, answer.py:211-214)
-- WHEN this change ships
-- THEN `query`'s behavior is unchanged — it already independently re-checks
+  (`retrieval/answer.py`)
+- WHEN `query` loads candidates
+- THEN it already independently re-checks
   each candidate at load, satisfying this requirement without modification
 
 ### Requirement: Embedding Is Gated As Egress, Like `llm.chat`

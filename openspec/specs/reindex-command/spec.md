@@ -32,7 +32,7 @@ derived indexes under `.openkos/`, gated by the SAME bundle-manifest-hash
 rebuild-on-change rule the vector store already uses via `content_hash`.
 `query`/`answer()` MUST NEVER write to these on-disk stores; the only
 writers are `reindex`, `purge`'s post-expunge best-effort rebuild, and —
-for the FTS index alone — `ingest`'s end-of-run build (issue #553).
+for the FTS index alone — `ingest`'s end-of-run build.
 
 #### Scenario: Reindex writes all three derived stores in one run
 
@@ -75,9 +75,6 @@ on-disk `vectors.db`, FTS, and graph derived stores under `.openkos/`
 `state/reindex.py` orchestrator to write all three, then print a summary of
 embedded/cache-hit/pruned/skipped/embed-failed counts — including whether the
 prune pass was skipped due to a walk error — and exit 0.
-(Previously: `reindex` opened and wrote only `vectors.db`; the summary line
-carried no prune-skip indicator, and `embed_failed` was surfaced solely via
-the stderr re-run notice, not the primary stdout tally.)
 
 #### Scenario: Successful run prints a summary and exits 0
 
@@ -143,13 +140,9 @@ description, tags, and body — the same composition `fts.py` uses to build
 its own index text — and MUST split it into a header (title + description +
 tags) and a body, embedding the body as one or more chunks per the
 `embedding-chunking` capability's windowing contract, with the header
-repeated on every chunk's embed text. This closes #554 (a document's own
-content no longer truncates out) and closes #888 (a document exceeding the
-embedder's window is no longer represented solely by its first chunk).
-(Previously: each document composed to exactly ONE embed-text string,
-embedded via exactly one `embedder.embed([text])[0]` call; a document whose
-composed text exceeded the embedder's window was silently truncated by the
-embedder itself.)
+repeated on every chunk's embed text. A document's own content therefore never truncates out, and a document
+exceeding the embedder's window is not represented solely by its first
+chunk.
 
 #### Scenario: Embed text matches FTS's field composition
 
@@ -196,8 +189,6 @@ absent or differs from the current `model_tag` (Embedding-Model Tag Gate),
 this per-doc comparison MUST be bypassed entirely for the vector pass —
 every discovered, readable doc is treated as changed and re-embedded,
 regardless of its content_hash.
-(Previously: the content_hash comparison was the only gate; no model-tag
-condition could override it.)
 
 #### Scenario: Unchanged content_hash is a cache-hit with zero Ollama calls
 
@@ -240,10 +231,6 @@ of walk errors. `ReindexReport` MUST additionally carry a `prune_skipped`
 field distinguishing "prune ran and found nothing to prune" from "prune was
 suppressed by a walk error", and the CLI summary MUST surface this
 distinction to the user.
-(Previously: any `concept_id` absent from the current walk was pruned
-unconditionally, with no distinction between "genuinely deleted" and "walk
-could not reach it"; `ReindexReport` had no field distinguishing a
-skipped-by-walk-error prune pass from a prune pass that found nothing.)
 
 #### Scenario: Deleted doc is pruned from the store
 
@@ -267,7 +254,7 @@ skipped-by-walk-error prune pass from a prune pass that found nothing.)
 
 - GIVEN a bundle whose walk completes with zero directory-scan errors
 - WHEN `reindex` runs
-- THEN pruning proceeds exactly as before this change, removing only
+- THEN pruning proceeds normally, removing only
   `concept_id`s genuinely absent from the walk
 
 #### Scenario: Walk-error prune-skip is observable in the report and CLI
@@ -300,9 +287,6 @@ sqlite3.SQLITE_LOCKED)`, NOT by message substring, and exit 1 with the SAME
 uniform "another process holds the workspace lock; wait and retry" message
 for all three stores. A non-lock `OperationalError` MUST NOT be swallowed by
 this catch; it keeps its existing (generic operational-error) handling.
-(Previously: only the graph ladder caught `sqlite3.Error` for a locked
-`graph.db`; the vectors/FTS ladder had no lock-contention catch and a locked
-`vectors.db`/`fts.db` produced a raw traceback instead of a clean exit 1.)
 
 #### Scenario: Ollama unreachable exits 1 with a clear message
 
@@ -354,10 +338,10 @@ this catch; it keeps its existing (generic operational-error) handling.
 
 #### Scenario: query command behavior is unaffected
 
-- GIVEN this change is applied
-- WHEN `openkos query "<question>"` runs, including against a locked store
-- THEN its observable behavior (degrade-and-continue via
-  `_open_*_or_degrade`) is identical to before this change
+- GIVEN a locked store
+- WHEN `openkos query "<question>"` runs
+- THEN it degrades and continues via `_open_*_or_degrade`, independent of
+  `reindex`'s lock-contention handling
 
 ### Requirement: Per-Doc Embed Failure Is Isolated, Not Fatal
 
@@ -389,10 +373,6 @@ processed after the raise.
 
 `ReindexReport.embedded` MUST equal the count of documents successfully
 embedded (every chunk succeeded) this run.
-(Previously: embed grain was one document = one `embedder.embed([text])`
-call; a chunked document now issues N calls, and this requirement adds the
-all-or-nothing rule across those N calls plus the no-partial-vector
-invariant.)
 
 #### Scenario: One poison document among many survives as a partial-progress run
 
@@ -530,8 +510,8 @@ completes with exit 0. A dimension-mismatch exit MUST NOT be worded as
 At the start of the vector reindex pass, `reindex()` MUST read the stored
 `embedding_model` tag from `vectors.db`'s `meta` table and compare it against
 the explicit `model_tag` param passed in for this run. For the `ollama`
-backend this comparison and the stored tag's bytes are UNCHANGED from before
-this change. For the `openai-compatible` backend, the tag additionally
+backend this comparison uses the bare model name, and the stored tag's bytes are
+that bare model name. For the `openai-compatible` backend, the tag additionally
 identifies the backend kind, so switching `backend` while keeping the same
 model name is itself a mismatch. A stored tag with no backend-kind qualifier
 MUST be read as backend `ollama` for this comparison, so an existing
@@ -558,8 +538,6 @@ hash. Switching servers within one backend kind while keeping the same model
 name (e.g. moving `bge-m3` from LM Studio to vLLM) is NOT detected by this
 gate — see the `openai-compatible-client`/`backend-selection` risk
 documentation; `reindex --force` is the remedy for that case.
-(Previously: the comparison was model-name-only, with no backend-kind
-component, because only one backend existed.)
 
 #### Scenario: Model mismatch forces full re-embed regardless of content_hash
 
@@ -569,9 +547,9 @@ component, because only one backend existed.)
 - THEN every discovered doc is re-embedded and upserted, and the stored tag
   becomes `'model-b'`
 
-#### Scenario: Absent tag (pre-slice vectors.db) forces one re-embed then self-heals
+#### Scenario: Absent tag (legacy vectors.db) forces one re-embed then self-heals
 
-- GIVEN a `vectors.db` created before this change, with no `meta` table row
+- GIVEN a `vectors.db` created by an older version, with no `meta` table row
   for `embedding_model`
 - WHEN `reindex()` runs once with `model_tag='model-a'`
 - THEN every discovered doc is re-embedded this run, the stored tag becomes
@@ -583,7 +561,7 @@ component, because only one backend existed.)
 - GIVEN a stored tag equal to the current `model_tag`
 - WHEN `reindex()` runs
 - THEN cache-hit/changed/new classification for each doc follows the
-  existing content_hash comparison exactly as before this change
+  existing content_hash comparison
 
 #### Scenario: Model-tag mismatch does not trigger an FTS/graph rebuild
 
@@ -620,7 +598,7 @@ component, because only one backend existed.)
 #### Scenario: An existing Ollama-only store forces no re-embed on upgrade
 
 - GIVEN a `vectors.db` whose stored `embedding_model` tag is the legacy,
-  backend-unqualified `bge-m3#chunk-v1`, written before this change
+  backend-unqualified `bge-m3#chunk-v1`, written by an older version
 - WHEN `reindex()` runs after upgrading to a version of `openkos` that
   understands backend-qualified tags, with `backend: ollama` and the same
   `model_tag`
@@ -641,17 +619,13 @@ component, because only one backend existed.)
 `state.reindex.reindex()` MUST accept an explicit string parameter — the
 current run's EFFECTIVE embedding-model tag — used solely to compare against
 and update the stored `embedding_model` tag. For the `ollama` backend this
-value MUST remain exactly `cfg.embedding_model`, byte-identical to before
-this change. For the `openai-compatible` backend this value MUST
+value MUST be exactly `cfg.embedding_model`. For the `openai-compatible` backend this value MUST
 additionally identify the backend kind, in a form that cannot be confused
 with a bare Ollama-style model tag (which may itself contain `:`). A stored
 tag read back with no backend-kind qualifier MUST be treated as backend
 `ollama` (see the Embedding-Model Tag Gate requirement above). The
 `Embedder` Protocol MUST NOT gain a model-identity accessor — the tag flows
 only through this explicit param, never through the embed-only seam.
-(Previously: this parameter was described as "the current
-`cfg.embedding_model` value" unconditionally, since only the `ollama`
-backend existed and the tag never needed to carry a backend identity.)
 
 #### Scenario: CLI wires the configured model into reindex for the ollama backend
 
@@ -710,9 +684,6 @@ backend-kind qualifier MUST NOT, by itself, cause statement (2) to print
 when the currently configured backend is `ollama` — upgrading to a version
 that emits backend-qualified tags MUST NOT be reported as a backend change.
 Every branch MUST also report `embed_calls` over `embedded` documents.
-(Previously: this requirement enumerated three statements — model changed,
-composition changed, no tag stored — with no backend-changed statement,
-because only one backend existed.)
 
 #### Scenario: A composition-only bump reports composition, not model, change
 
@@ -757,8 +728,8 @@ because only one backend existed.)
 
 #### Scenario: A legacy tag upgraded to backend-qualified tags is never reported as a backend change
 
-- GIVEN a stored tag with no backend-kind qualifier (written before this
-  change), and a current run configured with `backend: ollama` and the same
+- GIVEN a stored tag with no backend-kind qualifier (written by an older
+  version), and a current run configured with `backend: ollama` and the same
   model name
 - WHEN `reindex` runs after the upgrade
 - THEN no forced re-embed occurs (per the Embedding-Model Tag Gate
@@ -766,12 +737,13 @@ because only one backend existed.)
   forces a re-embed, the summary never attributes it to a backend change
 
 (`purge`'s own pre-emptive quoting of this wording is `privacy-purge`'s
-requirement, not this one — see the `privacy-purge` delta's MODIFIED
+requirement, not this one — see `privacy-purge`'s
 "Deferred-Reembed Warning On Success" for that scenario, which asserts on
 `purge`'s output, not `reindex`'s.)
 
 #### Scenario: query command behavior is unchanged
 
-- GIVEN this change is applied
-- WHEN the existing `query` command runs
-- THEN its observable behavior is identical to before this change
+- GIVEN a workspace with a `vectors.db`
+- WHEN the `query` command runs
+- THEN its observable behavior does not depend on `reindex`'s backend-change
+  disclosure

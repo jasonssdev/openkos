@@ -44,17 +44,6 @@ the `curate` cost gate's reported count and the actual spend stay exact.
 Once a pair carries one of these resolution edges, it is not re-judged,
 even after a later edit to either concept's content — removing the
 resolution edge is what restores the pair to candidacy.
-(Previously: candidate generation admitted any edge with a non-`None`
-`relation_type`, with no type-specific exclusion; then, in an earlier
-delta, an explicit `derived_from` exclusion was added so provenance-mirror
-edges — typed `derived_from` by graph projection instead of remaining
-`None` — do not become contradiction candidates. This delta widens the
-exclusion further to cover the three resolution relation types, applied
-before the count and the cap. This is a deliberate change to shipped
-behavior, confirmed by the project owner: a pair joined by
-`reconciled_with`, `supersedes`, or `revises` is no longer offered as a
-contradiction candidate, even after a later edit to either concept — to
-re-judge such a pair, the resolution edge must be removed.)
 
 #### Scenario: Symmetric and multi-edge pairs judged once
 
@@ -172,7 +161,7 @@ building the configured chat client and injecting it into
 `find_contradictions`, performing zero bundle writes on the judging path
 (the ruling flags in "`--decline`, `--reopen` And `--declined` Manage
 Findings" are the only writers). Its only persistence is the findings store
-under `.openkos/` (#653) — the same "persisting a finding is not a bundle
+under `.openkos/` — the same "persisting a finding is not a bundle
 write" carve-out `curate`'s Contradictions stage holds. By default it MUST
 display only `CONTRADICTS` verdicts above the confidence threshold;
 `CONSISTENT` and `UNCERTAIN` MUST be hidden.
@@ -309,8 +298,6 @@ are not computable yet because embeddings are missing (`vectors.db` absent
 or empty), which additionally starves any embedding-sourced candidate
 edges. State 3 MUST use a message distinguishable from state 1. Every
 state MUST exit `0`, never crash.
-(Previously: any zero-candidate-pairs outcome produced the same single "no
-candidate pairs" message regardless of cause.)
 
 #### Scenario: No typed edges at all
 

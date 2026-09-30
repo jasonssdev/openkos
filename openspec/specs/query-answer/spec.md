@@ -6,7 +6,7 @@ Per design D2, staleness detection (bundle-manifest comparison) is
 **reindex's exclusive responsibility** — a properly-reindexed handle is
 always fresh at query time. `answer()`/`query` MUST NEVER recompute or
 compare the current bundle's manifest hash; a full-bundle walk at query time
-would reintroduce the exact per-query cost this slice removes. The only
+would reintroduce the exact per-query cost the persisted index avoids. The only
 degrade triggers at query time are an **absent** (`None`) handle or a
 persisted store that is **unopenable/corrupt**. Edit-staleness ("stale until
 the next `reindex`") is captured as reindex's responsibility in
@@ -75,7 +75,7 @@ bundle's manifest hash; that comparison is reindex's exclusive job.
   itself recompute or compare a manifest hash)
 - WHEN `answer(...)` is called
 - THEN `fts_index.search(question, limit=pool_limit)` is called and its hits
-  feed the fused list as before
+  feed the fused list
 
 ### Requirement: Lexical Retrieval Drives Answer Assembly
 
@@ -88,11 +88,6 @@ limit)` MUST retrieve FTS hits via the injected, read-only
 fused hit's concept body — in fused order, truncated to `limit` — into the
 LLM context, call `llm.chat(...)` exactly once, and return an `AnswerResult`
 whose `answer` is the LLM's returned text.
-(Previously: FTS retrieval built its own `:memory:` index internally via
-`fts.build_index(bundle_dir)` on every call; there was no injected FTS
-handle. Previously: the signature also took a `graph_index` handle, and the
-fused list was topped up by a graph channel before truncation — issue #434
-removed both.)
 
 #### Scenario: Matching concepts produce a cited answer
 
@@ -131,7 +126,6 @@ WHEN both `FtsIndex.search` and `vector_store.query` return no hits,
 `answer` MUST return an `AnswerResult` with empty `citations` and a stable,
 non-empty no-match message, and MUST NOT call `llm.chat`. A hit from either
 retriever alone MUST be sufficient to avoid this path.
-(Previously: zero hits was determined by FTS alone.)
 
 #### Scenario: No matching concepts found in either list
 
@@ -180,10 +174,6 @@ transient. The GENERIC transient `BackendError` raised while embedding the
 question is the ONLY exception to this rule: it is caught and handled by
 the Dense Retrieval Degrades To FTS-Only requirement instead, and MUST NOT
 propagate from `answer`.
-
-(Previously: only `BackendUnavailable` and `BackendModelNotFound` propagated
-from the question-embed step; `BackendEmbeddingDimensionMismatch` was
-swallowed by the generic transient `BackendError` degrade instead.)
 
 #### Scenario: FTS index unavailable
 
@@ -235,11 +225,6 @@ itself.
 history. This parameter MUST NOT be sourced from `openkos.config` inside
 the module — the caller (`run_query`) resolves it from configuration and
 passes it explicitly, keeping the module itself config-free.
-(Previously: `LLMBackend`, `Embedder`, and `VectorStore` were caller-injected;
-`fts_index` and `graph_index` did not exist as parameters — the module built
-its own FTS index and graph internally. Previously: `graph_index` was a
-fourth injected handle; issue #434 removed the stage that read it.)
-(Previously: `answer()` had no `revision_history` parameter.)
 
 #### Scenario: Module has no config dependency
 
@@ -263,8 +248,8 @@ correspond to a concept whose body was actually placed in the LLM context
 for that call. Concepts skipped under guarded re-read, or never retrieved,
 MUST NOT appear in `citations`. This is a necessary condition, not a
 sufficient one: `citations` is a SUBSET of the context-included concepts,
-narrowed by the attribution requirement below (issue #753). The
-`confidential` flag (issue #569) MUST be `True` exactly when the concept's
+narrowed by the attribution requirement below. The
+`confidential` flag MUST be `True` exactly when the concept's
 freshly re-read frontmatter EXPLICITLY carries the top sensitivity rank —
 transparency for the CLI's disclosure, mirroring the commit path's
 explicit-value-only posture, never the fail-closed gate's — and MUST
@@ -284,7 +269,7 @@ WHEN `sufficiency_check` is enabled, `answer` MUST ask one model call, over
 the SAME assembled context and question string synthesis would receive,
 whether the context contains an answer — and MUST return
 `no_match_cause == "insufficient_context"` with empty `citations` and
-`llm_invoked` `False`, WITHOUT calling synthesis, when it does not (#760).
+`llm_invoked` `False`, WITHOUT calling synthesis, when it does not.
 
 The check MUST be evidence-first: it asks for the sentence that answers and
 treats a refusal sentinel as the negative, rather than asking for a verdict.
@@ -325,7 +310,7 @@ question. The check MUST NOT run when no context was assembled.
 - THEN synthesis still runs
 
 `AnswerResult.sufficiency_degraded` MUST report that the check was REQUESTED
-and could not run (#764). It MUST be `False` when the check was not
+and could not run. It MUST be `False` when the check was not
 requested, and `False` when it ran and allowed the answer through: the flag
 means "could not run", so a notice built on it fires only when the configured
 guard is actually missing.
@@ -351,7 +336,7 @@ guard is actually missing.
 ### Requirement: Citations Are Decided By What The Answer Reports Using
 
 `answer` MUST determine `citations` from the reply, not from retrieval
-alone (issue #753). The context blocks presented to the model MUST be
+alone. The context blocks presented to the model MUST be
 numbered from 1, and the model MUST be instructed to close its reply with a
 single line naming the block numbers its answer draws on. `answer` MUST
 strip that line from the returned prose — `query --save` files the prose as
@@ -364,7 +349,7 @@ bundle rather than merely shown.
   blocks it named, in fused-rank order, and MAY be empty when the reply
   reports drawing on none of them.
 - `"absent"` — no line was present; `citations` is every context-included
-  concept, which is the pre-#753 behavior.
+  concept, which is the unattributed-answer fallback.
 - `"unparsed"` — a line was present but named no in-range block; the same
   fallback applies.
 
@@ -424,8 +409,7 @@ count before guarded re-read filtering), `llm_invoked` (bool),
 `no_match_cause` (`NoMatchCause = Literal["none", "empty_query", "zero_hits",
 "all_unreadable"]`, `"none"` on a successful answer, else whichever guard
 tripped), and `skip_notices` (`list[str]`, copied from `FtsIndex.skipped` for
-that build) — UNCHANGED from the existing contract. `AnswerResult` MUST
-additionally, and PURELY ADDITIVELY, carry: `dense_hit_count` (int, raw
+that build). `AnswerResult` MUST additionally carry: `dense_hit_count` (int, raw
 `vector_store.query` hit count), `fused_count` (int, number of distinct
 `concept_id`s in the FINAL fused, limit-truncated list), and
 `dense_degraded` (bool). `AnswerResult` MUST NOT carry any graph metadata:
@@ -444,16 +428,6 @@ order. A successor whose full reachable chain within the depth bound was
 shown in full MUST NOT appear in this list. WHEN `revision_history` is
 disabled (the default), `history_truncated_titles` MUST be `[]`, and
 `context_block_count` MUST be unaffected by this requirement.
-(Previously: those three fields existed — `graph_hit_count` the raw
-personalized-PageRank candidate pool, `graph_degraded` whether the graph
-stage could run, and `graph_contributed_count` how many reserved slots the
-graph filled with concepts absent from the FTS+dense pool. All three
-described a channel issue #434 removed; a field that could only ever report
-zero would read as a channel that contributed nothing, rather than one that
-is not there.)
-(Previously: `context_block_count` counted only ordinary hit blocks, and
-there was no `history_truncated_titles` field, because history blocks did
-not exist.)
 
 #### Scenario: Successful answer sets success metadata
 
@@ -508,10 +482,6 @@ retrieval — it MUST NOT call `fts_index.search`, `embedder.embed`, or
 distinguishable from `"zero_hits"`. This MUST be provable via test doubles
 (spies) on `fts_index`, `embedder`, and `vector_store`, each recording zero
 calls for this path.
-(Previously: short-circuited before internally-built FTS/dense/graph steps;
-there were no injected handles for a test spy to observe, so the strongest
-available assertion was that the LLM was never called. Previously: a fourth
-spy covered `graph_index`.)
 
 #### Scenario: Whitespace-only question touches no injected handle
 
@@ -528,32 +498,6 @@ sliced to `limit`, and feed that list unchanged into `_assemble_context`.
 It MUST NOT accept a `graph_index` parameter, MUST NOT import
 `openkos.graph` or `retrieval.graph_retrieve`, MUST NOT derive graph seeds
 from the fused list, and MUST NOT run any second retrieval stage.
-
-(Previously: `answer` derived SEEDS as the top `min(limit, 5)`
-`concept_id`s of an INITIAL `fuse(hits, vec_hits)`, read an injected,
-read-only, persisted `graph_index` handle, and ran personalized PageRank
-(`nx.pagerank`, `alpha=0.85`, over an undirected view) for a `graph_hits`
-pool of size `max(limit, 10)`. A FINAL
-`fusion.fuse_with_graph(hits, vec_hits, graph_hits, limit=limit)` then let
-that pool fill bounded reserved tail slots with concepts absent from the
-FTS+dense pool. The stage degraded rather than raised — an absent handle,
-absent seeds, or a PageRank exception yielded `graph_hits = []` and
-`graph_degraded=True`, while an edgeless-but-openable projection yielded
-`[]` and `graph_degraded=False` — and its ranking was deterministic across
-repeated calls.
-
-None of that was wrong as implemented; the stage was correct, bounded and
-measurable, which is precisely what allowed it to be judged. Two A/B runs of
-10 questions found 7 harmful, 3 neutral and 0 beneficial contributions,
-including evicting `sources/mcp-origin` from "When did MCP originate?" and
-`sources/10-mcp` from a question about which protocol BigQuery belongs to.
-Seeded PPR ranks by GLOBAL CENTRALITY, not by relevance to the question, and
-the reserved slot always costs a base hit. Growing the corpus changes which
-central node wins the slot and nothing else. The typed graph is retained for
-contradiction-candidate derivation, which reads typed edges rather than
-centrality; a future graph channel would need a different ranking function —
-traversal from the question's own matched concepts — proposed and measured
-on its own terms.)
 
 #### Scenario: The graph plays no part in the answer
 
@@ -595,10 +539,6 @@ unswallowed to the caller so `query` reaches its existing fatal exit-1
 ladder. `FtsUnavailable` and any `BackendError`-family exception raised by
 `llm.chat` (the LLM completion path, not the question-embed step) also
 remain unaffected and continue to propagate unchanged.
-
-(Previously: only `BackendUnavailable` and `BackendModelNotFound` were
-excluded from the degrade; `BackendEmbeddingDimensionMismatch` set
-`dense_degraded=True` and produced a silent FTS-only answer.)
 
 #### Scenario: Cold store (never reindexed) degrades cleanly
 
@@ -700,8 +640,8 @@ per document, never per chunk.
 
 - GIVEN an answer citing a chunked document
 - WHEN `query --save` files provenance
-- THEN the provenance list is `concept_id`s exactly as before chunking,
-  with no chunk identity present
+- THEN the provenance list is `concept_id`s only, with no chunk
+  identity present
 
 ### Requirement: The Sensitivity Re-Check Still Runs Before Any Chunk's Content Reaches The LLM
 
@@ -1015,11 +955,6 @@ unresolved event date. An event date is resolved by reading only the
 predecessor's own already-admitted `provenance:` entries and, at most one
 hop further, the `provenance:` of any non-Source entry among them; it MUST
 NOT depend on any read outside that bound.
-(Previously: this requirement said the label "MUST NEVER substitute the
-concept's ingest timestamp for an unresolved event date," naming only the
-OKF v0.1 `timestamp` field; OKF v0.2 records that value as `generated.at`,
-with legacy `timestamp` still read on an unmigrated document, and the
-prohibition covers both.)
 
 The successor's own label MUST remain byte-identical to its non-history
 label; the history relationship is carried only on the predecessor's block.
@@ -1117,7 +1052,7 @@ of that successor's history for this pool MUST be dropped instead, and the
 successor's share reverts to its unchanged outer share. A dropped group's
 history blocks MUST NOT appear in the prompt or in citations.
 
-The existing excerpt-and-omission disclosure (issue #882) MUST apply
+The existing excerpt-and-omission disclosure MUST apply
 unchanged to a history block within a group that is not dropped as a whole:
 a history block that must be excerpted to fit its sub-share MUST be marked
 partial exactly like a hit, and a history block left zero room within an
@@ -1191,7 +1126,7 @@ MUST be `"superseded"` for a citation produced from a `supersedes` history
 block, `"refined"` for one produced from a `revises` history block, and
 `None` for every ordinary hit citation.
 
-`_split_attribution` and the issue #753 subset rule MUST apply to history
+`_split_attribution` and the attribution subset rule MUST apply to history
 citations unchanged: a history block is cited only when the model's
 attribution line names its block number, `citations` remains a subset of
 the sent blocks narrowed by what the reply reports using, and the
@@ -1227,7 +1162,7 @@ history) applies identically to history blocks.
 defaulting to `None`. WHEN `progress` is `None` (the default), `answer()`'s
 behavior, return value, and every side effect (including its calls to
 `fts_index`, `vector_store`, `embedder`, and `llm`) MUST be byte-identical
-to its contract before this parameter existed. This parameter MUST NOT be
+to a call made without the parameter. This parameter MUST NOT be
 sourced from `openkos.config`; the module remains config-free.
 
 WHEN a `progress` callable is supplied, `answer()` MUST invoke it with
@@ -1248,7 +1183,7 @@ order.
 - GIVEN a caller invokes `answer(...)` without a `progress` argument
 - WHEN it runs
 - THEN its return value and its calls to every injected dependency are
-  unchanged from `answer()`'s contract before this parameter existed
+  identical to a call made without the parameter
 
 #### Scenario: A supplied callback observes the four phases in order
 

@@ -57,14 +57,6 @@ workspace's own index file already exists on disk, the corresponding check
 still reports `pass`, since that observation does not depend on the
 bundle-readable check at all.
 
-(Previously: these four sites let their exception propagate uncaught,
-discarding every already-accumulated `CheckResult` and aborting the report
-before it rendered. Previously, a raising bundle-readable check also left
-the workspace-vector-index-present and workspace-fts-present checks
-reporting `fail` with an `openkos reindex` remediation, because their
-`skip`-versus-`fail` decision silently defaulted to treating the unread
-bundle as non-empty.)
-
 #### Scenario: Healthy workspace prints all applicable checks
 
 - GIVEN an initialized workspace, valid config, reachable Ollama, both
@@ -152,8 +144,7 @@ remediation wording: WHEN `shutil.which("ollama")` returns `None`, the
 remediation MUST state that no `ollama` binary was found on PATH and point
 to https://ollama.com for installation, and MUST NOT claim "Ollama is not
 installed"; WHEN a binary is found but the endpoint still refuses the
-connection, the remediation MUST point to `ollama serve`, unchanged from
-prior behavior; WHEN the signal cannot be read confidently, the remediation
+connection, the remediation MUST point to `ollama serve`; WHEN the signal cannot be read confidently, the remediation
 MUST cover both remedies rather than asserting either state as certain. For
 the `openai-compatible` backend, `doctor` MUST NOT probe for or reference
 `ollama`, `shutil.which("ollama")`, `ollama serve`, or `ollama pull` in any
@@ -249,10 +240,6 @@ known critical failure remains the dominant, already-actionable signal; and
 three CRITICAL ones stays informational: a `fail` on any of them, alone, MUST NOT cause a non-zero
 exit, and a `not-run` on any of them, alone (with no critical failure),
 MUST NOT push the exit code past `2`.
-(Previously: exit was binary — `0`/`1` — driven solely by
-`any(status == "fail" and critical)`; no outcome existed for a check whose
-read raised, because raising aborted the process before an exit code was
-ever chosen.)
 
 #### Scenario: Informational-only failure still exits zero
 
@@ -375,7 +362,7 @@ Ollama-reachable check.
 ### Requirement: Task-Models-Installed Check
 
 `doctor` MUST report whether every per-task model the workspace resolves
-(`models:` entries and packaged `DEFAULT_TASK_MODELS` defaults, #515/#513)
+(`models:` entries and packaged `DEFAULT_TASK_MODELS` defaults)
 is installed, using the same tag-normalized `model_tag_matches()`
 comparison and `[PASS]`/`[FAIL]`/`[SKIP]` + remediation pattern as the chat
 model-installed check.
@@ -468,9 +455,6 @@ check MUST report `not-run` rather than either, and MUST NOT print a
 `openkos reindex` remediation about a bundle nobody could read. Unlike a
 `fail` on this check, a `not-run` DOES contribute to the incomplete exit
 code `2`, because the report could not be completed.
-(Previously: this requirement described only `pass`/`fail`/`skip`, and an
-unread bundle left this check reporting `fail` with a `reindex`
-remediation derived from a value that was never measured.)
 
 #### Scenario: Present workspace vectors.db passes
 
@@ -515,7 +499,7 @@ remediation derived from a value that was never measured.)
 
 `doctor` MUST report whether the WORKSPACE `.openkos/fts.db`
 (`layout.fts_db_path`) exists on disk, mirroring the Workspace Vector Index
-Presence Check's exact shape (issue #553: `doctor` passed every check while
+Presence Check's exact shape (`doctor` passed every check while
 the workspace's first query was about to answer without lexical retrieval,
 because nothing ever looked at `fts.db`). A `fail` on this check MUST stay
 informational (an absent index alone MUST NOT affect the exit code), it
@@ -528,9 +512,6 @@ Mirroring the Workspace Vector Index Presence Check exactly, this check
 MUST report `not-run` when the bundle-readable check reported `not-run`,
 MUST NOT print a `openkos reindex` remediation in that case, and its
 `not-run` DOES contribute to the incomplete exit code `2`.
-(Previously: this requirement described only `pass`/`fail`/`skip`, and an
-unread bundle left this check reporting `fail` with a `reindex`
-remediation derived from a value that was never measured.)
 
 #### Scenario: Present workspace fts.db passes
 
@@ -604,8 +585,6 @@ every other applicable check still runs and prints its own result. No new
 check-line shape is introduced by this requirement; the one exception is the
 single leading version banner line (see "Doctor Prints A Leading Version
 Banner"), which precedes the checks and is not itself a check line.
-(Previously: the requirement stated no new line shape at all was introduced,
-with no carve-out for a non-check banner line.)
 
 #### Scenario: Non-str model value fails cleanly instead of crashing
 
@@ -641,14 +620,12 @@ with no carve-out for a non-check banner line.)
   entire output is the single leading `openkos {version}` banner preceding
   all checks
 
-### Requirement: Doctor Behavior Unchanged By list_models() Contract Widening
+### Requirement: Doctor Model-Installed Checks Depend Only On Tag Matching
 
 Doctor's chat-model-installed and embedding-model-installed checks MUST
-continue to report the exact same pass/fail outcomes as before
-`list_models()`'s return contract widened to include per-model family.
-Outcomes MUST depend solely on tag-normalized matching (`model_tag_matches`)
-against the returned entries' tags, unaffected by the added family field —
-this is a no-behavior-change requirement guarding the refactor.
+report outcomes that depend solely on tag-normalized matching
+(`model_tag_matches`) against the tags of the entries `list_models()`
+returns, unaffected by the per-model family field those entries also carry.
 
 #### Scenario: Configured model present in installed tags still passes
 
@@ -657,7 +634,7 @@ this is a no-behavior-change requirement guarding the refactor.
   `:latest`-normalized)
 - WHEN `openkos doctor` runs
 - THEN the chat model-installed check prints `[PASS]`, identical to its
-  outcome before the contract change
+  outcome for a plain tag list
 
 #### Scenario: Configured model absent still fails with pull remediation
 
@@ -665,8 +642,8 @@ this is a no-behavior-change requirement guarding the refactor.
   shape, and no entry matches the configured chat model tag
 - WHEN `openkos doctor` runs
 - THEN the chat model-installed check prints `[FAIL]` with a pull
-  remediation naming the configured tag, identical to its outcome before
-  the contract change
+  remediation naming the configured tag, identical to its outcome for
+  a plain tag list
 
 #### Scenario: Embedding-model check outcome also unchanged
 
@@ -730,9 +707,8 @@ follow the existing `[PASS]`/`[FAIL]`/`[SKIP]` +
 `openkos merge`/`openkos unmerge` on the affected survivor — the
 operations whose recovery pass (`bundle_ledger.recover`) actually
 resolves a pending marker — and MUST NOT name the repair verb, whose own
-torn-write gate refuses outright while any marker is pending (#603: the
-pre-fix remediation named `openkos repair` and sent the operator in a
-circle). This check MUST NOT write, modify, or delete any file —
+torn-write gate refuses outright while any marker is pending (naming
+it would send the operator in a circle). This check MUST NOT write, modify, or delete any file —
 `doctor` stays read-only; it detects and advises, it never repairs.
 
 #### Scenario: A workspace with no pending markers passes
@@ -771,7 +747,8 @@ and advises, it never repairs.
 
 A `[FAIL]` line's remediation MUST ALWAYS name the repair verb (for a
 ledger that is merely unmigrated, not corrupted) and MUST ALWAYS state
-that reversibility of merges made before this fix is not guaranteed. The
+that reversibility of merges made while the ledger was embedded is not
+guaranteed. The
 second remedy is conditional on the workspace actually having one, because
 the auto-commit that would create it is best-effort and silently no-ops
 with no repository, no configured git identity, or any git error:
@@ -939,8 +916,8 @@ precedence. This line is informational and MUST NOT affect the exit code.
 WHEN the resolution source is the packaged default, `doctor` MUST NOT print
 this endpoint-and-source line at all: the reachable check's detail MUST
 remain byte-identical to its pre-existing default-path wording (e.g.
-`12 models`), so a user who never sets `base_url` or `OLLAMA_HOST` sees no
-change in `doctor`'s output from this change.
+`12 models`), so a user who never sets `base_url` or `OLLAMA_HOST` sees only
+that default-path output.
 
 #### Scenario: The effective endpoint and its source are shown
 

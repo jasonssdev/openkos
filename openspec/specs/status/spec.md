@@ -85,9 +85,6 @@ newest-first.
 frontmatter, missing/empty `type`) by reusing `check_conformance`, under a
 "needs attention" section. Findings MUST be informational: their presence
 MUST NOT cause a non-zero exit.
-(Previously: named "Needs-Attention via §9 Conformance" and cited OKF §9
-conformance; OKF v0.2 renumbers the conformance section to §11 (v0.2
-§13.1); the underlying `check_conformance` behavior is unchanged.)
 
 #### Scenario: No conformance issues
 - GIVEN a bundle where every non-reserved file passes `check_conformance`
@@ -107,9 +104,6 @@ conformance; OKF v0.2 renumbers the conformance section to §11 (v0.2
 §11 conformance findings. Each surfaced entry MUST name the referring
 document and the missing target id. Findings MUST be informational: their
 presence MUST NOT cause a non-zero exit.
-(Previously: cited "§9 conformance findings"; OKF v0.2 renumbers the
-conformance section to §11 (v0.2 §13.1); the folding behavior is
-unchanged.)
 
 #### Scenario: Dangling reference is surfaced under needs attention
 - GIVEN a bundle containing a concept document whose `relations:` target or
@@ -146,10 +140,6 @@ count intentionally differs from — and is normally lower than — the count
 `openkos duplicates` itself reports, once near-match groups exist). This
 check MUST remain read-only and informational: its presence MUST NOT cause
 a non-zero exit.
-(Previously: `status` consulted `find_candidates` and filtered its result to
-the exact-title tier, paying for the pairwise near-match pass over every
-same-type document and then discarding every near-match group it produced.
-The surfaced line is unchanged; only the entry point is.)
 
 #### Scenario: No duplicate groups
 
@@ -177,7 +167,7 @@ The surfaced line is unchanged; only the entry point is.)
   command still prints `Nothing needs attention.`, and it exits 0
 - AND an adjacent informational line discloses that similar-title
   candidates are not counted here, naming `openkos duplicates` as the full
-  scan (issue #593: without the disclosure, a near-match backlog reads as
+  scan (without the disclosure, a near-match backlog reads as
   an empty one; widening the count itself was measured and rejected — the
   pairwise near-match pass costs seconds at hundreds of documents, which
   `status` must not pay)
@@ -276,10 +266,9 @@ informational: its presence MUST NOT cause a non-zero exit.
 `openkos status` MUST fold `lint`'s `unextracted` findings into its "needs
 attention" section, naming the same retry command `lint` computes. This
 requirement is deliberately spec-level, not an implementation detail: `status`
-already runs four bundle walks (`main.py` docstring, consolidation tracked
-separately under #195) and already folds `lint_check.collect_docs()`'s
+already runs four bundle walks (`main.py` docstring) and already folds `lint_check.collect_docs()`'s
 dangling-reference findings into `needs_attention` without a fifth walk
-(precedent: #216, where a repeated compute-then-discard walk was the bug).
+(a repeated compute-then-discard walk is the bug this avoids).
 `status` MUST consume the SAME in-memory `docs` list from the `collect_docs()`
 call it already makes — it MUST NOT perform a second `collect_docs()` call or
 any new `rglob`. Only `failed`-sourced `unextracted` findings reach
@@ -307,11 +296,11 @@ findings.
   findings
 - WHEN the unextracted-source check also runs
 - THEN it reuses that same in-memory `docs` list and `status` still performs
-  no more bundle walks than before this change
+  no additional bundle walks
 
 ### Requirement: Needs-Attention Surfaces Unjudged Extractions
 
-`openkos status` MUST fold `lint`'s `unjudged` findings (issue #772: a
+`openkos status` MUST fold `lint`'s `unjudged` findings (a
 Source whose `extraction_notice` carries a judge-degrade token) into its
 "needs attention" section, naming the same retry command `lint` computes.
 The check MUST consume the SAME in-memory `docs` list from the single
@@ -336,7 +325,7 @@ distinct entries, reusing the same in-memory `docs` list from the
 `below-source-sensitivity` entry MUST name the descendant, its Source, and
 both sensitivity levels; each surfaced `multi-source-uncovered` entry MUST
 name the descendant and every cited concept id. Since ADR-0016 it MUST NOT
-be labeled as not covered by `backfill-sensitivity`, because that sweep now
+be labeled as not covered by `backfill-sensitivity`, because that sweep
 repairs it. Findings MUST be informational: their presence MUST NOT cause a
 non-zero exit.
 
@@ -370,7 +359,7 @@ non-zero exit.
 - GIVEN `status` already calls `lint_check.collect_docs()` once
 - WHEN the below-Source and multi-source-uncovered checks also run
 - THEN they reuse that same in-memory `docs` list and `status` performs no
-  more bundle walks than before this change
+  additional bundle walks
 
 ### Requirement: Needs-Attention Surfaces Unbacked Provenance Claims
 
@@ -397,7 +386,7 @@ exit, and `status` MUST NOT repair the offending relation.
 - GIVEN `status` already calls `lint_check.collect_docs()` once
 - WHEN the unbacked-provenance check also runs
 - THEN it reuses that same in-memory `docs` list and `status` performs no
-  more bundle walks than before this change
+  additional bundle walks
 
 ### Requirement: Needs-Attention Surfaces Persisted Contradiction Findings
 

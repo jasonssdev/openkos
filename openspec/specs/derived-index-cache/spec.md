@@ -15,7 +15,7 @@ Per-doc incremental FTS/graph updates (graph edges are cross-document,
 making safe incremental maintenance unsafe); caching personalized PageRank
 results (PPR is per-query seed-dependent, not cacheable — only the
 query-independent graph BUILD is cached); an `embedding_model` tag in
-`vector_meta` (deferred to its own slice); any lazy auto-refresh at query
+`vector_meta` (out of scope here); any lazy auto-refresh at query
 time (query never writes).
 
 ## Requirements
@@ -44,7 +44,7 @@ written ONLY by `reindex`, surviving across process exit — mirroring
 
 The cache key MUST be a digest computed over the sorted set of
 `(concept_id, content_hash)` pairs for every discovered document in the
-bundle, stored in a meta table. Reusing the shipped Slice 2b `content_hash`
+bundle, stored in a meta table. Reusing the `content_hash`
 primitive, ANY added, edited, or removed document MUST change this digest.
 
 #### Scenario: Unchanged bundle reuses the cached index

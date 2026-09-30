@@ -3,9 +3,9 @@
 ## Note
 
 The existing Non-Goals section defers "persistence of the index
-(`.openkos/fts.db`, `.gitignore` entries, locks)" to MVP-2. This slice IS
-that MVP-2 work: persistence is now in scope via the ADDED requirement below,
-written only by `reindex`. The in-memory `build_index(bundle_dir)` contract
+(`.openkos/fts.db`, `.gitignore` entries, locks)" to MVP-2. Persistence
+is in scope via the persisted-index requirement below, written only by
+`reindex`. The in-memory `build_index(bundle_dir)` contract
 itself is unchanged for any caller that does not go through `reindex`.
 
 ## Purpose
@@ -14,7 +14,7 @@ itself is unchanged for any caller that does not go through `reindex`.
 pure library module that builds an in-memory SQLite FTS5 index over the
 compiled bundle and exposes a `search()` surface returning OKF concept IDs.
 It has no CLI command of its own; direct calls to `build_index(bundle_dir)`
-still have no on-disk effect, but `reindex` now persists this index to
+still have no on-disk effect, but `reindex` persists this index to
 the workspace state directory with a `.gitignore` entry (see the Note
 below).
 
@@ -34,7 +34,7 @@ any CLI command or workspace-visible artifact.
 The system MUST provide a persistence path that writes the FTS5 projection
 to on-disk SQLite storage under `.openkos/`, invoked ONLY by `reindex`,
 `purge`'s post-expunge best-effort rebuild, and `ingest`'s end-of-run build
-(issue #553) — never by any read path — using the SAME document set and
+— never by any read path — using the SAME document set and
 row/identity rules as `build_index` (one row per non-reserved document,
 keyed by OKF concept ID, reserved filenames excluded, graceful degradation
 on bad files). A stored bundle-manifest hash MUST gate whether the
@@ -75,15 +75,9 @@ Calling `build_index(bundle_dir)` directly (the in-memory library entry
 point) MUST NOT touch disk — no `.openkos/` directory, `fts.db` file, or
 `.gitignore` entry is created by that call alone, and the index exists only
 in memory for the caller's session. Disk persistence exists ONLY via the
-dedicated on-disk writer path invoked by `reindex` (see the new persisted-index
+dedicated on-disk writer path invoked by `reindex` (see the persisted-index
 requirement above); ad-hoc, non-`reindex` callers of `build_index` observe no
-change from this slice.
-(Previously: `build_index` had no on-disk persistence concept at all; this
-clarifies the in-memory call and the new `reindex`-only persistence path
-remain distinct. The file this spec named was also `openkos.db` throughout --
-the single-store consolidation `docs/architecture.md` records as an open
-option no change has adopted. The file `reindex` actually writes is
-`config.py`'s `fts_db_path`, `.openkos/fts.db`; the obligation is unchanged.)
+on-disk effect.
 
 #### Scenario: Index never touches disk
 
@@ -186,17 +180,16 @@ that a query matching a tag value returns that document as a hit.
 ### Requirement: No CLI Surface, No Lifecycle Change
 
 This module MUST NOT introduce a CLI command or any user-invocable entry
-point, and MUST NOT alter `forget` behavior. It began as a dormant library
-dependency; the commands that now legitimately call it are `query`
-(add-query-command), `reindex`/`purge` (persistence and rebuild), and
-`ingest`'s end-of-run build (issue #553) — `forget` remains outside its
+point, and MUST NOT alter `forget` behavior. The commands that legitimately call it are `query`
+(retrieval), `reindex`/`purge` (persistence and rebuild), and
+`ingest`'s end-of-run build — `forget` remains outside its
 reach.
 
 #### Scenario: forget behavior is unchanged
 
 - GIVEN this module exists in the codebase
 - WHEN `openkos forget` runs
-- THEN its observable behavior is identical to before this change
+- THEN its observable behavior does not depend on this module
 
 ### Requirement: Architecture Doc States Layering As Convention
 
@@ -205,12 +198,12 @@ state that canonical/derived separation is a followed convention, not an
 implemented CI guard, until an automated guard (e.g. import-linter) is
 actually wired for the derived layer.
 
-#### Scenario: Doc no longer claims CI enforcement it lacks
+#### Scenario: Doc does not claim CI enforcement it lacks
 
 - GIVEN `docs/architecture.md` at the layering-convention line (~112)
-- WHEN a reader reviews that line after this change
+- WHEN a reader reviews that line
 - THEN it describes layering as a followed convention and states that an
-  automated guard arrives with the derived layer, and no longer claims CI
+  automated guard arrives with the derived layer, and does not claim CI
   already enforces it
 
 ### Requirement: `CREATE VIRTUAL TABLE` Failure Is Discriminated By Errorcode
@@ -230,7 +223,7 @@ Mirrors `query`) can catch it.
 
 - GIVEN `sqlite3`'s `fts5` module is not compiled into the running SQLite
 - WHEN `_populate_docs_table` attempts `CREATE VIRTUAL TABLE`
-- THEN `FtsUnavailable` is raised, unchanged from before this change
+- THEN `FtsUnavailable` is raised
 
 #### Scenario: A lock error at CREATE VIRTUAL TABLE is not mislabeled as FtsUnavailable
 

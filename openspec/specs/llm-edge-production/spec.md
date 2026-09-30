@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`llm-edge-production` is slice 2b of the typed-graph work: a read-only CLI
+`llm-edge-production` covers LLM edge-type suggestion: a read-only CLI
 verb that reads existing UNTYPED body-link edges (`relation_type = NULL`)
 from the derived graph projection, asks the LLM to suggest a relation
 `type` + rationale for each, and instructs the human to confirm the write
@@ -27,21 +27,17 @@ graph projection and, for each, MUST print an LLM-suggested relation
 file, index, or log. Every printed suggested type MUST be a value accepted
 by the existing `validate_relation_type` check. The candidate set MUST be
 restricted to untyped edges only; edges that already carry a `relation_type`
-MUST NOT be listed as suggestion candidates. Because graph projection now
+MUST NOT be listed as suggestion candidates. Because graph projection
 synthesizes `relation_type = "derived_from"` for provenance-mirror edges
 (edges whose target is a member of the source document's `provenance:`
 frontmatter list), those edges carry a `relation_type` and MUST NOT be
 listed as candidates, and MUST NOT trigger an LLM call.
-(Previously: the candidate set excluded only edges typed via `relations:`
-frontmatter; it now also excludes edges typed by provenance-mirror
-projection synthesis, with no code path distinction required since both
-sources populate the same `relation_type` field read by this requirement.)
 
 An ASYMMETRIC suggested type (`relations.ASYMMETRIC_RELATION_TYPES`) MUST
 carry the `(direction model-suggested, unverified)` suffix on the listing
-line AND on `--apply`'s preview line and `[y/N]` prompt (issue #778): the
+line AND on `--apply`'s preview line and `[y/N]` prompt: the
 wording is the documented contract (`docs/testing.md`, Known issues) and
-#624 already established it on `curate`'s Structure stage -- one surface
+`curate`'s Structure stage already carries it on `curate`'s Structure stage -- one surface
 spelling the caveat while the surface that most invites bulk application
 stayed silent was the defect. The spelling MUST come from one shared
 helper so the surfaces cannot drift. A symmetric type MUST NOT carry the
@@ -49,7 +45,7 @@ direction suffix.
 
 The LEAST-SPECIFIC type (`edge_typing.LEAST_SPECIFIC_RELATION_TYPE`) MUST
 carry `(connected; the documents do not say how)` on the SAME three
-surfaces (issue #802). It is the rubric's honest answer when no specific
+surfaces. It is the rubric's honest answer when no specific
 type holds, so its rationale routinely explains why the pair is NOT any
 of the specific types -- and the operator was shown that explanation under
 a bare type label, with nothing stating what accepting it asserts. The
@@ -58,7 +54,7 @@ answer is correct and only the claim it writes is weaker than a bare label
 implies.
 
 Both caveats MUST come from ONE shared helper. Two helpers would let a
-surface carry one and miss the other, which is the #778 defect one caveat
+surface carry one and miss the other, which would reintroduce the defect one caveat
 at a time. The two classes MUST stay disjoint -- the least-specific type
 is symmetric -- and that disjointness MUST be pinned by a test, so a
 future asymmetric least-specific type cannot silently take whichever
@@ -111,14 +107,14 @@ branch is written first.
 
 - GIVEN a bundle whose only body links are provenance-mirror edges (every
   link target is a member of its source document's `provenance:`
-  frontmatter list, now typed `derived_from` by graph projection)
+  frontmatter list, typed `derived_from` by graph projection)
 - WHEN the suggestion verb runs
 - THEN it prints zero candidate edges, makes zero LLM calls, and reports
   honestly that there is nothing to type
 
 #### Scenario: A genuine untyped concept-to-concept edge is still surfaced
 
-- GIVEN a bundle containing one provenance-mirror edge (now typed
+- GIVEN a bundle containing one provenance-mirror edge (typed
   `derived_from`) and one genuine untyped concept-to-concept edge whose
   target is not a member of its source's `provenance:` list
 - WHEN the suggestion verb runs
@@ -156,7 +152,7 @@ generic `BackendError` handler, print to stderr a
 message that states the backend is not responding, and additionally points
 to `openkos doctor` to diagnose the environment, then exit 1 with zero
 writes to any bundle file. For `ollama`, the message MUST tell the user to
-start it with `ollama serve`, byte-identical to before this change. For
+start it with `ollama serve`, byte-identical across runs. For
 `openai-compatible`, the message MUST instead advise verifying the
 configured server is running at its endpoint, with no `ollama serve`
 reference. The `BackendModelNotFound` and generic `BackendError` branches,
@@ -195,14 +191,14 @@ derived `graph` layer. The suggestion verb, as derived/CLI code, MAY read
 
 #### Scenario: Canonical layer has no graph import
 
-- GIVEN the codebase after this change
+- GIVEN the codebase
 - WHEN `model`, `bundle`, and `state` modules are inspected for imports
 - THEN none of them import from the `graph` package
 
 ### Requirement: Human-In-The-Loop Write Path Unchanged
 
 Writing an accepted suggestion MUST go only through the existing `relate`
-verb, unmodified by this change: `relate` MUST retain its fail-closed
+verb, which is not modified by suggestion writing: `relate` MUST retain its fail-closed
 source/target validation, containment checks, idempotency, and confirm
 gate (Phase A compute-no-write, preview, confirm).
 
@@ -315,7 +311,7 @@ value at which the next batch starts.
 
 `openkos suggest-relations` MUST persist every freshly computed
 suggestion to the `edge_suggestions` tables of `.openkos/findings.db`
-(issue #799 -- `state.edge_suggestions`, the findings store's third
+(`state.edge_suggestions`, the findings store's third
 tenant, so `purge`'s wholesale deletion and `forget`'s sweep cover it
 with no new privacy surface), alongside one content-hash digest per
 endpoint computed at persist time. `curate`'s Structure stage MUST read

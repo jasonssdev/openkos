@@ -106,7 +106,7 @@ same list MUST NOT add further score.
 ### Requirement: Filed Syntheses Are Down-Weighted In The Ranking
 
 An id under `insights/` (a filed synthesis — model output over an earlier
-bundle state, issue #649) MUST have its accumulated fused score scaled by
+bundle state) MUST have its accumulated fused score scaled by
 `0.5` before ordering. The scaling is part of the ranking function itself,
 not a layer over it: purity, determinism, and the two-list contract are
 unchanged, and a fuse whose inputs contain no `insights/` id MUST order
@@ -157,38 +157,10 @@ function, a `GRAPH_RESERVED_SLOTS` constant, or a `GraphHit` dataclass, and
 MUST NOT reserve any slot of the final top-`limit` for a channel other than
 those two lists.
 
-(Previously: `fuse_with_graph(fts_hits, vec_hits, graph_hits, *, limit)`
-layered a seeded personalized-PageRank list on top of the two-list base,
-additively — it could contribute only `concept_id`s absent from the FTS+dense
-pool, into `min(GRAPH_RESERVED_SLOTS, limit // 2)` reserved slots at the
-tail, and could neither promote nor demote a concept the base already
-contained. That shape was itself the fix for an even earlier design, where
-the graph was folded into the same `Σ 1/(K_RRF + rank)` sum and reshuffled
-what FTS and dense had already found without ever contributing a concept of
-its own — 0 in 26 promotions over 10 questions.
-
-Bounding the channel is what made it countable, and counting it is what
-ended it. Two A/B measurements, 10 questions each, taken with the channel
-already bounded: on a 21-node/23-edge graph every question's ranking changed
-and the SAME concept, `concepts/document-skills`, was the contribution on 6
-of 10 questions — MCP origin, BigQuery, agent building and productionizing
-alike. On a 27-node/38-edge graph the concentration fell to 4 of 10 across 7
-distinct concepts, but per-question judgement was 7 harmful, 3 neutral, 0
-beneficial. Asked "When did MCP originate?", the graph evicted
-`sources/mcp-origin` — the document containing the answer — to insert
-`concepts/document-skills`; it did the same to `sources/10-mcp` on a question
-about which protocol BigQuery belongs to.
-
-THE DEFECT IS THE RANKING FUNCTION, NOT THE TYPED GRAPH. Seeded personalized
-PageRank ranks by GLOBAL CENTRALITY, a property of the corpus rather than of
-the question. A larger graph changes WHICH central node wins the reserved
-slot; it does not stop the slot costing a base hit, and it does not turn
-centrality into relevance. The typed graph is deliberately retained
-elsewhere — contradiction-candidate derivation reads typed edges and caught a
-planted contradictory pair at confidence 1.00. What would justify a graph
-channel returning is a DIFFERENT ranking function — traversal from the
-question's own matched concepts along typed edges — proposed and measured on
-its own terms, never as a revert of this requirement.)
+The typed graph is retained elsewhere — contradiction-candidate derivation
+reads typed edges — but it is not a retrieval channel: seeded personalized
+PageRank ranks by global centrality, a property of the corpus rather than of
+the question, so a reserved slot for it always costs a real FTS or dense hit.
 
 #### Scenario: Fusion exposes no graph surface
 

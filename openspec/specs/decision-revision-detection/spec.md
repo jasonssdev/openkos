@@ -289,7 +289,7 @@ itself.
   is `REVERSES` or `REFINES`
 - WHEN the finding is classified
 - THEN it is NOT an untyped change, and its relation type is inferred
-  exactly as before (`supersedes` for `REVERSES`, `revises` for `REFINES`)
+  by the standard mapping (`supersedes` for `REVERSES`, `revises` for `REFINES`)
 
 #### Scenario: An untyped change remains actionable
 
@@ -347,10 +347,6 @@ embedding calls to produce that count.
   count, and no judge LLM call and no embedding call has yet been made
 
 ### Requirement: One Exact Cost Gate Before Pair Judgment
-
-(Previously: "Two Sequential Exact Cost Gates" — a subject-pass gate
-followed by a pair-judgment gate. The subject pass is not built in
-production, so the verb has exactly one gate.)
 
 `openkos revisions` MUST gate proceeding past the pair-judgment phase — the
 one LLM-spending phase in the run — behind confirmation. Candidate

@@ -73,13 +73,10 @@ Opening the store MUST run `CREATE VIRTUAL TABLE IF NOT EXISTS vectors USING
 vec0(embedding float[1024], concept_id TEXT, chunk_index INTEGER,
 content_hash TEXT)`, a second `vec0` table `doc_vectors(embedding
 float[1024], concept_id TEXT)` holding one derived row per document, and the
-companion `vector_meta` table keyed for `content_hash` lookups, now
-additionally carrying `chunk_count INTEGER`. `concept_id` in `vectors` MUST
+companion `vector_meta` table keyed for `content_hash` lookups and
+carrying `chunk_count INTEGER`. `concept_id` in `vectors` MUST
 remain the document id and MUST NEVER be a composite key encoding chunk
 position. Running schema creation twice MUST be a no-op.
-(Previously: `vectors` had no `chunk_index` column and stored exactly one
-row per `concept_id`; there was no `doc_vectors` table; `vector_meta` had no
-`chunk_count` column.)
 
 #### Scenario: Re-opening an existing (post-migration) store is a no-op migration
 
@@ -130,15 +127,15 @@ hex digest for given bytes/text, for later use as an invalidation key.
 
 ### Requirement: No CLI Surface, No Init-Time Side Effect
 
-This module MUST NOT be invoked by `init` or any CLI command in this slice,
+This module MUST NOT be invoked by `init` or any CLI command,
 and `WorkspaceLayout` gaining `openkos_dir`/`vectors_db_path` MUST NOT change
 `init`'s file-creation behavior.
 
 #### Scenario: init behavior is unchanged
 
-- GIVEN this module and the new `WorkspaceLayout` properties exist
+- GIVEN this module and the `WorkspaceLayout` properties exist
 - WHEN `openkos init` runs
-- THEN it creates the same files as before, and no `.openkos/` directory or
+- THEN it creates only its usual files, and no `.openkos/` directory or
   `vectors.db` is created
 
 ### Requirement: Vector Upsert Data Flow
@@ -171,9 +168,6 @@ over-fetch `k × max(chunk_count)` rows from `vectors`, keep each
 the boundary between two different documents' rows MUST be broken
 deterministically in Python by `(distance, concept_id)`, never left to
 vec0's insertion-order fallback.
-(Previously: `query` returned up to `k` `(concept_id, distance)` pairs
-directly from a one-row-per-`concept_id` table, ordered solely by ascending
-distance from vec0.)
 
 #### Scenario: Query returns at most one hit per document
 
@@ -315,7 +309,7 @@ from `vector_meta`. This runs inside the store's own schema-creation commit.
 
 #### Scenario: A legacy 3-column store is migrated on open
 
-- GIVEN a `vectors.db` created before this change (no `chunk_index` column)
+- GIVEN a `vectors.db` created with the legacy schema (no `chunk_index` column)
 - WHEN `open_vector_store` opens it
 - THEN `vectors` is dropped and recreated with the chunk-aware schema, and
   `vector_meta` has zero rows afterward
