@@ -1264,7 +1264,7 @@ def prior_ingest_pending(concept_text: str | None) -> bool:
         return False
     try:
         metadata, _ = okf.load_frontmatter(concept_text)
-    except Exception:
+    except okf.FrontmatterError:
         return False
     return okf.is_ingest_pending(metadata)
 
@@ -1296,7 +1296,7 @@ def find_uncatalogued_objects(
                 continue
             try:
                 metadata, _ = okf.load_frontmatter(path.read_text(encoding="utf-8"))
-            except Exception:  # noqa: S112 -- degrade per file, like family_owns_source
+            except (OSError, ValueError):  # degrade per file, like family_owns_source
                 continue
             provenance = metadata.get("provenance")
             if not isinstance(provenance, list) or provenance_key not in provenance:
