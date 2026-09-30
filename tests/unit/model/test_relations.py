@@ -83,39 +83,31 @@ def test_module_has_zero_openkos_imports() -> None:
             assert node.module is None or not node.module.startswith("openkos")
 
 
-def test_validate_relation_type_accepts_known_type_silently(
+def test_validate_relation_type_never_writes_to_stderr(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """A known seeded type is accepted with no stderr note."""
-    result = relations.validate_relation_type("references")
+    """Library code returns; the CLI decides what to print. Neither a seeded
+    nor an unknown type may reach stderr from `validate_relation_type`."""
+    assert relations.validate_relation_type("references") == "references"
+    assert relations.validate_relation_type("custom_relation") == "custom_relation"
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert captured.out == ""
 
-    assert result == "references"
-    assert capsys.readouterr().err == ""
+
+def test_relation_type_note_is_none_for_a_seeded_type() -> None:
+    assert relations.relation_type_note("references") is None
+    assert relations.relation_type_note("  references  ") is None
 
 
-def test_validate_relation_type_warns_on_unknown_type(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """An unknown type is accepted (never raises) but WARNs to stderr
+def test_relation_type_note_carries_the_exact_advisory_text() -> None:
+    """The note is the text the CLI prints verbatim on the `relate` path
     (spec: "Unknown type accepted with WARN to stderr")."""
-    result = relations.validate_relation_type("custom_relation")
-
-    assert result == "custom_relation"
-    err = capsys.readouterr().err
-    assert "custom_relation" in err
-
-
-def test_validate_relation_type_warn_false_suppresses_the_advisory_note(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """`warn=False` still accepts (and returns) an unknown type but prints NO
-    advisory note -- for callers on a PREVIEW/suggestion path where the note
-    belongs to the write path only (issue #134: suggest-relations flooded
-    stderr with one note per out-of-vocab suggestion)."""
-    result = relations.validate_relation_type("custom_relation", warn=False)
-
-    assert result == "custom_relation"
-    assert capsys.readouterr().err == ""
+    known = ", ".join(sorted(relations.SEEDED_RELATION_TYPES))
+    assert relations.relation_type_note(" custom_relation ") == (
+        f"openkos: note -- 'custom_relation' is not a seeded relation type "
+        f"(known: {known})"
+    )
 
 
 def test_validate_relation_type_rejects_empty_type() -> None:

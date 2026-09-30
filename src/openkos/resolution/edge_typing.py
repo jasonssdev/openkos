@@ -477,10 +477,10 @@ def _parse_reply(raw: object) -> tuple[str | None, str]:
         return None, rationale if rationale.strip() else _DEGRADED_RATIONALE_FALLBACK
 
     try:
-        # `warn=False`: this is a read-only PREVIEW path, so an out-of-vocab
-        # suggestion must not print the write-path advisory note -- one per
-        # edge would flood stderr (issue #134). The value is still kept.
-        suggested_type = validate_relation_type(type_raw, warn=False)
+        # `validate_relation_type` is pure: the out-of-vocab advisory note is
+        # the `relate` write path's own (`relation_type_note`), so a preview
+        # never emits one per edge (issue #134). The value is still kept.
+        suggested_type = validate_relation_type(type_raw)
     except ValueError:
         return None, rationale if rationale.strip() else _DEGRADED_RATIONALE_FALLBACK
 
