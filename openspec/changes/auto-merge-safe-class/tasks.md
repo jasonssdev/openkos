@@ -37,16 +37,18 @@ evals/run_self_tests.py` — each run directly, unpiped.
 
 ## Phase 1 — The measurement harness (`evals/auto_merge/`)
 
-- [ ] 1.1 [PRE] Confirm the instrument does not exist and the prior holds:
+- [x] 1.1 [PRE] Confirm the instrument does not exist and the prior holds:
   `ls evals/auto_merge` fails; `grep -n "Confidence carries no information"
   evals/adjudication/README.md` hits. Record both outputs in the PR.
-- [ ] 1.2 [TEST] Self-test fixture checks, written first against an empty
+  Confirmed at session start: `ls evals/auto_merge` -> "No such file or
+  directory"; the grep hit at `evals/adjudication/README.md:245`.
+- [x] 1.2 [TEST] Self-test fixture checks, written first against an empty
   `auto_merge_fixtures.py` so they are RED: class minimums (≥ 12 negative
   pairs over ≥ 5 classes incl. `week-apart` ≥ 3 and `asym-recurrence` ≥ 3;
   ≥ 10 positive pairs over ≥ 4 classes incl. `reingest-dup` ≥ 3); every
   document has `type`, `title`, `sensitivity: private`, non-empty
   `provenance`; fixture digest identical across two materializations.
-- [ ] 1.3 [IMPL] `evals/auto_merge/auto_merge_fixtures.py`: invented,
+- [x] 1.3 [IMPL] `evals/auto_merge/auto_merge_fixtures.py`: invented,
   de-identified content only (no private corpus text, ever). Import
   `recurrence`, `asym-recurrence` (with `grupo-calidad-datos`), `event-same`,
   `asym-same` and same-type `part-whole`/`aspect-of` pairs from
@@ -55,20 +57,39 @@ evals/run_self_tests.py` — each run directly, unpiped.
   attendees/decisions), `namesake-person`, `reingest-dup` (shared
   provenance), `person-same`, `alias-same`. Module docstring states the
   labels are constructed, not adjudicated.
-- [ ] 1.4 [TEST] D3 structural eligibility in the self-test: for every
+  26 pairs across the 10 classes (15 negative, 11 positive), well above the
+  design floor. `alias-same`'s two pairs use a short-title/qualified-title
+  variant of one name (not two unrelated names): candidate discovery is
+  title-based, so a wholly different alias would never be nominated as a
+  candidate at all -- observed directly (see 1.4's RED below).
+- [x] 1.4 [TEST] D3 structural eligibility in the self-test: for every
   labelled pair, on the materialized bundle, `find_candidates` yields
   exactly one 2-member group, both members declare one type,
   `lifecycle.cross_type_concern` is `None`, and `prepare_one_merge` is not
   guardrail-refused. RED until 1.3's pairs are shaped to pass.
-- [ ] 1.5 [MUT] Give one `week-apart` document a different `type`; the
+  Observed RED with the first `alias-same` draft (unrelated names "Task
+  Queue" / "Job Queue"): "no labelled pair is missing from find_candidates:
+  got ['alias-same:...']" -- reshaped to a near-matching title pair per 1.3's
+  note, then GREEN.
+- [x] 1.5 [MUT] Give one `week-apart` document a different `type`; the
   self-test goes RED naming that pair. Revert, purge `__pycache__`, GREEN.
-- [ ] 1.6 [TEST] `decide(cal, conf)` on synthetic arms: one case per
+  Observed: `cross_type_concern is not None -- members declare different OKF
+  types (Project / Event)` naming the mutated pair exactly. Reverted,
+  `__pycache__` purged, confirmed GREEN.
+- [x] 1.6 [TEST] `decide(cal, conf)` on synthetic arms: one case per
   outcome — `PASS`; `FAIL (no separator)` (highest bad ≥ every good);
   `FAIL R2` (a confirmation negative at ≥ `t*`); `FAIL R3` (a `week-apart`
   auto-merge in calibration only); `FAIL R4` (retention 0.49); `FAIL R5`
   (stability 0.79); `INVALID` (one `<missing>` trial; mismatched fixture
   digest). Plus: `B = -inf` labels `t*` non-binding.
-- [ ] 1.7 [IMPL] `evals/auto_merge/run_auto_merge_eval.py`: `decide()` exactly
+  All eight cases implemented and GREEN. Deviation, documented in
+  `run_auto_merge_eval.py` and `README.md`: the `FAIL R3` case is
+  constructed in the CONFIRMATION arm, not calibration -- Step 1's own
+  invariant (`t* > B` always, and `B` is the max over ALL calibration
+  negative `same` trials, week-apart included) makes a calibration-only R3
+  violation mathematically unreachable under a correct implementation; the
+  cross-arm check's real bite is catching a lucky confirmation run.
+- [x] 1.7 [IMPL] `evals/auto_merge/run_auto_merge_eval.py`: `decide()` exactly
   as `design.md` §"Decision rule" states; `--self-test` (model-free);
   `--arm {calibration,confirmation} --runs 15 --model qwen3:8b` over the
   real `find_candidates` + `adjudicate_candidates` path in a temp bundle
@@ -77,13 +98,23 @@ evals/run_self_tests.py` — each run directly, unpiped.
   `openkos.eval.auto_merge/v1` and the three report files per
   `design.md` §"Results file format", rationales verbatim, `tier` and
   `cross_source` per trial, secondary cross-source-excluded population.
-- [ ] 1.8 [MUT] For each bar R2-R5 and the separator step, invert one
+- [x] 1.8 [MUT] For each bar R2-R5 and the separator step, invert one
   comparison in `decide()` (e.g. `>` → `>=` in `t*` selection); the
   matching 1.6 case goes RED. Revert each, purge `__pycache__`.
-- [ ] 1.9 [TEST] `uv run python evals/run_self_tests.py` discovers the new
+  Five mutations, each observed RED on its matching case then reverted
+  (`__pycache__` purged before each re-run): separator `>`→`>=` (no
+  separator case flips to a spurious PASS); R2 `if false_merges:` →
+  `if len(false_merges) > 1:`; R3 the analogous off-by-one (co-fires with
+  R2 by construction -- a week-apart trial is also a negative trial, so a
+  pure-R3-only failure is not reachable, but the R3-specific reason text
+  disappearing was observed RED); R4 `< 0.50` → `< 0.49`; R5 `< 0.80` →
+  `< 0.79`. All five reverted and reconfirmed GREEN.
+- [x] 1.9 [TEST] `uv run python evals/run_self_tests.py` discovers the new
   harness (count rises by one) and passes under the poisoned
   `OLLAMA_HOST`.
-- [ ] 1.10 [DOC] `evals/auto_merge/README.md`: why the harness exists, the
+  Observed: 45 of 45 harness self-tests run (44 pre-existing + this one),
+  `evals/auto_merge/run_auto_merge_eval.py` listed `ok 0.3s`, 0 failing.
+- [x] 1.10 [DOC] `evals/auto_merge/README.md`: why the harness exists, the
   fixture table, the frozen decision rule (verbatim copy, with the design
   commit sha it was frozen at), usage, and "What a PASS does not
   establish". Commit Phase 1 following the harness precedent
