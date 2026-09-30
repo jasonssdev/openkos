@@ -33,8 +33,9 @@ body:
     id: environment
     attributes:
       label: Environment
-      description: Your OS, Python version, and how you installed OpenKOS.
+      description: The output of `openkos --version`, your OS, Python version, and how you installed OpenKOS.
       placeholder: |
+        openkos --version: openkos 0.2.14
         OS: macOS 15.4
         Python: 3.13.2
         Install: uv sync from source at commit abc1234
