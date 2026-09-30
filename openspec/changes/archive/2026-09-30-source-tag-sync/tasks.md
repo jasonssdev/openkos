@@ -253,7 +253,7 @@ only the verb name and may land after Phase 3 or together with it.
 
 ## Archive
 
-- [ ] **5.1** Merge `specs/tag-sync/spec.md` as the new canonical domain and
+- [x] **5.1** Merge `specs/tag-sync/spec.md` as the new canonical domain and
       compose `specs/ingestion/spec.md`; name-match every requirement
       heading. Flip ADR-0033 to Accepted in frontmatter, body, and README
       (renumber first if #1075 did not take 0032).

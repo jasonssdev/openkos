@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0033: Source tag sync is union-only and never tags below the Source's sensitivity"
 description: sync-tags adds a Source's current tags to its provenance descendants and never removes a tag, because without per-tag provenance a synced tag cannot be told apart from a hand-added one; a descendant classified below its Source is not tagged, and tag values stay out of log.md and commits.
-status: Proposed
+status: Accepted
 date: 2026-09-30
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0033: Source tag sync is union-only and never tags below the Source's sensitivity
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-09-30
 
 ## Context
