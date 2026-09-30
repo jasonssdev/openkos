@@ -5,8 +5,10 @@ the CLI actually USES it, on every command that can write, and that the roster
 saying which commands those are cannot rot silently.
 """
 
+import os
 import subprocess
 import sys
+import tempfile
 import textwrap
 from pathlib import Path
 
@@ -219,3 +221,28 @@ def test_no_workspace_reports_its_own_refusal_not_a_lock_error(
     assert "no OpenKOS workspace found" in result.stderr
     assert not lock.lock_path_for(tmp_path).exists()
     assert not (tmp_path / ".openkos").exists()
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="lock directory modes are POSIX-only"
+)
+def test_an_untrusted_lock_directory_is_a_refusal_with_exit_1_not_a_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Exit 1, not 3: a plain re-run refuses again until the directory is
+    fixed, so this must not advertise the retry-safe code (#1134)."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_tmp = tmp_path.parent / f"{tmp_path.name}-faketmp"
+    fake_tmp.mkdir()
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(fake_tmp))
+    directory = fake_tmp / f"{lock.LOCK_DIR_PREFIX}-{os.geteuid()}"
+    directory.mkdir()
+    directory.chmod(0o755)
+
+    result = runner.invoke(app, ["relate", "a", "references", "b"])
+
+    assert result.exit_code == 1
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+    assert "openkos relate: refusing to run --" in result.stderr
+    assert str(directory) in result.stderr
+    assert "chmod 700" in result.stderr

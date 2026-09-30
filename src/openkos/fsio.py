@@ -107,6 +107,45 @@ def write_atomic(path: Path, content: str) -> None:
         raise
 
 
+def mkdir_private(path: Path, *, top: Path | None = None) -> None:
+    """Create `path` and every missing directory from `top` down to it with
+    mode `0o700` (#1135). `top` defaults to `path` itself.
+
+    For engine-owned state (`.openkos/`, `bundle/.state/`) that can hold the
+    text of confidential documents: a default umask would leave it readable by
+    every local account. Only directories THIS call creates are given the mode;
+    an existing one is left exactly as found (`doctor` reports it -- guessing
+    at a user's chosen permissions is not this function's job), and anything
+    above `top` is created with ordinary defaults, since it is the user's.
+    `mode` is masked by the umask, which can only narrow it.
+    """
+    top = path if top is None else top
+    missing: list[Path] = []
+    for candidate in (path, *path.parents):
+        if candidate.exists():
+            break
+        missing.append(candidate)
+    for candidate in reversed(missing):
+        private = candidate == top or top in candidate.parents
+        try:
+            candidate.mkdir(mode=0o700 if private else 0o777)
+        except FileExistsError:
+            continue  # a concurrent creator won the race; that is fine
+
+
+def touch_private(path: Path) -> None:
+    """Create `path` empty with mode `0o600` if it does not exist (#1135).
+
+    Called before a SQLite store's first write so the file never exists at the
+    default mode, not even briefly: SQLite gives the `-wal` and `-shm`
+    sidecars the main file's permissions, so fixing the mode here fixes all
+    three. An existing file is never modified or re-moded. An empty file is a
+    valid, empty SQLite database.
+    """
+    with contextlib.suppress(FileExistsError):
+        os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+
+
 def remove_file(path: Path) -> None:
     """Delete `path`, refusing to silently no-op on a missing file.
 
