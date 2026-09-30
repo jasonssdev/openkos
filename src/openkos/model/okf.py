@@ -19,6 +19,7 @@ import unicodedata
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from enum import StrEnum
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 from pathlib import Path, PurePosixPath
@@ -2178,14 +2179,159 @@ def generation_time(metadata: Mapping[str, object]) -> datetime | None:
     return _parse_instant(metadata.get("timestamp"))
 
 
+STATUS_DERIVED_FROM_KEY: Final = "status_derived_from"
+"""OKF v0.2 §4.1 extension key (`deprecated-status-export`, issue #1075):
+marks a `status: deprecated` value as WRITTEN BY THE ENGINE from a computed
+`supersedes` edge, never by a person. This is the ONLY place this key name
+is read or written -- no other module may reason about it (spec: "The
+Export Marker Is An Engine-Owned Extension Key")."""
+
+_EXPORT_MARKER_VALUE: Final = "supersedes"
+"""The exact, only valid value for `STATUS_DERIVED_FROM_KEY`."""
+
+
+class ExportOutcome(StrEnum):
+    """The five possible results of `project_deprecation_export` (spec:
+    "One Deterministic Projection Decides Every Export Write")."""
+
+    UNCHANGED = "unchanged"
+    """Nothing to do: either already consistent, or a human-authored value
+    that the engine must not touch."""
+    EXPORT = "export"
+    """Superseded, and own status was absent/`stable`/legacy `active` with no
+    valid marker -- write `status: deprecated` + the marker."""
+    WITHDRAW = "withdraw"
+    """No longer superseded, but a valid export marker remains -- write
+    `status: stable` and remove the marker."""
+    DROP_MARKER = "drop-marker"
+    """An INVALID marker was present and the row is otherwise UNCHANGED --
+    the marker alone is removed, the human's own `status` value stays."""
+    BLOCKED = "blocked"
+    """Superseded, but own status is a human-authored value other than
+    absent/`stable`/`active`/`deprecated` (e.g. `draft`) -- nothing is
+    written; the value is preserved and reported."""
+
+
+@dataclass(frozen=True)
+class ExportDecision:
+    """One `project_deprecation_export` result.
+
+    `metadata` is always a FULL COPY of the projected frontmatter -- for
+    `UNCHANGED` and `BLOCKED` it is a copy of the unmodified input, so a
+    caller can compare or serialize it uniformly without branching on the
+    outcome first. `blocked_value` carries the preserved human `status`
+    value ONLY when `outcome` is `BLOCKED`; it is `None` for every other
+    outcome."""
+
+    outcome: ExportOutcome
+    metadata: dict[str, object]
+    blocked_value: object | None
+
+
+def has_valid_export_marker(metadata: Mapping[str, object]) -> bool:
+    """`True` only when `metadata` carries `STATUS_DERIVED_FROM_KEY` with the
+    exact value `"supersedes"` AND the same document's `status` is exactly
+    `"deprecated"` (spec: "The Export Marker Is An Engine-Owned Extension
+    Key"). Every other combination -- a marker with any other value, or a
+    `supersedes` marker beside any other `status` -- is INVALID."""
+    return (
+        metadata.get(STATUS_DERIVED_FROM_KEY) == _EXPORT_MARKER_VALUE
+        and metadata.get("status") == "deprecated"
+    )
+
+
+def project_deprecation_export(
+    metadata: Mapping[str, object], *, superseded: bool
+) -> ExportDecision:
+    """The ONE pure function deciding every deprecated-status export write,
+    withdrawal, or repair (spec: "One Deterministic Projection Decides Every
+    Export Write"). Takes a concept's own frontmatter and whether it is
+    superseded (the target of at least one non-self `supersedes` edge
+    authored by another concept) and returns exactly one outcome, per the
+    spec's precedence table.
+
+    An INVALID marker (present but not `has_valid_export_marker`) is
+    discarded whenever the row would otherwise be `UNCHANGED`, turning that
+    outcome into `DROP_MARKER` -- a hand-edited export (`deprecated` ->
+    `draft` with the marker left behind) resolves deterministically: the
+    marker goes, the human value stays. `EXPORT`, `WITHDRAW`, and `BLOCKED`
+    each fully determine the marker's fate on their own and need no such
+    correction.
+
+    Idempotent: applying `.metadata` and re-evaluating with the SAME
+    `superseded` value yields `UNCHANGED` or `BLOCKED`. Preserves every
+    other key byte-for-byte (returns a shallow copy of `metadata` with at
+    most `status`/`STATUS_DERIVED_FROM_KEY` touched)."""
+    status = metadata.get("status")
+    valid_marker = has_valid_export_marker(metadata)
+    marker_present = STATUS_DERIVED_FROM_KEY in metadata
+    invalid_marker = marker_present and not valid_marker
+
+    outcome: ExportOutcome
+    if superseded:
+        if status == "deprecated":
+            outcome = ExportOutcome.UNCHANGED
+        elif status in (None, "stable", "active"):
+            outcome = ExportOutcome.EXPORT
+        else:
+            outcome = ExportOutcome.BLOCKED
+    else:
+        if status == "deprecated" and valid_marker:
+            outcome = ExportOutcome.WITHDRAW
+        elif invalid_marker:
+            outcome = ExportOutcome.DROP_MARKER
+        else:
+            outcome = ExportOutcome.UNCHANGED
+
+    result_metadata = dict(metadata)
+    blocked_value: object | None = None
+    if outcome is ExportOutcome.EXPORT:
+        result_metadata["status"] = "deprecated"
+        result_metadata[STATUS_DERIVED_FROM_KEY] = _EXPORT_MARKER_VALUE
+    elif outcome is ExportOutcome.WITHDRAW:
+        result_metadata["status"] = "stable"
+        del result_metadata[STATUS_DERIVED_FROM_KEY]
+    elif outcome is ExportOutcome.DROP_MARKER:
+        del result_metadata[STATUS_DERIVED_FROM_KEY]
+    elif outcome is ExportOutcome.BLOCKED:
+        blocked_value = status
+
+    return ExportDecision(
+        outcome=outcome, metadata=result_metadata, blocked_value=blocked_value
+    )
+
+
+def apply_deprecation_export(
+    text: str, *, superseded: bool
+) -> tuple[ExportDecision, str]:
+    """`load_frontmatter` -> `project_deprecation_export` -> `dump_frontmatter`
+    over a whole document's TEXT (spec: "One Deterministic Projection
+    Decides Every Export Write"). Returns the input `text` UNCHANGED (the
+    SAME object, no re-serialization) when the outcome is `UNCHANGED` or
+    `BLOCKED`, mirroring `migrate_document`'s `Unchanged` rule -- an
+    already-consistent or human-blocked document is never cosmetically
+    rewritten."""
+    metadata, body = load_frontmatter(text)
+    decision = project_deprecation_export(metadata, superseded=superseded)
+    if decision.outcome in (ExportOutcome.UNCHANGED, ExportOutcome.BLOCKED):
+        return decision, text
+    return decision, dump_frontmatter(decision.metadata, body)
+
+
 def declares_deprecated(metadata: Mapping[str, object]) -> bool:
     """`True` only when `metadata`'s own `status` field is the exact literal
-    `"deprecated"` (okf-v02-migration design.md Decision 6) -- the same
-    comparison `lifecycle.py` and `bundle/listing.py` made inline before
-    this helper existed, now centralized in the one OKF seam. `"active"`,
-    `"stable"`, `"draft"`, an absent key, and any other value are NOT
-    deprecating (OKF v0.2 §5.4: absent means `stable`)."""
-    return metadata.get("status") == "deprecated"
+    `"deprecated"` AND it does not carry a valid deprecated-status export
+    marker (`deprecated-status-export`, issue #1075: "The Engine Never Reads
+    Its Own Export"). `"active"`, `"stable"`, `"draft"`, an absent key, and
+    any other value are NOT deprecating (OKF v0.2 §5.4: absent means
+    `stable`). A `status: deprecated` the ENGINE wrote as an export
+    (`has_valid_export_marker`) is not a declaration -- only a
+    human-authored `deprecated` counts, so effective deprecation depends
+    only on `supersedes` edges and human-authored status, never on the
+    engine's own export (okf-v02-migration design.md Decision 6, narrowed)."""
+    return metadata.get("status") == "deprecated" and not has_valid_export_marker(
+        metadata
+    )
 
 
 def _absorbed_is_more_recent(

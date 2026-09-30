@@ -26,6 +26,8 @@ in-cycle edge. Contradictory or cyclic supersession is treated as
 unresolved and hidden rather than guessed at.
 """
 
+from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
@@ -50,6 +52,86 @@ class _HasConceptId(Protocol):
 
     @property
     def concept_id(self) -> str: ...
+
+
+def _superseded_ids(supersedes: set[tuple[str, str]]) -> frozenset[str]:
+    """The shared edge rule (R2, fail-safe): every non-self `supersedes`
+    TARGET, cycles included, with no reciprocal-cancellation exemption. The
+    ONE place this computation is made, so `deprecated_concept_ids` and the
+    deprecated-status export (`superseded_from_metadata`) can never disagree
+    about who is superseded (design: 'the predicate and the export can
+    never disagree')."""
+    return frozenset(target for source, target in supersedes if target != source)
+
+
+@dataclass(frozen=True)
+class SupersededSet:
+    """One `superseded_from_metadata`/`superseded_concept_ids` result
+    (deprecated-status-export, issue #1075).
+
+    `ids` is the edge-derived superseded set (the same rule
+    `deprecated_concept_ids` folds into its own result). `complete` is
+    `False` when any document contributed no data because it failed to
+    read/parse or carried malformed `relations:` -- an unreadable document
+    may hold the only edge that supersedes some concept, so a caller MUST
+    NOT withdraw a deprecated-status export on an incomplete walk (spec:
+    'Withdrawal Requires A Complete Edge Walk'). `unreadable` names every
+    concept id that made the walk incomplete, sorted for determinism."""
+
+    ids: frozenset[str]
+    complete: bool
+    unreadable: tuple[str, ...]
+
+
+def superseded_from_metadata(
+    docs: Mapping[str, Mapping[str, object] | None],
+) -> SupersededSet:
+    """Compute a `SupersededSet` from an already-held mapping of concept id
+    to its frontmatter metadata (deprecated-status-export, issue #1075).
+
+    Built for a WRITER's post-write view: the metadata it already holds for
+    every document in the bundle (no extra walk), with its own planned
+    texts substituted and deleted documents removed. A `None` value marks a
+    concept whose document could not be read/parsed -- it contributes no
+    edges and makes the result incomplete. A concept whose `relations:` is
+    present but malformed (fails `okf.decode_relations`) contributes no
+    edges for ITSELF either, and also makes the result incomplete, since a
+    real `supersedes` edge it might have carried cannot be trusted absent."""
+    supersedes: set[tuple[str, str]] = set()
+    unreadable: list[str] = []
+    for cid, meta in docs.items():
+        if meta is None:
+            unreadable.append(cid)
+            continue
+        try:
+            relations = okf.decode_relations(dict(meta))
+        except ValueError:
+            unreadable.append(cid)
+            continue
+        for relation in relations:
+            if relation.type == "supersedes":
+                supersedes.add((cid, relation.target))
+
+    return SupersededSet(
+        ids=_superseded_ids(supersedes),
+        complete=not unreadable,
+        unreadable=tuple(sorted(unreadable)),
+    )
+
+
+def superseded_concept_ids(bundle_dir: Path) -> SupersededSet:
+    """`superseded_from_metadata` over one fresh `okf._iter_docs` walk of
+    `bundle_dir` (deprecated-status-export, issue #1075) -- the disk-backed
+    counterpart callers use when they hold no in-memory planned view of
+    their own (e.g. `lint`, `repair`)."""
+    docs: dict[str, Mapping[str, object] | None] = {}
+    for scan in okf._iter_docs(bundle_dir):
+        cid = okf.concept_id_for(scan.path, bundle_dir)
+        if scan.read_error is not None or scan.parse_error is not None:
+            docs[cid] = None
+        else:
+            docs[cid] = scan.metadata or {}
+    return superseded_from_metadata(docs)
 
 
 def deprecated_concept_ids(bundle_dir: Path) -> frozenset[str]:
@@ -81,7 +163,9 @@ def deprecated_concept_ids(bundle_dir: Path) -> frozenset[str]:
     # Fail-safe rule (R2): any non-self supersedes target is deprecated,
     # with no reciprocal-cancellation or cycle-length exemption — every
     # member of any supersedes cycle (mutual pair or longer) is hidden.
-    superseded = {target for source, target in supersedes if target != source}
+    # Shared with `superseded_from_metadata` via `_superseded_ids` so the
+    # predicate and the deprecated-status export can never disagree.
+    superseded = _superseded_ids(supersedes)
     own_deprecated = {
         cid for cid, status in status_by_id.items() if status == "deprecated"
     }
