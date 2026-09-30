@@ -22,7 +22,7 @@ good-life-demo/
     └── decisions/      # Frame the essay on the dichotomy of control
 ```
 
-Open it in any markdown editor to see the shape of a workspace, or treat it as the expected output when building the compiler.
+Open it in any markdown editor to see the shape of a workspace, or treat it as the expected shape of `ingest` output.
 
 ### What each part is there to demonstrate
 
@@ -38,12 +38,13 @@ The consequence is uncomfortable and worth stating plainly: Stoicism is public k
 
 ### OKF conformance
 
-`bundle/` is conformant with **OKF v0.1** and is meant to stay that way; it doubles as the fixture for the conformance tests. Each of these is the spec, not a preference:
+`bundle/` is conformant with **OKF v0.2** and is meant to stay that way; it doubles as the fixture for the conformance tests. Each of these is the spec, not a preference:
 
 - No object has an `id` field — a concept's identity is its path (§2).
-- `index.md` and `log.md` carry no frontmatter, except the root `index.md`, which carries `okf_version` and nothing else (§6, §11).
-- `log.md` uses `## YYYY-MM-DD` headings, newest first (§7).
-- Links are untyped: `- [Epicureanism](/concepts/epicureanism.md) — contrasted with` puts the *kind* of relationship in the prose, exactly as §5.3 prescribes.
-- Citations point at Source concepts inside the bundle (`/sources/call-with-maria-2026-07-14.md`), never at `raw/` directly — the pattern §8 describes. Only a Source concept's `resource` reaches outside the bundle, so every internal link always resolves.
+- `index.md` and `log.md` carry no frontmatter, except the root `index.md`, which carries `okf_version` and nothing else (§8, §12).
+- `log.md` uses `## YYYY-MM-DD` headings, newest first (§9).
+- Links are untyped: `- [Epicureanism](/concepts/epicureanism.md) — contrasted with` puts the *kind* of relationship in the prose, exactly as §6.1 prescribes.
+- Provenance and its generated `sources` projection point at Source concepts inside the bundle (`/sources/call-with-maria-2026-07-14.md`), never at `raw/` directly (§5.1). Only a Source concept's `resource` reaches outside the bundle, so every internal link always resolves.
+- The concept documents still carry a body `# Citations` list, a shape from before OKF v0.2 that was migrated in place and preserved verbatim; see [`../docs/knowledge-object-model.md`](../docs/knowledge-object-model.md).
 
 **Why `raw/` is not inside `bundle/`.** An OKF bundle is a bundle of *concepts*; raw sources are input material. Keeping them apart means `bundle/` holds concept documents and nothing else — so it is conformant by construction (nothing dropped into `raw/` can break it), sources keep their own names and extensions, and `bundle/` can be shared on its own as pure OKF without dragging the originals along. See [`../docs/architecture.md`](../docs/architecture.md).

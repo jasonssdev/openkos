@@ -118,9 +118,9 @@ the workflow's whole budget."""
 
 TOTAL_BUDGET_SECONDS = 300
 """Aggregate ceiling for the whole sweep, and it is not redundant with the
-per-harness one: 30 harnesses at 120s each is 3600s against a workflow step
-capped at 600s, so a handful of simultaneous hangs would have the job KILLED
-by the runner -- with no report at all, which is the one thing this job
+per-harness one: many harnesses at 120s each add up to far more than the
+workflow step's 600s cap, so a handful of simultaneous hangs would have the
+job KILLED by the runner -- with no report at all, which is the one thing this job
 exists to produce.
 
 Half the step's ceiling, not most of it: the remaining 300s has to cover

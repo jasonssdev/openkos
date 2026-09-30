@@ -13,9 +13,10 @@ depending on it.
 
 [#404](https://github.com/jasonssdev/openkos/issues/404) measured extraction
 against real documents and found two distinct behaviours the demo fixtures
-cannot show:
+cannot show. These are the findings as #404 recorded them; extraction has
+since been reworked, so they are the corpus's origin, not the current state:
 
-- **The cap of 5 is too low for large sources.** 13–17 KB documents routinely
+- **The cap of 5 was too low for large sources.** 13–17 KB documents routinely
   contain 7–10 genuinely distinct subjects. `Agent Security` and
   `Agent Observability` were real subjects, discarded.
 - **Enumeration decay past that point.** Once the model runs out of genuine
@@ -50,9 +51,14 @@ headings, and tangents. That messiness *is* the test.
 ```
 extraction-corpus/
 ├── corpus.py         # survey candidates, then add one
-├── sources/          # the chosen raw markdown, verbatim
+├── sources/          # the chosen raw markdown, verbatim (mostly gitignored)
 └── ground-truth/     # one hand-written expectation per source
 ```
+
+`sources/` is gitignored except the fixtures deliberately committed (today
+`medium-10-reunion-plataforma.md`, which was written for this repository).
+A fresh clone therefore has every ground-truth file but not most of the
+sources; see [Licensing](#licensing).
 
 ## Adding a source
 
@@ -85,7 +91,9 @@ ground-truth stub. It refuses to overwrite an existing source.
 
 ## The ground truth is the measurement
 
-Each source needs a hand-written expectation naming three things:
+Each source needs a hand-written expectation naming three things (the
+rules for deciding them are in
+[`annotation-guidelines.md`](annotation-guidelines.md)):
 
 1. **Genuinely distinct subjects** — what a reader would expect its own
    document for. This is the number a run is scored against.
@@ -120,7 +128,14 @@ consequences bind anyone scoring a run:
   but size and *language* vary together here, so a difference cannot be
   attributed to length.
 
-It also surfaces a gap nothing in this project has measured: the classification
+`medium-09-sdk-skills-notes` is likewise a paired variant, of
+`medium-08-sdk-skills`: a synthetic container-title twin, byte-identical to
+`medium-08` below the H1, whose first line names the document as a course
+session's notes instead of its topic (it tests whether a container-shaped
+title changes extraction, #459). Its ground truth opens with the same
+warning: report the pair, never average it.
+
+`small-04-pre-build-skills` also surfaces a gap nothing in this project has measured: the classification
 rubric, the tie-break chain, the anti-enumeration paragraph and the
 multiplicity test are all English, and this is the first non-English source in
 any fixture set.
@@ -138,4 +153,6 @@ titles and classifications, so a harness can score decay rather than count.
 
 This repository is public and Apache-2.0. Anything committed under `sources/`
 is published under that license. Only add material you hold the rights to and
-intend to publish.
+intend to publish. This is why `sources/` is gitignored except for fixtures
+written for this repository: the third-party sources stay local, and a fresh
+clone has the ground truth and the method but not those bytes.

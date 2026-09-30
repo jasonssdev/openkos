@@ -134,7 +134,7 @@ control and the only baseline these columns may be read against.
 # user's own server is never touched
 OLLAMA_HOST=127.0.0.1:11435 OLLAMA_NUM_PARALLEL=4 ollama serve &
 
-python evals/ingest_concurrency/run_ingest_concurrency_probe.py \
+uv run python -u evals/ingest_concurrency/run_ingest_concurrency_probe.py \
     --runs 15 --host http://127.0.0.1:11435 --server-num-parallel 4
 ```
 

@@ -8,9 +8,11 @@ ID. This probe reproduces that failure shape deterministically and gives a
 prompt change something to move against.
 
 ```bash
-python evals/language_leak/run_language_leak_probe.py --arm baseline --runs 3
-python evals/language_leak/run_language_leak_probe.py --arm treatment --runs 3
+uv run python -u evals/language_leak/run_language_leak_probe.py --arm baseline --runs 3
+uv run python -u evals/language_leak/run_language_leak_probe.py --arm treatment --runs 3
 ```
+
+`--self-test` runs the harness's synthetic checks with no model (`uv run python -u evals/language_leak/run_language_leak_probe.py --self-test`).
 
 One ~24 KB synthetic Spanish meeting transcript (7 chunk windows) whose
 prose names English technical terms heavily — the code-switched register of
