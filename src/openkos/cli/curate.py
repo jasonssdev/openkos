@@ -57,6 +57,7 @@ from typing import Literal
 import typer
 
 from openkos import config, lint, sensitivity
+from openkos.application import backends as application_backends
 from openkos.application import lifecycle as application_lifecycle
 from openkos.application import next_action as next_action_module
 from openkos.application import pending as application_pending
@@ -69,7 +70,6 @@ from openkos.llm.base import (
     BackendUnavailable,
     LLMBackend,
 )
-from openkos.llm.ollama import OllamaClient
 from openkos.model import okf
 from openkos.model.relations import ASYMMETRIC_RELATION_TYPES
 from openkos.resolution import candidate_group_truncation_notice, find_candidates_report
@@ -288,6 +288,20 @@ class CurateContext:
     Setting BOTH is refused at the command's front door, so a context
     carrying both holds a bug; `_reconcile_planned` reads `no_reconcile`
     first regardless."""
+    backend_factories: application_backends.BackendFactories | None = None
+    """The concrete client classes for both backend families, filled by
+    `cli/main.py` from its own `_backend_factories()` when it builds this
+    context (issue #1057 Phase 9, design Decision 4): `curate.py` itself
+    binds no concrete `openkos.llm.*` backend anymore -- the stage loop's
+    chat construction calls `application_backends.chat_client(ctx.cfg,
+    factories=ctx.backend_factories, task=stage.task)` instead of
+    constructing `OllamaClient` directly, exactly like every other chat
+    verb. This retires curate's former status as "the design's stated
+    exception" to the one-resolver-seam rule.
+
+    `None` only for a context nobody filled (a stray direct construction);
+    the stage loop raises loudly rather than silently skipping a chat call
+    if it is ever reached in that state."""
     ollama_client: LLMBackend | None = field(default=None, init=False)
     """The client for the stage currently running -- reassigned by the
     sequencer before each `needs_llm` stage's `run`.
@@ -2053,23 +2067,24 @@ def run_curate(ctx: CurateContext) -> list[StageOutcome]:
         if stage.needs_llm:
             cached = ctx.ollama_clients.get(model)
             if cached is None:
-                # `model=config.resolve_task_model(...)` rather than the
-                # `model` local computed above, though the two are equal by
-                # construction: `test_chat_timeout_wiring.py` reads THIS
-                # source to prove every chat client carries the workspace's
-                # `chat_timeout` and `max_generation_tokens`, and it
-                # recognizes a chat client by the shape of its `model=`
-                # argument. A bare local name is indistinguishable there
-                # from the liveness probes' own `model=` locals, which must
-                # NOT be governed by those two settings -- so writing the
-                # resolver call keeps that guard able to see this site.
-                cached = OllamaClient(
-                    model=config.resolve_task_model(ctx.cfg, stage.task),
-                    timeout=ctx.cfg.chat_timeout,
-                    max_generation_tokens=ctx.cfg.max_generation_tokens,
-                    context_window=ctx.cfg.context_window,
-                    temperature=ctx.cfg.temperature,
-                    seed=ctx.cfg.seed,
+                # Routed through the ONE resolver seam every other chat verb
+                # uses (issue #1057 Phase 9, design Decision 4) rather than
+                # constructing `OllamaClient` directly -- this retires
+                # curate's former status as "the design's stated exception".
+                # `test_chat_timeout_wiring.py`'s AST guard reads THIS site
+                # through `application/backends.py::chat_client`'s own body
+                # (the `model=` argument shape it recognizes lives there
+                # now, not here), so the workspace's `chat_timeout`/
+                # `max_generation_tokens` wiring stays pinned regardless of
+                # which backend `cfg.backend` selects.
+                if ctx.backend_factories is None:
+                    raise RuntimeError(
+                        "CurateContext.backend_factories was never set -- "
+                        "cli/main.py's curate command must fill it from "
+                        "_backend_factories()"
+                    )
+                cached = application_backends.chat_client(
+                    ctx.cfg, factories=ctx.backend_factories, task=stage.task
                 )
                 ctx.ollama_clients[model] = cached
             ctx.ollama_client = cached

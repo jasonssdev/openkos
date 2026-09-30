@@ -192,3 +192,29 @@ def test_layering_invariants() -> None:
         "the mcp verb must import openkos.mcp somewhere inside a function "
         "body, otherwise the lazy-import contract has nothing behind it"
     )
+
+
+def test_mcp_server_may_import_both_concrete_client_classes() -> None:
+    """`mcp/server.py` may import BOTH `OllamaClient` and
+    `OpenAICompatibleClient` (and their exception types), while the ban on
+    `openkos.cli` imports still holds (issue #1057 task 9.22b, mcp spec
+    "mcp/server.py may import both concrete client classes").
+
+    Nothing in the layering guard above bars `openkos.llm.*` imports for
+    `mcp/` -- only `openkos.cli` is banned -- so this is a positive
+    assertion that the resolver-seam wiring (`_backend_factories()`)
+    actually landed, run ALONGSIDE `test_layering_invariants`'s existing
+    `cli_offenders`/`non_openkos_offenders` checks rather than replacing
+    them."""
+    server_tree = _tree(_MCP_DIR / "server.py")
+    imported = set(_imported_module_names(server_tree))
+
+    assert "openkos.llm.ollama" in imported
+    assert "openkos.llm.openai_compatible" in imported
+
+    cli_hits = [
+        name
+        for name in imported
+        if name == "openkos.cli" or name.startswith("openkos.cli.")
+    ]
+    assert cli_hits == []

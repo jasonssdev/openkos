@@ -49,6 +49,7 @@ from openkos.llm.base import (
     LLMBackend,
 )
 from openkos.llm.ollama import OllamaClient
+from openkos.llm.openai_compatible import OpenAICompatibleClient
 from openkos.mcp import tools as mcp_tools
 from openkos.mcp import transport
 from openkos.state.fts import FtsUnavailable
@@ -184,13 +185,27 @@ def _server_version() -> str:
         return "0+unknown"
 
 
+def _backend_factories() -> application_backends.BackendFactories:
+    """Build this adapter's `BackendFactories` from THIS module's own
+    globals, read at call time (issue #1057 Phase 9, design Decision 4):
+    the MCP adapter's equivalent of `cli/main.py::_backend_factories()`.
+    May import both concrete client classes directly -- `mcp/server.py` may
+    not import `openkos.cli`, but nothing bars it from `openkos.llm.*`
+    (`tests/unit/mcp/test_layering.py::
+    test_mcp_server_may_import_both_concrete_client_classes`)."""
+    return application_backends.BackendFactories(
+        ollama=OllamaClient, openai_compatible=OpenAICompatibleClient
+    )
+
+
 def _make_llm(cfg: config.Config) -> LLMBackend:
     """Build the CHAT client `query` uses, through the SAME non-CLI seam
-    the CLI's own `_chat_client` delegates to (design Decision 7): no
-    per-task model override here, mirroring `cli/main.py`'s own `query`
-    command, which omits `task=` for the same reason
-    `application/backends.py`'s docstring gives (`query` has no harness)."""
-    return application_backends.chat_client(cfg, factory=OllamaClient)
+    the CLI's own `_chat_client` delegates to (design Decision 7; issue
+    #1057 Phase 9, design Decision 4): no per-task model override here,
+    mirroring `cli/main.py`'s own `query` command, which omits `task=` for
+    the same reason `application/backends.py`'s docstring gives (`query`
+    has no harness)."""
+    return application_backends.chat_client(cfg, factories=_backend_factories())
 
 
 def _make_embedder(cfg: config.Config) -> Embedder:
@@ -199,9 +214,10 @@ def _make_embedder(cfg: config.Config) -> Embedder:
 
 def _local_exemption_for(client: LLMBackend, cfg: config.Config) -> bool:
     """Resolve `query`'s local-exemption gate exactly as the CLI resolves
-    it (design Decision 9): `client` is always a concrete `OllamaClient` at
-    runtime here (`_make_llm`'s only return value), which carries the
-    `.locality` property `resolve_local_exemption` reads --
+    it (design Decision 9): `client` is a concrete `OllamaClient` or, since
+    issue #1057 Phase 9, an `OpenAICompatibleClient` at runtime here
+    (`_make_llm`'s return value, dispatched by `cfg.backend`) -- both carry
+    the `.locality` property `resolve_local_exemption` reads.
     `LLMBackend` itself does not declare that property, since it is
     deliberately the narrower Protocol every `application/*` seam is
     allowed to depend on (ADR-0018 D1); the `cast` below narrows back to

@@ -49,6 +49,7 @@ from typing import ClassVar
 
 import pytest
 
+import tests.unit.conftest as _conftest_module
 from openkos.llm.ollama import OllamaClient
 from openkos.llm.openai_compatible import (
     OpenAICompatibleClient,
@@ -480,6 +481,38 @@ def test_live_backend_marker_also_lifts_the_offline_ollama_seam() -> None:
 
     assert seam is OllamaClient
     assert seam is not OfflineOllama
+
+
+def test_conftest_single_helper_patches_both_bindings() -> None:
+    """The autouse `_offline_ollama_by_default` fixture patches
+    `OllamaClient`/`OpenAICompatibleClient` in BOTH `openkos.cli.main` and
+    `openkos.mcp.server` through the one shared `_patch_backend_seams`
+    helper, and clears `OPENKOS_OPENAI_API_KEY` so no developer's exported
+    key leaks into a test (issue #1057 task 9.25).
+
+    The binding-coverage half is proven BEHAVIORALLY: read each seam
+    dynamically (mirroring `_cli_ollama_seam` above) after the fixture has
+    already installed itself for this very test. The `OPENKOS_OPENAI_API_KEY`
+    clear cannot be proven the same way from inside the test it protects --
+    the `delenv` call already ran before this test body started, so a
+    passing `not in os.environ` check here cannot distinguish "cleared"
+    from "never set" -- so that half is pinned structurally instead, by
+    reading the fixture's own source for the literal `delenv` call,
+    mirroring `test_declared_surfaces_match_the_ones_tested_literally`'s
+    rationale for the socket guard (a check driven by the thing it checks
+    would disappear together with it)."""
+    from openkos.cli import main
+    from openkos.mcp import server
+
+    for module in (main, server):
+        assert getattr(module, "OllamaClient") is OfflineOllama  # noqa: B009
+        assert (
+            getattr(module, "OpenAICompatibleClient")  # noqa: B009
+            is OfflineOpenAICompatible
+        )
+
+    fixture_source = inspect.getsource(_conftest_module._offline_ollama_by_default)
+    assert 'delenv("OPENKOS_OPENAI_API_KEY"' in fixture_source
 
 
 def _overridden_network_overrides(stub: type) -> set[str]:
