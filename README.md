@@ -46,6 +46,8 @@ That command is also how you track unreleased `main` at any time.
 
 > **Upgrading a workspace created before 0.2.11?** Run `openkos reindex` once afterwards. From 0.2.11 the embedding store keeps chunk-backed vectors, so the rest of every long source is visible to semantic search; a store written before that has the old schema, which cannot be migrated in place. It is detected on open, dropped, and recreated, so that first `reindex` re-embeds the workspace and reports `no embedding-model tag stored (fresh or dropped store)` rather than a model change. Nothing in `bundle/` is touched: the derived indexes rebuild from it, which is the point of keeping them derived.
 
+> **Upgrading an existing bundle from 0.2.x?** Run `openkos repair` once to migrate it from OKF v0.1 to v0.2; reads keep working meanwhile, only new writes use the v0.2 shape. The [changelog](https://github.com/jasonssdev/openkos/blob/main/CHANGELOG.md) lists the few other behaviour changes (the `STATUS` column now says `stable`, and `doctor`/`lint` exit `2` when a check could not run).
+
 **4 · Check the setup before anything can fail:**
 
 ```bash
@@ -64,6 +66,8 @@ openkos query "what did we decide?"   # an answer with citations, from your own 
 ```
 
 From here, `openkos next` recommends the one thing worth doing whenever one of its ranked tiers fires — and says so honestly when none does (`openkos status` then points at the standing disclosures, such as near-duplicate backlogs its duplicate tier deliberately leaves to `openkos duplicates`) — and `openkos --help` lists every command, grouped. The full reference is [`docs/cli.md`](https://github.com/jasonssdev/openkos/blob/main/docs/cli.md); the end-to-end experience is [`docs/user-journey.md`](https://github.com/jasonssdev/openkos/blob/main/docs/user-journey.md).
+
+**Ask from a chat client.** `openkos mcp --workspace ~/knowledge` serves the workspace read-only over stdio to any MCP client (`query`, `get`, `navigate`, and what is pending). Confidential objects stay withheld unless you launch it with `--expose-confidential`. Prefer llama.cpp, LM Studio or vLLM to Ollama? Set `backend: openai-compatible` and `base_url` in `openkos.yaml` — see [`docs/cli.md`](https://github.com/jasonssdev/openkos/blob/main/docs/cli.md).
 
 **What `init` set up for you.** `raw/` holds your immutable sources; `bundle/` is the pure-OKF knowledge base — plain markdown you can open in Obsidian, VS Code, or GitHub, and take anywhere (open **`bundle/`** itself as the vault or folder, not the workspace root — [the procedure is here](https://github.com/jasonssdev/openkos/blob/main/docs/user-journey.md#reading-the-bundle-in-an-editor)); `openkos.yaml` is the engine config. The folder is also a git repository **you never have to operate**: every command commits its own changes, and `git log` / `git diff` / `git revert` are always there for inspection and undo.
 

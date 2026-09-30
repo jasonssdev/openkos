@@ -14,7 +14,192 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-30
+
+MVP 3, the Ask Surface, is complete. The headline is `openkos mcp`: a
+read-only Model Context Protocol server over stdio that lets a chat client
+`query`, `get`, `navigate` and read the `pending` work of a workspace, behind
+a second sensitivity boundary that decides what may be *disclosed* to a client
+rather than what may be *sent to a model*. Around it: an OpenAI-compatible
+LLM backend beside Ollama, OKF v0.2 as the written format (with `repair`
+migrating a v0.1 bundle), incoming source frontmatter preserved and lifted
+onto the Source, event dates and decision-revision tooling (`--event-date`,
+`reconcile --revision`, the experimental `revisions` verb, opt-in revision
+history in `query`), `sync-tags`, a `status: deprecated` export for OKF
+consumers, and `doctor`/`lint` that report what they could not check instead
+of exiting 0 over it. The release also carries the pre-MVP-4 audit fixes: a
+batch of security and durability defects against guarantees the project had
+written down but not enforced, and the documentation drifts found by auditing
+the docs against the code.
+
+### Upgrading from 0.2.x
+
+Most of this release needs nothing from you. These are the points that do:
+
+- **Run `openkos repair` once per existing bundle** to migrate it from OKF
+  v0.1 to v0.2 (`timestamp` becomes `generated`, `status: active` becomes
+  `stable`, `sources` is regenerated from `provenance`). Reads keep working on
+  an unmigrated bundle; only new writes use the v0.2 shape.
+- **`active` is now `stable`** in the `STATUS` column of `list`, in
+  `concept_read`, and in the MCP concept payload. Match `stable` in any script.
+- **`doctor` and `lint` now exit `2`** when a check could not run (an
+  incomplete report), where they previously exited `0`. Exit `1` still means a
+  genuine failure.
+- **Reserved Windows device names get a `-doc` suffix** (a source titled `CON`
+  files as `sources/con-doc.md`), and ids containing `\` or `:` are refused. A
+  workspace holding `sources/con.md` gets a second Source on re-ingest.
+- **`.openkos/` and its stores are now created owner-only.** Existing
+  workspaces are not changed; `doctor` reports exposed state with the
+  `chmod go-rwx` fix.
+- **A `.md` file under any dot-directory in `bundle/` is no longer part of the
+  bundle**, and neither is a symlinked `.md` file or directory: reads skip it,
+  `ingest` refuses to write through one, and `lint` reports both.
+- **The proximity candidate floor drops from 0.70 to 0.59**, so
+  `suggest-relations` and `contradictions` nominate more candidate pairs, and
+  cost more on a bundle that has many.
+- **`unmerge` refuses a survivor edited after its merge** unless you pass
+  `--discard-survivor-edits`.
+
+### Added
+
+- `openkos mcp --workspace DIR [--expose-confidential]`, a read-only MCP server
+  over stdio exposing the tools `query`, `get`, `navigate` and `pending`
+  ([#995](https://github.com/jasonssdev/openkos/issues/995),
+  [#1010](https://github.com/jasonssdev/openkos/issues/1010)). It never writes
+  and never takes the workspace lock. Every tool response passes a fail-closed
+  disclosure gate ([ADR-0028](docs/adr/0028-mcp-disclosure-is-its-own-boundary.md)):
+  confidential objects are withheld from the client unless the operator opted
+  in once at launch with `--expose-confidential`, there is no per-request
+  override, and a neighbour is shown only when both ends are disclosable. `query`
+  reports progress notifications and honours cancellation. Transport and
+  async-boundary decisions are in [ADR-0027](docs/adr/0027-hand-rolled-stdio-mcp-server.md) and
+  [ADR-0021](docs/adr/0021-sync-async-boundary.md). The read cores of `status`,
+  `list`, `lint`, `doctor`, `next` and `query` now live in `application/`
+  services so the MCP adapter and the CLI share one implementation.
+
+- An OpenAI-compatible LLM backend beside Ollama
+  ([#1057](https://github.com/jasonssdev/openkos/issues/1057),
+  [ADR-0031](docs/adr/0031-openai-compatible-backend.md)): set `backend:
+  openai-compatible` and `base_url` (plus an optional `embedding_base_url`) in
+  `openkos.yaml` to use llama.cpp, LM Studio, vLLM or LocalAI over
+  `/v1/chat/completions`, `/v1/embeddings` and `/v1/models`. The key, if the
+  server needs one, is read only from the `OPENKOS_OPENAI_API_KEY` environment
+  variable; a key in any workspace file is refused. `doctor`, the CLI, `curate`
+  and MCP word their remediation for the selected backend. A plain-`http://`
+  non-local endpoint, or any non-local host the key would be sent to, is named
+  in a one-line stderr notice that never prints the key
+  ([#1130](https://github.com/jasonssdev/openkos/issues/1130)). The default
+  stays `ollama`; a workspace that never sets `backend` sees no change.
+
+- OKF v0.2 is the written format
+  ([#1064](https://github.com/jasonssdev/openkos/issues/1064),
+  [ADR-0029](docs/adr/0029-adopt-okf-v02-frontmatter.md)). Every writer emits
+  `generated: {by, at}` and `status: stable`, `sources` is generated from
+  `provenance` at every write point, and a Source no longer ends with a bare
+  `# Citations` heading. `openkos repair` migrates a v0.1 bundle, merge-ledger
+  snapshots included, with every refusal decided before any write.
+
+- Incoming source frontmatter is preserved
+  ([#1062](https://github.com/jasonssdev/openkos/issues/1062),
+  [ADR-0030](docs/adr/0030-untrusted-incoming-frontmatter.md)). A Markdown
+  source's own YAML frontmatter is parsed fail-closed (64 KiB cap, YAML only)
+  and stored verbatim under `source_frontmatter`; its `tags` are unioned onto
+  the Source and onto the concepts extracted from it in the same run, a
+  higher `sensitivity` raises the Source (never lowers it), and a `date:` key
+  supplies the event date.
+
+- `ingest --event-date YYYY-MM-DD` and a Source `event_date` key
+  ([#1014](https://github.com/jasonssdev/openkos/issues/1014),
+  [ADR-0023](docs/adr/0023-source-event-date.md)): when the recorded event
+  happened, distinct from `generated.at`. Precedence is flag, then stored,
+  then an unambiguous date in the file name. Changing the date on a converged
+  source rewrites it with no extraction.
+
+- `reconcile --revision <id>` records that one concept refines another by
+  writing a single directional `revises` edge, hiding nothing
+  ([#1014](https://github.com/jasonssdev/openkos/issues/1014),
+  [ADR-0024](docs/adr/0024-revises-relation-and-resolved-pairs.md)).
+
+- `openkos revisions` **[experimental]** finds Decisions that a later Decision
+  reverses, refines or reaffirms, blocking candidate pairs by stored
+  embedding similarity (no embedding call) and persisting verdicts to
+  `.openkos/findings.db`, swept by `forget`. `reconcile --from-findings` walks
+  the actionable ones with a per-item consent prompt. Detection quality is
+  unmeasured on real bundles; every run says so
+  ([#1014](https://github.com/jasonssdev/openkos/issues/1014),
+  [ADR-0025](docs/adr/0025-temporal-direction-never-comes-from-the-model.md)).
+
+- Opt-in revision history in `query`
+  ([#1014](https://github.com/jasonssdev/openkos/issues/1014),
+  [ADR-0026](docs/adr/0026-superseded-concepts-re-enter-answers-only-as-labelled-history.md)):
+  with `revision_history: true` (default off, unmeasured), each retrieved
+  concept's bounded chain of earlier `supersedes`/`revises` versions is
+  attached as labelled, separately numbered context, and `--save` marks those
+  citations. The `query` result gains a `revision_history` key.
+
+- `openkos sync-tags (<source-id> | --all)` adds a Source's current tags to the
+  derived concepts it grounds, union-only
+  ([#1093](https://github.com/jasonssdev/openkos/issues/1093),
+  [ADR-0033](docs/adr/0033-source-tag-sync-is-union-only.md)). A Source-only
+  rewrite that adds tags advises running it.
+
+- Deprecation is exported as `status: deprecated` for OKF v0.2 consumers
+  ([#1075](https://github.com/jasonssdev/openkos/issues/1075),
+  [ADR-0032](docs/adr/0032-deprecated-status-is-an-export-of-computed-supersession.md)).
+  `reconcile --winner` and `relate <a> supersedes <b>` write it onto the
+  superseded concept together with the edge; `forget` and `purge` withdraw it
+  when the last superseder goes. The engine never reads its own export back.
+  `lint` reports `status-export-drift` and `status-export-blocked`, and
+  `repair` fixes drift.
+
+- `temperature` and `seed` in `openkos.yaml` pin chat sampling
+  ([#1013](https://github.com/jasonssdev/openkos/issues/1013)). Unset sends a
+  request byte-identical to before. Pinning reduces variance; it does not make
+  output deterministic.
+
 ### Changed
+
+- New Source concepts carry no `provenance`
+  ([#1076](https://github.com/jasonssdev/openkos/issues/1076)): the `resource`
+  field already names the one raw original, nothing read a Source's own
+  provenance, and the canonical example already described a Source without it.
+  Existing Sources keep theirs.
+
+- `doctor` and `lint` report checks that could not run as data, under their own
+  section, and exit `2` for an incomplete report instead of `0`; a genuine
+  critical failure still exits `1`
+  ([#1002](https://github.com/jasonssdev/openkos/issues/1002)). One unreadable
+  directory now degrades only its own check instead of destroying the report.
+
+- The proximity candidate floor moves from 0.70 to 0.59, calibrated on a
+  91-pair labelled set (recall 0.317 to 0.707, no hard negative nominated)
+  ([#1052](https://github.com/jasonssdev/openkos/issues/1052)). The module
+  docstring had also misdescribed the embed shape the old floor was measured on.
+
+- Edge direction is corrected, not just withdrawn, when the two endpoints' OKF
+  object types show an asymmetric relation is backwards, independent of the
+  language of the rationale
+  ([#991](https://github.com/jasonssdev/openkos/issues/991)).
+
+- A pair a human already resolved with `reconcile` (`supersedes`,
+  `reconciled_with` or `revises`) is never a contradiction candidate again,
+  so `curate`'s cost gate no longer counts it
+  ([#1014](https://github.com/jasonssdev/openkos/issues/1014)).
+
+- `init` ends by naming `bundle/` as the path to open in an editor, and says
+  the workspace root is the wrong one.
+
+- `list --sources` streams its provenance index one document at a time instead
+  of buffering the bundle: a 47% lower peak on a 4101-document bundle
+  ([#1012](https://github.com/jasonssdev/openkos/issues/1012)).
+
+- Internal, with no observable change: `ingest` single-source orchestration,
+  the chat/embed backend resolver, and the `status`/`lint`/`list`/`doctor`/
+  `next` read cores moved into `application/`; frontmatter parse failures are
+  a typed `FrontmatterError` with `yaml` kept behind `model/okf.py`, and Ruff
+  `BLE` is enabled ([#1144](https://github.com/jasonssdev/openkos/issues/1144));
+  dead code was removed and library warnings now route through the CLI
+  ([#1145](https://github.com/jasonssdev/openkos/issues/1145)).
 
 - The computed `STATUS` column `list` prints, the `status` field
   `concept_read` returns, and the MCP concept payload's `status` field now
@@ -112,17 +297,6 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   objects the interrupted run had already written. Sources written before this
   change carry no such key and stay converged.
 
-- A concept id containing a backslash or a colon (`..\..\x`, `C:\x`,
-  `a:b`) is now refused by every id-taking verb and tool, and `slugify` no
-  longer emits a reserved Windows device name (`con`, `prn`, `aux`, `nul`,
-  `com1`-`com9`, `lpt1`-`lpt9`) as a whole slug: it appends `-doc`, so a
-  source titled `CON` files as `sources/con-doc.md`
-  ([#1131](https://github.com/jasonssdev/openkos/issues/1131)). On Windows the
-  old ids could traverse out of the bundle or replace its base path, and the
-  old slugs named files Windows cannot create. A workspace that already holds
-  `sources/con.md` and re-ingests a `con.*` file gets a second source at
-  `con-doc.md`; delete the old one.
-
 - `unmerge` no longer silently overwrites a survivor edited after its merge
   ([#1110](https://github.com/jasonssdev/openkos/issues/1110)). It restored
   the survivor from the ledger's pre-merge snapshot unconditionally, with no
@@ -160,6 +334,13 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   source exactly as before.
 
 ### Security
+
+- `ingest --re-extract` on a Source already raised to `confidential` no longer
+  sends its text to a non-local model when the workspace default is lower
+  ([#1086](https://github.com/jasonssdev/openkos/issues/1086)). The send gate
+  read only the workspace default; it now reads the Source's own resolved
+  sensitivity, the same value that is stamped.
+
 
 - `ingest` no longer writes through a symlinked `bundle/sources` or derived-object
   directory, and the bundle walk no longer reads through a symlinked `.md` file
@@ -199,6 +380,30 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   changed automatically: `openkos doctor` now reports an exposed `.openkos/`,
   store, or `bundle/.state/` with a one-line `chmod go-rwx` fix. `bundle/` and
   `raw/` are your own files and are left alone.
+
+### Measured
+
+- The decision-revision detector was run against pre-registered bars on a
+  non-AMI fixture, and a judge-prompt A/B separating a narrowed choice from an
+  overturned one was adopted (directed REVERSES precision 0.80 to 0.93, at a
+  cost of undirected-change recall 0.80 to 0.69 on one pair)
+  ([#1014](https://github.com/jasonssdev/openkos/issues/1014)).
+- The safest class of cross-source merge was measured for automatic
+  application and **failed** the bar, so no auto-apply was built
+  ([#1054](https://github.com/jasonssdev/openkos/issues/1054)).
+
+### Documentation
+
+- MVP 3 is marked shipped and OKF v0.2 described across `AGENTS.md`, the root
+  documents and `docs/`; the roadmap moves the stable Python API to MVP 5.
+- The CLI reference, the living specs and the eval and example READMEs were
+  audited against the shipped code and aligned with it; living specs no longer
+  carry change history, and cross-ADR amendments are visible from the amended
+  ADR. The docs no longer claim an OpenAI-compatible API the Ollama client
+  never spoke ([#1056](https://github.com/jasonssdev/openkos/issues/1056)).
+- `docs/user-journey.md` gives reading the bundle in an editor as a procedure,
+  and `docs/architecture.md` defines the workspace as the repository rather
+  than the vault root.
 
 ## [0.2.14] - 2026-09-11
 
@@ -2839,7 +3044,8 @@ and Memory) work.
 - Default embedding model is `bge-m3` (ADR-0006), superseding the earlier
   `qwen3-embedding:0.6b` default.
 
-[Unreleased]: https://github.com/jasonssdev/openkos/compare/v0.2.14...HEAD
+[Unreleased]: https://github.com/jasonssdev/openkos/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/jasonssdev/openkos/compare/v0.2.14...v0.3.0
 [0.2.14]: https://github.com/jasonssdev/openkos/compare/v0.2.13...v0.2.14
 [0.2.13]: https://github.com/jasonssdev/openkos/compare/v0.2.12...v0.2.13
 [0.2.12]: https://github.com/jasonssdev/openkos/compare/v0.2.11...v0.2.12
