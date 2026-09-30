@@ -1,6 +1,7 @@
 """Renders the bytes of a fresh bundle's root `index.md`, and appends to it."""
 
 import re
+import unicodedata
 from pathlib import PurePosixPath
 
 from openkos.model import okf
@@ -252,6 +253,29 @@ def _link_identity(target: str) -> str | None:
         else:
             parts.append(part)
     return "/".join(parts).removesuffix(".md")
+
+
+def indexed_concept_ids(index_text: str) -> set[str]:
+    """The concept ids (NFC-normalized) `index_text` lists: the resolved
+    identity of the FIRST markdown link of every bullet, the same reading
+    `remove_index_entry` matches against. Read-only; an index whose
+    frontmatter cannot be split contributes nothing rather than raising."""
+    try:
+        _, body = _split_frontmatter_verbatim(index_text)
+    except ValueError:
+        return set()
+    ids: set[str] = set()
+    for line in body.splitlines():
+        stripped = line.lstrip()
+        if not stripped.startswith(_BULLET_MARKERS):
+            continue
+        match = _LINK_RE.search(stripped)
+        if match is None:
+            continue
+        identity = _link_identity(match.group(1))
+        if identity is not None:
+            ids.add(unicodedata.normalize("NFC", identity))
+    return ids
 
 
 def remove_index_entry(index_text: str, concept_id: str) -> tuple[str, int]:
