@@ -24,6 +24,7 @@ from openkos.cli.main import app
 from openkos.graph import sqlite_graph
 from openkos.llm.base import EMBED_DIM
 from openkos.state import derived, findings, fts
+from tests.unit.cli.conftest import corrupt_identity_sidecar
 from tests.unit.cli.conftest import snapshot_bytes as _snapshot
 from tests.unit.conftest import LOCAL_BACKEND_LOCALITY
 
@@ -1774,6 +1775,32 @@ def test_a_group_ruled_distinct_leaves_needs_attention(
 
     assert after.exit_code == 0, after.stderr
     assert "candidate group" not in after.stdout
+
+
+def test_status_still_surfaces_a_malformed_identity_row_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The reader used to print this itself; now the service returns it and
+    `status` renders it, so the operator still learns a ruling was dropped."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "dup-a.md", title="Stoicism")
+    _write_doc(tmp_path / "bundle" / "concepts" / "dup-b.md", title="STOICISM")
+    runner.invoke(
+        app,
+        [
+            "duplicates",
+            "--keep-distinct",
+            "concepts/dup-a",
+            "--keep-distinct",
+            "concepts/dup-b",
+        ],
+    )
+    _, warning = corrupt_identity_sidecar(tmp_path / "bundle", "concepts/dup-a")
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0, result.stderr
+    assert result.stderr.splitlines().count(warning) == 1
 
 
 # --- regression: partial output on a late, unguarded read failure ---------

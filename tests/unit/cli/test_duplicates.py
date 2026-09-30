@@ -14,8 +14,10 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from openkos.bundle import decisions as bundle_decisions
 from openkos.cli import main
 from openkos.cli.main import app
+from openkos.model import okf
 from openkos.resolution.candidates import CandidateGroup, CandidateGroupReport, Tier
 from tests.unit.cli.conftest import snapshot_with_mtime as _snapshot
 
@@ -664,6 +666,41 @@ def test_kept_distinct_lists_the_ruling(
     view = runner.invoke(app, ["duplicates", "--kept-distinct"])
 
     assert view.exit_code == 0, view.stderr
+    assert "[KEPT DISTINCT] events/afg-eval + events/afg-eval-2" in view.stdout
+
+
+def test_kept_distinct_view_prints_the_malformed_row_warning_verbatim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The library returns the note; the CLI is what puts it on stderr, with
+    the exact wording an operator saw before the note left the library."""
+    _init_workspace(tmp_path, monkeypatch)
+    runner.invoke(
+        app,
+        [
+            "duplicates",
+            "--keep-distinct",
+            "events/afg-eval",
+            "--keep-distinct",
+            "events/afg-eval-2",
+        ],
+    )
+    sidecar = bundle_decisions.decisions_path_for(
+        "events/afg-eval", tmp_path / "bundle"
+    )
+    metadata, body = okf.load_frontmatter(sidecar.read_text(encoding="utf-8"))
+    rows = metadata["identity_decisions"]
+    assert isinstance(rows, list)
+    rows.append({"decision_key": "k", "member_ids": ["only-one"]})
+    sidecar.write_text(okf.dump_frontmatter(metadata, body=body), encoding="utf-8")
+
+    view = runner.invoke(app, ["duplicates", "--kept-distinct"])
+
+    assert view.exit_code == 0, view.stderr
+    assert view.stderr == (
+        f"openkos: warning -- 1 malformed identity decision record(s) in "
+        f"{sidecar}; those groups will be offered again.\n"
+    )
     assert "[KEPT DISTINCT] events/afg-eval + events/afg-eval-2" in view.stdout
 
 

@@ -782,10 +782,13 @@ def _identity_probe(ctx: CurateContext) -> StageProbe:
     # cost line, so it costs no model call and is never re-offered. The
     # truncation notice still describes what the corpus produced --
     # suppression is the human's answer, not a smaller candidate set.
+    note = cli_main._echo_warning_once()
     groups = tuple(
         group
         for group in report.groups
-        if not application_pending.is_group_kept_distinct(ctx.layout, group.member_ids)
+        if not application_pending.is_group_kept_distinct(
+            ctx.layout, group.member_ids, on_warning=note
+        )
     )
     # #867: price what a run would actually pay. The partition is rebuilt
     # in `run` rather than carried from here -- design D4's no-memoization
