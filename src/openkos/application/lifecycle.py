@@ -2483,6 +2483,16 @@ class PreparedRelate:
     can learn what the gate asks and which flag bypasses it. The adapter
     still decides WHETHER to ask (`review`, `--auto`, TTY); this only says
     what is asked."""
+    new_target_text: str | None
+    target_bytes: bytes | None
+    status_outcome: okf.ExportOutcome | None
+    """The deprecated-status export (`deprecated-status-export`, issue
+    #1075): non-`None` only when `rel_type == "supersedes"` ADDED a new
+    edge (`not already_present`). `new_target_text`/`target_bytes` are the
+    target's projected text and its Phase-A snapshot baseline -- `None`
+    for every other relation type or an idempotent re-run, so the caller
+    writes and drift-guards the target ONLY when there is something to
+    write."""
 
 
 def prepare_relate(
@@ -2494,6 +2504,7 @@ def prepare_relate(
     root: Path,
     *,
     now: datetime,
+    target_path: Path,
 ) -> PreparedRelate:
     """Phase A (pure, no writes): read config + the two texts, compute the
     updated `relations:` list and the `log.md` entry -- extracted verbatim
@@ -2541,6 +2552,22 @@ def prepare_relate(
         log_text, now.astimezone().date(), log_line
     )
 
+    # deprecated-status-export (issue #1075, design Decision 5's `relate`
+    # sequence): an ADDED `supersedes` edge exports the target's status in
+    # this SAME Phase A build, so `relate_core` writes it alongside the
+    # source in one Phase B. An idempotent re-run (`already_present`) or
+    # any other relation type leaves both `None` -- nothing new to write,
+    # pre-existing drift stays `repair`'s concern.
+    new_target_text: str | None = None
+    target_bytes: bytes | None = None
+    status_outcome: okf.ExportOutcome | None = None
+    if rel_type == "supersedes" and not already_present:
+        target_bytes, target_text = fsio.snapshot_read(target_path)
+        decision, new_target_text = okf.apply_deprecation_export(
+            target_text, superseded=True
+        )
+        status_outcome = decision.outcome
+
     return PreparedRelate(
         source_canonical=source_canonical,
         target_canonical=target_canonical,
@@ -2554,16 +2581,25 @@ def prepare_relate(
         source_bytes=source_bytes,
         log_bytes=log_bytes,
         confirmation=boolean_confirmation("relate"),
+        new_target_text=new_target_text,
+        target_bytes=target_bytes,
+        status_outcome=status_outcome,
     )
 
 
-def relate_core(source_path: Path, log_path: Path, prepared: PreparedRelate) -> None:
-    """Phase B (after confirm): write the source concept file then
-    `log.md` -- extracted verbatim from `relate`'s former inline body
-    (`main.py:3800-3801` pre-extraction, design D5). Non-interactive;
-    raises `OSError`/`ValueError`. Performs NO VCS side effect --
-    `_autocommit` stays the caller's responsibility."""
+def relate_core(
+    source_path: Path, log_path: Path, prepared: PreparedRelate, *, target_path: Path
+) -> None:
+    """Phase B (after confirm): write the source concept file, then the
+    target's deprecated-status export when one was projected
+    (`prepared.new_target_text`, issue #1075), then `log.md` -- extracted
+    verbatim from `relate`'s former inline body (`main.py:3800-3801`
+    pre-extraction, design D5). Non-interactive; raises `OSError`/
+    `ValueError`. Performs NO VCS side effect -- `_autocommit` stays the
+    caller's responsibility."""
     fsio.write_atomic(source_path, prepared.new_source_text)
+    if prepared.new_target_text is not None:
+        fsio.write_atomic(target_path, prepared.new_target_text)
     fsio.write_atomic(log_path, prepared.new_log_text)
 
 

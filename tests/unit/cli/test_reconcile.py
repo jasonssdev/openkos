@@ -69,6 +69,12 @@ def _body_of(tmp_path: Path, concept_id: str) -> str:
     return body
 
 
+def _metadata_of(tmp_path: Path, concept_id: str) -> dict[str, object]:
+    text = (tmp_path / "bundle" / f"{concept_id}.md").read_text(encoding="utf-8")
+    metadata, _ = okf.load_frontmatter(text)
+    return metadata
+
+
 def _log_text(tmp_path: Path) -> str:
     return (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
 
@@ -1720,6 +1726,33 @@ def test_reverses_known_direction_offers_supersedes_held_by_the_later_decision(
     )
     assert _relations_of(tmp_path, "decisions/alpha") == []
     assert "applied 1, skipped 0, declined 0." in result.output
+
+
+def test_reverses_from_findings_walk_exports_the_earlier_decisions_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """deprecated-status-export (issue #1075, Phase 3, task 3.4): the
+    `--from-findings` REVERSES walk shares `_reconcile_pair` with the
+    two-id `--winner` form, so accepting a REVERSES finding exports the
+    superseded (earlier) Decision's status too, in the same write."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_decision(tmp_path, "decisions/alpha")
+    _write_decision(tmp_path, "decisions/beta")
+    _seed_revision_finding(
+        tmp_path,
+        ("decisions/alpha", "decisions/beta"),
+        verdict="reverses",
+        dates=("2026-01-01", "2026-02-01"),
+        date_states=("dated", "dated"),
+    )
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["reconcile", "--from-findings"], input="y\n")
+
+    assert result.exit_code == 0
+    metadata = _metadata_of(tmp_path, "decisions/alpha")
+    assert metadata["status"] == "deprecated"
+    assert metadata[okf.STATUS_DERIVED_FROM_KEY] == "supersedes"
 
 
 def test_refines_known_direction_offers_revises_held_by_the_later_decision(

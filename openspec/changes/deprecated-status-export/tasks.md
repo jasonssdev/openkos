@@ -136,32 +136,32 @@ stacked in order; the chain strategy is the orchestrator's call.
 
 ## Phase 3 — Additive writers: `reconcile --winner`, `relate supersedes`
 
-- [ ] 3.1 [PRE] Confirm `_reconcile_pair` is the only reconcile write path
+- [x] 3.1 [PRE] Confirm `_reconcile_pair` is the only reconcile write path
   (`cli/main.py:10146`, `:10628`, `:10746` all call it) and already writes
   both pair files under one drift guard (`:10377-10398`).
-- [ ] 3.2 [TEST] `reconcile a b --winner a --auto`: `b` carries the export,
+- [x] 3.2 [TEST] `reconcile a b --winner a --auto`: `b` carries the export,
   same commit as the edge; preview line names `status → deprecated`;
   a `draft` loser keeps `draft` and the preview says so; symmetric and
   `--revision` write no status; an idempotent re-run (edge present, export
   missing) writes no status; a declined gate leaves `b`'s bytes unchanged.
   RED on the first.
-- [ ] 3.3 [IMPL] In `_reconcile_pair`, when `edge_type == "supersedes"`
+- [x] 3.3 [IMPL] In `_reconcile_pair`, when `edge_type == "supersedes"`
   and the edge was added, pass the target text through
   `apply_deprecation_export(superseded=True)`; preview/echo wording.
   GREEN 3.2.
-- [ ] 3.4 [TEST] `--from-findings` and the revision-findings walk
+- [x] 3.4 [TEST] `--from-findings` and the revision-findings walk
   (`reconcile` REVERSES verdict → `supersedes`) export the loser too.
   Expected first-try GREEN (shared path) → 3.5.
-- [ ] 3.5 [MUT] Guard 3.4: make 3.3's branch key on `edge_added_a` only;
+- [x] 3.5 [MUT] Guard 3.4: make 3.3's branch key on `edge_added_a` only;
   the `holder == b` walk case must go RED. Revert, purge.
-- [ ] 3.6 [TEST] `relate a supersedes b --auto` exports `b` in the same
+- [x] 3.6 [TEST] `relate a supersedes b --auto` exports `b` in the same
   commit; `relate a references b` leaves `b` untouched; idempotent relate
   writes no status; drift guard refuses when `b` changed after the preview.
   RED.
-- [ ] 3.7 [IMPL] `prepare_relate` projects the target when the added type
+- [x] 3.7 [IMPL] `prepare_relate` projects the target when the added type
   is `supersedes` and ids differ; `relate_core` writes it; baselines and
   commit paths include it; preview line. GREEN 3.6.
-- [ ] 3.8 After this phase, `lint` on a bundle built only by `reconcile`
+- [x] 3.8 After this phase, `lint` on a bundle built only by `reconcile`
   and `relate` reports zero `status-export-drift`.
 
 ## Phase 4 — Subtractive writers: `forget`, `purge`

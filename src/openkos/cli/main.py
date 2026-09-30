@@ -7211,7 +7211,7 @@ def relate(
         source_path, source_canonical = application_lifecycle.resolve_concept_path(
             layout.bundle_dir, source_id
         )
-        _, target_canonical = application_lifecycle.resolve_concept_path(
+        target_path, target_canonical = application_lifecycle.resolve_concept_path(
             layout.bundle_dir, target_id
         )
         if source_canonical == target_canonical:
@@ -7235,6 +7235,7 @@ def relate(
             rel_type,
             root,
             now=now,
+            target_path=target_path,
         )
     except (OSError, ValueError) as exc:
         typer.echo(
@@ -7259,6 +7260,9 @@ def relate(
             f"+{{target: {prepared.target_canonical}, type: {prepared.rel_type}}})"
         )
     typer.echo(preview_line)
+    if prepared.status_outcome is not None:
+        suffix = _status_export_preview_suffix(prepared.status_outcome)
+        typer.echo(f"  ~ bundle/{prepared.target_canonical}.md ({suffix.lstrip('; ')})")
     typer.echo(f"  ~ {log_path.name} (new dated entry)")
 
     if not auto and prepared.review:
@@ -7273,17 +7277,18 @@ def relate(
 
     # Issue #313: every byte below was computed from a pre-prompt read, so
     # re-validate each target now -- after the gate, before the first write.
-    _reject_drifted_targets(
-        layout,
-        {
-            source_path: prepared.source_bytes,
-            log_path: prepared.log_bytes,
-        },
-        "relate",
-    )
+    drift_baselines = {
+        source_path: prepared.source_bytes,
+        log_path: prepared.log_bytes,
+    }
+    if prepared.target_bytes is not None:
+        drift_baselines[target_path] = prepared.target_bytes
+    _reject_drifted_targets(layout, drift_baselines, "relate")
 
     try:
-        application_lifecycle.relate_core(source_path, log_path, prepared)
+        application_lifecycle.relate_core(
+            source_path, log_path, prepared, target_path=target_path
+        )
     except (OSError, ValueError) as exc:
         typer.echo(
             f"openkos relate: failed while writing the relate -- {exc}.", err=True
@@ -7296,9 +7301,12 @@ def relate(
         f"'bundle/{prepared.target_canonical}.md' ({log_path.name} updated)."
     )
 
+    commit_paths = [f"bundle/{prepared.source_canonical}.md", "bundle/log.md"]
+    if prepared.new_target_text is not None:
+        commit_paths.insert(1, f"bundle/{prepared.target_canonical}.md")
     _autocommit(
         root,
-        [f"bundle/{prepared.source_canonical}.md", "bundle/log.md"],
+        commit_paths,
         f"openkos: relate {prepared.source_canonical} -> "
         f"{prepared.target_canonical} ({prepared.rel_type})",
     )
@@ -10363,6 +10371,20 @@ def reconcile(
         _refresh_derived_after_write(layout, cfg, verb="reconcile")
 
 
+def _status_export_preview_suffix(outcome: okf.ExportOutcome) -> str:
+    """Preview text naming a deprecated-status export outcome for the
+    counterpart of a directed `supersedes` write (deprecated-status-export,
+    issue #1075, design Decision 5's reconcile/relate sequences). `EXPORT`
+    names the status change; `BLOCKED` states the human value stays and the
+    concept is hidden regardless; every other outcome (`UNCHANGED`) adds
+    nothing -- this write did not change that concept's superseded-ness."""
+    if outcome is okf.ExportOutcome.EXPORT:
+        return "; status → deprecated"
+    if outcome is okf.ExportOutcome.BLOCKED:
+        return "; own status preserved (hidden from retrieval regardless)"
+    return ""
+
+
 def _reconcile_pair(
     root: Path,
     layout: config.WorkspaceLayout,
@@ -10502,6 +10524,32 @@ def _reconcile_pair(
             )
             note_added_b = True
 
+        # deprecated-status-export (issue #1075, design Decision 5): a
+        # directed `supersedes` edge that was just ADDED (never on a
+        # symmetric/`revises` reconcile, and never on an idempotent
+        # no-edge re-run) exports the counterpart's status in this SAME
+        # Phase B write. `edge_type == "revises"` and the idempotent case
+        # both leave `status_outcome` `None`, writing nothing.
+        status_outcome: okf.ExportOutcome | None = None
+        target_is_a = False
+        if holder_canonical is not None and edge_type == "supersedes":
+            edge_added = (
+                edge_added_a if holder_canonical == canonical_a else edge_added_b
+            )
+            if edge_added:
+                target_is_a = holder_canonical != canonical_a
+                if target_is_a:
+                    decision = okf.project_deprecation_export(
+                        metadata_a, superseded=True
+                    )
+                    metadata_a = decision.metadata
+                else:
+                    decision = okf.project_deprecation_export(
+                        metadata_b, superseded=True
+                    )
+                    metadata_b = decision.metadata
+                status_outcome = decision.outcome
+
         metadata_a[okf.RELATIONS_KEY] = okf.encode_relations(relations_a)
         metadata_b[okf.RELATIONS_KEY] = okf.encode_relations(relations_b)
         new_text_a = okf.dump_frontmatter(metadata_a, body_a)
@@ -10540,6 +10588,15 @@ def _reconcile_pair(
         )
         raise typer.Exit(code=1) from exc
 
+    status_suffix_a = ""
+    status_suffix_b = ""
+    if status_outcome is not None:
+        suffix = _status_export_preview_suffix(status_outcome)
+        if target_is_a:
+            status_suffix_a = suffix
+        else:
+            status_suffix_b = suffix
+
     if announce_preview:
         typer.echo("openkos reconcile: proposed changes:")
         if holder_canonical is not None:
@@ -10550,12 +10607,14 @@ def _reconcile_pair(
         typer.echo(
             f"  ~ bundle/{canonical_a}.md (relation "
             f"{'added' if edge_added_a else 'unchanged'}; note "
-            f"{'appended' if note_added_a else 'already present'})"
+            f"{'appended' if note_added_a else 'already present'}"
+            f"{status_suffix_a})"
         )
         typer.echo(
             f"  ~ bundle/{canonical_b}.md (relation "
             f"{'added' if edge_added_b else 'unchanged'}; note "
-            f"{'appended' if note_added_b else 'already present'})"
+            f"{'appended' if note_added_b else 'already present'}"
+            f"{status_suffix_b})"
         )
         typer.echo(f"  ~ {log_path.name} (new dated entry)")
 
@@ -12643,6 +12702,7 @@ def _run_suggest_relations_apply(
             continue
 
         source_path = okf.concept_path_for(edge.source_id, layout.bundle_dir)
+        target_path = okf.concept_path_for(edge.target_id, layout.bundle_dir)
         try:
             prepared = application_lifecycle.prepare_relate(
                 source_path,
@@ -12652,6 +12712,7 @@ def _run_suggest_relations_apply(
                 result.suggested_type,
                 root,
                 now=now,
+                target_path=target_path,
             )
         except (OSError, ValueError) as exc:
             typer.echo(
@@ -12666,14 +12727,22 @@ def _run_suggest_relations_apply(
             skipped += 1
             continue
 
+        drift_baselines = {
+            source_path: prepared.source_bytes,
+            log_path: prepared.log_bytes,
+        }
+        if prepared.target_bytes is not None:
+            drift_baselines[target_path] = prepared.target_bytes
         _reject_drifted_targets(
             layout,
-            {source_path: prepared.source_bytes, log_path: prepared.log_bytes},
+            drift_baselines,
             "suggest-relations --apply",
         )
 
         try:
-            application_lifecycle.relate_core(source_path, log_path, prepared)
+            application_lifecycle.relate_core(
+                source_path, log_path, prepared, target_path=target_path
+            )
         except (OSError, ValueError) as exc:
             typer.echo(
                 "openkos suggest-relations --apply: failed while relating "
@@ -12682,9 +12751,12 @@ def _run_suggest_relations_apply(
             )
             raise typer.Exit(code=1) from exc
 
+        apply_commit_paths = [f"bundle/{edge.source_id}.md", "bundle/log.md"]
+        if prepared.new_target_text is not None:
+            apply_commit_paths.insert(1, f"bundle/{edge.target_id}.md")
         _autocommit(
             root,
-            [f"bundle/{edge.source_id}.md", "bundle/log.md"],
+            apply_commit_paths,
             f"openkos: relate {edge.source_id} -> {edge.target_id} "
             f"({result.suggested_type})",
         )
