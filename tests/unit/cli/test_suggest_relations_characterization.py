@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from typer.testing import CliRunner
+from typer.testing import CliRunner, Result
 
 from openkos.cli import main
 from openkos.cli.main import app
@@ -144,7 +144,7 @@ def _run(
     stdin: str | None = None,
     calls: list[dict[str, Any]] | None = None,
     extra: Callable[[], dict[str, Any]] | None = None,
-) -> None:
+) -> Result:
     result = runner.invoke(app, ["suggest-relations", *args], input=stdin)
     actual: dict[str, Any] = {
         "exit_code": result.exit_code,
@@ -158,6 +158,7 @@ def _run(
     if extra is not None:
         actual["extra"] = extra()
     _GOLDENS.check(scenario, actual)
+    return result
 
 
 def _two_docs(tmp_path: Path) -> None:
@@ -510,6 +511,42 @@ def test_partial_batch(
     calls: list[dict[str, Any]] = []
     _patch_typing(monkeypatch, calls, tmp_path, failure=error, keep=1)
     _run(scenario, tmp_path, ["--auto"], calls=calls)
+
+
+@pytest.mark.parametrize(
+    ("scenario", "error", "wording"),
+    [
+        (
+            "partial_unavailable_openai_compatible",
+            OllamaUnavailable("server down"),
+            "Start your OpenAI-compatible server at 127.0.0.1:1",
+        ),
+        (
+            "partial_model_not_found_openai_compatible",
+            OllamaModelNotFound("nope"),
+            "Make sure your OpenAI-compatible server serves 'qwen3:8b'",
+        ),
+    ],
+)
+def test_partial_batch_on_an_openai_compatible_workspace_names_the_backend(
+    scenario: str,
+    error: OllamaError,
+    wording: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The partial-batch line follows the configured backend too (#1175)."""
+    _init_workspace(tmp_path, monkeypatch)
+    with (tmp_path / "openkos.yaml").open("a", encoding="utf-8") as handle:
+        handle.write("backend: openai-compatible\nbase_url: http://127.0.0.1:1/v1\n")
+    monkeypatch.delenv("OPENKOS_OPENAI_API_KEY", raising=False)
+    _two_docs(tmp_path)
+    _patch_edges(monkeypatch, [_A_B, _C_D])
+    calls: list[dict[str, Any]] = []
+    _patch_typing(monkeypatch, calls, tmp_path, failure=error, keep=1)
+    result = _run(scenario, tmp_path, ["--auto"], calls=calls)
+    assert "ollama" not in result.stderr.lower()
+    assert wording in result.stderr
 
 
 def test_partial_batch_with_the_truncation_hint(

@@ -92,6 +92,21 @@
     "stderr": "openkos suggest-volatility: failed after suggesting 1 concept type(s) -- model 'qwen3:8b' is not installed. Pull it with `ollama pull qwen3:8b`, then try again.\n",
     "stdout": "openkos suggest-volatility: workspace at <ROOT>\n\n[slow] Person\n  rationale: kept work\n\nNext: openkos set-volatility <ConceptType> <tier>\n"
   },
+  "partial_model_not_found_openai_compatible": {
+    "calls": [
+      {
+        "bundle_dir": "<ROOT>/bundle",
+        "include_confidential": "False",
+        "llm_type": "OfflineOpenAICompatible",
+        "local_exemption": "True",
+        "on_progress": "None",
+        "rationale_language": "None"
+      }
+    ],
+    "exit_code": 1,
+    "stderr": "openkos suggest-volatility: failed after suggesting 1 concept type(s) -- model 'qwen3:8b' is not installed. Make sure your OpenAI-compatible server serves 'qwen3:8b' (run `openkos doctor` to see the models it reports), then try again.\n",
+    "stdout": "openkos suggest-volatility: workspace at <ROOT>\n\n[slow] Person\n  rationale: kept work\n\nNext: openkos set-volatility <ConceptType> <tier>\n"
+  },
   "partial_unavailable": {
     "calls": [
       {
@@ -105,6 +120,21 @@
     ],
     "exit_code": 1,
     "stderr": "openkos suggest-volatility: failed after suggesting 1 concept type(s) -- Ollama not reachable at x. Start it with `ollama serve`, then try again. Or run `openkos doctor` to diagnose the environment.\n",
+    "stdout": "openkos suggest-volatility: workspace at <ROOT>\n\n[slow] Person\n  rationale: kept work\n\nNext: openkos set-volatility <ConceptType> <tier>\n"
+  },
+  "partial_unavailable_openai_compatible": {
+    "calls": [
+      {
+        "bundle_dir": "<ROOT>/bundle",
+        "include_confidential": "False",
+        "llm_type": "OfflineOpenAICompatible",
+        "local_exemption": "True",
+        "on_progress": "None",
+        "rationale_language": "None"
+      }
+    ],
+    "exit_code": 1,
+    "stderr": "openkos suggest-volatility: failed after suggesting 1 concept type(s) -- server down. Start your OpenAI-compatible server at 127.0.0.1:1, then try again. Or run `openkos doctor` to diagnose the environment.\n",
     "stdout": "openkos suggest-volatility: workspace at <ROOT>\n\n[slow] Person\n  rationale: kept work\n\nNext: openkos set-volatility <ConceptType> <tier>\n"
   },
   "raised_generic": {

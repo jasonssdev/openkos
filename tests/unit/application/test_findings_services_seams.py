@@ -753,3 +753,31 @@ def test_revisions_batch_failure_message_keeps_the_three_tiers(
         "openkos revisions: failed after judging 0 of 3 planned pair(s) -- "
         "model 'm' is not installed. Pull it with `ollama pull m`, then try again."
     )
+
+
+def test_revisions_batch_failure_message_words_the_configured_backend(
+    tmp_path: Path,
+) -> None:
+    import dataclasses
+
+    config.write_config(tmp_path)
+    cfg = dataclasses.replace(
+        config.read_config(tmp_path),
+        backend="openai-compatible",
+        base_url="http://127.0.0.1:1/v1",
+        model="m",
+    )
+
+    def _outcome(failure: Exception) -> Any:
+        return revisions_service.RevisionOutcome(results=(), failure=failure)  # type: ignore[arg-type]
+
+    unavailable = revisions_service.revisions_batch_failure_message(
+        _outcome(BackendUnavailable("gone")), total=3, model="m", cfg=cfg
+    )
+    assert "Start your OpenAI-compatible server at 127.0.0.1:1" in unavailable
+    assert "ollama" not in unavailable
+    missing = revisions_service.revisions_batch_failure_message(
+        _outcome(BackendModelNotFound("x")), total=3, model="m", cfg=cfg
+    )
+    assert "Make sure your OpenAI-compatible server serves 'm'" in missing
+    assert "ollama" not in missing

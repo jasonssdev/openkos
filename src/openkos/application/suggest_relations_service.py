@@ -129,7 +129,10 @@ def unreadable_refusal(verb: str, exc: Exception) -> WorkspaceUnreadable:
 
 
 def batch_failure_message(
-    context: str, failure: BaseException | None, model: str
+    context: str,
+    failure: BaseException | None,
+    model: str,
+    cfg: config.Config | None = None,
 ) -> str:
     """The one stderr line for a partial batch (#441): the same 3-tier
     cause-specific wording the raise-path handlers use, prefixed with `context`
@@ -138,25 +141,29 @@ def batch_failure_message(
     generic branch must come last or their remediation is lost."""
     if isinstance(failure, BackendUnavailable):
         return (
-            f"{context} -- {failure}. Start it with `ollama serve`, then try "
-            f"again.{DOCTOR_HINT}"
+            f"{context} -- {failure}. {application_backends.start_hint(cfg)}, "
+            f"then try again.{DOCTOR_HINT}"
         )
     if isinstance(failure, BackendModelNotFound):
         return (
-            f"{context} -- model '{model}' is not installed. Pull it with "
-            f"`ollama pull {model}`, then try again."
+            f"{context} -- model '{model}' is not installed. "
+            f"{application_backends.install_hint(cfg, model)}, then try again."
         )
     return f"{context} -- {failure}."
 
 
 def relations_batch_failure_message(
-    batch: EdgeSuggestionBatch, *, total: int, model: str
+    batch: EdgeSuggestionBatch,
+    *,
+    total: int,
+    model: str,
+    cfg: config.Config | None = None,
 ) -> str:
     context = (
         f"openkos {_VERB}: failed after suggesting "
         f"{len(batch.results)} of {total} untyped edge(s)"
     )
-    return batch_failure_message(context, batch.failure, model)
+    return batch_failure_message(context, batch.failure, model, cfg)
 
 
 # -- Inputs / ports / observer ----------------------------------------------
@@ -283,6 +290,8 @@ class SuggestRelationsOutcome:
     failure: BackendError | None = None
     model: str = ""
     batch: EdgeSuggestionBatch | None = None
+    cfg: config.Config | None = None
+    """The run's config, so a partial-batch message words the backend."""
 
 
 @dataclass(frozen=True)
@@ -703,6 +712,7 @@ def suggest_relations(
         failure=batch.failure,
         model=cfg.model,
         batch=batch,
+        cfg=cfg,
     )
 
 

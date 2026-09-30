@@ -960,10 +960,16 @@ class RevisionsRun:
     ]
     model: str
     report: RevisionsReport | None = None
+    cfg: config.Config | None = None
+    """The run's config, so a partial-batch message words the backend."""
 
 
 def revisions_batch_failure_message(
-    outcome: RevisionOutcome, *, total: int, model: str
+    outcome: RevisionOutcome,
+    *,
+    total: int,
+    model: str,
+    cfg: config.Config | None = None,
 ) -> str:
     """One line for a partial `RevisionOutcome` (#441 precedent): the same
     3-tier cause-specific wording the sibling verbs use, prefixed with how much
@@ -977,13 +983,13 @@ def revisions_batch_failure_message(
     )
     if isinstance(failure, BackendUnavailable):
         return (
-            f"{context} -- {failure}. Start it with `ollama serve`, then "
-            f"try again.{application_backends.DOCTOR_HINT}"
+            f"{context} -- {failure}. {application_backends.start_hint(cfg)}, "
+            f"then try again.{application_backends.DOCTOR_HINT}"
         )
     if isinstance(failure, BackendModelNotFound):
         return (
-            f"{context} -- model '{model}' is not installed. Pull it with "
-            f"`ollama pull {model}`, then try again."
+            f"{context} -- model '{model}' is not installed. "
+            f"{application_backends.install_hint(cfg, model)}, then try again."
         )
     return f"{context} -- {failure}."
 
@@ -1082,5 +1088,6 @@ def run_revisions(
     return RevisionsRun(
         status="completed",
         model=cfg.model,
+        cfg=cfg,
         report=RevisionsReport(decisions=decisions, plan=plan, outcome=outcome),
     )
