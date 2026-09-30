@@ -3,7 +3,7 @@
 MCP adapter can be a thin layer instead of a second implementation).
 
 This module ORCHESTRATES: it wires `config.read_config`, the `index.md`
-read, `lint.resolve_windows`, `lint.collect_docs`, and all thirteen
+read, `lint.resolve_windows`, `lint.collect_docs`, and all fourteen
 `lint.check_*` calls into one read, and returns the result as the SAME
 `lint.LintReport` that module already declares. `openkos/lint.py` IMPLEMENTS
 the checks themselves (`LintDoc`, `LintFinding`, `LintReport`, every
@@ -25,7 +25,7 @@ which is why `status` was split into `read_status_overview` (cheap,
 guarded, called and rendered FIRST) and `build_status_report` (everything
 else, called and rendered SECOND). `lint`'s pre-extraction CLI body was the
 opposite shape: EVERY read and check (`config.read_config`, the `index.md`
-read, `lint.collect_docs`, `lint.resolve_windows`, and all thirteen
+read, `lint.collect_docs`, `lint.resolve_windows`, and all fourteen
 `check_*`/`scan_*` calls) ran to completion before the first `typer.echo`
 -- verified by reading the pre-extraction `cli/main.py::lint` body top to
 bottom: its first `typer.echo` was the one printing the workspace header,
@@ -90,9 +90,9 @@ from typing import Final
 from openkos import config, read_outcome
 from openkos import lint as lint_check
 
-TOTAL_CHECKS: Final = 13
+TOTAL_CHECKS: Final = 14
 """How many `check_*`/`scan_*` calls `build_lint_report` makes (ADR-0022,
-design.md Decision 5) -- NOT the same number as `LintReport`'s fourteen
+design.md Decision 5) -- NOT the same number as `LintReport`'s fifteen
 finding-list fields: `check_below_source_sensitivity` is ONE call that
 feeds two fields (`below_source` and `multi_source_uncovered`). The render
 counts line (`cli/main.py`'s `lint()`) reports completed/not-run against
@@ -120,7 +120,7 @@ def build_lint_report(layout: config.WorkspaceLayout) -> lint_check.LintReport:
     `config.read_config`, the `bundle/index.md` read, `lint.collect_docs`
     (the ONE bundle walk that feeds `check_stale_stamps`, `check_orphans`,
     and the eight checks sharing `docs` below -- design D3's no-fifth-walk
-    guard), `lint.resolve_windows`, then all thirteen `check_*`/`scan_*`
+    guard), `lint.resolve_windows`, then all fourteen `check_*`/`scan_*`
     calls. `today` is computed ONCE via `datetime.now(UTC).date()` and
     injected into `check_stale_stamps` -- the clock is never read inside
     `lint.py` itself (see that module's own contract), so this is the one
@@ -218,6 +218,18 @@ def build_lint_report(layout: config.WorkspaceLayout) -> lint_check.LintReport:
             read_outcome.NotRun(label="Dot-directory markdown", reason=str(exc))
         )
 
+    # deprecated-status-export (issue #1075): its own walk, never the `docs`
+    # list -- it must see a document's own `status`/marker even when its
+    # `relations:` are malformed or it fails to parse, neither of which
+    # `LintDoc` retains. Its own `NotRun` half is an incomplete-edge-walk
+    # DATA outcome, not an `OSError`, so it is returned directly rather than
+    # caught.
+    status_export, status_export_not_run = lint_check.check_status_export(
+        layout.bundle_dir
+    )
+    if status_export_not_run is not None:
+        not_run.append(status_export_not_run)
+
     notices = window_notices + skip_notices
 
     return lint_check.LintReport(
@@ -232,6 +244,7 @@ def build_lint_report(layout: config.WorkspaceLayout) -> lint_check.LintReport:
         multi_source_uncovered=multi_source_uncovered,
         dangling_provenance=dangling_provenance,
         unbacked_provenance=unbacked_provenance,
+        status_export=status_export,
         non_nfc=non_nfc,
         state_dir_markdown=state_dir_markdown,
         dot_dir_markdown=dot_dir_markdown,

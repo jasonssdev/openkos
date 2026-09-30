@@ -29,6 +29,17 @@ Plan phase (every refusal happens here, before any write):
    `bundle_ledger.migrate_sidecars_to_okf_v02`'s dry run; a `ValueError`
    there (an embedded ledger snapshot that cannot be migrated
    deterministically) also refuses the whole run.
+3b. Deprecated-status export pass (deprecated-status-export, issue #1075,
+   design.md Decision 4): AFTER every document migrates (or is confirmed
+   Unchanged), `okf.apply_deprecation_export` runs over the POST-migration
+   text of every document, evaluated against the bundle's superseded set
+   (`lifecycle.superseded_from_metadata` over that SAME post-migration
+   metadata). A migrated document's `DocumentRewrite` is amended in place;
+   an export-only document gets a fresh one -- AT MOST ONE rewrite per
+   document either way. BLOCKED and an incomplete-walk-skipped WITHDRAW
+   write nothing and are reported by id only
+   (`RepairPlan.blocked_export_ids`/`skipped_withdrawal_ids`), never as a
+   refusal -- this pass never refuses the run.
 4. Bundle version: `index.md`, when present, is flip-planned when its
    `okf_version` differs from `okf.OKF_VERSION` (a bundle with no
    `index.md` plans no flip -- OKF §11 tolerance).
@@ -47,10 +58,10 @@ idempotent, so a re-run completes it.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
-from openkos import config, fsio
+from openkos import config, fsio, lifecycle
 from openkos.bundle import ledger as bundle_ledger
 from openkos.model import okf
 
@@ -80,15 +91,52 @@ class RepairRefusal:
 
 
 @dataclass(frozen=True)
+class RepairDocumentChanges:
+    """Every independent rewrite rule that fired for one repaired document:
+    `okf.migrate_document`'s own four rules, WIDENED with the
+    deprecated-status export outcome (deprecated-status-export, issue
+    #1075) -- a `DocumentRewrite` field, never `okf.MigrationChanges`
+    itself, so `migrate_document`'s general OKF-migration contract stays
+    untouched by a repair-only concern.
+
+    `export` is `okf.ExportOutcome.UNCHANGED` for a rewrite that migration
+    alone produced (no export activity), and for a document that needed no
+    migration but was rewritten ONLY for its export -- `generated`,
+    `status`, `sources`, and `citations_removed` are all `False` in that
+    case, matching `migrate_document`'s own no-rule-fired shape."""
+
+    generated: bool
+    status: bool
+    sources: bool
+    citations_removed: bool
+    legacy_citations: bool
+    export: okf.ExportOutcome
+
+    @classmethod
+    def from_migration(cls, changes: okf.MigrationChanges) -> RepairDocumentChanges:
+        """Widen a fresh `okf.MigrationChanges` with `export=UNCHANGED`."""
+        return cls(
+            generated=changes.generated,
+            status=changes.status,
+            sources=changes.sources,
+            citations_removed=changes.citations_removed,
+            legacy_citations=changes.legacy_citations,
+            export=okf.ExportOutcome.UNCHANGED,
+        )
+
+
+@dataclass(frozen=True)
 class DocumentRewrite:
-    """One concept document `migrate_document` rewrote (a `Migrated`
-    result) during the plan's OKF scan. `path` is absolute; `text` is the
+    """One concept document rewritten by the plan's OKF scan: by
+    `migrate_document` (a `Migrated` result), by the deprecated-status
+    export projection, or both -- AT MOST ONE `DocumentRewrite` per
+    document (design.md Decision 4). `path` is absolute; `text` is the
     full new bytes `apply_repair` writes verbatim via `fsio.write_atomic`."""
 
     concept_id: str
     path: Path
     text: str
-    changes: okf.MigrationChanges
+    changes: RepairDocumentChanges
 
 
 @dataclass(frozen=True)
@@ -116,7 +164,18 @@ class RepairPlan:
     `legacy_citations_ids` is every concept id whose `# Citations` section
     was left in place (hand-authored, non-empty, or not the document's
     true bare trailing heading), sorted, for the report's "left in place"
-    line."""
+    line.
+
+    `blocked_export_ids` (deprecated-status-export, issue #1075) is every
+    concept id whose deprecated-status export outcome is BLOCKED, sorted --
+    superseded, but its own human-authored `status` is neither
+    absent/`stable`/legacy `active` nor an existing valid export, so
+    NOTHING is written for it (no `DocumentRewrite`) and it is reported by
+    id only. `skipped_withdrawal_ids` is every concept id whose export
+    outcome would be WITHDRAW but the edge walk was incomplete (an
+    unreadable document or malformed `relations:` elsewhere in the bundle)
+    -- also unwritten and reported by id only (spec: 'Withdrawal Requires A
+    Complete Edge Walk')."""
 
     extraction: list[tuple[str, list[okf.MergeLedgerEntry]]]
     document_rewrites: list[DocumentRewrite]
@@ -125,12 +184,17 @@ class RepairPlan:
     index_new_text: str | None
     baselines: dict[Path, bytes]
     legacy_citations_ids: tuple[str, ...]
+    blocked_export_ids: tuple[str, ...] = ()
+    skipped_withdrawal_ids: tuple[str, ...] = ()
 
     @property
     def has_work(self) -> bool:
         """`False` exactly when there is nothing for `repair` to do
-        (design.md Decision 9 step 5): the CLI prints "nothing to migrate"
-        and exits 0 without calling `apply_repair`."""
+        (design.md Decision 9 step 5, widened by deprecated-status-export
+        issue #1075 to also cover export drift): the CLI prints "nothing
+        to repair" and exits 0 without calling `apply_repair`. A BLOCKED or
+        skipped-withdrawal concept alone does NOT count as work -- neither
+        is ever written."""
         return bool(
             self.extraction
             or self.document_rewrites
@@ -183,10 +247,18 @@ def plan_repair(bundle_dir: Path) -> RepairPlan | RepairRefusal:
     extraction_ids = {concept_id for concept_id, _ in unmigrated}
 
     baselines: dict[Path, bytes] = {}
-    document_rewrites: list[DocumentRewrite] = []
+    document_rewrites: dict[str, DocumentRewrite] = {}
     legacy_citations_ids: list[str] = []
     refused: list[tuple[str, str]] = []
     current_texts: dict[str, str] = {}
+    # deprecated-status export pass (deprecated-status-export, issue #1075,
+    # design.md Decision 4): every non-reserved doc's POST-migration text
+    # and raw bytes, kept so the export pass below can evaluate the
+    # projection over the SAME text `apply_repair` would otherwise write,
+    # composing at most ONE `DocumentRewrite` per document.
+    migrated_texts: dict[str, str] = {}
+    paths_by_id: dict[str, Path] = {}
+    raw_bytes_by_id: dict[str, bytes] = {}
 
     for path in okf.iter_bundle_markdown(bundle_dir):
         if path.name in okf.RESERVED_FILENAMES:
@@ -203,20 +275,23 @@ def plan_repair(bundle_dir: Path) -> RepairPlan | RepairRefusal:
             refused.append((concept_id, result.reason))
             continue
         if isinstance(result, okf.Migrated):
-            document_rewrites.append(
-                DocumentRewrite(
-                    concept_id=concept_id,
-                    path=path,
-                    text=result.text,
-                    changes=result.changes,
-                )
+            document_rewrites[concept_id] = DocumentRewrite(
+                concept_id=concept_id,
+                path=path,
+                text=result.text,
+                changes=RepairDocumentChanges.from_migration(result.changes),
             )
             baselines[path] = raw_bytes
+            migrated_texts[concept_id] = result.text
             if result.changes.legacy_citations:
                 legacy_citations_ids.append(concept_id)
-        elif result.legacy_citations:
-            legacy_citations_ids.append(concept_id)
+        else:
+            migrated_texts[concept_id] = working_text
+            if result.legacy_citations:
+                legacy_citations_ids.append(concept_id)
 
+        paths_by_id[concept_id] = path
+        raw_bytes_by_id[concept_id] = raw_bytes
         if is_extraction_target:
             baselines[path] = raw_bytes
 
@@ -247,6 +322,58 @@ def plan_repair(bundle_dir: Path) -> RepairPlan | RepairRefusal:
         sidecar_bytes, _ = fsio.snapshot_read(sidecar_path)
         baselines[sidecar_path] = sidecar_bytes
 
+    # deprecated-status export pass (deprecated-status-export, issue #1075,
+    # design.md Decision 4): the superseded set is computed from the
+    # POST-migration metadata -- migration never touches `relations:`, so
+    # this equals the pre-migration set (pinned by task 5.1's regression).
+    post_migration_metadata: dict[str, dict[str, object] | None] = {
+        cid: okf.load_frontmatter(text)[0] for cid, text in migrated_texts.items()
+    }
+    superseded = lifecycle.superseded_from_metadata(post_migration_metadata)
+
+    blocked_export_ids: list[str] = []
+    skipped_withdrawal_ids: list[str] = []
+    for concept_id, metadata in post_migration_metadata.items():
+        if metadata is None:
+            # Unreachable in practice: every entry here came from
+            # `migrated_texts`, built only from documents `okf.
+            # load_frontmatter` already parsed successfully above. The
+            # `| None` in this dict's type exists only to satisfy
+            # `lifecycle.superseded_from_metadata`'s shared signature.
+            continue
+        decision = okf.project_deprecation_export(
+            metadata, superseded=concept_id in superseded.ids
+        )
+        if decision.outcome is okf.ExportOutcome.UNCHANGED:
+            continue
+        if decision.outcome is okf.ExportOutcome.WITHDRAW and not superseded.complete:
+            skipped_withdrawal_ids.append(concept_id)
+            continue
+        if decision.outcome is okf.ExportOutcome.BLOCKED:
+            blocked_export_ids.append(concept_id)
+            continue
+
+        path = paths_by_id[concept_id]
+        _, migrated_body = okf.load_frontmatter(migrated_texts[concept_id])
+        new_text = okf.dump_frontmatter(decision.metadata, migrated_body)
+        existing = document_rewrites.get(concept_id)
+        changes = (
+            replace(existing.changes, export=decision.outcome)
+            if existing is not None
+            else RepairDocumentChanges(
+                generated=False,
+                status=False,
+                sources=False,
+                citations_removed=False,
+                legacy_citations=False,
+                export=decision.outcome,
+            )
+        )
+        document_rewrites[concept_id] = DocumentRewrite(
+            concept_id=concept_id, path=path, text=new_text, changes=changes
+        )
+        baselines.setdefault(path, raw_bytes_by_id[concept_id])
+
     index_path = bundle_dir / "index.md"
     index_new_text: str | None = None
     if index_path.is_file():
@@ -260,12 +387,14 @@ def plan_repair(bundle_dir: Path) -> RepairPlan | RepairRefusal:
 
     return RepairPlan(
         extraction=unmigrated,
-        document_rewrites=document_rewrites,
+        document_rewrites=list(document_rewrites.values()),
         sidecar_rewrites=sidecar_rewrites,
         index_path=index_path,
         index_new_text=index_new_text,
         baselines=baselines,
         legacy_citations_ids=tuple(sorted(set(legacy_citations_ids))),
+        blocked_export_ids=tuple(sorted(blocked_export_ids)),
+        skipped_withdrawal_ids=tuple(sorted(skipped_withdrawal_ids)),
     )
 
 

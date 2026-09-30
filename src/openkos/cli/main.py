@@ -11598,9 +11598,16 @@ def lint() -> None:
     else:
         for finding in report.dot_dir_markdown:
             typer.echo(f"  {finding.path}: {finding.detail}")
+    typer.echo()
+    typer.echo("Deprecated-status exports:")
+    if not report.status_export:
+        typer.echo("  No deprecated-status export findings.")
+    else:
+        for finding in report.status_export:
+            typer.echo(f"  {finding.concept_id}: {finding.detail}")
 
     # Completed/not-run counts (design.md Decision 5, ADR-0022): against
-    # `application_lint.TOTAL_CHECKS` (13 calls), NOT the 14 `LintReport`
+    # `application_lint.TOTAL_CHECKS` (14 calls), NOT the 15 `LintReport`
     # finding-list fields -- `check_below_source_sensitivity` is one call
     # feeding two fields, so counting fields would overstate how many
     # checks ran.
@@ -16143,10 +16150,31 @@ def repair() -> None:
         typer.echo(plan.message, err=True)
         raise typer.Exit(code=1)
 
+    # deprecated-status export, issue #1075: reported unconditionally, even
+    # when there is otherwise `nothing to repair` below -- BLOCKED and a
+    # skipped withdrawal are never written (spec: "MUST be reported by
+    # count and id" / "MUST be reported"), so their disclosure cannot wait
+    # behind the has_work early return.
+    if plan.blocked_export_ids:
+        n = len(plan.blocked_export_ids)
+        typer.echo(
+            f"openkos repair: blocked -- {n} concept(s) superseded but not "
+            "exported (own status is neither absent/stable/legacy active "
+            f"nor an existing valid export): {', '.join(plan.blocked_export_ids)}"
+        )
+    if plan.skipped_withdrawal_ids:
+        n = len(plan.skipped_withdrawal_ids)
+        typer.echo(
+            f"openkos repair: skipped -- {n} withdrawal(s) could not be "
+            "confirmed (the edge walk is incomplete): "
+            f"{', '.join(plan.skipped_withdrawal_ids)}"
+        )
+
     if not plan.has_work:
         typer.echo(
-            "openkos repair: nothing to migrate -- no unmigrated merge "
-            "ledger and no OKF 0.1 content found."
+            "openkos repair: nothing to repair -- no unmigrated merge "
+            "ledger, no OKF 0.1 content, and no deprecated-status export "
+            "drift found."
         )
         return
 
@@ -16184,18 +16212,51 @@ def repair() -> None:
             f"openkos repair: migrated {n} ledger{'s' if n != 1 else ''} to "
             "bundle/.state/ledger/."
         )
-    if plan.document_rewrites:
-        n = len(plan.document_rewrites)
-        generated = sum(rewrite.changes.generated for rewrite in plan.document_rewrites)
-        status = sum(rewrite.changes.status for rewrite in plan.document_rewrites)
-        sources = sum(rewrite.changes.sources for rewrite in plan.document_rewrites)
+    # A rewrite whose ONLY change is its deprecated-status export (issue
+    # #1075) touched no OKF v0.1->v0.2 migration rule at all, so it must
+    # not inflate this "migrated N documents to OKF 0.2" count -- filtered
+    # to rewrites where at least one migration rule actually fired.
+    migrated_rewrites = [
+        rewrite
+        for rewrite in plan.document_rewrites
+        if rewrite.changes.generated
+        or rewrite.changes.status
+        or rewrite.changes.sources
+        or rewrite.changes.citations_removed
+    ]
+    if migrated_rewrites:
+        n = len(migrated_rewrites)
+        generated = sum(rewrite.changes.generated for rewrite in migrated_rewrites)
+        status = sum(rewrite.changes.status for rewrite in migrated_rewrites)
+        sources = sum(rewrite.changes.sources for rewrite in migrated_rewrites)
         citations_removed = sum(
-            rewrite.changes.citations_removed for rewrite in plan.document_rewrites
+            rewrite.changes.citations_removed for rewrite in migrated_rewrites
         )
         typer.echo(
             f"openkos repair: migrated {n} document{'s' if n != 1 else ''} to "
             f"OKF 0.2 (generated: {generated}, status: {status}, sources: "
             f"{sources}, empty # Citations removed: {citations_removed})."
+        )
+    exported = sum(
+        1
+        for rewrite in plan.document_rewrites
+        if rewrite.changes.export is okf.ExportOutcome.EXPORT
+    )
+    withdrawn = sum(
+        1
+        for rewrite in plan.document_rewrites
+        if rewrite.changes.export is okf.ExportOutcome.WITHDRAW
+    )
+    dropped_marker = sum(
+        1
+        for rewrite in plan.document_rewrites
+        if rewrite.changes.export is okf.ExportOutcome.DROP_MARKER
+    )
+    if exported or withdrawn or dropped_marker:
+        typer.echo(
+            f"openkos repair: deprecated-status export -- {exported} "
+            f"exported, {withdrawn} withdrawn, {dropped_marker} marker(s) "
+            "dropped."
         )
     if plan.sidecar_rewrites:
         n = len(plan.sidecar_rewrites)

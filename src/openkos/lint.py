@@ -20,7 +20,7 @@ from datetime import date, timedelta
 from pathlib import Path, PurePosixPath
 from typing import Final
 
-from openkos import config, fsio, read_outcome
+from openkos import config, fsio, lifecycle, read_outcome
 from openkos.bundle import provenance as bundle_provenance
 from openkos.model import okf, types
 from openkos.model import relations as relation_vocabulary
@@ -292,14 +292,26 @@ class LintReport:
     found under any dot-directory OTHER than `bundle/.state/` -- which
     keeps its own, more specific `state_dir_markdown` finding instead --
     see `check_dot_dir_markdown`."""
+    status_export: list[LintFinding] = field(default_factory=list)
+    """`"status-export-drift"` and `"status-export-blocked"` findings
+    (deprecated-status-export, issue #1075): the computed supersession
+    (`okf.project_deprecation_export`) disagreeing with, or being blocked
+    from, a concept's own frontmatter `status` -- see
+    `check_status_export`. A `status-export-drift` finding names `openkos
+    repair` as the fix; `status-export-blocked` names the concept's own
+    human-authored status and that only a person can change what OKF
+    consumers see."""
     notices: list[str] = field(default_factory=list)
     not_run: tuple[read_outcome.NotRun, ...] = ()
     """Late-walk checks that could not run, and why (ADR-0022, design.md
     Decision 6): a `NotRun` entry for `check_non_nfc_names`,
     `check_state_dir_contains_no_markdown`, or `check_dot_dir_markdown`
-    when its own directory walk raised `OSError` instead of returning --
+    when its own directory walk raised `OSError` instead of returning, OR
+    for `check_status_export` when its edge walk is incomplete (a document
+    failed to read/parse or carried malformed `relations:` --
+    deprecated-status-export, issue #1075) --
     containment happens in `application/lint.py`, not here; this field is
-    only the shape the result is carried in. A `tuple`, unlike its fourteen
+    only the shape the result is carried in. A `tuple`, unlike its fifteen
     `list` siblings above: it is never mutated after `build_lint_report`
     constructs it, mirroring `application.doctor.run_diagnostics`' own
     `tuple[CheckResult, ...]` return shape. Empty on a fully complete run
@@ -1815,3 +1827,93 @@ def check_non_nfc_names(bundle_dir: Path) -> list[LintFinding]:
         )
         for entry in scan_non_nfc_entries(bundle_dir)
     ]
+
+
+def check_status_export(
+    bundle_dir: Path,
+) -> tuple[list[LintFinding], read_outcome.NotRun | None]:
+    """Deprecated-status export drift scan (deprecated-status-export,
+    issue #1075): `okf.project_deprecation_export`, evaluated over the
+    bundle's superseded set, for every concept.
+
+    A dedicated own-walk check, like `check_non_nfc_names`: it must see a
+    document's own `status`/marker even when its `relations:` are malformed
+    or it fails to parse -- neither of which `collect_docs`'s `LintDoc` list
+    retains (that walk drops such a doc entirely, surfacing only a skip
+    notice) -- so this reuses `okf._iter_docs` directly, then
+    `lifecycle.superseded_from_metadata` over the SAME per-document metadata
+    map, so the scan and the shared predicate can never disagree about who
+    is superseded.
+
+    Returns `(findings, not_run)`: `not_run` is `None` UNLESS the walk is
+    incomplete AND at least one concept's outcome is a skipped WITHDRAW
+    (spec: 'Withdrawal Requires A Complete Edge Walk') -- an unreadable
+    document may hold the only edge that supersedes it, so a stale-export
+    claim there would be an unproven assertion, silently excluded from
+    `findings` instead. A bundle with an unrelated unreadable document but
+    NO candidate withdrawal stays fully reported (`not_run is None`):
+    incompleteness alone never gates the scan, only an actual skipped
+    finding does. EXPORT, BLOCKED, and DROP-MARKER findings are unaffected
+    either way -- each is justified by an edge or a marker actually
+    observed, so they stay safe on an incomplete walk."""
+    per_doc_metadata: dict[str, dict[str, object] | None] = {}
+    for scan in okf._iter_docs(bundle_dir):
+        cid = okf.concept_id_for(scan.path, bundle_dir)
+        if scan.read_error is not None or scan.parse_error is not None:
+            per_doc_metadata[cid] = None
+        else:
+            per_doc_metadata[cid] = scan.metadata or {}
+
+    superseded = lifecycle.superseded_from_metadata(per_doc_metadata)
+
+    findings: list[LintFinding] = []
+    skipped_withdrawals: list[str] = []
+    for cid in sorted(per_doc_metadata):
+        metadata = per_doc_metadata[cid]
+        if metadata is None:
+            continue
+        decision = okf.project_deprecation_export(
+            metadata, superseded=cid in superseded.ids
+        )
+        if decision.outcome is okf.ExportOutcome.UNCHANGED:
+            continue
+        if decision.outcome is okf.ExportOutcome.WITHDRAW and not superseded.complete:
+            skipped_withdrawals.append(cid)
+            continue
+        if decision.outcome is okf.ExportOutcome.BLOCKED:
+            findings.append(
+                LintFinding(
+                    kind="status-export-blocked",
+                    path=f"{cid}.md",
+                    detail=(
+                        f"superseded, but its own status is "
+                        f"{decision.blocked_value!r}; it is hidden from "
+                        "retrieval regardless, and only a person editing its "
+                        "status changes what OKF consumers see"
+                    ),
+                )
+            )
+        else:
+            findings.append(
+                LintFinding(
+                    kind="status-export-drift",
+                    path=f"{cid}.md",
+                    detail=(
+                        f"deprecated-status export is out of date "
+                        f"({decision.outcome.value}); run `openkos repair` "
+                        "to fix it"
+                    ),
+                )
+            )
+
+    not_run: read_outcome.NotRun | None = None
+    if skipped_withdrawals:
+        not_run = read_outcome.NotRun(
+            label="Deprecated-status export withdrawals",
+            reason=(
+                f"cannot confirm {', '.join(skipped_withdrawals)} should "
+                "withdraw its deprecated-status export -- unreadable/"
+                f"unparseable document(s): {', '.join(superseded.unreadable)}"
+            ),
+        )
+    return findings, not_run

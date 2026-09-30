@@ -32,32 +32,32 @@ stacked in order; the chain strategy is the orchestrator's call.
 
 ## Phase 1 — Projection and the never-read-back rule (`okf`, no writer yet)
 
-- [ ] 1.1 [PRE] Assert no reader of raw `status` exists outside
+- [x] 1.1 [PRE] Assert no reader of raw `status` exists outside
   `model/okf.py`: `grep -rn '"status"' src/openkos` shows only
   `okf.py` hits and `judge_status`/`extraction_status`-family names. Record
   the output in the PR. Also assert `status_derived_from` appears nowhere
   in `src/` or `examples/` today.
-- [ ] 1.2 [TEST] `tests/unit/test_okf_status_export.py`: one test per row of
+- [x] 1.2 [TEST] `tests/unit/test_okf_status_export.py`: one test per row of
   the spec table (`project_deprecation_export`) — EXPORT from absent,
   `stable`, `active`; UNCHANGED for superseded `deprecated` with and
   without marker; BLOCKED for `draft` and for an unknown value (asserting
   `blocked_value`); WITHDRAW; UNCHANGED for unmarked live `deprecated`;
   DROP-MARKER for invalid marker beside `draft` and for marker value
   `manual`. RED: module attribute does not exist.
-- [ ] 1.3 [IMPL] Add `STATUS_DERIVED_FROM_KEY`, `has_valid_export_marker`,
+- [x] 1.3 [IMPL] Add `STATUS_DERIVED_FROM_KEY`, `has_valid_export_marker`,
   `ExportOutcome`, `ExportDecision`, `project_deprecation_export` to
   `model/okf.py`. GREEN 1.2.
-- [ ] 1.4 [TEST] Idempotence sweep: for every row × both `superseded`
+- [x] 1.4 [TEST] Idempotence sweep: for every row × both `superseded`
   values, re-projecting the result yields UNCHANGED or BLOCKED; every
   non-status key and the body survive byte-for-byte through
   `apply_deprecation_export`; UNCHANGED/BLOCKED return the SAME input text
   object (no re-serialization). RED: `apply_deprecation_export` missing.
-- [ ] 1.5 [IMPL] `apply_deprecation_export`. GREEN 1.4.
-- [ ] 1.6 [TEST] `declares_deprecated` returns `False` for
+- [x] 1.5 [IMPL] `apply_deprecation_export`. GREEN 1.4.
+- [x] 1.6 [TEST] `declares_deprecated` returns `False` for
   `status: deprecated` + valid marker, `True` for unmarked `deprecated` and
   for `deprecated` + marker value `manual`. RED on the first case.
-- [ ] 1.7 [IMPL] Narrow `declares_deprecated`. GREEN 1.6.
-- [ ] 1.8 [TEST] `lifecycle.superseded_from_metadata` / `superseded_concept_ids`:
+- [x] 1.7 [IMPL] Narrow `declares_deprecated`. GREEN 1.6.
+- [x] 1.8 [TEST] `lifecycle.superseded_from_metadata` / `superseded_concept_ids`:
   non-self targets only; cycles fail safe (2- and 3-cycles all members);
   an unreadable doc (`None`) and a malformed `relations:` each make
   `complete=False` and are named in `unreadable`. And
@@ -65,55 +65,74 @@ stacked in order; the chain strategy is the orchestrator's call.
   concept excludes it (spec: "A stale export does not hide a concept"),
   while `list` reports it `stable`. RED: functions missing; predicate still
   counts the marked value until 1.7 lands (order the run to show it).
-- [ ] 1.9 [IMPL] Add `SupersededSet` + both functions; refactor
+- [x] 1.9 [IMPL] Add `SupersededSet` + both functions; refactor
   `deprecated_concept_ids` to reuse the edge rule. GREEN 1.8.
-- [ ] 1.10 [MUT] For each first-try-green test in 1.4/1.8: flip the
+- [x] 1.10 [MUT] For each first-try-green test in 1.4/1.8: flip the
   `relation.target != cid` self-loop guard, drop the invalid-marker discard,
   and make WITHDRAW write `deprecated`; each mutation must turn a named
   test RED. Revert by inverse edit; purge `__pycache__`.
-- [ ] 1.11 [TEST] Seam guard: a test greps `src/openkos` for
+- [x] 1.11 [TEST] Seam guard: a test greps `src/openkos` for
   `status_derived_from` outside `model/okf.py` and for `.get("status")`
   outside `model/okf.py`, failing on any hit. [MUT] add a stray read in
   `lint.py`, observe RED, revert.
-- [ ] 1.12 Regression: `deprecated_concept_ids` equality over
+- [x] 1.12 Regression: `deprecated_concept_ids` equality over
   `examples/good-life-demo/bundle` and the v0.1 fixture before/after this
   phase (no exports exist yet, so it must be identical).
 
 ## Phase 2 — `lint` reports, `repair` fixes (the safety net before any writer)
 
-- [ ] 2.1 [PRE] Confirm `lint` has no `--fix` and no write path
+- [x] 2.1 [PRE] Confirm `lint` has no `--fix` and no write path
   (`openspec/specs/lint/spec.md:242`) and that `plan_repair` composes
   per-document rewrites (`application/repair.py:83-152`); record both.
-- [ ] 2.2 [TEST] `check_status_export`: drift for missing export, stale
+- [x] 2.2 [TEST] `check_status_export`: drift for missing export, stale
   export, invalid marker; `status-export-blocked` naming `draft`; nothing
   on a consistent bundle; detail text names `openkos repair` for drift and
   "hidden from retrieval regardless" for blocked; exit `0`. RED: check
   missing.
-- [ ] 2.3 [IMPL] `lint.check_status_export` + wiring into the report and
+- [x] 2.3 [IMPL] `lint.check_status_export` + wiring into the report and
   rendering. GREEN 2.2.
-- [ ] 2.4 [TEST] Incomplete walk: one unparsable doc + a stale export →
+- [x] 2.4 [TEST] Incomplete walk: one unparsable doc + a stale export →
   no drift finding for it, and a `not-run` for the stale half naming the
   unreadable doc; EXPORT findings still reported. RED.
-- [ ] 2.5 [IMPL] Not-run degradation per the lint spec's structured
-  not-run contract. GREEN 2.4.
-- [ ] 2.6 [TEST] `repair` over: a hand-written `supersedes` edge (exports),
+- [x] 2.5 [IMPL] Not-run degradation per the lint spec's structured
+  not-run contract. GREEN 2.4. Deviation from the literal table read:
+  `not_run` fires only when an ACTUAL withdrawal candidate is skipped, not
+  merely because SOME document in the bundle is unreadable/unparseable --
+  an unrelated unreadable file with zero exports anywhere must not gate an
+  otherwise-clean `lint` run (regression:
+  `test_lint_surfaces_a_skipped_unparseable_file_as_a_notice`, which
+  expects exit 0). This still satisfies every literal scenario in the lint
+  delta spec, which is always stated in terms of an existing export
+  candidate.
+- [x] 2.6 [TEST] `repair` over: a hand-written `supersedes` edge (exports),
   a hand-deleted edge (withdraws), a `draft` (blocked, reported, bytes
   unchanged), an invalid marker (dropped); summary counts each separately;
   one commit. RED: repair reports nothing to migrate.
-- [ ] 2.7 [IMPL] Export pass in `plan_repair` composed after
+- [x] 2.7 [IMPL] Export pass in `plan_repair` composed after
   `migrate_document` (ONE rewrite per doc), `DocumentRewrite.changes.export`,
   `has_work`, CLI summary lines, "nothing to repair" wording. GREEN 2.6.
-- [ ] 2.8 [TEST] A v0.1 doc with `status: active` that is superseded is
+  Implementation note: `DocumentRewrite.changes` is now
+  `application.repair.RepairDocumentChanges` (widens `okf.MigrationChanges`
+  with `export`), not `okf.MigrationChanges` itself, so `migrate_document`'s
+  general contract stays untouched. `RepairPlan` gained
+  `blocked_export_ids`/`skipped_withdrawal_ids`; the CLI reports both
+  BEFORE the `has_work` early return, since a BLOCKED/skipped concept alone
+  never counts as work but still MUST be reported.
+- [x] 2.8 [TEST] A v0.1 doc with `status: active` that is superseded is
   migrated AND exported in one rewrite (`status: deprecated` + marker, and
   `generated`/`sources` migrated). Second `repair` writes nothing and
   creates no commit. Incomplete walk: withdrawal skipped and reported.
   RED/GREEN against 2.7 (split an IMPL task if RED reveals a gap).
-- [ ] 2.9 [MUT] Remove the complete-walk check in `repair`; 2.8's skip test
-  must go RED. Swap migrate/project order; the v0.1 test must go RED.
-  Revert, purge `__pycache__`.
-- [ ] 2.10 Regression: `deprecated_concept_ids` identical before and after
+- [x] 2.9 [MUT] Remove the complete-walk check in `repair`; 2.8's skip test
+  must go RED. Swap migrate/project order (fed the export pass PRE-migration
+  metadata instead of post-migration); the v0.1 test must go RED. Revert,
+  purge `__pycache__`.
+- [x] 2.10 Regression: `deprecated_concept_ids` identical before and after
   `repair` on every fixture with a `supersedes` edge (the export must not
-  change effective status).
+  change effective status). No shipped fixture carries a `supersedes` edge
+  yet, so this is a dedicated tmp_path bundle rather than
+  `examples/good-life-demo`/the v0.1 fixture (task 6.2 plants one in the
+  shipped example).
 
 ## Phase 3 — Additive writers: `reconcile --winner`, `relate supersedes`
 
