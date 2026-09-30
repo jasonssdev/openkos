@@ -109,7 +109,10 @@ mirroring `fsio.snapshot_read`'s own promotion for the same reason."""
 def canonicalize_concept_id(concept_id: str) -> str:
     """Canonicalize `concept_id` to its bundle-relative form, applying every
     path-safety check `resolve_concept_path` applies EXCEPT existence:
-    rejects an absolute id (a leading `/`), any `..` path segment, and a
+    rejects an absolute id (a leading `/`), any `..` path segment, a
+    backslash or colon anywhere (a Concept ID is a POSIX-style relative
+    path, OKF §2; on Windows `\\` is a separator and `:` a drive letter or
+    stream marker, so either would escape the bundle there), and a
     reserved basename (`index`/`log`, `okf.RESERVED_FILENAMES`, matched
     CASE-INSENSITIVELY so a case-insensitive filesystem -- macOS/Windows
     default -- cannot be tricked into targeting the real `index.md`/
@@ -123,6 +126,10 @@ def canonicalize_concept_id(concept_id: str) -> str:
     """
     if concept_id.startswith("/"):
         raise ValueError(f"'{concept_id}' must be a relative concept-id, not absolute")
+    if "\\" in concept_id:
+        raise ValueError(f"'{concept_id}' must not contain a backslash")
+    if ":" in concept_id:
+        raise ValueError(f"'{concept_id}' must not contain a colon")
     posix_id = PurePosixPath(concept_id.removesuffix(".md"))
     if ".." in posix_id.parts:
         raise ValueError(f"'{concept_id}' must not contain '..' segments")

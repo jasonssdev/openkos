@@ -47,6 +47,16 @@ def titleize(stem: str) -> str:
 
 _SLUG_COLLAPSE_RE = re.compile(r"-+")
 
+_WINDOWS_DEVICE_NAMES = frozenset(
+    {"con", "prn", "aux", "nul"}
+    | {f"{device}{digit}" for device in ("com", "lpt") for digit in "123456789¹²³"}
+)
+"""Base names Windows reserves as devices (the superscript digits included,
+per Microsoft's naming rules). A file called `con.md` cannot be created
+there, so `slugify` never emits one of these as the whole slug."""
+
+_WINDOWS_DEVICE_SUFFIX = "-doc"
+
 
 def _is_slug_char(char: str) -> bool:
     """Whether `slugify` keeps `char` verbatim.
@@ -96,8 +106,13 @@ def slugify(stem: str) -> str:
     --save` title). Nothing but a Unicode letter, digit, mark or `-` can
     reach the output, and no Unicode alphanumeric is a path separator on
     any supported platform, so `/`, `\\`, `.`, `..`, `:`, a null byte, a
-    control character and the Windows-reserved set are all unreachable:
-    `../../etc/passwd` slugifies to `etc-passwd`.
+    control character and the Windows-reserved characters are all
+    unreachable: `../../etc/passwd` slugifies to `etc-passwd`. A slug that
+    would BE a reserved Windows device name (`con`, `prn`, `aux`, `nul`,
+    `com1`-`com9`, `lpt1`-`lpt9`, and the superscript-digit forms) gets a
+    deterministic `-doc` suffix (`CON` -> `con-doc`), because such a file
+    cannot be created on Windows; a longer word that merely starts with one
+    (`console`) is untouched.
 
     **Backward compatible for ASCII, exactly.** For any pure-ASCII input the
     result is byte-for-byte what the old `[^a-z0-9]+` regex returned
@@ -117,9 +132,12 @@ def slugify(stem: str) -> str:
     sanitized = "".join(
         char.lower() if _is_slug_char(char) else "-" for char in normalized
     )
-    return unicodedata.normalize(
+    slug = unicodedata.normalize(
         "NFC", _SLUG_COLLAPSE_RE.sub("-", sanitized).strip("-")
     )
+    if slug in _WINDOWS_DEVICE_NAMES:
+        return f"{slug}{_WINDOWS_DEVICE_SUFFIX}"
+    return slug
 
 
 _TOP_LEVEL_TITLE_RE = re.compile(r"^title:([ \t]*.*)$", re.MULTILINE)

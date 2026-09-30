@@ -73,11 +73,18 @@ preview.
 
 A concept-id MUST be a bundle-relative POSIX path minus its `.md`
 extension. `forget` MUST reject any concept-id containing `..` segments,
-absolute paths, or any path resolving outside the bundle directory, and
-MUST reject reserved filenames (`index.md`, `log.md`).
+absolute paths, a backslash or a colon (Windows separators and drive
+letters, which a POSIX-style id never carries), or any path resolving
+outside the bundle directory, and MUST reject reserved filenames
+(`index.md`, `log.md`).
 
 #### Scenario: Traversal segment rejected
 - GIVEN a concept-id containing a `..` segment
+- WHEN `openkos forget <concept-id>` runs
+- THEN it refuses in Phase A, exits non-zero, and writes nothing
+
+#### Scenario: Backslash or colon rejected
+- GIVEN a concept-id such as `..\..\x`, `C:\x` or `a:b`
 - WHEN `openkos forget <concept-id>` runs
 - THEN it refuses in Phase A, exits non-zero, and writes nothing
 

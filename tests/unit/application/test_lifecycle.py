@@ -2059,3 +2059,24 @@ def test_sync_tags_core_names_landed_on_failure(
 
     assert len(calls) == 2
     assert caught.value.landed == ["bundle/concepts/a.md"]
+
+
+@pytest.mark.parametrize(
+    "concept_id",
+    ["..\\..\\x", "C:\\x", "a:b", "concepts\\x", "concepts/x:stream", "C:/x", "c:x"],
+)
+def test_canonicalize_concept_id_refuses_windows_path_syntax(concept_id: str) -> None:
+    """Concept IDs are POSIX-style relative paths (OKF §2). A backslash is a
+    separator and a colon a drive letter / NTFS stream on Windows, so either
+    lets an id traverse or replace the bundle base there; both are refused
+    on every platform."""
+    with pytest.raises(ValueError, match=r"backslash|colon") as excinfo:
+        lifecycle_service.canonicalize_concept_id(concept_id)
+    assert repr(concept_id) in str(excinfo.value) or concept_id in str(excinfo.value)
+
+
+def test_canonicalize_concept_id_still_accepts_a_plain_posix_id() -> None:
+    assert (
+        lifecycle_service.canonicalize_concept_id("concepts/stoicism.md")
+        == "concepts/stoicism"
+    )
