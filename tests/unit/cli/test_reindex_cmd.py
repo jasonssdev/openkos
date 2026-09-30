@@ -1247,3 +1247,15 @@ def test_reembed_trigger_wording_legacy_upgrade_is_never_reported_as_backend_cha
     wording = _reembed_trigger_wording("bge-m3#chunk-v1", "bge-m3#chunk-v1")
 
     assert "backend changed" not in wording
+
+
+def test_reindex_force_help_names_every_store_it_rebuilds() -> None:
+    """`--force` re-embeds ignoring the hash cache AND rebuilds the FTS and
+    graph stores unconditionally; its `--help` must say all of it, not just
+    the embedding half (docs/cli.md: `reindex`)."""
+    result = runner.invoke(app, ["reindex", "--help"], env={"COLUMNS": "200"})
+
+    assert result.exit_code == 0
+    text = " ".join(result.stdout.split())
+    assert "FTS" in text
+    assert "graph" in text
