@@ -323,8 +323,17 @@ class GitFinalizeError(GitError):
     """
 
 
+# Upper bound for the auto-commit's `git add` / `git commit` (#1128). Generous:
+# a healthy add/commit takes milliseconds, so this only ever fires on a hang
+# (a pinentry, a credential helper, or a hook waiting on a terminal).
+_COMMIT_TIMEOUT_SECONDS = 120.0
+
+
 def _run(
-    argv: Sequence[str], cwd: Path, env: Mapping[str, str] | None = None
+    argv: Sequence[str],
+    cwd: Path,
+    env: Mapping[str, str] | None = None,
+    timeout: float | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run a FIXED argv list under `cwd`, never via a shell.
 
@@ -332,12 +341,17 @@ def _run(
     operation, in both production code and test fixtures, goes through this
     one function instead of calling `subprocess` directly.
 
-    Deliberate decision: no `timeout=` is passed to `subprocess.run`. A
+    Deliberate decision: NO timeout by default (`timeout=None`). A
     mis-calibrated timeout could kill an in-flight `git filter-repo` rewrite
     mid-write, which is the exact partial-failure catastrophe this module's
     `GitFinalizeError` exists to detect and report -- an artificially killed
     process is strictly worse than a slow one. Callers control cancellation
     at the process level (e.g. Ctrl-C / SIGINT) instead.
+
+    `timeout` is opt-in and is passed ONLY by the auto-commit's `git add` /
+    `git commit` (#1128), which can hang on a prompt but never rewrite
+    history. An expired timeout raises `GitError`; `subprocess.run` kills
+    the child first.
     """
     try:
         return subprocess.run(  # noqa: S603
@@ -360,7 +374,10 @@ def _run(
             # here also makes the error message below actually true.
             encoding="utf-8",
             check=False,
+            timeout=timeout,
         )
+    except subprocess.TimeoutExpired as exc:
+        raise GitError(f"{argv[0]} timed out after {timeout} seconds") from exc
     except FileNotFoundError as exc:
         raise GitUnavailable(f"{argv[0]} not found on PATH") from exc
     except OSError as exc:
@@ -516,16 +533,49 @@ def has_reset_point(cwd: Path) -> bool:
     return result.returncode == 0
 
 
+def _known_rel_paths(
+    cwd: Path, rel_paths: Sequence[str], env: Mapping[str, str]
+) -> list[str]:
+    """The subset of `rel_paths` that matches an index entry or a `HEAD`
+    entry (a path just deleted is in `HEAD` only). Order is preserved."""
+    listed: list[str] = []
+    for argv in (
+        ["git", "ls-files", "-z", "--cached", "--", *rel_paths],
+        ["git", "ls-tree", "-r", "-z", "--name-only", "HEAD", "--", *rel_paths],
+    ):
+        result = _run(argv, cwd=cwd, env=env, timeout=_COMMIT_TIMEOUT_SECONDS)
+        # ls-tree fails on an unborn HEAD (the first commit): nothing there.
+        if result.returncode == 0:
+            listed.extend(name for name in result.stdout.split("\0") if name)
+    return [
+        path
+        for path in rel_paths
+        if any(
+            name == path.rstrip("/") or name.startswith(path.rstrip("/") + "/")
+            for name in listed
+        )
+    ]
+
+
 def commit_paths(cwd: Path, rel_paths: Sequence[str], message: str) -> str | None:
     """Stage EXACTLY `rel_paths` (`git add -- <rel_paths>`, never `-A`/
-    `-a`), commit them with `message`, and return the new commit's
+    `-a`), commit ONLY them with `message` (`git commit -m <message> --
+    <rel_paths>`), and return the new commit's
     ABBREVIATED sha -- or `None` if that sha cannot be read back.
 
     The `--` end-of-options guard keeps a leading-dash path from being
     re-parsed as a flag. Scoped staging is deliberate (design: `commit_paths`
     decision) -- in an existing host repo, a blanket `-A`/`-a` would sweep
     unrelated dirty content into openkos's own commit. Raises `GitError` if
-    either the `add` or the `commit` step exits non-zero.
+    either the `add` or the `commit` step exits non-zero or times out.
+
+    Three properties keep the commit to the engine's own paths (#1128):
+    the commit carries the same pathspec as the add, so content the user
+    already STAGED elsewhere is neither committed nor dropped from the index;
+    both run with `GIT_LITERAL_PATHSPECS=1`, so a file name containing `[`,
+    `*` or `?` is a name, never a glob; and both run with a timeout and
+    `GIT_TERMINAL_PROMPT=0`, so a credential helper, pinentry or hook cannot
+    hang an unattended caller.
 
     The return value exists so callers can NAME the commit they just wrote
     and the `git revert` that undoes it (issue #800): the whole workspace is
@@ -588,10 +638,27 @@ def commit_paths(cwd: Path, rel_paths: Sequence[str], message: str) -> str | Non
     landed and only its name is missing. The verb's own success line is
     already true and complete; a WARNING here would raise an alarm about
     a cosmetic gap."""
-    add_result = _run(["git", "add", "--", *rel_paths], cwd=cwd)
+    env = {**os.environ, "GIT_LITERAL_PATHSPECS": "1", "GIT_TERMINAL_PROMPT": "0"}
+    add_result = _run(
+        ["git", "add", "--", *rel_paths],
+        cwd=cwd,
+        env=env,
+        timeout=_COMMIT_TIMEOUT_SECONDS,
+    )
     if add_result.returncode != 0:
         raise GitError(f"git add failed: {add_result.stderr.strip()}")
-    commit_result = _run(["git", "commit", "-m", message], cwd=cwd)
+    # `git commit -- <pathspec>` refuses a pathspec that matches nothing the
+    # repository knows (an empty directory such as a fresh `raw/`, which the
+    # add above accepted silently), so hand it only the paths git knows.
+    known = _known_rel_paths(cwd, rel_paths, env)
+    if not known:
+        raise GitError("git commit failed: nothing to commit")
+    commit_result = _run(
+        ["git", "commit", "-m", message, "--", *known],
+        cwd=cwd,
+        env=env,
+        timeout=_COMMIT_TIMEOUT_SECONDS,
+    )
     if commit_result.returncode != 0:
         raise GitError(f"git commit failed: {commit_result.stderr.strip()}")
     try:

@@ -76,8 +76,15 @@ set-volatility <ConceptType> -> <tier>`, `openkos: set-sensitivity <id> ->
 ### Requirement: Scoped Staging Only
 
 `_autocommit` MUST stage with `git add -- <paths>` and MUST NOT use `-A` or
-`-a`. A pre-existing unrelated dirty file elsewhere in the workspace MUST
-NOT be swept into the commit. A decline or re-open of a persisted
+`-a`, and MUST commit with the same pathspec (`git commit -- <paths>`), so
+the commit contains only `<paths>`. A pre-existing unrelated dirty file
+elsewhere in the workspace, whether unstaged or already staged by the user,
+MUST NOT be swept into the commit, and MUST keep its staged or unstaged
+state. Both git invocations MUST treat `<paths>` literally (a file name
+containing `[`, `*` or `?` is a name, not a glob), MUST NOT be able to
+prompt on a terminal, and MUST be abandoned after a bounded timeout; a
+timeout is reported as the same non-fatal WARNING as any other commit
+failure. A decline or re-open of a persisted
 contradiction finding writes a `bundle/.state/**` decision path; that path
 MUST be added explicitly to the caller's path list passed to `_autocommit`,
 the same way `MergeResult.ledger_sidecar_path` is added for a merge. A
@@ -92,6 +99,22 @@ MUST NOT enter the commit.
 - THEN the resulting commit contains only the verb's own written paths
 - AND the unrelated dirty file remains modified and uncommitted after the
   command exits
+
+#### Scenario: Content the user already staged is not committed
+
+- GIVEN a git-backed workspace with configured identity and an unrelated
+  file the user has already staged
+- WHEN a mutating verb completes successfully and `_autocommit` runs
+- THEN the resulting commit does not contain the staged file
+- AND the file is still staged after the command exits
+
+#### Scenario: A file name with glob characters is taken literally
+
+- GIVEN a written path whose name contains `[a-z]*` and an untracked sibling
+  that the name would match as a glob
+- WHEN `_autocommit` runs
+- THEN only the literally named file is committed and the sibling stays
+  untracked
 
 #### Scenario: A decline's decision path is staged explicitly
 

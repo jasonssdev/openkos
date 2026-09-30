@@ -83,6 +83,16 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   is answered with error `-32001` and any late result is discarded. A hung tool
   keeps its slot until its thread actually ends, so the cap holds.
 
+- The auto-commit after a mutating verb no longer commits content you had
+  already staged, treats a file name containing `[`, `*` or `?` literally
+  instead of as a glob, and can no longer hang on a prompt
+  ([#1128](https://github.com/jasonssdev/openkos/issues/1128)). It ran
+  `git commit` with no pathspec, so anything staged by you or an editor
+  plugin went into the engine's commit under the engine's message; it now
+  commits only the paths the verb wrote and leaves other staged files staged.
+  `git add` and `git commit` run with a bounded timeout and no terminal
+  prompts, and a timeout is reported as the usual auto-commit WARNING.
+
 - `ingest` no longer leaves a Source the next run skips forever when it is
   killed part-way ([#1136](https://github.com/jasonssdev/openkos/issues/1136)).
   Phase B wrote the Source before the derived objects, `index.md` and
