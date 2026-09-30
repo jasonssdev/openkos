@@ -129,9 +129,13 @@ updating files that already exist, separate from `write_exclusive`.
 storage as an exclusive (create-only) binary write and generate exactly one
 OKF Source concept with frontmatter `type`, `title`, `description`,
 `resource`, `tags`, `generated: { by: openkos/<version>, at: <ISO-8601 Z> }`,
-`status: stable`, and `sources` (see "`sources` Is A Generated, One-Way
-Projection Of `provenance`" above), plus OpenKOS-layer `version`,
-`freshness`, `sensitivity`, and `provenance`. WHEN the decoded source's
+`status: stable`, plus OpenKOS-layer `version`, `freshness`, and
+`sensitivity`. The Source concept MUST carry no `provenance` frontmatter key
+and no `sources` key (see "OKF-Native Provenance" and "`sources` Is A
+Generated, One-Way Projection Of `provenance`" above): its `resource` field
+already names its one raw original, so neither a `provenance` list nor a
+`sources` projection of it would add anything a reader does not already
+have. WHEN the decoded source's
 leading frontmatter parses to a mapping, the generated Source concept's
 frontmatter also carries the extension key `source_frontmatter` holding
 that mapping verbatim (see "The `source_frontmatter` Namespace Preserves
@@ -156,8 +160,9 @@ Source concept's BODY MUST embed that text verbatim under a labeled section.
 WHEN the source is not valid UTF-8 text, the body MUST instead contain a
 short, honest note that the content could not be embedded as text (no
 crash). Neither case MUST append a `# Citations` heading; the Source's
-provenance is carried entirely in frontmatter (`sources`, `provenance`), per
-OKF v0.2 §5.1/§13.1. An empty source MUST render a body distinct from both
+provenance is its `resource` field alone, per OKF v0.2 §5.1/§13.1's
+`resource`-only Source shape (see "OKF-Native Provenance" above). An empty
+source MUST render a body distinct from both
 the verbatim and undecodable cases. The generated Source concept MUST pass
 `check_conformance`. The `description` MUST remain a single line (no
 newlines) and MUST state that the raw source's content was embedded
@@ -232,6 +237,8 @@ heading; OKF v0.2 supersedes both with `generated`/`status: stable`/
 (Previously: the generated Source concept's frontmatter never carried
 `source_frontmatter`, and `tags` was always empty regardless of any
 incoming frontmatter the raw source carried.)
+(Previously: `ingest` also wrote `provenance: [resource]` on the Source
+concept itself; see "OKF-Native Provenance" above for why that stopped.)
 
 #### Scenario: Successful ingest embeds verbatim text
 
@@ -1243,16 +1250,44 @@ MUST NOT influence where the copy or concept document is written.
 
 ### Requirement: OKF-Native Provenance
 
-The system MUST record provenance as a `provenance:` frontmatter list of
-raw source paths on the generated Source concept, with no separate
-provenance store.
+The system MUST record a Source's provenance as its `resource:` frontmatter
+field alone — the raw path under `raw/` that field already names — with no
+separate provenance store and no `provenance:` frontmatter key on the
+Source concept itself. A derived object's provenance MUST still be recorded
+as a `provenance:` frontmatter list of Concept IDs (never raw paths) naming
+the Source(s)/concept(s) it was derived from (see "Derived Object
+Provenance and Sensitivity Inheritance").
 
-#### Scenario: Provenance recorded in frontmatter
+(Reason: a Source's own `provenance: [raw/<file>]` entry duplicated
+`resource`, was never projected into `sources`, and read as exactly the
+raw-path provenance shape every other conformance rule forbids.)
+
+(Previously: `ingest` wrote `provenance: [resource]` on every Source
+concept; a Source written before this change keeps that on-disk entry
+untouched, and `lint`/`status` MUST NOT start flagging it.)
+
+#### Scenario: A Source's provenance is its resource field alone
 
 - GIVEN a successful ingest of `<path>`
-- WHEN the generated concept's frontmatter is inspected
-- THEN `provenance` lists the raw path(s) for that source
+- WHEN the generated Source concept's frontmatter is inspected
+- THEN it carries a `resource` field naming the raw copy and no
+  `provenance` frontmatter key
 
+#### Scenario: A derived object's provenance still names Concept IDs
+
+- GIVEN a successful ingest of `<path>` whose extraction yields a derived
+  object
+- WHEN that derived object's frontmatter is inspected
+- THEN its `provenance` list names the Source's Concept ID, never a raw
+  path
+
+#### Scenario: A pre-existing Source's raw-path provenance is left alone
+
+- GIVEN a Source concept written by an older `openkos` version, carrying
+  `provenance: [raw/<file>]`
+- WHEN `openkos lint` or `openkos status` runs against that bundle
+- THEN neither command flags that entry as dangling, and it is left
+  byte-identical on disk
 ### Requirement: Review/Confirm Flow
 
 `ingest` MUST compute the Source concept, raw copy, any staged derived
