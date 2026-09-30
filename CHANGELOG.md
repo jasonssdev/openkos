@@ -67,6 +67,13 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   ([#1143](https://github.com/jasonssdev/openkos/issues/1143), lock half; the
   per-document FTS/graph rebuild half is deferred to MVP 4).
 
+- The `AGENTS.md` that `init` writes into every workspace now says `provenance`
+  lists Concept IDs of Source documents (the `sources/<id>` form) instead of
+  "paths relative to the workspace root"
+  ([#1147](https://github.com/jasonssdev/openkos/issues/1147)). The old
+  sentence contradicted the ingestion spec, `lint`, and the canonical example,
+  and taught an agent operating a bundle the wrong shape for the field.
+
 - The MCP server no longer lets one peer grow its memory or thread count
   without bound ([#1133](https://github.com/jasonssdev/openkos/issues/1133)).
   A stdin line over 8 MiB is now dropped and answered with `-32700` instead of

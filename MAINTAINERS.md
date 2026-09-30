@@ -35,7 +35,7 @@ Tone: be specific, explain the *why* behind each requested change, and praise go
 
 **Reject or redirect** when it is out of scope, conflicts with a principle or an ADR, is too large or unfocused, adds heavy dependencies, lacks tests, or is a design you don't want to commit to maintaining. A good PR can still be a no if it takes the project somewhere it shouldn't go — that is a legitimate maintainer call.
 
-Anchor decisions in **documented principles and recorded decisions, not personal taste**. "This conflicts with our local-first principle" or "this is outside the current MVP's contribution surface (see the roadmap)" is objective and impersonal. Once the ADR log begins (with the first code-time decision), cite the relevant ADR the same way.
+Anchor decisions in **documented principles and recorded decisions, not personal taste**. "This conflicts with our local-first principle" or "this is outside the current MVP's contribution surface (see the roadmap)" is objective and impersonal. Cite the relevant ADR the same way.
 
 **The safe zone:** OpenKOS ships no plugin surface yet — there is no `Producer`/`Consumer` interface and no entry-point group, and that extension surface is a roadmap item (see [`docs/roadmap.md`](docs/roadmap.md)). Until it exists, the low-risk contributions to prepare `good first issue`s for are documentation, test coverage, and additions behind the seams that do exist (`graph/base.py`, `state/vectorstore.py`, `llm/base.py`), which are internal and isolated from the canonical layer.
 
