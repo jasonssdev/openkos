@@ -289,6 +289,42 @@ warning MUST NOT block the request; it is advisory only.
 - WHEN a client using that endpoint and key is constructed
 - THEN no unencrypted-credential warning is printed
 
+### Requirement: A Non-Local Key Destination Is Named Once Per Host
+
+WHEN an API key is present AND an effective endpoint (chat or embedding)
+classifies as non-local, the engine MUST print one notice line to stderr
+naming that endpoint's origin (`scheme://host[:port]`, never the path, query,
+userinfo or the key) before the first request using that key is made, at
+most once per process for each distinct origin. The notice MUST NOT block the
+request. It MUST NOT be printed for a local endpoint, when no key is set, or
+for `backend: ollama`. An endpoint already covered by the plain-`http://`
+warning is named by that warning alone: one line per host. In the MCP
+server the notice MUST reach stderr through logging and never stdout, which
+carries the protocol.
+
+#### Scenario: A remote https host is named once
+
+- GIVEN an API key is configured and the chat endpoint is
+  `https://api.example.com/v1`
+- WHEN several chat and embed clients are constructed in one process
+- THEN exactly one notice naming `https://api.example.com` is printed to
+  stderr, and neither the key nor `/v1` appears in it
+
+#### Scenario: Distinct chat and embedding hosts are each named
+
+- GIVEN an API key is configured, the chat endpoint is
+  `https://api.example.com/v1` and `embedding_base_url` is
+  `https://embed.example.org/v1`
+- WHEN clients are constructed
+- THEN one notice is printed for each of the two origins
+
+#### Scenario: Local, keyless and plain-http cases print no extra notice
+
+- GIVEN a loopback endpoint, or no API key, or a non-local `http://`
+  endpoint (which already prints the plain-http warning)
+- WHEN a client is constructed
+- THEN no additional non-local-destination notice is printed
+
 ### Requirement: One Resolver Seam Constructs Every Chat And Embed Client
 
 `application/backends.py`'s chat-client construction MUST dispatch between

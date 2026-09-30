@@ -160,7 +160,7 @@ def test_doctor_all_healthy_exits_zero(
     result = runner.invoke(app, ["doctor"])
 
     assert result.exit_code == 0
-    assert result.stdout.count("[PASS]") == 15
+    assert result.stdout.count("[PASS]") == 16
     assert "[FAIL]" not in result.stdout
     assert "[SKIP]" not in result.stdout
     assert "[PASS] Workspace initialized" in result.stdout
@@ -725,7 +725,7 @@ def test_doctor_vector_extension_loadable_shows_pass(
     assert "[PASS] Vector extension loadable" in result.stdout
     # 13, not 12: since #650 a stock workspace passes the task-model check
     # too (nothing packaged is left to be missing).
-    assert result.stdout.count("[PASS]") == 13
+    assert result.stdout.count("[PASS]") == 14
 
 
 def test_doctor_vector_extension_not_loadable_fails_but_exit_stays_zero(
@@ -990,7 +990,7 @@ def test_doctor_prints_version_banner_first(
     assert re.match(r"^openkos \d+\.\d+\.\d+", lines[0])
     assert lines[1] == f"openkos doctor: checking environment at {tmp_path}"
     assert result.exit_code == 0
-    assert result.stdout.count("[PASS]") == 14
+    assert result.stdout.count("[PASS]") == 15
 
 
 # --- issue #240: the informational backend-locality check --------------------
@@ -1262,7 +1262,7 @@ def test_doctor_passes_when_every_task_model_is_installed(
     result = runner.invoke(app, ["doctor"])
 
     assert result.exit_code == 0
-    assert result.stdout.count("[PASS]") == 15
+    assert result.stdout.count("[PASS]") == 16
     assert "[PASS] Task models installed" in result.stdout
     assert "[FAIL]" not in result.stdout
 
@@ -1737,7 +1737,7 @@ def test_doctor_renders_not_run_and_counts(
     assert (
         "[NOT RUN] Workspace FTS index present — depends on check 6 (Bundle readable)"
     ) in result.stdout
-    assert "12 check(s) completed, 3 did not run." in result.stdout
+    assert "13 check(s) completed, 3 did not run." in result.stdout
 
 
 def test_render_check_has_a_tag_for_every_status_literal() -> None:

@@ -100,3 +100,87 @@ def test_insecure_key_warning_flag_resets_between_tests(
 
     captured = capsys.readouterr()
     assert "OPENKOS_OPENAI_API_KEY" in captured.err
+
+
+def test_remote_key_notice_names_host_once_across_calls(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("OPENKOS_OPENAI_API_KEY", "sk-sentinel")
+    cfg = _openai_compatible_cfg(tmp_path, base_url="https://api.example.com/v1?a=b")
+
+    main_mod._chat_client(cfg)
+    main_mod._embed_client(cfg)
+    main_mod._chat_client(cfg)
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.count("https://api.example.com") == 1
+    assert captured.err.count("notice:") == 1
+    assert "sk-sentinel" not in captured.err
+    assert "a=b" not in captured.err
+    assert "/v1" not in captured.err
+
+
+def test_remote_key_notice_one_line_per_distinct_host(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("OPENKOS_OPENAI_API_KEY", "secret")
+    cfg = dataclasses.replace(
+        _openai_compatible_cfg(tmp_path, base_url="https://api.example.com/v1"),
+        embedding_base_url="https://embed.example.org/v1",
+    )
+
+    main_mod._chat_client(cfg)
+    main_mod._embed_client(cfg)
+
+    err = capsys.readouterr().err
+    assert err.count("https://api.example.com") == 1
+    assert err.count("https://embed.example.org") == 1
+
+
+@pytest.mark.parametrize(
+    "base_url", ["https://localhost:8080/v1", "http://127.0.0.1:8080"]
+)
+def test_remote_key_notice_absent_for_local_host(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    base_url: str,
+) -> None:
+    monkeypatch.setenv("OPENKOS_OPENAI_API_KEY", "secret")
+    cfg = _openai_compatible_cfg(tmp_path, base_url=base_url)
+
+    main_mod._chat_client(cfg)
+
+    assert capsys.readouterr().err == ""
+
+
+def test_remote_key_notice_absent_without_key(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cfg = _openai_compatible_cfg(tmp_path, base_url="https://api.example.com/v1")
+
+    main_mod._chat_client(cfg)
+
+    assert capsys.readouterr().err == ""
+
+
+def test_http_remote_prints_only_the_existing_warning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("OPENKOS_OPENAI_API_KEY", "secret")
+    cfg = _openai_compatible_cfg(tmp_path, base_url="http://example.com:8080")
+
+    main_mod._chat_client(cfg)
+    main_mod._embed_client(cfg)
+
+    err = capsys.readouterr().err
+    assert err.count("plain HTTP") == 1
+    assert "notice:" not in err
+    assert len(err.strip().splitlines()) == 1
