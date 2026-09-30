@@ -558,6 +558,12 @@ def extraction_retry_due(metadata: Mapping[str, object]) -> bool:
     time -- exactly the retry logic already applies once, inline, before
     ever reaching this marker.
 
+    #1136 adds a third kind of debt that is not about the extraction at all:
+    a Source still carrying `okf.INGEST_PENDING_KEY` belongs to a run that
+    was interrupted before its final write, so it is retry-due whatever else
+    it says. Sources that never carried the key (every workspace written
+    before it existed) are unaffected.
+
     Every other state -- markers absent, a deliberate-policy
     `extraction_status` (`no-extractable-text`/`blocked-by-sensitivity`/
     `no-concepts-found`), #585's sole-object disclosure, or #801's
@@ -578,6 +584,13 @@ def extraction_retry_due(metadata: Mapping[str, object]) -> bool:
     cost-gate predictor, out of scope otherwise) and `converged_reingest`
     below both call, so "the shared predicate" stays true by construction."""
     if metadata.get(okf.EXTRACTION_STATUS_KEY) == okf.EXTRACTION_STATUS_FAILED:
+        return True
+    # #1136: a Source still carrying `ingest_pending` was written by a run
+    # that never reached its final write -- its derived objects, catalog
+    # entries or both may be missing, and nothing else on the Source says
+    # so. The one condition here that is not a property of the extraction
+    # at all, which is why it is checked before any notice token.
+    if okf.is_ingest_pending(metadata):
         return True
     # #884: MEMBERSHIP over every recorded token, not equality against the
     # whole value. The key can now hold several conditions, and a run whose
@@ -697,7 +710,8 @@ def converged_reingest(
        so such a Source takes that path ONCE and every later re-ingest of
        it skips like any other.
     4. Retryable debt (`extraction_retry_due`) -- exactly the retry
-       `lint`'s unextracted/unjudged hints name.
+       `lint`'s unextracted/unjudged hints name -- including an
+       `ingest_pending` Source left by an interrupted run (#1136).
 
     Only when all four clear does this return `ConvergedReingest`, carrying
     the PRIOR run's `carried_extraction_notice` -- not `None`, since the
@@ -1235,6 +1249,88 @@ def compose_source_document(
 
 
 @dataclass(frozen=True)
+class AdoptedObject:
+    """A derived object already on disk that a previous, interrupted ingest
+    of the same Source wrote but never entered in `index.md` (#1136)."""
+
+    doc_type: str
+    section: str
+    link_dir: str
+    slug: str
+    title: str
+    description: str
+
+
+def prior_ingest_pending(concept_text: str | None) -> bool:
+    """Whether the prior Source snapshot carries `ingest_pending` (#1136).
+    Unreadable frontmatter is not pending: the full run rewrites the Source
+    either way, and adoption is only an optimisation of what that run
+    catalogues."""
+    if concept_text is None:
+        return False
+    try:
+        metadata, _ = okf.load_frontmatter(concept_text)
+    except Exception:
+        return False
+    return okf.is_ingest_pending(metadata)
+
+
+def find_uncatalogued_objects(
+    bundle_dir: Path, source_slug: str, index_text: str
+) -> tuple[AdoptedObject, ...]:
+    """Derived objects citing `sources/<source_slug>` that `index_text` does
+    not list (#1136).
+
+    A run killed between its derived writes and its `index.md` write leaves
+    such objects behind. The retry's own staging cannot repair that: it sees
+    each one as a same-source collision and drops it as an `already-exists`
+    no-op, so it would never reach the catalog. Callers run this ONLY for a
+    Source that was still pending, so an object a user deliberately removed
+    from the index of a healthy Source is never resurrected.
+
+    Read-only, sorted for a stable index order, and degrading per file: an
+    unreadable or unparseable object is skipped, never raised."""
+    listed = bundle_index.indexed_concept_ids(index_text)
+    provenance_key = f"sources/{source_slug}"
+    found: list[AdoptedObject] = []
+    for link_dir in sorted(set(TYPE_TO_LINK_DIR.values())):
+        directory = bundle_dir / link_dir
+        if not directory.is_dir():
+            continue
+        for path in sorted(directory.glob("*.md")):
+            if unicodedata.normalize("NFC", f"{link_dir}/{path.stem}") in listed:
+                continue
+            try:
+                metadata, _ = okf.load_frontmatter(path.read_text(encoding="utf-8"))
+            except Exception:  # noqa: S112 -- degrade per file, like family_owns_source
+                continue
+            provenance = metadata.get("provenance")
+            if not isinstance(provenance, list) or provenance_key not in provenance:
+                continue
+            doc_type = metadata.get("type")
+            title = metadata.get("title")
+            description = metadata.get("description")
+            if (
+                not isinstance(doc_type, str)
+                or TYPE_TO_LINK_DIR.get(doc_type) != link_dir
+                or not isinstance(title, str)
+                or not isinstance(description, str)
+            ):
+                continue
+            found.append(
+                AdoptedObject(
+                    doc_type=doc_type,
+                    section=TYPE_TO_SECTION[doc_type],
+                    link_dir=link_dir,
+                    slug=path.stem,
+                    title=bundle_index.sanitize_link_label(title),
+                    description=description,
+                )
+            )
+    return tuple(found)
+
+
+@dataclass(frozen=True)
 class CatalogUpdate:
     """`compose_catalog_update`'s typed result (design: Interfaces/
     Contracts) -- the Source document's final bytes for THIS run, plus the
@@ -1258,6 +1354,7 @@ def compose_catalog_update(
     regenerate: bool,
     timestamp: str,
     entry_date: date,
+    adopted: tuple[AdoptedObject, ...] = (),
 ) -> CatalogUpdate:
     """Own the conditional Source re-render and the derived-plans index/log
     loop (design: Interfaces/Contracts).
@@ -1284,6 +1381,11 @@ def compose_catalog_update(
     object, plus the durable disambiguation audit log entry (#131) when
     `plan.disambiguated_from is not None` -- no second read-modify-write
     round trip, matching "one confirm gate, one preview".
+
+    `adopted` (#1136) are derived objects an interrupted run already wrote
+    but never catalogued (`find_uncatalogued_objects`): each gets the index
+    bullet and log entry a staged plan gets, and nothing else -- the file
+    itself is already on disk and is never rewritten.
 
     Renders nothing and calls no presentation primitive."""
     concept_content = source.content
@@ -1350,6 +1452,30 @@ def compose_catalog_update(
                 f"collided with '{plan.disambiguated_from}'; wrote "
                 f"distinct concept '{plan.slug}'.",
             )
+
+    for obj in adopted:
+        try:
+            adopted_index = bundle_index.insert_index_entry(
+                new_index_text,
+                section=obj.section,
+                link_dir=obj.link_dir,
+                title=obj.title,
+                slug=obj.slug,
+                description=obj.description,
+            )
+        except ValueError:
+            # A hand-edited object whose title/description cannot be a
+            # catalog bullet (a newline, a link delimiter) must not block
+            # finishing everything else; `lint` still reports it.
+            continue
+        new_index_text = adopted_index
+        new_log_text = bundle_log.insert_log_entry(
+            new_log_text,
+            entry_date,
+            f"**Ingest**: Extracted [{obj.title}]"
+            f"(/{obj.link_dir}/{obj.slug}.md) ({obj.doc_type}) "
+            f"from [{source.title}](/sources/{slug}.md).",
+        )
 
     return CatalogUpdate(
         concept_content=concept_content,
