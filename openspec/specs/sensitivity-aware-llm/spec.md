@@ -66,13 +66,30 @@ re-ask, gated on the resolved sensitivity floor per "Extract Gates on the
 Workspace Sensitivity Floor"), `adjudicate`, `contradictions`,
 `suggest-relations`, `suggest-volatility`, `revisions`, `query`, and
 `curate` (whose stages apply the same gate through the shared services).
-Known limitation, not intended behavior: the merged-body reconciliation
-call made by `merge`, `adjudicate --apply`, `adjudicate --apply-same` and
-`curate` applies no confidential gate. It is bounded only by the merge's own
-consent and the `--no-reconcile` opt-out (`entity-resolution-merge`), so a
-merge involving a `confidential` concept against a backend that is not
-local sends its bodies off the device. Closing this gap is outside this
-requirement's enumerated call sites.
+The merged-body reconciliation call made by `merge`, `curate`'s Identity
+stage, `adjudicate --apply` and `adjudicate --apply-same` is gated the same
+way, as a high-water mark over the merge: when the survivor, the absorbed
+concept or the merged survivor resolves to confidential (a missing or blank
+`sensitivity` counting as confidential), no body is sent unless the backend
+qualifies for the local exemption. The pass is then skipped, the stacked body
+is kept, and a stderr notice, worded as a deliberate skip rather than a
+failure, names the confidential concept's id (never its content); the merge
+itself completes.
+These verbs offer no `--include-confidential` flag, so the local exemption is
+the only release.
+
+#### Scenario: Reconciliation never sends a confidential merge to a non-local backend
+- GIVEN a merge whose survivor or absorbed concept is confidential
+- AND the chat backend does not qualify for the local exemption
+- WHEN the merged-body reconciliation would run
+- THEN no `llm.chat` call is made, the stacked body is kept, and the merge
+  completes with a stderr notice
+
+#### Scenario: Reconciliation still runs on a local backend
+- GIVEN the same merge against a verified-local backend with the local
+  exemption enabled
+- WHEN the merged-body reconciliation runs
+- THEN the bodies are sent and the reconciled body is written
 
 #### Scenario: Confidential excluded from adjudicate/contradictions/suggest-relations
 - GIVEN a confidential concept is a candidate for `adjudicate`,
