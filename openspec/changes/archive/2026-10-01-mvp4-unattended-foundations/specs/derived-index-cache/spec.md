@@ -4,11 +4,8 @@
 
 ### Requirement: Whole-Index Rebuild On Manifest Change
 
-**Reason**: A single edited document cost a full FTS and graph rebuild on
-the next refresh, which a scheduled maintenance pass would pay
-continuously, and which is also the step that keeps a commit phase long
-(ADR-0036). Replaced by "Per-Document Update With Whole-Rebuild Fallback",
-which keeps the whole rebuild as the fallback path.
+(Reason: A single edited document cost a full FTS and graph rebuild on the next refresh, which a scheduled maintenance pass would pay continuously, and which is also the step that keeps a commit phase long (ADR-0036). Replaced by "Per-Document Update With Whole-Rebuild Fallback", which keeps the whole rebuild as the fallback path.)
+(Migration: None -- a store without recorded pairs rebuilds whole once and records them.)
 
 ## ADDED Requirements
 

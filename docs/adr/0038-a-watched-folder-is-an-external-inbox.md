@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0038: A watched folder is an external inbox; a source edited after import is refused into the queue, never re-imported"
 description: The folder watch reads a user-configured inbox outside raw/ and the bundle, never raw/ itself; it imports a file only after its bytes stay unchanged for a quiet window; it never moves, renames or deletes an inbox file; a file whose bytes change after import produces one pending-work row per source instead of a new import, so raw immutability holds and the human re-imports deliberately; source versioning is deferred.
-status: Proposed
+status: Accepted
 date: 2026-09-30
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0038: A watched folder is an external inbox; a source edited after import is refused into the queue, never re-imported
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-09-30
 
 ## Context

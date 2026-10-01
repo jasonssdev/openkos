@@ -27,11 +27,11 @@ place staleness is decided.
 
 `stale_derived_stores` (#381) is the read-only ADVISORY counterpart to
 `reindex_gate`: same stored row, same comparison, but it never rebuilds and
-never writes. It exists because only `reindex` and `purge` ever write
-`fts.db`/`graph.db` -- every other bundle-writing verb (`relate`,
-`reconcile`, `merge`, `curate`, and `ingest`, which embeds vectors only)
-leaves them behind, and the sole symptom was a quietly worse answer. Callers
-use it to SAY so; the decision of what is stale stays here, in one place.
+never writes. It exists because a bundle write that happens outside every refresh path
+(a hand edit, a verb whose refresh was skipped or failed) leaves
+`fts.db`/`graph.db` behind, and the sole symptom is a quietly worse answer.
+Callers use it to SAY so; the decision of what is stale stays here, in one
+place.
 
 The D2 binding contract is unchanged by that addition: `retrieval/answer.py`
 still never computes or compares a manifest hash. The advisory lives at the

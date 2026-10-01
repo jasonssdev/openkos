@@ -294,16 +294,19 @@ Additionally, `reindex` MUST catch lock-contention `sqlite3.OperationalError`
 raised at ANY write surface of the three on-disk stores (vectors, FTS,
 graph) — store open, `upsert_many`/prune commit, or `BEGIN IMMEDIATE` —
 discriminated by `exc.sqlite_errorcode in (sqlite3.SQLITE_BUSY,
-sqlite3.SQLITE_LOCKED)`, NOT by message substring, and exit 1 with the SAME
-uniform "another process holds the workspace lock; wait and retry" message
-for all three stores. A non-lock `OperationalError` MUST NOT be swallowed by
+sqlite3.SQLITE_LOCKED)`, NOT by message substring, and exit `3` -- the
+retry-safe refusal -- with the SAME uniform message for all three stores. The
+message MUST say that another OpenKOS process is using the workspace's
+derived stores and that a re-run is safe, and MUST NOT name a specific
+concurrent verb. A non-lock `OperationalError` MUST NOT be swallowed by
 this catch; it keeps its existing (generic operational-error) handling.
 
 The same refusal is the contract for every other verb that holds the workspace
 lock: a lock-contention `sqlite3.OperationalError` from any derived or findings
 store that no verb-specific handler took MUST surface as the same uniform
-message (naming the verb the user ran) and exit 1, mapped once in the shared
-workspace-lock guard rather than per verb.
+message (naming the verb the user ran) and exit `3`, mapped once in the shared
+workspace-lock guard rather than per verb (`workspace-lock`: Derived-Store
+Contention Is The Same Retry-Safe Refusal).
 
 #### Scenario: Ollama unreachable exits 1 with a clear message
 
@@ -317,23 +320,23 @@ workspace-lock guard rather than per verb.
 - WHEN `openkos reindex` runs
 - THEN it prints a clear stderr message and exits 1
 
-#### Scenario: Locked vectors.db exits 1 with the retry message, no traceback
+#### Scenario: Locked vectors.db exits 3 with the retry message, no traceback
 
 - GIVEN a concurrent process holds a write lock on `vectors.db` past
   `busy_timeout`
 - WHEN `openkos reindex` runs and hits `sqlite3.OperationalError` with
   errorcode `SQLITE_BUSY`/`SQLITE_LOCKED` at store open, upsert, or commit
-- THEN it prints the uniform lock-contention message to stderr and exits 1,
+- THEN it prints the uniform lock-contention message to stderr and exits 3,
   with no raw traceback
 
-#### Scenario: Locked fts.db, including at BEGIN IMMEDIATE, exits 1 with the retry message
+#### Scenario: Locked fts.db, including at BEGIN IMMEDIATE, exits 3 with the retry message
 
 - GIVEN a concurrent process holds a write lock on `fts.db` past
   `busy_timeout`, including at the `BEGIN IMMEDIATE` step of
   `write_fts_index`
 - WHEN `openkos reindex` runs and hits the same lock-contention
   `OperationalError`
-- THEN it prints the uniform lock-contention message to stderr and exits 1,
+- THEN it prints the uniform lock-contention message to stderr and exits 3,
   with no raw traceback
 
 #### Scenario: Any locked-workspace verb refuses instead of tracing back
@@ -342,16 +345,16 @@ workspace-lock guard rather than per verb.
   `busy_timeout`
 - WHEN a locked verb other than `reindex` writes to it
 - THEN it prints the uniform lock-contention message under its own name to
-  stderr and exits 1, with no raw traceback
+  stderr and exits 3, with no raw traceback
 
-#### Scenario: Locked graph.db exits 1 with the SAME uniform message
+#### Scenario: Locked graph.db exits 3 with the SAME uniform message
 
 - GIVEN a concurrent process holds a write lock on `graph.db` past
   `busy_timeout`
 - WHEN `openkos reindex` runs and hits the lock-contention
   `OperationalError`
 - THEN it prints the SAME uniform lock-contention message used for
-  vectors/FTS, and exits 1 with no raw traceback
+  vectors/FTS, and exits 3 with no raw traceback
 
 #### Scenario: A non-lock operational error is not mislabeled as lock contention
 

@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0037: Unattended work computes and enqueues; only a human-facing path applies a proposal"
 description: A run no human started performs only non-consequential work and records every consequential proposal as a row in a derived pending-work queue in findings.db, keyed by a stable decision key and retired as stale when its inputs change; only human-facing write paths move a row to applied, declines stay in bundle/.state/decisions/ under git, and the queue is the instrument for measuring how much of the curation queue is mechanical.
-status: Proposed
+status: Accepted
 date: 2026-09-30
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0037: Unattended work computes and enqueues; only a human-facing path applies a proposal
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-09-30
 
 ## Context

@@ -56,8 +56,9 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   [#1142](https://github.com/jasonssdev/openkos/issues/1142)). It is validated
   when the config is read (unknown keys, booleans and out-of-range values are
   refused; the inbox may not be `raw/`, `bundle/`, `.openkos/` or the workspace
-  root). The defaults are provisional and absent means all of them; nothing
-  reads the section yet.
+  root, or a folder that contains the workspace). The defaults are
+  provisional and absent means all of them; `openkos daemon` reads the
+  section.
 
 ### Changed
 
