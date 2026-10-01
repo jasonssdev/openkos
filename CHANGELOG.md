@@ -52,6 +52,16 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Changed
 
+- `openkos next` reads the pending-work queue: once the queue exists, its
+  duplicate-group and contradiction tiers take their findings from open queue
+  rows instead of recomputing them, and a new last tier recommends
+  `openkos pending` for open rows no earlier tier ranks and for an unattended
+  job that ended `budget_exhausted`, `timed_out`, `commit_failed` or `failed`.
+  `openkos status` lists the open rows per kind and the most recent unattended
+  job's kind, outcome and end time under **Needs attention**, and says "not
+  available" for a queue or job record that is absent or unreadable instead of
+  reporting nothing pending. Both stay read-only and create neither file
+  ([#1141](https://github.com/jasonssdev/openkos/issues/1141)).
 - `merge`, `unmerge`, `forget`, `relate`, `set-sensitivity`, `sync-tags`,
   `repair`, `reconcile`, `adjudicate --apply` and `suggest-relations --apply`
   no longer refuse with exit `3` because another process appended to `index.md`

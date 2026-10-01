@@ -9895,11 +9895,18 @@ def status() -> None:
                 f"{untyped} of {total} concept-to-concept edge(s) untyped — "
                 "run `openkos curate` to type them."
             )
+    # The pending-work queue and the last unattended job: rows and a job that
+    # needs a human are actionable; an absent or unreadable store is reported
+    # as "not available" below, never as nothing pending.
+    queue_lines = pending_report.status_lines(report.unattended)
+    needs_attention.extend(queue_lines.attention)
     if not needs_attention:
         typer.echo("  Nothing needs attention.")
     else:
         for line in needs_attention:
             typer.echo(f"  {line}")
+    for notice in queue_lines.notices:
+        typer.echo(f"  {notice}")
     # The empty-graph notice stays a separate, purely INFORMATIONAL line
     # (spec: "or an adjacent informational line") -- never appended to
     # `needs_attention`, so a healthy workspace still prints "Nothing needs
