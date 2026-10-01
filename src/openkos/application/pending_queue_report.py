@@ -14,6 +14,7 @@ person's words.
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from openkos.application.budget import JOBS_DB_NAME
 from openkos.config import WorkspaceLayout
@@ -30,6 +31,10 @@ _RECENT_JOBS_SCANNED = 50
 ABSENT_LINES = (
     "The pending-work queue has not been computed yet.",
     "Run `openkos daemon --once` to compute it.",
+)
+
+ABSENT_QUEUE_NOTICE = (
+    "Pending-work queue not available: not computed yet (run `openkos daemon --once`)."
 )
 
 _RESOLVING_COMMAND = {
@@ -199,6 +204,153 @@ def _stats_lines(report: PendingReport) -> list[str]:
         fmt(_STATS_HEADERS),
         *(fmt(r) for r in rows),
     ]
+
+
+@dataclass(frozen=True)
+class QueueSnapshot:
+    """What `next` and `status` need from the queue and the job record: the
+    open rows and the single most recent job, each with an explicit
+    availability so an ABSENT or unreadable store is never read as an empty
+    one."""
+
+    queue: Literal["present", "absent", "unreadable"]
+    open_items: tuple[pq.PendingItem, ...]
+    last_job: jobs.JobRecord | None
+    jobs_unreadable: bool
+    """`last_job is None` with this `False` means no unattended run is
+    recorded (no `jobs.db`, or one with no jobs)."""
+
+
+def _read_last_job(path: Path) -> tuple[jobs.JobRecord | None, bool]:
+    try:
+        conn = jobs.open_jobs_read_only(path)
+    except jobs.JobsStoreUnreadableError:
+        return None, True
+    if conn is None:
+        return None, False
+    try:
+        return jobs.last_job(conn), False
+    except sqlite3.Error:
+        return None, True
+    finally:
+        conn.close()
+
+
+def read_snapshot(layout: WorkspaceLayout) -> QueueSnapshot:
+    """Read the open queue rows and the most recent job, read-only, never
+    creating either file and never raising: the readers behind `openkos
+    pending`, narrowed to what the pure `next` / `status` services report."""
+    try:
+        present, items, _stats = _read_queue(layout.findings_db_path)
+    except QueueUnavailableError:
+        queue: Literal["present", "absent", "unreadable"] = "unreadable"
+        open_items: tuple[pq.PendingItem, ...] = ()
+    else:
+        queue = "present" if present else "absent"
+        open_items = tuple(i for i in items if i.status in pq.OPEN_STATUSES)
+    last_job, jobs_unreadable = _read_last_job(layout.openkos_dir / JOBS_DB_NAME)
+    return QueueSnapshot(
+        queue=queue,
+        open_items=open_items,
+        last_job=last_job,
+        jobs_unreadable=jobs_unreadable,
+    )
+
+
+_REMEDY = {
+    "budget_exhausted": (
+        "the rest runs on a later pass once the `unattended:` budget in "
+        "openkos.yaml allows it"
+    ),
+    "timed_out": "the rest is retried on the next unattended run",
+    "commit_failed": (
+        "the next unattended run retries the commit; or commit the changed "
+        "files yourself"
+    ),
+    "failed": "fix the cause, then run `openkos daemon --once`",
+}
+
+
+def attention_outcome(job: jobs.JobRecord | None) -> str | None:
+    """The outcome of `job` when it needs a human, else `None`."""
+    if job is not None and job.outcome in ATTENTION_OUTCOMES:
+        return job.outcome
+    return None
+
+
+def attention_summary(job: jobs.JobRecord) -> str:
+    """One line naming an attention-worthy job: its kind, outcome, end time,
+    what was deferred, and the remedy. Never carries a row's payload."""
+    outcome = job.outcome or ""
+    detail = f" ({job.detail_code})" if job.detail_code else ""
+    deferred = f", {job.units_deferred} deferred" if job.units_deferred else ""
+    return (
+        f"the last unattended {job.kind} job ended {outcome}{detail}"
+        f"{deferred} at {job.ended_at or job.started_at}"
+        f" -- {_REMEDY.get(outcome, 'see `openkos pending`')}"
+    )
+
+
+def open_row_breakdown(items: tuple[pq.PendingItem, ...]) -> str:
+    """`2 identity, 1 revision`: per-kind counts of `items`, in `pq.KINDS`
+    order, for kinds that have a row."""
+    return ", ".join(
+        f"{sum(1 for i in items if i.kind == kind)} {kind}"
+        for kind in pq.KINDS
+        if any(i.kind == kind for i in items)
+    )
+
+
+@dataclass(frozen=True)
+class StatusLines:
+    """The queue and unattended-job lines `openkos status` prints: those that
+    belong under **Needs attention**, and informational ones that must not
+    stop the section from saying nothing needs attention."""
+
+    attention: tuple[str, ...]
+    notices: tuple[str, ...]
+
+
+def status_lines(snapshot: QueueSnapshot) -> StatusLines:
+    """Render `snapshot` for `status`. A missing or unreadable queue or job
+    record is "not available", never "nothing pending"."""
+    attention: list[str] = []
+    notices: list[str] = []
+    if snapshot.queue == "absent":
+        notices.append(ABSENT_QUEUE_NOTICE)
+    elif snapshot.queue == "unreadable":
+        notices.append(
+            "Pending-work queue not available: findings.db could not be read."
+        )
+    elif not snapshot.open_items:
+        notices.append("Pending-work queue: no open rows.")
+    else:
+        count = len(snapshot.open_items)
+        attention.append(
+            f"{count} open pending-work row{'' if count == 1 else 's'} "
+            f"({open_row_breakdown(snapshot.open_items)}) -- "
+            "run `openkos pending` to review."
+        )
+    job = snapshot.last_job
+    if snapshot.jobs_unreadable:
+        notices.append(
+            "Unattended job record not available: jobs.db could not be read."
+        )
+    elif job is None:
+        notices.append("No unattended run recorded.")
+    elif attention_outcome(job) is not None:
+        summary = attention_summary(job)
+        attention.append(f"{summary[:1].upper()}{summary[1:]}")
+    elif job.outcome is None:
+        notices.append(
+            f"Last unattended job: {job.kind}, in progress, started {job.started_at}."
+        )
+    else:
+        notices.append(
+            f"Last unattended job: {job.kind}, {job.outcome}, "
+            f"ended {job.ended_at or job.started_at}."
+        )
+    return StatusLines(attention=tuple(attention), notices=tuple(notices))
 
 
 def render_lines(
