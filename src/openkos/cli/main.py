@@ -11096,6 +11096,7 @@ def _suggest_relations_ports() -> relations_service.SuggestRelationsPorts:
         build_graph=lambda *args, **kwargs: build_graph(*args, **kwargs),
         candidate_edges=lambda *args, **kwargs: candidate_edges(*args, **kwargs),
         suggest_edge_types=lambda *args, **kwargs: suggest_edge_types(*args, **kwargs),
+        commit_section=_commit_section,
     )
 
 
@@ -11115,7 +11116,7 @@ def _refuse(exc: "relations_service.SuggestionRefused") -> "typer.Exit":
     ),
     rich_help_panel="Curate",
 )
-@_guard_workspace_lock("suggest-relations")
+@_guard_workspace_lock("suggest-relations", commit_phase=True)
 def suggest_relations_cmd(
     auto: bool = typer.Option(
         False,
