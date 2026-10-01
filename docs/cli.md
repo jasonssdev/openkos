@@ -912,6 +912,10 @@ context_window: 12288     # tokens the model holds at once (prompt + reply); unp
 # rationale_language: Spanish  # language curate writes its Metadata/Structure
                           # rationales in; unset means each row follows its own
                           # documents, which is why one report can mix languages
+# unattended:             # budget and folder-watch limits for the unattended
+#   inbox: ../inbox       # runner; unset = every default. The comments in
+                          # the generated `openkos.yaml` are the authority for the keys and
+                          # their PROVISIONAL defaults
 
 # Layout is fixed: `raw/` (immutable sources) and `bundle/` (the OKF
 # bundle root) live next to this file. The engine does not read layout
