@@ -235,7 +235,7 @@ def test_an_untrusted_lock_directory_is_a_refusal_with_exit_1_not_a_traceback(
     fake_tmp = tmp_path.parent / f"{tmp_path.name}-faketmp"
     fake_tmp.mkdir()
     monkeypatch.setattr(tempfile, "gettempdir", lambda: str(fake_tmp))
-    directory = fake_tmp / f"{lock.LOCK_DIR_PREFIX}-{os.geteuid()}"
+    directory = fake_tmp / f"{lock.LEGACY_LOCK_DIR_PREFIX}-{os.geteuid()}"
     directory.mkdir()
     directory.chmod(0o755)
 
