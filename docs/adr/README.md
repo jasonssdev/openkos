@@ -74,3 +74,6 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 | [0033](0033-source-tag-sync-is-union-only.md) | Source tag sync is union-only and never tags below the Source's sensitivity | Accepted | 2026-09-30 |
 | [0034](0034-identity-auto-merge-only-for-a-measured-class.md) | Identity merges apply without prior consent only for an opt-in class that passed a pre-registered measurement | Accepted | 2026-09-30 |
 | [0035](0035-a-pending-marker-makes-an-interrupted-ingest-completable.md) | A pending marker on the Source makes an interrupted ingest completable | Accepted | 2026-09-30 |
+| [0036](0036-lock-a-short-commit-phase-in-a-per-user-state-directory.md) | The workspace lock covers a short commit phase, not the whole verb, and lives in a per-user state directory | Proposed | 2026-09-30 |
+| [0037](0037-unattended-work-computes-and-enqueues-only.md) | Unattended work computes and enqueues; only a human-facing path applies a proposal | Proposed | 2026-09-30 |
+| [0038](0038-a-watched-folder-is-an-external-inbox.md) | A watched folder is an external inbox; a source edited after import is refused into the queue, never re-imported | Proposed | 2026-09-30 |
