@@ -16,6 +16,17 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Added
 
+- `openkos daemon [--once]` runs the unattended engine in the foreground: it
+  retries any failed auto-commit, then runs a scheduled maintenance pass that
+  refreshes the derived indexes, counts lint findings and queues advisor
+  proposals (duplicates, relation types, volatility, contradictions, decision
+  revisions) for `openkos pending`, writing nothing under `bundle/`. Model calls
+  stay inside the `unattended:` budget, each job's outcome is recorded in
+  `.openkos/jobs.db`, and `SIGTERM`/`SIGINT` stop it cleanly with exit `0`. It
+  holds the workspace lock only for a short write, never while idle
+  ([#1139](https://github.com/jasonssdev/openkos/issues/1139),
+  [#1140](https://github.com/jasonssdev/openkos/issues/1140),
+  [#1141](https://github.com/jasonssdev/openkos/issues/1141)).
 - `openkos pending` lists the pending-work queue read-only: open rows grouped by
   kind with their target ids and resolving command, then the unattended job
   outcomes that need attention. `--all` adds resolved rows and `--stats` prints
