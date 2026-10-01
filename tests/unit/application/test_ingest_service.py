@@ -301,9 +301,13 @@ def test_a_target_edited_after_its_snapshot_is_drift_and_nothing_is_written(
 ) -> None:
     """The drift guard runs on the unprompted path too, and the baseline is
     the ONE observation the snapshot port returned (#318): an edit landing
-    the instant it returns is caught, never adopted as the new baseline."""
+    the instant it returns is caught, never adopted as the new baseline.
+    The rewritten target is the existing Source concept; `index.md` and
+    `log.md` are re-composed at the commit phase instead (#1137)."""
     src = _source(tmp_path)
-    index_path = workspace / "bundle" / "index.md"
+    policy = svc.IngestPolicy(skip_confirmation=True, re_extract=True)
+    svc.ingest_source(workspace, src, policy, ports=_ports([]))
+    concept_path = workspace / "bundle" / "sources" / "notes.md"
     concurrent = "hand-edited the instant the snapshot returned\n"
     fired = False
 
@@ -311,9 +315,9 @@ def test_a_target_edited_after_its_snapshot_is_drift_and_nothing_is_written(
         nonlocal fired
         data = path.read_bytes()
         result = (data, data.decode("utf-8"))
-        if path == index_path and not fired:
+        if path == concept_path and not fired:
             fired = True
-            index_path.write_text(concurrent, encoding="utf-8")
+            concept_path.write_text(concurrent, encoding="utf-8")
         return result
 
     calls: list[str] = []
@@ -321,15 +325,14 @@ def test_a_target_edited_after_its_snapshot_is_drift_and_nothing_is_written(
         svc.ingest_source(
             workspace,
             src,
-            svc.IngestPolicy(skip_confirmation=True),
+            policy,
             ports=_ports(calls, snapshot_read=_racing),
         )
 
     assert fired
-    assert "bundle/index.md" in excinfo.value.message
+    assert "bundle/sources/notes.md" in excinfo.value.message
     assert "Nothing was written." in excinfo.value.message
-    assert index_path.read_text(encoding="utf-8") == concurrent
-    assert not (workspace / "raw" / "notes.txt").exists()
+    assert concept_path.read_text(encoding="utf-8") == concurrent
     assert calls == []
 
 

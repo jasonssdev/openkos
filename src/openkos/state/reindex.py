@@ -56,6 +56,7 @@ this same single end-of-run commit.
 """
 
 from collections.abc import Callable
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -302,6 +303,14 @@ def _reindex_fts(bundle_dir: Path, fts_db_path: Path, *, force: bool) -> None:
     fts.refresh_fts_index(fts_db_path, bundle_dir, force=force)
 
 
+def _digest_of(path: Path) -> str | None:
+    """The content hash `path` holds now, or `None` when it cannot be read."""
+    try:
+        return content_hash(path.read_bytes())
+    except OSError:
+        return None
+
+
 def reindex(
     bundle_dir: Path,
     db: VectorStore,
@@ -313,6 +322,7 @@ def reindex(
     embedding_backend: str = config.DEFAULT_BACKEND,
     on_progress: Callable[[int, int, str], None] | None = None,
     local_exemption: bool = False,
+    commit_section: Callable[[], AbstractContextManager[None]] | None = None,
 ) -> ReindexReport:
     """Walk `bundle_dir`, embed changed/new/forced docs through `embedder`,
     upsert into `db`, then prune any `db` row whose source file vanished.
@@ -442,6 +452,16 @@ def reindex(
     gate's own stranding reason: a withheld doc keeps its stale old-model
     vector, so persisting the new tag would make the next run read it as a
     content-hash cache hit and strand it on the old model permanently.
+
+    `commit_section` (#1137, ADR-0036) splits the run in two: the walk and every
+    embedding call run WITHOUT it, and only the write to `db` -- the upsert, the
+    prune and the model-tag write -- runs inside it. A caller that holds the
+    workspace lock passes the section that takes it, so a slow embedder never
+    holds the lock and the store write still happens under it. Inside the
+    section each queued document is re-read and re-hashed: a document that
+    changed or vanished while its vector was being computed is dropped from the
+    upsert rather than stored beside a hash it no longer matches (the next run
+    re-embeds it). The default `None` holds nothing, exactly as before.
     """
     cached_hashes = db.meta_hashes()
     stored_model_tag = db.read_model_tag()
@@ -507,8 +527,8 @@ def reindex(
     embedded = 0
     embed_failed = 0
     embed_calls = 0
+    items: list[tuple[str, list[list[float]], str]] = []
     if to_embed:
-        items: list[tuple[str, list[list[float]], str]] = []
         queue_total = len(to_embed)
         for queue_index, (concept_id, chunk_texts, digest) in enumerate(
             to_embed, start=1
@@ -562,49 +582,74 @@ def reindex(
             items.append((concept_id, chunk_vectors, digest))
             if on_progress is not None:
                 on_progress(queue_index, queue_total, concept_id)
-        if items:
-            db.upsert_many(items)
-        embedded = len(items)
-
-    pruned = 0
     prune_skipped = bool(okf._walk_errors(bundle_dir))
     to_prune: list[str] = []
     if not prune_skipped:
         to_prune = [
             concept_id for concept_id in cached_hashes if concept_id not in seen
         ]
+
+    # Everything below writes to `db`, so it runs inside the caller's commit
+    # section (the workspace lock); everything above -- the walk and every
+    # embedding call -- ran outside it.
+    section = commit_section if commit_section is not None else nullcontext
+    with section():
+        # The vectors were computed from text read before the embedder ran. A
+        # document edited or removed since then no longer matches the digest its
+        # vector was computed from, so it is dropped here, never stored.
+        current_items = [
+            item
+            for item in items
+            if _digest_of(bundle_dir / f"{item[0]}.md") == item[2]
+        ]
+        # A dropped document keeps its stale vector, so it joins the union that
+        # withholds the model-tag write below, for the same stranding reason.
+        dropped_stale = len(items) - len(current_items)
+        items = current_items
+        if items:
+            db.upsert_many(items)
+        embedded = len(items)
+
+        # A path that exists again was not "removed since the last run".
+        to_prune = [
+            concept_id
+            for concept_id in to_prune
+            if not (bundle_dir / f"{concept_id}.md").exists()
+        ]
+        pruned = 0
         if to_prune:
             db.prune_many(to_prune)
             pruned = len(to_prune)
 
-    # Persist the new tag ONLY when this run's model-change re-embed
-    # genuinely covered every discovered doc -- a doc left in `skipped`
-    # still carries its stale old-model vector, so persisting early would
-    # strand it permanently (review correction, CRITICAL finding above).
-    # The trailing `model_tag is not None` is a type-checker artifact, not
-    # a second business rule: `model_changed` already guarantees it at
-    # runtime (see its definition above) -- it stays only because mypy
-    # cannot narrow `model_tag` from a separate bool variable (round-2
-    # review correction, SUGGESTION finding).
-    # `withheld_confidential` joins the union for the SAME stranding reason
-    # (#922): a withheld doc keeps its stale old-model vector, so persisting
-    # the new tag would let the next run see a matching tag, fall through to
-    # the content_hash comparison, find the doc unchanged, and treat it as a
-    # cache hit -- pinned to the old model forever, even once the operator
-    # points the backend back at this machine.
-    tag_written = False
-    if (
-        model_changed
-        and skipped == 0
-        and embed_failed == 0
-        and withheld_confidential == 0
-        and effective_model_tag is not None
-    ):
-        db.write_model_tag(effective_model_tag)
-        tag_written = True
+        # Persist the new tag ONLY when this run's model-change re-embed
+        # genuinely covered every discovered doc -- a doc left in `skipped`
+        # still carries its stale old-model vector, so persisting early would
+        # strand it permanently (review correction, CRITICAL finding above).
+        # The trailing `model_tag is not None` is a type-checker artifact, not
+        # a second business rule: `model_changed` already guarantees it at
+        # runtime (see its definition above) -- it stays only because mypy
+        # cannot narrow `model_tag` from a separate bool variable (round-2
+        # review correction, SUGGESTION finding).
+        # `withheld_confidential` joins the union for the SAME stranding reason
+        # (#922): a withheld doc keeps its stale old-model vector, so persisting
+        # the new tag would let the next run see a matching tag, fall through to
+        # the content_hash comparison, find the doc unchanged, and treat it as a
+        # cache hit -- pinned to the old model forever, even once the operator
+        # points the backend back at this machine.
+        tag_written = False
+        if (
+            model_changed
+            and skipped == 0
+            and embed_failed == 0
+            and withheld_confidential == 0
+            and dropped_stale == 0
+            and effective_model_tag is not None
+        ):
+            db.write_model_tag(effective_model_tag)
+            tag_written = True
 
-    if to_embed or to_prune or tag_written:
-        db.commit()
+        if to_embed or to_prune or tag_written:
+            db.commit()
 
     if fts_db_path is not None:
         _reindex_fts(bundle_dir, fts_db_path, force=force)
