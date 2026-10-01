@@ -23,8 +23,9 @@ from __future__ import annotations
 
 import re
 import sqlite3
+from collections.abc import Mapping
 from contextlib import AbstractContextManager, nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from typing import Final, Literal
@@ -205,6 +206,13 @@ class FiledAnswerPlan:
     the `--save`-site mirror of `_DerivedPlan.type_floor_raised`. `False`
     on the common path (no offset configured for this type, or the
     citation high-water-mark already at or above the floor-plus-offset)."""
+    cited_sensitivities: Mapping[str, str] = field(default_factory=dict)
+    """The read dependencies of `sensitivity`: each cited concept id mapped to
+    the level it contributed to the high-water-mark when this plan was staged
+    (`confidential` for one that could not be read, the fail-closed fold).
+    The commit phase re-reads them under the lock and refuses when any moved
+    (`describe_cited_drift`), so a concurrent raise is never filed under the
+    lower level this plan computed."""
 
 
 _DECLARATIVE_TITLE_MAX_CHARS = 90
@@ -556,31 +564,11 @@ def stage_filed_answer(
         )
 
     cited_high_water_mark = default_sensitivity
+    cited_sensitivities: dict[str, str] = {}
     for citation in citations:
-        try:
-            # `okf.concept_path_for`, not `bundle_dir / f"{id}.md"` (#473):
-            # citation ids come out of `okf.concept_id_for` and are NFC, while
-            # the name on disk may be decomposed on a byte-exact filesystem.
-            # A direct read of the NFC spelling misses a file that exists,
-            # falls into the fail-closed `except` below, and folds a READABLE
-            # citation's sensitivity to `confidential` -- fail-closed is for
-            # documents that cannot be verified, not for a spelling mismatch
-            # the rest of the pipeline already tolerates.
-            text = okf.concept_path_for(citation.concept_id, bundle_dir).read_text(
-                encoding="utf-8"
-            )
-            metadata, _ = okf.load_frontmatter(text)
-        except (OSError, ValueError):  # a read/decode/parse failure
-            # fails CLOSED to "confidential" (cannot verify -> most
-            # restrictive); `okf.FrontmatterError` and
-            # `UnicodeDecodeError` are both `ValueError`s.
-            cited_high_water_mark = okf.combine_sensitivity(
-                cited_high_water_mark, "confidential"
-            )
-            continue
-        cited_high_water_mark = okf.combine_sensitivity(
-            cited_high_water_mark, metadata.get("sensitivity")
-        )
+        level = cited_concept_level(citation.concept_id, bundle_dir)
+        cited_sensitivities[citation.concept_id] = level
+        cited_high_water_mark = okf.combine_sensitivity(cited_high_water_mark, level)
 
     # Per-type sensitivity default (issue #669, design D3): the offset
     # applies to the CONFIG FLOOR, never to `cited_high_water_mark` itself,
@@ -621,6 +609,63 @@ def stage_filed_answer(
         content=content,
         sensitivity=sensitivity,
         type_floor_raised=(sensitivity != cited_high_water_mark),
+        cited_sensitivities=cited_sensitivities,
+    )
+
+
+def cited_concept_level(concept_id: str, bundle_dir: Path) -> str:
+    """The sensitivity one cited concept contributes to a filing's
+    high-water-mark, re-read from disk.
+
+    An unreadable OR unparseable concept contributes `confidential` -- the
+    most-restrictive level, never skipped (fail-closed: "cannot verify
+    sensitivity -> confidential", the same stance as `okf._rank` and
+    `sensitivity.blocks_llm_send`). Skipping would under-classify: a cited
+    concept surfaced under `--include-confidential` that becomes unreadable
+    at save time could otherwise leave a filed answer -- which may have
+    synthesized confidential content -- classified below `confidential`, a
+    future-leak vector.
+    """
+    try:
+        # `okf.concept_path_for`, not `bundle_dir / f"{id}.md"` (#473):
+        # citation ids come out of `okf.concept_id_for` and are NFC, while
+        # the name on disk may be decomposed on a byte-exact filesystem.
+        # A direct read of the NFC spelling misses a file that exists,
+        # falls into the fail-closed `except` below, and folds a READABLE
+        # citation's sensitivity to `confidential` -- fail-closed is for
+        # documents that cannot be verified, not for a spelling mismatch
+        # the rest of the pipeline already tolerates.
+        text = okf.concept_path_for(concept_id, bundle_dir).read_text(encoding="utf-8")
+        metadata, _ = okf.load_frontmatter(text)
+    except (OSError, ValueError):  # a read/decode/parse failure
+        # `okf.FrontmatterError` and `UnicodeDecodeError` are `ValueError`s.
+        return "confidential"
+    return okf.combine_sensitivity(
+        metadata.get("sensitivity"), metadata.get("sensitivity")
+    )
+
+
+def describe_cited_drift(plan: FiledAnswerPlan, bundle_dir: Path) -> str | None:
+    """Describe the refusal a filing owes when a cited concept's sensitivity
+    moved after `plan` was staged, or `None` when none did.
+
+    Called inside the commit phase, under the workspace lock, so the read it
+    makes is the one the write that follows can rely on. Any change refuses --
+    a raise would file confidential content under a lower level, and a lower
+    one is a stale plan -- with nothing written (exit 3 at the adapter).
+    """
+    moved = sorted(
+        concept_id
+        for concept_id, staged in plan.cited_sensitivities.items()
+        if cited_concept_level(concept_id, bundle_dir) != staged
+    )
+    if not moved:
+        return None
+    return (
+        "openkos query: refusing to write -- the sensitivity of "
+        f"{len(moved)} cited concept(s) changed after this answer was "
+        f"computed: {', '.join(moved)}. Nothing was written. Re-run to "
+        "recompute over the current bundle."
     )
 
 
