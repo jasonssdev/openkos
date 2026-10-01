@@ -384,18 +384,26 @@ def retire_unseen(
     return len(doomed)
 
 
+def _platform() -> str:
+    """`sys.platform` read through a function so mypy does not narrow the
+    per-OS branches below to the host it runs on (with `warn_unreachable`,
+    the other OS's branch would otherwise be flagged on every CI runner)."""
+    return sys.platform
+
+
 @lru_cache(maxsize=1)
 def boot_id() -> str:
     """An identifier of the current boot, so a pid reused after a reboot is not
     mistaken for a live claimant. Empty when the platform offers none."""
     try:
-        if sys.platform.startswith("linux"):
+        platform = _platform()
+        if platform.startswith("linux"):
             return (
                 Path("/proc/sys/kernel/random/boot_id")
                 .read_text(encoding="utf-8")
                 .strip()
             )
-        if sys.platform == "darwin":
+        if platform == "darwin":
             out = subprocess.run(
                 ["/usr/sbin/sysctl", "-n", "kern.boottime"],
                 capture_output=True,
