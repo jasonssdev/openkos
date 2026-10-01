@@ -311,9 +311,7 @@ from the account database rather than the environment, because a lock is a
 rendezvous that every process of the user must find in the same place. It holds
 no content and survives nothing; a refusing command must leave the workspace
 byte- and structure-identical, and a lock file created inside it would break
-that. A lock run also takes the earlier temp-directory lock for one transitional
-release, so an older `openkos` still excludes a newer one
-([ADR-0036](adr/0036-lock-a-short-commit-phase-in-a-per-user-state-directory.md)).
+that ([ADR-0036](adr/0036-lock-a-short-commit-phase-in-a-per-user-state-directory.md)).
 The unattended runner's logs live in the sibling `logs` directory of the same
 per-user state directory, for the same reason: a log is written on every run and
 must never appear in the workspace's tree or its version history.

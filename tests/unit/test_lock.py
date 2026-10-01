@@ -499,20 +499,6 @@ def test_an_unopenable_lock_file_is_a_clean_refusal_not_a_traceback(
 
 # --- the lock lives in the per-user state directory, not the OS temp dir (ADR-0036) ---
 
-# An "older openkos": holds ONLY the legacy temp-directory lock, the way a
-# release before the relocation does.
-_LEGACY_HOLDER = textwrap.dedent(
-    """
-    import sys
-    from pathlib import Path
-    from openkos import lock
-
-    with lock._hold(lock.legacy_lock_path_for(Path(sys.argv[1]))):
-        print("ACQUIRED", flush=True)
-        sys.stdin.read()
-    """
-)
-
 
 def test_the_lock_file_lives_in_the_state_directory_locks_dir(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -534,7 +520,6 @@ def test_the_lock_file_lives_in_the_state_directory_locks_dir(
     with lock.workspace_lock(tmp_path) as path:
         assert path == Path(userstate.locks_dir()) / f"{digest}.lock"
         assert path.is_file()
-        assert path.parent != lock.legacy_lock_path_for(tmp_path).parent
 
 
 @_POSIX_ONLY
@@ -575,75 +560,38 @@ def test_a_symlinked_workspace_root_shares_one_lock_across_processes(
         holder.wait(timeout=60)
 
 
-def test_an_older_openkos_holding_only_the_legacy_lock_still_excludes(
-    tmp_path: Path,
-) -> None:
-    holder = _spawn(_LEGACY_HOLDER, tmp_path)
-    try:
-        assert holder.stdout is not None
-        assert holder.stdout.readline().strip() == "ACQUIRED"
-        # Precondition: the legacy holder never touched the state-directory lock.
-        assert not lock.lock_path_for(tmp_path).exists()
-
-        with pytest.raises(lock.WorkspaceBusyError), lock.workspace_lock(tmp_path):
-            pytest.fail("the legacy lock was held; this must refuse")
-    finally:
-        assert holder.stdin is not None
-        holder.stdin.close()
-        holder.wait(timeout=60)
-
-
-def test_a_refusal_for_the_legacy_lock_leaves_the_state_lock_free(
-    tmp_path: Path,
-) -> None:
-    """Contention on the second lock must release the first, or one refused run
-    would wedge the workspace for every newer process."""
-    holder = _spawn(_LEGACY_HOLDER, tmp_path)
-    try:
-        assert holder.stdout is not None
-        assert holder.stdout.readline().strip() == "ACQUIRED"
-        with pytest.raises(lock.WorkspaceBusyError), lock.workspace_lock(tmp_path):
-            pass
-
-        with lock._hold(lock.lock_path_for(tmp_path)):
-            pass  # the state-directory lock was released by the refused run
-    finally:
-        assert holder.stdin is not None
-        holder.stdin.close()
-        holder.wait(timeout=60)
-
-
-def test_a_held_acquisition_holds_both_locks_and_releases_both(
-    tmp_path: Path,
-) -> None:
-    with lock.workspace_lock(tmp_path):
-        for path in (
-            lock.lock_path_for(tmp_path),
-            lock.legacy_lock_path_for(tmp_path),
-        ):
-            with pytest.raises(lock.WorkspaceBusyError), lock._hold(path):
-                pass
-
-    for path in (lock.lock_path_for(tmp_path), lock.legacy_lock_path_for(tmp_path)):
-        with lock._hold(path):
-            pass
-
-
-@_POSIX_ONLY
-def test_an_untrusted_legacy_lock_directory_is_refused(
+def test_a_held_legacy_temp_directory_lock_no_longer_excludes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    legacy_tmp = tmp_path.parent / f"{tmp_path.name}-legacy"
+    """The transitional temp-directory lock is gone (#1217): a lock held on the
+    pre-ADR-0036 path does not refuse a run, and the run creates no such file."""
+    import hashlib
+
+    legacy_tmp = tmp_path.parent / f"{tmp_path.name}-legacy-tmp"
     legacy_tmp.mkdir()
     monkeypatch.setattr(tempfile, "gettempdir", lambda: str(legacy_tmp))
-    directory = legacy_tmp / f"{lock.LEGACY_LOCK_DIR_PREFIX}-{os.geteuid()}"
-    directory.mkdir()
-    directory.chmod(0o755)
+    suffix = f"-{os.geteuid()}" if hasattr(os, "geteuid") else ""
+    legacy_dir = legacy_tmp / f"openkos-locks{suffix}"
+    legacy_dir.mkdir(mode=0o700)
+    digest = hashlib.sha256(os.path.realpath(tmp_path).encode()).hexdigest()
+    legacy_file = legacy_dir / f"{digest}.lock"
 
+    with lock._hold(legacy_file), lock.workspace_lock(tmp_path) as path:
+        assert path == lock.lock_path_for(tmp_path)
+
+    assert not hasattr(lock, "legacy_lock_path_for")
+
+
+def test_a_held_acquisition_holds_the_state_lock_and_releases_it(
+    tmp_path: Path,
+) -> None:
+    path = lock.lock_path_for(tmp_path)
     with (
-        pytest.raises(lock.WorkspaceLockUnavailableError) as excinfo,
         lock.workspace_lock(tmp_path),
+        pytest.raises(lock.WorkspaceBusyError),
+        lock._hold(path),
     ):
-        pytest.fail("unreachable")
+        pass
 
-    assert str(directory) in str(excinfo.value)
+    with lock._hold(path):
+        pass
