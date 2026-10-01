@@ -2104,6 +2104,7 @@ def test_purge_keeps_the_sidecars_of_the_stores_it_rebuilt(
     assert sorted(swept) == [
         "findings.db",
         "insight_questions.db",
+        "jobs.db",
         "vectors.db",
     ]
 
