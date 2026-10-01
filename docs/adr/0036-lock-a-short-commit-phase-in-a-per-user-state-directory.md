@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0036: The workspace lock covers a short commit phase, not the whole verb, and lives in a per-user state directory"
 description: Locked verbs compute without the lock and take it only for a commit phase that re-validates every input the plan depends on, writes, commits and refreshes the cheap derived stores; purge keeps a whole-verb lock; plain query takes no lock; the lock file moves from the OS temp directory to a per-user state directory; the CLI stays fail-fast with an opt-in bounded --wait, and derived-store contention becomes the same retry-safe exit 3. Amends ADR-0020 Decisions One, Two and Six.
-status: Proposed
+status: Accepted
 date: 2026-09-30
 tags:
   - openkos
@@ -14,9 +14,9 @@ sensitivity: public
 
 # ADR-0036: The workspace lock covers a short commit phase, not the whole verb, and lives in a per-user state directory
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-09-30
-- **Amends (on acceptance):** [ADR-0020](0020-concurrency-across-three-writers.md) (Decisions One, Two and Six)
+- **Amends:** [ADR-0020](0020-concurrency-across-three-writers.md) (Decisions One, Two and Six)
 
 ## Context
 

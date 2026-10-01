@@ -82,7 +82,12 @@ with at least one finding:
    `openkos set-sensitivity <id> <level>` remediation;
 9. pending exact-title duplicate group, command `openkos curate`;
 10. on-disk name that is not NFC, command `openkos normalize-names`;
-11. open contradiction finding, command `openkos contradictions`.
+11. open contradiction finding, command `openkos contradictions`;
+12. an open pending-work queue row of a kind no earlier tier ranks
+    (`identity` beyond exact-title groups, `relation_type`, `volatility`,
+    `revision`, `watch_refusal`), or a most recent unattended job outcome of
+    `budget_exhausted`, `timed_out`, `commit_failed`, or `failed`, command
+    `openkos pending`.
 
 A lower-ranked tier's finding MUST NOT be recommended while a higher-ranked
 tier has at least one finding.
@@ -629,3 +634,44 @@ cites. No lint output rendering MUST change because of this field.
   exist
 - WHEN `openkos next` runs
 - THEN its stdout is byte-for-byte identical in both cases
+
+### Requirement: Queue-Backed Tiers Read The Queue Before Recomputing
+
+WHEN the pending-work queue exists and is readable, tiers 9, 11, and 12
+MUST take their findings from open queue rows and MUST NOT recompute the
+advisor behind them; the declined and kept-distinct exclusions MUST still
+apply. WHEN the queue is absent or unreadable, tiers 9 and 11 MUST behave
+as they did before the queue existed, and tier 12's queue-row half MUST NOT
+fire. Tier 12's job-outcome half reads the unattended job record
+independently of the queue and MUST still fire when the most recent job
+outcome needs attention. Reading
+the queue MUST NOT make a model call, MUST NOT construct a model backend,
+and MUST NOT write.
+
+#### Scenario: An open identity row is ranked without a candidate walk
+
+- GIVEN an open `identity` row for an exact-title duplicate group, and no
+  higher tier fires
+- WHEN `openkos next` runs
+- THEN it recommends `openkos curate` without walking the bundle for
+  duplicate candidates
+
+#### Scenario: A watch refusal points at pending
+
+- GIVEN one open `watch_refusal` row and no higher tier fires
+- WHEN `openkos next` runs
+- THEN it recommends `openkos pending` and names the refused Source
+
+#### Scenario: A job outcome fires without a queue
+
+- GIVEN a workspace with no queue table whose most recent unattended job
+  outcome is `budget_exhausted`, and no higher tier fires
+- WHEN `openkos next` runs
+- THEN it recommends `openkos pending` and names the job outcome
+
+#### Scenario: No queue keeps the old behavior
+
+- GIVEN a workspace with no queue table and one persisted open contradiction
+  finding
+- WHEN `openkos next` runs and no higher tier fires
+- THEN it recommends `openkos contradictions` as before

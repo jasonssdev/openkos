@@ -58,7 +58,7 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 | [0017](0017-merge-ledger-stores-the-catalog-delta.md) | The merge ledger stores the catalog delta, not a catalog snapshot | Accepted | 2026-08-17 |
 | [0018](0018-application-layer-for-bounded-context-services.md) | An application layer for bounded-context services | Accepted | 2026-08-31 |
 | [0019](0019-dot-directories-are-not-knowledge.md) | Dot-directories are not knowledge | Accepted | 2026-09-14 |
-| [0020](0020-concurrency-across-three-writers.md) | Concurrency across three writers -- per-operation locking, detection for the rest | Amended by ADR-0036 | 2026-09-16 |
+| [0020](0020-concurrency-across-three-writers.md) | Concurrency across three writers -- per-operation locking, detection for the rest | Accepted | 2026-09-16 |
 | [0021](0021-sync-async-boundary.md) | The sync/async boundary -- a worker thread per operation, and no cancellation below it | Accepted | 2026-09-17 |
 | [0022](0022-incomplete-read-verbs-report-incompleteness.md) | An incomplete read verb reports incompleteness as data and as exit code 2 | Accepted | 2026-09-21 |
 | [0023](0023-source-event-date.md) | A Source records its event date as an optional, never-defaulted `event_date` key | Accepted | 2026-09-25 |
@@ -74,6 +74,6 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 | [0033](0033-source-tag-sync-is-union-only.md) | Source tag sync is union-only and never tags below the Source's sensitivity | Accepted | 2026-09-30 |
 | [0034](0034-identity-auto-merge-only-for-a-measured-class.md) | Identity merges apply without prior consent only for an opt-in class that passed a pre-registered measurement | Accepted | 2026-09-30 |
 | [0035](0035-a-pending-marker-makes-an-interrupted-ingest-completable.md) | A pending marker on the Source makes an interrupted ingest completable | Accepted | 2026-09-30 |
-| [0036](0036-lock-a-short-commit-phase-in-a-per-user-state-directory.md) | The workspace lock covers a short commit phase, not the whole verb, and lives in a per-user state directory | Accepted | 2026-09-30 |
-| [0037](0037-unattended-work-computes-and-enqueues-only.md) | Unattended work computes and enqueues; only a human-facing path applies a proposal | Accepted | 2026-09-30 |
-| [0038](0038-a-watched-folder-is-an-external-inbox.md) | A watched folder is an external inbox; a source edited after import is refused into the queue, never re-imported | Accepted | 2026-09-30 |
+| [0036](0036-lock-a-short-commit-phase-in-a-per-user-state-directory.md) | The workspace lock covers a short commit phase, not the whole verb, and lives in a per-user state directory | Proposed | 2026-09-30 |
+| [0037](0037-unattended-work-computes-and-enqueues-only.md) | Unattended work computes and enqueues; only a human-facing path applies a proposal | Proposed | 2026-09-30 |
+| [0038](0038-a-watched-folder-is-an-external-inbox.md) | A watched folder is an external inbox; a source edited after import is refused into the queue, never re-imported | Proposed | 2026-09-30 |
