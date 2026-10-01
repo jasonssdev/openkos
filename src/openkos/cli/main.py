@@ -2432,6 +2432,11 @@ def _run_adjudicate_apply(
                 deletes=frozenset({absorbed_path}),
             )
 
+            # The documents the plan only READ (the scan behind the survivor's
+            # sensitivity and the reference rewrite) are re-validated too:
+            # the whole-verb lock no longer excludes their writers.
+            _reject_read_drift(layout, prepared.read_dependencies, "adjudicate --apply")
+
             try:
                 merge_service.commit_merge(
                     root, layout, prepared, autocommit=_autocommit
@@ -2767,6 +2772,9 @@ def _run_adjudicate_apply_same(
                     application_lifecycle.merge_drift_targets(layout, prepared),
                     "adjudicate --apply-same",
                     deletes=frozenset({absorbed_path}),
+                )
+                _reject_read_drift(
+                    layout, prepared.read_dependencies, "adjudicate --apply-same"
                 )
             except typer.Exit:
                 typer.echo(
