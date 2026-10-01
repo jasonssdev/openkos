@@ -30,18 +30,18 @@
     "stdout": "openkos reindex: 3 embedded, 1 cache-hit, 0 pruned, 0 skipped, 0 embed-failed, 0 withheld.\nopenkos reindex: prune pass was skipped this run -- a directory-scan error made part of the bundle unreadable, so no concept was pruned even if some appeared absent (review carry-over, fold-in #3).\n"
   },
   "lock_contention_at_store_open": {
-    "exit_code": 1,
-    "stderr": "openkos reindex: failed -- another process is holding the workspace lock (a concurrent reindex?); wait for it to finish, then try again.\n",
+    "exit_code": 3,
+    "stderr": "openkos reindex: failed -- another OpenKOS process is using the workspace's derived stores; re-running is safe, so try again once it finishes.\n",
     "stdout": ""
   },
   "lock_contention_in_graph": {
-    "exit_code": 1,
-    "stderr": "openkos reindex: failed -- another process is holding the workspace lock (a concurrent reindex?); wait for it to finish, then try again.\n",
+    "exit_code": 3,
+    "stderr": "openkos reindex: failed -- another OpenKOS process is using the workspace's derived stores; re-running is safe, so try again once it finishes.\n",
     "stdout": "openkos reindex: 1 embedded, 0 cache-hits, 0 pruned, 0 skipped, 0 embed-failed, 0 withheld.\n"
   },
   "lock_contention_in_orchestrator": {
-    "exit_code": 1,
-    "stderr": "openkos reindex: failed -- another process is holding the workspace lock (a concurrent reindex?); wait for it to finish, then try again.\n",
+    "exit_code": 3,
+    "stderr": "openkos reindex: failed -- another OpenKOS process is using the workspace's derived stores; re-running is safe, so try again once it finishes.\n",
     "stdout": ""
   },
   "malformed_config": {

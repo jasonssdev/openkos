@@ -6,6 +6,7 @@ saying which commands those are cannot rot silently.
 """
 
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -17,6 +18,7 @@ from typer.testing import CliRunner
 
 from openkos import lock
 from openkos.cli.main import _READ_ONLY_COMMANDS, app
+from tests.unit.conftest import make_locked_error, make_non_lock_operational_error
 
 runner = CliRunner()
 
@@ -246,3 +248,55 @@ def test_an_untrusted_lock_directory_is_a_refusal_with_exit_1_not_a_traceback(
     assert "openkos relate: refusing to run --" in result.stderr
     assert str(directory) in result.stderr
     assert "chmod 700" in result.stderr
+
+
+_DERIVED_STORE_MESSAGE = (
+    "openkos relate: failed -- another OpenKOS process is using the "
+    "workspace's derived stores; re-running is safe, so try again once it "
+    "finishes.\n"
+)
+
+
+@pytest.mark.parametrize(
+    "errorcode", [sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED], ids=["busy", "locked"]
+)
+def test_derived_store_contention_in_a_locked_verb_exits_3_with_the_neutral_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, errorcode: int
+) -> None:
+    """A findings/derived-store write that hits a SQLite busy timeout in any
+    locked verb no verb-specific handler took is the same retry-safe refusal
+    as workspace-lock contention: exit 3, the verb's own name, and no guess at
+    which other verb is running."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    def _raise_locked(*args: object, **kwargs: object) -> None:
+        raise make_locked_error(errorcode=errorcode)
+
+    monkeypatch.setattr(
+        "openkos.cli.main.application_lifecycle.resolve_concept_path", _raise_locked
+    )
+
+    result = runner.invoke(app, ["relate", "a", "references", "b"])
+
+    assert result.exit_code == 3
+    assert result.stderr == _DERIVED_STORE_MESSAGE
+    assert "reindex" not in result.stderr
+    assert "workspace lock" not in result.stderr
+
+
+def test_a_non_contention_operational_error_in_a_locked_verb_is_not_exit_3(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+
+    def _raise(*args: object, **kwargs: object) -> None:
+        raise make_non_lock_operational_error("disk I/O error")
+
+    monkeypatch.setattr(
+        "openkos.cli.main.application_lifecycle.resolve_concept_path", _raise
+    )
+
+    result = runner.invoke(app, ["relate", "a", "references", "b"])
+
+    assert result.exit_code != 3
+    assert isinstance(result.exception, sqlite3.OperationalError)
