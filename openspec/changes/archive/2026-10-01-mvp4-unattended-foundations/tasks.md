@@ -116,7 +116,7 @@ dependencies only.
   Tests: `tests/unit/graph/test_graph_incremental.py` (link to a
   not-yet-existing target recovered; removed target drops edges; candidate
   ceiling unchanged).
-- [ ] 2.3 (NOT delivered: #1185 was closed unmerged; the add/change/remove equivalence is covered by the unit tests of #1182 and #1184, the seeded random-edit property test remains open) Equivalence property test over random edit sequences for both
+- [x] 2.3 (#1211; first opened as #1185, which GitHub closed when its base branch was deleted) Equivalence property test over random edit sequences for both
   stores; the staleness probe stays hash-only.
   Tests: `tests/unit/state/test_incremental_equivalence.py`. ~250.
 
