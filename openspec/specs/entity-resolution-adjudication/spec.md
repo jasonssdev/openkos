@@ -865,8 +865,15 @@ group, where `N` is its member count.
 
 ### Requirement: Survivor/Absorbed Preview And Prompt
 
-For each eligible group, the survivor MUST be the member with the RICHER
-BODY (longer stripped body text), falling back to `member_ids[0]`
+For each eligible group whose two members are a base/`-N` family (the same
+directory, one id being the other plus `-` and decimal digits -- the
+ingest-time collision suffix), the survivor MUST be the un-suffixed id
+whatever the bodies weigh, and the preview MUST state
+`survivor: <id> (canonical id (base of a -N family))`: the Concept ID is
+the entity's identity under OKF, so a disambiguator must not become
+permanent. The absorbed body is not lost -- the merge stacks and
+reconciles both. For every other group, the survivor MUST be the member
+with the RICHER BODY (longer stripped body text), falling back to `member_ids[0]`
 (ascending id) only on an exact tie (string order alone made a
 bilingual pleonasm the permanent Concept ID purely because `f` sorts
 before `o`; the richer-body rule mirrors the extraction union's own
@@ -908,6 +915,13 @@ itself remains as defense in depth).
   the longer body
 - WHEN any apply walk previews it
 - THEN that member is the survivor and the preview states `richer body`
+
+#### Scenario: A base/-N family keeps the canonical id
+- GIVEN a SAME 2-member group `people/ana` and `people/ana-2`, where
+  `people/ana-2` has the longer body
+- WHEN any apply walk previews it
+- THEN `people/ana` is the survivor and the preview states the
+  canonical-id criterion
 
 #### Scenario: A tie keeps ascending-id order and says so
 

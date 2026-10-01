@@ -890,6 +890,34 @@ would trade that fact for a probability.
 - WHEN the reply passes every refusal gate
 - THEN the returned body is byte-identical to the reply
 
+### Requirement: A Reconciled Body Keeps The Members' Related Links
+
+A reconciliation reply is free text, so it may drop the `## Related`
+section (the backlinks to the Sources the object was extracted from) while
+frontmatter `provenance` stays intact. After every refusal gate and the
+heading pin, the returned body MUST contain a `Related` link for every
+link target found in either input note's `Related` section. When the
+reply already has a `Related` section, only the missing links MUST be
+appended to the first such section, matched by link target so a reworded
+bullet is not repeated; when it has none, exactly one `## Related`
+section MUST be appended. The result MUST NOT carry a second `Related`
+section the reply did not already have, and a merge whose inputs have no
+`Related` links MUST leave the reply unchanged. This is deterministic
+rather than prompt-asked, because the links are facts already in hand.
+
+#### Scenario: A reply that dropped Related gets it rebuilt
+- GIVEN two input notes each with a `## Related` bullet and a reply with
+  no `Related` section
+- WHEN the reply passes every refusal gate
+- THEN the returned body ends with one `## Related` section holding both
+  bullets
+
+#### Scenario: A reply that kept Related only gains what is missing
+- GIVEN a reply whose `## Related` lists only the survivor's link
+- WHEN the reply passes every refusal gate
+- THEN the absorbed note's link is appended to that same section and no
+  second `## Related` appears
+
 ### Requirement: The Cross-Source Warning Reaches Every Merge Surface
 
 Every surface that offers to merge two concepts MUST name the cross-source

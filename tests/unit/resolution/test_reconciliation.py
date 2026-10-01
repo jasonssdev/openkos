@@ -389,3 +389,86 @@ def test_a_sibling_heading_at_the_leading_level_is_promoted_with_it() -> None:
     assert out.startswith("# Model Context Protocol\n")
     assert "\n# Transport\n" in out
     assert "\n## Details\n" in out
+
+
+# --- #1229: the survivor's `## Related` section is guaranteed ---------------
+
+_SRC_A = "- [sources/a](/sources/a.md) — source this was extracted from"
+_SRC_B = "- [sources/b](/sources/b.md) — source this was extracted from"
+_PROSE = (
+    "The Model Context Protocol (MCP) is an open protocol that connects "
+    "language models to external tools and data sources through servers, "
+    "and one client works with any conformant server."
+)
+
+
+def _reconcile_with_related(reply: str) -> str:
+    result = reconciliation.reconcile_merged_body(
+        survivor_title="Model Context Protocol",
+        survivor_body=f"# Model Context Protocol\n\n{_SURVIVOR}\n\n## Related\n\n{_SRC_A}\n",
+        # Headings arrive demoted two levels, exactly as the stacked
+        # absorbed half does after `_demote_absorbed_headings`.
+        absorbed_body=f"### MCP\n\n{_ABSORBED}\n\n### Related\n\n{_SRC_B}\n",
+        llm=_FakeLLM(reply),
+    )
+    assert result is not None
+    return result
+
+
+def test_a_reply_that_dropped_related_gets_it_rebuilt_from_both_members() -> None:
+    result = _reconcile_with_related(f"# Model Context Protocol\n\n{_PROSE}")
+
+    assert result.endswith(f"\n\n## Related\n\n{_SRC_A}\n{_SRC_B}")
+    assert result.count("## Related") == 1
+
+
+def test_a_reply_keeping_related_gains_only_the_missing_links() -> None:
+    reply = f"# Model Context Protocol\n\n{_PROSE}\n\n## Related\n\n{_SRC_A}\n"
+
+    result = _reconcile_with_related(reply)
+
+    assert result.count("## Related") == 1
+    assert result.count(_SRC_A) == 1
+    assert result.index(_SRC_B) > result.index(_SRC_A)
+
+
+def test_a_reply_with_complete_related_is_unchanged() -> None:
+    reply = f"# Model Context Protocol\n\n{_PROSE}\n\n## Related\n\n{_SRC_B}\n{_SRC_A}"
+
+    assert _reconcile_with_related(reply) == reply
+
+
+def test_related_bullets_are_matched_by_link_target_not_by_note_text() -> None:
+    reply = (
+        f"# Model Context Protocol\n\n{_PROSE}\n\n## Related\n\n"
+        "- [sources/a](/sources/a.md) — reworded by the model\n"
+    )
+
+    result = _reconcile_with_related(reply)
+
+    assert result.count("/sources/a.md") == 1
+    assert "/sources/b.md" in result
+
+
+def test_no_related_anywhere_adds_no_section() -> None:
+    result = _reconcile(f"# Model Context Protocol\n\n{_PROSE}")
+
+    assert result is not None
+    assert "## Related" not in result
+
+
+def test_related_inside_a_fence_is_not_a_section() -> None:
+    reply = f"# Model Context Protocol\n\n{_PROSE}\n\n```\n## Related\n```"
+
+    result = _reconcile_with_related(reply)
+
+    assert result.endswith(f"```\n\n## Related\n\n{_SRC_A}\n{_SRC_B}")
+
+
+def test_an_empty_related_heading_is_filled_not_duplicated() -> None:
+    reply = f"# Model Context Protocol\n\n{_PROSE}\n\n## Related\n\n"
+
+    result = _reconcile_with_related(reply)
+
+    assert result.count("## Related") == 1
+    assert result.endswith(f"## Related\n\n{_SRC_A}\n{_SRC_B}")
