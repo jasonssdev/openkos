@@ -2377,24 +2377,29 @@ def _run_adjudicate_apply(
         # after the accepted `y`, before the first write. The absorbed
         # file rides in `deletes=` because it is UNLINKED, not overwritten
         # (#329), mirroring `merge`'s own call site.
-        absorbed_path = layout.bundle_dir / f"{prepared.absorbed_canonical}.md"
-        _reject_drifted_targets(
-            layout,
-            application_lifecycle.merge_drift_targets(layout, prepared),
-            "adjudicate --apply",
-            deletes=frozenset({absorbed_path}),
-        )
-
-        try:
-            merge_service.commit_merge(root, layout, prepared, autocommit=_autocommit)
-        except (OSError, ValueError) as exc:
-            typer.echo(
-                "openkos adjudicate --apply: failed while merging "
-                f"{prepared.absorbed_canonical} into "
-                f"{prepared.survivor_canonical} -- {exc}.",
-                err=True,
+        # The commit phase (#1137): the prompt and the reconciliation call
+        # above held no workspace lock.
+        with _commit_section():
+            absorbed_path = layout.bundle_dir / f"{prepared.absorbed_canonical}.md"
+            _reject_drifted_targets(
+                layout,
+                application_lifecycle.merge_drift_targets(layout, prepared),
+                "adjudicate --apply",
+                deletes=frozenset({absorbed_path}),
             )
-            raise typer.Exit(code=1) from exc
+
+            try:
+                merge_service.commit_merge(
+                    root, layout, prepared, autocommit=_autocommit
+                )
+            except (OSError, ValueError) as exc:
+                typer.echo(
+                    "openkos adjudicate --apply: failed while merging "
+                    f"{prepared.absorbed_canonical} into "
+                    f"{prepared.survivor_canonical} -- {exc}.",
+                    err=True,
+                )
+                raise typer.Exit(code=1) from exc
         applied += 1
 
     skipped_total = skipped_n_gt2 + skipped_already_merged + len(declined)
@@ -2708,42 +2713,47 @@ def _run_adjudicate_apply_same(
         # exists only to echo the same partial summary the mid-batch
         # failure paths echo, so a drift abort leaves the operator the
         # same recovery affordance.
-        absorbed_path = layout.bundle_dir / f"{prepared.absorbed_canonical}.md"
-        try:
-            _reject_drifted_targets(
-                layout,
-                application_lifecycle.merge_drift_targets(layout, prepared),
-                "adjudicate --apply-same",
-                deletes=frozenset({absorbed_path}),
-            )
-        except typer.Exit:
-            typer.echo(
-                "openkos adjudicate --apply-same: stopped after drift "
-                f"refusal -- applied {applied} of {total} previewed before "
-                "this refusal; the remaining pairs were not attempted. "
-                "Applied merges remain committed and reversible via "
-                "`unmerge`.",
-                err=True,
-            )
-            raise
+        # The commit phase (#1137): the reconciliation call above held no
+        # workspace lock.
+        with _commit_section():
+            absorbed_path = layout.bundle_dir / f"{prepared.absorbed_canonical}.md"
+            try:
+                _reject_drifted_targets(
+                    layout,
+                    application_lifecycle.merge_drift_targets(layout, prepared),
+                    "adjudicate --apply-same",
+                    deletes=frozenset({absorbed_path}),
+                )
+            except typer.Exit:
+                typer.echo(
+                    "openkos adjudicate --apply-same: stopped after drift "
+                    f"refusal -- applied {applied} of {total} previewed before "
+                    "this refusal; the remaining pairs were not attempted. "
+                    "Applied merges remain committed and reversible via "
+                    "`unmerge`.",
+                    err=True,
+                )
+                raise
 
-        try:
-            merge_service.commit_merge(root, layout, prepared, autocommit=_autocommit)
-        except (OSError, ValueError) as exc:
-            typer.echo(
-                "openkos adjudicate --apply-same: failed while merging "
-                f"{prepared.absorbed_canonical} into "
-                f"{prepared.survivor_canonical} -- {exc}.",
-                err=True,
-            )
-            typer.echo(
-                "openkos adjudicate --apply-same: stopped after failure -- "
-                f"applied {applied} of {total} previewed before this "
-                "failure; the remaining pairs were not attempted. Applied "
-                "merges remain committed and reversible via `unmerge`.",
-                err=True,
-            )
-            raise typer.Exit(code=1) from exc
+            try:
+                merge_service.commit_merge(
+                    root, layout, prepared, autocommit=_autocommit
+                )
+            except (OSError, ValueError) as exc:
+                typer.echo(
+                    "openkos adjudicate --apply-same: failed while merging "
+                    f"{prepared.absorbed_canonical} into "
+                    f"{prepared.survivor_canonical} -- {exc}.",
+                    err=True,
+                )
+                typer.echo(
+                    "openkos adjudicate --apply-same: stopped after failure -- "
+                    f"applied {applied} of {total} previewed before this "
+                    "failure; the remaining pairs were not attempted. Applied "
+                    "merges remain committed and reversible via `unmerge`.",
+                    err=True,
+                )
+                raise typer.Exit(code=1) from exc
         applied += 1
 
     skipped_total = (
@@ -10369,7 +10379,7 @@ def _duplicates_kept_distinct_view(root: Path) -> None:
     ),
     rich_help_panel="Curate",
 )
-@_guard_workspace_lock("adjudicate")
+@_guard_workspace_lock("adjudicate", commit_phase=True)
 def adjudicate(
     same_only: bool = typer.Option(
         False,
@@ -10681,6 +10691,15 @@ def adjudicate(
         include_confidential=include_confidential,
         local_exemption=local_exemption,
     )
+    # #1137: the judging call below holds no workspace lock, so pin each
+    # member's digest BEFORE it -- the persist keeps a verdict only for content
+    # that is still what was judged.
+    _digest_of = application_pending.current_finding_digest(layout.bundle_dir)
+    judged_digests = {
+        member_id: _digest_of(member_id)
+        for group in to_judge
+        for member_id in group.member_ids
+    }
     try:
         # Still called with an empty `to_judge` (a fully-served run): zero
         # groups means zero `llm.chat` calls by construction, and the
@@ -10729,7 +10748,10 @@ def adjudicate(
     # are rebuilt in candidate order -- served verdict, else fresh one;
     # groups past a mid-batch failure appear in neither and stay absent.
     _persist_adjudications(
-        layout, batch.results, include_confidential=effective_confidential
+        layout,
+        batch.results,
+        include_confidential=effective_confidential,
+        judged_digests=judged_digests,
     )
     if served_by_key:
         results = _reassemble_adjudications(candidates, served_by_key, batch.results)
@@ -11709,56 +11731,83 @@ def _persist_adjudications(
     *,
     include_confidential: bool,
     surface: str = "adjudicate",
+    judged_digests: "Mapping[str, str | None] | None" = None,
 ) -> None:
     """Persist freshly judged adjudication verdicts (#779), fail-open: a
     failed persist costs one stderr advisory, never the run -- the same
     #684 posture curate's findings persist takes. A result any of whose
     members has no current digest (unreadable -- including the
     no-readable-member UNCERTAIN short-circuit) is skipped: a row whose
-    staleness can never be checked would serve forever."""
+    staleness can never be checked would serve forever.
+
+    `judged_digests` is each member's content digest as it stood BEFORE the
+    judging call (#1137): the judging call holds no workspace lock, so a
+    member edited, raised or forgotten meanwhile has a different digest now,
+    and its verdict is dropped rather than stored against content nobody
+    judged. Without it (curate, which holds the lock throughout) the digests
+    are read here, as before.
+
+    The persist is a commit phase: it takes the workspace lock, and a busy
+    workspace costs the same advisory a failed persist does."""
     if not results:
         return
-    current_digest = application_pending.current_finding_digest(layout.bundle_dir)
-    # #838: every fresh verdict records the rubric it was computed under,
-    # so the serve gate can refuse it after a judgment fix ships. Computed
-    # once -- it is constant within a build.
-    current_rubric = rubric_digest()
-    batch: list[adjudications_store.Adjudication] = []
-    for result in results:
-        digests: list[adjudications_store.InputDigest] = []
-        for member_id in result.candidate.member_ids:
-            digest = current_digest(member_id)
-            if digest is None:
-                break
-            digests.append(
-                adjudications_store.InputDigest(input_ref=member_id, digest=digest)
-            )
-        else:
-            batch.append(
-                adjudications_store.Adjudication(
-                    member_ids=tuple(result.candidate.member_ids),
-                    verdict=result.verdict.value,
-                    confidence=result.confidence,
-                    rationale=result.rationale,
-                    include_confidential=include_confidential,
-                    input_digests=tuple(digests),
-                    rubric_digest=current_rubric,
-                )
-            )
-    if not batch:
-        return
     try:
-        conn = derived.open_derived_connection(layout.findings_db_path)
-        try:
-            adjudications_store.record_adjudications(conn, batch)
-        finally:
-            conn.close()
-    except (OSError, sqlite3.Error) as exc:
-        # `surface` names the command the user actually ran (#867 review):
-        # curate's Identity stage persists through this helper too.
+        with _commit_section():
+            current_digest = application_pending.current_finding_digest(
+                layout.bundle_dir
+            )
+            # #838: every fresh verdict records the rubric it was computed under,
+            # so the serve gate can refuse it after a judgment fix ships. Computed
+            # once -- it is constant within a build.
+            current_rubric = rubric_digest()
+            batch: list[adjudications_store.Adjudication] = []
+            for result in results:
+                digests: list[adjudications_store.InputDigest] = []
+                for member_id in result.candidate.member_ids:
+                    digest = current_digest(member_id)
+                    if digest is None or (
+                        judged_digests is not None
+                        and judged_digests.get(member_id) != digest
+                    ):
+                        break
+                    digests.append(
+                        adjudications_store.InputDigest(
+                            input_ref=member_id, digest=digest
+                        )
+                    )
+                else:
+                    batch.append(
+                        adjudications_store.Adjudication(
+                            member_ids=tuple(result.candidate.member_ids),
+                            verdict=result.verdict.value,
+                            confidence=result.confidence,
+                            rationale=result.rationale,
+                            include_confidential=include_confidential,
+                            input_digests=tuple(digests),
+                            rubric_digest=current_rubric,
+                        )
+                    )
+            if not batch:
+                return
+            try:
+                conn = derived.open_derived_connection(layout.findings_db_path)
+                try:
+                    adjudications_store.record_adjudications(conn, batch)
+                finally:
+                    conn.close()
+            except (OSError, sqlite3.Error) as exc:
+                # `surface` names the command the user actually ran (#867 review):
+                # curate's Identity stage persists through this helper too.
+                typer.echo(
+                    f"openkos {surface}: warning -- failed to persist adjudication "
+                    f"verdicts ({exc}); the next run will re-judge them.",
+                    err=True,
+                )
+    except lock.WorkspaceBusyError as exc:
         typer.echo(
-            f"openkos {surface}: warning -- failed to persist adjudication "
-            f"verdicts ({exc}); the next run will re-judge them.",
+            f"openkos {surface}: warning -- the workspace is busy, so the "
+            f"adjudication verdicts were not persisted ({exc}); the next run "
+            "will re-judge them.",
             err=True,
         )
 
