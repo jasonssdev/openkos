@@ -697,7 +697,7 @@ def test_unmerge_drift_on_the_unprompted_path(
     _merged(tmp_path, monkeypatch)
     hook = echo_after(
         monkeypatch,
-        _edit(tmp_path / "bundle" / "index.md", "\nedit\n"),
+        _edit(tmp_path / "bundle" / f"{_SURVIVOR}.md", "\nedit\n"),
         trigger=f"+ bundle/{_ABSORBED}.md (restore",
     )
     actual = _run(tmp_path, ["unmerge", _SURVIVOR, _ABSORBED, "--auto"])
@@ -918,7 +918,7 @@ def test_reconcile_drift_on_the_unprompted_path(
     _reconcilable(tmp_path, monkeypatch)
     hook = echo_after(
         monkeypatch,
-        _edit(tmp_path / "bundle" / "log.md", "\nedit\n"),
+        _edit(tmp_path / "bundle" / f"{_ALPHA}.md", "\nedit\n"),
         trigger="(new dated entry)",
     )
     actual = _run(tmp_path, ["reconcile", _ALPHA, _BETA, "--auto"])

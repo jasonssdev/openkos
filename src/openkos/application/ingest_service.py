@@ -47,9 +47,9 @@ from pathlib import Path
 from typing import Literal
 
 from openkos import config, fsio
+from openkos.application import catalog_delta, lock_wait
 from openkos.application import drift as application_drift
 from openkos.application import ingest as application_ingest
-from openkos.application import lock_wait
 from openkos.bundle import source_titles
 from openkos.extraction.concept import FAN_OUT_CONCURRENCY, fans_out
 from openkos.llm.base import BackendError, LLMBackend, is_timeout_failure
@@ -572,24 +572,24 @@ def _recompose_catalog(prepared: _Prepared, ports: IngestPorts) -> tuple[str, st
     concurrent append is kept. Only a file that cannot be read, or whose
     current text cannot take the delta, refuses."""
     try:
-        index_bytes, index_text = ports.snapshot_read(prepared.index_path)
-        log_bytes, log_text = ports.snapshot_read(prepared.log_path)
-    except (OSError, UnicodeDecodeError) as exc:
-        raise DriftDetected(
-            "openkos ingest: refusing to write -- the catalog (index.md or "
-            f"log.md) could not be re-read for the commit phase: {exc}. "
-            "Nothing was written."
-        ) from exc
-    if index_bytes == prepared.index_snapshot and log_bytes == prepared.log_snapshot:
-        return prepared.new_index_text, prepared.new_log_text
-    try:
-        update = prepared.recompose_catalog(index_text, log_text)
-    except ValueError as exc:
-        raise DriftDetected(
-            "openkos ingest: refusing to write -- index.md or log.md changed "
-            f"and the ingest's entries cannot be re-applied to it: {exc}. "
-            "Nothing was written."
-        ) from exc
+        return catalog_delta.recompose_catalog(
+            verb="ingest",
+            index_path=prepared.index_path,
+            log_path=prepared.log_path,
+            index_baseline=prepared.index_snapshot,
+            log_baseline=prepared.log_snapshot,
+            planned=(prepared.new_index_text, prepared.new_log_text),
+            delta=lambda index_text, log_text: _catalog_texts(
+                prepared.recompose_catalog(index_text, log_text)
+            ),
+            read=ports.snapshot_read,
+            subject="the ingest's",
+        )
+    except catalog_delta.CatalogRecomposeError as exc:
+        raise DriftDetected(str(exc)) from exc
+
+
+def _catalog_texts(update: application_ingest.CatalogUpdate) -> tuple[str, str]:
     return update.new_index_text, update.new_log_text
 
 

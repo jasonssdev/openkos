@@ -44,7 +44,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from openkos import config
-from openkos.application import commit_phase
+from openkos.application import catalog_delta, commit_phase
 from openkos.application import drift as application_drift
 from openkos.application import lifecycle as application_lifecycle
 from openkos.application.lifecycle import PreparedMerge
@@ -358,9 +358,13 @@ def merge_concepts(
         # before the first write. The ABSORBED file is in here too: it is
         # UNLINKED, so an edit landing on it during the prompt would be
         # destroyed outright (#319).
+        # `index.md` and `log.md` are not guarded: every verb appends to them,
+        # so the merge's edit is re-composed over their current bytes below.
         drift = application_drift.describe_drift(
             layout,
-            application_lifecycle.merge_drift_targets(layout, prepared),
+            application_lifecycle.merge_drift_targets(
+                layout, prepared, include_catalog=False
+            ),
             "merge",
             deletes=frozenset({absorbed_path}),
         )
@@ -374,6 +378,10 @@ def merge_concepts(
         )
         if read_drift is not None:
             raise DriftDetected(read_drift)
+        try:
+            prepared = application_lifecycle.recompose_merge_catalog(layout, prepared)
+        except catalog_delta.CatalogRecomposeError as exc:
+            raise DriftDetected(str(exc)) from exc
 
         try:
             result = application_lifecycle.merge_core(

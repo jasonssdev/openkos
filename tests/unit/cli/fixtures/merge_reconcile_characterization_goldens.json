@@ -384,12 +384,12 @@
     ],
     "exit_code": 3,
     "files": {
-      "bundle/concepts/alpha.md": "---\ntype: Concept\ntitle: Alpha\n---\n\n# Alpha\n\nAlpha claims X.\n",
+      "bundle/concepts/alpha.md": "---\ntype: Concept\ntitle: Alpha\n---\n\n# Alpha\n\nAlpha claims X.\n\nedit\n",
       "bundle/concepts/beta.md": "---\ntype: Concept\ntitle: Beta\n---\n\n# Beta\n\nBeta claims Y.\n",
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Alpha](/concepts/alpha.md) - Alpha.\n* [Beta](/concepts/beta.md) - Beta.\n",
-      "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n\nedit\n"
+      "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "openkos reconcile: refusing to write -- 1 write target(s) changed on disk after this run computed its plan: bundle/log.md. Nothing was written. Re-run to recompute over the current bundle.\n",
+    "stderr": "openkos reconcile: refusing to write -- 1 write target(s) changed on disk after this run computed its plan: bundle/concepts/alpha.md. Nothing was written. Re-run to recompute over the current bundle.\n",
     "stdout": "openkos reconcile: proposed changes:\n  ~ bundle/concepts/alpha.md (relation added; note appended)\n  ~ bundle/concepts/beta.md (relation added; note appended)\n  ~ log.md (new dated entry)\n"
   },
   "reconcile_from_findings": {
@@ -866,11 +866,11 @@
     "files": {
       "bundle/.state/ledger/concepts/survivor.ledger.okf": "---\nexpected_survivor_sha256: <SHA256>\nmerged_from:\n- absorbed_id: concepts/absorbed\n  absorbed_snapshot: '---\n\n    type: Concept\n\n    title: Absorbed\n\n    ---\n\n\n    # Absorbed\n\n\n    Absorbed body.\n\n    '\n  carried_content_ids: []\n  index_restores:\n  - blank_gap: 0\n    line: '* [Absorbed](/concepts/absorbed.md) - Absorbed.\n\n      '\n    preceded_by: '* [Survivor](/concepts/survivor.md) - Survivor.\n\n      '\n    preceded_by_occurrence: 0\n  link_rewrites:\n  - file: concepts/linker.md\n    new_link: /concepts/survivor.md\n    offset: 62\n    old_link: /concepts/absorbed.md\n  merged_at: '<TS>'\n  provenance_rewrites: []\n  relation_rewrites: []\n  schema: openkos.merge_ledger/v5\n  sensitivity_after: private\n  sensitivity_before: ''\n  survivor_after_sha256: <SHA256>\n  survivor_before: '---\n\n    type: Concept\n\n    title: Survivor\n\n    ---\n\n\n    # Survivor\n\n\n    Survivor body.\n\n    '\nschema: openkos.merge_ledger_sidecar/v1\nsurvivor_id: concepts/survivor\n---\n",
       "bundle/concepts/linker.md": "---\ntype: Concept\ntitle: Linker\n---\n\n# Linker\n\nSee [Absorbed](/concepts/survivor.md) for detail.\n",
-      "bundle/concepts/survivor.md": "---\nfreshness: null\nsensitivity: private\ntitle: Survivor\ntype: Concept\n---\n\n# Survivor\n\nSurvivor body.\n\n## Merged content (concepts/absorbed)\n\n### Absorbed\n\nAbsorbed body.\n",
-      "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n* [Linker](/concepts/linker.md) - Linker.\n\nedit\n",
+      "bundle/concepts/survivor.md": "---\nfreshness: null\nsensitivity: private\ntitle: Survivor\ntype: Concept\n---\n\n# Survivor\n\nSurvivor body.\n\n## Merged content (concepts/absorbed)\n\n### Absorbed\n\nAbsorbed body.\n\nedit\n",
+      "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n* [Linker](/concepts/linker.md) - Linker.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "openkos unmerge: refusing to write -- 1 write target(s) changed on disk after this run computed its plan: bundle/index.md. Nothing was written. Copy your edit somewhere safe before re-running: a re-run restores the pre-merge snapshots over index.md, log.md, and the survivor (overwriting the edit), and keeps refusing on an edited rewrite file until that edit is reverted.\n",
+    "stderr": "openkos unmerge: refusing to write -- 1 write target(s) changed on disk after this run computed its plan: bundle/concepts/survivor.md. Nothing was written. Copy your edit somewhere safe before re-running: a re-run restores the pre-merge snapshots over index.md, log.md, and the survivor (overwriting the edit), and keeps refusing on an edited rewrite file until that edit is reverted.\n",
     "stdout": "openkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\n"
   },
   "unmerge_legacy_ledger_entry": {
