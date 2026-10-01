@@ -35,6 +35,7 @@ from openkos import (
 )
 from openkos import lint as lint_check
 from openkos.application import backends as application_backends
+from openkos.application import catalog_delta as application_catalog_delta
 from openkos.application import commit_phase as application_commit_phase
 from openkos.application import (
     contradictions_service,
@@ -1299,6 +1300,20 @@ def _reject_drifted_targets(
     raise typer.Exit(code=3)
 
 
+def _recomposed_catalog[**P, T](
+    compose: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs
+) -> T:
+    """Run a commit-phase catalog re-composition (`application.catalog_delta`),
+    turning its refusal into exit 3 with nothing written -- the same exit a
+    drift refusal owes, because it is raised only when `index.md`/`log.md`
+    changed and the verb's entries cannot be re-applied to the new bytes."""
+    try:
+        return compose(*args, **kwargs)
+    except application_catalog_delta.CatalogRecomposeError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=3) from exc
+
+
 def _require_member_baseline(
     verb: str, other_bytes: Mapping[str, bytes], member: str
 ) -> bytes:
@@ -2432,11 +2447,21 @@ def _run_adjudicate_apply(
         # above held no workspace lock.
         with _commit_section_for(root)():
             absorbed_path = layout.bundle_dir / f"{prepared.absorbed_canonical}.md"
+            # `index.md`/`log.md` are re-composed over their current bytes,
+            # not guarded: every verb appends to them.
             _reject_drifted_targets(
                 layout,
-                application_lifecycle.merge_drift_targets(layout, prepared),
+                application_lifecycle.merge_drift_targets(
+                    layout, prepared, include_catalog=False
+                ),
                 "adjudicate --apply",
                 deletes=frozenset({absorbed_path}),
+            )
+            prepared = _recomposed_catalog(
+                application_lifecycle.recompose_merge_catalog,
+                layout,
+                prepared,
+                verb="adjudicate --apply",
             )
 
             try:
@@ -2771,9 +2796,17 @@ def _run_adjudicate_apply_same(
             try:
                 _reject_drifted_targets(
                     layout,
-                    application_lifecycle.merge_drift_targets(layout, prepared),
+                    application_lifecycle.merge_drift_targets(
+                        layout, prepared, include_catalog=False
+                    ),
                     "adjudicate --apply-same",
                     deletes=frozenset({absorbed_path}),
+                )
+                prepared = _recomposed_catalog(
+                    application_lifecycle.recompose_merge_catalog,
+                    layout,
+                    prepared,
+                    verb="adjudicate --apply-same",
                 )
             except typer.Exit:
                 typer.echo(
@@ -5351,8 +5384,7 @@ def forget(
         _reject_drifted_targets(
             layout,
             {
-                index_path: plan.index_bytes,
-                log_path: plan.log_bytes,
+                # `index.md`/`log.md` are re-composed below, not guarded.
                 concept_path: plan.concept_bytes,
                 **{
                     # Defensive fail-closed lookup (see `_require_member_baseline`):
@@ -5415,6 +5447,10 @@ def forget(
                 ),
             ),
             "forget",
+        )
+
+        plan = _recomposed_catalog(
+            application_lifecycle.recompose_forget_catalog, layout, plan
         )
 
         ledger_touched: list[Path] = []
@@ -6561,10 +6597,8 @@ def relate(
     # Issue #313: every byte below was computed from a pre-prompt read, so
     # re-validate each target now -- after the gate, before the first write.
     with _commit_section_for(root)():
-        drift_baselines = {
-            source_path: prepared.source_bytes,
-            log_path: prepared.log_bytes,
-        }
+        # `log.md` is re-composed below, not guarded.
+        drift_baselines = {source_path: prepared.source_bytes}
         if prepared.target_bytes is not None:
             drift_baselines[target_path] = prepared.target_bytes
         _reject_drifted_targets(layout, drift_baselines, "relate")
@@ -6576,6 +6610,10 @@ def relate(
                 ),
                 "relate",
             )
+
+        prepared = _recomposed_catalog(
+            application_lifecycle.recompose_relate_log, log_path, prepared
+        )
 
         try:
             application_lifecycle.relate_core(
@@ -6873,9 +6911,13 @@ def set_sensitivity_cmd(
             f"**Set-sensitivity**: Set [{canonical_id}](/{canonical_id}.md) "
             f"sensitivity to {level!r} (was {current!r})."
         )
-        new_log_text = bundle_log.insert_log_entry(
-            log_text, now.astimezone().date(), log_line
-        )
+
+        def set_sensitivity_log(current_log: str) -> str:
+            return bundle_log.insert_log_entry(
+                current_log, now.astimezone().date(), log_line
+            )
+
+        new_log_text = set_sensitivity_log(log_text)
     except (OSError, ValueError) as exc:
         typer.echo(
             f"openkos set-sensitivity: failed while preparing the "
@@ -6956,11 +6998,19 @@ def set_sensitivity_cmd(
                     for descendant_raise in descendant_raises
                 },
                 concept_path: concept_bytes,
-                log_path: log_bytes,
             },
             "set-sensitivity",
         )
         _reject_read_drift(layout, sensitivity_dependencies, "set-sensitivity")
+        # `log.md` is re-composed over its current bytes, not guarded.
+        new_log_text = _recomposed_catalog(
+            application_catalog_delta.recompose_file,
+            verb="set-sensitivity",
+            path=log_path,
+            baseline=log_bytes,
+            planned=new_log_text,
+            delta=set_sensitivity_log,
+        )
 
         landed: list[str] = []
         try:
@@ -7460,6 +7510,9 @@ def sync_tags_cmd(
                 )
             },
             "sync-tags",
+        )
+        prepared = _recomposed_catalog(
+            application_lifecycle.recompose_sync_tags_log, layout, prepared
         )
 
         try:
@@ -14195,6 +14248,8 @@ def repair() -> None:
         _reject_drifted_targets(
             layout, {**plan.read_dependencies, **plan.baselines}, "repair"
         )
+        # The `index.md` flip is re-applied to its current bytes, not guarded.
+        plan = _recomposed_catalog(application_repair.recompose_index, plan)
 
         try:
             outcome = application_repair.apply_repair(root, plan)

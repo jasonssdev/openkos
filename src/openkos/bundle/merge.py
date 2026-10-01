@@ -242,7 +242,7 @@ def plan_merge(
     )
 
 
-def _restored_catalog_and_log(
+def restored_catalog_and_log(
     entry: okf.MergeLedgerEntry,
     *,
     survivor_id: str,
@@ -325,7 +325,7 @@ def plan_unmerge(
 
     `current_index_text`/`current_log_text` are the CURRENT on-disk
     `index.md`/`log.md`. They are REQUIRED for a V5 (delta) tail entry and
-    ignored for a V1-V4 (snapshot) one -- see `_restored_catalog_and_log`
+    ignored for a V1-V4 (snapshot) one -- see `restored_catalog_and_log`
     -- and default to `None` so a caller reversing an old snapshot entry
     needs no knowledge of the newer shape.
     """
@@ -370,7 +370,7 @@ def plan_unmerge(
             "unmerge refused"
         )
 
-    restored_index, restored_log = _restored_catalog_and_log(
+    restored_index, restored_log = restored_catalog_and_log(
         tail,
         survivor_id=survivor_id,
         absorbed_id=absorbed_id,

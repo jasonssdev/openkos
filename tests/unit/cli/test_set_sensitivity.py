@@ -1280,7 +1280,7 @@ def test_the_two_preparation_phases_do_not_share_a_message(
 
 @pytest.mark.parametrize(
     "target",
-    ["bundle/sources/notes.md", "bundle/concepts/zzz-derived.md", "bundle/log.md"],
+    ["bundle/sources/notes.md", "bundle/concepts/zzz-derived.md"],
 )
 def test_a_write_target_edited_during_the_prompt_is_refused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str
