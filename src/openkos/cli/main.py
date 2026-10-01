@@ -11798,7 +11798,10 @@ def _persist_adjudications(
     if not results:
         return
     try:
-        with _commit_section_for(layout.root)():
+        # A whole-lock caller (curate) publishes no section and already holds
+        # the lock, so only a split verb's published section is entered.
+        published = _COMMIT_SECTION.get()
+        with published() if published is not None else nullcontext():
             current_digest = application_pending.current_finding_digest(
                 layout.bundle_dir
             )
