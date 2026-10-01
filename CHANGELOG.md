@@ -60,6 +60,12 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   links of both members are put back deterministically, without a second
   `## Related` (#1229).
 
+- Two count lines no longer describe output that is not what they say
+  ([#1234](https://github.com/jasonssdev/openkos/issues/1234)). `contradictions`
+  now says its "N of M candidate edge(s) shown (cap reached)" line counts
+  candidate edges the verb does not list, and `lint`'s "Unevidenced objects:"
+  detail says "one or more derived objects" rather than implying exactly one.
+
 ## [0.3.1] - 2026-10-01
 
 MVP 4, the Unattended Engine, is complete. The headline is `openkos daemon`: a

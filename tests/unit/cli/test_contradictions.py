@@ -833,6 +833,9 @@ def test_contradictions_reports_candidate_truncation_when_the_cap_is_reached(
 
     assert result.exit_code == 0
     assert "50 of 60 candidate edge(s) shown (cap reached)" in result.stdout
+    # #1234: this verb lists no edges, so the line must say what it counts.
+    assert "not listed by this verb" in result.stdout
+    assert "feed the contradiction check" in result.stdout
 
 
 def test_contradictions_no_candidate_truncation_notice_under_the_cap(
