@@ -471,6 +471,9 @@ def _guard_workspace_lock(
         def wrapper(*args: object, **kwargs: object) -> _T:
             wait = cast(int, kwargs.pop(_WAIT_PARAM, 0))
             root = Path.cwd()
+            # A previous invocation in this context that left its commit section
+            # before its embedding stage must not leak failures into this one.
+            _CARRIED_REFRESH_FAILURES.set(None)
             if config.require_workspace(root) is not None:
                 return fn(*args, **kwargs)
 
@@ -1238,11 +1241,15 @@ def _sweep_decisions_for_ids(bundle_dir: Path, purge_ids: Iterable[str]) -> list
 
 
 def _refresh_derived_after_write_quietly(root: Path, verb: str) -> None:
-    """The `after_commit` port of a service-backed verb: the #640 derived
-    refresh, whose freshness verdict the service has no use for. `cfg=None` --
-    these verbs never read config; the helper reads its own copy inside the
-    vector stage's fail-open envelope."""
-    _refresh_derived_after_write(config.WorkspaceLayout(root), None, verb=verb)
+    """The `after_commit` port of a service-backed verb: the lexical half of the
+    #640 derived refresh, run inside the service's commit section, whose
+    freshness verdict the service has no use for. The caller finishes with
+    `_finish_refresh_after_commit` once the section is left. `cfg=None` -- these
+    verbs never read config; the helper reads its own copy inside the vector
+    stage's fail-open envelope."""
+    _refresh_derived_after_write(
+        config.WorkspaceLayout(root), None, verb=verb, stage="lexical"
+    )
 
 
 def _reject_read_drift(
@@ -3824,6 +3831,69 @@ def _embed_after_ingest(
     _warn_withheld_from_embedding("ingest", report.withheld_confidential, cfg)
 
 
+_RefreshStage = Literal["all", "lexical", "vectors"]
+"""Which part of `_refresh_derived_after_write` a call runs (its docstring)."""
+
+_CARRIED_REFRESH_FAILURES: contextvars.ContextVar[list[str] | None] = (
+    contextvars.ContextVar("openkos_carried_refresh_failures", default=None)
+)
+"""The lexical (FTS/graph) failures a verb's commit section collected, held for
+the one advisory its post-section vector refresh prints."""
+
+
+def _refresh_lexical_stores(layout: config.WorkspaceLayout) -> list[str]:
+    """Refresh FTS and the graph, returning one `store: reason` line per failure.
+
+    Pure SQLite projections of the bundle, no model call: the caller holds the
+    workspace lock (a commit section, or a whole-verb lock). Each store degrades
+    on its own, so a dead FTS5 module costs the graph nothing."""
+    failures: list[str] = []
+    try:
+        reindex_module._reindex_fts(layout.bundle_dir, layout.fts_db_path, force=False)
+    except Exception as exc:  # noqa: BLE001 -- a failed FTS refresh is collected into the degrade summary
+        failures.append(f"fts: {exc}")
+
+    try:
+        with_candidates = _open_proximity_or_degrade(layout.vectors_db_path)
+        try:
+            sqlite_graph.reindex_graph(
+                layout.bundle_dir,
+                layout.graph_db_path,
+                force=False,
+                candidates=with_candidates,
+            )
+        finally:
+            if with_candidates is not None:
+                with_candidates.close()
+    except Exception as exc:  # noqa: BLE001 -- a failed graph refresh is collected into the degrade summary
+        failures.append(f"graph: {exc}")
+    return failures
+
+
+def _finish_refresh_after_commit(
+    layout: config.WorkspaceLayout,
+    cfg: config.Config | None,
+    *,
+    verb: str,
+    warn_nonlocal_host: bool = True,
+) -> bool:
+    """The post-section half of a split verb's derived refresh: the vector
+    stage, outside the lock, once a commit section has run its lexical stage.
+
+    A run whose section never reached that stage (a refusal, a no-op) committed
+    nothing the stores must catch up with, so it embeds nothing and returns
+    False. Otherwise it returns `_refresh_derived_after_write`'s verdict."""
+    if _CARRIED_REFRESH_FAILURES.get() is None:
+        return False
+    return _refresh_derived_after_write(
+        layout,
+        cfg,
+        verb=verb,
+        warn_nonlocal_host=warn_nonlocal_host,
+        stage="vectors",
+    )
+
+
 def _refresh_derived_after_write(
     layout: config.WorkspaceLayout,
     cfg: config.Config | None,
@@ -3831,6 +3901,7 @@ def _refresh_derived_after_write(
     verb: str,
     warn_nonlocal_host: bool = True,
     commit_section: lock_wait.CommitSection | None = None,
+    stage: _RefreshStage = "all",
 ) -> bool:
     """Refresh the three derived stores as part of the write that just
     invalidated them (issue #640), returning True iff every store is fresh.
@@ -3881,39 +3952,42 @@ def _refresh_derived_after_write(
     deliberately untouched: they remain the safety net for this helper's
     own degrade path.
 
-    `commit_section` (#1137) is for a verb that does NOT hold the workspace lock
-    for its whole run: the FTS and graph refreshes (no model call) run inside it,
-    and the vector refresh runs its embedding calls outside it and enters it only
-    for the store write. `None` (every other verb, which already holds the lock)
-    changes nothing."""
-    failures: list[str] = []
-    section: lock_wait.CommitSection = (
-        commit_section if commit_section is not None else nullcontext
+    PLACEMENT (#1137, #1143, ADR-0036), the same for every verb that does not
+    hold the workspace lock for its whole run, so no model call holds it:
+
+    - `stage="lexical"` (FTS and graph: pure SQLite, no model call, and
+      incremental) is the LAST statement of the verb's commit section, with the
+      lock already held. Its failures are carried, not printed.
+    - `stage="vectors"` runs after that section has been left: the embedding
+      calls hold no lock, and only the vector-store write re-takes it briefly,
+      with `reindex`'s content-hash re-check. It prints the one advisory that
+      folds in the carried lexical failures, and returns whether every store is
+      fresh.
+    - `stage="all"` (the default) is for a caller outside any section: the FTS
+      and graph refreshes enter the verb's commit section (`commit_section`, or
+      the one its guard published) as one brief hold, then the vector refresh
+      runs as above. A verb that holds the lock for its whole run (`curate`)
+      publishes no section, so every step runs under the one lock it holds."""
+    section: lock_wait.CommitSection | None = (
+        commit_section if commit_section is not None else _COMMIT_SECTION.get()
     )
-
-    try:
-        with section():
-            reindex_module._reindex_fts(
-                layout.bundle_dir, layout.fts_db_path, force=False
-            )
-    except Exception as exc:  # noqa: BLE001 -- a failed FTS refresh is collected into the degrade summary
-        failures.append(f"fts: {exc}")
-
-    try:
-        with section():
-            with_candidates = _open_proximity_or_degrade(layout.vectors_db_path)
-            try:
-                sqlite_graph.reindex_graph(
-                    layout.bundle_dir,
-                    layout.graph_db_path,
-                    force=False,
-                    candidates=with_candidates,
-                )
-            finally:
-                if with_candidates is not None:
-                    with_candidates.close()
-    except Exception as exc:  # noqa: BLE001 -- a failed graph refresh is collected into the degrade summary
-        failures.append(f"graph: {exc}")
+    failures: list[str] = []
+    if stage == "lexical":
+        carried = _CARRIED_REFRESH_FAILURES.get() or []
+        lexical = _refresh_lexical_stores(layout)
+        _CARRIED_REFRESH_FAILURES.set([*carried, *lexical])
+        return not lexical
+    if stage == "vectors":
+        failures.extend(_CARRIED_REFRESH_FAILURES.get() or [])
+        _CARRIED_REFRESH_FAILURES.set(None)
+    elif section is None:
+        failures.extend(_refresh_lexical_stores(layout))
+    else:
+        try:
+            with section():
+                failures.extend(_refresh_lexical_stores(layout))
+        except Exception as exc:  # noqa: BLE001 -- a busy lock or any failure to enter the section degrades the refresh, never the write that already committed
+            failures.append(f"fts/graph: {exc}")
 
     try:
         if cfg is None:
@@ -3941,7 +4015,7 @@ def _refresh_derived_after_write(
                 embedding_backend=cfg.backend,
                 on_progress=observability.progress_callback(verb, "embedding doc"),
                 local_exemption=_resolve_local_exemption(embedder_locality, cfg),
-                commit_section=commit_section,
+                commit_section=section,
             )
         _warn_withheld_from_embedding(verb, report.withheld_confidential, cfg)
         # An exception is not the only way embedding degrades: `reindex`
@@ -5436,7 +5510,9 @@ def forget(
 
         # #640: also prunes the forgotten concept(s) from `vectors.db` via the
         # vector stage's prune pass, not only the manifest-gated stores.
-        _refresh_derived_after_write(layout, cfg, verb="forget")
+        _refresh_derived_after_write(layout, cfg, verb="forget", stage="lexical")
+    # Outside the section: the embedding calls hold no lock (ADR-0036).
+    _finish_refresh_after_commit(layout, cfg, verb="forget")
 
 
 _PurgeScope = Literal["self", "source"]
@@ -6528,7 +6604,8 @@ def relate(
         )
 
         # #640: `cfg=None` -- `relate` never reads config at this layer.
-        _refresh_derived_after_write(layout, None, verb="relate")
+        _refresh_derived_after_write(layout, None, verb="relate", stage="lexical")
+    _finish_refresh_after_commit(layout, None, verb="relate")
 
 
 @app.command(
@@ -6989,7 +7066,10 @@ def set_sensitivity_cmd(
 
         # #640: a frontmatter-only write is a vector cache-hit (#554 excludes
         # frontmatter from embeddings), so this costs FTS+graph rebuilds only.
-        _refresh_derived_after_write(layout, cfg, verb="set-sensitivity")
+        _refresh_derived_after_write(
+            layout, cfg, verb="set-sensitivity", stage="lexical"
+        )
+    _finish_refresh_after_commit(layout, cfg, verb="set-sensitivity")
 
 
 @app.command(
@@ -8512,10 +8592,11 @@ def merge(
         ),
         clock=lambda: datetime.now(UTC),
         commit_section=_commit_section_for(root),
-        # #640, ADR-0036: the derived refresh runs inside the commit section,
-        # after the auto-commit, so it cannot race another writer's burst.
-        # `cfg=None` -- `merge` never reads config; the helper reads its own
-        # copy inside the vector stage's fail-open envelope.
+        # #640, ADR-0036: the FTS/graph refresh runs inside the commit section,
+        # after the auto-commit, so it cannot race another writer's burst; the
+        # embedding stage runs once the section is left (below). `cfg=None` --
+        # `merge` never reads config; the helper reads its own copy inside the
+        # vector stage's fail-open envelope.
         after_commit=lambda: _refresh_derived_after_write_quietly(root, "merge"),
     )
     try:
@@ -8535,6 +8616,7 @@ def merge(
         )
     except write_gate.WriteRefused as exc:
         _exit_for_write_refusal(exc)
+    _finish_refresh_after_commit(config.WorkspaceLayout(root), None, verb="merge")
 
 
 class _CliUnmergeObserver(unmerge_service.UnmergeObserver):
@@ -8795,9 +8877,10 @@ def unmerge(
         autocommit=lambda root, paths, message: _autocommit(root, paths, message),
         clock=lambda: datetime.now(UTC),
         commit_section=_commit_section_for(root),
-        # #640, ADR-0036: refreshed inside each step's commit section, after
-        # its auto-commit, so a chain that stops later leaves every completed
-        # step's derived stores fresh.
+        # #640, ADR-0036: FTS and graph are refreshed inside each step's commit
+        # section, after its auto-commit, so a chain that stops later leaves
+        # every completed step's lexical stores fresh; the embedding stage runs
+        # once, after the chain, whether or not it completed.
         after_commit=lambda: _refresh_derived_after_write_quietly(root, "unmerge"),
     )
     observer = _CliUnmergeObserver()
@@ -8842,6 +8925,10 @@ def unmerge(
         ) from exc
     except write_gate.WriteRefused as exc:
         _exit_for_write_refusal(exc)
+    finally:
+        # A chain that stopped at step N still committed steps 1..N-1, so the
+        # embedding stage runs whether or not the chain completed.
+        _finish_refresh_after_commit(config.WorkspaceLayout(root), None, verb="unmerge")
 
 
 @app.command(
@@ -13603,10 +13690,13 @@ def query(
         # carries the manual `openkos reindex` pointer instead.
         # `query` printed the advisory before it embedded the question (#199),
         # so the refresh must not repeat it (#353 item 4).
-        if _refresh_derived_after_write(
-            layout, cfg, verb="query", warn_nonlocal_host=False
-        ):
-            typer.echo("openkos query: the filed insight is indexed and searchable.")
+        _refresh_derived_after_write(
+            layout, cfg, verb="query", warn_nonlocal_host=False, stage="lexical"
+        )
+    if _finish_refresh_after_commit(
+        layout, cfg, verb="query", warn_nonlocal_host=False
+    ):
+        typer.echo("openkos query: the filed insight is indexed and searchable.")
 
 
 @app.command(
