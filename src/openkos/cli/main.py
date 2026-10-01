@@ -6656,6 +6656,145 @@ def relate(
 
 
 @app.command(
+    help=(
+        "Drop one typed relation between two concepts, exactly as given. "
+        "The inverse of `relate`; refuses when the relation does not exist."
+    ),
+    rich_help_panel="Curate",
+)
+@_guard_workspace_lock("unrelate", commit_phase=True)
+def unrelate(
+    source_id: str = typer.Argument(
+        ...,
+        help="Bundle-relative concept id (path minus '.md') to remove the relation from.",
+    ),
+    rel: str = typer.Argument(
+        ..., help="Relation type of the edge to remove, e.g. 'references'."
+    ),
+    target_id: str = typer.Argument(
+        ...,
+        help="Bundle-relative concept id (path minus '.md') the relation points to.",
+    ),
+    auto: bool = typer.Option(
+        False,
+        "--auto",
+        help="Skip the confirmation prompt and write immediately (unattended).",
+    ),
+) -> None:
+    """Remove one deterministic typed edge -- `{target: target_id, type: rel}`
+    -- from `source_id`'s `relations:` frontmatter (spec: "`unrelate` CLI Verb
+    Removes A Typed Relation"). It mirrors `relate` end to end: the same
+    id resolution (both ends must exist and be distinct), the same preview /
+    confirm gate / drift guard / commit phase, a `**Unrelate**` line in
+    `log.md`, an autocommit, and a derived-store refresh.
+
+    The one difference is the refusal: an edge that is not there is an error
+    (exit 1, nothing written), never a silent no-op. Removing a `supersedes`
+    edge also withdraws the target's deprecated-status export, unless another
+    concept still supersedes it. When the last relation goes, the `relations:`
+    key is removed from the frontmatter."""
+    root = Path.cwd()
+    layout = config.WorkspaceLayout(root)
+    log_path = layout.bundle_dir / "log.md"
+
+    try:
+        workspace_reason = config.require_workspace(root)
+        if workspace_reason is not None:
+            typer.echo(
+                f"openkos unrelate: refusing to unrelate -- {workspace_reason}.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+        source_path, source_canonical = application_lifecycle.resolve_concept_path(
+            layout.bundle_dir, source_id
+        )
+        target_path, target_canonical = application_lifecycle.resolve_concept_path(
+            layout.bundle_dir, target_id
+        )
+        if source_canonical == target_canonical:
+            raise ValueError(
+                "source and target concept-ids must be distinct, both "
+                f"resolved to {source_canonical!r}"
+            )
+        rel_type = validate_relation_type(rel)
+        prepared = application_lifecycle.prepare_unrelate(
+            source_path,
+            log_path,
+            source_canonical,
+            target_canonical,
+            rel_type,
+            root,
+            now=datetime.now(UTC),
+            target_path=target_path,
+        )
+    except (OSError, ValueError) as exc:
+        typer.echo(f"openkos unrelate: refusing to unrelate -- {exc}.", err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo("openkos unrelate: proposed changes:")
+    typer.echo(
+        f"  ~ bundle/{prepared.source_canonical}.md (relations: "
+        f"{prepared.existing_relations_count} -> "
+        f"{prepared.updated_relations_count} entries; "
+        f"-{{target: {prepared.target_canonical}, type: {prepared.rel_type}}})"
+    )
+    if prepared.status_outcome is not None:
+        suffix = _status_export_preview_suffix(prepared.status_outcome)
+        typer.echo(f"  ~ bundle/{prepared.target_canonical}.md ({suffix.lstrip('; ')})")
+    typer.echo(f"  ~ {log_path.name} (new dated entry)")
+
+    if not auto and prepared.review:
+        if sys.stdin.isatty():
+            typer.confirm(prepared.confirmation.prompt, abort=True)
+        else:
+            typer.echo(prepared.confirmation.non_tty_refusal, err=True)
+            raise typer.Exit(code=1)
+
+    with _commit_section_for(root)():
+        # `log.md` is re-composed below, not guarded.
+        drift_baselines = {source_path: prepared.source_bytes}
+        if prepared.target_bytes is not None:
+            drift_baselines[target_path] = prepared.target_bytes
+        _reject_drifted_targets(layout, drift_baselines, "unrelate")
+        _reject_read_drift(layout, prepared.read_dependencies, "unrelate")
+
+        prepared = _recomposed_catalog(
+            application_lifecycle.recompose_unrelate_log, log_path, prepared
+        )
+
+        try:
+            application_lifecycle.unrelate_core(
+                source_path, log_path, prepared, target_path=target_path
+            )
+        except (OSError, ValueError) as exc:
+            typer.echo(
+                f"openkos unrelate: failed while writing the unrelate -- {exc}.",
+                err=True,
+            )
+            raise typer.Exit(code=1) from exc
+
+        typer.echo(
+            f"openkos unrelate: removed the {prepared.rel_type!r} relation from "
+            f"'bundle/{prepared.source_canonical}.md' to "
+            f"'bundle/{prepared.target_canonical}.md' ({log_path.name} updated)."
+        )
+
+        commit_paths = [f"bundle/{prepared.source_canonical}.md", "bundle/log.md"]
+        if prepared.new_target_text is not None:
+            commit_paths.insert(1, f"bundle/{prepared.target_canonical}.md")
+        _autocommit(
+            root,
+            commit_paths,
+            f"openkos: unrelate {prepared.source_canonical} -> "
+            f"{prepared.target_canonical} ({prepared.rel_type})",
+        )
+
+        _refresh_derived_after_write(layout, None, verb="unrelate", stage="lexical")
+    _finish_refresh_after_commit(layout, None, verb="unrelate")
+
+
+@app.command(
     "set-sensitivity",
     help=(
         "Set one concept's sensitivity level directly, without a sweep or a "

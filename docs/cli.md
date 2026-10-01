@@ -461,6 +461,14 @@ The edge is **idempotent**: an identical `(target, type)` pair already present i
 | --- | --- |
 | `--auto` | Skip the confirmation prompt and write immediately (unattended). Config `review: false` skips the prompt the same way. |
 
+### `openkos unrelate <source-id> <type> <target-id>`
+
+The inverse of `relate`: removes one typed edge — `{target: <target-id>, type: <type>}` — from `<source-id>`'s `relations:` frontmatter. **No LLM.** Ids and `<type>` are resolved and validated exactly as `relate` does, and it shares `relate`'s preview / confirm gate / write / auto-commit shape and `--auto` flag; `log.md` gains an `**Unrelate**` line and the derived stores are refreshed. An edge that is not there **refuses** (exit 1, nothing written) rather than succeeding as a no-op. When the last relation goes, the `relations:` key is removed. Removing a `supersedes` edge also withdraws the target's `status: deprecated` export in the same write, unless another concept still supersedes it.
+
+| Flag | Meaning |
+| --- | --- |
+| `--auto` | Skip the confirmation prompt and write immediately (unattended). Config `review: false` skips the prompt the same way. |
+
 ### `openkos suggest-volatility`
 
 **Read-only.** LLM-suggests a volatility `tier` for every concept `type` present in the bundle, printing a suggested tier and rationale per type (or `[?]` when the suggestion is invalid) for human review. It never writes — accepting a suggestion is a separate, explicit `openkos set-volatility <Type> <tier>` call (below), which records the tier in `openkos.yaml`'s `type_tiers:`. Degrades the same way `suggest-relations`/`adjudicate`/`query` do.

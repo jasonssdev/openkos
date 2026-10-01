@@ -82,6 +82,21 @@ def _two_concepts(tmp_path: Path) -> None:
     commit_pending_fixture_docs()
 
 
+def _two_related_concepts(tmp_path: Path) -> None:
+    write_doc(
+        tmp_path,
+        "concepts/a",
+        {
+            "type": "Concept",
+            "title": "A",
+            "relations": [{"target": "concepts/b", "type": "references"}],
+        },
+        "Alpha.\n",
+    )
+    write_doc(tmp_path, "concepts/b", {"type": "Concept", "title": "B"}, "Beta.\n")
+    commit_pending_fixture_docs()
+
+
 def _seed_normalize(tmp_path: Path) -> None:
     nfd = unicodedata.normalize("NFD", "café") + ".md"
     write_doc(tmp_path, nfd.removesuffix(".md"), {"type": "Concept", "title": "Cafe"})
@@ -95,6 +110,11 @@ _SCENARIOS: dict[str, _Scenario] = {
     "relate": (
         _two_concepts,
         ["relate", "concepts/a", "references", "concepts/b", "--auto"],
+        "",
+    ),
+    "unrelate": (
+        _two_related_concepts,
+        ["unrelate", "concepts/a", "references", "concepts/b", "--auto"],
         "",
     ),
     "set-sensitivity": (

@@ -69,6 +69,9 @@ NON_RESOLVING_CORES: Final = {
     "openkos.application.lifecycle.unmerge_core": (
         "undoes a merge; no advisor proposes an unmerge"
     ),
+    "openkos.application.lifecycle.unrelate_core": (
+        "removes a relation; no advisor proposes a removal"
+    ),
     "openkos.application.lifecycle.forget_core": (
         "erases; the forget sweep deletes every row that names the concept"
     ),

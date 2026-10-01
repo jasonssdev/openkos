@@ -15,6 +15,10 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+### Added
+
+- `openkos unrelate <source> <type> <target>` removes one typed relation, mirroring `relate`'s preview, confirm and commit flow. It writes a `log.md` line, refreshes the derived stores, withdraws a `supersedes` target's deprecated-status export when nothing else supersedes it, and refuses (writing nothing) when the relation does not exist. Before, a wrong relation could only be removed by hand-editing frontmatter or a revert that conflicts on `log.md` (#1232).
+
 ### Fixed
 
 - `openkos.yaml` with a repeated key (top-level or nested) is now refused, and
