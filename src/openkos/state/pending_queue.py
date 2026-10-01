@@ -22,9 +22,10 @@ and `identity_decision_key_for`), so a recorded human ruling addresses the same
 proposal the row stands for. The stored `decision_key` is `"<kind>:<body>"`, so
 two kinds can never collide. The other kinds hash their natural subject.
 
-**Producers never resolve.** There is deliberately no `applied`/`declined`
-writer here: only human-facing write paths resolve a row, and a producer may
-only insert, refresh, or retire a row as `stale`.
+**Producers never resolve.** A producer may only insert, refresh, or retire a
+row as `stale` (`upsert_proposal`, `retire_unseen`); only the human-facing write
+cores resolve one, through `resolve_open_by_key` / `resolve_open_by_input_digest`
+(`application.queue_resolution` is their one caller).
 
 **Sweep readiness (unit 4.4).** `pending_item_targets` names every concept a
 row mentions, and `pending_item_input_digests` records every `(input_ref,
@@ -47,7 +48,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, Literal
 
 from openkos.bundle import decisions as bundle_decisions
 
@@ -161,7 +162,7 @@ class Proposal:
 
     @property
     def decision_key(self) -> str:
-        return f"{self.kind}:{self.key_body}"
+        return stored_decision_key(self.kind, self.key_body)
 
 
 @dataclass(frozen=True)
@@ -195,6 +196,12 @@ class KindStats:
     @property
     def resolved_by_a_human(self) -> int:
         return self.as_proposed + self.modified + self.declined
+
+
+def stored_decision_key(kind: str, key_body: str) -> str:
+    """The stored, kind-scoped `decision_key` (`"<kind>:<body>"`) of a key a
+    `*_key` constructor built: what a resolver looks a row up by."""
+    return f"{kind}:{key_body}"
 
 
 def _hashed(namespace: str, *parts: str) -> str:
@@ -402,6 +409,96 @@ def retire_unseen(
             [(now, item_id) for item_id in doomed],
         )
     return len(doomed)
+
+
+Resolution = Literal["as_proposed", "modified", "declined"]
+"""How a human path resolved an open row. `as_proposed` and `modified` move it to
+`applied`; `declined` moves it to `declined`."""
+
+_RESOLVED_STATUS: Final = {
+    "as_proposed": "applied",
+    "modified": "applied",
+    "declined": "declined",
+}
+
+
+def _resolve_rows(
+    conn: sqlite3.Connection,
+    item_ids: Sequence[int],
+    resolution: Resolution,
+    resolved_by: str,
+    now: str,
+) -> None:
+    conn.executemany(
+        "UPDATE pending_items SET status=?, resolution=?, resolved_by=?,"
+        " claimed_by=NULL, resolved_at=? WHERE id = ?"
+        " AND status IN ('pending','claimed')",
+        [
+            (_RESOLVED_STATUS[resolution], resolution, resolved_by, now, i)
+            for i in item_ids
+        ],
+    )
+
+
+def resolve_open_by_key(
+    conn: sqlite3.Connection,
+    decision_key: str,
+    *,
+    resolution: Callable[[PendingItem], Resolution],
+    resolved_by: str,
+    commit_section: CommitSection,
+    clock: Callable[[], datetime] = _now,
+) -> int:
+    """Resolve the open row (at most one: the unique partial index) whose
+    stored `decision_key` is `decision_key`, as `resolution(row)` -- the caller
+    judges `as_proposed` against the row's own payload. Returns how many rows
+    moved (0 or 1). Only a human-facing write path calls this. An absent queue
+    answers 0 and is never created."""
+    if not queue_exists(conn):
+        return 0
+    now = clock().isoformat()
+    with _transaction(conn, commit_section):
+        items = _select_items(
+            conn,
+            "WHERE decision_key = ? AND status IN ('pending','claimed')",
+            (decision_key,),
+            claimant_alive,
+        )
+        for item in items:
+            _resolve_rows(conn, [item.id], resolution(item), resolved_by, now)
+    return len(items)
+
+
+def resolve_open_by_input_digest(
+    conn: sqlite3.Connection,
+    kind: str,
+    digest: str,
+    *,
+    resolution: Resolution,
+    resolved_by: str,
+    commit_section: CommitSection,
+    clock: Callable[[], datetime] = _now,
+) -> int:
+    """Resolve every open row of `kind` that was computed from `digest` (one of
+    its recorded input digests): a `watch_refusal` row is identified by the
+    sha256 of the refused bytes, not by a name a rename would change. Returns
+    how many rows moved. An absent queue answers 0 and is never created."""
+    if not queue_exists(conn):
+        return 0
+    now = clock().isoformat()
+    with _transaction(conn, commit_section):
+        ids = [
+            row[0]
+            for row in conn.execute(
+                "SELECT i.id FROM pending_items i WHERE i.kind = ?"
+                " AND i.status IN ('pending','claimed') AND EXISTS ("
+                "SELECT 1 FROM pending_item_input_digests d"
+                " WHERE d.item_id = i.id AND d.digest = ?)",
+                (kind, digest),
+            )
+        ]
+        _resolve_rows(conn, ids, resolution, resolved_by, now)
+    return len(ids)
 
 
 def _platform() -> str:
