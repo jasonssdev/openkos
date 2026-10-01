@@ -57,12 +57,14 @@ from openkos.state.fts import FtsUnavailable
 from openkos.state.vectorstore import VectorStoreDB, VecUnavailable
 
 LOCK_CONTENTION_TEMPLATE = (
-    "openkos {command}: failed -- another process is holding the workspace "
-    "lock (a concurrent reindex?); wait for it to finish, then try again."
+    "openkos {command}: failed -- another OpenKOS process is using the "
+    "workspace's derived stores; re-running is safe, so try again once it "
+    "finishes."
 )
-"""The uniform lock-contention message: `reindex`'s two error ladders and the
-CLI's workspace-lock guard for every other verb all format it, so a locked
-store always reads identically whichever store hit the lock."""
+"""The uniform derived-store contention message: `reindex`'s two error ladders
+and the CLI's workspace-lock guard for every other verb all format it, so a
+busy store always reads identically whichever store hit the busy timeout. It
+names the verb the user ran and never a specific concurrent one."""
 
 _VERB = "reindex"
 
