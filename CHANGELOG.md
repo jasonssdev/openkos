@@ -69,6 +69,17 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   `3`, before writing anything, when a file appears at the path it was about to
   restore, where it used to stop partway through
   ([#1137](https://github.com/jasonssdev/openkos/issues/1137)).
+- The derived-index refresh that follows a write is placed the same way for
+  every verb that takes the lock only to write (`merge`, `unmerge`, `forget`,
+  `relate`, `set-sensitivity`, `sync-tags`, `normalize-names`, `repair`,
+  `reconcile`, `adjudicate`, `suggest-relations --apply`, `query --save`):
+  the full-text and graph refresh run with the lock held, the embedding calls
+  run with it released, and only the vector-store write takes it again briefly.
+  `sync-tags`, `normalize-names`, `repair`, `adjudicate` and `reconcile` used to
+  refresh with no lock at all, and `forget`, `relate`, `set-sensitivity`,
+  `merge`, `unmerge` and `query --save` used to embed while holding it
+  ([#1137](https://github.com/jasonssdev/openkos/issues/1137),
+  [#1143](https://github.com/jasonssdev/openkos/issues/1143)).
 - `ingest` no longer holds the workspace lock while it waits on the model: the
   lock is taken only for each file's commit phase (re-validation, the writes
   and the auto-commit), so a slow extraction, or a batch between files, no
