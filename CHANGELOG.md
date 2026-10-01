@@ -35,6 +35,15 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Changed
 
+- `ingest` no longer holds the workspace lock while it waits on the model: the
+  lock is taken only for each file's commit phase (re-validation, the writes
+  and the auto-commit), so a slow extraction, or a batch between files, no
+  longer refuses another OpenKOS process. A concurrent append to `index.md` or
+  `log.md` is now merged into the ingest's own entries instead of refusing it;
+  a change to the Source it rewrites, to `openkos.yaml` (which decides the
+  sensitivity level), or a file the ingest was about to create still refuses
+  with exit `3` and writes nothing
+  ([#1137](https://github.com/jasonssdev/openkos/issues/1137)).
 - `sync-tags`, `normalize-names`, `repair`, `reconcile`, `adjudicate` and
   `suggest-relations` no longer hold the workspace lock while they wait on the
   model or on you: the lock is taken only to re-validate, write and commit, so
