@@ -41,7 +41,8 @@ answering core keeps treating whatever handle it is given as fresh.
 
 import hashlib
 import sqlite3
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
@@ -103,23 +104,27 @@ def is_lock_contention(exc: sqlite3.OperationalError) -> bool:
     )
 
 
-def bundle_manifest_hash(bundle_dir: Path) -> str:
-    """Return the sha256 hex digest cache key for `bundle_dir`'s current
-    document set (derived-index-cache: Bundle-Manifest-Hash Cache Key).
+@dataclass(frozen=True)
+class ManifestEntry:
+    """One readable document of a bundle snapshot: its concept ID, the
+    content hash of the bytes read, and the on-disk path those bytes came
+    from. The path is carried because a concept ID is NFC-normalized and
+    cannot always be mapped back to the file's actual (possibly NFD) name."""
 
-    Walks `okf._iter_docs(bundle_dir)` once (the SAME walk `fts.build_index`/
-    `reindex` use), skipping any doc with a `read_error`/`parse_error` or
-    that vanishes between the walk and this second `read_bytes` (a TOCTOU
-    guard, mirrors `reindex`'s own second-read guard) -- such a doc
-    contributes no pair, matching its absence from the indexes this key
-    gates. Every remaining doc contributes one `(concept_id, content_hash)`
-    pair; the pairs are SORTED before being canonically joined
-    (`f"{concept_id}\\x00{digest}\\n"` per pair) and hashed, so the walk's
-    on-disk discovery order never affects the result (derived-index-cache:
-    Walk order does not affect the manifest hash) -- ANY added, edited, or
-    removed document changes at least one pair and therefore the digest.
-    """
-    pairs: list[tuple[str, str]] = []
+    concept_id: str
+    content_hash: str
+    path: Path
+
+
+def bundle_manifest_entries(bundle_dir: Path) -> list[ManifestEntry]:
+    """Walk `okf._iter_docs(bundle_dir)` once and return one `ManifestEntry`
+    per successfully readable document, in walk order.
+
+    A doc with a `read_error`/`parse_error`, or that vanishes between the
+    walk and the second `read_bytes` (a TOCTOU guard, mirrors `reindex`'s own
+    second-read guard), contributes no entry -- matching its absence from the
+    indexes this key gates."""
+    entries: list[ManifestEntry] = []
     for scan in okf._iter_docs(bundle_dir):
         concept_id = okf.concept_id_for(scan.path, bundle_dir)
         if scan.read_error is not None or scan.parse_error is not None:
@@ -128,12 +133,36 @@ def bundle_manifest_hash(bundle_dir: Path) -> str:
             raw_bytes = scan.path.read_bytes()
         except OSError:
             continue
-        pairs.append((concept_id, content_hash(raw_bytes)))
+        entries.append(ManifestEntry(concept_id, content_hash(raw_bytes), scan.path))
+    return entries
 
+
+def manifest_digest(pairs: Iterable[tuple[str, str]]) -> str:
+    """Return the sha256 hex digest of `(concept_id, content_hash)` pairs:
+    sorted, then canonically joined (`f"{concept_id}\\x00{digest}\\n"` per
+    pair), so the order the pairs arrive in never affects the result."""
     canonical = "".join(
         f"{concept_id}\x00{digest}\n" for concept_id, digest in sorted(pairs)
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def bundle_manifest_hash(bundle_dir: Path) -> str:
+    """Return the sha256 hex digest cache key for `bundle_dir`'s current
+    document set (derived-index-cache: Bundle-Manifest-Hash Cache Key).
+
+    Every readable doc contributes one `(concept_id, content_hash)` pair
+    (see `bundle_manifest_entries`); the digest is order-independent
+    (derived-index-cache: Walk order does not affect the manifest hash) --
+    ANY added, edited, or removed document changes at least one pair and
+    therefore the digest. It is also exactly the digest of a store's recorded
+    `doc_manifest` pairs, which is what lets an incremental refresh verify
+    that its recorded baseline is trustworthy.
+    """
+    return manifest_digest(
+        (entry.concept_id, entry.content_hash)
+        for entry in bundle_manifest_entries(bundle_dir)
+    )
 
 
 def open_derived_connection(

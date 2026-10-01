@@ -508,10 +508,9 @@ def test_reindex_unchanged_bundle_skips_fts_rebuild(tmp_path: Path) -> None:
 
 
 def test_reindex_any_document_change_rebuilds_fts_index(tmp_path: Path) -> None:
-    """Editing a single document invalidates the manifest, triggering a
-    FULL FTS rebuild on the next `reindex()` run (derived-index-cache: Any
-    document change invalidates the cache; Single-document edit triggers a
-    full rebuild)."""
+    """Editing a single document invalidates the manifest; the next
+    `reindex()` run leaves the index equal to a whole rebuild (here a row
+    that belongs to no document is gone, so it was not merely patched over)."""
     bundle_dir = tmp_path / "bundle"
     doc_path = bundle_dir / "concepts" / "stoicism.md"
     _write_doc(doc_path, title="Stoicism", body="version one")
@@ -594,27 +593,25 @@ def test_reindex_fts_meta_manifest_matches_derived_bundle_manifest_hash(
 def test_reindex_computes_bundle_manifest_hash_exactly_once_per_rebuild_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A `reindex()` run that rebuilds the FTS index computes
-    `derived.bundle_manifest_hash` exactly ONCE for that run -- the decision
-    snapshot (`_reindex_fts`'s skip/rebuild comparison) and the persisted
-    value must be the SAME walk, not two independently-taken snapshots of a
-    bundle that could mutate between them (review correction, Finding C:
-    triple-walk/TOCTOU). `write_fts_index` must receive and store the
-    ALREADY-computed digest rather than recomputing its own."""
+    """A `reindex()` run that rebuilds the FTS index walks and hashes the
+    bundle (`derived.bundle_manifest_entries`) exactly ONCE for that run --
+    the decision snapshot and the persisted digest/`doc_manifest` must be the
+    SAME walk, not independently-taken snapshots of a bundle that could
+    mutate between them (review correction, Finding C: triple-walk/TOCTOU)."""
     bundle_dir = tmp_path / "bundle"
     _write_doc(bundle_dir / "concepts" / "stoicism.md", title="Stoicism")
     vectors_db_path = tmp_path / ".openkos" / "vectors.db"
     fts_db_path = tmp_path / ".openkos" / "fts.db"
 
     call_count = 0
-    original_manifest_hash = derived.bundle_manifest_hash
+    original_entries = derived.bundle_manifest_entries
 
-    def _counting_manifest_hash(bundle_dir_arg: Path) -> str:
+    def _counting_entries(bundle_dir_arg: Path) -> list[derived.ManifestEntry]:
         nonlocal call_count
         call_count += 1
-        return original_manifest_hash(bundle_dir_arg)
+        return original_entries(bundle_dir_arg)
 
-    monkeypatch.setattr(derived, "bundle_manifest_hash", _counting_manifest_hash)
+    monkeypatch.setattr(derived, "bundle_manifest_entries", _counting_entries)
 
     with vectorstore.open_vector_store(vectors_db_path) as db:
         reindex.reindex(bundle_dir, db, _FakeEmbedder(), fts_db_path=fts_db_path)

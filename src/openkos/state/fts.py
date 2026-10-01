@@ -42,7 +42,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
-from typing import Protocol
+from typing import Literal, Protocol
 
 from openkos.model import okf
 from openkos.state import derived
@@ -60,6 +60,19 @@ _INSERT_SQL = (
     "INSERT INTO docs (concept_id, title, description, tags, body) "
     "VALUES (?, ?, ?, ?, ?)"
 )
+
+SCHEMA_VERSION = "1"
+"""Layout version of `fts.db`. A store written under a different version is
+rebuilt whole rather than updated per document."""
+
+SCHEMA_VERSION_KEY = "schema_version"
+
+_CREATE_DOC_MANIFEST_SQL = """
+CREATE TABLE doc_manifest (
+    concept_id TEXT PRIMARY KEY,
+    content_hash TEXT NOT NULL
+)
+"""
 
 _SEARCH_SQL = (
     "SELECT concept_id, rank FROM docs WHERE docs MATCH ? "
@@ -217,22 +230,34 @@ def _populate_docs_table(conn: sqlite3.Connection, bundle_dir: Path) -> list[str
         if scan.parse_error is not None:
             skipped.append(_skip_note(concept_id, reason="unparseable frontmatter"))
             continue
-        try:
-            text = scan.path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            skipped.append(_skip_note(concept_id, reason="unreadable"))
+        row = _doc_row(scan.path, concept_id)
+        if isinstance(row, str):
+            skipped.append(_skip_note(concept_id, reason=row))
             continue
-        try:
-            metadata, body = okf.load_frontmatter(text)
-        except okf.FrontmatterError:  # a concurrent edit can corrupt frontmatter
-            skipped.append(_skip_note(concept_id, reason="unparseable frontmatter"))
-            continue
-        title = str(metadata.get("title") or "")
-        description = str(metadata.get("description") or "")
-        tags = metadata.get("tags")
-        tags_text = " ".join(str(tag) for tag in tags) if isinstance(tags, list) else ""
-        conn.execute(_INSERT_SQL, (concept_id, title, description, tags_text, body))
+        conn.execute(_INSERT_SQL, row)
     return skipped
+
+
+def _doc_row(path: Path, concept_id: str) -> tuple[str, str, str, str, str] | str:
+    """Read and parse `path` into one `docs` row, or return the skip reason.
+
+    The one place a document becomes an FTS row, shared by the whole rebuild
+    and the per-document update so the two can never disagree on what a
+    document indexes as. The read is guarded (`lint.collect_docs`-shaped): a
+    doc that vanishes or corrupts after the walk is reported, not raised."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return "unreadable"
+    try:
+        metadata, body = okf.load_frontmatter(text)
+    except okf.FrontmatterError:  # a concurrent edit can corrupt frontmatter
+        return "unparseable frontmatter"
+    title = str(metadata.get("title") or "")
+    description = str(metadata.get("description") or "")
+    tags = metadata.get("tags")
+    tags_text = " ".join(str(tag) for tag in tags) if isinstance(tags, list) else ""
+    return (concept_id, title, description, tags_text, body)
 
 
 def build_index(bundle_dir: Path) -> FtsIndex:
@@ -300,20 +325,172 @@ def write_fts_index(
     """
     conn = derived.open_derived_connection(path)
     try:
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            conn.execute("DROP TABLE IF EXISTS docs")
-            _populate_docs_table(conn, bundle_dir)
-            digest = (
-                manifest_hash
-                if manifest_hash is not None
-                else derived.bundle_manifest_hash(bundle_dir)
+        entries = derived.bundle_manifest_entries(bundle_dir)
+        digest = (
+            manifest_hash
+            if manifest_hash is not None
+            else derived.manifest_digest(
+                (e.concept_id, e.content_hash) for e in entries
             )
-            derived.write_manifest_hash(conn, digest)
-            conn.commit()
-        except BaseException:
-            conn.rollback()
+        )
+        _rebuild(conn, bundle_dir, entries, digest)
+    finally:
+        conn.close()
+
+
+def _rebuild(
+    conn: sqlite3.Connection,
+    bundle_dir: Path,
+    entries: list[derived.ManifestEntry],
+    digest: str,
+) -> None:
+    """Whole rebuild of `docs` + `doc_manifest` + meta in ONE explicit
+    transaction (see `write_fts_index` for why it is explicit). `entries`
+    are recorded as the store's per-document baseline."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.execute("DROP TABLE IF EXISTS docs")
+        conn.execute("DROP TABLE IF EXISTS doc_manifest")
+        _populate_docs_table(conn, bundle_dir)
+        conn.execute(_CREATE_DOC_MANIFEST_SQL)
+        conn.executemany(
+            "INSERT OR REPLACE INTO doc_manifest (concept_id, content_hash) "
+            "VALUES (?, ?)",
+            [(e.concept_id, e.content_hash) for e in entries],
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+            (SCHEMA_VERSION_KEY, SCHEMA_VERSION),
+        )
+        derived.write_manifest_hash(conn, digest)
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+
+
+def _recorded_pairs(conn: sqlite3.Connection) -> dict[str, str] | None:
+    """The store's recorded `{concept_id: content_hash}` baseline, or `None`
+    when it cannot be trusted to drive a per-document update: no
+    `doc_manifest` (a store from before it existed), no `docs` table, a
+    `schema_version` that differs from this code's, or recorded pairs whose
+    digest does not reproduce the stored `manifest_hash`, or `docs` rows for
+    documents the manifest does not record."""
+    tables = {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE name IN ('docs', 'doc_manifest')"
+        )
+    }
+    if tables != {"docs", "doc_manifest"}:
+        return None
+    version = conn.execute(
+        "SELECT value FROM meta WHERE key = ?", (SCHEMA_VERSION_KEY,)
+    ).fetchone()
+    if version is None or str(version[0]) != SCHEMA_VERSION:
+        return None
+    recorded = {
+        str(cid): str(chash)
+        for cid, chash in conn.execute(
+            "SELECT concept_id, content_hash FROM doc_manifest"
+        )
+    }
+    if derived.manifest_digest(recorded.items()) != derived.read_manifest_hash(conn):
+        return None
+    indexed = {str(row[0]) for row in conn.execute("SELECT concept_id FROM docs")}
+    if not indexed <= recorded.keys():  # a row no recorded document accounts for
+        return None
+    return recorded
+
+
+def _apply_incremental(
+    conn: sqlite3.Connection,
+    recorded: dict[str, str],
+    entries: list[derived.ManifestEntry],
+    digest: str,
+) -> None:
+    """Rewrite only the added, changed and removed documents' rows, and the
+    manifest, in one transaction."""
+    current = {e.concept_id: e for e in entries}
+    removed = [cid for cid in recorded if cid not in current]
+    touched = [
+        cid for cid, entry in current.items() if recorded.get(cid) != entry.content_hash
+    ]
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        for cid in (*removed, *touched):
+            conn.execute("DELETE FROM docs WHERE concept_id = ?", (cid,))
+        for cid in removed:
+            conn.execute("DELETE FROM doc_manifest WHERE concept_id = ?", (cid,))
+        for cid in touched:
+            row = _doc_row(current[cid].path, cid)
+            if not isinstance(row, str):  # a skipped doc keeps no row, as in a rebuild
+                conn.execute(_INSERT_SQL, row)
+            conn.execute(
+                "INSERT OR REPLACE INTO doc_manifest (concept_id, content_hash) "
+                "VALUES (?, ?)",
+                (cid, current[cid].content_hash),
+            )
+        derived.write_manifest_hash(conn, digest)
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+
+
+def _try_incremental(
+    conn: sqlite3.Connection,
+    recorded: dict[str, str],
+    entries: list[derived.ManifestEntry],
+    digest: str,
+) -> bool:
+    """Run the per-document update; `False` means it failed (and rolled back),
+    so the caller must rebuild whole. Lock contention is NOT a failure of the
+    update itself -- a rebuild would meet the same lock -- so it propagates."""
+    try:
+        _apply_incremental(conn, recorded, entries, digest)
+    except sqlite3.OperationalError as exc:
+        if derived.is_lock_contention(exc):
             raise
+        return False
+    except Exception:  # noqa: BLE001 -- any failure falls back to a whole rebuild
+        return False
+    return True
+
+
+def refresh_fts_index(
+    path: Path, bundle_dir: Path, *, force: bool = False
+) -> Literal["unchanged", "incremental", "rebuilt"]:
+    """Bring the on-disk index at `path` up to date with `bundle_dir`
+    (derived-index-cache: Per-Document Update With Whole-Rebuild Fallback).
+
+    The bundle's manifest hash against the stored one is still the only
+    staleness gate: equal (and not `force`) -> `"unchanged"`, no write.
+    Otherwise the recorded `doc_manifest` is diffed against the current
+    documents and only the added/changed/removed ones are rewritten
+    (`"incremental"`). Whole rebuild (`"rebuilt"`) is the fallback when `force`
+    is set, the store has no trustworthy baseline (`_recorded_pairs`), or the
+    per-document update fails for any reason other than lock contention
+    (which propagates, since a rebuild would meet the same lock). The
+    incremental transaction rolls back before the fallback runs, so a failed
+    update never leaves a half-updated index."""
+    conn = derived.open_derived_connection(path)
+    try:
+        stored = derived.read_manifest_hash(conn)
+        entries = derived.bundle_manifest_entries(bundle_dir)
+        digest = derived.manifest_digest(
+            (e.concept_id, e.content_hash) for e in entries
+        )
+        if not force and stored == digest:
+            return "unchanged"
+        if not force:
+            recorded = _recorded_pairs(conn)
+            if recorded is not None and _try_incremental(
+                conn, recorded, entries, digest
+            ):
+                return "incremental"
+        _rebuild(conn, bundle_dir, entries, digest)
+        return "rebuilt"
     finally:
         conn.close()
 
