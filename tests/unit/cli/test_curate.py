@@ -11,7 +11,7 @@ gates, per-item confirms, exit codes, `--auto`) follow `test_adjudicate.py`'s
 import os
 import sqlite3
 import sys
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -4943,19 +4943,18 @@ def _mixed_structure_queue(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-def test_accept_structure_still_prompts_for_a_related_to_suggestion(
+def test_accept_structure_applies_a_related_to_suggestion_without_prompting(
     tmp_path: Path,
     tmp_path_factory: pytest.TempPathFactory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`--accept structure` applies the SPECIFIC suggestion silently but
-    still prompts for `related_to` (#508).
+    """`--accept structure` applies `related_to` silently (#1222).
 
     `related_to` is the answer the prompt calls correct when the documents
-    do not support a specific claim, so it is the one type whose bulk
-    acceptance adds no specific claim to the graph -- and, measured on a
-    real bundle, 67% of accepted edges. Accepting those unreviewed is
-    exactly the low-value material #385 warned about."""
+    do not support a specific claim, so applying it adds no claim beyond the
+    untyped link that already existed. Prompting for it saved the operator
+    zero prompts on a bundle where it was 39 of 50 suggestions, and the
+    fatigue then defeated the review the asymmetric prompts exist for."""
     _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
     _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
     _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
@@ -4964,32 +4963,27 @@ def test_accept_structure_still_prompts_for_a_related_to_suggestion(
     _mixed_structure_queue(monkeypatch)
     _simulate_tty(monkeypatch)
 
-    # The cost gate's "y", then a decline for the `related_to` prompt that
-    # must still be asked.
-    result = runner.invoke(app, ["curate", "--accept", "structure"], input="y\nn\n")
+    # Only the cost gate's "y": a second prompt would starve stdin and abort.
+    result = runner.invoke(app, ["curate", "--accept", "structure"], input="y\n")
 
     assert result.exit_code == 0
     assert "Relate concepts/a -> concepts/b" not in result.stdout
-    assert (
-        "Relate concepts/a -> concepts/c [related_to] "
-        "(connected; the documents do not say how)? [y/N]" in result.stdout
+    assert "Relate concepts/a -> concepts/c" not in result.stdout
+    assert "Structure: applied 2, skipped 0." in _lines(result.stdout)
+    source_text = (tmp_path / "bundle" / "concepts" / "a.md").read_text(
+        encoding="utf-8"
     )
-    assert "Structure: applied 1, skipped 1." in _lines(result.stdout)
-    assert "  declined: concepts/a -> concepts/c [related_to]" in result.stdout
+    assert "concepts/c" in source_text
 
 
-def test_accept_structure_on_a_pipe_skips_related_to_instead_of_prompting(
+def test_accept_structure_on_a_pipe_applies_related_to(
     tmp_path: Path,
     tmp_path_factory: pytest.TempPathFactory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """On a non-TTY run there is no channel to ask on, so an unacceptable
-    item is SKIPPED rather than prompted (#508).
-
-    Without this the run would reach `typer.prompt` with no terminal and
-    die mid-walk -- the same failure the Identity non-TTY guard exists to
-    prevent. Unattended acceptance therefore applies exactly the specific
-    suggestions and leaves the rest queued for a human."""
+    """On a non-TTY run an accepted Structure writes `related_to` too: it
+    needs no consent beyond the flag (#1222), so unattended acceptance
+    applies every symmetric-scope suggestion."""
     _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
     _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
     _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
@@ -5001,12 +4995,12 @@ def test_accept_structure_on_a_pipe_skips_related_to_instead_of_prompting(
 
     assert result.exit_code == 0
     assert "Relate concepts/a" not in result.stdout
-    assert "Structure: applied 1, skipped 1." in _lines(result.stdout)
+    assert "Structure: applied 2, skipped 0." in _lines(result.stdout)
     source_text = (tmp_path / "bundle" / "concepts" / "a.md").read_text(
         encoding="utf-8"
     )
     assert "concepts/b" in source_text
-    assert "concepts/c" not in source_text
+    assert "concepts/c" in source_text
 
 
 def _asymmetric_structure_queue(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -5075,7 +5069,7 @@ def test_accept_structure_still_prompts_for_an_asymmetric_suggestion(
     assert "Relate concepts/a -> concepts/b" not in result.stdout
     assert (
         "Relate concepts/a -> concepts/c [part_of] "
-        "(direction model-suggested, unverified)? [y/N]" in result.stdout
+        "(direction model-suggested, unverified)? [y/N/a/r]" in result.stdout
     )
     assert "Structure: applied 1, skipped 1." in _lines(result.stdout)
     assert "  declined: concepts/a -> concepts/c [part_of]" in result.stdout
@@ -5107,6 +5101,140 @@ def test_accept_structure_on_a_pipe_skips_asymmetric_instead_of_prompting(
     )
     assert "concepts/b" in source_text
     assert "concepts/c" not in source_text
+
+
+def _typed_asymmetric_queue(
+    monkeypatch: pytest.MonkeyPatch, types: Sequence[str]
+) -> None:
+    """A COMPLETE Structure queue of one edge `a -> <x>` per entry in `types`
+    (targets `b`, `c`, `d`, ...), each suggested with that type."""
+    from openkos.graph.base import Edge
+    from openkos.resolution.edge_typing import EdgeSuggestion, EdgeSuggestionBatch
+
+    edges = [
+        Edge(source_id="concepts/a", target_id=f"concepts/{chr(ord('b') + i)}")
+        for i in range(len(types))
+    ]
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(),
+    )
+    monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: edges)
+    monkeypatch.setattr(
+        "openkos.cli.curate.suggest_edge_types",
+        lambda *a, **k: EdgeSuggestionBatch(
+            results=[
+                EdgeSuggestion(edge=edge, suggested_type=kind, rationale="why")
+                for edge, kind in zip(edges, types, strict=True)
+            ]
+        ),
+    )
+    monkeypatch.setattr("openkos.cli.curate._concept_type_names", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "openkos.cli.curate._contradiction_plan", lambda *a, **k: _empty_plan()
+    )
+
+
+def _abcd_workspace(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    for name in ("a", "b", "c", "d"):
+        _write_doc(
+            tmp_path / "bundle" / "concepts" / f"{name}.md",
+            title=f"Concept {name.upper()}",
+        )
+    _reindexed_workspace(tmp_path, monkeypatch)
+    _simulate_tty(monkeypatch)
+
+
+def test_accept_the_rest_answer_applies_remaining_items_of_that_type_only(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Answering `a` to an asymmetric prompt accepts that item and every
+    remaining item of the SAME type, and no other type (#1222): a second
+    asymmetric type still asks, so the answer cannot become a bulk apply of
+    unverified directions the operator never looked at."""
+    _abcd_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _typed_asymmetric_queue(monkeypatch, ["part_of", "part_of", "depends_on"])
+
+    # Cost gate "y"; first part_of "a"; the second part_of is NOT asked;
+    # the depends_on prompt IS asked and declined.
+    result = runner.invoke(app, ["curate", "--accept", "structure"], input="y\na\nn\n")
+
+    assert result.exit_code == 0
+    assert result.stdout.count("Relate concepts/a -> concepts/b [part_of]") == 1
+    assert "Relate concepts/a -> concepts/c [part_of]" not in result.stdout
+    assert "Relate concepts/a -> concepts/d [depends_on]" in result.stdout
+    assert "Structure: applied 2, skipped 1." in _lines(result.stdout)
+    source_text = (tmp_path / "bundle" / "concepts" / "a.md").read_text(
+        encoding="utf-8"
+    )
+    assert "concepts/b" in source_text
+    assert "concepts/c" in source_text
+    assert "depends_on" not in source_text
+
+
+def test_reverse_answer_writes_the_swapped_direction(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Answering `r` relates target -> source instead (#1222): direction is
+    where the model errs, so the reversed edge is an explicit choice, and it
+    applies to that one item only."""
+    _abcd_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _typed_asymmetric_queue(monkeypatch, ["produced_by", "produced_by"])
+
+    result = runner.invoke(app, ["curate", "--accept", "structure"], input="y\nr\nn\n")
+
+    assert result.exit_code == 0
+    assert "r = relate concepts/b -> concepts/a [produced_by]" in result.stdout
+    assert "Structure: applied 1, skipped 1." in _lines(result.stdout)
+    reversed_text = (tmp_path / "bundle" / "concepts" / "b.md").read_text(
+        encoding="utf-8"
+    )
+    assert "concepts/a" in reversed_text
+    assert "produced_by" in reversed_text
+    source_text = (tmp_path / "bundle" / "concepts" / "a.md").read_text(
+        encoding="utf-8"
+    )
+    assert "produced_by" not in source_text
+
+
+def test_unrecognised_asymmetric_answer_asks_again(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An answer outside y/n/a/r re-asks rather than counting as a decline."""
+    _abcd_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _typed_asymmetric_queue(monkeypatch, ["part_of"])
+
+    result = runner.invoke(app, ["curate", "--accept", "structure"], input="y\nzz\ny\n")
+
+    assert result.exit_code == 0
+    assert "Unrecognized answer 'zz'" in result.stdout
+    assert "Structure: applied 1, skipped 0." in _lines(result.stdout)
+
+
+def test_accept_the_rest_is_not_offered_without_accept_structure(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without `--accept structure` the walk stays the plain `[y/N]` one."""
+    _abcd_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _typed_asymmetric_queue(monkeypatch, ["part_of"])
+
+    result = runner.invoke(app, ["curate"], input="y\nn\n")
+
+    assert "[y/N/a/r]" not in result.stdout
+    assert "(direction model-suggested, unverified)? [y/N]" in result.stdout
 
 
 def test_per_item_walk_marks_direction_unverified_only_on_asymmetric_types(
@@ -5166,7 +5294,7 @@ def test_accepted_structure_discloses_that_types_go_in_unreviewed(
         "openkos curate: Structure: symmetric suggested relation types are"
         in result.stderr
     )
-    assert "Asymmetric types and related_to still ask per item" in result.stderr
+    assert "Asymmetric types still ask per item" in result.stderr
 
 
 def test_structure_without_accept_prints_no_bulk_advisory(
@@ -5687,7 +5815,6 @@ def test_the_shipped_structure_stage_carries_its_accept_caveat() -> None:
 
     assert structure.auto_acceptable is True
     assert "asymmetric" in structure.accept_caveat
-    assert "related_to" in structure.accept_caveat
     # Metadata accepts its whole queue in bulk -- nothing is held back, so
     # there is nothing to disclose.
     assert metadata.auto_acceptable is True

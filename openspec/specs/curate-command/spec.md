@@ -280,36 +280,55 @@ Identity MUST remain subject to that refusal on every path.
 - WHEN `curate --accept strcture` runs
 - THEN the exit code is 2 and stderr names the offending value
 
-### Requirement: Bulk Acceptance Excludes The Least-Specific Relation Type
+### Requirement: Bulk Acceptance Excludes Asymmetric Relation Types
 
-An accepted Structure stage MUST still route a `related_to` suggestion to
-the operator. Every other suggestable type asserts a specific relationship;
-`related_to` is the answer the prompt designates as correct when the
-documents do not support one, so applying it adds no claim beyond the
-untyped link that already existed. It is therefore the cheapest place to
-spend a human glance, and at a measured 67% of accepted edges also the
-largest.
+An accepted Structure stage MUST apply every suggestion whose type is not
+asymmetric without asking, including `related_to`. `related_to` is the
+answer the prompt designates as correct when the documents do not support a
+specific relationship, so applying it adds no claim beyond the untyped link
+that already existed; prompting for it saves the operator nothing and
+erodes the attention the asymmetric prompts need.
 
-On a TTY the exempted item falls back to the per-item prompt. On a non-TTY
-run there is no channel to ask on, so it MUST be counted as skipped rather
-than prompted — reaching the prompt with no terminal would kill the walk
-mid-run.
+An accepted Structure stage MUST still route every asymmetric type
+(`caused_by`, `depends_on`, `member_of`, `part_of`, `produced_by`) to the
+operator, because the suggested direction is unverified. On a TTY that
+prompt MUST accept, besides `y` and `n`, an answer `a` that accepts the
+item and every remaining item of the SAME asymmetric type for the run, and
+an answer `r` that applies the item with source and target swapped. `a`
+MUST NOT apply any other asymmetric type, and the flag by itself MUST NOT
+apply any asymmetric type. An unrecognized answer asks again.
 
-This exemption is scoped to the item, not the stage: the same run still
-applies every specific suggestion without asking.
+On a non-TTY run there is no channel to ask on, so an asymmetric item MUST
+be counted as skipped rather than prompted — reaching the prompt with no
+terminal would kill the walk mid-run.
 
-#### Scenario: A specific type applies while `related_to` is prompted
+Each applied item keeps its own commit and log entry.
+
+#### Scenario: `related_to` applies without a prompt
 
 - GIVEN a Structure queue with one specific suggestion and one `related_to`
 - WHEN `curate --accept structure` runs on a TTY
-- THEN the specific suggestion is written with no prompt
-- AND the `related_to` suggestion is prompted per item
+- THEN both suggestions are written with no per-item prompt
 
-#### Scenario: On a pipe the exempted item is skipped, not prompted
+#### Scenario: Accept-the-rest is scoped to one asymmetric type
 
-- GIVEN the same queue
+- GIVEN two `part_of` suggestions and one `depends_on` suggestion
+- WHEN `curate --accept structure` runs on a TTY and the first `part_of`
+  prompt is answered `a`
+- THEN both `part_of` suggestions are written, and the `depends_on`
+  suggestion is still prompted
+
+#### Scenario: The reversed direction is an explicit answer
+
+- GIVEN an asymmetric suggestion `a -> b [produced_by]`
+- WHEN the operator answers `r`
+- THEN the relation is written from `b` to `a`
+
+#### Scenario: On a pipe asymmetric items are skipped, not prompted
+
+- GIVEN a queue with one specific suggestion and one asymmetric suggestion
 - WHEN `curate --auto --accept structure` runs with stdout piped
-- THEN the specific suggestion is written, the `related_to` suggestion is
+- THEN the specific suggestion is written, the asymmetric suggestion is
   counted as skipped, and no prompt is printed
 
 ### Requirement: `review: false` Accepts Only The Non-Destructive Stages

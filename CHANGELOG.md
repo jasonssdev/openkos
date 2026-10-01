@@ -29,6 +29,11 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   older no longer exclude a current run: do not run them concurrently against
   the same workspace.
 
+- `openkos curate --accept structure` applies `related_to` suggestions without
+  asking, since they add no claim beyond the untyped link; asymmetric types
+  still ask per item, and that prompt now also takes `a` (accept this and the
+  remaining items of the same type) and `r` (apply the reversed direction).
+
 ### Fixed
 
 - `openkos.yaml` with a repeated key (top-level or nested) is now refused, and

@@ -90,7 +90,6 @@ from openkos.resolution.contradiction import (
     plan_candidates,
 )
 from openkos.resolution.edge_typing import (
-    LEAST_SPECIFIC_RELATION_TYPE,
     EdgeSuggestion,
     candidate_edges,
     candidate_truncation_notice,
@@ -198,8 +197,8 @@ class Stage:
     """What `--accept <this stage>` still asks per item, or `""` when it
     holds nothing back (issue #702, gap 1).
 
-    Part of the offer, not a footnote. Structure's bulk path covers only the
-    symmetric-scope types -- asymmetric ones and `related_to` keep asking,
+    Part of the offer, not a footnote. Structure's bulk path covers the
+    symmetric-scope types and `related_to` -- asymmetric ones keep asking,
     because the engine marks those directions `model-suggested, unverified`
     and cannot vouch for them (#624/#508). A hint that promised to remove
     every prompt would be selling something the flag does not do, and the
@@ -740,6 +739,32 @@ def _confirm(prompt_text: str) -> bool:
             return False
         typer.echo(
             f"Unrecognized answer '{answer.strip()}' -- expected y or n "
+            "(Enter = N). Asking again."
+        )
+
+
+def _confirm_direction(prompt_text: str) -> Literal["yes", "no", "all", "reverse"]:
+    """The per-item prompt for an ASYMMETRIC suggestion in an accepted
+    Structure run (issue #1222): `_confirm`'s `y`/`n` plus two answers that
+    exist because direction is where the suggester errs.
+
+    `a`/`all` accepts this item and the remaining items of the same type;
+    `r`/`reverse` applies it with source and target swapped. Anything else
+    asks again, never counting as a decline, for the same reason `_confirm`
+    does not."""
+    while True:
+        answer = typer.prompt(prompt_text, default="N", show_default=False)
+        token = answer.strip().lower()
+        if token in {"y", "yes"}:
+            return "yes"
+        if token in {"", "n", "no"}:
+            return "no"
+        if token in {"a", "all"}:
+            return "all"
+        if token in {"r", "reverse"}:
+            return "reverse"
+        typer.echo(
+            f"Unrecognized answer '{answer.strip()}' -- expected y, n, a or r "
             "(Enter = N). Asking again."
         )
 
@@ -1363,14 +1388,14 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         # five bulk-written types are wrong by the rubric. The operator
         # asked for bulk acceptance and keeps it; what they do not keep is
         # going in blind. Since #624 the bulk path covers only the
-        # symmetric-scope types -- asymmetric ones and `related_to` always
-        # ask per item -- so the advisory names that split. Once per run,
-        # on stderr, so a piped summary stays clean.
+        # symmetric-scope types and `related_to` (#1222) -- asymmetric ones
+        # always ask per item -- so the advisory names that split. Once per
+        # run, on stderr, so a piped summary stays clean.
         typer.echo(
             "openkos curate: Structure: symmetric suggested relation types "
             "are applied without review -- accuracy is measured, not "
             "assumed (see evals/edge_typing/ and issue #513). Asymmetric "
-            "types and related_to still ask per item (issue #624). Re-run "
+            "types still ask per item (issue #624). Re-run "
             "without `--accept structure` to decide each one.",
             err=True,
         )
@@ -1452,6 +1477,10 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
     applied = 0
     skipped = 0
     declined: list[str] = []
+    # #1222: asymmetric types the operator answered `a` ("accept the rest")
+    # for. Scoped per type, so one answer never waves through a different
+    # asymmetric type whose directions the operator has not looked at.
+    accepted_rest: set[str] = set()
 
     for suggestion in suggestions:
         # `effective_edge`, not `edge` (#991 second review round): this is
@@ -1481,27 +1510,48 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         # also answers for the least-specific type, so a surface cannot
         # carry one caveat and miss the other.
         caveat = cli_main._suggestion_caveat(suggestion.suggested_type)
-        if not _confirm_item(
-            ctx,
-            "Structure",
+        question = (
             f"Relate {edge.source_id} -> {edge.target_id} "
-            f"[{suggestion.suggested_type}]{caveat}? [y/N]",
-            # #508: the least-specific type asserts nothing beyond the
-            # untyped link that already existed, so it still reaches a
-            # human even in a bulk-accepted run; #624 extends the same
-            # routing to every asymmetric type, whose direction is
-            # unverified. See `edge_typing.LEAST_SPECIFIC_RELATION_TYPE`
-            # and `relations.ASYMMETRIC_RELATION_TYPES`.
-            acceptable_in_bulk=(
-                suggestion.suggested_type != LEAST_SPECIFIC_RELATION_TYPE
-                and not asymmetric
-            ),
-        ):
+            f"[{suggestion.suggested_type}]{caveat}?"
+        )
+        reverse = False
+        if asymmetric and suggestion.suggested_type in accepted_rest:
+            accepted = True
+        elif asymmetric and _accepts(ctx, "Structure") and sys.stdin.isatty():
+            # #1222: the stage is accepted, so the flag already told us the
+            # operator wants fewer prompts; the asymmetric ones still ask
+            # (#624) but can be settled a type at a time, and the reversed
+            # direction is an explicit choice instead of a decline.
+            typer.echo(
+                f"  a = accept this and every remaining "
+                f"{suggestion.suggested_type}; r = relate "
+                f"{edge.target_id} -> {edge.source_id} "
+                f"[{suggestion.suggested_type}] instead"
+            )
+            answer = _confirm_direction(f"{question} [y/N/a/r]")
+            accepted = answer != "no"
+            reverse = answer == "reverse"
+            if answer == "all":
+                accepted_rest.add(suggestion.suggested_type)
+        else:
+            accepted = _confirm_item(
+                ctx,
+                "Structure",
+                f"{question} [y/N]",
+                # #624: every asymmetric type, whose direction is unverified,
+                # reaches a human even in a bulk-accepted run. `related_to`
+                # asserts nothing beyond the untyped link, so since #1222 it
+                # goes in with the rest. See `relations.ASYMMETRIC_RELATION_TYPES`.
+                acceptable_in_bulk=not asymmetric,
+            )
+        if not accepted:
             skipped += 1
             declined.append(
                 f"{edge.source_id} -> {edge.target_id} [{suggestion.suggested_type}]"
             )
             continue
+        if reverse:
+            edge = Edge(source_id=edge.target_id, target_id=edge.source_id)
 
         source_path = okf.concept_path_for(edge.source_id, layout.bundle_dir)
         target_path = okf.concept_path_for(edge.target_id, layout.bundle_dir)
@@ -2224,8 +2274,8 @@ _STAGES: tuple[Stage, ...] = (
         live=True,
         auto_acceptable=True,
         accept_caveat=(
-            "asymmetric types and related_to are still asked per item, "
-            "since their direction is model-suggested and unverified"
+            "asymmetric types are still asked per item, since their "
+            "direction is model-suggested and unverified"
         ),
         task="edge_typing",
     ),
