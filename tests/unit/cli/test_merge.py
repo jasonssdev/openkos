@@ -13,6 +13,7 @@ import pytest
 from typer.testing import CliRunner, _NamedTextIOWrapper
 
 from openkos import fsio
+from openkos.application import commit_phase
 from openkos.application.lifecycle import _apply_link_rewrite_idempotently
 from openkos.bundle import index as bundle_index
 from openkos.bundle import ledger as bundle_ledger
@@ -1163,6 +1164,10 @@ def test_merge_scans_bundle_exactly_once_via_rglob_when_scanning_provenance(
     # merge committed; stub it so this count keeps measuring what T5 is
     # about -- `prepare_merge`'s single scan -- not the post-write refresh.
     monkeypatch.setattr(main, "_refresh_derived_after_write", lambda *a, **k: True)
+    # Likewise the commit phase re-lists the bundle once to spot a document
+    # that appeared after the plan (ADR-0036); that is a separate, deliberate
+    # walk, so it is stubbed out of THIS count.
+    monkeypatch.setattr(commit_phase, "describe_read_drift", lambda *a, **k: None)
 
     result = runner.invoke(
         app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
@@ -1286,18 +1291,17 @@ def _pair_with_all_three_rewrite_groups(
 
 
 _MERGE_WRITE_TARGETS = [
-    "bundle/index.md",
-    "bundle/log.md",
     "bundle/concepts/other.md",
     "bundle/concepts/relator.md",
     "bundle/concepts/derived.md",
     "bundle/concepts/survivor.md",
 ]
-"""One entry per guard-mapping contributor `merge_core` OVERWRITES: the two
-fixed catalog/log keys, one touched file per rewrite partition, and the
-survivor -- so no single contributor can be dropped from the mapping without
-failing at least one parametrized case below. The absorbed DELETE target has
-its own dedicated tests."""
+"""One entry per guard-mapping contributor `merge_core` OVERWRITES: one
+touched file per rewrite partition and the survivor -- so no single
+contributor can be dropped from the mapping without failing at least one
+parametrized case below. `index.md`/`log.md` are re-composed at commit time,
+not guarded (test_catalog_recompose.py). The absorbed DELETE target has its
+own dedicated tests."""
 
 
 @pytest.mark.parametrize("target", _MERGE_WRITE_TARGETS)

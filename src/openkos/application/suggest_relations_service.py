@@ -34,18 +34,21 @@ Structure stage shares: their advisories reach the caller as a message through
 
 from __future__ import annotations
 
+import contextlib
 import sqlite3
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, NamedTuple, Protocol, cast
 
-from openkos import config
+from openkos import config, lock
 from openkos.application import backends as application_backends
+from openkos.application import catalog_delta
 from openkos.application import drift as application_drift
 from openkos.application import lifecycle as application_lifecycle
 from openkos.application import pending as application_pending
+from openkos.application.lock_wait import CommitSection
 from openkos.graph import proximity, sqlite_graph
 from openkos.graph.base import Edge, GraphStore
 from openkos.llm.base import (
@@ -178,6 +181,10 @@ class SuggestRelationsRequest:
     edge_offset: int = 0
     skip_confirmation: bool = False
     """`--auto`: skip the cost question."""
+    max_calls: int | None = None
+    """The most edges (one chat call each) this run may type -- a budgeted,
+    runner-started run passes what it has left. `None` is unbounded: the only
+    value a CLI run passes, and byte-identical to a run without the bound."""
 
 
 @dataclass(frozen=True)
@@ -275,6 +282,12 @@ class SuggestRelationsPorts:
         edge_typing.suggest_edge_types
     )
     now: Callable[[], datetime] = _utc_now
+    commit_section: CommitSection = contextlib.nullcontext
+    """Entered around each commit phase -- the persist of the suggestions and
+    each accepted relation's prepare, drift check, write and auto-commit --
+    and nothing before it: the cost prompt, the model calls and the per-item
+    prompts hold no workspace lock (#1137, ADR-0036). An adapter that owns the
+    lock passes a section that takes it; the default holds nothing."""
 
 
 @dataclass(frozen=True)
@@ -292,6 +305,9 @@ class SuggestRelationsOutcome:
     batch: EdgeSuggestionBatch | None = None
     cfg: config.Config | None = None
     """The run's config, so a partial-batch message words the backend."""
+    deferred_by_bound: int = 0
+    """Untyped edges a `max_calls` bound left for a later pass. They are in
+    `total` but have no suggestion yet, and nothing is persisted for them."""
 
 
 @dataclass(frozen=True)
@@ -456,9 +472,19 @@ def persist_edge_suggestions(
     include_confidential: bool,
     on_warning: Callable[[str], None] | None = None,
     surface: str = _VERB,
+    judged_digests: Mapping[str, str | None] | None = None,
+    commit_section: CommitSection = contextlib.nullcontext,
 ) -> None:
     """Persist freshly computed edge-typing suggestions (#799), fail-open: a
     failed persist costs one advisory, never the run.
+
+    `judged_digests` is each endpoint's content digest as it stood BEFORE the
+    typing call (#1137): that call holds no workspace lock, so an endpoint
+    edited or forgotten meanwhile has a different digest now, and its
+    suggestion is dropped rather than stored against content nobody typed.
+    Without it (curate, which holds the lock throughout) the digests are read
+    here, as before. The persist runs inside `commit_section`; a busy
+    workspace costs the same advisory a failed persist does.
 
     Two results are skipped rather than stored. A `suggested_type` of `None` is
     the fail-closed degrade (a FAILURE, not a verdict: caching it would never
@@ -466,47 +492,63 @@ def persist_edge_suggestions(
     a row whose staleness can never be checked would serve forever."""
     if not results:
         return
-    current_digest = application_pending.current_finding_digest(layout.bundle_dir)
-    batch: list[edge_suggestions_store.PersistedEdgeSuggestion] = []
-    for result in results:
-        if result.suggested_type is None:
-            continue
-        # `result.edge`, deliberately NOT `effective_edge` (#991): the row is
-        # keyed on the CANDIDATE pair -- the question that was asked -- never
-        # on a direction-corrected one.
-        edge = result.edge
-        digests: list[edge_suggestions_store.InputDigest] = []
-        for endpoint_id in (edge.source_id, edge.target_id):
-            digest = current_digest(endpoint_id)
-            if digest is None:
-                break
-            digests.append(
-                edge_suggestions_store.InputDigest(input_ref=endpoint_id, digest=digest)
-            )
-        else:
-            batch.append(
-                edge_suggestions_store.PersistedEdgeSuggestion(
-                    source_id=edge.source_id,
-                    target_id=edge.target_id,
-                    suggested_type=result.suggested_type,
-                    rationale=result.rationale,
-                    include_confidential=include_confidential,
-                    input_digests=tuple(digests),
-                )
-            )
-    if not batch:
-        return
     try:
-        conn = derived.open_derived_connection(layout.findings_db_path)
-        try:
-            edge_suggestions_store.record_edge_suggestions(conn, batch)
-        finally:
-            conn.close()
-    except (OSError, sqlite3.Error) as exc:
+        with commit_section():
+            current_digest = application_pending.current_finding_digest(
+                layout.bundle_dir
+            )
+            batch: list[edge_suggestions_store.PersistedEdgeSuggestion] = []
+            for result in results:
+                if result.suggested_type is None:
+                    continue
+                # `result.edge`, deliberately NOT `effective_edge` (#991): the row is
+                # keyed on the CANDIDATE pair -- the question that was asked -- never
+                # on a direction-corrected one.
+                edge = result.edge
+                digests: list[edge_suggestions_store.InputDigest] = []
+                for endpoint_id in (edge.source_id, edge.target_id):
+                    digest = current_digest(endpoint_id)
+                    if digest is None or (
+                        judged_digests is not None
+                        and judged_digests.get(endpoint_id) != digest
+                    ):
+                        break
+                    digests.append(
+                        edge_suggestions_store.InputDigest(
+                            input_ref=endpoint_id, digest=digest
+                        )
+                    )
+                else:
+                    batch.append(
+                        edge_suggestions_store.PersistedEdgeSuggestion(
+                            source_id=edge.source_id,
+                            target_id=edge.target_id,
+                            suggested_type=result.suggested_type,
+                            rationale=result.rationale,
+                            include_confidential=include_confidential,
+                            input_digests=tuple(digests),
+                        )
+                    )
+            if not batch:
+                return
+            try:
+                conn = derived.open_derived_connection(layout.findings_db_path)
+                try:
+                    edge_suggestions_store.record_edge_suggestions(conn, batch)
+                finally:
+                    conn.close()
+            except (OSError, sqlite3.Error) as exc:
+                if on_warning is not None:
+                    on_warning(
+                        f"openkos {surface}: warning -- failed to persist edge "
+                        f"suggestions ({exc}); the next run will re-type them."
+                    )
+    except lock.WorkspaceBusyError as exc:
         if on_warning is not None:
             on_warning(
-                f"openkos {surface}: warning -- failed to persist edge "
-                f"suggestions ({exc}); the next run will re-type them."
+                f"openkos {surface}: warning -- the workspace is busy, so the "
+                f"edge suggestions were not persisted ({exc}); the next run "
+                "will re-type them."
             )
 
 
@@ -530,6 +572,8 @@ def suggest_relations(
     batch (#441) and is carried on the outcome: the completed suggestions are
     never discarded. The raise-path ladder is retained around the call for an
     injected backend that raises outside `llm.chat`'s guarded seam."""
+    if request.max_calls is not None and request.max_calls < 0:
+        raise ValueError(f"max_calls must be >= 0, got {request.max_calls}")
     reason = config.require_workspace(root)
     if reason is not None:
         raise workspace_refusal(_VERB, reason)
@@ -655,6 +699,22 @@ def suggest_relations(
             model=cfg.model,
         )
 
+    # The unattended budget's bound truncates the edges still to type, in
+    # candidate order: what was typed is persisted below and served next pass.
+    deferred = 0
+    if request.max_calls is not None and len(to_type) > request.max_calls:
+        deferred = len(to_type) - request.max_calls
+        to_type = to_type[: request.max_calls]
+
+    # #1137: the typing call below holds no workspace lock, so pin each
+    # endpoint's digest BEFORE it -- the persist keeps a suggestion only for
+    # content that is still what was typed.
+    digest_of = application_pending.current_finding_digest(layout.bundle_dir)
+    judged_digests = {
+        endpoint_id: digest_of(endpoint_id)
+        for edge in to_type
+        for endpoint_id in (edge.source_id, edge.target_id)
+    }
     try:
         # Still called with an empty `to_type` (a fully-served run): zero edges
         # means zero `llm.chat` calls by construction.
@@ -697,6 +757,8 @@ def suggest_relations(
         batch.results,
         include_confidential=effective_confidential,
         on_warning=observer.warn,
+        judged_digests=judged_digests,
+        commit_section=ports.commit_section,
     )
     results: list[EdgeSuggestion] = (
         reassemble_edge_suggestions(edges, served_by_key, batch.results)
@@ -713,6 +775,7 @@ def suggest_relations(
         model=cfg.model,
         batch=batch,
         cfg=cfg,
+        deferred_by_bound=deferred,
     )
 
 
@@ -763,53 +826,63 @@ def apply_relation_suggestions(
             )
             continue
 
-        source_path = okf.concept_path_for(edge.source_id, layout.bundle_dir)
-        target_path = okf.concept_path_for(edge.target_id, layout.bundle_dir)
-        try:
-            prepared = application_lifecycle.prepare_relate(
-                source_path,
-                log_path,
-                edge.source_id,
-                edge.target_id,
-                result.suggested_type,
+        # The commit phase (#1137): the model call and the prompt above held
+        # no workspace lock, so the relation is prepared from the bytes it
+        # will be written over.
+        with ports.commit_section():
+            source_path = okf.concept_path_for(edge.source_id, layout.bundle_dir)
+            target_path = okf.concept_path_for(edge.target_id, layout.bundle_dir)
+            try:
+                prepared = application_lifecycle.prepare_relate(
+                    source_path,
+                    log_path,
+                    edge.source_id,
+                    edge.target_id,
+                    result.suggested_type,
+                    root,
+                    now=now,
+                    target_path=target_path,
+                )
+            except (OSError, ValueError) as exc:
+                raise _relate_failed(edge, exc) from exc
+
+            if prepared.already_present:
+                observer.already_present()
+                skipped += 1
+                continue
+
+            # `log.md` is re-composed below, not guarded.
+            drift_baselines = {source_path: prepared.source_bytes}
+            if prepared.target_bytes is not None:
+                drift_baselines[target_path] = prepared.target_bytes
+            drift = application_drift.describe_drift(
+                layout, drift_baselines, _APPLY_VERB
+            )
+            if drift is not None:
+                raise DriftDetected(drift)
+            try:
+                prepared = application_lifecycle.recompose_relate_log(
+                    log_path, prepared, verb=_APPLY_VERB
+                )
+            except catalog_delta.CatalogRecomposeError as exc:
+                raise DriftDetected(str(exc)) from exc
+
+            try:
+                application_lifecycle.relate_core(
+                    source_path, log_path, prepared, target_path=target_path
+                )
+            except (OSError, ValueError) as exc:
+                raise _relate_failed(edge, exc) from exc
+
+            apply_commit_paths = [f"bundle/{edge.source_id}.md", "bundle/log.md"]
+            if prepared.new_target_text is not None:
+                apply_commit_paths.insert(1, f"bundle/{edge.target_id}.md")
+            ports.autocommit(
                 root,
-                now=now,
-                target_path=target_path,
+                apply_commit_paths,
+                f"openkos: relate {edge.source_id} -> {edge.target_id} "
+                f"({result.suggested_type})",
             )
-        except (OSError, ValueError) as exc:
-            raise _relate_failed(edge, exc) from exc
-
-        if prepared.already_present:
-            observer.already_present()
-            skipped += 1
-            continue
-
-        drift_baselines = {
-            source_path: prepared.source_bytes,
-            log_path: prepared.log_bytes,
-        }
-        if prepared.target_bytes is not None:
-            drift_baselines[target_path] = prepared.target_bytes
-        drift = application_drift.describe_drift(layout, drift_baselines, _APPLY_VERB)
-        if drift is not None:
-            raise DriftDetected(drift)
-
-        try:
-            application_lifecycle.relate_core(
-                source_path, log_path, prepared, target_path=target_path
-            )
-        except (OSError, ValueError) as exc:
-            raise _relate_failed(edge, exc) from exc
-
-        apply_commit_paths = [f"bundle/{edge.source_id}.md", "bundle/log.md"]
-        if prepared.new_target_text is not None:
-            apply_commit_paths.insert(1, f"bundle/{edge.target_id}.md")
-        ports.autocommit(
-            root,
-            apply_commit_paths,
-            f"openkos: relate {edge.source_id} -> {edge.target_id} "
-            f"({result.suggested_type})",
-        )
         applied += 1
 
     outcome = ApplyOutcome(applied=applied, skipped=skipped, declined=tuple(declined))

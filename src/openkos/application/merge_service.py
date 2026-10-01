@@ -25,9 +25,15 @@ What it does NOT own, and how it reaches each through a parameter instead
   probe, the reconciliation pass (a model call the adapter wires) and the
   clock, so each stays a substitutable seam.
 
-The post-write derived-index refresh is deliberately NOT here: it is a
+The post-write derived-index refresh is not computed here either: it is a
 once-per-invocation step that a caller such as `curate` batches across many
-merges, so it stays the adapter's to place.
+merges, so the adapter supplies it as `MergePorts.after_commit` and the service
+only places it inside the commit section, after the auto-commit.
+
+Locking (ADR-0036): the service holds NO lock while it plans, asks the
+confirmation question or runs the reconciliation model call. It enters
+`MergePorts.commit_section` only for the commit phase -- re-validate the drift
+targets and the read dependencies, write, auto-commit, refresh.
 """
 
 from __future__ import annotations
@@ -38,9 +44,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from openkos import config
+from openkos.application import catalog_delta, commit_phase
 from openkos.application import drift as application_drift
 from openkos.application import lifecycle as application_lifecycle
 from openkos.application.lifecycle import PreparedMerge
+from openkos.application.lock_wait import CommitSection
 from openkos.application.write_gate import (
     ConfirmCallback,
     DriftDetected,
@@ -87,6 +95,17 @@ class MergePorts:
     call; it reports its own degrade notices and never raises."""
 
     clock: Callable[[], datetime] = _utc_now
+
+    commit_section: CommitSection = commit_phase.unlocked_section
+    """Entered around the commit phase only -- drift and read-dependency
+    re-validation, the write, the auto-commit and `after_commit` -- never around
+    the confirmation question or the reconciliation model call (ADR-0036). The
+    CLI hands it a section that takes the workspace lock; the default holds
+    nothing."""
+
+    after_commit: Callable[[], None] = commit_phase.no_after_commit
+    """Runs inside the commit section after the auto-commit: the derived-index
+    refresh, which must not race another writer's burst."""
 
 
 @dataclass(frozen=True)
@@ -330,45 +349,67 @@ def merge_concepts(
     # and notices -- the merge itself never fails on an improvement pass.
     prepared = ports.apply_reconciliation(root, prepared, policy)
 
-    # Issue #334: every byte `merge_core` writes below was computed from a
-    # pre-prompt read, so re-validate each target now -- after the gate, before
-    # the first write. The ABSORBED file is in here too: it is UNLINKED, so an
-    # edit landing on it during the prompt would be destroyed outright (#319).
-    drift = application_drift.describe_drift(
-        layout,
-        application_lifecycle.merge_drift_targets(layout, prepared),
-        "merge",
-        deletes=frozenset({absorbed_path}),
-    )
-    if drift is not None:
-        raise DriftDetected(drift)
-
-    try:
-        result = application_lifecycle.merge_core(
-            layout.bundle_dir, index_path, log_path, prepared
+    # ADR-0036: everything above ran with no workspace lock. The commit phase
+    # takes it now. A busy lock propagates as `WorkspaceBusyError` before
+    # anything is written (the adapter maps it to exit 3).
+    with ports.commit_section():
+        # Issue #334: every byte `merge_core` writes below was computed from a
+        # pre-prompt read, so re-validate each target now -- after the gate,
+        # before the first write. The ABSORBED file is in here too: it is
+        # UNLINKED, so an edit landing on it during the prompt would be
+        # destroyed outright (#319).
+        # `index.md` and `log.md` are not guarded: every verb appends to them,
+        # so the merge's edit is re-composed over their current bytes below.
+        drift = application_drift.describe_drift(
+            layout,
+            application_lifecycle.merge_drift_targets(
+                layout, prepared, include_catalog=False
+            ),
+            "merge",
+            deletes=frozenset({absorbed_path}),
         )
-    except (OSError, ValueError) as exc:
-        raise Refused(
-            f"openkos merge: failed while writing the merge -- {exc}."
-        ) from exc
-
-    obs.merged(
-        MergeSummary(
-            survivor_canonical=survivor_canonical,
-            absorbed_canonical=absorbed_canonical,
-            index_name=index_path.name,
-            log_name=log_path.name,
+        if drift is not None:
+            raise DriftDetected(drift)
+        # The documents the plan only READ (the whole-bundle scan that decided
+        # which documents reference the absorbed concept) are re-validated too:
+        # the whole-verb lock no longer excludes the writer that changed them.
+        read_drift = commit_phase.describe_read_drift(
+            layout, prepared.read_dependencies, "merge"
         )
-    )
+        if read_drift is not None:
+            raise DriftDetected(read_drift)
+        try:
+            prepared = application_lifecycle.recompose_merge_catalog(layout, prepared)
+        except catalog_delta.CatalogRecomposeError as exc:
+            raise DriftDetected(str(exc)) from exc
 
-    sha = ports.autocommit(
-        root, merge_commit_paths(prepared, result), merge_commit_message(prepared)
-    )
-    # #800: `unmerge` reverses a merge, but only through the ledger and only
-    # in last-in-first-out order; the commit is the unconditional way back, so
-    # it is named after the success line and only when it exists.
-    if sha is not None:
-        obs.committed(sha)
+        try:
+            result = application_lifecycle.merge_core(
+                layout.bundle_dir, index_path, log_path, prepared
+            )
+        except (OSError, ValueError) as exc:
+            raise Refused(
+                f"openkos merge: failed while writing the merge -- {exc}."
+            ) from exc
+
+        obs.merged(
+            MergeSummary(
+                survivor_canonical=survivor_canonical,
+                absorbed_canonical=absorbed_canonical,
+                index_name=index_path.name,
+                log_name=log_path.name,
+            )
+        )
+
+        sha = ports.autocommit(
+            root, merge_commit_paths(prepared, result), merge_commit_message(prepared)
+        )
+        # #800: `unmerge` reverses a merge, but only through the ledger and only
+        # in last-in-first-out order; the commit is the unconditional way back,
+        # so it is named after the success line and only when it exists.
+        if sha is not None:
+            obs.committed(sha)
+        ports.after_commit()
 
     return MergeOutcome(
         survivor_canonical=survivor_canonical,

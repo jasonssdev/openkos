@@ -347,20 +347,52 @@ def test_reingest_interactive_preview_matches_pre_move_golden(
     )
 
 
-@pytest.mark.parametrize("target", ["bundle/index.md", "bundle/log.md"])
-def test_drift_after_the_preview_matches_pre_move_golden(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str
+def test_a_sensitivity_input_edited_after_the_preview_refuses_with_exit_3(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """The workspace config decides the Source's level, so an edit to it between
+    the plan and the commit phase refuses the run whole (#1137)."""
     _init_workspace(tmp_path, monkeypatch)
     (tmp_path / "notes.txt").write_text("Some raw notes.", encoding="utf-8")
+    config_path = tmp_path / "openkos.yaml"
     hook = echo_after(
         monkeypatch,
-        lambda: (tmp_path / target).write_text("edited\n", encoding="utf-8"),
+        lambda: config_path.write_text(
+            config_path.read_text(encoding="utf-8") + "\n# edited\n",
+            encoding="utf-8",
+        ),
         trigger="(new dated entry)",
     )
     actual = _run(["ingest", "notes.txt", "--auto"])
     assert hook.fired
-    _assert_matches_golden(f"drift_{Path(target).stem}", actual)
+    _assert_matches_golden("drift_config", actual)
+    assert not (tmp_path / "raw" / "notes.txt").exists()
+
+
+@pytest.mark.parametrize("target", ["bundle/index.md", "bundle/log.md"])
+def test_a_catalog_edit_after_the_preview_is_kept_not_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str
+) -> None:
+    """`index.md` and `log.md` are appended by every verb, so a change between
+    the plan and the commit phase is re-composed, not refused (#1137): the
+    ingest writes and the concurrent line survives beside its own entry."""
+    _init_workspace(tmp_path, monkeypatch)
+    (tmp_path / "notes.txt").write_text("Some raw notes.", encoding="utf-8")
+    foreign = "<!-- appended by another process -->\n"
+    path = tmp_path / target
+    hook = echo_after(
+        monkeypatch,
+        lambda: path.write_text(
+            path.read_text(encoding="utf-8") + foreign, encoding="utf-8"
+        ),
+        trigger="(new dated entry)",
+    )
+    actual = _run(["ingest", "notes.txt", "--auto"])
+    assert hook.fired
+    assert actual["exit_code"] == 0, actual
+    text = path.read_text(encoding="utf-8")
+    assert foreign in text
+    assert "sources/notes" in text
 
 
 def test_missing_source_matches_pre_move_golden(

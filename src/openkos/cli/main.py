@@ -1,8 +1,10 @@
 """Typer application object exposed as the `openkos` console script."""
 
+import contextvars
 import dataclasses
 import functools
 import glob
+import inspect
 import json
 import os
 import sqlite3
@@ -11,7 +13,7 @@ import unicodedata
 from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from collections.abc import Set as AbstractSet
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from importlib.metadata import PackageNotFoundError
@@ -22,13 +24,24 @@ from typing import Final, Literal, NamedTuple, NoReturn, TypedDict, TypeVar, cas
 import typer
 from rich.console import Console
 
-from openkos import config, fsio, lock, read_outcome, source_date, source_title
+from openkos import (
+    config,
+    fsio,
+    lock,
+    logsetup,
+    read_outcome,
+    source_date,
+    source_title,
+)
 from openkos import lint as lint_check
 from openkos.application import backends as application_backends
+from openkos.application import catalog_delta as application_catalog_delta
+from openkos.application import commit_phase as application_commit_phase
 from openkos.application import (
     contradictions_service,
     duplicates_service,
     ingest_service,
+    lock_wait,
     merge_service,
     reconcile_service,
     reindex_service,
@@ -43,6 +56,7 @@ from openkos.application import lint as application_lint
 from openkos.application import list_service as application_list
 from openkos.application import next_action as next_action_module
 from openkos.application import pending as application_pending
+from openkos.application import pending_queue_report as pending_report
 from openkos.application import query as application_query
 from openkos.application import repair as application_repair
 from openkos.application import revisions as revisions_service
@@ -57,6 +71,7 @@ from openkos.bundle import ledger as bundle_ledger
 from openkos.bundle import log as bundle_log
 from openkos.bundle import provenance as bundle_provenance
 from openkos.cli import curate as curate_module
+from openkos.cli import daemon as daemon_module
 from openkos.cli import observability
 from openkos.extraction import judge as judge_mod
 from openkos.extraction.concept import (
@@ -133,6 +148,7 @@ from openkos.retrieval.answer import NO_MATCH, NoMatchCause
 from openkos.state import adjudications as adjudications_store
 from openkos.state import derived, findings
 from openkos.state import edge_suggestions as edge_suggestions_store
+from openkos.state import pending_queue as pending_queue_store
 from openkos.state import reindex as reindex_module
 from openkos.state import revision_findings as revision_findings_store
 from openkos.state.fts import FtsUnavailable
@@ -327,6 +343,7 @@ def callback(
     ),
 ) -> None:
     """openkos: local-first engine that compiles text into a portable knowledge base."""
+    logsetup.configure_logging("cli")
 
 
 _READ_ONLY_COMMANDS = frozenset(
@@ -337,6 +354,7 @@ _READ_ONLY_COMMANDS = frozenset(
         "lint",
         "doctor",
         "mcp",
+        "pending",
     }
 )
 """The commands that never write to the workspace, and so take no lock (#925).
@@ -354,8 +372,72 @@ can drift without a red test.
 """
 
 
+_SELF_LOCKING_COMMANDS: frozenset[str] = frozenset({"daemon"})
+"""Long-running commands that take the lock per unit of work (a commit phase
+each), never for their own lifetime, so the guard must not wrap them (`daemon`);
+a name here must be registered, and no command is in two classes
+(`test_every_command_is_classified`)."""
+
+
+_WAIT_PARAM = "wait"
+
+
+def _add_wait_option(wrapper: Callable[..., object], fn: Callable[..., object]) -> None:
+    """Give a locked verb's published signature `--wait <seconds>` (#1137).
+
+    The option is added HERE, by the guard, so the set of verbs that accept it
+    is exactly the set that is locked and cannot drift from it. Typer reads the
+    wrapper's `__signature__` and annotations, not the wrapped function's, so
+    the body never sees the parameter: the wrapper pops it before delegating.
+    Click validates it, which is what makes a bad value a usage error (exit 2)
+    before any work.
+    """
+    signature = inspect.signature(fn)
+    if _WAIT_PARAM in signature.parameters:
+        raise TypeError(f"{fn.__name__} already declares a {_WAIT_PARAM!r} parameter")
+    option = inspect.Parameter(
+        _WAIT_PARAM,
+        inspect.Parameter.KEYWORD_ONLY,
+        default=typer.Option(
+            0,
+            "--wait",
+            min=0,
+            max=lock_wait.MAX_WAIT_SECONDS,
+            metavar="SECONDS",
+            help=(
+                "When another OpenKOS process holds the workspace lock, retry "
+                "for up to this many seconds before refusing (exit 3). The "
+                "default 0 refuses at once."
+            ),
+        ),
+        annotation=int,
+    )
+    wrapper.__signature__ = signature.replace(  # type: ignore[attr-defined]
+        parameters=[*signature.parameters.values(), option]
+    )
+    wrapper.__annotations__ = {**fn.__annotations__, _WAIT_PARAM: int}
+
+
+_COMMIT_SECTION: contextvars.ContextVar[lock_wait.CommitSection | None] = (
+    contextvars.ContextVar("openkos_commit_section", default=None)
+)
+"""The commit section a SPLIT verb's guard publishes for its body (#1137): the
+section that takes the workspace lock under that invocation's `--wait`."""
+
+
+def _commit_section_for(root: Path) -> lock_wait.CommitSection:
+    """The commit section the running verb was given, or one with no wait when
+    the body runs outside a guard (a direct call, a test)."""
+    published = _COMMIT_SECTION.get()
+    if published is not None:
+        return published
+    return lock_wait.locked_commit_section(root, wait_seconds=0)
+
+
 def _guard_workspace_lock(
     command_name: str,
+    *,
+    commit_phase: bool = False,
 ) -> Callable[[Callable[..., _T]], Callable[..., _T]]:
     """Hold the workspace's exclusive mutation lock for one command's body (#925).
 
@@ -377,16 +459,48 @@ def _guard_workspace_lock(
     plain re-run is exactly equivalent once the other process finishes. That is
     precisely a busy workspace's contract, so it reuses the code scripts
     already treat as retryable rather than inventing a second one.
+
+    `commit_phase=True` marks a SPLIT verb (ADR-0036): the guard does not hold
+    the lock around the body. It publishes a commit section (`_commit_section_for`)
+    that takes the lock under this invocation's `--wait`, and the body enters it
+    only around its commit phase, so extraction and every other slow step run
+    unlocked. The refusal mapping below is unchanged: the section raises the same
+    `WorkspaceBusyError`, mapped to the same exit codes.
     """
 
     def decorate(fn: Callable[..., _T]) -> Callable[..., _T]:
         @functools.wraps(fn)
         def wrapper(*args: object, **kwargs: object) -> _T:
+            wait = cast(int, kwargs.pop(_WAIT_PARAM, 0))
             root = Path.cwd()
+            # A previous invocation in this context that left its commit section
+            # before its embedding stage must not leak failures into this one.
+            _CARRIED_REFRESH_FAILURES.set(None)
             if config.require_workspace(root) is not None:
                 return fn(*args, **kwargs)
+
+            def announce_wait() -> None:
+                typer.echo(
+                    f"openkos {command_name}: the workspace is busy; "
+                    f"waiting up to {wait} s for it.",
+                    err=True,
+                )
+
+            holder: AbstractContextManager[object]
+            token: contextvars.Token[lock_wait.CommitSection | None] | None = None
+            if commit_phase:
+                token = _COMMIT_SECTION.set(
+                    lock_wait.locked_commit_section(
+                        root, wait_seconds=wait, on_wait=announce_wait
+                    )
+                )
+                holder = nullcontext()
+            else:
+                holder = lock_wait.acquire_with_backoff(
+                    root, wait_seconds=wait, on_wait=announce_wait
+                )
             try:
-                with lock.workspace_lock(root):
+                with holder:
                     return fn(*args, **kwargs)
             except lock.WorkspaceBusyError as exc:
                 typer.echo(
@@ -417,8 +531,13 @@ def _guard_workspace_lock(
                     err=True,
                 )
                 raise typer.Exit(code=3) from exc
+            finally:
+                if token is not None:
+                    _COMMIT_SECTION.reset(token)
 
+        _add_wait_option(wrapper, fn)
         wrapper.__openkos_locked_command__ = command_name  # type: ignore[attr-defined]
+        wrapper.__openkos_commit_phase__ = commit_phase  # type: ignore[attr-defined]
         return wrapper
 
     return decorate
@@ -1016,15 +1135,20 @@ def _sweep_findings_for_ids(
             revision_findings_store.delete_revision_findings_referencing(
                 conn, set(purge_ids)
             )
+            # #1141: the pending-work queue is the same file's FIFTH tenant;
+            # a row's payload can quote a purge-set member's text. It matches
+            # every field that names a concept (target, input ref including
+            # `sources-of:`), not one pair field -- same erasure discipline.
+            pending_queue_store.delete_items_referencing(conn, set(purge_ids))
         finally:
             conn.close()
     except (OSError, sqlite3.Error) as exc:
         typer.echo(
             "openkos forget: warning -- failed to sweep persisted findings/"
-            "adjudications/edge suggestions/revision findings "
+            "adjudications/edge suggestions/revision findings/pending-work queue "
             f"({exc}); '.openkos/findings.db' "
             "may still quote the forgotten concept(s). Delete the file to "
-            "clear the residue (all four stores are recomputable at LLM "
+            "clear the residue (all five stores are recomputable at LLM "
             "cost).",
             err=True,
         )
@@ -1118,6 +1242,34 @@ def _sweep_decisions_for_ids(bundle_dir: Path, purge_ids: Iterable[str]) -> list
     return touched
 
 
+def _refresh_derived_after_write_quietly(root: Path, verb: str) -> None:
+    """The `after_commit` port of a service-backed verb: the lexical half of the
+    #640 derived refresh, run inside the service's commit section, whose
+    freshness verdict the service has no use for. The caller finishes with
+    `_finish_refresh_after_commit` once the section is left. `cfg=None` -- these
+    verbs never read config; the helper reads its own copy inside the vector
+    stage's fail-open envelope."""
+    _refresh_derived_after_write(
+        config.WorkspaceLayout(root), None, verb=verb, stage="lexical"
+    )
+
+
+def _reject_read_drift(
+    layout: config.WorkspaceLayout,
+    dependencies: application_commit_phase.ReadDependencies,
+    verb: str,
+) -> None:
+    """Refuse the whole run (exit 3, nothing written) when a document the plan
+    only READ changed, vanished or newly appeared since it was computed
+    (ADR-0036). The decision lives in `application.commit_phase`; this wrapper
+    prints it and exits, exactly like `_reject_drifted_targets`."""
+    message = application_commit_phase.describe_read_drift(layout, dependencies, verb)
+    if message is None:
+        return
+    typer.echo(message, err=True)
+    raise typer.Exit(code=3)
+
+
 def _reject_drifted_targets(
     layout: config.WorkspaceLayout,
     expected: Mapping[Path, bytes],
@@ -1147,6 +1299,20 @@ def _reject_drifted_targets(
         return
     typer.echo(message, err=True)
     raise typer.Exit(code=3)
+
+
+def _recomposed_catalog[**P, T](
+    compose: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs
+) -> T:
+    """Run a commit-phase catalog re-composition (`application.catalog_delta`),
+    turning its refusal into exit 3 with nothing written -- the same exit a
+    drift refusal owes, because it is raised only when `index.md`/`log.md`
+    changed and the verb's entries cannot be re-applied to the new bytes."""
+    try:
+        return compose(*args, **kwargs)
+    except application_catalog_delta.CatalogRecomposeError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=3) from exc
 
 
 def _require_member_baseline(
@@ -2278,24 +2444,44 @@ def _run_adjudicate_apply(
         # after the accepted `y`, before the first write. The absorbed
         # file rides in `deletes=` because it is UNLINKED, not overwritten
         # (#329), mirroring `merge`'s own call site.
-        absorbed_path = layout.bundle_dir / f"{prepared.absorbed_canonical}.md"
-        _reject_drifted_targets(
-            layout,
-            application_lifecycle.merge_drift_targets(layout, prepared),
-            "adjudicate --apply",
-            deletes=frozenset({absorbed_path}),
-        )
-
-        try:
-            merge_service.commit_merge(root, layout, prepared, autocommit=_autocommit)
-        except (OSError, ValueError) as exc:
-            typer.echo(
-                "openkos adjudicate --apply: failed while merging "
-                f"{prepared.absorbed_canonical} into "
-                f"{prepared.survivor_canonical} -- {exc}.",
-                err=True,
+        # The commit phase (#1137): the prompt and the reconciliation call
+        # above held no workspace lock.
+        with _commit_section_for(root)():
+            absorbed_path = layout.bundle_dir / f"{prepared.absorbed_canonical}.md"
+            # `index.md`/`log.md` are re-composed over their current bytes,
+            # not guarded: every verb appends to them.
+            _reject_drifted_targets(
+                layout,
+                application_lifecycle.merge_drift_targets(
+                    layout, prepared, include_catalog=False
+                ),
+                "adjudicate --apply",
+                deletes=frozenset({absorbed_path}),
             )
-            raise typer.Exit(code=1) from exc
+            prepared = _recomposed_catalog(
+                application_lifecycle.recompose_merge_catalog,
+                layout,
+                prepared,
+                verb="adjudicate --apply",
+            )
+
+            # The documents the plan only READ (the scan behind the survivor's
+            # sensitivity and the reference rewrite) are re-validated too:
+            # the whole-verb lock no longer excludes their writers.
+            _reject_read_drift(layout, prepared.read_dependencies, "adjudicate --apply")
+
+            try:
+                merge_service.commit_merge(
+                    root, layout, prepared, autocommit=_autocommit
+                )
+            except (OSError, ValueError) as exc:
+                typer.echo(
+                    "openkos adjudicate --apply: failed while merging "
+                    f"{prepared.absorbed_canonical} into "
+                    f"{prepared.survivor_canonical} -- {exc}.",
+                    err=True,
+                )
+                raise typer.Exit(code=1) from exc
         applied += 1
 
     skipped_total = skipped_n_gt2 + skipped_already_merged + len(declined)
@@ -2609,42 +2795,58 @@ def _run_adjudicate_apply_same(
         # exists only to echo the same partial summary the mid-batch
         # failure paths echo, so a drift abort leaves the operator the
         # same recovery affordance.
-        absorbed_path = layout.bundle_dir / f"{prepared.absorbed_canonical}.md"
-        try:
-            _reject_drifted_targets(
-                layout,
-                application_lifecycle.merge_drift_targets(layout, prepared),
-                "adjudicate --apply-same",
-                deletes=frozenset({absorbed_path}),
-            )
-        except typer.Exit:
-            typer.echo(
-                "openkos adjudicate --apply-same: stopped after drift "
-                f"refusal -- applied {applied} of {total} previewed before "
-                "this refusal; the remaining pairs were not attempted. "
-                "Applied merges remain committed and reversible via "
-                "`unmerge`.",
-                err=True,
-            )
-            raise
+        # The commit phase (#1137): the reconciliation call above held no
+        # workspace lock.
+        with _commit_section_for(root)():
+            absorbed_path = layout.bundle_dir / f"{prepared.absorbed_canonical}.md"
+            try:
+                _reject_drifted_targets(
+                    layout,
+                    application_lifecycle.merge_drift_targets(
+                        layout, prepared, include_catalog=False
+                    ),
+                    "adjudicate --apply-same",
+                    deletes=frozenset({absorbed_path}),
+                )
+                _reject_read_drift(
+                    layout, prepared.read_dependencies, "adjudicate --apply-same"
+                )
+                prepared = _recomposed_catalog(
+                    application_lifecycle.recompose_merge_catalog,
+                    layout,
+                    prepared,
+                    verb="adjudicate --apply-same",
+                )
+            except typer.Exit:
+                typer.echo(
+                    "openkos adjudicate --apply-same: stopped after drift "
+                    f"refusal -- applied {applied} of {total} previewed before "
+                    "this refusal; the remaining pairs were not attempted. "
+                    "Applied merges remain committed and reversible via "
+                    "`unmerge`.",
+                    err=True,
+                )
+                raise
 
-        try:
-            merge_service.commit_merge(root, layout, prepared, autocommit=_autocommit)
-        except (OSError, ValueError) as exc:
-            typer.echo(
-                "openkos adjudicate --apply-same: failed while merging "
-                f"{prepared.absorbed_canonical} into "
-                f"{prepared.survivor_canonical} -- {exc}.",
-                err=True,
-            )
-            typer.echo(
-                "openkos adjudicate --apply-same: stopped after failure -- "
-                f"applied {applied} of {total} previewed before this "
-                "failure; the remaining pairs were not attempted. Applied "
-                "merges remain committed and reversible via `unmerge`.",
-                err=True,
-            )
-            raise typer.Exit(code=1) from exc
+            try:
+                merge_service.commit_merge(
+                    root, layout, prepared, autocommit=_autocommit
+                )
+            except (OSError, ValueError) as exc:
+                typer.echo(
+                    "openkos adjudicate --apply-same: failed while merging "
+                    f"{prepared.absorbed_canonical} into "
+                    f"{prepared.survivor_canonical} -- {exc}.",
+                    err=True,
+                )
+                typer.echo(
+                    "openkos adjudicate --apply-same: stopped after failure -- "
+                    f"applied {applied} of {total} previewed before this "
+                    "failure; the remaining pairs were not attempted. Applied "
+                    "merges remain committed and reversible via `unmerge`.",
+                    err=True,
+                )
+                raise typer.Exit(code=1) from exc
         applied += 1
 
     skipped_total = (
@@ -3577,6 +3779,7 @@ def _embed_after_ingest(
     embedding_backend: str = config.DEFAULT_BACKEND,
     warn_nonlocal_host: bool = True,
     local_exemption: bool = False,
+    commit_section: lock_wait.CommitSection | None = None,
 ) -> None:
     """Embed the concepts `ingest` just wrote, so candidate edges are
     available in the SAME run (#183).
@@ -3621,7 +3824,12 @@ def _embed_after_ingest(
     NOT re-derived here: it is resolved at the call site, from the very
     client passed in as `embedder`. Its `False` default is fail-closed, so a
     future caller that forgets it withholds a confidential document rather
-    than sending one."""
+    than sending one.
+
+    `commit_section` (#1137) is the section that takes the workspace lock:
+    the embedding calls run without it and only the vector-store write enters
+    it, with a content-hash re-check (`state.reindex.reindex`). `None` holds
+    nothing, for a caller already inside the lock."""
     # BEFORE the embed attempt, so the notice lands even when the embed
     # itself then degrades: the advisory is about where the data is headed,
     # not about whether it arrived (#199).
@@ -3638,6 +3846,7 @@ def _embed_after_ingest(
                 model_tag=model_tag,
                 embedding_backend=embedding_backend,
                 local_exemption=local_exemption,
+                commit_section=commit_section,
             )
     except Exception as exc:  # noqa: BLE001 -- a failed embedding refresh degrades to a notice, never aborts the ingest
         typer.echo(
@@ -3664,12 +3873,77 @@ def _embed_after_ingest(
     _warn_withheld_from_embedding("ingest", report.withheld_confidential, cfg)
 
 
+_RefreshStage = Literal["all", "lexical", "vectors"]
+"""Which part of `_refresh_derived_after_write` a call runs (its docstring)."""
+
+_CARRIED_REFRESH_FAILURES: contextvars.ContextVar[list[str] | None] = (
+    contextvars.ContextVar("openkos_carried_refresh_failures", default=None)
+)
+"""The lexical (FTS/graph) failures a verb's commit section collected, held for
+the one advisory its post-section vector refresh prints."""
+
+
+def _refresh_lexical_stores(layout: config.WorkspaceLayout) -> list[str]:
+    """Refresh FTS and the graph, returning one `store: reason` line per failure.
+
+    Pure SQLite projections of the bundle, no model call: the caller holds the
+    workspace lock (a commit section, or a whole-verb lock). Each store degrades
+    on its own, so a dead FTS5 module costs the graph nothing."""
+    failures: list[str] = []
+    try:
+        reindex_module._reindex_fts(layout.bundle_dir, layout.fts_db_path, force=False)
+    except Exception as exc:  # noqa: BLE001 -- a failed FTS refresh is collected into the degrade summary
+        failures.append(f"fts: {exc}")
+
+    try:
+        with_candidates = _open_proximity_or_degrade(layout.vectors_db_path)
+        try:
+            sqlite_graph.reindex_graph(
+                layout.bundle_dir,
+                layout.graph_db_path,
+                force=False,
+                candidates=with_candidates,
+            )
+        finally:
+            if with_candidates is not None:
+                with_candidates.close()
+    except Exception as exc:  # noqa: BLE001 -- a failed graph refresh is collected into the degrade summary
+        failures.append(f"graph: {exc}")
+    return failures
+
+
+def _finish_refresh_after_commit(
+    layout: config.WorkspaceLayout,
+    cfg: config.Config | None,
+    *,
+    verb: str,
+    warn_nonlocal_host: bool = True,
+) -> bool:
+    """The post-section half of a split verb's derived refresh: the vector
+    stage, outside the lock, once a commit section has run its lexical stage.
+
+    A run whose section never reached that stage (a refusal, a no-op) committed
+    nothing the stores must catch up with, so it embeds nothing and returns
+    False. Otherwise it returns `_refresh_derived_after_write`'s verdict."""
+    if _CARRIED_REFRESH_FAILURES.get() is None:
+        return False
+    return _refresh_derived_after_write(
+        layout,
+        cfg,
+        verb=verb,
+        warn_nonlocal_host=warn_nonlocal_host,
+        stage="vectors",
+    )
+
+
 def _refresh_derived_after_write(
     layout: config.WorkspaceLayout,
     cfg: config.Config | None,
     *,
     verb: str,
     warn_nonlocal_host: bool = True,
+    commit_section: lock_wait.CommitSection | None = None,
+    stage: _RefreshStage = "all",
 ) -> bool:
     """Refresh the three derived stores as part of the write that just
     invalidated them (issue #640), returning True iff every store is fresh.
@@ -3718,28 +3992,44 @@ def _refresh_derived_after_write(
     with the same TTY-gated progress idiom (#190) and NO `fts_db_path`
     (stage 1 already owns FTS). The stale-index warning tiers are
     deliberately untouched: they remain the safety net for this helper's
-    own degrade path."""
+    own degrade path.
+
+    PLACEMENT (#1137, #1143, ADR-0036), the same for every verb that does not
+    hold the workspace lock for its whole run, so no model call holds it:
+
+    - `stage="lexical"` (FTS and graph: pure SQLite, no model call, and
+      incremental) is the LAST statement of the verb's commit section, with the
+      lock already held. Its failures are carried, not printed.
+    - `stage="vectors"` runs after that section has been left: the embedding
+      calls hold no lock, and only the vector-store write re-takes it briefly,
+      with `reindex`'s content-hash re-check. It prints the one advisory that
+      folds in the carried lexical failures, and returns whether every store is
+      fresh.
+    - `stage="all"` (the default) is for a caller outside any section: the FTS
+      and graph refreshes enter the verb's commit section (`commit_section`, or
+      the one its guard published) as one brief hold, then the vector refresh
+      runs as above. A verb that holds the lock for its whole run (`curate`)
+      publishes no section, so every step runs under the one lock it holds."""
+    section: lock_wait.CommitSection | None = (
+        commit_section if commit_section is not None else _COMMIT_SECTION.get()
+    )
     failures: list[str] = []
-
-    try:
-        reindex_module._reindex_fts(layout.bundle_dir, layout.fts_db_path, force=False)
-    except Exception as exc:  # noqa: BLE001 -- a failed FTS refresh is collected into the degrade summary
-        failures.append(f"fts: {exc}")
-
-    try:
-        with_candidates = _open_proximity_or_degrade(layout.vectors_db_path)
+    if stage == "lexical":
+        carried = _CARRIED_REFRESH_FAILURES.get() or []
+        lexical = _refresh_lexical_stores(layout)
+        _CARRIED_REFRESH_FAILURES.set([*carried, *lexical])
+        return not lexical
+    if stage == "vectors":
+        failures.extend(_CARRIED_REFRESH_FAILURES.get() or [])
+        _CARRIED_REFRESH_FAILURES.set(None)
+    elif section is None:
+        failures.extend(_refresh_lexical_stores(layout))
+    else:
         try:
-            sqlite_graph.reindex_graph(
-                layout.bundle_dir,
-                layout.graph_db_path,
-                force=False,
-                candidates=with_candidates,
-            )
-        finally:
-            if with_candidates is not None:
-                with_candidates.close()
-    except Exception as exc:  # noqa: BLE001 -- a failed graph refresh is collected into the degrade summary
-        failures.append(f"graph: {exc}")
+            with section():
+                failures.extend(_refresh_lexical_stores(layout))
+        except Exception as exc:  # noqa: BLE001 -- a busy lock or any failure to enter the section degrades the refresh, never the write that already committed
+            failures.append(f"fts/graph: {exc}")
 
     try:
         if cfg is None:
@@ -3767,6 +4057,7 @@ def _refresh_derived_after_write(
                 embedding_backend=cfg.backend,
                 on_progress=observability.progress_callback(verb, "embedding doc"),
                 local_exemption=_resolve_local_exemption(embedder_locality, cfg),
+                commit_section=section,
             )
         _warn_withheld_from_embedding(verb, report.withheld_confidential, cfg)
         # An exception is not the only way embedding degrades: `reindex`
@@ -4332,6 +4623,7 @@ def _ingest_batch(
         verb="ingest",
         # The batch already emitted the advisory once, up front (#353 item 4).
         warn_nonlocal_host=False,
+        commit_section=_commit_section_for(root),
     )
 
     # ONE torn-classification aggregate for the WHOLE batch (#566), on
@@ -4412,7 +4704,7 @@ def _ingest_batch(
     ),
     rich_help_panel="Get started",
 )
-@_guard_workspace_lock("ingest")
+@_guard_workspace_lock("ingest", commit_phase=True)
 def ingest(
     src: Path = typer.Argument(
         ...,
@@ -4555,6 +4847,7 @@ def ingest(
             verb="ingest",
             # Already emitted by this run's own embed (#353 item 4).
             warn_nonlocal_host=False,
+            commit_section=_commit_section_for(Path.cwd()),
         )
         return
     matches, skipped_non_text = expansion
@@ -4708,6 +5001,8 @@ def _ingest_single(
     and catches the `typer.Exit` to skip that file; `ingest` ignores the
     outcome for a single file."""
 
+    section = _commit_section_for(Path.cwd())
+
     def _after_commit(layout: config.WorkspaceLayout, cfg: config.Config) -> None:
         embedder = _embed_client(cfg)
         _embed_after_ingest(
@@ -4723,6 +5018,7 @@ def _ingest_single(
             local_exemption=_resolve_local_exemption(
                 cast(BackendDiagnostics, embedder), cfg
             ),
+            commit_section=section,
         )
 
     ports = ingest_service.IngestPorts(
@@ -4731,6 +5027,7 @@ def _ingest_single(
         after_commit=_after_commit,
         snapshot_read=lambda path: _snapshot_read(path),
         clock=lambda: datetime.now(UTC),
+        commit_section=section,
     )
     policy = ingest_service.IngestPolicy(
         include_confidential=include_confidential,
@@ -4761,6 +5058,13 @@ def _ingest_single(
     except ingest_service.DriftDetected as exc:
         typer.echo(exc.message, err=True)
         raise typer.Exit(code=3) from exc
+    except lock.WorkspaceBusyError as exc:
+        # The commit phase could not take the lock within `--wait`. Nothing was
+        # written, so it is the same retry-safe refusal the guard has always
+        # given, raised HERE so a batch records this file as skipped and the
+        # next one gets its own chance at the lock.
+        typer.echo(f"openkos ingest: refusing to run -- {exc}.", err=True)
+        raise typer.Exit(code=3) from exc
     except ingest_service.IngestRefused as exc:
         typer.echo(exc.message, err=True)
         raise typer.Exit(code=1) from exc
@@ -4776,7 +5080,7 @@ _ForgetScope = Literal["self", "source"]
     ),
     rich_help_panel="Remove",
 )
-@_guard_workspace_lock("forget")
+@_guard_workspace_lock("forget", commit_phase=True)
 def forget(
     concept_id: str = typer.Argument(
         ..., help="Bundle-relative concept id (path minus '.md') to remove."
@@ -5067,156 +5371,193 @@ def forget(
             typer.echo(plan.confirmation.non_tty_refusal, err=True)
             raise typer.Exit(code=1)
 
-    # Issue #313: every byte below was computed from a pre-prompt read, so
-    # re-validate each target now -- after the gate, before the first write.
-    #
-    # The DELETE targets are in here too, not just the two `write_atomic`
-    # ones -- and this comment is the ONE copy of the why (#320: three
-    # copies of this rationale each over-claimed). `forget` picks its purge
-    # set from the Phase-A bundle snapshot and then unlinks those exact
-    # paths, so an edit landing during the prompt is destroyed outright --
-    # strictly worse than being overwritten, since nothing survives to
-    # recover from -- and a `provenance:` edit on a member is drift in that
-    # member's own claim to purge-set membership. Either alone justifies
-    # guarding the delete targets. It is also ALL the guard delivers: it
-    # re-reads only this mapping's paths, so an inbound reference gained
-    # during the prompt -- which lives in a REFERRER file, by construction
-    # outside the purge set, since the gate above drops intra-set referrers
-    # -- is not caught, and neither is a brand-new `.md` file created
-    # during the prompt: additive drift has no baseline here.
-    _reject_drifted_targets(
-        layout,
-        {
-            index_path: plan.index_bytes,
-            log_path: plan.log_bytes,
-            concept_path: plan.concept_bytes,
-            **{
-                # Defensive fail-closed lookup (see `_require_member_baseline`):
-                # today the key exists by construction, but a missing baseline
-                # must refuse cleanly, never `KeyError` mid-gate.
-                layout.bundle_dir / f"{member}.md": _require_member_baseline(
-                    "forget", plan.other_bytes, member
-                )
-                for member in plan.purge_ids
-                if member != canonical_id
+    with _commit_section_for(root)():
+        # Issue #313: every byte below was computed from a pre-prompt read, so
+        # re-validate each target now -- after the gate, before the first write.
+        #
+        # The DELETE targets are in here too, not just the two `write_atomic`
+        # ones -- and this comment is the ONE copy of the why (#320: three
+        # copies of this rationale each over-claimed). `forget` picks its purge
+        # set from the Phase-A bundle snapshot and then unlinks those exact
+        # paths, so an edit landing during the prompt is destroyed outright --
+        # strictly worse than being overwritten, since nothing survives to
+        # recover from -- and a `provenance:` edit on a member is drift in that
+        # member's own claim to purge-set membership. Either alone justifies
+        # guarding the delete targets. It is also ALL this guard delivers: it
+        # re-reads only this mapping's paths, so an inbound reference gained
+        # during the prompt -- which lives in a REFERRER file, by construction
+        # outside the purge set, since the gate above drops intra-set referrers
+        # -- is not caught here, and neither is a brand-new `.md` file created
+        # during the prompt: additive drift has no baseline in this mapping.
+        # Both are caught by the read-dependency check below (ADR-0036).
+        _reject_drifted_targets(
+            layout,
+            {
+                # `index.md`/`log.md` are re-composed below, not guarded.
+                concept_path: plan.concept_bytes,
+                **{
+                    # Defensive fail-closed lookup (see `_require_member_baseline`):
+                    # today the key exists by construction, but a missing baseline
+                    # must refuse cleanly, never `KeyError` mid-gate.
+                    layout.bundle_dir / f"{member}.md": _require_member_baseline(
+                        "forget", plan.other_bytes, member
+                    )
+                    for member in plan.purge_ids
+                    if member != canonical_id
+                },
+                # deprecated-status-export (issue #1075): every resurrection
+                # target this run will REWRITE is also a write target, so its
+                # pre-prompt baseline joins the guard exactly like a purge-set
+                # member's does.
+                **{
+                    layout.bundle_dir
+                    / f"{withdrawal.target}.md": _require_member_baseline(
+                        "forget", plan.other_bytes, withdrawal.target
+                    )
+                    for withdrawal in plan.status_withdrawals
+                },
             },
-            # deprecated-status-export (issue #1075): every resurrection
-            # target this run will REWRITE is also a write target, so its
-            # pre-prompt baseline joins the guard exactly like a purge-set
-            # member's does.
-            **{
-                layout.bundle_dir / f"{withdrawal.target}.md": _require_member_baseline(
-                    "forget", plan.other_bytes, withdrawal.target
-                )
-                for withdrawal in plan.status_withdrawals
-            },
-        },
-        "forget",
-        # #319: the purge-set members are UNLINKED below, not written --
-        # `deletes` is what makes the refusal say so. Built the same way the
-        # unlink loop builds its paths (`bundle_dir / f"{member}.md"`, with
-        # `concept_path` standing in for the canonical root), so the labels
-        # track Phase B by construction.
-        deletes=frozenset(
-            {concept_path}
-            | {
-                layout.bundle_dir / f"{member}.md"
-                for member in plan.purge_ids
-                if member != canonical_id
-            }
-        ),
-    )
-
-    ledger_touched: list[Path] = []
-    decisions_touched: list[Path] = []
-    try:
-        application_lifecycle.forget_core(layout, plan)
-        # Merge-ledger sidecar privacy sweep (forget-command spec:
-        # "Deletion Sweep Includes Ledger Storage"), same Phase B write:
-        # a purge-set member's content must not survive `forget` merely
-        # because it was previously absorbed into (or is the survivor of)
-        # a merge. Stays adapter-side (shared with `purge`'s own Phase B),
-        # so it runs immediately after `forget_core`'s write, inside the
-        # SAME try/except.
-        ledger_touched = _sweep_ledger_sidecars_for_ids(
-            layout.bundle_dir, plan.purge_ids
-        )
-        # Pending-work decision sweep (forget-command spec: "Forget Sweeps
-        # Live Decision Entries Referencing The Purge Set"), same Phase B
-        # write: a purge-set member's contradiction decision must not
-        # survive `forget` merely because the record lives under a
-        # different (live) concept's sidecar. `forget` performs no history
-        # rewrite, so this call IS the entire sweep for it (unlike
-        # `purge`, which also puts these paths into `expunge_targets`).
-        decisions_touched = _sweep_decisions_for_ids(layout.bundle_dir, plan.purge_ids)
-        # Persisted-findings privacy sweep (#685 item 1), same Phase B:
-        # a derived cache only (never autocommitted), and it degrades to a
-        # loud warning internally rather than raising into this block --
-        # the bundle deletes above must not be reported as failed over a
-        # recomputable cache.
-        _sweep_findings_for_ids(layout, plan.purge_ids)
-    except (OSError, ValueError) as exc:
-        message = f"openkos forget: failed while writing the forget -- {exc}."
-        # K-of-N observability on a mid-cascade unlink failure (`--scope
-        # source`): only enrich when there is more than one purge-set
-        # member to report on, so the `self`/single-member message stays
-        # byte-identical. `forget_core` carries the exact count out on
-        # `PartialForgetWrite`; anything else reaching this arm came from
-        # the three sweeps BELOW `forget_core`, by which point every unlink
-        # had already succeeded -- hence the full-count default. Do not
-        # re-derive this by probing the filesystem here: `Path.exists()`
-        # re-raises `EACCES` (see `_purge_store_is_gone`), and a probe
-        # inside this handler would replace the operator's diagnosis with a
-        # traceback in exactly the permission failure that opened it.
-        if len(plan.purge_ids) > 1:
-            unlinked_count = getattr(exc, "unlinked_count", len(plan.purge_ids))
-            remaining = len(plan.purge_ids) - unlinked_count
-            message += (
-                f" removed {unlinked_count} of {len(plan.purge_ids)} concept(s) "
-                f"before failing; {remaining} remain (recover with git or "
-                "'openkos lint')."
-            )
-        typer.echo(message, err=True)
-        raise typer.Exit(code=1) from exc
-
-    if scope == "source":
-        deleted_paths = ", ".join(f"bundle/{member}.md" for member in plan.purge_ids)
-        typer.echo(
-            f"openkos forget: removed {len(plan.purge_ids)} concept(s) "
-            f"({deleted_paths}) ({index_path.name}, {log_path.name} updated)."
-        )
-    else:
-        typer.echo(
-            f"openkos forget: removed 'bundle/{canonical_id}.md' "
-            f"({index_path.name}, {log_path.name} updated)."
-        )
-
-    forget_message = f"openkos: forget {canonical_id}"
-    if len(plan.purge_ids) > 1:
-        forget_message += f" (+{len(plan.purge_ids) - 1} descendants)"
-    forget_sha = _autocommit(
-        root,
-        [
-            "bundle/index.md",
-            "bundle/log.md",
-            *(f"bundle/{member}.md" for member in plan.purge_ids),
-            *(
-                f"bundle/{p.relative_to(layout.bundle_dir).as_posix()}"
-                for p in (*ledger_touched, *decisions_touched)
+            "forget",
+            # #319: the purge-set members are UNLINKED below, not written --
+            # `deletes` is what makes the refusal say so. Built the same way the
+            # unlink loop builds its paths (`bundle_dir / f"{member}.md"`, with
+            # `concept_path` standing in for the canonical root), so the labels
+            # track Phase B by construction.
+            deletes=frozenset(
+                {concept_path}
+                | {
+                    layout.bundle_dir / f"{member}.md"
+                    for member in plan.purge_ids
+                    if member != canonical_id
+                }
             ),
-        ],
-        forget_message,
-    )
-    # #800: after the removal line above, never instead of it -- `forget`
-    # echoes what it removed before `_autocommit` runs, so this reads as the
-    # postscript it is. Silent when `_autocommit` degraded: a workspace with
-    # no git identity must not be sent after a commit that was never made.
-    if forget_sha is not None:
-        _echo_commit_disclosure(forget_sha, prefix="openkos forget: ")
+        )
 
-    # #640: also prunes the forgotten concept(s) from `vectors.db` via the
-    # vector stage's prune pass, not only the manifest-gated stores.
-    _refresh_derived_after_write(layout, cfg, verb="forget")
+        # ADR-0036: the reference scan above read EVERY other bundle document, and
+        # the whole-verb lock no longer keeps another writer from changing one. A
+        # referrer that lands during the prompt lives outside the drift targets
+        # (the gate drops intra-set referrers), so it is declared a read
+        # dependency here, and a document that appeared since the snapshot -- which
+        # has no baseline -- is refused too.
+        _written_ids = set(plan.purge_ids) | {
+            withdrawal.target for withdrawal in plan.status_withdrawals
+        }
+        _reject_read_drift(
+            layout,
+            application_commit_phase.ReadDependencies(
+                present={
+                    layout.bundle_dir / rel: data
+                    for rel, data in plan.other_bytes.items()
+                    if rel.removesuffix(".md") not in _written_ids
+                },
+                documents=frozenset(
+                    {concept_path}
+                    | {layout.bundle_dir / rel for rel in plan.other_bytes}
+                ),
+            ),
+            "forget",
+        )
+
+        plan = _recomposed_catalog(
+            application_lifecycle.recompose_forget_catalog, layout, plan
+        )
+
+        ledger_touched: list[Path] = []
+        decisions_touched: list[Path] = []
+        try:
+            application_lifecycle.forget_core(layout, plan)
+            # Merge-ledger sidecar privacy sweep (forget-command spec:
+            # "Deletion Sweep Includes Ledger Storage"), same Phase B write:
+            # a purge-set member's content must not survive `forget` merely
+            # because it was previously absorbed into (or is the survivor of)
+            # a merge. Stays adapter-side (shared with `purge`'s own Phase B),
+            # so it runs immediately after `forget_core`'s write, inside the
+            # SAME try/except.
+            ledger_touched = _sweep_ledger_sidecars_for_ids(
+                layout.bundle_dir, plan.purge_ids
+            )
+            # Pending-work decision sweep (forget-command spec: "Forget Sweeps
+            # Live Decision Entries Referencing The Purge Set"), same Phase B
+            # write: a purge-set member's contradiction decision must not
+            # survive `forget` merely because the record lives under a
+            # different (live) concept's sidecar. `forget` performs no history
+            # rewrite, so this call IS the entire sweep for it (unlike
+            # `purge`, which also puts these paths into `expunge_targets`).
+            decisions_touched = _sweep_decisions_for_ids(
+                layout.bundle_dir, plan.purge_ids
+            )
+            # Persisted-findings privacy sweep (#685 item 1), same Phase B:
+            # a derived cache only (never autocommitted), and it degrades to a
+            # loud warning internally rather than raising into this block --
+            # the bundle deletes above must not be reported as failed over a
+            # recomputable cache.
+            _sweep_findings_for_ids(layout, plan.purge_ids)
+        except (OSError, ValueError) as exc:
+            message = f"openkos forget: failed while writing the forget -- {exc}."
+            # K-of-N observability on a mid-cascade unlink failure (`--scope
+            # source`): only enrich when there is more than one purge-set
+            # member to report on, so the `self`/single-member message stays
+            # byte-identical. `forget_core` carries the exact count out on
+            # `PartialForgetWrite`; anything else reaching this arm came from
+            # the three sweeps BELOW `forget_core`, by which point every unlink
+            # had already succeeded -- hence the full-count default. Do not
+            # re-derive this by probing the filesystem here: `Path.exists()`
+            # re-raises `EACCES` (see `_purge_store_is_gone`), and a probe
+            # inside this handler would replace the operator's diagnosis with a
+            # traceback in exactly the permission failure that opened it.
+            if len(plan.purge_ids) > 1:
+                unlinked_count = getattr(exc, "unlinked_count", len(plan.purge_ids))
+                remaining = len(plan.purge_ids) - unlinked_count
+                message += (
+                    f" removed {unlinked_count} of {len(plan.purge_ids)} concept(s) "
+                    f"before failing; {remaining} remain (recover with git or "
+                    "'openkos lint')."
+                )
+            typer.echo(message, err=True)
+            raise typer.Exit(code=1) from exc
+
+        if scope == "source":
+            deleted_paths = ", ".join(
+                f"bundle/{member}.md" for member in plan.purge_ids
+            )
+            typer.echo(
+                f"openkos forget: removed {len(plan.purge_ids)} concept(s) "
+                f"({deleted_paths}) ({index_path.name}, {log_path.name} updated)."
+            )
+        else:
+            typer.echo(
+                f"openkos forget: removed 'bundle/{canonical_id}.md' "
+                f"({index_path.name}, {log_path.name} updated)."
+            )
+
+        forget_message = f"openkos: forget {canonical_id}"
+        if len(plan.purge_ids) > 1:
+            forget_message += f" (+{len(plan.purge_ids) - 1} descendants)"
+        forget_sha = _autocommit(
+            root,
+            [
+                "bundle/index.md",
+                "bundle/log.md",
+                *(f"bundle/{member}.md" for member in plan.purge_ids),
+                *(
+                    f"bundle/{p.relative_to(layout.bundle_dir).as_posix()}"
+                    for p in (*ledger_touched, *decisions_touched)
+                ),
+            ],
+            forget_message,
+        )
+        # #800: after the removal line above, never instead of it -- `forget`
+        # echoes what it removed before `_autocommit` runs, so this reads as the
+        # postscript it is. Silent when `_autocommit` degraded: a workspace with
+        # no git identity must not be sent after a commit that was never made.
+        if forget_sha is not None:
+            _echo_commit_disclosure(forget_sha, prefix="openkos forget: ")
+
+        # #640: also prunes the forgotten concept(s) from `vectors.db` via the
+        # vector stage's prune pass, not only the manifest-gated stores.
+        _refresh_derived_after_write(layout, cfg, verb="forget", stage="lexical")
+    # Outside the section: the embedding calls hold no lock (ADR-0036).
+    _finish_refresh_after_commit(layout, cfg, verb="forget")
 
 
 _PurgeScope = Literal["self", "source"]
@@ -5349,6 +5690,12 @@ def _purge_dropped_stores(
             "scan. Free to restore and nothing to run: a miss re-embeds on "
             "the next save.",
         ),
+        (
+            layout.jobs_db_path,
+            "the unattended engine's job history and daily spend ledger. "
+            "Nothing to run: the next unattended run starts a fresh record, "
+            "and its budget counts spend from zero.",
+        ),
     )
 
 
@@ -5411,6 +5758,44 @@ class _PurgeIndexOutcome:
     (#923). Non-empty means the erasure is incomplete."""
 
 
+def _purge_delete_daemon_logs(layout: config.WorkspaceLayout) -> list[Path]:
+    """Delete the workspace's daemon log files -- the live one and its rotated
+    siblings (`<digest>.log`, `<digest>.log.1`, ...) -- from the per-user log
+    directory (privacy-purge spec: "Purge Removes The Workspace's Unattended
+    Records And Logs"). Returns the files that could NOT be deleted so the
+    caller reports them with the stores: a log is not a store, but an
+    undeleted one is the same incomplete erasure and the same manual remedy.
+
+    Never raises: a missing log directory is nothing to delete, and one
+    undeletable file does not abandon the rest."""
+    live = logsetup.log_path_for(layout.root)
+    try:
+        candidates = sorted(
+            p
+            for p in live.parent.iterdir()
+            if p.name == live.name or p.name.startswith(live.name + ".")
+        )
+    except FileNotFoundError:
+        return []
+    except OSError as exc:
+        typer.echo(
+            f"openkos purge: warning -- cannot list '{live.parent}': {exc}.",
+            err=True,
+        )
+        return [live]
+    undeleted: list[Path] = []
+    for path in candidates:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as exc:
+            undeleted.append(path)
+            typer.echo(
+                f"openkos purge: warning -- failed to delete '{path}': {exc}.",
+                err=True,
+            )
+    return undeleted
+
+
 def _purge_rebuild_indexes(
     layout: config.WorkspaceLayout,
 ) -> _PurgeIndexOutcome:
@@ -5470,6 +5855,7 @@ def _purge_rebuild_indexes(
     for db_path in dropped:
         if _purge_store_is_gone(db_path):
             _purge_sweep_store_sidecars(db_path)
+    undeleted.extend(_purge_delete_daemon_logs(layout))
 
     try:
         reindex_module._reindex_fts(layout.bundle_dir, layout.fts_db_path, force=True)
@@ -6048,7 +6434,7 @@ def purge(
     ),
     rich_help_panel="Curate",
 )
-@_guard_workspace_lock("relate")
+@_guard_workspace_lock("relate", commit_phase=True)
 def relate(
     source_id: str = typer.Argument(
         ...,
@@ -6152,6 +6538,13 @@ def relate(
                 f"resolved to {source_canonical!r}"
             )
         rel_type = validate_relation_type(rel)
+        # ADR-0036: the resolve above proved the target EXISTS, which is all a
+        # plain relation depends on (a `supersedes` edge also reads it as a
+        # write target). Its bytes are the baseline the commit phase
+        # re-validates, so a target forgotten during the prompt is refused
+        # rather than left as a dangling relation. Read BEFORE the plan, so a
+        # change landing in between compares unequal (fail closed).
+        target_baseline, _ = fsio.snapshot_read(target_path)
     except (OSError, ValueError) as exc:
         typer.echo(f"openkos relate: refusing to relate -- {exc}.", err=True)
         raise typer.Exit(code=1) from exc
@@ -6212,42 +6605,54 @@ def relate(
 
     # Issue #313: every byte below was computed from a pre-prompt read, so
     # re-validate each target now -- after the gate, before the first write.
-    drift_baselines = {
-        source_path: prepared.source_bytes,
-        log_path: prepared.log_bytes,
-    }
-    if prepared.target_bytes is not None:
-        drift_baselines[target_path] = prepared.target_bytes
-    _reject_drifted_targets(layout, drift_baselines, "relate")
+    with _commit_section_for(root)():
+        # `log.md` is re-composed below, not guarded.
+        drift_baselines = {source_path: prepared.source_bytes}
+        if prepared.target_bytes is not None:
+            drift_baselines[target_path] = prepared.target_bytes
+        _reject_drifted_targets(layout, drift_baselines, "relate")
+        if prepared.target_bytes is None:
+            _reject_read_drift(
+                layout,
+                application_commit_phase.ReadDependencies(
+                    present={target_path: target_baseline}
+                ),
+                "relate",
+            )
 
-    try:
-        application_lifecycle.relate_core(
-            source_path, log_path, prepared, target_path=target_path
+        prepared = _recomposed_catalog(
+            application_lifecycle.recompose_relate_log, log_path, prepared
         )
-    except (OSError, ValueError) as exc:
+
+        try:
+            application_lifecycle.relate_core(
+                source_path, log_path, prepared, target_path=target_path
+            )
+        except (OSError, ValueError) as exc:
+            typer.echo(
+                f"openkos relate: failed while writing the relate -- {exc}.", err=True
+            )
+            raise typer.Exit(code=1) from exc
+
         typer.echo(
-            f"openkos relate: failed while writing the relate -- {exc}.", err=True
+            f"openkos relate: added a {prepared.rel_type!r} relation from "
+            f"'bundle/{prepared.source_canonical}.md' to "
+            f"'bundle/{prepared.target_canonical}.md' ({log_path.name} updated)."
         )
-        raise typer.Exit(code=1) from exc
 
-    typer.echo(
-        f"openkos relate: added a {prepared.rel_type!r} relation from "
-        f"'bundle/{prepared.source_canonical}.md' to "
-        f"'bundle/{prepared.target_canonical}.md' ({log_path.name} updated)."
-    )
+        commit_paths = [f"bundle/{prepared.source_canonical}.md", "bundle/log.md"]
+        if prepared.new_target_text is not None:
+            commit_paths.insert(1, f"bundle/{prepared.target_canonical}.md")
+        _autocommit(
+            root,
+            commit_paths,
+            f"openkos: relate {prepared.source_canonical} -> "
+            f"{prepared.target_canonical} ({prepared.rel_type})",
+        )
 
-    commit_paths = [f"bundle/{prepared.source_canonical}.md", "bundle/log.md"]
-    if prepared.new_target_text is not None:
-        commit_paths.insert(1, f"bundle/{prepared.target_canonical}.md")
-    _autocommit(
-        root,
-        commit_paths,
-        f"openkos: relate {prepared.source_canonical} -> "
-        f"{prepared.target_canonical} ({prepared.rel_type})",
-    )
-
-    # #640: `cfg=None` -- `relate` never reads config at this layer.
-    _refresh_derived_after_write(layout, None, verb="relate")
+        # #640: `cfg=None` -- `relate` never reads config at this layer.
+        _refresh_derived_after_write(layout, None, verb="relate", stage="lexical")
+    _finish_refresh_after_commit(layout, None, verb="relate")
 
 
 @app.command(
@@ -6260,7 +6665,7 @@ def relate(
     ),
     rich_help_panel="Curate",
 )
-@_guard_workspace_lock("set-sensitivity")
+@_guard_workspace_lock("set-sensitivity", commit_phase=True)
 def set_sensitivity_cmd(
     concept_id: str = typer.Argument(
         ...,
@@ -6515,9 +6920,13 @@ def set_sensitivity_cmd(
             f"**Set-sensitivity**: Set [{canonical_id}](/{canonical_id}.md) "
             f"sensitivity to {level!r} (was {current!r})."
         )
-        new_log_text = bundle_log.insert_log_entry(
-            log_text, now.astimezone().date(), log_line
-        )
+
+        def set_sensitivity_log(current_log: str) -> str:
+            return bundle_log.insert_log_entry(
+                current_log, now.astimezone().date(), log_line
+            )
+
+        new_log_text = set_sensitivity_log(log_text)
     except (OSError, ValueError) as exc:
         typer.echo(
             f"openkos set-sensitivity: failed while preparing the "
@@ -6562,124 +6971,164 @@ def set_sensitivity_cmd(
 
     # Issue #306: every byte below was computed from a pre-prompt read, so
     # re-validate each target now -- after the gate, before the first write.
-    _reject_drifted_targets(
-        layout,
-        {
-            **{
-                layout.bundle_dir / f"{descendant_raise.concept_id}.md": bundle_bytes[
-                    f"{descendant_raise.concept_id}.md"
-                ]
-                for descendant_raise in descendant_raises
-            },
-            concept_path: concept_bytes,
-            log_path: log_bytes,
+    # ADR-0036: the descendant closure was resolved from a whole-bundle
+    # snapshot. A document that changed since (a bystander that began citing
+    # this Source) or newly appeared (a derived concept with no baseline) would
+    # escape the raise and sit BELOW the Source's new level, so the snapshot is
+    # the read-dependency set. Empty when no scan ran (a lowering, or a
+    # non-Source target).
+    _raised_ids = {
+        descendant_raise.concept_id for descendant_raise in descendant_raises
+    }
+    sensitivity_dependencies = application_commit_phase.ReadDependencies(
+        present={
+            layout.bundle_dir / rel: data
+            for rel, data in bundle_bytes.items()
+            if rel.removesuffix(".md") not in _raised_ids
         },
-        "set-sensitivity",
+        documents=(
+            frozenset(
+                {concept_path} | {layout.bundle_dir / rel for rel in bundle_bytes}
+            )
+            if metadata.get("type") == "Source" and direction == "raise"
+            else None
+        ),
     )
 
-    landed: list[str] = []
-    try:
-        # Write order: descendants BEFORE the target concept BEFORE
-        # `log.md` (design: "Descendants are written BEFORE the target
-        # concept"). A mid-way failure then leaves the bundle
-        # over-classified, never under-classified -- there is no
-        # cross-file rollback, matching `relate`/`merge`. `landed` records
-        # each path only AFTER its `write_atomic` call returns, so a
-        # failure names exactly the paths already on disk (design D9,
-        # issue #233).
-        for descendant_raise in descendant_raises:
-            descendant_path = f"bundle/{descendant_raise.concept_id}.md"
-            fsio.write_atomic(
-                layout.bundle_dir / f"{descendant_raise.concept_id}.md",
-                descendant_raise.content,
-            )
-            landed.append(descendant_path)
-        fsio.write_atomic(concept_path, new_concept_text)
-        landed.append(f"bundle/{canonical_id}.md")
-        fsio.write_atomic(log_path, new_log_text)
-        landed.append("bundle/log.md")
-    except (OSError, ValueError) as exc:
-        # Distinct from the two phases above on purpose: this one is
-        # reached only after the write phase began, so the concept file may
-        # already be on disk while `log.md` is not. "refusing" would tell an
-        # operator nothing happened, which is exactly wrong here.
-        landed_suffix = (
-            f"Already written (left over-classified, not rolled back): "
-            f"{', '.join(landed)}."
-            if landed
-            else "No path was written."
+    with _commit_section_for(root)():
+        _reject_drifted_targets(
+            layout,
+            {
+                **{
+                    layout.bundle_dir
+                    / f"{descendant_raise.concept_id}.md": bundle_bytes[
+                        f"{descendant_raise.concept_id}.md"
+                    ]
+                    for descendant_raise in descendant_raises
+                },
+                concept_path: concept_bytes,
+            },
+            "set-sensitivity",
         )
-        typer.echo(
-            f"openkos set-sensitivity: failed while writing the "
-            f"set-sensitivity -- {exc}. {landed_suffix}",
-            err=True,
+        _reject_read_drift(layout, sensitivity_dependencies, "set-sensitivity")
+        # `log.md` is re-composed over its current bytes, not guarded.
+        new_log_text = _recomposed_catalog(
+            application_catalog_delta.recompose_file,
+            verb="set-sensitivity",
+            path=log_path,
+            baseline=log_bytes,
+            planned=new_log_text,
+            delta=set_sensitivity_log,
         )
-        raise typer.Exit(code=1) from exc
 
-    if descendant_raises:
-        propagated = ", ".join(
-            f"'bundle/{descendant_raise.concept_id}.md' -> {descendant_raise.new_level}"
-            for descendant_raise in descendant_raises
-        )
-        typer.echo(
-            f"openkos set-sensitivity: set 'bundle/{canonical_id}.md' "
-            f"sensitivity to {level} ({log_path.name} updated). Also raised "
-            f"{len(descendant_raises)} provenance descendant(s): "
-            f"{propagated}."
-        )
-    else:
-        typer.echo(
-            f"openkos set-sensitivity: set 'bundle/{canonical_id}.md' "
-            f"sensitivity to {level} ({log_path.name} updated). Only this "
-            "concept was changed; no sibling or derived object was touched."
-        )
-        # #571: raising a DERIVED object protects one file while extraction
-        # replicated its content into siblings -- the ADR-0009 containment
-        # lever is the Source, whose raise-only propagation covers every
-        # descendant. Name that lever, or the success message implies a
-        # protection the user did not get. Raise-only: on a lowering the
-        # note would read as advice to lower the Source too.
-        raw_provenance = metadata.get("provenance")
-        provenance_sources = [
-            entry
-            for entry in (raw_provenance if isinstance(raw_provenance, list) else [])
-            if isinstance(entry, str) and entry.startswith("sources/")
-        ]
-        if (
-            direction == "raise"
-            and metadata.get("type") != "Source"
-            and provenance_sources
-        ):
-            named = ", ".join(provenance_sources)
-            if len(provenance_sources) == 1:
-                lever = (
-                    "raise the Source: openkos set-sensitivity "
-                    f"{provenance_sources[0]} {level}"
+        landed: list[str] = []
+        try:
+            # Write order: descendants BEFORE the target concept BEFORE
+            # `log.md` (design: "Descendants are written BEFORE the target
+            # concept"). A mid-way failure then leaves the bundle
+            # over-classified, never under-classified -- there is no
+            # cross-file rollback, matching `relate`/`merge`. `landed` records
+            # each path only AFTER its `write_atomic` call returns, so a
+            # failure names exactly the paths already on disk (design D9,
+            # issue #233).
+            for descendant_raise in descendant_raises:
+                descendant_path = f"bundle/{descendant_raise.concept_id}.md"
+                fsio.write_atomic(
+                    layout.bundle_dir / f"{descendant_raise.concept_id}.md",
+                    descendant_raise.content,
                 )
-            else:
-                lever = f"raise each Source: {named}"
-            typer.echo(
-                f"openkos set-sensitivity: note -- '{canonical_id}' was "
-                f"derived from {named}; raising it does not contain content "
-                "its source(s) replicated into sibling objects. To contain "
-                f"everything derived from them, {lever}. For every Source "
-                "that reaches this object, including through intermediate "
-                f"objects: openkos list --sources {canonical_id}."
+                landed.append(descendant_path)
+            fsio.write_atomic(concept_path, new_concept_text)
+            landed.append(f"bundle/{canonical_id}.md")
+            fsio.write_atomic(log_path, new_log_text)
+            landed.append("bundle/log.md")
+        except (OSError, ValueError) as exc:
+            # Distinct from the two phases above on purpose: this one is
+            # reached only after the write phase began, so the concept file may
+            # already be on disk while `log.md` is not. "refusing" would tell an
+            # operator nothing happened, which is exactly wrong here.
+            landed_suffix = (
+                f"Already written (left over-classified, not rolled back): "
+                f"{', '.join(landed)}."
+                if landed
+                else "No path was written."
             )
+            typer.echo(
+                f"openkos set-sensitivity: failed while writing the "
+                f"set-sensitivity -- {exc}. {landed_suffix}",
+                err=True,
+            )
+            raise typer.Exit(code=1) from exc
 
-    _autocommit(
-        root,
-        [
-            f"bundle/{descendant_raise.concept_id}.md"
-            for descendant_raise in descendant_raises
-        ]
-        + [f"bundle/{canonical_id}.md", "bundle/log.md"],
-        f"openkos: set-sensitivity {canonical_id} -> {level}",
-    )
+        if descendant_raises:
+            propagated = ", ".join(
+                f"'bundle/{descendant_raise.concept_id}.md' -> {descendant_raise.new_level}"
+                for descendant_raise in descendant_raises
+            )
+            typer.echo(
+                f"openkos set-sensitivity: set 'bundle/{canonical_id}.md' "
+                f"sensitivity to {level} ({log_path.name} updated). Also raised "
+                f"{len(descendant_raises)} provenance descendant(s): "
+                f"{propagated}."
+            )
+        else:
+            typer.echo(
+                f"openkos set-sensitivity: set 'bundle/{canonical_id}.md' "
+                f"sensitivity to {level} ({log_path.name} updated). Only this "
+                "concept was changed; no sibling or derived object was touched."
+            )
+            # #571: raising a DERIVED object protects one file while extraction
+            # replicated its content into siblings -- the ADR-0009 containment
+            # lever is the Source, whose raise-only propagation covers every
+            # descendant. Name that lever, or the success message implies a
+            # protection the user did not get. Raise-only: on a lowering the
+            # note would read as advice to lower the Source too.
+            raw_provenance = metadata.get("provenance")
+            provenance_sources = [
+                entry
+                for entry in (
+                    raw_provenance if isinstance(raw_provenance, list) else []
+                )
+                if isinstance(entry, str) and entry.startswith("sources/")
+            ]
+            if (
+                direction == "raise"
+                and metadata.get("type") != "Source"
+                and provenance_sources
+            ):
+                named = ", ".join(provenance_sources)
+                if len(provenance_sources) == 1:
+                    lever = (
+                        "raise the Source: openkos set-sensitivity "
+                        f"{provenance_sources[0]} {level}"
+                    )
+                else:
+                    lever = f"raise each Source: {named}"
+                typer.echo(
+                    f"openkos set-sensitivity: note -- '{canonical_id}' was "
+                    f"derived from {named}; raising it does not contain content "
+                    "its source(s) replicated into sibling objects. To contain "
+                    f"everything derived from them, {lever}. For every Source "
+                    "that reaches this object, including through intermediate "
+                    f"objects: openkos list --sources {canonical_id}."
+                )
 
-    # #640: a frontmatter-only write is a vector cache-hit (#554 excludes
-    # frontmatter from embeddings), so this costs FTS+graph rebuilds only.
-    _refresh_derived_after_write(layout, cfg, verb="set-sensitivity")
+        _autocommit(
+            root,
+            [
+                f"bundle/{descendant_raise.concept_id}.md"
+                for descendant_raise in descendant_raises
+            ]
+            + [f"bundle/{canonical_id}.md", "bundle/log.md"],
+            f"openkos: set-sensitivity {canonical_id} -> {level}",
+        )
+
+        # #640: a frontmatter-only write is a vector cache-hit (#554 excludes
+        # frontmatter from embeddings), so this costs FTS+graph rebuilds only.
+        _refresh_derived_after_write(
+            layout, cfg, verb="set-sensitivity", stage="lexical"
+        )
+    _finish_refresh_after_commit(layout, cfg, verb="set-sensitivity")
 
 
 @app.command(
@@ -6913,7 +7362,7 @@ def backfill_sensitivity_cmd(
     ),
     rich_help_panel="Maintain",
 )
-@_guard_workspace_lock("sync-tags")
+@_guard_workspace_lock("sync-tags", commit_phase=True)
 def sync_tags_cmd(
     source_id: str | None = typer.Argument(
         None,
@@ -7054,34 +7503,47 @@ def sync_tags_cmd(
             typer.echo(prepared.confirmation.non_tty_refusal, err=True)
             raise typer.Exit(code=1)
 
-    # Issue #306: every byte below was computed from a pre-prompt read, so
-    # re-validate each target now -- after the gate, before the first write.
-    _reject_drifted_targets(
-        layout,
-        {root / rel: content for rel, content in prepared.baselines.items()},
-        "sync-tags",
-    )
-
-    try:
-        landed = application_lifecycle.sync_tags_core(layout, prepared)
-    except (OSError, ValueError) as exc:
-        typer.echo(
-            f"openkos sync-tags: failed while writing the sync-tags -- {exc}.",
-            err=True,
+    # The commit phase (#1137): everything above ran without the workspace lock.
+    with _commit_section_for(root)():
+        # Issue #306: every byte below was computed from a pre-prompt read, so
+        # re-validate each target now -- after the gate, before the first
+        # write. The read dependencies ride along: a member that stopped being
+        # grounded in its Source while the prompt waited must not be tagged.
+        _reject_drifted_targets(
+            layout,
+            {
+                root / rel: content
+                for rel, content in (
+                    *prepared.read_dependencies.items(),
+                    *prepared.baselines.items(),
+                )
+            },
+            "sync-tags",
         )
-        raise typer.Exit(code=1) from exc
+        prepared = _recomposed_catalog(
+            application_lifecycle.recompose_sync_tags_log, layout, prepared
+        )
 
-    typer.echo(
-        f"openkos sync-tags: added tags to {len(prepared.additions)} "
-        f"concept(s) ({log_path.name} updated)."
-    )
+        try:
+            landed = application_lifecycle.sync_tags_core(layout, prepared)
+        except (OSError, ValueError) as exc:
+            typer.echo(
+                f"openkos sync-tags: failed while writing the sync-tags -- {exc}.",
+                err=True,
+            )
+            raise typer.Exit(code=1) from exc
 
-    commit_subject = (
-        f"openkos: sync-tags {prepared.roots[0]}"
-        if source_id is not None
-        else "openkos: sync-tags --all"
-    )
-    _autocommit(root, landed, commit_subject)
+        typer.echo(
+            f"openkos sync-tags: added tags to {len(prepared.additions)} "
+            f"concept(s) ({log_path.name} updated)."
+        )
+
+        commit_subject = (
+            f"openkos: sync-tags {prepared.roots[0]}"
+            if source_id is not None
+            else "openkos: sync-tags --all"
+        )
+        _autocommit(root, landed, commit_subject)
 
     # #640: `cfg` already read above -- a tag write changes the embedding
     # input (design Decision 7), so this is not suppressed.
@@ -7096,7 +7558,7 @@ def sync_tags_cmd(
     ),
     rich_help_panel="Maintain",
 )
-@_guard_workspace_lock("normalize-names")
+@_guard_workspace_lock("normalize-names", commit_phase=True)
 def normalize_names_cmd(
     auto: bool = typer.Option(
         False,
@@ -7263,159 +7725,162 @@ def normalize_names_cmd(
             )
             raise typer.Exit(code=1)
 
-    try:
-        log_bytes, log_text = _snapshot_read(log_path)
-    except (OSError, ValueError) as exc:
-        typer.echo(
-            f"openkos normalize-names: failed while reading {log_path.name} -- {exc}.",
-            err=True,
-        )
-        raise typer.Exit(code=1) from exc
-
-    # Issue #306-style guard: `log.md` is re-validated against its
-    # pre-prompt snapshot immediately before the first write.
-    _reject_drifted_targets(layout, {log_path: log_bytes}, "normalize-names")
-
-    # Purpose-built drift re-check (design D4), immediately before Phase
-    # B: nothing here rewrites file BYTES, so `_reject_drifted_targets`'
-    # bytes-comparison contract does not apply to the rename targets
-    # themselves. Each planned entry is re-validated against current
-    # on-disk state; any failure demotes it to a reported skip, never a
-    # crash.
-    final_renames: list[lint_check.NonNfcEntry] = []
-    drift_skips: list[tuple[lint_check.NonNfcEntry, str, str]] = []
-    for entry in planned:
+    # The commit phase (#1137): the scan, the preview and the prompt above held
+    # no workspace lock.
+    with _commit_section_for(root)():
         try:
-            current_listing = os.listdir(entry.path.parent)  # noqa: PTH208
-        except OSError:
-            drift_skips.append((entry, "vanished", "vanished"))
-            continue
-        if entry.raw_name not in current_listing:
-            drift_skips.append((entry, "vanished", "vanished"))
-            continue
-        if entry.nfc_name in current_listing:
-            drift_skips.append(
-                (entry, "collision", f"{entry.nfc_name!r} already exists")
+            log_bytes, log_text = _snapshot_read(log_path)
+        except (OSError, ValueError) as exc:
+            typer.echo(
+                f"openkos normalize-names: failed while reading {log_path.name} -- {exc}.",
+                err=True,
             )
-            continue
+            raise typer.Exit(code=1) from exc
+
+        # Issue #306-style guard: `log.md` is re-validated against its
+        # pre-prompt snapshot immediately before the first write.
+        _reject_drifted_targets(layout, {log_path: log_bytes}, "normalize-names")
+
+        # Purpose-built drift re-check (design D4), immediately before Phase
+        # B: nothing here rewrites file BYTES, so `_reject_drifted_targets`'
+        # bytes-comparison contract does not apply to the rename targets
+        # themselves. Each planned entry is re-validated against current
+        # on-disk state; any failure demotes it to a reported skip, never a
+        # crash.
+        final_renames: list[lint_check.NonNfcEntry] = []
+        drift_skips: list[tuple[lint_check.NonNfcEntry, str, str]] = []
+        for entry in planned:
+            try:
+                current_listing = os.listdir(entry.path.parent)  # noqa: PTH208
+            except OSError:
+                drift_skips.append((entry, "vanished", "vanished"))
+                continue
+            if entry.raw_name not in current_listing:
+                drift_skips.append((entry, "vanished", "vanished"))
+                continue
+            if entry.nfc_name in current_listing:
+                drift_skips.append(
+                    (entry, "collision", f"{entry.nfc_name!r} already exists")
+                )
+                continue
+            try:
+                drifted_to_symlink = entry.path.is_symlink()
+            except OSError:
+                drifted_to_symlink = False
+            if drifted_to_symlink:
+                drift_skips.append((entry, "symlink", "symlink"))
+                continue
+            final_renames.append(entry)
+
+        if not final_renames:
+            typer.echo(
+                "openkos normalize-names: every planned rename drifted away "
+                "before it could be applied -- nothing was written, no log "
+                "entry was appended, and no commit was created."
+            )
+            return
+
+        all_skips = skips + drift_skips
+        pairs = ", ".join(
+            f"{entry.rel_posix!r} -> {entry.nfc_name!r}" for entry in final_renames
+        )
+        skip_kind_counts = Counter(kind for _entry, kind, _reason in all_skips)
+        skip_detail = ", ".join(
+            f"{kind}: {count}" for kind, count in sorted(skip_kind_counts.items())
+        )
+        # Design D6's bounded log line: counts always; the renamed pairs are
+        # listed inline only for a small batch (<= 5 total entries), so the
+        # line stays single (`insert_log_entry` rejects newlines) and never
+        # grows unbounded with the batch size (Key Decisions Recorded, b).
+        total_entries = len(final_renames) + len(all_skips)
+        if total_entries <= 5:
+            log_line = (
+                f"**Normalize-names**: Renamed {len(final_renames)} on-disk "
+                f"name(s) to NFC: {pairs}. Skipped {len(all_skips)}"
+                + (f" ({skip_detail})" if all_skips else "")
+                + "."
+            )
+        else:
+            log_line = (
+                f"**Normalize-names**: Renamed {len(final_renames)} on-disk "
+                f"name(s) to NFC. Skipped {len(all_skips)}"
+                + (f" ({skip_detail})" if all_skips else "")
+                + "."
+            )
         try:
-            drifted_to_symlink = entry.path.is_symlink()
-        except OSError:
-            drifted_to_symlink = False
-        if drifted_to_symlink:
-            drift_skips.append((entry, "symlink", "symlink"))
-            continue
-        final_renames.append(entry)
-
-    if not final_renames:
-        typer.echo(
-            "openkos normalize-names: every planned rename drifted away "
-            "before it could be applied -- nothing was written, no log "
-            "entry was appended, and no commit was created."
-        )
-        return
-
-    all_skips = skips + drift_skips
-    pairs = ", ".join(
-        f"{entry.rel_posix!r} -> {entry.nfc_name!r}" for entry in final_renames
-    )
-    skip_kind_counts = Counter(kind for _entry, kind, _reason in all_skips)
-    skip_detail = ", ".join(
-        f"{kind}: {count}" for kind, count in sorted(skip_kind_counts.items())
-    )
-    # Design D6's bounded log line: counts always; the renamed pairs are
-    # listed inline only for a small batch (<= 5 total entries), so the
-    # line stays single (`insert_log_entry` rejects newlines) and never
-    # grows unbounded with the batch size (Key Decisions Recorded, b).
-    total_entries = len(final_renames) + len(all_skips)
-    if total_entries <= 5:
-        log_line = (
-            f"**Normalize-names**: Renamed {len(final_renames)} on-disk "
-            f"name(s) to NFC: {pairs}. Skipped {len(all_skips)}"
-            + (f" ({skip_detail})" if all_skips else "")
-            + "."
-        )
-    else:
-        log_line = (
-            f"**Normalize-names**: Renamed {len(final_renames)} on-disk "
-            f"name(s) to NFC. Skipped {len(all_skips)}"
-            + (f" ({skip_detail})" if all_skips else "")
-            + "."
-        )
-    try:
-        new_log_text = bundle_log.insert_log_entry(
-            log_text, datetime.now(UTC).astimezone().date(), log_line
-        )
-    except (OSError, ValueError) as exc:
-        typer.echo(
-            f"openkos normalize-names: failed while preparing the "
-            f"normalize-names -- {exc}.",
-            err=True,
-        )
-        raise typer.Exit(code=1) from exc
-
-    landed: list[str] = []
-    applied_raw_rels: list[str] = []
-    try:
-        for entry in final_renames:
-            # `entry.path` is the RAW spelling captured at Phase A/scan
-            # time; `entry.rel_posix` is already NFC-normalized (design
-            # D1), so it names the entry's NEW path, never its old one --
-            # using it for `old_rel` would stage the wrong pathspec.
-            old_rel = entry.path.relative_to(root).as_posix()
-            fsio.rename_two_step(entry.path, entry.nfc_name)
-            landed.append(old_rel)
-            applied_raw_rels.append(old_rel)
-        # New paths are resolved only AFTER the whole batch: the path
-        # `rename_two_step` returns names the entry under its ancestors'
-        # spellings AT RENAME TIME, and deepest-first means a later
-        # ancestor rename carries the entry along, so that momentary
-        # spelling goes stale before `_autocommit` ever sees it (review
-        # R3-001). The final spelling normalizes exactly the segments
-        # whose own rename APPLIED -- never a blanket NFC over the whole
-        # path, because an ancestor skipped at drift time (collision)
-        # keeps its raw spelling, and its NFC twin names the COLLIDING
-        # sibling, not this entry.
-        applied = set(applied_raw_rels)
-
-        def _final_rel(raw_rel: str) -> str:
-            parts = raw_rel.split("/")
-            return "/".join(
-                unicodedata.normalize("NFC", part)
-                if "/".join(parts[: index + 1]) in applied
-                else part
-                for index, part in enumerate(parts)
+            new_log_text = bundle_log.insert_log_entry(
+                log_text, datetime.now(UTC).astimezone().date(), log_line
             )
+        except (OSError, ValueError) as exc:
+            typer.echo(
+                f"openkos normalize-names: failed while preparing the "
+                f"normalize-names -- {exc}.",
+                err=True,
+            )
+            raise typer.Exit(code=1) from exc
 
-        # Strictly AFTER the write (issue #495): `landed` doubles as the
-        # failure report, which promises OLD paths only, and as
-        # `_autocommit`'s staging scope, which needs the final spellings
-        # too. Extending before the write let a failure AT the write
-        # report both spellings for the same entry.
-        fsio.write_atomic(log_path, new_log_text)
-        landed.extend(_final_rel(raw_rel) for raw_rel in applied_raw_rels)
-        landed.append("bundle/log.md")
-    except (OSError, ValueError) as exc:
-        landed_suffix = (
-            f"Already landed (left renamed, not rolled back): {', '.join(landed)}."
-            if landed
-            else "No path was written."
-        )
+        landed: list[str] = []
+        applied_raw_rels: list[str] = []
+        try:
+            for entry in final_renames:
+                # `entry.path` is the RAW spelling captured at Phase A/scan
+                # time; `entry.rel_posix` is already NFC-normalized (design
+                # D1), so it names the entry's NEW path, never its old one --
+                # using it for `old_rel` would stage the wrong pathspec.
+                old_rel = entry.path.relative_to(root).as_posix()
+                fsio.rename_two_step(entry.path, entry.nfc_name)
+                landed.append(old_rel)
+                applied_raw_rels.append(old_rel)
+            # New paths are resolved only AFTER the whole batch: the path
+            # `rename_two_step` returns names the entry under its ancestors'
+            # spellings AT RENAME TIME, and deepest-first means a later
+            # ancestor rename carries the entry along, so that momentary
+            # spelling goes stale before `_autocommit` ever sees it (review
+            # R3-001). The final spelling normalizes exactly the segments
+            # whose own rename APPLIED -- never a blanket NFC over the whole
+            # path, because an ancestor skipped at drift time (collision)
+            # keeps its raw spelling, and its NFC twin names the COLLIDING
+            # sibling, not this entry.
+            applied = set(applied_raw_rels)
+
+            def _final_rel(raw_rel: str) -> str:
+                parts = raw_rel.split("/")
+                return "/".join(
+                    unicodedata.normalize("NFC", part)
+                    if "/".join(parts[: index + 1]) in applied
+                    else part
+                    for index, part in enumerate(parts)
+                )
+
+            # Strictly AFTER the write (issue #495): `landed` doubles as the
+            # failure report, which promises OLD paths only, and as
+            # `_autocommit`'s staging scope, which needs the final spellings
+            # too. Extending before the write let a failure AT the write
+            # report both spellings for the same entry.
+            fsio.write_atomic(log_path, new_log_text)
+            landed.extend(_final_rel(raw_rel) for raw_rel in applied_raw_rels)
+            landed.append("bundle/log.md")
+        except (OSError, ValueError) as exc:
+            landed_suffix = (
+                f"Already landed (left renamed, not rolled back): {', '.join(landed)}."
+                if landed
+                else "No path was written."
+            )
+            typer.echo(
+                f"openkos normalize-names: failed while writing the "
+                f"normalize-names -- {exc}. {landed_suffix}",
+                err=True,
+            )
+            raise typer.Exit(code=1) from exc
+
         typer.echo(
-            f"openkos normalize-names: failed while writing the "
-            f"normalize-names -- {exc}. {landed_suffix}",
-            err=True,
+            f"openkos normalize-names: renamed {len(final_renames)} on-disk "
+            f"name(s) ({log_path.name} updated): {pairs}."
         )
-        raise typer.Exit(code=1) from exc
 
-    typer.echo(
-        f"openkos normalize-names: renamed {len(final_renames)} on-disk "
-        f"name(s) ({log_path.name} updated): {pairs}."
-    )
+        _autocommit(root, landed, "openkos: normalize-names")
 
-    _autocommit(root, landed, "openkos: normalize-names")
-
-    # #640: a rename changes concept ids, which every derived store keys on.
+        # #640: a rename changes concept ids, which every derived store keys on.
     _refresh_derived_after_write(layout, cfg, verb="normalize-names")
 
 
@@ -7688,7 +8153,7 @@ def backfill_source_titles_cmd(
     ),
     rich_help_panel="Curate",
 )
-@_guard_workspace_lock("set-volatility")
+@_guard_workspace_lock("set-volatility", commit_phase=True)
 def set_volatility_cmd(
     concept_type: str = typer.Argument(
         ..., help="Exact PascalCase REGISTRY type name, e.g. 'Person'."
@@ -7826,26 +8291,29 @@ def set_volatility_cmd(
     # possibly a safety setting like `review:` or `default_sensitivity:` --
     # would be silently reverted by the whole-file write below. Re-validate
     # the one target now -- after the gate, before the write.
-    _reject_drifted_targets(
-        layout, {layout.config_path: prepared.config_bytes}, "set-volatility"
-    )
+    with _commit_section_for(root)():
+        _reject_drifted_targets(
+            layout, {layout.config_path: prepared.config_bytes}, "set-volatility"
+        )
 
-    try:
-        application_lifecycle.set_volatility_core(layout.config_path, prepared)
-    except (OSError, ValueError) as exc:
-        typer.echo(f"openkos set-volatility: failed while writing -- {exc}.", err=True)
-        raise typer.Exit(code=1) from exc
+        try:
+            application_lifecycle.set_volatility_core(layout.config_path, prepared)
+        except (OSError, ValueError) as exc:
+            typer.echo(
+                f"openkos set-volatility: failed while writing -- {exc}.", err=True
+            )
+            raise typer.Exit(code=1) from exc
 
-    typer.echo(
-        f"openkos set-volatility: set {concept_type} -> {tier} in "
-        f"{layout.config_path.name}."
-    )
+        typer.echo(
+            f"openkos set-volatility: set {concept_type} -> {tier} in "
+            f"{layout.config_path.name}."
+        )
 
-    _autocommit(
-        root,
-        ["openkos.yaml"],
-        f"openkos: set-volatility {concept_type} -> {tier}",
-    )
+        _autocommit(
+            root,
+            ["openkos.yaml"],
+            f"openkos: set-volatility {concept_type} -> {tier}",
+        )
 
 
 @dataclass(frozen=True)
@@ -8018,7 +8486,7 @@ class _CliMergeObserver(merge_service.MergeObserver):
     ),
     rich_help_panel="Curate",
 )
-@_guard_workspace_lock("merge")
+@_guard_workspace_lock("merge", commit_phase=True)
 def merge(
     survivor_id: str = typer.Argument(
         ...,
@@ -8185,6 +8653,13 @@ def merge(
             verb="merge",
         ),
         clock=lambda: datetime.now(UTC),
+        commit_section=_commit_section_for(root),
+        # #640, ADR-0036: the FTS/graph refresh runs inside the commit section,
+        # after the auto-commit, so it cannot race another writer's burst; the
+        # embedding stage runs once the section is left (below). `cfg=None` --
+        # `merge` never reads config; the helper reads its own copy inside the
+        # vector stage's fail-open envelope.
+        after_commit=lambda: _refresh_derived_after_write_quietly(root, "merge"),
     )
     try:
         merge_service.merge_concepts(
@@ -8203,10 +8678,7 @@ def merge(
         )
     except write_gate.WriteRefused as exc:
         _exit_for_write_refusal(exc)
-
-    # #640: `cfg=None` -- `merge` never reads config; the helper reads its
-    # own copy inside the vector stage's fail-open envelope.
-    _refresh_derived_after_write(config.WorkspaceLayout(root), None, verb="merge")
+    _finish_refresh_after_commit(config.WorkspaceLayout(root), None, verb="merge")
 
 
 class _CliUnmergeObserver(unmerge_service.UnmergeObserver):
@@ -8326,7 +8798,7 @@ in those two places too."""
     ),
     rich_help_panel="Curate",
 )
-@_guard_workspace_lock("unmerge")
+@_guard_workspace_lock("unmerge", commit_phase=True)
 def unmerge(
     survivor_id: str = typer.Argument(
         ...,
@@ -8466,6 +8938,12 @@ def unmerge(
     ports = unmerge_service.UnmergePorts(
         autocommit=lambda root, paths, message: _autocommit(root, paths, message),
         clock=lambda: datetime.now(UTC),
+        commit_section=_commit_section_for(root),
+        # #640, ADR-0036: FTS and graph are refreshed inside each step's commit
+        # section, after its auto-commit, so a chain that stops later leaves
+        # every completed step's lexical stores fresh; the embedding stage runs
+        # once, after the chain, whether or not it completed.
+        after_commit=lambda: _refresh_derived_after_write_quietly(root, "unmerge"),
     )
     observer = _CliUnmergeObserver()
     try:
@@ -8509,11 +8987,10 @@ def unmerge(
         ) from exc
     except write_gate.WriteRefused as exc:
         _exit_for_write_refusal(exc)
-
-    # #640: once per invocation, after the single step -- or the WHOLE chain --
-    # completed. A stopped chain raised above and leaves the stale-index
-    # warnings as its safety net.
-    _refresh_derived_after_write(config.WorkspaceLayout(root), None, verb="unmerge")
+    finally:
+        # A chain that stopped at step N still committed steps 1..N-1, so the
+        # embedding stage runs whether or not the chain completed.
+        _finish_refresh_after_commit(config.WorkspaceLayout(root), None, verb="unmerge")
 
 
 @app.command(
@@ -8523,7 +9000,7 @@ def unmerge(
     ),
     rich_help_panel="Curate",
 )
-@_guard_workspace_lock("reconcile")
+@_guard_workspace_lock("reconcile", commit_phase=True)
 def reconcile(
     id_a: str | None = typer.Argument(
         None,
@@ -8806,6 +9283,7 @@ def _reconcile_ports() -> reconcile_service.ReconcilePorts:
         autocommit=lambda root, paths, message: _autocommit(root, paths, message),
         snapshot_read=lambda path: _snapshot_read(path),
         clock=lambda: datetime.now(UTC),
+        commit_section=lambda: _commit_section_for(Path.cwd())(),
     )
 
 
@@ -9417,11 +9895,18 @@ def status() -> None:
                 f"{untyped} of {total} concept-to-concept edge(s) untyped — "
                 "run `openkos curate` to type them."
             )
+    # The pending-work queue and the last unattended job: rows and a job that
+    # needs a human are actionable; an absent or unreadable store is reported
+    # as "not available" below, never as nothing pending.
+    queue_lines = pending_report.status_lines(report.unattended)
+    needs_attention.extend(queue_lines.attention)
     if not needs_attention:
         typer.echo("  Nothing needs attention.")
     else:
         for line in needs_attention:
             typer.echo(f"  {line}")
+    for notice in queue_lines.notices:
+        typer.echo(f"  {notice}")
     # The empty-graph notice stays a separate, purely INFORMATIONAL line
     # (spec: "or an adjacent informational line") -- never appended to
     # `needs_attention`, so a healthy workspace still prints "Nothing needs
@@ -9491,6 +9976,94 @@ def next_cmd() -> None:
         _echo_warning(warning)
     for line in next_action_module.render_lines(result):
         typer.echo(line)
+
+
+@app.command(
+    "pending",
+    help=(
+        "List the pending-work queue and the unattended outcomes needing "
+        "attention. Read-only: no lock, no model call."
+    ),
+    rich_help_panel="Get started",
+)
+def pending_cmd(
+    all_rows: bool = typer.Option(
+        False,
+        "--all",
+        help="Also list applied, declined and stale rows.",
+    ),
+    stats: bool = typer.Option(
+        False,
+        "--stats",
+        help="Per-kind counters over the queue's current lifetime.",
+    ),
+) -> None:
+    """List open pending-work rows grouped by kind, each with its target ids
+    and the command that resolves it, then the unattended job outcomes that
+    need attention. `--all` adds resolved rows; `--stats` prints per-kind
+    counters (lifetime of the current queue only).
+
+    An absent queue is reported as not computed, never as nothing pending.
+    Refuses (exit 1) outside an initialized workspace, or when the queue file
+    exists but cannot be read. Takes no lock, constructs no model backend and
+    writes nothing; no row's payload is ever printed.
+    """
+    root = Path.cwd()
+    reason = config.require_workspace(root)
+    if reason is not None:
+        typer.echo(f"openkos pending: refusing to run -- {reason}.", err=True)
+        raise typer.Exit(code=1)
+    try:
+        report = pending_report.read_report(config.WorkspaceLayout(root))
+    except pending_report.QueueUnavailableError as exc:
+        typer.echo(
+            f"openkos pending: the pending-work queue is not available ({exc}); "
+            "it is derived state, so `openkos daemon --once` rebuilds it.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+    for line in pending_report.render_lines(report, include_all=all_rows, stats=stats):
+        typer.echo(line)
+
+
+@app.command(
+    "daemon",
+    help=(
+        "Run unattended maintenance for this workspace in the foreground: it "
+        "refreshes the derived indexes and queues proposals for you to review "
+        "(see `pending`). Never changes your knowledge base itself."
+    ),
+    rich_help_panel="Maintain",
+)
+def daemon_cmd(
+    once: bool = typer.Option(
+        False,
+        "--once",
+        help="Run every job that is due once, then exit.",
+    ),
+) -> None:
+    """Run the unattended engine for the workspace in the current directory.
+
+    Foreground and long-running: it runs the jobs that are due (a retry of any
+    auto-commit that failed, then a maintenance pass once the configured
+    interval has elapsed), idles between polls, and stops on SIGTERM or SIGINT
+    after the work in progress finishes, exiting 0. `--once` runs what is due
+    and exits.
+
+    A maintenance pass refreshes the derived indexes, counts lint findings and
+    runs the advisors (duplicates, relation types, volatility, contradictions,
+    decision revisions), recording each proposal as a pending-work row. It
+    writes nothing under `bundle/` and approves nothing. Model calls are bounded
+    by the `unattended:` budget in `openkos.yaml`. Each job's outcome is recorded
+    in `.openkos/jobs.db`; the log goes to the per-user log directory.
+
+    The daemon never holds the workspace lock for its lifetime, only for a short
+    write, so your own commands keep working while it runs. Refuses (exit 1)
+    outside an initialized workspace.
+    """
+    code = daemon_module.serve(Path.cwd(), once=once)
+    if code != 0:
+        raise typer.Exit(code=code)
 
 
 def _run_list_sources(layout: config.WorkspaceLayout, object_id: str) -> None:
@@ -10256,7 +10829,7 @@ def _duplicates_kept_distinct_view(root: Path) -> None:
     ),
     rich_help_panel="Curate",
 )
-@_guard_workspace_lock("adjudicate")
+@_guard_workspace_lock("adjudicate", commit_phase=True)
 def adjudicate(
     same_only: bool = typer.Option(
         False,
@@ -10568,6 +11141,15 @@ def adjudicate(
         include_confidential=include_confidential,
         local_exemption=local_exemption,
     )
+    # #1137: the judging call below holds no workspace lock, so pin each
+    # member's digest BEFORE it -- the persist keeps a verdict only for content
+    # that is still what was judged.
+    _digest_of = application_pending.current_finding_digest(layout.bundle_dir)
+    judged_digests = {
+        member_id: _digest_of(member_id)
+        for group in to_judge
+        for member_id in group.member_ids
+    }
     try:
         # Still called with an empty `to_judge` (a fully-served run): zero
         # groups means zero `llm.chat` calls by construction, and the
@@ -10616,7 +11198,10 @@ def adjudicate(
     # are rebuilt in candidate order -- served verdict, else fresh one;
     # groups past a mid-batch failure appear in neither and stay absent.
     _persist_adjudications(
-        layout, batch.results, include_confidential=effective_confidential
+        layout,
+        batch.results,
+        include_confidential=effective_confidential,
+        judged_digests=judged_digests,
     )
     if served_by_key:
         results = _reassemble_adjudications(candidates, served_by_key, batch.results)
@@ -10961,6 +11546,7 @@ def _suggest_relations_ports() -> relations_service.SuggestRelationsPorts:
         build_graph=lambda *args, **kwargs: build_graph(*args, **kwargs),
         candidate_edges=lambda *args, **kwargs: candidate_edges(*args, **kwargs),
         suggest_edge_types=lambda *args, **kwargs: suggest_edge_types(*args, **kwargs),
+        commit_section=lambda: _commit_section_for(Path.cwd())(),
     )
 
 
@@ -10980,7 +11566,7 @@ def _refuse(exc: "relations_service.SuggestionRefused") -> "typer.Exit":
     ),
     rich_help_panel="Curate",
 )
-@_guard_workspace_lock("suggest-relations")
+@_guard_workspace_lock("suggest-relations", commit_phase=True)
 def suggest_relations_cmd(
     auto: bool = typer.Option(
         False,
@@ -11571,18 +12157,26 @@ def _persist_edge_suggestions(
     *,
     include_confidential: bool,
     surface: str = "suggest-relations",
+    judged_digests: "Mapping[str, str | None] | None" = None,
 ) -> None:
     """Delegator to `relations_service.persist_edge_suggestions` (issue
     #1168), which owns the persist rule (#799). This wrapper only renders the
     service's advisory, to stderr; `surface` names the command the user
     actually ran (#867 review), since curate's Structure stage persists
-    through this helper too."""
+    through this helper too.
+
+    The persist is a commit phase (#1137): it enters the commit section the
+    running split verb published, and `judged_digests` pins each endpoint as it
+    stood before the typing call, so a suggestion about an endpoint edited or
+    forgotten meanwhile is dropped."""
     relations_service.persist_edge_suggestions(
         layout,
         results,
         include_confidential=include_confidential,
         on_warning=_echo_stderr,
         surface=surface,
+        judged_digests=judged_digests,
+        commit_section=_commit_section_for(layout.root),
     )
 
 
@@ -11596,56 +12190,84 @@ def _persist_adjudications(
     *,
     include_confidential: bool,
     surface: str = "adjudicate",
+    judged_digests: "Mapping[str, str | None] | None" = None,
 ) -> None:
     """Persist freshly judged adjudication verdicts (#779), fail-open: a
     failed persist costs one stderr advisory, never the run -- the same
     #684 posture curate's findings persist takes. A result any of whose
     members has no current digest (unreadable -- including the
     no-readable-member UNCERTAIN short-circuit) is skipped: a row whose
-    staleness can never be checked would serve forever."""
+    staleness can never be checked would serve forever.
+
+    `judged_digests` is each member's content digest as it stood BEFORE the
+    judging call (#1137): the judging call holds no workspace lock, so a
+    member edited, raised or forgotten meanwhile has a different digest now,
+    and its verdict is dropped rather than stored against content nobody
+    judged. Without it the digests are read here, at persist time.
+
+    The persist is a commit phase: it takes the workspace lock, and a busy
+    workspace costs the same advisory a failed persist does."""
     if not results:
         return
-    current_digest = application_pending.current_finding_digest(layout.bundle_dir)
-    # #838: every fresh verdict records the rubric it was computed under,
-    # so the serve gate can refuse it after a judgment fix ships. Computed
-    # once -- it is constant within a build.
-    current_rubric = rubric_digest()
-    batch: list[adjudications_store.Adjudication] = []
-    for result in results:
-        digests: list[adjudications_store.InputDigest] = []
-        for member_id in result.candidate.member_ids:
-            digest = current_digest(member_id)
-            if digest is None:
-                break
-            digests.append(
-                adjudications_store.InputDigest(input_ref=member_id, digest=digest)
-            )
-        else:
-            batch.append(
-                adjudications_store.Adjudication(
-                    member_ids=tuple(result.candidate.member_ids),
-                    verdict=result.verdict.value,
-                    confidence=result.confidence,
-                    rationale=result.rationale,
-                    include_confidential=include_confidential,
-                    input_digests=tuple(digests),
-                    rubric_digest=current_rubric,
-                )
-            )
-    if not batch:
-        return
     try:
-        conn = derived.open_derived_connection(layout.findings_db_path)
-        try:
-            adjudications_store.record_adjudications(conn, batch)
-        finally:
-            conn.close()
-    except (OSError, sqlite3.Error) as exc:
-        # `surface` names the command the user actually ran (#867 review):
-        # curate's Identity stage persists through this helper too.
+        # Both callers (`adjudicate`, `curate`) are split verbs, so the persist
+        # always enters the commit section the guard published.
+        with _commit_section_for(layout.root)():
+            current_digest = application_pending.current_finding_digest(
+                layout.bundle_dir
+            )
+            # #838: every fresh verdict records the rubric it was computed under,
+            # so the serve gate can refuse it after a judgment fix ships. Computed
+            # once -- it is constant within a build.
+            current_rubric = rubric_digest()
+            batch: list[adjudications_store.Adjudication] = []
+            for result in results:
+                digests: list[adjudications_store.InputDigest] = []
+                for member_id in result.candidate.member_ids:
+                    digest = current_digest(member_id)
+                    if digest is None or (
+                        judged_digests is not None
+                        and judged_digests.get(member_id) != digest
+                    ):
+                        break
+                    digests.append(
+                        adjudications_store.InputDigest(
+                            input_ref=member_id, digest=digest
+                        )
+                    )
+                else:
+                    batch.append(
+                        adjudications_store.Adjudication(
+                            member_ids=tuple(result.candidate.member_ids),
+                            verdict=result.verdict.value,
+                            confidence=result.confidence,
+                            rationale=result.rationale,
+                            include_confidential=include_confidential,
+                            input_digests=tuple(digests),
+                            rubric_digest=current_rubric,
+                        )
+                    )
+            if not batch:
+                return
+            try:
+                conn = derived.open_derived_connection(layout.findings_db_path)
+                try:
+                    adjudications_store.record_adjudications(conn, batch)
+                finally:
+                    conn.close()
+            except (OSError, sqlite3.Error) as exc:
+                # `surface` names the command the user actually ran (#867 review):
+                # curate's Identity stage persists through this helper too.
+                typer.echo(
+                    f"openkos {surface}: warning -- failed to persist adjudication "
+                    f"verdicts ({exc}); the next run will re-judge them.",
+                    err=True,
+                )
+    except lock.WorkspaceBusyError as exc:
         typer.echo(
-            f"openkos {surface}: warning -- failed to persist adjudication "
-            f"verdicts ({exc}); the next run will re-judge them.",
+            f"openkos {surface}: warning -- the workspace is busy, so the "
+            f"adjudication verdicts were not persisted ({exc}); the next run "
+            "will re-judge them.",
             err=True,
         )
 
@@ -12351,7 +12973,7 @@ def _no_match_message(cause: NoMatchCause, fts_hit_count: int) -> str:
     ),
     rich_help_panel="Explore",
 )
-@_guard_workspace_lock("query")
+@_guard_workspace_lock("query", commit_phase=True)
 def query(
     question: str = typer.Argument(
         ..., help="Natural-language question to answer from the bundle."
@@ -13075,96 +13697,112 @@ def query(
             )
             raise typer.Exit(code=1)
 
-    # Issue #313: every byte below was computed from a pre-prompt read, so
-    # re-validate each target now -- after the gate, before the first write.
-    # `plan.path` is absent by necessity, not oversight -- see the docstring.
-    _reject_drifted_targets(
-        layout,
-        {save_index_path: index_bytes, save_log_path: log_bytes},
-        "query",
-    )
+    # The commit phase (#1137): everything above -- retrieval, the model call,
+    # the duplicate scan, the preview and the prompt -- ran with no lock held.
+    # Only the re-validation and the writes below hold it, so a human reading
+    # the preview never starves another writer.
+    with _commit_section_for(root)():
+        # Read dependencies first: the insight's level was folded from the
+        # cited concepts' sensitivity at staging, and a concurrent raise is
+        # not a drifted WRITE target, so the guard below cannot see it.
+        cited_drift = application_query.describe_cited_drift(plan, layout.bundle_dir)
+        if cited_drift is not None:
+            typer.echo(cited_drift, err=True)
+            raise typer.Exit(code=3)
 
-    answer_rel = f"bundle/{plan.link_dir}/{plan.slug}.md"
-    landed: list[str] = []
-    try:
-        # Write order: answer document BEFORE `index.md` BEFORE `log.md`
-        # (content before catalog, mirroring `ingest`'s D3): a mid-sequence
-        # failure can leave an uncataloged file on disk, never a catalog
-        # entry pointing at a file that does not exist. There is no
-        # cross-file rollback, matching every other mutating verb's
-        # documented limitation. `landed` records each path only AFTER its
-        # write returns, so a failure names exactly the paths already on
-        # disk (#331, mirroring `set-sensitivity`'s D9 shape).
-        plan.path.parent.mkdir(parents=True, exist_ok=True)
-        fsio.write_exclusive(plan.path, plan.content)
-        landed.append(answer_rel)
-        fsio.write_atomic(save_index_path, new_index_text)
-        landed.append("bundle/index.md")
-        fsio.write_atomic(save_log_path, new_log_text)
-        landed.append("bundle/log.md")
-    except (OSError, ValueError) as exc:
-        # Distinct from the refusal phases above on purpose (#234): this is
-        # reached only after the write phase began, so the answer document
-        # may already be on disk while the catalog is not. "refusing" would
-        # tell an operator nothing happened, which is exactly wrong here.
-        landed_suffix = (
-            f"Already written (left partially filed, not rolled back): "
-            f"{', '.join(landed)}."
-            if landed
-            else "No path was written."
+        # Issue #313: every byte below was computed from a pre-prompt read, so
+        # re-validate each target now -- after the gate, before the first write.
+        # `plan.path` is absent by necessity, not oversight -- see the docstring.
+        _reject_drifted_targets(
+            layout,
+            {save_index_path: index_bytes, save_log_path: log_bytes},
+            "query",
         )
-        typer.echo(
-            f"openkos query: failed while saving the answer -- {exc}. {landed_suffix}",
-            err=True,
-        )
-        raise typer.Exit(code=1) from exc
 
-    typer.echo(
-        f"openkos query: filed answer as bundle/{plan.link_dir}/{plan.slug}.md "
-        f"({save_index_path.name}, {save_log_path.name} updated)."
-    )
-    # Write-Time Advisory (issue #669, design D4): the spec-required
-    # success-message advisory, the `query --save` mirror of ingest's
-    # run-summary line -- fires even when `--auto` skips the confirmation
-    # prompt, since the preview block above can, in principle, be bypassed
-    # in ways the success message must never depend on. stdout, like
-    # `query`'s own success line -- `query --save` has no batch stdout
-    # contract to protect (unlike ingest's stderr notices, #349).
-    if plan.type_floor_raised:
-        typer.echo(
-            f"openkos query: 1 concept was born above the workspace "
-            f"sensitivity floor by type default ({save_type} -> "
-            f"{plan.sensitivity})."
-        )
-        if plan.sensitivity == "confidential":
-            typer.echo(
-                "openkos query: confidential concepts are excluded from "
-                "query, contradictions, and suggest-relations against a "
-                "non-local backend (#569)."
+        answer_rel = f"bundle/{plan.link_dir}/{plan.slug}.md"
+        landed: list[str] = []
+        try:
+            # Write order: answer document BEFORE `index.md` BEFORE `log.md`
+            # (content before catalog, mirroring `ingest`'s D3): a mid-sequence
+            # failure can leave an uncataloged file on disk, never a catalog
+            # entry pointing at a file that does not exist. There is no
+            # cross-file rollback, matching every other mutating verb's
+            # documented limitation. `landed` records each path only AFTER its
+            # write returns, so a failure names exactly the paths already on
+            # disk (#331, mirroring `set-sensitivity`'s D9 shape).
+            plan.path.parent.mkdir(parents=True, exist_ok=True)
+            fsio.write_exclusive(plan.path, plan.content)
+            landed.append(answer_rel)
+            fsio.write_atomic(save_index_path, new_index_text)
+            landed.append("bundle/index.md")
+            fsio.write_atomic(save_log_path, new_log_text)
+            landed.append("bundle/log.md")
+        except (OSError, ValueError) as exc:
+            # Distinct from the refusal phases above on purpose (#234): this is
+            # reached only after the write phase began, so the answer document
+            # may already be on disk while the catalog is not. "refusing" would
+            # tell an operator nothing happened, which is exactly wrong here.
+            landed_suffix = (
+                f"Already written (left partially filed, not rolled back): "
+                f"{', '.join(landed)}."
+                if landed
+                else "No path was written."
             )
+            typer.echo(
+                f"openkos query: failed while saving the answer -- {exc}. {landed_suffix}",
+                err=True,
+            )
+            raise typer.Exit(code=1) from exc
 
-    # #331: `query --save` was the ONE mutating path without the
-    # workspace-autocommit safety net, for no documented reason -- the
-    # Slice-2 exclusion list (workspace-autocommit spec: "Exclusions and
-    # Unconditional Behavior") names `reindex` output, `init`, and
-    # read-only verbs only, and `query --save` simply postdated the
-    # planning that produced the six-verb roster. Same call shape as every
-    # sibling: the exact Phase-B paths, workspace-relative POSIX, scoped
-    # `git add -- <paths>`, best-effort and non-fatal.
-    _autocommit(
-        root,
-        [answer_rel, "bundle/index.md", "bundle/log.md"],
-        f"openkos: query --save {plan.link_dir}/{plan.slug}",
-    )
+        typer.echo(
+            f"openkos query: filed answer as bundle/{plan.link_dir}/{plan.slug}.md "
+            f"({save_index_path.name}, {save_log_path.name} updated)."
+        )
+        # Write-Time Advisory (issue #669, design D4): the spec-required
+        # success-message advisory, the `query --save` mirror of ingest's
+        # run-summary line -- fires even when `--auto` skips the confirmation
+        # prompt, since the preview block above can, in principle, be bypassed
+        # in ways the success message must never depend on. stdout, like
+        # `query`'s own success line -- `query --save` has no batch stdout
+        # contract to protect (unlike ingest's stderr notices, #349).
+        if plan.type_floor_raised:
+            typer.echo(
+                f"openkos query: 1 concept was born above the workspace "
+                f"sensitivity floor by type default ({save_type} -> "
+                f"{plan.sensitivity})."
+            )
+            if plan.sensitivity == "confidential":
+                typer.echo(
+                    "openkos query: confidential concepts are excluded from "
+                    "query, contradictions, and suggest-relations against a "
+                    "non-local backend (#569)."
+                )
 
-    # #640: this verb used to end with "Run `openkos reindex` to make it
-    # searchable." -- with the write-time refresh, that instruction is FALSE
-    # on the success path, so searchability is claimed only when the refresh
-    # actually completed; the degrade path's advisory (inside the helper)
-    # carries the manual `openkos reindex` pointer instead.
-    # `query` printed the advisory before it embedded the question (#199),
-    # so the refresh must not repeat it (#353 item 4).
-    if _refresh_derived_after_write(
+        # #331: `query --save` was the ONE mutating path without the
+        # workspace-autocommit safety net, for no documented reason -- the
+        # Slice-2 exclusion list (workspace-autocommit spec: "Exclusions and
+        # Unconditional Behavior") names `reindex` output, `init`, and
+        # read-only verbs only, and `query --save` simply postdated the
+        # planning that produced the six-verb roster. Same call shape as every
+        # sibling: the exact Phase-B paths, workspace-relative POSIX, scoped
+        # `git add -- <paths>`, best-effort and non-fatal.
+        _autocommit(
+            root,
+            [answer_rel, "bundle/index.md", "bundle/log.md"],
+            f"openkos: query --save {plan.link_dir}/{plan.slug}",
+        )
+
+        # #640: this verb used to end with "Run `openkos reindex` to make it
+        # searchable." -- with the write-time refresh, that instruction is FALSE
+        # on the success path, so searchability is claimed only when the refresh
+        # actually completed; the degrade path's advisory (inside the helper)
+        # carries the manual `openkos reindex` pointer instead.
+        # `query` printed the advisory before it embedded the question (#199),
+        # so the refresh must not repeat it (#353 item 4).
+        _refresh_derived_after_write(
+            layout, cfg, verb="query", warn_nonlocal_host=False, stage="lexical"
+        )
+    if _finish_refresh_after_commit(
         layout, cfg, verb="query", warn_nonlocal_host=False
     ):
         typer.echo("openkos query: the filed insight is indexed and searchable.")
@@ -13548,7 +14186,7 @@ def doctor() -> None:
     ),
     rich_help_panel="Maintain",
 )
-@_guard_workspace_lock("repair")
+@_guard_workspace_lock("repair", commit_phase=True)
 def repair() -> None:
     """Read-write migration verb, thin over `application.repair` (ADR-0018,
     okf-v02-migration Phase 6): extracts every survivor's OWN frontmatter-
@@ -13656,105 +14294,114 @@ def repair() -> None:
             err=True,
         )
 
-    # Issue #313's precedent: every byte in `plan.baselines` was computed
-    # from `plan_repair`'s own reads, so re-validate each target now --
-    # before the first write -- exactly like every other mutating verb.
-    _reject_drifted_targets(layout, plan.baselines, "repair")
+    # The commit phase (#1137): `plan_repair`'s whole-bundle walk above held no
+    # workspace lock. Issue #313's precedent: every byte in `plan.baselines`
+    # was computed from `plan_repair`'s own reads, so re-validate each target
+    # now -- before the first write -- exactly like every other mutating verb;
+    # the read dependencies (the documents whose `supersedes` edges decided an
+    # export) are re-validated with them.
+    with _commit_section_for(root)():
+        _reject_drifted_targets(
+            layout, {**plan.read_dependencies, **plan.baselines}, "repair"
+        )
+        # The `index.md` flip is re-applied to its current bytes, not guarded.
+        plan = _recomposed_catalog(application_repair.recompose_index, plan)
 
-    try:
-        outcome = application_repair.apply_repair(root, plan)
-    except (OSError, ValueError) as exc:
-        typer.echo(
-            f"openkos repair: failed while writing the migration -- {exc}.", err=True
-        )
-        raise typer.Exit(code=1) from exc
+        try:
+            outcome = application_repair.apply_repair(root, plan)
+        except (OSError, ValueError) as exc:
+            typer.echo(
+                f"openkos repair: failed while writing the migration -- {exc}.",
+                err=True,
+            )
+            raise typer.Exit(code=1) from exc
 
-    if plan.extraction:
-        n = len(plan.extraction)
-        typer.echo(
-            f"openkos repair: migrated {n} ledger{'s' if n != 1 else ''} to "
-            "bundle/.state/ledger/."
+        if plan.extraction:
+            n = len(plan.extraction)
+            typer.echo(
+                f"openkos repair: migrated {n} ledger{'s' if n != 1 else ''} to "
+                "bundle/.state/ledger/."
+            )
+        # A rewrite whose ONLY change is its deprecated-status export (issue
+        # #1075) touched no OKF v0.1->v0.2 migration rule at all, so it must
+        # not inflate this "migrated N documents to OKF 0.2" count -- filtered
+        # to rewrites where at least one migration rule actually fired.
+        migrated_rewrites = [
+            rewrite
+            for rewrite in plan.document_rewrites
+            if rewrite.changes.generated
+            or rewrite.changes.status
+            or rewrite.changes.sources
+            or rewrite.changes.citations_removed
+        ]
+        if migrated_rewrites:
+            n = len(migrated_rewrites)
+            generated = sum(rewrite.changes.generated for rewrite in migrated_rewrites)
+            status = sum(rewrite.changes.status for rewrite in migrated_rewrites)
+            sources = sum(rewrite.changes.sources for rewrite in migrated_rewrites)
+            citations_removed = sum(
+                rewrite.changes.citations_removed for rewrite in migrated_rewrites
+            )
+            typer.echo(
+                f"openkos repair: migrated {n} document{'s' if n != 1 else ''} to "
+                f"OKF 0.2 (generated: {generated}, status: {status}, sources: "
+                f"{sources}, empty # Citations removed: {citations_removed})."
+            )
+        exported = sum(
+            1
+            for rewrite in plan.document_rewrites
+            if rewrite.changes.export is okf.ExportOutcome.EXPORT
         )
-    # A rewrite whose ONLY change is its deprecated-status export (issue
-    # #1075) touched no OKF v0.1->v0.2 migration rule at all, so it must
-    # not inflate this "migrated N documents to OKF 0.2" count -- filtered
-    # to rewrites where at least one migration rule actually fired.
-    migrated_rewrites = [
-        rewrite
-        for rewrite in plan.document_rewrites
-        if rewrite.changes.generated
-        or rewrite.changes.status
-        or rewrite.changes.sources
-        or rewrite.changes.citations_removed
-    ]
-    if migrated_rewrites:
-        n = len(migrated_rewrites)
-        generated = sum(rewrite.changes.generated for rewrite in migrated_rewrites)
-        status = sum(rewrite.changes.status for rewrite in migrated_rewrites)
-        sources = sum(rewrite.changes.sources for rewrite in migrated_rewrites)
-        citations_removed = sum(
-            rewrite.changes.citations_removed for rewrite in migrated_rewrites
+        withdrawn = sum(
+            1
+            for rewrite in plan.document_rewrites
+            if rewrite.changes.export is okf.ExportOutcome.WITHDRAW
         )
-        typer.echo(
-            f"openkos repair: migrated {n} document{'s' if n != 1 else ''} to "
-            f"OKF 0.2 (generated: {generated}, status: {status}, sources: "
-            f"{sources}, empty # Citations removed: {citations_removed})."
+        dropped_marker = sum(
+            1
+            for rewrite in plan.document_rewrites
+            if rewrite.changes.export is okf.ExportOutcome.DROP_MARKER
         )
-    exported = sum(
-        1
-        for rewrite in plan.document_rewrites
-        if rewrite.changes.export is okf.ExportOutcome.EXPORT
-    )
-    withdrawn = sum(
-        1
-        for rewrite in plan.document_rewrites
-        if rewrite.changes.export is okf.ExportOutcome.WITHDRAW
-    )
-    dropped_marker = sum(
-        1
-        for rewrite in plan.document_rewrites
-        if rewrite.changes.export is okf.ExportOutcome.DROP_MARKER
-    )
-    if exported or withdrawn or dropped_marker:
-        typer.echo(
-            f"openkos repair: deprecated-status export -- {exported} "
-            f"exported, {withdrawn} withdrawn, {dropped_marker} marker(s) "
-            "dropped."
-        )
-    if plan.sidecar_rewrites:
-        n = len(plan.sidecar_rewrites)
-        typer.echo(
-            f"openkos repair: migrated {n} merge-ledger sidecar"
-            f"{'s' if n != 1 else ''} to OKF 0.2."
-        )
-    if plan.index_new_text is not None:
-        typer.echo("openkos repair: okf_version 0.1 -> 0.2 in bundle/index.md.")
-    if plan.legacy_citations_ids:
-        n = len(plan.legacy_citations_ids)
-        noun = "document" if n == 1 else "documents"
-        verb = "keeps" if n == 1 else "keep"
-        typer.echo(
-            f"openkos repair: left in place -- {n} {noun} {verb} a "
-            "hand-written # Citations list (legacy, OKF 0.2 section 13.1): "
-            f"{', '.join(plan.legacy_citations_ids)}"
-        )
+        if exported or withdrawn or dropped_marker:
+            typer.echo(
+                f"openkos repair: deprecated-status export -- {exported} "
+                f"exported, {withdrawn} withdrawn, {dropped_marker} marker(s) "
+                "dropped."
+            )
+        if plan.sidecar_rewrites:
+            n = len(plan.sidecar_rewrites)
+            typer.echo(
+                f"openkos repair: migrated {n} merge-ledger sidecar"
+                f"{'s' if n != 1 else ''} to OKF 0.2."
+            )
+        if plan.index_new_text is not None:
+            typer.echo("openkos repair: okf_version 0.1 -> 0.2 in bundle/index.md.")
+        if plan.legacy_citations_ids:
+            n = len(plan.legacy_citations_ids)
+            noun = "document" if n == 1 else "documents"
+            verb = "keeps" if n == 1 else "keep"
+            typer.echo(
+                f"openkos repair: left in place -- {n} {noun} {verb} a "
+                "hand-written # Citations list (legacy, OKF 0.2 section 13.1): "
+                f"{', '.join(plan.legacy_citations_ids)}"
+            )
 
-    parts: list[str] = []
-    if plan.extraction:
-        parts.append(
-            f"migrate {len(plan.extraction)} ledger(s) to bundle/.state/ledger/"
-        )
-    if (
-        plan.document_rewrites
-        or plan.sidecar_rewrites
-        or plan.index_new_text is not None
-    ):
-        parts.append(
-            f"migrate {len(plan.document_rewrites)} document(s) and "
-            f"{len(plan.sidecar_rewrites)} ledger sidecar(s) to OKF 0.2"
-        )
+        parts: list[str] = []
+        if plan.extraction:
+            parts.append(
+                f"migrate {len(plan.extraction)} ledger(s) to bundle/.state/ledger/"
+            )
+        if (
+            plan.document_rewrites
+            or plan.sidecar_rewrites
+            or plan.index_new_text is not None
+        ):
+            parts.append(
+                f"migrate {len(plan.document_rewrites)} document(s) and "
+                f"{len(plan.sidecar_rewrites)} ledger sidecar(s) to OKF 0.2"
+            )
 
-    _autocommit(root, outcome.touched, f"openkos: repair ({'; '.join(parts)})")
+        _autocommit(root, outcome.touched, f"openkos: repair ({'; '.join(parts)})")
     _refresh_derived_after_write(layout, None, verb="repair")
 
 
@@ -13765,7 +14412,7 @@ def repair() -> None:
     ),
     rich_help_panel="Curate",
 )
-@_guard_workspace_lock("curate")
+@_guard_workspace_lock("curate", commit_phase=True)
 def curate(
     auto: bool = typer.Option(
         False,
@@ -13861,6 +14508,12 @@ def curate(
     every stage's underlying call, fail-closed by default (spec:
     Sensitivity Threading Is Fail-Closed).
 
+    Locking (ADR-0036): `curate` is a SPLIT verb. It holds no workspace lock
+    while a stage plans, calls the model or asks; each accepted item's write
+    and each persist of paid-for results is its own commit phase, which takes
+    the lock under `--wait`, re-validates its inputs and drops an item whose
+    input vanished.
+
     All five stages run fully as of slice 2 (design D10): Preconditions and
     Identity shipped in slice 1; Structure, Metadata, and Contradictions
     went `live=True` in slice 2 with real `probe`/`run` implementations, so
@@ -13941,7 +14594,9 @@ def curate(
     # write -- an all-declined/empty session invalidated nothing. NOT per
     # stage and NOT inside `merge_service.commit_merge` (Identity commits per item).
     if any(outcome.applied for outcome in outcomes):
-        _refresh_derived_after_write(layout, cfg, verb="curate")
+        _refresh_derived_after_write(
+            layout, cfg, verb="curate", commit_section=_commit_section_for(root)
+        )
 
 
 @app.command(

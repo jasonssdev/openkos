@@ -2005,29 +2005,9 @@ def test_a_delete_target_edited_during_the_prompt_is_refused(
     assert changed == {Path(target)}
 
 
-@pytest.mark.parametrize("target", ["bundle/index.md", "bundle/log.md"])
-def test_a_write_target_edited_during_the_prompt_is_refused(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str
-) -> None:
-    """The two `write_atomic` targets the issue's table names: both are
-    rendered from a pre-prompt read and written back verbatim."""
-    source_id, _, _ = _source_with_two_children(tmp_path, monkeypatch)
-    target_path = tmp_path / target
-    concurrent = "hand-edited while the prompt waited\n"
-    before = snapshot_with_mtime(tmp_path)
-    confirm_after(
-        monkeypatch, lambda: target_path.write_text(concurrent, encoding="utf-8")
-    )
-
-    result = runner.invoke(app, ["forget", source_id, "--scope", "source"], input="y\n")
-
-    assert result.exit_code == 3
-    assert "refusing to write --" in result.stderr
-    assert target in result.stderr
-    assert target_path.read_text(encoding="utf-8") == concurrent
-    after = snapshot_with_mtime(tmp_path)
-    changed = changed_paths(before, after)
-    assert changed == {Path(target)}
+# `index.md` and `log.md` are re-composed over their current bytes at commit
+# time rather than guarded (tests/unit/cli/test_catalog_recompose.py), so an
+# edit to either during the prompt is kept, never an exit 3.
 
 
 def test_a_delete_target_deleted_during_the_prompt_is_refused(
@@ -2177,19 +2157,17 @@ def test_the_root_concept_edited_during_the_prompt_is_refused(
     assert changed == {Path(target)}
 
 
-def test_scope_self_ignores_drift_on_an_unrelated_bundle_file(
+def test_scope_self_refuses_drift_on_a_bystander_the_reference_scan_read(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """#326: on the DEFAULT scope the guard's member comprehension yields
-    zero entries -- the mapping is exactly `index.md`, `log.md`, and the
-    root -- so an unrelated bundle file edited during the prompt is not
-    this run's business and must not refuse it. This is the property that
-    makes gating the whole-bundle BYTES retention on `--scope source` safe:
-    a `self`-scope run never consults `other_bytes`, so retaining every
-    file's raw bytes for it bought nothing and doubled the scan's residency
-    for the default path. No behavior may change either way -- this test
-    pins that the mapping stays member-free on `self`, which is the
-    invariant the retention gate leans on."""
+    """#326 pinned that a bystander edited during the prompt was "not this
+    run's business" because the write-target mapping is member-free on the
+    default scope. That held only while the whole-verb lock kept every other
+    writer out. The inbound-reference gate READ the bystander, so an edit that
+    lands during the prompt may be exactly the reference the gate was meant to
+    refuse on; the commit phase therefore re-validates it as a read dependency
+    (ADR-0036) and refuses (exit 3, nothing deleted). The write-target mapping
+    itself is still member-free on `self`."""
     _init_workspace(tmp_path, monkeypatch)
     source_id = _ingest_source(tmp_path, "notes.txt")
     _write_plain_concept(tmp_path, "concepts/bystander")
@@ -2202,14 +2180,15 @@ def test_scope_self_ignores_drift_on_an_unrelated_bundle_file(
 
     result = runner.invoke(app, ["forget", source_id], input="y\n")
 
-    assert result.exit_code == 0, result.stderr
-    # The forget completed: root unlinked, catalog updated, and the
-    # bystander's concurrent edit is untouched.
-    assert not (tmp_path / "bundle" / f"{source_id}.md").exists()
+    assert result.exit_code == 3, result.stderr
+    assert "1 read dependency(ies) changed on disk" in result.stderr
+    assert "concepts/bystander.md" in result.stderr
+    # Nothing was deleted, and the concurrent edit is untouched.
+    assert (tmp_path / "bundle" / f"{source_id}.md").exists()
     assert bystander_path.read_text(encoding="utf-8") == concurrent
 
 
-def test_an_edit_landing_after_the_snapshot_observation_is_refused(
+def test_an_edit_landing_after_the_snapshot_observation_is_recomposed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """#318's race, pinned for `forget` (#327 follow-up; the pin existed
@@ -2223,12 +2202,14 @@ def test_an_edit_landing_after_the_snapshot_observation_is_refused(
 
     The edit lands immediately after `index.md`'s snapshot returns (the
     first of `forget`'s snapshots), the earliest a concurrent writer can
-    now land relative to the plan; the guard's later re-read must call it
-    drift and refuse the whole run.
+    now land relative to the plan. The baseline is the earlier bytes, so the
+    commit phase sees the catalog moved and re-applies the purge set's edit to
+    the CURRENT text: the concurrent edit survives, never reverted from the
+    earlier text.
     """
     source_id, _, _ = _source_with_two_children(tmp_path, monkeypatch)
     target_path = tmp_path / "bundle" / "index.md"
-    concurrent = "hand-edited the instant the snapshot returned\n"
+    concurrent_line = "* hand-appended the instant the snapshot returned\n"
     real_snapshot_read = fsio.snapshot_read
     fired = False
 
@@ -2237,10 +2218,12 @@ def test_an_edit_landing_after_the_snapshot_observation_is_refused(
         snapshot = real_snapshot_read(path)
         if not fired and path == target_path:
             fired = True
-            target_path.write_text(concurrent, encoding="utf-8")
+            target_path.write_text(
+                target_path.read_text(encoding="utf-8") + concurrent_line,
+                encoding="utf-8",
+            )
         return snapshot
 
-    before = snapshot_with_mtime(tmp_path)
     # (issue #918 Slice 3): `forget`'s Phase-A reads relocated into
     # `application.lifecycle.prepare_forget`, which calls
     # `fsio.snapshot_read` directly rather than `main._snapshot_read` (the
@@ -2252,14 +2235,8 @@ def test_an_edit_landing_after_the_snapshot_observation_is_refused(
     result = runner.invoke(app, ["forget", source_id, "--scope", "source", "--auto"])
 
     assert fired, "the racing wrapper never saw the index.md snapshot"
-    assert result.exit_code == 3
-    assert isinstance(result.exception, SystemExit)
-    assert "refusing to write --" in result.stderr
-    assert "bundle/index.md" in result.stderr
-    assert target_path.read_text(encoding="utf-8") == concurrent
-    assert changed_paths(before, snapshot_with_mtime(tmp_path)) == {
-        Path("bundle/index.md")
-    }
+    assert result.exit_code == 0, result.stderr
+    assert concurrent_line in target_path.read_text(encoding="utf-8")
 
 
 # --- #602: the sweep scrubs bodies from ALL snapshot fields -----------------

@@ -67,6 +67,7 @@ tier 2 and tier 3 in the same run still calls `lint_check.collect_docs`
 exactly once.
 """
 
+import json
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -74,11 +75,12 @@ from pathlib import Path
 
 from openkos import config
 from openkos import lint as lint_check
-from openkos.application import pending
+from openkos.application import pending, pending_queue_report
 from openkos.model import okf
 from openkos.resolution import CandidateGroup, find_exact_title_groups
 from openkos.resolution.contradiction import is_high_confidence_finding
 from openkos.state import findings
+from openkos.state import pending_queue as pq
 from openkos.state.derived import stale_derived_stores
 from openkos.state.vectorstore import vector_store_is_empty
 
@@ -222,6 +224,7 @@ class BundleSignals:
         self._walk_incomplete: bool | None = None
         self._non_nfc_entries: list[lint_check.NonNfcEntry] | None = None
         self._open_contradictions: tuple[findings.PersistedFinding, ...] | None = None
+        self._queue_snapshot: pending_queue_report.QueueSnapshot | None = None
 
     def _note_warning(self, message: str) -> None:
         """Keep a note a reader returned; the same sidecar is re-read once
@@ -371,6 +374,92 @@ class BundleSignals:
         return self._exact_title_groups
 
     @property
+    def queue_snapshot(self) -> pending_queue_report.QueueSnapshot:
+        """The open pending-work rows and the most recent unattended job,
+        memoized and read only by tiers 9, 11 and 12 (design Decision 4).
+
+        Read-only and never raises: it goes through `pending_queue_report`'s
+        read-only openers, so no lock is taken, no model backend is built,
+        and an absent `findings.db` / `jobs.db` is not created. `queue`
+        distinguishes absent and unreadable from present-but-empty, because
+        only a PRESENT queue is authoritative: an absent or unreadable one
+        leaves tiers 9 and 11 on their recompute path and tier 12's row half
+        silent."""
+        if self._queue_snapshot is None:
+            self._queue_snapshot = pending_queue_report.read_snapshot(self._layout)
+        return self._queue_snapshot
+
+    @property
+    def queued_exact_title_groups(self) -> tuple[pq.PendingItem, ...]:
+        """Open `identity` rows for an exact-title group a human has not
+        ruled distinct (#797) -- tier 9's queue-backed finding. Callers
+        branch on `queue_snapshot.queue` first, so an empty result here
+        never stands in for an absent queue."""
+        return tuple(
+            row
+            for row in self.queue_snapshot.open_items
+            if row.kind == "identity"
+            and _row_payload(row).get("tier") == "high"
+            and not self._row_kept_distinct(row)
+        )
+
+    def _row_kept_distinct(self, row: pq.PendingItem) -> bool:
+        return bool(row.targets) and pending.is_group_kept_distinct(
+            self._layout, row.targets, on_warning=self._note_warning
+        )
+
+    @property
+    def queued_contradictions(
+        self,
+    ) -> tuple[tuple[tuple[str, str], float], ...]:
+        """`(pair_ids, confidence)` for each open `contradiction` row that is
+        high-confidence and not declined, oldest first -- tier 11's
+        queue-backed finding. A row whose payload cannot be read as a pair is
+        skipped: it names nothing `next` could recommend acting on."""
+        found: list[tuple[tuple[str, str], float]] = []
+        for row in self.queue_snapshot.open_items:
+            if row.kind != "contradiction":
+                continue
+            payload = _row_payload(row)
+            ids = payload.get("pair_ids")
+            confidence = payload.get("confidence")
+            if (
+                not isinstance(ids, list)
+                or len(ids) != 2
+                or not all(isinstance(i, str) for i in ids)
+                or isinstance(confidence, bool)
+                or not isinstance(confidence, int | float)
+            ):
+                continue
+            pair = (str(ids[0]), str(ids[1]))
+            absorbed = payload.get("merged_absorbed_id")
+            absorbed_id = absorbed if isinstance(absorbed, str) else None
+            if not is_high_confidence_finding("contradicts", float(confidence)):
+                continue
+            if pending.is_contradiction_declined(self._layout, pair, absorbed_id):
+                continue
+            found.append((pair, float(confidence)))
+        return tuple(found)
+
+    @property
+    def unranked_queue_rows(self) -> tuple[pq.PendingItem, ...]:
+        """Open rows of a kind no earlier tier ranks (tier 12):
+        `relation_type`, `volatility`, `revision`, `watch_refusal`, and an
+        `identity` row that is not an exact-title group. A kept-distinct
+        identity row is excluded exactly as tier 9 excludes it."""
+        rows: list[pq.PendingItem] = []
+        for row in self.queue_snapshot.open_items:
+            if row.kind == "identity":
+                if _row_payload(row).get("tier") == "high":
+                    continue
+                if self._row_kept_distinct(row):
+                    continue
+            elif row.kind == "contradiction":
+                continue
+            rows.append(row)
+        return tuple(rows)
+
+    @property
     def non_nfc_entries(self) -> list[lint_check.NonNfcEntry]:
         """1 walk (`lint_check.scan_non_nfc_entries`), memoized, read by the
         LAST tier alone (#491).
@@ -446,6 +535,17 @@ class BundleSignals:
                 )
             )
         return self._open_contradictions
+
+
+def _row_payload(row: pq.PendingItem) -> dict[str, object]:
+    """A queue row's payload as a mapping, `{}` when it is not a JSON object.
+    Read for structure only (tier, ids, confidence); its prose is never
+    rendered."""
+    try:
+        decoded = json.loads(row.payload)
+    except ValueError:
+        return {}
+    return decoded if isinstance(decoded, dict) else {}
 
 
 _SAFE_ARGUMENT = re.compile(r"\A(?!-)[\w./-]+\Z")
@@ -851,10 +951,13 @@ def _tier_duplicate_groups(signals: BundleSignals) -> NextAction | None:
     covered by D4's standing contract (`_NO_ACTION_LINE` means no tier
     fired, never that the bundle is clean) plus `status`'s #593 disclosure
     line naming `openkos duplicates` as the full scan."""
-    groups = signals.exact_title_groups
-    if not groups:
+    if signals.queue_snapshot.queue == "present":
+        # The queue is authoritative once it exists: no candidate walk.
+        count = len(signals.queued_exact_title_groups)
+    else:
+        count = len(signals.exact_title_groups)
+    if not count:
         return None
-    count = len(groups)
     return NextAction(
         command="openkos curate",
         reason=(
@@ -935,22 +1038,77 @@ def _tier_open_contradictions(signals: BundleSignals) -> NextAction | None:
     (`:77-80`) are untouched, and `_STATUS_POINTER` (`:71-75`) is still
     appended by `render_lines` on every path. A `None` action here means
     only "no ranked tier fired", never "no contradictions exist"."""
+    if signals.queue_snapshot.queue == "present":
+        # The queue is authoritative once it exists: its rows, not a
+        # recompute over `findings`, are what is pending.
+        queued = signals.queued_contradictions
+        if not queued:
+            return None
+        pair, confidence = queued[0]
+        return _contradiction_action(pair, confidence)
     findings_ = signals.open_contradictions
     if not findings_:
         return None
     finding = findings_[0]
-    source_id, target_id = finding.pair_ids
+    return _contradiction_action(finding.pair_ids, finding.confidence)
+
+
+def _contradiction_action(pair_ids: tuple[str, str], confidence: float) -> NextAction:
+    source_id, target_id = pair_ids
     return NextAction(
         command="openkos contradictions",
         reason=(
-            # Fixed wording, not `finding.verdict`: after the #639 filter
-            # the verdict here is always `contradicts`, and interpolating
-            # it printed the raw enum value ("an open contradicts
-            # finding").
+            # Fixed wording, not the verdict: after the #639 filter the
+            # verdict here is always `contradicts`, and interpolating it
+            # printed the raw enum value ("an open contradicts finding").
             f"{source_id} <-> {target_id}: an open contradiction finding "
-            f"is pending review (confidence: {finding.confidence:.2f})."
+            f"is pending review (confidence: {confidence:.2f})."
         ),
-        subjects=finding.pair_ids,
+        subjects=pair_ids,
+    )
+
+
+def _tier_pending_queue(signals: BundleSignals) -> NextAction | None:
+    """Rank 12, LAST: pending-work rows no earlier tier ranks, and an
+    unattended job that needs a human (`budget_exhausted`, `timed_out`,
+    `commit_failed`, `failed`). The command is `openkos pending`, the
+    read-only view that lists both.
+
+    Ranked last because it is not itself a content finding: it points at a
+    list whose rows are proposals other advisors already made, and a deferred
+    unattended run is a statement about scheduling. The row half fires only
+    over a PRESENT queue (an absent or unreadable queue is never read as one
+    with rows); the job half reads `jobs.db` independently, because a
+    watch-only workspace can have an outcome to report and no queue yet.
+
+    Reads only rows' kinds, counts, and, for a watcher refusal, the one
+    refused Source's id -- never a payload. That id is declared in `subjects`
+    so a disclosure gate can withhold it; the counts and the job line name
+    nothing a concept owns."""
+    snapshot = signals.queue_snapshot
+    parts: list[str] = []
+    subjects: tuple[str, ...] = ()
+    if snapshot.queue == "present":
+        rows = signals.unranked_queue_rows
+        if rows:
+            count = len(rows)
+            by_kind = pending_queue_report.open_row_breakdown(rows)
+            parts.append(
+                f"{count} open pending-work row{_plural(count)} ({by_kind}) "
+                f"{_agree(count, 'awaits', 'await')} review."
+            )
+            refusal = next((r for r in rows if r.kind == "watch_refusal"), None)
+            if refusal is not None and refusal.targets:
+                parts.append(f"The watcher refused {refusal.targets[0]}.")
+                subjects = (refusal.targets[0],)
+    job = snapshot.last_job
+    if job is not None and pending_queue_report.attention_outcome(job) is not None:
+        summary = pending_queue_report.attention_summary(job)
+        parts.append(f"{summary[:1].upper()}{summary[1:]}.")
+    if not parts:
+        return None
+    return NextAction(
+        command="openkos pending", reason=" ".join(parts), subjects=subjects
     )
 
 
@@ -968,12 +1126,14 @@ _TIERS: tuple[Tier, ...] = (
     _tier_duplicate_groups,
     _tier_non_nfc_names,
     _tier_open_contradictions,
+    _tier_pending_queue,
 )
 """D1 order: ingest-first (empty bundle, #386), reindex (missing vectors),
 reindex (missing FTS, #553), reindex (stale, #381), ingest (failed
 extraction), ingest (judge debt, #868), backfill-sensitivity,
 set-sensitivity (#693), curate, normalize-names,
-contradictions (durable-pending-work, Decision 6). A higher-ranked tier's finding always
+contradictions (durable-pending-work, Decision 6), pending (queue rows no
+earlier tier ranks and unattended outcomes needing attention). A higher-ranked tier's finding always
 wins; a lower-ranked tier is never even evaluated once a higher one fires
 (first-hit short-circuit) -- which is also what keeps the three reindex
 tiers from ever all firing: a missing index short-circuits before the

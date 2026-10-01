@@ -1649,14 +1649,17 @@ def test_non_nfc_tier_is_ranked_last() -> None:
     decomposed filename blocks nothing, is not missing, and is not unsafe
     -- it is hygiene, which outranks nothing except the contradictions
     tier's own judgment-over-present-content recommendation."""
-    assert next_action._TIERS[-1] is next_action._tier_open_contradictions
+    # The pending-queue tier (12) is the new last; contradictions (11) sit
+    # directly above it.
+    assert next_action._TIERS[-1] is next_action._tier_pending_queue
+    assert next_action._TIERS[-2] is next_action._tier_open_contradictions
     assert (
         next_action._TIERS.index(next_action._tier_non_nfc_names)
-        == len(next_action._TIERS) - 2
+        == len(next_action._TIERS) - 3
     )
     assert (
         next_action._TIERS.index(next_action._tier_duplicate_groups)
-        == len(next_action._TIERS) - 3
+        == len(next_action._TIERS) - 4
     )
 
 

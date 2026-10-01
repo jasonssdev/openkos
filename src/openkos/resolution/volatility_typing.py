@@ -29,7 +29,7 @@ of that type's concept bodies (design's "Deterministic Sampling Rule") to
 show the LLM -- one `llm.chat` call per type, never per concept.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -130,6 +130,12 @@ class TierSuggestionBatch:
     chat calls attempted. `None` when the run completed. The failed type
     produced no suggestion and no `on_progress` call, and no later type
     was ever prompted."""
+    deferred: int = 0
+    """How many types a `max_calls` bound left unasked: each would have been a
+    chat call (a type the post-sampling re-check filters out never would, so it
+    is not counted). `0` for an unbounded run and for one the bound did not
+    cut. A deferred type is simply asked on a later run; nothing is persisted
+    for it, so there is nothing to resume from."""
 
 
 def _reread_sensitivity_blocked(
@@ -302,6 +308,8 @@ def suggest_volatility(
     local_exemption: bool = False,
     rationale_language: str | None = None,
     on_progress: Callable[[int, int, TierSuggestion], None] | None = None,
+    max_calls: int | None = None,
+    skip_types: Collection[str] = (),
 ) -> TierSuggestionBatch:
     """Suggest a volatility tier + rationale for every distinct concept TYPE
     present under `bundle_dir`, read-only.
@@ -373,7 +381,18 @@ def suggest_volatility(
     both suggesters' rationales into one table the operator reads top to
     bottom. `None` -- the default -- assembles the pre-#812 prompt byte for
     byte. The CLI resolves it once from `config.Config.rationale_language`;
-    this module stays config-free."""
+    this module stays config-free.
+
+    `max_calls` (the unattended budget's per-stage bound) caps the `llm.chat`
+    calls this run MAY issue, in the same sorted-type order: once that many
+    calls were issued (a raised one included, it was still spent) every type
+    left to ask is counted in `TierSuggestionBatch.deferred` instead. `None` --
+    the default, and the only value a CLI run ever passes -- is unbounded and
+    leaves the loop byte-identical.
+
+    `skip_types` names types the caller already holds a suggestion for (a fresh
+    pending-work row): they are left out of the sample, cost no call and do not
+    count toward `total`. Empty -- the default -- changes nothing."""
     blocked = sensitivity.sensitive_concept_ids(
         bundle_dir,
         include_confidential=include_confidential,
@@ -382,9 +401,15 @@ def suggest_volatility(
 
     docs, _skip_notices = lint.collect_docs(bundle_dir)
     docs = [doc for doc in docs if doc.identity not in blocked]
-    sampled_docs = _sample_docs_by_type(docs)
+    sampled_docs = {
+        type_name: type_docs
+        for type_name, type_docs in _sample_docs_by_type(docs).items()
+        if type_name not in skip_types
+    }
     results: list[TierSuggestion] = []
     total = len(sampled_docs)
+    calls_issued = 0
+    deferred = 0
     for type_index, type_name in enumerate(sorted(sampled_docs), start=1):
         type_docs = [
             doc
@@ -397,6 +422,9 @@ def suggest_volatility(
         ]
         if not type_docs:
             continue
+        if max_calls is not None and calls_issued >= max_calls:
+            deferred += 1
+            continue
         bodies = [doc.body[:M_TRUNCATE_CHARS] for doc in type_docs]
         current_default = types.TYPE_TO_DEFAULT_VOLATILITY.get(type_name, "")
         messages = _build_messages(
@@ -408,6 +436,7 @@ def suggest_volatility(
         # Guard ONLY the chat call (#441): a transport/model failure must
         # not discard the completed suggestions, while parse/validate/
         # progress failures keep their own existing contracts untouched.
+        calls_issued += 1
         try:
             reply = llm.chat(messages)
         except BackendError as exc:
@@ -424,4 +453,4 @@ def suggest_volatility(
         results.append(suggestion)
         if on_progress is not None:
             on_progress(len(results), total, suggestion)
-    return TierSuggestionBatch(results=results)
+    return TierSuggestionBatch(results=results, deferred=deferred)

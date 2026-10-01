@@ -142,7 +142,7 @@ Where the community can contribute: MCP integrations, client configurations, and
 
 *Goal: the engine carries the work it can carry, and queues only the work a human should decide.*
 
-**Status: not started.**
+**Status: in progress.** The substrate is delivered: the workspace lock is held only for a commit phase (so a person and a daemon can share a workspace), a durable pending-work queue with a read-only `pending` verb, a call budget that binds only the unattended runner, the runner itself and its foreground `daemon` verb, and incremental refresh of the derived FTS and graph stores. The inbox watcher's import job exists, but the daemon does not yet enable it. What remains: the watcher's wiring and its refusal cases, the remaining readers of the queue (the MCP surface and `curate`), and closing the arc's spec and ADR bookkeeping.
 
 MVP 3 gives the base a second surface; it does not reduce what the base asks of its user. Every maintenance pass is still an invocation someone has to remember, and the output of that pass is a list of tasks. The philosophy commits to the engine reducing *cognitive maintenance* while leaving *cognitive responsibility* with the human. This arc enforces that line in the engine's own operation.
 

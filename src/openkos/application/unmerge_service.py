@@ -36,10 +36,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from openkos import config
+from openkos.application import catalog_delta, commit_phase
 from openkos.application import drift as application_drift
 from openkos.application import lifecycle as application_lifecycle
 from openkos.application.consent import boolean_confirmation
 from openkos.application.lifecycle import PreparedUnmerge
+from openkos.application.lock_wait import CommitSection
 from openkos.application.write_gate import (
     ConfirmCallback,
     DriftDetected,
@@ -78,6 +80,15 @@ class UnmergePorts:
     raise for a git failure (it degrades to a warning)."""
 
     clock: Callable[[], datetime] = _utc_now
+
+    commit_section: CommitSection = commit_phase.unlocked_section
+    """Entered around each step's commit phase only (ADR-0036): never around
+    the confirmation question. The CLI hands it a section that takes the
+    workspace lock; the default holds nothing."""
+
+    after_commit: Callable[[], None] = commit_phase.no_after_commit
+    """Runs inside the commit section after each step's auto-commit: the
+    derived-index refresh."""
 
 
 @dataclass(frozen=True)
@@ -469,45 +480,74 @@ def _unmerge_step(
             prepared.confirmation.non_tty_refusal,
         )
 
-    drift = application_drift.describe_drift(
-        layout,
-        {
-            index_path: prepared.index_bytes,
-            log_path: prepared.log_bytes,
-            request.survivor_path: prepared.survivor_bytes,
-            **{
-                layout.bundle_dir / rel: data
-                for rel, data in prepared.rewrite_bytes.items()
+    # ADR-0036: the plan and the question above ran with no workspace lock;
+    # the commit phase takes it now (a busy lock propagates as
+    # `WorkspaceBusyError` before anything is written).
+    with ports.commit_section():
+        # A V5 (delta) entry's reversal is re-composed over the catalog's
+        # current bytes below; a snapshot entry restores whole files and so
+        # keeps refusing when either catalog file moved.
+        recomposable = prepared.catalog_edit is not None
+        drift = application_drift.describe_drift(
+            layout,
+            {
+                **(
+                    {}
+                    if recomposable
+                    else {
+                        index_path: prepared.index_bytes,
+                        log_path: prepared.log_bytes,
+                    }
+                ),
+                request.survivor_path: prepared.survivor_bytes,
+                **{
+                    layout.bundle_dir / rel: data
+                    for rel, data in prepared.rewrite_bytes.items()
+                },
             },
-        },
-        "unmerge",
-        remedy=(
-            "Copy your edit somewhere safe before re-running: a re-run "
-            "restores the pre-merge snapshots over index.md, log.md, and "
-            "the survivor (overwriting the edit), and keeps refusing on an "
-            "edited rewrite file until that edit is reverted."
-        ),
-        hint=application_lifecycle.okf_v02_migration_hint(index_path),
-    )
-    if drift is not None:
-        raise DriftDetected(drift)
-
-    try:
-        result = application_lifecycle.unmerge_core(layout, prepared)
-    except (OSError, ValueError) as exc:
-        raise Refused(
-            f"openkos unmerge: failed while writing the unmerge -- {exc}."
-        ) from exc
-
-    obs.restored(
-        UnmergeSummary(
-            survivor_canonical=survivor_canonical,
-            absorbed_canonical=absorbed_canonical,
-            index_name=index_path.name,
-            log_name=log_path.name,
+            "unmerge",
+            remedy=(
+                "Copy your edit somewhere safe before re-running: a re-run "
+                "restores the pre-merge snapshots over index.md, log.md, and "
+                "the survivor (overwriting the edit), and keeps refusing on an "
+                "edited rewrite file until that edit is reverted."
+            ),
+            hint=application_lifecycle.okf_v02_migration_hint(index_path),
         )
-    )
+        if drift is not None:
+            raise DriftDetected(drift)
+        # What the plan only READ (bystander relations, the free absorbed
+        # path): a re-run recomputes over them, so the default advice applies.
+        read_drift = commit_phase.describe_read_drift(
+            layout, prepared.read_dependencies, "unmerge"
+        )
+        if read_drift is not None:
+            raise DriftDetected(read_drift)
+        if recomposable:
+            try:
+                prepared = application_lifecycle.recompose_unmerge_catalog(
+                    layout, prepared
+                )
+            except catalog_delta.CatalogRecomposeError as exc:
+                raise DriftDetected(str(exc)) from exc
 
-    ports.autocommit(
-        root, result.committed_paths, f"openkos: unmerge {absorbed_canonical}"
-    )
+        try:
+            result = application_lifecycle.unmerge_core(layout, prepared)
+        except (OSError, ValueError) as exc:
+            raise Refused(
+                f"openkos unmerge: failed while writing the unmerge -- {exc}."
+            ) from exc
+
+        obs.restored(
+            UnmergeSummary(
+                survivor_canonical=survivor_canonical,
+                absorbed_canonical=absorbed_canonical,
+                index_name=index_path.name,
+                log_name=log_path.name,
+            )
+        )
+
+        ports.autocommit(
+            root, result.committed_paths, f"openkos: unmerge {absorbed_canonical}"
+        )
+        ports.after_commit()

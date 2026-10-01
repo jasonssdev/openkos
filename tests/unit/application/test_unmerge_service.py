@@ -214,11 +214,11 @@ def test_a_survivor_edited_since_the_merge_is_refused_unless_discarded(
 def test_an_edit_during_the_confirmation_is_drift_with_the_copy_your_edit_remedy(
     merged: Path,
 ) -> None:
-    index = merged / "bundle" / "index.md"
+    survivor = merged / "bundle" / f"{_SURVIVOR}.md"
 
     def _edit_then_proceed(prompt: str) -> ConfirmationAnswer:
-        index.write_text(
-            index.read_text(encoding="utf-8") + "\nlate edit\n", encoding="utf-8"
+        survivor.write_text(
+            survivor.read_text(encoding="utf-8") + "\nlate edit\n", encoding="utf-8"
         )
         return "proceed"
 
@@ -394,15 +394,15 @@ def test_a_failing_step_stops_the_unwind_and_carries_its_own_refusal(
 def test_a_drifting_step_keeps_its_drift_type_through_the_chain(
     chain: Path,
 ) -> None:
-    index = chain / "bundle" / "index.md"
+    survivor = chain / "bundle" / f"{_SURVIVOR}.md"
 
     def _edit_on_first_step(observer_calls: list[str]) -> svc.UnmergeObserver:
         class _Edit(svc.UnmergeObserver):
             def proposed(self, preview: svc.UnmergePreview) -> None:
                 if not observer_calls:
                     observer_calls.append("edited")
-                    index.write_text(
-                        index.read_text(encoding="utf-8") + "\nlate\n",
+                    survivor.write_text(
+                        survivor.read_text(encoding="utf-8") + "\nlate\n",
                         encoding="utf-8",
                     )
 

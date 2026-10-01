@@ -705,6 +705,13 @@ class WorkspaceLayout:
         return self.openkos_dir / "findings.db"
 
     @property
+    def jobs_db_path(self) -> Path:
+        """`.openkos/jobs.db`: the unattended engine's job record and daily
+        spend ledger. Pure derivation, never created here; `purge` deletes it
+        wholesale because job rows can name the concepts they touched."""
+        return self.openkos_dir / "jobs.db"
+
+    @property
     def insight_questions_db_path(self) -> Path:
         """`.openkos/insight_questions.db`: cached embeddings of the SOURCE
         QUESTION every filed insight was saved from.

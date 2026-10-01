@@ -58,10 +58,12 @@ idempotent, so a re-run completes it.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from collections.abc import Callable
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from openkos import config, fsio, lifecycle
+from openkos.application import catalog_delta
 from openkos.bundle import ledger as bundle_ledger
 from openkos.model import okf
 
@@ -186,6 +188,19 @@ class RepairPlan:
     legacy_citations_ids: tuple[str, ...]
     blocked_export_ids: tuple[str, ...] = ()
     skipped_withdrawal_ids: tuple[str, ...] = ()
+    read_dependencies: dict[Path, bytes] = field(default_factory=dict)
+    """Every concept document the plan READ and does not write: the
+    deprecated-status export is decided from the whole bundle's `relations:`
+    edges (who supersedes whom, and whether that walk was complete), so a
+    document that is only an edge holder is an input (#1137, ADR-0036). The
+    commit phase re-validates them with `baselines`; disjoint from it."""
+    index_bytes: bytes = b""
+    """The bytes `index.md` held when `index_new_text` was composed. Not a drift
+    baseline: another verb appends to the index body, so the commit phase
+    re-applies the `okf_version` flip to the current text
+    (`recompose_index`) instead of refusing."""
+    index_edit: Callable[[str], str] | None = None
+    """The `okf_version` flip as a pure function of the index's current text."""
 
     @property
     def has_work(self) -> bool:
@@ -376,14 +391,20 @@ def plan_repair(bundle_dir: Path) -> RepairPlan | RepairRefusal:
 
     index_path = bundle_dir / "index.md"
     index_new_text: str | None = None
+    index_edit: Callable[[str], str] | None = None
+    index_bytes = b""
     if index_path.is_file():
         index_bytes, index_text = fsio.snapshot_read(index_path)
-        index_metadata, index_body = okf.load_frontmatter(index_text)
+        index_metadata, _ = okf.load_frontmatter(index_text)
         if not okf.okf_version_is_current(index_metadata):
-            new_index_metadata = dict(index_metadata)
-            new_index_metadata[okf.OKF_VERSION_KEY] = okf.OKF_VERSION
-            index_new_text = okf.dump_frontmatter(new_index_metadata, index_body)
-            baselines[index_path] = index_bytes
+            index_edit = _flip_okf_version
+            index_new_text = index_edit(index_text)
+
+    read_dependencies = {
+        path: raw_bytes_by_id[concept_id]
+        for concept_id, path in paths_by_id.items()
+        if path not in baselines
+    }
 
     return RepairPlan(
         extraction=unmigrated,
@@ -395,7 +416,48 @@ def plan_repair(bundle_dir: Path) -> RepairPlan | RepairRefusal:
         legacy_citations_ids=tuple(sorted(set(legacy_citations_ids))),
         blocked_export_ids=tuple(sorted(blocked_export_ids)),
         skipped_withdrawal_ids=tuple(sorted(skipped_withdrawal_ids)),
+        read_dependencies=read_dependencies,
+        index_bytes=index_bytes,
+        index_edit=index_edit,
     )
+
+
+def _flip_okf_version(index_text: str) -> str:
+    """`index_text` with its `okf_version` set to the current one, body kept
+    verbatim; unchanged when it already is current."""
+    metadata, body = okf.load_frontmatter(index_text)
+    if okf.okf_version_is_current(metadata):
+        return index_text
+    flipped = dict(metadata)
+    flipped[okf.OKF_VERSION_KEY] = okf.OKF_VERSION
+    return okf.dump_frontmatter(flipped, body)
+
+
+def recompose_index(
+    plan: RepairPlan,
+    *,
+    read: catalog_delta.SnapshotRead = fsio.snapshot_read,
+) -> RepairPlan:
+    """The plan with its flipped `index.md` text re-composed over the index's
+    current bytes (commit phase, ADR-0036): a concurrent append to the index
+    body is kept beside the flip. Raises `catalog_delta.CatalogRecomposeError`
+    when that is not possible; a plan with no flip is returned unchanged."""
+    if plan.index_new_text is None:
+        return plan
+    if plan.index_edit is None:
+        raise catalog_delta.CatalogRecomposeError(
+            "openkos repair: refusing to write -- the plan carries no staged "
+            "index delta. Nothing was written."
+        )
+    new_text = catalog_delta.recompose_file(
+        verb="repair",
+        path=plan.index_path,
+        baseline=plan.index_bytes,
+        planned=plan.index_new_text,
+        delta=plan.index_edit,
+        read=read,
+    )
+    return replace(plan, index_new_text=new_text)
 
 
 def apply_repair(root: Path, plan: RepairPlan) -> RepairOutcome:

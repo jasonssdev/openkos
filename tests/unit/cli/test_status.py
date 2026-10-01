@@ -8,6 +8,7 @@ then renders three sections via `typer.echo`. Exit 0 on every successful
 read; the ONLY non-zero path is an absent/unreadable workspace.
 """
 
+import contextlib
 import os
 import sqlite3
 from collections.abc import Callable, Iterator
@@ -23,7 +24,8 @@ from openkos.bundle import decisions as bundle_decisions
 from openkos.cli.main import app
 from openkos.graph import sqlite_graph
 from openkos.llm.base import EMBED_DIM
-from openkos.state import derived, findings, fts
+from openkos.state import derived, findings, fts, jobs
+from openkos.state import pending_queue as pq
 from tests.unit.cli.conftest import corrupt_identity_sidecar
 from tests.unit.cli.conftest import snapshot_bytes as _snapshot
 from tests.unit.conftest import LOCAL_BACKEND_LOCALITY
@@ -1866,3 +1868,274 @@ def test_status_prints_partial_output_when_a_late_read_raises(
     # The header reaches the operator; the contents it would have listed do
     # not, because the read that computes them is the one that raised.
     assert "Nothing needs attention." not in result.stdout
+
+
+# -- the pending-work queue and unattended outcomes (status delta) -----------------
+
+
+def _queue_row(tmp_path: Path, kind: str, targets: tuple[str, ...]) -> None:
+    key = {
+        "identity": lambda: pq.identity_key(targets),
+        "relation_type": lambda: pq.relation_type_key(*targets[:2]),
+        "volatility": lambda: pq.volatility_key(targets[0]),
+        "contradiction": lambda: pq.contradiction_key((targets[0], targets[1]), None),
+        "revision": lambda: pq.revision_key((targets[0], targets[1])),
+        "watch_refusal": lambda: pq.watch_refusal_key(targets[0]),
+    }[kind]()
+
+    @contextlib.contextmanager
+    def _section() -> Iterator[None]:
+        yield
+
+    layout = config.WorkspaceLayout(tmp_path)
+    conn = derived.open_derived_connection(layout.findings_db_path)
+    try:
+        pq.ensure_schema(conn)
+        pq.upsert_proposal(
+            conn,
+            pq.Proposal(
+                kind=kind,
+                key_body=key,
+                producer="test/1",
+                payload="SENTINEL-PAYLOAD-5d1e",
+                targets=targets,
+            ),
+            commit_section=_section,
+            bundle_dir=layout.bundle_dir,
+        )
+    finally:
+        conn.close()
+
+
+def _job_row(
+    tmp_path: Path,
+    kind: str,
+    outcome: str,
+    *,
+    ended: str = "2026-01-02T00:01:00+00:00",
+    deferred: int = 0,
+    detail_code: str | None = None,
+) -> None:
+    conn = jobs.open_jobs(config.WorkspaceLayout(tmp_path).openkos_dir / "jobs.db")
+    try:
+        job_id = jobs.start_job(conn, kind, "2026-01-02T00:00:00+00:00")
+        jobs.finish_job(
+            conn,
+            job_id,
+            outcome=outcome,
+            ended_at=ended,
+            chat_calls=0,
+            units_done=0,
+            units_deferred=deferred,
+            detail_code=detail_code,
+        )
+    finally:
+        conn.close()
+
+
+def _status_lines() -> list[str]:
+    result = runner.invoke(app, ["status"])
+    assert result.exit_code == 0, result.output
+    return result.stdout.splitlines()
+
+
+def test_status_without_a_queue_says_not_available_and_creates_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    before = _snapshot(tmp_path)
+
+    lines = _status_lines()
+
+    assert (
+        "  Pending-work queue not available: not computed yet "
+        "(run `openkos daemon --once`)." in lines
+    )
+    assert "  No unattended run recorded." in lines
+    assert "  Nothing needs attention." in lines
+    assert not (tmp_path / ".openkos" / "findings.db").exists()
+    assert not (tmp_path / ".openkos" / "jobs.db").exists()
+    assert _snapshot(tmp_path) == before
+
+
+def test_status_with_an_empty_queue_is_not_the_absent_queue(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    layout = config.WorkspaceLayout(tmp_path)
+    conn = derived.open_derived_connection(layout.findings_db_path)
+    pq.ensure_schema(conn)
+    conn.close()
+
+    lines = _status_lines()
+
+    assert "  Pending-work queue: no open rows." in lines
+    assert not any("not available" in line for line in lines)
+    assert "  Nothing needs attention." in lines
+
+
+def test_status_counts_open_rows_per_kind_and_names_pending(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    _queue_row(tmp_path, "identity", ("concepts/a", "concepts/b"))
+    _queue_row(tmp_path, "volatility", ("Person",))
+    _queue_row(tmp_path, "volatility", ("Event",))
+    _queue_row(tmp_path, "watch_refusal", ("sources/refused",))
+    _queue_row(tmp_path, "contradiction", ("concepts/a", "concepts/b"))
+
+    lines = _status_lines()
+
+    assert (
+        "  5 open pending-work rows (1 identity, 2 volatility, 1 contradiction, "
+        "1 watch_refusal) -- run `openkos pending` to review." in lines
+    )
+    assert "  Nothing needs attention." not in lines
+    assert "  Pending-work queue: no open rows." not in lines
+
+
+def test_status_one_open_row_is_singular(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    _queue_row(tmp_path, "revision", ("concepts/a", "concepts/b"))
+
+    assert (
+        "  1 open pending-work row (1 revision) -- run `openkos pending` to review."
+        in _status_lines()
+    )
+
+
+def test_status_never_prints_a_row_payload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    _queue_row(tmp_path, "relation_type", ("concepts/a", "concepts/b"))
+
+    result = runner.invoke(app, ["status"])
+
+    assert "SENTINEL-PAYLOAD-5d1e" not in result.output
+
+
+def test_status_resolved_rows_are_not_counted_as_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    _queue_row(tmp_path, "revision", ("concepts/a", "concepts/b"))
+    conn = sqlite3.connect(tmp_path / ".openkos" / "findings.db")
+    conn.execute("UPDATE pending_items SET status='applied', resolution='as_proposed'")
+    conn.commit()
+    conn.close()
+
+    lines = _status_lines()
+
+    assert "  Pending-work queue: no open rows." in lines
+    assert not any("open pending-work row" in line for line in lines)
+
+
+def test_status_unreadable_queue_is_not_available_never_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    layout = config.WorkspaceLayout(tmp_path)
+    conn = derived.open_derived_connection(layout.findings_db_path)
+    conn.execute("CREATE TABLE pending_items (unrelated TEXT)")
+    conn.commit()
+    conn.close()
+
+    lines = _status_lines()
+
+    assert "  Pending-work queue not available: findings.db could not be read." in lines
+    assert "  Pending-work queue: no open rows." not in lines
+
+
+@pytest.mark.parametrize(
+    ("outcome", "remedy"),
+    [
+        (
+            "budget_exhausted",
+            "the rest runs on a later pass once the `unattended:` budget in "
+            "openkos.yaml allows it",
+        ),
+        ("timed_out", "the rest is retried on the next unattended run"),
+        (
+            "commit_failed",
+            "the next unattended run retries the commit; or commit the changed "
+            "files yourself",
+        ),
+        ("failed", "fix the cause, then run `openkos daemon --once`"),
+    ],
+)
+def test_status_names_a_last_job_that_needs_attention(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str, remedy: str
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    _job_row(tmp_path, "watch", outcome, deferred=3)
+
+    lines = _status_lines()
+
+    assert (
+        f"  The last unattended watch job ended {outcome}, 3 deferred at "
+        f"2026-01-02T00:01:00+00:00 -- {remedy}" in lines
+    )
+    assert "  Nothing needs attention." not in lines
+
+
+def test_status_a_deferral_carries_its_detail_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    _job_row(
+        tmp_path,
+        "watch",
+        "budget_exhausted",
+        deferred=3,
+        detail_code="max_sources_per_pass",
+    )
+
+    assert any(
+        "watch job ended budget_exhausted (max_sources_per_pass), 3 deferred" in line
+        for line in _status_lines()
+    )
+
+
+@pytest.mark.parametrize("outcome", ["completed", "stopped", "busy", "refused"])
+def test_status_a_benign_last_job_is_informational(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    _job_row(tmp_path, "maintenance", outcome)
+
+    lines = _status_lines()
+
+    assert (
+        f"  Last unattended job: maintenance, {outcome}, ended "
+        "2026-01-02T00:01:00+00:00." in lines
+    )
+    assert "  Nothing needs attention." in lines
+
+
+def test_status_reports_only_the_most_recent_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    _job_row(tmp_path, "watch", "failed")
+    _job_row(tmp_path, "maintenance", "completed")
+
+    lines = _status_lines()
+
+    assert any(line.startswith("  Last unattended job: maintenance") for line in lines)
+    assert not any("ended failed" in line for line in lines)
+
+
+def test_status_an_unreadable_job_record_is_not_available(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    (tmp_path / ".openkos").mkdir(exist_ok=True)
+    (tmp_path / ".openkos" / "jobs.db").write_bytes(b"not a database" * 100)
+
+    lines = _status_lines()
+
+    assert "  Unattended job record not available: jobs.db could not be read." in lines
+    assert "  No unattended run recorded." not in lines

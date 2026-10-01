@@ -54,6 +54,7 @@ from typing import Any, Protocol, cast
 from openkos import config
 from openkos.application import backends as application_backends
 from openkos.application import pending as application_pending
+from openkos.application import queue_resolution
 from openkos.bundle import decisions as bundle_decisions
 from openkos.graph import proximity
 from openkos.graph.base import GraphStore
@@ -179,6 +180,11 @@ class ContradictionsOptions:
     include_deprecated: bool = False
     include_confidential: bool = False
     fresh: bool = False
+    max_calls: int | None = None
+    """The most pairs (one chat call each) this run may judge -- a budgeted,
+    runner-started run passes what it has left. Served verdicts cost nothing
+    and never count against it. `None` is unbounded: the only value a CLI run
+    passes."""
 
 
 @dataclass(frozen=True)
@@ -205,6 +211,9 @@ class ContradictionsOutcome:
     quarantine_notice: str | None
     truncation_notice: str | None
     zero_state: str | None
+    deferred_by_bound: int = 0
+    """Candidates a `max_calls` bound left unjudged, in plan order. Everything
+    judged was persisted, so the next pass serves it and spends only on these."""
 
 
 @dataclass(frozen=True)
@@ -262,7 +271,9 @@ def apply_contradiction_decision(
     `pair`/`merged_absorbed_id` to `target_state`, returning the
     workspace-relative decision path for the caller's auto-commit list.
 
-    Never opens `.openkos/findings.db`: decline/reopen never read the findings
+    Never REQUIRES `.openkos/findings.db`: a decline closes the matching
+    pending-work row when the queue holds one (a best-effort no-op otherwise),
+    but decline/reopen never read the findings
     store as a precondition -- a matching findings row is not required either
     way. Any existing record for the SAME `decision_key` is replaced in place
     (idempotent re-decline/re-reopen); every OTHER record already in the owning
@@ -284,6 +295,10 @@ def apply_contradiction_decision(
     path = bundle_decisions.write_decisions(
         owner_id, layout.bundle_dir, records=records, on_warning=on_warning
     )
+    if target_state == "declined":
+        queue_resolution.resolve_declined_contradiction(
+            layout.root, pair_ids=pair_ids, merged_absorbed_id=merged_absorbed_id
+        )
     return f"bundle/{path.relative_to(layout.bundle_dir).as_posix()}"
 
 
@@ -492,6 +507,8 @@ def run_contradictions(
     backend refusals BEFORE the generic one, since both subclass
     `BackendError`), the fail-open persistence, and only then the notices that
     read the still-open store."""
+    if options.max_calls is not None and options.max_calls < 0:
+        raise ValueError(f"max_calls must be >= 0, got {options.max_calls}")
     layout = _require_workspace(root)
     try:
         cfg = config.read_config(root)
@@ -548,6 +565,15 @@ def run_contradictions(
                 plan,
                 finding_input_digests=ports.finding_input_digests,
                 observer=observer,
+            )
+        # The unattended budget's bound truncates what is left to judge (the
+        # served candidates cost nothing), in plan order -- the next pass
+        # serves what this one persisted and judges only the remainder.
+        deferred = 0
+        if options.max_calls is not None and len(judged_plan.specs) > options.max_calls:
+            deferred = len(judged_plan.specs) - options.max_calls
+            judged_plan = dataclasses.replace(
+                judged_plan, specs=judged_plan.specs[: options.max_calls]
             )
         try:
             batch, _total_pairs = ports.find_contradictions(
@@ -614,7 +640,7 @@ def run_contradictions(
             local_exemption=local_exemption,
         )
         zero_state: str | None = None
-        if not verdicts and batch.failure is None:
+        if not verdicts and batch.failure is None and deferred == 0:
             # Guarded on a clean run only (#441): a first-candidate failure also
             # carries zero verdicts, and the zero-candidates state message would
             # then claim an empty graph the failure, not the projection,
@@ -656,4 +682,5 @@ def run_contradictions(
         quarantine_notice=quarantine_notice,
         truncation_notice=truncation_notice,
         zero_state=zero_state,
+        deferred_by_bound=deferred,
     )
