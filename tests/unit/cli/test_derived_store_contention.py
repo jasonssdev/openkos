@@ -76,9 +76,11 @@ def test_a_findings_write_blocked_past_busy_timeout_is_a_refusal_not_a_traceback
         holder.execute("ROLLBACK")
         holder.close()
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert isinstance(result.exception, SystemExit)
-    assert result.stderr.startswith("openkos probe: failed -- another process is ")
+    assert result.stderr.startswith(
+        "openkos probe: failed -- another OpenKOS process is "
+    )
     assert "try again" in result.stderr
     assert "Traceback" not in result.stderr
 
