@@ -16,9 +16,13 @@ from dataclasses import dataclass
 from typing import Final, cast
 
 from openkos import config
-from openkos.application import concept_read, list_service, next_action
+from openkos.application import (
+    concept_read,
+    list_service,
+    next_action,
+    pending_queue_report,
+)
 from openkos.application import consistency as application_consistency
-from openkos.application import pending_queue_report
 from openkos.application import query as query_service
 from openkos.llm.base import Embedder, LLMBackend
 from openkos.mcp import gate

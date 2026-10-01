@@ -26,9 +26,13 @@ from pathlib import Path
 from typing import Final, cast
 
 from openkos import read_outcome, sensitivity
-from openkos.application import concept_read, list_service, next_action
+from openkos.application import (
+    concept_read,
+    list_service,
+    next_action,
+    pending_queue_report,
+)
 from openkos.application import consistency as application_consistency
-from openkos.application import pending_queue_report
 from openkos.application import query as query_service
 from openkos.model import okf
 
@@ -412,6 +416,12 @@ class PendingRead:
     queue: pending_queue_report.QueueSnapshot
 
 
+_SUBJECT_FREE_KINDS: Final = frozenset({"volatility"})
+"""Queue kinds whose row legitimately names no concept (a volatility row is
+about a concept TYPE). Any other row with no declared target is withheld: an
+empty list there is a producer defect, and the gate fails closed on it."""
+
+
 def _disclose_queue(
     queue: pending_queue_report.QueueSnapshot, snapshot: Snapshot
 ) -> dict[str, object]:
@@ -433,7 +443,8 @@ def _disclose_queue(
             "resolve": pending_queue_report.resolving_command(row.kind),
         }
         for row in queue.open_items
-        if row.targets and _subjects_disclosable(row.targets, snapshot)
+        if _subjects_disclosable(row.targets, snapshot)
+        and (row.targets or row.kind in _SUBJECT_FREE_KINDS)
     ]
     return {"state": "present", "rows": rows}
 

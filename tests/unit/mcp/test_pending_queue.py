@@ -15,7 +15,7 @@ from typer.testing import CliRunner
 
 from openkos import config
 from openkos.cli.main import app
-from openkos.llm.base import BackendHostLocality, Embedder, LLMBackend
+from openkos.llm.base import Embedder, LLMBackend
 from openkos.mcp import tools
 from openkos.state import derived
 from openkos.state import pending_queue as pq
@@ -71,7 +71,7 @@ def _enqueue(
 ) -> None:
     key = {
         "identity": pq.identity_key(targets),
-        "volatility": pq.volatility_key(targets[0]),
+        "volatility": pq.volatility_key(targets[0] if targets else "Concept"),
     }[kind]
     conn: sqlite3.Connection = derived.open_derived_connection(layout.findings_db_path)
     try:
@@ -170,3 +170,18 @@ def test_listing_does_not_change_a_rows_status(layout: config.WorkspaceLayout) -
         conn.close()
     assert statuses == ["pending"]
     assert layout.findings_db_path.read_bytes() == before
+
+
+def test_a_volatility_row_names_no_concept_and_is_listed(
+    layout: config.WorkspaceLayout,
+) -> None:
+    """A type is not a concept: the row declares no subjects, so nothing in it
+    can fail the gate."""
+    _enqueue(layout, "volatility", ())
+
+    result = _call(layout)
+
+    assert result["queue"] == {
+        "state": "present",
+        "rows": [{"kind": "volatility", "targets": [], "resolve": "openkos curate"}],
+    }

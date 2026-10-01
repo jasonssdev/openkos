@@ -29,7 +29,7 @@ of that type's concept bodies (design's "Deterministic Sampling Rule") to
 show the LLM -- one `llm.chat` call per type, never per concept.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -309,6 +309,7 @@ def suggest_volatility(
     rationale_language: str | None = None,
     on_progress: Callable[[int, int, TierSuggestion], None] | None = None,
     max_calls: int | None = None,
+    skip_types: Collection[str] = (),
 ) -> TierSuggestionBatch:
     """Suggest a volatility tier + rationale for every distinct concept TYPE
     present under `bundle_dir`, read-only.
@@ -387,7 +388,11 @@ def suggest_volatility(
     calls were issued (a raised one included, it was still spent) every type
     left to ask is counted in `TierSuggestionBatch.deferred` instead. `None` --
     the default, and the only value a CLI run ever passes -- is unbounded and
-    leaves the loop byte-identical."""
+    leaves the loop byte-identical.
+
+    `skip_types` names types the caller already holds a suggestion for (a fresh
+    pending-work row): they are left out of the sample, cost no call and do not
+    count toward `total`. Empty -- the default -- changes nothing."""
     blocked = sensitivity.sensitive_concept_ids(
         bundle_dir,
         include_confidential=include_confidential,
@@ -396,7 +401,11 @@ def suggest_volatility(
 
     docs, _skip_notices = lint.collect_docs(bundle_dir)
     docs = [doc for doc in docs if doc.identity not in blocked]
-    sampled_docs = _sample_docs_by_type(docs)
+    sampled_docs = {
+        type_name: type_docs
+        for type_name, type_docs in _sample_docs_by_type(docs).items()
+        if type_name not in skip_types
+    }
     results: list[TierSuggestion] = []
     total = len(sampled_docs)
     calls_issued = 0

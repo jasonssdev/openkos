@@ -57,8 +57,8 @@ import typer
 
 from openkos import config, lint, lock, sensitivity
 from openkos.application import backends as application_backends
+from openkos.application import curate_queue, merge_service
 from openkos.application import lifecycle as application_lifecycle
-from openkos.application import merge_service
 from openkos.application import next_action as next_action_module
 from openkos.application import pending as application_pending
 from openkos.application.lock_wait import CommitSection
@@ -98,7 +98,9 @@ from openkos.resolution.edge_typing import (
     suggest_edge_types,
 )
 from openkos.resolution.volatility_typing import TierSuggestion, suggest_volatility
+from openkos.state import adjudications as adjudications_store
 from openkos.state import derived, findings
+from openkos.state import edge_suggestions as edge_suggestions_store
 from openkos.state.vectorstore import content_hash
 
 _DOCTOR_HINT = " Or run `openkos doctor` to diagnose the environment."
@@ -778,6 +780,39 @@ def _preconditions_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
     return StageOutcome(status="empty")
 
 
+def _serve_identity_rows(
+    ctx: CurateContext,
+    served: dict[str, AdjudicatedCandidate],
+    to_judge: list[CandidateGroup],
+) -> tuple[dict[str, AdjudicatedCandidate], list[CandidateGroup]]:
+    """Move every group a fresh open identity row already holds a verdict for
+    from `to_judge` to `served` (pending-work: curate serves open rows instead
+    of recomputing). No row, no change: an absent queue is today's partition."""
+    verdicts = curate_queue.identity_verdicts(ctx.layout)
+    if not verdicts:
+        return served, to_judge
+    served = dict(served)
+    remaining: list[CandidateGroup] = []
+    for group in to_judge:
+        row = verdicts.get(tuple(sorted(group.member_ids)))
+        try:
+            verdict = Verdict(row[0]) if row is not None else None
+        except ValueError:
+            verdict = None
+        if row is None or verdict is None:
+            remaining.append(group)
+            continue
+        served[adjudications_store.group_key_for(group.member_ids)] = (
+            AdjudicatedCandidate(
+                candidate=group,
+                verdict=verdict,
+                confidence=row[1],
+                rationale=row[2],
+            )
+        )
+    return served, remaining
+
+
 def _identity_probe(ctx: CurateContext) -> StageProbe:
     """`resolution.find_candidates_report` (design D1/D4) -- one LLM call
     per RETAINED candidate group the adjudication store cannot serve
@@ -820,6 +855,7 @@ def _identity_probe(ctx: CurateContext) -> StageProbe:
         # here too would print the same line twice per curate run.
         warn_on_failure=False,
     )
+    served, to_judge = _serve_identity_rows(ctx, served, to_judge)
     return StageProbe(
         items=groups,
         llm_calls=len(to_judge),
@@ -900,6 +936,9 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
             surface="curate",
         )
     )
+    # A fresh open identity row already holds its verdict: serve it (no model
+    # call) rather than judging the group again.
+    served_by_key, to_judge = _serve_identity_rows(ctx, served_by_key, to_judge)
     # Gated on whether the store was READ, the same fact the verb and the
     # Structure stage gate on (#809): a store that was read and served
     # nothing is drift worth saying out loud, while an absent or
@@ -953,6 +992,15 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         cli_main._reassemble_adjudications(groups, served_by_key, batch.results)
         if served_by_key
         else batch.results
+    )
+    # Every candidate group this run offers that holds no open row becomes one,
+    # with its verdict: the human's decision below resolves it.
+    curate_queue.enqueue_identity(
+        layout,
+        groups,
+        results,
+        pinned=judged_digests,
+        commit_section=cli_main._commit_section_for(ctx.root),
     )
 
     applied = 0
@@ -1080,11 +1128,22 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
                 )
                 skipped += 1
                 continue
+            # `index.md`/`log.md` are re-composed over their current bytes
+            # below, not guarded: every verb appends to them, so a concurrent
+            # entry is kept beside this merge's own.
             cli_main._reject_drifted_targets(
                 layout,
-                application_lifecycle.merge_drift_targets(layout, prepared),
+                application_lifecycle.merge_drift_targets(
+                    layout, prepared, include_catalog=False
+                ),
                 "curate",
                 deletes=frozenset({absorbed_path}),
+            )
+            prepared = cli_main._recomposed_catalog(
+                application_lifecycle.recompose_merge_catalog,
+                layout,
+                prepared,
+                verb="curate",
             )
             # The documents the plan only READ (the whole-bundle scan behind
             # the reference rewrites and the survivor's sensitivity) are
@@ -1151,6 +1210,42 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         notice=f"applied {applied}, skipped {skipped}.",
         skipped_items=tuple(declined),
     )
+
+
+def _serve_relation_rows(
+    ctx: CurateContext,
+    served: dict[str, EdgeSuggestion],
+    to_type: list[Edge],
+) -> tuple[dict[str, EdgeSuggestion], list[Edge]]:
+    """Move every candidate edge a fresh open relation row already holds a
+    suggestion for from `to_type` to `served`. The row answers only for an edge
+    this run's own walk produced, so an endpoint the run excludes is never
+    offered. No row, no change."""
+    rows = curate_queue.relation_suggestions(ctx.layout)
+    if not rows:
+        return served, to_type
+    served = dict(served)
+    remaining: list[Edge] = []
+    for edge in to_type:
+        row = rows.get((edge.source_id, edge.target_id))
+        if row is None:
+            remaining.append(edge)
+            continue
+        corrected = (
+            None
+            if (row.effective_source_id, row.effective_target_id)
+            == (edge.source_id, edge.target_id)
+            else Edge(row.effective_source_id, row.effective_target_id)
+        )
+        served[edge_suggestions_store.pair_key_for(edge.source_id, edge.target_id)] = (
+            EdgeSuggestion(
+                edge=edge,
+                suggested_type=row.suggested_type,
+                rationale=row.rationale,
+                corrected_edge=corrected,
+            )
+        )
+    return served, remaining
 
 
 def _structure_probe(ctx: CurateContext) -> StageProbe:
@@ -1221,6 +1316,7 @@ def _structure_probe(ctx: CurateContext) -> StageProbe:
         # review, the Identity probe's exact reason).
         warn_on_failure=False,
     )
+    served, to_type = _serve_relation_rows(ctx, served, to_type)
     return StageProbe(
         items=tuple(edges),
         llm_calls=len(to_type),
@@ -1291,6 +1387,9 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         include_confidential=effective_confidential,
         surface="curate",
     )
+    # A fresh open relation row already holds its suggestion: serve it (no
+    # model call) rather than typing the edge again.
+    served_by_key, to_type = _serve_relation_rows(ctx, served_by_key, to_type)
     # Gated on whether the store was READ, the same fact the standalone
     # verb gates on (#809). This used to gate on `served_by_key` being
     # non-empty, so a store that was read and served nothing -- drift, and
@@ -1339,6 +1438,12 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         cli_main._reassemble_edge_suggestions(edges, served_by_key, batch.results)
         if served_by_key
         else batch.results
+    )
+    curate_queue.enqueue_relations(
+        ctx.layout,
+        suggestions,
+        pinned=judged_digests,
+        commit_section=cli_main._commit_section_for(ctx.root),
     )
 
     layout = ctx.layout
@@ -1425,10 +1530,9 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
             )
             raise typer.Exit(code=1) from exc
 
-        drift_baselines = {
-            source_path: prepared.source_bytes,
-            log_path: prepared.log_bytes,
-        }
+        # `log.md` is re-composed below, not guarded: another verb's entry
+        # appended since the plan was composed is kept.
+        drift_baselines = {source_path: prepared.source_bytes}
         if prepared.target_bytes is not None:
             drift_baselines[target_path] = prepared.target_bytes
         # The commit phase (#1137): the prompt held no workspace lock, so the
@@ -1439,6 +1543,12 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
                 skipped += 1
                 continue
             cli_main._reject_drifted_targets(layout, drift_baselines, "curate")
+            prepared = cli_main._recomposed_catalog(
+                application_lifecycle.recompose_relate_log,
+                log_path,
+                prepared,
+                verb="curate",
+            )
 
             try:
                 application_lifecycle.relate_core(
@@ -1545,6 +1655,20 @@ def _sensitivity_gap_ids(bundle_dir: Path) -> frozenset[str]:
     return frozenset(gaps)
 
 
+def _volatility_rows_for(
+    ctx: CurateContext, type_names: Sequence[str]
+) -> dict[str, TierSuggestion]:
+    """The fresh open volatility rows that answer for one of this run's types;
+    a row for a type the run does not see is not served."""
+    return {
+        type_name: suggestion
+        for type_name, suggestion in curate_queue.volatility_suggestions(
+            ctx.layout
+        ).items()
+        if type_name in type_names
+    }
+
+
 def _metadata_probe(ctx: CurateContext) -> StageProbe:
     """`lint.collect_docs` + `cfg.type_tiers` (design D4): the queue is
     every distinct concept TYPE `suggest_volatility` would sample -- one
@@ -1572,9 +1696,11 @@ def _metadata_probe(ctx: CurateContext) -> StageProbe:
                 f" Sensitivity unset on: {gap_list} -- set it with "
                 "`openkos set-sensitivity`."
             )
+    row_served = _volatility_rows_for(ctx, type_names)
     return StageProbe(
         items=tuple(type_names),
-        llm_calls=len(type_names),
+        llm_calls=len(type_names) - len(row_served),
+        served=len(row_served),
         empty_message=empty_message,
     )
 
@@ -1614,16 +1740,27 @@ def _metadata_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
     if llm is None:  # pragma: no cover -- sequencer invariant (needs_llm)
         raise RuntimeError("Metadata stage requires an LLM client")
 
+    # A fresh open volatility row already holds its tier: serve it (no model
+    # call) and ask the model only about the other types.
+    row_served = _volatility_rows_for(ctx, type_names)
     batch = suggest_volatility(
         ctx.layout.bundle_dir,
         llm=llm,
+        skip_types=frozenset(row_served),
         include_confidential=ctx.include_confidential,
         local_exemption=ctx.local_exemption,
         # #812, the other half of the pair -- see `_structure_run`'s note.
         rationale_language=ctx.cfg.rationale_language,
         on_progress=observability.progress_callback("curate", "concept type"),
     )
-    results: Sequence[TierSuggestion] = batch.results
+    results: Sequence[TierSuggestion] = sorted(
+        [*row_served.values(), *batch.results], key=lambda r: r.type_name
+    )
+    curate_queue.enqueue_volatility(
+        ctx.layout,
+        results,
+        commit_section=cli_main._commit_section_for(ctx.root),
+    )
 
     applied = 0
     skipped = 0
@@ -1990,6 +2127,23 @@ def _contradictions_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
             typer.echo(f"  - {claim}")
         typer.echo(f"  rationale: {verdict.rationale}")
 
+    # Report-only stage: a contradiction is enqueued for the human and never
+    # resolved or applied here. Only a verdict about the content still on disk
+    # is a proposal about it.
+    curate_queue.enqueue_contradictions(
+        ctx.layout,
+        [
+            (verdict, spec)
+            for index, (spec, verdict) in enumerate(
+                zip(plan.specs, verdicts, strict=False)
+            )
+            if tuple(judged_inputs[index])
+            == finding_input_digests(ctx.layout.bundle_dir, spec)
+            and _all_present(ctx.layout, spec.pair_ids)
+        ],
+        input_digests=finding_input_digests,
+        commit_section=cli_main._commit_section_for(ctx.root),
+    )
     try:
         persist_findings(
             ctx.layout,
