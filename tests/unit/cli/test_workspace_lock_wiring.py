@@ -17,7 +17,7 @@ import pytest
 from typer.testing import CliRunner
 
 from openkos import lock
-from openkos.cli.main import _READ_ONLY_COMMANDS, app
+from openkos.cli.main import _READ_ONLY_COMMANDS, _SELF_LOCKING_COMMANDS, app
 from tests.unit.conftest import make_locked_error, make_non_lock_operational_error
 
 runner = CliRunner()
@@ -72,6 +72,7 @@ def test_every_command_is_classified() -> None:
         name
         for name, callback in commands.items()
         if name not in _READ_ONLY_COMMANDS
+        and name not in _SELF_LOCKING_COMMANDS
         and getattr(callback, "__openkos_locked_command__", None) is None
     ]
 
@@ -80,6 +81,22 @@ def test_every_command_is_classified() -> None:
         "@_guard_workspace_lock, or name them in _READ_ONLY_COMMANDS if they "
         "provably never write to the workspace"
     )
+
+
+def test_a_command_belongs_to_exactly_one_class() -> None:
+    """Read-only, locked and self-locking are disjoint: a command in two
+    classes would be both exempt from the lock and wrapped in it."""
+    commands = _registered_commands()
+    locked = {
+        name
+        for name, callback in commands.items()
+        if getattr(callback, "__openkos_locked_command__", None) is not None
+    }
+
+    assert frozenset() == _READ_ONLY_COMMANDS & _SELF_LOCKING_COMMANDS
+    assert locked & _READ_ONLY_COMMANDS == set()
+    assert locked & _SELF_LOCKING_COMMANDS == set()
+    assert set(commands) >= _SELF_LOCKING_COMMANDS
 
 
 def test_the_declared_lock_name_matches_the_registered_name() -> None:
@@ -300,3 +317,151 @@ def test_a_non_contention_operational_error_in_a_locked_verb_is_not_exit_3(
 
     assert result.exit_code != 3
     assert isinstance(result.exception, sqlite3.OperationalError)
+
+
+# --- `--wait <seconds>` (#1137) -------------------------------------------------
+
+_TIMED_HOLDER = textwrap.dedent(
+    """
+    import sys
+    import time
+    from pathlib import Path
+    from openkos import lock
+
+    with lock.workspace_lock(Path(sys.argv[1])):
+        print("ACQUIRED", flush=True)
+        time.sleep(float(sys.argv[2]))
+    """
+)
+
+
+def _locked_command_names() -> list[str]:
+    return sorted(
+        name
+        for name, callback in _registered_commands().items()
+        if getattr(callback, "__openkos_locked_command__", None) is not None
+    )
+
+
+def _option_names(command: str) -> set[str]:
+    info = next(
+        i
+        for i in app.registered_commands
+        if (i.name or (i.callback.__name__ if i.callback else ""))
+        .replace("_", "-")
+        .removesuffix("-cmd")
+        == command
+    )
+    import typer.main
+
+    click_command = typer.main.get_command_from_info(
+        info,
+        pretty_exceptions_short=True,
+        rich_markup_mode=None,
+    )
+    return {opt for param in click_command.params for opt in param.opts}
+
+
+def test_every_locked_verb_accepts_wait_and_no_other_command_does() -> None:
+    """The guard adds the option, so the roster cannot drift from the lock."""
+    locked = _locked_command_names()
+    assert locked  # a vacuous pass would prove nothing
+
+    with_wait = {c for c in _registered_commands() if "--wait" in _option_names(c)}
+
+    assert with_wait == set(locked)
+
+
+@pytest.mark.parametrize("value", ["abc", "-1", "1.5", "3601", ""])
+def test_a_bad_wait_value_is_a_usage_error_before_any_work(
+    value: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["relate", "a", "references", "b", "--wait", value])
+
+    assert result.exit_code == 2
+    assert "Invalid value for '--wait'" in result.output
+    assert "refusing to run" not in result.stderr
+
+
+def test_wait_zero_equals_the_default_fail_fast(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    holder = subprocess.Popen(  # noqa: S603
+        [sys.executable, "-c", _HOLDER, str(tmp_path)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+        cwd=_REPO_ROOT,
+    )
+    try:
+        assert holder.stdout is not None
+        assert holder.stdout.readline().strip() == "ACQUIRED"
+
+        default = runner.invoke(app, ["relate", "a", "references", "b"])
+        zero = runner.invoke(app, ["relate", "a", "references", "b", "--wait", "0"])
+
+        assert default.exit_code == zero.exit_code == 3
+        assert zero.stderr == default.stderr
+        assert "waiting" not in zero.stderr
+    finally:
+        assert holder.stdin is not None
+        holder.stdin.close()
+        holder.wait(timeout=60)
+
+
+def test_an_expired_wait_exits_3_with_one_waiting_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    holder = subprocess.Popen(  # noqa: S603
+        [sys.executable, "-c", _HOLDER, str(tmp_path)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+        cwd=_REPO_ROOT,
+    )
+    try:
+        assert holder.stdout is not None
+        assert holder.stdout.readline().strip() == "ACQUIRED"
+
+        result = runner.invoke(app, ["relate", "a", "references", "b", "--wait", "1"])
+
+        assert result.exit_code == 3
+        assert "another OpenKOS process is modifying this workspace" in result.stderr
+        waiting = [ln for ln in result.stderr.splitlines() if "waiting" in ln]
+        assert waiting == [
+            "openkos relate: the workspace is busy; waiting up to 1 s for it."
+        ]
+    finally:
+        assert holder.stdin is not None
+        holder.stdin.close()
+        holder.wait(timeout=60)
+
+
+def test_a_wait_succeeds_once_the_holder_releases(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    free = runner.invoke(app, ["relate", "a", "references", "b"])
+    assert free.exit_code != 3, free.stderr
+    holder = subprocess.Popen(  # noqa: S603
+        [sys.executable, "-c", _TIMED_HOLDER, str(tmp_path), "1"],
+        stdout=subprocess.PIPE,
+        text=True,
+        cwd=_REPO_ROOT,
+    )
+    try:
+        assert holder.stdout is not None
+        assert holder.stdout.readline().strip() == "ACQUIRED"
+
+        result = runner.invoke(app, ["relate", "a", "references", "b", "--wait", "10"])
+
+        # The body ran (not a lock refusal) and ended as it does when unheld.
+        assert result.exit_code == free.exit_code
+        assert "refusing to run" not in result.stderr
+        assert "waiting up to 10 s" in result.stderr
+    finally:
+        holder.wait(timeout=60)

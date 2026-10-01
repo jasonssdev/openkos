@@ -16,6 +16,12 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Added
 
+- Every verb that takes the workspace lock accepts `--wait <seconds>`: when
+  another OpenKOS process holds the lock it retries with backoff for up to that
+  many seconds (at most 3600) before refusing with exit `3` as before, printing
+  one line to stderr when it starts waiting. A value that is not a non-negative
+  integer is a usage error (exit `2`); `--wait 0`, the default, refuses at once
+  ([#1137](https://github.com/jasonssdev/openkos/issues/1137)).
 - `openkos.yaml` accepts an optional `unattended:` section for the unattended
   engine: per-pass and per-day chat-call limits, a per-pass source limit, a job
   deadline, a maintenance interval, and a watched `inbox` folder with its

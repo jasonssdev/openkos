@@ -3,6 +3,7 @@
 import dataclasses
 import functools
 import glob
+import inspect
 import json
 import os
 import sqlite3
@@ -29,6 +30,7 @@ from openkos.application import (
     contradictions_service,
     duplicates_service,
     ingest_service,
+    lock_wait,
     merge_service,
     reconcile_service,
     reindex_service,
@@ -354,6 +356,52 @@ can drift without a red test.
 """
 
 
+_SELF_LOCKING_COMMANDS: frozenset[str] = frozenset()
+"""Long-running commands that take the lock per unit of work (a commit phase
+each), never for their own lifetime, so the guard must not wrap them. Empty
+until such a command exists (`daemon`); a name here must be registered, and
+no command is in two classes (`test_every_command_is_classified`)."""
+
+
+_WAIT_PARAM = "wait"
+
+
+def _add_wait_option(wrapper: Callable[..., object], fn: Callable[..., object]) -> None:
+    """Give a locked verb's published signature `--wait <seconds>` (#1137).
+
+    The option is added HERE, by the guard, so the set of verbs that accept it
+    is exactly the set that is locked and cannot drift from it. Typer reads the
+    wrapper's `__signature__` and annotations, not the wrapped function's, so
+    the body never sees the parameter: the wrapper pops it before delegating.
+    Click validates it, which is what makes a bad value a usage error (exit 2)
+    before any work.
+    """
+    signature = inspect.signature(fn)
+    if _WAIT_PARAM in signature.parameters:
+        raise TypeError(f"{fn.__name__} already declares a {_WAIT_PARAM!r} parameter")
+    option = inspect.Parameter(
+        _WAIT_PARAM,
+        inspect.Parameter.KEYWORD_ONLY,
+        default=typer.Option(
+            0,
+            "--wait",
+            min=0,
+            max=lock_wait.MAX_WAIT_SECONDS,
+            metavar="SECONDS",
+            help=(
+                "When another OpenKOS process holds the workspace lock, retry "
+                "for up to this many seconds before refusing (exit 3). The "
+                "default 0 refuses at once."
+            ),
+        ),
+        annotation=int,
+    )
+    wrapper.__signature__ = signature.replace(  # type: ignore[attr-defined]
+        parameters=[*signature.parameters.values(), option]
+    )
+    wrapper.__annotations__ = {**fn.__annotations__, _WAIT_PARAM: int}
+
+
 def _guard_workspace_lock(
     command_name: str,
 ) -> Callable[[Callable[..., _T]], Callable[..., _T]]:
@@ -382,11 +430,22 @@ def _guard_workspace_lock(
     def decorate(fn: Callable[..., _T]) -> Callable[..., _T]:
         @functools.wraps(fn)
         def wrapper(*args: object, **kwargs: object) -> _T:
+            wait = cast(int, kwargs.pop(_WAIT_PARAM, 0))
             root = Path.cwd()
             if config.require_workspace(root) is not None:
                 return fn(*args, **kwargs)
+
+            def announce_wait() -> None:
+                typer.echo(
+                    f"openkos {command_name}: the workspace is busy; "
+                    f"waiting up to {wait} s for it.",
+                    err=True,
+                )
+
             try:
-                with lock.workspace_lock(root):
+                with lock_wait.acquire_with_backoff(
+                    root, wait_seconds=wait, on_wait=announce_wait
+                ):
                     return fn(*args, **kwargs)
             except lock.WorkspaceBusyError as exc:
                 typer.echo(
@@ -418,6 +477,7 @@ def _guard_workspace_lock(
                 )
                 raise typer.Exit(code=3) from exc
 
+        _add_wait_option(wrapper, fn)
         wrapper.__openkos_locked_command__ = command_name  # type: ignore[attr-defined]
         return wrapper
 
