@@ -255,3 +255,59 @@ def test_non_insight_scores_are_byte_identical_to_plain_rrf() -> None:
     vec_hits = [VecHit(concept_id="cid_B", distance=0.0)]
 
     assert fusion.fuse(fts_hits, vec_hits) == ["cid_B", "cid_A"]
+
+
+# --- Source share cap in the displayed top-`limit` (issue #1220) -----------
+
+
+def test_source_cap_leaves_a_source_free_ranking_a_plain_slice() -> None:
+    """With no `sources/` id the selection is exactly `ranked[:limit]`."""
+    ranked = [f"concepts/c{i}" for i in range(8)]
+
+    assert fusion.select_top(ranked, 5) == ranked[:5]
+
+
+def test_source_cap_defers_sources_beyond_half_the_limit() -> None:
+    """Four Sources outrank three compiled concepts at limit 5: only
+    `limit // 2` Sources keep their slots, the concepts move up (#1220)."""
+    ranked = [
+        "sources/a",
+        "sources/b",
+        "sources/c",
+        "sources/d",
+        "people/gustavo",
+        "events/kickoff",
+        "events/review",
+    ]
+
+    assert fusion.select_top(ranked, 5) == [
+        "sources/a",
+        "sources/b",
+        "people/gustavo",
+        "events/kickoff",
+        "events/review",
+    ]
+
+
+def test_source_cap_backfills_deferred_sources_when_concepts_run_out() -> None:
+    """A re-rank, never an exclusion: with too few compiled concepts the
+    deferred Sources fill the empty slots in their original order."""
+    ranked = ["sources/a", "sources/b", "sources/c", "people/x", "sources/d"]
+
+    assert fusion.select_top(ranked, 5) == [
+        "sources/a",
+        "sources/b",
+        "people/x",
+        "sources/c",
+        "sources/d",
+    ]
+
+
+def test_source_cap_always_admits_one_source() -> None:
+    """At `limit == 1` the cap floors at one, so a lone best Source stays."""
+    assert fusion.select_top(["sources/a", "people/x"], 1) == ["sources/a"]
+
+
+def test_source_cap_nonpositive_limit_is_empty() -> None:
+    assert fusion.select_top(["sources/a"], 0) == []
+    assert fusion.select_top(["sources/a"], -3) == []
