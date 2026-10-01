@@ -663,16 +663,16 @@ def test_reindex_fts_unavailable_maps_to_exit_one(
 
 # --- reindex-lock-handling: ladder 1 (vectors/fts) --------------------------
 
-_LOCK_MESSAGE_FRAGMENT = "holding the workspace lock"
+_LOCK_MESSAGE_FRAGMENT = "using the workspace's derived stores"
 
 
-def test_reindex_locked_vectors_db_at_open_exits_one_with_the_retry_message(
+def test_reindex_locked_vectors_db_at_open_exits_three_with_the_retry_message(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A lock-contention `OperationalError` raised at `open_vector_store`
     (store open) is caught, prints the uniform lock-contention retry
-    message, and exits 1 with no raw traceback (spec: Locked vectors.db
-    exits 1 with the retry message, no traceback; task 3.1)."""
+    message, and exits 3 with no raw traceback (spec: Locked vectors.db
+    exits 3 with the retry message, no traceback; task 3.1)."""
     _init_workspace(tmp_path, monkeypatch)
 
     def _raise_locked(*args: object, **kwargs: object) -> None:
@@ -682,19 +682,19 @@ def test_reindex_locked_vectors_db_at_open_exits_one_with_the_retry_message(
 
     result = runner.invoke(app, ["reindex"])
 
-    assert result.exit_code != 0
+    assert result.exit_code == 3
     assert isinstance(result.exception, SystemExit)
     assert result.stderr.startswith("openkos reindex: failed -- ")
     assert _LOCK_MESSAGE_FRAGMENT in result.stderr
     assert "Traceback" not in result.stderr
 
 
-def test_reindex_locked_vectors_db_at_upsert_or_commit_exits_one_with_the_retry_message(
+def test_reindex_locked_vectors_db_at_upsert_or_commit_exits_three_with_the_retry_message(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A lock-contention `OperationalError` raised inside
     `state.reindex.reindex` (representing a lock hit at `upsert_many`/the
-    end-of-run `commit`) is caught the same way, exits 1, no traceback
+    end-of-run `commit`) is caught the same way, exits 3, no traceback
     (task 3.2)."""
     _init_workspace(tmp_path, monkeypatch)
 
@@ -705,21 +705,21 @@ def test_reindex_locked_vectors_db_at_upsert_or_commit_exits_one_with_the_retry_
 
     result = runner.invoke(app, ["reindex"])
 
-    assert result.exit_code != 0
+    assert result.exit_code == 3
     assert isinstance(result.exception, SystemExit)
     assert result.stderr.startswith("openkos reindex: failed -- ")
     assert _LOCK_MESSAGE_FRAGMENT in result.stderr
     assert "Traceback" not in result.stderr
 
 
-def test_reindex_locked_fts_db_at_begin_immediate_exits_one_with_the_retry_message(
+def test_reindex_locked_fts_db_at_begin_immediate_exits_three_with_the_retry_message(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A lock-contention `OperationalError` raised inside
     `state.reindex.reindex` (representing a lock hit at `write_fts_index`'s
     `BEGIN IMMEDIATE`, propagated unchanged per `state/fts.py`'s errorcode
-    discrimination) is caught the SAME way, exits 1, no traceback (spec:
-    Locked fts.db, including at BEGIN IMMEDIATE, exits 1 with the retry
+    discrimination) is caught the SAME way, exits 3, no traceback (spec:
+    Locked fts.db, including at BEGIN IMMEDIATE, exits 3 with the retry
     message; task 3.3)."""
     _init_workspace(tmp_path, monkeypatch)
 
@@ -730,7 +730,7 @@ def test_reindex_locked_fts_db_at_begin_immediate_exits_one_with_the_retry_messa
 
     result = runner.invoke(app, ["reindex"])
 
-    assert result.exit_code != 0
+    assert result.exit_code == 3
     assert isinstance(result.exception, SystemExit)
     assert result.stderr.startswith("openkos reindex: failed -- ")
     assert _LOCK_MESSAGE_FRAGMENT in result.stderr
@@ -972,7 +972,7 @@ def test_reindex_summary_and_prune_skipped_notice_still_surface_when_graph_write
 # --- reindex-lock-handling: ladder 2 (graph) --------------------------------
 
 
-def test_reindex_locked_graph_db_exits_one_with_the_same_retry_message(
+def test_reindex_locked_graph_db_exits_three_with_the_same_retry_message(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A lock-contention `OperationalError` raised by
@@ -981,7 +981,7 @@ def test_reindex_locked_graph_db_exits_one_with_the_same_retry_message(
     caught and reports the SAME uniform lock-contention message ladder 1
     uses for vectors.db/fts.db, exiting 1 with no raw traceback -- NOT the
     graph-specific "failed while writing the graph index" message a
-    non-lock `sqlite3.Error` still gets (spec: Locked graph.db exits 1 with
+    non-lock `sqlite3.Error` still gets (spec: Locked graph.db exits 3 with
     the SAME uniform message; task 4.1)."""
     _init_workspace(tmp_path, monkeypatch)
     fake_report = ReindexReport(embedded=1, cache_hits=0, pruned=0, skipped=0)
@@ -996,7 +996,7 @@ def test_reindex_locked_graph_db_exits_one_with_the_same_retry_message(
 
     result = runner.invoke(app, ["reindex"])
 
-    assert result.exit_code != 0
+    assert result.exit_code == 3
     assert isinstance(result.exception, SystemExit)
     assert result.stderr.startswith("openkos reindex: failed -- ")
     assert _LOCK_MESSAGE_FRAGMENT in result.stderr
