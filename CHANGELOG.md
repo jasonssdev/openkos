@@ -44,6 +44,8 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   sensitivity level), or a file the ingest was about to create still refuses
   with exit `3` and writes nothing
   ([#1137](https://github.com/jasonssdev/openkos/issues/1137)).
+
+
 - `sync-tags`, `normalize-names`, `repair`, `reconcile`, `adjudicate` and
   `suggest-relations` no longer hold the workspace lock while they wait on the
   model or on you: the lock is taken only to re-validate, write and commit, so
