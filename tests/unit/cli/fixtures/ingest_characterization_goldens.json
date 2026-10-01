@@ -34,14 +34,9 @@
     "stderr": "openkos ingest: 'raw/notes.txt' is already held by a different source; copying this one to 'raw/notes-2.txt' instead.\nopenkos ingest: no concept extracted from this source; keeping the Source only.\n",
     "stdout": "openkos ingest: proposed changes:\n  + raw/notes-2.txt\n  + bundle/sources/notes-2.md\n  ~ index.md (new Source entry)\n  ~ log.md (new dated entry)\nopenkos ingest: imported 'b/notes.txt' -> raw/notes-2.txt, bundle/sources/notes-2.md (index.md, log.md updated).\n"
   },
-  "drift_index": {
+  "drift_config": {
     "exit_code": 3,
-    "stderr": "openkos ingest: no concept extracted from this source; keeping the Source only.\nopenkos ingest: refusing to write -- 1 write target(s) changed on disk after this run computed its plan: bundle/index.md. Nothing was written. Re-run to recompute over the current bundle.\n",
-    "stdout": "openkos ingest: proposed changes:\n  + raw/notes.txt\n  + bundle/sources/notes.md\n  ~ index.md (new Source entry)\n  ~ log.md (new dated entry)\n"
-  },
-  "drift_log": {
-    "exit_code": 3,
-    "stderr": "openkos ingest: no concept extracted from this source; keeping the Source only.\nopenkos ingest: refusing to write -- 1 write target(s) changed on disk after this run computed its plan: bundle/log.md. Nothing was written. Re-run to recompute over the current bundle.\n",
+    "stderr": "openkos ingest: no concept extracted from this source; keeping the Source only.\nopenkos ingest: refusing to write -- 1 input(s) that decided this ingest's sensitivity or provenance changed on disk after the plan was computed: openkos.yaml. Nothing was written. Re-run to recompute over the current state.\n",
     "stdout": "openkos ingest: proposed changes:\n  + raw/notes.txt\n  + bundle/sources/notes.md\n  ~ index.md (new Source entry)\n  ~ log.md (new dated entry)\n"
   },
   "empty_slug_lost_in_staging": {
