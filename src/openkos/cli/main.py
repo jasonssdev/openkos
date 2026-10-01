@@ -1,5 +1,6 @@
 """Typer application object exposed as the `openkos` console script."""
 
+import contextlib
 import dataclasses
 import functools
 import glob
@@ -402,6 +403,66 @@ def _add_wait_option(wrapper: Callable[..., object], fn: Callable[..., object]) 
     wrapper.__annotations__ = {**fn.__annotations__, _WAIT_PARAM: int}
 
 
+class _LockRefused(Exception):
+    """A lock-related refusal already reported on stderr, carrying its exit code."""
+
+    def __init__(self, code: int) -> None:
+        super().__init__(code)
+        self.code = code
+
+
+def _wait_announcer(command_name: str, wait: int) -> Callable[[], None]:
+    def announce_wait() -> None:
+        typer.echo(
+            f"openkos {command_name}: the workspace is busy; "
+            f"waiting up to {wait} s for it.",
+            err=True,
+        )
+
+    return announce_wait
+
+
+@contextlib.contextmanager
+def _lock_refusals(command_name: str) -> Iterator[None]:
+    """Turn the lock's refusals into their stderr line and exit code.
+
+    Shared by the whole-body guard and the commit-phase guard, so a refusal
+    reads the same wherever the lock was taken. Raises `_LockRefused` (the
+    line is already printed); any other error passes through unchanged.
+    """
+    try:
+        yield
+    except lock.WorkspaceBusyError as exc:
+        typer.echo(
+            f"openkos {command_name}: refusing to run -- {exc}.",
+            err=True,
+        )
+        raise _LockRefused(3) from exc
+    except lock.WorkspaceLockUnavailableError as exc:
+        # Exit 1, not 3: a re-run refuses again until the directory is
+        # fixed, so the retry-safe code would be a false promise.
+        typer.echo(
+            f"openkos {command_name}: refusing to run -- {exc}.",
+            err=True,
+        )
+        raise _LockRefused(1) from exc
+    except sqlite3.OperationalError as exc:
+        # The one place a derived store's lock contention (a writer or
+        # opener still blocked after `busy_timeout`) becomes a
+        # refusal, for every locked verb, so no verb has to remember
+        # its own handler. A verb that handles the error itself
+        # (`reindex`'s ladders, the persist-time advisories) never
+        # reaches here. Any other operational failure is re-raised
+        # unchanged.
+        if not derived.is_lock_contention(exc):
+            raise
+        typer.echo(
+            _LOCK_CONTENTION_TEMPLATE.format(command=command_name),
+            err=True,
+        )
+        raise _LockRefused(3) from exc
+
+
 def _guard_workspace_lock(
     command_name: str,
 ) -> Callable[[Callable[..., _T]], Callable[..., _T]]:
@@ -435,49 +496,73 @@ def _guard_workspace_lock(
             if config.require_workspace(root) is not None:
                 return fn(*args, **kwargs)
 
-            def announce_wait() -> None:
-                typer.echo(
-                    f"openkos {command_name}: the workspace is busy; "
-                    f"waiting up to {wait} s for it.",
-                    err=True,
-                )
-
             try:
-                with lock_wait.acquire_with_backoff(
-                    root, wait_seconds=wait, on_wait=announce_wait
+                with (
+                    _lock_refusals(command_name),
+                    lock_wait.acquire_with_backoff(
+                        root,
+                        wait_seconds=wait,
+                        on_wait=_wait_announcer(command_name, wait),
+                    ),
                 ):
                     return fn(*args, **kwargs)
-            except lock.WorkspaceBusyError as exc:
-                typer.echo(
-                    f"openkos {command_name}: refusing to run -- {exc}.",
-                    err=True,
-                )
-                raise typer.Exit(code=3) from exc
-            except lock.WorkspaceLockUnavailableError as exc:
-                # Exit 1, not 3: a re-run refuses again until the directory is
-                # fixed, so the retry-safe code would be a false promise.
-                typer.echo(
-                    f"openkos {command_name}: refusing to run -- {exc}.",
-                    err=True,
-                )
-                raise typer.Exit(code=1) from exc
-            except sqlite3.OperationalError as exc:
-                # The one place a derived store's lock contention (a writer or
-                # opener still blocked after `busy_timeout`) becomes a
-                # refusal, for every locked verb, so no verb has to remember
-                # its own handler. A verb that handles the error itself
-                # (`reindex`'s ladders, the persist-time advisories) never
-                # reaches here. Any other operational failure is re-raised
-                # unchanged.
-                if not derived.is_lock_contention(exc):
-                    raise
-                typer.echo(
-                    _LOCK_CONTENTION_TEMPLATE.format(command=command_name),
-                    err=True,
-                )
-                raise typer.Exit(code=3) from exc
+            except _LockRefused as refused:
+                raise typer.Exit(code=refused.code) from refused.__cause__
 
         _add_wait_option(wrapper, fn)
+        wrapper.__openkos_locked_command__ = command_name  # type: ignore[attr-defined]
+        return wrapper
+
+    return decorate
+
+
+_COMMIT_SECTION_PARAM = "commit_section"
+
+
+def _guard_commit_phase(
+    command_name: str,
+) -> Callable[[Callable[..., _T]], Callable[..., _T]]:
+    """Classify a verb as locked for its COMMIT PHASE only (#1137).
+
+    The verb's body runs with no lock held -- retrieval, the model call, the
+    preview and the confirmation can take minutes -- and enters the
+    `commit_section` this guard injects around the writes that must not
+    interleave with another writer. The section takes the lock under the
+    caller's `--wait` policy; a refusal raised inside it is reported exactly
+    as the whole-body guard reports it (exit 3, nothing written).
+
+    The body declares `commit_section` as a parameter; this guard hides it
+    from the published signature (it is not an option), and adds `--wait`,
+    so the verb stays in the locked class `test_every_command_is_classified`
+    and the `--wait` roster check enforce.
+    """
+
+    def decorate(fn: Callable[..., _T]) -> Callable[..., _T]:
+        @functools.wraps(fn)
+        def wrapper(*args: object, **kwargs: object) -> _T:
+            wait = cast(int, kwargs.pop(_WAIT_PARAM, 0))
+            root = Path.cwd()
+            kwargs[_COMMIT_SECTION_PARAM] = lock_wait.locked_commit_section(
+                root,
+                wait_seconds=wait,
+                on_wait=_wait_announcer(command_name, wait),
+            )
+            try:
+                with _lock_refusals(command_name):
+                    return fn(*args, **kwargs)
+            except _LockRefused as refused:
+                raise typer.Exit(code=refused.code) from refused.__cause__
+
+        _add_wait_option(wrapper, fn)
+        published = inspect.signature(wrapper)
+        wrapper.__signature__ = published.replace(  # type: ignore[attr-defined]
+            parameters=[
+                p
+                for p in published.parameters.values()
+                if p.name != _COMMIT_SECTION_PARAM
+            ]
+        )
+        wrapper.__annotations__.pop(_COMMIT_SECTION_PARAM, None)
         wrapper.__openkos_locked_command__ = command_name  # type: ignore[attr-defined]
         return wrapper
 
@@ -12411,7 +12496,7 @@ def _no_match_message(cause: NoMatchCause, fts_hit_count: int) -> str:
     ),
     rich_help_panel="Explore",
 )
-@_guard_workspace_lock("query")
+@_guard_commit_phase("query")
 def query(
     question: str = typer.Argument(
         ..., help="Natural-language question to answer from the bundle."
@@ -12470,6 +12555,8 @@ def query(
             "model ever accounting for them."
         ),
     ),
+    *,
+    commit_section: lock_wait.CommitSection,
 ) -> None:
     """Answer a natural-language question from the compiled bundle, with citations.
 
@@ -13135,99 +13222,112 @@ def query(
             )
             raise typer.Exit(code=1)
 
-    # Issue #313: every byte below was computed from a pre-prompt read, so
-    # re-validate each target now -- after the gate, before the first write.
-    # `plan.path` is absent by necessity, not oversight -- see the docstring.
-    _reject_drifted_targets(
-        layout,
-        {save_index_path: index_bytes, save_log_path: log_bytes},
-        "query",
-    )
+    # The commit phase (#1137): everything above -- retrieval, the model call,
+    # the duplicate scan, the preview and the prompt -- ran with no lock held.
+    # Only the re-validation and the writes below hold it, so a human reading
+    # the preview never starves another writer.
+    with commit_section():
+        # Read dependencies first: the insight's level was folded from the
+        # cited concepts' sensitivity at staging, and a concurrent raise is
+        # not a drifted WRITE target, so the guard below cannot see it.
+        cited_drift = application_query.describe_cited_drift(plan, layout.bundle_dir)
+        if cited_drift is not None:
+            typer.echo(cited_drift, err=True)
+            raise typer.Exit(code=3)
 
-    answer_rel = f"bundle/{plan.link_dir}/{plan.slug}.md"
-    landed: list[str] = []
-    try:
-        # Write order: answer document BEFORE `index.md` BEFORE `log.md`
-        # (content before catalog, mirroring `ingest`'s D3): a mid-sequence
-        # failure can leave an uncataloged file on disk, never a catalog
-        # entry pointing at a file that does not exist. There is no
-        # cross-file rollback, matching every other mutating verb's
-        # documented limitation. `landed` records each path only AFTER its
-        # write returns, so a failure names exactly the paths already on
-        # disk (#331, mirroring `set-sensitivity`'s D9 shape).
-        plan.path.parent.mkdir(parents=True, exist_ok=True)
-        fsio.write_exclusive(plan.path, plan.content)
-        landed.append(answer_rel)
-        fsio.write_atomic(save_index_path, new_index_text)
-        landed.append("bundle/index.md")
-        fsio.write_atomic(save_log_path, new_log_text)
-        landed.append("bundle/log.md")
-    except (OSError, ValueError) as exc:
-        # Distinct from the refusal phases above on purpose (#234): this is
-        # reached only after the write phase began, so the answer document
-        # may already be on disk while the catalog is not. "refusing" would
-        # tell an operator nothing happened, which is exactly wrong here.
-        landed_suffix = (
-            f"Already written (left partially filed, not rolled back): "
-            f"{', '.join(landed)}."
-            if landed
-            else "No path was written."
+        # Issue #313: every byte below was computed from a pre-prompt read, so
+        # re-validate each target now -- after the gate, before the first write.
+        # `plan.path` is absent by necessity, not oversight -- see the docstring.
+        _reject_drifted_targets(
+            layout,
+            {save_index_path: index_bytes, save_log_path: log_bytes},
+            "query",
         )
-        typer.echo(
-            f"openkos query: failed while saving the answer -- {exc}. {landed_suffix}",
-            err=True,
-        )
-        raise typer.Exit(code=1) from exc
 
-    typer.echo(
-        f"openkos query: filed answer as bundle/{plan.link_dir}/{plan.slug}.md "
-        f"({save_index_path.name}, {save_log_path.name} updated)."
-    )
-    # Write-Time Advisory (issue #669, design D4): the spec-required
-    # success-message advisory, the `query --save` mirror of ingest's
-    # run-summary line -- fires even when `--auto` skips the confirmation
-    # prompt, since the preview block above can, in principle, be bypassed
-    # in ways the success message must never depend on. stdout, like
-    # `query`'s own success line -- `query --save` has no batch stdout
-    # contract to protect (unlike ingest's stderr notices, #349).
-    if plan.type_floor_raised:
-        typer.echo(
-            f"openkos query: 1 concept was born above the workspace "
-            f"sensitivity floor by type default ({save_type} -> "
-            f"{plan.sensitivity})."
-        )
-        if plan.sensitivity == "confidential":
-            typer.echo(
-                "openkos query: confidential concepts are excluded from "
-                "query, contradictions, and suggest-relations against a "
-                "non-local backend (#569)."
+        answer_rel = f"bundle/{plan.link_dir}/{plan.slug}.md"
+        landed: list[str] = []
+        try:
+            # Write order: answer document BEFORE `index.md` BEFORE `log.md`
+            # (content before catalog, mirroring `ingest`'s D3): a mid-sequence
+            # failure can leave an uncataloged file on disk, never a catalog
+            # entry pointing at a file that does not exist. There is no
+            # cross-file rollback, matching every other mutating verb's
+            # documented limitation. `landed` records each path only AFTER its
+            # write returns, so a failure names exactly the paths already on
+            # disk (#331, mirroring `set-sensitivity`'s D9 shape).
+            plan.path.parent.mkdir(parents=True, exist_ok=True)
+            fsio.write_exclusive(plan.path, plan.content)
+            landed.append(answer_rel)
+            fsio.write_atomic(save_index_path, new_index_text)
+            landed.append("bundle/index.md")
+            fsio.write_atomic(save_log_path, new_log_text)
+            landed.append("bundle/log.md")
+        except (OSError, ValueError) as exc:
+            # Distinct from the refusal phases above on purpose (#234): this is
+            # reached only after the write phase began, so the answer document
+            # may already be on disk while the catalog is not. "refusing" would
+            # tell an operator nothing happened, which is exactly wrong here.
+            landed_suffix = (
+                f"Already written (left partially filed, not rolled back): "
+                f"{', '.join(landed)}."
+                if landed
+                else "No path was written."
             )
+            typer.echo(
+                f"openkos query: failed while saving the answer -- {exc}. {landed_suffix}",
+                err=True,
+            )
+            raise typer.Exit(code=1) from exc
 
-    # #331: `query --save` was the ONE mutating path without the
-    # workspace-autocommit safety net, for no documented reason -- the
-    # Slice-2 exclusion list (workspace-autocommit spec: "Exclusions and
-    # Unconditional Behavior") names `reindex` output, `init`, and
-    # read-only verbs only, and `query --save` simply postdated the
-    # planning that produced the six-verb roster. Same call shape as every
-    # sibling: the exact Phase-B paths, workspace-relative POSIX, scoped
-    # `git add -- <paths>`, best-effort and non-fatal.
-    _autocommit(
-        root,
-        [answer_rel, "bundle/index.md", "bundle/log.md"],
-        f"openkos: query --save {plan.link_dir}/{plan.slug}",
-    )
+        typer.echo(
+            f"openkos query: filed answer as bundle/{plan.link_dir}/{plan.slug}.md "
+            f"({save_index_path.name}, {save_log_path.name} updated)."
+        )
+        # Write-Time Advisory (issue #669, design D4): the spec-required
+        # success-message advisory, the `query --save` mirror of ingest's
+        # run-summary line -- fires even when `--auto` skips the confirmation
+        # prompt, since the preview block above can, in principle, be bypassed
+        # in ways the success message must never depend on. stdout, like
+        # `query`'s own success line -- `query --save` has no batch stdout
+        # contract to protect (unlike ingest's stderr notices, #349).
+        if plan.type_floor_raised:
+            typer.echo(
+                f"openkos query: 1 concept was born above the workspace "
+                f"sensitivity floor by type default ({save_type} -> "
+                f"{plan.sensitivity})."
+            )
+            if plan.sensitivity == "confidential":
+                typer.echo(
+                    "openkos query: confidential concepts are excluded from "
+                    "query, contradictions, and suggest-relations against a "
+                    "non-local backend (#569)."
+                )
 
-    # #640: this verb used to end with "Run `openkos reindex` to make it
-    # searchable." -- with the write-time refresh, that instruction is FALSE
-    # on the success path, so searchability is claimed only when the refresh
-    # actually completed; the degrade path's advisory (inside the helper)
-    # carries the manual `openkos reindex` pointer instead.
-    # `query` printed the advisory before it embedded the question (#199),
-    # so the refresh must not repeat it (#353 item 4).
-    if _refresh_derived_after_write(
-        layout, cfg, verb="query", warn_nonlocal_host=False
-    ):
-        typer.echo("openkos query: the filed insight is indexed and searchable.")
+        # #331: `query --save` was the ONE mutating path without the
+        # workspace-autocommit safety net, for no documented reason -- the
+        # Slice-2 exclusion list (workspace-autocommit spec: "Exclusions and
+        # Unconditional Behavior") names `reindex` output, `init`, and
+        # read-only verbs only, and `query --save` simply postdated the
+        # planning that produced the six-verb roster. Same call shape as every
+        # sibling: the exact Phase-B paths, workspace-relative POSIX, scoped
+        # `git add -- <paths>`, best-effort and non-fatal.
+        _autocommit(
+            root,
+            [answer_rel, "bundle/index.md", "bundle/log.md"],
+            f"openkos: query --save {plan.link_dir}/{plan.slug}",
+        )
+
+        # #640: this verb used to end with "Run `openkos reindex` to make it
+        # searchable." -- with the write-time refresh, that instruction is FALSE
+        # on the success path, so searchability is claimed only when the refresh
+        # actually completed; the degrade path's advisory (inside the helper)
+        # carries the manual `openkos reindex` pointer instead.
+        # `query` printed the advisory before it embedded the question (#199),
+        # so the refresh must not repeat it (#353 item 4).
+        if _refresh_derived_after_write(
+            layout, cfg, verb="query", warn_nonlocal_host=False
+        ):
+            typer.echo("openkos query: the filed insight is indexed and searchable.")
 
 
 @app.command(

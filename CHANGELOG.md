@@ -35,6 +35,12 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Changed
 
+- `query` no longer blocks behind a running writer: a plain `query` takes no
+  workspace lock, and `query --save` holds it only for the filing itself, not
+  for retrieval, the model call or the confirmation prompt. The filing refuses
+  with exit `3`, writing nothing, when a cited concept's sensitivity changed
+  while the answer was computed
+  ([#1137](https://github.com/jasonssdev/openkos/issues/1137)).
 - A derived-store lock contention (`vectors.db`, `fts.db`, `graph.db` or
   `findings.db` still busy after the busy timeout) now exits `3`, the
   retry-safe refusal, instead of `1`, for `reindex` and every other locked
