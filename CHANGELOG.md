@@ -66,6 +66,12 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   instead of "shown", since it lists no edges, and `lint`'s "Unevidenced objects:"
   detail says "one or more derived objects" rather than implying exactly one.
 
+- `contradictions` and `curate` no longer recommend `openkos unmerge` unqualified
+  for a merged-content finding: the judge can flag complementary statements of
+  one entity as contradictory at high confidence, so the `next:` line now asks
+  you to read both bodies first and unmerge only if they truly conflict.
+  Refs #1223.
+
 ## [0.3.1] - 2026-10-01
 
 MVP 4, the Unattended Engine, is complete. The headline is `openkos daemon`: a
