@@ -1262,3 +1262,90 @@ def test_actionable_revision_findings_strict_freshness_and_actionability(
     assert {finding.pair_ids for finding in actionable} == {
         ("decisions/a", "decisions/b")
     }
+
+
+# ---------------------------------------------------------------------------
+# `max_calls` (MVP 4 unit 5.2): the bound a budgeted run passes
+# ---------------------------------------------------------------------------
+
+
+def _four_decision_plan(layout: config.WorkspaceLayout) -> revisions.RevisionPlan:
+    for letter in "abcdefgh":
+        _write_doc(
+            layout.bundle_dir / "decisions" / f"{letter}.md", body=f"Body {letter}."
+        )
+    return _plan_with_to_judge(
+        [
+            ("decisions/a", "decisions/b"),
+            ("decisions/c", "decisions/d"),
+            ("decisions/e", "decisions/f"),
+            ("decisions/g", "decisions/h"),
+        ]
+    )
+
+
+def _refines(first: str, second: str) -> str:
+    return json.dumps(
+        {
+            "verdict": "refines",
+            "confidence": 0.8,
+            "rationale": "narrows.",
+            "quote_first": f"Body {first}.",
+            "quote_second": f"Body {second}.",
+        }
+    )
+
+
+def test_judge_revisions_max_calls_judges_a_prefix_and_reports_the_rest(
+    tmp_path: Path,
+) -> None:
+    """A bound of 2 over four pairs: exactly the first two are judged (two chat
+    calls) and persisted, and the other two are REPORTED as deferred, never
+    silently dropped."""
+    layout = _workspace(tmp_path)
+    plan = _four_decision_plan(layout)
+    llm = _ScriptedLLM([_refines("a", "b"), _refines("c", "d")])
+
+    outcome = revisions.judge_revisions(
+        layout, plan, llm=llm, effective_confidential=False, max_calls=2
+    )
+
+    assert len(llm.calls) == 2
+    assert [v.pair_ids for v in outcome.results] == [
+        ("decisions/a", "decisions/b"),
+        ("decisions/c", "decisions/d"),
+    ]
+    assert outcome.deferred_by_bound == 2
+    assert {f.pair_ids for f in _open_persisted(layout)} == {
+        ("decisions/a", "decisions/b"),
+        ("decisions/c", "decisions/d"),
+    }
+
+
+def test_judge_revisions_without_a_bound_is_unchanged(tmp_path: Path) -> None:
+    layout = _workspace(tmp_path)
+    plan = _four_decision_plan(layout)
+    llm = _ScriptedLLM([_refines(a, b) for a, b in ("ab", "cd", "ef", "gh")])
+
+    outcome = revisions.judge_revisions(
+        layout, plan, llm=llm, effective_confidential=False
+    )
+
+    assert len(llm.calls) == 4
+    assert outcome.deferred_by_bound == 0
+
+
+def test_judge_revisions_a_bound_of_zero_makes_no_call_and_defers_everything(
+    tmp_path: Path,
+) -> None:
+    layout = _workspace(tmp_path)
+    plan = _four_decision_plan(layout)
+    llm = _ScriptedLLM([])
+
+    outcome = revisions.judge_revisions(
+        layout, plan, llm=llm, effective_confidential=False, max_calls=0
+    )
+
+    assert llm.calls == []
+    assert outcome.results == ()
+    assert outcome.deferred_by_bound == 4
