@@ -101,6 +101,12 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   same source line are collapsed to the one with the longer body before
   staging, and `ingest` says so on stderr. A pair that quotes different lines,
   or quotes nothing, is never touched.
+- The feedback text a Gemini-notes export (Spanish locale) appends ("Actualizamos
+  la sección Decisiones con tus comentarios. Danos tu opinión: Útil o Poco
+  útil") is no longer copied into an object body
+  ([#1231](https://github.com/jasonssdev/openkos/issues/1231)). The decision
+  granularity and the missed person in the same report are model behavior and
+  stay open.
 
 ## [0.3.1] - 2026-10-01
 
