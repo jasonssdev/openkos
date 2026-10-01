@@ -12503,7 +12503,7 @@ def render_contradiction_header(result: ContradictionVerdict) -> None:
         # line states the precondition instead of promising success.
         typer.echo(
             "  next: read both bodies first -- the judge can flag compatible "
-            "statements (#1223); only if they truly conflict, run "
+            "statements; only if they truly conflict, run "
             f"openkos unmerge {survivor_id} {result.merged_absorbed_id}"
             " (LIFO-enforced: refuses unless this is the survivor's "
             "most recent unreversed merge)"

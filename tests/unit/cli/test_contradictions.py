@@ -1831,7 +1831,7 @@ def test_contradictions_merged_body_verdict_names_unmerge_as_the_next_step(
     # (#486, cosmetic finding carried over from #445's review).
     assert (
         "  next: read both bodies first -- the judge can flag compatible "
-        "statements (#1223); only if they truly conflict, run "
+        "statements; only if they truly conflict, run "
         "openkos unmerge concepts/apatheia concepts/apatheia-2 "
         "(LIFO-enforced: refuses unless this is the survivor's most recent "
         "unreversed merge)" in result.stdout
