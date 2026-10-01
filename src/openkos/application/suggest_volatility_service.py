@@ -52,6 +52,10 @@ _VERB = "suggest-volatility"
 @dataclass(frozen=True)
 class VolatilityRequest:
     include_confidential: bool = False
+    max_calls: int | None = None
+    """The most chat calls this run may issue (a budgeted, runner-started run
+    passes what it has left). `None` is unbounded: the only value a CLI run
+    passes, and byte-identical to a run that never had the bound."""
 
 
 class VolatilityObserver(Protocol):
@@ -86,6 +90,11 @@ class VolatilityOutcome:
     """The run's config, so a partial-batch message words the backend."""
 
     @property
+    def deferred_by_bound(self) -> int:
+        """Types a `max_calls` bound left unasked; `0` for an unbounded run."""
+        return self.batch.deferred
+
+    @property
     def results(self) -> tuple[TierSuggestion, ...]:
         return tuple(self.batch.results)
 
@@ -118,6 +127,9 @@ def suggest_volatility_tiers(
     if reason is not None:
         raise workspace_refusal(_VERB, reason)
 
+    if request.max_calls is not None and request.max_calls < 0:
+        raise ValueError(f"max_calls must be >= 0, got {request.max_calls}")
+
     layout = config.WorkspaceLayout(root)
     try:
         cfg = config.read_config(root)
@@ -133,6 +145,9 @@ def suggest_volatility_tiers(
         include_confidential=request.include_confidential,
         local_exemption=local_exemption,
     )
+    # The bound is forwarded only when one was set, so every unbounded (CLI)
+    # call reaches the port with exactly the arguments it always had.
+    bound = {} if request.max_calls is None else {"max_calls": request.max_calls}
     try:
         batch = ports.suggest_volatility(
             layout.bundle_dir,
@@ -142,6 +157,7 @@ def suggest_volatility_tiers(
             # #812: the mirror of `suggest-relations`' own forwarding.
             rationale_language=cfg.rationale_language,
             on_progress=observer.progress_callback(),
+            **bound,
         )
     except BackendUnavailable as exc:
         raise BackendNotReachable(
