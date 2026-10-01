@@ -17,7 +17,6 @@ no `openkos.cli`, no `asyncio`.
 from __future__ import annotations
 
 import math
-import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -43,26 +42,53 @@ def _monotonic() -> float:
 
 
 class StopToken:
-    """A latching, thread-safe cooperative stop flag.
+    """A latching cooperative stop flag, settable from a signal handler.
 
-    Backed by `threading.Event` on purpose: `Event.set()` may be called from
-    a signal handler, which runs on the main thread between bytecodes --
-    possibly while that thread already holds a lock. A lock of our own here
-    could therefore deadlock the interrupted thread, whereas `Event.set()`
-    takes only the event's internal condition briefly and is the idiom the
-    standard library documents for this. There is deliberately no `clear()`:
-    a stop is never re-armed mid-run, so a second signal is idempotent.
+    The setter is deliberately lock-free. A Python signal handler runs on
+    the main thread between bytecodes, possibly while that same thread is
+    inside a lock-guarded section. `threading.Event.set()` takes its
+    Condition's non-reentrant lock, so a handler calling it while the
+    interrupted thread holds that lock (for example inside `Event.wait()`)
+    would block on a lock its own thread owns and deadlock at shutdown.
+    A single attribute store is atomic under the GIL and takes no lock, so
+    `set()` is one such store and `is_set()` one load. There is no
+    `clear()`: a stop is never re-armed mid-run, so a second signal is
+    idempotent.
+
+    `wait()` is a short poll on the flag rather than a blocking primitive,
+    so an idle loop stays interruptible without any lock a handler could
+    collide with.
     """
 
     def __init__(self) -> None:
-        self._event = threading.Event()
+        self._stopped = False
 
     def set(self) -> None:
-        """Request a stop. Idempotent; safe from a signal handler."""
-        self._event.set()
+        """Request a stop. Idempotent; takes no lock."""
+        self._stopped = True
 
     def is_set(self) -> bool:
-        return self._event.is_set()
+        return self._stopped
+
+    def wait(
+        self,
+        timeout: float,
+        *,
+        clock: Callable[[], float] | None = None,
+        sleep: Callable[[float], None] | None = None,
+        poll: float = 0.1,
+    ) -> bool:
+        """Block up to `timeout` seconds; `True` as soon as the flag is set,
+        `False` if the timeout elapses first. Clock and sleep are injectable."""
+        now = clock if clock is not None else _monotonic
+        nap = sleep if sleep is not None else time.sleep
+        end = now() + timeout
+        while not self._stopped:
+            left = end - now()
+            if left <= 0:
+                return False
+            nap(min(poll, left))
+        return True
 
 
 class Deadline:

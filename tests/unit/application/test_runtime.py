@@ -53,12 +53,54 @@ def test_stop_token_has_no_clear() -> None:
     assert not hasattr(runtime.StopToken(), "clear")
 
 
-def test_stop_token_delegates_to_threading_event_with_no_lock_of_its_own() -> None:
-    """`set()` runs inside a signal handler on the interrupted thread; a lock
-    of our own that thread might already hold would deadlock it."""
-    source = Path(runtime.__file__).read_text(encoding="utf-8")
-    assert "threading.Event" in source
-    assert "Lock(" not in source
+def test_stop_token_set_acquires_no_lock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`set()` runs in a signal handler on the main thread, possibly while
+    that thread already holds a lock; any lock acquisition could deadlock.
+    `threading.Event.set()` takes its Condition's non-reentrant lock, so
+    make every Event/Condition entry explode and require `set()` to work."""
+
+    def boom(*_a: object, **_k: object) -> None:
+        raise AssertionError("StopToken.set() touched a threading lock")
+
+    token = runtime.StopToken()
+    monkeypatch.setattr(threading.Condition, "__enter__", boom)
+    monkeypatch.setattr(threading.Event, "set", boom)
+    monkeypatch.setattr(threading.Event, "is_set", boom)
+    token.set()
+    assert token.is_set() is True
+
+
+def test_stop_token_wait_returns_true_as_soon_as_set() -> None:
+    token = runtime.StopToken()
+    token.set()
+    assert token.wait(10.0, sleep=lambda _s: pytest.fail("slept")) is True
+
+
+def test_stop_token_wait_polls_until_timeout_on_injected_clock() -> None:
+    clock = _Clock(0.0)
+    sleeps: list[float] = []
+
+    def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        clock.now += seconds
+
+    token = runtime.StopToken()
+    assert token.wait(1.0, clock=clock, sleep=sleep, poll=0.4) is False
+    assert sleeps == [0.4, 0.4, pytest.approx(0.2)]
+    assert clock.now == pytest.approx(1.0)
+
+
+def test_stop_token_wait_sees_a_set_made_during_the_wait() -> None:
+    clock = _Clock(0.0)
+    token = runtime.StopToken()
+
+    def sleep(seconds: float) -> None:
+        clock.now += seconds
+        if clock.now >= 0.5:
+            token.set()
+
+    assert token.wait(60.0, clock=clock, sleep=sleep, poll=0.25) is True
+    assert clock.now == pytest.approx(0.5)
 
 
 # --- Deadline ----------------------------------------------------------
