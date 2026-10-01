@@ -13,7 +13,7 @@ import unicodedata
 from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from collections.abc import Set as AbstractSet
-from contextlib import AbstractContextManager, contextmanager
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from importlib.metadata import PackageNotFoundError
@@ -407,46 +407,25 @@ def _add_wait_option(wrapper: Callable[..., object], fn: Callable[..., object]) 
 _COMMIT_SECTION: contextvars.ContextVar[lock_wait.CommitSection | None] = (
     contextvars.ContextVar("openkos_commit_section", default=None)
 )
-"""The `CommitSection` the guard built for the verb now running (ADR-0036).
-
-Set only for a verb declared `commit_phase=True`: such a verb computes its plan
-and asks its questions with NO lock, then enters this section for its commit
-phase alone. A context variable, not a parameter, because Typer reads the
-wrapper's signature and the body must not see a hidden argument."""
+"""The commit section a SPLIT verb's guard publishes for its body (#1137): the
+section that takes the workspace lock under that invocation's `--wait`."""
 
 
-def _commit_section() -> lock_wait.CommitSection:
-    """The commit section of the running `commit_phase` verb, bound to its
-    `--wait` policy. Calling it outside such a verb is a programming error, not
-    a silent unlocked write."""
-    section = _COMMIT_SECTION.get()
-    if section is None:
-        raise RuntimeError(
-            "no commit section: only a verb guarded with commit_phase=True may "
-            "enter one"
-        )
-    return section
-
-
-def _commit_phase() -> AbstractContextManager[None]:
-    """Enter the running verb's commit phase: `with _commit_phase():` holds the
-    workspace lock (under this run's `--wait` policy) for the block and nothing
-    else. A busy lock raises `WorkspaceBusyError` before the block runs, which
-    the guard maps to exit 3."""
-    return _commit_section()()
+def _commit_section_for(root: Path) -> lock_wait.CommitSection:
+    """The commit section the running verb was given, or one with no wait when
+    the body runs outside a guard (a direct call, a test)."""
+    published = _COMMIT_SECTION.get()
+    if published is not None:
+        return published
+    return lock_wait.locked_commit_section(root, wait_seconds=0)
 
 
 def _guard_workspace_lock(
-    command_name: str, *, commit_phase: bool = False
+    command_name: str,
+    *,
+    commit_phase: bool = False,
 ) -> Callable[[Callable[..., _T]], Callable[..., _T]]:
     """Hold the workspace's exclusive mutation lock for one command's body (#925).
-
-    With `commit_phase=True` the lock is NOT held for the body (ADR-0036): the
-    guard instead publishes a `CommitSection` (`_commit_section()`) that takes
-    the lock under this run's `--wait` policy, and the verb enters it around
-    its commit phase only -- so a confirmation prompt or a model call never
-    blocks another writer. Every refusal below still applies, because a busy
-    lock now surfaces from inside the body.
 
     Applied UNDER `@app.command(...)`, so Typer registers the wrapper and reads
     its signature through `functools.wraps` -- options, arguments, and the
@@ -466,6 +445,13 @@ def _guard_workspace_lock(
     plain re-run is exactly equivalent once the other process finishes. That is
     precisely a busy workspace's contract, so it reuses the code scripts
     already treat as retryable rather than inventing a second one.
+
+    `commit_phase=True` marks a SPLIT verb (ADR-0036): the guard does not hold
+    the lock around the body. It publishes a commit section (`_commit_section_for`)
+    that takes the lock under this invocation's `--wait`, and the body enters it
+    only around its commit phase, so extraction and every other slow step run
+    unlocked. The refusal mapping below is unchanged: the section raises the same
+    `WorkspaceBusyError`, mapped to the same exit codes.
     """
 
     def decorate(fn: Callable[..., _T]) -> Callable[..., _T]:
@@ -474,16 +460,6 @@ def _guard_workspace_lock(
             wait = cast(int, kwargs.pop(_WAIT_PARAM, 0))
             root = Path.cwd()
             if config.require_workspace(root) is not None:
-                if commit_phase:
-                    # No workspace, so the body refuses before any commit
-                    # phase; the section it asks for is never entered.
-                    token = _COMMIT_SECTION.set(
-                        application_commit_phase.unlocked_section
-                    )
-                    try:
-                        return fn(*args, **kwargs)
-                    finally:
-                        _COMMIT_SECTION.reset(token)
                 return fn(*args, **kwargs)
 
             def announce_wait() -> None:
@@ -493,20 +469,21 @@ def _guard_workspace_lock(
                     err=True,
                 )
 
-            try:
-                if commit_phase:
-                    token = _COMMIT_SECTION.set(
-                        lock_wait.locked_commit_section(
-                            root, wait_seconds=wait, on_wait=announce_wait
-                        )
+            holder: AbstractContextManager[object]
+            token: contextvars.Token[lock_wait.CommitSection | None] | None = None
+            if commit_phase:
+                token = _COMMIT_SECTION.set(
+                    lock_wait.locked_commit_section(
+                        root, wait_seconds=wait, on_wait=announce_wait
                     )
-                    try:
-                        return fn(*args, **kwargs)
-                    finally:
-                        _COMMIT_SECTION.reset(token)
-                with lock_wait.acquire_with_backoff(
+                )
+                holder = nullcontext()
+            else:
+                holder = lock_wait.acquire_with_backoff(
                     root, wait_seconds=wait, on_wait=announce_wait
-                ):
+                )
+            try:
+                with holder:
                     return fn(*args, **kwargs)
             except lock.WorkspaceBusyError as exc:
                 typer.echo(
@@ -537,6 +514,9 @@ def _guard_workspace_lock(
                     err=True,
                 )
                 raise typer.Exit(code=3) from exc
+            finally:
+                if token is not None:
+                    _COMMIT_SECTION.reset(token)
 
         _add_wait_option(wrapper, fn)
         wrapper.__openkos_locked_command__ = command_name  # type: ignore[attr-defined]
@@ -3723,6 +3703,7 @@ def _embed_after_ingest(
     embedding_backend: str = config.DEFAULT_BACKEND,
     warn_nonlocal_host: bool = True,
     local_exemption: bool = False,
+    commit_section: lock_wait.CommitSection | None = None,
 ) -> None:
     """Embed the concepts `ingest` just wrote, so candidate edges are
     available in the SAME run (#183).
@@ -3767,7 +3748,12 @@ def _embed_after_ingest(
     NOT re-derived here: it is resolved at the call site, from the very
     client passed in as `embedder`. Its `False` default is fail-closed, so a
     future caller that forgets it withholds a confidential document rather
-    than sending one."""
+    than sending one.
+
+    `commit_section` (#1137) is the section that takes the workspace lock:
+    the embedding calls run without it and only the vector-store write enters
+    it, with a content-hash re-check (`state.reindex.reindex`). `None` holds
+    nothing, for a caller already inside the lock."""
     # BEFORE the embed attempt, so the notice lands even when the embed
     # itself then degrades: the advisory is about where the data is headed,
     # not about whether it arrived (#199).
@@ -3784,6 +3770,7 @@ def _embed_after_ingest(
                 model_tag=model_tag,
                 embedding_backend=embedding_backend,
                 local_exemption=local_exemption,
+                commit_section=commit_section,
             )
     except Exception as exc:  # noqa: BLE001 -- a failed embedding refresh degrades to a notice, never aborts the ingest
         typer.echo(
@@ -3816,6 +3803,7 @@ def _refresh_derived_after_write(
     *,
     verb: str,
     warn_nonlocal_host: bool = True,
+    commit_section: lock_wait.CommitSection | None = None,
 ) -> bool:
     """Refresh the three derived stores as part of the write that just
     invalidated them (issue #640), returning True iff every store is fresh.
@@ -3864,26 +3852,39 @@ def _refresh_derived_after_write(
     with the same TTY-gated progress idiom (#190) and NO `fts_db_path`
     (stage 1 already owns FTS). The stale-index warning tiers are
     deliberately untouched: they remain the safety net for this helper's
-    own degrade path."""
+    own degrade path.
+
+    `commit_section` (#1137) is for a verb that does NOT hold the workspace lock
+    for its whole run: the FTS and graph refreshes (no model call) run inside it,
+    and the vector refresh runs its embedding calls outside it and enters it only
+    for the store write. `None` (every other verb, which already holds the lock)
+    changes nothing."""
     failures: list[str] = []
+    section: lock_wait.CommitSection = (
+        commit_section if commit_section is not None else nullcontext
+    )
 
     try:
-        reindex_module._reindex_fts(layout.bundle_dir, layout.fts_db_path, force=False)
+        with section():
+            reindex_module._reindex_fts(
+                layout.bundle_dir, layout.fts_db_path, force=False
+            )
     except Exception as exc:  # noqa: BLE001 -- a failed FTS refresh is collected into the degrade summary
         failures.append(f"fts: {exc}")
 
     try:
-        with_candidates = _open_proximity_or_degrade(layout.vectors_db_path)
-        try:
-            sqlite_graph.reindex_graph(
-                layout.bundle_dir,
-                layout.graph_db_path,
-                force=False,
-                candidates=with_candidates,
-            )
-        finally:
-            if with_candidates is not None:
-                with_candidates.close()
+        with section():
+            with_candidates = _open_proximity_or_degrade(layout.vectors_db_path)
+            try:
+                sqlite_graph.reindex_graph(
+                    layout.bundle_dir,
+                    layout.graph_db_path,
+                    force=False,
+                    candidates=with_candidates,
+                )
+            finally:
+                if with_candidates is not None:
+                    with_candidates.close()
     except Exception as exc:  # noqa: BLE001 -- a failed graph refresh is collected into the degrade summary
         failures.append(f"graph: {exc}")
 
@@ -3913,6 +3914,7 @@ def _refresh_derived_after_write(
                 embedding_backend=cfg.backend,
                 on_progress=observability.progress_callback(verb, "embedding doc"),
                 local_exemption=_resolve_local_exemption(embedder_locality, cfg),
+                commit_section=commit_section,
             )
         _warn_withheld_from_embedding(verb, report.withheld_confidential, cfg)
         # An exception is not the only way embedding degrades: `reindex`
@@ -4478,6 +4480,7 @@ def _ingest_batch(
         verb="ingest",
         # The batch already emitted the advisory once, up front (#353 item 4).
         warn_nonlocal_host=False,
+        commit_section=_commit_section_for(root),
     )
 
     # ONE torn-classification aggregate for the WHOLE batch (#566), on
@@ -4558,7 +4561,7 @@ def _ingest_batch(
     ),
     rich_help_panel="Get started",
 )
-@_guard_workspace_lock("ingest")
+@_guard_workspace_lock("ingest", commit_phase=True)
 def ingest(
     src: Path = typer.Argument(
         ...,
@@ -4701,6 +4704,7 @@ def ingest(
             verb="ingest",
             # Already emitted by this run's own embed (#353 item 4).
             warn_nonlocal_host=False,
+            commit_section=_commit_section_for(Path.cwd()),
         )
         return
     matches, skipped_non_text = expansion
@@ -4854,6 +4858,8 @@ def _ingest_single(
     and catches the `typer.Exit` to skip that file; `ingest` ignores the
     outcome for a single file."""
 
+    section = _commit_section_for(Path.cwd())
+
     def _after_commit(layout: config.WorkspaceLayout, cfg: config.Config) -> None:
         embedder = _embed_client(cfg)
         _embed_after_ingest(
@@ -4869,6 +4875,7 @@ def _ingest_single(
             local_exemption=_resolve_local_exemption(
                 cast(BackendDiagnostics, embedder), cfg
             ),
+            commit_section=section,
         )
 
     ports = ingest_service.IngestPorts(
@@ -4877,6 +4884,7 @@ def _ingest_single(
         after_commit=_after_commit,
         snapshot_read=lambda path: _snapshot_read(path),
         clock=lambda: datetime.now(UTC),
+        commit_section=section,
     )
     policy = ingest_service.IngestPolicy(
         include_confidential=include_confidential,
@@ -4906,6 +4914,13 @@ def _ingest_single(
         raise typer.Exit(code=1) from exc
     except ingest_service.DriftDetected as exc:
         typer.echo(exc.message, err=True)
+        raise typer.Exit(code=3) from exc
+    except lock.WorkspaceBusyError as exc:
+        # The commit phase could not take the lock within `--wait`. Nothing was
+        # written, so it is the same retry-safe refusal the guard has always
+        # given, raised HERE so a batch records this file as skipped and the
+        # next one gets its own chance at the lock.
+        typer.echo(f"openkos ingest: refusing to run -- {exc}.", err=True)
         raise typer.Exit(code=3) from exc
     except ingest_service.IngestRefused as exc:
         typer.echo(exc.message, err=True)
@@ -5213,7 +5228,7 @@ def forget(
             typer.echo(plan.confirmation.non_tty_refusal, err=True)
             raise typer.Exit(code=1)
 
-    with _commit_phase():
+    with _commit_section_for(root)():
         # Issue #313: every byte below was computed from a pre-prompt read, so
         # re-validate each target now -- after the gate, before the first write.
         #
@@ -6397,7 +6412,7 @@ def relate(
 
     # Issue #313: every byte below was computed from a pre-prompt read, so
     # re-validate each target now -- after the gate, before the first write.
-    with _commit_phase():
+    with _commit_section_for(root)():
         drift_baselines = {
             source_path: prepared.source_bytes,
             log_path: prepared.log_bytes,
@@ -6780,7 +6795,7 @@ def set_sensitivity_cmd(
         ),
     )
 
-    with _commit_phase():
+    with _commit_section_for(root)():
         _reject_drifted_targets(
             layout,
             {
@@ -8049,7 +8064,7 @@ def set_volatility_cmd(
     # possibly a safety setting like `review:` or `default_sensitivity:` --
     # would be silently reverted by the whole-file write below. Re-validate
     # the one target now -- after the gate, before the write.
-    with _commit_phase():
+    with _commit_section_for(root)():
         _reject_drifted_targets(
             layout, {layout.config_path: prepared.config_bytes}, "set-volatility"
         )
@@ -8411,7 +8426,7 @@ def merge(
             verb="merge",
         ),
         clock=lambda: datetime.now(UTC),
-        commit_section=_commit_section(),
+        commit_section=_commit_section_for(root),
         # #640, ADR-0036: the derived refresh runs inside the commit section,
         # after the auto-commit, so it cannot race another writer's burst.
         # `cfg=None` -- `merge` never reads config; the helper reads its own
@@ -8694,7 +8709,7 @@ def unmerge(
     ports = unmerge_service.UnmergePorts(
         autocommit=lambda root, paths, message: _autocommit(root, paths, message),
         clock=lambda: datetime.now(UTC),
-        commit_section=_commit_section(),
+        commit_section=_commit_section_for(root),
         # #640, ADR-0036: refreshed inside each step's commit section, after
         # its auto-commit, so a chain that stops later leaves every completed
         # step's derived stores fresh.
