@@ -63,7 +63,7 @@ from pathlib import Path, PurePosixPath
 from typing import Literal
 
 from openkos import config, fsio, lifecycle, sensitivity
-from openkos.application import commit_phase, queue_resolution
+from openkos.application import catalog_delta, commit_phase, queue_resolution
 from openkos.application.consent import (
     BooleanConfirmation,
     TypedChallengeConfirmation,
@@ -320,6 +320,10 @@ class PreparedMerge:
     concept and which supersede what, so the commit phase re-validates them
     beside the drift targets. Touched files are not repeated here -- they are
     drift targets (`touched_bytes`)."""
+    catalog_edit: catalog_delta.CatalogDelta | None = None
+    """The merge's `index.md`/`log.md` edit as a pure function of their current
+    text, so the commit phase re-composes it over a concurrent append instead of
+    refusing (`catalog_delta.recompose_catalog`)."""
 
 
 @dataclass(frozen=True)
@@ -530,16 +534,21 @@ def prepare_merge(
             merged_chars=len(merged_body),
         )
 
-    new_index_text, removed = bundle_index.remove_index_entry(
-        index_text, absorbed_canonical
+    merge_entry_date = now.astimezone().date()
+    merge_entry = bundle_merge.merge_log_entry(
+        survivor_id=survivor_canonical, absorbed_id=absorbed_canonical
     )
-    new_log_text = bundle_log.insert_log_entry(
-        log_text,
-        now.astimezone().date(),
-        bundle_merge.merge_log_entry(
-            survivor_id=survivor_canonical, absorbed_id=absorbed_canonical
-        ),
-    )
+
+    def merge_catalog(current_index: str, current_log: str) -> tuple[str, str]:
+        edited_index, _ = bundle_index.remove_index_entry(
+            current_index, absorbed_canonical
+        )
+        return edited_index, bundle_log.insert_log_entry(
+            current_log, merge_entry_date, merge_entry
+        )
+
+    new_index_text, new_log_text = merge_catalog(index_text, log_text)
+    _, removed = bundle_index.remove_index_entry(index_text, absorbed_canonical)
 
     rewritten_files = sorted({rewrite.file for rewrite in link_rewrites})
     relation_rewritten_files = sorted({rewrite.file for rewrite in relation_rewrites})
@@ -595,6 +604,7 @@ def prepare_merge(
         touched_bytes=touched_bytes,
         status_outcome=status_outcome,
         read_dependencies=read_dependencies,
+        catalog_edit=merge_catalog,
     )
 
 
@@ -828,6 +838,13 @@ class PreparedUnmerge:
     """What the plan read but will not write (ADR-0036): the bystander
     documents whose relations decided the post-unmerge supersession walk, and
     the absorbed path, which the restore assumed free."""
+    catalog_edit: catalog_delta.CatalogDelta | None = None
+    """`(current index, current log)` -> the restored `(index, log)`, set only
+    for a V5 (delta) ledger entry, whose reversal is surgical and so can be
+    re-applied over a concurrent catalog append. `None` for a snapshot entry,
+    which restores whole files and cannot be re-composed."""
+    log_edit: catalog_delta.LogDelta | None = None
+    """The `**Unmerge**` audit line as a pure function of the restored log."""
 
 
 @dataclass(frozen=True)
@@ -1205,12 +1222,27 @@ def prepare_unmerge(
             ),
         )
 
-    new_log_text = bundle_log.insert_log_entry(
-        plan.restored_log,
-        now.astimezone().date(),
+    unmerge_entry_date = now.astimezone().date()
+    unmerge_entry = (
         f"**Unmerge**: Restored [{absorbed_canonical}](/{absorbed_canonical}.md) "
-        f"from [{survivor_canonical}](/{survivor_canonical}.md).",
+        f"from [{survivor_canonical}](/{survivor_canonical}.md)."
     )
+
+    def unmerge_log(restored_log: str) -> str:
+        return bundle_log.insert_log_entry(
+            restored_log, unmerge_entry_date, unmerge_entry
+        )
+
+    def unmerge_catalog(current_index: str, current_log: str) -> tuple[str, str]:
+        return bundle_merge.restored_catalog_and_log(
+            plan.entry,
+            survivor_id=survivor_canonical,
+            absorbed_id=absorbed_canonical,
+            current_index_text=current_index,
+            current_log_text=current_log,
+        )
+
+    new_log_text = unmerge_log(plan.restored_log)
 
     return PreparedUnmerge(
         confirmation=boolean_confirmation("unmerge"),
@@ -1236,6 +1268,47 @@ def prepare_unmerge(
         survivor_bytes=survivor_bytes,
         rewrite_bytes=rewrite_bytes,
         read_dependencies=read_dependencies,
+        catalog_edit=(
+            unmerge_catalog if plan.entry.schema == okf.MERGE_LEDGER_SCHEMA_V5 else None
+        ),
+        log_edit=unmerge_log,
+    )
+
+
+def recompose_unmerge_catalog(
+    layout: config.WorkspaceLayout,
+    prepared: PreparedUnmerge,
+    *,
+    read: catalog_delta.SnapshotRead = fsio.snapshot_read,
+) -> PreparedUnmerge:
+    """The prepared unmerge with its restored `index.md`/`log.md` re-composed
+    over the catalog's current bytes (commit phase, ADR-0036). Only a V5
+    ledger entry (`catalog_edit` set) can be; a snapshot entry restores whole
+    files, so `catalog_edit is None` is the caller's cue to keep refusing on a
+    changed catalog instead. Raises `catalog_delta.CatalogRecomposeError` when
+    the current text cannot take the reversal."""
+    if prepared.catalog_edit is None or prepared.log_edit is None:
+        raise catalog_delta.CatalogRecomposeError(
+            "openkos unmerge: refusing to write -- this merge's ledger entry "
+            "restores whole-file snapshots and cannot be re-applied to a "
+            "changed catalog. Nothing was written."
+        )
+    restored_index, restored_log = catalog_delta.recompose_catalog(
+        verb="unmerge",
+        index_path=layout.bundle_dir / "index.md",
+        log_path=layout.bundle_dir / "log.md",
+        index_baseline=prepared.index_bytes,
+        log_baseline=prepared.log_bytes,
+        planned=(prepared.plan.restored_index, prepared.plan.restored_log),
+        delta=prepared.catalog_edit,
+        read=read,
+    )
+    return dataclasses.replace(
+        prepared,
+        plan=dataclasses.replace(
+            prepared.plan, restored_index=restored_index, restored_log=restored_log
+        ),
+        new_log_text=prepared.log_edit(restored_log),
     )
 
 
@@ -1367,8 +1440,39 @@ def unmerge_core(
     )
 
 
+def recompose_merge_catalog(
+    layout: config.WorkspaceLayout,
+    prepared: PreparedMerge,
+    *,
+    verb: str = "merge",
+    read: catalog_delta.SnapshotRead = fsio.snapshot_read,
+) -> PreparedMerge:
+    """The prepared merge with its `index.md`/`log.md` text re-composed over
+    the catalog's current bytes (commit phase, ADR-0036). Raises
+    `catalog_delta.CatalogRecomposeError` when that is not possible."""
+    if prepared.catalog_edit is None:
+        raise catalog_delta.CatalogRecomposeError(
+            f"openkos {verb}: refusing to write -- the plan carries no staged "
+            "catalog delta. Nothing was written."
+        )
+    new_index, new_log = catalog_delta.recompose_catalog(
+        verb=verb,
+        index_path=layout.bundle_dir / "index.md",
+        log_path=layout.bundle_dir / "log.md",
+        index_baseline=prepared.index_bytes,
+        log_baseline=prepared.log_bytes,
+        planned=(prepared.new_index_text, prepared.new_log_text),
+        delta=prepared.catalog_edit,
+        read=read,
+    )
+    return dataclasses.replace(prepared, new_index_text=new_index, new_log_text=new_log)
+
+
 def merge_drift_targets(
-    layout: config.WorkspaceLayout, prepared: PreparedMerge
+    layout: config.WorkspaceLayout,
+    prepared: PreparedMerge,
+    *,
+    include_catalog: bool = True,
 ) -> dict[Path, bytes]:
     """Build the drift-guard baseline mapping (issue #334) a prepared merge
     needs for `_reject_drifted_targets` -- extracted from `merge`'s former
@@ -1382,14 +1486,21 @@ def merge_drift_targets(
     target: it is the one path `merge_core`/`curate`'s Identity stage
     UNLINKS, not overwrites -- the caller is responsible for passing it in
     `deletes=` to `_reject_drifted_targets` so the refusal message reports
-    it as a delete target, not a write target (#329)."""
+    it as a delete target, not a write target (#329).
+
+    `include_catalog=False` leaves `index.md`/`log.md` out: a caller whose
+    commit phase re-composes them (`recompose_merge_catalog`) must not also
+    refuse on them."""
     index_path = layout.bundle_dir / "index.md"
     log_path = layout.bundle_dir / "log.md"
     survivor_path = layout.bundle_dir / f"{prepared.survivor_canonical}.md"
     absorbed_path = layout.bundle_dir / f"{prepared.absorbed_canonical}.md"
     return {
-        index_path: prepared.index_bytes,
-        log_path: prepared.log_bytes,
+        **(
+            {index_path: prepared.index_bytes, log_path: prepared.log_bytes}
+            if include_catalog
+            else {}
+        ),
         **{
             layout.bundle_dir / rel: data
             for rel, data in prepared.touched_bytes.items()
@@ -1584,6 +1695,9 @@ class ForgetPlan:
     """The unreadable/malformed document id(s) that made the post-forget
     edge walk incomplete, for the skip report -- empty when the walk was
     complete or no resurrection target needed it."""
+    catalog_edit: catalog_delta.CatalogDelta | None = None
+    """The purge set's `index.md`/`log.md` edit as a pure function of their
+    current text, re-applied by the commit phase over a concurrent append."""
 
 
 @dataclass(frozen=True)
@@ -1849,12 +1963,9 @@ def prepare_forget(
 
     # `index.md` bullet removal for every purge-set member (a pure text
     # transform -- call order has no effect on the final result).
-    new_index_text = index_text
     total_removed = 0
     for member in purge_ids:
-        new_index_text, removed_i = bundle_index.remove_index_entry(
-            new_index_text, member
-        )
+        _, removed_i = bundle_index.remove_index_entry(index_text, member)
         total_removed += removed_i
 
     # `log.md` tombstones, one per member, all sharing `tombstone_time`.
@@ -1862,18 +1973,34 @@ def prepare_forget(
     # ends up at the very top -- a deterministic ascending top-to-bottom
     # order matching the sorted delete order in `forget_core`.
     tombstone_time = now.strftime("%H:%M:%SZ")
-    new_log_text = log_text
+    tombstones: list[tuple[str, str]] = []
     for member in reversed(purge_ids):
         raw_title = member_metadata[member].get("title")
         title = (
             raw_title if isinstance(raw_title, str) and raw_title.strip() else member
         )
-        new_log_text = bundle_log.insert_log_entry(
-            new_log_text,
-            now.astimezone().date(),
-            f"**Tombstone** ({tombstone_time}): Removed [{title}]"
-            f"(/{member}.md) (id: {member}).",
+        tombstones.append(
+            (
+                member,
+                f"**Tombstone** ({tombstone_time}): Removed [{title}]"
+                f"(/{member}.md) (id: {member}).",
+            )
         )
+    forget_entry_date = now.astimezone().date()
+    forgotten = list(purge_ids)
+
+    def forget_catalog(current_index: str, current_log: str) -> tuple[str, str]:
+        edited_index = current_index
+        for member in forgotten:
+            edited_index, _ = bundle_index.remove_index_entry(edited_index, member)
+        edited_log = current_log
+        for _, line in tombstones:
+            edited_log = bundle_log.insert_log_entry(
+                edited_log, forget_entry_date, line
+            )
+        return edited_index, edited_log
+
+    new_index_text, new_log_text = forget_catalog(index_text, log_text)
 
     # Gate 2's prompt is scope-conditional (design table); `--scope self`
     # keeps S2a's verbatim text (byte-identity, design decision 6).
@@ -1908,7 +2035,36 @@ def prepare_forget(
         status_withdrawals=tuple(status_withdrawals),
         skipped_withdrawal_ids=tuple(skipped_withdrawal_ids),
         incomplete_walk_unreadable=incomplete_walk_unreadable,
+        catalog_edit=forget_catalog,
     )
+
+
+def recompose_forget_catalog(
+    layout: config.WorkspaceLayout,
+    plan: ForgetPlan,
+    *,
+    verb: str = "forget",
+    read: catalog_delta.SnapshotRead = fsio.snapshot_read,
+) -> ForgetPlan:
+    """The forget plan with its `index.md`/`log.md` text re-composed over the
+    catalog's current bytes (commit phase, ADR-0036). Raises
+    `catalog_delta.CatalogRecomposeError` when that is not possible."""
+    if plan.catalog_edit is None:
+        raise catalog_delta.CatalogRecomposeError(
+            f"openkos {verb}: refusing to write -- the plan carries no staged "
+            "catalog delta. Nothing was written."
+        )
+    new_index, new_log = catalog_delta.recompose_catalog(
+        verb=verb,
+        index_path=layout.bundle_dir / "index.md",
+        log_path=layout.bundle_dir / "log.md",
+        index_baseline=plan.index_bytes,
+        log_baseline=plan.log_bytes,
+        planned=(plan.new_index_text, plan.new_log_text),
+        delta=plan.catalog_edit,
+        read=read,
+    )
+    return dataclasses.replace(plan, new_index_text=new_index, new_log_text=new_log)
 
 
 def forget_core(layout: config.WorkspaceLayout, plan: ForgetPlan) -> ForgetResult:
@@ -3078,6 +3234,9 @@ class PreparedRelate:
     for every other relation type or an idempotent re-run, so the caller
     writes and drift-guards the target ONLY when there is something to
     write."""
+    log_edit: catalog_delta.LogDelta | None = None
+    """The `log.md` entry as a pure function of the log's current text, so the
+    commit phase re-composes it over a concurrent append."""
 
 
 def prepare_relate(
@@ -3133,9 +3292,12 @@ def prepare_relate(
             f"[{source_canonical}](/{source_canonical}.md) to "
             f"[{target_canonical}](/{target_canonical}.md)."
         )
-    new_log_text = bundle_log.insert_log_entry(
-        log_text, now.astimezone().date(), log_line
-    )
+    relate_entry_date = now.astimezone().date()
+
+    def relate_log(current_log: str) -> str:
+        return bundle_log.insert_log_entry(current_log, relate_entry_date, log_line)
+
+    new_log_text = relate_log(log_text)
 
     # deprecated-status-export (issue #1075, design Decision 5's `relate`
     # sequence): an ADDED `supersedes` edge exports the target's status in
@@ -3169,7 +3331,34 @@ def prepare_relate(
         new_target_text=new_target_text,
         target_bytes=target_bytes,
         status_outcome=status_outcome,
+        log_edit=relate_log,
     )
+
+
+def recompose_relate_log(
+    log_path: Path,
+    prepared: PreparedRelate,
+    *,
+    verb: str = "relate",
+    read: catalog_delta.SnapshotRead = fsio.snapshot_read,
+) -> PreparedRelate:
+    """The prepared relate with its `log.md` text re-composed over the log's
+    current bytes (commit phase, ADR-0036). Raises
+    `catalog_delta.CatalogRecomposeError` when that is not possible."""
+    if prepared.log_edit is None:
+        raise catalog_delta.CatalogRecomposeError(
+            f"openkos {verb}: refusing to write -- the plan carries no staged "
+            "log delta. Nothing was written."
+        )
+    new_log = catalog_delta.recompose_file(
+        verb=verb,
+        path=log_path,
+        baseline=prepared.log_bytes,
+        planned=prepared.new_log_text,
+        delta=prepared.log_edit,
+        read=read,
+    )
+    return dataclasses.replace(prepared, new_log_text=new_log)
 
 
 def relate_core(
@@ -3282,6 +3471,12 @@ class PreparedTagSync:
     commit phase re-validates them with the baselines, because a member that
     stopped being grounded in the Source while the prompt waited must not
     receive the Source's tags. Disjoint from `baselines` by construction."""
+    log_bytes: bytes = b""
+    """The bytes `log.md` held when `new_log_text` was composed. Not a drift
+    baseline: the commit phase re-composes the entry over the log's current
+    bytes (`recompose_sync_tags_log`) instead of refusing."""
+    log_edit: catalog_delta.LogDelta | None = None
+    """The `**Sync-tags**` entry as a pure function of the log's current text."""
 
 
 def _source_tags_and_level(
@@ -3400,9 +3595,12 @@ def prepare_sync_tags(
             f"**Sync-tags**: Added tags from {len(contributing_roots)} "
             f"Source(s) to {len(final_additions)} concept(s)."
         )
-    new_log_text = bundle_log.insert_log_entry(
-        log_text, now.astimezone().date(), log_line
-    )
+    sync_entry_date = now.astimezone().date()
+
+    def sync_tags_log(current_log: str) -> str:
+        return bundle_log.insert_log_entry(current_log, sync_entry_date, log_line)
+
+    new_log_text = sync_tags_log(log_text)
 
     baselines: dict[str, bytes] = {
         f"bundle/{addition.concept_id}.md": bundle_bytes[f"{addition.concept_id}.md"]
@@ -3410,7 +3608,6 @@ def prepare_sync_tags(
     }
     for root_id in sorted(contributing_roots):
         baselines[f"bundle/{root_id}.md"] = bundle_bytes[f"{root_id}.md"]
-    baselines["bundle/log.md"] = log_bytes
 
     read_dependencies: dict[str, bytes] = {}
     for root_id in root_ids:
@@ -3430,7 +3627,34 @@ def prepare_sync_tags(
         baselines=baselines,
         confirmation=boolean_confirmation("sync-tags"),
         read_dependencies=read_dependencies,
+        log_bytes=log_bytes,
+        log_edit=sync_tags_log,
     )
+
+
+def recompose_sync_tags_log(
+    layout: config.WorkspaceLayout,
+    prepared: PreparedTagSync,
+    *,
+    read: catalog_delta.SnapshotRead = fsio.snapshot_read,
+) -> PreparedTagSync:
+    """The prepared sync-tags with its `log.md` text re-composed over the log's
+    current bytes (commit phase, ADR-0036). Raises
+    `catalog_delta.CatalogRecomposeError` when that is not possible."""
+    if prepared.log_edit is None:
+        raise catalog_delta.CatalogRecomposeError(
+            "openkos sync-tags: refusing to write -- the plan carries no "
+            "staged log delta. Nothing was written."
+        )
+    new_log = catalog_delta.recompose_file(
+        verb="sync-tags",
+        path=layout.bundle_dir / "log.md",
+        baseline=prepared.log_bytes,
+        planned=prepared.new_log_text,
+        delta=prepared.log_edit,
+        read=read,
+    )
+    return dataclasses.replace(prepared, new_log_text=new_log)
 
 
 class SyncTagsWriteError(OSError):

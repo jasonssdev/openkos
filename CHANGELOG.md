@@ -16,6 +16,17 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Added
 
+- `openkos daemon [--once]` runs the unattended engine in the foreground: it
+  retries any failed auto-commit, then runs a scheduled maintenance pass that
+  refreshes the derived indexes, counts lint findings and queues advisor
+  proposals (duplicates, relation types, volatility, contradictions, decision
+  revisions) for `openkos pending`, writing nothing under `bundle/`. Model calls
+  stay inside the `unattended:` budget, each job's outcome is recorded in
+  `.openkos/jobs.db`, and `SIGTERM`/`SIGINT` stop it cleanly with exit `0`. It
+  holds the workspace lock only for a short write, never while idle
+  ([#1139](https://github.com/jasonssdev/openkos/issues/1139),
+  [#1140](https://github.com/jasonssdev/openkos/issues/1140),
+  [#1141](https://github.com/jasonssdev/openkos/issues/1141)).
 - `openkos pending` lists the pending-work queue read-only: open rows grouped by
   kind with their target ids and resolving command, then the unattended job
   outcomes that need attention. `--all` adds resolved rows and `--stats` prints
@@ -41,6 +52,25 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Changed
 
+- `openkos next` reads the pending-work queue: once the queue exists, its
+  duplicate-group and contradiction tiers take their findings from open queue
+  rows instead of recomputing them, and a new last tier recommends
+  `openkos pending` for open rows no earlier tier ranks and for an unattended
+  job that ended `budget_exhausted`, `timed_out`, `commit_failed` or `failed`.
+  `openkos status` lists the open rows per kind and the most recent unattended
+  job's kind, outcome and end time under **Needs attention**, and says "not
+  available" for a queue or job record that is absent or unreadable instead of
+  reporting nothing pending. Both stay read-only and create neither file
+  ([#1141](https://github.com/jasonssdev/openkos/issues/1141)).
+- `merge`, `unmerge`, `forget`, `relate`, `set-sensitivity`, `sync-tags`,
+  `repair`, `reconcile`, `adjudicate --apply` and `suggest-relations --apply`
+  no longer refuse with exit `3` because another process appended to `index.md`
+  or `log.md` while they waited: at commit time they re-apply their own entries
+  to the files' current text, so both writers' entries are kept. A concept the
+  run writes or deletes, or an input it read, that changed still refuses with
+  exit `3`, as does a catalog the entries cannot be re-applied to (and an
+  `unmerge` of a merge recorded as whole-file snapshots, which cannot be
+  re-applied) ([#1137](https://github.com/jasonssdev/openkos/issues/1137)).
 - `query` no longer blocks behind a running writer: a plain `query` takes no
   workspace lock, and `query --save` holds it only for the filing itself, not
   for retrieval, the model call or the confirmation prompt. The filing refuses
@@ -91,6 +121,17 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   exit `3` and nothing written, and `adjudicate` and `suggest-relations` no
   longer cache a verdict against a document edited while the model was working
   ([#1137](https://github.com/jasonssdev/openkos/issues/1137)).
+- `curate` no longer holds the workspace lock for its whole run: every stage
+  plans, calls the model and asks with no lock, and takes it only for each
+  accepted item's write (a merge, a relation, a volatility tier) and for each
+  persist of what the model paid for (adjudication verdicts, edge suggestions,
+  contradiction findings), so another OpenKOS process is not refused while a
+  prompt is open. A merge now also refuses with exit `3`, writing nothing, when
+  a document its plan only read changed or a new document appeared; an item
+  whose concept was forgotten while its prompt waited is skipped with a notice;
+  and a verdict, suggestion or finding about content edited or forgotten while
+  the model ran is no longer cached
+  ([#1137](https://github.com/jasonssdev/openkos/issues/1137)).
 - A derived-store lock contention (`vectors.db`, `fts.db`, `graph.db` or
   `findings.db` still busy after the busy timeout) now exits `3`, the
   retry-safe refusal, instead of `1`, for `reindex` and every other locked
@@ -121,6 +162,11 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Security
 
+- `adjudicate --apply` and `--apply-same` refuse a merge (exit `3`, nothing
+  written) when a document the merge plan only read, or one that appeared
+  after it, changed while the model ran, so the survivor can no longer be
+  committed with a stale sensitivity
+  ([#1137](https://github.com/jasonssdev/openkos/issues/1137)).
 - The merged-body reconciliation that `merge`, `curate`, and `adjudicate --apply`
   run no longer sends a `confidential` concept to a non-local model
   ([#1124](https://github.com/jasonssdev/openkos/issues/1124)). It follows the

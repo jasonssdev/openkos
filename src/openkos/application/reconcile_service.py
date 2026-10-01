@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Literal
 
 from openkos import config, fsio
+from openkos.application import catalog_delta
 from openkos.application import drift as application_drift
 from openkos.application import lifecycle as application_lifecycle
 from openkos.application import queue_resolution
@@ -523,6 +524,9 @@ class _PreparedPair:
     new_text_a: str
     new_text_b: str
     new_log_text: str
+    log_edit: catalog_delta.LogDelta
+    """The `**Reconcile**` entry as a pure function of the log's current text,
+    re-applied by the commit phase over a concurrent append."""
     preview: ReconcilePreview
     changed: bool
 
@@ -697,7 +701,11 @@ def _prepare_pair(
                 f"revises [{target_canonical}](/{target_canonical}.md) "
                 "(recorded 'revises'; both remain current)."
             )
-        new_log_text = bundle_log.insert_log_entry(log_text, today, log_line)
+
+        def log_edit(current_log: str) -> str:
+            return bundle_log.insert_log_entry(current_log, today, log_line)
+
+        new_log_text = log_edit(log_text)
     except (OSError, ValueError) as exc:
         raise Refused(
             f"openkos reconcile: failed while preparing the reconcile -- {exc}."
@@ -710,6 +718,7 @@ def _prepare_pair(
         new_text_a=new_text_a,
         new_text_b=new_text_b,
         new_log_text=new_log_text,
+        log_edit=log_edit,
         preview=ReconcilePreview(
             pair=pair,
             edge_added_a=edge_added_a,
@@ -780,17 +789,28 @@ def reconcile_pair(
             {
                 pair.path_a: prepared.bytes_a,
                 pair.path_b: prepared.bytes_b,
-                log_path: prepared.log_bytes,
             },
             "reconcile",
         )
         if drift is not None:
             raise DriftDetected(drift)
+        # `log.md` is re-composed over its current bytes, not guarded.
+        try:
+            new_log_text = catalog_delta.recompose_file(
+                verb="reconcile",
+                path=log_path,
+                baseline=prepared.log_bytes,
+                planned=prepared.new_log_text,
+                delta=prepared.log_edit,
+                read=ports.snapshot_read,
+            )
+        except catalog_delta.CatalogRecomposeError as exc:
+            raise DriftDetected(str(exc)) from exc
 
         try:
             fsio.write_atomic(pair.path_a, prepared.new_text_a)
             fsio.write_atomic(pair.path_b, prepared.new_text_b)
-            fsio.write_atomic(log_path, prepared.new_log_text)
+            fsio.write_atomic(log_path, new_log_text)
         except (OSError, ValueError) as exc:
             raise Refused(
                 f"openkos reconcile: failed while writing the reconcile -- {exc}."

@@ -44,6 +44,7 @@ from typing import Literal, NamedTuple, Protocol, cast
 
 from openkos import config, lock
 from openkos.application import backends as application_backends
+from openkos.application import catalog_delta
 from openkos.application import drift as application_drift
 from openkos.application import lifecycle as application_lifecycle
 from openkos.application import pending as application_pending
@@ -850,10 +851,8 @@ def apply_relation_suggestions(
                 skipped += 1
                 continue
 
-            drift_baselines = {
-                source_path: prepared.source_bytes,
-                log_path: prepared.log_bytes,
-            }
+            # `log.md` is re-composed below, not guarded.
+            drift_baselines = {source_path: prepared.source_bytes}
             if prepared.target_bytes is not None:
                 drift_baselines[target_path] = prepared.target_bytes
             drift = application_drift.describe_drift(
@@ -861,6 +860,12 @@ def apply_relation_suggestions(
             )
             if drift is not None:
                 raise DriftDetected(drift)
+            try:
+                prepared = application_lifecycle.recompose_relate_log(
+                    log_path, prepared, verb=_APPLY_VERB
+                )
+            except catalog_delta.CatalogRecomposeError as exc:
+                raise DriftDetected(str(exc)) from exc
 
             try:
                 application_lifecycle.relate_core(

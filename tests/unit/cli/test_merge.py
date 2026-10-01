@@ -1291,18 +1291,17 @@ def _pair_with_all_three_rewrite_groups(
 
 
 _MERGE_WRITE_TARGETS = [
-    "bundle/index.md",
-    "bundle/log.md",
     "bundle/concepts/other.md",
     "bundle/concepts/relator.md",
     "bundle/concepts/derived.md",
     "bundle/concepts/survivor.md",
 ]
-"""One entry per guard-mapping contributor `merge_core` OVERWRITES: the two
-fixed catalog/log keys, one touched file per rewrite partition, and the
-survivor -- so no single contributor can be dropped from the mapping without
-failing at least one parametrized case below. The absorbed DELETE target has
-its own dedicated tests."""
+"""One entry per guard-mapping contributor `merge_core` OVERWRITES: one
+touched file per rewrite partition and the survivor -- so no single
+contributor can be dropped from the mapping without failing at least one
+parametrized case below. `index.md`/`log.md` are re-composed at commit time,
+not guarded (test_catalog_recompose.py). The absorbed DELETE target has its
+own dedicated tests."""
 
 
 @pytest.mark.parametrize("target", _MERGE_WRITE_TARGETS)

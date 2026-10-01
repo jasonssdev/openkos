@@ -74,6 +74,7 @@ from dataclasses import dataclass
 from openkos import config
 from openkos import lint as lint_check
 from openkos.application import pending as application_pending
+from openkos.application import pending_queue_report
 from openkos.bundle import log as bundle_log
 from openkos.graph.sqlite_graph import build_graph
 from openkos.graph.summary import asserted_relations_exist, graph_edge_summary
@@ -200,6 +201,12 @@ class StatusReport:
     R2-asserted-relations-false-is-ambiguous). The sole consumer reads it
     behind that same zero-edge guard, so this is a truthfulness fix, not a
     behaviour change -- `not None` and `not False` agree."""
+
+    unattended: pending_queue_report.QueueSnapshot
+    """The open pending-work rows and the most recent unattended job, read
+    through the read-only openers `openkos pending` uses (no lock, no model
+    call, neither file created). Absent and unreadable stores are distinct
+    from empty ones, so the adapter can say "not available" truthfully."""
 
     warnings: tuple[str, ...] = ()
     """Complete, already-worded notes about state the read had to work
@@ -427,5 +434,6 @@ def build_status_report(layout: config.WorkspaceLayout) -> StatusReport:
         stale_indexes=stale_indexes,
         edge_summary=edge_summary,
         asserted_relations=asserted_relations,
+        unattended=pending_queue_report.read_snapshot(layout),
         warnings=tuple(warnings),
     )

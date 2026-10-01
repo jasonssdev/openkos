@@ -35,6 +35,7 @@ from openkos import (
 )
 from openkos import lint as lint_check
 from openkos.application import backends as application_backends
+from openkos.application import catalog_delta as application_catalog_delta
 from openkos.application import commit_phase as application_commit_phase
 from openkos.application import (
     contradictions_service,
@@ -70,6 +71,7 @@ from openkos.bundle import ledger as bundle_ledger
 from openkos.bundle import log as bundle_log
 from openkos.bundle import provenance as bundle_provenance
 from openkos.cli import curate as curate_module
+from openkos.cli import daemon as daemon_module
 from openkos.cli import observability
 from openkos.extraction import judge as judge_mod
 from openkos.extraction.concept import (
@@ -370,11 +372,11 @@ can drift without a red test.
 """
 
 
-_SELF_LOCKING_COMMANDS: frozenset[str] = frozenset()
+_SELF_LOCKING_COMMANDS: frozenset[str] = frozenset({"daemon"})
 """Long-running commands that take the lock per unit of work (a commit phase
-each), never for their own lifetime, so the guard must not wrap them. Empty
-until such a command exists (`daemon`); a name here must be registered, and
-no command is in two classes (`test_every_command_is_classified`)."""
+each), never for their own lifetime, so the guard must not wrap them (`daemon`);
+a name here must be registered, and no command is in two classes
+(`test_every_command_is_classified`)."""
 
 
 _WAIT_PARAM = "wait"
@@ -1297,6 +1299,20 @@ def _reject_drifted_targets(
         return
     typer.echo(message, err=True)
     raise typer.Exit(code=3)
+
+
+def _recomposed_catalog[**P, T](
+    compose: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs
+) -> T:
+    """Run a commit-phase catalog re-composition (`application.catalog_delta`),
+    turning its refusal into exit 3 with nothing written -- the same exit a
+    drift refusal owes, because it is raised only when `index.md`/`log.md`
+    changed and the verb's entries cannot be re-applied to the new bytes."""
+    try:
+        return compose(*args, **kwargs)
+    except application_catalog_delta.CatalogRecomposeError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=3) from exc
 
 
 def _require_member_baseline(
@@ -2432,12 +2448,27 @@ def _run_adjudicate_apply(
         # above held no workspace lock.
         with _commit_section_for(root)():
             absorbed_path = layout.bundle_dir / f"{prepared.absorbed_canonical}.md"
+            # `index.md`/`log.md` are re-composed over their current bytes,
+            # not guarded: every verb appends to them.
             _reject_drifted_targets(
                 layout,
-                application_lifecycle.merge_drift_targets(layout, prepared),
+                application_lifecycle.merge_drift_targets(
+                    layout, prepared, include_catalog=False
+                ),
                 "adjudicate --apply",
                 deletes=frozenset({absorbed_path}),
             )
+            prepared = _recomposed_catalog(
+                application_lifecycle.recompose_merge_catalog,
+                layout,
+                prepared,
+                verb="adjudicate --apply",
+            )
+
+            # The documents the plan only READ (the scan behind the survivor's
+            # sensitivity and the reference rewrite) are re-validated too:
+            # the whole-verb lock no longer excludes their writers.
+            _reject_read_drift(layout, prepared.read_dependencies, "adjudicate --apply")
 
             try:
                 merge_service.commit_merge(
@@ -2771,9 +2802,20 @@ def _run_adjudicate_apply_same(
             try:
                 _reject_drifted_targets(
                     layout,
-                    application_lifecycle.merge_drift_targets(layout, prepared),
+                    application_lifecycle.merge_drift_targets(
+                        layout, prepared, include_catalog=False
+                    ),
                     "adjudicate --apply-same",
                     deletes=frozenset({absorbed_path}),
+                )
+                _reject_read_drift(
+                    layout, prepared.read_dependencies, "adjudicate --apply-same"
+                )
+                prepared = _recomposed_catalog(
+                    application_lifecycle.recompose_merge_catalog,
+                    layout,
+                    prepared,
+                    verb="adjudicate --apply-same",
                 )
             except typer.Exit:
                 typer.echo(
@@ -5351,8 +5393,7 @@ def forget(
         _reject_drifted_targets(
             layout,
             {
-                index_path: plan.index_bytes,
-                log_path: plan.log_bytes,
+                # `index.md`/`log.md` are re-composed below, not guarded.
                 concept_path: plan.concept_bytes,
                 **{
                     # Defensive fail-closed lookup (see `_require_member_baseline`):
@@ -5415,6 +5456,10 @@ def forget(
                 ),
             ),
             "forget",
+        )
+
+        plan = _recomposed_catalog(
+            application_lifecycle.recompose_forget_catalog, layout, plan
         )
 
         ledger_touched: list[Path] = []
@@ -6561,10 +6606,8 @@ def relate(
     # Issue #313: every byte below was computed from a pre-prompt read, so
     # re-validate each target now -- after the gate, before the first write.
     with _commit_section_for(root)():
-        drift_baselines = {
-            source_path: prepared.source_bytes,
-            log_path: prepared.log_bytes,
-        }
+        # `log.md` is re-composed below, not guarded.
+        drift_baselines = {source_path: prepared.source_bytes}
         if prepared.target_bytes is not None:
             drift_baselines[target_path] = prepared.target_bytes
         _reject_drifted_targets(layout, drift_baselines, "relate")
@@ -6576,6 +6619,10 @@ def relate(
                 ),
                 "relate",
             )
+
+        prepared = _recomposed_catalog(
+            application_lifecycle.recompose_relate_log, log_path, prepared
+        )
 
         try:
             application_lifecycle.relate_core(
@@ -6873,9 +6920,13 @@ def set_sensitivity_cmd(
             f"**Set-sensitivity**: Set [{canonical_id}](/{canonical_id}.md) "
             f"sensitivity to {level!r} (was {current!r})."
         )
-        new_log_text = bundle_log.insert_log_entry(
-            log_text, now.astimezone().date(), log_line
-        )
+
+        def set_sensitivity_log(current_log: str) -> str:
+            return bundle_log.insert_log_entry(
+                current_log, now.astimezone().date(), log_line
+            )
+
+        new_log_text = set_sensitivity_log(log_text)
     except (OSError, ValueError) as exc:
         typer.echo(
             f"openkos set-sensitivity: failed while preparing the "
@@ -6956,11 +7007,19 @@ def set_sensitivity_cmd(
                     for descendant_raise in descendant_raises
                 },
                 concept_path: concept_bytes,
-                log_path: log_bytes,
             },
             "set-sensitivity",
         )
         _reject_read_drift(layout, sensitivity_dependencies, "set-sensitivity")
+        # `log.md` is re-composed over its current bytes, not guarded.
+        new_log_text = _recomposed_catalog(
+            application_catalog_delta.recompose_file,
+            verb="set-sensitivity",
+            path=log_path,
+            baseline=log_bytes,
+            planned=new_log_text,
+            delta=set_sensitivity_log,
+        )
 
         landed: list[str] = []
         try:
@@ -7460,6 +7519,9 @@ def sync_tags_cmd(
                 )
             },
             "sync-tags",
+        )
+        prepared = _recomposed_catalog(
+            application_lifecycle.recompose_sync_tags_log, layout, prepared
         )
 
         try:
@@ -9833,11 +9895,18 @@ def status() -> None:
                 f"{untyped} of {total} concept-to-concept edge(s) untyped — "
                 "run `openkos curate` to type them."
             )
+    # The pending-work queue and the last unattended job: rows and a job that
+    # needs a human are actionable; an absent or unreadable store is reported
+    # as "not available" below, never as nothing pending.
+    queue_lines = pending_report.status_lines(report.unattended)
+    needs_attention.extend(queue_lines.attention)
     if not needs_attention:
         typer.echo("  Nothing needs attention.")
     else:
         for line in needs_attention:
             typer.echo(f"  {line}")
+    for notice in queue_lines.notices:
+        typer.echo(f"  {notice}")
     # The empty-graph notice stays a separate, purely INFORMATIONAL line
     # (spec: "or an adjacent informational line") -- never appended to
     # `needs_attention`, so a healthy workspace still prints "Nothing needs
@@ -9955,6 +10024,46 @@ def pending_cmd(
         raise typer.Exit(code=1) from exc
     for line in pending_report.render_lines(report, include_all=all_rows, stats=stats):
         typer.echo(line)
+
+
+@app.command(
+    "daemon",
+    help=(
+        "Run unattended maintenance for this workspace in the foreground: it "
+        "refreshes the derived indexes and queues proposals for you to review "
+        "(see `pending`). Never changes your knowledge base itself."
+    ),
+    rich_help_panel="Maintain",
+)
+def daemon_cmd(
+    once: bool = typer.Option(
+        False,
+        "--once",
+        help="Run every job that is due once, then exit.",
+    ),
+) -> None:
+    """Run the unattended engine for the workspace in the current directory.
+
+    Foreground and long-running: it runs the jobs that are due (a retry of any
+    auto-commit that failed, then a maintenance pass once the configured
+    interval has elapsed), idles between polls, and stops on SIGTERM or SIGINT
+    after the work in progress finishes, exiting 0. `--once` runs what is due
+    and exits.
+
+    A maintenance pass refreshes the derived indexes, counts lint findings and
+    runs the advisors (duplicates, relation types, volatility, contradictions,
+    decision revisions), recording each proposal as a pending-work row. It
+    writes nothing under `bundle/` and approves nothing. Model calls are bounded
+    by the `unattended:` budget in `openkos.yaml`. Each job's outcome is recorded
+    in `.openkos/jobs.db`; the log goes to the per-user log directory.
+
+    The daemon never holds the workspace lock for its lifetime, only for a short
+    write, so your own commands keep working while it runs. Refuses (exit 1)
+    outside an initialized workspace.
+    """
+    code = daemon_module.serve(Path.cwd(), once=once)
+    if code != 0:
+        raise typer.Exit(code=code)
 
 
 def _run_list_sources(layout: config.WorkspaceLayout, object_id: str) -> None:
@@ -12048,18 +12157,26 @@ def _persist_edge_suggestions(
     *,
     include_confidential: bool,
     surface: str = "suggest-relations",
+    judged_digests: "Mapping[str, str | None] | None" = None,
 ) -> None:
     """Delegator to `relations_service.persist_edge_suggestions` (issue
     #1168), which owns the persist rule (#799). This wrapper only renders the
     service's advisory, to stderr; `surface` names the command the user
     actually ran (#867 review), since curate's Structure stage persists
-    through this helper too."""
+    through this helper too.
+
+    The persist is a commit phase (#1137): it enters the commit section the
+    running split verb published, and `judged_digests` pins each endpoint as it
+    stood before the typing call, so a suggestion about an endpoint edited or
+    forgotten meanwhile is dropped."""
     relations_service.persist_edge_suggestions(
         layout,
         results,
         include_confidential=include_confidential,
         on_warning=_echo_stderr,
         surface=surface,
+        judged_digests=judged_digests,
+        commit_section=_commit_section_for(layout.root),
     )
 
 
@@ -12086,18 +12203,16 @@ def _persist_adjudications(
     judging call (#1137): the judging call holds no workspace lock, so a
     member edited, raised or forgotten meanwhile has a different digest now,
     and its verdict is dropped rather than stored against content nobody
-    judged. Without it (curate, which holds the lock throughout) the digests
-    are read here, as before.
+    judged. Without it the digests are read here, at persist time.
 
     The persist is a commit phase: it takes the workspace lock, and a busy
     workspace costs the same advisory a failed persist does."""
     if not results:
         return
     try:
-        # A whole-lock caller (curate) publishes no section and already holds
-        # the lock, so only a split verb's published section is entered.
-        published = _COMMIT_SECTION.get()
-        with published() if published is not None else nullcontext():
+        # Both callers (`adjudicate`, `curate`) are split verbs, so the persist
+        # always enters the commit section the guard published.
+        with _commit_section_for(layout.root)():
             current_digest = application_pending.current_finding_digest(
                 layout.bundle_dir
             )
@@ -14189,6 +14304,8 @@ def repair() -> None:
         _reject_drifted_targets(
             layout, {**plan.read_dependencies, **plan.baselines}, "repair"
         )
+        # The `index.md` flip is re-applied to its current bytes, not guarded.
+        plan = _recomposed_catalog(application_repair.recompose_index, plan)
 
         try:
             outcome = application_repair.apply_repair(root, plan)
@@ -14295,7 +14412,7 @@ def repair() -> None:
     ),
     rich_help_panel="Curate",
 )
-@_guard_workspace_lock("curate")
+@_guard_workspace_lock("curate", commit_phase=True)
 def curate(
     auto: bool = typer.Option(
         False,
@@ -14391,6 +14508,12 @@ def curate(
     every stage's underlying call, fail-closed by default (spec:
     Sensitivity Threading Is Fail-Closed).
 
+    Locking (ADR-0036): `curate` is a SPLIT verb. It holds no workspace lock
+    while a stage plans, calls the model or asks; each accepted item's write
+    and each persist of paid-for results is its own commit phase, which takes
+    the lock under `--wait`, re-validates its inputs and drops an item whose
+    input vanished.
+
     All five stages run fully as of slice 2 (design D10): Preconditions and
     Identity shipped in slice 1; Structure, Metadata, and Contradictions
     went `live=True` in slice 2 with real `probe`/`run` implementations, so
@@ -14471,7 +14594,9 @@ def curate(
     # write -- an all-declined/empty session invalidated nothing. NOT per
     # stage and NOT inside `merge_service.commit_merge` (Identity commits per item).
     if any(outcome.applied for outcome in outcomes):
-        _refresh_derived_after_write(layout, cfg, verb="curate")
+        _refresh_derived_after_write(
+            layout, cfg, verb="curate", commit_section=_commit_section_for(root)
+        )
 
 
 @app.command(
