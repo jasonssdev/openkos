@@ -47,6 +47,11 @@ _RESOLVING_COMMAND = {
 }
 
 
+def resolving_command(kind: str) -> str:
+    """The command that resolves a row of `kind`."""
+    return _RESOLVING_COMMAND[kind]
+
+
 class QueueUnavailableError(Exception):
     """`findings.db` exists but cannot be read as a queue."""
 
