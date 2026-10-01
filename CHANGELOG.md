@@ -152,6 +152,11 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Security
 
+- `adjudicate --apply` and `--apply-same` refuse a merge (exit `3`, nothing
+  written) when a document the merge plan only read, or one that appeared
+  after it, changed while the model ran, so the survivor can no longer be
+  committed with a stale sensitivity
+  ([#1137](https://github.com/jasonssdev/openkos/issues/1137)).
 - The merged-body reconciliation that `merge`, `curate`, and `adjudicate --apply`
   run no longer sends a `confidential` concept to a non-local model
   ([#1124](https://github.com/jasonssdev/openkos/issues/1124)). It follows the

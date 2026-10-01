@@ -291,3 +291,89 @@ def test_a_verdict_is_persisted_only_for_the_content_it_judged(
         assert [a.member_ids for a in _stored_adjudications(tmp_path)] == [
             ("concepts/a", "concepts/b")
         ]
+
+
+_ARGV_AND_PROMPT = [
+    pytest.param(["adjudicate", "--apply"], id="apply"),
+    pytest.param(["adjudicate", "--apply-same", "--confirm-count", "1"], id="same"),
+]
+
+
+def _during_reconcile(monkeypatch: pytest.MonkeyPatch, action: object) -> None:
+    """Run `action` inside the lock-free reconciliation window."""
+
+    def _reconcile(root_arg: Path, prepared: object) -> tuple[object, None]:
+        if callable(action):
+            action()
+        return prepared, None
+
+    monkeypatch.setattr("openkos.cli.main._reconcile_merged_survivor", _reconcile)
+    monkeypatch.setattr("typer.prompt", lambda *a, **k: "y")
+
+
+@pytest.mark.parametrize("argv", _ARGV_AND_PROMPT)
+def test_a_bystander_the_plan_read_raised_to_confidential_blocks_the_merge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, argv: list[str]
+) -> None:
+    """Sentinel: the plan scanned every bundle document to decide the merged
+    survivor's sensitivity and references. A bystander it only READ (so it is no
+    drift target) raised to `confidential` while the lock-free reconciliation
+    runs must refuse the commit, with nothing written -- the sentinel body
+    must not reach any file the merge writes."""
+    init_workspace(tmp_path, monkeypatch)
+    bystander = tmp_path / "bundle" / "concepts" / "bystander.md"
+    _write(bystander, title="Bystander", body="Unrelated public prose. " * 6)
+    _seed_same_group(tmp_path, monkeypatch)
+    before = _snapshot(tmp_path)
+
+    _during_reconcile(
+        monkeypatch,
+        lambda: _write(
+            bystander,
+            title="Bystander",
+            body=f"{_SENTINEL_BODY} " + "Now secret. " * 6,
+            sensitivity="confidential",
+        ),
+    )
+
+    result = runner.invoke(app, argv)
+
+    assert result.exit_code == 3, result.stderr
+    assert "1 read dependency(ies) changed on disk" in result.stderr
+    assert "concepts/bystander.md" in result.stderr
+    assert (tmp_path / "bundle" / "concepts" / "a.md").exists()
+    assert (tmp_path / "bundle" / "concepts" / "b.md").exists()
+    after = _snapshot(tmp_path)
+    for path, content in after.items():
+        if path == bystander.relative_to(tmp_path):
+            continue
+        if str(path).startswith("bundle"):
+            assert content == before.get(path), path
+            assert content is None or _SENTINEL_BODY.encode() not in content, path
+
+
+@pytest.mark.parametrize("argv", _ARGV_AND_PROMPT)
+def test_a_new_document_linking_the_absorbed_concept_blocks_the_merge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, argv: list[str]
+) -> None:
+    """A document that appears while the model runs has no baseline, and it
+    links the concept about to be unlinked: the commit refuses rather than
+    leave that reference dangling."""
+    init_workspace(tmp_path, monkeypatch)
+    _seed_same_group(tmp_path, monkeypatch)
+    latecomer = tmp_path / "bundle" / "concepts" / "latecomer.md"
+    _during_reconcile(
+        monkeypatch,
+        lambda: _write(
+            latecomer,
+            title="Latecomer",
+            body="See [a](/concepts/a.md) and [b](/concepts/b.md).",
+        ),
+    )
+
+    result = runner.invoke(app, argv)
+
+    assert result.exit_code == 3, result.stderr
+    assert "1 new document(s) appeared: concepts/latecomer.md" in result.stderr
+    assert (tmp_path / "bundle" / "concepts" / "a.md").exists()
+    assert (tmp_path / "bundle" / "concepts" / "b.md").exists()
