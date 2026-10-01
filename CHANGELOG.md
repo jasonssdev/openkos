@@ -105,6 +105,13 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   same egress rule as every other chat call: a merge involving a confidential
   concept skips the pass and keeps the stacked body, with a notice, unless the
   backend is verifiably local and `confidential_local_exemption` is on.
+- `forget` erases pending-work queue rows that name a forgotten concept (as a
+  target or an input reference) from `.openkos/findings.db` with the same
+  vacuum-and-checkpoint erasure as the other stores in that file, and `purge`
+  now deletes `.openkos/jobs.db` and the workspace's daemon log files, naming
+  any it cannot delete in the incomplete-erasure report
+  ([#1141](https://github.com/jasonssdev/openkos/issues/1141),
+  [#1139](https://github.com/jasonssdev/openkos/issues/1139)).
 
 ## [0.3.0] - 2026-09-30
 
