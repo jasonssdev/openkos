@@ -1422,15 +1422,14 @@ def _merged_pair_with_all_three_rewrite_groups(
 
 
 _READABLE_WRITE_TARGETS = (
-    "bundle/index.md",
-    "bundle/log.md",
     "bundle/concepts/survivor.md",
     "bundle/concepts/other.md",
     "bundle/concepts/relator.md",
     "bundle/concepts/derived.md",
 )
-"""Every readable target `unmerge` overwrites for the fixture above: the two
-catalog/log keys, the survivor, and ONE third-party file per rewrite group.
+"""Every readable GUARDED target `unmerge` overwrites for the fixture above:
+the survivor and ONE third-party file per rewrite group (`index.md`/`log.md`
+are re-composed at commit time -- see test_catalog_recompose.py).
 
 Named once and spread into both `parametrize` lists and the CRLF-at-rest loop
 below (#327): the same six paths used to be written out three times, so
@@ -1510,7 +1509,7 @@ def test_a_write_target_edited_during_the_prompt_is_refused(
     assert changed == {Path(target)}
 
 
-@pytest.mark.parametrize("target", ["bundle/index.md", "bundle/concepts/survivor.md"])
+@pytest.mark.parametrize("target", ["bundle/concepts/survivor.md"])
 def test_the_refusal_warns_that_a_rerun_discards_the_edit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str
 ) -> None:

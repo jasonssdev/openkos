@@ -633,9 +633,7 @@ def _pair_on_a_tty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[str
     return id_a, id_b
 
 
-@pytest.mark.parametrize(
-    "target", ["bundle/sources/a.md", "bundle/sources/b.md", "bundle/log.md"]
-)
+@pytest.mark.parametrize("target", ["bundle/sources/a.md", "bundle/sources/b.md"])
 def test_a_write_target_edited_during_the_prompt_is_refused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str
 ) -> None:
@@ -692,9 +690,7 @@ def test_a_write_target_deleted_during_the_prompt_is_refused(
     assert changed == {Path("bundle/sources/b.md")}
 
 
-@pytest.mark.parametrize(
-    "target", ["bundle/sources/a.md", "bundle/sources/b.md", "bundle/log.md"]
-)
+@pytest.mark.parametrize("target", ["bundle/sources/a.md", "bundle/sources/b.md"])
 def test_a_crlf_rewrite_during_the_prompt_is_refused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str
 ) -> None:
@@ -753,9 +749,7 @@ def test_targets_that_were_already_crlf_are_not_drift(
     ]
 
 
-@pytest.mark.parametrize(
-    "target", ["bundle/sources/a.md", "bundle/sources/b.md", "bundle/log.md"]
-)
+@pytest.mark.parametrize("target", ["bundle/sources/a.md", "bundle/sources/b.md"])
 def test_drift_on_the_unprompted_path_is_refused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str
 ) -> None:
