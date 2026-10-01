@@ -39,7 +39,7 @@ marker on the Source (#1136) is what makes an interrupted run completable.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -49,6 +49,7 @@ from typing import Literal
 from openkos import config, fsio
 from openkos.application import drift as application_drift
 from openkos.application import ingest as application_ingest
+from openkos.application import lock_wait
 from openkos.bundle import source_titles
 from openkos.extraction.concept import FAN_OUT_CONCURRENCY, fans_out
 from openkos.llm.base import BackendError, LLMBackend, is_timeout_failure
@@ -186,6 +187,14 @@ class IngestPorts:
     text (the plan's input), taken together (#318)."""
 
     clock: Callable[[], datetime] = _utc_now
+
+    commit_section: lock_wait.CommitSection = nullcontext
+    """Entered around the COMMIT phase -- re-validation, the write burst and the
+    auto-commit -- and nowhere else (ADR-0036). The CLI hands one that takes the
+    workspace lock under its `--wait` policy, the unattended runner one with its
+    own policy; the default holds nothing, for a caller that needs no lock.
+    Extraction and the confirmation question run before it is entered, so a slow
+    model never holds the lock."""
 
 
 # -- Outputs ----------------------------------------------------------------
@@ -334,7 +343,21 @@ class _Prepared:
     concept_content: str
     new_index_text: str
     new_log_text: str
+    index_snapshot: bytes
+    log_snapshot: bytes
+    """The bytes `new_index_text`/`new_log_text` were composed from. When both
+    still match at the commit phase the finished text is written as planned;
+    otherwise the catalog is re-composed from the current bytes."""
+    recompose_catalog: Callable[[str, str], application_ingest.CatalogUpdate]
+    """The staged catalog delta: `(index_text, log_text)` -> the catalog the plan
+    owns, applied to those bytes. Pure, so the commit phase can re-apply it to
+    whatever `index.md` and `log.md` hold by then instead of refusing."""
     guarded_targets: dict[Path, bytes]
+    """Targets the plan rewrites in place: a change refuses the run."""
+    read_dependencies: dict[Path, bytes]
+    """Files whose bytes decided a sensitivity level or a provenance claim in
+    the plan but which the plan does not write. A change refuses the run."""
+    created_targets: tuple[Path, ...]
     derived_plans: tuple[application_ingest.DerivedPlan, ...]
     adopted: tuple[application_ingest.AdoptedObject, ...]
     two_step: bool
@@ -411,51 +434,163 @@ def ingest_source(
         if answer != "proceed":
             raise ConfirmationUnavailable()
 
-    # Issue #313: every byte below was computed from a pre-prompt read, so
-    # re-validate each target now -- after the gate, before the first write.
-    drift = application_drift.describe_drift(
-        prepared.layout, prepared.guarded_targets, "ingest"
-    )
-    if drift is not None:
-        raise DriftDetected(drift)
+    # The commit phase (ADR-0036): everything above ran without the workspace
+    # lock; from here to the end of the auto-commit the lock is held. Nothing in
+    # it calls a model or waits on a human.
+    with ports.commit_section():
+        # Issue #313: every byte below was computed from a pre-prompt read, so
+        # re-validate each target now -- after the gate, before the first write.
+        _revalidate(prepared)
+        new_index_text, new_log_text = _recompose_catalog(prepared, ports)
 
-    _write(prepared)
+        _write(prepared, new_index_text, new_log_text)
 
-    imported_paths = [f"raw/{prepared.name}", f"bundle/sources/{prepared.slug}.md"]
-    imported_paths.extend(
-        f"bundle/{plan.link_dir}/{plan.slug}.md" for plan in prepared.derived_plans
-    )
-    # Adopted objects were written by the interrupted run and are still
-    # uncommitted; they belong in this run's commit (#1136).
-    committed_paths = [
-        *imported_paths,
-        *(f"bundle/{obj.link_dir}/{obj.slug}.md" for obj in prepared.adopted),
-    ]
-    type_counts: dict[str, int] = {}
-    for plan in prepared.derived_plans:
-        type_counts[plan.doc_type] = type_counts.get(plan.doc_type, 0) + 1
-    obs.imported(
-        ImportedSummary(
-            source=src,
-            imported_paths=tuple(imported_paths),
-            index_name=prepared.index_path.name,
-            log_name=prepared.log_path.name,
-            type_counts=type_counts,
+        imported_paths = [
+            f"raw/{prepared.name}",
+            f"bundle/sources/{prepared.slug}.md",
+        ]
+        imported_paths.extend(
+            f"bundle/{plan.link_dir}/{plan.slug}.md" for plan in prepared.derived_plans
         )
-    )
+        # Adopted objects were written by the interrupted run and are still
+        # uncommitted; they belong in this run's commit (#1136).
+        committed_paths = [
+            *imported_paths,
+            *(f"bundle/{obj.link_dir}/{obj.slug}.md" for obj in prepared.adopted),
+        ]
+        type_counts: dict[str, int] = {}
+        for plan in prepared.derived_plans:
+            type_counts[plan.doc_type] = type_counts.get(plan.doc_type, 0) + 1
+        obs.imported(
+            ImportedSummary(
+                source=src,
+                imported_paths=tuple(imported_paths),
+                index_name=prepared.index_path.name,
+                log_name=prepared.log_path.name,
+                type_counts=type_counts,
+            )
+        )
 
-    ports.autocommit(
-        root,
-        [*committed_paths, "bundle/index.md", "bundle/log.md"],
-        f"openkos: ingest {prepared.name} (+{len(prepared.derived_plans)} concepts)",
-    )
+        ports.autocommit(
+            root,
+            [*committed_paths, "bundle/index.md", "bundle/log.md"],
+            f"openkos: ingest {prepared.name} (+{len(prepared.derived_plans)} concepts)",
+        )
 
     # AFTER the commit, never before: the ingest is durable by this point,
     # so a failing embedder degrades to a notice instead of stranding
-    # written-but-uncommitted files (#183).
+    # written-but-uncommitted files (#183). Outside the commit section too: the
+    # embedding calls hold no lock, and the adapter re-takes it briefly for the
+    # vector upsert.
     ports.after_commit(prepared.layout, prepared.cfg)
 
     return prepared.outcome
+
+
+def _display(layout: config.WorkspaceLayout, path: Path) -> str:
+    try:
+        return path.relative_to(layout.root).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def _describe_dependency_drift(
+    layout: config.WorkspaceLayout, dependencies: Mapping[Path, bytes]
+) -> str | None:
+    """Refusal text when a file that decided the plan's sensitivity or
+    provenance changed or vanished since Phase A read it, else `None`.
+
+    Separate from `describe_drift` because these files are READ by the plan,
+    never written: calling them "write targets" would misname what the operator
+    has to look at."""
+    changed: list[str] = []
+    for path, expected in dependencies.items():
+        try:
+            current = path.read_bytes()
+        except OSError:
+            changed.append(f"{_display(layout, path)} (vanished)")
+            continue
+        if current != expected:
+            changed.append(_display(layout, path))
+    if not changed:
+        return None
+    return (
+        "openkos ingest: refusing to write -- "
+        f"{len(changed)} input(s) that decided this ingest's sensitivity or "
+        f"provenance changed on disk after the plan was computed: "
+        f"{', '.join(sorted(changed))}. Nothing was written. Re-run to "
+        "recompute over the current state."
+    )
+
+
+def _describe_created_targets(
+    layout: config.WorkspaceLayout, created: Sequence[Path]
+) -> str | None:
+    """Refusal text when a path the plan would CREATE exists by the commit
+    phase. Create-only writes fail closed on their own, but only partway through
+    the burst; checking first keeps the refusal whole-run, before any write."""
+    existing: list[str] = []
+    for path in created:
+        try:
+            path.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError:
+            pass  # unreadable is not provably absent: fail closed
+        existing.append(_display(layout, path))
+    if not existing:
+        return None
+    return (
+        "openkos ingest: refusing to write -- "
+        f"{len(existing)} path(s) this run would create now exist: "
+        f"{', '.join(sorted(existing))}. Nothing was written. Re-run to "
+        "recompute over the current bundle."
+    )
+
+
+def _revalidate(prepared: _Prepared) -> None:
+    """The commit phase's first step: refuse, before the first write, when any
+    input the plan's safety rests on changed since Phase A read it."""
+    drift = application_drift.describe_drift(
+        prepared.layout, prepared.guarded_targets, "ingest"
+    )
+    if drift is None:
+        drift = _describe_dependency_drift(prepared.layout, prepared.read_dependencies)
+    if drift is None:
+        drift = _describe_created_targets(prepared.layout, prepared.created_targets)
+    if drift is not None:
+        raise DriftDetected(drift)
+
+
+def _recompose_catalog(prepared: _Prepared, ports: IngestPorts) -> tuple[str, str]:
+    """The `index.md` and `log.md` text to write.
+
+    Every verb appends to both, so a change since Phase A is the ordinary case
+    under a lock held only for the commit, not drift. When their bytes still
+    match what the plan was composed from the finished text is used as planned;
+    otherwise the staged catalog delta is re-applied to the current bytes, so a
+    concurrent append is kept. Only a file that cannot be read, or whose
+    current text cannot take the delta, refuses."""
+    try:
+        index_bytes, index_text = ports.snapshot_read(prepared.index_path)
+        log_bytes, log_text = ports.snapshot_read(prepared.log_path)
+    except (OSError, UnicodeDecodeError) as exc:
+        raise DriftDetected(
+            "openkos ingest: refusing to write -- the catalog (index.md or "
+            f"log.md) could not be re-read for the commit phase: {exc}. "
+            "Nothing was written."
+        ) from exc
+    if index_bytes == prepared.index_snapshot and log_bytes == prepared.log_snapshot:
+        return prepared.new_index_text, prepared.new_log_text
+    try:
+        update = prepared.recompose_catalog(index_text, log_text)
+    except ValueError as exc:
+        raise DriftDetected(
+            "openkos ingest: refusing to write -- index.md or log.md changed "
+            f"and the ingest's entries cannot be re-applied to it: {exc}. "
+            "Nothing was written."
+        ) from exc
+    return update.new_index_text, update.new_log_text
 
 
 def _prepare(
@@ -553,6 +688,11 @@ def _prepare(
             # would otherwise swallow a binary/non-text source and fail the
             # whole ingest, instead of degrading to the binary-fallback body.
             raw_content = None
+        # The workspace config decides the Source's sensitivity floor and every
+        # derived object's: its bytes are a read dependency of the plan. Taken
+        # BEFORE it is parsed, so an edit landing between the two reads makes
+        # the commit phase refuse (fail closed) rather than adopt the parse.
+        config_snapshot = layout.config_path.read_bytes()
         cfg = config.read_config(root)
         had_prior_source = regenerate and concept_path.exists()
         if had_prior_source:
@@ -765,10 +905,10 @@ def _prepare(
         # (issues #306, #313, #318).
         index_bytes, index_text = ports.snapshot_read(index_path)
         log_bytes, log_text = ports.snapshot_read(log_path)
-        guarded_targets: dict[Path, bytes] = {
-            index_path: index_bytes,
-            log_path: log_bytes,
-        }
+        # `index.md` and `log.md` are NOT guarded targets: every verb appends
+        # to them, so the commit phase re-composes them from their current
+        # bytes (`_recompose_catalog`) instead of refusing on a change.
+        guarded_targets: dict[Path, bytes] = {}
         if concept_snapshot is not None:
             guarded_targets[concept_path] = concept_snapshot
         # `compose_catalog_update` owns the conditional Source re-render (never
@@ -788,18 +928,24 @@ def _prepare(
             and application_ingest.prior_ingest_pending(concept_text)
             else ()
         )
-        catalog_update = application_ingest.compose_catalog_update(
-            source=source_plan,
-            staged=staged,
-            slug=slug,
-            resource=resource,
-            index_text=index_text,
-            log_text=log_text,
-            regenerate=regenerate,
-            timestamp=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            entry_date=now.astimezone().date(),
-            adopted=adopted,
-        )
+
+        def recompose_catalog(
+            current_index_text: str, current_log_text: str
+        ) -> application_ingest.CatalogUpdate:
+            return application_ingest.compose_catalog_update(
+                source=source_plan,
+                staged=staged,
+                slug=slug,
+                resource=resource,
+                index_text=current_index_text,
+                log_text=current_log_text,
+                regenerate=regenerate,
+                timestamp=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                entry_date=now.astimezone().date(),
+                adopted=adopted,
+            )
+
+        catalog_update = recompose_catalog(index_text, log_text)
     except (OSError, ValueError) as exc:
         raise PreparationFailed(
             f"openkos ingest: failed while preparing the ingest -- {exc}."
@@ -899,7 +1045,19 @@ def _prepare(
         concept_content=catalog_update.concept_content,
         new_index_text=catalog_update.new_index_text,
         new_log_text=catalog_update.new_log_text,
+        index_snapshot=index_bytes,
+        log_snapshot=log_bytes,
+        recompose_catalog=recompose_catalog,
         guarded_targets=guarded_targets,
+        read_dependencies={layout.config_path: config_snapshot},
+        # Create-only writes have no snapshot to compare, so the commit phase
+        # checks they are still absent: the raw copy on a fresh ingest, the
+        # Source when it did not exist, and every staged derived object.
+        created_targets=(
+            *(() if regenerate else (raw_dest,)),
+            *(() if had_prior_source else (concept_path,)),
+            *(plan.path for plan in derived_plans),
+        ),
         derived_plans=tuple(derived_plans),
         adopted=adopted,
         # A Source-only rewrite (`converged` set) extracts nothing and stays
@@ -912,7 +1070,7 @@ def _prepare(
     )
 
 
-def _write(prepared: _Prepared) -> None:
+def _write(prepared: _Prepared, new_index_text: str, new_log_text: str) -> None:
     """Phase B: the writes, in order (see `ingest_source`)."""
     first_content = (
         okf.mark_ingest_pending(prepared.concept_content)
@@ -944,8 +1102,8 @@ def _write(prepared: _Prepared) -> None:
         for plan in prepared.derived_plans:
             plan.path.parent.mkdir(parents=True, exist_ok=True)
             fsio.write_exclusive(plan.path, plan.content)
-        fsio.write_atomic(prepared.index_path, prepared.new_index_text)
-        fsio.write_atomic(prepared.log_path, prepared.new_log_text)
+        fsio.write_atomic(prepared.index_path, new_index_text)
+        fsio.write_atomic(prepared.log_path, new_log_text)
         if prepared.two_step:
             fsio.write_atomic(prepared.concept_path, prepared.concept_content)
     except (OSError, ValueError) as exc:

@@ -2157,11 +2157,12 @@ def test_batch_all_drift_skips_exit_3_preserving_retry_contract(
     non-retryable-looking one (issue #349)."""
     _init_workspace(tmp_path, monkeypatch)
     _write_notes(tmp_path, {"a.txt": "Alpha notes."})
-    index_path = tmp_path / "bundle" / "index.md"
+    config_path = tmp_path / "openkos.yaml"
     hook = echo_after(
         monkeypatch,
-        lambda: index_path.write_text(
-            index_path.read_text(encoding="utf-8") + "drifted\n", encoding="utf-8"
+        lambda: config_path.write_text(
+            config_path.read_text(encoding="utf-8") + "\n# drifted\n",
+            encoding="utf-8",
         ),
         trigger="(new dated entry)",
     )
@@ -2193,13 +2194,14 @@ def test_batch_mixed_drift_and_hard_refusal_exits_1(
     _stage_ingested_raw(
         tmp_path, "b.txt", "conflicting bytes", tmp_path / "notes" / "b.txt"
     )
-    # a drift-refuses: an index.md edit lands inside a's preview window
+    # a drift-refuses: an openkos.yaml edit lands inside a's preview window
     # (exit 3); the hook fires ONCE, on a's preview -- a sorts before b.
-    index_path = tmp_path / "bundle" / "index.md"
+    config_path = tmp_path / "openkos.yaml"
     hook = echo_after(
         monkeypatch,
-        lambda: index_path.write_text(
-            index_path.read_text(encoding="utf-8") + "drifted\n", encoding="utf-8"
+        lambda: config_path.write_text(
+            config_path.read_text(encoding="utf-8") + "\n# drifted\n",
+            encoding="utf-8",
         ),
         trigger="(new dated entry)",
     )
