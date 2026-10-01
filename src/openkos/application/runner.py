@@ -56,7 +56,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from openkos import config, lock
 from openkos.application import budget as budget_module
@@ -77,6 +77,9 @@ from openkos.application.runtime import (
 )
 from openkos.state import derived, jobs
 from openkos.state import pending_queue as pq
+
+if TYPE_CHECKING:
+    from openkos.application.watch import WatchPorts
 
 log = logging.getLogger(__name__)
 
@@ -187,6 +190,8 @@ class RunnerPorts:
     """The four git effects stay adapter-side: `application/` never imports
     `openkos.vcs` (the verb wires `vcs.git`'s functions here)."""
     advisor_stages: Sequence[AdvisorStage] = ()
+    watch: WatchPorts | None = None
+    """The watch job's ports; `None` keeps the watch off."""
     lint_counts: Callable[[config.WorkspaceLayout], Mapping[str, int]] = (
         default_lint_counts
     )
@@ -681,7 +686,8 @@ def run_due_jobs(
     maintenance_due: bool,
 ) -> tuple[JobResult, ...]:
     """Run every due job once, in `JOB_ORDER`: the commit-retry first (only
-    when something is recorded), then maintenance when due. No new job starts
+    when something is recorded), then the watch (only when the inbox holds a
+    settled file), then maintenance when due. No new job starts
     once the stop flag is set."""
     results: list[JobResult] = []
     if not stop.is_set():
@@ -690,7 +696,14 @@ def run_due_jobs(
         )
         if retry is not None:
             results.append(retry)
-    # Unit 7.2 inserts the watch job here, before maintenance.
+    if not stop.is_set():
+        from openkos.application import watch as watch_job  # circular at import time
+
+        watched = watch_job.run_watch_job(
+            root, unattended=unattended, stop=stop, ports=ports
+        )
+        if watched is not None:
+            results.append(watched)
     if maintenance_due and not stop.is_set():
         results.append(
             run_maintenance_job(root, unattended=unattended, stop=stop, ports=ports)
