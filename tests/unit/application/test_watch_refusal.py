@@ -300,3 +300,22 @@ def test_a_watch_with_no_refusal_creates_no_queue(env: _Env) -> None:
     env.job()
 
     assert not config.WorkspaceLayout(env.root).findings_db_path.exists()
+
+
+def test_restoring_the_imported_bytes_costs_no_model_call(env: _Env) -> None:
+    path = _import_then_edit(env)
+    env.job()  # the refusal row is open
+    imported = (env.root / "raw" / "a.md").read_text(encoding="utf-8")
+    path.write_text(imported, encoding="utf-8")
+    env.job()
+    env.settle()
+    assert env.model.calls > 0  # the first import did call the model
+    calls, commits = env.model.calls, len(env.commits)
+
+    result = env.job()
+
+    assert env.model.calls == calls  # converged: no extraction on the restore
+    assert len(env.commits) == commits  # and nothing written or committed
+    assert result is not None
+    assert (result.chat_calls, result.units_done) == (0, 1)
+    assert [(r.status, r.resolution) for r in _rows(env)] == [("stale", "stale")]

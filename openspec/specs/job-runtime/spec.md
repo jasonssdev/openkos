@@ -127,6 +127,28 @@ because a message can carry a path or a person's words.
 - WHEN it has exited
 - THEN no file under `bundle/` was created by logging
 
+### Requirement: A Foreground Daemon Says What It Is Doing
+
+While a job runs, `openkos daemon` MUST give a person watching it the same
+liveness signal the other long verbs give: one stderr line as each maintenance
+stage starts, and the per-item progress counter of the stage's own verb. Both
+MUST appear only when stderr is a TTY, so a piped or service-managed run stays
+byte-clean, and neither MUST touch stdout, which carries the job reports. A
+daemon run that ends normally MUST log an end line, so a log that records a
+start never looks like a crash.
+
+#### Scenario: A long maintenance pass is not silent
+
+- GIVEN a TTY and a maintenance pass with several advisor stages
+- WHEN `openkos daemon --once` runs
+- THEN each stage is named on stderr as it starts, before the final job report
+
+#### Scenario: A finished run is closed in the log
+
+- GIVEN `openkos daemon --once` completed
+- WHEN the process has exited
+- THEN the daemon log holds an end line after its start line
+
 ### Requirement: SIGTERM And SIGINT Stop The Daemon Cooperatively
 
 On SIGTERM or SIGINT the daemon MUST set a stop flag and MUST NOT start a

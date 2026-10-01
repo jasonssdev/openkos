@@ -86,6 +86,15 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   the daemon's stderr instead of passing silently. Retiring the dead Source of
   an earlier failed import remains manual (`openkos forget`). (Refs #1224)
 
+- `openkos daemon` no longer works in silence on a terminal: each maintenance
+  stage is named as it starts and the stages show their usual per-item progress
+  counter, a first run that only sees a new inbox file says "N file(s) seen in
+  the inbox; will import after Ns quiet" instead of ending without a word, and a
+  normally ended run writes an end line to the daemon log (#1225). The quiet
+  window is still measured from when the watch first observed the file, not from
+  its modification time, so a file copied in with an old timestamp is never
+  imported unseen.
+
 ## [0.3.1] - 2026-10-01
 
 MVP 4, the Unattended Engine, is complete. The headline is `openkos daemon`: a

@@ -201,6 +201,9 @@ class RunnerPorts:
     sleep: Callable[[float], None] = time.sleep
     jitter: Callable[[float, float], float] = random.uniform
     wait_cap_seconds: float = DEFAULT_WAIT_CAP_SECONDS
+    announce: Callable[[str], None] = lambda message: None
+    """Tells a person watching one line of what the job is doing (the verb wires
+    it to a TTY-gated stderr line; the default says nothing)."""
 
 
 @dataclass(frozen=True)
@@ -386,6 +389,7 @@ def _run_maintenance_units(
 
     try:
         gate()
+        ports.announce("maintenance: refreshing the index...")
         try:
             _retry_derived_contention(
                 lambda: ports.refresh_derived(root),
@@ -408,13 +412,15 @@ def _run_maintenance_units(
             log.warning("lint counts unavailable (%s)", _snake(type(exc).__name__))
         tally.done += 1
 
-        for stage in ports.advisor_stages:
+        stage_count = len(ports.advisor_stages)
+        for position, stage in enumerate(ports.advisor_stages, start=1):
             gate()
             if stage.uses_model and not run_budget.admit(1).admitted:
                 tally.budget_limit = (
                     run_budget.admit(1).limit or budget_module.PASS_LIMIT_KEY
                 )
                 continue
+            ports.announce(f"maintenance: {stage.name} ({position}/{stage_count})...")
             try:
                 result = stage.run(ctx)
             except lock.WorkspaceBusyError:

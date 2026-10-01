@@ -36,6 +36,7 @@ Those helpers are reached by attribute at call time, so a test that patches
 `openkos.cli.main.<name>` keeps intercepting.
 """
 
+import dataclasses
 import logging
 import signal
 import types
@@ -69,6 +70,7 @@ from openkos.application.runner import (
 )
 from openkos.application.runtime import StopToken
 from openkos.application.watch import BudgetedRun, WatchPorts
+from openkos.cli import observability
 from openkos.graph import sqlite_graph
 from openkos.resolution import contradiction, edge_typing, volatility_typing
 from openkos.state.vectorstore import open_vector_store
@@ -88,15 +90,15 @@ repository) does not write a job record every poll."""
 _STOP_SIGNALS = (signal.SIGTERM, signal.SIGINT)
 
 
-# -- silent observers: the services' "window onto a run", with no terminal ---------
+# -- observers: the services' "window onto a run", with only TTY-gated stderr -----
 
 
-class _SilentReindexObserver:
+class _DaemonReindexObserver:
     def embedder_ready(self, locality: object, cfg: config.Config) -> None:
         return None
 
-    def progress_callback(self) -> None:
-        return None
+    def progress_callback(self) -> Callable[[int, int, object], None] | None:
+        return observability.progress_callback("daemon", "embedding doc")
 
     def vectors_indexed(
         self, report: object, previous_model_tag: str | None, cfg: config.Config
@@ -104,7 +106,7 @@ class _SilentReindexObserver:
         return None
 
 
-class _SilentContradictionsObserver:
+class _DaemonContradictionsObserver:
     def exemption_resolved(self, local_exemption: bool) -> None:
         return None
 
@@ -114,14 +116,18 @@ class _SilentContradictionsObserver:
     def persisted_findings_unreadable(self, error: Exception) -> None:
         log.warning("persisted findings unreadable (%s)", type(error).__name__)
 
-    def progress_callback(self) -> None:
-        return None
+    def progress_callback(self) -> Callable[[int, int, object], None] | None:
+        return observability.progress_callback("daemon", "checking pair")
 
     def persist_failed(self, error: Exception) -> None:
         log.warning("contradiction findings not persisted (%s)", type(error).__name__)
 
 
-class _SilentRelationsObserver:
+class _DaemonRelationsObserver:
+    def __init__(self) -> None:
+        self._progress: Callable[[int, int, object], None] | None = None
+        self._progress_resolved = False
+
     def walk_incomplete(
         self, bundle_dir: Path, *, include_confidential: bool, local_exemption: bool
     ) -> None:
@@ -149,20 +155,24 @@ class _SilentRelationsObserver:
         return True  # the budget bounds the spend; no human is attached
 
     def edge_progress(self, index: int, count: int, suggestion: object) -> None:
-        return None
+        if self._progress is None and not self._progress_resolved:
+            self._progress = observability.progress_callback("daemon", "untyped edge")
+            self._progress_resolved = True
+        if self._progress is not None:
+            self._progress(index, count, suggestion)
 
 
-class _SilentVolatilityObserver:
+class _DaemonVolatilityObserver:
     def walk_incomplete(
         self, bundle_dir: Path, *, include_confidential: bool, local_exemption: bool
     ) -> None:
         return None
 
-    def progress_callback(self) -> None:
-        return None
+    def progress_callback(self) -> Callable[[int, int, object], None] | None:
+        return observability.progress_callback("daemon", "suggesting type")
 
 
-class _SilentRevisionsObserver:
+class _DaemonRevisionsObserver:
     def started(self) -> None:
         return None
 
@@ -175,8 +185,8 @@ class _SilentRevisionsObserver:
     def confirm_judging(self) -> revisions.ConfirmationAnswer:
         return "proceed"  # the budget bounds the spend; no human is attached
 
-    def progress_callback(self) -> None:
-        return None
+    def progress_callback(self) -> Callable[[int, int, object], None] | None:
+        return observability.progress_callback("daemon", "judging pair")
 
 
 # -- the incremental refresh --------------------------------------------------------
@@ -198,7 +208,7 @@ def _refresh_derived(root: Path) -> object:
                 client, cfg
             ),
         ),
-        observer=_SilentReindexObserver(),
+        observer=_DaemonReindexObserver(),
     )
 
 
@@ -262,7 +272,7 @@ def _relations_stage(ctx: StageContext) -> StageResult:
             suggest_edge_types=lambda *a, **k: edge_typing.suggest_edge_types(*a, **k),
             commit_section=ctx.commit_section,
         ),
-        _SilentRelationsObserver(),
+        _DaemonRelationsObserver(),
     )
     producers.enqueue_relations(
         ctx.queue(),
@@ -294,7 +304,7 @@ def _volatility_stage(ctx: StageContext) -> StageResult:
                 *a, **k
             ),
         ),
-        _SilentVolatilityObserver(),
+        _DaemonVolatilityObserver(),
     )
     producers.enqueue_volatility(
         ctx.queue(),
@@ -332,7 +342,7 @@ def _contradictions_stage(ctx: StageContext) -> StageResult:
             finding_input_digests=curate_module.finding_input_digests,
             zero_state_message=lambda layout, store, embeddings_missing: "",
         ),
-        observer=_SilentContradictionsObserver(),
+        observer=_DaemonContradictionsObserver(),
     )
     producers.enqueue_contradictions(
         ctx.queue(),
@@ -361,7 +371,7 @@ def _revisions_stage(ctx: StageContext) -> StageResult:
                 cli_main._resolve_local_exemption(client, cfg)
             ),
         ),
-        _SilentRevisionsObserver(),
+        _DaemonRevisionsObserver(),
     )
     if run.status != "completed" or run.report is None:
         # Nothing was judged (no decisions, no usable vectors): an absent result
@@ -470,6 +480,25 @@ def _idle_seconds(
     return max(poll, COMMIT_RETRY_PAUSE_SECONDS) if stuck else poll
 
 
+class _Announcer:
+    """The runner's `announce` port: one TTY-gated `openkos daemon: ...` line on
+    stderr. A line identical to the one just printed is dropped, so an idling
+    loop that keeps finding the same unsettled file says it once, not every
+    poll; `reset` lets the same line print again after a job reported."""
+
+    def __init__(self) -> None:
+        self._last: str | None = None
+
+    def __call__(self, message: str) -> None:
+        if message == self._last:
+            return
+        self._last = message
+        observability.stage_notice("daemon", message)
+
+    def reset(self) -> None:
+        self._last = None
+
+
 def serve(
     root: Path,
     *,
@@ -502,6 +531,8 @@ def serve(
     logsetup.configure_logging("daemon", root=root)
     try:
         wired = ports if ports is not None else production_ports(root)
+        announcer = _Announcer()
+        wired = dataclasses.replace(wired, announce=announcer)
         log.info("daemon started (once=%s)", once)
         while True:
             due = maintenance_due(root, cfg.unattended, wired.now())
@@ -514,6 +545,8 @@ def serve(
             )
             for result in results:
                 _report(result)
+            if results:
+                announcer.reset()
             if once or token.is_set():
                 break
             token.wait(_idle_seconds(cfg.unattended, results))
@@ -522,6 +555,8 @@ def serve(
         if token.is_set():
             log.info("daemon stopped on request")
             typer.echo("openkos daemon: stopped.")
+        else:
+            log.info("daemon finished (once=%s)", once)
         return 0
     except Exception as exc:  # noqa: BLE001 -- logged by type; never a traceback to a log
         log.error("daemon failed (%s)", type(exc).__name__)
