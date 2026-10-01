@@ -70,6 +70,7 @@ from openkos.bundle import ledger as bundle_ledger
 from openkos.bundle import log as bundle_log
 from openkos.bundle import provenance as bundle_provenance
 from openkos.cli import curate as curate_module
+from openkos.cli import daemon as daemon_module
 from openkos.cli import observability
 from openkos.extraction import judge as judge_mod
 from openkos.extraction.concept import (
@@ -370,11 +371,11 @@ can drift without a red test.
 """
 
 
-_SELF_LOCKING_COMMANDS: frozenset[str] = frozenset()
+_SELF_LOCKING_COMMANDS: frozenset[str] = frozenset({"daemon"})
 """Long-running commands that take the lock per unit of work (a commit phase
-each), never for their own lifetime, so the guard must not wrap them. Empty
-until such a command exists (`daemon`); a name here must be registered, and
-no command is in two classes (`test_every_command_is_classified`)."""
+each), never for their own lifetime, so the guard must not wrap them (`daemon`);
+a name here must be registered, and no command is in two classes
+(`test_every_command_is_classified`)."""
 
 
 _WAIT_PARAM = "wait"
@@ -9868,6 +9869,46 @@ def pending_cmd(
         raise typer.Exit(code=1) from exc
     for line in pending_report.render_lines(report, include_all=all_rows, stats=stats):
         typer.echo(line)
+
+
+@app.command(
+    "daemon",
+    help=(
+        "Run unattended maintenance for this workspace in the foreground: it "
+        "refreshes the derived indexes and queues proposals for you to review "
+        "(see `pending`). Never changes your knowledge base itself."
+    ),
+    rich_help_panel="Maintain",
+)
+def daemon_cmd(
+    once: bool = typer.Option(
+        False,
+        "--once",
+        help="Run every job that is due once, then exit.",
+    ),
+) -> None:
+    """Run the unattended engine for the workspace in the current directory.
+
+    Foreground and long-running: it runs the jobs that are due (a retry of any
+    auto-commit that failed, then a maintenance pass once the configured
+    interval has elapsed), idles between polls, and stops on SIGTERM or SIGINT
+    after the work in progress finishes, exiting 0. `--once` runs what is due
+    and exits.
+
+    A maintenance pass refreshes the derived indexes, counts lint findings and
+    runs the advisors (duplicates, relation types, volatility, contradictions,
+    decision revisions), recording each proposal as a pending-work row. It
+    writes nothing under `bundle/` and approves nothing. Model calls are bounded
+    by the `unattended:` budget in `openkos.yaml`. Each job's outcome is recorded
+    in `.openkos/jobs.db`; the log goes to the per-user log directory.
+
+    The daemon never holds the workspace lock for its lifetime, only for a short
+    write, so your own commands keep working while it runs. Refuses (exit 1)
+    outside an initialized workspace.
+    """
+    code = daemon_module.serve(Path.cwd(), once=once)
+    if code != 0:
+        raise typer.Exit(code=code)
 
 
 def _run_list_sources(layout: config.WorkspaceLayout, object_id: str) -> None:
