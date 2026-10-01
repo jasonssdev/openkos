@@ -71,7 +71,7 @@ from openkos.llm.base import (
     Embedder,
 )
 from openkos.model import okf
-from openkos.state import derived, fts
+from openkos.state import fts
 from openkos.state.vectorstore import VectorStore, content_hash
 
 EMBED_COMPOSITION_TAG: Final = "chunk-v1"
@@ -292,20 +292,14 @@ class ReindexReport:
 def _reindex_fts(bundle_dir: Path, fts_db_path: Path, *, force: bool) -> None:
     """Rebuild `fts_db_path` iff the bundle's manifest hash changed since the
     last `reindex` run, or `force` (derived-index-cache: Bundle-Manifest-Hash
-    Cache Key; Whole-Index Rebuild On Manifest Change).
+    Cache Key; Per-Document Update With Whole-Rebuild Fallback).
 
-    A thin, FTS-specific wrapper around `derived.reindex_gate` (the shared
-    manifest-gate-and-rebuild helper, review carry-over task 2.11 REFACTOR):
-    the gate itself decides skip-vs-rebuild by comparing the bundle's CURRENT
-    manifest hash against the PREVIOUSLY stored one (D2 binding contract --
-    the ONLY place staleness is decided anywhere in the system), then calls
-    `fts.write_fts_index` with that SAME digest on a mismatch/absent/`force`,
-    so it is never recomputed a second time there (review correction,
-    Finding C carried over from PR1).
+    Delegates to `fts.refresh_fts_index`: the manifest comparison stays the
+    only staleness gate (D2 binding contract), and a mismatch updates only
+    the changed documents' rows, falling back to a whole rebuild when the
+    store has no trustworthy per-document baseline.
     """
-    derived.reindex_gate(
-        bundle_dir, fts_db_path, force=force, write=fts.write_fts_index
-    )
+    fts.refresh_fts_index(fts_db_path, bundle_dir, force=force)
 
 
 def reindex(
