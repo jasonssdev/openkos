@@ -5004,10 +5004,7 @@ def _ingested_source_on_a_tty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     _simulate_tty(monkeypatch)
 
 
-@pytest.mark.parametrize(
-    "target",
-    ["bundle/sources/notes.md", "bundle/index.md", "bundle/log.md"],
-)
+@pytest.mark.parametrize("target", ["bundle/sources/notes.md"])
 def test_a_write_target_edited_during_the_prompt_is_refused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str
 ) -> None:
@@ -5016,10 +5013,11 @@ def test_a_write_target_edited_during_the_prompt_is_refused(
     so an edit landing while the operator reads the preview was overwritten
     in full and auto-committed.
 
-    Only these three are at risk. The raw copy and the derived objects go
-    through `copy_exclusive`/`write_exclusive`, which already fail closed on
-    a concurrent create -- guarding them would be redundant, and NOT
-    guarding these three is what leaves the verb uneven.
+    The concept is the file the plan rewrites in place, so a change refuses the
+    run. `index.md` and `log.md` are not refused: every verb appends to them, so
+    the commit phase re-composes them from their current bytes (#1137, see
+    `test_a_catalog_rewrite_during_the_prompt_is_recomposed`). The raw copy and
+    the derived objects are create-only and are checked absent instead.
     """
     _ingested_source_on_a_tty(tmp_path, monkeypatch)
     target_path = tmp_path / target
@@ -5063,10 +5061,7 @@ def test_a_write_target_deleted_during_the_prompt_is_refused(
     assert changed == {Path("bundle/sources/notes.md")}
 
 
-@pytest.mark.parametrize(
-    "target",
-    ["bundle/sources/notes.md", "bundle/index.md", "bundle/log.md"],
-)
+@pytest.mark.parametrize("target", ["bundle/sources/notes.md"])
 def test_a_crlf_rewrite_during_the_prompt_is_refused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str
 ) -> None:
@@ -5094,6 +5089,29 @@ def test_a_crlf_rewrite_during_the_prompt_is_refused(
     assert changed == {Path(target)}
 
 
+@pytest.mark.parametrize("target", ["bundle/index.md", "bundle/log.md"])
+def test_a_catalog_rewrite_during_the_prompt_is_recomposed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str
+) -> None:
+    """The catalog files are the exception to the drift guard (#1137): a change
+    between the plan and the commit phase -- here a CRLF rewrite carrying a line
+    only the other writer has -- is re-composed from the current bytes, not
+    refused. The re-ingest writes, and the other writer's line is still there."""
+    _ingested_source_on_a_tty(tmp_path, monkeypatch)
+    target_path = tmp_path / target
+    foreign = "<!-- only the other writer has this line -->"
+    concurrent = (target_path.read_text(encoding="utf-8") + foreign + "\n").replace(
+        "\n", "\r\n"
+    )
+    confirm_after(monkeypatch, lambda: target_path.write_bytes(concurrent.encode()))
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--re-extract"], input="y\n")
+
+    assert result.exit_code == 0, result.stderr
+    assert "refusing to write" not in result.stderr
+    assert foreign in target_path.read_text(encoding="utf-8")
+
+
 def test_targets_that_were_already_crlf_are_not_drift(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -5113,7 +5131,7 @@ def test_targets_that_were_already_crlf_are_not_drift(
     assert "refusing to write" not in result.stderr
 
 
-@pytest.mark.parametrize("target", ["bundle/index.md", "bundle/log.md"])
+@pytest.mark.parametrize("target", ["openkos.yaml"])
 def test_drift_on_the_unprompted_path_is_refused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str
 ) -> None:
@@ -5159,15 +5177,16 @@ def test_an_edit_landing_after_the_snapshot_observation_is_refused(
     comparison finds no drift and Phase B writes the plan computed from the
     EARLIER text, silently reverting the edit and autocommitting the revert.
 
-    The edit lands immediately after `index.md`'s snapshot returns -- the
+    The edit lands immediately after the concept's snapshot returns -- the
     earliest a concurrent writer can now land relative to the plan -- and
     the guard's later re-read must call it drift and refuse the whole run.
+    (`index.md` is no longer a guarded target: it is re-composed, #1137.)
     `test_a_concept_edited_during_the_llm_call_is_refused` covers the OTHER
     seam ingest alone has (the network call inside Phase A); this one
     covers the seam every guarded verb shares.
     """
     _ingested_source_on_a_tty(tmp_path, monkeypatch)
-    target_path = tmp_path / "bundle" / "index.md"
+    target_path = tmp_path / "bundle" / "sources" / "notes.md"
     concurrent = "hand-edited the instant the snapshot returned\n"
     real_snapshot_read = main._snapshot_read
     fired = False
@@ -5185,14 +5204,14 @@ def test_an_edit_landing_after_the_snapshot_observation_is_refused(
 
     result = runner.invoke(app, ["ingest", "notes.txt", "--auto", "--re-extract"])
 
-    assert fired, "the racing wrapper never saw the index.md snapshot"
+    assert fired, "the racing wrapper never saw the concept snapshot"
     assert result.exit_code == 3
     assert isinstance(result.exception, SystemExit)
     assert "refusing to write --" in result.stderr
-    assert "bundle/index.md" in result.stderr
+    assert "bundle/sources/notes.md" in result.stderr
     assert target_path.read_text(encoding="utf-8") == concurrent
     assert changed_paths(before, snapshot_with_mtime(tmp_path)) == {
-        Path("bundle/index.md")
+        Path("bundle/sources/notes.md")
     }
 
 
@@ -5308,18 +5327,18 @@ def test_a_concept_created_during_the_prompt_on_a_post_forget_reingest_is_refuse
 
     result = runner.invoke(app, ["ingest", "notes.txt"], input="y\n")
 
-    assert result.exit_code == 1
+    # The commit phase checks every create-only target is still absent BEFORE
+    # the first write (#1137), so this is the retry-safe whole-run refusal
+    # (exit 3) rather than the Phase-B `FileExistsError` it used to surface as.
+    assert result.exit_code == 3
     assert isinstance(result.exception, SystemExit)
-    # Same failure surface as a concurrent create on a FRESH ingest:
-    # `write_exclusive` raises `FileExistsError`, reported by the Phase-B
-    # error path, naming the colliding path.
-    assert "failed while writing the ingest --" in result.stderr
+    assert "refusing to write --" in result.stderr
+    assert "would create now exist" in result.stderr
     assert "bundle/sources/notes.md" in result.stderr
     # The concurrently created file survives byte-for-byte...
     assert concept_path.read_text(encoding="utf-8") == concurrent
-    # ...and it is the ONLY change on disk: the concept write comes before
-    # `index.md`/`log.md` (content before catalog, D3), so the failure
-    # leaves the catalog untouched.
+    # ...and it is the ONLY change on disk: the refusal precedes every write,
+    # so nothing of the ingest's own landed.
     after = snapshot_with_mtime(tmp_path)
     changed = changed_paths(before, after)
     assert changed == {Path("bundle/sources/notes.md")}
