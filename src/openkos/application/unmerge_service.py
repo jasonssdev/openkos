@@ -36,7 +36,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from openkos import config
-from openkos.application import commit_phase
+from openkos.application import catalog_delta, commit_phase
 from openkos.application import drift as application_drift
 from openkos.application import lifecycle as application_lifecycle
 from openkos.application.consent import boolean_confirmation
@@ -484,11 +484,21 @@ def _unmerge_step(
     # the commit phase takes it now (a busy lock propagates as
     # `WorkspaceBusyError` before anything is written).
     with ports.commit_section():
+        # A V5 (delta) entry's reversal is re-composed over the catalog's
+        # current bytes below; a snapshot entry restores whole files and so
+        # keeps refusing when either catalog file moved.
+        recomposable = prepared.catalog_edit is not None
         drift = application_drift.describe_drift(
             layout,
             {
-                index_path: prepared.index_bytes,
-                log_path: prepared.log_bytes,
+                **(
+                    {}
+                    if recomposable
+                    else {
+                        index_path: prepared.index_bytes,
+                        log_path: prepared.log_bytes,
+                    }
+                ),
                 request.survivor_path: prepared.survivor_bytes,
                 **{
                     layout.bundle_dir / rel: data
@@ -513,6 +523,13 @@ def _unmerge_step(
         )
         if read_drift is not None:
             raise DriftDetected(read_drift)
+        if recomposable:
+            try:
+                prepared = application_lifecycle.recompose_unmerge_catalog(
+                    layout, prepared
+                )
+            except catalog_delta.CatalogRecomposeError as exc:
+                raise DriftDetected(str(exc)) from exc
 
         try:
             result = application_lifecycle.unmerge_core(layout, prepared)
