@@ -1383,7 +1383,9 @@ def test_check_unevidenced_detail_says_what_is_wrong_and_what_to_do() -> None:
     detail = lint.check_unevidenced(docs)[0].detail
 
     assert "no line quoted from this source" in detail
-    assert "citation" in detail
+    # The marker is a flag, not a count: the detail must not claim exactly one.
+    assert detail.startswith("one or more derived objects were stored")
+    assert "they cannot support a citation" in detail
     assert "--re-extract" in detail
 
 

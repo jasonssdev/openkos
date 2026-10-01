@@ -629,6 +629,9 @@ def run_contradictions(
             layout.bundle_dir,
             include_confidential=options.include_confidential,
             local_exemption=local_exemption,
+            # #1234: this verb lists contradictions, never edges, so the
+            # count must say what it measures rather than "shown".
+            action="checked for contradictions",
         )
         # #841: the unjudged-source withholding -- the contradiction engine
         # reads the same candidate projection, so its queue is also smaller than

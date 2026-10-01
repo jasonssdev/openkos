@@ -1049,6 +1049,7 @@ def candidate_truncation_notice(
     *,
     include_confidential: bool = False,
     local_exemption: bool = False,
+    action: str = "shown",
 ) -> str | None:
     """Render pass 3's candidate-edge cap truncation notice restricted to
     what THIS caller may see (#378 slice 2, post-review correction).
@@ -1098,7 +1099,7 @@ def candidate_truncation_notice(
     visible_produced = len(visible_pairs)
     if visible_produced <= visible_retained:
         return None
-    return f"{visible_retained} of {visible_produced} candidate edge(s) shown (cap reached)"
+    return f"{visible_retained} of {visible_produced} candidate edge(s) {action} (cap reached)"
 
 
 def quarantined_candidate_notice(

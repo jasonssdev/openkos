@@ -720,8 +720,9 @@ and MUST NOT gate the exit code.
 ### Requirement: Unevidenced-Source and Staging-Dropped Scans
 
 `openkos lint` MUST report an `unevidenced` finding for each Source whose
-`extraction_notice` carries `objects-without-evidence` (a stored derived
-object quotes no line from its source), and a `staging-dropped` finding for
+`extraction_notice` carries `objects-without-evidence` (at least one stored
+derived object quotes no line from its source; the finding does not state
+how many), and a `staging-dropped` finding for
 each Source whose `extraction_notice` carries
 `candidates-dropped-in-staging` (at least one extracted candidate was
 dropped while staging). Each check MUST match only its own token and
