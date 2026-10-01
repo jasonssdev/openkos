@@ -8,11 +8,80 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 > OpenKOS is **alpha** — it runs, and the API may still change. The package is
 > published on [PyPI](https://pypi.org/project/openkos/); the MVP 1 (Compiler),
-> MVP 2 (Graph and Memory), and MVP 3 (Ask Surface) arcs are complete. The project's vision,
+> MVP 2 (Graph and Memory), MVP 3 (Ask Surface), and MVP 4 (Unattended Engine) arcs
+> are complete; MVP 5 (Interoperability) is next. The project's vision,
 > architecture, and design live in the documents under
 > [`docs/`](https://github.com/jasonssdev/openkos/tree/main/docs).
 
 ## [Unreleased]
+
+## [0.3.1] - 2026-10-01
+
+MVP 4, the Unattended Engine, is complete. The headline is `openkos daemon`: a
+foreground runner that, on a timer and inside a call budget you set in the new
+optional `unattended:` section of `openkos.yaml`, refreshes the derived indexes,
+counts lint findings, ingests files that settle in a watched inbox folder, and
+queues what the advisors propose (duplicates, relation types, volatility,
+contradictions, decision revisions) instead of changing `bundle/`. What it
+queues is the new pending-work queue, read by `openkos pending`, `next`,
+`status`, the MCP `pending` tool and `curate`. Underneath, every verb that took
+the workspace lock for a whole run now plans and calls the model without it and
+holds it only for a short commit phase, so a person and a daemon can share one
+workspace: `--wait <seconds>` retries a busy lock, and every contention exits
+`3`. The derived full-text and graph stores refresh per document with a
+whole-rebuild fallback. The release also carries security fixes: a `confidential`
+concept no longer reaches a non-local model through merged-body reconciliation
+(#1124), and `adjudicate --apply` re-validates what its plan read before it
+commits.
+
+### Upgrading from 0.3.0
+
+Most of this release needs nothing from you. These are the points that do, or
+that you will notice:
+
+- **The workspace lock file moved** from the OS temp directory to a per-user
+  state directory (`~/.local/state/openkos/locks/` on Linux,
+  `~/Library/Application Support/openkos/locks/` on macOS,
+  `%LOCALAPPDATA%\openkos\locks\` on Windows). For this one release a run also
+  takes the old temp-directory lock, so a 0.3.0 `openkos` still excludes this
+  one.
+- **Contention now exits `3`, not `1`**, when `vectors.db`, `fts.db`, `graph.db`
+  or `findings.db` stay busy after the busy timeout. Exit `3` is the retry-safe
+  refusal every other lock contention already used; a script that retried on
+  `3` only now also retries these. The message names the verb you ran instead of
+  blaming "a concurrent reindex".
+- **A plain `query` no longer takes the workspace lock**, and `query --save`
+  holds it only for the filing, so a `query` is no longer refused while another
+  command runs.
+- **Locked verbs accept `--wait <seconds>`** (default `0`, at most `3600`): wait
+  for a busy lock instead of refusing at once. Not a breaking change; the default
+  keeps today's behaviour.
+- **A write now also refuses with exit `3` (nothing written, safe to re-run)**
+  when a document its plan only read changed, or a new one appeared, while the
+  model ran or a prompt was open: for example `merge` and `forget` (the bundle
+  scan behind their gates), `set-sensitivity` (a Source's descendants),
+  `adjudicate --apply`, `query --save` (a cited concept's sensitivity raised
+  while the answer was computed) and `ingest` (`openkos.yaml` changed). A raise
+  of a concept's sensitivity mid-run is therefore a refusal, never a write at
+  the stale level.
+- **Concurrent appends to `log.md` and `index.md` are kept, not refused.**
+  `ingest`, `merge`, `unmerge`, `forget`, `relate`, `set-sensitivity`,
+  `sync-tags`, `repair`, `reconcile`, `adjudicate --apply`,
+  `suggest-relations --apply` and `curate` re-apply their own entries over the
+  files' current text at commit time.
+- **`openkos.yaml` gains an optional `unattended:` section** (budget, interval,
+  deadline, watched `inbox`). Absent means every default, and nothing runs
+  unattended unless you start `openkos daemon`. A malformed section is refused
+  when the config is read; the generated `openkos.yaml` comments describe each
+  key.
+- **New files you may see.** `.openkos/jobs.db` (the daemon's job record, a
+  disposable cache) appears once the daemon runs, `.openkos/findings.db` gains
+  the pending-work queue, and the daemon's log goes to the per-user log directory,
+  never into the workspace. `purge` deletes `jobs.db` and the daemon logs;
+  `forget` erases queue rows naming a forgotten concept.
+- **A merge involving a `confidential` concept skips the model reconciliation
+  pass** and keeps the stacked body, with a notice, unless the backend is
+  verifiably local and `confidential_local_exemption` is on (#1124).
 
 ### Added
 
@@ -60,6 +129,13 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   provisional and absent means all of them; `openkos daemon` reads the
   section.
 
+- One logging setup for the CLI, the daemon and the MCP server
+  ([#1139](https://github.com/jasonssdev/openkos/issues/1139)). The CLI prints
+  warnings to stderr as before; `openkos mcp` logs to stderr and never to
+  stdout, which stays the protocol channel; the daemon writes a rotating log
+  (1 MiB, 5 files) per workspace to the per-user log directory. Records carry
+  ids, counts, outcome codes and durations, never document text or model output.
+
 ### Changed
 
 - The MCP `pending` tool also lists the open pending-work queue rows (kind,
@@ -68,6 +144,15 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   server's launch setting is withheld whole, and no count of withheld rows is
   returned. An absent queue is reported as not computed. The tool never changes
   a row
+  ([#1141](https://github.com/jasonssdev/openkos/issues/1141)).
+- The derived full-text index and the graph store refresh per document, from a
+  manifest of what changed, with a whole rebuild as the fallback when the
+  incremental update cannot be trusted; results are the same as a rebuild
+  ([#1143](https://github.com/jasonssdev/openkos/issues/1143)).
+- A merge, relation, volatility tier or reconciliation written from any verb
+  (not only `curate`), and a declined or kept-distinct identity or contradiction
+  decision, also resolves the matching open pending-work row, through the same
+  write cores; a failure to update the queue never fails the write
   ([#1141](https://github.com/jasonssdev/openkos/issues/1141)).
 - `openkos curate` reads and feeds the pending-work queue: once it exists, the
   Identity, Structure and Metadata stages serve a fresh open row's verdict,
@@ -104,7 +189,7 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   for retrieval, the model call or the confirmation prompt. The filing refuses
   with exit `3`, writing nothing, when a cited concept's sensitivity changed
   while the answer was computed
-
+  ([#1137](https://github.com/jasonssdev/openkos/issues/1137)).
 - `merge`, `unmerge`, `forget`, `relate`, `set-sensitivity` and
   `set-volatility` no longer hold the workspace lock while they wait at a
   confirmation prompt or on a model call: they plan and ask with no lock and
@@ -138,8 +223,6 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   sensitivity level), or a file the ingest was about to create still refuses
   with exit `3` and writes nothing
   ([#1137](https://github.com/jasonssdev/openkos/issues/1137)).
-
-
 - `sync-tags`, `normalize-names`, `repair`, `reconcile`, `adjudicate` and
   `suggest-relations` no longer hold the workspace lock while they wait on the
   model or on you: the lock is taken only to re-validate, write and commit, so
@@ -167,7 +250,6 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   message no longer blames "a concurrent reindex" or "the workspace lock": it
   names the verb you ran and says another OpenKOS process is using the
   workspace's derived stores and that a re-run is safe.
-
 - The workspace lock file moved from the OS temp directory to a per-user state
   directory (`~/.local/state/openkos/locks/` on Linux,
   `~/Library/Application Support/openkos/locks/` on macOS,
@@ -208,6 +290,14 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   any it cannot delete in the incomplete-erasure report
   ([#1141](https://github.com/jasonssdev/openkos/issues/1141),
   [#1139](https://github.com/jasonssdev/openkos/issues/1139)).
+
+### Documentation
+
+- MVP 4 is marked shipped across `README.md`, `AGENTS.md`, the roadmap and the
+  architecture and CLI references; the design for the unattended foundations is
+  recorded in [ADR-0036](docs/adr/0036-lock-a-short-commit-phase-in-a-per-user-state-directory.md),
+  [ADR-0037](docs/adr/0037-unattended-work-computes-and-enqueues-only.md) and
+  [ADR-0038](docs/adr/0038-a-watched-folder-is-an-external-inbox.md).
 
 ## [0.3.0] - 2026-09-30
 
@@ -3239,7 +3329,8 @@ and Memory) work.
 - Default embedding model is `bge-m3` (ADR-0006), superseding the earlier
   `qwen3-embedding:0.6b` default.
 
-[Unreleased]: https://github.com/jasonssdev/openkos/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/jasonssdev/openkos/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/jasonssdev/openkos/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/jasonssdev/openkos/compare/v0.2.14...v0.3.0
 [0.2.14]: https://github.com/jasonssdev/openkos/compare/v0.2.13...v0.2.14
 [0.2.13]: https://github.com/jasonssdev/openkos/compare/v0.2.12...v0.2.13

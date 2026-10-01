@@ -14,7 +14,7 @@ sensitivity: public
 
 # CLI Reference
 
-This is the single source of truth for the OpenKOS command line. It covers the complete MVP 1 (Compiler), MVP 2 (Graph and Memory) and MVP 3 (Ask Surface) surface, which ship today (the project is **alpha**). Anything not yet built is marked as such.
+This is the single source of truth for the OpenKOS command line. It covers the complete MVP 1 (Compiler), MVP 2 (Graph and Memory), MVP 3 (Ask Surface) and MVP 4 (Unattended Engine) surface, which ship today (the project is **alpha**). Anything not yet built is marked as such.
 
 ## Conventions
 
@@ -656,7 +656,7 @@ Refuses (exit 1) outside an initialized workspace, using the same shared workspa
 
 **Unattended, foreground.** Runs the jobs that are due for the workspace in the current directory, one at a time: a retry of any auto-commit that failed, then a maintenance pass once `unattended.maintenance_interval_seconds` has elapsed since the last one began. `--once` runs what is due and exits; without it the command idles between polls and stops on `SIGTERM` or `SIGINT` after the work in progress finishes, exiting `0`. It is meant to be run by a terminal or a service manager of your choice; nothing is installed for you.
 
-A maintenance pass refreshes the derived indexes, counts the lint findings and runs the advisors (duplicates, relation types, volatility, contradictions, decision revisions), recording each proposal as a pending-work row for `openkos pending` to list. It never changes `bundle/` and never approves a proposal. Model calls are bounded by the `unattended:` budget in `openkos.yaml`; that budget applies to the daemon only, and a command you run yourself is never limited by it. Every job's outcome — including a budget that ran out — is recorded in `.openkos/jobs.db` and printed. The log goes to the per-user log directory, never into the workspace. The `unattended:` keys (budget, interval, deadline, inbox) are all optional; the comments in the generated `openkos.yaml` are the authority for their names and defaults.
+A maintenance pass refreshes the derived indexes, counts the lint findings and runs the advisors (duplicates, relation types, volatility, contradictions, decision revisions), recording each proposal as a pending-work row for `openkos pending` to list. It never changes `bundle/` and never approves a proposal. Model calls are bounded by the `unattended:` budget in `openkos.yaml`; that budget applies to the daemon only, and a command you run yourself is never limited by it. Every job's outcome — including a budget that ran out — is recorded in `.openkos/jobs.db` and printed. When `unattended.inbox` is set it also imports each file that has stayed unchanged for `unattended.quiet_seconds`, as `ingest` of that file would, inside the same budget; the inbox itself is never written, and a file edited after it was imported is queued once as a `watch_refusal` row instead of being re-ingested. The log goes to the per-user log directory, never into the workspace. The `unattended:` keys (budget, interval, deadline, inbox) are all optional; the comments in the generated `openkos.yaml` are the authority for their names and defaults.
 
 The daemon never holds the workspace lock while idle: it takes it only for a short write, so your own commands keep working. Refuses (exit 1) outside an initialized workspace.
 

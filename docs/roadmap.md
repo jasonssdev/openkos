@@ -142,17 +142,18 @@ Where the community can contribute: MCP integrations, client configurations, and
 
 *Goal: the engine carries the work it can carry, and queues only the work a human should decide.*
 
-**Status: in progress.** The substrate is delivered: the workspace lock is held only for a commit phase (so a person and a daemon can share a workspace), a durable pending-work queue with a read-only `pending` verb, a call budget that binds only the unattended runner, the runner itself and its foreground `daemon` verb, and incremental refresh of the derived FTS and graph stores. The inbox watcher's import job exists, but the daemon does not yet enable it. What remains: the watcher's wiring and its refusal cases, the remaining readers of the queue (the MCP surface and `curate`), and closing the arc's spec and ADR bookkeeping.
+**Status: complete and shipped.**
 
 MVP 3 gives the base a second surface; it does not reduce what the base asks of its user. Every maintenance pass is still an invocation someone has to remember, and the output of that pass is a list of tasks. The philosophy commits to the engine reducing *cognitive maintenance* while leaving *cognitive responsibility* with the human. This arc enforces that line in the engine's own operation.
 
-Deliverables:
+Deliverables — **all shipped**, with the one measurement noted below:
 
-- A job substrate and a background runtime
-- Folder watch — a source dropped in is ingested without an invocation
-- Scheduled maintenance: lint, reconcile, and findings passes on a timer, kept human-in-the-loop
-- **An explicit rule for what runs unattended and what queues.** The engine performs the non-consequential (`ingest`, `reindex`, `lint`, computing findings) and *enqueues* the consequential (merges, forgets, relation confirmations) as durable pending work — which `.openkos/findings.db` and `bundle/.state/decisions/` already exist to hold
-- **A measurement of how much of the curation queue is mechanical.** A four-source ingest produced nine unresolved duplicate groups, a good share of them entities the engine had itself disambiguated. If the engine can disambiguate, the fraction it could also reconcile is a number worth having before automating anything on top of the queue
+- **A job substrate and a background runtime.** `openkos daemon` runs due jobs in the foreground, one at a time, records every outcome in a disposable `.openkos/jobs.db`, and stops cleanly on a signal. Only the runner is bounded by a call budget; a command run by hand never is
+- **Folder watch.** A source that settles in a configured inbox folder is ingested without an invocation; the inbox is outside the workspace and never written. A file edited after import is queued once as a refusal instead of being re-ingested
+- **Scheduled maintenance.** A pass on a timer refreshes the derived indexes, counts lint findings and runs the advisors, kept human-in-the-loop: it writes nothing under `bundle/`
+- **An explicit rule for what runs unattended and what queues.** The engine performs the non-consequential (`ingest`, `reindex`, `lint`, computing findings) and *enqueues* the consequential (merges, forgets, relation confirmations) as durable pending work in `.openkos/findings.db`, listed by `openkos pending` and read by `next`, `status`, the MCP server and `curate`; a human-facing write resolves the row it answers
+- **A workspace lock held only for commit phases,** so a person and a daemon share one workspace, with `--wait` to ride out a short contention and incremental refresh of the derived full-text and graph stores
+- **The instrument for measuring how much of the curation queue is mechanical.** `openkos pending --stats` reports how often a proposal was applied as proposed, per kind. The measurement itself needs the queue to accumulate real use and is not yet taken
 
 What a user can do after MVP 4: leave OpenKOS running, drop sources into a folder, and find the base current — with a short queue holding only the decisions that were genuinely theirs.
 

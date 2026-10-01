@@ -367,3 +367,9 @@ A watched inbox folder is outside the workspace and read-only to OpenKOS
   `application/backends.py`), and the `mcp` adapter built on it. A local REST
   API and full OKF import/export were split out to their own arcs; see
   [`roadmap.md`](roadmap.md).
+- **MVP 4 (The Unattended Engine)** — delivered: the runner, call budget and
+  inbox watch (`application/runner.py`, `budget.py`, `watch.py`), the
+  `state/jobs.py` job record, the pending-work queue in `findings.db`, the
+  commit-phase workspace lock in a per-user state directory, per-document
+  refresh of the derived FTS and graph stores, and the `daemon` and `pending`
+  verbs. See [The unattended runner](#the-unattended-runner).
