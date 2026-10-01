@@ -200,7 +200,7 @@ def _verify_lock_dir(directory: Path, euid: int) -> None:
         )
 
 
-def _digest(root: Path) -> str:
+def workspace_digest(root: Path) -> str:
     return hashlib.sha256(
         os.path.realpath(root).encode("utf-8", "surrogateescape")
     ).hexdigest()
@@ -215,14 +215,14 @@ def lock_path_for(root: Path) -> Path:
     deliberately still allows -- resolves to one lock rather than two that
     cannot see each other.
     """
-    return _lock_dir() / f"{_digest(root)}.lock"
+    return _lock_dir() / f"{workspace_digest(root)}.lock"
 
 
 def legacy_lock_path_for(root: Path) -> Path:
     """The transitional temp-directory lock file for `root` (see
     `LEGACY_LOCK_DIR_PREFIX`). Creates the containing directory, never the
     file."""
-    return _legacy_lock_dir() / f"{_digest(root)}.lock"
+    return _legacy_lock_dir() / f"{workspace_digest(root)}.lock"
 
 
 @contextlib.contextmanager
