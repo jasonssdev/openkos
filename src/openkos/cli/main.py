@@ -54,6 +54,7 @@ from openkos.application import lint as application_lint
 from openkos.application import list_service as application_list
 from openkos.application import next_action as next_action_module
 from openkos.application import pending as application_pending
+from openkos.application import pending_queue_report as pending_report
 from openkos.application import query as application_query
 from openkos.application import repair as application_repair
 from openkos.application import revisions as revisions_service
@@ -349,6 +350,7 @@ _READ_ONLY_COMMANDS = frozenset(
         "lint",
         "doctor",
         "mcp",
+        "pending",
     }
 )
 """The commands that never write to the workspace, and so take no lock (#925).
@@ -9634,6 +9636,54 @@ def next_cmd() -> None:
     for warning in result.warnings:
         _echo_warning(warning)
     for line in next_action_module.render_lines(result):
+        typer.echo(line)
+
+
+@app.command(
+    "pending",
+    help=(
+        "List the pending-work queue and the unattended outcomes needing "
+        "attention. Read-only: no lock, no model call."
+    ),
+    rich_help_panel="Get started",
+)
+def pending_cmd(
+    all_rows: bool = typer.Option(
+        False,
+        "--all",
+        help="Also list applied, declined and stale rows.",
+    ),
+    stats: bool = typer.Option(
+        False,
+        "--stats",
+        help="Per-kind counters over the queue's current lifetime.",
+    ),
+) -> None:
+    """List open pending-work rows grouped by kind, each with its target ids
+    and the command that resolves it, then the unattended job outcomes that
+    need attention. `--all` adds resolved rows; `--stats` prints per-kind
+    counters (lifetime of the current queue only).
+
+    An absent queue is reported as not computed, never as nothing pending.
+    Refuses (exit 1) outside an initialized workspace, or when the queue file
+    exists but cannot be read. Takes no lock, constructs no model backend and
+    writes nothing; no row's payload is ever printed.
+    """
+    root = Path.cwd()
+    reason = config.require_workspace(root)
+    if reason is not None:
+        typer.echo(f"openkos pending: refusing to run -- {reason}.", err=True)
+        raise typer.Exit(code=1)
+    try:
+        report = pending_report.read_report(config.WorkspaceLayout(root))
+    except pending_report.QueueUnavailableError as exc:
+        typer.echo(
+            f"openkos pending: the pending-work queue is not available ({exc}); "
+            "it is derived state, so `openkos daemon --once` rebuilds it.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+    for line in pending_report.render_lines(report, include_all=all_rows, stats=stats):
         typer.echo(line)
 
 

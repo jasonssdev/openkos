@@ -177,6 +177,24 @@ class PendingItem:
     created_at: str
     last_seen_at: str
     targets: tuple[str, ...]
+    resolution: str | None = None
+
+
+@dataclass(frozen=True)
+class KindStats:
+    """Lifetime counters of one kind (`openkos pending --stats`)."""
+
+    kind: str
+    enqueued: int
+    as_proposed: int
+    modified: int
+    declined: int
+    stale: int
+    open: int
+
+    @property
+    def resolved_by_a_human(self) -> int:
+        return self.as_proposed + self.modified + self.declined
 
 
 def _hashed(namespace: str, *parts: str) -> str:
@@ -474,28 +492,18 @@ def claim_item(
     return True
 
 
-def open_items(
+def _select_items(
     conn: sqlite3.Connection,
-    *,
-    kind: str | None = None,
-    alive: Callable[[str], bool] = claimant_alive,
+    where: str,
+    params: tuple[str, ...],
+    alive: Callable[[str], bool],
 ) -> list[PendingItem]:
-    """Every open row, oldest first. A `claimed` row whose claimant is dead
-    reads as `pending` (no lease timer). Read-only; an absent queue reads as
-    empty -- callers that must tell the two apart use `queue_exists`."""
-    if not queue_exists(conn):
-        return []
     sql = (
         "SELECT id, decision_key, kind, producer, payload, payload_digest, status,"
-        " claimed_by, created_at, last_seen_at FROM pending_items"
-        " WHERE status IN ('pending','claimed')"
+        " claimed_by, created_at, last_seen_at, resolution FROM pending_items"
     )
-    params: tuple[str, ...] = ()
-    if kind is not None:
-        sql += " AND kind = ?"
-        params = (kind,)
     items: list[PendingItem] = []
-    for row in conn.execute(sql + " ORDER BY id", params).fetchall():
+    for row in conn.execute(f"{sql} {where} ORDER BY id", params).fetchall():
         status, claimed_by = row[6], row[7]
         if status == "claimed" and (claimed_by is None or not alive(claimed_by)):
             status, claimed_by = "pending", None
@@ -520,10 +528,89 @@ def open_items(
                 created_at=row[8],
                 last_seen_at=row[9],
                 targets=targets,
+                resolution=row[10],
             )
         )
     return items
 
+
+def open_items(
+    conn: sqlite3.Connection,
+    *,
+    kind: str | None = None,
+    alive: Callable[[str], bool] = claimant_alive,
+) -> list[PendingItem]:
+    """Every open row, oldest first. A `claimed` row whose claimant is dead
+    reads as `pending` (no lease timer). Read-only; an absent queue reads as
+    empty -- callers that must tell the two apart use `queue_exists`."""
+    if not queue_exists(conn):
+        return []
+    where = "WHERE status IN ('pending','claimed')"
+    params: tuple[str, ...] = ()
+    if kind is not None:
+        where += " AND kind = ?"
+        params = (kind,)
+    return _select_items(conn, where, params, alive)
+
+
+def all_items(
+    conn: sqlite3.Connection,
+    *,
+    alive: Callable[[str], bool] = claimant_alive,
+) -> list[PendingItem]:
+    """Every row of every status, oldest first (`openkos pending --all`).
+    Read-only; an absent queue reads as empty (see `queue_exists`)."""
+    if not queue_exists(conn):
+        return []
+    return _select_items(conn, "", (), alive)
+
+
+def kind_stats(conn: sqlite3.Connection) -> list[KindStats]:
+    """Per-kind lifetime counters, in `KINDS` order, for kinds that ever had a
+    row. The counts cover only the queue's current lifetime: a rebuild or a
+    purge resets applied history. Read-only."""
+    if not queue_exists(conn):
+        return []
+    counts: dict[str, dict[str, int]] = {}
+    for kind, status, resolution, n in conn.execute(
+        "SELECT kind, status, resolution, COUNT(*) FROM pending_items"
+        " GROUP BY kind, status, resolution"
+    ):
+        bucket = counts.setdefault(kind, dict.fromkeys(_STAT_FIELDS, 0))
+        bucket["enqueued"] += n
+        if status in OPEN_STATUSES:
+            bucket["open"] += n
+        elif status == "stale":
+            bucket["stale"] += n
+        elif status == "declined":
+            bucket["declined"] += n
+        elif resolution == "modified":
+            bucket["modified"] += n
+        else:
+            bucket["as_proposed"] += n
+    return [
+        KindStats(
+            kind=kind,
+            enqueued=counts[kind]["enqueued"],
+            as_proposed=counts[kind]["as_proposed"],
+            modified=counts[kind]["modified"],
+            declined=counts[kind]["declined"],
+            stale=counts[kind]["stale"],
+            open=counts[kind]["open"],
+        )
+        for kind in KINDS
+        if kind in counts
+    ]
+
+
+_STAT_FIELDS: Final = (
+    "enqueued",
+    "as_proposed",
+    "modified",
+    "declined",
+    "stale",
+    "open",
+)
 
 _SOURCES_OF_PREFIX = "sources-of:"
 

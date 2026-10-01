@@ -16,6 +16,12 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Added
 
+- `openkos pending` lists the pending-work queue read-only: open rows grouped by
+  kind with their target ids and resolving command, then the unattended job
+  outcomes that need attention. `--all` adds resolved rows and `--stats` prints
+  per-kind counters over the queue's current lifetime. An absent queue is
+  reported as not computed, never as nothing pending
+  ([#1141](https://github.com/jasonssdev/openkos/issues/1141)).
 - Every verb that takes the workspace lock accepts `--wait <seconds>`: when
   another OpenKOS process holds the lock it retries with backoff for up to that
   many seconds (at most 3600) before refusing with exit `3` as before, printing
