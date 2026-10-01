@@ -404,6 +404,7 @@ _COMMIT_PHASE_VERBS = {
     "unmerge",
     "forget",
     "relate",
+    "unrelate",
     "set-sensitivity",
     "set-volatility",
 }

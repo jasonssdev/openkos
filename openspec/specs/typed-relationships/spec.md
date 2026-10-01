@@ -154,3 +154,56 @@ unchanged (`supersedes` stays an accepted, advisory-warned type).
   `status: stable` (pre-existing drift)
 - WHEN `openkos relate a supersedes b --auto` runs
 - THEN `b`'s bytes are unchanged; the drift stays `repair`'s concern
+
+### Requirement: `unrelate` CLI Verb Removes A Typed Relation
+
+`openkos unrelate <source> <rel> <target>` MUST resolve `source` and `target`
+exactly as `relate` does (both existing, distinct concept ids, fail-closed
+before any read) and validate `rel` as `relate` does. It MUST remove every
+`{target, type: rel}` entry from `source`'s `relations:` list, remove the
+`relations:` key when no entry remains, append an `**Unrelate**` entry to
+`log.md`, auto-commit, and refresh the derived stores, following the same
+review-gated flow as `relate`: Phase A compute-no-write, preview, then confirm;
+`--auto` and `review: false` skip the prompt; non-TTY without `--auto` refuses
+to write; a document changed since Phase A refuses the whole run (exit 3).
+When `source` holds no such relation, it MUST exit non-zero with a clear error
+and write nothing.
+
+When the removed edge is a `supersedes` edge, the system MUST evaluate the
+deprecated-status export projection for `target` over the post-removal
+superseded state and, when that withdraws the export, write it in the SAME
+Phase B as the edge removal, under the same drift guard. A `target` still
+superseded by another concept, or a walk that cannot read every document, MUST
+leave `target`'s bytes unchanged.
+
+#### Scenario: Successful unrelate removes the edge
+
+- GIVEN `a` holds `{target: b, type: references}` and `{target: c, type: references}`
+- WHEN `openkos unrelate a references b --auto` runs
+- THEN `a` keeps only `{target: c, type: references}` and `log.md` gains an
+  `**Unrelate**` entry
+
+#### Scenario: Unrelating an absent relation refuses
+
+- GIVEN `a` holds no `depends_on` relation to `b`
+- WHEN `openkos unrelate a depends_on b --auto` runs
+- THEN it exits non-zero naming the missing relation and writes nothing
+
+#### Scenario: Non-TTY without --auto refuses
+
+- GIVEN `review: true`, non-TTY stdin, no `--auto`
+- WHEN `unrelate` runs
+- THEN it refuses to write, exits non-zero, and nothing is written
+
+#### Scenario: Unrelating supersedes withdraws the target's status
+
+- GIVEN `a` supersedes `b` and `b` carries `status: deprecated` with the
+  engine's export marker
+- WHEN `openkos unrelate a supersedes b --auto` runs
+- THEN `b` carries `status: stable` and no marker, in the same commit
+
+#### Scenario: A still-superseded target keeps its status
+
+- GIVEN `a` and `c` both supersede `b`
+- WHEN `openkos unrelate a supersedes b --auto` runs
+- THEN `b`'s bytes are unchanged

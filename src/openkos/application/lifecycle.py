@@ -3384,6 +3384,182 @@ def relate_core(
 
 
 @dataclass(frozen=True)
+class PreparedUnrelate:
+    """Pure Phase-A result of `prepare_unrelate`: everything `unrelate`'s
+    preview, confirm gate and `unrelate_core` need, built in memory without
+    writing anything. The mirror of `PreparedRelate`; the difference is the
+    edge is removed, so the plan never carries an idempotent no-op (an absent
+    edge refuses in Phase A instead)."""
+
+    source_canonical: str
+    target_canonical: str
+    rel_type: str
+    new_source_text: str
+    new_log_text: str
+    existing_relations_count: int
+    updated_relations_count: int
+    review: bool
+    source_bytes: bytes
+    log_bytes: bytes
+    confirmation: BooleanConfirmation
+    new_target_text: str | None
+    target_bytes: bytes | None
+    status_outcome: okf.ExportOutcome | None
+    """The deprecated-status withdrawal (`deprecated-status-export`):
+    non-`None` only when a `supersedes` edge was removed, the walk over the
+    post-removal bundle was complete, and the target is no longer superseded
+    by any other concept and the projection says WITHDRAW or DROP_MARKER."""
+    read_dependencies: commit_phase.ReadDependencies
+    """Every bystander document the superseded-ness walk read, re-validated
+    at commit time (ADR-0036). Empty for a non-`supersedes` removal."""
+    log_edit: catalog_delta.LogDelta | None = None
+
+
+def prepare_unrelate(
+    source_path: Path,
+    log_path: Path,
+    source_canonical: str,
+    target_canonical: str,
+    rel_type: str,
+    root: Path,
+    *,
+    now: datetime,
+    target_path: Path,
+) -> PreparedUnrelate:
+    """Phase A (pure, no writes) for `unrelate`: read config + the texts,
+    remove every `(target, type)` match from the source's `relations:` and
+    build the `log.md` entry. Raises `ValueError` when the source holds no
+    such relation (nothing is ever written for an absent edge), `OSError` on
+    an unreadable file. A removed `supersedes` edge also withdraws the
+    target's deprecated-status export when no other concept still supersedes
+    it."""
+    cfg = config.read_config(root)
+    source_bytes, source_text = fsio.snapshot_read(source_path)
+    log_bytes, log_text = fsio.snapshot_read(log_path)
+
+    metadata, body = okf.load_frontmatter(source_text)
+    existing_relations = okf.decode_relations(metadata)
+    remaining = [
+        relation
+        for relation in existing_relations
+        if not (relation.target == target_canonical and relation.type == rel_type)
+    ]
+    if len(remaining) == len(existing_relations):
+        raise ValueError(
+            f"{source_canonical!r} has no {rel_type!r} relation to "
+            f"{target_canonical!r}; nothing to remove"
+        )
+    if remaining:
+        metadata[okf.RELATIONS_KEY] = okf.encode_relations(remaining)
+    else:
+        del metadata[okf.RELATIONS_KEY]
+    new_source_text = okf.dump_frontmatter(metadata, body)
+
+    log_line = (
+        f"**Unrelate**: Removed a {rel_type!r} relation from "
+        f"[{source_canonical}](/{source_canonical}.md) to "
+        f"[{target_canonical}](/{target_canonical}.md)."
+    )
+    entry_date = now.astimezone().date()
+
+    def unrelate_log(current_log: str) -> str:
+        return bundle_log.insert_log_entry(current_log, entry_date, log_line)
+
+    new_target_text: str | None = None
+    target_bytes: bytes | None = None
+    status_outcome: okf.ExportOutcome | None = None
+    read_dependencies = commit_phase.ReadDependencies()
+    if rel_type == "supersedes":
+        bundle_dir = log_path.parent
+        # Captured BEFORE the walk, so a bystander changing in between
+        # compares unequal at commit time (fail closed).
+        read_dependencies = commit_phase.capture_bundle_documents(
+            bundle_dir, exclude={source_path, target_path}
+        )
+        post_metadata: dict[str, Mapping[str, object] | None] = {}
+        for scan in okf._iter_docs(bundle_dir):
+            cid = okf.concept_id_for(scan.path, bundle_dir)
+            if scan.read_error is not None or scan.parse_error is not None:
+                post_metadata[cid] = None
+            else:
+                post_metadata[cid] = scan.metadata or {}
+        post_metadata[source_canonical] = metadata
+        superseded_post = lifecycle.superseded_from_metadata(post_metadata)
+        if target_canonical not in superseded_post.ids and superseded_post.complete:
+            target_bytes, target_text = fsio.snapshot_read(target_path)
+            decision, projected = okf.apply_deprecation_export(
+                target_text, superseded=False
+            )
+            if decision.outcome in (
+                okf.ExportOutcome.WITHDRAW,
+                okf.ExportOutcome.DROP_MARKER,
+            ):
+                new_target_text = projected
+                status_outcome = decision.outcome
+            else:
+                target_bytes = None
+
+    return PreparedUnrelate(
+        source_canonical=source_canonical,
+        target_canonical=target_canonical,
+        rel_type=rel_type,
+        new_source_text=new_source_text,
+        new_log_text=unrelate_log(log_text),
+        existing_relations_count=len(existing_relations),
+        updated_relations_count=len(remaining),
+        review=cfg.review,
+        source_bytes=source_bytes,
+        log_bytes=log_bytes,
+        confirmation=boolean_confirmation("unrelate"),
+        new_target_text=new_target_text,
+        target_bytes=target_bytes,
+        status_outcome=status_outcome,
+        read_dependencies=read_dependencies,
+        log_edit=unrelate_log,
+    )
+
+
+def recompose_unrelate_log(
+    log_path: Path,
+    prepared: PreparedUnrelate,
+    *,
+    read: catalog_delta.SnapshotRead = fsio.snapshot_read,
+) -> PreparedUnrelate:
+    """The prepared unrelate with its `log.md` text re-composed over the
+    log's current bytes (commit phase, ADR-0036)."""
+    if prepared.log_edit is None:
+        raise catalog_delta.CatalogRecomposeError(
+            "openkos unrelate: refusing to write -- the plan carries no staged "
+            "log delta. Nothing was written."
+        )
+    new_log = catalog_delta.recompose_file(
+        verb="unrelate",
+        path=log_path,
+        baseline=prepared.log_bytes,
+        planned=prepared.new_log_text,
+        delta=prepared.log_edit,
+        read=read,
+    )
+    return dataclasses.replace(prepared, new_log_text=new_log)
+
+
+def unrelate_core(
+    source_path: Path,
+    log_path: Path,
+    prepared: PreparedUnrelate,
+    *,
+    target_path: Path,
+) -> None:
+    """Phase B (after confirm): write the source concept, then the target's
+    status withdrawal when one was projected, then `log.md`. Performs NO VCS
+    side effect -- `_autocommit` stays the caller's responsibility."""
+    fsio.write_atomic(source_path, prepared.new_source_text)
+    if prepared.new_target_text is not None:
+        fsio.write_atomic(target_path, prepared.new_target_text)
+    fsio.write_atomic(log_path, prepared.new_log_text)
+
+
+@dataclass(frozen=True)
 class PreparedSetVolatility:
     """Pure Phase-A result of `prepare_set_volatility`: everything
     `set-volatility`'s preview, confirm gate, and `set_volatility_core`
