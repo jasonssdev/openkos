@@ -15,8 +15,6 @@ from pathlib import Path
 from typing import Final, NamedTuple
 from urllib.parse import urlsplit
 
-import yaml
-
 from openkos import fsio
 from openkos.model import okf, types
 
@@ -1437,8 +1435,9 @@ def read_config(root: Path) -> Config:
     `default_sensitivity` fields, falling back to packaged defaults for any
     field the file omits OR sets to an explicit YAML null (D3).
 
-    Uses `yaml.safe_load` -- never a loader that can construct arbitrary
-    Python objects from untrusted YAML. A `yaml.YAMLError` (malformed YAML),
+    Uses a `SafeLoader` (via `okf.load_unique_key_yaml`) -- never a loader that can construct arbitrary
+    Python objects from untrusted YAML. A duplicated key (#1233; PyYAML would
+    silently keep the last) or malformed YAML,
     a `TypeError` (some PyYAML constructor code paths raise this directly
     rather than a `YAMLError`, e.g. for a mapping with an unhashable complex
     key), or a root that parses but is not a mapping all raise `ValueError`,
@@ -1454,8 +1453,8 @@ def read_config(root: Path) -> Config:
     layout = WorkspaceLayout(root)
     text = layout.config_path.read_text(encoding="utf-8")
     try:
-        raw = yaml.safe_load(text)
-    except (yaml.YAMLError, TypeError) as exc:
+        raw = okf.load_unique_key_yaml(text)
+    except okf.FrontmatterError as exc:
         raise ValueError(f"{layout.config_path.name}: invalid YAML -- {exc}") from exc
     if not isinstance(raw, dict):
         raise ValueError(

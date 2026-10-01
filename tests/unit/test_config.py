@@ -687,6 +687,42 @@ def test_read_config_raises_valueerror_on_malformed_yaml(tmp_path: Path) -> None
         config.read_config(tmp_path)
 
 
+def test_read_config_rejects_duplicate_top_level_key(tmp_path: Path) -> None:
+    """A repeated top-level key is refused, naming the key (#1233).
+
+    PyYAML silently keeps the last duplicate, so which block is in effect
+    would be invisible to the operator.
+    """
+    (tmp_path / "openkos.yaml").write_text(
+        "model: a\nunattended:\n  max_calls_per_day: 1\nunattended:\n  max_calls_per_day: 2\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=r"openkos\.yaml.*duplicate.*'unattended'"):
+        config.read_config(tmp_path)
+
+
+def test_read_config_rejects_duplicate_nested_key(tmp_path: Path) -> None:
+    """A repeated key inside a nested mapping is refused too (#1233)."""
+    (tmp_path / "openkos.yaml").write_text(
+        "unattended:\n  max_calls_per_day: 1\n  max_calls_per_day: 2\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=r"duplicate.*'max_calls_per_day'"):
+        config.read_config(tmp_path)
+
+
+def test_frontmatter_parse_still_tolerates_duplicate_keys() -> None:
+    """The duplicate-key refusal is scoped to `openkos.yaml`: OKF frontmatter
+    keeps its tolerant parse (#1233)."""
+    from openkos.model import okf
+
+    meta, _body = okf.load_frontmatter("---\ntype: a\ntype: b\n---\nbody\n")
+
+    assert meta["type"] == "b"
+
+
 def test_read_config_raises_valueerror_on_non_mapping_root(tmp_path: Path) -> None:
     """A YAML root that parses but is not a mapping (e.g. a list) raises `ValueError`."""
     (tmp_path / "openkos.yaml").write_text("- a\n- b\n", encoding="utf-8")
@@ -713,15 +749,15 @@ def test_read_config_wraps_typeerror_from_yaml_parsing_as_valueerror(
     every complex-key shape tried (e.g. `"? - a\\n  - b\\n: c\\n"`) -- so this
     exact escape is not currently reproducible via real YAML content in this
     environment. This test forces the scenario via monkeypatching
-    `yaml.safe_load` so the defensive `except (yaml.YAMLError, TypeError)`
+    `yaml.load` so the defensive `except (yaml.YAMLError, TypeError)`
     widening stays covered regardless of the installed PyYAML version's
     internal behavior."""
     (tmp_path / "openkos.yaml").write_text("model: gpt\n", encoding="utf-8")
 
-    def _raise_type_error(_text: str) -> Any:
+    def _raise_type_error(*_args: Any, **_kwargs: Any) -> Any:
         raise TypeError("unhashable type: 'list'")
 
-    monkeypatch.setattr(yaml, "safe_load", _raise_type_error)
+    monkeypatch.setattr(yaml, "load", _raise_type_error)
 
     with pytest.raises(ValueError, match=r"openkos\.yaml"):
         config.read_config(tmp_path)

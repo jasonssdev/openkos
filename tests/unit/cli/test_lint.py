@@ -9,6 +9,7 @@ every successful read; the ONLY non-zero exit path is an absent/unreadable
 workspace.
 """
 
+import re
 import unicodedata
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -145,6 +146,14 @@ def test_lint_flags_an_orphan_page(
     assert "not referenced by index.md or any concept" in result.stdout
 
 
+def _set_freshness_window(config_text: str, value: str) -> str:
+    """Replace the template's `freshness_window:` line; appending a second one
+    would be a duplicate key, which `read_config` refuses (#1233)."""
+    return re.sub(
+        r"(?m)^freshness_window:.*$", f"freshness_window: {value}", config_text
+    )
+
+
 def test_lint_falls_back_and_prints_notice_on_bad_freshness_window(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -154,7 +163,9 @@ def test_lint_falls_back_and_prints_notice_on_bad_freshness_window(
     _init_workspace(tmp_path, monkeypatch)
     config_path = tmp_path / "openkos.yaml"
     config_path.write_text(
-        config_path.read_text(encoding="utf-8") + "freshness_window: not-a-duration\n",
+        _set_freshness_window(
+            config_path.read_text(encoding="utf-8"), "not-a-duration"
+        ),
         encoding="utf-8",
     )
 
@@ -174,7 +185,7 @@ def test_lint_falls_back_and_prints_notice_on_non_string_freshness_window(
     _init_workspace(tmp_path, monkeypatch)
     config_path = tmp_path / "openkos.yaml"
     config_path.write_text(
-        config_path.read_text(encoding="utf-8") + "freshness_window: 7\n",
+        _set_freshness_window(config_path.read_text(encoding="utf-8"), "7"),
         encoding="utf-8",
     )
 
