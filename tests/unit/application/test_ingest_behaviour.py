@@ -281,14 +281,10 @@ def test_decode_guard_precedes_generic_value_error(
     source.write_text("content", encoding="utf-8")
     before = _snapshot(tmp_path)
 
-    original_read_text = Path.read_text
+    def failing_read(path: Path) -> object:
+        raise ValueError("simulated non-decode value error")
 
-    def failing_read_text(self: Path, *args: object, **kwargs: object) -> str:
-        if self.name == "notes.txt":
-            raise ValueError("simulated non-decode value error")
-        return original_read_text(self, *args, **kwargs)  # type: ignore[arg-type]
-
-    monkeypatch.setattr(Path, "read_text", failing_read_text)
+    monkeypatch.setattr(fsio, "read_source_text", failing_read)
 
     result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
 
@@ -3674,6 +3670,32 @@ def test_undecodable_source_skips_extraction_without_network_call(
     assert not (tmp_path / "bundle" / "concepts").exists()
     assert (tmp_path / "bundle" / "sources" / "notes.md").is_file()
     assert "no extractable text" in result.stderr
+
+
+def test_legacy_encoded_source_is_decoded_and_extracted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Mac Roman export with CR line endings is text, not binary (#1224):
+    the model is called on the DECODED text, the stderr line names the
+    codec, and `raw/` keeps the original bytes untouched."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake = _patch_llm(monkeypatch, _concept_reply())
+    source = tmp_path / "notes.txt"
+    original = (
+        "Decisi\u00f3n de coordinaci\u00f3n\rEpicteto ense\u00f1\u00f3.\r".encode(
+            "mac_roman"
+        )
+    )
+    source.write_bytes(original)
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert (tmp_path / "raw" / "notes.txt").read_bytes() == original
+    assert len(fake.calls) >= 1
+    assert "Decisión de coordinación" in str(fake.calls[0])
+    assert "mac_roman" in result.stderr
+    assert "no extractable text" not in result.stderr
 
 
 # --- Multi-object extraction (PR 2, Phases 7-14) ----------------------------

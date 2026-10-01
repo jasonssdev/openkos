@@ -46,8 +46,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
-from openkos import config, lock
+from openkos import config, fsio, lock
 from openkos.application import budget as budget_module
+from openkos.application import ingest as application_ingest
 from openkos.application import ingest_service as svc
 from openkos.application import queue_producers as producers
 from openkos.application import runner
@@ -122,8 +123,34 @@ def _hash_file(path: Path) -> str:
 
 
 def _estimate_calls(path: Path) -> int:
-    text = path.read_text(encoding="utf-8", errors="replace")
+    decoded = fsio.read_source_text(path)
+    # Not text -> no model call; the ingest degrades to a Source-only run.
+    text = decoded.text if decoded is not None else ""
     return estimate_extraction_calls(text, source_title=path.stem).calls
+
+
+def _log_notice(message: str) -> None:
+    log.warning("%s", message)
+
+
+class _WatchObserver(svc.IngestObserver):
+    """Surfaces what an unattended import would otherwise swallow (#1224): a
+    legacy-encoding read and a source that ended with no extractable text."""
+
+    def __init__(self, name: str, notify: Callable[[str], None]) -> None:
+        self._name = name
+        self._notify = notify
+
+    def notice(self, message: str) -> None:
+        self._notify(message)
+
+    def staged(self, staged: application_ingest.StagedDerivedObjects) -> None:
+        if staged.report is None and staged.skip_reason == "no-extractable-text":
+            self._notify(
+                f"openkos daemon: watch: '{self._name}' has no extractable text "
+                "(binary, or not decodable as text); its Source was kept "
+                "without concepts."
+            )
 
 
 @dataclass(frozen=True)
@@ -137,6 +164,8 @@ class WatchPorts:
     stat: Callable[[Path], FileStat] = _stat
     hash_file: Callable[[Path], str] = _hash_file
     estimate_calls: Callable[[Path], int] = _estimate_calls
+    notify: Callable[[str], None] = _log_notice
+    """Where an import's advisory lines go (the daemon verb wires stderr)."""
 
 
 class _NotSettled(Exception):
@@ -403,6 +432,7 @@ def _import_one(
         cand.path,
         svc.IngestPolicy(skip_confirmation=True),
         ports=watch.ingest_ports(guarded, run_budget),
+        observer=_WatchObserver(cand.path.name, watch.notify),
         confirm=None,
     )
 

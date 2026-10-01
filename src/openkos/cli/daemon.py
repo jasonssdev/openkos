@@ -412,8 +412,12 @@ def _ingest_ports(
     )
 
 
+def _notify_stderr(message: str) -> None:
+    typer.echo(message, err=True)
+
+
 def watch_ports() -> WatchPorts:
-    return WatchPorts(ingest_ports=_ingest_ports)
+    return WatchPorts(ingest_ports=_ingest_ports, notify=_notify_stderr)
 
 
 def production_ports(root: Path) -> RunnerPorts:

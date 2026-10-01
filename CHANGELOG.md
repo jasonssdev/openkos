@@ -72,6 +72,20 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   you to read both bodies first and unmerge only if they truly conflict.
   Refs #1223.
 
+- **An auto-commit left a decomposed-Unicode file name staged but uncommitted.**
+  On macOS an inbox file named with decomposed accents (`o` + combining accent)
+  was listed by the version control layer in its composed form, so the
+  auto-commit dropped its `raw/` copy from the commit pathspec and left it
+  staged, with nothing recorded for the daemon's commit retry. Names are now
+  compared in NFC. (#1219)
+- **Non-UTF-8 text is no longer treated as binary.** `ingest` and the daemon's
+  inbox watch now read legacy-encoded text through a deterministic fallback
+  (Mac Roman for CR-terminated files, otherwise cp1252, only when the result is
+  plausible text), say which codec was used, and leave `raw/` byte-identical.
+  A source that still ends with no extractable text is now reported by name on
+  the daemon's stderr instead of passing silently. Retiring the dead Source of
+  an earlier failed import remains manual (`openkos forget`). (Refs #1224)
+
 ## [0.3.1] - 2026-10-01
 
 MVP 4, the Unattended Engine, is complete. The headline is `openkos daemon`: a

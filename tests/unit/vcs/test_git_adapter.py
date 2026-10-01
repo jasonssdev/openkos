@@ -1739,3 +1739,52 @@ def test_commit_paths_with_nothing_known_raises_and_never_commits_staged_content
         git.commit_paths(repo, ["emptydir"], "openkos: nothing")
 
     assert _committed_files(repo) == {"seed.txt"}
+
+
+# --- #1219: a decomposed (NFD) file name is still a name git knows ---------
+
+
+def test_known_rel_paths_matches_a_name_git_lists_in_another_unicode_form(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On macOS an inbox name arrives decomposed (NFD) while git, with
+    `core.precomposeunicode`, lists the same file composed (NFC). A byte
+    comparison dropped it from the commit pathspec, so the commit landed
+    without the `raw/` copy and left it staged (#1219). Platform-independent:
+    the git listing is faked."""
+    nfd = "raw/Decisión (coordinación).txt"
+    nfc = "raw/Decisión (coordinación).txt"
+    assert nfd != nfc
+
+    def _fake_run(
+        argv: list[str],
+        cwd: Path,
+        env: Mapping[str, str] | None = None,
+        timeout: float | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        listing = f"{nfc}\0" if "ls-files" in argv else ""
+        return subprocess.CompletedProcess(argv, 0, stdout=listing, stderr="")
+
+    monkeypatch.setattr(git, "_run", _fake_run)
+
+    assert git._known_rel_paths(tmp_path, [nfd, "bundle/other.md"], {}) == [nfd]
+
+
+def test_commit_paths_commits_a_decomposed_file_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Real git: the raw copy named in NFD lands in the commit, not just the
+    index (the case that is the bug on macOS; a no-op regression guard on
+    filesystems that normalise nothing)."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo_with_identity(repo, monkeypatch, tmp_path)
+    raw = "raw/Decisión (coordinación).txt"
+    (repo / "raw").mkdir()
+    (repo / raw).write_text("x", encoding="utf-8")
+    (repo / "log.md").write_text("l", encoding="utf-8")
+
+    git.commit_paths(repo, [raw, "log.md"], "ingest")
+
+    status = git._run(["git", "status", "--porcelain"], cwd=repo)
+    assert status.stdout.strip() == ""

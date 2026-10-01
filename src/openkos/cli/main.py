@@ -4357,9 +4357,7 @@ def _estimate_batch_calls(
     floor_gated = cfg.default_sensitivity == "confidential" and not include_confidential
     for path in matches:
         try:
-            text = path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            continue  # undecodable -> Source-only, no model call
+            decoded = fsio.read_source_text(path)
         except OSError:
             # Fail OPEN, distinct from undecodable: a file the gate cannot
             # READ right now (permissions, a race) may still extract fine
@@ -4370,6 +4368,9 @@ def _estimate_batch_calls(
             # do, so the unchunked estimate is the honest floor.
             calls += 3 if cfg.union_judge else 1
             continue
+        if decoded is None:
+            continue  # undecodable -> Source-only, no model call
+        text = decoded.text
         if not text.strip():
             continue  # blank -> no extractable text, no model call
         if floor_gated:
@@ -8102,13 +8103,15 @@ def backfill_source_titles_cmd(
         for candidate in scan.candidates:
             raw_path = layout.raw_dir / PurePosixPath(candidate.resource).name
             try:
-                raw_texts[candidate.resource] = raw_path.read_text(encoding="utf-8")
-            except UnicodeDecodeError:
-                # Subclasses `ValueError`: caught before `except (OSError,
-                # ValueError)` below, or one binary raw file fails the sweep.
-                raw_texts[candidate.resource] = None
+                decoded = fsio.read_source_text(raw_path)
             except OSError:
                 pass  # absent key -> `raw-unreadable` (design D2)
+            else:
+                # `None` (binary / not text) is an explicit `None`, the same
+                # read-time decoding `ingest` applies (#1224).
+                raw_texts[candidate.resource] = (
+                    decoded.text if decoded is not None else None
+                )
 
         backfill = source_titles.resolve_source_title_backfill(scan, raw_texts)
     except (OSError, ValueError) as exc:
