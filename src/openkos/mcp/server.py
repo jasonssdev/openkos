@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import sys
 import threading
 from collections.abc import Callable, Mapping
 from contextlib import suppress
@@ -37,7 +36,7 @@ from json import dumps as _json_dumps
 from pathlib import Path
 from typing import Final, Literal, TypeGuard, cast
 
-from openkos import config
+from openkos import config, logsetup
 from openkos.application import backends as application_backends
 from openkos.application import concept_read
 from openkos.llm.base import (
@@ -790,15 +789,12 @@ def serve(root: Path, *, expose_confidential: bool) -> int:
     """
     ctx = _build_context(root, expose_confidential=expose_confidential)
     call_deadline = _tool_deadline_for(root)
-    handler = logging.StreamHandler(sys.stderr)
-    logger.setLevel(logging.INFO)
-    logger.addHandler(handler)
-    # Before `propagate = False` below: this one-shot startup advisory
-    # should still reach a root-attached test/log handler (e.g. pytest's
-    # `caplog`), unlike the per-request logging that follows, which
-    # deliberately stops propagating so it is never double-printed.
+    # The startup advisory goes out BEFORE the MCP handler is installed so it
+    # reaches the root handler once (the CLI's stderr handler, or a test's
+    # `caplog`); the per-request logging that follows has its own handler and
+    # stops propagating so it is never double-printed.
     _warn_insecure_key_at_startup(root)
-    logger.propagate = False
+    logsetup.configure_logging("mcp")
     try:
         with transport.claim_stdio() as streams:
             return asyncio.run(
@@ -809,5 +805,4 @@ def serve(root: Path, *, expose_confidential: bool) -> int:
     except KeyboardInterrupt:
         return 130
     finally:
-        logger.removeHandler(handler)
-        logger.propagate = True
+        logsetup.reset_logging()
