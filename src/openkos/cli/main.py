@@ -8635,7 +8635,7 @@ def unmerge(
     ),
     rich_help_panel="Curate",
 )
-@_guard_workspace_lock("reconcile")
+@_guard_workspace_lock("reconcile", commit_phase=True)
 def reconcile(
     id_a: str | None = typer.Argument(
         None,
@@ -8918,6 +8918,7 @@ def _reconcile_ports() -> reconcile_service.ReconcilePorts:
         autocommit=lambda root, paths, message: _autocommit(root, paths, message),
         snapshot_read=lambda path: _snapshot_read(path),
         clock=lambda: datetime.now(UTC),
+        commit_section=_commit_section,
     )
 
 

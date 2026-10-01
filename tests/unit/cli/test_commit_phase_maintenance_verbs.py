@@ -15,17 +15,24 @@ that it was HELD at the write -- otherwise "never held at all" would pass.
 
 import contextlib
 import unicodedata
-from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner, _NamedTextIOWrapper
+from typer.testing import CliRunner
 
-from openkos import fsio, lock
+from openkos import fsio
 from openkos.application import lifecycle as application_lifecycle
 from openkos.application import repair as application_repair
 from openkos.cli.main import app
-from openkos.model import okf
+from tests.unit.cli.commit_phase_support import (
+    hold_the_lock_from,
+    init_workspace,
+    lock_is_free,
+    metadata_of,
+    simulate_tty,
+    wrap,
+    write_doc,
+)
 from tests.unit.cli.conftest import (
     changed_paths,
     commit_pending_fixture_docs,
@@ -50,83 +57,14 @@ def _git_identity(
     )
 
 
-def _lock_is_free(root: Path) -> bool:
-    """Whether another OpenKOS process could take the workspace lock right now."""
-    try:
-        with lock.workspace_lock(root):
-            return True
-    except lock.WorkspaceBusyError:
-        return False
-
-
-def _simulate_tty(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(_NamedTextIOWrapper, "isatty", lambda self: True)
-
-
-def _init_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.chdir(tmp_path)
-    assert runner.invoke(app, ["init"]).exit_code == 0
-
-
-def _write_doc(
-    tmp_path: Path,
-    concept_id: str,
-    metadata: dict[str, object],
-    body: str = "Body.\n",
-) -> Path:
-    path = tmp_path / "bundle" / f"{concept_id}.md"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(okf.dump_frontmatter(metadata, body), encoding="utf-8")
-    return path
-
-
-def _metadata(tmp_path: Path, concept_id: str) -> dict[str, object]:
-    text = (tmp_path / "bundle" / f"{concept_id}.md").read_text(encoding="utf-8")
-    return okf.load_frontmatter(text)[0]
-
-
-def _wrap(
-    monkeypatch: pytest.MonkeyPatch,
-    target: object,
-    name: str,
-    *,
-    before: Callable[[], object],
-) -> None:
-    """Replace `target.name` with a wrapper that runs `before` and then the
-    real function, so a test observes the state at the moment a phase starts."""
-    real = getattr(target, name)
-
-    def _wrapper(*args: object, **kwargs: object) -> object:
-        before()
-        return real(*args, **kwargs)
-
-    monkeypatch.setattr(target, name, _wrapper)
-
-
-def _hold_the_lock_from(
-    stack: contextlib.ExitStack, root: Path, acquired: list[bool]
-) -> Callable[[], object]:
-    """A prompt-time edit that takes the workspace lock as "another process"
-    would and keeps it until `stack` closes. `acquired` proves the acquisition
-    itself succeeded -- if the verb under test were still holding the lock
-    through its prompt, this would raise and the contention test would pass
-    for the wrong reason."""
-
-    def _take() -> None:
-        stack.enter_context(lock.workspace_lock(root))
-        acquired.append(True)
-
-    return _take
-
-
 # -- sync-tags ----------------------------------------------------------------
 
 
 def _seed_sync_tags(tmp_path: Path) -> None:
-    _write_doc(
+    write_doc(
         tmp_path, "sources/notes", {"type": "Source", "title": "N", "tags": ["alpha"]}
     )
-    _write_doc(
+    write_doc(
         tmp_path,
         "concepts/a",
         {"type": "Concept", "title": "A", "provenance": ["sources/notes"]},
@@ -137,17 +75,17 @@ def _seed_sync_tags(tmp_path: Path) -> None:
 def test_sync_tags_prompt_does_not_hold_the_lock_but_the_write_does(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _init_workspace(tmp_path, monkeypatch)
+    init_workspace(tmp_path, monkeypatch)
     _seed_sync_tags(tmp_path)
-    _simulate_tty(monkeypatch)
+    simulate_tty(monkeypatch)
     at_prompt: list[bool] = []
     at_write: list[bool] = []
-    confirm_after(monkeypatch, lambda: at_prompt.append(_lock_is_free(tmp_path)))
-    _wrap(
+    confirm_after(monkeypatch, lambda: at_prompt.append(lock_is_free(tmp_path)))
+    wrap(
         monkeypatch,
         application_lifecycle,
         "sync_tags_core",
-        before=lambda: at_write.append(_lock_is_free(tmp_path)),
+        before=lambda: at_write.append(lock_is_free(tmp_path)),
     )
 
     result = runner.invoke(app, ["sync-tags", "sources/notes"], input="y\n")
@@ -155,19 +93,19 @@ def test_sync_tags_prompt_does_not_hold_the_lock_but_the_write_does(
     assert result.exit_code == 0, result.stderr
     assert at_prompt == [True]
     assert at_write == [False]
-    assert _metadata(tmp_path, "concepts/a")["tags"] == ["alpha"]
+    assert metadata_of(tmp_path, "concepts/a")["tags"] == ["alpha"]
 
 
 def test_sync_tags_refuses_with_exit_3_when_the_lock_is_busy_at_commit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _init_workspace(tmp_path, monkeypatch)
+    init_workspace(tmp_path, monkeypatch)
     _seed_sync_tags(tmp_path)
-    _simulate_tty(monkeypatch)
+    simulate_tty(monkeypatch)
     before = _snapshot(tmp_path)
     acquired: list[bool] = []
     with contextlib.ExitStack() as stack:
-        confirm_after(monkeypatch, _hold_the_lock_from(stack, tmp_path, acquired))
+        confirm_after(monkeypatch, hold_the_lock_from(stack, tmp_path, acquired))
 
         result = runner.invoke(app, ["sync-tags", "sources/notes"], input="y\n")
 
@@ -188,8 +126,8 @@ def test_sync_tags_refuses_a_tag_whose_provenance_path_vanished_between_phases(
     and nothing else. Re-attributing `concepts/m` removes `concepts/d` from the
     Source's provenance closure."""
     sentinel = "SENTINEL-CONFIDENTIAL-TAG"
-    _init_workspace(tmp_path, monkeypatch)
-    _write_doc(
+    init_workspace(tmp_path, monkeypatch)
+    write_doc(
         tmp_path,
         "sources/secret",
         {
@@ -199,8 +137,8 @@ def test_sync_tags_refuses_a_tag_whose_provenance_path_vanished_between_phases(
             "sensitivity": "confidential",
         },
     )
-    _write_doc(tmp_path, "sources/other", {"type": "Source", "title": "O"})
-    middle = _write_doc(
+    write_doc(tmp_path, "sources/other", {"type": "Source", "title": "O"})
+    middle = write_doc(
         tmp_path,
         "concepts/m",
         {
@@ -211,7 +149,7 @@ def test_sync_tags_refuses_a_tag_whose_provenance_path_vanished_between_phases(
             "sensitivity": "confidential",
         },
     )
-    derived = _write_doc(
+    derived = write_doc(
         tmp_path,
         "concepts/d",
         {
@@ -222,11 +160,11 @@ def test_sync_tags_refuses_a_tag_whose_provenance_path_vanished_between_phases(
         },
     )
     commit_pending_fixture_docs()
-    _simulate_tty(monkeypatch)
+    simulate_tty(monkeypatch)
     derived_before = derived.read_bytes()
 
     def _re_attribute() -> None:
-        _write_doc(
+        write_doc(
             tmp_path,
             "concepts/m",
             {
@@ -255,19 +193,19 @@ def test_sync_tags_refuses_a_tag_whose_provenance_path_vanished_between_phases(
 def test_normalize_names_prompt_does_not_hold_the_lock_but_the_rename_does(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _init_workspace(tmp_path, monkeypatch)
+    init_workspace(tmp_path, monkeypatch)
     nfd = unicodedata.normalize("NFD", "café") + ".md"
     (tmp_path / "bundle").joinpath(nfd).write_text("body\n", encoding="utf-8")
     commit_pending_fixture_docs()
-    _simulate_tty(monkeypatch)
+    simulate_tty(monkeypatch)
     at_prompt: list[bool] = []
     at_write: list[bool] = []
-    confirm_after(monkeypatch, lambda: at_prompt.append(_lock_is_free(tmp_path)))
-    _wrap(
+    confirm_after(monkeypatch, lambda: at_prompt.append(lock_is_free(tmp_path)))
+    wrap(
         monkeypatch,
         fsio,
         "rename_two_step",
-        before=lambda: at_write.append(_lock_is_free(tmp_path)),
+        before=lambda: at_write.append(lock_is_free(tmp_path)),
     )
 
     result = runner.invoke(app, ["normalize-names"], input="y\n")
@@ -280,15 +218,15 @@ def test_normalize_names_prompt_does_not_hold_the_lock_but_the_rename_does(
 def test_normalize_names_refuses_with_exit_3_when_the_lock_is_busy_at_commit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _init_workspace(tmp_path, monkeypatch)
+    init_workspace(tmp_path, monkeypatch)
     nfd = unicodedata.normalize("NFD", "café") + ".md"
     (tmp_path / "bundle").joinpath(nfd).write_text("body\n", encoding="utf-8")
     commit_pending_fixture_docs()
-    _simulate_tty(monkeypatch)
+    simulate_tty(monkeypatch)
     before = snapshot_with_mtime(tmp_path)
     acquired: list[bool] = []
     with contextlib.ExitStack() as stack:
-        confirm_after(monkeypatch, _hold_the_lock_from(stack, tmp_path, acquired))
+        confirm_after(monkeypatch, hold_the_lock_from(stack, tmp_path, acquired))
 
         result = runner.invoke(app, ["normalize-names"], input="y\n")
 
@@ -302,7 +240,7 @@ def test_normalize_names_refuses_with_exit_3_when_the_lock_is_busy_at_commit(
 
 
 def _seed_repair(tmp_path: Path) -> None:
-    _write_doc(
+    write_doc(
         tmp_path,
         "concepts/a",
         {
@@ -311,7 +249,7 @@ def _seed_repair(tmp_path: Path) -> None:
             "relations": [{"target": "concepts/b", "type": "supersedes"}],
         },
     )
-    _write_doc(
+    write_doc(
         tmp_path, "concepts/b", {"type": "Concept", "title": "B", "status": "stable"}
     )
     commit_pending_fixture_docs()
@@ -320,21 +258,21 @@ def _seed_repair(tmp_path: Path) -> None:
 def test_repair_plans_without_the_lock_and_writes_with_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _init_workspace(tmp_path, monkeypatch)
+    init_workspace(tmp_path, monkeypatch)
     _seed_repair(tmp_path)
     at_plan: list[bool] = []
     at_write: list[bool] = []
-    _wrap(
+    wrap(
         monkeypatch,
         application_repair,
         "plan_repair",
-        before=lambda: at_plan.append(_lock_is_free(tmp_path)),
+        before=lambda: at_plan.append(lock_is_free(tmp_path)),
     )
-    _wrap(
+    wrap(
         monkeypatch,
         application_repair,
         "apply_repair",
-        before=lambda: at_write.append(_lock_is_free(tmp_path)),
+        before=lambda: at_write.append(lock_is_free(tmp_path)),
     )
 
     result = runner.invoke(app, ["repair"])
@@ -342,7 +280,7 @@ def test_repair_plans_without_the_lock_and_writes_with_it(
     assert result.exit_code == 0, result.stderr
     assert at_plan == [True]
     assert at_write == [False]
-    assert _metadata(tmp_path, "concepts/b")["status"] == "deprecated"
+    assert metadata_of(tmp_path, "concepts/b")["status"] == "deprecated"
 
 
 def test_repair_refuses_an_export_whose_superseding_edge_vanished_between_phases(
@@ -351,7 +289,7 @@ def test_repair_refuses_an_export_whose_superseding_edge_vanished_between_phases
     """Sentinel: `concepts/b`'s deprecation is decided by `concepts/a`'s
     `supersedes` edge, a document `repair` reads but never writes. If that edge
     is removed after the plan was computed, the export must not be written."""
-    _init_workspace(tmp_path, monkeypatch)
+    init_workspace(tmp_path, monkeypatch)
     _seed_repair(tmp_path)
     target = tmp_path / "bundle" / "concepts" / "b.md"
     target_before = target.read_bytes()
@@ -359,7 +297,7 @@ def test_repair_refuses_an_export_whose_superseding_edge_vanished_between_phases
 
     def _plan_then_remove_the_edge(bundle_dir: Path) -> object:
         plan = real(bundle_dir)
-        _write_doc(tmp_path, "concepts/a", {"type": "Concept", "title": "A"})
+        write_doc(tmp_path, "concepts/a", {"type": "Concept", "title": "A"})
         return plan
 
     monkeypatch.setattr(application_repair, "plan_repair", _plan_then_remove_the_edge)
