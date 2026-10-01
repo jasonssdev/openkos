@@ -145,6 +145,7 @@ from openkos.retrieval.answer import NO_MATCH, NoMatchCause
 from openkos.state import adjudications as adjudications_store
 from openkos.state import derived, findings
 from openkos.state import edge_suggestions as edge_suggestions_store
+from openkos.state import pending_queue as pending_queue_store
 from openkos.state import reindex as reindex_module
 from openkos.state import revision_findings as revision_findings_store
 from openkos.state.fts import FtsUnavailable
@@ -1127,15 +1128,20 @@ def _sweep_findings_for_ids(
             revision_findings_store.delete_revision_findings_referencing(
                 conn, set(purge_ids)
             )
+            # #1141: the pending-work queue is the same file's FIFTH tenant;
+            # a row's payload can quote a purge-set member's text. It matches
+            # every field that names a concept (target, input ref including
+            # `sources-of:`), not one pair field -- same erasure discipline.
+            pending_queue_store.delete_items_referencing(conn, set(purge_ids))
         finally:
             conn.close()
     except (OSError, sqlite3.Error) as exc:
         typer.echo(
             "openkos forget: warning -- failed to sweep persisted findings/"
-            "adjudications/edge suggestions/revision findings "
+            "adjudications/edge suggestions/revision findings/pending-work queue "
             f"({exc}); '.openkos/findings.db' "
             "may still quote the forgotten concept(s). Delete the file to "
-            "clear the residue (all four stores are recomputable at LLM "
+            "clear the residue (all five stores are recomputable at LLM "
             "cost).",
             err=True,
         )
@@ -5505,6 +5511,12 @@ def _purge_dropped_stores(
             "scan. Free to restore and nothing to run: a miss re-embeds on "
             "the next save.",
         ),
+        (
+            layout.jobs_db_path,
+            "the unattended engine's job history and daily spend ledger. "
+            "Nothing to run: the next unattended run starts a fresh record, "
+            "and its budget counts spend from zero.",
+        ),
     )
 
 
@@ -5567,6 +5579,44 @@ class _PurgeIndexOutcome:
     (#923). Non-empty means the erasure is incomplete."""
 
 
+def _purge_delete_daemon_logs(layout: config.WorkspaceLayout) -> list[Path]:
+    """Delete the workspace's daemon log files -- the live one and its rotated
+    siblings (`<digest>.log`, `<digest>.log.1`, ...) -- from the per-user log
+    directory (privacy-purge spec: "Purge Removes The Workspace's Unattended
+    Records And Logs"). Returns the files that could NOT be deleted so the
+    caller reports them with the stores: a log is not a store, but an
+    undeleted one is the same incomplete erasure and the same manual remedy.
+
+    Never raises: a missing log directory is nothing to delete, and one
+    undeletable file does not abandon the rest."""
+    live = logsetup.log_path_for(layout.root)
+    try:
+        candidates = sorted(
+            p
+            for p in live.parent.iterdir()
+            if p.name == live.name or p.name.startswith(live.name + ".")
+        )
+    except FileNotFoundError:
+        return []
+    except OSError as exc:
+        typer.echo(
+            f"openkos purge: warning -- cannot list '{live.parent}': {exc}.",
+            err=True,
+        )
+        return [live]
+    undeleted: list[Path] = []
+    for path in candidates:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as exc:
+            undeleted.append(path)
+            typer.echo(
+                f"openkos purge: warning -- failed to delete '{path}': {exc}.",
+                err=True,
+            )
+    return undeleted
+
+
 def _purge_rebuild_indexes(
     layout: config.WorkspaceLayout,
 ) -> _PurgeIndexOutcome:
@@ -5626,6 +5676,7 @@ def _purge_rebuild_indexes(
     for db_path in dropped:
         if _purge_store_is_gone(db_path):
             _purge_sweep_store_sidecars(db_path)
+    undeleted.extend(_purge_delete_daemon_logs(layout))
 
     try:
         reindex_module._reindex_fts(layout.bundle_dir, layout.fts_db_path, force=True)

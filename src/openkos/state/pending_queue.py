@@ -31,8 +31,8 @@ row mentions, and `pending_item_input_digests` records every `(input_ref,
 digest)` the proposal was computed from; both are indexed so the `forget` /
 `purge` sweep can find rows by target id (`concept_id`), by `input_ref`
 (including `sources-of:<id>` forms), and by digest, without parsing payloads.
-`find_item_ids_referencing` is that lookup, read-only; the erasing sweep is not
-here."""
+`find_item_ids_referencing` is that lookup, read-only; `delete_items_referencing`
+is the erasing sweep `forget` runs."""
 
 import contextlib
 import hashlib
@@ -658,3 +658,49 @@ def find_item_ids_referencing(
             )
         )
     return found
+
+
+def delete_items_referencing(
+    conn: sqlite3.Connection,
+    concept_ids: Iterable[str],
+    *,
+    digests: Iterable[str] = (),
+) -> int:
+    """Privacy sweep (forget-command spec: "Deletion Sweep Includes The
+    Pending-Work Queue"): delete every row (any status) that
+    `find_item_ids_referencing` finds, child rows included, and return how many
+    rows were removed.
+
+    An ERASURE, not a row-level tombstone, under the same discipline as the
+    other `findings.db` tenants: after the deletes commit, `VACUUM` rebuilds the
+    file without the freelist pages a plain `DELETE` leaves recoverable, and a
+    CHECKED `wal_checkpoint(TRUNCATE)` clears the WAL sidecar. SQLite reports a
+    blocked checkpoint through the returned row's `busy` column, never an
+    exception, so it is inspected and raised as a failure: a reader pinning the
+    WAL would otherwise leave the deleted payloads in un-truncated frames while
+    this reports success.
+
+    An absent queue answers 0 and is never created. The caller holds the
+    workspace lock (`forget`'s write phase), so this takes no commit section."""
+    doomed = sorted(find_item_ids_referencing(conn, concept_ids, digests=digests))
+    if not doomed:
+        return 0
+    marks = ",".join("?" for _ in doomed)
+    # "?" placeholder marks only; every value travels as a parameter.
+    for table, column in (
+        ("pending_item_targets", "item_id"),
+        ("pending_item_input_digests", "item_id"),
+        ("pending_items", "id"),
+    ):
+        conn.execute(f"DELETE FROM {table} WHERE {column} IN ({marks})", doomed)  # noqa: S608
+    conn.commit()
+    conn.execute("VACUUM")
+    busy, _wal_frames, _checkpointed = conn.execute(
+        "PRAGMA wal_checkpoint(TRUNCATE)"
+    ).fetchone()
+    if busy:
+        raise sqlite3.OperationalError(
+            "wal checkpoint busy: a concurrent reader held the WAL open, so "
+            "deleted pending-work bytes may remain in it"
+        )
+    return len(doomed)
