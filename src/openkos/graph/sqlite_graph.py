@@ -112,13 +112,14 @@ importing `openkos.state.derived` (canonical) below is the ALLOWED direction
 -- derived depends on canonical, never the reverse.
 """
 
+import json
 import re
 import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
-from typing import Final, Protocol
+from typing import Final, Literal, Protocol
 
 from openkos.graph.base import Edge
 from openkos.model import okf
@@ -211,7 +212,97 @@ _CREATE_EDGES_SOURCE_INDEX_SQL = "CREATE INDEX idx_edges_source_id ON edges (sou
 
 _CREATE_EDGES_TARGET_INDEX_SQL = "CREATE INDEX idx_edges_target_id ON edges (target_id)"
 
+SCHEMA_VERSION: Final = "1"
+"""Layout version of `graph.db`. A store written under a different version
+is rebuilt whole rather than updated per document."""
+
+SCHEMA_VERSION_KEY: Final = "schema_version"
+
+_CREATE_DOC_OUTLINKS_SQL = """
+CREATE TABLE doc_outlinks (
+    source_id TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    relation_type TEXT
+)
+"""
+"""Every outgoing reference a document makes, resolved or not (`kind` is
+`link` for a body link -- `relation_type` is the synthesized `derived_from`
+or `NULL` -- and `relation` for a `relations:` entry). `edges` rows for passes
+1 and 2 are exactly the outlinks whose target is a node; keeping the
+unresolved ones is what lets a new document recover the links that named it
+before it existed."""
+
+_CREATE_DOC_OUTLINKS_SOURCE_INDEX_SQL = (
+    "CREATE INDEX idx_doc_outlinks_source_id ON doc_outlinks (source_id)"
+)
+
+_CREATE_DOC_OUTLINKS_TARGET_INDEX_SQL = (
+    "CREATE INDEX idx_doc_outlinks_target_id ON doc_outlinks (target_id)"
+)
+
+_CREATE_NODE_FACTS_SQL = """
+CREATE TABLE node_facts (
+    concept_id TEXT PRIMARY KEY,
+    is_source INTEGER NOT NULL,
+    quarantined INTEGER NOT NULL,
+    provenance TEXT NOT NULL
+)
+"""
+"""What pass 3 needs to know about a node without re-reading its document:
+whether it is a `Source`, whether that Source carries a quarantine notice, and
+its decoded `provenance:` list (JSON array of strings)."""
+
+_CREATE_DOC_MANIFEST_SQL = """
+CREATE TABLE doc_manifest (
+    concept_id TEXT PRIMARY KEY,
+    content_hash TEXT NOT NULL
+)
+"""
+
+_STORE_TABLES: Final = (
+    "nodes",
+    "edges",
+    "doc_outlinks",
+    "node_facts",
+    "doc_manifest",
+)
+
 _INSERT_NODE_SQL = "INSERT INTO nodes (concept_id) VALUES (?)"
+
+_INSERT_OUTLINK_SQL = (
+    "INSERT INTO doc_outlinks (source_id, target_id, kind, relation_type) "
+    "VALUES (?, ?, ?, ?)"
+)
+
+_INSERT_FACTS_SQL = (
+    "INSERT INTO node_facts (concept_id, is_source, quarantined, provenance) "
+    "VALUES (?, ?, ?, ?)"
+)
+
+_MATERIALISE_ALL_EDGES_SQL = (
+    "INSERT INTO edges (source_id, target_id, relation_type) "
+    "SELECT source_id, target_id, relation_type FROM doc_outlinks "
+    "WHERE target_id IN (SELECT concept_id FROM nodes) "
+    "ORDER BY kind, source_id, target_id, relation_type"
+)
+
+_MATERIALISE_TOUCHED_EDGES_SQL = (
+    "INSERT INTO edges (source_id, target_id, relation_type) "
+    "SELECT source_id, target_id, relation_type FROM doc_outlinks "
+    "WHERE target_id IN (SELECT concept_id FROM nodes) "
+    "AND (source_id IN (SELECT concept_id FROM touched) "
+    "OR target_id IN (SELECT concept_id FROM touched)) "
+    "ORDER BY kind, source_id, target_id, relation_type"
+)
+
+_DELETE_CANDIDATE_EDGES_SQL = (
+    "DELETE FROM edges WHERE relation_type IS NULL AND NOT EXISTS ("
+    "SELECT 1 FROM doc_outlinks o WHERE o.kind = 'link' "
+    "AND o.relation_type IS NULL "
+    "AND o.source_id = edges.source_id AND o.target_id = edges.target_id)"
+)
+"""Pass-3 candidate edges are the untyped edges no body link accounts for."""
 
 _INSERT_EDGE_SQL = (
     "INSERT INTO edges (source_id, target_id, relation_type) VALUES (?, ?, ?)"
@@ -385,6 +476,163 @@ class SqliteGraphStore:
         self.close()
 
 
+def _read_doc(path: Path) -> tuple[dict[str, object], str] | str:
+    """Read and parse `path` into `(metadata, body)`, or return the skip
+    reason. The one place a document becomes graph input, shared by the whole
+    rebuild and the per-document update so the two can never disagree on what
+    a document contributes. The read is guarded (`fts.py`-shaped): a doc that
+    vanishes or corrupts after the walk is reported, not raised."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return "unreadable"
+    try:
+        return okf.load_frontmatter(text)
+    except okf.FrontmatterError:  # a concurrent edit can corrupt frontmatter
+        return "unparseable frontmatter"
+
+
+def _store_doc(
+    conn: sqlite3.Connection,
+    concept_id: str,
+    metadata: dict[str, object],
+    body: str,
+) -> str | None:
+    """Record one document: its node, its pass-3 facts, and every outgoing
+    reference it makes (`doc_outlinks`), resolved or not. Edges are NOT
+    written here -- they are materialised from the outlinks once the node set
+    is known. Returns a skip note when the document's `relations:` block is
+    malformed (it then contributes no typed outlinks), else `None`."""
+    raw_provenance = metadata.get("provenance")
+    provenance = sorted(
+        {entry for entry in raw_provenance if isinstance(entry, str)}
+        if isinstance(raw_provenance, list)
+        else set()
+    )
+    is_source = metadata.get("type") == "Source"
+    # #841: a Source is quarantined when its extraction notices carry either
+    # judge-degrade marker.
+    quarantined = is_source and bool(
+        {
+            okf.EXTRACTION_NOTICE_JUDGE_UNAVAILABLE,
+            okf.EXTRACTION_NOTICE_JUDGE_EMPTY,
+        }
+        & set(okf.extraction_notices(metadata))
+    )
+    conn.execute(_INSERT_NODE_SQL, (concept_id,))
+    conn.execute(
+        _INSERT_FACTS_SQL,
+        (concept_id, int(is_source), int(quarantined), json.dumps(provenance)),
+    )
+    link_targets = {
+        match.group(1).removesuffix(".md")
+        for match in _LINK_RE.finditer(_mask_fenced_code_blocks(body))
+    }
+    for target_id in sorted(link_targets):
+        relation_type = "derived_from" if target_id in provenance else None
+        conn.execute(
+            _INSERT_OUTLINK_SQL, (concept_id, target_id, "link", relation_type)
+        )
+    try:
+        relations = okf.decode_relations(metadata)
+    except ValueError:  # malformed relations: contributes no typed edges
+        return _skip_note(concept_id, reason="malformed relations")
+    for target_id, relation_type in sorted(
+        {(relation.target, relation.type) for relation in relations}
+    ):
+        conn.execute(
+            _INSERT_OUTLINK_SQL, (concept_id, target_id, "relation", relation_type)
+        )
+    return None
+
+
+def _candidate_pass(
+    conn: sqlite3.Connection,
+    candidates: CandidateSource,
+    candidate_offset: int,
+) -> CandidateReport:
+    """Pass 3: nominate, filter, rank and cap proximity candidates, inserting
+    the retained ones as untyped edges. Reads only the store (`node_facts` and
+    the edges already materialised), never the bundle -- which is what lets
+    the per-document refresh recompute it globally and cheaply. The caller
+    must have removed any prior candidate edges, so the `edges` table holds
+    only the pass 1 and 2 rows."""
+    # Dedup against BOTH prior passes, in both directions. A pair a human
+    # already typed via `relations:` would otherwise gain a redundant NULL
+    # row -- filtered right back out of suggestions by `edge_typing`'s
+    # pair-level exclusion, but still inflating `graph_edge_summary`'s total.
+    # Both directions because links are directed and proximity is not.
+    seen: set[tuple[str, str]] = set()
+    for source_id, target_id in conn.execute("SELECT source_id, target_id FROM edges"):
+        seen.add((source_id, target_id))
+        seen.add((target_id, source_id))
+    provenance_by_source: dict[str, set[str]] = {}
+    seed_node_ids: set[str] = set()
+    quarantined_sources: set[str] = set()
+    for concept_id, is_source, quarantined, provenance in conn.execute(
+        "SELECT concept_id, is_source, quarantined, provenance FROM node_facts"
+    ):
+        provenance_by_source[concept_id] = set(json.loads(provenance))
+        if not is_source:
+            seed_node_ids.add(concept_id)
+        if quarantined:
+            quarantined_sources.add(concept_id)
+    # Source-exclusion (#378 slice 1): a `Source` document must not propose
+    # (anchor list) or receive (row guards) a candidate edge. Both endpoints
+    # are checked against the Source-free `seed_node_ids`, because
+    # `VectorProximitySource.pairs` queries the whole `vectors.db` and can
+    # return a Source as a neighbor even when it was never offered as an anchor.
+    # #378 slice 2: a `dict` keyed by the canonical `(min, max)` pair keeps the
+    # SMALLEST distance per pair. Endpoint guard, self-pair drop, and `seen`
+    # dedup all run before ranking, so `best` already holds the fully deduped
+    # set BEFORE the cap (filter before cap: discarded rows must not consume
+    # cap slots and starve eligible ones).
+    # #841: a pair is withheld exactly when both endpoints CITE a common
+    # quarantined source (`provenance:`) -- near-boilerplate pairs from one
+    # degraded extraction. An endpoint with no `provenance:` cannot cite a
+    # quarantined source and keeps its pair (attribution fails open).
+    quarantine_dropped: dict[tuple[str, str], set[str]] = {}
+    best: dict[tuple[str, str], float] = {}
+    for pair in candidates.pairs(sorted(seed_node_ids)):
+        if pair.source_id not in seed_node_ids or pair.target_id not in seed_node_ids:
+            continue
+        if pair.source_id == pair.target_id:
+            continue
+        if (pair.source_id, pair.target_id) in seen:
+            continue
+        key = (
+            min(pair.source_id, pair.target_id),
+            max(pair.source_id, pair.target_id),
+        )
+        common_quarantined = (
+            provenance_by_source.get(pair.source_id, set())
+            & provenance_by_source.get(pair.target_id, set())
+            & quarantined_sources
+        )
+        if common_quarantined:
+            quarantine_dropped.setdefault(key, set()).update(common_quarantined)
+            continue
+        if key not in best or pair.distance < best[key]:
+            best[key] = pair.distance
+    # Rank by distance ascending, tie-broken by `(source_id, target_id)`, THEN
+    # slice to the cap. #567 paging: the window slides by `candidate_offset`
+    # ranked pairs; an offset at or past the set retains nothing.
+    ranked = sorted(best, key=lambda pair_key: (best[pair_key], pair_key))
+    retained_keys = ranked[candidate_offset : candidate_offset + _MAX_CANDIDATE_EDGES]
+    for source_id, target_id in sorted(retained_keys):
+        conn.execute(_INSERT_EDGE_SQL, (source_id, target_id, None))
+    return CandidateReport(
+        produced=len(best),
+        retained=len(retained_keys),
+        pairs=tuple(ranked),
+        offset=candidate_offset,
+        quarantine_withheld=tuple(
+            WithheldCandidate(pair=pair, source_ids=tuple(sorted(sources)))
+            for pair, sources in sorted(quarantine_dropped.items())
+        ),
+    )
+
+
 def _populate_graph_tables(
     conn: sqlite3.Connection,
     bundle_dir: Path,
@@ -393,47 +641,37 @@ def _populate_graph_tables(
     candidate_offset: int = 0,
 ) -> tuple[list[str], CandidateReport]:
     """Shared node/edge-population core (D-refactor, dedupes the in-memory/
-    on-disk writer paths): creates the `nodes`/`edges` tables + indexes on
-    `conn`, then walks `okf._iter_docs(bundle_dir)` once and extracts nodes
-    and edges exactly as documented at module level, returning the skip
+    on-disk writer paths): creates the graph tables + indexes on `conn`, then
+    walks `okf._iter_docs(bundle_dir)` once and records each document's node,
+    pass-3 facts and outgoing references (`_store_doc`), returning the skip
     notices for anything that could not be projected, plus the pass-3
     truncation report (#378 slice 2).
 
     A `read_error`/`parse_error` doc is skipped and noted, never crashing
     the build (mirrors `fts.build_index`); a valid doc has its body AND
-    metadata re-read and re-parsed via `okf.load_frontmatter` (the same
-    TOCTOU guard `fts.build_index` uses) and becomes one node. Edges are
-    then extracted in up to three independent passes over that same doc set,
-    exactly as documented at module level: the first, from body links, is
-    `NULL` UNLESS the link's target is a member of the source doc's
-    `provenance:` frontmatter list, in which case it is synthesized as
-    `derived_from` (#135, provenance-mirror synthesis, projection-read-time
-    only); the second, from `relations:` frontmatter, always carries that
-    entry's explicit `type`; the third runs ONLY when `candidates` is given
-    (#183) and writes one untyped row per nominated pair that neither
-    earlier pass already claimed, in either direction, EXCLUDING any pair
-    where either endpoint's OKF `type` is `Source` (#378 slice 1) -- a
-    Source document must not propose or receive a candidate edge, though it
-    still participates fully in passes 1 and 2. The surviving candidates are
-    then RANKED by `ProximityPair.distance` ascending, tie-broken by
-    `(source_id, target_id)`, and truncated to `_MAX_CANDIDATE_EDGES` (#378
-    slice 2) -- the retained slice is re-sorted by id before insert, so an
-    under-cap bundle's output stays byte-identical to the pre-slice-2 build.
-    With `candidates=None` -- the default -- the third pass does not run,
-    the output is byte-identical to the two-pass build, and the returned
-    `CandidateReport` is the zero-valued default. Callers own `conn`'s
-    lifecycle -- any exception raised here propagates to the caller
-    unchanged, closing/cleanup is the caller's responsibility.
+    metadata re-read and re-parsed (the same TOCTOU guard `fts.build_index`
+    uses) and becomes one node. Edges are then materialised from the
+    recorded outlinks whose target is a node, exactly as documented at module
+    level: body links are `NULL` UNLESS the link's target is a member of the
+    source doc's `provenance:` list, in which case `derived_from` (#135,
+    projection-read-time only); `relations:` entries always carry their
+    explicit `type`. A third pass runs ONLY when `candidates` is given
+    (#183): see `_candidate_pass`. With `candidates=None` the third pass does
+    not run and the returned `CandidateReport` is the zero-valued default.
+    Callers own `conn`'s lifecycle -- any exception raised here propagates to
+    the caller unchanged, closing/cleanup is the caller's responsibility.
     """
     conn.execute(_CREATE_NODES_SQL)
     conn.execute(_CREATE_EDGES_SQL)
     conn.execute(_CREATE_EDGES_SOURCE_INDEX_SQL)
     conn.execute(_CREATE_EDGES_TARGET_INDEX_SQL)
+    conn.execute(_CREATE_DOC_OUTLINKS_SQL)
+    conn.execute(_CREATE_DOC_OUTLINKS_SOURCE_INDEX_SQL)
+    conn.execute(_CREATE_DOC_OUTLINKS_TARGET_INDEX_SQL)
+    conn.execute(_CREATE_NODE_FACTS_SQL)
 
     skipped: list[str] = []
-    node_ids: set[str] = set()
-    bodies: list[tuple[str, str]] = []
-    metadatas: list[tuple[str, dict[str, object]]] = []
+    malformed: list[str] = []
     for scan in okf._iter_docs(bundle_dir):
         concept_id = okf.concept_id_for(scan.path, bundle_dir)
         if scan.read_error is not None:
@@ -442,187 +680,19 @@ def _populate_graph_tables(
         if scan.parse_error is not None:
             skipped.append(_skip_note(concept_id, reason="unparseable frontmatter"))
             continue
-        try:
-            text = scan.path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            skipped.append(_skip_note(concept_id, reason="unreadable"))
+        doc = _read_doc(scan.path)
+        if isinstance(doc, str):
+            skipped.append(_skip_note(concept_id, reason=doc))
             continue
-        try:
-            metadata, body = okf.load_frontmatter(text)
-        except okf.FrontmatterError:  # a concurrent edit can corrupt frontmatter
-            skipped.append(_skip_note(concept_id, reason="unparseable frontmatter"))
-            continue
+        note = _store_doc(conn, concept_id, doc[0], doc[1])
+        if note is not None:
+            malformed.append(note)
+    skipped.extend(malformed)
 
-        conn.execute(_INSERT_NODE_SQL, (concept_id,))
-        node_ids.add(concept_id)
-        bodies.append((concept_id, body))
-        metadatas.append((concept_id, metadata))
-
-    provenance_by_source: dict[str, set[str]] = {}
-    for source_id, metadata in metadatas:
-        raw_provenance = metadata.get("provenance")
-        if isinstance(raw_provenance, list):
-            provenance_by_source[source_id] = {
-                entry for entry in raw_provenance if isinstance(entry, str)
-            }
-        else:
-            provenance_by_source[source_id] = set()
-
-    edge_pairs: set[tuple[str, str]] = set()
-    for source_id, body in bodies:
-        for match in _LINK_RE.finditer(_mask_fenced_code_blocks(body)):
-            target_id = match.group(1).removesuffix(".md")
-            if target_id in node_ids:
-                edge_pairs.add((source_id, target_id))
-    for source_id, target_id in sorted(edge_pairs):
-        relation_type = (
-            "derived_from"
-            if target_id in provenance_by_source.get(source_id, set())
-            else None
-        )
-        conn.execute(_INSERT_EDGE_SQL, (source_id, target_id, relation_type))
-
-    typed_edges: set[tuple[str, str, str]] = set()
-    for source_id, metadata in metadatas:
-        try:
-            relations = okf.decode_relations(metadata)
-        except ValueError:  # malformed relations: contributes no typed edges
-            skipped.append(_skip_note(source_id, reason="malformed relations"))
-            continue
-        for relation in relations:
-            if relation.target in node_ids:
-                typed_edges.add((source_id, relation.target, relation.type))
-    for source_id, target_id, relation_type in sorted(typed_edges):
-        conn.execute(_INSERT_EDGE_SQL, (source_id, target_id, relation_type))
-
+    conn.execute(_MATERIALISE_ALL_EDGES_SQL)
     candidate_report = CandidateReport()
     if candidates is not None:
-        # Dedup against BOTH prior passes, in both directions. The design
-        # sketch deduped only against body links; that is not enough. A pair
-        # a human already typed via `relations:` would otherwise gain a
-        # redundant NULL row -- filtered right back out of suggestions by
-        # `edge_typing._candidate_edges`' pair-level exclusion, but still
-        # inflating `graph_edge_summary`'s total and firing the "untyped but
-        # all excluded" message for a pair nobody needs to revisit. Both
-        # directions because links are directed and proximity is not.
-        seen: set[tuple[str, str]] = set()
-        for source_id, target_id in edge_pairs:
-            seen.add((source_id, target_id))
-            seen.add((target_id, source_id))
-        for source_id, target_id, _ in typed_edges:
-            seen.add((source_id, target_id))
-            seen.add((target_id, source_id))
-        # Source-exclusion (#378 slice 1): a `Source` document must not
-        # propose (anchor list) or receive (row guards) a candidate edge.
-        # Narrowing the anchor list alone is not enough --
-        # `VectorProximitySource.pairs` queries the whole `vectors.db` and
-        # never filters its own hits against the ids it was handed, so a
-        # Source can still come back as a neighbor even when it was never
-        # offered as an anchor. Both endpoints must be checked against the
-        # Source-free `seed_node_ids`, not the full `node_ids`.
-        seed_node_ids = {
-            concept_id
-            for concept_id, metadata in metadatas
-            if metadata.get("type") != "Source"
-        }
-        # #378 slice 2: a `dict` keyed by the canonical `(min, max)` pair,
-        # retaining the SMALLEST distance per pair -- mirroring
-        # `proximity.py`'s own tie rule -- rather than the bare
-        # `set[tuple[str, str]]` slice 1 used, which discarded `distance`,
-        # the ranking key the cap needs. Endpoint guard, self-pair drop, and
-        # `seen` dedup ALL run here, inside this single comprehension, so
-        # `best` already holds the fully deduped candidate set BEFORE any
-        # ranking or truncation happens -- dedup runs before the cap, never
-        # after (`contradiction.py`'s post-review HIGH correction: filtering
-        # after a cap lets discarded rows consume cap slots and starve
-        # eligible ones).
-        # #841: one source's degraded extraction must not become O(N^2)
-        # candidate structure. Objects stored WITHOUT judge selection
-        # (#772's quarantine tokens on their Source) are near-boilerplate
-        # by construction, so their mutual pairs are proximity's cheapest
-        # false positives -- each one an LLM call downstream and permanent
-        # typed structure once accepted. A pair is withheld exactly when
-        # both endpoints CITE a common quarantined source (`provenance:`);
-        # a cross pair keeping one healthy endpoint survives, because the
-        # gate bounds the degraded cluster, never the healthy neighbor's
-        # connectivity. Withheld BEFORE `best` -- the filter-before-cap
-        # rule -- so withheld pairs never starve cap slots, and recorded on
-        # the report so the drop is never silent. The tokens are spelled as
-        # literals, not imported from `okf`, for the same reason
-        # `lint._UNJUDGED_NOTICE_CAUSES` gives for its own copies: a typo
-        # in either module then fails a test instead of silently agreeing
-        # with itself, which a shared constant cannot do. An endpoint with
-        # no `provenance:` cannot cite a quarantined source and keeps its
-        # pair -- attribution fails open, since withholding on missing
-        # data would punish hand-authored documents. The projection is
-        # derived state: a re-ingest whose judge answers clears the
-        # marker, and the next rebuild reconsiders the pairs.
-        quarantined_sources = {
-            concept_id
-            for concept_id, metadata in metadatas
-            if metadata.get("type") == "Source"
-            and bool(
-                {
-                    okf.EXTRACTION_NOTICE_JUDGE_UNAVAILABLE,
-                    okf.EXTRACTION_NOTICE_JUDGE_EMPTY,
-                }
-                & set(okf.extraction_notices(metadata))
-            )
-        }
-        quarantine_dropped: dict[tuple[str, str], set[str]] = {}
-        best: dict[tuple[str, str], float] = {}
-        for pair in candidates.pairs(sorted(seed_node_ids)):
-            if (
-                pair.source_id not in seed_node_ids
-                or pair.target_id not in seed_node_ids
-            ):
-                continue
-            if pair.source_id == pair.target_id:
-                continue
-            if (pair.source_id, pair.target_id) in seen:
-                continue
-            key = (
-                min(pair.source_id, pair.target_id),
-                max(pair.source_id, pair.target_id),
-            )
-            common_quarantined = (
-                provenance_by_source.get(pair.source_id, set())
-                & provenance_by_source.get(pair.target_id, set())
-                & quarantined_sources
-            )
-            if common_quarantined:
-                quarantine_dropped.setdefault(key, set()).update(common_quarantined)
-                continue
-            if key not in best or pair.distance < best[key]:
-                best[key] = pair.distance
-        # Rank by distance ascending, tie-broken by `(source_id, target_id)`
-        # -- matching `pairs()`'s own `sorted(best)` determinism guarantee
-        # -- THEN slice to the cap. Select by distance, insert by id: the
-        # retained slice is re-sorted by id before insert so the on-disk
-        # projection's byte identity (insertion order) matches the
-        # pre-slice-2 build for any under-cap bundle.
-        ranked = sorted(best, key=lambda pair_key: (best[pair_key], pair_key))
-        # #567 paging: the window slides by `candidate_offset` ranked pairs;
-        # the default 0 reproduces the pre-#567 `[:cap]` slice exactly. An
-        # offset at or past the set retains nothing -- honest emptiness,
-        # never a wrap-around.
-        retained_keys = ranked[
-            candidate_offset : candidate_offset + _MAX_CANDIDATE_EDGES
-        ]
-        retained = sorted(retained_keys)
-        candidate_report = CandidateReport(
-            produced=len(best),
-            retained=len(retained_keys),
-            pairs=tuple(ranked),
-            offset=candidate_offset,
-            quarantine_withheld=tuple(
-                WithheldCandidate(pair=pair, source_ids=tuple(sorted(sources)))
-                for pair, sources in sorted(quarantine_dropped.items())
-            ),
-        )
-        for source_id, target_id in retained:
-            conn.execute(_INSERT_EDGE_SQL, (source_id, target_id, None))
-
+        candidate_report = _candidate_pass(conn, candidates, candidate_offset)
     return skipped, candidate_report
 
 
@@ -696,21 +766,210 @@ def write_graph_store(
     """
     conn = derived.open_derived_connection(path)
     try:
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            conn.execute("DROP TABLE IF EXISTS nodes")
-            conn.execute("DROP TABLE IF EXISTS edges")
-            _populate_graph_tables(conn, bundle_dir, candidates=candidates)
-            digest = (
-                manifest_hash
-                if manifest_hash is not None
-                else derived.bundle_manifest_hash(bundle_dir)
+        entries = derived.bundle_manifest_entries(bundle_dir)
+        digest = (
+            manifest_hash
+            if manifest_hash is not None
+            else derived.manifest_digest(
+                (e.concept_id, e.content_hash) for e in entries
             )
-            derived.write_manifest_hash(conn, digest)
-            conn.commit()
-        except BaseException:
-            conn.rollback()
+        )
+        _rebuild(conn, bundle_dir, entries, digest, candidates)
+    finally:
+        conn.close()
+
+
+def _rebuild(
+    conn: sqlite3.Connection,
+    bundle_dir: Path,
+    entries: list[derived.ManifestEntry],
+    digest: str,
+    candidates: CandidateSource | None,
+) -> None:
+    """Whole rebuild of every graph table + `doc_manifest` + meta in ONE
+    explicit transaction (see `write_graph_store` for why it is explicit).
+    `entries` are recorded as the store's per-document baseline."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        for table in _STORE_TABLES:
+            conn.execute(f"DROP TABLE IF EXISTS {table}")
+        _populate_graph_tables(conn, bundle_dir, candidates=candidates)
+        conn.execute(_CREATE_DOC_MANIFEST_SQL)
+        conn.executemany(
+            "INSERT OR REPLACE INTO doc_manifest (concept_id, content_hash) "
+            "VALUES (?, ?)",
+            [(e.concept_id, e.content_hash) for e in entries],
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+            (SCHEMA_VERSION_KEY, SCHEMA_VERSION),
+        )
+        derived.write_manifest_hash(conn, digest)
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+
+
+def _recorded_pairs(conn: sqlite3.Connection) -> dict[str, str] | None:
+    """The store's recorded `{concept_id: content_hash}` baseline, or `None`
+    when it cannot be trusted to drive a per-document update: a table missing
+    (a store from before per-document maintenance), a `schema_version` that
+    differs from this code's, recorded pairs whose digest does not reproduce
+    the stored `manifest_hash`, or nodes/outlinks/facts for documents the
+    manifest does not record."""
+    tables = {
+        str(row[0])
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+    }
+    if not set(_STORE_TABLES) <= tables:
+        return None
+    version = conn.execute(
+        "SELECT value FROM meta WHERE key = ?", (SCHEMA_VERSION_KEY,)
+    ).fetchone()
+    if version is None or str(version[0]) != SCHEMA_VERSION:
+        return None
+    recorded = {
+        str(cid): str(chash)
+        for cid, chash in conn.execute(
+            "SELECT concept_id, content_hash FROM doc_manifest"
+        )
+    }
+    if derived.manifest_digest(recorded.items()) != derived.read_manifest_hash(conn):
+        return None
+    stray = conn.execute(
+        "SELECT 1 FROM ("
+        "SELECT concept_id FROM nodes UNION SELECT concept_id FROM node_facts "
+        "UNION SELECT source_id FROM doc_outlinks) "
+        "WHERE concept_id NOT IN (SELECT concept_id FROM doc_manifest) LIMIT 1"
+    ).fetchone()
+    if stray is not None:  # state no recorded document accounts for
+        return None
+    return recorded
+
+
+def _apply_incremental(
+    conn: sqlite3.Connection,
+    recorded: dict[str, str],
+    entries: list[derived.ManifestEntry],
+    digest: str,
+    candidates: CandidateSource | None,
+) -> None:
+    """Rewrite only the added, changed and removed documents' nodes, facts,
+    outlinks and edges, re-resolve every outlink that names a touched
+    document, recompute the global candidate pass, and update the manifest --
+    in one transaction. The outlink table keeps references to targets that did
+    not exist, so a link naming a document that has just appeared is
+    recovered here without re-reading its source."""
+    current = {e.concept_id: e for e in entries}
+    removed = [cid for cid in recorded if cid not in current]
+    touched = [
+        cid for cid, entry in current.items() if recorded.get(cid) != entry.content_hash
+    ]
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        # Candidate edges are the untyped edges no body link accounts for;
+        # identify them while the outlinks still describe the old documents.
+        conn.execute(_DELETE_CANDIDATE_EDGES_SQL)
+        conn.execute("CREATE TEMP TABLE touched (concept_id TEXT PRIMARY KEY)")
+        conn.executemany(
+            "INSERT INTO touched (concept_id) VALUES (?)",
+            [(cid,) for cid in (*removed, *touched)],
+        )
+        conn.execute(
+            "DELETE FROM edges WHERE source_id IN (SELECT concept_id FROM touched) "
+            "OR target_id IN (SELECT concept_id FROM touched)"
+        )
+        for table, column in (
+            ("nodes", "concept_id"),
+            ("node_facts", "concept_id"),
+            ("doc_outlinks", "source_id"),
+        ):
+            conn.execute(
+                f"DELETE FROM {table} WHERE {column} IN "  # noqa: S608 -- fixed names
+                "(SELECT concept_id FROM touched)"
+            )
+        for cid in removed:
+            conn.execute("DELETE FROM doc_manifest WHERE concept_id = ?", (cid,))
+        for cid in touched:
+            doc = _read_doc(current[cid].path)
+            if not isinstance(doc, str):  # a skipped doc keeps no node, as in a rebuild
+                _store_doc(conn, cid, doc[0], doc[1])
+            conn.execute(
+                "INSERT OR REPLACE INTO doc_manifest (concept_id, content_hash) "
+                "VALUES (?, ?)",
+                (cid, current[cid].content_hash),
+            )
+        conn.execute(_MATERIALISE_TOUCHED_EDGES_SQL)
+        conn.execute("DROP TABLE touched")
+        if candidates is not None:
+            _candidate_pass(conn, candidates, 0)
+        derived.write_manifest_hash(conn, digest)
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+
+
+def _try_incremental(
+    conn: sqlite3.Connection,
+    recorded: dict[str, str],
+    entries: list[derived.ManifestEntry],
+    digest: str,
+    candidates: CandidateSource | None,
+) -> bool:
+    """Run the per-document update; `False` means it failed (and rolled back),
+    so the caller must rebuild whole. Lock contention is NOT a failure of the
+    update itself -- a rebuild would meet the same lock -- so it propagates."""
+    try:
+        _apply_incremental(conn, recorded, entries, digest, candidates)
+    except sqlite3.OperationalError as exc:
+        if derived.is_lock_contention(exc):
             raise
+        return False
+    except Exception:  # noqa: BLE001 -- any failure falls back to a whole rebuild
+        return False
+    return True
+
+
+def refresh_graph_store(
+    path: Path,
+    bundle_dir: Path,
+    *,
+    force: bool = False,
+    candidates: CandidateSource | None = None,
+) -> Literal["unchanged", "incremental", "rebuilt"]:
+    """Bring the on-disk graph at `path` up to date with `bundle_dir`
+    (derived-index-cache: Per-Document Update With Whole-Rebuild Fallback).
+
+    The bundle's manifest hash against the stored one is still the only
+    staleness gate: equal (and not `force`) -> `"unchanged"`, no write.
+    Otherwise the recorded `doc_manifest` is diffed against the current
+    documents and only the added/changed/removed ones are rewritten
+    (`"incremental"`), with the candidate pass recomputed globally. Whole
+    rebuild (`"rebuilt"`) is the fallback when `force` is set, the store has
+    no trustworthy baseline (`_recorded_pairs`), or the per-document update
+    fails for any reason other than lock contention (which propagates, since a
+    rebuild would meet the same lock). The incremental transaction rolls back
+    before the fallback runs, so a failed update never leaves a half-updated
+    graph."""
+    conn = derived.open_derived_connection(path)
+    try:
+        stored = derived.read_manifest_hash(conn)
+        entries = derived.bundle_manifest_entries(bundle_dir)
+        digest = derived.manifest_digest(
+            (e.concept_id, e.content_hash) for e in entries
+        )
+        if not force and stored == digest:
+            return "unchanged"
+        if not force:
+            recorded = _recorded_pairs(conn)
+            if recorded is not None and _try_incremental(
+                conn, recorded, entries, digest, candidates
+            ):
+                return "incremental"
+        _rebuild(conn, bundle_dir, entries, digest, candidates)
+        return "rebuilt"
     finally:
         conn.close()
 
@@ -758,11 +1017,11 @@ def reindex_graph(
     manifest hash changed since the last run, or `force` (mirrors
     `state/reindex.py`'s `_reindex_fts` gate for the FTS store).
 
-    A thin, graph-specific wrapper around `derived.reindex_gate` (the shared
-    manifest-gate-and-rebuild helper, task 2.11 REFACTOR): the gate decides
-    skip-vs-rebuild by comparing the bundle's CURRENT manifest hash against
-    the PREVIOUSLY stored one (D2 binding contract), then calls
-    `write_graph_store` with that SAME digest on a mismatch/absent/`force`.
+    A thin wrapper around `refresh_graph_store`: the manifest comparison is
+    still the only staleness gate (D2 binding contract); a mismatch updates
+    only the changed documents (candidate pass recomputed globally) and falls
+    back to a whole rebuild when the store has no trustworthy per-document
+    baseline.
 
     Deliberately lives HERE in `openkos.graph` rather than in
     `state/reindex.py`: `state/reindex.py` is canonical-layer code and MUST
@@ -775,13 +1034,4 @@ def reindex_graph(
     canonical/derived layering boundary (docs/architecture.md).
     """
 
-    def write(
-        path: Path, bundle_dir: Path, *, manifest_hash: str | None = None
-    ) -> None:
-        """Parameter NAMES matter: `derived.DerivedStoreWriter` is a callable
-        Protocol, so they are part of the contract, not free-form."""
-        write_graph_store(
-            path, bundle_dir, manifest_hash=manifest_hash, candidates=candidates
-        )
-
-    derived.reindex_gate(bundle_dir, path, force=force, write=write)
+    refresh_graph_store(path, bundle_dir, force=force, candidates=candidates)
