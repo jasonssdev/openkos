@@ -40,6 +40,15 @@ def _accepted_keys() -> set[str]:
     return keys
 
 
+# Keys whose requirement is a delta spec of an in-flight change and is not yet
+# merged into `openspec/specs/`. Each entry MUST name the change; the archive
+# phase of that change merges the delta and REMOVES the entry (a stale entry
+# is caught by `test_the_pending_allowlist_holds_only_unspecified_keys`).
+_PENDING_ARCHIVE: dict[str, str] = {
+    "unattended": "mvp4-unattended-foundations (unattended-budget delta spec)",
+}
+
+
 def _spec_text() -> str:
     return "\n".join(
         path.read_text(encoding="utf-8") for path in sorted(_SPECS.glob("*/spec.md"))
@@ -62,8 +71,22 @@ def test_every_accepted_config_key_is_named_in_a_living_spec() -> None:
     # config line (`key: value`, `key:`).
     unspecified = sorted(
         key
-        for key in _accepted_keys()
+        for key in _accepted_keys() - _PENDING_ARCHIVE.keys()
         if re.search(rf"`{re.escape(key)}[`:]", specs) is None
     )
 
     assert unspecified == []
+
+
+def test_the_pending_allowlist_holds_only_unspecified_keys() -> None:
+    specs = _spec_text()
+
+    stale = sorted(
+        key
+        for key in _PENDING_ARCHIVE
+        if re.search(rf"`{re.escape(key)}[`:]", specs) is not None
+    )
+
+    # Once archive merges the delta, the entry has done its job: delete it.
+    assert stale == []
+    assert set(_PENDING_ARCHIVE) <= _accepted_keys()
