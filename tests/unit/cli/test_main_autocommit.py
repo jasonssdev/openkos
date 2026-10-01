@@ -831,7 +831,7 @@ def test_forget_names_the_commit_and_the_way_back(
     assert result.exit_code == 0, result.stderr
     sha = _head_short_sha(tmp_path)
     assert (
-        f"openkos forget: committed as {sha} -- undo with `git revert {sha}`."
+        f"openkos forget: committed as {sha} -- `git revert {sha}` undoes it only while it is the latest commit."
         in _lines(result.stdout)
     )
 
@@ -853,7 +853,7 @@ def test_merge_names_the_commit_and_the_way_back(
     assert result.exit_code == 0, result.stderr
     sha = _head_short_sha(tmp_path)
     assert (
-        f"openkos merge: committed as {sha} -- undo with `git revert {sha}`."
+        f"openkos merge: committed as {sha} -- `git revert {sha}` undoes it only while it is the latest commit."
         in _lines(result.stdout)
     )
 

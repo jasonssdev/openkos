@@ -223,6 +223,11 @@ commit, since each commits before the next item is considered. The wording
 MUST come from one shared helper rather than a per-site string, so five call
 sites cannot drift into five spellings of the same sentence.
 
+The line MUST NOT advertise an unconditional undo. Every commit appends to
+`bundle/log.md`, so `git revert` of any commit but the latest conflicts there
+and leaves the bundle unparseable mid-revert; the line therefore states that
+`git revert <sha>` undoes the commit only while it is the latest commit.
+
 The scope is exactly those three verbs. Every other mutating verb —
 `ingest`, `relate`, `unmerge`, `reconcile`, `set-volatility`,
 `set-sensitivity`, `adjudicate`'s merge walks — MUST keep its output
