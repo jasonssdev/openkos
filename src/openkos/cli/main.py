@@ -416,7 +416,7 @@ def _guard_workspace_lock(
                     _LOCK_CONTENTION_TEMPLATE.format(command=command_name),
                     err=True,
                 )
-                raise typer.Exit(code=1) from exc
+                raise typer.Exit(code=3) from exc
 
         wrapper.__openkos_locked_command__ = command_name  # type: ignore[attr-defined]
         return wrapper
@@ -13196,7 +13196,8 @@ def reindex(
     supplies the current directory as the workspace root, the effects (the
     embedding client, the vector store, the proximity source), and a
     `_ReindexObserver` that renders the summary and the advisories, then maps
-    every typed `ReindexRefused` to its message on stderr and exit code 1. The
+    every typed `ReindexRefused` to its message on stderr and an exit code: 3
+    (the retry-safe refusal) for derived-store contention, 1 for the rest. The
     orchestration -- the ordered backend error ladder, the lock-contention
     discrimination, the summary-before-graph ordering -- lives in the service.
     """
@@ -13214,7 +13215,9 @@ def reindex(
         )
     except reindex_service.ReindexRefused as exc:
         typer.echo(exc.message, err=True)
-        raise typer.Exit(code=1) from exc
+        raise typer.Exit(
+            code=3 if isinstance(exc, reindex_service.LockContention) else 1
+        ) from exc
 
 
 def _render_reindex_summary(
