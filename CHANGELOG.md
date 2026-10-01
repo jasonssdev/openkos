@@ -46,6 +46,19 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   for retrieval, the model call or the confirmation prompt. The filing refuses
   with exit `3`, writing nothing, when a cited concept's sensitivity changed
   while the answer was computed
+
+- `merge`, `unmerge`, `forget`, `relate`, `set-sensitivity` and
+  `set-volatility` no longer hold the workspace lock while they wait at a
+  confirmation prompt or on a model call: they plan and ask with no lock and
+  take it only to write, so another OpenKOS process is not refused while you
+  read a preview. Because nothing excludes other writers during that window,
+  the write step now also re-checks the documents the plan only read -- the
+  bundle scan behind `forget`'s inbound-reference gate and `merge`'s link
+  rewrites, a Source's descendants for `set-sensitivity`, the target of a
+  `relate` -- and refuses with exit `3` (nothing written, safe to re-run) when
+  one changed or a new document appeared. `unmerge` likewise refuses with exit
+  `3`, before writing anything, when a file appears at the path it was about to
+  restore, where it used to stop partway through
   ([#1137](https://github.com/jasonssdev/openkos/issues/1137)).
 - `ingest` no longer holds the workspace lock while it waits on the model: the
   lock is taken only for each file's commit phase (re-validation, the writes

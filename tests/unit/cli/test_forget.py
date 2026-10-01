@@ -2177,19 +2177,17 @@ def test_the_root_concept_edited_during_the_prompt_is_refused(
     assert changed == {Path(target)}
 
 
-def test_scope_self_ignores_drift_on_an_unrelated_bundle_file(
+def test_scope_self_refuses_drift_on_a_bystander_the_reference_scan_read(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """#326: on the DEFAULT scope the guard's member comprehension yields
-    zero entries -- the mapping is exactly `index.md`, `log.md`, and the
-    root -- so an unrelated bundle file edited during the prompt is not
-    this run's business and must not refuse it. This is the property that
-    makes gating the whole-bundle BYTES retention on `--scope source` safe:
-    a `self`-scope run never consults `other_bytes`, so retaining every
-    file's raw bytes for it bought nothing and doubled the scan's residency
-    for the default path. No behavior may change either way -- this test
-    pins that the mapping stays member-free on `self`, which is the
-    invariant the retention gate leans on."""
+    """#326 pinned that a bystander edited during the prompt was "not this
+    run's business" because the write-target mapping is member-free on the
+    default scope. That held only while the whole-verb lock kept every other
+    writer out. The inbound-reference gate READ the bystander, so an edit that
+    lands during the prompt may be exactly the reference the gate was meant to
+    refuse on; the commit phase therefore re-validates it as a read dependency
+    (ADR-0036) and refuses (exit 3, nothing deleted). The write-target mapping
+    itself is still member-free on `self`."""
     _init_workspace(tmp_path, monkeypatch)
     source_id = _ingest_source(tmp_path, "notes.txt")
     _write_plain_concept(tmp_path, "concepts/bystander")
@@ -2202,10 +2200,11 @@ def test_scope_self_ignores_drift_on_an_unrelated_bundle_file(
 
     result = runner.invoke(app, ["forget", source_id], input="y\n")
 
-    assert result.exit_code == 0, result.stderr
-    # The forget completed: root unlinked, catalog updated, and the
-    # bystander's concurrent edit is untouched.
-    assert not (tmp_path / "bundle" / f"{source_id}.md").exists()
+    assert result.exit_code == 3, result.stderr
+    assert "1 read dependency(ies) changed on disk" in result.stderr
+    assert "concepts/bystander.md" in result.stderr
+    # Nothing was deleted, and the concurrent edit is untouched.
+    assert (tmp_path / "bundle" / f"{source_id}.md").exists()
     assert bystander_path.read_text(encoding="utf-8") == concurrent
 
 

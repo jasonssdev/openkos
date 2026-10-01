@@ -1710,11 +1710,10 @@ def test_a_create_at_the_absorbed_path_during_the_prompt_is_not_clobbered(
     """#323: Phase A refuses when a file already sits at the absorbed path,
     but that existence check is a TOCTOU against Phase B's recreation write
     -- a file created while the operator read the preview is invisible to
-    both the check (already passed) and the drift guard (no Phase-A bytes
-    to compare against). The recreation must be create-only
-    (`write_exclusive`) so the Phase-A promise holds: the collision then
-    errors mid-Phase-B, leaving the documented git-recoverable partial
-    state, instead of silently discarding the created file.
+    the write-target drift guard (no Phase-A bytes to compare against).
+    The commit phase therefore declares the absorbed path a read dependency
+    that must stay absent (ADR-0036) and refuses with exit 3 before any write,
+    so the created file survives and nothing is half-restored.
     """
     _init_workspace(tmp_path, monkeypatch)
     _write_concept(tmp_path, "concepts/survivor", title="Survivor")
@@ -1742,35 +1741,27 @@ def test_a_create_at_the_absorbed_path_during_the_prompt_is_not_clobbered(
         app, ["unmerge", "concepts/survivor", "concepts/absorbed"], input="y\n"
     )
 
-    assert result.exit_code == 1
+    # ADR-0036: the commit phase re-validates that the restore path is still
+    # free BEFORE the first write, so the collision is a retry-safe drift
+    # refusal (exit 3) and nothing is half-restored. `write_exclusive` stays
+    # as the last line of defence for a file that lands inside the commit
+    # section itself, which the workspace lock excludes.
+    assert result.exit_code == 3
     assert isinstance(result.exception, SystemExit)
-    # `FileExistsError` surfaces through the existing Phase-B error path --
-    # a clean stderr line naming the colliding path, never a traceback.
-    assert "failed while writing the unmerge --" in result.stderr
-    assert "bundle/concepts/absorbed.md" in result.stderr
+    assert "1 path(s) that must not exist appeared" in result.stderr
+    assert "concepts/absorbed.md" in result.stderr
     # The concurrently created file survives byte-for-byte.
     assert absorbed_path.read_text(encoding="utf-8") == concurrent
-    # The documented mid-Phase-B partial state, pinned exactly:
-    # `index.md`/`log.md` land FIRST and were already restored to their
-    # pre-merge bytes (idempotent to re-write on a retry); the survivor is
-    # untouched, and the ledger sidecar still holds the absorbed snapshot
-    # (the absorbed content stays recoverable, popped only LAST) since the
-    # pop never ran; the second log write (the `**Unmerge**` audit line)
-    # never ran either.
-    assert (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8") == pre_index
-    assert (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8") == pre_log
+    # Nothing else moved: no catalog restore, no audit line, ledger intact.
     assert survivor_path.read_text(encoding="utf-8") == merged_survivor
-    assert "merged_from" not in merged_survivor
     assert (
         len(bundle_ledger.read_entries("concepts/survivor", tmp_path / "bundle")) == 1
     )
     after = _snapshot(tmp_path)
     changed = changed_paths(before, after)
-    assert changed == {
-        Path("bundle/index.md"),
-        Path("bundle/log.md"),
-        Path("bundle/concepts/absorbed.md"),
-    }
+    assert changed == {Path("bundle/concepts/absorbed.md")}
+    assert pre_index != (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
+    assert pre_log != (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
 
 
 def test_removing_the_colliding_file_and_rerunning_completes_the_unmerge(
@@ -1807,8 +1798,8 @@ def test_removing_the_colliding_file_and_rerunning_completes_the_unmerge(
     collided = runner.invoke(
         app, ["unmerge", "concepts/survivor", "concepts/absorbed"], input="y\n"
     )
-    assert collided.exit_code == 1
-    assert "failed while writing the unmerge --" in collided.stderr
+    assert collided.exit_code == 3
+    assert "must not exist appeared" in collided.stderr
 
     # The documented recovery: the operator inspects the colliding file,
     # decides it should not block the restore, and removes it.
