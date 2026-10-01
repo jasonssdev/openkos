@@ -41,6 +41,12 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Changed
 
+- `query` no longer blocks behind a running writer: a plain `query` takes no
+  workspace lock, and `query --save` holds it only for the filing itself, not
+  for retrieval, the model call or the confirmation prompt. The filing refuses
+  with exit `3`, writing nothing, when a cited concept's sensitivity changed
+  while the answer was computed
+  ([#1137](https://github.com/jasonssdev/openkos/issues/1137)).
 - `ingest` no longer holds the workspace lock while it waits on the model: the
   lock is taken only for each file's commit phase (re-validation, the writes
   and the auto-commit), so a slow extraction, or a batch between files, no
