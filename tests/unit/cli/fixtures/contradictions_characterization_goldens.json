@@ -840,7 +840,7 @@
     ],
     "state_files": {},
     "stderr": "openkos contradictions: warning -- the graph has no applied relations, so typed-edge contradiction coverage is empty; only 1 merged-body candidate(s) will be judged. A clean result here is NOT an all-clear. Apply relations first: `openkos suggest-relations` then `openkos relate`, or `openkos curate`.\n",
-    "stdout": "openkos contradictions: workspace at <ROOT>\n\n0 of 1 candidate(s) served from persisted findings; 1 judged fresh.\n\n[CONTRADICTS] concepts/survivor0 (merged content, absorbed concepts/absorbed0) (confidence: 0.91)\n  next: openkos unmerge concepts/survivor0 concepts/absorbed0 (LIFO-enforced: refuses unless this is the survivor's most recent unreversed merge)\n  - claim m1\n  rationale: merged body disagrees\n\n"
+    "stdout": "openkos contradictions: workspace at <ROOT>\n\n0 of 1 candidate(s) served from persisted findings; 1 judged fresh.\n\n[CONTRADICTS] concepts/survivor0 (merged content, absorbed concepts/absorbed0) (confidence: 0.91)\n  next: read both bodies first -- the judge can flag compatible statements; only if they truly conflict, run openkos unmerge concepts/survivor0 concepts/absorbed0 (LIFO-enforced: refuses unless this is the survivor's most recent unreversed merge)\n  - claim m1\n  rationale: merged body disagrees\n\n"
   },
   "zero_state_embeddings_missing": {
     "exit_code": 0,

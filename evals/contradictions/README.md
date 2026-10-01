@@ -140,6 +140,31 @@ Two caveats, stated rather than implied:
   `contradictions --fresh` re-judges. The #838 rubric-digest gate covers
   the adjudication store only.
 
+## Compatible statements of one entity (#1223) — no prompt change shipped
+
+The 0.3.1 field run judged two compatible things `contradicts` at 0.95: two
+roles of one merged person, and two bodies stating the same RAG
+traceability limitation (whose rationale began "Ambos conceptos afirman...").
+Two probe classes joined the fixture, reported as one
+`compatible-statement FP` metric: `complementary-description` x2 (two
+roles/facets of one entity, one mirroring the wild pair) and
+`identical-statement` x2 (the same limitation stated in different words, one
+mirroring the wild pair). The fixture is now 26 pairs, so earlier arms are not
+comparable.
+
+`baseline` (live production prompt), `qwen3:8b`, **15 runs**, 2026-10-01
+(see the newest `runs-baseline-*` file under `results/`): compatible-statement FP
+**0.00** raw and high-confidence, antonym FP 0.00, benefit-limitation FP
+0.00, TP and evaluative retention 1.00, accuracy 1.00, stability 1.00 --
+390 of 390 judgements right. The production prompt cannot be beaten on this
+fixture, so **no treatment was run and no prompt change ships**: there is
+nothing for an A/B to win. The field failure is therefore not reproduced by
+these constructed pairs; the wild bodies (organic prose, merged-content path,
+12288-token context) differ from them in ways this harness does not capture.
+The pairs stay as a regression guard. What ships for #1223 is deterministic:
+the merged-content `next:` hint asks the operator to read both bodies before
+offering `unmerge`.
+
 ## What a smaller model costs here (#700 lever 3) — REJECTED
 
 [#700](https://github.com/jasonssdev/openkos/issues/700) ranked "smaller models

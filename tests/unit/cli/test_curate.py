@@ -3454,7 +3454,9 @@ def test_curate_renders_a_merged_body_contradiction_with_its_unmerge_remedy(
         "[CONTRADICTS] concepts/a (merged content, absorbed concepts/b) "
         "(confidence: 0.95)" in result.stdout
     )
-    assert "next: openkos unmerge concepts/a concepts/b" in result.stdout
+    assert "only if they truly conflict, run openkos unmerge concepts/a concepts/b" in (
+        result.stdout
+    )
     assert "concepts/a <-> concepts/a" not in result.stdout
     assert "the two merged halves disagree" in result.stdout
 

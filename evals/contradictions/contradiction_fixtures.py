@@ -41,6 +41,15 @@ Four classes, keyed by `LabelledPair.probe`:
   `contradicts`. The guard the new class needs: a benefit/limitation
   carve-out must not wash out real conflicts that arrive dressed as
   evaluations.
+- `complementary-description` (#1223): two descriptions of ONE entity that
+  state different, compatible facts (two roles of one person). Expected
+  `consistent`. The field shape is a merged person whose two bodies read as
+  "a participant in the discussion" and "the team member who will test the
+  project"; the judge flagged it at 0.95 on difference alone.
+- `identical-statement` (#1223): two bodies that assert the SAME limitation
+  of one technique in different words. Expected `consistent`. The field
+  judge's own rationale began "Both concepts state ..." and still returned
+  `contradicts` at 0.95.
 """
 
 from dataclasses import dataclass, field
@@ -355,8 +364,62 @@ DOCS: tuple[ConceptDoc, ...] = (
         "request with no explicit timeout set is aborted after 30 seconds "
         "with a timeout error.",
     ),
+    # -- complementary-description (#1223) ------------------------------------
+    ConceptDoc(
+        "people/ana-ruiz-participant",
+        "Ana Ruiz",
+        "A participant in the conversation discussing knowledge graph "
+        "implementation and system performance.",
+        relations=(("people/ana-ruiz-tester", "related_to"),),
+    ),
+    ConceptDoc(
+        "people/ana-ruiz-tester",
+        "Ana Ruiz",
+        "Miembro del equipo que se encargar\u00e1 de probar el proyecto.",
+    ),
+    ConceptDoc(
+        "people/marco-silva-role",
+        "Marco Silva",
+        "Marco Silva leads the infrastructure team and owns the deployment pipeline.",
+        relations=(("people/marco-silva-talk", "related_to"),),
+    ),
+    ConceptDoc(
+        "people/marco-silva-talk",
+        "Marco Silva",
+        "Marco Silva gave the closing talk at the 2024 platform meetup, "
+        "about incident reviews.",
+    ),
+    # -- identical-statement (#1223) ------------------------------------------
+    ConceptDoc(
+        "concepts/rag-limitaciones",
+        "RAG y sus limitaciones",
+        "Los sistemas RAG tienen limitaciones en la trazabilidad: la "
+        "respuesta generada no siempre permite identificar qu\u00e9 "
+        "fragmento recuperado sustenta cada afirmaci\u00f3n.",
+        relations=(("concepts/trazabilidad-sistemas-informacion", "related_to"),),
+    ),
+    ConceptDoc(
+        "concepts/trazabilidad-sistemas-informacion",
+        "Trazabilidad en sistemas de informaci\u00f3n",
+        "La trazabilidad en sistemas basados en RAG es limitada: no es "
+        "posible determinar con certeza qu\u00e9 fragmento recuperado "
+        "respalda cada afirmaci\u00f3n de la respuesta generada.",
+    ),
+    ConceptDoc(
+        "concepts/batch-job-idempotency",
+        "Batch Job Idempotency",
+        "The nightly batch job is not idempotent: running it twice for the "
+        "same date duplicates the output rows.",
+        relations=(("concepts/nightly-export-caveats", "related_to"),),
+    ),
+    ConceptDoc(
+        "concepts/nightly-export-caveats",
+        "Nightly Export Caveats",
+        "A caveat of the nightly export: re-running the batch job for a "
+        "date that already ran produces duplicate output rows, so it must "
+        "never be run twice for one date.",
+    ),
 )
-
 
 PAIRS: tuple[LabelledPair, ...] = (
     LabelledPair(
@@ -466,5 +529,29 @@ PAIRS: tuple[LabelledPair, ...] = (
         "concepts/event-bus-rollout-retrospective",
         "contradicts",
         "evaluative-contradiction",
+    ),
+    LabelledPair(
+        "people/ana-ruiz-participant",
+        "people/ana-ruiz-tester",
+        "consistent",
+        "complementary-description",
+    ),
+    LabelledPair(
+        "people/marco-silva-role",
+        "people/marco-silva-talk",
+        "consistent",
+        "complementary-description",
+    ),
+    LabelledPair(
+        "concepts/rag-limitaciones",
+        "concepts/trazabilidad-sistemas-informacion",
+        "consistent",
+        "identical-statement",
+    ),
+    LabelledPair(
+        "concepts/batch-job-idempotency",
+        "concepts/nightly-export-caveats",
+        "consistent",
+        "identical-statement",
     ),
 )

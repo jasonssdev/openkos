@@ -320,6 +320,11 @@ def main() -> int:
     # (evaluative-contradiction retention) instead of diluting either.
     bl_fp_raw = _rate(class_raw_contradicts, ("benefit-limitation",), class_totals)
     bl_fp_hc = _rate(class_hc_contradicts, ("benefit-limitation",), class_totals)
+    # #1223: compatible statements of one entity, reported apart for the
+    # same reason as #870's classes (older arms keep their meaning).
+    cs_probes = ("complementary-description", "identical-statement")
+    cs_fp_raw = _rate(class_raw_contradicts, cs_probes, class_totals)
+    cs_fp_hc = _rate(class_hc_contradicts, cs_probes, class_totals)
     ec_raw = _rate(class_raw_contradicts, ("evaluative-contradiction",), class_totals)
     ec_hc = _rate(class_hc_contradicts, ("evaluative-contradiction",), class_totals)
 
@@ -374,6 +379,8 @@ def main() -> int:
         f"| **antonym FP rate, high-confidence** | **{fp_hc:.2f}** |",
         f"| **benefit-limitation FP rate, raw contradicts** | **{bl_fp_raw:.2f}** |",
         f"| **benefit-limitation FP rate, high-confidence** | **{bl_fp_hc:.2f}** |",
+        f"| **compatible-statement FP rate, raw contradicts** | **{cs_fp_raw:.2f}** |",
+        f"| **compatible-statement FP rate, high-confidence** | **{cs_fp_hc:.2f}** |",
         f"| evaluative-contradiction retention, raw contradicts | {ec_raw:.2f} |",
         f"| evaluative-contradiction retention, high-confidence | {ec_hc:.2f} |",
         f"| mean stability (modal share) | {mean_stability:.2f} |",

@@ -12484,6 +12484,9 @@ def render_contradiction_header(result: ContradictionVerdict) -> None:
             f"(merged content, absorbed {result.merged_absorbed_id}) "
             f"(confidence: {result.confidence:.2f})"
         )
+        # The judge is not trusted to the point of an unqualified undo: it has
+        # flagged complementary descriptions of one entity at 0.95 (#1223), so
+        # the hint asks for a read before it offers the verb.
         # Name the verb that resolves the condition (#445, same shape as
         # #386's advisory ladder). A pair verdict needs no pointer: the
         # operator can open both files. A merged-content verdict has ONE
@@ -12499,7 +12502,9 @@ def render_contradiction_header(result: ContradictionVerdict) -> None:
         # merges, the older verdict's command therefore REFUSES -- so the
         # line states the precondition instead of promising success.
         typer.echo(
-            f"  next: openkos unmerge {survivor_id} {result.merged_absorbed_id}"
+            "  next: read both bodies first -- the judge can flag compatible "
+            "statements; only if they truly conflict, run "
+            f"openkos unmerge {survivor_id} {result.merged_absorbed_id}"
             " (LIFO-enforced: refuses unless this is the survivor's "
             "most recent unreversed merge)"
         )
