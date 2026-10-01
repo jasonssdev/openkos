@@ -560,3 +560,18 @@ def corrupt_identity_sidecar(bundle_dir: Path, owner_id: str) -> tuple[Path, str
         f"{sidecar}; those groups will be offered again."
     )
     return sidecar, warning
+
+
+@pytest.fixture
+def plain_rich_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Render Typer/rich help and usage errors as plain, unwrapped text.
+
+    GitHub Actions makes rich force colour, which splits option names like
+    `--wait` with ANSI escapes and box-drawing wrap, so a substring assertion
+    that passes locally fails in CI. Pin the environment instead of loosening
+    the assertion."""
+    for name in ("FORCE_COLOR", "GITHUB_ACTIONS", "TTY_COMPATIBLE"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.setenv("TERM", "dumb")
+    monkeypatch.setenv("COLUMNS", "200")

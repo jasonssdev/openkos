@@ -695,7 +695,7 @@ def test_the_derived_refresh_runs_inside_a_commit_phase(
 
 
 def test_curate_takes_wait_like_every_split_verb(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, plain_rich_output: None
 ) -> None:
     monkeypatch.chdir(tmp_path)
 
