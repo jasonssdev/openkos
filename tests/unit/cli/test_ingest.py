@@ -1493,6 +1493,23 @@ def test_batch_cost_gate_bills_zero_for_blank_and_undecodable_sources(
     assert "~3 LLM call(s)" in result.stderr
 
 
+def test_batch_cost_gate_bills_a_legacy_encoded_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1224: a legacy-encoded text file is extracted, so the gate bills it
+    (it used to be billed zero as "undecodable")."""
+    _init_workspace(tmp_path, monkeypatch)
+    notes = tmp_path / "notes"
+    notes.mkdir()
+    (notes / "legacy.txt").write_bytes("Reuni\u00f3n\rok\r".encode("mac_roman"))
+    (notes / "real.txt").write_text("Alpha notes.", encoding="utf-8")
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["ingest", "notes"], input="n\n")
+
+    assert "~6 LLM call(s)" in result.stderr
+
+
 def test_estimate_bills_an_unreadable_file_at_the_unchunked_cost(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

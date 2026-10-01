@@ -8,6 +8,7 @@ layering dependency.
 import contextlib
 import os
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 
 RENAME_TEMP_PREFIX = "okos-nfc-tmp-"
@@ -53,6 +54,66 @@ def snapshot_read(path: Path) -> tuple[bytes, str]:
     data = path.read_bytes()
     text = data.decode("utf-8")
     return data, text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+@dataclass(frozen=True)
+class DecodedText:
+    """A source's text and the codec that produced it."""
+
+    text: str
+    encoding: str
+    """`utf-8`, or the legacy codec the fallback chose (`cp1252`/`mac_roman`)."""
+
+
+_TEXT_CONTROLS = frozenset("\t\n\r\f")
+
+
+def _looks_like_text(text: str) -> bool:
+    """No NUL or other C0/DEL control character beyond whitespace -- what
+    separates a legacy-encoded document from binary bytes that happen to
+    decode (every Mac Roman byte is defined, so decoding alone proves nothing)."""
+    return all(c in _TEXT_CONTROLS or (c >= " " and c != "\x7f") for c in text)
+
+
+def decode_source_text(data: bytes) -> DecodedText | None:
+    """Decode a source's bytes to text at READ time, or `None` when they are
+    not plausibly text. `raw/` is immutable: the bytes are never rewritten.
+
+    UTF-8 first (strict). Otherwise a deterministic legacy fallback, because
+    exports from older tools are common and treating them as binary silently
+    discards the document (#1224). Mac Roman when the text uses bare-CR line
+    endings (the Classic Mac OS convention), cp1252 otherwise; if the chosen
+    codec cannot decode (cp1252 leaves five bytes undefined) the other is tried.
+    A codec cannot be proven from bytes alone, so this is a best effort whose
+    result is bounded by `_looks_like_text`: binary stays binary.
+
+    Newlines are translated exactly as `read_text`'s universal-newline mode
+    does (`\\r\\n` then lone `\\r`, both to `\\n`)."""
+    try:
+        text = data.decode("utf-8")
+        encoding = "utf-8"
+    except UnicodeDecodeError:
+        if b"\x00" in data:
+            return None
+        bare_cr = b"\r" in data.replace(b"\r\n", b"")
+        order = ("mac_roman", "cp1252") if bare_cr else ("cp1252", "mac_roman")
+        for encoding in order:
+            try:
+                text = data.decode(encoding)
+            except UnicodeDecodeError:
+                continue
+            if _looks_like_text(text):
+                break
+            return None
+        else:
+            return None
+    return DecodedText(text.replace("\r\n", "\n").replace("\r", "\n"), encoding)
+
+
+def read_source_text(path: Path) -> DecodedText | None:
+    """`decode_source_text` over `path`'s bytes. Raises `OSError` as `read_bytes`
+    does."""
+    return decode_source_text(path.read_bytes())
 
 
 def write_exclusive(path: Path, content: str) -> None:

@@ -689,14 +689,18 @@ def _prepare(
     resource = f"raw/{name}"
 
     try:
-        try:
-            raw_content: str | None = src.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            # `UnicodeDecodeError` subclasses `ValueError`, so it MUST be
-            # caught here first: the outer `except (OSError, ValueError)`
-            # would otherwise swallow a binary/non-text source and fail the
-            # whole ingest, instead of degrading to the binary-fallback body.
-            raw_content = None
+        # Decoded at READ time (`raw/` is never rewritten): UTF-8, else a
+        # deterministic legacy fallback (#1224). `None` is binary / not text
+        # and degrades to the binary-fallback Source body. `OSError` still
+        # reaches the outer handler.
+        decoded = fsio.read_source_text(src)
+        raw_content: str | None = decoded.text if decoded is not None else None
+        if decoded is not None and decoded.encoding != "utf-8":
+            obs.notice(
+                f"openkos ingest: '{src.name}' is not UTF-8; read it as "
+                f"{decoded.encoding} (a best-effort guess). The raw copy keeps "
+                "its original bytes."
+            )
         # The workspace config decides the Source's sensitivity floor and every
         # derived object's: its bytes are a read dependency of the plan. Taken
         # BEFORE it is parsed, so an edit landing between the two reads makes

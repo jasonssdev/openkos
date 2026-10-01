@@ -56,6 +56,7 @@ class _Env:
         self.time = _Time()
         self.model = _Model()
         self.commits: list[list[str]] = []
+        self.notices: list[str] = []
         self.stop = StopToken()
         self.on_commit: Callable[[], None] | None = None
 
@@ -86,7 +87,9 @@ class _Env:
             sleep=lambda seconds: None,
             jitter=lambda low, high: high,
             wait_cap_seconds=0,
-            watch=watch.WatchPorts(ingest_ports=self.ingest_ports),
+            watch=watch.WatchPorts(
+                ingest_ports=self.ingest_ports, notify=self.notices.append
+            ),
         )
 
     def cfg(self, **kw: int) -> config.UnattendedConfig:
@@ -174,6 +177,38 @@ def test_a_settled_file_is_imported_through_the_ingest_service(env: _Env) -> Non
     assert env.commits
     assert "raw/a.md" in env.commits[0]
     assert env.observation("a.md").outcome == watch.IMPORTED
+
+
+def test_a_legacy_encoded_file_is_decoded_and_extracted(env: _Env) -> None:
+    """A Mac Roman, CR-terminated export is text (#1224): the model is called,
+    the raw copy keeps the original bytes, and the codec is announced."""
+    original = "Decisi\u00f3n\rcoordinaci\u00f3n\r".encode("mac_roman")
+    (env.inbox / "a.txt").write_bytes(original)
+    env.job()
+    env.settle()
+
+    result = env.job()
+
+    assert result is not None
+    assert result.units_done == 1
+    assert env.model.calls >= 1
+    assert (env.root / "raw" / "a.txt").read_bytes() == original
+    assert any("a.txt" in n and "mac_roman" in n for n in env.notices)
+
+
+def test_a_binary_file_is_imported_with_a_visible_warning(env: _Env) -> None:
+    """A source that ends as no-extractable-text is never silent in the
+    unattended path (#1224): the warning names the file."""
+    (env.inbox / "pic.bin").write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00")
+    env.job()
+    env.settle()
+
+    result = env.job()
+
+    assert result is not None
+    assert result.units_done == 1
+    assert env.model.calls == 0
+    assert any("pic.bin" in n and "no extractable text" in n for n in env.notices)
 
 
 def test_dot_entries_symlinks_and_subdirectories(env: _Env) -> None:

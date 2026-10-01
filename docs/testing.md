@@ -342,8 +342,9 @@ writing anything.
 
 ### 3.1 Constraints to design your material around
 
-- **UTF-8 decodability decides everything.** A decodable file is embedded and
-  sent to the LLM for extraction. A non-decodable file is still copied to `raw/`
+- **Text decodability decides everything.** A file that decodes as UTF-8 (or as
+  plausible legacy text: cp1252, or Mac Roman for CR-terminated files) is
+  embedded and sent to the LLM for extraction. A non-decodable file is still copied to `raw/`
   but extraction is skipped (exit 0, Source only). **There is no PDF or DOCX
   parser** — binary files copy but yield no extracted knowledge. Use `.md`,
   `.txt`, `.csv`, `.json`, `.yaml`, `.py`, `.html`, `.log`, or extensionless text.

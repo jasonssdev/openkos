@@ -197,9 +197,14 @@ write only the Source concept, emit an explanatory note to stderr, and exit 0
 (no crash). Extraction always runs regardless of `--auto`; `--auto` only
 skips the confirmation prompt. WHEN the source decodes as UTF-8 text, the
 Source concept's BODY MUST embed that text verbatim under a labeled section.
-WHEN the source is not valid UTF-8 text, the body MUST instead contain a
-short, honest note that the content could not be embedded as text (no
-crash). Neither case MUST append a `# Citations` heading; the Source's
+WHEN the source is not valid UTF-8, `ingest` MUST first try a deterministic
+legacy-encoding fallback at read time (never rewriting `raw/`): Mac Roman when
+the text uses bare-CR line endings, otherwise cp1252, accepting the result only
+when it is plausible text (no NUL or other control characters), and MUST say on
+stderr which codec it used; line endings are normalized to `\n`. WHEN the
+source is still not text, the body MUST instead contain a short, honest note
+that the content could not be embedded as text (no crash), and the unattended
+watch MUST report the file by name as having no extractable text. Neither case MUST append a `# Citations` heading; the Source's
 provenance is its `resource` field alone, per OKF v0.2 §5.1/§13.1's
 `resource`-only Source shape (see "OKF-Native Provenance" above). An empty
 source MUST render a body distinct from both

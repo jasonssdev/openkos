@@ -226,3 +226,63 @@ def test_copy_exclusive_unlinks_partial_dst_on_write_failure(
         fsio.copy_exclusive(src, dst)
 
     assert not dst.exists()
+
+
+# --- #1224: legacy-encoding fallback for source text ------------------------
+
+_SPANISH = "Decisión de evaluación (coordinación): reunión del equipo.\n"
+
+
+def test_decode_source_text_utf8_is_unchanged() -> None:
+    decoded = fsio.decode_source_text(_SPANISH.encode("utf-8"))
+
+    assert decoded == fsio.DecodedText(text=_SPANISH, encoding="utf-8")
+
+
+def test_decode_source_text_translates_newlines_like_read_text() -> None:
+    decoded = fsio.decode_source_text(b"a\r\nb\rc\n")
+
+    assert decoded is not None
+    assert decoded.text == "a\nb\nc\n"
+
+
+def test_decode_source_text_cr_only_text_is_mac_roman() -> None:
+    """Bare-CR line endings are the Classic Mac OS convention, so the legacy
+    codepage is Mac Roman: byte 0x97 is "ó" there (and an em dash in cp1252)."""
+    data = "Decisión\rcoordinación\r".encode("mac_roman")
+    assert b"\x97" in data
+
+    decoded = fsio.decode_source_text(data)
+
+    assert decoded == fsio.DecodedText(
+        text="Decisión\ncoordinación\n", encoding="mac_roman"
+    )
+
+
+def test_decode_source_text_other_legacy_text_is_cp1252() -> None:
+    data = "Reunión — señor\r\nok\r\n".encode("cp1252")
+
+    decoded = fsio.decode_source_text(data)
+
+    assert decoded == fsio.DecodedText(text="Reunión — señor\nok\n", encoding="cp1252")
+
+
+def test_decode_source_text_cp1252_undefined_byte_falls_to_mac_roman() -> None:
+    # 0x81 is undefined in cp1252 but is "Å" in Mac Roman.
+    decoded = fsio.decode_source_text(b"abc \x81 def\n")
+
+    assert decoded is not None
+    assert decoded.encoding == "mac_roman"
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        b"\xff\xfe not valid utf-8 \x00\x01",  # NUL
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR",  # PNG header
+        b"abc \x81 \x02 def",  # undefined in cp1252 AND a control char
+        b"abc \x02 \xe9",  # control char in otherwise plausible text
+    ],
+)
+def test_decode_source_text_binary_is_not_text(data: bytes) -> None:
+    assert fsio.decode_source_text(data) is None
