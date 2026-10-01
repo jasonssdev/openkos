@@ -80,6 +80,17 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   exit `3` and nothing written, and `adjudicate` and `suggest-relations` no
   longer cache a verdict against a document edited while the model was working
   ([#1137](https://github.com/jasonssdev/openkos/issues/1137)).
+- `curate` no longer holds the workspace lock for its whole run: every stage
+  plans, calls the model and asks with no lock, and takes it only for each
+  accepted item's write (a merge, a relation, a volatility tier) and for each
+  persist of what the model paid for (adjudication verdicts, edge suggestions,
+  contradiction findings), so another OpenKOS process is not refused while a
+  prompt is open. A merge now also refuses with exit `3`, writing nothing, when
+  a document its plan only read changed or a new document appeared; an item
+  whose concept was forgotten while its prompt waited is skipped with a notice;
+  and a verdict, suggestion or finding about content edited or forgotten while
+  the model ran is no longer cached
+  ([#1137](https://github.com/jasonssdev/openkos/issues/1137)).
 - A derived-store lock contention (`vectors.db`, `fts.db`, `graph.db` or
   `findings.db` still busy after the busy timeout) now exits `3`, the
   retry-safe refusal, instead of `1`, for `reindex` and every other locked
