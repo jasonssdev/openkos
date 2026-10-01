@@ -514,3 +514,61 @@ def test_payload_round_trips_unmodified(
     _upsert(conn, _proposal(payload=payload), section, bundle_dir)
     (item,) = pq.open_items(conn)
     assert item.payload == payload
+
+
+# -- resolution (unit 4.3) --------------------------------------------------
+
+
+def test_resolving_an_absent_queue_moves_nothing_and_creates_nothing(
+    conn: sqlite3.Connection, section: _Section
+) -> None:
+    moved = pq.resolve_open_by_key(
+        conn,
+        "relation_type:x",
+        resolution=lambda _item: "as_proposed",
+        resolved_by="relate",
+        commit_section=section,
+    )
+    by_digest = pq.resolve_open_by_input_digest(
+        conn,
+        "watch_refusal",
+        "sha-a",
+        resolution="as_proposed",
+        resolved_by="ingest",
+        commit_section=section,
+    )
+
+    assert (moved, by_digest) == (0, 0)
+    assert not pq.queue_exists(conn)
+    assert section.entered == 0
+
+
+def test_resolution_records_the_verb_and_time_and_never_touches_a_closed_row(
+    conn: sqlite3.Connection, section: _Section, bundle_dir: Path
+) -> None:
+    proposal = _proposal()
+    _upsert(conn, proposal, section, bundle_dir)
+
+    first = pq.resolve_open_by_key(
+        conn,
+        proposal.decision_key,
+        resolution=lambda _item: "modified",
+        resolved_by="relate",
+        commit_section=section,
+        clock=lambda: T0,
+    )
+    again = pq.resolve_open_by_key(
+        conn,
+        proposal.decision_key,
+        resolution=lambda _item: "declined",
+        resolved_by="decline",
+        commit_section=section,
+        clock=lambda: T0,
+    )
+
+    assert (first, again) == (1, 0)
+    row = conn.execute(
+        "SELECT status, resolution, resolved_by, resolved_at, claimed_by"
+        " FROM pending_items"
+    ).fetchone()
+    assert row == ("applied", "modified", "relate", T0.isoformat(), None)

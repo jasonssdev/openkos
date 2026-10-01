@@ -47,13 +47,14 @@ from pathlib import Path
 from typing import Literal
 
 from openkos import config, fsio
-from openkos.application import catalog_delta, lock_wait
+from openkos.application import catalog_delta, lock_wait, queue_resolution
 from openkos.application import drift as application_drift
 from openkos.application import ingest as application_ingest
 from openkos.bundle import source_titles
 from openkos.extraction.concept import FAN_OUT_CONCURRENCY, fans_out
 from openkos.llm.base import BackendError, LLMBackend, is_timeout_failure
 from openkos.model import okf
+from openkos.state.vectorstore import content_hash
 
 ConfirmationAnswer = Literal["proceed", "declined", "unavailable"]
 """What a `confirm` callback answers. `"unavailable"` means the question
@@ -444,6 +445,7 @@ def ingest_source(
         new_index_text, new_log_text = _recompose_catalog(prepared, ports)
 
         _write(prepared, new_index_text, new_log_text)
+        _resolve_watch_refusals(prepared)
 
         imported_paths = [
             f"raw/{prepared.name}",
@@ -1068,6 +1070,19 @@ def _prepare(
         preview=preview,
         outcome=outcome,
     )
+
+
+def _resolve_watch_refusals(prepared: _Prepared) -> None:
+    """A raw copy landed: resolve the open `watch_refusal` rows that refused
+    exactly these bytes (#1141). Skipped when the raw copy was reused, not
+    written (`regenerate`): no new bytes landed."""
+    if prepared.regenerate:
+        return
+    try:
+        digest = content_hash(prepared.raw_dest.read_bytes())
+    except OSError:
+        return
+    queue_resolution.resolve_watch_refusals(prepared.layout.root, raw_digest=digest)
 
 
 def _write(prepared: _Prepared, new_index_text: str, new_log_text: str) -> None:
