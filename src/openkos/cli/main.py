@@ -25,7 +25,15 @@ from typing import Final, Literal, NamedTuple, NoReturn, TypedDict, TypeVar, cas
 import typer
 from rich.console import Console
 
-from openkos import config, fsio, lock, read_outcome, source_date, source_title
+from openkos import (
+    config,
+    fsio,
+    lock,
+    logsetup,
+    read_outcome,
+    source_date,
+    source_title,
+)
 from openkos import lint as lint_check
 from openkos.application import backends as application_backends
 from openkos.application import (
@@ -331,6 +339,7 @@ def callback(
     ),
 ) -> None:
     """openkos: local-first engine that compiles text into a portable knowledge base."""
+    logsetup.configure_logging("cli")
 
 
 _READ_ONLY_COMMANDS = frozenset(
@@ -404,23 +413,6 @@ def _add_wait_option(wrapper: Callable[..., object], fn: Callable[..., object]) 
     wrapper.__annotations__ = {**fn.__annotations__, _WAIT_PARAM: int}
 
 
-_COMMIT_SECTION: contextvars.ContextVar[lock_wait.CommitSection | None] = (
-    contextvars.ContextVar("openkos_commit_section", default=None)
-)
-"""The `CommitSection` the running verb enters around its commit phase (#1137,
-ADR-0036). Set by `_guard_workspace_lock(..., commit_phase=True)` for the
-duration of the verb's body and read by `_commit_section()`."""
-
-
-def _commit_section() -> AbstractContextManager[None]:
-    """Enter the workspace lock for one commit phase, under the `--wait` policy
-    the verb was invoked with. Outside a commit-phase verb (a unit test calling
-    a helper directly, or a run with no usable workspace, which refuses before
-    reaching a commit phase) it holds nothing."""
-    factory = _COMMIT_SECTION.get()
-    return factory() if factory is not None else contextlib.nullcontext()
-
-
 def _guard_workspace_lock(
     command_name: str,
     *,
@@ -471,20 +463,9 @@ def _guard_workspace_lock(
                 )
 
             try:
-                with contextlib.ExitStack() as held:
-                    if commit_phase:
-                        token = _COMMIT_SECTION.set(
-                            lock_wait.locked_commit_section(
-                                root, wait_seconds=wait, on_wait=announce_wait
-                            )
-                        )
-                        held.callback(_COMMIT_SECTION.reset, token)
-                    else:
-                        held.enter_context(
-                            lock_wait.acquire_with_backoff(
-                                root, wait_seconds=wait, on_wait=announce_wait
-                            )
-                        )
+                with lock_wait.acquire_with_backoff(
+                    root, wait_seconds=wait, on_wait=announce_wait
+                ):
                     return fn(*args, **kwargs)
             except lock.WorkspaceBusyError as exc:
                 typer.echo(
