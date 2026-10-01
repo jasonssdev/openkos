@@ -123,7 +123,7 @@ Two measurements set the boundaries, rather than taste:
 - **Reading without a terminal was already solved, and cost nothing.** The capability had been claimed in the docs for months and never tested; verifying it took two minutes. That narrows this arc rather than filling it — a "nicer interface" is not a frontend project, because the remaining gap is asking and deciding, not reading.
 - **No thin adapter was possible at the time.** The command logic lived in `openkos.cli.main`, and `application/` covered ingest, query, and lifecycle only. The read verbs — `status`, `list`, navigation — had no application service behind them, so an MCP server written against the code as it stood would either have reimplemented them or imported Typer. Extracting them was prerequisite zero, not a cleanup.
 
-Three edges of the original arc move out on the same reasoning. A local **REST API** goes to the horizon, because MCP already answers the question REST was there to answer, and a second network surface doubles the trust boundary for no user we can name. **Memory projections** go with it: they are a research direction, not a deliverable with someone waiting on it. A **stable Python API** moves to MVP 5: the application services under `application/` are the surface it would present, but MCP already serves this arc's audience, and declaring those services stable is a compatibility promise with no user waiting on it yet. It belongs with the extension points, where third-party code first needs a surface it can rely on.
+Three edges of the original arc move out on the same reasoning. A local **REST API** goes to the horizon, because MCP already answers the question REST was there to answer, and a second network surface doubles the trust boundary for no user we can name (MVP 6 promotes it, because a desktop app is that user). **Memory projections** go with it: they are a research direction, not a deliverable with someone waiting on it. A **stable Python API** moves out of this arc: the application services under `application/` are the surface it would present, but MCP already serves this arc's audience, and declaring those services stable is a compatibility promise with no user waiting on it yet. It ships in MVP 6, with the desktop app as its first client, so the surface is shaped by a real consumer.
 
 Deliverables — **all shipped**:
 
@@ -172,12 +172,36 @@ Deliverables:
 - **OKF export first.** The bundle is already OKF-conformant, so export is the cheap half — and it is what first makes our conformance claim testable by somebody else
 - **OKF import second.** Consuming bundles produced by other tools, including Google's reference producers, is cross-bundle entity resolution. It is an arc of work in its own right, not the mirror image of export
 - Sensitivity enforcement at the export boundary — confidential objects excluded from exports and sharing
-- Extension points for third-party producers and consumers
-- **A stable Python API** over the application services, versioned and declared public, as the surface those producers and consumers build on
 
-What a user can do after MVP 5: move knowledge in and out of OpenKOS without losing its structure, and extend it with their own producers and consumers.
+This arc is deliberately narrow. Export and import are built on the internal `application/` services; a public API is a compatibility promise of a different kind, and freezing it before import has pressured those services, while OKF is still v0.2, would freeze the wrong shape. The stable Python API therefore moves to MVP 6, and the extension points that depend on it to the Horizon ([ADR-0039](adr/0039-the-stable-python-api-ships-with-a-desktop-app-as-its-first-client.md)).
 
-Where the community can contribute: interop adapters, producers, and consumers.
+What a user can do after MVP 5: move knowledge in and out of OpenKOS without losing its structure.
+
+Where the community can contribute: interop adapters and OKF conformance fixtures.
+
+---
+
+## MVP 6 — The Desktop App
+
+*Goal: a non-technical user can use OpenKOS without a terminal.*
+
+**Status: not started.**
+
+Reading knowledge already needs no new interface: the bundle is plain markdown, and Obsidian or any editor is its viewer. What a terminal still gates is installing the engine, dropping sources in, asking, and deciding the pending queue, where "the human curates, the engine maintains" currently means `[y/N]` prompts.
+
+Deliverables:
+
+- **A desktop application.** One installer and an icon; internally a local web UI on `localhost` wrapped in a native shell, so the user never starts a server by hand. Nothing leaves the machine
+- **Packaging as a core deliverable, not an extra.** The main barrier for a non-technical user is installation: Python, `uv`, a local model runtime, multi-GB models and `openkos.yaml`. The app ships or guides the engine and model setup
+- **A local API** the app talks to. This promotes the Horizon item for a local REST API: the desktop app is the consumer MCP cannot serve
+- **A stable Python API** over the application services, versioned and declared public, with the desktop app as its first client, so the API is shaped by a real consumer rather than designed in a vacuum
+- **A minimum app scope that maps onto shipped verbs:** drop files (the inbox watch), ask (`query`), and review the pending-decision queue (`pending`, `curate`), which is the heart of the app
+
+The shell technology (Tauri, Electron, or another; each needs the Python engine as a sidecar process) is not decided here. It gets its own ADR when this arc starts. Every UI remains a thin adapter over the same local engine; adding it never touches the core.
+
+What a user can do after MVP 6: install OpenKOS like any other application, drop files in, ask questions, and settle the pending queue, without a terminal.
+
+Where the community can contribute: packaging for more platforms, accessibility, and client work against the stable API.
 
 ---
 
@@ -186,13 +210,13 @@ Where the community can contribute: interop adapters, producers, and consumers.
 These are promising directions we intend to explore *after* the MVPs prove out with real users. They are listed for transparency and to invite discussion, not as promises:
 
 - Optional additional producers (PDF, web clip) as the extraction pipeline matures
-- A local REST API, if a consumer appears that MCP cannot serve
 - Opt-in memory projections over the graph (episodic, semantic, procedural)
-- A desktop application and graphical knowledge explorer
+- A graphical knowledge explorer
 - Interactive graph visualization and memory browsing
 - A richer, configurable memory engine
 - Federation and selective sharing across multiple bundles or people
 - Finer-grained agent permissions and sandboxing
+- Extension points for third-party producers and consumers, built on the stable Python API
 - A plugin marketplace
 
 Priorities here will be set by what users actually need, and by where the community wants to contribute.

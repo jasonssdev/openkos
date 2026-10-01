@@ -1166,4 +1166,4 @@ A withheld document is **not** an error and does not change the exit code. `rein
 
 ## Not yet built
 
-For orientation, these are **not** part of the CLI: a local REST API (a Horizon item) and full OKF import/export (MVP 5). `openkos mcp` (above) already ships the ask surface — an MCP client, not the CLI, is its interface. Everything else described above — hybrid semantic/graph query, volatility-aware freshness windows, entity resolution and merge, the typed graph, reference-aware/cascade `forget`, and the `purge` verb — ships today.
+For orientation, these are **not** part of the CLI: a local API (planned with the desktop app, MVP 6) and full OKF import/export (MVP 5). `openkos mcp` (above) already ships the ask surface — an MCP client, not the CLI, is its interface. Everything else described above — hybrid semantic/graph query, volatility-aware freshness windows, entity resolution and merge, the typed graph, reference-aware/cascade `forget`, and the `purge` verb — ships today.
