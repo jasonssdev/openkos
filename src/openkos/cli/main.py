@@ -24,7 +24,15 @@ from typing import Final, Literal, NamedTuple, NoReturn, TypedDict, TypeVar, cas
 import typer
 from rich.console import Console
 
-from openkos import config, fsio, lock, read_outcome, source_date, source_title
+from openkos import (
+    config,
+    fsio,
+    lock,
+    logsetup,
+    read_outcome,
+    source_date,
+    source_title,
+)
 from openkos import lint as lint_check
 from openkos.application import backends as application_backends
 from openkos.application import commit_phase as application_commit_phase
@@ -331,6 +339,7 @@ def callback(
     ),
 ) -> None:
     """openkos: local-first engine that compiles text into a portable knowledge base."""
+    logsetup.configure_logging("cli")
 
 
 _READ_ONLY_COMMANDS = frozenset(

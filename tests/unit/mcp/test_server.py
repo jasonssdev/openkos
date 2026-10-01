@@ -22,7 +22,7 @@ from typing import Any
 
 import pytest
 
-from openkos import config
+from openkos import config, logsetup
 from openkos.application import backends as application_backends
 from openkos.llm.base import Embedder, LLMBackend, Message
 from openkos.llm.ollama import (
@@ -1472,3 +1472,28 @@ def test_answer_withheld_when_a_prompt_object_is_raised_mid_flight(
     structured = result["structuredContent"]
     assert structured["answer"] == ""
     assert structured["answer_withheld"] is True
+
+
+def test_serve_logs_to_stderr_only_and_restores_logging(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The MCP setup lives in `logsetup`: while serving, records reach stderr
+    and never stdout (stdout is the JSON-RPC channel), and the handler is gone
+    once `serve()` returns."""
+    seen: list[bool] = []
+
+    class _LogsThenInterrupts(_RaisesKeyboardInterrupt):
+        def __enter__(self) -> transport.StdioStreams:
+            logging.getLogger("openkos.mcp").info("during serve")
+            seen.append(logsetup.is_configured("mcp"))
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(transport, "claim_stdio", _LogsThenInterrupts)
+
+    assert server.serve(Path("/nonexistent"), expose_confidential=False) == 130
+
+    captured = capsys.readouterr()
+    assert seen == [True]
+    assert captured.out == ""
+    assert captured.err == "during serve\n"
+    assert not logsetup.is_configured("mcp")

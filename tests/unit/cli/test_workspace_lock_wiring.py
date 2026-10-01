@@ -385,6 +385,14 @@ def test_a_bad_wait_value_is_a_usage_error_before_any_work(
     value: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _init_workspace(tmp_path, monkeypatch)
+    # CI makes rich force colour and wrap at 80 columns, which splits the
+    # message with escape sequences; pin the rendering so the exact text is
+    # what is asserted, locally and in CI alike.
+    for name in ("FORCE_COLOR", "GITHUB_ACTIONS", "TTY_COMPATIBLE"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.setenv("TERM", "dumb")
+    monkeypatch.setenv("COLUMNS", "200")
 
     result = runner.invoke(
         app, ["relate", "a", "references", "b", "--auto", "--wait", value]
