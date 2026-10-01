@@ -18,6 +18,7 @@ from typing import Final, cast
 from openkos import config
 from openkos.application import concept_read, list_service, next_action
 from openkos.application import consistency as application_consistency
+from openkos.application import pending_queue_report
 from openkos.application import query as query_service
 from openkos.llm.base import Embedder, LLMBackend
 from openkos.mcp import gate
@@ -176,12 +177,15 @@ def _pending_run(
     arguments: Mapping[str, object],
     ctx: ToolContext,
     progress: ProgressSink | None,
-) -> next_action.NextResult:
+) -> gate.PendingRead:
     """`pending`'s service call (design Decision 6): `next_action.
-    next_action` unmodified -- no arguments to pass, per Decision 15's
-    empty `inputSchema`; `gate.disclose_pending` is what decides what may
-    be disclosed."""
-    return next_action.next_action(ctx.layout)
+    next_action` unmodified plus the read-only queue snapshot -- no
+    arguments to pass, per Decision 15's empty `inputSchema`;
+    `gate.disclose_pending` is what decides what may be disclosed."""
+    return gate.PendingRead(
+        result=next_action.next_action(ctx.layout),
+        queue=pending_queue_report.read_snapshot(ctx.layout),
+    )
 
 
 _PENDING_INPUT_SCHEMA: Final[Mapping[str, object]] = {
@@ -195,6 +199,7 @@ _PENDING_OUTPUT_SCHEMA: Final[Mapping[str, object]] = {
     "properties": {
         "action": {"type": ["object", "null"]},
         "declinations": {"type": "array"},
+        "queue": {"type": "object"},
         "skipped_documents": {"type": "integer", "minimum": 0},
         "withheld": {"type": "integer", "minimum": 0},
         "warnings": {"type": "array"},
@@ -208,7 +213,8 @@ _PENDING_TOOL: Final = Tool(
     name="pending",
     title="Pending Work",
     description="Read the single ranked recommendation, plus the findings "
-    "seen and declined or skipped along the way.",
+    "seen and declined or skipped along the way, and the open pending-work "
+    "queue rows (kind, target ids, resolving command).",
     input_schema=_PENDING_INPUT_SCHEMA,
     output_schema=_PENDING_OUTPUT_SCHEMA,
     run=_pending_run,
