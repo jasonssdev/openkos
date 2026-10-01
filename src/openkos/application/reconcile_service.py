@@ -41,6 +41,7 @@ from typing import Literal
 from openkos import config, fsio
 from openkos.application import drift as application_drift
 from openkos.application import lifecycle as application_lifecycle
+from openkos.application import queue_resolution
 from openkos.application.lock_wait import CommitSection
 from openkos.application.write_gate import (
     ConfirmCallback,
@@ -795,6 +796,7 @@ def reconcile_pair(
                 f"openkos reconcile: failed while writing the reconcile -- {exc}."
             ) from exc
 
+        queue_resolution.resolve_reconciled(root, pair_ids=(canonical_a, canonical_b))
         obs.written(ReconcileWritten(pair=pair, log_name=log_path.name))
 
         if holder_canonical is None:

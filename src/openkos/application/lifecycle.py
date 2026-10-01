@@ -63,7 +63,7 @@ from pathlib import Path, PurePosixPath
 from typing import Literal
 
 from openkos import config, fsio, lifecycle, sensitivity
-from openkos.application import commit_phase
+from openkos.application import commit_phase, queue_resolution
 from openkos.application.consent import (
     BooleanConfirmation,
     TypedChallengeConfirmation,
@@ -613,7 +613,16 @@ def merge_core(
     verbatim from `merge`'s former inline body, `main.py:2559-2596`, design:
     merge-core Extraction, Slice 2b-i). Non-interactive; raises
     `OSError`/`ValueError`. Performs NO VCS side effect -- `_autocommit`
-    stays the command's responsibility."""
+    stays the command's responsibility.
+
+    The identity row over exactly this pair (if the pending-work queue holds
+    one) is resolved last, in the caller's commit phase, as `as_proposed` only
+    when the engine's own survivor choice is the one merged (#1141)."""
+    # Read BEFORE the writes: the absorbed file is gone afterwards.
+    proposed_survivor = ordered_merge_pair(
+        bundle_dir,
+        tuple(sorted((prepared.survivor_canonical, prepared.absorbed_canonical))),
+    )[0]
     fsio.write_atomic(index_path, prepared.new_index_text)
     fsio.write_atomic(log_path, prepared.new_log_text)
 
@@ -691,6 +700,13 @@ def merge_core(
     fsio.write_atomic(survivor_path, prepared.plan.merged_survivor)  # V
     bundle_ledger.commit_pending(survivor_canonical, bundle_dir)  # S2
     fsio.remove_file(absorbed_path)  # D
+
+    queue_resolution.resolve_merged(
+        bundle_dir.parent,
+        survivor_id=survivor_canonical,
+        absorbed_id=absorbed_canonical,
+        proposed_survivor=proposed_survivor,
+    )
 
     sidecar_rel = (
         bundle_ledger.ledger_path_for(survivor_canonical, bundle_dir)
@@ -3170,6 +3186,12 @@ def relate_core(
     if prepared.new_target_text is not None:
         fsio.write_atomic(target_path, prepared.new_target_text)
     fsio.write_atomic(log_path, prepared.new_log_text)
+    queue_resolution.resolve_related(
+        log_path.parent.parent,
+        source_id=prepared.source_canonical,
+        target_id=prepared.target_canonical,
+        rel_type=prepared.rel_type,
+    )
 
 
 @dataclass(frozen=True)
@@ -3227,6 +3249,9 @@ def set_volatility_core(config_path: Path, prepared: PreparedSetVolatility) -> N
     `ValueError`. Performs NO VCS side effect -- `_autocommit` stays the
     caller's responsibility."""
     fsio.write_atomic(config_path, prepared.new_config_text)
+    queue_resolution.resolve_volatility_set(
+        config_path.parent, type_name=prepared.concept_type, tier=prepared.tier
+    )
 
 
 @dataclass(frozen=True)

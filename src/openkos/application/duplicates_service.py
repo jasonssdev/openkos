@@ -41,6 +41,7 @@ from pathlib import Path
 from openkos import config
 from openkos.application import lifecycle as application_lifecycle
 from openkos.application import pending as application_pending
+from openkos.application import queue_resolution
 from openkos.bundle import decisions as bundle_decisions
 from openkos.resolution.candidates import (
     CandidateGroup,
@@ -165,8 +166,9 @@ def apply_identity_decision(
     to `target_state` (#797), returning the workspace-relative path for the
     caller's auto-commit list.
 
-    Never opens `.openkos/findings.db`. A keep-distinct ruling must be writable
-    with NO adjudication row behind it: the human may be overruling a verdict
+    Never REQUIRES `.openkos/findings.db`: a declined ruling closes the matching
+    pending-work row when the queue holds one (a best-effort no-op otherwise).
+    A keep-distinct ruling must be writable with NO adjudication row behind it: the human may be overruling a verdict
     the model has not produced yet, or one that was recomputed away. Requiring
     a matching row would make the human's answer depend on the machine's.
 
@@ -190,6 +192,8 @@ def apply_identity_decision(
     path = bundle_decisions.write_identity_decisions(
         owner_id, layout.bundle_dir, records=records
     )
+    if target_state == "declined":
+        queue_resolution.resolve_declined_identity(layout.root, member_ids=members)
     return f"bundle/{path.relative_to(layout.bundle_dir).as_posix()}"
 
 
