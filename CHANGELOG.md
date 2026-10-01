@@ -62,8 +62,8 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 - Two count lines no longer describe output that is not what they say
   ([#1234](https://github.com/jasonssdev/openkos/issues/1234)). `contradictions`
-  now says its "N of M candidate edge(s) shown (cap reached)" line counts
-  candidate edges the verb does not list, and `lint`'s "Unevidenced objects:"
+  now says "N of M candidate edge(s) checked for contradictions (cap reached)"
+  instead of "shown", since it lists no edges, and `lint`'s "Unevidenced objects:"
   detail says "one or more derived objects" rather than implying exactly one.
 
 ## [0.3.1] - 2026-10-01

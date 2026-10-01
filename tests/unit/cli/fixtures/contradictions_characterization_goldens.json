@@ -4,7 +4,7 @@
     "findings_rows": null,
     "state_files": {},
     "stderr": "",
-    "stdout": "openkos contradictions: workspace at <ROOT>\n\n50 of 60 candidate edge(s) shown (cap reached) -- candidate edges are not listed by this verb; they only feed the contradiction check\n\nThe graph has no typed edges yet. Apply relations first: `openkos suggest-relations` then `openkos relate`, or `openkos curate`.\n"
+    "stdout": "openkos contradictions: workspace at <ROOT>\n\n50 of 60 candidate edge(s) checked for contradictions (cap reached)\n\nThe graph has no typed edges yet. Apply relations first: `openkos suggest-relations` then `openkos relate`, or `openkos curate`.\n"
   },
   "corrupt_findings_db": {
     "exit_code": 0,

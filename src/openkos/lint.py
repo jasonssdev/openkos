@@ -1217,7 +1217,7 @@ def check_unevidenced(docs: list[LintDoc]) -> list[LintFinding]:
                 path=f"{doc.identity}.md",
                 detail=(
                     "one or more derived objects were stored with no line "
-                    "quoted from this source — it cannot support a citation; check the "
+                    "quoted from this source — they cannot support a citation; check the "
                     "derived objects against the source, and re-ingest with "
                     "--re-extract to redo extraction"
                 ),

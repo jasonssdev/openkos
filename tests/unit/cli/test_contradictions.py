@@ -832,10 +832,12 @@ def test_contradictions_reports_candidate_truncation_when_the_cap_is_reached(
     result = runner.invoke(app, ["contradictions"])
 
     assert result.exit_code == 0
-    assert "50 of 60 candidate edge(s) shown (cap reached)" in result.stdout
     # #1234: this verb lists no edges, so the line must say what it counts.
-    assert "not listed by this verb" in result.stdout
-    assert "feed the contradiction check" in result.stdout
+    assert (
+        "50 of 60 candidate edge(s) checked for contradictions (cap reached)"
+        in result.stdout
+    )
+    assert "candidate edge(s) shown" not in result.stdout
 
 
 def test_contradictions_no_candidate_truncation_notice_under_the_cap(
@@ -936,7 +938,10 @@ def test_contradictions_suppresses_candidate_notice_when_every_dropped_pair_is_c
     assert default_run.exit_code == 0
     assert "candidate edge(s) shown" not in default_run.stdout
     assert flagged_run.exit_code == 0
-    assert "50 of 60 candidate edge(s) shown (cap reached)" in flagged_run.stdout
+    assert (
+        "50 of 60 candidate edge(s) checked for contradictions (cap reached)"
+        in flagged_run.stdout
+    )
 
 
 # ---------------------------------------------------------------------------
