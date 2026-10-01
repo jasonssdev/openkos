@@ -239,15 +239,15 @@ the effective uid, or accessible to group or other.
 - WHEN a locked command runs
 - THEN it exits `1` naming the directory and the fix
 
-### Requirement: The Legacy Lock Is Also Taken During The Transition
+### Requirement: No Legacy Temp-Directory Lock Is Taken
 
-Until its removal, a lock acquisition MUST also acquire the legacy lock at
-`<tempdir>/openkos-locks[-<uid>]/<digest>.lock`, after the state-directory
-lock, both non-blocking, and MUST release both. Contention on either MUST be
-reported as contention.
+A lock acquisition MUST take only the state-directory lock. It MUST NOT
+acquire or create a lock under the OS temp directory, so an `openkos` of 0.3.0
+or older, which locks only that path, does not exclude a current one and the
+two MUST NOT run concurrently against the same workspace.
 
-#### Scenario: An older openkos still excludes a newer one
+#### Scenario: A lock held on the old temp-directory path does not refuse a run
 
-- GIVEN an older `openkos` holding only the legacy lock
-- WHEN a newer `openkos` runs a locked command on the same workspace
-- THEN the newer one is refused for contention
+- GIVEN a lock held on the pre-relocation temp-directory path for a workspace
+- WHEN a locked command runs on the same workspace
+- THEN it acquires the state-directory lock and is not refused

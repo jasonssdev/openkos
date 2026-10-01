@@ -5,18 +5,16 @@ the CLI actually USES it, on every command that can write, and that the roster
 saying which commands those are cannot rot silently.
 """
 
-import os
 import sqlite3
 import subprocess
 import sys
-import tempfile
 import textwrap
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
-from openkos import lock
+from openkos import lock, userstate
 from openkos.cli.main import _READ_ONLY_COMMANDS, _SELF_LOCKING_COMMANDS, app
 from tests.unit.conftest import make_locked_error, make_non_lock_operational_error
 
@@ -34,7 +32,9 @@ _HOLDER = textwrap.dedent(
     """
     import sys
     from pathlib import Path
-    from openkos import lock
+    from openkos import lock, userstate
+
+    userstate.locks_dir = lambda *a, **k: Path(sys.argv[2])
 
     with lock.workspace_lock(Path(sys.argv[1])):
         print("ACQUIRED", flush=True)
@@ -161,7 +161,7 @@ def test_a_mutating_command_refuses_while_another_process_holds_the_lock(
     """
     _init_workspace(tmp_path, monkeypatch)
     holder = subprocess.Popen(  # noqa: S603
-        [sys.executable, "-c", _HOLDER, str(tmp_path)],
+        [sys.executable, "-c", _HOLDER, str(tmp_path), str(userstate.locks_dir())],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         text=True,
@@ -193,7 +193,7 @@ def test_a_read_only_command_still_runs_while_the_lock_is_held(
     """
     _init_workspace(tmp_path, monkeypatch)
     holder = subprocess.Popen(  # noqa: S603
-        [sys.executable, "-c", _HOLDER, str(tmp_path)],
+        [sys.executable, "-c", _HOLDER, str(tmp_path), str(userstate.locks_dir())],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         text=True,
@@ -224,7 +224,7 @@ def test_help_does_not_take_the_lock(
     """
     _init_workspace(tmp_path, monkeypatch)
     holder = subprocess.Popen(  # noqa: S603
-        [sys.executable, "-c", _HOLDER, str(tmp_path)],
+        [sys.executable, "-c", _HOLDER, str(tmp_path), str(userstate.locks_dir())],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         text=True,
@@ -269,11 +269,8 @@ def test_an_untrusted_lock_directory_is_a_refusal_with_exit_1_not_a_traceback(
     """Exit 1, not 3: a plain re-run refuses again until the directory is
     fixed, so this must not advertise the retry-safe code (#1134)."""
     _init_workspace(tmp_path, monkeypatch)
-    fake_tmp = tmp_path.parent / f"{tmp_path.name}-faketmp"
-    fake_tmp.mkdir()
-    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(fake_tmp))
-    directory = fake_tmp / f"{lock.LEGACY_LOCK_DIR_PREFIX}-{os.geteuid()}"
-    directory.mkdir()
+    directory = Path(userstate.locks_dir())
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     directory.chmod(0o755)
 
     result = runner.invoke(app, ["relate", "a", "references", "b", "--auto"])
@@ -344,7 +341,9 @@ _TIMED_HOLDER = textwrap.dedent(
     import sys
     import time
     from pathlib import Path
-    from openkos import lock
+    from openkos import lock, userstate
+
+    userstate.locks_dir = lambda *a, **k: Path(sys.argv[3])
 
     with lock.workspace_lock(Path(sys.argv[1])):
         print("ACQUIRED", flush=True)
@@ -418,7 +417,7 @@ def test_wait_zero_equals_the_default_fail_fast(
 ) -> None:
     _init_workspace(tmp_path, monkeypatch)
     holder = subprocess.Popen(  # noqa: S603
-        [sys.executable, "-c", _HOLDER, str(tmp_path)],
+        [sys.executable, "-c", _HOLDER, str(tmp_path), str(userstate.locks_dir())],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         text=True,
@@ -447,7 +446,7 @@ def test_an_expired_wait_exits_3_with_one_waiting_line(
 ) -> None:
     _init_workspace(tmp_path, monkeypatch)
     holder = subprocess.Popen(  # noqa: S603
-        [sys.executable, "-c", _HOLDER, str(tmp_path)],
+        [sys.executable, "-c", _HOLDER, str(tmp_path), str(userstate.locks_dir())],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         text=True,
@@ -480,7 +479,14 @@ def test_a_wait_succeeds_once_the_holder_releases(
     free = runner.invoke(app, ["relate", "a", "references", "b", "--auto"])
     assert free.exit_code != 3, free.stderr
     holder = subprocess.Popen(  # noqa: S603
-        [sys.executable, "-c", _TIMED_HOLDER, str(tmp_path), "1"],
+        [
+            sys.executable,
+            "-c",
+            _TIMED_HOLDER,
+            str(tmp_path),
+            "1",
+            str(userstate.locks_dir()),
+        ],
         stdout=subprocess.PIPE,
         text=True,
         cwd=_REPO_ROOT,

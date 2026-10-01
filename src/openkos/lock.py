@@ -32,21 +32,6 @@ blocking. A blocking acquire would sit behind another process's interactive
 confirmation prompt for an unbounded time with no output, which reads as a
 hang. The refusal is retry-safe by construction: it fires before the verb has
 read anything, so nothing was written and a later re-run is exactly equivalent.
-"""
-
-import contextlib
-import hashlib
-import os
-import stat
-import sys
-import tempfile
-from collections.abc import Iterator
-from pathlib import Path
-
-from openkos import userstate
-
-LEGACY_LOCK_DIR_PREFIX = "openkos-locks"
-"""Name prefix of the pre-ADR-0036 per-user lock directory under the OS temp dir.
 
 **The lock lives OUTSIDE the workspace, deliberately.** The obvious home is
 `<root>/.openkos/workspace.lock`, and it was the first design. It is wrong for
@@ -58,16 +43,23 @@ explicitly so a refusal that created a stray `.git` is caught. Creating
 96 tests went red -- and the honest reading is that they were right: a run that
 refuses really should write nothing at all.
 
-**The current home is the per-user state directory** (`userstate.locks_dir()`,
+**The home is the per-user state directory** (`userstate.locks_dir()`,
 ADR-0036), resolved from the account database and never from the environment,
 because a temp reaper that deletes a held lock lets a second process lock a
 fresh inode -- harmless for a CLI's short holds, not for a long-lived runner.
-
-**The temp-directory lock is kept for one transitional release.** An older
-`openkos` takes only that one; a newer run also takes it (after the
-state-directory lock, both non-blocking) so the two still exclude each other.
-Remove it, and this constant, in the follow-up release.
+The earlier temp-directory lock is no longer taken (#1217): an `openkos` of
+0.3.0 or older locks only that path, so it does not exclude this one.
 """
+
+import contextlib
+import hashlib
+import os
+import stat
+import sys
+from collections.abc import Iterator
+from pathlib import Path
+
+from openkos import userstate
 
 
 class WorkspaceBusyError(RuntimeError):
@@ -150,20 +142,6 @@ def _lock_dir() -> Path:
     return directory
 
 
-def _legacy_lock_dir() -> Path:
-    """The pre-ADR-0036 per-user directory under the OS temp dir.
-
-    `tempfile.gettempdir()` is already per-user on macOS and Windows but NOT on
-    Linux, where `/tmp` is shared -- so the uid goes in the name there and the
-    mode is `0o700`, with the same ownership checks as the current directory.
-    """
-    geteuid = getattr(os, "geteuid", None)
-    suffix = "" if geteuid is None else f"-{geteuid()}"
-    directory = Path(tempfile.gettempdir()) / f"{LEGACY_LOCK_DIR_PREFIX}{suffix}"
-    _ensure_private_dir(directory)
-    return directory
-
-
 def _verify_lock_dir(directory: Path, euid: int) -> None:
     """Refuse a lock directory that is not ours, not a real directory, or open
     to group/other (#1134). `mkdir(exist_ok=True)` accepts whatever already sits
@@ -218,13 +196,6 @@ def lock_path_for(root: Path) -> Path:
     return _lock_dir() / f"{workspace_digest(root)}.lock"
 
 
-def legacy_lock_path_for(root: Path) -> Path:
-    """The transitional temp-directory lock file for `root` (see
-    `LEGACY_LOCK_DIR_PREFIX`). Creates the containing directory, never the
-    file."""
-    return _legacy_lock_dir() / f"{workspace_digest(root)}.lock"
-
-
 @contextlib.contextmanager
 def _hold(path: Path) -> Iterator[Path]:
     """Hold the exclusive non-blocking lock on one lock file for the block.
@@ -273,15 +244,11 @@ def _hold(path: Path) -> Iterator[Path]:
 def workspace_lock(root: Path) -> Iterator[Path]:
     """Hold this workspace's exclusive mutation lock for the whole block.
 
-    Takes the state-directory lock, then the legacy temp-directory lock (both
-    non-blocking), and yields the state-directory lock's path. Raises
-    `WorkspaceBusyError` immediately if another process holds EITHER; a
-    refusal on the second releases the first. Both are released on the way out
-    of the block -- on success, on an exception, and on process death, the
-    last of which is the kernel's doing rather than this code's.
+    Takes the state-directory lock (non-blocking) and yields its path. Raises
+    `WorkspaceBusyError` immediately if another process holds it. It is
+    released on the way out of the block -- on success, on an exception, and on
+    process death, the last of which is the kernel's doing rather than this
+    code's.
     """
-    with (
-        _hold(lock_path_for(root)) as path,
-        _hold(legacy_lock_path_for(root)),
-    ):
+    with _hold(lock_path_for(root)) as path:
         yield path

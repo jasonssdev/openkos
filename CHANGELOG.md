@@ -19,6 +19,16 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 - `openkos unrelate <source> <type> <target>` removes one typed relation, mirroring `relate`'s preview, confirm and commit flow. It writes a `log.md` line, refreshes the derived stores, withdraws a `supersedes` target's deprecated-status export when nothing else supersedes it, and refuses (writing nothing) when the relation does not exist. Before, a wrong relation could only be removed by hand-editing frontmatter or a revert that conflicts on `log.md` (#1232).
 
+### Changed
+
+- **The transitional temp-directory workspace lock is no longer taken.** 0.3.1
+  moved the lock to the per-user state directory and, for that one release,
+  also took the old lock under the OS temp directory so an older `openkos`
+  still excluded it. That second lock is removed
+  ([#1217](https://github.com/jasonssdev/openkos/issues/1217)), so 0.3.0 and
+  older no longer exclude a current run: do not run them concurrently against
+  the same workspace.
+
 ### Fixed
 
 - `openkos.yaml` with a repeated key (top-level or nested) is now refused, and
@@ -26,6 +36,7 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   `[PASS]` over a file whose last duplicate silently won
   ([#1233](https://github.com/jasonssdev/openkos/issues/1233)). Bundle
   frontmatter parsing is unchanged.
+
 
 ## [0.3.1] - 2026-10-01
 
